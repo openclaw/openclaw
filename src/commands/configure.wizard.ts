@@ -43,7 +43,7 @@ import { setupChannels } from "./onboard-channels.js";
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
-  ensureWorkspaceAndSessions,
+  ensureWorkspaceReady,
   guardCancel,
   probeGatewayReachable,
   resolveControlUiLinks,
@@ -597,7 +597,7 @@ export async function runConfigureWizard(
           },
         },
       };
-      await ensureWorkspaceAndSessions(workspaceDir, runtime, {
+      await ensureWorkspaceReady(workspaceDir, runtime, {
         skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
         skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
       });

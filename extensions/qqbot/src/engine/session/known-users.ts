@@ -1,16 +1,10 @@
-/**
- * Known user tracking — JSON file-based store.
- *
- * Migrated from src/known-users.ts. Dependencies are only Node.js
- * built-ins + log + platform (both zero plugin-sdk).
- */
+/** Known user tracking backed by the plugin SQLite state table. */
 
-import path from "node:path";
-import { privateFileStoreSync } from "openclaw/plugin-sdk/security-runtime";
+import type { GatewayPluginRuntime } from "../gateway/types.js";
+import { createMemoryKeyedStore, type KeyedStore } from "../state/keyed-store.js";
 import type { ChatScope } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
 import { debugLog, debugError } from "../utils/log.js";
-import { getQQBotDataDir, getQQBotDataPath } from "../utils/platform.js";
 
 /** Persisted record for a user who has interacted with the bot. */
 interface KnownUser {
@@ -26,15 +20,21 @@ interface KnownUser {
 
 let usersCache: Map<string, KnownUser> | null = null;
 const SAVE_THROTTLE_MS = 5000;
+const KNOWN_USERS_NAMESPACE = "known-users";
+const MAX_KNOWN_USERS = 100_000;
+
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
-let isDirty = false;
+let knownUserStore: KeyedStore<KnownUser> = createMemoryKeyedStore();
+let dirtyUsers = new Map<string, KnownUser>();
 
-function ensureDir(): void {
-  getQQBotDataDir("data");
-}
-
-function getKnownUsersFile(): string {
-  return path.join(getQQBotDataPath("data"), "known-users.json");
+export async function configureKnownUsersStore(runtime: GatewayPluginRuntime): Promise<void> {
+  knownUserStore = runtime.state.openKeyedStore<KnownUser>({
+    namespace: KNOWN_USERS_NAMESPACE,
+    maxEntries: MAX_KNOWN_USERS,
+  });
+  usersCache = null;
+  dirtyUsers = new Map();
+  await loadUsersFromStore();
 }
 
 function makeUserKey(user: Partial<KnownUser>): string {
@@ -42,22 +42,17 @@ function makeUserKey(user: Partial<KnownUser>): string {
   return user.type === "group" && user.groupOpenid ? `${base}:${user.groupOpenid}` : base;
 }
 
-function loadUsersFromFile(): Map<string, KnownUser> {
+async function loadUsersFromStore(): Promise<Map<string, KnownUser>> {
   if (usersCache !== null) {
     return usersCache;
   }
   usersCache = new Map();
   try {
-    const knownUsersFile = getKnownUsersFile();
-    const users = privateFileStoreSync(path.dirname(knownUsersFile)).readJsonIfExists<KnownUser[]>(
-      path.basename(knownUsersFile),
-    );
-    if (users) {
-      for (const user of users) {
-        usersCache.set(makeUserKey(user), user);
-      }
-      debugLog(`[known-users] Loaded ${usersCache.size} users`);
+    const entries = await knownUserStore.entries();
+    for (const entry of entries) {
+      usersCache.set(makeUserKey(entry.value), entry.value);
     }
+    debugLog(`[known-users] Loaded ${usersCache.size} users`);
   } catch (err) {
     debugError(`[known-users] Failed to load users: ${formatErrorMessage(err)}`);
     usersCache = new Map();
@@ -65,40 +60,46 @@ function loadUsersFromFile(): Map<string, KnownUser> {
   return usersCache;
 }
 
-function saveUsersToFile(): void {
-  if (!isDirty || saveTimer) {
+function loadUsersFromStoreSync(): Map<string, KnownUser> {
+  if (usersCache === null) {
+    usersCache = new Map();
+  }
+  return usersCache;
+}
+
+function saveUsersToStore(): void {
+  if (dirtyUsers.size === 0 || saveTimer) {
     return;
   }
   saveTimer = setTimeout(() => {
     saveTimer = null;
-    doSaveUsersToFile();
+    void doSaveUsersToStore();
   }, SAVE_THROTTLE_MS);
 }
 
-function doSaveUsersToFile(): void {
-  if (!usersCache || !isDirty) {
+async function doSaveUsersToStore(): Promise<void> {
+  if (dirtyUsers.size === 0) {
     return;
   }
+  const pending = dirtyUsers;
+  dirtyUsers = new Map();
   try {
-    ensureDir();
-    const filePath = getKnownUsersFile();
-    privateFileStoreSync(path.dirname(filePath)).writeJson(
-      path.basename(filePath),
-      Array.from(usersCache.values()),
-    );
-    isDirty = false;
+    await Promise.all(Array.from(pending, ([key, user]) => knownUserStore.register(key, user)));
   } catch (err) {
     debugError(`[known-users] Failed to save users: ${formatErrorMessage(err)}`);
+    for (const [key, user] of pending) {
+      dirtyUsers.set(key, user);
+    }
   }
 }
 
 /** Flush pending writes immediately, typically during shutdown. */
-export function flushKnownUsers(): void {
+export async function flushKnownUsers(): Promise<void> {
   if (saveTimer) {
     clearTimeout(saveTimer);
     saveTimer = null;
   }
-  doSaveUsersToFile();
+  await doSaveUsersToStore();
 }
 
 /** Record a known user whenever a message is received. */
@@ -109,7 +110,7 @@ export function recordKnownUser(user: {
   groupOpenid?: string;
   accountId: string;
 }): void {
-  const cache = loadUsersFromFile();
+  const cache = loadUsersFromStoreSync();
   const key = makeUserKey(user);
   const now = Date.now();
   const existing = cache.get(key);
@@ -133,6 +134,6 @@ export function recordKnownUser(user: {
     });
     debugLog(`[known-users] New user: ${user.openid} (${user.type})`);
   }
-  isDirty = true;
-  saveUsersToFile();
+  dirtyUsers.set(key, cache.get(key)!);
+  saveUsersToStore();
 }

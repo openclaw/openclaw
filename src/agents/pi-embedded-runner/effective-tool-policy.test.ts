@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { upsertSessionEntry } from "../../config/sessions/store.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { setPluginToolMeta } from "../../plugins/tools.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { providerAliasCases } from "../test-helpers/provider-alias-cases.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import { applyFinalEffectiveToolPolicy } from "./effective-tool-policy.js";
@@ -14,6 +17,10 @@ function makeTool(name: string, ownerOnly = false): AnyAgentTool {
     execute: async () => ({ content: [{ type: "text", text: "ok" }], details: {} }),
   };
 }
+
+afterEach(() => {
+  closeOpenClawAgentDatabasesForTest();
+});
 
 describe("applyFinalEffectiveToolPolicy", () => {
   it.each(providerAliasCases)(
@@ -40,6 +47,70 @@ describe("applyFinalEffectiveToolPolicy", () => {
     const filtered = applyFinalEffectiveToolPolicy({
       bundledTools: [makeTool("mcp__bundle__fs_delete"), makeTool("mcp__bundle__fs_read")],
       config: { tools: { allow: ["mcp__bundle__fs_read"] } },
+      warn: () => {},
+    });
+
+    expect(filtered.map((tool) => tool.name)).toEqual(["mcp__bundle__fs_read"]);
+  });
+
+  it("filters bundled tools through inherited subagent allowlists", () => {
+    const agentId = `bundled-inherited-allow-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const sessionKey = `agent:${agentId}:subagent:limited`;
+    upsertSessionEntry({
+      agentId,
+      sessionKey,
+      entry: {
+        sessionId: "limited-session",
+        updatedAt: Date.now(),
+        spawnDepth: 1,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
+        inheritedToolAllow: ["mcp__bundle__fs_read"],
+      } as SessionEntry,
+    });
+
+    const filtered = applyFinalEffectiveToolPolicy({
+      bundledTools: [makeTool("mcp__bundle__fs_delete"), makeTool("mcp__bundle__fs_read")],
+      config: {},
+      sessionKey,
+      warn: () => {},
+    });
+
+    expect(filtered.map((tool) => tool.name)).toEqual(["mcp__bundle__fs_read"]);
+  });
+
+  it("honors configured plugin allow entries alongside inherited bundled tool allows", () => {
+    const agentId = `bundled-plugin-allow-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const sessionKey = `agent:${agentId}:subagent:limited`;
+    upsertSessionEntry({
+      agentId,
+      sessionKey,
+      entry: {
+        sessionId: "limited-session",
+        updatedAt: Date.now(),
+        spawnDepth: 1,
+        subagentRole: "orchestrator",
+        subagentControlScope: "children",
+        inheritedToolAllow: ["mcp__bundle__fs_read"],
+      } as SessionEntry,
+    });
+    const deniedTool = makeTool("mcp__bundle__fs_delete");
+    const allowedTool = makeTool("mcp__bundle__fs_read");
+    setPluginToolMeta(deniedTool, { pluginId: "bundle-mcp", optional: false });
+    setPluginToolMeta(allowedTool, { pluginId: "bundle-mcp", optional: false });
+
+    const filtered = applyFinalEffectiveToolPolicy({
+      bundledTools: [deniedTool, allowedTool],
+      config: {
+        tools: {
+          subagents: {
+            tools: {
+              allow: ["bundle-mcp"],
+            },
+          },
+        },
+      },
+      sessionKey,
       warn: () => {},
     });
 

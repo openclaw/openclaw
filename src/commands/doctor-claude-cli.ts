@@ -8,7 +8,7 @@ import {
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import { CLAUDE_CLI_PROFILE_ID } from "../agents/auth-profiles/constants.js";
-import { resolveAuthStorePathForDisplay } from "../agents/auth-profiles/paths.js";
+import { resolveAuthProfileStoreLocationForDisplay } from "../agents/auth-profiles/paths.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
 import type {
   AuthProfileStore,
@@ -266,7 +266,7 @@ export function noteClaudeCliHealth(
     ((rawCommand: string, nextEnv?: NodeJS.ProcessEnv) =>
       resolveExecutablePath(rawCommand, { env: nextEnv }));
   const commandPath = resolveCommandPath(command, env);
-  const authStorePath = resolveAuthStorePathForDisplay();
+  const authStoreLocation = resolveAuthProfileStoreLocationForDisplay();
   const storedProfile = store.profiles[CLAUDE_CLI_PROFILE_ID];
   const defaultAgentId = resolveDefaultAgentId(cfg);
   const showAgentLabels =
@@ -297,7 +297,9 @@ export function noteClaudeCliHealth(
   }
 
   if (!storedProfile) {
-    lines.push(`- OpenClaw auth profile: missing (${CLAUDE_CLI_PROFILE_ID}) in ${authStorePath}.`);
+    lines.push(
+      `- OpenClaw auth profile: missing (${CLAUDE_CLI_PROFILE_ID}) in ${authStoreLocation}.`,
+    );
     fixHints.push(
       `- Fix: run ${formatCliCommand(
         "openclaw models auth login --provider anthropic --method cli --set-default",

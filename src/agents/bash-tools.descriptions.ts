@@ -1,5 +1,5 @@
 import path from "node:path";
-import { loadExecApprovals, resolveExecApprovalsFromFile } from "../infra/exec-approvals.js";
+import { loadExecApprovals, resolveExecApprovalsDocument } from "../infra/exec-approvals.js";
 
 /**
  * Show the exact approved token in hints. Absolute paths stay absolute so the
@@ -33,9 +33,9 @@ export function describeExecTool(params?: { agentId?: string; hasCronTool?: bool
     "IMPORTANT (Windows): Run executables directly; do NOT wrap commands in `cmd /c`, `powershell -Command`, `& ` prefix, or WSL. Use backslash paths (C:\\path), not forward slashes. Use short executable names (e.g. `node`, `python3`) instead of full paths.",
   );
   try {
-    const approvalsFile = loadExecApprovals();
-    const approvals = resolveExecApprovalsFromFile({
-      file: approvalsFile,
+    const approvalsDocument = loadExecApprovals();
+    const approvals = resolveExecApprovalsDocument({
+      document: approvalsDocument,
       agentId: params?.agentId,
     });
     const allowlist = approvals.allowlist.filter((entry) => {

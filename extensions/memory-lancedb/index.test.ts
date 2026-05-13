@@ -304,6 +304,49 @@ describe("memory plugin e2e", () => {
     );
   });
 
+  test("registers as disabled instead of creating a default LanceDB path", () => {
+    const registerService = vi.fn();
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    };
+    const mockApi = {
+      id: "memory-lancedb",
+      name: "Memory (LanceDB)",
+      source: "test",
+      config: {},
+      pluginConfig: {
+        embedding: {
+          provider: "openai",
+          model: "text-embedding-3-small",
+        },
+      },
+      runtime: {},
+      logger,
+      registerTool: vi.fn(),
+      registerCli: vi.fn(),
+      registerService,
+      on: vi.fn(),
+      resolvePath: vi.fn((filePath: string) => filePath),
+    };
+
+    memoryPlugin.register(mockApi as any);
+
+    expect(registerService).toHaveBeenCalledWith({
+      id: "memory-lancedb",
+      start: expect.any(Function),
+    });
+    expect(mockApi.resolvePath).not.toHaveBeenCalled();
+    expect(mockApi.registerTool).not.toHaveBeenCalled();
+
+    registerService.mock.calls[0]?.[0].start({});
+    expect(logger.warn).toHaveBeenCalledWith(
+      "memory-lancedb: disabled until configured (dbPath required)",
+    );
+  });
+
   test("registers auto-recall on before_prompt_build instead of the legacy hook", () => {
     const on = vi.fn();
     const mockApi = {
@@ -448,7 +491,7 @@ describe("memory plugin e2e", () => {
       expect(providerOptions.provider).toBe("openai");
       expect(providerOptions.fallback).toBe("none");
       expect(providerOptions.model).toBe("text-embedding-3-small");
-      expect(createProvider.mock.calls.at(0)?.[0]).not.toHaveProperty("remote");
+      expect(providerOptions).not.toHaveProperty("remote");
       expect(embedQuery).toHaveBeenCalledWith("project memory");
     } finally {
       vi.doUnmock("openclaw/plugin-sdk/memory-core-host-engine-embeddings");

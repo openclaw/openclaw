@@ -14,7 +14,7 @@ export const secretTargetRegistryEntries: import("openclaw/plugin-sdk/channel-se
     {
       id: "channels.irc.accounts.*.nickserv.password",
       targetType: "channels.irc.accounts.*.nickserv.password",
-      configFile: "openclaw.json",
+      store: "openclaw.json",
       pathPattern: "channels.irc.accounts.*.nickserv.password",
       secretShape: "secret_input",
       expectedResolvedValue: "string",
@@ -25,7 +25,7 @@ export const secretTargetRegistryEntries: import("openclaw/plugin-sdk/channel-se
     {
       id: "channels.irc.accounts.*.password",
       targetType: "channels.irc.accounts.*.password",
-      configFile: "openclaw.json",
+      store: "openclaw.json",
       pathPattern: "channels.irc.accounts.*.password",
       secretShape: "secret_input",
       expectedResolvedValue: "string",
@@ -36,7 +36,7 @@ export const secretTargetRegistryEntries: import("openclaw/plugin-sdk/channel-se
     {
       id: "channels.irc.nickserv.password",
       targetType: "channels.irc.nickserv.password",
-      configFile: "openclaw.json",
+      store: "openclaw.json",
       pathPattern: "channels.irc.nickserv.password",
       secretShape: "secret_input",
       expectedResolvedValue: "string",
@@ -47,7 +47,7 @@ export const secretTargetRegistryEntries: import("openclaw/plugin-sdk/channel-se
     {
       id: "channels.irc.password",
       targetType: "channels.irc.password",
-      configFile: "openclaw.json",
+      store: "openclaw.json",
       pathPattern: "channels.irc.password",
       secretShape: "secret_input",
       expectedResolvedValue: "string",

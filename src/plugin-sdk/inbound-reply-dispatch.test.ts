@@ -39,7 +39,7 @@ import {
 } from "./inbound-reply-dispatch.js";
 
 function readFirstMockArg(fn: unknown): unknown {
-  return (fn as { mock: { calls: unknown[][] } }).mock.calls.at(0)?.[0];
+  return (fn as { mock: { calls: unknown[][] } }).mock.calls[0]?.[0];
 }
 
 describe("recordInboundSessionAndDispatchReply", () => {
@@ -80,7 +80,6 @@ describe("recordInboundSessionAndDispatchReply", () => {
       accountId: "default",
       agentId: "main",
       routeSessionKey: "agent:main:test:peer",
-      storePath: "/tmp/sessions.json",
       ctxPayload,
       recordInboundSession,
       dispatchReplyWithBufferedBlockDispatcher,
@@ -122,7 +121,6 @@ describe("recordInboundSessionAndDispatchReply", () => {
       accountId: "default",
       agentId: "main",
       routeSessionKey: "agent:main:telegram:peer",
-      storePath: "/tmp/sessions.json",
       ctxPayload: {
         Body: "body",
         RawBody: "body",
@@ -187,7 +185,6 @@ describe("recordInboundSessionAndDispatchReply", () => {
         agentId: "main",
         sessionKey: "agent:main:telegram:peer",
       },
-      storePath: "/tmp/sessions.json",
       ctxPayload,
       core: {
         channel: {

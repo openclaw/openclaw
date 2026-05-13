@@ -176,7 +176,6 @@ describe("Feishu card-action lifecycle", () => {
       finalizeInboundContextMock,
       dispatchReplyFromConfigMock,
       withReplyDispatcherMock,
-      storePath: "/tmp/feishu-card-action-sessions.json",
     });
   });
 

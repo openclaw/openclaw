@@ -68,7 +68,7 @@ export {
   formatAuthDoctorHint,
   resolveAuthProfileEligibility,
   resolveAuthProfileOrder,
-  resolveAuthStorePathForDisplay,
+  resolveAuthProfileStoreLocationForDisplay,
 } from "../agents/auth-profiles.js";
 export type {
   ApiKeyCredential,

@@ -1,11 +1,18 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const createdHomes: string[] = [];
+let previousOpenClawHome: string | undefined;
+let previousStateDir: string | undefined;
 
 async function useMockHome(homeDir: string): Promise<void> {
+  previousOpenClawHome ??= process.env.OPENCLAW_HOME;
+  previousStateDir ??= process.env.OPENCLAW_STATE_DIR;
+  process.env.OPENCLAW_HOME = homeDir;
+  process.env.OPENCLAW_STATE_DIR = path.join(homeDir, ".openclaw");
   vi.resetModules();
   vi.doMock("node:os", async (importOriginal) => {
     const actual = await importOriginal<typeof import("node:os")>();
@@ -25,6 +32,19 @@ function makeHome(): string {
 
 describe("qqbot storage laziness", () => {
   afterEach(() => {
+    resetPluginStateStoreForTests();
+    if (previousOpenClawHome === undefined) {
+      delete process.env.OPENCLAW_HOME;
+    } else {
+      process.env.OPENCLAW_HOME = previousOpenClawHome;
+    }
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
+    previousOpenClawHome = undefined;
+    previousStateDir = undefined;
     vi.doUnmock("node:os");
     vi.resetModules();
     for (const home of createdHomes.splice(0)) {
@@ -56,8 +76,7 @@ describe("qqbot storage laziness", () => {
 
     saveCredentialBackup("default", "123456", "secret");
 
-    expect(fs.existsSync(path.join(qqbotRoot, "data", "credential-backup-default.json"))).toBe(
-      true,
-    );
+    expect(fs.existsSync(path.join(homeDir, ".openclaw", "state", "openclaw.sqlite"))).toBe(true);
+    expect(fs.existsSync(qqbotRoot)).toBe(false);
   });
 });

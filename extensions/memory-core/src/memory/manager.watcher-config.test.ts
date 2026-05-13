@@ -112,6 +112,7 @@ describe("memory watcher config", () => {
       workspaceDir = "";
       extraDir = "";
     }
+    vi.unstubAllEnvs();
   });
 
   async function setupWatcherWorkspace(seedFile: { name: string; contents: string }) {
@@ -120,6 +121,7 @@ describe("memory watcher config", () => {
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await fs.mkdir(extraDir, { recursive: true });
     await fs.writeFile(path.join(extraDir, seedFile.name), seedFile.contents);
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
   }
 
   function createWatcherConfig(overrides?: Partial<MemorySearchConfig>): OpenClawConfig {
@@ -128,7 +130,7 @@ describe("memory watcher config", () => {
       memorySearch: {
         provider: "openai",
         model: "mock-embed",
-        store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
+        store: { vector: { enabled: false } },
         sync: { watch: true, watchDebounceMs: 25, onSessionStart: false, onSearch: false },
         query: { minScore: 0, hybrid: { enabled: false } },
         extraPaths: [extraDir],
@@ -161,7 +163,7 @@ describe("memory watcher config", () => {
     await expectWatcherManager(cfg);
 
     expect(watchMock).toHaveBeenCalledTimes(1);
-    const [watchedPaths, options] = watchMock.mock.calls.at(0) as unknown as [
+    const [watchedPaths, options] = watchMock.mock.calls[0] as unknown as [
       string[],
       Record<string, unknown>,
     ];
@@ -217,7 +219,7 @@ describe("memory watcher config", () => {
     await expectWatcherManager(cfg);
 
     expect(watchMock).toHaveBeenCalledTimes(1);
-    const [watchedPaths, options] = watchMock.mock.calls.at(0) as unknown as [
+    const [watchedPaths, options] = watchMock.mock.calls[0] as unknown as [
       string[],
       Record<string, unknown>,
     ];

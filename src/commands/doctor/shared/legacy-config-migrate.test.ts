@@ -27,7 +27,7 @@ function expectMigrationChangesToIncludeFragments(changes: string[], fragments: 
 }
 
 describe("legacy session maintenance migrate", () => {
-  it("removes deprecated session.maintenance.rotateBytes", () => {
+  it("removes ignored session.maintenance", () => {
     const res = migrateLegacyConfigForTest({
       session: {
         maintenance: {
@@ -39,16 +39,180 @@ describe("legacy session maintenance migrate", () => {
       },
     });
 
-    expect(res.config?.session?.maintenance).toEqual({
-      mode: "enforce",
-      pruneAfter: "30d",
-      maxEntries: 500,
+    expect(res.config?.session).toEqual({});
+    expect(res.changes).toContain(
+      "Removed ignored session.maintenance; SQLite sessions do not prune rows.",
+    );
+  });
+
+  it("removes ignored session.writeLock", () => {
+    const res = migrateLegacyConfigForTest({
+      session: {
+        writeLock: {
+          acquireTimeoutMs: 120_000,
+        },
+      },
     });
-    expect(res.changes).toStrictEqual(["Removed deprecated session.maintenance.rotateBytes."]);
+
+    expect(res.config?.session).toEqual({});
+    expect(res.changes).toContain(
+      "Removed ignored session.writeLock; SQLite serializes session writes.",
+    );
+  });
+
+  it("keeps unrelated session settings while removing ignored maintenance and writeLock", () => {
+    const res = migrateLegacyConfigForTest({
+      session: {
+        store: "sessions.json",
+        resetTriggers: ["/new"],
+        writeLock: {
+          acquireTimeoutMs: 120_000,
+        },
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "30d",
+          maxEntries: 500,
+        },
+      },
+    });
+
+    expect(res.config?.session).toEqual({
+      resetTriggers: ["/new"],
+    });
+    expect(res.changes).toContain(
+      "Removed ignored session.store; sessions live in per-agent SQLite databases.",
+    );
+    expect(res.changes).toContain(
+      "Removed ignored session.maintenance; SQLite sessions do not prune rows.",
+    );
+    expect(res.changes).toContain(
+      "Removed ignored session.writeLock; SQLite serializes session writes.",
+    );
+  });
+
+  it("moves legacy session.idleMinutes into session.reset", () => {
+    const res = migrateLegacyConfigForTest({
+      session: {
+        idleMinutes: 120,
+      },
+    });
+
+    expect(res.config?.session).toEqual({
+      reset: {
+        mode: "idle",
+        idleMinutes: 120,
+      },
+    });
+    expect(res.changes).toContain("Moved session.idleMinutes to session.reset.idleMinutes.");
+  });
+
+  it("moves legacy session.resetByType.dm into direct", () => {
+    const res = migrateLegacyConfigForTest({
+      session: {
+        resetByType: {
+          dm: { mode: "idle", idleMinutes: 45 },
+          group: { mode: "daily", atHour: 3 },
+        },
+      },
+    });
+
+    expect(res.config?.session).toEqual({
+      resetByType: {
+        direct: { mode: "idle", idleMinutes: 45 },
+        group: { mode: "daily", atHour: 3 },
+      },
+    });
+    expect(res.changes).toContain("Moved session.resetByType.dm to session.resetByType.direct.");
+  });
+});
+
+describe("legacy memory search store migrate", () => {
+  it("removes sidecar memory search index paths", () => {
+    const res = migrateLegacyConfigForTest({
+      memorySearch: {
+        provider: "openai",
+        store: {
+          path: "/tmp/openclaw-memory-{agentId}.sqlite",
+          vector: { enabled: false },
+        },
+      },
+      agents: {
+        defaults: {
+          memorySearch: {
+            store: {
+              path: "/tmp/default-memory.sqlite",
+              fts: { tokenizer: "trigram" },
+            },
+          },
+        },
+        list: [
+          {
+            id: "ops",
+            memorySearch: {
+              store: {
+                path: "/tmp/ops-memory.sqlite",
+                vector: { enabled: true },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect((res.config as Record<string, unknown> | null)?.memorySearch).toBeUndefined();
+    expect(res.config?.agents?.defaults?.memorySearch?.store).toEqual({
+      fts: { tokenizer: "trigram" },
+      vector: { enabled: false },
+    });
+    expect(res.config?.agents?.list?.[0]?.memorySearch?.store).toEqual({
+      vector: { enabled: true },
+    });
+    expect(res.changes).toContain(
+      "Merged memorySearch → agents.defaults.memorySearch (filled missing fields from legacy; kept explicit agents.defaults values).",
+    );
+    expect(res.changes).toContain(
+      "Removed agents.defaults.memorySearch.store.path; memory indexes now use each agent database.",
+    );
+    expect(res.changes).toContain(
+      "Removed agents.list[0].memorySearch.store.path; memory indexes now use each agent database.",
+    );
+  });
+});
+
+describe("legacy cron store migrate", () => {
+  it("removes ignored cron.store path config", () => {
+    const res = migrateLegacyConfigForTest({
+      cron: {
+        enabled: true,
+        store: "~/.openclaw/cron/jobs.json",
+        maxConcurrentRuns: 2,
+      },
+    });
+
+    expect(res.config?.cron).toEqual({
+      enabled: true,
+      maxConcurrentRuns: 2,
+    });
+    expect(res.changes).toContain(
+      "Removed cron.store; cron jobs now use the shared SQLite database.",
+    );
   });
 });
 
 describe("legacy session parent fork migrate", () => {
+  it("removes ignored session.store", () => {
+    const res = migrateLegacyConfigForTest({
+      session: {
+        store: "sessions.json",
+      },
+    });
+
+    expect(res.config?.session).toEqual({});
+    expect(res.changes).toContain(
+      "Removed ignored session.store; sessions live in per-agent SQLite databases.",
+    );
+  });
+
   it("removes legacy session.parentForkMaxTokens", () => {
     const res = migrateLegacyConfigForTest({
       session: {
@@ -57,12 +221,13 @@ describe("legacy session parent fork migrate", () => {
       },
     });
 
-    expect(res.config?.session).toEqual({
-      store: "sessions.json",
-    });
-    expect(res.changes).toStrictEqual([
+    expect(res.config?.session).toEqual({});
+    expect(res.changes).toContain(
+      "Removed ignored session.store; sessions live in per-agent SQLite databases.",
+    );
+    expect(res.changes).toContain(
       "Removed session.parentForkMaxTokens; parent fork sizing is automatic.",
-    ]);
+    );
   });
 });
 

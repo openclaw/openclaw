@@ -7,7 +7,7 @@ export async function withSandboxMediaTempHome<T>(
   prefix: string,
   fn: (home: string) => Promise<T>,
 ): Promise<T> {
-  return withTempHomeBase(async (home) => await fn(home), { prefix, skipSessionCleanup: true });
+  return withTempHomeBase(async (home) => await fn(home), { prefix, skipStateCleanup: true });
 }
 
 export function createSandboxMediaContexts(mediaPath: string): {
@@ -40,6 +40,5 @@ export function createSandboxMediaStageConfig(home: string): OpenClawConfig {
       },
     },
     channels: { whatsapp: { allowFrom: ["*"] } },
-    session: { store: join(home, "sessions.json") },
   } as OpenClawConfig;
 }

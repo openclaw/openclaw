@@ -235,7 +235,6 @@ export function resolveAcpxPluginConfig(params: {
   const workspaceDir = params.workspaceDir?.trim() || process.cwd();
   const fallbackCwd = workspaceDir;
   const cwd = path.resolve(normalized.cwd?.trim() || fallbackCwd);
-  const stateDir = path.resolve(normalized.stateDir?.trim() || path.join(workspaceDir, "state"));
   const pluginToolsMcpBridge = normalized.pluginToolsMcpBridge === true;
   const openClawToolsMcpBridge = normalized.openClawToolsMcpBridge === true;
   const mcpServers = resolveConfiguredMcpServers({
@@ -262,7 +261,6 @@ export function resolveAcpxPluginConfig(params: {
 
   return {
     cwd,
-    stateDir,
     probeAgent,
     permissionMode: normalized.permissionMode ?? DEFAULT_PERMISSION_MODE,
     nonInteractivePermissions:

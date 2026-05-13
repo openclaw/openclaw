@@ -72,7 +72,6 @@ vi.mock("./runtime-api.js", () => ({
   recordSessionMetaFromInbound: async () => {},
   resolveChannelContextVisibilityMode: () => "standard",
   resolveInboundSessionEnvelopeContext: () => ({
-    storePath: "/tmp/sessions.json",
     envelopeOptions: {},
     previousTimestamp: undefined,
   }),
@@ -201,7 +200,7 @@ function makeRemoveAckAfterReplyParams() {
 }
 
 function firstTranscriptionContext(): Record<string, unknown> {
-  const call = transcribeFirstAudioMock.mock.calls.at(0)?.[0] as
+  const call = transcribeFirstAudioMock.mock.calls[0]?.[0] as
     | { ctx?: Record<string, unknown> }
     | undefined;
   if (!call?.ctx) {

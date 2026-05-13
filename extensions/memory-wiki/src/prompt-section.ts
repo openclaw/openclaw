@@ -1,9 +1,7 @@
-import fs from "node:fs";
-import path from "node:path";
 import type { MemoryPromptSectionBuilder } from "openclaw/plugin-sdk/memory-host-core";
 import { resolveMemoryWikiConfig, type ResolvedMemoryWikiConfig } from "./config.js";
+import { readMemoryWikiAgentDigestSync } from "./digest-state.js";
 
-const AGENT_DIGEST_PATH = ".openclaw-wiki/cache/agent-digest.json";
 const DIGEST_MAX_PAGES = 4;
 const DIGEST_MAX_CLAIMS_PER_PAGE = 2;
 
@@ -31,9 +29,11 @@ type PromptDigest = {
 };
 
 function tryReadPromptDigest(config: ResolvedMemoryWikiConfig): PromptDigest | null {
-  const digestPath = path.join(config.vault.path, AGENT_DIGEST_PATH);
+  const raw = readMemoryWikiAgentDigestSync(config.vault.path);
+  if (!raw) {
+    return null;
+  }
   try {
-    const raw = fs.readFileSync(digestPath, "utf8");
     const parsed = JSON.parse(raw) as PromptDigest;
     if (!parsed || typeof parsed !== "object") {
       return null;

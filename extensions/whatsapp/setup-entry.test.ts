@@ -14,34 +14,28 @@ describe("whatsapp setup entry", () => {
 
     expect(setupEntry.kind).toBe("bundled-channel-setup-entry");
     expect(setupEntry.features).toEqual({
-      legacySessionSurfaces: true,
-      legacyStateMigrations: true,
+      doctorSessionMigrationSurface: true,
+      doctorLegacyState: true,
     });
 
     const whatsappSetupPlugin = setupEntry.loadSetupPlugin();
     expect(whatsappSetupPlugin.id).toBe("whatsapp");
-    const detectLegacyStateMigrations = setupEntry.loadLegacyStateMigrationDetector?.();
-    if (!detectLegacyStateMigrations) {
+    const detectDoctorLegacyState = setupEntry.loadDoctorLegacyStateDetector?.();
+    if (!detectDoctorLegacyState) {
       throw new Error("expected WhatsApp legacy state migration detector");
     }
     expect(
-      detectLegacyStateMigrations({
+      detectDoctorLegacyState({
         cfg: {},
         env: {},
         oauthDir: "/tmp/openclaw-whatsapp-empty",
         stateDir: "/tmp/openclaw-state",
       }),
     ).toStrictEqual([]);
-    const legacySessionSurface = setupEntry.loadLegacySessionSurface?.();
-    if (!legacySessionSurface) {
-      throw new Error("expected WhatsApp legacy session surface");
-    }
-    expect(Object.keys(legacySessionSurface).toSorted()).toEqual([
-      "canonicalizeLegacySessionKey",
-      "isLegacyGroupSessionKey",
-    ]);
-    expect(legacySessionSurface.canonicalizeLegacySessionKey).toBeTypeOf("function");
-    expect(legacySessionSurface.isLegacyGroupSessionKey).toBeTypeOf("function");
+    expect(setupEntry.loadDoctorSessionMigrationSurface?.()).toEqual({
+      canonicalizeLegacySessionKey: expect.any(Function),
+      isLegacyGroupSessionKey: expect.any(Function),
+    });
   });
 
   it("loads the delegated setup wizard without importing runtime dependencies", async () => {

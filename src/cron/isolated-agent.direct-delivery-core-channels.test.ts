@@ -16,8 +16,8 @@ import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import {
   makeCfg,
   makeJob,
+  seedMainRouteSession,
   withTempCronHome,
-  writeSessionStore,
 } from "./isolated-agent.test-harness.js";
 import { setupIsolatedAgentTurnMocks } from "./isolated-agent.test-setup.js";
 
@@ -124,8 +124,8 @@ async function expectCoreChannelAnnounceDelivery({
   testCase: ChannelCase;
 }): Promise<void> {
   await withTempCronHome(async (home) => {
-    const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
-    const cfg = makeCfg(home, storePath);
+    await seedMainRouteSession(home, { lastChannel: "webchat", lastTo: "" });
+    const cfg = makeCfg(home);
     const deps = createCliDeps();
     if (meta) {
       mockAgentPayloads(payloads, meta);
@@ -227,7 +227,7 @@ async function expectTelegramAnnounceDelivery({
   to: string;
 }): Promise<void> {
   await withTempCronHome(async (home) => {
-    const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
+    await seedMainRouteSession(home, { lastChannel: "webchat", lastTo: "" });
     const deps = createCliDeps();
     if (meta) {
       mockAgentPayloads(payloads, meta);
@@ -237,7 +237,6 @@ async function expectTelegramAnnounceDelivery({
 
     const res = await runTelegramAnnounceTurn({
       home,
-      storePath,
       deps,
       delivery: { mode: "announce", channel: "telegram", to },
     });

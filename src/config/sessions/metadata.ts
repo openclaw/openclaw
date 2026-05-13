@@ -8,47 +8,19 @@ import {
 } from "../../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { buildGroupDisplayName, resolveGroupSessionKey } from "./group.js";
-import type { GroupKeyResolution, SessionEntry, SessionOrigin } from "./types.js";
+import type { GroupKeyResolution, SessionEntry } from "./types.js";
 
-const mergeOrigin = (
-  existing: SessionOrigin | undefined,
-  next: SessionOrigin | undefined,
-): SessionOrigin | undefined => {
-  if (!existing && !next) {
-    return undefined;
-  }
-  const merged: SessionOrigin = existing ? { ...existing } : {};
-  if (next?.label) {
-    merged.label = next.label;
-  }
-  if (next?.provider) {
-    merged.provider = next.provider;
-  }
-  if (next?.surface) {
-    merged.surface = next.surface;
-  }
-  if (next?.chatType) {
-    merged.chatType = next.chatType;
-  }
-  if (next?.from) {
-    merged.from = next.from;
-  }
-  if (next?.to) {
-    merged.to = next.to;
-  }
-  if (next?.nativeChannelId) {
-    merged.nativeChannelId = next.nativeChannelId;
-  }
-  if (next?.nativeDirectUserId) {
-    merged.nativeDirectUserId = next.nativeDirectUserId;
-  }
-  if (next?.accountId) {
-    merged.accountId = next.accountId;
-  }
-  if (next?.threadId != null && next.threadId !== "") {
-    merged.threadId = next.threadId;
-  }
-  return Object.keys(merged).length > 0 ? merged : undefined;
+type SessionOrigin = {
+  label?: string;
+  provider?: string;
+  surface?: string;
+  chatType?: string;
+  from?: string;
+  to?: string;
+  nativeChannelId?: string;
+  nativeDirectUserId?: string;
+  accountId?: string;
+  threadId?: string | number;
 };
 
 export function deriveSessionOrigin(
@@ -110,13 +82,6 @@ export function deriveSessionOrigin(
   }
 
   return Object.keys(origin).length > 0 ? origin : undefined;
-}
-
-export function snapshotSessionOrigin(entry?: SessionEntry): SessionOrigin | undefined {
-  if (!entry?.origin) {
-    return undefined;
-  }
-  return { ...entry.origin };
 }
 
 export function deriveGroupSessionPatch(params: {
@@ -186,17 +151,30 @@ export function deriveSessionMetaPatch(params: {
   skipSystemEventOrigin?: boolean;
 }): Partial<SessionEntry> | null {
   const groupPatch = deriveGroupSessionPatch(params);
-  const origin = deriveSessionOrigin(params.ctx, {
-    skipSystemEventOrigin: params.skipSystemEventOrigin,
-  });
-  if (!groupPatch && !origin) {
-    return null;
+  const isSystemEventProvider =
+    params.ctx.Provider === "heartbeat" ||
+    params.ctx.Provider === "cron-event" ||
+    params.ctx.Provider === "exec-event";
+  if (params.skipSystemEventOrigin && isSystemEventProvider) {
+    return groupPatch && Object.keys(groupPatch).length > 0 ? { ...groupPatch } : null;
   }
 
   const patch: Partial<SessionEntry> = groupPatch ? { ...groupPatch } : {};
-  const mergedOrigin = mergeOrigin(params.existing?.origin, origin);
-  if (mergedOrigin) {
-    patch.origin = mergedOrigin;
+  const chatType = normalizeChatType(params.ctx.ChatType) ?? undefined;
+  if (chatType && !patch.chatType) {
+    patch.chatType = chatType;
+  }
+  const providerRaw =
+    (typeof params.ctx.OriginatingChannel === "string" && params.ctx.OriginatingChannel) ||
+    params.ctx.Surface ||
+    params.ctx.Provider;
+  const channel = normalizeMessageChannel(providerRaw);
+  if (channel && !patch.channel) {
+    patch.channel = channel;
+  }
+  const displayName = normalizeOptionalString(resolveConversationLabel(params.ctx));
+  if (displayName && !patch.displayName && !params.existing?.displayName) {
+    patch.displayName = displayName;
   }
 
   return Object.keys(patch).length > 0 ? patch : null;

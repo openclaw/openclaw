@@ -9,6 +9,7 @@ import type { SkillSnapshot } from "../skills.js";
 
 export type CompactEmbeddedPiSessionParams = {
   sessionId: string;
+  agentId?: string;
   runId?: string;
   sessionKey?: string;
   /** Session key used only for runtime policy/sandbox resolution. Defaults to sessionKey. */
@@ -35,7 +36,6 @@ export type CompactEmbeddedPiSessionParams = {
   spawnedBy?: string | null;
   /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
-  sessionFile: string;
   /** Optional caller-observed live prompt tokens used for compaction diagnostics. */
   currentTokenCount?: number;
   workspaceDir: string;

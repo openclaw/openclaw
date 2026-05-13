@@ -2,10 +2,17 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
+import { resolveAuthProfileStoreKey } from "../agents/auth-profiles/paths.js";
+import {
+  loadPersistedAuthProfileStore,
+  savePersistedAuthProfileSecretsStore,
+} from "../agents/auth-profiles/persisted.js";
+import { readAuthProfileStorePayloadResult } from "../agents/auth-profiles/sqlite-storage.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
@@ -35,8 +42,8 @@ import { agentsAddCommand } from "./agents.js";
 
 const runtime = createTestRuntime();
 
-function oauthProfileSecretId(authStorePath: string, profileId: string): string {
-  return createHash("sha256").update(`${authStorePath}\0${profileId}`).digest("hex").slice(0, 32);
+function oauthProfileSecretId(agentDir: string, profileId: string): string {
+  return createHash("sha256").update(`${agentDir}\0${profileId}`).digest("hex").slice(0, 32);
 }
 
 describe("agents add command", () => {
@@ -48,6 +55,11 @@ describe("agents add command", () => {
     runtime.log.mockClear();
     runtime.error.mockClear();
     runtime.exit.mockClear();
+  });
+
+  afterEach(() => {
+    closeOpenClawStateDatabaseForTest();
+    vi.unstubAllEnvs();
   });
 
   it("requires --workspace when flags are present", async () => {
@@ -97,51 +109,44 @@ describe("agents add command", () => {
   it("copies only portable auth profiles when seeding a new agent store", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agents-add-auth-copy-"));
     try {
+      vi.stubEnv("OPENCLAW_STATE_DIR", root);
       const sourceAgentDir = path.join(root, "main", "agent");
       const destAgentDir = path.join(root, "work", "agent");
-      const destAuthPath = path.join(destAgentDir, "auth-profiles.json");
       await fs.mkdir(sourceAgentDir, { recursive: true });
-      await fs.writeFile(
-        path.join(sourceAgentDir, "auth-profiles.json"),
-        `${JSON.stringify(
-          {
-            version: AUTH_STORE_VERSION,
-            profiles: {
-              "openai:default": {
-                type: "api_key",
-                provider: "openai",
-                key: "sk-test",
-              },
-              "github-copilot:default": {
-                type: "token",
-                provider: "github-copilot",
-                token: "gho-test",
-              },
-              "openai-codex:default": {
-                type: "oauth",
-                provider: "openai-codex",
-                access: "codex-access",
-                refresh: "codex-refresh",
-                expires: Date.now() + 60_000,
-              },
+      savePersistedAuthProfileSecretsStore(
+        {
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            "openai:default": {
+              type: "api_key",
+              provider: "openai",
+              key: "sk-test",
+            },
+            "github-copilot:default": {
+              type: "token",
+              provider: "github-copilot",
+              token: "gho-test",
+            },
+            "openai-codex:default": {
+              type: "oauth",
+              provider: "openai-codex",
+              access: "codex-access",
+              refresh: "codex-refresh",
+              expires: Date.now() + 60_000,
             },
           },
-          null,
-          2,
-        )}\n`,
-        "utf8",
+        },
+        sourceAgentDir,
       );
 
       const result = await __testing.copyPortableAuthProfiles({
         sourceAgentDir,
-        destAuthPath,
+        destAgentDir,
       });
 
       expect(result).toEqual({ copied: 2, skipped: 1 });
-      const copied = JSON.parse(await fs.readFile(destAuthPath, "utf8")) as {
-        profiles: Record<string, unknown>;
-      };
-      expect(Object.keys(copied.profiles).toSorted()).toEqual([
+      const copied = loadPersistedAuthProfileStore(destAgentDir);
+      expect(Object.keys(copied?.profiles ?? {}).toSorted()).toEqual([
         "github-copilot:default",
         "openai:default",
       ]);
@@ -157,7 +162,6 @@ describe("agents add command", () => {
     try {
       const sourceAgentDir = path.join(root, "main", "agent");
       const destAgentDir = path.join(root, "work", "agent");
-      const destAuthPath = path.join(destAgentDir, "auth-profiles.json");
       const expires = Date.now() + 60_000;
       await fs.mkdir(sourceAgentDir, { recursive: true });
       saveAuthProfileStore(
@@ -179,11 +183,15 @@ describe("agents add command", () => {
 
       const result = await __testing.copyPortableAuthProfiles({
         sourceAgentDir,
-        destAuthPath,
+        destAgentDir,
       });
 
       expect(result).toEqual({ copied: 1, skipped: 0 });
-      const copiedRaw = await fs.readFile(destAuthPath, "utf8");
+      const copiedResult = readAuthProfileStorePayloadResult(
+        resolveAuthProfileStoreKey(destAgentDir),
+      );
+      expect(copiedResult.exists).toBe(true);
+      const copiedRaw = JSON.stringify(copiedResult.exists ? copiedResult.value : undefined);
       expect(copiedRaw).not.toContain("codex-copy-access-token");
       expect(copiedRaw).not.toContain("codex-copy-refresh-token");
       const copied = JSON.parse(copiedRaw) as {
@@ -198,7 +206,7 @@ describe("agents add command", () => {
         oauthRef: {
           source: "openclaw-credentials",
           provider: "openai-codex",
-          id: oauthProfileSecretId(destAuthPath, "openai-codex:default"),
+          id: oauthProfileSecretId(destAgentDir, "openai-codex:default"),
         },
       });
     } finally {

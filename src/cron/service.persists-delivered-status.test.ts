@@ -9,7 +9,7 @@ import {
 } from "./service.test-harness.js";
 
 const noopLogger = createNoopLogger();
-const { makeStorePath } = createCronStoreHarness();
+const { makeStoreKey } = createCronStoreHarness();
 installCronTestHooks({ logger: noopLogger });
 
 type CronAddInput = Parameters<CronService["add"]>[0];
@@ -45,14 +45,14 @@ function buildMainSessionSystemEventJob(name: string): CronAddInput {
 }
 
 function createIsolatedCronWithFinishedBarrier(params: {
-  storePath: string;
+  storeKey?: string;
   delivered?: boolean;
   error?: string;
   onFinished?: (evt: { jobId: string; delivered?: boolean; deliveryStatus?: string }) => void;
 }) {
   const finished = createFinishedBarrier();
   const cron = new CronService({
-    storePath: params.storePath,
+    storeKey: params.storeKey,
     cronEnabled: true,
     log: noopLogger,
     enqueueSystemEvent: vi.fn(),
@@ -84,8 +84,9 @@ async function runSingleJobAndReadState(params: {
 }) {
   const job = await params.cron.add(params.job);
   vi.setSystemTime(new Date(job.state.nextRunAtMs! + 5));
+  const finished = params.finished.waitForOk(job.id);
   await vi.runOnlyPendingTimersAsync();
-  await params.finished.waitForOk(job.id);
+  await finished;
 
   const jobs = await params.cron.list({ includeDisabled: true });
   return { job, updated: jobs.find((entry) => entry.id === job.id) };
@@ -129,9 +130,9 @@ async function runIsolatedJobAndReadState(params: {
   error?: string;
   onFinished?: (evt: { jobId: string; delivered?: boolean; deliveryStatus?: string }) => void;
 }) {
-  const store = await makeStorePath();
+  const store = await makeStoreKey();
   const { cron, finished } = createIsolatedCronWithFinishedBarrier({
-    storePath: store.storePath,
+    storeKey: store.storeKey,
     ...(params.delivered !== undefined ? { delivered: params.delivered } : {}),
     ...(params.error !== undefined ? { error: params.error } : {}),
     ...(params.onFinished ? { onFinished: params.onFinished } : {}),
@@ -212,9 +213,9 @@ describe("CronService persists delivered status", () => {
   });
 
   it("does not set lastDelivered for main session jobs", async () => {
-    const store = await makeStorePath();
+    const store = await makeStoreKey();
     const { cron, enqueueSystemEvent, finished } = createStartedCronServiceWithFinishedBarrier({
-      storePath: store.storePath,
+      storeKey: store.storeKey,
       logger: noopLogger,
     });
 

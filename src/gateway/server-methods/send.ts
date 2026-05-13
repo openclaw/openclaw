@@ -21,7 +21,6 @@ import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { extractToolPayload } from "../../infra/outbound/tool-payload.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { normalizePollInput } from "../../polls.js";
-import { parseThreadSessionSuffix } from "../../sessions/session-key-utils.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -528,14 +527,12 @@ export const sendHandlers: GatewayRequestHandlers = {
           replyToId,
           threadId,
         });
-        const providedSessionBaseKey =
-          parseThreadSessionSuffix(providedSessionKey).baseSessionKey ?? providedSessionKey;
         const shouldUseDerivedThreadSessionKey =
           channel === "slack" &&
           !!providedSessionKey &&
           !!normalizeOptionalString(derivedRoute?.threadId) &&
-          normalizeOptionalLowercaseString(derivedRoute?.baseSessionKey) ===
-            normalizeOptionalLowercaseString(providedSessionBaseKey) &&
+          (normalizeOptionalLowercaseString(derivedRoute?.baseSessionKey) === providedSessionKey ||
+            normalizeOptionalLowercaseString(derivedRoute?.sessionKey) === providedSessionKey) &&
           normalizeOptionalLowercaseString(derivedRoute?.sessionKey) !== providedSessionKey;
         const outboundRoute = derivedRoute
           ? providedSessionKey

@@ -1,12 +1,16 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveUserPath } from "../utils.js";
+import { listDiagnosticEvents } from "../infra/diagnostic-events-store.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createCacheTrace } from "./cache-trace.js";
 
 describe("createCacheTrace", () => {
   function createMemoryTraceForTest() {
-    const lines: string[] = [];
+    const events: unknown[] = [];
     const trace = createCacheTrace({
       cfg: {
         diagnostics: {
@@ -17,12 +21,11 @@ describe("createCacheTrace", () => {
       },
       env: {},
       writer: {
-        filePath: "memory",
-        write: (line) => lines.push(line),
-        flush: async () => undefined,
+        destination: "memory",
+        write: (event) => events.push(event),
       },
     });
-    return { lines, trace };
+    return { events, trace };
   }
 
   it("returns null when diagnostics cache tracing is disabled", () => {
@@ -34,38 +37,65 @@ describe("createCacheTrace", () => {
     expect(trace).toBeNull();
   });
 
-  it("honors diagnostics cache trace config and expands file paths", () => {
-    const lines: string[] = [];
+  it("stores diagnostics cache trace output in SQLite state", () => {
+    const events: unknown[] = [];
     const trace = createCacheTrace({
       cfg: {
         diagnostics: {
           cacheTrace: {
             enabled: true,
-            filePath: "~/.openclaw/logs/cache-trace.jsonl",
           },
         },
       },
       env: {},
       writer: {
-        filePath: "memory",
-        write: (line) => lines.push(line),
-        flush: async () => undefined,
+        destination: "memory",
+        write: (event) => events.push(event),
       },
     });
 
     expect(typeof trace?.recordStage).toBe("function");
-    expect(trace?.filePath).toBe(resolveUserPath("~/.openclaw/logs/cache-trace.jsonl"));
+    expect(trace?.destination).toBe("sqlite://state/diagnostics/cache-trace");
 
     trace?.recordStage("session:loaded", {
       messages: [],
       system: "sys",
     });
 
-    expect(lines.length).toBe(1);
+    expect(events.length).toBe(1);
+  });
+
+  it("stores default cache trace events in SQLite state", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cache-trace-"));
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    try {
+      const trace = createCacheTrace({
+        cfg: {
+          diagnostics: {
+            cacheTrace: {
+              enabled: true,
+            },
+          },
+        },
+        env,
+      });
+
+      expect(trace?.destination).toBe("sqlite://state/diagnostics/cache-trace");
+      trace?.recordStage("session:loaded", { messages: [] });
+
+      const entries = listDiagnosticEvents<Record<string, unknown>>("diagnostics.cache_trace", {
+        env,
+      });
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.value).toMatchObject({ stage: "session:loaded" });
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("records empty prompt/system values when enabled", () => {
-    const lines: string[] = [];
+    const events: unknown[] = [];
     const trace = createCacheTrace({
       cfg: {
         diagnostics: {
@@ -78,34 +108,33 @@ describe("createCacheTrace", () => {
       },
       env: {},
       writer: {
-        filePath: "memory",
-        write: (line) => lines.push(line),
-        flush: async () => undefined,
+        destination: "memory",
+        write: (event) => events.push(event),
       },
     });
 
     trace?.recordStage("prompt:before", { prompt: "", system: "" });
 
-    const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
+    const event = (events[0] ?? {}) as Record<string, unknown>;
     expect(event.prompt).toBe("");
     expect(event.system).toBe("");
   });
 
   it("records raw model run session stages", () => {
-    const { lines, trace } = createMemoryTraceForTest();
+    const { events, trace } = createMemoryTraceForTest();
 
     trace?.recordStage("session:raw-model-run", {
       messages: [],
       system: "",
     });
 
-    const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
+    const event = (events[0] ?? {}) as Record<string, unknown>;
     expect(event.stage).toBe("session:raw-model-run");
     expect(event.system).toBe("");
   });
 
   it("records stream context from systemPrompt when wrapping stream functions", () => {
-    const lines: string[] = [];
+    const events: unknown[] = [];
     const trace = createCacheTrace({
       cfg: {
         diagnostics: {
@@ -117,9 +146,8 @@ describe("createCacheTrace", () => {
       },
       env: {},
       writer: {
-        filePath: "memory",
-        write: (line) => lines.push(line),
-        flush: async () => undefined,
+        destination: "memory",
+        write: (event) => events.push(event),
       },
     });
 
@@ -142,14 +170,14 @@ describe("createCacheTrace", () => {
       {},
     );
 
-    const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
+    const event = (events[0] ?? {}) as Record<string, unknown>;
     expect(event.stage).toBe("stream:context");
     expect(event.system).toBe("system prompt text");
     expect(event.systemDigest).toBeTypeOf("string");
   });
 
   it("respects env overrides for enablement", () => {
-    const lines: string[] = [];
+    const events: unknown[] = [];
     const trace = createCacheTrace({
       cfg: {
         diagnostics: {
@@ -162,9 +190,8 @@ describe("createCacheTrace", () => {
         OPENCLAW_CACHE_TRACE: "0",
       },
       writer: {
-        filePath: "memory",
-        write: (line) => lines.push(line),
-        flush: async () => undefined,
+        destination: "memory",
+        write: (event) => events.push(event),
       },
     });
 
@@ -172,7 +199,7 @@ describe("createCacheTrace", () => {
   });
 
   it("sanitizes cache-trace payloads before writing", () => {
-    const { lines, trace } = createMemoryTraceForTest();
+    const { events, trace } = createMemoryTraceForTest();
 
     trace?.recordStage("stream:context", {
       system: {
@@ -210,7 +237,7 @@ describe("createCacheTrace", () => {
       ] as unknown as [],
     });
 
-    const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
+    const event = (events[0] ?? {}) as Record<string, unknown>;
     expect(event.system).toEqual({
       provider: {
         baseUrl: "https://api.example.com",
@@ -262,7 +289,7 @@ describe("createCacheTrace", () => {
   });
 
   it("handles circular references in messages without stack overflow", () => {
-    const { lines, trace } = createMemoryTraceForTest();
+    const { events, trace } = createMemoryTraceForTest();
 
     const parent: Record<string, unknown> = { role: "user", content: "hello" };
     const child: Record<string, unknown> = { ref: parent };
@@ -272,12 +299,12 @@ describe("createCacheTrace", () => {
       messages: [parent] as unknown as [],
     });
 
-    expect(lines.length).toBe(1);
+    expect(events.length).toBe(1);
     const fingerprint = crypto
       .createHash("sha256")
       .update('{"child":{"ref":"[Circular]"},"content":"hello","role":"user"}')
       .digest("hex");
-    const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
+    const event = (events[0] ?? {}) as Record<string, unknown>;
     expect(event).toStrictEqual({
       ts: expect.any(String),
       seq: 1,
@@ -287,6 +314,13 @@ describe("createCacheTrace", () => {
       messageFingerprints: [fingerprint],
       messagesDigest: crypto.createHash("sha256").update(JSON.stringify(fingerprint)).digest("hex"),
       messages: [{ role: "user", content: "hello", child: { ref: "[Circular]" } }],
+      modelApi: undefined,
+      modelId: undefined,
+      provider: undefined,
+      runId: undefined,
+      sessionId: undefined,
+      sessionKey: undefined,
+      workspaceDir: undefined,
     });
   });
 });

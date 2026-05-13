@@ -21,7 +21,7 @@ vi.mock("../agents/sandbox.js", () => ({
   resolveSandboxScope: vi.fn(() => "shared"),
 }));
 
-vi.mock("../agents/sandbox/registry.js", () => ({
+vi.mock("./doctor/legacy/sandbox-registry.js", () => ({
   inspectLegacySandboxRegistryFiles,
   migrateLegacySandboxRegistryFiles,
 }));
@@ -81,15 +81,20 @@ describe("maybeRepairSandboxImages", () => {
     await maybeRepairSandboxImages(createSandboxConfig(params.mode), mockRuntime, mockPrompter);
   }
 
+  function firstNoteCall() {
+    const noteCall = note.mock.calls[0];
+    if (noteCall === undefined) {
+      throw new Error("expected sandbox warning note");
+    }
+    return noteCall;
+  }
+
   it("warns when sandbox mode is enabled but Docker is not available", async () => {
     await runSandboxRepair({ mode: "non-main", dockerAvailable: false });
 
     // The warning should clearly indicate sandbox is enabled but won't work
     expect(note).toHaveBeenCalled();
-    const noteCall = note.mock.calls.at(0);
-    if (noteCall === undefined) {
-      throw new Error("expected sandbox warning note");
-    }
+    const noteCall = firstNoteCall();
     const message = noteCall[0] as string;
 
     // The message should warn that sandbox mode won't function, not just "skipping checks"
@@ -102,10 +107,7 @@ describe("maybeRepairSandboxImages", () => {
     await runSandboxRepair({ mode: "all", dockerAvailable: false });
 
     expect(note).toHaveBeenCalled();
-    const noteCall = note.mock.calls.at(0);
-    if (noteCall === undefined) {
-      throw new Error("expected sandbox warning note");
-    }
+    const noteCall = firstNoteCall();
     const message = noteCall[0] as string;
 
     // Should warn about the impact on sandbox functionality
@@ -161,7 +163,7 @@ describe("maybeRepairSandboxRegistryFiles", () => {
       [
         "Legacy sandbox registry files detected.",
         "- containers: /tmp/openclaw/sandbox/containers.json (2 entries)",
-        "Run openclaw doctor --fix to migrate them to sharded registry files.",
+        "Run openclaw doctor --fix to migrate them into SQLite.",
       ].join("\n"),
       "Sandbox",
     );
@@ -195,7 +197,7 @@ describe("maybeRepairSandboxRegistryFiles", () => {
 
     expect(migrateLegacySandboxRegistryFiles).toHaveBeenCalledTimes(1);
     expect(note).toHaveBeenCalledWith(
-      "- Migrated containers registry from /tmp/openclaw/sandbox/containers.json into 2 shards.",
+      "- Migrated 2 containers registry entries from /tmp/openclaw/sandbox/containers.json into SQLite.",
       "Doctor changes",
     );
   });

@@ -25,23 +25,13 @@ describe("classifySilentReplyConversationType", () => {
   it("prefers an explicit conversation type", () => {
     expect(
       classifySilentReplyConversationType({
-        sessionKey: "agent:main:group:123",
         conversationType: "internal",
       }),
     ).toBe("internal");
   });
 
-  it("classifies direct and group session keys", () => {
-    expect(
-      classifySilentReplyConversationType({
-        sessionKey: "agent:main:telegram:direct:123",
-      }),
-    ).toBe("direct");
-    expect(
-      classifySilentReplyConversationType({
-        sessionKey: "agent:main:discord:group:123",
-      }),
-    ).toBe("group");
+  it("does not infer conversation type from session key shape", () => {
+    expect(classifySilentReplyConversationType({})).toBe("internal");
   });
 
   it("treats webchat as direct by default and unknown surfaces as internal", () => {

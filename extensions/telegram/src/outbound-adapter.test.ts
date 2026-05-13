@@ -74,19 +74,17 @@ describe("telegramOutbound", () => {
       deps: { sendTelegram: sendMessageTelegramMock },
     });
 
-    expect(sendMessageTelegramMock).toHaveBeenCalledWith("12345", "hello", {
-      cfg: {},
-      verbose: false,
-      messageThreadId: 12,
-      replyToMessageId: 900,
-      accountId: "ops",
-      silent: undefined,
-      gatewayClientScopes: undefined,
-      mediaUrl: "/tmp/image.png",
-      mediaLocalRoots: ["/tmp/agent-root"],
-      mediaReadFile: undefined,
-      forceDocument: false,
-    });
+    expect(sendMessageTelegramMock).toHaveBeenCalledWith(
+      "12345",
+      "hello",
+      expect.objectContaining({
+        mediaUrl: "/tmp/image.png",
+        mediaLocalRoots: ["/tmp/agent-root"],
+        accountId: "ops",
+        replyToMessageId: 900,
+        messageThreadId: 12,
+      }),
+    );
     expect(result).toEqual({ channel: "telegram", messageId: "tg-media" });
   });
 
@@ -148,6 +146,44 @@ describe("telegramOutbound", () => {
     const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "- Retry");
     expect(options.buttons).toEqual([[{ text: "Retry", callback_data: "cmd:retry" }]]);
     expect(result).toEqual({ channel: "telegram", messageId: "tg-buttons", chatId: "12345" });
+  });
+
+  it("renders presentation web app buttons for payload sends", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-web-app", chatId: "12345" });
+    const presentation = {
+      blocks: [
+        {
+          type: "buttons" as const,
+          buttons: [{ label: "Launch", webApp: { url: "https://example.com/app" } }],
+        },
+      ],
+    };
+    const rendered = await telegramOutbound.renderPresentation?.({
+      payload: { text: "Open app:" },
+      presentation,
+      ctx: {} as never,
+    });
+    if (!rendered) {
+      throw new Error("expected rendered Telegram presentation");
+    }
+
+    await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "12345",
+      text: "",
+      payload: rendered,
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    const options = callOptionsAt(
+      sendMessageTelegramMock,
+      0,
+      "12345",
+      "Open app:\n\n- Launch: https://example.com/app",
+    );
+    expect(options.buttons).toEqual([
+      [{ text: "Launch", web_app: { url: "https://example.com/app" } }],
+    ]);
   });
 
   it("forwards silent delivery options to Telegram sends", async () => {

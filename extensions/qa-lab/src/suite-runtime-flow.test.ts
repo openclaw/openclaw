@@ -21,7 +21,7 @@ const waitForConfigRestartSettle = vi.hoisted(() => vi.fn());
 const createSession = vi.hoisted(() => vi.fn());
 const readEffectiveTools = vi.hoisted(() => vi.fn());
 const readSkillStatus = vi.hoisted(() => vi.fn());
-const readRawQaSessionStore = vi.hoisted(() => vi.fn());
+const readRawQaSessionEntries = vi.hoisted(() => vi.fn());
 const runQaCli = vi.hoisted(() => vi.fn());
 const extractMediaPathFromText = vi.hoisted(() => vi.fn());
 const resolveGeneratedImagePath = vi.hoisted(() => vi.fn());
@@ -86,7 +86,7 @@ vi.mock("./suite-runtime-agent.js", () => ({
   createSession,
   readEffectiveTools,
   readSkillStatus,
-  readRawQaSessionStore,
+  readRawQaSessionEntries,
   runQaCli,
   extractMediaPathFromText,
   resolveGeneratedImagePath,
@@ -227,7 +227,7 @@ describe("qa suite runtime flow", () => {
 
     expect(result).toEqual({ api: "ok" });
     expect(createQaScenarioRuntimeApi).toHaveBeenCalledTimes(1);
-    const call = createQaScenarioRuntimeApi.mock.calls.at(0)?.[0] as {
+    const call = createQaScenarioRuntimeApi.mock.calls[0]?.[0] as {
       env: typeof env;
       scenario: typeof scenario;
       deps: {

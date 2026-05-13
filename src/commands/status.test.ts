@@ -45,6 +45,10 @@ function createUnknownUsageSessionStore() {
   };
 }
 
+function toSessionRows(store: Record<string, Record<string, unknown>>) {
+  return Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry }));
+}
+
 function createChannelIssueCollector(channel: string) {
   return (accounts: Array<Record<string, unknown>>) =>
     accounts
@@ -77,7 +81,7 @@ function createErrorChannelPlugin(params: { id: string; label: string; docsPath:
 }
 
 async function withUnknownUsageStore(run: () => Promise<void>) {
-  mocks.loadSessionStore.mockReturnValue(createUnknownUsageSessionStore());
+  mocks.listSessionEntries.mockReturnValue(toSessionRows(createUnknownUsageSessionStore()));
   await run();
 }
 
@@ -91,6 +95,10 @@ function getRuntimeLog(index: number): string {
     throw new Error(`expected runtime log call ${index}`);
   }
   return String(call[0]);
+}
+
+function getLastRuntimeLog(): string {
+  return getRuntimeLog(runtimeLogMock.mock.calls.length - 1);
 }
 
 function getJoinedRuntimeLogs() {
@@ -216,12 +224,12 @@ function createSessionStatusRows() {
     id: string;
   }>;
   const byAgent = agents.map((agent: { id: string }) => {
-    const path = mocks.resolveStorePath("sessions", { agentId: agent.id });
-    const store = mocks.loadSessionStore(path) as Record<
-      string,
-      ReturnType<typeof createDefaultSessionStoreEntry>
-    >;
-    const recent = Object.entries(store).map(([key, entry]) => {
+    const rows = mocks.listSessionEntries({ agentId: agent.id }) as Array<{
+      sessionKey: string;
+      entry: ReturnType<typeof createDefaultSessionStoreEntry>;
+    }>;
+    const databasePath = `/tmp/${agent.id}/openclaw-agent.sqlite`;
+    const recent = rows.map(({ sessionKey: key, entry }) => {
       const contextTokens = typeof entry.contextTokens === "number" ? entry.contextTokens : null;
       const total = typeof entry.totalTokens === "number" ? entry.totalTokens : null;
       return {
@@ -251,11 +259,11 @@ function createSessionStatusRows() {
         ],
       };
     });
-    return { agentId: agent.id, path, count: recent.length, recent };
+    return { agentId: agent.id, databasePath, count: recent.length, recent };
   });
   const recent = byAgent.flatMap((entry) => entry.recent);
   return {
-    paths: byAgent.map((entry) => entry.path),
+    databasePaths: byAgent.map((entry) => entry.databasePath),
     count: recent.length,
     defaults: {
       model: recent[0]?.model ?? "pi:opus",
@@ -404,11 +412,10 @@ async function withEnvVar<T>(key: string, value: string, run: () => Promise<T>):
 const mocks = vi.hoisted(() => ({
   hasPotentialConfiguredChannels: vi.fn(() => true),
   loadConfig: vi.fn().mockReturnValue({ session: {} }),
-  loadSessionStore: vi.fn().mockReturnValue({
-    "+1000": createDefaultSessionStoreEntry(),
-  }),
+  listSessionEntries: vi.fn((_options?: { agentId?: string }) =>
+    toSessionRows({ "+1000": createDefaultSessionStoreEntry() }),
+  ),
   resolveMainSessionKey: vi.fn().mockReturnValue("agent:main:main"),
-  resolveStorePath: vi.fn().mockReturnValue("/tmp/sessions.json"),
   loadNodeHostConfig: vi.fn().mockResolvedValue(null),
   webAuthExists: vi.fn().mockResolvedValue(true),
   getWebAuthAgeMs: vi.fn().mockReturnValue(5000),
@@ -541,11 +548,8 @@ vi.mock("../plugins/memory-runtime.js", () => ({
 vi.mock("../config/sessions/main-session.js", () => ({
   resolveMainSessionKey: mocks.resolveMainSessionKey,
 }));
-vi.mock("../config/sessions/paths.js", () => ({
-  resolveStorePath: mocks.resolveStorePath,
-}));
-vi.mock("../config/sessions/store-read.js", () => ({
-  readSessionStoreReadOnly: mocks.loadSessionStore,
+vi.mock("../config/sessions/store.js", () => ({
+  listSessionEntries: mocks.listSessionEntries,
 }));
 vi.mock("../config/sessions/types.js", () => ({
   resolveSessionTotalTokens: vi.fn((entry?: { totalTokens?: number }) =>
@@ -886,14 +890,12 @@ describe("statusCommand", () => {
     mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
     mocks.loadConfig.mockReset();
     mocks.loadConfig.mockReturnValue({ session: {} });
-    mocks.loadSessionStore.mockReset();
-    mocks.loadSessionStore.mockReturnValue({
-      "+1000": createDefaultSessionStoreEntry(),
-    });
+    mocks.listSessionEntries.mockReset();
+    mocks.listSessionEntries.mockReturnValue(
+      toSessionRows({ "+1000": createDefaultSessionStoreEntry() }),
+    );
     mocks.resolveMainSessionKey.mockReset();
     mocks.resolveMainSessionKey.mockReturnValue("agent:main:main");
-    mocks.resolveStorePath.mockReset();
-    mocks.resolveStorePath.mockReturnValue("/tmp/sessions.json");
     mocks.loadNodeHostConfig.mockReset();
     mocks.loadNodeHostConfig.mockResolvedValue(null);
     mocks.probeGateway.mockReset();
@@ -997,8 +999,8 @@ describe("statusCommand", () => {
     expect(payload.memoryPlugin.enabled).toBe(true);
     expect(payload.memoryPlugin.slot).toBe("memory-core");
     expect(payload.sessions.count).toBe(1);
-    expect(payload.sessions.paths).toContain("/tmp/sessions.json");
-    expect(payload.sessions.defaults.model).toBe("pi:opus");
+    expect(payload.sessions.databasePaths[0]).toContain("openclaw-agent.sqlite");
+    expect(payload.sessions.defaults.model).toBeTruthy();
     expect(payload.sessions.defaults.contextTokens).toBeGreaterThan(0);
     expect(payload.sessions.recent[0].percentUsed).toBe(50);
     expect(payload.sessions.recent[0].cacheRead).toBe(2_000);
@@ -1025,7 +1027,7 @@ describe("statusCommand", () => {
     const allPayload = JSON.parse(getRuntimeLog(0));
     expect(allPayload.securityAudit.summary.critical).toBe(1);
     expect(allPayload.securityAudit.summary.warn).toBe(1);
-    const auditParams = mocks.runSecurityAudit.mock.calls.at(0)?.[0];
+    const auditParams = mocks.runSecurityAudit.mock.calls[0]?.[0];
     expect(auditParams?.includeFilesystem).toBe(true);
     expect(auditParams?.includeChannelSecurity).toBe(true);
   });
@@ -1038,7 +1040,7 @@ describe("statusCommand", () => {
 
     await statusCommand({ usage: true, timeoutMs: 1234 }, runtime as never);
 
-    const params = snapshotMock.mock.calls.at(-1)?.[0] as
+    const params = snapshotMock.mock.calls[snapshotMock.mock.calls.length - 1]?.[0] as
       | {
           config: unknown;
           timeoutMs?: number;
@@ -1083,7 +1085,7 @@ describe("statusCommand", () => {
     await withUnknownUsageStore(async () => {
       runtimeLogMock.mockClear();
       await statusCommand({ json: true }, runtime as never);
-      const payload = JSON.parse(String(runtimeLogMock.mock.calls.at(-1)?.[0]));
+      const payload = JSON.parse(getLastRuntimeLog());
       expect(payload.sessions.recent[0].totalTokens).toBeNull();
       expect(payload.sessions.recent[0].totalTokensFresh).toBe(false);
       expect(payload.sessions.recent[0].percentUsed).toBeNull();
@@ -1092,18 +1094,20 @@ describe("statusCommand", () => {
   });
 
   it("surfaces stale usage when totalTokens is preserved but not fresh", async () => {
-    mocks.loadSessionStore.mockReturnValue({
-      "+1000": {
-        updatedAt: Date.now() - 60_000,
-        totalTokens: 5_000,
-        totalTokensFresh: false,
-        contextTokens: 10_000,
-        model: "pi:opus",
-      },
-    });
+    mocks.listSessionEntries.mockReturnValue(
+      toSessionRows({
+        "+1000": {
+          updatedAt: Date.now() - 60_000,
+          totalTokens: 5_000,
+          totalTokensFresh: false,
+          contextTokens: 10_000,
+          model: "pi:opus",
+        },
+      }),
+    );
     runtimeLogMock.mockClear();
     await statusCommand({ json: true }, runtime as never);
-    const payload = JSON.parse(String(runtimeLogMock.mock.calls.at(-1)?.[0]));
+    const payload = JSON.parse(getLastRuntimeLog());
     expect(payload.sessions.recent[0].totalTokens).toBe(5000);
     expect(payload.sessions.recent[0].totalTokensFresh).toBe(false);
     expect(payload.sessions.recent[0].percentUsed).toBe(50);
@@ -1188,28 +1192,32 @@ describe("statusCommand", () => {
   });
 
   it("uses prompt-side denominator for cached percentages", async () => {
-    mocks.loadSessionStore.mockReturnValue({
-      "+1000": {
-        ...createDefaultSessionStoreEntry(),
-        inputTokens: undefined,
-        cacheRead: 1_200,
-        cacheWrite: 0,
-        totalTokens: 1_000,
-      },
-    });
+    mocks.listSessionEntries.mockReturnValue(
+      toSessionRows({
+        "+1000": {
+          ...createDefaultSessionStoreEntry(),
+          inputTokens: undefined,
+          cacheRead: 1_200,
+          cacheWrite: 0,
+          totalTokens: 1_000,
+        },
+      }),
+    );
     const logs = await runStatusAndGetLogs();
     expectLogsInclude(logs, "100% cached");
     expectLogsExclude(logs, "120% cached");
 
-    mocks.loadSessionStore.mockReturnValue({
-      "+1000": {
-        ...createDefaultSessionStoreEntry(),
-        inputTokens: 500,
-        cacheRead: 2_000,
-        cacheWrite: 500,
-        totalTokens: 5_000,
-      },
-    });
+    mocks.listSessionEntries.mockReturnValue(
+      toSessionRows({
+        "+1000": {
+          ...createDefaultSessionStoreEntry(),
+          inputTokens: 500,
+          cacheRead: 2_000,
+          cacheWrite: 500,
+          totalTokens: 5_000,
+        },
+      }),
+    );
     const promptSideLogs = await runStatusAndGetLogs();
     expectLogsInclude(promptSideLogs, "67% cached");
     expectLogsExclude(promptSideLogs, "40% cached");
@@ -1278,7 +1286,7 @@ describe("statusCommand", () => {
     });
 
     await statusCommand({ json: true }, runtime as never);
-    const payload = JSON.parse(String(runtimeLogMock.mock.calls.at(-1)?.[0]));
+    const payload = JSON.parse(getLastRuntimeLog());
     const gatewayAuthMessage = payload.gateway.error ?? payload.gateway.authWarning;
     expect(typeof gatewayAuthMessage).toBe("string");
     expect(gatewayAuthMessage.trim().length).toBeGreaterThan(0);
@@ -1414,8 +1422,7 @@ describe("statusCommand", () => {
 
   it("includes sessions across agents in JSON output", async () => {
     const originalAgents = mocks.listGatewayAgentsBasic.getMockImplementation();
-    const originalResolveStorePath = mocks.resolveStorePath.getMockImplementation();
-    const originalLoadSessionStore = mocks.loadSessionStore.getMockImplementation();
+    const originalListSessionEntries = mocks.listSessionEntries.getMockImplementation();
 
     mocks.listGatewayAgentsBasic.mockReturnValue({
       defaultId: "main",
@@ -1426,12 +1433,10 @@ describe("statusCommand", () => {
         { id: "ops", name: "Ops" },
       ],
     });
-    mocks.resolveStorePath.mockImplementation((_store, opts) =>
-      opts?.agentId === "ops" ? "/tmp/ops.json" : "/tmp/main.json",
-    );
-    mocks.loadSessionStore.mockImplementation((storePath) => {
-      if (storePath === "/tmp/ops.json") {
-        return {
+    mocks.listSessionEntries.mockImplementation((options?: { agentId?: string }) => {
+      const agentId = options?.agentId;
+      if (agentId === "ops") {
+        return toSessionRows({
           "agent:ops:main": {
             updatedAt: Date.now() - 120_000,
             inputTokens: 1_000,
@@ -1440,17 +1445,17 @@ describe("statusCommand", () => {
             contextTokens: 10_000,
             model: "pi:opus",
           },
-        };
+        });
       }
-      return {
+      return toSessionRows({
         "+1000": createDefaultSessionStoreEntry(),
-      };
+      });
     });
 
     await statusCommand({ json: true }, runtime as never);
-    const payload = JSON.parse(String(runtimeLogMock.mock.calls.at(-1)?.[0]));
+    const payload = JSON.parse(getLastRuntimeLog());
     expect(payload.sessions.count).toBe(2);
-    expect(payload.sessions.paths.length).toBe(2);
+    expect(payload.sessions.databasePaths.length).toBe(2);
     expect(
       payload.sessions.recent.some((sess: { key?: string }) => sess.key === "agent:ops:main"),
     ).toBe(true);
@@ -1458,11 +1463,8 @@ describe("statusCommand", () => {
     if (originalAgents) {
       mocks.listGatewayAgentsBasic.mockImplementation(originalAgents);
     }
-    if (originalResolveStorePath) {
-      mocks.resolveStorePath.mockImplementation(originalResolveStorePath);
-    }
-    if (originalLoadSessionStore) {
-      mocks.loadSessionStore.mockImplementation(originalLoadSessionStore);
+    if (originalListSessionEntries) {
+      mocks.listSessionEntries.mockImplementation(originalListSessionEntries);
     }
   });
 });

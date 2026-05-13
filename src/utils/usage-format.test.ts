@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { writeStoredModelsConfigRaw } from "../agents/models-config-store.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   __resetGatewayModelPricingCacheForTest,
@@ -138,7 +139,7 @@ describe("usage-format", () => {
     ).toBeUndefined();
   });
 
-  it("prefers models.json pricing over openclaw config and cached pricing", async () => {
+  it("prefers stored model catalog pricing over openclaw config and cached pricing", async () => {
     const config = {
       models: {
         providers: {
@@ -154,25 +155,20 @@ describe("usage-format", () => {
       },
     } as unknown as OpenClawConfig;
 
-    await fs.writeFile(
-      path.join(agentDir, "models.json"),
-      JSON.stringify(
-        {
-          providers: {
-            "demo-preferred": {
-              models: [
-                {
-                  id: "demo-model",
-                  cost: { input: 10, output: 11, cacheRead: 12, cacheWrite: 13 },
-                },
-              ],
-            },
+    writeStoredModelsConfigRaw(
+      agentDir,
+      `${JSON.stringify({
+        providers: {
+          "demo-preferred": {
+            models: [
+              {
+                id: "demo-model",
+                cost: { input: 10, output: 11, cacheRead: 12, cacheWrite: 13 },
+              },
+            ],
           },
         },
-        null,
-        2,
-      ),
-      "utf8",
+      })}\n`,
     );
 
     __setGatewayModelPricingForTest([
@@ -197,7 +193,7 @@ describe("usage-format", () => {
     });
   });
 
-  it("falls back to openclaw config pricing when models.json is absent", () => {
+  it("falls back to openclaw config pricing when stored model catalog pricing is absent", () => {
     const config = {
       models: {
         providers: {
@@ -466,48 +462,43 @@ describe("usage-format", () => {
     expect(total).toBeCloseTo(0.00225, 8);
   });
 
-  it("normalizes open-ended range from models.json ([start] and [start, -1])", async () => {
-    await fs.writeFile(
-      path.join(agentDir, "models.json"),
-      JSON.stringify(
-        {
-          providers: {
-            volcengine: {
-              models: [
-                {
-                  id: "doubao-open-ended",
-                  cost: {
-                    input: 0.46,
-                    output: 2.3,
-                    cacheRead: 0,
-                    cacheWrite: 0,
-                    tieredPricing: [
-                      { input: 0.46, output: 2.3, cacheRead: 0, cacheWrite: 0, range: [0, 32000] },
-                      { input: 0.7, output: 3.5, cacheRead: 0, cacheWrite: 0, range: [32000] },
-                    ],
-                  },
+  it("normalizes open-ended range from stored model catalog ([start] and [start, -1])", async () => {
+    writeStoredModelsConfigRaw(
+      agentDir,
+      `${JSON.stringify({
+        providers: {
+          volcengine: {
+            models: [
+              {
+                id: "doubao-open-ended",
+                cost: {
+                  input: 0.46,
+                  output: 2.3,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  tieredPricing: [
+                    { input: 0.46, output: 2.3, cacheRead: 0, cacheWrite: 0, range: [0, 32000] },
+                    { input: 0.7, output: 3.5, cacheRead: 0, cacheWrite: 0, range: [32000] },
+                  ],
                 },
-                {
-                  id: "doubao-neg-one",
-                  cost: {
-                    input: 0.46,
-                    output: 2.3,
-                    cacheRead: 0,
-                    cacheWrite: 0,
-                    tieredPricing: [
-                      { input: 0.46, output: 2.3, cacheRead: 0, cacheWrite: 0, range: [0, 32000] },
-                      { input: 0.7, output: 3.5, cacheRead: 0, cacheWrite: 0, range: [32000, -1] },
-                    ],
-                  },
+              },
+              {
+                id: "doubao-neg-one",
+                cost: {
+                  input: 0.46,
+                  output: 2.3,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  tieredPricing: [
+                    { input: 0.46, output: 2.3, cacheRead: 0, cacheWrite: 0, range: [0, 32000] },
+                    { input: 0.7, output: 3.5, cacheRead: 0, cacheWrite: 0, range: [32000, -1] },
+                  ],
                 },
-              ],
-            },
+              },
+            ],
           },
         },
-        null,
-        2,
-      ),
-      "utf8",
+      })}\n`,
     );
 
     // [32000] should be normalized to [32000, Infinity]
@@ -529,48 +520,46 @@ describe("usage-format", () => {
     expect(tiers2[1].range).toEqual([32000, Infinity]);
   });
 
-  it("resolves tiered pricing from models.json", async () => {
-    await fs.writeFile(
-      path.join(agentDir, "models.json"),
-      JSON.stringify(
-        {
-          providers: {
-            volcengine: {
-              models: [
-                {
-                  id: "doubao-seed-2-0-pro",
-                  cost: {
-                    input: 0.46,
-                    output: 2.3,
-                    cacheRead: 0,
-                    cacheWrite: 0,
-                    tieredPricing: [
-                      { input: 0.46, output: 2.3, cacheRead: 0, cacheWrite: 0, range: [0, 32000] },
-                      {
-                        input: 0.7,
-                        output: 3.5,
-                        cacheRead: 0,
-                        cacheWrite: 0,
-                        range: [32000, 128000],
-                      },
-                    ],
-                  },
+  it("resolves tiered pricing from stored model catalog", async () => {
+    writeStoredModelsConfigRaw(
+      agentDir,
+      `${JSON.stringify({
+        providers: {
+          volcengine: {
+            models: [
+              {
+                id: "doubao-seed-2-0-pro",
+                cost: {
+                  input: 0.46,
+                  output: 2.3,
+                  cacheRead: 0,
+                  cacheWrite: 0,
+                  tieredPricing: [
+                    { input: 0.46, output: 2.3, cacheRead: 0, cacheWrite: 0, range: [0, 32000] },
+                    {
+                      input: 0.7,
+                      output: 3.5,
+                      cacheRead: 0,
+                      cacheWrite: 0,
+                      range: [32000, 128000],
+                    },
+                  ],
                 },
-              ],
-            },
+              },
+            ],
           },
         },
-        null,
-        2,
-      ),
-      "utf8",
+      })}\n`,
     );
 
     const cost = resolveModelCostConfig({
       provider: "volcengine",
       model: "doubao-seed-2-0-pro",
     });
-    const tiers = requireTieredPricing(requireCostConfig(cost, "models.json"), "models.json");
+    const tiers = requireTieredPricing(
+      requireCostConfig(cost, "stored model catalog"),
+      "stored model catalog",
+    );
 
     expect(tiers).toHaveLength(2);
     expect(tiers[0].range).toEqual([0, 32000]);

@@ -77,7 +77,7 @@ let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
 
 function createExecApprovals(): ExecApprovalsResolved {
   return {
-    path: "/tmp/exec-approvals.json",
+    path: "/tmp/openclaw.sqlite#table/exec_approvals_config/current",
     socketPath: "/tmp/exec-approvals.sock",
     token: "token",
     defaults: {

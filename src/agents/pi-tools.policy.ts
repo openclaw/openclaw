@@ -1,15 +1,11 @@
 import { getLoadedChannelPlugin } from "../channels/plugins/index.js";
-import { resolveSessionConversation } from "../channels/plugins/session-conversation.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { resolveChannelGroupToolsPolicy } from "../config/group-policy.js";
+import { readSqliteSessionRoutingInfo } from "../config/sessions/session-entries.sqlite.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import { logWarn } from "../logger.js";
-import { normalizeAgentId } from "../routing/session-key.js";
-import {
-  parseRawSessionConversationRef,
-  parseThreadSessionSuffix,
-} from "../sessions/session-key-utils.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -22,6 +18,8 @@ import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox.js";
 import {
   resolveSubagentCapabilityStore,
+  resolveStoredSubagentInheritedToolAllowlist,
+  resolveStoredSubagentInheritedToolDenylist,
   resolveStoredSubagentCapabilities,
   type SessionCapabilityStore,
   type SubagentSessionRole,
@@ -84,6 +82,13 @@ function resolveSubagentDenyListForRole(role: SubagentSessionRole): string[] {
   return [...SUBAGENT_TOOL_DENY_ALWAYS];
 }
 
+function mergeConfiguredSubagentAllow(
+  allow: string[] | undefined,
+  alsoAllow: string[] | undefined,
+): string[] | undefined {
+  return allow && alsoAllow ? Array.from(new Set([...allow, ...alsoAllow])) : allow;
+}
+
 export function resolveSubagentToolPolicy(cfg?: OpenClawConfig, depth?: number): SandboxToolPolicy {
   const configured = cfg?.tools?.subagents?.tools;
   const maxSpawnDepth =
@@ -99,7 +104,7 @@ export function resolveSubagentToolPolicy(cfg?: OpenClawConfig, depth?: number):
     ...baseDeny.filter((toolName) => !explicitAllow.has(normalizeToolName(toolName))),
     ...(Array.isArray(configured?.deny) ? configured.deny : []),
   ];
-  const mergedAllow = allow && alsoAllow ? Array.from(new Set([...allow, ...alsoAllow])) : allow;
+  const mergedAllow = mergeConfiguredSubagentAllow(allow, alsoAllow);
   return { allow: mergedAllow, deny };
 }
 
@@ -130,8 +135,32 @@ export function resolveSubagentToolPolicyForSession(
     ),
     ...(Array.isArray(configured?.deny) ? configured.deny : []),
   ];
-  const mergedAllow = allow && alsoAllow ? Array.from(new Set([...allow, ...alsoAllow])) : allow;
+  const mergedAllow = mergeConfiguredSubagentAllow(allow, alsoAllow);
   return { allow: mergedAllow, deny };
+}
+
+export function resolveInheritedToolPolicyForSession(
+  cfg: OpenClawConfig | undefined,
+  sessionKey: string | undefined | null,
+  opts?: {
+    store?: SessionCapabilityStore;
+  },
+): SandboxToolPolicy | undefined {
+  const inheritedToolAllow = resolveStoredSubagentInheritedToolAllowlist(sessionKey, {
+    cfg,
+    store: opts?.store,
+  });
+  const inheritedToolDeny = resolveStoredSubagentInheritedToolDenylist(sessionKey, {
+    cfg,
+    store: opts?.store,
+  });
+  if (inheritedToolAllow.length === 0 && inheritedToolDeny.length === 0) {
+    return undefined;
+  }
+  return {
+    ...(inheritedToolAllow.length > 0 ? { allow: inheritedToolAllow } : {}),
+    ...(inheritedToolDeny.length > 0 ? { deny: inheritedToolDeny } : {}),
+  };
 }
 
 export function filterToolsByPolicy(tools: AnyAgentTool[], policy?: SandboxToolPolicy) {
@@ -232,6 +261,32 @@ function buildScopedGroupIdCandidates(groupId?: string | null): string[] {
   return [raw];
 }
 
+function resolveGroupContextFromParsedSessionKey(sessionKey?: string | null): {
+  channel?: string;
+  groupIds?: string[];
+} {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (!parsed) {
+    return {};
+  }
+  const parts = parsed.rest.split(":").filter(Boolean);
+  if (parts.length < 3) {
+    return {};
+  }
+  const [channel, kind, ...groupParts] = parts;
+  if (kind !== "group" && kind !== "channel") {
+    return {};
+  }
+  const groupId = groupParts.join(":").trim();
+  if (!groupId) {
+    return {};
+  }
+  return {
+    channel: normalizeLowercaseStringOrEmpty(channel),
+    groupIds: buildScopedGroupIdCandidates(groupId),
+  };
+}
+
 function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
   channel?: string;
   groupIds?: string[];
@@ -240,45 +295,30 @@ function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
   if (!raw) {
     return {};
   }
-  const { baseSessionKey, threadId } = parseThreadSessionSuffix(raw);
-  const conversationKey = threadId ? baseSessionKey : raw;
-  const conversation = parseRawSessionConversationRef(conversationKey);
-  if (conversation) {
-    const resolvedConversation = resolveSessionConversation({
-      channel: conversation.channel,
-      kind: conversation.kind,
-      rawId: conversation.rawId,
+  let routingInfo;
+  try {
+    routingInfo = readSqliteSessionRoutingInfo({
+      agentId: resolveAgentIdFromSessionKey(raw),
+      sessionKey: raw,
     });
-    return {
-      channel: conversation.channel,
-      groupIds: collectUniqueStrings([
-        ...buildScopedGroupIdCandidates(conversation.rawId),
-        resolvedConversation?.id,
-        resolvedConversation?.baseConversationId,
-        ...(resolvedConversation?.parentConversationCandidates ?? []),
-      ]),
-    };
+  } catch {
+    return resolveGroupContextFromParsedSessionKey(raw);
   }
-  const base = conversationKey ?? raw;
-  const parts = base.split(":").filter(Boolean);
-  let body = parts[0] === "agent" ? parts.slice(2) : parts;
-  if (body[0] === "subagent") {
-    body = body.slice(1);
-  }
-  if (body.length < 3) {
-    return {};
-  }
-  const [channel, kind, ...rest] = body;
+  const kind = routingInfo?.conversationKind ?? routingInfo?.chatType;
   if (kind !== "group" && kind !== "channel") {
-    return {};
+    return resolveGroupContextFromParsedSessionKey(raw);
   }
-  const groupId = rest.join(":").trim();
+  const groupId = routingInfo?.conversationPeerId?.trim();
   if (!groupId) {
-    return {};
+    return resolveGroupContextFromParsedSessionKey(raw);
   }
   return {
-    channel: normalizeLowercaseStringOrEmpty(channel),
-    groupIds: buildScopedGroupIdCandidates(groupId),
+    channel: normalizeLowercaseStringOrEmpty(routingInfo?.channel),
+    groupIds: collectUniqueStrings([
+      ...buildScopedGroupIdCandidates(groupId),
+      routingInfo?.parentConversationId,
+      routingInfo?.primaryConversationId,
+    ]),
   };
 }
 

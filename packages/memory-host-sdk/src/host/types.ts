@@ -27,6 +27,11 @@ export type MemorySyncProgressUpdate = {
   label?: string;
 };
 
+export type MemorySessionTranscriptScope = {
+  agentId: string;
+  sessionId: string;
+};
+
 export type MemorySearchRuntimeDebug = {
   backend: "builtin" | "qmd";
   configuredMode?: string;
@@ -99,7 +104,7 @@ export interface MemorySearchManager {
   sync?(params?: {
     reason?: string;
     force?: boolean;
-    sessionFiles?: string[];
+    sessionTranscriptScopes?: MemorySessionTranscriptScope[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void>;
   getCachedEmbeddingAvailability?(): MemoryEmbeddingProbeResult | null;

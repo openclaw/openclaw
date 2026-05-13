@@ -22,7 +22,6 @@ const mocks = vi.hoisted(() => ({
   isWorkspaceSetupCompleted: vi.fn(async () => false),
   resolveAgentDir: vi.fn((_cfg?: unknown, _agentId?: string) => "/agents/test-agent"),
   resolveAgentWorkspaceDir: vi.fn((_cfg?: unknown, _agentId?: string) => "/workspace/test-agent"),
-  resolveSessionTranscriptsDirForAgent: vi.fn((_agentId?: string) => "/transcripts/test-agent"),
   listAgentsForGateway: vi.fn(() => ({
     defaultId: "main",
     mainKey: "agent:main:main",
@@ -97,10 +96,6 @@ vi.mock("../../agents/workspace.js", async () => {
     isWorkspaceSetupCompleted: mocks.isWorkspaceSetupCompleted,
   };
 });
-
-vi.mock("../../config/sessions/paths.js", () => ({
-  resolveSessionTranscriptsDirForAgent: mocks.resolveSessionTranscriptsDirForAgent,
-}));
 
 vi.mock("../../plugin-sdk/browser-maintenance.js", () => ({
   movePathToTrash: mocks.movePathToTrash,
@@ -284,6 +279,10 @@ function expectRespondErrorContaining(respond: ReturnType<typeof vi.fn>, text: s
   return error;
 }
 
+function firstRespondResult(respond: ReturnType<typeof vi.fn>): unknown {
+  return mockCallArg(respond, 0, 1);
+}
+
 function expectStringContaining(value: unknown, text: string) {
   expect(typeof value).toBe("string");
   expect(value as string).toContain(text);
@@ -444,7 +443,7 @@ async function listAgentFileNames(agentId = "main") {
   const { respond, promise } = makeCall("agents.files.list", { agentId });
   await promise;
 
-  const [, result] = respond.mock.calls.at(0) ?? [];
+  const result = firstRespondResult(respond);
   const files = (result as { files: Array<{ name: string }> }).files;
   return files.map((file) => file.name);
 }
@@ -1170,7 +1169,7 @@ describe("agents.files.list", () => {
     const { respond, promise } = makeCall("agents.files.list", { agentId: "main" });
     await promise;
 
-    const [, result] = respond.mock.calls.at(0) ?? [];
+    const result = firstRespondResult(respond);
     const files = (result as { files: Array<{ name: string; missing: boolean; size?: number }> })
       .files;
     const file = files.find((entry) => entry.name === "AGENTS.md");
@@ -1197,7 +1196,7 @@ describe("agents.files.list", () => {
     const { respond, promise } = makeCall("agents.files.list", { agentId: "main" });
     await promise;
 
-    const [, result] = respond.mock.calls.at(0) ?? [];
+    const result = firstRespondResult(respond);
     const files = (result as { files: Array<{ name: string; missing: boolean; size?: number }> })
       .files;
     const file = files.find((entry) => entry.name === "AGENTS.md");

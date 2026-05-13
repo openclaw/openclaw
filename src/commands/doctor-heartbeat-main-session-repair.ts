@@ -1,18 +1,14 @@
-import fs from "node:fs";
-import path from "node:path";
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
-import { formatSessionArchiveTimestamp } from "../config/sessions/artifacts.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
-import {
-  resolveSessionFilePath,
-  type resolveSessionFilePathOptions,
-} from "../config/sessions/paths.js";
-import { updateSessionStore } from "../config/sessions/store.js";
+import { getSessionEntry, moveSessionEntryKey } from "../config/sessions/store.js";
+import { loadSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatFilesystemTimestamp } from "../infra/filesystem-timestamp.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { asNullableObjectRecord } from "../shared/record-coerce.js";
 import type { note } from "../terminal/note.js";
+import { clearTuiLastSessionPointers as clearTuiLastSessionPointersFromState } from "../tui/tui-last-session.js";
 
 type DoctorPrompterLike = {
   confirmRuntimeRepair: (params: {
@@ -41,14 +37,6 @@ function countLabel(count: number, singular: string, plural = `${singular}s`): s
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
-function existsFile(filePath: string): boolean {
-  try {
-    return fs.existsSync(filePath) && fs.statSync(filePath).isFile();
-  } catch {
-    return false;
-  }
-}
-
 function sessionEntryHasSyntheticHeartbeatOwnership(entry: SessionEntry): boolean {
   return (
     typeof entry.heartbeatIsolatedBaseSessionKey === "string" &&
@@ -56,13 +44,8 @@ function sessionEntryHasSyntheticHeartbeatOwnership(entry: SessionEntry): boolea
   );
 }
 
-function parseTranscriptMessageLine(line: string): { role: string; content?: unknown } | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(line);
-  } catch {
-    return null;
-  }
+function parseTranscriptMessageEvent(event: unknown): { role: string; content?: unknown } | null {
+  const parsed = event;
   const record = asNullableObjectRecord(parsed);
   if (!record) {
     return null;
@@ -76,15 +59,11 @@ function parseTranscriptMessageLine(line: string): { role: string; content?: unk
   return { role, content: message.content };
 }
 
-function summarizeTranscriptHeartbeatMessages(
-  transcriptPath: string,
-): TranscriptHeartbeatSummary | null {
-  let raw: string;
-  try {
-    raw = fs.readFileSync(transcriptPath, "utf8");
-  } catch {
-    return null;
-  }
+function summarizeTranscriptHeartbeatMessages(transcriptScope: {
+  agentId: string;
+  sessionId: string;
+}): TranscriptHeartbeatSummary | null {
+  const events = loadSqliteSessionTranscriptEvents(transcriptScope);
   const summary: TranscriptHeartbeatSummary = {
     inspectedMessages: 0,
     userMessages: 0,
@@ -93,12 +72,8 @@ function summarizeTranscriptHeartbeatMessages(
     assistantMessages: 0,
     heartbeatOkAssistantMessages: 0,
   };
-  for (const line of raw.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      continue;
-    }
-    const message = parseTranscriptMessageLine(trimmed);
+  for (const event of events) {
+    const message = parseTranscriptMessageEvent(event.event);
     if (!message) {
       continue;
     }
@@ -122,9 +97,9 @@ function summarizeTranscriptHeartbeatMessages(
 
 export function resolveHeartbeatMainSessionRepairCandidate(params: {
   entry: SessionEntry | undefined;
-  transcriptPath?: string;
+  transcriptScope?: { agentId: string; sessionId: string };
 }): HeartbeatMainSessionRepairCandidate | null {
-  const { entry, transcriptPath } = params;
+  const { entry, transcriptScope } = params;
   if (!entry) {
     return null;
   }
@@ -133,13 +108,13 @@ export function resolveHeartbeatMainSessionRepairCandidate(params: {
     return null;
   }
   const hasSyntheticHeartbeatOwnership = sessionEntryHasSyntheticHeartbeatOwnership(entry);
-  if (hasSyntheticHeartbeatOwnership && !transcriptPath) {
+  if (hasSyntheticHeartbeatOwnership && !transcriptScope) {
     return { reason: "metadata" };
   }
-  if (!transcriptPath) {
+  if (!transcriptScope) {
     return null;
   }
-  const summary = summarizeTranscriptHeartbeatMessages(transcriptPath);
+  const summary = summarizeTranscriptHeartbeatMessages(transcriptScope);
   if (!summary) {
     return null;
   }
@@ -162,7 +137,7 @@ function resolveHeartbeatMainRecoveryKey(params: {
   if (!parsed) {
     return null;
   }
-  const stamp = formatSessionArchiveTimestamp(params.nowMs).toLowerCase();
+  const stamp = formatFilesystemTimestamp(params.nowMs).toLowerCase();
   const base = `agent:${parsed.agentId}:heartbeat-recovered-${stamp}`;
   if (!params.store[base]) {
     return base;
@@ -190,55 +165,11 @@ export function moveHeartbeatMainSessionEntry(params: {
   return true;
 }
 
-function resolveTuiLastSessionPath(stateDir: string): string {
-  return path.join(stateDir, "tui", "last-session.json");
-}
-
-export function clearTuiLastSessionPointers(params: {
-  filePath: string;
-  sessionKeys: ReadonlySet<string>;
-}): number {
-  if (params.sessionKeys.size === 0 || !existsFile(params.filePath)) {
-    return 0;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(fs.readFileSync(params.filePath, "utf8"));
-  } catch {
-    return 0;
-  }
-  const store = asNullableObjectRecord(parsed);
-  if (!store) {
-    return 0;
-  }
-  let removed = 0;
-  const next: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(store)) {
-    const record = asNullableObjectRecord(value);
-    const sessionKey = record?.sessionKey;
-    if (typeof sessionKey === "string" && params.sessionKeys.has(sessionKey)) {
-      removed += 1;
-      continue;
-    }
-    next[key] = value;
-  }
-  if (removed === 0) {
-    return 0;
-  }
-  try {
-    fs.writeFileSync(params.filePath, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
-  } catch {
-    return 0;
-  }
-  return removed;
-}
-
 export async function repairHeartbeatPoisonedMainSession(params: {
   cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
-  absoluteStorePath: string;
   stateDir: string;
-  sessionPathOpts: ReturnType<typeof resolveSessionFilePathOptions>;
+  sessionScopeOpts: { agentId?: string };
   prompter: DoctorPrompterLike;
   warnings: string[];
   changes: string[];
@@ -248,16 +179,16 @@ export async function repairHeartbeatPoisonedMainSession(params: {
   if (!mainEntry?.sessionId) {
     return;
   }
-  let transcriptPath: string | undefined;
-  try {
-    transcriptPath = resolveSessionFilePath(mainEntry.sessionId, mainEntry, params.sessionPathOpts);
-  } catch {
-    transcriptPath = undefined;
-  }
-  const candidate = resolveHeartbeatMainSessionRepairCandidate({
-    entry: mainEntry,
-    transcriptPath,
-  });
+  const transcriptScope =
+    params.sessionScopeOpts.agentId && mainEntry.sessionId
+      ? { agentId: params.sessionScopeOpts.agentId, sessionId: mainEntry.sessionId }
+      : undefined;
+  const resolveCandidate = (entry: SessionEntry | undefined) =>
+    resolveHeartbeatMainSessionRepairCandidate({
+      entry,
+      transcriptScope,
+    });
+  const candidate = resolveCandidate(mainEntry);
   if (!candidate) {
     return;
   }
@@ -288,28 +219,32 @@ export async function repairHeartbeatPoisonedMainSession(params: {
   if (!shouldRepair) {
     return;
   }
-  let movedEntry: SessionEntry | undefined;
-  await updateSessionStore(params.absoluteStorePath, (currentStore) => {
-    const currentEntry = currentStore[mainKey];
-    const currentCandidate = resolveHeartbeatMainSessionRepairCandidate({
-      entry: currentEntry,
-      transcriptPath,
-    });
-    if (!currentCandidate) {
-      return;
-    }
-    if (moveHeartbeatMainSessionEntry({ store: currentStore, mainKey, recoveredKey })) {
-      movedEntry = currentEntry;
-    }
+  const agentId = parseAgentSessionKey(mainKey)?.agentId ?? "main";
+  const currentEntry = getSessionEntry({ agentId, sessionKey: mainKey });
+  const currentCandidate = resolveCandidate(currentEntry);
+  if (!currentCandidate && currentEntry?.sessionId !== mainEntry.sessionId) {
+    params.warnings.push(`- Main session ${mainKey} changed before repair could move it.`);
+    return;
+  }
+  if (!currentEntry) {
+    params.warnings.push(`- Main session ${mainKey} changed before repair could move it.`);
+    return;
+  }
+  const movedEntry = structuredClone(currentEntry);
+  const moved = moveSessionEntryKey({
+    agentId,
+    fromSessionKey: mainKey,
+    toSessionKey: recoveredKey,
+    entry: movedEntry,
   });
-  if (!movedEntry) {
+  if (!moved) {
     params.warnings.push(`- Main session ${mainKey} changed before repair could move it.`);
     return;
   }
   params.store[recoveredKey] = movedEntry;
   delete params.store[mainKey];
-  const clearedPointers = clearTuiLastSessionPointers({
-    filePath: resolveTuiLastSessionPath(params.stateDir),
+  const clearedPointers = await clearTuiLastSessionPointersFromState({
+    stateDir: params.stateDir,
     sessionKeys: new Set([mainKey]),
   });
   params.changes.push(`- Moved heartbeat-owned main session ${mainKey} to ${recoveredKey}.`);

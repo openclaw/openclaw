@@ -97,14 +97,11 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
 import { buildGatewayCronService } from "./server-cron.js";
 
 function createCronConfig(name: string): OpenClawConfig {
-  const tmpDir = path.join(os.tmpdir(), `${name}-${Date.now()}`);
   return {
     session: {
       mainKey: "main",
     },
-    cron: {
-      store: path.join(tmpDir, "cron.json"),
-    },
+    cron: {},
   } as OpenClawConfig;
 }
 
@@ -126,7 +123,7 @@ function callArg(
   argIndex: number,
   label: string,
 ) {
-  const call = mock.mock.calls.at(callIndex);
+  const call = mock.mock.calls[callIndex];
   if (!call) {
     throw new Error(`Expected mock call: ${label}`);
   }
@@ -134,6 +131,15 @@ function callArg(
     throw new Error(`Expected mock call argument ${argIndex}: ${label}`);
   }
   return call[argIndex];
+}
+
+function lastMockCall(mock: { mock: { calls: Array<Array<unknown>> } }, label: string) {
+  const calls = mock.mock.calls;
+  const call = calls[calls.length - 1];
+  if (!call) {
+    throw new Error(`Expected last mock call: ${label}`);
+  }
+  return call;
 }
 
 function expectHookContext(callIndex: number, fields: { config?: unknown; hasGetCron?: boolean }) {
@@ -652,9 +658,7 @@ describe("buildGatewayCronService", () => {
         ?.sessionKey;
       const wakeOpts = wakeCall?.[0] as { agentId?: string; sessionKey?: string } | undefined;
 
-      if (!enqueueSessionKey) {
-        throw new Error("Expected enqueue session key");
-      }
+      expect(enqueueSessionKey).toBeDefined();
       expect(enqueueSessionKey).toMatch(/^agent:ops:/);
       expect(wakeOpts?.agentId).toBe("ops");
       expect(wakeOpts?.sessionKey).toMatch(/^agent:ops:/);
@@ -715,9 +719,10 @@ describe("buildGatewayCronService", () => {
       expect((enqueueCall?.[1] as { sessionKey?: string } | undefined)?.sessionKey).toBe(
         "agent:primary:discord:channel:ops",
       );
-      const wakeRequest = wakeCall?.[0] as { agentId?: string; sessionKey?: string } | undefined;
-      expect(wakeRequest?.agentId).toBe("primary");
-      expect(wakeRequest?.sessionKey).toBe("agent:primary:discord:channel:ops");
+      expect(wakeCall?.[0]).toMatchObject({
+        agentId: "primary",
+        sessionKey: "agent:primary:discord:channel:ops",
+      });
     } finally {
       state.cron.stop();
     }
@@ -775,9 +780,10 @@ describe("buildGatewayCronService", () => {
       expect((enqueueCall?.[1] as { sessionKey?: string } | undefined)?.sessionKey).toBe(
         "agent:primary:main",
       );
-      const wakeRequest = wakeCall?.[0] as { agentId?: string; sessionKey?: string } | undefined;
-      expect(wakeRequest?.agentId).toBe("primary");
-      expect(wakeRequest?.sessionKey).toBe("agent:primary:main");
+      expect(wakeCall?.[0]).toMatchObject({
+        agentId: "primary",
+        sessionKey: "agent:primary:main",
+      });
     } finally {
       state.cron.stop();
     }
@@ -819,20 +825,15 @@ describe("buildGatewayCronService", () => {
       expect((enqueueCall?.[1] as { sessionKey?: string } | undefined)?.sessionKey).toMatch(
         /^agent:ops:/,
       );
-      const wakeRequest = wakeCall?.[0] as
-        | {
-            source?: string;
-            intent?: string;
-            reason?: string;
-            agentId?: string;
-            sessionKey?: string;
-          }
-        | undefined;
-      expect(wakeRequest?.source).toBe("manual");
-      expect(wakeRequest?.intent).toBe("immediate");
-      expect(wakeRequest?.reason).toBe("wake");
-      expect(wakeRequest?.agentId).toBe("ops");
-      expect(wakeRequest?.sessionKey).toMatch(/^agent:ops:/);
+      expect(wakeCall?.[0]).toMatchObject({
+        source: "manual",
+        intent: "immediate",
+        reason: "wake",
+        agentId: "ops",
+      });
+      expect((wakeCall?.[0] as { sessionKey?: string } | undefined)?.sessionKey).toMatch(
+        /^agent:ops:/,
+      );
     } finally {
       state.cron.stop();
     }
@@ -927,14 +928,11 @@ describe("buildGatewayCronService", () => {
   });
 
   it("passes custom session targets through to isolated cron runs", async () => {
-    const tmpDir = path.join(os.tmpdir(), `server-cron-custom-session-${Date.now()}`);
     const cfg = {
       session: {
         mainKey: "main",
       },
-      cron: {
-        store: path.join(tmpDir, "cron.json"),
-      },
+      cron: {},
     } as OpenClawConfig;
     loadConfigMock.mockReturnValue(cfg);
 
@@ -1010,9 +1008,7 @@ describe("buildGatewayCronService", () => {
       session: {
         mainKey: "main",
       },
-      cron: {
-        store: path.join(tmpDir, "cron.json"),
-      },
+      cron: {},
       agents: {
         defaults: {
           workspace: path.join(tmpDir, "workspace"),
@@ -1027,9 +1023,7 @@ describe("buildGatewayCronService", () => {
       session: {
         mainKey: "main",
       },
-      cron: {
-        store: path.join(tmpDir, "cron.json"),
-      },
+      cron: {},
       agents: {
         defaults: {
           workspace: path.join(tmpDir, "workspace"),
@@ -1077,9 +1071,7 @@ describe("buildGatewayCronService", () => {
       session: {
         mainKey: "main",
       },
-      cron: {
-        store: path.join(tmpDir, "cron.json"),
-      },
+      cron: {},
       agents: {
         defaults: {
           workspace: path.join(tmpDir, "workspace"),
@@ -1105,9 +1097,7 @@ describe("buildGatewayCronService", () => {
       session: {
         mainKey: "main",
       },
-      cron: {
-        store: path.join(tmpDir, "cron.json"),
-      },
+      cron: {},
       agents: {
         defaults: {
           workspace: path.join(tmpDir, "workspace"),

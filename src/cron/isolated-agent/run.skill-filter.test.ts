@@ -132,7 +132,6 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
   it("refreshes cached snapshot when skillFilter changes without version bump", async () => {
     resolveAgentSkillsFilterMock.mockReturnValue(["weather"]);
     resolveCronSessionMock.mockReturnValue({
-      storePath: "/tmp/store.json",
       store: {},
       sessionEntry: {
         sessionId: "test-session-id",
@@ -168,7 +167,6 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
   it("reuses cached snapshot when version and normalized skillFilter are unchanged", async () => {
     resolveAgentSkillsFilterMock.mockReturnValue([" weather ", "meme-factory", "weather"]);
     resolveCronSessionMock.mockReturnValue({
-      storePath: "/tmp/store.json",
       store: {},
       sessionEntry: {
         sessionId: "test-session-id",
@@ -349,7 +347,6 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       // Make runWithModelFallback invoke the run callback so the CLI path executes.
       mockCliFallbackInvocation();
       resolveCronSessionMock.mockReturnValue({
-        storePath: "/tmp/store.json",
         store: {},
         sessionEntry: {
           sessionId: "test-session-fresh",
@@ -357,7 +354,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
           systemSent: false,
           skillsSnapshot: undefined,
           // A stored CLI session ID that should NOT be reused on fresh runs.
-          cliSessionIds: { "claude-cli": "prev-cli-session-abc" },
+          cliSessionBindings: { "claude-cli": { sessionId: "prev-cli-session-abc" } },
         },
         systemSent: false,
         isNewSession: true,
@@ -381,14 +378,13 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       });
       mockCliFallbackInvocation();
       resolveCronSessionMock.mockReturnValue({
-        storePath: "/tmp/store.json",
         store: {},
         sessionEntry: {
           sessionId: "test-session-continuation",
           updatedAt: 0,
           systemSent: false,
           skillsSnapshot: undefined,
-          cliSessionIds: { "claude-cli": "existing-cli-session-def" },
+          cliSessionBindings: { "claude-cli": { sessionId: "existing-cli-session-def" } },
         },
         systemSent: false,
         isNewSession: false,

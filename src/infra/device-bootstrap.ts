@@ -1,4 +1,3 @@
-import path from "node:path";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   normalizeDeviceBootstrapHandoffProfile,
@@ -10,8 +9,12 @@ import {
 } from "../shared/device-bootstrap-profile.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { normalizeDevicePublicKeyBase64Url } from "./device-identity.js";
-import { resolvePairingPaths } from "./pairing-files.js";
-import { createAsyncLock, pruneExpiredPending, tryReadJson, writeJson } from "./pairing-files.js";
+import {
+  createAsyncLock,
+  pruneExpiredPending,
+  readPairingStateRecord,
+  writePairingStateRecord,
+} from "./pairing-state.js";
 import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
 
 export const DEVICE_BOOTSTRAP_TOKEN_TTL_MS = 10 * 60 * 1000;
@@ -30,14 +33,11 @@ export type DeviceBootstrapTokenRecord = {
   lastUsedAtMs?: number;
 };
 
-type DeviceBootstrapStateFile = Record<string, DeviceBootstrapTokenRecord>;
+export type DeviceBootstrapState = Record<string, DeviceBootstrapTokenRecord>;
 
 const withLock = createAsyncLock();
 const log = createSubsystemLogger("device-bootstrap");
-
-function resolveBootstrapPath(baseDir?: string): string {
-  return path.join(resolvePairingPaths(baseDir, "devices").dir, "bootstrap.json");
-}
+const DEVICE_BOOTSTRAP_STATE_KEY = "bootstrap";
 
 function resolveIssuedBootstrapProfileInput(params: {
   profile?: DeviceBootstrapProfileInput;
@@ -187,18 +187,18 @@ function normalizeBootstrapPublicKey(publicKey: string): string {
   return trimmed;
 }
 
-async function loadState(baseDir?: string): Promise<DeviceBootstrapStateFile> {
-  const bootstrapPath = resolveBootstrapPath(baseDir);
-  const rawState = (await tryReadJson<DeviceBootstrapStateFile>(bootstrapPath)) ?? {};
-  const state: DeviceBootstrapStateFile = {};
-  if (!rawState || typeof rawState !== "object" || Array.isArray(rawState)) {
-    return state;
-  }
+async function loadState(baseDir?: string): Promise<DeviceBootstrapState> {
+  const rawState = readPairingStateRecord<Partial<DeviceBootstrapTokenRecord>>({
+    baseDir,
+    subdir: "devices",
+    key: DEVICE_BOOTSTRAP_STATE_KEY,
+  });
+  const state: DeviceBootstrapState = {};
   for (const [tokenKey, entry] of Object.entries(rawState)) {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
       continue;
     }
-    const record = entry as Partial<DeviceBootstrapTokenRecord>;
+    const record = entry;
     const token =
       typeof record.token === "string" && record.token.trim().length > 0 ? record.token : tokenKey;
     const issuedAtMs = typeof record.issuedAtMs === "number" ? record.issuedAtMs : 0;
@@ -220,9 +220,13 @@ async function loadState(baseDir?: string): Promise<DeviceBootstrapStateFile> {
   return state;
 }
 
-async function persistState(state: DeviceBootstrapStateFile, baseDir?: string): Promise<void> {
-  const bootstrapPath = resolveBootstrapPath(baseDir);
-  await writeJson(bootstrapPath, state);
+async function persistState(state: DeviceBootstrapState, baseDir?: string): Promise<void> {
+  writePairingStateRecord({
+    baseDir,
+    subdir: "devices",
+    key: DEVICE_BOOTSTRAP_STATE_KEY,
+    value: state,
+  });
 }
 
 export async function issueDeviceBootstrapToken(

@@ -400,7 +400,7 @@ export async function runGatewayLoop(params: {
           const activeRuns = getActiveEmbeddedRunCount();
 
           // Best-effort abort for compacting runs so long compaction operations
-          // don't hold session write locks across restart boundaries.
+          // can drain before the next lifecycle starts.
           if (activeRuns > 0) {
             abortEmbeddedPiRun(undefined, { mode: "compacting" });
           }

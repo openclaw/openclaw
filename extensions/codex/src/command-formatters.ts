@@ -126,31 +126,23 @@ export function formatAccount(
 }
 
 function formatAccountAuthOverview(overview: CodexAccountAuthOverview): string {
-  const lines: string[] = [];
-  if (overview.currentLine) {
-    lines.push(overview.currentLine, "");
+  const lines = [overview.headline];
+  if (overview.reason) {
+    lines.push(`Reason: ${overview.reason}`);
   }
-  if (overview.subscriptionLabel) {
-    lines.push(`Subscription  ${overview.subscriptionLabel}`);
-    if (overview.subscriptionUsage) {
-      lines.push(`  ${overview.subscriptionUsage}`);
-    }
-    lines.push("");
+  if (overview.usage) {
+    lines.push(`Usage: ${overview.usage}`);
   }
   if (overview.rows.length > 0) {
-    lines.push(overview.orderTitle);
+    lines.push("", overview.orderTitle);
     for (const [index, row] of overview.rows.entries()) {
-      lines.push(`  ${index + 1}. ${row.label}   ${row.kind}   — ${formatAuthRowStatus(row)}`);
+      lines.push(`  ${index + 1}. ${row.label} - ${row.kind} - ${row.status}`);
+      if (row.usage) {
+        lines.push(`     Usage: ${row.usage}`);
+      }
     }
   }
-  while (lines.at(-1) === "") {
-    lines.pop();
-  }
   return lines.map(formatCodexAccountLine).join("\n");
-}
-
-function formatAuthRowStatus(row: CodexAccountAuthOverview["rows"][number]): string {
-  return row.billingNote ? `${row.status} · ${row.billingNote}` : row.status;
 }
 
 export function formatComputerUseStatus(status: CodexComputerUseStatus): string {
@@ -255,13 +247,7 @@ function escapeCodexChatTextPreservingAt(value: string): string {
 }
 
 function formatCodexAccountLine(value: string): string {
-  if (value === "") {
-    return "";
-  }
-  const safe = sanitizeCodexTextForDisplay(value).trimEnd();
-  if (!safe.trim()) {
-    return "";
-  }
+  const safe = formatCodexTextForDisplay(value);
   const emailPattern = /[^\s@<>()[\]`]+@[^\s@<>()[\]`]+\.[^\s@<>()[\]`]+/gu;
   let formatted = "";
   let lastIndex = 0;

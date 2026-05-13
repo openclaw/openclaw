@@ -1,3 +1,4 @@
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import type { SessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import type { SessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { projectChatDisplayMessage } from "./chat-display-projection.js";
@@ -6,7 +7,7 @@ import type {
   SessionEventSubscriberRegistry,
   SessionMessageSubscriberRegistry,
 } from "./server-chat.js";
-import { resolveSessionKeyForTranscriptFile } from "./session-transcript-key.js";
+import { resolveSessionKeyForSessionScope } from "./session-transcript-key.js";
 import {
   attachOpenClawTranscriptMeta,
   loadGatewaySessionRow,
@@ -39,7 +40,6 @@ function buildGatewaySessionSnapshot(params: {
     groupChannel: sessionRow.groupChannel,
     space: sessionRow.space,
     chatType: sessionRow.chatType,
-    origin: sessionRow.origin,
     spawnedBy: sessionRow.spawnedBy,
     spawnedWorkspaceDir: sessionRow.spawnedWorkspaceDir,
     forkedFromParent: sessionRow.forkedFromParent,
@@ -51,6 +51,10 @@ function buildGatewaySessionSnapshot(params: {
     deliveryContext: sessionRow.deliveryContext,
     parentSessionKey: params.parentSessionKey ?? sessionRow.parentSessionKey,
     childSessions: sessionRow.childSessions,
+    lastChannel: sessionRow.lastChannel,
+    lastTo: sessionRow.lastTo,
+    lastAccountId: sessionRow.lastAccountId,
+    lastThreadId: sessionRow.lastThreadId,
     thinkingLevel: sessionRow.thinkingLevel,
     fastMode: sessionRow.fastMode,
     verboseLevel: sessionRow.verboseLevel,
@@ -61,10 +65,6 @@ function buildGatewaySessionSnapshot(params: {
     abortedLastRun: sessionRow.abortedLastRun,
     inputTokens: sessionRow.inputTokens,
     outputTokens: sessionRow.outputTokens,
-    lastChannel: sessionRow.lastChannel,
-    lastTo: sessionRow.lastTo,
-    lastAccountId: sessionRow.lastAccountId,
-    lastThreadId: sessionRow.lastThreadId,
     totalTokens: sessionRow.totalTokens,
     totalTokensFresh: sessionRow.totalTokensFresh,
     contextTokens: sessionRow.contextTokens,
@@ -104,7 +104,14 @@ async function handleTranscriptUpdateBroadcast(
   },
   update: SessionTranscriptUpdate,
 ): Promise<void> {
-  const sessionKey = update.sessionKey ?? resolveSessionKeyForTranscriptFile(update.sessionFile);
+  const sessionKey =
+    update.sessionKey ??
+    (update.sessionId
+      ? resolveSessionKeyForSessionScope({
+          agentId: update.agentId,
+          sessionId: update.sessionId,
+        })
+      : undefined);
   if (!sessionKey || update.message === undefined) {
     return;
   }
@@ -118,9 +125,10 @@ async function handleTranscriptUpdateBroadcast(
   if (connIds.size === 0) {
     return;
   }
-  const { entry, storePath } = loadSessionEntry(sessionKey);
+  const { entry } = loadSessionEntry(sessionKey);
+  const agentId = resolveAgentIdFromSessionKey(sessionKey);
   const messageSeq = entry?.sessionId
-    ? await readSessionMessageCountAsync(entry.sessionId, storePath, entry.sessionFile)
+    ? await readSessionMessageCountAsync({ agentId, sessionId: entry.sessionId })
     : undefined;
   const sessionSnapshot = buildGatewaySessionSnapshot({
     sessionRow: loadGatewaySessionRow(sessionKey, { transcriptUsageMaxBytes: 64 * 1024 }),

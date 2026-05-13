@@ -44,6 +44,8 @@ export async function main(argv = process.argv.slice(2)) {
           args: ["lint:extensions:no-deprecated-channel-access"],
         },
         { name: "runtime sidecar loader guard", args: ["check:runtime-sidecar-loaders"] },
+        { name: "database-first legacy store guard", args: ["check:database-first-legacy-stores"] },
+        { name: "Kysely generated database types", args: ["db:kysely:check"] },
         { name: "tool display", args: ["tool-display:check"] },
         { name: "host env policy", args: ["check:host-env-policy:swift"] },
         { name: "opengrep rule metadata", args: ["check:opengrep-rule-metadata"] },

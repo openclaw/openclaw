@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import type { Bot } from "grammy";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -110,8 +109,14 @@ function requireMockCall<T extends unknown[]>(call: T | undefined, label: string
   return call;
 }
 
+function mockCall(mock: ReturnType<typeof vi.fn>, index: number, label: string): unknown[] {
+  const calls = mock.mock.calls;
+  const resolvedIndex = index < 0 ? calls.length + index : index;
+  return requireMockCall(calls[resolvedIndex], label);
+}
+
 function firstMockCall(mock: ReturnType<typeof vi.fn>, label: string): unknown[] {
-  return requireMockCall(mock.mock.calls.at(0), label);
+  return mockCall(mock, 0, label);
 }
 
 function requireString(value: unknown, label: string): string {
@@ -119,6 +124,10 @@ function requireString(value: unknown, label: string): string {
     throw new Error(`expected ${label} to be a string`);
   }
   return value;
+}
+
+function mockCallText(call: unknown[], label: string): string {
+  return requireString(call[1], label);
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -144,7 +153,7 @@ function expectMediaSendCall(
 
 function expectPersistedTarget(fields: Record<string, unknown>): void {
   const [target] = requireMockCall(
-    maybePersistResolvedTelegramTarget.mock.calls.at(-1),
+    mockCall(maybePersistResolvedTelegramTarget, -1, "persisted Telegram target"),
     "persisted Telegram target",
   );
   const record = requireRecord(target, "persisted Telegram target");
@@ -186,11 +195,10 @@ describe("sent-message-cache", () => {
   });
 
   it("keeps sent-message ownership across restart", async () => {
-    const persistedStorePath = `/tmp/openclaw-telegram-send-tests-${process.pid}-restart.json`;
-    const sentMessageCfg = { session: { store: persistedStorePath } };
+    const scope = { accountId: "restart" };
 
-    recordSentMessage(123, 1, sentMessageCfg);
-    expect(wasSentByBot(123, 1, sentMessageCfg)).toBe(true);
+    recordSentMessage(123, 1, scope);
+    expect(wasSentByBot(123, 1, scope)).toBe(true);
 
     resetSentMessageCacheForTest();
 
@@ -200,49 +208,37 @@ describe("sent-message-cache", () => {
     );
 
     try {
-      expect(restartedCache.wasSentByBot(123, 1, sentMessageCfg)).toBe(true);
+      expect(restartedCache.wasSentByBot(123, 1, scope)).toBe(true);
     } finally {
       restartedCache.clearSentMessageCache();
     }
   });
 
-  it("keeps expired custom-store cleanup away from the default store", () => {
-    const customStorePath = `/tmp/openclaw-telegram-send-tests-${process.pid}-custom-cleanup.json`;
-    const customCfg = { session: { store: customStorePath } };
+  it("keeps expired account-scoped cleanup away from the default store", () => {
+    const accountScope = { accountId: "custom-cleanup" };
     const startedAt = new Date("2026-01-01T00:00:00.000Z");
     vi.useFakeTimers();
     vi.setSystemTime(startedAt);
 
-    try {
-      recordSentMessage(123, 2, customCfg);
+    recordSentMessage(123, 2, accountScope);
 
-      vi.setSystemTime(startedAt.getTime() + 24 * 60 * 60 * 1000 + 1);
-      recordSentMessage(123, 1);
+    vi.setSystemTime(startedAt.getTime() + 24 * 60 * 60 * 1000 + 1);
+    recordSentMessage(123, 1);
 
-      expect(wasSentByBot(123, 2, customCfg)).toBe(false);
-      expect(wasSentByBot(123, 1)).toBe(true);
-    } finally {
-      fs.rmSync(customStorePath, { force: true });
-      fs.rmSync(`${customStorePath}.telegram-sent-messages.json`, { force: true });
-    }
+    expect(wasSentByBot(123, 2, accountScope)).toBe(false);
+    expect(wasSentByBot(123, 1)).toBe(true);
   });
 
-  it("keeps default and custom stores isolated while both are loaded", () => {
-    const customStorePath = `/tmp/openclaw-telegram-send-tests-${process.pid}-custom-isolated.json`;
-    const customCfg = { session: { store: customStorePath } };
+  it("keeps default and account-scoped stores isolated while both are loaded", () => {
+    const accountScope = { accountId: "custom-isolated" };
 
-    try {
-      recordSentMessage(123, 1);
-      recordSentMessage(123, 2, customCfg);
+    recordSentMessage(123, 1);
+    recordSentMessage(123, 2, accountScope);
 
-      expect(wasSentByBot(123, 1)).toBe(true);
-      expect(wasSentByBot(123, 2)).toBe(false);
-      expect(wasSentByBot(123, 1, customCfg)).toBe(false);
-      expect(wasSentByBot(123, 2, customCfg)).toBe(true);
-    } finally {
-      fs.rmSync(customStorePath, { force: true });
-      fs.rmSync(`${customStorePath}.telegram-sent-messages.json`, { force: true });
-    }
+    expect(wasSentByBot(123, 1)).toBe(true);
+    expect(wasSentByBot(123, 2)).toBe(false);
+    expect(wasSentByBot(123, 1, accountScope)).toBe(false);
+    expect(wasSentByBot(123, 2, accountScope)).toBe(true);
   });
 
   it("shares sent-message state across distinct module instances", async () => {
@@ -333,6 +329,13 @@ describe("buildInlineKeyboard", () => {
         input: [[{ text: "Open", url: "https://example.com" }]],
         expected: {
           inline_keyboard: [[{ text: "Open", url: "https://example.com" }]],
+        },
+      },
+      {
+        name: "keeps web app buttons",
+        input: [[{ text: "Launch", web_app: { url: "https://example.com/app" } }]],
+        expected: {
+          inline_keyboard: [[{ text: "Launch", web_app: { url: "https://example.com/app" } }]],
         },
       },
       {
@@ -1985,10 +1988,15 @@ describe("sendMessageTelegram", () => {
         message_thread_id: 271,
       },
     );
-    expectMediaSendCall(sendPhoto.mock.calls.at(1), "second send photo call", chatId, {
-      caption: "photo",
-      parse_mode: "HTML",
-    });
+    expectMediaSendCall(
+      mockCall(sendPhoto, 1, "second send photo call"),
+      "second send photo call",
+      chatId,
+      {
+        caption: "photo",
+        parse_mode: "HTML",
+      },
+    );
     expect(res.messageId).toBe("59");
   });
 
@@ -2082,7 +2090,7 @@ describe("sendMessageTelegram", () => {
 
     expect(sendMessage).toHaveBeenCalledTimes(2);
     const firstCall = firstMockCall(sendMessage, "first sendMessage call");
-    const secondCall = requireMockCall(sendMessage.mock.calls.at(1), "second sendMessage call");
+    const secondCall = mockCall(sendMessage, 1, "second sendMessage call");
     const firstParams = requireRecord(firstCall[2], "first sendMessage params");
     const secondParams = requireRecord(secondCall[2], "second sendMessage params");
     expect((firstCall[1] as string).length).toBeLessThanOrEqual(4000);
@@ -2113,7 +2121,7 @@ describe("sendMessageTelegram", () => {
 
     expect(sendMessage).toHaveBeenCalledTimes(2);
     const firstCall = firstMockCall(sendMessage, "first sendMessage call");
-    const secondCall = requireMockCall(sendMessage.mock.calls.at(1), "second sendMessage call");
+    const secondCall = mockCall(sendMessage, 1, "second sendMessage call");
     const firstParams = requireRecord(firstCall[2], "first sendMessage params");
     const secondParams = requireRecord(secondCall[2], "second sendMessage params");
     const firstText = requireString(firstCall[1], "first sendMessage text");
@@ -2155,9 +2163,15 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledTimes(4);
-    const plainFallbackCalls = [sendMessage.mock.calls.at(1), sendMessage.mock.calls.at(3)];
-    expect(plainFallbackCalls.map((call) => String(call?.[1] ?? "")).join("")).toBe(plainText);
-    expect(plainFallbackCalls.map((call) => String(call?.[1] ?? "")).join("")).not.toContain("<");
+    const plainFallbackCalls = [
+      mockCall(sendMessage, 1, "first plain fallback sendMessage call"),
+      mockCall(sendMessage, 3, "second plain fallback sendMessage call"),
+    ];
+    const plainFallbackText = plainFallbackCalls
+      .map((call) => mockCallText(call, "plain fallback text"))
+      .join("");
+    expect(plainFallbackText).toBe(plainText);
+    expect(plainFallbackText).not.toContain("<");
     expect(res.messageId).toBe("91");
   });
 
@@ -2188,11 +2202,15 @@ describe("sendMessageTelegram", () => {
     expect(
       requireString(firstMockCall(sendMessage, "sendMessage call")[1], "sendMessage text"),
     ).toMatch(/^&/);
-    const plainFallbackCalls = [sendMessage.mock.calls.at(1), sendMessage.mock.calls.at(3)];
-    expect(plainFallbackCalls.map((call) => String(call?.[1] ?? "")).join("")).toBe(plainText);
-    expect(
-      plainFallbackCalls.map((call) => String(call?.[1] ?? "")).filter((text) => text === ""),
-    ).toEqual([]);
+    const plainFallbackCalls = [
+      mockCall(sendMessage, 1, "first plain fallback sendMessage call"),
+      mockCall(sendMessage, 3, "second plain fallback sendMessage call"),
+    ];
+    const plainFallbackTexts = plainFallbackCalls.map((call) =>
+      mockCallText(call, "plain fallback text"),
+    );
+    expect(plainFallbackTexts.join("")).toBe(plainText);
+    expect(plainFallbackTexts.filter((text) => text === "")).toEqual([]);
     expect(res.messageId).toBe("93");
   });
 
@@ -2749,7 +2767,7 @@ describe("editMessageTelegram", () => {
 
     if ("secondExpectReplyMarkup" in testCase && testCase.secondExpectReplyMarkup) {
       const secondParams = requireRecord(
-        (botApi.editMessageText.mock.calls.at(1) ?? [])[3],
+        mockCall(botApi.editMessageText, 1, "second editMessageText call")[3],
         "second edit params",
       );
       expect(secondParams.reply_markup, testCase.name).toEqual(testCase.secondExpectReplyMarkup);
@@ -2885,8 +2903,8 @@ describe("sendPollTelegram", () => {
         .message_thread_id,
     ).toBe(99);
     expect(
-      (api.sendPoll.mock.calls.at(1)?.[3] as { message_thread_id?: unknown } | undefined)
-        ?.message_thread_id,
+      (mockCall(api.sendPoll, 1, "second send poll call")[3] as { message_thread_id?: unknown })
+        .message_thread_id,
     ).toBeUndefined();
   });
 

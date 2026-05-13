@@ -7,7 +7,7 @@ import {
 } from "./service.test-harness.js";
 
 const noopLogger = createNoopLogger();
-const { makeStorePath } = createCronStoreHarness({ prefix: "openclaw-cron-" });
+const { makeStoreKey } = createCronStoreHarness({ prefix: "openclaw-cron-" });
 installCronTestHooks({
   logger: noopLogger,
   baseTimeIso: "2025-12-13T00:00:00.000Z",
@@ -15,13 +15,13 @@ installCronTestHooks({
 
 describe("CronService", () => {
   it("avoids duplicate runs when two services share a store", async () => {
-    const store = await makeStorePath();
+    const { storeKey } = await makeStoreKey();
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
 
     const cronA = new CronService({
-      storePath: store.storePath,
+      storeKey,
       cronEnabled: true,
       log: noopLogger,
       enqueueSystemEvent,
@@ -41,7 +41,7 @@ describe("CronService", () => {
     });
 
     const cronB = new CronService({
-      storePath: store.storePath,
+      storeKey,
       cronEnabled: true,
       log: noopLogger,
       enqueueSystemEvent,
@@ -61,6 +61,5 @@ describe("CronService", () => {
 
     cronA.stop();
     cronB.stop();
-    await store.cleanup();
   });
 });

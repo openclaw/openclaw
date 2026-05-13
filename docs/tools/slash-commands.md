@@ -249,7 +249,7 @@ User-invocable skills are also exposed as slash commands:
     - For full provider usage breakdown, use `openclaw status --usage`.
     - `/allowlist add|remove` requires `commands.config=true` and honors channel `configWrites`.
     - In multi-account channels, config-targeted `/allowlist --account <id>` and `/config set channels.<provider>.accounts.<id>...` also honor the target account's `configWrites`.
-    - `/usage` controls the per-response usage footer; `/usage cost` prints a local cost summary from OpenClaw session logs.
+    - `/usage` controls the per-response usage footer; `/usage cost` prints a local cost summary from OpenClaw session transcripts.
     - `/restart` is enabled by default; set `commands.restart: false` to disable it.
     - `/plugins install <spec>` accepts the same plugin specs as `openclaw plugins install`: local path/archive, npm package, `git:<repo>`, or `clawhub:<pkg>`, then requests a Gateway restart because plugin source modules changed.
     - `/plugins enable|disable` updates plugin config and triggers Gateway plugin reload for new agent turns.

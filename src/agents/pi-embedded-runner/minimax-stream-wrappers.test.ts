@@ -1,6 +1,6 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import type { Context, Model } from "@earendil-works/pi-ai";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
+import type { Context, Model } from "../pi-ai-contract.js";
 import {
   createMinimaxFastModeWrapper,
   createMinimaxThinkingDisabledWrapper,

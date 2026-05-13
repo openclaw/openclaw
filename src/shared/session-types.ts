@@ -28,7 +28,7 @@ export type GatewayAgentRow = {
 
 export type SessionsListResultBase<TDefaults, TRow> = {
   ts: number;
-  path: string;
+  databasePath: string;
   count: number;
   totalCount?: number;
   limitApplied?: number;
@@ -39,7 +39,7 @@ export type SessionsListResultBase<TDefaults, TRow> = {
 
 export type SessionsPatchResultBase<TEntry> = {
   ok: true;
-  path: string;
+  databasePath: string;
   key: string;
   entry: TEntry;
 };

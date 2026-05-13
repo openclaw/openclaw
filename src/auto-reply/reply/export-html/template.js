@@ -1209,33 +1209,6 @@
   }
 
   /**
-   * Download the session data as a JSONL file.
-   * Reconstructs the original format: header line + entry lines.
-   */
-  window.downloadSessionJson = function () {
-    // Build JSONL content: header first, then all entries
-    const lines = [];
-    if (header) {
-      lines.push(JSON.stringify({ type: "header", ...header }));
-    }
-    for (const entry of entries) {
-      lines.push(JSON.stringify(entry));
-    }
-    const jsonlContent = lines.join("\n");
-
-    // Create download
-    const blob = new Blob([jsonlContent], { type: "application/x-ndjson" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${header?.id || "session"}.jsonl`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
-  /**
    * Build a shareable URL for a specific message.
    * URL format: base?gistId&leafId=<leafId>&targetId=<entryId>
    */
@@ -1550,7 +1523,6 @@
             <h1>Session: ${escapeHtml(header?.id || "unknown")}</h1>
             <div class="help-bar">
               <span>Ctrl+T toggle thinking · Ctrl+O toggle tools</span>
-              <button class="download-json-btn" onclick="downloadSessionJson()" title="Download session as JSONL">↓ JSONL</button>
             </div>
             <div class="header-info">
               <div class="info-item"><span class="info-label">Date:</span><span class="info-value">${header?.timestamp ? new Date(header.timestamp).toLocaleString() : "unknown"}</span></div>

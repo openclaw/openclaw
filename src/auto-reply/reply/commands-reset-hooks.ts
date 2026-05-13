@@ -1,5 +1,8 @@
-import fs from "node:fs/promises";
-import path from "node:path";
+import {
+  hasSqliteSessionTranscriptEvents,
+  loadSqliteSessionTranscriptEvents,
+  type SqliteSessionTranscriptEvent,
+} from "../../config/sessions/transcript-store.sqlite.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -15,81 +18,74 @@ function loadRouteReplyRuntime() {
 
 export type ResetCommandAction = "new" | "reset";
 
-function parseTranscriptMessages(content: string): unknown[] {
+function collectTranscriptMessages(events: readonly SqliteSessionTranscriptEvent[]): unknown[] {
   const messages: unknown[] = [];
-  for (const line of content.split("\n")) {
-    if (!line.trim()) {
+  for (const { event } of events) {
+    if (!event || typeof event !== "object") {
       continue;
     }
-    try {
-      const entry = JSON.parse(line);
-      if (entry.type === "message" && entry.message) {
-        messages.push(entry.message);
-      }
-    } catch {
-      // Skip malformed lines from partially-written transcripts.
+    const entry = event as { type?: unknown; message?: unknown };
+    if (entry.type === "message" && entry.message) {
+      messages.push(entry.message);
     }
   }
   return messages;
 }
 
-async function findLatestArchivedTranscript(sessionFile: string): Promise<string | undefined> {
+type BeforeResetTranscriptScope = {
+  agentId?: string;
+  sessionId?: string;
+};
+
+function hasScopedSqliteTranscriptEvents(
+  params: BeforeResetTranscriptScope,
+): params is BeforeResetTranscriptScope & { agentId: string; sessionId: string } {
+  if (!params.agentId?.trim() || !params.sessionId?.trim()) {
+    return false;
+  }
   try {
-    const dir = path.dirname(sessionFile);
-    const base = path.basename(sessionFile);
-    const resetPrefix = `${base}.reset.`;
-    const archived = (await fs.readdir(dir))
-      .filter((name) => name.startsWith(resetPrefix))
-      .toSorted();
-    const latest = archived[archived.length - 1];
-    return latest ? path.join(dir, latest) : undefined;
+    return hasSqliteSessionTranscriptEvents({
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+    });
+  } catch {
+    return false;
+  }
+}
+
+function loadScopedBeforeResetTranscript(
+  params: BeforeResetTranscriptScope,
+): { messages: unknown[] } | undefined {
+  if (!hasScopedSqliteTranscriptEvents(params)) {
+    return undefined;
+  }
+  try {
+    return {
+      messages: collectTranscriptMessages(
+        loadSqliteSessionTranscriptEvents({
+          agentId: params.agentId,
+          sessionId: params.sessionId,
+        }),
+      ),
+    };
   } catch {
     return undefined;
   }
 }
 
 async function loadBeforeResetTranscript(params: {
-  sessionFile?: string;
-}): Promise<{ sessionFile?: string; messages: unknown[] }> {
-  const sessionFile = params.sessionFile;
-  if (!sessionFile) {
-    logVerbose("before_reset: no session file available, firing hook with empty messages");
-    return { sessionFile, messages: [] };
+  agentId?: string;
+  sessionId?: string;
+}): Promise<{ messages: unknown[] }> {
+  const scopedTranscript = loadScopedBeforeResetTranscript(params);
+  if (scopedTranscript) {
+    return scopedTranscript;
   }
 
-  try {
-    return {
-      sessionFile,
-      messages: parseTranscriptMessages(await fs.readFile(sessionFile, "utf-8")),
-    };
-  } catch (err: unknown) {
-    if ((err as { code?: unknown })?.code !== "ENOENT") {
-      logVerbose(
-        `before_reset: failed to read session file ${sessionFile}; firing hook with empty messages (${String(err)})`,
-      );
-      return { sessionFile, messages: [] };
-    }
-  }
-
-  const archivedSessionFile = await findLatestArchivedTranscript(sessionFile);
-  if (!archivedSessionFile) {
-    logVerbose(
-      `before_reset: failed to find archived transcript for ${sessionFile}; firing hook with empty messages`,
-    );
-    return { sessionFile, messages: [] };
-  }
-
-  try {
-    return {
-      sessionFile: archivedSessionFile,
-      messages: parseTranscriptMessages(await fs.readFile(archivedSessionFile, "utf-8")),
-    };
-  } catch (err: unknown) {
-    logVerbose(
-      `before_reset: failed to read archived session file ${archivedSessionFile}; firing hook with empty messages (${String(err)})`,
-    );
-    return { sessionFile: archivedSessionFile, messages: [] };
-  }
+  logVerbose(
+    "before_reset: no scoped SQLite transcript available, firing hook with empty messages",
+  );
+  return { messages: [] };
 }
 
 export async function emitResetCommandHooks(params: {
@@ -142,16 +138,18 @@ export async function emitResetCommandHooks(params: {
   const hookRunner = getGlobalHookRunner();
   if (hookRunner?.hasHooks("before_reset")) {
     const prevEntry = params.previousSessionEntry;
+    const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
     void (async () => {
-      const { sessionFile, messages } = await loadBeforeResetTranscript({
-        sessionFile: prevEntry?.sessionFile,
+      const { messages } = await loadBeforeResetTranscript({
+        agentId,
+        sessionId: prevEntry?.sessionId,
       });
 
       try {
         await hookRunner.runBeforeReset(
-          { sessionFile, messages, reason: params.action },
+          { messages, reason: params.action },
           {
-            agentId: resolveAgentIdFromSessionKey(params.sessionKey),
+            agentId,
             sessionKey: params.sessionKey,
             sessionId: prevEntry?.sessionId,
             workspaceDir: params.workspaceDir,

@@ -13,7 +13,7 @@ export const secretTargetRegistryEntries = [
   {
     id: "channels.qqbot.accounts.*.clientSecret",
     targetType: "channels.qqbot.accounts.*.clientSecret",
-    configFile: "openclaw.json",
+    store: "openclaw.json",
     pathPattern: "channels.qqbot.accounts.*.clientSecret",
     secretShape: "secret_input",
     expectedResolvedValue: "string",
@@ -24,7 +24,7 @@ export const secretTargetRegistryEntries = [
   {
     id: "channels.qqbot.clientSecret",
     targetType: "channels.qqbot.clientSecret",
-    configFile: "openclaw.json",
+    store: "openclaw.json",
     pathPattern: "channels.qqbot.clientSecret",
     secretShape: "secret_input",
     expectedResolvedValue: "string",

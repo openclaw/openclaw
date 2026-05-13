@@ -157,7 +157,7 @@ class CrestodianTuiBackend implements TuiBackend {
     const model = splitModelRef(overview.defaultModel);
     return {
       ts: Date.now(),
-      path: "crestodian",
+      databasePath: "crestodian",
       count: 1,
       defaults: {
         model: model.model ?? null,
@@ -192,7 +192,7 @@ class CrestodianTuiBackend implements TuiBackend {
     const model = splitModelRef(typeof opts.model === "string" ? opts.model : undefined);
     return {
       ok: true,
-      path: "crestodian",
+      databasePath: "crestodian",
       key: CRESTODIAN_SESSION_KEY,
       entry: {
         sessionId: "crestodian",

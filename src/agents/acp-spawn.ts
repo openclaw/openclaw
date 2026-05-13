@@ -33,9 +33,11 @@ import {
   DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
 } from "../config/agent-limits.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
-import { loadSessionStore } from "../config/sessions/store.js";
-import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
+import {
+  getSessionEntry,
+  listSessionEntries,
+  upsertSessionEntry,
+} from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
@@ -67,10 +69,17 @@ import {
 } from "../utils/delivery-context.js";
 import {
   type AcpSpawnParentRelayHandle,
-  resolveAcpSpawnStreamLogPath,
   startAcpSpawnParentStreamRelay,
 } from "./acp-spawn-parent-stream.js";
 import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
+import {
+  findAcpUnsupportedInheritedToolAllow,
+  findAcpUnsupportedInheritedToolDeny,
+  formatAcpInheritedToolAllowError,
+  formatAcpInheritedToolDenyError,
+  inheritedToolAllowPatch,
+  inheritedToolDenyPatch,
+} from "./inherited-tool-deny.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 import { resolveRequesterOriginForChild } from "./spawn-requester-origin.js";
@@ -81,7 +90,7 @@ import {
   resolveSubagentCapabilityStore,
   type SessionCapabilityStore,
 } from "./subagent-capabilities.js";
-import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
+import { getSubagentDepthFromSessionEntries } from "./subagent-depth.js";
 import { countActiveRunsForSession, getSubagentRunByChildSessionKey } from "./subagent-registry.js";
 import { resolveSubagentTargetPolicy } from "./subagent-target-policy.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
@@ -123,6 +132,8 @@ export type SpawnAcpContext = {
   /** Trusted provider role ids for the requester in this group turn. */
   agentMemberRoleIds?: string[];
   sandboxed?: boolean;
+  inheritedToolAllowlist?: string[];
+  inheritedToolDenylist?: string[];
 };
 
 export const ACP_SPAWN_ERROR_CODES = [
@@ -147,7 +158,6 @@ type SpawnAcpResultFields = {
   runId?: string;
   mode?: SpawnAcpMode;
   inlineDelivery?: boolean;
-  streamLogPath?: string;
   note?: string;
 };
 
@@ -213,8 +223,6 @@ type AcpSpawnInitializedRuntime = {
   runtimeCloseHandle: AcpSpawnRuntimeCloseHandle;
   sessionId?: string;
   sessionEntry: SessionEntry | undefined;
-  sessionStore: Record<string, SessionEntry>;
-  storePath: string;
 };
 
 type AcpSpawnRequesterState = {
@@ -387,11 +395,10 @@ function hasSessionLocalHeartbeatRelayRoute(params: {
     return false;
   }
 
-  const storePath = resolveStorePath(params.cfg.session?.store, {
+  const parentEntry = getSessionEntry({
     agentId: params.requesterAgentId,
+    sessionKey: params.parentSessionKey,
   });
-  const sessionStore = loadSessionStore(storePath);
-  const parentEntry = sessionStore[params.parentSessionKey];
   const parentDeliveryContext = deliveryContextFromSession(parentEntry);
   return Boolean(parentDeliveryContext?.channel && parentDeliveryContext.to);
 }
@@ -509,30 +516,31 @@ function resolveRequesterInternalSessionKey(params: {
     : alias;
 }
 
-async function persistAcpSpawnSessionFileBestEffort(params: {
+async function persistAcpSpawnSessionRowBestEffort(params: {
   sessionId: string;
   sessionKey: string;
   sessionEntry: SessionEntry | undefined;
-  sessionStore: Record<string, SessionEntry>;
-  storePath: string;
   agentId: string;
-  threadId?: string | number;
   stage: "spawn" | "thread-bind";
 }): Promise<SessionEntry | undefined> {
   try {
-    const resolvedSessionFile = await resolveSessionTranscriptFile({
+    const now = Date.now();
+    const entry: SessionEntry = {
+      ...(params.sessionEntry ?? {
+        updatedAt: now,
+        sessionStartedAt: now,
+      }),
       sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      sessionEntry: params.sessionEntry,
-      sessionStore: params.sessionStore,
-      storePath: params.storePath,
+    };
+    upsertSessionEntry({
       agentId: params.agentId,
-      threadId: params.threadId,
+      sessionKey: params.sessionKey,
+      entry,
     });
-    return resolvedSessionFile.sessionEntry;
+    return entry;
   } catch (error) {
     log.warn(
-      `ACP session-file persistence failed during ${params.stage} for ${params.sessionKey}: ${summarizeError(error)}`,
+      `ACP session row persistence failed during ${params.stage} for ${params.sessionKey}: ${summarizeError(error)}`,
     );
     return params.sessionEntry;
   }
@@ -749,7 +757,7 @@ function resolveAcpSubagentEnvelopeState(params: {
     return {};
   }
 
-  const callerDepth = getSubagentDepthFromSessionStore(requesterSessionKey, {
+  const callerDepth = getSubagentDepthFromSessionEntries(requesterSessionKey, {
     cfg: params.cfg,
   });
   const maxSpawnDepth =
@@ -881,9 +889,7 @@ function validateAcpResumeSessionOwnership(params: {
     };
   }
 
-  const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.targetAgentId });
-  const sessionStore = loadSessionStore(storePath);
-  for (const [sessionKey, entry] of Object.entries(sessionStore)) {
+  for (const { sessionKey, entry } of listSessionEntries({ agentId: params.targetAgentId })) {
     if (!sessionEntryMatchesAcpResumeSessionId(entry, resumeSessionId)) {
       continue;
     }
@@ -917,16 +923,16 @@ async function initializeAcpSpawnRuntime(params: {
   runTimeoutSeconds?: number;
   cwd?: string;
 }): Promise<AcpSpawnInitializedRuntime> {
-  const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.targetAgentId });
-  const sessionStore = loadSessionStore(storePath);
-  let sessionEntry: SessionEntry | undefined = sessionStore[params.sessionKey];
+  const sessionEntryRow = getSessionEntry({
+    agentId: params.targetAgentId,
+    sessionKey: params.sessionKey,
+  });
+  let sessionEntry: SessionEntry | undefined = sessionEntryRow;
   const sessionId = sessionEntry?.sessionId;
   if (sessionId) {
-    sessionEntry = await persistAcpSpawnSessionFileBestEffort({
+    sessionEntry = await persistAcpSpawnSessionRowBestEffort({
       sessionId,
       sessionKey: params.sessionKey,
-      sessionStore,
-      storePath,
       sessionEntry,
       agentId: params.targetAgentId,
       stage: "spawn",
@@ -959,8 +965,6 @@ async function initializeAcpSpawnRuntime(params: {
     },
     sessionId,
     sessionEntry,
-    sessionStore,
-    storePath,
   };
 }
 
@@ -1028,14 +1032,11 @@ async function bindPreparedAcpThread(params: {
   if (params.initializedRuntime.sessionId && params.preparedBinding.placement === "child") {
     const boundThreadId = normalizeOptionalString(binding.conversation.conversationId);
     if (boundThreadId) {
-      sessionEntry = await persistAcpSpawnSessionFileBestEffort({
+      sessionEntry = await persistAcpSpawnSessionRowBestEffort({
         sessionId: params.initializedRuntime.sessionId,
         sessionKey: params.sessionKey,
-        sessionStore: params.initializedRuntime.sessionStore,
-        storePath: params.initializedRuntime.storePath,
         sessionEntry,
         agentId: params.targetAgentId,
-        threadId: boundThreadId,
         stage: "thread-bind",
       });
     }
@@ -1155,6 +1156,26 @@ export async function spawnAcpDirect(
       status: "forbidden",
       errorCode: "runtime_policy",
       error: runtimePolicyError,
+    });
+  }
+  const acpUnsupportedInheritedTool = findAcpUnsupportedInheritedToolDeny(
+    ctx.inheritedToolDenylist,
+  );
+  if (acpUnsupportedInheritedTool) {
+    return createAcpSpawnFailure({
+      status: "forbidden",
+      errorCode: "runtime_policy",
+      error: formatAcpInheritedToolDenyError(acpUnsupportedInheritedTool),
+    });
+  }
+  const acpUnsupportedInheritedAllow = findAcpUnsupportedInheritedToolAllow(
+    ctx.inheritedToolAllowlist,
+  );
+  if (acpUnsupportedInheritedAllow) {
+    return createAcpSpawnFailure({
+      status: "forbidden",
+      errorCode: "runtime_policy",
+      error: formatAcpInheritedToolAllowError(acpUnsupportedInheritedAllow),
     });
   }
 
@@ -1291,6 +1312,8 @@ export async function spawnAcpDirect(
         key: sessionKey,
         spawnedBy: requesterInternalKey,
         ...subagentEnvelopeState.childSessionPatch,
+        ...inheritedToolAllowPatch(ctx.inheritedToolAllowlist),
+        ...inheritedToolDenyPatch(ctx.inheritedToolDenylist),
         ...(params.label ? { label: params.label } : {}),
       },
       timeoutMs: 10_000,
@@ -1324,7 +1347,6 @@ export async function spawnAcpDirect(
       cfg,
       sessionKey,
       shouldDeleteSession: sessionCreated,
-      deleteTranscript: true,
       runtimeCloseHandle: initializedRuntime,
     });
     return createAcpSpawnFailure({
@@ -1344,22 +1366,15 @@ export async function spawnAcpDirect(
   });
   const childIdem = crypto.randomUUID();
   let childRunId: string = childIdem;
-  const streamLogPath =
-    effectiveStreamToParent && parentSessionKey
-      ? resolveAcpSpawnStreamLogPath({
-          childSessionKey: sessionKey,
-        })
-      : undefined;
   // Resolve parent session delivery context so system events route to the
   // correct thread/topic instead of falling back to the main DM.
   const parentDeliveryCtx =
     effectiveStreamToParent && parentSessionKey
       ? deliveryContextFromSession(
-          loadSessionStore(
-            resolveStorePath(cfg.session?.store, {
-              agentId: resolveAgentIdFromSessionKey(parentSessionKey),
-            }),
-          )[parentSessionKey],
+          getSessionEntry({
+            agentId: resolveAgentIdFromSessionKey(parentSessionKey),
+            sessionKey: parentSessionKey,
+          }),
         )
       : undefined;
 
@@ -1371,9 +1386,6 @@ export async function spawnAcpDirect(
       parentSessionKey,
       childSessionKey: sessionKey,
       agentId: targetAgentId,
-      mainKey: cfg.session?.mainKey,
-      sessionScope: cfg.session?.scope,
-      logPath: streamLogPath,
       deliveryContext: parentDeliveryCtx,
       emitStartNotice: false,
     });
@@ -1407,7 +1419,6 @@ export async function spawnAcpDirect(
       cfg,
       sessionKey,
       shouldDeleteSession: true,
-      deleteTranscript: true,
     });
     return createAcpSpawnFailure({
       status: "error",
@@ -1426,9 +1437,6 @@ export async function spawnAcpDirect(
         parentSessionKey,
         childSessionKey: sessionKey,
         agentId: targetAgentId,
-        mainKey: cfg.session?.mainKey,
-        sessionScope: cfg.session?.scope,
-        logPath: streamLogPath,
         deliveryContext: parentDeliveryCtx,
         emitStartNotice: false,
       });
@@ -1461,7 +1469,6 @@ export async function spawnAcpDirect(
       childSessionKey: sessionKey,
       runId: childRunId,
       mode: spawnMode,
-      ...(streamLogPath ? { streamLogPath } : {}),
       note: spawnMode === "session" ? ACP_SPAWN_SESSION_ACCEPTED_NOTE : ACP_SPAWN_ACCEPTED_NOTE,
     };
   }

@@ -11,6 +11,7 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import { resolveBundledPluginWorkspaceSourcePath } from "../plugins/bundled-plugin-metadata.js";
 import { pluginCommands } from "../plugins/command-registry-state.js";
+import { writePluginBindingApprovalsSnapshot } from "../plugins/conversation-binding.js";
 import { clearPluginLoaderCache } from "../plugins/loader.js";
 import {
   pinActivePluginChannelRegistry,
@@ -293,27 +294,29 @@ async function writePluginBindingApproval(params: {
   accountId: string;
 }): Promise<void> {
   const openclawDir = path.join(params.homeDir, ".openclaw");
-  await fs.mkdir(openclawDir, { recursive: true });
-  await fs.writeFile(
-    path.join(openclawDir, "plugin-binding-approvals.json"),
-    `${JSON.stringify(
-      {
-        version: 1,
-        approvals: [
-          {
-            pluginRoot: params.pluginRoot,
-            pluginId: "codex",
-            pluginName: "Codex",
-            channel: params.channel,
-            accountId: params.accountId,
-            approvedAt: Date.now(),
-          },
-        ],
-      },
-      null,
-      2,
-    )}\n`,
-  );
+  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+  process.env.OPENCLAW_STATE_DIR = openclawDir;
+  try {
+    writePluginBindingApprovalsSnapshot({
+      version: 1,
+      approvals: [
+        {
+          pluginRoot: params.pluginRoot,
+          pluginId: "codex",
+          pluginName: "Codex",
+          channel: params.channel,
+          accountId: params.accountId,
+          approvedAt: Date.now(),
+        },
+      ],
+    });
+  } finally {
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
+  }
 }
 
 async function writeGatewayConfig(params: {

@@ -12,7 +12,6 @@ export async function clearAllIndexedDbState(params?: { databasePrefix?: string 
             const req = indexedDB.deleteDatabase(name);
             req.addEventListener("success", () => resolve(), { once: true });
             req.addEventListener("error", () => reject(req.error), { once: true });
-            req.addEventListener("blocked", () => resolve(), { once: true });
           }),
       ),
   );
@@ -66,12 +65,19 @@ export async function readDatabaseRecords(params: {
       let values: unknown[] | null = null;
 
       const maybeResolve = () => {
-        if (!keys || !values) {
+        const resolvedKeys = keys;
+        const resolvedValues = values;
+        if (!resolvedKeys || !resolvedValues) {
           return;
         }
-        db.close();
-        const resolvedValues = values;
-        resolve(keys.map((key, index) => ({ key, value: resolvedValues[index] })));
+        tx.addEventListener(
+          "complete",
+          () => {
+            db.close();
+            resolve(resolvedKeys.map((key, index) => ({ key, value: resolvedValues[index] })));
+          },
+          { once: true },
+        );
       };
 
       keysReq.addEventListener("success", () => {

@@ -50,7 +50,6 @@ export type GatewaySessionRow = {
   groupChannel?: string;
   space?: string;
   chatType?: ChatType;
-  origin?: SessionEntry["origin"];
   updatedAt: number | null;
   sessionId?: string;
   systemSent?: boolean;
@@ -85,10 +84,10 @@ export type GatewaySessionRow = {
   agentRuntime?: GatewayAgentRuntime;
   contextTokens?: number;
   deliveryContext?: DeliveryContext;
-  lastChannel?: SessionEntry["lastChannel"];
+  lastChannel?: string;
   lastTo?: string;
   lastAccountId?: string;
-  lastThreadId?: SessionEntry["lastThreadId"];
+  lastThreadId?: string | number;
   compactionCheckpointCount?: number;
   latestCompactionCheckpoint?: SessionCompactionCheckpointPreview;
   pluginExtensions?: PluginSessionExtensionProjection[];

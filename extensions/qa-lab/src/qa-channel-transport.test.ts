@@ -110,6 +110,7 @@ describe("qa channel transport", () => {
     const message = await transport.capabilities.readNormalizedMessage({
       messageId: inbound.id,
     });
+    expect(message).toBeTruthy();
     if (!message) {
       throw new Error("expected normalized QA message");
     }

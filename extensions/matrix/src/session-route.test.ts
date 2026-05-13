@@ -1,11 +1,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "./runtime-api.js";
 import { resolveMatrixOutboundSessionRoute } from "./session-route.js";
 
 const tempDirs = new Set<string>();
+const previousStateDir = process.env.OPENCLAW_STATE_DIR;
 const currentDmSessionKey = "agent:main:matrix:channel:!dm:example.org";
 type MatrixChannelConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["matrix"]>;
 
@@ -26,22 +28,26 @@ const defaultAccountPerRoomDmMatrixConfig = {
   },
 } satisfies MatrixChannelConfig;
 
-function createTempStore(entries: Record<string, unknown>): string {
+function seedTempSessionEntries(entries: Record<string, unknown>): void {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-session-route-"));
   tempDirs.add(tempDir);
-  const storePath = path.join(tempDir, "sessions.json");
-  fs.writeFileSync(storePath, JSON.stringify(entries), "utf8");
-  return storePath;
+  process.env.OPENCLAW_STATE_DIR = tempDir;
+  for (const [sessionKey, entry] of Object.entries(entries)) {
+    upsertSessionEntry({
+      agentId: "main",
+      sessionKey,
+      entry: entry as never,
+    });
+  }
 }
 
 function createMatrixRouteConfig(
   entries: Record<string, unknown>,
   matrix: MatrixChannelConfig = perRoomDmMatrixConfig,
 ): OpenClawConfig {
+  seedTempSessionEntries(entries);
   return {
-    session: {
-      store: createTempStore(entries),
-    },
+    session: {},
     channels: {
       matrix,
     },
@@ -55,35 +61,32 @@ function createStoredDirectDmSession(
     accountId?: string | null;
     nativeChannelId?: string;
     nativeDirectUserId?: string;
-    lastTo?: string;
-    lastAccountId?: string;
   } = {},
 ): Record<string, unknown> {
   const accountId = params.accountId === null ? undefined : (params.accountId ?? "ops");
   const to = params.to ?? "room:!dm:example.org";
   const accountMetadata = accountId ? { accountId } : {};
+  const from = params.from ?? "matrix:@alice:example.org";
+  const nativeChannelId =
+    params.nativeChannelId ?? (to.startsWith("room:!") ? to.slice("room:".length) : undefined);
+  const nativeDirectUserId =
+    params.nativeDirectUserId ??
+    (from.startsWith("matrix:@") ? from.slice("matrix:".length) : undefined);
   const nativeMetadata = {
-    ...(params.nativeChannelId ? { nativeChannelId: params.nativeChannelId } : {}),
-    ...(params.nativeDirectUserId ? { nativeDirectUserId: params.nativeDirectUserId } : {}),
+    ...(nativeChannelId ? { nativeChannelId } : {}),
+    ...(nativeDirectUserId ? { nativeDirectUserId } : {}),
   };
   return {
     sessionId: "sess-1",
     updatedAt: Date.now(),
     chatType: "direct",
-    origin: {
-      chatType: "direct",
-      from: params.from ?? "matrix:@alice:example.org",
-      to,
-      ...nativeMetadata,
-      ...accountMetadata,
-    },
+    channel: "matrix",
+    ...nativeMetadata,
     deliveryContext: {
       channel: "matrix",
       to,
       ...accountMetadata,
     },
-    ...(params.lastTo ? { lastTo: params.lastTo } : {}),
-    ...(params.lastAccountId ? { lastAccountId: params.lastAccountId } : {}),
   };
 }
 
@@ -92,21 +95,14 @@ function createStoredChannelSession(): Record<string, unknown> {
     sessionId: "sess-1",
     updatedAt: Date.now(),
     chatType: "channel",
-    origin: {
-      chatType: "channel",
-      from: "matrix:channel:!ops:example.org",
-      to: "room:!ops:example.org",
-      nativeChannelId: "!ops:example.org",
-      nativeDirectUserId: "@alice:example.org",
-      accountId: "ops",
-    },
+    channel: "matrix",
+    nativeChannelId: "!ops:example.org",
+    nativeDirectUserId: "@alice:example.org",
     deliveryContext: {
       channel: "matrix",
       to: "room:!ops:example.org",
       accountId: "ops",
     },
-    lastTo: "room:!ops:example.org",
-    lastAccountId: "ops",
   };
 }
 
@@ -180,6 +176,11 @@ function expectRoute(route: ReturnType<typeof resolveMatrixOutboundSessionRoute>
 }
 
 afterEach(() => {
+  if (previousStateDir === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = previousStateDir;
+  }
   for (const tempDir of tempDirs) {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -221,8 +222,6 @@ describe("resolveMatrixOutboundSessionRoute", () => {
         to: "room:@bob:example.org",
         nativeChannelId: "!dm:example.org",
         nativeDirectUserId: "@alice:example.org",
-        lastTo: "room:@bob:example.org",
-        lastAccountId: "ops",
       }),
       accountId: "ops",
     });
@@ -237,8 +236,6 @@ describe("resolveMatrixOutboundSessionRoute", () => {
         to: "room:@bob:example.org",
         nativeChannelId: "!dm:example.org",
         nativeDirectUserId: "@alice:example.org",
-        lastTo: "room:@bob:example.org",
-        lastAccountId: "ops",
       }),
       accountId: "ops",
       target: "@bob:example.org",
@@ -265,13 +262,13 @@ describe("resolveMatrixOutboundSessionRoute", () => {
     expectCurrentDmRoomRoute(route);
   });
 
-  it("reuses the current DM room when stored account metadata is missing", () => {
+  it("does not reuse the current DM room when stored account metadata is missing", () => {
     const route = resolveUserRouteForCurrentSession({
       storedSession: createStoredDirectDmSession({ accountId: null }),
       matrix: defaultAccountPerRoomDmMatrixConfig,
     });
 
-    expectCurrentDmRoomRoute(route);
+    expectFallbackUserRoute(route);
   });
 
   it("recovers channel thread routes from currentSessionKey and preserves Matrix event-id case", () => {

@@ -102,7 +102,6 @@ describe("runCliAgent bundle MCP e2e", () => {
       resetGlobalHookRunner();
 
       const workspaceDir = path.join(tempHome, "workspace");
-      const sessionFile = path.join(tempHome, "session.jsonl");
       const binDir = path.join(tempHome, "bin");
       const serverScriptPath = path.join(tempHome, "mcp", "bundle-probe.mjs");
       const fakeClaudePath = path.join(binDir, "fake-claude.mjs");
@@ -130,7 +129,6 @@ describe("runCliAgent bundle MCP e2e", () => {
       try {
         const result = await runCliAgent({
           sessionId: "session:test",
-          sessionFile,
           workspaceDir,
           config,
           prompt: "Use your configured MCP tools and report the bundle probe text.",
@@ -176,7 +174,6 @@ describe("runCliAgent bundle MCP e2e", () => {
       await closeMcpLoopbackServer();
 
       const workspaceDir = path.join(tempHome, "workspace");
-      const sessionFile = path.join(tempHome, "session.jsonl");
       const binDir = path.join(tempHome, "bin");
       const serverScriptPath = path.join(tempHome, "mcp", "bundle-probe.mjs");
       const fakeClaudePath = path.join(binDir, "fake-live-claude.mjs");
@@ -205,7 +202,6 @@ describe("runCliAgent bundle MCP e2e", () => {
       try {
         const result = await runCliAgent({
           sessionId: "session:test-live-cleanup",
-          sessionFile,
           workspaceDir,
           config,
           prompt: "Use your configured MCP tools and report the bundle probe text.",

@@ -2,12 +2,14 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  migrateSessionEntries,
-  parseSessionEntries,
   type SessionEntry as PiSessionEntry,
   type SessionHeader,
-} from "@earendil-works/pi-coding-agent";
-import { pathExists } from "../../infra/fs-safe.js";
+  type TranscriptEntry,
+} from "../../agents/transcript/session-transcript-contract.js";
+import {
+  hasSqliteSessionTranscriptEvents,
+  loadSqliteSessionTranscriptEvents,
+} from "../../config/sessions/transcript-store.sqlite.js";
 import type { ReplyPayload } from "../types.js";
 import {
   isReplyPayload,
@@ -60,7 +62,7 @@ async function generateHtml(sessionData: SessionData): Promise<string> {
     loadTemplate(path.join("vendor", "highlight.min.js")),
   ]);
 
-  // Use pi-mono dark theme colors (matching their theme/dark.json)
+  // Keep the exported transcript palette aligned with OpenClaw's dark TUI theme.
   const themeVars = `
     --cyan: #00d7ff;
     --blue: #5f87ff;
@@ -144,17 +146,35 @@ async function writeNewDefaultExportFile(filePath: string, html: string): Promis
   }
   throw new Error(`Could not find an unused export filename near ${filePath}`);
 }
-async function readSessionDataFromTranscript(sessionFile: string): Promise<{
+function hasScopedSqliteTranscriptEvents(params: { agentId: string; sessionId: string }): boolean {
+  try {
+    return hasSqliteSessionTranscriptEvents(params);
+  } catch {
+    return false;
+  }
+}
+
+async function readSessionDataFromTranscript(params: {
+  agentId: string;
+  sessionId: string;
+}): Promise<{
   header: SessionHeader | null;
   entries: PiSessionEntry[];
   leafId: string | null;
 }> {
-  const raw = await fsp.readFile(sessionFile, "utf-8");
-  const fileEntries = parseSessionEntries(raw);
-  migrateSessionEntries(fileEntries);
+  if (!hasScopedSqliteTranscriptEvents(params)) {
+    throw new Error(
+      `Transcript is not in SQLite for agent ${params.agentId} session ${params.sessionId}. Run "openclaw doctor --fix" to import legacy JSONL transcripts.`,
+    );
+  }
+  const transcriptEntries = loadSqliteSessionTranscriptEvents(params).map(
+    (row) => row.event as TranscriptEntry,
+  );
   const header =
-    fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
-  const entries = fileEntries.filter((entry): entry is PiSessionEntry => entry.type !== "session");
+    transcriptEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
+  const entries = transcriptEntries.filter(
+    (entry): entry is PiSessionEntry => entry.type !== "session",
+  );
   const lastEntry = entries.at(-1);
   const leafId = typeof lastEntry?.id === "string" ? lastEntry.id : null;
   return { header, entries, leafId };
@@ -172,14 +192,19 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   if (isReplyPayload(sessionTarget)) {
     return sessionTarget;
   }
-  const { entry, sessionFile } = sessionTarget;
+  const { agentId, entry } = sessionTarget;
 
-  if (!(await pathExists(sessionFile))) {
-    return { text: `❌ Session file not found: ${sessionFile}` };
+  if (!hasScopedSqliteTranscriptEvents({ agentId, sessionId: entry.sessionId })) {
+    return {
+      text: `❌ Session transcript has not been migrated into SQLite. Run \`openclaw doctor --fix\` and try again.`,
+    };
   }
 
   // 2. Load session entries
-  const { entries, header, leafId } = await readSessionDataFromTranscript(sessionFile);
+  const { entries, header, leafId } = await readSessionDataFromTranscript({
+    agentId,
+    sessionId: entry.sessionId,
+  });
 
   // 3. Build full system prompt
   const { systemPrompt, tools } = await resolveCommandsSystemPromptBundle({

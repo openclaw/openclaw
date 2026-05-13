@@ -78,6 +78,28 @@ function startTelegramAccount(
   };
 }
 
+function latestMonitorOptions(): {
+  token?: string;
+  accountId?: string;
+  useWebhook?: boolean;
+  botInfo?: unknown;
+} {
+  const calls = monitorTelegramProvider.mock.calls;
+  const options = calls[calls.length - 1]?.[0];
+  if (!options || typeof options !== "object") {
+    throw new Error("expected monitor Telegram options");
+  }
+  return options;
+}
+
+function sendMessageOptionsAt(index: number): Record<string, unknown> {
+  const options = sendMessageTelegram.mock.calls[index]?.[2];
+  if (!options || typeof options !== "object") {
+    throw new Error(`expected sendMessageTelegram options ${index}`);
+  }
+  return options;
+}
+
 afterEach(() => {
   clearTelegramRuntime();
   probeTelegram.mockReset();
@@ -129,12 +151,10 @@ describe("telegramPlugin gateway startup", () => {
     const { task } = startTelegramAccount();
 
     await expect(task).resolves.toBeUndefined();
-    const monitorOptions = monitorTelegramProvider.mock.calls.at(-1)?.[0] as
-      | { token?: string; accountId?: string; useWebhook?: boolean }
-      | undefined;
-    expect(monitorOptions?.token).toBe("123456:bad-token");
-    expect(monitorOptions?.accountId).toBe("default");
-    expect(monitorOptions?.useWebhook).toBe(false);
+    const monitorOptions = latestMonitorOptions();
+    expect(monitorOptions.token).toBe("123456:bad-token");
+    expect(monitorOptions.accountId).toBe("default");
+    expect(monitorOptions.useWebhook).toBe(false);
   });
 
   it("uses the getMe request guard for startup probe timeout", async () => {
@@ -191,10 +211,7 @@ describe("telegramPlugin gateway startup", () => {
     const { task } = startTelegramAccount();
 
     await expect(task).resolves.toBeUndefined();
-    const monitorOptions = monitorTelegramProvider.mock.calls.at(-1)?.[0] as
-      | { botInfo?: typeof botInfo }
-      | undefined;
-    expect(monitorOptions?.botInfo).toBe(botInfo);
+    expect(latestMonitorOptions().botInfo).toBe(botInfo);
   });
 
   it("honors higher per-account timeoutSeconds for startup probe", async () => {
@@ -234,7 +251,7 @@ describe("telegramPlugin outbound attachments", () => {
       to: "12345",
       text: "hi **boss**",
     });
-    expect(sendMessageTelegram.mock.calls.at(0)?.[2]).not.toHaveProperty("textMode");
+    expect(sendMessageOptionsAt(0)).not.toHaveProperty("textMode");
 
     await sendText({
       cfg: createTelegramConfig(),
@@ -242,7 +259,7 @@ describe("telegramPlugin outbound attachments", () => {
       text: "<b>hi boss</b>",
       formatting: { parseMode: "HTML" },
     });
-    expect(sendMessageTelegram.mock.calls.at(1)?.[2]?.textMode).toBe("html");
+    expect(sendMessageOptionsAt(1).textMode).toBe("html");
   });
 
   it("preserves explicit HTML parse mode for payload media captions", async () => {
@@ -264,6 +281,94 @@ describe("telegramPlugin outbound attachments", () => {
       formatting: { parseMode: "HTML" },
     });
 
-    expect(sendMessageTelegram.mock.calls.at(0)?.[2]?.textMode).toBe("html");
+    expect(sendMessageOptionsAt(0).textMode).toBe("html");
+  });
+});
+
+describe("telegramPlugin outbound attachments", () => {
+  it("preserves default markdown rendering unless a parse mode is explicit", async () => {
+    installTelegramRuntime();
+    sendMessageTelegram.mockResolvedValue({ messageId: "tg-1", chatId: "12345" });
+    const sendText = telegramPlugin.outbound?.sendText;
+    expect(sendText).toBeDefined();
+
+    await sendText!({
+      cfg: createTelegramConfig(),
+      to: "12345",
+      text: "hi **boss**",
+    });
+    expect(sendMessageTelegram.mock.calls[0]?.[2]).not.toHaveProperty("textMode");
+
+    await sendText!({
+      cfg: createTelegramConfig(),
+      to: "12345",
+      text: "<b>hi boss</b>",
+      formatting: { parseMode: "HTML" },
+    });
+    expect(sendMessageTelegram.mock.calls[1]?.[2]).toMatchObject({ textMode: "html" });
+  });
+
+  it("preserves explicit HTML parse mode for payload media captions", async () => {
+    installTelegramRuntime();
+    sendMessageTelegram.mockResolvedValue({ messageId: "tg-payload", chatId: "12345" });
+    const sendPayload = telegramPlugin.outbound?.sendPayload;
+    expect(sendPayload).toBeDefined();
+
+    await sendPayload!({
+      cfg: createTelegramConfig(),
+      to: "12345",
+      text: "",
+      payload: {
+        text: "<b>report</b>",
+        mediaUrl: "https://example.com/report.png",
+      },
+      formatting: { parseMode: "HTML" },
+    });
+
+    expect(sendMessageTelegram.mock.calls[0]?.[2]).toMatchObject({ textMode: "html" });
+  });
+});
+
+describe("telegramPlugin outbound attachments", () => {
+  it("preserves default markdown rendering unless a parse mode is explicit", async () => {
+    installTelegramRuntime();
+    sendMessageTelegram.mockResolvedValue({ messageId: "tg-1", chatId: "12345" });
+    const sendText = telegramPlugin.outbound?.sendText;
+    expect(sendText).toBeDefined();
+
+    await sendText!({
+      cfg: createTelegramConfig(),
+      to: "12345",
+      text: "hi **boss**",
+    });
+    expect(sendMessageTelegram.mock.calls[0]?.[2]).not.toHaveProperty("textMode");
+
+    await sendText!({
+      cfg: createTelegramConfig(),
+      to: "12345",
+      text: "<b>hi boss</b>",
+      formatting: { parseMode: "HTML" },
+    });
+    expect(sendMessageTelegram.mock.calls[1]?.[2]).toMatchObject({ textMode: "html" });
+  });
+
+  it("preserves explicit HTML parse mode for payload media captions", async () => {
+    installTelegramRuntime();
+    sendMessageTelegram.mockResolvedValue({ messageId: "tg-payload", chatId: "12345" });
+    const sendPayload = telegramPlugin.outbound?.sendPayload;
+    expect(sendPayload).toBeDefined();
+
+    await sendPayload!({
+      cfg: createTelegramConfig(),
+      to: "12345",
+      text: "",
+      payload: {
+        text: "<b>report</b>",
+        mediaUrl: "https://example.com/report.png",
+      },
+      formatting: { parseMode: "HTML" },
+    });
+
+    expect(sendMessageTelegram.mock.calls[0]?.[2]).toMatchObject({ textMode: "html" });
   });
 });

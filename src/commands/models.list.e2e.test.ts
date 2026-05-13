@@ -160,7 +160,7 @@ function makeRuntime() {
 }
 
 function firstMockArg(mockFn: ReturnType<typeof vi.fn>, label: string): unknown {
-  const call = mockFn.mock.calls.at(0);
+  const call = mockFn.mock.calls[0];
   if (!call) {
     throw new Error(`Expected ${label} call`);
   }
@@ -613,7 +613,7 @@ describe("models list/status", () => {
     await expect(loadModelRegistry({})).rejects.toThrow("model discovery unavailable");
   });
 
-  it("loadModelRegistry does not persist models.json as a side effect", async () => {
+  it("loadModelRegistry does not persist a model catalog file as a side effect", async () => {
     modelRegistryState.models = [OPENAI_MODEL];
     modelRegistryState.available = [OPENAI_MODEL];
     const resolvedConfig = {
@@ -652,7 +652,7 @@ describe("models list/status", () => {
     expect(Array.from(loaded.availableKeys ?? [])).toEqual(["openai/gpt-4.1-mini"]);
   });
 
-  it("modelsListCommand lists source snapshot provider models without persisting models.json", async () => {
+  it("modelsListCommand lists source snapshot provider models without persisting a model catalog file", async () => {
     modelRegistryState.models = [];
     modelRegistryState.available = [];
     const sourceConfig = {

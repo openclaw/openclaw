@@ -52,7 +52,7 @@ async function openPairingSession(
   await connectOk(pairingWs, {
     skipDefaultAuth: true,
     deviceToken: operator.token,
-    deviceIdentityPath: operator.identityPath,
+    deviceIdentityKey: operator.identityKey,
     scopes: ["operator.pairing"],
   });
   return pairingWs;

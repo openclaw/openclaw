@@ -226,9 +226,7 @@ describe("qa suite planning helpers", () => {
           plugins: {
             entries: {
               "active-memory": {
-                config: {
-                  transcriptDir: "qa-memory-e2e",
-                },
+                config: {},
               },
             },
           },
@@ -248,7 +246,6 @@ describe("qa suite planning helpers", () => {
             config: {
               enabled: true,
               agents: ["qa"],
-              transcriptDir: "qa-memory-e2e",
             },
           },
         },

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { getTaskSessionLookupByIdForStatus } from "../../tasks/task-status-access.js";
 import {
   ErrorCodes,
@@ -307,16 +308,17 @@ async function loadArtifacts(
   if (!sessionKey) {
     return { artifacts: [] };
   }
-  const { storePath, entry } = loadSessionEntry(sessionKey);
+  const { entry } = loadSessionEntry(sessionKey);
   const sessionId = entry?.sessionId;
-  if (!sessionId || !storePath) {
+  if (!sessionId) {
     return { sessionKey, artifacts: [] };
   }
   const artifacts: ArtifactRecord[] = [];
   await visitSessionMessagesAsync(
-    sessionId,
-    storePath,
-    entry?.sessionFile,
+    {
+      agentId: resolveAgentIdFromSessionKey(sessionKey),
+      sessionId,
+    },
     (message, seq) => {
       collectArtifactsFromMessage({
         message,

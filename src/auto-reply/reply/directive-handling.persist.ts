@@ -7,7 +7,7 @@ import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { listLegacyRuntimeModelProviderAliases } from "../../agents/model-runtime-aliases.js";
 import { normalizeProviderId, type ModelAliasIndex } from "../../agents/model-selection.js";
-import { updateSessionStore } from "../../config/sessions/store.js";
+import { getSessionEntry, mergeSessionEntry, upsertSessionEntry } from "../../config/sessions.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
@@ -88,7 +88,6 @@ export async function persistInlineDirectives(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
-  storePath?: string;
   elevatedEnabled: boolean;
   elevatedAllowed: boolean;
   defaultProvider: string;
@@ -118,7 +117,6 @@ export async function persistInlineDirectives(params: {
     sessionEntry,
     sessionStore,
     sessionKey,
-    storePath,
     elevatedEnabled,
     elevatedAllowed,
     defaultProvider,
@@ -357,11 +355,13 @@ export async function persistInlineDirectives(params: {
     if (updated) {
       sessionEntry.updatedAt = Date.now();
       sessionStore[sessionKey] = sessionEntry;
-      if (storePath) {
-        await updateSessionStore(storePath, (store) => {
-          store[sessionKey] = sessionEntry;
-        });
-      }
+      upsertSessionEntry({
+        agentId: activeAgentId,
+        sessionKey,
+        entry: mergeSessionEntry(getSessionEntry({ agentId: activeAgentId, sessionKey }), {
+          ...sessionEntry,
+        }),
+      });
       enqueueModeSwitchEvents({
         enqueueSystemEvent,
         sessionEntry,

@@ -1,16 +1,9 @@
-/**
- * Gateway session persistence — JSONL file-based store.
- *
- * Migrated from src/session-store.ts. Dependencies are only Node.js
- * built-ins + log + platform (both zero plugin-sdk).
- */
+/** Gateway session persistence backed by the plugin SQLite state table. */
 
-import fs from "node:fs";
-import path from "node:path";
-import { privateFileStoreSync } from "openclaw/plugin-sdk/security-runtime";
+import type { GatewayPluginRuntime } from "../gateway/types.js";
+import { createMemoryKeyedStore, type KeyedStore } from "../state/keyed-store.js";
 import { formatErrorMessage } from "../utils/format.js";
 import { debugLog, debugError } from "../utils/log.js";
-import { getQQBotDataDir, getQQBotDataPath } from "../utils/platform.js";
 
 /** Persisted gateway session state. */
 export interface SessionState {
@@ -25,6 +18,9 @@ export interface SessionState {
 
 const SESSION_EXPIRE_TIME = 5 * 60 * 1000;
 const SAVE_THROTTLE_MS = 1000;
+const SESSION_STORE_NAMESPACE = "sessions";
+
+let sessionStore: KeyedStore<SessionState> = createMemoryKeyedStore();
 
 const throttleState = new Map<
   string,
@@ -35,49 +31,22 @@ const throttleState = new Map<
   }
 >();
 
-function ensureDir(): void {
-  getQQBotDataDir("sessions");
-}
-
-function getSessionDir(): string {
-  return getQQBotDataPath("sessions");
-}
-
-function encodeAccountIdForFileName(accountId: string): string {
-  return Buffer.from(accountId, "utf8").toString("base64url");
-}
-
-function getLegacySessionPath(accountId: string): string {
-  const safeId = accountId.replace(/[^a-zA-Z0-9_-]/g, "_");
-  return path.join(getSessionDir(), `session-${safeId}.json`);
-}
-
-function getSessionPath(accountId: string): string {
-  const encodedId = encodeAccountIdForFileName(accountId);
-  return path.join(getSessionDir(), `session-${encodedId}.json`);
-}
-
-function getCandidateSessionPaths(accountId: string): string[] {
-  const primaryPath = getSessionPath(accountId);
-  const legacyPath = getLegacySessionPath(accountId);
-  return primaryPath === legacyPath ? [primaryPath] : [primaryPath, legacyPath];
+export function configureSessionStore(runtime: GatewayPluginRuntime): void {
+  sessionStore = runtime.state.openKeyedStore<SessionState>({
+    namespace: SESSION_STORE_NAMESPACE,
+    maxEntries: 100,
+    defaultTtlMs: SESSION_EXPIRE_TIME,
+  });
 }
 
 /** Load a saved session, rejecting expired or mismatched appId entries. */
-export function loadSession(accountId: string, expectedAppId?: string): SessionState | null {
+export async function loadSession(
+  accountId: string,
+  expectedAppId?: string,
+): Promise<SessionState | null> {
   try {
-    let filePath: string | null = null;
-    let state: SessionState | null = null;
-    for (const candidatePath of getCandidateSessionPaths(accountId)) {
-      state = privateFileStoreSync(path.dirname(candidatePath)).readJsonIfExists<SessionState>(
-        path.basename(candidatePath),
-      );
-      if (state) {
-        filePath = candidatePath;
-        break;
-      }
-    }
-    if (!filePath || !state) {
+    const state = (await sessionStore.lookup(accountId)) ?? null;
+    if (!state) {
       return null;
     }
 
@@ -87,9 +56,7 @@ export function loadSession(accountId: string, expectedAppId?: string): SessionS
       debugLog(
         `[session-store] Session expired for ${accountId}, age: ${Math.round((now - state.savedAt) / 1000)}s`,
       );
-      try {
-        fs.unlinkSync(filePath);
-      } catch {}
+      await sessionStore.delete(accountId);
       return null;
     }
 
@@ -97,9 +64,7 @@ export function loadSession(accountId: string, expectedAppId?: string): SessionS
       debugLog(
         `[session-store] appId mismatch for ${accountId}: saved=${state.appId}, current=${expectedAppId}. Discarding stale session.`,
       );
-      try {
-        fs.unlinkSync(filePath);
-      } catch {}
+      await sessionStore.delete(accountId);
       return null;
     }
 
@@ -160,23 +125,19 @@ export function saveSession(state: SessionState): void {
 }
 
 function doSaveSession(state: SessionState): void {
-  const filePath = getSessionPath(state.accountId);
-  const legacyPath = getLegacySessionPath(state.accountId);
-  try {
-    ensureDir();
-    const stateToSave: SessionState = { ...state, savedAt: Date.now() };
-    privateFileStoreSync(path.dirname(filePath)).writeJson(path.basename(filePath), stateToSave);
-    if (legacyPath !== filePath && fs.existsSync(legacyPath)) {
-      fs.unlinkSync(legacyPath);
-    }
-    debugLog(
-      `[session-store] Saved session for ${state.accountId}: sessionId=${state.sessionId}, lastSeq=${state.lastSeq}`,
-    );
-  } catch (err) {
-    debugError(
-      `[session-store] Failed to save session for ${state.accountId}: ${formatErrorMessage(err)}`,
-    );
-  }
+  const stateToSave: SessionState = { ...state, savedAt: Date.now() };
+  void sessionStore.register(state.accountId, stateToSave, { ttlMs: SESSION_EXPIRE_TIME }).then(
+    () => {
+      debugLog(
+        `[session-store] Saved session for ${state.accountId}: sessionId=${state.sessionId}, lastSeq=${state.lastSeq}`,
+      );
+    },
+    (err: unknown) => {
+      debugError(
+        `[session-store] Failed to save session for ${state.accountId}: ${formatErrorMessage(err)}`,
+      );
+    },
+  );
 }
 
 /** Clear a saved session and any pending throttle state. */
@@ -188,20 +149,16 @@ export function clearSession(accountId: string): void {
     }
     throttleState.delete(accountId);
   }
-  try {
-    let cleared = false;
-    for (const filePath of getCandidateSessionPaths(accountId)) {
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
-        cleared = true;
+  void sessionStore.delete(accountId).then(
+    (cleared) => {
+      if (cleared) {
+        debugLog(`[session-store] Cleared session for ${accountId}`);
       }
-    }
-    if (cleared) {
-      debugLog(`[session-store] Cleared session for ${accountId}`);
-    }
-  } catch (err) {
-    debugError(
-      `[session-store] Failed to clear session for ${accountId}: ${formatErrorMessage(err)}`,
-    );
-  }
+    },
+    (err: unknown) => {
+      debugError(
+        `[session-store] Failed to clear session for ${accountId}: ${formatErrorMessage(err)}`,
+      );
+    },
+  );
 }

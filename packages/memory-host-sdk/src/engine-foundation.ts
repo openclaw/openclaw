@@ -16,7 +16,6 @@ export {
 export { parseDurationMs } from "./host/openclaw-runtime-config.js";
 export { loadConfig } from "./host/openclaw-runtime-config.js";
 export { resolveStateDir } from "./host/openclaw-runtime-config.js";
-export { resolveSessionTranscriptsDirForAgent } from "./host/openclaw-runtime-config.js";
 export {
   hasConfiguredSecretInput,
   normalizeResolvedSecretInputString,

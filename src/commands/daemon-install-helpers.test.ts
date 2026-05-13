@@ -2,7 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { writeStateDirDotEnv } from "../config/test-helpers.js";
+import { sourceBundledPluginTestEnv, writeStateDirDotEnv } from "../config/test-helpers.js";
+import { resetSecretTargetRegistryQueryCacheForTest } from "../secrets/target-registry-query.js";
 
 const mocks = vi.hoisted(() => ({
   hasAnyAuthProfileStoreSource: vi.fn(() => true),
@@ -47,10 +48,12 @@ import {
 
 afterEach(() => {
   vi.resetAllMocks();
+  vi.unstubAllEnvs();
+  resetSecretTargetRegistryQueryCacheForTest();
 });
 
 function firstMockArg(mockFn: ReturnType<typeof vi.fn>, label: string): Record<string, any> {
-  const call = mockFn.mock.calls.at(0);
+  const call = mockFn.mock.calls[0];
   if (!call) {
     throw new Error(`Expected ${label} call`);
   }
@@ -116,6 +119,10 @@ describe("buildGatewayInstallPlan", () => {
   let isolatedHome: string;
   beforeEach(() => {
     isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), "oc-plan-test-"));
+    for (const [key, value] of Object.entries(sourceBundledPluginTestEnv())) {
+      vi.stubEnv(key, value);
+    }
+    resetSecretTargetRegistryQueryCacheForTest();
   });
   afterEach(() => {
     fs.rmSync(isolatedHome, { recursive: true, force: true });
@@ -417,7 +424,7 @@ describe("buildGatewayInstallPlan", () => {
       'Exec SecretRef passEnv ref "HOME" blocked by host-env security policy',
       "Config SecretRef",
     );
-    const warningMessages = warn.mock.calls.map(([message]) => message);
+    const warningOutput = warn.mock.calls.map(([message]) => message).join("\n");
     for (const blockedName of [
       "XDG_CONFIG_HOME",
       "XDG_CONFIG_DIRS",
@@ -427,7 +434,7 @@ describe("buildGatewayInstallPlan", () => {
       "DOCKER_HOST",
       "NODE_TLS_REJECT_UNAUTHORIZED",
     ]) {
-      expect(warningMessages.some((message) => message.includes(blockedName))).toBe(true);
+      expect(warningOutput).toContain(blockedName);
     }
     expect(warn.mock.calls.every(([, title]) => title === "Config SecretRef")).toBe(true);
   });

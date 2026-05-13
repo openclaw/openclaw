@@ -10,16 +10,14 @@ import {
   resolveScopeOutsideRequestedRoles,
   roleScopesAllow,
 } from "../shared/operator-scope-compat.js";
+import { rejectPendingPairingRequest } from "./pairing-pending.js";
 import {
   createAsyncLock,
   pruneExpiredPending,
-  readJsonIfExists,
   reconcilePendingPairingRequests,
-  coercePairingStateRecord,
-  resolvePairingPaths,
-  writeJson,
-} from "./pairing-files.js";
-import { rejectPendingPairingRequest } from "./pairing-pending.js";
+  readPairingStateRecord,
+  writePairingStateRecord,
+} from "./pairing-state.js";
 import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
 
 export type DevicePairingPendingRequest = {
@@ -152,14 +150,17 @@ export function formatDevicePairingForbiddenMessage(result: DevicePairingForbidd
 }
 
 async function loadState(baseDir?: string): Promise<DevicePairingStateFile> {
-  const { pendingPath, pairedPath } = resolvePairingPaths(baseDir, "devices");
-  const [pending, paired] = await Promise.all([
-    readJsonIfExists<unknown>(pendingPath),
-    readJsonIfExists<unknown>(pairedPath),
-  ]);
   const state: DevicePairingStateFile = {
-    pendingById: coercePairingStateRecord<DevicePairingPendingRequest>(pending),
-    pairedByDeviceId: coercePairingStateRecord<PairedDevice>(paired),
+    pendingById: readPairingStateRecord<DevicePairingPendingRequest>({
+      baseDir,
+      subdir: "devices",
+      key: "pending",
+    }),
+    pairedByDeviceId: readPairingStateRecord<PairedDevice>({
+      baseDir,
+      subdir: "devices",
+      key: "paired",
+    }),
   };
   pruneExpiredPending(state.pendingById, Date.now(), PENDING_TTL_MS);
   return state;
@@ -172,19 +173,36 @@ async function persistState(
   baseDir: string | undefined,
   target: DevicePairingPersistTarget,
 ) {
-  const { pendingPath, pairedPath } = resolvePairingPaths(baseDir, "devices");
   if (target === "pending") {
-    await writeJson(pendingPath, state.pendingById);
+    writePairingStateRecord({
+      baseDir,
+      subdir: "devices",
+      key: "pending",
+      value: state.pendingById,
+    });
     return;
   }
   if (target === "paired") {
-    await writeJson(pairedPath, state.pairedByDeviceId);
+    writePairingStateRecord({
+      baseDir,
+      subdir: "devices",
+      key: "paired",
+      value: state.pairedByDeviceId,
+    });
     return;
   }
-  await Promise.all([
-    writeJson(pendingPath, state.pendingById),
-    writeJson(pairedPath, state.pairedByDeviceId),
-  ]);
+  writePairingStateRecord({
+    baseDir,
+    subdir: "devices",
+    key: "pending",
+    value: state.pendingById,
+  });
+  writePairingStateRecord({
+    baseDir,
+    subdir: "devices",
+    key: "paired",
+    value: state.pairedByDeviceId,
+  });
 }
 
 function normalizeDeviceId(deviceId: string) {

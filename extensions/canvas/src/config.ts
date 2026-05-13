@@ -109,7 +109,7 @@ export const canvasConfigSchema: CanvasPluginConfigSchema = {
     },
     "host.root": {
       label: "Canvas Host Root Directory",
-      help: "Directory to serve. Defaults to the OpenClaw state canvas directory.",
+      help: "Optional directory to serve. Managed Canvas documents are stored in SQLite.",
       advanced: true,
     },
     "host.port": {

@@ -1,10 +1,3 @@
-import {
-  completeSimple,
-  getModel,
-  type Api,
-  type AssistantMessage,
-  type Model,
-} from "@earendil-works/pi-ai";
 import { getRuntimeConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
@@ -12,7 +5,8 @@ import { collectProviderApiKeys } from "./live-auth-keys.js";
 import { isLiveTestEnabled } from "./live-test-helpers.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { normalizeProviderId, parseModelRef } from "./model-selection.js";
-import { ensureOpenClawModelsJson } from "./models-config.js";
+import { ensureOpenClawModelCatalog } from "./models-config.js";
+import { completeSimple, type Api, type AssistantMessage, type Model } from "./pi-ai-contract.js";
 import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
 import { buildAssistantMessageWithZeroUsage } from "./stream-message-shared.js";
 
@@ -167,38 +161,14 @@ export async function resolveLiveDirectModel(params: {
   envVar: string;
   preferredModelIds: readonly string[];
 }): Promise<LiveResolvedModel> {
-  const liveKeys = collectProviderApiKeys(params.provider);
-  const rawModel = process.env[params.envVar]?.trim();
-  const parsed = rawModel ? parseModelRef(rawModel, params.provider) : null;
-  const requestedModelId =
-    parsed && normalizeProviderId(parsed.provider) === params.provider ? parsed.model : rawModel;
-  if (liveKeys.length > 0) {
-    const selectedModel = requestedModelId
-      ? getModel(params.provider, requestedModelId as never)
-      : params.preferredModelIds
-          .map((id) => getModel(params.provider, id as never))
-          .find((model) => model?.api === params.api);
-    if (!selectedModel || selectedModel.api !== params.api) {
-      throw new Error(
-        requestedModelId
-          ? `Model not found for ${params.provider}: ${requestedModelId}`
-          : `No built-in ${params.provider} ${params.api} model available.`,
-      );
-    }
-    logLiveCache(`resolved ${params.provider} model ${selectedModel.id} from live env key`);
-    return {
-      model: selectedModel,
-      apiKey: liveKeys[0] ?? "",
-    };
-  }
-
-  logLiveCache(`resolving ${params.provider} model from configured auth storage`);
   const cfg = getRuntimeConfig();
-  await ensureOpenClawModelsJson(cfg);
+  await ensureOpenClawModelCatalog(cfg);
   const agentDir = resolveDefaultAgentDir(cfg);
   const authStorage = discoverAuthStorage(agentDir);
   const models = discoverModels(authStorage, agentDir).getAll();
 
+  const rawModel = process.env[params.envVar]?.trim();
+  const parsed = rawModel ? parseModelRef(rawModel, params.provider) : null;
   const candidates = models.filter(
     (model) => normalizeProviderId(model.provider) === params.provider && model.api === params.api,
   );
@@ -223,17 +193,17 @@ export async function resolveLiveDirectModel(params: {
     );
   }
 
-  const apiKey = requireApiKey(
-    await getApiKeyForModel({
-      model: resolvedModel,
-      cfg,
-      agentDir,
-    }),
-    resolvedModel.provider,
-  );
-  logLiveCache(
-    `resolved ${params.provider} model ${resolvedModel.id} from configured auth storage`,
-  );
+  const liveKeys = collectProviderApiKeys(params.provider);
+  const apiKey =
+    liveKeys[0] ??
+    requireApiKey(
+      await getApiKeyForModel({
+        model: resolvedModel,
+        cfg,
+        agentDir,
+      }),
+      resolvedModel.provider,
+    );
   return {
     model: resolvedModel,
     apiKey,

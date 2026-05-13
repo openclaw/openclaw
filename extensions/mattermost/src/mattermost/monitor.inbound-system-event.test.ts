@@ -141,7 +141,6 @@ vi.mock("./runtime-api.js", async () => {
 function createRuntimeCore(cfg: OpenClawConfig) {
   const runPrepared = vi.fn(
     async (turn: {
-      storePath: string;
       routeSessionKey: string;
       ctxPayload: { SessionKey?: string };
       recordInboundSession: (params: unknown) => Promise<void>;
@@ -157,7 +156,6 @@ function createRuntimeCore(cfg: OpenClawConfig) {
       }>;
     }) => {
       await turn.recordInboundSession({
-        storePath: turn.storePath,
         sessionKey: turn.ctxPayload.SessionKey ?? turn.routeSessionKey,
         ctx: turn.ctxPayload,
         groupResolution: turn.record?.groupResolution,
@@ -275,27 +273,7 @@ function createRuntimeCore(cfg: OpenClawConfig) {
         }),
       },
       session: {
-        resolveStorePath: () => "/tmp/openclaw-test-sessions.json",
-        recordInboundSession: vi.fn(
-          async (_params: {
-            createIfMissing?: unknown;
-            groupResolution?: unknown;
-            onRecordError?: unknown;
-            sessionKey?: string;
-            storePath?: string;
-            updateLastRoute?: {
-              accountId?: string;
-              channel?: string;
-              mainDmOwnerPin?: {
-                onSkip?: unknown;
-                ownerRecipient?: string;
-                senderRecipient?: string;
-              };
-              sessionKey?: string;
-              to?: string;
-            };
-          }) => {},
-        ),
+        recordInboundSession: vi.fn(async () => {}),
         updateLastRoute: vi.fn(async () => {}),
       },
       turn: {
@@ -484,17 +462,20 @@ describe("mattermost inbound user posts", () => {
     await monitor;
 
     expect(runtimeCore.channel.session.recordInboundSession).toHaveBeenCalledTimes(1);
-    const [recordCall] = runtimeCore.channel.session.recordInboundSession.mock.calls.at(0) ?? [];
-    expect(recordCall?.storePath).toBe("/tmp/openclaw-test-sessions.json");
+    const recordMock = runtimeCore.channel.session.recordInboundSession as unknown as {
+      mock: { calls: Array<[Record<string, unknown>]> };
+    };
+    const [recordCall] = recordMock.mock.calls[0] ?? [];
     expect(recordCall?.sessionKey).toBe("mattermost:default:channel:chan-1");
-    const updateLastRoute = recordCall?.updateLastRoute;
+    const updateLastRoute = recordCall?.updateLastRoute as Record<string, unknown> | undefined;
     expect(updateLastRoute?.sessionKey).toBe("mattermost:default:channel:chan-1");
     expect(updateLastRoute?.channel).toBe("mattermost");
     expect(updateLastRoute?.to).toBe("user:user-1");
     expect(updateLastRoute?.accountId).toBe("default");
-    expect(updateLastRoute?.mainDmOwnerPin?.ownerRecipient).toBe("user-1");
-    expect(updateLastRoute?.mainDmOwnerPin?.senderRecipient).toBe("user-1");
-    expect(typeof updateLastRoute?.mainDmOwnerPin?.onSkip).toBe("function");
+    const mainDmOwnerPin = updateLastRoute?.mainDmOwnerPin as Record<string, unknown> | undefined;
+    expect(mainDmOwnerPin?.ownerRecipient).toBe("user-1");
+    expect(mainDmOwnerPin?.senderRecipient).toBe("user-1");
+    expect(typeof mainDmOwnerPin?.onSkip).toBe("function");
     expect(recordCall?.createIfMissing).toBeUndefined();
     expect(recordCall?.groupResolution).toBeUndefined();
     expect(recordCall?.onRecordError).toBeInstanceOf(Function);

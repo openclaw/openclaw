@@ -2,7 +2,6 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const ensureMatrixSdkLoggingConfiguredMock = vi.hoisted(() => vi.fn());
 const resolveValidatedMatrixHomeserverUrlMock = vi.hoisted(() => vi.fn());
-const maybeMigrateLegacyStorageMock = vi.hoisted(() => vi.fn(async () => undefined));
 const resolveMatrixStoragePathsMock = vi.hoisted(() => vi.fn());
 const writeStorageMetaMock = vi.hoisted(() => vi.fn());
 const MatrixClientMock = vi.hoisted(() => vi.fn());
@@ -16,7 +15,6 @@ vi.mock("./config.js", () => ({
 }));
 
 vi.mock("./storage.js", () => ({
-  maybeMigrateLegacyStorage: maybeMigrateLegacyStorageMock,
   resolveMatrixStoragePaths: resolveMatrixStoragePathsMock,
   writeStorageMeta: writeStorageMetaMock,
 }));
@@ -29,11 +27,10 @@ let createMatrixClient: typeof import("./create-client.js").createMatrixClient;
 
 describe("createMatrixClient", () => {
   const storagePaths = {
+    stateDir: "/tmp/openclaw-matrix-create-client-state",
     rootDir: "/tmp/openclaw-matrix-create-client-test",
-    storagePath: "/tmp/openclaw-matrix-create-client-test/storage.json",
-    recoveryKeyPath: "/tmp/openclaw-matrix-create-client-test/recovery.key",
-    idbSnapshotPath: "/tmp/openclaw-matrix-create-client-test/idb.snapshot",
-    metaPath: "/tmp/openclaw-matrix-create-client-test/storage-meta.json",
+    recoveryKeyStorageKey: "/tmp/openclaw-matrix-create-client-test",
+    idbSnapshotStorageKey: "/tmp/openclaw-matrix-create-client-test",
     accountKey: "default",
     tokenHash: "token-hash",
   };
@@ -76,9 +73,15 @@ describe("createMatrixClient", () => {
       encryption: undefined,
       localTimeoutMs: undefined,
       initialSyncLimit: undefined,
-      storagePath: storagePaths.storagePath,
-      recoveryKeyPath: storagePaths.recoveryKeyPath,
-      idbSnapshotPath: storagePaths.idbSnapshotPath,
+      storageRootDir: storagePaths.rootDir,
+      recoveryKeyRef: {
+        stateDir: storagePaths.stateDir,
+        storageKey: storagePaths.recoveryKeyStorageKey,
+      },
+      idbSnapshotRef: {
+        stateDir: storagePaths.stateDir,
+        storageKey: storagePaths.idbSnapshotStorageKey,
+      },
       cryptoDatabasePrefix: "openclaw-matrix-default-token-hash",
       autoBootstrapCrypto: undefined,
       ssrfPolicy: undefined,
@@ -182,9 +185,9 @@ describe("createMatrixClient", () => {
       encryption: undefined,
       localTimeoutMs: undefined,
       initialSyncLimit: undefined,
-      storagePath: undefined,
-      recoveryKeyPath: undefined,
-      idbSnapshotPath: undefined,
+      storageRootDir: undefined,
+      recoveryKeyRef: undefined,
+      idbSnapshotRef: undefined,
       cryptoDatabasePrefix: undefined,
       autoBootstrapCrypto: undefined,
       ssrfPolicy: undefined,

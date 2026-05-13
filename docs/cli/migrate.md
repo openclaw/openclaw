@@ -10,6 +10,10 @@ title: "Migrate"
 
 Import state from another agent system through a plugin-owned migration provider. Bundled providers cover Codex CLI state, [Claude](/install/migrating-claude), and [Hermes](/install/migrating-hermes); third-party plugins can register additional providers.
 
+Legacy OpenClaw file-to-database imports are doctor-owned. Run
+`openclaw doctor --fix` after upgrading an older state directory so doctor can
+create the database and import legacy files in one migration pass.
+
 <Tip>
 For user-facing walkthroughs, see [Migrating from Claude](/install/migrating-claude) and [Migrating from Hermes](/install/migrating-hermes). The [migration hub](/install/migrating) lists all paths.
 </Tip>
@@ -129,7 +133,8 @@ your personal Codex CLI state by default.
 Running `openclaw migrate codex` in an interactive terminal previews the full
 plan, then opens checkbox selectors before the final apply confirmation. Skill
 copy items are prompted first. Use `Toggle all on` or `Toggle all off` for bulk
-selection; planned skills start checked, conflict skills start unchecked, and
+selection. Press Space to toggle rows, or press Enter to activate the highlighted
+row and continue. Planned skills start checked, conflict skills start unchecked, and
 `Skip for now` skips skill copies for this run while still continuing to plugin
 selection. When source-installed curated Codex plugins are migratable and
 `--plugin` was not supplied, migration then prompts for native Codex plugin
@@ -196,7 +201,7 @@ For migrated source-installed curated plugins, apply writes:
 
 - `plugins.entries.codex.enabled: true`
 - `plugins.entries.codex.config.codexPlugins.enabled: true`
-- `plugins.entries.codex.config.codexPlugins.allow_destructive_actions: true`
+- `plugins.entries.codex.config.codexPlugins.allow_destructive_actions: false`
 - one explicit plugin entry with `marketplaceName: "openai-curated"` and
   `pluginName` for each selected plugin
 

@@ -256,8 +256,8 @@ describe("daemon-cli coverage", () => {
     await runDaemonCommand(["daemon", "status", "--deep"]);
 
     expect(findExtraGatewayServices).toHaveBeenCalledTimes(1);
-    const discoveryCall = findExtraGatewayServices.mock.calls.at(0);
-    if (discoveryCall?.[0] === undefined) {
+    const discoveryCall = findExtraGatewayServices.mock.calls[0];
+    if (!discoveryCall || discoveryCall[0] === undefined) {
       throw new Error("Expected gateway service discovery params");
     }
     expect(discoveryCall[1]).toEqual({ deep: true });

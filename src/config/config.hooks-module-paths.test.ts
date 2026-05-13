@@ -47,7 +47,7 @@ describe("config hooks module paths", () => {
     );
   });
 
-  it("rejects absolute hooks.internal.handlers[].module", () => {
+  it("rejects legacy hooks.internal.handlers", () => {
     expectRejectedIssuePath(
       {
         agents: { list: [{ id: "pi" }] },
@@ -58,22 +58,7 @@ describe("config hooks module paths", () => {
           },
         },
       },
-      "hooks.internal.handlers.0.module",
-    );
-  });
-
-  it("rejects escaping hooks.internal.handlers[].module", () => {
-    expectRejectedIssuePath(
-      {
-        agents: { list: [{ id: "pi" }] },
-        hooks: {
-          internal: {
-            enabled: true,
-            handlers: [{ event: "command:new", module: "../handler.mjs" }],
-          },
-        },
-      },
-      "hooks.internal.handlers.0.module",
+      "hooks.internal",
     );
   });
 

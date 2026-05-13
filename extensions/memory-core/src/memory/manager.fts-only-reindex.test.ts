@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
 import type { MemoryIndexManager } from "./manager.js";
@@ -32,7 +33,8 @@ describe("memory manager FTS-only reindex", () => {
     workspaceDir = path.join(fixtureRoot, `case-${caseId++}`);
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Alpha topic\n\nKeep this note.");
-    indexPath = path.join(workspaceDir, "index.sqlite");
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
+    indexPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
   });
 
   afterEach(async () => {
@@ -41,6 +43,7 @@ describe("memory manager FTS-only reindex", () => {
       manager = null;
     }
     await closeAllMemorySearchManagers();
+    vi.unstubAllEnvs();
   });
 
   afterAll(async () => {
@@ -61,7 +64,6 @@ describe("memory manager FTS-only reindex", () => {
           memorySearch: {
             provider: "auto",
             model: "",
-            store: { path: indexPath },
             cache: { enabled: false },
             sync: { watch: false, onSessionStart: false, onSearch: false },
           },
@@ -81,7 +83,7 @@ describe("memory manager FTS-only reindex", () => {
     const db = new DatabaseSync(indexPath);
     try {
       const row = db
-        .prepare(`SELECT COUNT(*) as c FROM chunks WHERE text LIKE ?`)
+        .prepare(`SELECT COUNT(*) as c FROM memory_index_chunks WHERE text LIKE ?`)
         .get(`%${term}%`) as { c: number } | undefined;
       return row?.c ?? 0;
     } finally {

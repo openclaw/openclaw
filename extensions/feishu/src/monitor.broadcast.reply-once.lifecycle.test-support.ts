@@ -167,7 +167,6 @@ describe("Feishu broadcast reply-once lifecycle", () => {
       finalizeInboundContextMock,
       dispatchReplyFromConfigMock,
       withReplyDispatcherMock,
-      storePath: "/tmp/feishu-broadcast-sessions.json",
     });
   });
 

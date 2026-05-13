@@ -16,9 +16,9 @@ describe("memory embedding cache", () => {
     const db = new DatabaseSync(":memory:");
     ensureMemoryIndexSchema({
       db,
-      embeddingCacheTable: "embedding_cache",
+      embeddingCacheTable: "memory_embedding_cache",
       cacheEnabled: true,
-      ftsTable: "chunks_fts",
+      ftsTable: "memory_index_chunks_fts",
       ftsEnabled: false,
       ftsTokenizer: "unicode61",
     });
@@ -48,12 +48,11 @@ describe("memory embedding cache", () => {
         hashes: ["a", "b", "a"],
       });
 
-      expect(cached).toEqual(
-        new Map([
-          ["a", [0.1, 0.2]],
-          ["b", [0.3, 0.4]],
-        ]),
-      );
+      expect(Array.from(cached.keys())).toEqual(["a", "b"]);
+      expect(cached.get("a")?.[0]).toBeCloseTo(0.1);
+      expect(cached.get("a")?.[1]).toBeCloseTo(0.2);
+      expect(cached.get("b")?.[0]).toBeCloseTo(0.3);
+      expect(cached.get("b")?.[1]).toBeCloseTo(0.4);
     } finally {
       db.close();
     }

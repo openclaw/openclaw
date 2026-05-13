@@ -1,10 +1,10 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { StreamFn } from "./agent-core-contract.js";
 import {
   getApiProvider,
   registerApiProvider,
   type Api,
   type StreamOptions,
-} from "@earendil-works/pi-ai";
+} from "./pi-ai-contract.js";
 
 const CUSTOM_API_SOURCE_PREFIX = "openclaw-custom-api:";
 

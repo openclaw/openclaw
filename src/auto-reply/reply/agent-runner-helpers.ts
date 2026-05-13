@@ -2,8 +2,9 @@ import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
-import { loadSessionStore } from "../../config/sessions.js";
+import { getSessionEntry } from "../../config/sessions/store.js";
 import { isAudioFileName } from "../../media/mime.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { normalizeVerboseLevel, type VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import type { TypingSignaler } from "./typing-mode.js";
@@ -16,19 +17,21 @@ export const isAudioPayload = (payload: ReplyPayload): boolean =>
 
 type VerboseGateParams = {
   sessionKey?: string;
-  storePath?: string;
   resolvedVerboseLevel: VerboseLevel;
 };
 
 const VERBOSE_GATE_SESSION_REFRESH_MS = 250;
 
 function readCurrentVerboseLevel(params: VerboseGateParams): VerboseLevel | undefined {
-  if (!params.sessionKey || !params.storePath) {
+  if (!params.sessionKey) {
     return undefined;
   }
   try {
-    const store = loadSessionStore(params.storePath);
-    const entry = store[params.sessionKey];
+    const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+    if (!agentId) {
+      return undefined;
+    }
+    const entry = getSessionEntry({ agentId, sessionKey: params.sessionKey });
     return typeof entry?.verboseLevel === "string"
       ? normalizeVerboseLevel(entry.verboseLevel)
       : undefined;
@@ -44,7 +47,7 @@ function createCurrentVerboseLevelResolver(
   let cachedLevel: VerboseLevel | undefined;
   let cachedAtMs = Number.NEGATIVE_INFINITY;
   return () => {
-    if (!params.sessionKey || !params.storePath) {
+    if (!params.sessionKey) {
       return undefined;
     }
     const now = Date.now();
@@ -61,7 +64,7 @@ function createVerboseGate(
   params: VerboseGateParams,
   shouldEmit: (level: VerboseLevel) => boolean,
 ): () => boolean {
-  // Normalize verbose values from session store/config so false/"false" still means off.
+  // Normalize verbose values from SQLite session rows/config so false/"false" still means off.
   const fallbackVerbose = params.resolvedVerboseLevel;
   const resolveCurrentVerboseLevel = createCurrentVerboseLevelResolver(params);
   return () => {

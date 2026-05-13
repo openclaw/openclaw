@@ -3,7 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
-import { AUTH_PROFILE_FILENAME } from "../agents/auth-profiles/constants.js";
+import { savePersistedAuthProfileSecretsStore } from "../agents/auth-profiles/persisted.js";
+import { getSessionEntry } from "../config/sessions.js";
 import { __testing as controlPlaneRateLimitTesting } from "./control-plane-rate-limit.js";
 import {
   connectOk,
@@ -11,7 +12,7 @@ import {
   rpcReq,
   startServerWithClient,
   testState,
-  writeSessionStore,
+  seedGatewaySessionEntries,
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -82,25 +83,18 @@ async function expectSchemaLookupInvalid(path: unknown) {
 
 async function writeUnresolvedAuthProfileTokenRef(missingEnvVar: string) {
   delete process.env[missingEnvVar];
-  const authStorePath = path.join(resolveDefaultAgentDir({}), AUTH_PROFILE_FILENAME);
-  await fs.mkdir(path.dirname(authStorePath), { recursive: true });
-  await fs.writeFile(
-    authStorePath,
-    `${JSON.stringify(
-      {
-        version: 1,
-        profiles: {
-          "custom:token": {
-            type: "token",
-            provider: "custom",
-            tokenRef: { source: "env", provider: "default", id: missingEnvVar },
-          },
+  savePersistedAuthProfileSecretsStore(
+    {
+      version: 1,
+      profiles: {
+        "custom:token": {
+          type: "token",
+          provider: "custom",
+          tokenRef: { source: "env", provider: "default", id: missingEnvVar },
         },
       },
-      null,
-      2,
-    )}\n`,
-    "utf-8",
+    },
+    resolveDefaultAgentDir({}),
   );
 }
 
@@ -471,9 +465,6 @@ describe("gateway config.apply", () => {
 describe("gateway server sessions", () => {
   it("filters sessions by agentId", async () => {
     const dir = await resetTempDir("agents");
-    testState.sessionConfig = {
-      store: path.join(dir, "{agentId}", "sessions.json"),
-    };
     testState.agentsConfig = {
       list: [{ id: "home", default: true }, { id: "work" }],
     };
@@ -481,8 +472,7 @@ describe("gateway server sessions", () => {
     const workDir = path.join(dir, "work");
     await fs.mkdir(homeDir, { recursive: true });
     await fs.mkdir(workDir, { recursive: true });
-    await writeSessionStore({
-      storePath: path.join(homeDir, "sessions.json"),
+    await seedGatewaySessionEntries({
       agentId: "home",
       entries: {
         main: {
@@ -495,8 +485,7 @@ describe("gateway server sessions", () => {
         },
       },
     });
-    await writeSessionStore({
-      storePath: path.join(workDir, "sessions.json"),
+    await seedGatewaySessionEntries({
       agentId: "work",
       entries: {
         main: {
@@ -531,14 +520,11 @@ describe("gateway server sessions", () => {
   });
 
   it("resolves and patches main alias to default agent main key", async () => {
-    const dir = await resetTempDir("main-alias");
-    const storePath = path.join(dir, "sessions.json");
-    testState.sessionStorePath = storePath;
+    await resetTempDir("main-alias");
     testState.agentsConfig = { list: [{ id: "ops", default: true }] };
     testState.sessionConfig = { mainKey: "work" };
 
-    await writeSessionStore({
-      storePath,
+    await seedGatewaySessionEntries({
       agentId: "ops",
       mainKey: "work",
       entries: {
@@ -562,11 +548,9 @@ describe("gateway server sessions", () => {
     expect(patched.ok).toBe(true);
     expect(patched.payload?.key).toBe("agent:ops:work");
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-      string,
-      { thinkingLevel?: string }
-    >;
-    expect(stored["agent:ops:work"]?.thinkingLevel).toBe("medium");
-    expect(stored.main).toBeUndefined();
+    expect(getSessionEntry({ agentId: "ops", sessionKey: "agent:ops:work" })?.thinkingLevel).toBe(
+      "medium",
+    );
+    expect(getSessionEntry({ agentId: "ops", sessionKey: "main" })).toBeUndefined();
   });
 });

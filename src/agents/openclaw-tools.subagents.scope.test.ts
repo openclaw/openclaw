@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { upsertSessionEntry } from "../config/sessions/store.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
   callGatewayMock,
   resetSubagentsConfigOverride,
@@ -11,14 +14,15 @@ import { addSubagentRunForTests, resetSubagentRegistryForTests } from "./subagen
 import { createPerSenderSessionConfig } from "./test-helpers/session-config.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 
-function writeStore(storePath: string, store: Record<string, unknown>) {
-  fs.mkdirSync(path.dirname(storePath), { recursive: true });
-  fs.writeFileSync(storePath, JSON.stringify(store, null, 2), "utf-8");
+function writeSessionEntries(entries: Record<string, SessionEntry>) {
+  for (const [sessionKey, entry] of Object.entries(entries)) {
+    upsertSessionEntry({ agentId: "main", sessionKey, entry });
+  }
 }
 
-function seedLeafOwnedChildSession(storePath: string, leafKey = "agent:main:subagent:leaf") {
+async function seedLeafOwnedChildSession(leafKey = "agent:main:subagent:leaf") {
   const childKey = `${leafKey}:subagent:child`;
-  writeStore(storePath, {
+  writeSessionEntries({
     [leafKey]: {
       sessionId: "leaf-session",
       updatedAt: Date.now(),
@@ -54,12 +58,11 @@ function seedLeafOwnedChildSession(storePath: string, leafKey = "agent:main:suba
 }
 
 async function expectLeafSubagentControlForbidden(params: {
-  storePath: string;
   action: "kill" | "steer";
   callId: string;
   message?: string;
 }) {
-  const { childKey, tool } = seedLeafOwnedChildSession(params.storePath);
+  const { childKey, tool } = await seedLeafOwnedChildSession();
   const result = await tool.execute(params.callId, {
     action: params.action,
     target: childKey,
@@ -73,27 +76,31 @@ async function expectLeafSubagentControlForbidden(params: {
 }
 
 describe("openclaw-tools: subagents scope isolation", () => {
-  let storePath = "";
+  let stateDir = "";
 
-  beforeEach(() => {
+  beforeEach(async () => {
     resetSubagentRegistryForTests();
     resetSubagentsConfigOverride();
     callGatewayMock.mockReset();
-    storePath = path.join(
-      os.tmpdir(),
-      `openclaw-subagents-scope-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
-    );
+    stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagents-scope-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     setSubagentsConfigOverride({
-      session: createPerSenderSessionConfig({ store: storePath }),
+      session: createPerSenderSessionConfig({}),
     });
-    writeStore(storePath, {});
+    writeSessionEntries({});
+  });
+
+  afterEach(() => {
+    closeOpenClawAgentDatabasesForTest();
+    vi.unstubAllEnvs();
+    fs.rmSync(stateDir, { recursive: true, force: true });
   });
 
   it("leaf subagents do not inherit parent sibling control scope", async () => {
     const leafKey = "agent:main:subagent:leaf";
     const siblingKey = "agent:main:subagent:unsandboxed";
 
-    writeStore(storePath, {
+    writeSessionEntries({
       [leafKey]: {
         sessionId: "leaf-session",
         updatedAt: Date.now(),
@@ -154,7 +161,7 @@ describe("openclaw-tools: subagents scope isolation", () => {
     const workerKey = `${orchestratorKey}:subagent:worker`;
     const siblingKey = "agent:main:subagent:sibling";
 
-    writeStore(storePath, {
+    writeSessionEntries({
       [orchestratorKey]: {
         sessionId: "orchestrator-session",
         updatedAt: Date.now(),
@@ -211,7 +218,6 @@ describe("openclaw-tools: subagents scope isolation", () => {
 
   it("leaf subagents cannot kill even explicitly-owned child sessions", async () => {
     await expectLeafSubagentControlForbidden({
-      storePath,
       action: "kill",
       callId: "call-leaf-kill",
     });
@@ -219,7 +225,6 @@ describe("openclaw-tools: subagents scope isolation", () => {
 
   it("leaf subagents cannot steer even explicitly-owned child sessions", async () => {
     await expectLeafSubagentControlForbidden({
-      storePath,
       action: "steer",
       callId: "call-leaf-steer",
       message: "continue",

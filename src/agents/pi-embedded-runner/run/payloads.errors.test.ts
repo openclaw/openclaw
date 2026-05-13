@@ -1,5 +1,5 @@
-import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
+import type { AssistantMessage } from "../../pi-ai-contract.js";
 import { formatBillingErrorMessage } from "../../pi-embedded-helpers.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import {
@@ -44,7 +44,7 @@ describe("buildEmbeddedRunPayloads", () => {
     payloads: ReturnType<typeof buildPayloads>,
     needle: string,
   ) => {
-    expect(payloads.some((payload) => (payload.text ?? "").includes(needle))).toBe(false);
+    expect(payloads.map((payload) => payload.text ?? "").join("\n")).not.toContain(needle);
   };
 
   function expectSinglePayloadSummary(

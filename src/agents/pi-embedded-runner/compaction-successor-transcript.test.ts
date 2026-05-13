@@ -1,12 +1,17 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
+import { openTranscriptSessionManagerForSession } from "../transcript/session-manager.js";
+import type { SessionManager } from "../transcript/session-transcript-contract.js";
+import { readTranscriptStateForSession } from "../transcript/transcript-state.js";
 import {
   rotateTranscriptAfterCompaction,
-  rotateTranscriptFileAfterCompaction,
+  rotateSqliteTranscriptAfterCompaction,
   shouldRotateCompactionTranscript,
 } from "./compaction-successor-transcript.js";
 import { hardenManualCompactionBoundary } from "./manual-compaction-boundary.js";
@@ -15,10 +20,14 @@ let tmpDir: string | undefined;
 
 async function createTmpDir(): Promise<string> {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "compaction-successor-test-"));
+  vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
   return tmpDir;
 }
 
 afterEach(async () => {
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
+  vi.unstubAllEnvs();
   if (tmpDir) {
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
     tmpDir = undefined;
@@ -32,18 +41,16 @@ function makeAssistant(text: string, timestamp: number) {
   });
 }
 
-function requireString(value: string | undefined, label: string): string {
-  if (!value) {
-    throw new Error(`expected ${label}`);
-  }
-  return value;
+async function loadState(scope: { agentId: string; sessionId: string }) {
+  return await readTranscriptStateForSession(scope);
 }
 
-function requireValue<T>(value: T | null | undefined, label: string): T {
-  if (value == null) {
-    throw new Error(`expected ${label}`);
-  }
-  return value;
+function createScopedSessionManager(cwd: string) {
+  return openTranscriptSessionManagerForSession({
+    agentId: "main",
+    sessionId: randomUUID(),
+    cwd,
+  });
 }
 
 type TranscriptEntry = ReturnType<SessionManager["getEntries"]>[number];
@@ -78,11 +85,11 @@ function requireEntryByType<T extends TranscriptEntry["type"]>(
 
 function createCompactedSession(sessionDir: string): {
   manager: SessionManager;
-  sessionFile: string;
+  scope: { agentId: string; sessionId: string };
   firstKeptId: string;
   oldUserId: string;
 } {
-  const manager = SessionManager.create(sessionDir, sessionDir);
+  const manager = createScopedSessionManager(sessionDir);
   manager.appendModelChange("openai", "gpt-5.2");
   manager.appendThinkingLevelChange("medium");
   manager.appendCustomEntry("test-extension", { cursor: "before-compaction" });
@@ -95,98 +102,87 @@ function createCompactedSession(sessionDir: string): {
   manager.appendCompaction("Summary of old user and old assistant.", firstKeptId, 5000);
   manager.appendMessage({ role: "user", content: "post user", timestamp: 5 });
   manager.appendMessage(makeAssistant("post assistant", 6));
-  return {
-    manager,
-    sessionFile: requireString(manager.getSessionFile(), "compacted session file"),
-    firstKeptId,
-    oldUserId,
-  };
+  const scope = manager.getTranscriptScope();
+  if (!scope) {
+    throw new Error("expected persisted transcript scope");
+  }
+  return { manager, scope, firstKeptId, oldUserId };
 }
 
 describe("rotateTranscriptAfterCompaction", () => {
   it("can rotate a persisted transcript without opening a manager", async () => {
     const dir = await createTmpDir();
-    const { sessionFile } = createCompactedSession(dir);
+    const { scope: sourceScope } = createCompactedSession(dir);
 
-    const openSpy = vi.spyOn(SessionManager, "open").mockImplementation(() => {
-      throw new Error("SessionManager.open should not be used for file rotation");
-    });
-    const result = await rotateTranscriptFileAfterCompaction({
-      sessionFile,
+    const result = await rotateSqliteTranscriptAfterCompaction({
+      ...sourceScope,
       now: () => new Date("2026-04-27T12:00:00.000Z"),
     });
-    openSpy.mockRestore();
 
     expect(result.rotated).toBe(true);
-    const successorFile = requireString(result.sessionFile, "successor session file");
+    expect(result.sessionId).toBeTruthy();
 
-    const successor = SessionManager.open(successorFile);
-    const header = requireValue(successor.getHeader(), "successor header");
-    expect(header.parentSession).toBe(sessionFile);
-    expect(header.cwd).toBe(dir);
+    const successor = await loadState({
+      agentId: "main",
+      sessionId: result.sessionId!,
+    });
+    expect(successor.getHeader()).toMatchObject({
+      parentTranscriptScope: sourceScope,
+      cwd: dir,
+    });
     const messages = successor.buildSessionContext().messages;
-    expect(
-      messages.map((message) => {
-        if (message.role === "compactionSummary") {
-          return {
-            role: message.role,
-            summary: message.summary,
-            tokensBefore: message.tokensBefore,
-          };
-        }
-        if (!("content" in message)) {
-          throw new Error(`expected ${message.role} message content`);
-        }
-        return {
-          role: message.role,
-          content: message.content,
-          timestamp: message.timestamp,
-        };
-      }),
-    ).toEqual([
-      {
-        role: "compactionSummary",
-        summary: "Summary of old user and old assistant.",
-        tokensBefore: 5000,
-      },
-      { role: "user", content: "kept user", timestamp: 3 },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "kept assistant" }],
-        timestamp: 4,
-      },
-      { role: "user", content: "post user", timestamp: 5 },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "post assistant" }],
-        timestamp: 6,
-      },
+    expect(messages.map((message) => message.role)).toStrictEqual([
+      "compactionSummary",
+      "user",
+      "assistant",
+      "user",
+      "assistant",
     ]);
+    expect(messages[0]).toMatchObject({
+      role: "compactionSummary",
+      summary: "Summary of old user and old assistant.",
+      tokensBefore: 5000,
+    });
+    expect(messages[1]).toMatchObject({ role: "user", content: "kept user", timestamp: 3 });
+    expect(messages[2]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "kept assistant" }],
+      timestamp: 4,
+    });
+    expect(messages[3]).toMatchObject({ role: "user", content: "post user", timestamp: 5 });
+    expect(messages[4]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "post assistant" }],
+      timestamp: 6,
+    });
   });
 
   it("creates a compacted successor transcript and leaves the archive untouched", async () => {
     const dir = await createTmpDir();
-    const { manager, sessionFile, firstKeptId, oldUserId } = createCompactedSession(dir);
-    const originalBytes = await fs.readFile(sessionFile, "utf8");
+    const { manager, scope: sourceScope, firstKeptId, oldUserId } = createCompactedSession(dir);
     const originalEntryCount = manager.getEntries().length;
+    const originalEntries = manager.getEntries();
 
     const result = await rotateTranscriptAfterCompaction({
       sessionManager: manager,
-      sessionFile,
+      ...sourceScope,
       now: () => new Date("2026-04-27T12:00:00.000Z"),
     });
 
     expect(result.rotated).toBe(true);
-    const successorSessionId = requireString(result.sessionId, "successor session id");
-    const successorFile = requireString(result.sessionFile, "successor session file");
-    expect(successorFile).not.toBe(sessionFile);
-    expect(await fs.readFile(sessionFile, "utf8")).toBe(originalBytes);
+    expect(result.sessionId).toBeTruthy();
+    expect(result.sessionId).not.toBe(sourceScope.sessionId);
+    expect((await loadState(sourceScope)).getEntries()).toEqual(originalEntries);
 
-    const successor = SessionManager.open(successorFile);
-    const header = requireValue(successor.getHeader(), "successor header");
-    expect(header.id).toBe(successorSessionId);
-    expect(header.parentSession).toBe(sessionFile);
-    expect(header.cwd).toBe(dir);
+    const successor = await loadState({
+      agentId: "main",
+      sessionId: result.sessionId!,
+    });
+    expect(successor.getHeader()).toMatchObject({
+      id: result.sessionId,
+      parentTranscriptScope: sourceScope,
+      cwd: dir,
+    });
     expect(successor.getEntries().length).toBeLessThan(originalEntryCount);
     expect(successor.getBranch()[0]?.type).toBe("model_change");
     const customBranchEntry = requireEntryByType(
@@ -213,7 +209,7 @@ describe("rotateTranscriptAfterCompaction", () => {
 
   it("deduplicates stale pre-compaction session state", async () => {
     const dir = await createTmpDir();
-    const manager = SessionManager.create(dir, dir);
+    const manager = createScopedSessionManager(dir);
 
     const staleModelId = manager.appendModelChange("anthropic", "claude-sonnet-4-5");
     const staleThinkingId = manager.appendThinkingLevelChange("low");
@@ -232,14 +228,15 @@ describe("rotateTranscriptAfterCompaction", () => {
 
     const result = await rotateTranscriptAfterCompaction({
       sessionManager: manager,
-      sessionFile: requireString(manager.getSessionFile(), "source session file"),
+      ...manager.getTranscriptScope()!,
       now: () => new Date("2026-04-27T12:05:00.000Z"),
     });
 
     expect(result.rotated).toBe(true);
-    const successor = SessionManager.open(
-      requireString(result.sessionFile, "successor session file"),
-    );
+    const successor = await loadState({
+      agentId: "main",
+      sessionId: result.sessionId!,
+    });
     const entries = successor.getEntries();
     expect(entries.find((entry) => entry.id === staleModelId)).toBeUndefined();
     expect(entries.find((entry) => entry.id === staleThinkingId)).toBeUndefined();
@@ -263,7 +260,7 @@ describe("rotateTranscriptAfterCompaction", () => {
 
   it("drops duplicate user messages from the rotated active branch tail", async () => {
     const dir = await createTmpDir();
-    const manager = SessionManager.create(dir, dir);
+    const manager = createScopedSessionManager(dir);
     manager.appendMessage({ role: "user", content: "old user", timestamp: 1 });
     const firstKeptId = manager.appendMessage(makeAssistant("old assistant", 2));
     manager.appendCompaction("Summary of old work.", firstKeptId, 5000);
@@ -281,19 +278,17 @@ describe("rotateTranscriptAfterCompaction", () => {
 
     const result = await rotateTranscriptAfterCompaction({
       sessionManager: manager,
-      sessionFile: requireString(manager.getSessionFile(), "source session file"),
+      ...manager.getTranscriptScope()!,
       now: () => new Date("2026-04-27T12:10:00.000Z"),
     });
 
     expect(result.rotated).toBe(true);
-    const successor = SessionManager.open(
-      requireString(result.sessionFile, "successor session file"),
-    );
+    const successor = await loadState({
+      agentId: "main",
+      sessionId: result.sessionId!,
+    });
     const entries = successor.getEntries();
-    requireValue(
-      entries.find((entry) => entry.id === firstDuplicateId),
-      "kept duplicate entry",
-    );
+    expect(entries.find((entry) => entry.id === firstDuplicateId)).toBeDefined();
     expect(entries.find((entry) => entry.id === secondDuplicateId)).toBeUndefined();
     const contextText = JSON.stringify(successor.buildSessionContext().messages);
     expect(contextText.match(/deployment status check/g)).toHaveLength(1);
@@ -301,13 +296,13 @@ describe("rotateTranscriptAfterCompaction", () => {
 
   it("skips sessions with no compaction entry", async () => {
     const dir = await createTmpDir();
-    const manager = SessionManager.create(dir, dir);
+    const manager = createScopedSessionManager(dir);
     manager.appendMessage({ role: "user", content: "hello", timestamp: 1 });
     manager.appendMessage(makeAssistant("hi", 2));
 
     const result = await rotateTranscriptAfterCompaction({
       sessionManager: manager,
-      sessionFile: requireString(manager.getSessionFile(), "source session file"),
+      ...manager.getTranscriptScope()!,
     });
 
     expect(result.rotated).toBe(false);
@@ -316,7 +311,7 @@ describe("rotateTranscriptAfterCompaction", () => {
 
   it("uses a refreshed manager after manual boundary hardening", async () => {
     const dir = await createTmpDir();
-    const manager = SessionManager.create(dir, dir);
+    const manager = createScopedSessionManager(dir);
     manager.appendMessage({ role: "user", content: "old question", timestamp: 1 });
     manager.appendMessage(makeAssistant("old answer", 2));
     const recentTailId = manager.appendMessage({
@@ -326,10 +321,15 @@ describe("rotateTranscriptAfterCompaction", () => {
     });
     manager.appendMessage(makeAssistant("detailed recent answer", 4));
     const compactionId = manager.appendCompaction("fresh manual summary", recentTailId, 200);
-    const sessionFile = requireString(manager.getSessionFile(), "manual compaction session file");
-    const staleManager = SessionManager.open(sessionFile);
+    const sourceScope = manager.getTranscriptScope();
+    if (!sourceScope) {
+      throw new Error("expected persisted transcript scope");
+    }
+    const staleManager = await loadState(sourceScope);
 
-    const hardened = await hardenManualCompactionBoundary({ sessionFile });
+    const hardened = await hardenManualCompactionBoundary({
+      ...sourceScope,
+    });
     expect(hardened.applied).toBe(true);
     const staleLeaf = staleManager.getLeafEntry();
     expect(staleLeaf?.type).toBe("compaction");
@@ -339,15 +339,13 @@ describe("rotateTranscriptAfterCompaction", () => {
     expect(staleLeaf.firstKeptEntryId).toBe(recentTailId);
 
     const result = await rotateTranscriptAfterCompaction({
-      sessionManager: SessionManager.open(sessionFile),
-      sessionFile,
+      sessionManager: await loadState(sourceScope),
+      ...sourceScope,
       now: () => new Date("2026-04-27T12:30:00.000Z"),
     });
 
     expect(result.rotated).toBe(true);
-    const successor = SessionManager.open(
-      requireString(result.sessionFile, "successor session file"),
-    );
+    const successor = await loadState({ agentId: "main", sessionId: result.sessionId! });
     const successorText = JSON.stringify(successor.buildSessionContext().messages);
     expect(successorText).toContain("fresh manual summary");
     expect(successorText).not.toContain("recent question");
@@ -363,7 +361,7 @@ describe("rotateTranscriptAfterCompaction", () => {
 
   it("preserves unsummarized sibling branches and branch summaries", async () => {
     const dir = await createTmpDir();
-    const manager = SessionManager.create(dir, dir);
+    const manager = createScopedSessionManager(dir);
 
     manager.appendMessage({ role: "user", content: "hello", timestamp: 1 });
     const branchFromId = manager.appendMessage(makeAssistant("hi there", 2));
@@ -385,17 +383,14 @@ describe("rotateTranscriptAfterCompaction", () => {
     manager.appendCompaction("Summary of main branch.", firstKeptId, 5000);
     manager.appendMessage({ role: "user", content: "next", timestamp: 7 });
 
-    const sessionFile = requireString(manager.getSessionFile(), "source session file");
     const result = await rotateTranscriptAfterCompaction({
       sessionManager: manager,
-      sessionFile,
+      ...manager.getTranscriptScope()!,
       now: () => new Date("2026-04-27T12:45:00.000Z"),
     });
 
     expect(result.rotated).toBe(true);
-    const successor = SessionManager.open(
-      requireString(result.sessionFile, "successor session file"),
-    );
+    const successor = await loadState({ agentId: "main", sessionId: result.sessionId! });
     const allEntries = successor.getEntries();
     const branchSummary = requireEntryByIdAndType(
       allEntries,
@@ -423,7 +418,7 @@ describe("rotateTranscriptAfterCompaction", () => {
 
   it("orders preserved sibling branches after their surviving parents", async () => {
     const dir = await createTmpDir();
-    const manager = SessionManager.create(dir, dir);
+    const manager = createScopedSessionManager(dir);
 
     manager.appendMessage({ role: "user", content: "hello", timestamp: 1 });
     const branchFromId = manager.appendMessage(makeAssistant("hi there", 2));
@@ -451,14 +446,12 @@ describe("rotateTranscriptAfterCompaction", () => {
 
     const result = await rotateTranscriptAfterCompaction({
       sessionManager: manager,
-      sessionFile: requireString(manager.getSessionFile(), "source session file"),
+      ...manager.getTranscriptScope()!,
       now: () => new Date("2026-04-27T13:00:00.000Z"),
     });
 
     expect(result.rotated).toBe(true);
-    const successor = SessionManager.open(
-      requireString(result.sessionFile, "successor session file"),
-    );
+    const successor = await loadState({ agentId: "main", sessionId: result.sessionId! });
     const entries = successor.getEntries();
     const indexById = new Map(entries.map((entry, index) => [entry.id, index]));
     expect(indexById.get(branchFromId)).toBeLessThan(indexById.get(branchSummaryId)!);
@@ -478,7 +471,7 @@ describe("shouldRotateCompactionTranscript", () => {
     expect(shouldRotateCompactionTranscript()).toBe(false);
     expect(
       shouldRotateCompactionTranscript({
-        agents: { defaults: { compaction: { truncateAfterCompaction: true } } },
+        agents: { defaults: { compaction: { rotateAfterCompaction: true } } },
       }),
     ).toBe(true);
   });

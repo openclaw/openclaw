@@ -2,9 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 
 const configMocks = vi.hoisted(() => ({
-  storePath: "",
   workspaceDir: "",
   getRuntimeConfig: vi.fn(() => ({
     agents: {
@@ -15,7 +15,6 @@ const configMocks = vi.hoisted(() => ({
     },
     session: {
       mainKey: "main",
-      store: configMocks.storePath,
     },
   })),
 }));
@@ -42,22 +41,25 @@ vi.mock("../../tasks/detached-task-runtime.js", () => ({
 
 import { agentHandlers } from "./agent.js";
 
+function firstMockCall<T extends readonly unknown[]>(mock: { mock: { calls: readonly T[] } }) {
+  return mock.mock.calls[0];
+}
+
 describe("agent handler session create events", () => {
   let tempDir: string;
-  let storePath: string;
 
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-create-event-"));
-    storePath = path.join(tempDir, "sessions.json");
-    configMocks.storePath = storePath;
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
     configMocks.workspaceDir = tempDir;
     configMocks.getRuntimeConfig.mockClear();
     agentIngressMocks.agentCommandFromIngress.mockClear();
     agentIngressMocks.agentCommandFromIngress.mockResolvedValue({ ok: true });
-    await fs.writeFile(storePath, "{}\n", "utf8");
   });
 
   afterEach(async () => {
+    closeOpenClawAgentDatabasesForTest();
+    vi.unstubAllEnvs();
     await fs.rm(tempDir, { recursive: true, force: true });
     vi.restoreAllMocks();
   });
@@ -89,7 +91,7 @@ describe("agent handler session create events", () => {
       req: { id: "req-agent-create-event" } as never,
     });
 
-    const responseCall = respond.mock.calls.at(0) as
+    const responseCall = firstMockCall(respond) as
       | [boolean, { status?: string; runId?: string }, unknown, { runId?: string }]
       | undefined;
     expect(responseCall?.[0]).toBe(true);
@@ -99,7 +101,7 @@ describe("agent handler session create events", () => {
     expect(responseCall?.[3]?.runId).toBe("idem-agent-create-event");
     await vi.waitFor(
       () => {
-        const call = broadcastToConnIds.mock.calls.at(0) as
+        const call = firstMockCall(broadcastToConnIds) as
           | [
               string,
               { sessionKey?: string; reason?: string },

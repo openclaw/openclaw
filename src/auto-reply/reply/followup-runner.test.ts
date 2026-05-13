@@ -20,9 +20,6 @@ let resolveQueuedReplyExecutionConfigActual:
   | undefined;
 let createFollowupRunner: typeof import("./followup-runner.js").createFollowupRunner;
 let clearRuntimeConfigSnapshot: typeof import("../../config/config.js").clearRuntimeConfigSnapshot;
-let loadSessionStore: typeof import("../../config/sessions/store.js").loadSessionStore;
-let saveSessionStore: typeof import("../../config/sessions/store.js").saveSessionStore;
-let clearSessionStoreCacheForTest: typeof import("../../config/sessions/store.js").clearSessionStoreCacheForTest;
 let clearFollowupQueue: typeof import("./queue.js").clearFollowupQueue;
 let enqueueFollowupRun: typeof import("./queue.js").enqueueFollowupRun;
 let sessionRunAccounting: typeof import("./session-run-accounting.js");
@@ -37,7 +34,7 @@ const FOLLOWUP_TEST_QUEUES = new Map<
     lastRun?: FollowupRun["run"];
   }
 >();
-const FOLLOWUP_TEST_SESSION_STORES = new Map<string, Record<string, SessionEntry>>();
+const FOLLOWUP_TEST_SESSION_STORES = new Set<Record<string, SessionEntry>>();
 
 function debugFollowupTest(message: string): void {
   if (!FOLLOWUP_DEBUG) {
@@ -74,6 +71,18 @@ function requireMockCallArg(
   return requireRecord(call[0], `mock call ${index} arg`);
 }
 
+function requireLastMockCallArg(
+  mock: { mock: { calls: unknown[][] } },
+  label: string,
+): Record<string, unknown> {
+  const calls = mock.mock.calls;
+  const call = calls[calls.length - 1];
+  if (!call) {
+    throw new Error(`expected ${label} mock call`);
+  }
+  return requireRecord(call[0], `${label} mock call arg`);
+}
+
 function expectBlockReplyText(onBlockReply: { mock: { calls: unknown[][] } }, text: string): void {
   expect(
     onBlockReply.mock.calls.some(
@@ -104,11 +113,8 @@ function expectNoBlockReplyTextIncludes(
   ).toBe(false);
 }
 
-function registerFollowupTestSessionStore(
-  storePath: string,
-  sessionStore: Record<string, SessionEntry>,
-): void {
-  FOLLOWUP_TEST_SESSION_STORES.set(storePath, sessionStore);
+function registerFollowupTestSessionStore(sessionStore: Record<string, SessionEntry>): void {
+  FOLLOWUP_TEST_SESSION_STORES.add(sessionStore);
 }
 
 async function incrementRunCompactionCountForFollowupTest(
@@ -138,9 +144,6 @@ async function incrementRunCompactionCountForFollowupTest(
   };
   if (newSessionId && newSessionId !== entry.sessionId) {
     nextEntry.sessionId = newSessionId;
-    if (entry.sessionFile?.trim()) {
-      nextEntry.sessionFile = path.join(path.dirname(entry.sessionFile), `${newSessionId}.jsonl`);
-    }
   }
   const promptTokens =
     (lastCallUsage?.input ?? 0) +
@@ -201,7 +204,6 @@ function refreshQueuedFollowupSessionForFollowupTest(params: {
   key: string;
   previousSessionId?: string;
   nextSessionId?: string;
-  nextSessionFile?: string;
   nextProvider?: string;
   nextModel?: string;
   nextAuthProfileId?: string;
@@ -233,9 +235,6 @@ function refreshQueuedFollowupSessionForFollowupTest(params: {
     }
     if (shouldRewriteSession && run.sessionId === params.previousSessionId) {
       run.sessionId = params.nextSessionId!;
-      if (params.nextSessionFile?.trim()) {
-        run.sessionFile = params.nextSessionFile;
-      }
     }
     if (shouldRewriteSelection) {
       if (typeof params.nextProvider === "string") {
@@ -261,12 +260,16 @@ function refreshQueuedFollowupSessionForFollowupTest(params: {
 async function persistRunSessionUsageForFollowupTest(
   params: Parameters<typeof import("./session-run-accounting.js").persistRunSessionUsage>[0],
 ): Promise<void> {
-  const { storePath, sessionKey } = params;
-  if (!storePath || !sessionKey) {
+  const { sessionKey } = params;
+  if (!sessionKey) {
     return;
   }
-  const registeredStore = FOLLOWUP_TEST_SESSION_STORES.get(storePath);
-  const store = registeredStore ?? loadSessionStore(storePath, { skipCache: true });
+  const store = Array.from(FOLLOWUP_TEST_SESSION_STORES).find((candidate) =>
+    Object.hasOwn(candidate, sessionKey),
+  );
+  if (!store) {
+    return;
+  }
   const entry = store[sessionKey];
   if (!entry) {
     return;
@@ -294,10 +297,6 @@ async function persistRunSessionUsageForFollowupTest(
   nextEntry.totalTokens = promptTokens > 0 ? promptTokens : undefined;
   nextEntry.totalTokensFresh = promptTokens > 0;
   store[sessionKey] = nextEntry;
-  if (registeredStore) {
-    return;
-  }
-  await saveSessionStore(storePath, store);
 }
 
 async function loadFreshFollowupRunnerModuleForTest() {
@@ -307,12 +306,6 @@ async function loadFreshFollowupRunnerModuleForTest() {
     "../../agents/model-fallback.js",
     async () => await import("../../test-utils/model-fallback.mock.js"),
   );
-  vi.doMock("../../agents/session-write-lock.js", () => ({
-    acquireSessionWriteLock: vi.fn(async () => ({
-      release: async () => {},
-    })),
-    resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 1),
-  }));
   vi.doMock("../../agents/pi-embedded.js", () => ({
     abortEmbeddedPiRun: vi.fn(async () => false),
     compactEmbeddedPiSession: (params: unknown) => compactEmbeddedPiSessionMock(params),
@@ -400,8 +393,6 @@ async function loadFreshFollowupRunnerModuleForTest() {
   ({ createFollowupRunner } = await import("./followup-runner.js"));
   ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
     await import("../../config/config.js"));
-  ({ clearSessionStoreCacheForTest, loadSessionStore, saveSessionStore } =
-    await import("../../config/sessions/store.js"));
   ({ clearFollowupQueue, enqueueFollowupRun } = await import("./queue.js"));
   sessionRunAccounting = await import("./session-run-accounting.js");
   ({ createMockFollowupRun, createMockTypingController } = await import("./test-helpers.js"));
@@ -465,7 +456,7 @@ afterEach(() => {
   FOLLOWUP_TEST_SESSION_STORES.clear();
   vi.clearAllTimers();
   vi.useRealTimers();
-  clearSessionStoreCacheForTest();
+  vi.unstubAllEnvs();
   if (!FOLLOWUP_DEBUG) {
     return;
   }
@@ -567,12 +558,8 @@ describe("createFollowupRunner runtime config", () => {
       }),
     );
 
-    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as
-      | {
-          config?: unknown;
-        }
-      | undefined;
-    expect(call?.config).toBe(runtimeConfig);
+    const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
+    expect(call.config).toBe(runtimeConfig);
   });
 
   it("resolves queued embedded followups before preflight helpers read config", async () => {
@@ -626,12 +613,8 @@ describe("createFollowupRunner runtime config", () => {
 
     expect(queued.run.config).toBe(runtimeConfig);
     expect(requireMockCallArg(runPreflightCompactionIfNeededMock, 0).cfg).toBe(runtimeConfig);
-    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as
-      | {
-          config?: unknown;
-        }
-      | undefined;
-    expect(call?.config).toBe(runtimeConfig);
+    const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
+    expect(call.config).toBe(runtimeConfig);
   });
 
   it("passes queued origin scope into queued execution-config resolution", async () => {
@@ -691,23 +674,14 @@ describe("createFollowupRunner runtime config", () => {
       }),
     );
 
-    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as
-      | {
-          images?: unknown;
-          imageOrder?: unknown;
-        }
-      | undefined;
-    expect(call?.images).toBe(images);
-    expect(call?.imageOrder).toBe(imageOrder);
+    const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
+    expect(call.images).toBe(images);
+    expect(call.imageOrder).toBe(imageOrder);
   });
 });
 
 describe("createFollowupRunner compaction", () => {
   it("adds verbose auto-compaction notice and tracks count", async () => {
-    const storePath = path.join(
-      await fs.mkdtemp(path.join(tmpdir(), "openclaw-compaction-")),
-      "sessions.json",
-    );
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
@@ -716,7 +690,7 @@ describe("createFollowupRunner compaction", () => {
       main: sessionEntry,
     };
     const onBlockReply = vi.fn(async () => {});
-    registerFollowupTestSessionStore(storePath, sessionStore);
+    registerFollowupTestSessionStore(sessionStore);
 
     mockCompactionRun({
       willRetry: true,
@@ -730,7 +704,6 @@ describe("createFollowupRunner compaction", () => {
       sessionEntry,
       sessionStore,
       sessionKey: "main",
-      storePath,
       defaultModel: "anthropic/claude-opus-4-6",
     });
 
@@ -749,20 +722,15 @@ describe("createFollowupRunner compaction", () => {
   });
 
   it("tracks auto-compaction from embedded result metadata even when no compaction event is emitted", async () => {
-    const storePath = path.join(
-      await fs.mkdtemp(path.join(tmpdir(), "openclaw-compaction-meta-")),
-      "sessions.json",
-    );
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      sessionFile: path.join(path.dirname(storePath), "session.jsonl"),
       updatedAt: Date.now(),
     };
     const sessionStore: Record<string, SessionEntry> = {
       main: sessionEntry,
     };
     const onBlockReply = vi.fn(async () => {});
-    registerFollowupTestSessionStore(storePath, sessionStore);
+    registerFollowupTestSessionStore(sessionStore);
 
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "final" }],
@@ -782,7 +750,6 @@ describe("createFollowupRunner compaction", () => {
       sessionEntry,
       sessionStore,
       sessionKey: "main",
-      storePath,
       defaultModel: "anthropic/claude-opus-4-6",
     });
 
@@ -799,25 +766,17 @@ describe("createFollowupRunner compaction", () => {
     expect(firstCall?.[0]?.text).toContain("Auto-compaction complete");
     expect(sessionStore.main.compactionCount).toBe(2);
     expect(sessionStore.main.sessionId).toBe("session-rotated");
-    expect(await normalizeComparablePath(sessionStore.main.sessionFile ?? "")).toBe(
-      await normalizeComparablePath(path.join(path.dirname(storePath), "session-rotated.jsonl")),
-    );
   });
 
-  it("refreshes queued followup runs to the rotated transcript", async () => {
-    const storePath = path.join(
-      await fs.mkdtemp(path.join(tmpdir(), "openclaw-compaction-queue-")),
-      "sessions.json",
-    );
+  it("refreshes queued followup runs to the rotated session id", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
-      sessionFile: path.join(path.dirname(storePath), "session.jsonl"),
       updatedAt: Date.now(),
     };
     const sessionStore: Record<string, SessionEntry> = {
       main: sessionEntry,
     };
-    registerFollowupTestSessionStore(storePath, sessionStore);
+    registerFollowupTestSessionStore(sessionStore);
 
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "final" }],
@@ -837,7 +796,6 @@ describe("createFollowupRunner compaction", () => {
       sessionEntry,
       sessionStore,
       sessionKey: "main",
-      storePath,
       defaultModel: "anthropic/claude-opus-4-6",
     });
 
@@ -845,7 +803,6 @@ describe("createFollowupRunner compaction", () => {
       prompt: "next",
       run: {
         sessionId: "session",
-        sessionFile: path.join(path.dirname(storePath), "session.jsonl"),
       },
     });
     const queueSettings: QueueSettings = { mode: "queue" };
@@ -855,23 +812,15 @@ describe("createFollowupRunner compaction", () => {
       run: {
         verboseLevel: "on",
         sessionId: "session",
-        sessionFile: path.join(path.dirname(storePath), "session.jsonl"),
       },
     });
 
     await runner(current);
 
     expect(queuedNext.run.sessionId).toBe("session-rotated");
-    expect(await normalizeComparablePath(queuedNext.run.sessionFile)).toBe(
-      await normalizeComparablePath(path.join(path.dirname(storePath), "session-rotated.jsonl")),
-    );
   });
 
   it("does not count failed compaction end events in followup runs", async () => {
-    const storePath = path.join(
-      await fs.mkdtemp(path.join(tmpdir(), "openclaw-compaction-failed-")),
-      "sessions.json",
-    );
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
@@ -880,7 +829,7 @@ describe("createFollowupRunner compaction", () => {
       main: sessionEntry,
     };
     const onBlockReply = vi.fn(async () => {});
-    registerFollowupTestSessionStore(storePath, sessionStore);
+    registerFollowupTestSessionStore(sessionStore);
 
     const runner = createFollowupRunner({
       opts: { onBlockReply },
@@ -889,7 +838,6 @@ describe("createFollowupRunner compaction", () => {
       sessionEntry,
       sessionStore,
       sessionKey: "main",
-      storePath,
       defaultModel: "anthropic/claude-opus-4-6",
     });
 
@@ -925,19 +873,6 @@ describe("createFollowupRunner compaction", () => {
 
   it("injects the post-compaction refresh prompt before followup runs after preflight compaction", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-preflight-followup-"));
-    const storePath = path.join(workspaceDir, "sessions.json");
-    const transcriptPath = path.join(workspaceDir, "session.jsonl");
-    await fs.writeFile(
-      transcriptPath,
-      `${JSON.stringify({
-        message: {
-          role: "user",
-          content: "x".repeat(320_000),
-          timestamp: Date.now(),
-        },
-      })}\n`,
-      "utf-8",
-    );
     await fs.writeFile(
       path.join(workspaceDir, "AGENTS.md"),
       [
@@ -953,7 +888,6 @@ describe("createFollowupRunner compaction", () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
-      sessionFile: transcriptPath,
       totalTokens: 10,
       totalTokensFresh: false,
       compactionCount: 1,
@@ -961,7 +895,7 @@ describe("createFollowupRunner compaction", () => {
     const sessionStore: Record<string, SessionEntry> = {
       main: sessionEntry,
     };
-    registerFollowupTestSessionStore(storePath, sessionStore);
+    registerFollowupTestSessionStore(sessionStore);
 
     compactEmbeddedPiSessionMock.mockResolvedValueOnce({
       ok: true,
@@ -979,10 +913,8 @@ describe("createFollowupRunner compaction", () => {
         sessionEntry?: SessionEntry;
         sessionStore?: Record<string, SessionEntry>;
         sessionKey?: string;
-        storePath?: string;
       }) => {
         await compactEmbeddedPiSessionMock({
-          sessionFile: transcriptPath,
           workspaceDir,
         });
         params.followupRun.run.extraSystemPrompt = joinPromptSections(
@@ -1000,16 +932,6 @@ describe("createFollowupRunner compaction", () => {
           updatedEntry.updatedAt = Date.now();
           if (params.sessionKey && params.sessionStore) {
             params.sessionStore[params.sessionKey] = updatedEntry;
-          }
-          if (params.storePath && params.sessionKey) {
-            const registeredStore = FOLLOWUP_TEST_SESSION_STORES.get(params.storePath);
-            if (registeredStore) {
-              registeredStore[params.sessionKey] = updatedEntry;
-            } else {
-              const store = loadSessionStore(params.storePath, { skipCache: true });
-              store[params.sessionKey] = updatedEntry;
-              await saveSessionStore(params.storePath, store);
-            }
           }
         }
         return updatedEntry;
@@ -1034,14 +956,12 @@ describe("createFollowupRunner compaction", () => {
       sessionEntry,
       sessionStore,
       sessionKey: "main",
-      storePath,
       defaultModel: "anthropic/claude-opus-4-6",
       agentCfgContextTokens: 100_000,
     });
 
     const queued = createQueuedRun({
       run: {
-        sessionFile: transcriptPath,
         workspaceDir,
       },
     });
@@ -1108,16 +1028,10 @@ describe("createFollowupRunner bootstrap warning dedupe", () => {
 
     await runner(baseQueuedRun());
 
-    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as
-      | {
-          allowGatewaySubagentBinding?: boolean;
-          bootstrapPromptWarningSignaturesSeen?: string[];
-          bootstrapPromptWarningSignature?: string;
-        }
-      | undefined;
-    expect(call?.allowGatewaySubagentBinding).toBe(true);
-    expect(call?.bootstrapPromptWarningSignaturesSeen).toEqual(["sig-a", "sig-b"]);
-    expect(call?.bootstrapPromptWarningSignature).toBe("sig-b");
+    const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
+    expect(call.allowGatewaySubagentBinding).toBe(true);
+    expect(call.bootstrapPromptWarningSignaturesSeen).toEqual(["sig-a", "sig-b"]);
+    expect(call.bootstrapPromptWarningSignature).toBe("sig-b");
   });
 });
 
@@ -1128,11 +1042,10 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       sessionEntry: SessionEntry;
       sessionStore: Record<string, SessionEntry>;
       sessionKey: string;
-      storePath: string;
     }> = {},
   ) {
-    if (overrides.storePath && overrides.sessionStore) {
-      registerFollowupTestSessionStore(overrides.storePath, overrides.sessionStore);
+    if (overrides.sessionStore) {
+      registerFollowupTestSessionStore(overrides.sessionStore);
     }
     return createFollowupRunner({
       opts: { onBlockReply },
@@ -1142,7 +1055,6 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       sessionEntry: overrides.sessionEntry,
       sessionStore: overrides.sessionStore,
       sessionKey: overrides.sessionKey,
-      storePath: overrides.storePath,
     });
   }
 
@@ -1153,7 +1065,6 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       sessionEntry: SessionEntry;
       sessionStore: Record<string, SessionEntry>;
       sessionKey: string;
-      storePath: string;
     }>;
   }) {
     const onBlockReply = createAsyncReplySpy();
@@ -1175,7 +1086,6 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
   }
 
   it("persists usage even when replies are suppressed", async () => {
-    const storePath = "/tmp/openclaw-followup-usage.json";
     const sessionKey = "main";
     const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: Date.now() };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
@@ -1212,14 +1122,12 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
         sessionEntry,
         sessionStore,
         sessionKey,
-        storePath,
       },
       queued: baseQueuedRun("slack"),
     });
 
     expect(onBlockReply).not.toHaveBeenCalled();
     const persistCall = requireMockCallArg(persistSpy, 0);
-    expect(persistCall.storePath).toBe(storePath);
     expect(persistCall.sessionKey).toBe(sessionKey);
     expect(persistCall.modelUsed).toBe("claude-opus-4-6");
     expect(persistCall.providerUsed).toBe("anthropic");
@@ -1232,7 +1140,6 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
   });
 
   it("passes queued config into usage persistence during drained followups", async () => {
-    const storePath = "/tmp/openclaw-followup-usage-cfg.json";
     const sessionKey = "main";
     const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: Date.now() };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
@@ -1262,7 +1169,6 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       sessionEntry,
       sessionStore,
       sessionKey,
-      storePath,
     });
 
     await expect(
@@ -1276,14 +1182,12 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     ).resolves.toBeUndefined();
 
     const persistCall = requireMockCallArg(persistSpy, 0);
-    expect(persistCall.storePath).toBe(storePath);
     expect(persistCall.sessionKey).toBe(sessionKey);
     expect(persistCall.cfg).toBe(cfg);
     persistSpy.mockRestore();
   });
 
   it("uses providerUsed for snapshot freshness when agent metadata overrides the run provider", async () => {
-    const storePath = "/tmp/openclaw-followup-usage-provider.json";
     const sessionKey = "main";
     const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: Date.now() };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
@@ -1308,7 +1212,6 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       sessionEntry,
       sessionStore,
       sessionKey,
-      storePath,
     });
 
     await expect(
@@ -1331,7 +1234,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     ).resolves.toBeUndefined();
 
     expect(requireMockCallArg(persistSpy, 0).providerUsed).toBe("anthropic");
-    expect(persistSpy.mock.calls.at(0)?.[0]?.usageIsContextSnapshot).toBeUndefined();
+    expect(requireMockCallArg(persistSpy, 0).usageIsContextSnapshot).toBeUndefined();
     persistSpy.mockRestore();
   });
 
@@ -1680,7 +1583,7 @@ describe("createFollowupRunner agentDir forwarding", () => {
     });
 
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as { agentDir?: string };
-    expect(call?.agentDir).toBe(agentDir);
+    const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
+    expect(call.agentDir).toBe(agentDir);
   });
 });

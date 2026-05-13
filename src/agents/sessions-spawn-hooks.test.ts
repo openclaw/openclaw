@@ -5,11 +5,12 @@ import {
 } from "./subagent-spawn.test-helpers.js";
 
 type GatewayRequest = { method?: string; params?: Record<string, unknown> };
+type SessionStore = Record<string, Record<string, unknown>>;
 
 const hoisted = vi.hoisted(() => ({
   callGatewayMock: vi.fn(),
   configOverride: {} as Record<string, unknown>,
-  updateSessionStoreMock: vi.fn(),
+  upsertSessionEntryMock: vi.fn(),
 }));
 
 const hookRunnerMocks = vi.hoisted(() => ({
@@ -41,6 +42,7 @@ const hookRunnerMocks = vi.hoisted(() => ({
 
 let resetSubagentRegistryForTests: typeof import("./subagent-registry.js").resetSubagentRegistryForTests;
 let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
+let sessionStore: SessionStore = {};
 
 function getGatewayRequests(): GatewayRequest[] {
   return hoisted.callGatewayMock.mock.calls.map((call) => call[0] as GatewayRequest);
@@ -181,7 +183,7 @@ beforeAll(async () => {
   ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
     callGatewayMock: hoisted.callGatewayMock,
     getRuntimeConfig: () => hoisted.configOverride,
-    updateSessionStoreMock: hoisted.updateSessionStoreMock,
+    upsertSessionEntryMock: hoisted.upsertSessionEntryMock,
     hookRunner: {
       hasHooks: (hookName: string) =>
         hookName === "subagent_spawning" ||
@@ -192,7 +194,7 @@ beforeAll(async () => {
       runSubagentEnded: hookRunnerMocks.runSubagentEnded,
     },
     resetModules: false,
-    sessionStorePath: "/tmp/subagent-spawn-hooks-session-store.json",
+    getSessionStore: () => sessionStore,
   }));
 });
 
@@ -200,7 +202,7 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
   beforeEach(() => {
     resetSubagentRegistryForTests();
     hoisted.callGatewayMock.mockReset();
-    hoisted.updateSessionStoreMock.mockReset();
+    hoisted.upsertSessionEntryMock.mockReset();
     hookRunnerMocks.hasSubagentEndedHook = true;
     hookRunnerMocks.runSubagentSpawning.mockClear();
     hookRunnerMocks.runSubagentSpawned.mockClear();
@@ -214,16 +216,8 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
         },
       },
     });
-    const store: Record<string, Record<string, unknown>> = {};
-    hoisted.updateSessionStoreMock.mockImplementation(
-      async (_storePath: unknown, mutator: unknown) => {
-        if (typeof mutator !== "function") {
-          throw new Error("missing session store mutator");
-        }
-        await mutator(store);
-        return store;
-      },
-    );
+    sessionStore = {};
+    hoisted.upsertSessionEntryMock.mockImplementation(() => undefined);
     hoisted.callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
       if (request.method === "sessions.patch") {
@@ -469,7 +463,6 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       deleteCall?.params,
       {
         key: event.targetSessionKey,
-        deleteTranscript: true,
         emitLifecycleHooks: false,
       },
       "delete params",
@@ -496,7 +489,6 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
     expectFields(
       deleteCall?.params,
       {
-        deleteTranscript: true,
         emitLifecycleHooks: true,
       },
       "delete params",
@@ -504,17 +496,12 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
   });
 
   it("cleans up the provisional session when lineage patching fails after thread binding", async () => {
-    const store: Record<string, Record<string, unknown>> = {};
-    hoisted.updateSessionStoreMock.mockImplementation(
-      async (_storePath: unknown, mutator: unknown) => {
-        if (typeof mutator !== "function") {
-          throw new Error("missing session store mutator");
-        }
-        await mutator(store);
-        if (Object.values(store).some((entry) => typeof entry.spawnedBy === "string")) {
+    sessionStore = {};
+    hoisted.upsertSessionEntryMock.mockImplementation(
+      (options: { entry?: Record<string, unknown> }) => {
+        if (typeof options.entry?.spawnedBy === "string") {
           throw new Error("lineage patch failed");
         }
-        return store;
       },
     );
     hoisted.callGatewayMock.mockImplementation(async (opts: unknown) => {
@@ -549,7 +536,6 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       deleteCall?.params,
       {
         key: result.childSessionKey,
-        deleteTranscript: true,
         emitLifecycleHooks: true,
       },
       "delete params",

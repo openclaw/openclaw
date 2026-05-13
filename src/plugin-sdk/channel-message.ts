@@ -167,7 +167,6 @@ export const buildChannelMessageReplyDispatchBase: InboundReplyDispatchModule["b
     accountId: params.accountId,
     agentId: params.route.agentId,
     routeSessionKey: params.route.sessionKey,
-    storePath: params.storePath,
     ctxPayload: params.ctxPayload,
     recordInboundSession: params.core.channel.session.recordInboundSession,
     dispatchReplyWithBufferedBlockDispatcher:

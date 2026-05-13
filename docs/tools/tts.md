@@ -678,9 +678,9 @@ Behavior notes:
 
 ## Per-user preferences
 
-Slash commands write local overrides to `prefsPath`. The default is
-`~/.openclaw/settings/tts.json`; override with the `OPENCLAW_TTS_PREFS` env var
-or `messages.tts.prefsPath`.
+Slash commands write local overrides to SQLite plugin state by default. Legacy
+`~/.openclaw/settings/tts.json` is imported by `openclaw doctor --fix`; runtime
+TTS prefs no longer write JSON files.
 
 | Stored field | Effect                                       |
 | ------------ | -------------------------------------------- |
@@ -813,9 +813,6 @@ OpenAI and ElevenLabs output formats are fixed per channel as listed above.
     </ParamField>
     <ParamField path="timeoutMs" type="number">
       Request timeout in milliseconds.
-    </ParamField>
-    <ParamField path="prefsPath" type="string">
-      Override the local prefs JSON path (provider/limit/summary). Default `~/.openclaw/settings/tts.json`.
     </ParamField>
   </Accordion>
 

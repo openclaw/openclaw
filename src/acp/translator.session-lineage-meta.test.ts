@@ -27,7 +27,7 @@ describe("acp session lineage metadata", () => {
       if (method === "sessions.list") {
         return {
           ts: 1,
-          path: "/tmp/sessions.json",
+          databasePath: "/tmp/openclaw-agent.sqlite",
           count: 2,
           defaults: {
             modelProvider: null,
@@ -94,7 +94,7 @@ describe("acp session lineage metadata", () => {
       if (method === "sessions.list") {
         return {
           ts: 1,
-          path: "/tmp/sessions.json",
+          databasePath: "/tmp/openclaw-agent.sqlite",
           count: 1,
           defaults: {
             modelProvider: null,
@@ -161,7 +161,7 @@ describe("acp session lineage metadata", () => {
       if (method === "sessions.list") {
         return {
           ts: 1,
-          path: "/tmp/sessions.json",
+          databasePath: "/tmp/openclaw-agent.sqlite",
           count: 1,
           defaults: {
             modelProvider: null,

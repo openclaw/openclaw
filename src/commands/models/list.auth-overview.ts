@@ -1,6 +1,6 @@
 import { formatRemainingShort } from "../../agents/auth-health.js";
 import { resolveAuthProfileDisplayLabel } from "../../agents/auth-profiles/display.js";
-import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles/paths.js";
+import { resolveAuthProfileStoreLocationForDisplay } from "../../agents/auth-profiles/paths.js";
 import { loadPersistedAuthProfileStore } from "../../agents/auth-profiles/persisted.js";
 import { listProfilesForProvider } from "../../agents/auth-profiles/profiles.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
@@ -136,7 +136,7 @@ export function resolveProviderAuthOverview(params: {
       return {
         kind: "profiles",
         detail: shortenHomePath(
-          resolveAuthStorePathForDisplay(
+          resolveAuthProfileStoreLocationForDisplay(
             resolveProfileSourceAgentDir({
               agentDir: params.agentDir,
               profileIds: profiles,
@@ -155,7 +155,7 @@ export function resolveProviderAuthOverview(params: {
       };
     }
     if (usableCustomKey) {
-      return { kind: "models.json", detail: formatMarkerOrSecret(usableCustomKey.apiKey) };
+      return { kind: "model_catalog", detail: formatMarkerOrSecret(usableCustomKey.apiKey) };
     }
     if (params.syntheticAuth) {
       return { kind: "synthetic", detail: params.syntheticAuth.source };
@@ -188,9 +188,9 @@ export function resolveProviderAuthOverview(params: {
       : {}),
     ...(customKey
       ? {
-          modelsJson: {
+          modelCatalog: {
             value: formatMarkerOrSecret(customKey),
-            source: `models.json: ${shortenHomePath(params.modelsPath)}`,
+            source: `stored model catalog: ${shortenHomePath(params.modelsPath)}`,
           },
         }
       : {}),

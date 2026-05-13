@@ -29,7 +29,7 @@ function shouldSkipPinnedMainDmRouteUpdate(
 }
 
 export async function recordInboundSession(params: {
-  storePath: string;
+  agentId?: string;
   sessionKey: string;
   ctx: MsgContext;
   groupResolution?: GroupKeyResolution | null;
@@ -38,12 +38,12 @@ export async function recordInboundSession(params: {
   onRecordError: (err: unknown) => void;
   trackSessionMetaTask?: (task: Promise<unknown>) => void;
 }): Promise<void> {
-  const { storePath, sessionKey, ctx, groupResolution, createIfMissing } = params;
+  const { agentId, sessionKey, ctx, groupResolution, createIfMissing } = params;
   const canonicalSessionKey = normalizeLowercaseStringOrEmpty(sessionKey);
   const runtime = await loadInboundSessionRuntime();
   const metaTask = runtime
     .recordSessionMetaFromInbound({
-      storePath,
+      agentId,
       sessionKey: canonicalSessionKey,
       ctx,
       groupResolution,
@@ -62,7 +62,7 @@ export async function recordInboundSession(params: {
   }
   const targetSessionKey = normalizeLowercaseStringOrEmpty(update.sessionKey);
   await runtime.updateLastRoute({
-    storePath,
+    agentId,
     sessionKey: targetSessionKey,
     deliveryContext: {
       channel: update.channel,

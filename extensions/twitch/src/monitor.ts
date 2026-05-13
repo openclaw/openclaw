@@ -119,9 +119,6 @@ async function processTwitchMessage(params: {
             envelopeFrom: fromLabel,
           },
         });
-        const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
-          agentId: route.agentId,
-        });
         const tableMode = core.channel.text.resolveMarkdownTableMode({
           cfg,
           channel: "twitch",
@@ -133,7 +130,6 @@ async function processTwitchMessage(params: {
           accountId,
           agentId: route.agentId,
           routeSessionKey: route.sessionKey,
-          storePath,
           ctxPayload,
           recordInboundSession: core.channel.session.recordInboundSession,
           dispatchReplyWithBufferedBlockDispatcher:

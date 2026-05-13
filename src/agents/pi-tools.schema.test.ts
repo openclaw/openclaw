@@ -1,7 +1,7 @@
-import { runAgentLoop, type AgentEvent, type StreamFn } from "@earendil-works/pi-agent-core";
-import { createAssistantMessageEventStream, validateToolArguments } from "@earendil-works/pi-ai";
+import { runAgentLoop, type AgentEvent, type StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { Type, type TSchema } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import { createAssistantMessageEventStream, validateToolArguments } from "./pi-ai-contract.js";
 import { wrapToolWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
 import {
   cleanToolSchemaForGemini,
@@ -69,6 +69,44 @@ describe("normalizeToolParameterSchema", () => {
     const schema = { type: "array", items: { type: "string" } };
 
     expect(normalizeToolParameterSchema(schema)).toEqual(schema);
+  });
+
+  it("adds permissive items schemas to arrays missing items", () => {
+    expect(
+      normalizeToolParameterSchema({
+        type: "object",
+        properties: {
+          entity_hints: { type: "array", description: "Optional entity hints" },
+          nested: {
+            type: "object",
+            properties: {
+              ids: { type: "array" },
+            },
+          },
+          alternatives: {
+            anyOf: [{ type: "array" }, { type: "string" }],
+          },
+        },
+      }),
+    ).toEqual({
+      type: "object",
+      properties: {
+        entity_hints: {
+          type: "array",
+          description: "Optional entity hints",
+          items: {},
+        },
+        nested: {
+          type: "object",
+          properties: {
+            ids: { type: "array", items: {} },
+          },
+        },
+        alternatives: {
+          anyOf: [{ type: "array", items: {} }, { type: "string" }],
+        },
+      },
+    });
   });
 
   it("inlines local $ref before removing unsupported keywords", () => {
@@ -428,7 +466,7 @@ describe("normalizeToolParameters", () => {
     );
 
     expect(streamCalls).toBe(2);
-    const executeCall = execute.mock.calls.at(0);
+    const executeCall = execute.mock.calls[0];
     expect(executeCall?.[0]).toBe("call-null-args");
     expect(executeCall?.[1]).toEqual({});
     expect(executeCall?.[2]).toBeUndefined();

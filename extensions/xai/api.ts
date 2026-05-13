@@ -3,13 +3,7 @@ import {
   normalizeOptionalLowercaseString,
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  applyXaiModelCompat,
-  HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING,
-  normalizeNativeXaiModelId,
-  resolveXaiModelCompatPatch,
-  XAI_TOOL_SCHEMA_PROFILE,
-} from "./model-compat.js";
+import { normalizeNativeXaiModelId } from "./model-compat.js";
 
 export { buildXaiProvider } from "./provider-catalog.js";
 export { applyXaiConfig, applyXaiProviderConfig } from "./onboard.js";
@@ -28,8 +22,12 @@ export {
 } from "./model-definitions.js";
 export { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
 export { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
-export { applyXaiModelCompat, HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING, XAI_TOOL_SCHEMA_PROFILE };
-export { resolveXaiModelCompatPatch };
+export {
+  applyXaiModelCompat,
+  HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING,
+  XAI_TOOL_SCHEMA_PROFILE,
+  resolveXaiModelCompatPatch,
+} from "./model-compat.js";
 
 const XAI_NATIVE_ENDPOINT_HOSTS = new Set(["api.x.ai", "api.grok.x.ai"]);
 
@@ -48,22 +46,15 @@ function isXaiNativeEndpoint(baseUrl: unknown): boolean {
 }
 
 export function isXaiModelHint(modelId: string): boolean {
-  return getModelProviderHint(modelId) === "x-ai";
+  const trimmed = normalizeOptionalLowercaseString(modelId);
+  if (!trimmed) {
+    return false;
+  }
+  const slashIndex = trimmed.indexOf("/");
+  return slashIndex > 0 && trimmed.slice(0, slashIndex) === "x-ai";
 }
 
 export { normalizeNativeXaiModelId as normalizeXaiModelId };
-
-function getModelProviderHint(modelId: string): string | null {
-  const trimmed = normalizeOptionalLowercaseString(modelId);
-  if (!trimmed) {
-    return null;
-  }
-  const slashIndex = trimmed.indexOf("/");
-  if (slashIndex <= 0) {
-    return null;
-  }
-  return trimmed.slice(0, slashIndex) || null;
-}
 
 function shouldUseXaiResponsesTransport(params: {
   provider: string;

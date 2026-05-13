@@ -1,7 +1,11 @@
 import { decodeRecoveryKey } from "matrix-js-sdk/lib/crypto-api/recovery-key.js";
-import { loadJsonFile, saveJsonFile } from "openclaw/plugin-sdk/json-store";
 import { formatMatrixErrorMessage, formatMatrixErrorReason } from "../errors.js";
 import { LogService } from "./logger.js";
+import {
+  readMatrixRecoveryKey,
+  writeMatrixRecoveryKey,
+  type MatrixRecoveryKeyRef,
+} from "./recovery-key-state.js";
 import type {
   MatrixCryptoBootstrapApi,
   MatrixCryptoCallbacks,
@@ -36,7 +40,7 @@ export class MatrixRecoveryKeyStore {
   private stagedRecoveryKeyUsed = false;
   private readonly stagedCacheKeyIds = new Set<string>();
 
-  constructor(private readonly recoveryKeyPath?: string) {}
+  constructor(private readonly recoveryKeyRef?: MatrixRecoveryKeyRef) {}
 
   buildCryptoCallbacks(): MatrixCryptoCallbacks {
     return {
@@ -88,7 +92,7 @@ export class MatrixRecoveryKeyStore {
         this.rememberSecretStorageKey(keyId, privateKey, normalizedKeyInfo);
 
         const stored = this.loadStoredRecoveryKey();
-        this.saveRecoveryKeyToDisk({
+        this.saveRecoveryKeyToState({
           keyId,
           keyInfo: normalizedKeyInfo,
           privateKey,
@@ -156,7 +160,7 @@ export class MatrixRecoveryKeyStore {
     createdAt?: string;
   } {
     const prepared = this.resolveEncodedRecoveryKeyInput(params);
-    this.saveRecoveryKeyToDisk({
+    this.saveRecoveryKeyToState({
       keyId: prepared.keyId,
       keyInfo: prepared.keyInfo,
       privateKey: prepared.privateKey,
@@ -204,7 +208,7 @@ export class MatrixRecoveryKeyStore {
     const privateKey = new Uint8Array(Buffer.from(staged.privateKeyBase64, "base64"));
     const keyId =
       typeof params?.keyId === "string" && params.keyId.trim() ? params.keyId.trim() : staged.keyId;
-    this.saveRecoveryKeyToDisk({
+    this.saveRecoveryKeyToState({
       keyId,
       keyInfo: params?.keyInfo ?? staged.keyInfo,
       privateKey,
@@ -262,7 +266,7 @@ export class MatrixRecoveryKeyStore {
       if (!stagedRecovery) {
         this.rememberSecretStorageKey(defaultKeyId, recoveryKey.privateKey, recoveryKey.keyInfo);
         if (storedRecovery && storedRecovery.keyId !== defaultKeyId) {
-          this.saveRecoveryKeyToDisk({
+          this.saveRecoveryKeyToState({
             keyId: defaultKeyId,
             keyInfo: recoveryKey.keyInfo,
             privateKey: recoveryKey.privateKey,
@@ -285,7 +289,7 @@ export class MatrixRecoveryKeyStore {
         );
       }
       recoveryKey = await crypto.createRecoveryKeyFromPassphrase();
-      this.saveRecoveryKeyToDisk(recoveryKey);
+      this.saveRecoveryKeyToState(recoveryKey);
       generatedRecoveryKey = true;
       return recoveryKey;
     };
@@ -337,10 +341,10 @@ export class MatrixRecoveryKeyStore {
       });
     }
 
-    if (generatedRecoveryKey && this.recoveryKeyPath) {
+    if (generatedRecoveryKey && this.recoveryKeyRef) {
       LogService.warn(
         "MatrixClientLite",
-        `Generated Matrix recovery key and saved it to ${this.recoveryKeyPath}. Keep this file secure.`,
+        "Generated Matrix recovery key and saved it to SQLite state. Keep this key secure.",
       );
     }
   }
@@ -394,41 +398,18 @@ export class MatrixRecoveryKeyStore {
   }
 
   private loadStoredRecoveryKey(): MatrixStoredRecoveryKey | null {
-    if (!this.recoveryKeyPath) {
+    if (!this.recoveryKeyRef) {
       return null;
     }
     try {
-      const parsed = loadJsonFile<Partial<MatrixStoredRecoveryKey>>(this.recoveryKeyPath);
-      if (
-        parsed?.version !== 1 ||
-        typeof parsed.createdAt !== "string" ||
-        typeof parsed.privateKeyBase64 !== "string" || // pragma: allowlist secret
-        !parsed.privateKeyBase64.trim()
-      ) {
-        return null;
-      }
-      return {
-        version: 1,
-        createdAt: parsed.createdAt,
-        keyId: typeof parsed.keyId === "string" ? parsed.keyId : null,
-        encodedPrivateKey:
-          typeof parsed.encodedPrivateKey === "string" ? parsed.encodedPrivateKey : undefined,
-        privateKeyBase64: parsed.privateKeyBase64,
-        keyInfo:
-          parsed.keyInfo && typeof parsed.keyInfo === "object"
-            ? {
-                passphrase: parsed.keyInfo.passphrase,
-                name: typeof parsed.keyInfo.name === "string" ? parsed.keyInfo.name : undefined,
-              }
-            : undefined,
-      };
+      return readMatrixRecoveryKey(this.recoveryKeyRef);
     } catch {
       return null;
     }
   }
 
-  private saveRecoveryKeyToDisk(params: MatrixGeneratedSecretStorageKey): void {
-    if (!this.recoveryKeyPath) {
+  private saveRecoveryKeyToState(params: MatrixGeneratedSecretStorageKey): void {
+    if (!this.recoveryKeyRef) {
       return;
     }
     try {
@@ -445,7 +426,7 @@ export class MatrixRecoveryKeyStore {
             }
           : undefined,
       };
-      saveJsonFile(this.recoveryKeyPath, payload);
+      writeMatrixRecoveryKey(this.recoveryKeyRef, payload);
     } catch (err) {
       LogService.warn("MatrixClientLite", "Failed to persist recovery key:", err);
     }

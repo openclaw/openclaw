@@ -49,7 +49,7 @@ const resolveAgentScopedOutboundMediaAccessMock = vi.hoisted(() =>
   })),
 );
 const appendAssistantMessageToSessionTranscriptMock = vi.hoisted(() =>
-  vi.fn(async () => ({ ok: true, sessionFile: "x" })),
+  vi.fn(async () => ({ ok: true, messageId: "mirror-message" })),
 );
 
 const mocks = {
@@ -126,7 +126,7 @@ function expectSingleCallFirstArg(
   label = "mock first argument",
 ): Record<string, unknown> {
   expect(mock.mock.calls).toHaveLength(1);
-  const [firstArg] = mock.mock.calls.at(0) ?? [];
+  const [firstArg] = mock.mock.calls[0] ?? [];
   return requireRecord(firstArg, label);
 }
 

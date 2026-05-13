@@ -1,7 +1,7 @@
 import { createAttachedChannelResultAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-send-deps";
 import { chunkTextForOutbound, type ChannelOutboundAdapter } from "../runtime-api.js";
-import { createMSTeamsPollStoreFs } from "./polls.js";
+import { createMSTeamsPollStoreState } from "./polls.js";
 import { sendMessageMSTeams, sendPollMSTeams } from "./send.js";
 
 export const msteamsOutbound: ChannelOutboundAdapter = {
@@ -54,7 +54,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
         options: poll.options,
         maxSelections,
       });
-      const pollStore = createMSTeamsPollStoreFs();
+      const pollStore = createMSTeamsPollStoreState();
       await pollStore.createPoll({
         id: result.pollId,
         question: poll.question,

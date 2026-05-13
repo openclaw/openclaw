@@ -1,9 +1,3 @@
-import {
-  completeSimple,
-  type Api,
-  type Model,
-  type ThinkingLevel as SimpleCompletionThinkingLevel,
-} from "@earendil-works/pi-ai";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -21,6 +15,12 @@ import {
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "./model-selection.js";
+import {
+  completeSimple,
+  type Api,
+  type Model,
+  type ThinkingLevel as SimpleCompletionThinkingLevel,
+} from "./pi-ai-contract.js";
 import { resolveModel, resolveModelAsync } from "./pi-embedded-runner/model.js";
 import { prepareModelForSimpleCompletion } from "./simple-completion-transport.js";
 

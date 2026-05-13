@@ -79,7 +79,4 @@ export function resolvePiCredentialsForDiscovery(
   return credentials;
 }
 
-export {
-  addEnvBackedPiCredentials,
-  scrubLegacyStaticAuthJsonEntriesForDiscovery,
-} from "./pi-auth-discovery-core.js";
+export { addEnvBackedPiCredentials } from "./pi-auth-discovery-core.js";

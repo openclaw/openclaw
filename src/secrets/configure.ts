@@ -223,14 +223,18 @@ async function promptOptionalPositiveInt(params: {
 }
 
 function configureCandidateKey(candidate: {
-  configFile: "openclaw.json" | "auth-profiles.json";
+  store: "openclaw.json" | "auth-profile-store";
   path: string;
   agentId?: string;
 }): string {
-  if (candidate.configFile === "auth-profiles.json") {
+  if (candidate.store === "auth-profile-store") {
     return `auth-profiles:${normalizeOptionalString(candidate.agentId) ?? ""}:${candidate.path}`;
   }
   return `openclaw:${candidate.path}`;
+}
+
+function formatConfigureCandidateStore(store: ConfigureCandidate["store"]): string {
+  return store === "auth-profile-store" ? "auth profile store" : "openclaw.json";
 }
 
 function hasSourceChoice(
@@ -332,7 +336,7 @@ async function promptNewAuthProfileCandidate(agentId: string): Promise<Configure
       path: `profiles.${profileIdTrimmed}.token`,
       pathSegments: ["profiles", profileIdTrimmed, "token"],
       label: `profiles.${profileIdTrimmed}.token (auth profile, agent ${agentId})`,
-      configFile: "auth-profiles.json",
+      store: "auth-profile-store",
       agentId,
       authProfileProvider: providerTrimmed,
       expectedResolvedValue: "string",
@@ -343,7 +347,7 @@ async function promptNewAuthProfileCandidate(agentId: string): Promise<Configure
     path: `profiles.${profileIdTrimmed}.key`,
     pathSegments: ["profiles", profileIdTrimmed, "key"],
     label: `profiles.${profileIdTrimmed}.key (auth profile, agent ${agentId})`,
-    configFile: "auth-profiles.json",
+    store: "auth-profile-store",
     agentId,
     authProfileProvider: providerTrimmed,
     expectedResolvedValue: "string",
@@ -791,7 +795,7 @@ export async function runSecretsConfigureInteractive(
         value: configureCandidateKey(candidate),
         label: candidate.label,
         hint: [
-          candidate.configFile === "auth-profiles.json" ? "auth-profiles.json" : "openclaw.json",
+          formatConfigureCandidateStore(candidate.store),
           candidate.isDerived === true ? "derived" : undefined,
         ]
           .filter(Boolean)

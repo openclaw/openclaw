@@ -62,7 +62,6 @@ export function createSessionConversationTestRegistry() {
           selectionLabel: "Discord",
           docsPath: "/channels/discord",
           blurb: "Discord test stub.",
-          preferSessionLookupForAnnounceTarget: true,
         },
         capabilities: { chatTypes: ["direct", "channel", "thread"] },
         messaging: {

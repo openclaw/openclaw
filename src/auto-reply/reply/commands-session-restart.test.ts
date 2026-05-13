@@ -6,7 +6,7 @@ import type { HandleCommandsParams } from "./commands-types.js";
 type ScheduleGatewayRestartArgs = Parameters<typeof scheduleGatewaySigusr1Restart>[0];
 
 const mocks = vi.hoisted(() => ({
-  unlink: vi.fn(async (_path: string) => undefined),
+  clearRestartSentinel: vi.fn(async () => undefined),
   isRestartEnabled: vi.fn(() => true),
   extractDeliveryInfo: vi.fn(() => ({
     deliveryContext: {
@@ -22,13 +22,6 @@ const mocks = vi.hoisted(() => ({
     scheduled: true,
   })),
   triggerOpenClawRestart: vi.fn(() => ({ ok: true, method: "launchctl" })),
-}));
-
-vi.mock("node:fs/promises", () => ({
-  default: {
-    unlink: mocks.unlink,
-  },
-  unlink: mocks.unlink,
 }));
 
 vi.mock("../../config/commands.flags.js", () => ({
@@ -63,6 +56,7 @@ vi.mock("../../infra/restart-sentinel.js", async () => {
   );
   return {
     ...actual,
+    clearRestartSentinel: mocks.clearRestartSentinel,
     formatDoctorNonInteractiveHint: mocks.formatDoctorNonInteractiveHint,
     writeRestartSentinel: mocks.writeRestartSentinel,
   };
@@ -107,11 +101,15 @@ function restartCommandParams(overrides?: Partial<HandleCommandsParams>): Handle
   } as HandleCommandsParams;
 }
 
+function firstRestartSentinelPayload() {
+  return mocks.writeRestartSentinel.mock.calls[0]?.[0];
+}
+
 describe("handleRestartCommand", () => {
   beforeEach(() => {
     mocks.isRestartEnabled.mockReset();
     mocks.isRestartEnabled.mockReturnValue(true);
-    mocks.unlink.mockClear();
+    mocks.clearRestartSentinel.mockClear();
     mocks.extractDeliveryInfo.mockClear();
     mocks.formatDoctorNonInteractiveHint.mockClear();
     mocks.writeRestartSentinel.mockClear();
@@ -128,7 +126,7 @@ describe("handleRestartCommand", () => {
 
     expect(result?.shouldContinue).toBe(false);
     expect(mocks.writeRestartSentinel).toHaveBeenCalledOnce();
-    const sentinelPayload = mocks.writeRestartSentinel.mock.calls.at(0)?.[0];
+    const sentinelPayload = firstRestartSentinelPayload();
     expect(sentinelPayload?.kind).toBe("restart");
     expect(sentinelPayload?.status).toBe("ok");
     expect(typeof sentinelPayload?.ts).toBe("number");
@@ -166,7 +164,7 @@ describe("handleRestartCommand", () => {
       await scheduledArgs?.emitHooks?.beforeEmit?.();
 
       expect(mocks.writeRestartSentinel).toHaveBeenCalledOnce();
-      const sentinelPayload = mocks.writeRestartSentinel.mock.calls.at(0)?.[0];
+      const sentinelPayload = firstRestartSentinelPayload();
       expect(sentinelPayload?.kind).toBe("restart");
       expect(sentinelPayload?.status).toBe("ok");
       expect(sentinelPayload?.sessionKey).toBe("agent:main:telegram:direct:123:thread:thread-1");
@@ -206,7 +204,7 @@ describe("handleRestartCommand", () => {
     expect(mocks.triggerOpenClawRestart).not.toHaveBeenCalled();
   });
 
-  it("removes the success sentinel when fallback restart fails", async () => {
+  it("clears the success sentinel when fallback restart fails", async () => {
     mocks.triggerOpenClawRestart.mockReturnValueOnce({
       ok: false,
       method: "launchctl",
@@ -215,6 +213,6 @@ describe("handleRestartCommand", () => {
     const result = await handleRestartCommand(restartCommandParams(), true);
 
     expect(result?.reply?.text).toContain("Restart failed");
-    expect(mocks.unlink).toHaveBeenCalledWith("/tmp/sentinel.json");
+    expect(mocks.clearRestartSentinel).toHaveBeenCalledTimes(1);
   });
 });

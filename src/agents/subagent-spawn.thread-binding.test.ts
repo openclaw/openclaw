@@ -2,14 +2,14 @@ import os from "node:os";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSubagentSpawnTestConfig,
-  installSessionStoreCaptureMock,
+  installSessionEntryCaptureMock,
   loadSubagentSpawnModuleForTest,
 } from "./subagent-spawn.test-helpers.js";
 import { installAcceptedSubagentGatewayMock } from "./test-helpers/subagent-gateway.js";
 
 const hoisted = vi.hoisted(() => ({
   callGatewayMock: vi.fn(),
-  updateSessionStoreMock: vi.fn(),
+  upsertSessionEntryMock: vi.fn(),
   registerSubagentRunMock: vi.fn(),
   emitSessionLifecycleEventMock: vi.fn(),
   hookRunner: {
@@ -17,6 +17,24 @@ const hoisted = vi.hoisted(() => ({
     runSubagentSpawning: vi.fn(),
   },
 }));
+
+function firstRegisteredSubagentRun(): {
+  requesterOrigin?: { channel?: string; accountId?: string; to?: string };
+  expectsCompletionMessage?: boolean;
+  spawnMode?: string;
+} {
+  const call = hoisted.registerSubagentRunMock.mock.calls[0]?.[0] as
+    | {
+        requesterOrigin?: { channel?: string; accountId?: string; to?: string };
+        expectsCompletionMessage?: boolean;
+        spawnMode?: string;
+      }
+    | undefined;
+  if (!call) {
+    throw new Error("expected registered subagent run");
+  }
+  return call;
+}
 
 describe("spawnSubagentDirect thread binding delivery", () => {
   type SpawnModule = Awaited<ReturnType<typeof loadSubagentSpawnModuleForTest>>;
@@ -36,7 +54,7 @@ describe("spawnSubagentDirect thread binding delivery", () => {
     ({ spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
       callGatewayMock: hoisted.callGatewayMock,
       getRuntimeConfig: () => currentConfig,
-      updateSessionStoreMock: hoisted.updateSessionStoreMock,
+      upsertSessionEntryMock: hoisted.upsertSessionEntryMock,
       registerSubagentRunMock: hoisted.registerSubagentRunMock,
       emitSessionLifecycleEventMock: hoisted.emitSessionLifecycleEventMock,
       hookRunner: hoisted.hookRunner,
@@ -66,13 +84,13 @@ describe("spawnSubagentDirect thread binding delivery", () => {
       to: params.conversationId ? `channel:${String(params.conversationId)}` : undefined,
     });
     hoisted.callGatewayMock.mockReset();
-    hoisted.updateSessionStoreMock.mockReset();
+    hoisted.upsertSessionEntryMock.mockReset();
     hoisted.registerSubagentRunMock.mockReset();
     hoisted.emitSessionLifecycleEventMock.mockReset();
     hoisted.hookRunner.hasHooks.mockReset();
     hoisted.hookRunner.runSubagentSpawning.mockReset();
     installAcceptedSubagentGatewayMock(hoisted.callGatewayMock);
-    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock);
+    installSessionEntryCaptureMock(hoisted.upsertSessionEntryMock);
   });
 
   it("passes the target agent's bound account to thread binding hooks", async () => {
@@ -161,13 +179,7 @@ describe("spawnSubagentDirect thread binding delivery", () => {
     expect(agentCall?.params?.to).toBe(`room:${boundRoom}`);
     expect(agentCall?.params?.threadId).toBe("$thread-root");
     expect(agentCall?.params?.deliver).toBe(true);
-    const registeredRun = hoisted.registerSubagentRunMock.mock.calls.at(0)?.[0] as
-      | {
-          requesterOrigin?: { channel?: string; accountId?: string; to?: string };
-          expectsCompletionMessage?: boolean;
-          spawnMode?: string;
-        }
-      | undefined;
+    const registeredRun = firstRegisteredSubagentRun();
     expect(registeredRun?.requesterOrigin?.channel).toBe("matrix");
     expect(registeredRun?.requesterOrigin?.accountId).toBe("bot-beta");
     expect(registeredRun?.requesterOrigin?.to).toBe(`room:${boundRoom}`);
@@ -222,12 +234,7 @@ describe("spawnSubagentDirect thread binding delivery", () => {
     expect(agentCall?.params?.accountId).toBe("sut");
     expect(agentCall?.params?.to).toBe("room:!parent:example");
     expect(agentCall?.params?.deliver).toBe(false);
-    const registeredRun = hoisted.registerSubagentRunMock.mock.calls.at(0)?.[0] as
-      | {
-          requesterOrigin?: { channel?: string; accountId?: string; to?: string };
-          expectsCompletionMessage?: boolean;
-        }
-      | undefined;
+    const registeredRun = firstRegisteredSubagentRun();
     expect(registeredRun?.expectsCompletionMessage).toBe(true);
     expect(registeredRun?.requesterOrigin?.channel).toBe("matrix");
     expect(registeredRun?.requesterOrigin?.accountId).toBe("sut");

@@ -2,7 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { afterEach, describe, expect, it } from "vitest";
+import { updateLastRoute, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   getMatrixExecApprovalApprovers,
   isMatrixExecApprovalApprover,
@@ -22,6 +23,7 @@ type MatrixExecApprovalRequest = Parameters<
 >[0]["request"];
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -65,14 +67,12 @@ function matrixAccount(
 }
 
 function buildMultiAccountMatrixConfig(params: {
-  sessionStorePath?: string;
   defaultExecApprovals?: MatrixExecApprovalConfig;
   opsExecApprovals?: MatrixExecApprovalConfig;
   defaultOverrides?: Partial<MatrixAccountConfig>;
   opsOverrides?: Partial<MatrixAccountConfig>;
 }): OpenClawConfig {
   return {
-    ...(params.sessionStorePath ? { session: { store: params.sessionStorePath } } : {}),
     channels: {
       matrix: {
         accounts: {
@@ -341,27 +341,25 @@ describe("matrix exec approvals", () => {
     ).toBe(false);
   });
 
-  it("scopes non-matrix turn sources to the stored matrix account", () => {
+  it("scopes non-matrix turn sources to the stored matrix account", async () => {
     const tmpDir = createTempDir();
-    const storePath = path.join(tmpDir, "sessions.json");
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify({
-        "agent:ops-agent:matrix:channel:!room:example.org": {
-          sessionId: "main",
-          updatedAt: 1,
-          origin: {
-            provider: "matrix",
-            accountId: "ops",
-          },
-          lastChannel: "slack",
-          lastTo: "channel:C999",
-          lastAccountId: "work",
-        },
-      }),
-      "utf-8",
-    );
-    const cfg = buildMultiAccountMatrixConfig({ sessionStorePath: storePath });
+    vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
+    upsertSessionEntry({
+      agentId: "ops-agent",
+      sessionKey: "agent:ops-agent:matrix:channel:!room:example.org",
+      entry: {
+        sessionId: "main",
+        updatedAt: 1,
+      },
+    });
+    await updateLastRoute({
+      agentId: "ops-agent",
+      sessionKey: "agent:ops-agent:matrix:channel:!room:example.org",
+      channel: "matrix",
+      to: "channel:!room:example.org",
+      accountId: "ops",
+    });
+    const cfg = buildMultiAccountMatrixConfig({});
     const request = makeForeignChannelApprovalRequest({
       id: "req-3",
       sessionKey: "agent:ops-agent:matrix:channel:!room:example.org",

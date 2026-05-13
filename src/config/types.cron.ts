@@ -30,25 +30,18 @@ export type CronFailureDestinationConfig = {
 
 export type CronConfig = {
   enabled?: boolean;
-  store?: string;
   maxConcurrentRuns?: number;
   /** Override default retry policy for one-shot jobs on transient errors. */
   retry?: CronRetryConfig;
   /**
-   * @deprecated Legacy fallback webhook URL used only for stored jobs with notify=true.
-   * Prefer per-job delivery.mode="webhook" with delivery.to.
+   * @deprecated Doctor-only fallback for translating legacy notify=true jobs.
+   * Runtime cron delivery uses per-job delivery.mode="webhook" with delivery.to.
    */
   webhook?: string;
   /** Bearer token for cron webhook POST delivery. */
   webhookToken?: SecretInput;
   /**
-   * How long to retain completed cron run sessions before automatic pruning.
-   * Accepts a duration string (e.g. "24h", "7d", "1h30m") or `false` to disable pruning.
-   * Default: "24h".
-   */
-  sessionRetention?: string | false;
-  /**
-   * Run-log pruning controls for `cron/runs/<jobId>.jsonl`.
+   * Run-log pruning controls for SQLite cron run history.
    * Defaults: `maxBytes=2_000_000`, `keepLines=2000`.
    */
   runLog?: {

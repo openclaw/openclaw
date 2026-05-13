@@ -39,7 +39,7 @@ const mocks = vi.hoisted(() => {
           };
         }
         return {
-          path: "/tmp/exec-approvals.json",
+          path: "/tmp/openclaw.sqlite#table/exec_approvals_config/current",
           exists: true,
           hash: "hash-1",
           file: { version: 1, agents: {} },
@@ -56,7 +56,7 @@ const mocks = vi.hoisted(() => {
 const { callGatewayFromCli, defaultRuntime, readBestEffortConfig, runtimeErrors } = mocks;
 
 const localSnapshot = {
-  path: "/tmp/local-exec-approvals.json",
+  path: "/tmp/local-openclaw.sqlite#table/exec_approvals_config/current",
   exists: true,
   raw: "{}",
   hash: "hash-local",
@@ -242,7 +242,7 @@ describe("exec approvals CLI", () => {
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(writtenJson(), 0);
     const policy = effectivePolicy();
     expect(policy.note).toBe(
-      "Effective exec policy is the host approvals file intersected with requested tools.exec policy.",
+      "Effective exec policy is the host approvals state intersected with requested tools.exec policy.",
     );
     const scope = scopeByLabel("tools.exec");
     expectFields(requireRecord(scope.security, "tools.exec security"), "tools.exec security", {
@@ -290,13 +290,13 @@ describe("exec approvals CLI", () => {
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(writtenJson(), 0);
     const scope = scopeByLabel("agent:runner");
     expect(requireRecord(scope.security, "agent security").hostSource).toBe(
-      "/tmp/local-exec-approvals.json agents.*.security",
+      "/tmp/local-openclaw.sqlite#table/exec_approvals_config/current agents.*.security",
     );
     expect(requireRecord(scope.ask, "agent ask").hostSource).toBe(
-      "/tmp/local-exec-approvals.json agents.*.ask",
+      "/tmp/local-openclaw.sqlite#table/exec_approvals_config/current agents.*.ask",
     );
     expect(requireRecord(scope.askFallback, "agent askFallback").source).toBe(
-      "/tmp/local-exec-approvals.json agents.*.askFallback",
+      "/tmp/local-openclaw.sqlite#table/exec_approvals_config/current agents.*.askFallback",
     );
   });
 
@@ -317,7 +317,7 @@ describe("exec approvals CLI", () => {
         }
         if (method === "exec.approvals.node.get") {
           return {
-            path: "/tmp/node-exec-approvals.json",
+            path: "/tmp/node-openclaw.sqlite#table/exec_approvals_config/current",
             exists: true,
             hash: "hash-node-1",
             file: {
@@ -336,7 +336,7 @@ describe("exec approvals CLI", () => {
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(writtenJson(), 0);
     const policy = effectivePolicy();
     expect(policy.note).toBe(
-      "Effective exec policy is the node host approvals file intersected with gateway tools.exec policy.",
+      "Effective exec policy is the node host approvals state intersected with gateway tools.exec policy.",
     );
     const scope = scopeByLabel("tools.exec");
     expectFields(requireRecord(scope.security, "tools.exec security"), "tools.exec security", {
@@ -354,7 +354,8 @@ describe("exec approvals CLI", () => {
       "tools.exec askFallback",
       {
         effective: "deny",
-        source: "/tmp/node-exec-approvals.json defaults.askFallback",
+        source:
+          "/tmp/node-openclaw.sqlite#table/exec_approvals_config/current defaults.askFallback",
       },
     );
   });
@@ -367,7 +368,7 @@ describe("exec approvals CLI", () => {
         }
         if (method === "exec.approvals.get") {
           return {
-            path: "/tmp/exec-approvals.json",
+            path: "/tmp/openclaw.sqlite#table/exec_approvals_config/current",
             exists: true,
             hash: "hash-1",
             file: { version: 1, agents: {} },
@@ -395,7 +396,7 @@ describe("exec approvals CLI", () => {
         }
         if (method === "exec.approvals.get") {
           return {
-            path: "/tmp/exec-approvals.json",
+            path: "/tmp/openclaw.sqlite#table/exec_approvals_config/current",
             exists: true,
             hash: "hash-1",
             file: { version: 1, agents: {} },
@@ -423,7 +424,7 @@ describe("exec approvals CLI", () => {
         }
         if (method === "exec.approvals.node.get") {
           return {
-            path: "/tmp/node-exec-approvals.json",
+            path: "/tmp/node-openclaw.sqlite#table/exec_approvals_config/current",
             exists: true,
             hash: "hash-node-1",
             file: { version: 1, agents: {} },
@@ -529,8 +530,10 @@ describe("exec approvals CLI", () => {
     expect(callGatewayFromCli.mock.calls.some((call) => call[0] === "exec.approvals.set")).toBe(
       false,
     );
-    const saved = requireRecord(firstMockArg(saveExecApprovals), "saved approvals");
-    expect(saveExecApprovals).toHaveBeenCalledWith(saved);
+    expect(saveExecApprovals).toHaveBeenCalledWith(
+      requireRecord(saveExecApprovals.mock.calls[0]?.[0], "saved approvals"),
+    );
+    const saved = requireRecord(saveExecApprovals.mock.calls[0]?.[0], "saved approvals");
     if (requireRecord(saved.agents, "saved agents")["*"] === undefined) {
       throw new Error("Expected wildcard exec approval agent entry");
     }

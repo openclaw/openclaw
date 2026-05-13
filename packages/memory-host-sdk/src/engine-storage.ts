@@ -12,6 +12,7 @@ export {
   parseEmbedding,
   remapChunkLines,
   runWithConcurrency,
+  serializeEmbedding,
   type MemoryChunk,
   type MemoryFileEntry,
 } from "./host/internal.js";
@@ -35,10 +36,11 @@ export type {
   MemorySearchManager,
   MemorySearchRuntimeDebug,
   MemorySearchResult,
+  MemorySessionTranscriptScope,
   MemorySource,
   MemorySyncProgressUpdate,
 } from "./host/types.js";
-export { ensureMemoryIndexSchema } from "./host/memory-schema.js";
+export { ensureMemoryIndexSchema, MEMORY_INDEX_TABLE_NAMES } from "./host/memory-schema.js";
 export { loadSqliteVecExtension } from "./host/sqlite-vec.js";
 export {
   closeMemorySqliteWalMaintenance,

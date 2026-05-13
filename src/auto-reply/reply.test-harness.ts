@@ -81,7 +81,6 @@ vi.mock("./reply/agent-runner.runtime.js", () => ({
         provider: string;
         reasoningLevel?: unknown;
         senderIsOwner?: boolean;
-        sessionFile: string;
         sessionId: string;
         sessionKey: string;
         skillsSnapshot?: unknown;
@@ -106,7 +105,6 @@ vi.mock("./reply/agent-runner.runtime.js", () => ({
       provider: params.followupRun.run.provider,
       reasoningLevel: params.followupRun.run.reasoningLevel,
       senderIsOwner: params.followupRun.run.senderIsOwner,
-      sessionFile: params.followupRun.run.sessionFile,
       sessionId: params.followupRun.run.sessionId,
       sessionKey: params.followupRun.run.sessionKey,
       skillsSnapshot: params.followupRun.run.skillsSnapshot,
@@ -169,7 +167,7 @@ export function createTempHomeHarness(options: { prefix: string; beforeEachCase?
 
   async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
     const home = path.join(fixtureRoot, `case-${++caseId}`);
-    await fs.mkdir(path.join(home, ".openclaw", "agents", "main", "sessions"), { recursive: true });
+    await fs.mkdir(path.join(home, ".openclaw", "agents", "main", "agent"), { recursive: true });
     const envSnapshot = snapshotHomeEnv();
     process.env.HOME = home;
     process.env.USERPROFILE = home;
@@ -209,7 +207,6 @@ export function makeReplyConfig(home: string) {
         allowFrom: ["*"],
       },
     },
-    session: { store: path.join(home, "sessions.json") },
   });
 }
 

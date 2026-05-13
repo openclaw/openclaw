@@ -323,6 +323,24 @@ describe("streamWithIdleTimeout", () => {
     await next;
   });
 
+  it("clears the connection timer when stream setup rejects", async () => {
+    vi.useFakeTimers();
+    const setupError = new Error("provider setup failed");
+    const baseFn = vi.fn().mockRejectedValue(setupError);
+
+    const onIdleTimeout = vi.fn();
+    const wrapped = streamWithIdleTimeout(baseFn, 50, onIdleTimeout);
+
+    const model = {} as Parameters<typeof baseFn>[0];
+    const context = {} as Parameters<typeof baseFn>[1];
+    const options = {} as Parameters<typeof baseFn>[2];
+
+    await expect(wrapped(model, context, options)).rejects.toThrow("provider setup failed");
+    await vi.advanceTimersByTimeAsync(50);
+
+    expect(onIdleTimeout).not.toHaveBeenCalled();
+  });
+
   it("throws when a promise stream never resolves", async () => {
     vi.useFakeTimers();
     let streamSignal: AbortSignal | undefined;
@@ -347,6 +365,25 @@ describe("streamWithIdleTimeout", () => {
 
     expect(onIdleTimeout).toHaveBeenCalledTimes(1);
     expect(streamSignal?.aborted).toBe(true);
+  });
+
+  it("clears setup state when baseFn throws synchronously", async () => {
+    vi.useFakeTimers();
+    const setupError = new Error("sync provider setup failed");
+    const baseFn = vi.fn(() => {
+      throw setupError;
+    }) as unknown as Parameters<typeof streamWithIdleTimeout>[0];
+    const onIdleTimeout = vi.fn();
+    const wrapped = streamWithIdleTimeout(baseFn, 50, onIdleTimeout);
+
+    const model = {} as Parameters<typeof baseFn>[0];
+    const context = {} as Parameters<typeof baseFn>[1];
+    const options = {} as Parameters<typeof baseFn>[2];
+
+    expect(() => wrapped(model, context, options)).toThrow("sync provider setup failed");
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(onIdleTimeout).not.toHaveBeenCalled();
   });
 
   it("resets timer on each chunk", async () => {

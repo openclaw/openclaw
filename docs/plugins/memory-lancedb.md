@@ -242,8 +242,9 @@ Agents also get LanceDB memory tools from the active memory plugin:
 
 ## Storage
 
-By default, LanceDB data lives under `~/.openclaw/memory/lancedb`. Override the
-path with `dbPath`:
+`memory-lancedb` uses an explicit external LanceDB path. OpenClaw no longer
+creates a managed `~/.openclaw/memory/lancedb` directory by default; configure
+`dbPath` when you select this plugin:
 
 ```json5
 {
@@ -252,7 +253,7 @@ path with `dbPath`:
       "memory-lancedb": {
         enabled: true,
         config: {
-          dbPath: "~/.openclaw/memory/lancedb",
+          dbPath: "~/memory/lancedb",
           embedding: {
             apiKey: "${OPENAI_API_KEY}",
             model: "text-embedding-3-small",

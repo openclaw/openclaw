@@ -29,7 +29,7 @@ const state = vi.hoisted(() => ({
   emitAgentEventMock: vi.fn(),
   registerAgentRunContextMock: vi.fn(),
   clearAgentRunContextMock: vi.fn(),
-  updateSessionStoreAfterAgentRunMock: vi.fn(),
+  updateSessionEntryAfterAgentRunMock: vi.fn(),
   deliverAgentCommandResultMock: vi.fn(),
   trajectoryRecordEventMock: vi.fn(),
   trajectoryFlushMock: vi.fn(async () => undefined),
@@ -63,7 +63,7 @@ vi.mock("./command/attempt-execution.runtime.js", () => ({
   persistSessionEntry: vi.fn(),
   prependInternalEventContext: (_body: string) => _body,
   runAgentAttempt: (...args: unknown[]) => state.runAgentAttemptMock(...args),
-  sessionFileHasContent: vi.fn(async () => false),
+  sessionTranscriptHasContent: vi.fn(async () => false),
 }));
 
 vi.mock("./command/delivery.runtime.js", () => ({
@@ -84,10 +84,16 @@ vi.mock("./command/run-context.js", () => ({
   }),
 }));
 
-vi.mock("./command/session-store.runtime.js", () => ({
-  updateSessionStoreAfterAgentRun: (...args: unknown[]) =>
-    state.updateSessionStoreAfterAgentRunMock(...args),
-}));
+vi.mock("./command/session-entry-updates.js", async () => {
+  const actual = await vi.importActual<typeof import("./command/session-entry-updates.js")>(
+    "./command/session-entry-updates.js",
+  );
+  return {
+    ...actual,
+    updateSessionEntryAfterAgentRun: (...args: unknown[]) =>
+      state.updateSessionEntryAfterAgentRunMock(...args),
+  };
+});
 
 vi.mock("./command/session.js", () => ({
   resolveSession: () => ({
@@ -99,7 +105,6 @@ vi.mock("./command/session.js", () => ({
       skillsSnapshot: { prompt: "", skills: [], version: 0 },
     },
     sessionStore: state.sessionStoreMock,
-    storePath: undefined,
     isNewSession: false,
     persistedThinking: undefined,
     persistedVerbose: undefined,
@@ -178,17 +183,12 @@ vi.mock("../config/runtime-snapshot.js", () => ({
 vi.mock("../config/sessions.js", () => ({
   resolveAgentIdFromSessionKey: () => "default",
   mergeSessionEntry: (a: unknown, b: unknown) => ({ ...(a as object), ...(b as object) }),
-  updateSessionStore: vi.fn(
-    async (_path: string, fn: (store: Record<string, unknown>) => unknown) => {
-      const store: Record<string, unknown> = {};
-      return fn(store);
-    },
-  ),
 }));
 
 vi.mock("../config/sessions/transcript-resolve.runtime.js", () => ({
-  resolveSessionTranscriptFile: async () => ({
-    sessionFile: "/tmp/session.jsonl",
+  resolveSessionTranscriptTarget: async () => ({
+    agentId: "default",
+    sessionId: "session-1",
     sessionEntry: { sessionId: "session-1", updatedAt: Date.now() },
   }),
 }));
@@ -255,7 +255,7 @@ vi.mock("../terminal/ansi.js", () => ({
 vi.mock("../trajectory/runtime.js", () => ({
   createTrajectoryRuntimeRecorder: () => ({
     enabled: true,
-    filePath: "/tmp/session.trajectory.jsonl",
+    runtimeScope: "sqlite:default:trajectory:session-1",
     recordEvent: (...args: unknown[]) => state.trajectoryRecordEventMock(...args),
     flush: () => state.trajectoryFlushMock(),
   }),
@@ -741,7 +741,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       version: 0,
     });
     state.deliverAgentCommandResultMock.mockResolvedValue(undefined);
-    state.updateSessionStoreAfterAgentRunMock.mockResolvedValue(undefined);
+    state.updateSessionEntryAfterAgentRunMock.mockResolvedValue(undefined);
     state.trajectoryFlushMock.mockResolvedValue(undefined);
   });
 
@@ -761,11 +761,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
     expect(state.runWithModelFallbackMock).toHaveBeenCalledTimes(2);
 
-    const secondCall = state.runWithModelFallbackMock.mock.calls.at(1)?.[0] as
-      | FallbackRunnerParams
-      | undefined;
-    expect(secondCall?.provider).toBe("openai");
-    expect(secondCall?.model).toBe("gpt-5.4");
+    const secondCall = mockCallArg(state.runWithModelFallbackMock, 1) as FallbackRunnerParams;
+    expect(secondCall.provider).toBe("openai");
+    expect(secondCall.model).toBe("gpt-5.4");
 
     const lifecycleEndCalls = state.emitAgentEventMock.mock.calls.filter((call: unknown[]) => {
       const arg = call[0] as { stream?: string; data?: { phase?: string } };
@@ -1176,7 +1174,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       code: "empty_result",
     });
     expect(state.runAgentAttemptMock).toHaveBeenCalledTimes(2);
-    expectRecordFields(state.runAgentAttemptMock.mock.calls.at(1)?.[0], {
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock, 1), {
       providerOverride: "openai",
       modelOverride: "gpt-5.4",
       isFallbackRetry: true,

@@ -34,7 +34,6 @@ export function createMockFollowupRun(
       sessionKey: "main",
       messageProvider: "whatsapp",
       agentAccountId: "primary",
-      sessionFile: "/tmp/session.jsonl",
       workspaceDir: "/tmp",
       config: {},
       skillsSnapshot: {

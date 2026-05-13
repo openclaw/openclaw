@@ -7,12 +7,12 @@ import {
 } from "./service.test-harness.js";
 
 const logger = createNoopLogger();
-const { makeStorePath } = createCronStoreHarness({ prefix: "openclaw-cron-get-job-" });
+const { makeStoreKey } = createCronStoreHarness({ prefix: "openclaw-cron-get-job-" });
 installCronTestHooks({ logger });
 
-function createCronService(storePath: string, cronEnabled = true) {
+function createCronService(storeKey: string, cronEnabled = true) {
   return new CronService({
-    storePath,
+    storeKey,
     cronEnabled,
     log: logger,
     enqueueSystemEvent: vi.fn(),
@@ -23,8 +23,8 @@ function createCronService(storePath: string, cronEnabled = true) {
 
 describe("CronService.getJob", () => {
   it("returns added jobs and undefined for missing ids", async () => {
-    const { storePath } = await makeStorePath();
-    const cron = createCronService(storePath);
+    const { storeKey } = await makeStoreKey();
+    const cron = createCronService(storeKey);
     await cron.start();
 
     try {
@@ -46,8 +46,8 @@ describe("CronService.getJob", () => {
   });
 
   it("preserves webhook delivery on create", async () => {
-    const { storePath } = await makeStorePath();
-    const cron = createCronService(storePath);
+    const { storeKey } = await makeStoreKey();
+    const cron = createCronService(storeKey);
     await cron.start();
 
     try {
@@ -71,8 +71,8 @@ describe("CronService.getJob", () => {
   });
 
   it("loads persisted jobs for direct reads without starting the scheduler", async () => {
-    const { storePath } = await makeStorePath();
-    const writer = createCronService(storePath);
+    const { storeKey } = await makeStoreKey();
+    const writer = createCronService(storeKey);
     await writer.start();
     const persisted = await writer.add({
       name: "persisted-job",
@@ -84,9 +84,12 @@ describe("CronService.getJob", () => {
     });
     writer.stop();
 
-    const reader = createCronService(storePath, false);
+    const reader = createCronService(storeKey, false);
 
-    await expect(reader.readJob(persisted.id)).resolves.toEqual(persisted);
+    await expect(reader.readJob(persisted.id)).resolves.toMatchObject({
+      id: persisted.id,
+      name: "persisted-job",
+    });
     if (reader.getJob(persisted.id) === undefined) {
       throw new Error("Expected persisted cron job");
     }

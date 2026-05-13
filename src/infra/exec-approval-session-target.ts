@@ -1,5 +1,6 @@
-import { resolveSessionConversationRef } from "../channels/plugins/session-conversation.js";
+import { readSqliteSessionRoutingInfo } from "../config/sessions/session-entries.sqlite.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import {
@@ -83,29 +84,39 @@ export function resolveApprovalRequestSessionConversation(params: {
   channel?: string | null;
   bundledFallback?: boolean;
 }): ApprovalRequestSessionConversation | null {
+  void params.bundledFallback;
   const sessionKey = normalizeOptionalString(params.request.request.sessionKey);
   if (!sessionKey) {
     return null;
   }
-  const resolved = resolveSessionConversationRef(sessionKey, {
-    bundledFallback: params.bundledFallback,
+  const routingInfo = readSqliteSessionRoutingInfo({
+    agentId: resolveAgentIdFromSessionKey(sessionKey),
+    sessionKey,
   });
-  if (!resolved) {
+  if (!routingInfo) {
+    return null;
+  }
+  const channel = normalizeOptionalChannel(routingInfo.channel);
+  const kind = routingInfo.conversationKind;
+  const peerId = normalizeOptionalString(routingInfo.conversationPeerId);
+  if (!channel || !peerId || (kind !== "group" && kind !== "channel")) {
     return null;
   }
   const expectedChannel = normalizeOptionalChannel(params.channel);
-  if (expectedChannel && normalizeOptionalChannel(resolved.channel) !== expectedChannel) {
+  if (expectedChannel && channel !== expectedChannel) {
     return null;
   }
+  const threadId = normalizeOptionalString(routingInfo.conversationThreadId);
+  const baseConversationId = normalizeOptionalString(routingInfo.parentConversationId) ?? peerId;
   return {
-    channel: resolved.channel,
-    kind: resolved.kind,
-    id: resolved.id,
-    rawId: resolved.rawId,
-    threadId: resolved.threadId,
-    baseSessionKey: resolved.baseSessionKey,
-    baseConversationId: resolved.baseConversationId,
-    parentConversationCandidates: resolved.parentConversationCandidates,
+    channel,
+    kind,
+    id: peerId,
+    rawId: peerId,
+    threadId,
+    baseSessionKey: sessionKey,
+    baseConversationId,
+    parentConversationCandidates: baseConversationId !== peerId ? [baseConversationId] : [],
   };
 }
 

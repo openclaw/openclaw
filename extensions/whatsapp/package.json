@@ -8,7 +8,8 @@
   },
   "type": "module",
   "dependencies": {
-    "baileys": "7.0.0-rc10",
+    "audio-decode": "2.2.3",
+    "baileys": "7.0.0-rc11",
     "https-proxy-agent": "9.0.0",
     "jimp": "1.6.1",
     "typebox": "1.1.38",
@@ -32,8 +33,8 @@
     ],
     "setupEntry": "./setup-entry.ts",
     "setupFeatures": {
-      "legacyStateMigrations": true,
-      "legacySessionSurfaces": true
+      "doctorLegacyState": true,
+      "doctorSessionMigrationSurface": true
     },
     "channel": {
       "id": "whatsapp",
@@ -56,8 +57,9 @@
       ]
     },
     "install": {
+      "clawhubSpec": "clawhub:@openclaw/whatsapp",
       "npmSpec": "@openclaw/whatsapp",
-      "defaultChoice": "npm",
+      "defaultChoice": "clawhub",
       "minHostVersion": ">=2026.4.25"
     },
     "compat": {

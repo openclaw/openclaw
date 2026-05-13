@@ -1,8 +1,12 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  closeOpenClawStateDatabaseForTest,
+} from "openclaw/plugin-sdk/sqlite-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadSessionStore } from "../config.runtime.js";
+import { getSessionEntry, upsertSessionEntry } from "../config.runtime.js";
 import { resolveGroupActivationFor } from "./group-activation.js";
 
 const GROUP_CONVERSATION_ID = "123@g.us";
@@ -17,19 +21,26 @@ type SessionStoreEntry = {
 
 async function makeSessionStore(
   entries: Record<string, unknown> = {},
-): Promise<{ storePath: string; cleanup: () => Promise<void> }> {
+): Promise<{ cleanup: () => Promise<void> }> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-"));
-  const storePath = path.join(dir, "sessions.json");
-  await fs.writeFile(storePath, JSON.stringify(entries));
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
+  process.env.OPENCLAW_STATE_DIR = dir;
+  for (const [sessionKey, entry] of Object.entries(entries)) {
+    upsertSessionEntry({
+      agentId: "main",
+      sessionKey,
+      entry: entry as never,
+    });
+  }
   return {
-    storePath,
     cleanup: async () => {
       await fs.rm(dir, { recursive: true, force: true });
     },
   };
 }
 
-const resolveWorkGroupActivation = (storePath: string) =>
+const resolveWorkGroupActivation = () =>
   resolveGroupActivationFor({
     cfg: {
       channels: {
@@ -39,7 +50,7 @@ const resolveWorkGroupActivation = (storePath: string) =>
           },
         },
       },
-      session: { store: storePath },
+      session: {},
     } as never,
     accountId: "work",
     agentId: "main",
@@ -48,36 +59,45 @@ const resolveWorkGroupActivation = (storePath: string) =>
   });
 
 const expectWorkGroupActivationEntry = async (
-  storePath: string,
   assertEntry?: (entry: SessionStoreEntry | undefined) => void,
 ) => {
   await vi.waitFor(() => {
-    const scopedEntry = loadSessionStore(storePath, { skipCache: true })[WORK_GROUP_SESSION_KEY];
+    const scopedEntry = getSessionEntry({
+      agentId: "main",
+      sessionKey: WORK_GROUP_SESSION_KEY,
+    });
     expect(scopedEntry?.groupActivation).toBe("always");
     assertEntry?.(scopedEntry);
   });
 };
 
 const expectResolvedWorkGroupActivation = async (
-  storePath: string,
   assertEntry?: (entry: SessionStoreEntry | undefined) => void,
 ) => {
-  const activation = await resolveWorkGroupActivation(storePath);
+  const activation = await resolveWorkGroupActivation();
   expect(activation).toBe("always");
-  await expectWorkGroupActivationEntry(storePath, assertEntry);
+  await expectWorkGroupActivationEntry(assertEntry);
 };
 
 describe("resolveGroupActivationFor", () => {
   const cleanups: Array<() => Promise<void>> = [];
+  const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 
   afterEach(async () => {
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
     while (cleanups.length > 0) {
       await cleanups.pop()?.();
+    }
+    if (originalStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = originalStateDir;
     }
   });
 
   it("reads legacy named-account group activation and backfills the scoped key", async () => {
-    const { storePath, cleanup } = await makeSessionStore({
+    const { cleanup } = await makeSessionStore({
       [LEGACY_GROUP_SESSION_KEY]: {
         groupActivation: "always",
         sessionId: "legacy-session",
@@ -86,14 +106,14 @@ describe("resolveGroupActivationFor", () => {
     });
     cleanups.push(cleanup);
 
-    await expectResolvedWorkGroupActivation(storePath, (scopedEntry) => {
-      expect(scopedEntry?.sessionId).toBeUndefined();
-      expect(scopedEntry?.updatedAt).toBeUndefined();
+    await expectResolvedWorkGroupActivation((scopedEntry) => {
+      expect(typeof scopedEntry?.sessionId).toBe("string");
+      expect(typeof scopedEntry?.updatedAt).toBe("number");
     });
   });
 
   it("preserves legacy group activation when the scoped entry already exists without activation", async () => {
-    const { storePath, cleanup } = await makeSessionStore({
+    const { cleanup } = await makeSessionStore({
       [LEGACY_GROUP_SESSION_KEY]: {
         groupActivation: "always",
       },
@@ -103,13 +123,13 @@ describe("resolveGroupActivationFor", () => {
     });
     cleanups.push(cleanup);
 
-    await expectResolvedWorkGroupActivation(storePath, (scopedEntry) => {
+    await expectResolvedWorkGroupActivation((scopedEntry) => {
       expect(scopedEntry?.sessionId).toBe("scoped-session");
     });
   });
 
   it("does not wake the default account from an activation-only legacy group entry in multi-account setups", async () => {
-    const { storePath, cleanup } = await makeSessionStore({
+    const { cleanup } = await makeSessionStore({
       [LEGACY_GROUP_SESSION_KEY]: {
         groupActivation: "always",
       },
@@ -129,7 +149,7 @@ describe("resolveGroupActivationFor", () => {
           },
         },
       },
-      session: { store: storePath },
+      session: {},
     } as never;
 
     const workActivation = await resolveGroupActivationFor({
@@ -151,11 +171,11 @@ describe("resolveGroupActivationFor", () => {
     });
 
     expect(defaultActivation).toBe("mention");
-    await expectWorkGroupActivationEntry(storePath);
+    await expectWorkGroupActivationEntry();
   });
 
   it("does not treat mixed-case default account keys as named accounts", async () => {
-    const { storePath, cleanup } = await makeSessionStore({
+    const { cleanup } = await makeSessionStore({
       [LEGACY_GROUP_SESSION_KEY]: {
         groupActivation: "always",
       },
@@ -176,7 +196,7 @@ describe("resolveGroupActivationFor", () => {
             },
           },
         },
-        session: { store: storePath },
+        session: {},
       } as never,
       accountId: "default",
       agentId: "main",

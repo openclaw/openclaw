@@ -3,22 +3,25 @@ import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
-  buildSessionEntry,
-  listSessionFilesForAgent,
-  loadSessionTranscriptClassificationForAgent,
-  normalizeSessionTranscriptPathForComparison,
-  parseUsageCountedSessionIdFromFileName,
-  sessionPathForFile,
-} from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
+  buildSessionTranscriptEntry,
+  listSessionTranscriptScopesForAgent,
+  sessionTranscriptKeyForScope,
+} from "openclaw/plugin-sdk/memory-core-host-engine-session-transcripts";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
+  appendDreamingSessionIngestionLines,
   formatMemoryDreamingDay,
+  MEMORY_CORE_DAILY_INGESTION_STATE_NAMESPACE,
+  MEMORY_CORE_SESSION_INGESTION_FILES_NAMESPACE,
+  MEMORY_CORE_SESSION_INGESTION_MESSAGES_NAMESPACE,
+  readDreamingWorkspaceMap,
+  resolveDreamingSessionIngestionRelativePath,
   resolveMemoryDreamingWorkspaces,
   resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,
+  writeDreamingWorkspaceMap,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { appendRegularFile, privateFileStore } from "openclaw/plugin-sdk/security-runtime";
 import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
 import {
   generateAndAppendDreamNarrative,
@@ -75,17 +78,10 @@ const LIGHT_SLEEP_EVENT_TEXT = "__openclaw_memory_core_light_sleep__";
 const REM_SLEEP_EVENT_TEXT = "__openclaw_memory_core_rem_sleep__";
 const MEMORY_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const DAILY_MEMORY_FILENAME_RE = /^(\d{4}-\d{2}-\d{2})\.md$/;
-const DAILY_INGESTION_STATE_RELATIVE_PATH = path.join("memory", ".dreams", "daily-ingestion.json");
 const DAILY_INGESTION_SCORE = 0.62;
 const DAILY_INGESTION_MAX_SNIPPET_CHARS = 280;
 const DAILY_INGESTION_MIN_SNIPPET_CHARS = 8;
 const DAILY_INGESTION_MAX_CHUNK_LINES = 4;
-const SESSION_INGESTION_STATE_RELATIVE_PATH = path.join(
-  "memory",
-  ".dreams",
-  "session-ingestion.json",
-);
-const SESSION_CORPUS_RELATIVE_DIR = path.join("memory", ".dreams", "session-corpus");
 const SESSION_INGESTION_SCORE = 0.58;
 const SESSION_INGESTION_MAX_SNIPPET_CHARS = 280;
 const SESSION_INGESTION_MIN_SNIPPET_CHARS = 12;
@@ -94,7 +90,6 @@ const SESSION_INGESTION_MAX_MESSAGES_PER_FILE = 80;
 const SESSION_INGESTION_MIN_MESSAGES_PER_FILE = 12;
 const SESSION_INGESTION_MAX_TRACKED_MESSAGES_PER_SESSION = 4096;
 const SESSION_INGESTION_MAX_TRACKED_SCOPES = 2048;
-const SESSION_CHECKPOINT_TRANSCRIPT_FILENAME_RE = /\.checkpoint\..+\.jsonl$/i;
 const GENERIC_DAY_HEADING_RE =
   /^(?:(?:mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)(?:,\s+)?)?(?:(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}[/-]\d{2}[/-]\d{2})$/i;
 const MANAGED_DAILY_DREAMING_BLOCKS = [
@@ -438,25 +433,24 @@ function normalizeMemoryDay(value: unknown): string | undefined {
 }
 
 async function readDailyIngestionState(workspaceDir: string): Promise<DailyIngestionState> {
-  try {
-    return normalizeDailyIngestionState(
-      await privateFileStore(workspaceDir).readJsonIfExists(DAILY_INGESTION_STATE_RELATIVE_PATH),
-    );
-  } catch (err) {
-    if (err instanceof SyntaxError) {
-      return { version: 1, files: {} };
-    }
-    throw err;
-  }
+  return normalizeDailyIngestionState({
+    version: 1,
+    files: await readDreamingWorkspaceMap<DailyIngestionFileState>(
+      MEMORY_CORE_DAILY_INGESTION_STATE_NAMESPACE,
+      workspaceDir,
+    ),
+  });
 }
 
 async function writeDailyIngestionState(
   workspaceDir: string,
   state: DailyIngestionState,
 ): Promise<void> {
-  await privateFileStore(workspaceDir).writeJson(DAILY_INGESTION_STATE_RELATIVE_PATH, state, {
-    trailingNewline: true,
-  });
+  await writeDreamingWorkspaceMap(
+    MEMORY_CORE_DAILY_INGESTION_STATE_NAMESPACE,
+    workspaceDir,
+    normalizeDailyIngestionState(state).files,
+  );
 }
 
 type SessionIngestionFileState = {
@@ -544,25 +538,36 @@ function normalizeSessionIngestionState(raw: unknown): SessionIngestionState {
 }
 
 async function readSessionIngestionState(workspaceDir: string): Promise<SessionIngestionState> {
-  try {
-    return normalizeSessionIngestionState(
-      await privateFileStore(workspaceDir).readJsonIfExists(SESSION_INGESTION_STATE_RELATIVE_PATH),
-    );
-  } catch (err) {
-    if (err instanceof SyntaxError) {
-      return { version: 3, files: {}, seenMessages: {} };
-    }
-    throw err;
-  }
+  return normalizeSessionIngestionState({
+    version: 3,
+    files: await readDreamingWorkspaceMap<SessionIngestionFileState>(
+      MEMORY_CORE_SESSION_INGESTION_FILES_NAMESPACE,
+      workspaceDir,
+    ),
+    seenMessages: await readDreamingWorkspaceMap<string[]>(
+      MEMORY_CORE_SESSION_INGESTION_MESSAGES_NAMESPACE,
+      workspaceDir,
+    ),
+  });
 }
 
 async function writeSessionIngestionState(
   workspaceDir: string,
   state: SessionIngestionState,
 ): Promise<void> {
-  await privateFileStore(workspaceDir).writeJson(SESSION_INGESTION_STATE_RELATIVE_PATH, state, {
-    trailingNewline: true,
-  });
+  const normalized = normalizeSessionIngestionState(state);
+  await Promise.all([
+    writeDreamingWorkspaceMap(
+      MEMORY_CORE_SESSION_INGESTION_FILES_NAMESPACE,
+      workspaceDir,
+      normalized.files,
+    ),
+    writeDreamingWorkspaceMap(
+      MEMORY_CORE_SESSION_INGESTION_MESSAGES_NAMESPACE,
+      workspaceDir,
+      normalized.seenMessages,
+    ),
+  ]);
 }
 
 function trimTrackedSessionScopes(
@@ -582,7 +587,7 @@ function trimTrackedSessionScopes(
   return next;
 }
 
-function normalizeSessionCorpusSnippet(value: string): string {
+function normalizeSessionIngestionSnippet(value: string): string {
   return value.replace(/\s+/g, " ").trim().slice(0, SESSION_INGESTION_MAX_SNIPPET_CHARS);
 }
 
@@ -591,9 +596,7 @@ function hashSessionMessageId(value: string): string {
 }
 
 function buildSessionScopeKey(agentId: string, absolutePath: string): string {
-  const fileName = path.basename(absolutePath);
-  const logicalSessionId = parseUsageCountedSessionIdFromFileName(fileName) ?? fileName;
-  return `${agentId}:${logicalSessionId}`;
+  return `${agentId}:${path.basename(absolutePath)}`;
 }
 
 function mergeTrackedMessageHashes(existing: string[], additions: string[]): string[] {
@@ -626,21 +629,17 @@ function areStringArraysEqual(a: string[], b: string[]): boolean {
   return true;
 }
 
-function buildSessionStateKey(agentId: string, absolutePath: string): string {
-  return `${agentId}:${sessionPathForFile(absolutePath)}`;
-}
-
-function isCheckpointSessionTranscriptPath(absolutePath: string): boolean {
-  return SESSION_CHECKPOINT_TRANSCRIPT_FILENAME_RE.test(path.basename(absolutePath));
+function buildSessionStateKey(agentId: string, transcriptKey: string): string {
+  return `${agentId}:${transcriptKey}`;
 }
 
 function buildSessionRenderedLine(params: {
   agentId: string;
-  sessionPath: string;
+  transcriptKey: string;
   lineNumber: number;
   snippet: string;
 }): string {
-  const source = `${params.agentId}/${params.sessionPath}#L${params.lineNumber}`;
+  const source = `${params.agentId}/${params.transcriptKey}#L${params.lineNumber}`;
   return `[${source}] ${params.snippet}`.slice(0, SESSION_INGESTION_MAX_SNIPPET_CHARS + 64);
 }
 
@@ -670,7 +669,7 @@ function resolveSessionAgentsForWorkspace(params: {
     .toSorted();
 }
 
-async function appendSessionCorpusLines(params: {
+async function appendSessionIngestionLines(params: {
   workspaceDir: string;
   day: string;
   lines: SessionIngestionMessage[];
@@ -678,36 +677,14 @@ async function appendSessionCorpusLines(params: {
   if (params.lines.length === 0) {
     return [];
   }
-  const relativePath = path.posix.join("memory", ".dreams", "session-corpus", `${params.day}.txt`);
-  const absolutePath = path.join(
-    params.workspaceDir,
-    SESSION_CORPUS_RELATIVE_DIR,
-    `${params.day}.txt`,
-  );
-  await fs.mkdir(path.dirname(absolutePath), { recursive: true });
-  let existing = "";
-  try {
-    existing = await fs.readFile(absolutePath, "utf-8");
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
-      throw err;
-    }
-  }
-  const normalizedExisting = existing.replace(/\r\n/g, "\n");
-  const existingLineCount =
-    normalizedExisting.length === 0
-      ? 0
-      : normalizedExisting.endsWith("\n")
-        ? normalizedExisting.slice(0, -1).split("\n").length
-        : normalizedExisting.split("\n").length;
-  const payload = `${params.lines.map((entry) => entry.rendered).join("\n")}\n`;
-  await appendRegularFile({
-    filePath: absolutePath,
-    content: payload,
-    rejectSymlinkParents: true,
+  const relativePath = resolveDreamingSessionIngestionRelativePath(params.day);
+  const firstLine = await appendDreamingSessionIngestionLines({
+    workspaceDir: params.workspaceDir,
+    relativePath,
+    lines: params.lines.map((entry) => entry.rendered),
   });
   return params.lines.map((entry, index) => {
-    const lineNumber = existingLineCount + index + 1;
+    const lineNumber = firstLine + index;
     return {
       path: relativePath,
       startLine: lineNumber,
@@ -748,43 +725,27 @@ async function collectSessionIngestionBatches(params: {
   const nextSeenMessages: Record<string, string[]> = { ...params.state.seenMessages };
   let changed = false;
 
-  const sessionFiles: Array<{
+  const sessionScopes: Array<{
     agentId: string;
-    absolutePath: string;
-    generatedByDreamingNarrative: boolean;
-    generatedByCronRun: boolean;
-    sessionPath: string;
+    scope: { agentId: string; sessionId: string };
+    transcriptKey: string;
   }> = [];
   for (const agentId of agentIds) {
-    const files = await listSessionFilesForAgent(agentId);
-    const transcriptClassification =
-      files.length > 0
-        ? loadSessionTranscriptClassificationForAgent(agentId)
-        : {
-            dreamingNarrativeTranscriptPaths: new Set<string>(),
-            cronRunTranscriptPaths: new Set<string>(),
-          };
-    for (const absolutePath of files) {
-      if (isCheckpointSessionTranscriptPath(absolutePath)) {
-        continue;
-      }
-      const normalizedPath = normalizeSessionTranscriptPathForComparison(absolutePath);
-      sessionFiles.push({
+    const scopes = await listSessionTranscriptScopesForAgent(agentId);
+    for (const scope of scopes) {
+      sessionScopes.push({
         agentId,
-        absolutePath,
-        generatedByDreamingNarrative:
-          transcriptClassification.dreamingNarrativeTranscriptPaths.has(normalizedPath),
-        generatedByCronRun: transcriptClassification.cronRunTranscriptPaths.has(normalizedPath),
-        sessionPath: sessionPathForFile(absolutePath),
+        scope,
+        transcriptKey: sessionTranscriptKeyForScope(scope),
       });
     }
   }
 
-  const sortedFiles = sessionFiles.toSorted((a, b) => {
+  const sortedScopes = sessionScopes.toSorted((a, b) => {
     if (a.agentId !== b.agentId) {
       return a.agentId.localeCompare(b.agentId);
     }
-    return a.sessionPath.localeCompare(b.sessionPath);
+    return a.transcriptKey.localeCompare(b.transcriptKey);
   });
 
   const totalCap = SESSION_INGESTION_MAX_MESSAGES_PER_SWEEP;
@@ -793,31 +754,26 @@ async function collectSessionIngestionBatches(params: {
     SESSION_INGESTION_MAX_MESSAGES_PER_FILE,
     Math.max(
       SESSION_INGESTION_MIN_MESSAGES_PER_FILE,
-      Math.ceil(totalCap / Math.max(1, sortedFiles.length)),
+      Math.ceil(totalCap / Math.max(1, sortedScopes.length)),
     ),
   );
 
-  for (const file of sortedFiles) {
+  for (const transcript of sortedScopes) {
     if (remaining <= 0) {
       break;
     }
-    const stateKey = buildSessionStateKey(file.agentId, file.absolutePath);
+    const stateKey = buildSessionStateKey(transcript.agentId, transcript.transcriptKey);
     const previous = params.state.files[stateKey];
-    const stat = await fs.stat(file.absolutePath).catch((err: unknown) => {
-      if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
-        return null;
-      }
-      throw err;
-    });
-    if (!stat) {
+    const entry = await buildSessionTranscriptEntry(transcript.scope);
+    if (!entry) {
       if (previous) {
         changed = true;
       }
       continue;
     }
     const fingerprint = {
-      mtimeMs: Math.floor(Math.max(0, stat.mtimeMs)),
-      size: Math.floor(Math.max(0, stat.size)),
+      mtimeMs: Math.floor(Math.max(0, entry.mtimeMs)),
+      size: Math.floor(Math.max(0, entry.size)),
     };
     const cursorAtEnd = previous !== undefined && previous.lastContentLine >= previous.lineCount;
     const unchanged =
@@ -831,13 +787,6 @@ async function collectSessionIngestionBatches(params: {
       continue;
     }
 
-    const entry = await buildSessionEntry(file.absolutePath, {
-      generatedByDreamingNarrative: file.generatedByDreamingNarrative,
-      generatedByCronRun: file.generatedByCronRun,
-    });
-    if (!entry) {
-      continue;
-    }
     if (entry.generatedByDreamingNarrative || entry.generatedByCronRun) {
       nextFiles[stateKey] = {
         mtimeMs: fingerprint.mtimeMs,
@@ -871,7 +820,7 @@ async function collectSessionIngestionBatches(params: {
       continue;
     }
 
-    const sessionScope = buildSessionScopeKey(file.agentId, file.absolutePath);
+    const sessionScope = buildSessionScopeKey(transcript.agentId, transcript.transcriptKey);
     const previousSeen = nextSeenMessages[sessionScope] ?? [];
     let seenSet = new Set(previousSeen);
     const newSeenHashes: string[] = [];
@@ -896,7 +845,7 @@ async function collectSessionIngestionBatches(params: {
       }
       lastScannedContentLine = index + 1;
       const rawSnippet = lines[index] ?? "";
-      const snippet = normalizeSessionCorpusSnippet(rawSnippet);
+      const snippet = normalizeSessionIngestionSnippet(rawSnippet);
       if (snippet.length < SESSION_INGESTION_MIN_SNIPPET_CHARS) {
         continue;
       }
@@ -916,8 +865,8 @@ async function collectSessionIngestionBatches(params: {
         continue;
       }
       const rendered = buildSessionRenderedLine({
-        agentId: file.agentId,
-        sessionPath: file.sessionPath,
+        agentId: transcript.agentId,
+        transcriptKey: transcript.transcriptKey,
         lineNumber,
         snippet,
       });
@@ -1004,7 +953,7 @@ async function collectSessionIngestionBatches(params: {
     if (lines.length === 0) {
       continue;
     }
-    const results = await appendSessionCorpusLines({
+    const results = await appendSessionIngestionLines({
       workspaceDir: params.workspaceDir,
       day,
       lines,
@@ -1851,6 +1800,8 @@ async function runPhaseIfTriggered(
 export const __testing = {
   runPhaseIfTriggered,
   previewRemDreaming,
+  readDailyIngestionState,
+  readSessionIngestionState,
   constants: {
     LIGHT_SLEEP_EVENT_TEXT,
     REM_SLEEP_EVENT_TEXT,

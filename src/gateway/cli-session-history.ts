@@ -3,10 +3,10 @@ import type { SessionEntry } from "../config/sessions.js";
 import {
   type ClaudeCliFallbackSeed,
   CLAUDE_CLI_PROVIDER,
+  resolveClaudeCliHistoryJsonlPath,
   readClaudeCliFallbackSeed,
   readClaudeCliSessionMessages,
   resolveClaudeCliBindingSessionId,
-  resolveClaudeCliSessionFilePath,
 } from "./cli-session-history.claude.js";
 import { mergeImportedChatHistoryMessages } from "./cli-session-history.merge.js";
 
@@ -14,10 +14,10 @@ const ANTHROPIC_PROVIDER = "anthropic";
 
 export {
   mergeImportedChatHistoryMessages,
+  resolveClaudeCliHistoryJsonlPath,
   readClaudeCliFallbackSeed,
   readClaudeCliSessionMessages,
   resolveClaudeCliBindingSessionId,
-  resolveClaudeCliSessionFilePath,
 };
 export type { ClaudeCliFallbackSeed };
 

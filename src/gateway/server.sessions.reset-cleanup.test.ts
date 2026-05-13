@@ -1,7 +1,7 @@
-import fs from "node:fs/promises";
 import { expect, test, vi } from "vitest";
+import { getSessionEntry } from "../config/sessions.js";
 import { enqueueSystemEvent, peekSystemEvents } from "../infra/system-events.js";
-import { embeddedRunMock, writeSessionStore } from "./test-helpers.js";
+import { embeddedRunMock, seedGatewaySessionEntries } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   bootstrapCacheMocks,
@@ -12,13 +12,13 @@ import {
   acpManagerMocks,
   browserSessionTabMocks,
   bundleMcpRuntimeMocks,
-  writeSingleLineSession,
+  seedSqliteSessionTranscript,
   sessionStoreEntry,
   expectActiveRunCleanup,
   directSessionReq,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir, seedActiveMainSession } = setupGatewaySessionsTestHarness();
+const { seedActiveMainSession } = setupGatewaySessionsTestHarness();
 
 function expectResetAcpState(
   acp:
@@ -109,8 +109,7 @@ test("sessions.reset aborts active runs and clears queues", async () => {
 });
 
 test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
-  const { dir, storePath } = await createSessionStoreDir();
-  await writeSingleLineSession(dir, "sess-main", "hello");
+  await seedSqliteSessionTranscript("sess-main", "hello");
   const prepareFreshSession = vi.fn(async () => {});
   acpRuntimeMocks.getAcpRuntimeBackend.mockReturnValue({
     id: "acpx",
@@ -119,7 +118,7 @@ test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
     },
   });
 
-  await writeSessionStore({
+  await seedGatewaySessionEntries({
     entries: {
       main: sessionStoreEntry("sess-main", {
         acp: {
@@ -173,7 +172,7 @@ test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
   expect(reset.ok).toBe(true);
   expectResetAcpState(reset.payload?.entry.acp);
   expect(acpManagerMocks.closeSession).toHaveBeenCalledTimes(1);
-  const closeSessionCall = acpManagerMocks.closeSession.mock.calls.at(0) as unknown as
+  const closeSessionCall = acpManagerMocks.closeSession.mock.calls[0] as unknown as
     | [
         {
           allowBackendUnavailable?: boolean;
@@ -196,9 +195,7 @@ test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
       }
     | undefined;
   expect(closeSessionParams?.allowBackendUnavailable).toBe(true);
-  if (!closeSessionParams?.cfg) {
-    throw new Error("expected closeSession config");
-  }
+  expect(closeSessionParams?.cfg).toBeTruthy();
   expect(closeSessionParams?.discardPersistentState).toBe(true);
   expect(closeSessionParams?.requireAcpSession).toBe(false);
   expect(closeSessionParams?.reason).toBe("session-reset");
@@ -206,35 +203,12 @@ test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
   expect(prepareFreshSession).toHaveBeenCalledWith({
     sessionKey: "agent:main:main",
   });
-  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-    string,
-    {
-      acp?: {
-        backend?: string;
-        agent?: string;
-        runtimeSessionName?: string;
-        identity?: {
-          state?: string;
-          acpxRecordId?: string;
-          acpxSessionId?: string;
-        };
-        mode?: string;
-        runtimeOptions?: {
-          runtimeMode?: string;
-          timeoutSeconds?: number;
-        };
-        cwd?: string;
-        state?: string;
-      };
-    }
-  >;
-  expectResetAcpState(store["agent:main:main"]?.acp);
+  expectResetAcpState(getSessionEntry({ agentId: "main", sessionKey: "agent:main:main" })?.acp);
 });
 
 test("sessions.reset does not emit lifecycle events when key does not exist", async () => {
-  const { dir } = await createSessionStoreDir();
-  await writeSingleLineSession(dir, "sess-main", "hello");
-  await writeSessionStore({
+  await seedSqliteSessionTranscript("sess-main", "hello");
+  await seedGatewaySessionEntries({
     entries: {
       main: sessionStoreEntry("sess-main"),
     },
@@ -254,9 +228,8 @@ test("sessions.reset does not emit lifecycle events when key does not exist", as
 });
 
 test("sessions.reset emits subagent targetKind for subagent sessions", async () => {
-  const { dir } = await createSessionStoreDir();
-  await writeSingleLineSession(dir, "sess-subagent", "hello");
-  await writeSessionStore({
+  await seedSqliteSessionTranscript("sess-subagent", "hello");
+  await seedGatewaySessionEntries({
     entries: {
       "agent:main:subagent:worker": sessionStoreEntry("sess-subagent"),
     },
@@ -288,9 +261,8 @@ test("sessions.reset emits subagent targetKind for subagent sessions", async () 
 });
 
 test("sessions.reset directly unbinds thread bindings when hooks are unavailable", async () => {
-  const { dir } = await createSessionStoreDir();
-  await writeSingleLineSession(dir, "sess-main", "hello");
-  await writeSessionStore({
+  await seedSqliteSessionTranscript("sess-main", "hello");
+  await seedGatewaySessionEntries({
     entries: {
       main: sessionStoreEntry("sess-main"),
     },

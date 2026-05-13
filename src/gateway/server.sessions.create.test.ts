@@ -1,14 +1,14 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { expect, test } from "vitest";
-import { piSdkMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
+import { getSessionEntry } from "../config/sessions.js";
+import { loadSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
+import { piSdkMock, rpcReq, testState, seedGatewaySessionEntries } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   sessionStoreEntry,
   directSessionReq,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
+const { createSessionFixtureDir, openClient } = setupGatewaySessionsTestHarness();
 
 function requireNonEmptyString(value: string | undefined, label: string): string {
   if (!value) {
@@ -18,10 +18,10 @@ function requireNonEmptyString(value: string | undefined, label: string): string
 }
 
 test("sessions.create stores dashboard session model and parent linkage, and creates a transcript", async () => {
-  const { dir, storePath } = await createSessionStoreDir();
+  await createSessionFixtureDir();
   piSdkMock.enabled = true;
   piSdkMock.models = [{ id: "gpt-test-a", name: "A", provider: "openai" }];
-  await writeSessionStore({
+  await seedGatewaySessionEntries({
     entries: {
       main: sessionStoreEntry("sess-parent"),
     },
@@ -34,7 +34,6 @@ test("sessions.create stores dashboard session model and parent linkage, and cre
       providerOverride?: string;
       modelOverride?: string;
       parentSessionKey?: string;
-      sessionFile?: string;
     };
   }>("sessions.create", {
     agentId: "ops",
@@ -43,49 +42,31 @@ test("sessions.create stores dashboard session model and parent linkage, and cre
     parentSessionKey: "main",
   });
 
-  expect(created.ok).toBe(true);
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
   expect(created.payload?.key).toMatch(/^agent:ops:dashboard:/);
   expect(created.payload?.entry?.label).toBe("Dashboard Chat");
   expect(created.payload?.entry?.providerOverride).toBe("openai");
   expect(created.payload?.entry?.modelOverride).toBe("gpt-test-a");
   expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
-  const sessionFile = requireNonEmptyString(
-    created.payload?.entry?.sessionFile,
-    "created session file",
-  );
   expect(created.payload?.sessionId).toMatch(
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
   );
 
-  const rawStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-    string,
-    {
-      sessionId?: string;
-      label?: string;
-      providerOverride?: string;
-      modelOverride?: string;
-      parentSessionKey?: string;
-      sessionFile?: string;
-    }
-  >;
-  const key = created.payload?.key as string;
-  expect(rawStore[key]?.sessionId).toBe(created.payload?.sessionId);
-  expect(rawStore[key]?.label).toBe("Dashboard Chat");
-  expect(rawStore[key]?.providerOverride).toBe("openai");
-  expect(rawStore[key]?.modelOverride).toBe("gpt-test-a");
-  expect(rawStore[key]?.parentSessionKey).toBe("agent:main:main");
-  expect(sessionFile).toBe(rawStore[key]?.sessionFile);
+  const key = requireNonEmptyString(created.payload?.key, "created session key");
+  const sessionId = requireNonEmptyString(created.payload?.sessionId, "created session id");
+  const stored = getSessionEntry({ agentId: "ops", sessionKey: key });
+  expect(stored?.sessionId).toBe(sessionId);
+  expect(stored?.label).toBe("Dashboard Chat");
+  expect(stored?.providerOverride).toBe("openai");
+  expect(stored?.modelOverride).toBe("gpt-test-a");
+  expect(stored?.parentSessionKey).toBe("agent:main:main");
 
-  const transcriptPath = path.join(dir, `${created.payload?.sessionId}.jsonl`);
-  const transcript = await fs.readFile(transcriptPath, "utf-8");
-  const [headerLine] = transcript.trim().split(/\r?\n/, 1);
-  const header = JSON.parse(headerLine) as { type?: string; id?: string };
-  expect(header.type).toBe("session");
-  expect(header.id).toBe(created.payload?.sessionId);
+  const [header] = loadSqliteSessionTranscriptEvents({ agentId: "ops", sessionId });
+  expect(header?.event).toMatchObject({ type: "session", id: sessionId });
 });
 
 test("sessions.create accepts an explicit key for persistent dashboard sessions", async () => {
-  await createSessionStoreDir();
+  await createSessionFixtureDir();
 
   const key = "agent:ops-agent:dashboard:direct:subagent-orchestrator";
   const created = await directSessionReq<{
@@ -99,7 +80,7 @@ test("sessions.create accepts an explicit key for persistent dashboard sessions"
     label: "Dashboard Orchestrator",
   });
 
-  expect(created.ok).toBe(true);
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
   expect(created.payload?.key).toBe(key);
   expect(created.payload?.entry?.label).toBe("Dashboard Orchestrator");
   expect(created.payload?.sessionId).toMatch(
@@ -108,42 +89,35 @@ test("sessions.create accepts an explicit key for persistent dashboard sessions"
 });
 
 test("sessions.create scopes the main alias to the requested agent", async () => {
-  const { storePath } = await createSessionStoreDir();
+  await createSessionFixtureDir();
 
   const created = await directSessionReq<{
     key?: string;
     sessionId?: string;
-    entry?: {
-      sessionFile?: string;
-    };
+    entry?: Record<string, unknown>;
   }>("sessions.create", {
     key: "main",
     agentId: "longmemeval",
   });
 
-  expect(created.ok).toBe(true);
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
   expect(created.payload?.key).toBe("agent:longmemeval:main");
-  requireNonEmptyString(created.payload?.entry?.sessionFile, "longmemeval session file");
 
-  const rawStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-    string,
-    {
-      sessionId?: string;
-    }
-  >;
-  expect(rawStore["agent:longmemeval:main"]?.sessionId).toBe(created.payload?.sessionId);
-  expect(rawStore["agent:main:main"]).toBeUndefined();
+  expect(
+    getSessionEntry({ agentId: "longmemeval", sessionKey: "agent:longmemeval:main" })?.sessionId,
+  ).toBe(created.payload?.sessionId);
+  expect(getSessionEntry({ agentId: "main", sessionKey: "agent:main:main" })?.sessionId).not.toBe(
+    created.payload?.sessionId,
+  );
 });
 
 test("sessions.create preserves global and unknown sentinel keys", async () => {
-  const { storePath } = await createSessionStoreDir();
+  await createSessionFixtureDir();
 
   const globalCreated = await directSessionReq<{
     key?: string;
     sessionId?: string;
-    entry?: {
-      sessionFile?: string;
-    };
+    entry?: Record<string, unknown>;
   }>("sessions.create", {
     key: "global",
     agentId: "longmemeval",
@@ -151,14 +125,11 @@ test("sessions.create preserves global and unknown sentinel keys", async () => {
 
   expect(globalCreated.ok).toBe(true);
   expect(globalCreated.payload?.key).toBe("global");
-  requireNonEmptyString(globalCreated.payload?.entry?.sessionFile, "global session file");
 
   const unknownCreated = await directSessionReq<{
     key?: string;
     sessionId?: string;
-    entry?: {
-      sessionFile?: string;
-    };
+    entry?: Record<string, unknown>;
   }>("sessions.create", {
     key: "unknown",
     agentId: "longmemeval",
@@ -166,22 +137,23 @@ test("sessions.create preserves global and unknown sentinel keys", async () => {
 
   expect(unknownCreated.ok).toBe(true);
   expect(unknownCreated.payload?.key).toBe("unknown");
-  requireNonEmptyString(unknownCreated.payload?.entry?.sessionFile, "unknown session file");
 
-  const rawStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-    string,
-    {
-      sessionId?: string;
-    }
-  >;
-  expect(rawStore.global?.sessionId).toBe(globalCreated.payload?.sessionId);
-  expect(rawStore.unknown?.sessionId).toBe(unknownCreated.payload?.sessionId);
-  expect(rawStore["agent:longmemeval:global"]).toBeUndefined();
-  expect(rawStore["agent:longmemeval:unknown"]).toBeUndefined();
+  expect(getSessionEntry({ agentId: "main", sessionKey: "global" })?.sessionId).toBe(
+    globalCreated.payload?.sessionId,
+  );
+  expect(getSessionEntry({ agentId: "main", sessionKey: "unknown" })?.sessionId).toBe(
+    unknownCreated.payload?.sessionId,
+  );
+  expect(
+    getSessionEntry({ agentId: "longmemeval", sessionKey: "agent:longmemeval:global" }),
+  ).toBeUndefined();
+  expect(
+    getSessionEntry({ agentId: "longmemeval", sessionKey: "agent:longmemeval:unknown" }),
+  ).toBeUndefined();
 });
 
 test("sessions.create rejects unknown parentSessionKey", async () => {
-  await createSessionStoreDir();
+  await createSessionFixtureDir();
 
   const created = await directSessionReq("sessions.create", {
     agentId: "ops",
@@ -195,7 +167,7 @@ test("sessions.create rejects unknown parentSessionKey", async () => {
 });
 
 test("sessions.create can start the first agent turn from an initial task", async () => {
-  await createSessionStoreDir();
+  await createSessionFixtureDir();
   // Register "ops" so the deleted-agent guard added in #65986 does not
   // reject the auto-started chat.send triggered by `task:`.
   testState.agentsConfig = { list: [{ id: "ops", default: true }] };
@@ -209,11 +181,11 @@ test("sessions.create can start the first agent turn from an initial task", asyn
     messageSeq?: number;
   }>(ws, "sessions.create", {
     agentId: "ops",
-    label: "Dashboard Chat",
+    label: "Dashboard Task Chat",
     task: "hello from create",
   });
 
-  expect(created.ok).toBe(true);
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
   expect(created.payload?.key).toMatch(/^agent:ops:dashboard:/);
   expect(created.payload?.sessionId).toMatch(
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,

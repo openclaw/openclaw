@@ -1,6 +1,11 @@
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import {
+  createPluginStateKeyedStore,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import { describe, expect, it, beforeEach, vi } from "vitest";
 const { createMatrixQaClient } = vi.hoisted(() => ({
   createMatrixQaClient: vi.fn(),
@@ -24,6 +29,32 @@ const {
   runMatrixQaOpenClawCli: vi.fn(),
   startMatrixQaOpenClawCli: vi.fn(),
 }));
+
+const matrixInboundDedupeStore = createPluginStateKeyedStore<{
+  roomId: string;
+  eventId: string;
+  ts: number;
+}>("matrix", {
+  namespace: "inbound-dedupe",
+  maxEntries: 20_000,
+});
+
+const matrixStorageMetaStore = createPluginStateKeyedStore<{
+  accountId?: string;
+  rootDir?: string;
+  userId?: string;
+}>("matrix", {
+  namespace: "storage-meta",
+  maxEntries: 10_000,
+});
+
+const matrixSyncStore = createPluginStateKeyedStore<ReturnType<typeof matrixSyncStoreFixture>>(
+  "matrix",
+  {
+    namespace: "sync-store",
+    maxEntries: 1000,
+  },
+);
 
 vi.mock("../../substrate/client.js", () => ({
   createMatrixQaClient,
@@ -163,16 +194,34 @@ type MockCallSource = {
   };
 };
 
+function mockCall(source: MockCallSource, label: string, callIndex = 0) {
+  const calls = source.mock.calls;
+  const resolvedIndex = callIndex < 0 ? calls.length + callIndex : callIndex;
+  const call = calls[resolvedIndex];
+  if (!call) {
+    throw new Error(`expected ${label} call ${callIndex}`);
+  }
+  return call;
+}
+
 function mockObjectArg(source: MockCallSource, label: string, callIndex = 0, argIndex = 0) {
-  const arg = source.mock.calls[callIndex]?.[argIndex];
+  const arg = mockCall(source, label, callIndex)[argIndex];
   if (!arg || typeof arg !== "object") {
     throw new Error(`expected ${label} object arg`);
   }
   return arg as Record<string, unknown>;
 }
 
+function lastMockObjectArg(source: MockCallSource, label: string, argIndex = 0) {
+  return mockObjectArg(source, label, -1, argIndex);
+}
+
 function mockMessageBody(source: MockCallSource, label: string, callIndex = 0) {
   return String(mockObjectArg(source, label, callIndex).body);
+}
+
+function lastMockMessageBody(source: MockCallSource, label: string) {
+  return mockMessageBody(source, label, -1);
 }
 
 function expectSentTextMessage(
@@ -254,14 +303,89 @@ function matrixSyncStoreFixture(nextBatch: string) {
   };
 }
 
+function resolveMatrixPluginStateKey(pathname: string): string {
+  return createHash("sha256").update(path.resolve(pathname), "utf8").digest("hex").slice(0, 32);
+}
+
+async function withTestOpenClawStateDir<T>(stateDir: string, fn: () => Promise<T>): Promise<T> {
+  const previous = process.env.OPENCLAW_STATE_DIR;
+  process.env.OPENCLAW_STATE_DIR = stateDir;
+  try {
+    return await fn();
+  } finally {
+    if (previous == null) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previous;
+    }
+  }
+}
+
+async function writeMatrixStorageMetaEntry(params: {
+  accountId: string;
+  rootDir: string;
+  stateDir: string;
+  userId: string;
+}) {
+  await withTestOpenClawStateDir(params.stateDir, () =>
+    matrixStorageMetaStore.register(resolveMatrixPluginStateKey(params.rootDir), {
+      accountId: params.accountId,
+      rootDir: params.rootDir,
+      userId: params.userId,
+    }),
+  );
+}
+
+async function writeMatrixSyncStoreEntry(params: {
+  nextBatch: string;
+  rootDir: string;
+  stateDir: string;
+}) {
+  await withTestOpenClawStateDir(params.stateDir, () =>
+    matrixSyncStore.register(
+      resolveMatrixPluginStateKey(params.rootDir),
+      matrixSyncStoreFixture(params.nextBatch),
+    ),
+  );
+}
+
+async function readMatrixSyncStoreEntry(params: { rootDir: string; stateDir: string }) {
+  return withTestOpenClawStateDir(params.stateDir, () =>
+    matrixSyncStore.lookup(resolveMatrixPluginStateKey(params.rootDir)),
+  );
+}
+
 function matrixQaE2eeRoomKey(
   scenarioId: Parameters<typeof scenarioTesting.buildMatrixQaE2eeScenarioRoomKey>[0],
 ) {
   return scenarioTesting.buildMatrixQaE2eeScenarioRoomKey(scenarioId);
 }
 
+async function writeMatrixInboundDedupeEntry(params: {
+  accountId: string;
+  eventId: string;
+  roomId: string;
+  stateDir: string;
+}) {
+  await withTestOpenClawStateDir(params.stateDir, async () => {
+    const key = `${params.accountId}:${createHash("sha256")
+      .update(params.accountId)
+      .update("\0")
+      .update(params.roomId)
+      .update("\0")
+      .update(params.eventId)
+      .digest("hex")}`;
+    await matrixInboundDedupeStore.register(key, {
+      roomId: params.roomId,
+      eventId: params.eventId,
+      ts: Date.now(),
+    });
+  });
+}
+
 describe("matrix live qa scenarios", () => {
   beforeEach(() => {
+    resetPluginStateStoreForTests();
     createMatrixQaClient.mockReset();
     createMatrixQaE2eeScenarioClient.mockReset();
     runMatrixQaE2eeBootstrap.mockReset();
@@ -640,7 +764,7 @@ describe("matrix live qa scenarios", () => {
     expect(artifacts.reactionEventId).toBe("$driver-approval-reaction");
     expect(artifacts.reactionTargetEventId).toBe(approvalEventId);
     expect(waitForRoomEvent).toHaveBeenCalledTimes(3);
-    expect(gatewayCall.mock.calls.at(-1)?.[0]).toBe("exec.approval.waitDecision");
+    expect(mockCall(gatewayCall, "gatewayCall", -1)[0]).toBe("exec.approval.waitDecision");
   });
 
   it("reuses observed Matrix approval events across channel and DM target=both waits", async () => {
@@ -741,10 +865,9 @@ describe("matrix live qa scenarios", () => {
     expect(artifacts.approvals?.[1]?.roomId).toBe("!driver-shared-dm:matrix-qa.test");
 
     expect(waitForRoomEvent).toHaveBeenCalledTimes(1);
-    expect(gatewayCall.mock.calls.at(-1)?.[0]).toBe("exec.approval.resolve");
-    expect((gatewayCall.mock.calls.at(-1)?.[2] as { expectFinal?: unknown }).expectFinal).toBe(
-      false,
-    );
+    const finalGatewayCall = mockCall(gatewayCall, "gatewayCall", -1);
+    expect(finalGatewayCall[0]).toBe("exec.approval.resolve");
+    expect((finalGatewayCall[2] as { expectFinal?: unknown }).expectFinal).toBe(false);
     expect(createMatrixQaClient).toHaveBeenCalledTimes(3);
   });
 
@@ -1421,7 +1544,7 @@ describe("matrix live qa scenarios", () => {
       since: `${params.roomId}:no-reply`,
     }));
     const waitForRoomEvent = vi.fn().mockImplementation(async (params) => {
-      const sentBody = String(sendTextMessage.mock.calls.at(-1)?.[0]?.body ?? "");
+      const sentBody = lastMockMessageBody(sendTextMessage, "sendTextMessage");
       const token = sentBody
         .replace("@sut:matrix-qa.test reply with only this exact marker: ", "")
         .replace("reply with only this exact marker: ", "");
@@ -1503,8 +1626,12 @@ describe("matrix live qa scenarios", () => {
       "@sut:matrix-qa.test",
     ]);
     expect(mockObjectArg(sendTextMessage, "sendTextMessage").roomId).toBe("!main:matrix-qa.test");
-    expect(sendTextMessage.mock.calls.at(1)?.[0]?.mentionUserIds).toEqual(["@sut:matrix-qa.test"]);
-    expect(sendTextMessage.mock.calls.at(1)?.[0]?.roomId).toBe("!main:matrix-qa.test");
+    expect(mockObjectArg(sendTextMessage, "sendTextMessage", 1).mentionUserIds).toEqual([
+      "@sut:matrix-qa.test",
+    ]);
+    expect(mockObjectArg(sendTextMessage, "sendTextMessage", 1).roomId).toBe(
+      "!main:matrix-qa.test",
+    );
   });
 
   it("queues a Matrix trigger during restart before proving incremental sync continues", async () => {
@@ -1515,7 +1642,7 @@ describe("matrix live qa scenarios", () => {
       return String(params.body).includes("CATCHUP") ? "$catchup-trigger" : "$incremental-trigger";
     });
     const waitForRoomEvent = vi.fn().mockImplementation(async () => {
-      const sentBody = String(sendTextMessage.mock.calls.at(-1)?.[0]?.body ?? "");
+      const sentBody = lastMockMessageBody(sendTextMessage, "sendTextMessage");
       const token = sentBody.replace("@sut:matrix-qa.test reply with only this exact marker: ", "");
       callOrder.push(`wait:${token.includes("CATCHUP") ? "catchup" : "incremental"}`);
       return {
@@ -1612,7 +1739,7 @@ describe("matrix live qa scenarios", () => {
       return kind === "fresh" ? "$fresh-trigger" : "$first-trigger";
     });
     const waitForRoomEvent = vi.fn().mockImplementation(async () => {
-      const sentBody = String(sendTextMessage.mock.calls.at(-1)?.[0]?.body ?? "");
+      const sentBody = lastMockMessageBody(sendTextMessage, "sendTextMessage");
       const token = sentBody.replace("@sut:matrix-qa.test reply with only this exact marker: ", "");
       const kind = token.includes("REPLAY_DEDUPE_FRESH") ? "fresh" : "first";
       callOrder.push(`wait:${kind}`);
@@ -1704,14 +1831,18 @@ describe("matrix live qa scenarios", () => {
     try {
       const accountDir = path.join(stateRoot, "matrix", "accounts", "sut", "server", "token");
       const staleSyncRoomId = "!stale-sync:matrix-qa.test";
-      const syncStorePath = path.join(accountDir, "bot-storage.json");
-      const dedupeStorePath = path.join(accountDir, "inbound-dedupe.json");
       await mkdir(accountDir, { recursive: true });
-      await writeTestJsonFile(path.join(accountDir, "storage-meta.json"), {
+      await writeMatrixStorageMetaEntry({
         accountId: "sut",
+        rootDir: accountDir,
+        stateDir: stateRoot,
         userId: "@sut:matrix-qa.test",
       });
-      await writeTestJsonFile(syncStorePath, matrixSyncStoreFixture("driver-sync-start"));
+      await writeMatrixSyncStoreEntry({
+        nextBatch: "driver-sync-start",
+        rootDir: accountDir,
+        stateDir: stateRoot,
+      });
 
       const callOrder: string[] = [];
       const primeRoom = vi.fn().mockResolvedValue("driver-sync-start");
@@ -1722,7 +1853,7 @@ describe("matrix live qa scenarios", () => {
         return kind === "fresh" ? "$fresh-trigger" : "$first-trigger";
       });
       const waitForRoomEvent = vi.fn().mockImplementation(async () => {
-        const sentBody = String(sendTextMessage.mock.calls.at(-1)?.[0]?.body ?? "");
+        const sentBody = lastMockMessageBody(sendTextMessage, "sendTextMessage");
         const token = sentBody.replace(
           "@sut:matrix-qa.test reply with only this exact marker: ",
           "",
@@ -1730,14 +1861,11 @@ describe("matrix live qa scenarios", () => {
         const kind = token.includes("STALE_SYNC_DEDUPE_FRESH") ? "fresh" : "first";
         callOrder.push(`wait:${kind}`);
         if (kind === "first") {
-          await writeTestJsonFile(dedupeStorePath, {
-            version: 1,
-            entries: [
-              {
-                key: `${staleSyncRoomId}|$first-trigger`,
-                ts: Date.now(),
-              },
-            ],
+          await writeMatrixInboundDedupeEntry({
+            accountId: "sut",
+            roomId: staleSyncRoomId,
+            eventId: "$first-trigger",
+            stateDir: stateRoot,
           });
         }
         return {
@@ -1774,11 +1902,19 @@ describe("matrix live qa scenarios", () => {
         gatewayStateDir: stateRoot,
         restartGatewayAfterStateMutation: async (mutateState) => {
           callOrder.push("hard-restart");
-          await writeTestJsonFile(syncStorePath, matrixSyncStoreFixture("driver-sync-after-first"));
+          await writeMatrixSyncStoreEntry({
+            nextBatch: "driver-sync-after-first",
+            rootDir: accountDir,
+            stateDir: stateRoot,
+          });
           await mutateState({ stateDir: stateRoot });
-          const persisted = JSON.parse(await readFile(syncStorePath, "utf8")) as {
-            savedSync?: { nextBatch?: string };
-          };
+          const persisted = await readMatrixSyncStoreEntry({
+            rootDir: accountDir,
+            stateDir: stateRoot,
+          });
+          if (!persisted) {
+            throw new Error("missing persisted Matrix sync-store entry");
+          }
           expect(persisted.savedSync?.nextBatch).toBe("driver-sync-start");
         },
         roomId: "!room:matrix-qa.test",
@@ -1856,7 +1992,6 @@ describe("matrix live qa scenarios", () => {
         "server",
         "token",
       );
-      const syncStorePath = path.join(accountDir, "bot-storage.json");
       await mkdir(accountDir, { recursive: true });
       await writeTestJsonFile(gatewayConfigPath, {
         channels: {
@@ -1876,11 +2011,17 @@ describe("matrix live qa scenarios", () => {
           },
         },
       });
-      await writeTestJsonFile(path.join(accountDir, "storage-meta.json"), {
+      await writeMatrixStorageMetaEntry({
         accountId: "sync-state-loss-gateway",
+        rootDir: accountDir,
+        stateDir: stateRoot,
         userId: "@sync-gateway:matrix-qa.test",
       });
-      await writeTestJsonFile(syncStorePath, matrixSyncStoreFixture("sut-sync-before-loss"));
+      await writeMatrixSyncStoreEntry({
+        nextBatch: "sut-sync-before-loss",
+        rootDir: accountDir,
+        stateDir: stateRoot,
+      });
 
       const registerWithToken = vi.fn().mockResolvedValue({
         accessToken: "sync-gateway-token",
@@ -1984,20 +2125,20 @@ describe("matrix live qa scenarios", () => {
         waitGatewayAccountReady,
       });
       const artifacts = result.artifacts as {
-        deletedSyncStorePath?: unknown;
+        deletedSyncStoreRoot?: unknown;
         driverEventId?: unknown;
         replyEventId?: unknown;
         roomKey?: unknown;
       };
-      expect(artifacts.deletedSyncStorePath).toBe(syncStorePath);
+      expect(artifacts.deletedSyncStoreRoot).toBe(accountDir);
       expect(artifacts.driverEventId).toBe("$driver-trigger");
       expect(artifacts.replyEventId).toBe("$sut-decrypted-reply");
       expect(artifacts.roomKey).toBe("e2ee-sync-state-loss-crypto-intact-recovery");
 
-      await expectPathMissing(syncStorePath);
-      expect(mockObjectArg(registerWithToken, "registerWithToken").registrationToken).toBe(
-        "registration-token",
-      );
+      await expect(
+        readMatrixSyncStoreEntry({ rootDir: accountDir, stateDir: stateRoot }),
+      ).resolves.toBeUndefined();
+      expect(registerWithToken.mock.calls[0]?.[0]?.registrationToken).toBe("registration-token");
       expect(createPrivateRoom).toHaveBeenCalledWith({
         encrypted: true,
         inviteUserIds: ["@observer:matrix-qa.test", "@sync-gateway:matrix-qa.test"],
@@ -2155,7 +2296,7 @@ describe("matrix live qa scenarios", () => {
         return "$after-trigger";
       });
       const waitForRoomEvent = vi.fn().mockImplementation(async (params) => {
-        const body = String(sendTextMessage.mock.calls.at(-1)?.[0]?.body ?? "");
+        const body = lastMockMessageBody(sendTextMessage, "sendTextMessage");
         const token = body.replace("@sut:matrix-qa.test reply with only this exact marker: ", "");
         return {
           event: {
@@ -3271,7 +3412,9 @@ describe("matrix live qa scenarios", () => {
     expect(body).toMatch(
       /reply with exactly this two-line body and no extra text:\nMATRIX_QA_BLOCK_ONE_[A-F0-9]{8}\nMATRIX_QA_BLOCK_TWO_[A-F0-9]{8}$/,
     );
-    expect(waitForRoomEvent.mock.calls.at(1)?.[0]?.since).toBe("driver-sync-block-one");
+    expect(mockObjectArg(waitForRoomEvent, "waitForRoomEvent", 1).since).toBe(
+      "driver-sync-block-one",
+    );
   });
 
   it("sends a real Matrix image attachment for image-understanding prompts", async () => {
@@ -3574,7 +3717,9 @@ describe("matrix live qa scenarios", () => {
       expect(mediaMessage?.kind).toBe(mediaCase.kind);
       expect(mediaMessage?.mentionUserIds).toEqual(["@sut:matrix-qa.test"]);
     }
-    const firstReplyWait = waitForRoomEvent.mock.calls.at(1)?.[0];
+    const firstReplyWait = mockObjectArg(waitForRoomEvent, "waitForRoomEvent", 1) as {
+      predicate: (event: MatrixQaObservedEvent) => boolean;
+    };
     const firstToken =
       mockMessageBody(sendMediaMessage, "sendMediaMessage").match(
         /MATRIX_QA_MEDIA_[A-Z]+_[A-Z0-9]+/,
@@ -4484,7 +4629,10 @@ describe("matrix live qa scenarios", () => {
         search: "",
       }),
     ).toBe(false);
-    const recoveryClientOptions = createMatrixQaE2eeScenarioClient.mock.calls.at(-1)?.[0];
+    const recoveryClientOptions = lastMockObjectArg(
+      createMatrixQaE2eeScenarioClient,
+      "createMatrixQaE2eeScenarioClient",
+    );
     expect(recoveryClientOptions?.accessToken).toBe("recovery-token");
     expect(recoveryClientOptions?.baseUrl).toBe("http://127.0.0.1:39877");
     expect(recoveryClientOptions?.deviceId).toBe("RECOVERYDEVICE");
@@ -4747,7 +4895,7 @@ describe("matrix live qa scenarios", () => {
       expect(endStdin).toHaveBeenCalledTimes(1);
       expect(wait).toHaveBeenCalledTimes(1);
       expect(kill).toHaveBeenCalledTimes(1);
-      const registrationRequest = mockObjectArg(registerWithToken, "registerWithToken");
+      const registrationRequest = registerWithToken.mock.calls[0]?.[0];
       expect(registrationRequest?.deviceName).toBe(
         "OpenClaw Matrix QA CLI Self Verification Owner",
       );

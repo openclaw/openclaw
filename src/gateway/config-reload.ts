@@ -12,8 +12,8 @@ import {
 import { diffConfigPaths } from "./config-diff.js";
 import {
   buildGatewayReloadPlan,
-  listPluginInstallTimestampMetadataPaths,
-  listPluginInstallWholeRecordPaths,
+  listInstalledPluginIndexTimestampMetadataPaths,
+  listInstalledPluginIndexWholeRecordPaths,
   type GatewayReloadPlan,
 } from "./config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "./config-reload-settings.js";
@@ -21,8 +21,8 @@ import { resolveGatewayReloadSettings } from "./config-reload-settings.js";
 export {
   buildGatewayReloadPlan,
   diffConfigPaths,
-  listPluginInstallTimestampMetadataPaths,
-  listPluginInstallWholeRecordPaths,
+  listInstalledPluginIndexTimestampMetadataPaths,
+  listInstalledPluginIndexWholeRecordPaths,
   resolveGatewayReloadSettings,
 };
 export type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
@@ -31,10 +31,10 @@ const MISSING_CONFIG_MAX_RETRIES = 2;
 
 /**
  * Paths under `skills.*` always change the snapshot that sessions cache in
- * sessions.json. Any prefix match here (for example `skills.allowBundled`,
- * `skills.entries.X.enabled`, `skills.profile`) forces sessions to rebuild
- * their snapshot on the next turn rather than silently advertising stale
- * tools to the model.
+ * SQLite session rows. Any prefix match here (for example
+ * `skills.allowBundled`, `skills.entries.X.enabled`, `skills.profile`) forces
+ * sessions to rebuild their snapshot on the next turn rather than silently
+ * advertising stale tools to the model.
  */
 const SKILLS_INVALIDATION_PREFIXES = ["skills"] as const;
 
@@ -72,11 +72,18 @@ type GatewayConfigReloader = {
 };
 
 type PluginInstallRecords = Record<string, PluginInstallRecord>;
+type InstalledPluginIndexDiffState = {
+  installedPluginIndex: {
+    installRecords: PluginInstallRecords;
+  };
+};
 
-function asPluginInstallConfig(records: PluginInstallRecords): OpenClawConfig {
+function asInstalledPluginIndexDiffState(
+  records: PluginInstallRecords,
+): InstalledPluginIndexDiffState {
   return {
-    plugins: {
-      installs: records,
+    installedPluginIndex: {
+      installRecords: records,
     },
   };
 }
@@ -183,43 +190,27 @@ export function startGatewayConfigReloader(opts: {
     afterWrite?: ConfigWriteNotification["afterWrite"],
   ) => {
     const configChangedPaths = diffConfigPaths(currentCompareConfig, nextCompareConfig);
-    const configPluginInstallTimestampNoopPaths = listPluginInstallTimestampMetadataPaths(
-      currentCompareConfig,
-      nextCompareConfig,
-    );
-    const configPluginInstallWholeRecordPaths = listPluginInstallWholeRecordPaths(
-      currentCompareConfig,
-      nextCompareConfig,
-    );
     let nextPluginInstallRecords = currentPluginInstallRecords;
     try {
       nextPluginInstallRecords = await readPluginInstallRecords();
     } catch (err) {
       opts.log.warn(`config reload plugin install record check failed: ${String(err)}`);
     }
-    const previousPluginInstallConfig = asPluginInstallConfig(currentPluginInstallRecords);
-    const nextPluginInstallConfig = asPluginInstallConfig(nextPluginInstallRecords);
+    const previousPluginInstallState = asInstalledPluginIndexDiffState(currentPluginInstallRecords);
+    const nextPluginInstallState = asInstalledPluginIndexDiffState(nextPluginInstallRecords);
     const pluginInstallRecordChangedPaths = diffConfigPaths(
-      previousPluginInstallConfig,
-      nextPluginInstallConfig,
+      previousPluginInstallState,
+      nextPluginInstallState,
     );
-    const pluginInstallRecordTimestampNoopPaths = listPluginInstallTimestampMetadataPaths(
-      previousPluginInstallConfig,
-      nextPluginInstallConfig,
+    const pluginInstallRecordTimestampNoopPaths = listInstalledPluginIndexTimestampMetadataPaths(
+      previousPluginInstallState,
+      nextPluginInstallState,
     );
-    const pluginInstallRecordWholeRecordPaths = listPluginInstallWholeRecordPaths(
-      previousPluginInstallConfig,
-      nextPluginInstallConfig,
+    const pluginInstallRecordWholeRecordPaths = listInstalledPluginIndexWholeRecordPaths(
+      previousPluginInstallState,
+      nextPluginInstallState,
     );
     const changedPaths = [...configChangedPaths, ...pluginInstallRecordChangedPaths];
-    const pluginInstallTimestampNoopPaths = [
-      ...configPluginInstallTimestampNoopPaths,
-      ...pluginInstallRecordTimestampNoopPaths,
-    ];
-    const pluginInstallWholeRecordPaths = [
-      ...configPluginInstallWholeRecordPaths,
-      ...pluginInstallRecordWholeRecordPaths,
-    ];
     currentConfig = nextConfig;
     currentCompareConfig = nextCompareConfig;
     currentPluginInstallRecords = nextPluginInstallRecords;
@@ -228,7 +219,7 @@ export function startGatewayConfigReloader(opts: {
       return;
     }
 
-    // Invalidate cached skills snapshots (persisted in sessions.json) whenever
+    // Invalidate cached skills snapshots (persisted in SQLite session rows) whenever
     // the user touches skills.* config. Without this, sessions keep advertising
     // tools that no longer exist in the allowlist, which causes infinite
     // tool-not-found loops against the model.
@@ -245,8 +236,8 @@ export function startGatewayConfigReloader(opts: {
       return;
     }
     const plan = buildGatewayReloadPlan(changedPaths, {
-      noopPaths: pluginInstallTimestampNoopPaths,
-      forceChangedPaths: pluginInstallWholeRecordPaths,
+      noopPaths: pluginInstallRecordTimestampNoopPaths,
+      forceChangedPaths: pluginInstallRecordWholeRecordPaths,
     });
     if (isNoopReloadPlan(plan) && !followUp.requiresRestart) {
       return;

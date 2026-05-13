@@ -434,7 +434,7 @@ export function registerGatewayCli(program: Command) {
   gatewayCallOpts(
     gateway
       .command("usage-cost")
-      .description("Fetch usage cost summary from session logs")
+      .description("Fetch usage cost summary from session transcripts")
       .option("--days <days>", "Number of days to include", "30")
       .action(async (opts, command) => {
         await runGatewayCommand(async () => {

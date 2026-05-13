@@ -4,6 +4,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { replaceSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
 
 const ttsMocks = vi.hoisted(() => ({
   getResolvedSpeechProviderConfig: vi.fn(),
@@ -79,6 +80,15 @@ function expectReply(
     throw new Error("Expected TTS command to return a reply");
   }
   return handled.reply;
+}
+
+function lastMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+  const calls = mock.mock.calls;
+  const call = calls[calls.length - 1];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
 }
 
 describe("handleTtsCommands status fallback reporting", () => {
@@ -224,10 +234,11 @@ describe("handleTtsCommands status fallback reporting", () => {
     const result = await handleTtsCommands(buildTtsParams("/tts status", cfg, "reader"), true);
 
     expectHandled(result);
-    const resolveCall = ttsMocks.resolveTtsConfig.mock.calls.at(-1);
-    expect(resolveCall?.[0]).toBe(cfg);
-    expect(resolveCall?.[1]?.agentId).toBe("reader");
-    expect(resolveCall?.[1]?.channelId).toBe("forum");
+    const resolveCall = lastMockCall(ttsMocks.resolveTtsConfig, "resolveTtsConfig");
+    const resolveOptions = resolveCall[1] as { agentId?: string; channelId?: string };
+    expect(resolveCall[0]).toBe(cfg);
+    expect(resolveOptions.agentId).toBe("reader");
+    expect(resolveOptions.channelId).toBe("forum");
   });
 
   it("passes the active agent and account ids to /tts audio synthesis", async () => {
@@ -249,11 +260,16 @@ describe("handleTtsCommands status fallback reporting", () => {
     );
 
     expectHandled(result);
-    const speechCall = ttsMocks.textToSpeech.mock.calls.at(-1)?.[0];
-    expect(speechCall?.text).toBe("hello");
-    expect(speechCall?.cfg).toBe(cfg);
-    expect(speechCall?.agentId).toBe("reader");
-    expect(speechCall?.accountId).toBe("feishu-main");
+    const speechCall = lastMockCall(ttsMocks.textToSpeech, "textToSpeech")[0] as {
+      accountId?: string;
+      agentId?: string;
+      cfg?: OpenClawConfig;
+      text?: string;
+    };
+    expect(speechCall.text).toBe("hello");
+    expect(speechCall.cfg).toBe(cfg);
+    expect(speechCall.agentId).toBe("reader");
+    expect(speechCall.accountId).toBe("feishu-main");
   });
 
   it("lists and sets configured TTS personas", async () => {
@@ -276,16 +292,16 @@ describe("handleTtsCommands status fallback reporting", () => {
 
   it("reads the latest assistant transcript reply once", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-tts-latest-"));
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    fs.writeFileSync(
-      sessionFile,
-      [
-        JSON.stringify({ type: "session", id: "s1" }),
-        JSON.stringify({
+    replaceSqliteSessionTranscriptEvents({
+      agentId: "main",
+      sessionId: "s1",
+      events: [
+        { type: "session", id: "s1" },
+        {
           type: "message",
           message: { role: "assistant", content: [{ type: "text", text: "older reply" }] },
-        }),
-        JSON.stringify({
+        },
+        {
           type: "message",
           message: {
             role: "assistant",
@@ -310,17 +326,16 @@ describe("handleTtsCommands status fallback reporting", () => {
               },
             ],
           },
-        }),
-      ].join("\n") + "\n",
-      "utf-8",
-    );
+        },
+      ],
+    });
     ttsMocks.textToSpeech.mockResolvedValue({
       success: true,
       audioPath: "/tmp/latest.ogg",
       provider: PRIMARY_TTS_PROVIDER,
       voiceCompatible: true,
     });
-    const sessionEntry: SessionEntry = { sessionId: "s1", updatedAt: 1, sessionFile };
+    const sessionEntry: SessionEntry = { sessionId: "s1", updatedAt: 1 };
     const sessionStore = { "session-key": sessionEntry };
 
     const beforeTtsRead = Date.now();
@@ -333,32 +348,34 @@ describe("handleTtsCommands status fallback reporting", () => {
     expect(reply.mediaUrl).toBe("/tmp/latest.ogg");
     expect(reply.audioAsVoice).toBe(true);
     expect(reply.spokenText).toBe("latest visible reply");
-    expect(ttsMocks.textToSpeech.mock.calls.at(-1)?.[0]?.text).toBe("latest visible reply");
+    const speechCall = lastMockCall(ttsMocks.textToSpeech, "textToSpeech")[0] as {
+      text?: string;
+    };
+    expect(speechCall.text).toBe("latest visible reply");
     expect(sessionEntry.lastTtsReadLatestHash).toMatch(/^[a-f0-9]{64}$/);
     expect(sessionEntry.lastTtsReadLatestAt).toBeGreaterThanOrEqual(beforeTtsRead);
   });
 
   it("does not resend /tts latest for the same assistant reply", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-tts-latest-"));
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    fs.writeFileSync(
-      sessionFile,
-      [
-        JSON.stringify({ type: "session", id: "s1" }),
-        JSON.stringify({
+    replaceSqliteSessionTranscriptEvents({
+      agentId: "main",
+      sessionId: "s1",
+      events: [
+        { type: "session", id: "s1" },
+        {
           type: "message",
           message: { role: "assistant", content: [{ type: "text", text: "read me once" }] },
-        }),
-      ].join("\n") + "\n",
-      "utf-8",
-    );
+        },
+      ],
+    });
     ttsMocks.textToSpeech.mockResolvedValue({
       success: true,
       audioPath: "/tmp/latest.ogg",
       provider: PRIMARY_TTS_PROVIDER,
       voiceCompatible: true,
     });
-    const sessionEntry: SessionEntry = { sessionId: "s1", updatedAt: 1, sessionFile };
+    const sessionEntry: SessionEntry = { sessionId: "s1", updatedAt: 1 };
     const sessionStore = { "session-key": sessionEntry };
     const params = buildTtsParams("/tts latest", {}, undefined, { sessionEntry, sessionStore });
 

@@ -40,9 +40,7 @@ vi.mock("../../agents/skills/refresh.js", () => ({
 }));
 
 vi.mock("../../config/sessions.js", () => ({
-  updateSessionStore: vi.fn(),
-  resolveSessionFilePath: vi.fn(),
-  resolveSessionFilePathOptions: vi.fn(),
+  upsertSessionEntry: vi.fn(),
 }));
 
 vi.mock("../../infra/skills-remote.js", () => ({

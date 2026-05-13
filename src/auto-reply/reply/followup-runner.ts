@@ -42,7 +42,6 @@ export function createFollowupRunner(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
-  storePath?: string;
   defaultModel: string;
   agentCfgContextTokens?: number;
 }): (queued: FollowupRun) => Promise<void> {
@@ -53,7 +52,6 @@ export function createFollowupRunner(params: {
     sessionEntry,
     sessionStore,
     sessionKey,
-    storePath,
     defaultModel,
     agentCfgContextTokens,
   } = params;
@@ -247,7 +245,6 @@ export function createFollowupRunner(params: {
         sessionEntry: activeSessionEntry,
         sessionStore,
         sessionKey,
-        storePath,
         isHeartbeat: opts?.isHeartbeat === true,
         replyOperation,
       });
@@ -292,7 +289,6 @@ export function createFollowupRunner(params: {
                 senderUsername: run.senderUsername,
                 senderE164: run.senderE164,
                 senderIsOwner: run.senderIsOwner,
-                sessionFile: run.sessionFile,
                 agentDir: run.agentDir,
                 workspaceDir: run.workspaceDir,
                 config: runtimeConfig,
@@ -377,9 +373,8 @@ export function createFollowupRunner(params: {
           allowAsyncLoad: false,
         }) ?? DEFAULT_CONTEXT_TOKENS;
 
-      if (storePath && sessionKey) {
+      if (sessionKey) {
         await persistRunSessionUsage({
-          storePath,
           sessionKey,
           cfg: runtimeConfig,
           usage,
@@ -423,13 +418,11 @@ export function createFollowupRunner(params: {
           sessionEntry,
           sessionStore,
           sessionKey,
-          storePath,
           amount: autoCompactionCount,
           compactionTokensAfter: runResult.meta?.agentMeta?.compactionTokensAfter,
           lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
           contextTokensUsed,
           newSessionId: runResult.meta?.agentMeta?.sessionId,
-          newSessionFile: runResult.meta?.agentMeta?.sessionFile,
         });
         const refreshedSessionEntry =
           sessionKey && sessionStore ? sessionStore[sessionKey] : undefined;
@@ -440,7 +433,6 @@ export function createFollowupRunner(params: {
               key: queueKey,
               previousSessionId,
               nextSessionId: refreshedSessionEntry.sessionId,
-              nextSessionFile: refreshedSessionEntry.sessionFile,
             });
           }
         }

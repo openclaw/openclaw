@@ -1,4 +1,8 @@
 import type { SQLInputValue } from "node:sqlite";
+import {
+  MEMORY_INDEX_TABLE_NAMES,
+  serializeEmbedding,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
 type VectorWriteDb = {
   prepare: (sql: string) => {
@@ -6,8 +10,7 @@ type VectorWriteDb = {
   };
 };
 
-const vectorToBlob = (embedding: number[]): Buffer =>
-  Buffer.from(new Float32Array(embedding).buffer);
+const vectorToBlob = (embedding: number[]): Uint8Array => serializeEmbedding(embedding);
 
 export function replaceMemoryVectorRow(params: {
   db: VectorWriteDb;
@@ -15,7 +18,7 @@ export function replaceMemoryVectorRow(params: {
   embedding: number[];
   tableName?: string;
 }): void {
-  const tableName = params.tableName ?? "chunks_vec";
+  const tableName = params.tableName ?? MEMORY_INDEX_TABLE_NAMES.vector;
   try {
     params.db.prepare(`DELETE FROM ${tableName} WHERE id = ?`).run(params.id);
   } catch {}

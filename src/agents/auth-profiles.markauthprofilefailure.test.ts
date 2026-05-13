@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 
 vi.mock("./cli-credentials.js", () => ({
   readClaudeCliCredentialsCached: () => null,
@@ -13,23 +14,34 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   resolveExternalAuthProfilesWithPlugins: () => [],
 }));
 
+import { savePersistedAuthProfileSecretsStore } from "./auth-profiles/persisted.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
 } from "./auth-profiles/store.js";
+import type { AuthProfileSecretsStore } from "./auth-profiles/types.js";
 import { calculateAuthProfileCooldownMs, markAuthProfileFailure } from "./auth-profiles/usage.js";
 
 type AuthProfileStore = ReturnType<typeof ensureAuthProfileStore>;
 
 let tempRoot = "";
 let tempCaseIndex = 0;
+let previousStateDir: string | undefined;
 
 beforeAll(() => {
   tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));
+  previousStateDir = process.env.OPENCLAW_STATE_DIR;
+  process.env.OPENCLAW_STATE_DIR = path.join(tempRoot, ".openclaw-state");
 });
 
 afterAll(() => {
   clearRuntimeAuthProfileStoreSnapshots();
+  closeOpenClawStateDatabaseForTest();
+  if (previousStateDir === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = previousStateDir;
+  }
   fs.rmSync(tempRoot, { recursive: true, force: true });
 });
 
@@ -40,56 +52,66 @@ function makeAgentDir(label = "case") {
   return agentDir;
 }
 
+function writeAuthStore(agentDir: string, store: AuthProfileSecretsStore): void {
+  savePersistedAuthProfileSecretsStore(store, agentDir);
+}
+
 async function withAuthProfileStore(
   fn: (ctx: { agentDir: string; store: AuthProfileStore }) => Promise<void>,
 ): Promise<void> {
   const agentDir = makeAgentDir("store");
-  const authPath = path.join(agentDir, "auth-profiles.json");
-  fs.writeFileSync(
-    authPath,
-    JSON.stringify({
-      version: 1,
-      profiles: {
-        "anthropic:default": {
-          type: "api_key",
-          provider: "anthropic",
-          key: "sk-default",
-        },
-        "openrouter:default": {
-          type: "api_key",
-          provider: "openrouter",
-          key: "sk-or-default",
-        },
+  writeAuthStore(agentDir, {
+    version: 1,
+    profiles: {
+      "anthropic:default": {
+        type: "api_key",
+        provider: "anthropic",
+        key: "sk-default",
       },
-    }),
-  );
+      "openrouter:default": {
+        type: "api_key",
+        provider: "openrouter",
+        key: "sk-or-default",
+      },
+    },
+  });
 
   const store = ensureAuthProfileStore(agentDir);
   await fn({ agentDir, store });
 }
 
-function expectCooldownInRange(remainingMs: number, minMs: number, maxMs: number): void {
-  expect(remainingMs).toBeGreaterThan(minMs);
-  expect(remainingMs).toBeLessThan(maxMs);
+function writeAnthropicStoreWithState(
+  agentDir: string,
+  state: NonNullable<AuthProfileStore["usageStats"]>["anthropic:default"],
+): void {
+  writeAuthStore(agentDir, {
+    version: 1,
+    profiles: {
+      "anthropic:default": {
+        type: "api_key",
+        provider: "anthropic",
+        key: "sk-default",
+      },
+    },
+    usageStats: {
+      "anthropic:default": state,
+    },
+  } as AuthProfileSecretsStore);
 }
 
 describe("markAuthProfileFailure", () => {
-  it("does not overwrite fresher on-disk credentials with a stale runtime snapshot", async () => {
+  it("does not overwrite fresher persisted credentials with a stale runtime snapshot", async () => {
     const agentDir = makeAgentDir("stale-snapshot");
-    const authPath = path.join(agentDir, "auth-profiles.json");
-    fs.writeFileSync(
-      authPath,
-      JSON.stringify({
-        version: 1,
-        profiles: {
-          "openai:default": {
-            type: "api_key",
-            provider: "openai",
-            key: "sk-expired-old",
-          },
+    writeAuthStore(agentDir, {
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-expired-old",
         },
-      }),
-    );
+      },
+    });
 
     const staleRuntimeStore: AuthProfileStore = {
       version: 1,
@@ -102,19 +124,16 @@ describe("markAuthProfileFailure", () => {
       },
     };
 
-    fs.writeFileSync(
-      authPath,
-      JSON.stringify({
-        version: 1,
-        profiles: {
-          "openai:default": {
-            type: "api_key",
-            provider: "openai",
-            key: "sk-fresh-new",
-          },
+    writeAuthStore(agentDir, {
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-fresh-new",
         },
-      }),
-    );
+      },
+    });
 
     const staleCredential = staleRuntimeStore.profiles["openai:default"];
     expect(staleCredential?.type).toBe("api_key");
@@ -138,6 +157,11 @@ describe("markAuthProfileFailure", () => {
     ).toBe("sk-fresh-new");
     expect(typeof reloaded.usageStats?.["openai:default"]?.cooldownUntil).toBe("number");
   });
+
+  function expectCooldownInRange(remainingMs: number, minMs: number, maxMs: number): void {
+    expect(remainingMs).toBeGreaterThan(minMs);
+    expect(remainingMs).toBeLessThan(maxMs);
+  }
 
   it("disables billing failures for ~5 hours by default", async () => {
     await withAuthProfileStore(async ({ agentDir, store }) => {
@@ -267,28 +291,12 @@ describe("markAuthProfileFailure", () => {
   });
   it("resets backoff counters outside the failure window", async () => {
     const agentDir = makeAgentDir("reset-window");
-    const authPath = path.join(agentDir, "auth-profiles.json");
     const now = Date.now();
-    fs.writeFileSync(
-      authPath,
-      JSON.stringify({
-        version: 1,
-        profiles: {
-          "anthropic:default": {
-            type: "api_key",
-            provider: "anthropic",
-            key: "sk-default",
-          },
-        },
-        usageStats: {
-          "anthropic:default": {
-            errorCount: 9,
-            failureCounts: { billing: 3 },
-            lastFailureAt: now - 48 * 60 * 60 * 1000,
-          },
-        },
-      }),
-    );
+    writeAnthropicStoreWithState(agentDir, {
+      errorCount: 9,
+      failureCounts: { billing: 3 },
+      lastFailureAt: now - 48 * 60 * 60 * 1000,
+    });
 
     const store = ensureAuthProfileStore(agentDir);
     await markAuthProfileFailure({
@@ -307,32 +315,16 @@ describe("markAuthProfileFailure", () => {
 
   it("resets error count when previous cooldown has expired to prevent escalation", async () => {
     const agentDir = makeAgentDir("expired-cooldown");
-    const authPath = path.join(agentDir, "auth-profiles.json");
     const now = Date.now();
     // Simulate state left on disk after 3 rapid failures within a 1-min cooldown
     // window. The cooldown has since expired, but clearExpiredCooldowns() only
-    // ran in-memory and never persisted - so disk still carries errorCount: 3.
-    fs.writeFileSync(
-      authPath,
-      JSON.stringify({
-        version: 1,
-        profiles: {
-          "anthropic:default": {
-            type: "api_key",
-            provider: "anthropic",
-            key: "sk-default",
-          },
-        },
-        usageStats: {
-          "anthropic:default": {
-            errorCount: 3,
-            failureCounts: { rate_limit: 3 },
-            lastFailureAt: now - 120_000, // 2 minutes ago
-            cooldownUntil: now - 60_000, // expired 1 minute ago
-          },
-        },
-      }),
-    );
+    // ran in-memory and never persisted - so SQLite still carries errorCount: 3.
+    writeAnthropicStoreWithState(agentDir, {
+      errorCount: 3,
+      failureCounts: { rate_limit: 3 },
+      lastFailureAt: now - 120_000, // 2 minutes ago
+      cooldownUntil: now - 60_000, // expired 1 minute ago
+    });
 
     const store = ensureAuthProfileStore(agentDir);
     await markAuthProfileFailure({

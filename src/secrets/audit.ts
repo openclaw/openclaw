@@ -1,11 +1,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resolveAuthProfileStoreLocationForDisplay } from "../agents/auth-profiles/paths.js";
+import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import {
   isNonSecretApiKeyMarker,
   isSecretRefHeaderValueMarker,
 } from "../agents/model-auth-markers.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
+import { readStoredModelsConfigRaw } from "../agents/models-config-store.js";
 import { resolveStateDir, type OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
@@ -30,8 +33,8 @@ import {
 } from "./secret-value.js";
 import { isNonEmptyString, isRecord } from "./shared.js";
 import {
-  listAgentModelsJsonPaths,
-  listAuthProfileStorePaths,
+  listAgentModelCatalogDirs,
+  listAuthProfileStoreAgentDirs,
   listLegacyAuthJsonPaths,
   parseEnvAssignmentValue,
   readJsonObjectIfExists,
@@ -261,30 +264,18 @@ function collectConfigSecrets(params: {
 }
 
 function collectAuthStoreSecrets(params: {
-  authStorePath: string;
+  agentDir?: string;
   collector: AuditCollector;
   defaults?: SecretDefaults;
+  env?: NodeJS.ProcessEnv;
 }): void {
-  if (!fs.existsSync(params.authStorePath)) {
+  const authStoreLocation = resolveAuthProfileStoreLocationForDisplay(params.agentDir, params.env);
+  const store = loadPersistedAuthProfileStore(params.agentDir, { env: params.env });
+  if (!store || !isRecord(store.profiles)) {
     return;
   }
-  params.collector.filesScanned.add(params.authStorePath);
-  const parsedResult = readJsonObjectIfExists(params.authStorePath);
-  if (parsedResult.error) {
-    addFinding(params.collector, {
-      code: "REF_UNRESOLVED",
-      severity: "error",
-      file: params.authStorePath,
-      jsonPath: "<root>",
-      message: `Invalid JSON in auth-profiles store: ${parsedResult.error}`,
-    });
-    return;
-  }
-  const parsed = parsedResult.value;
-  if (!parsed || !isRecord(parsed.profiles)) {
-    return;
-  }
-  for (const entry of iterateAuthProfileCredentials(parsed.profiles)) {
+  params.collector.filesScanned.add(authStoreLocation);
+  for (const entry of iterateAuthProfileCredentials(store.profiles)) {
     if (entry.kind === "api_key" || entry.kind === "token") {
       const { ref } = resolveSecretInputRef({
         value: entry.value,
@@ -293,7 +284,7 @@ function collectAuthStoreSecrets(params: {
       });
       if (ref) {
         params.collector.refAssignments.push({
-          file: params.authStorePath,
+          file: authStoreLocation,
           path: `profiles.${entry.profileId}.${entry.valueField}`,
           ref,
           expected: "string",
@@ -305,7 +296,7 @@ function collectAuthStoreSecrets(params: {
         addFinding(params.collector, {
           code: "PLAINTEXT_FOUND",
           severity: "warn",
-          file: params.authStorePath,
+          file: authStoreLocation,
           jsonPath: `profiles.${entry.profileId}.${entry.valueField}`,
           message:
             entry.kind === "api_key"
@@ -322,7 +313,7 @@ function collectAuthStoreSecrets(params: {
       addFinding(params.collector, {
         code: "LEGACY_RESIDUE",
         severity: "info",
-        file: params.authStorePath,
+        file: authStoreLocation,
         jsonPath: `profiles.${entry.profileId}`,
         message: "OAuth credentials are present (out of scope for static SecretRef migration).",
         provider: entry.provider,
@@ -369,33 +360,48 @@ function collectAuthJsonResidue(params: { stateDir: string; collector: AuditColl
   }
 }
 
-function collectModelsJsonSecrets(params: {
-  modelsJsonPath: string;
+function collectStoredModelCatalogSecrets(params: {
+  agentDir: string;
+  env: NodeJS.ProcessEnv;
   collector: AuditCollector;
 }): void {
-  if (!fs.existsSync(params.modelsJsonPath)) {
+  const stored = readStoredModelsConfigRaw(params.agentDir, { env: params.env });
+  if (!stored) {
     return;
   }
-  params.collector.filesScanned.add(params.modelsJsonPath);
-  const parsedResult = readJsonObjectIfExists(params.modelsJsonPath, {
-    requireRegularFile: true,
-    maxBytes: MAX_AUDIT_MODELS_JSON_BYTES,
-  });
-  if (parsedResult.error) {
+  const sourceLabel = `stored model catalog: ${params.agentDir}`;
+  params.collector.filesScanned.add(sourceLabel);
+  if (stored.raw.length > MAX_AUDIT_MODELS_JSON_BYTES) {
     addFinding(params.collector, {
       code: "REF_UNRESOLVED",
       severity: "error",
-      file: params.modelsJsonPath,
+      file: sourceLabel,
       jsonPath: "<root>",
-      message: `Invalid JSON in models.json: ${parsedResult.error}`,
+      message: `Stored model catalog is oversized (${stored.raw.length} bytes); regenerate it.`,
     });
     return;
   }
-  const parsed = parsedResult.value;
-  if (!parsed || !isRecord(parsed.providers)) {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stored.raw);
+  } catch (error) {
+    addFinding(params.collector, {
+      code: "REF_UNRESOLVED",
+      severity: "error",
+      file: sourceLabel,
+      jsonPath: "<root>",
+      message: `Invalid JSON in stored model catalog: ${formatErrorMessage(error)}`,
+    });
     return;
   }
-  for (const [providerId, providerValue] of Object.entries(parsed.providers)) {
+  if (!isRecord(parsed)) {
+    return;
+  }
+  const providers = parsed.providers;
+  if (!isRecord(providers)) {
+    return;
+  }
+  for (const [providerId, providerValue] of Object.entries(providers)) {
     if (!isRecord(providerValue)) {
       continue;
     }
@@ -404,18 +410,19 @@ function collectModelsJsonSecrets(params: {
       addFinding(params.collector, {
         code: "REF_UNRESOLVED",
         severity: "error",
-        file: params.modelsJsonPath,
+        file: sourceLabel,
         jsonPath: `providers.${providerId}.apiKey`,
-        message: "models.json contains an unresolved SecretRef object; regenerate models.json.",
+        message:
+          "Stored model catalog contains an unresolved SecretRef object; regenerate the model catalog.",
         provider: providerId,
       });
     } else if (isNonEmptyString(apiKey) && !isNonSecretApiKeyMarker(apiKey)) {
       addFinding(params.collector, {
         code: "PLAINTEXT_FOUND",
         severity: "warn",
-        file: params.modelsJsonPath,
+        file: sourceLabel,
         jsonPath: `providers.${providerId}.apiKey`,
-        message: "models.json provider apiKey is stored as plaintext.",
+        message: "Stored model catalog provider apiKey is plaintext.",
         provider: providerId,
       });
     }
@@ -430,10 +437,10 @@ function collectModelsJsonSecrets(params: {
         addFinding(params.collector, {
           code: "REF_UNRESOLVED",
           severity: "error",
-          file: params.modelsJsonPath,
+          file: sourceLabel,
           jsonPath: headerPath,
           message:
-            "models.json contains an unresolved SecretRef object for provider headers; regenerate models.json.",
+            "Stored model catalog contains an unresolved SecretRef object for provider headers; regenerate the model catalog.",
           provider: providerId,
         });
         continue;
@@ -450,9 +457,9 @@ function collectModelsJsonSecrets(params: {
       addFinding(params.collector, {
         code: "PLAINTEXT_FOUND",
         severity: "warn",
-        file: params.modelsJsonPath,
+        file: sourceLabel,
         jsonPath: headerPath,
-        message: "models.json provider header value is stored as plaintext.",
+        message: "Stored model catalog provider header value is plaintext.",
         provider: providerId,
       });
     }
@@ -673,16 +680,18 @@ export async function runSecretsAudit(
       configPath,
       collector,
     });
-    for (const authStorePath of listAuthProfileStorePaths(config, stateDir)) {
+    for (const agentDir of listAuthProfileStoreAgentDirs(config, stateDir)) {
       collectAuthStoreSecrets({
-        authStorePath,
+        agentDir,
         collector,
         defaults,
+        env,
       });
     }
-    for (const modelsJsonPath of listAgentModelsJsonPaths(config, stateDir, env)) {
-      collectModelsJsonSecrets({
-        modelsJsonPath,
+    for (const agentDir of listAgentModelCatalogDirs(config, stateDir, env)) {
+      collectStoredModelCatalogSecrets({
+        agentDir,
+        env,
         collector,
       });
     }

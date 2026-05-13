@@ -7,6 +7,4 @@ export {
   collectVoiceCallLegacyConfigIssues,
   formatVoiceCallLegacyConfigWarnings,
   migrateVoiceCallLegacyConfigInput,
-  normalizeVoiceCallLegacyConfigInput,
-  parseVoiceCallPluginConfig,
 } from "./src/config-compat.js";

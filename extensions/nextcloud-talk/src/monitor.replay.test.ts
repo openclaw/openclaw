@@ -76,12 +76,12 @@ describe("createNextcloudTalkWebhookServer backend allowlist", () => {
 
 describe("createNextcloudTalkWebhookServer replay handling", () => {
   function createReplayGuardedProcess(params: {
-    stateDir?: string;
+    scopeKey?: string;
     accountId?: string;
     handleMessage: () => Promise<void>;
   }) {
     const replayGuard = createNextcloudTalkReplayGuard(
-      params.stateDir ? { stateDir: params.stateDir } : {},
+      params.scopeKey ? { scopeKey: params.scopeKey } : {},
     );
 
     return (message: NextcloudTalkInboundMessage) =>

@@ -1,4 +1,3 @@
-import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createEmptyPluginRegistry,
@@ -8,6 +7,7 @@ import {
 import type { ResolvedTtsConfig, SpeechProviderPlugin } from "openclaw/plugin-sdk/speech-core";
 import { withEnv, withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AssistantMessage } from "../../agents/pi-ai-contract.js";
 import { resolveWorkspacePackagePublicModuleUrl } from "../../plugin-sdk/test-helpers/public-surface-loader.js";
 
 type TtsRuntimeModule = typeof import("openclaw/plugin-sdk/tts-runtime");
@@ -23,7 +23,7 @@ let ttsRuntime: TtsRuntimeModule;
 let ttsRuntimePromise: Promise<TtsRuntimeModule> | null = null;
 let ttsRuntimeInitialized = false;
 let ttsCorePromise: Promise<TtsCoreModule> | null = null;
-let completeSimple: typeof import("@earendil-works/pi-ai").completeSimple;
+let completeSimple: typeof import("../../agents/pi-ai-contract.js").completeSimple;
 let getApiKeyForModelMock: SummarizeTextDeps["getApiKeyForModel"];
 let requireApiKeyMock: SummarizeTextDeps["requireApiKey"];
 let resolveModelAsyncMock: SummarizeTextDeps["resolveModelAsync"];
@@ -70,7 +70,7 @@ async function withIsolatedSpeechProviderEnvAsync<T>(
   return await withEnvAsync(isolatedSpeechProviderEnv(overrides), fn);
 }
 
-vi.mock("@earendil-works/pi-ai", () => {
+vi.mock("../../agents/pi-ai-contract.js", () => {
   const getApiProvider = vi.fn(() => undefined);
   return {
     completeSimple: vi.fn(),
@@ -84,7 +84,7 @@ vi.mock("@earendil-works/pi-ai", () => {
   };
 });
 
-vi.mock("@earendil-works/pi-ai/oauth", () => {
+vi.mock("../../agents/pi-ai-oauth-contract.js", () => {
   return {
     getOAuthProviders: () => [],
     getOAuthApiKey: vi.fn(async () => null),
@@ -116,6 +116,14 @@ function asLegacyTtsConfig(value: unknown): OpenClawConfig {
 
 function asLegacyOpenClawConfig(value: Record<string, unknown>): OpenClawConfig {
   return value as unknown as OpenClawConfig;
+}
+
+function mockCallAt(mock: { mock: { calls: Array<Array<unknown>> } }, index: number): unknown[] {
+  const call = mock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected mock call at index ${index}`);
+  }
+  return call;
 }
 
 const mockAssistantMessage = (content: AssistantMessage["content"]): AssistantMessage => ({
@@ -486,7 +494,6 @@ function createResolvedSummarizationConfig(cfg: OpenClawConfig): ResolvedTtsConf
     },
     providerConfigs: {},
     personas: {},
-    prefsPath: typeof rawConfig.prefsPath === "string" ? rawConfig.prefsPath : undefined,
     maxTextLength: typeof rawConfig.maxTextLength === "number" ? rawConfig.maxTextLength : 4096,
     timeoutMs: typeof rawConfig.timeoutMs === "number" ? rawConfig.timeoutMs : 30_000,
     rawConfig,
@@ -496,7 +503,7 @@ function createResolvedSummarizationConfig(cfg: OpenClawConfig): ResolvedTtsConf
 
 async function setupSummarizationMocks() {
   ({ summarizeText: summarizeTextCore } = await loadTtsCore());
-  ({ completeSimple } = await import("@earendil-works/pi-ai"));
+  ({ completeSimple } = await import("../../agents/pi-ai-contract.js"));
   getApiKeyForModelMock = vi.fn() as SummarizeTextDeps["getApiKeyForModel"];
   requireApiKeyMock = vi.fn() as SummarizeTextDeps["requireApiKey"];
   resolveModelAsyncMock = vi.fn() as SummarizeTextDeps["resolveModelAsync"];
@@ -900,10 +907,12 @@ export function describeTtsSummarizationContract() {
     it("calls the summary model with the expected parameters", async () => {
       await runSummarizeText();
 
-      const callArgs = vi.mocked(completeSimple).mock.calls.at(0);
-      expect(callArgs?.[1]?.messages?.[0]?.role).toBe("user");
-      expect(callArgs?.[2]?.maxTokens).toBe(250);
-      expect(callArgs?.[2]?.temperature).toBe(0.3);
+      const callArgs = mockCallAt(vi.mocked(completeSimple), 0);
+      expect(
+        (callArgs[1] as { messages?: Array<{ role?: string }> } | undefined)?.messages?.[0]?.role,
+      ).toBe("user");
+      expect((callArgs[2] as { maxTokens?: number } | undefined)?.maxTokens).toBe(250);
+      expect((callArgs[2] as { temperature?: number } | undefined)?.temperature).toBe(0.3);
       expect(getApiKeyForModelMock).toHaveBeenCalledTimes(1);
     });
 
@@ -928,7 +937,9 @@ export function describeTtsSummarizationContract() {
 
       await runSummarizeText();
 
-      expect(vi.mocked(completeSimple).mock.calls.at(0)?.[0]?.api).toBe("openai-completions");
+      expect(
+        (mockCallAt(vi.mocked(completeSimple), 0)[0] as { api?: string } | undefined)?.api,
+      ).toBe("openai-completions");
       expect(ensureCustomApiRegisteredMock).not.toHaveBeenCalled();
     });
 
@@ -1196,7 +1207,7 @@ export function describeTtsProviderRuntimeContract() {
 
           expect(result.success).toBe(true);
           expect(fetchMock).toHaveBeenCalledTimes(1);
-          const [, init] = fetchMock.mock.calls.at(0) as [string, RequestInit];
+          const [, init] = mockCallAt(fetchMock, 0) as [string, RequestInit];
           expect(typeof init.body).toBe("string");
           const body = JSON.parse(init.body as string) as Record<string, unknown>;
           expect(body.instructions).toBe(expectedInstructions);
@@ -1240,13 +1251,7 @@ export function describeTtsAutoApplyContract() {
     const withMockedAutoTtsFetch = async (
       run: (fetchMock: ReturnType<typeof vi.fn>) => Promise<void>,
     ) => {
-      const prevPrefs = process.env.OPENCLAW_TTS_PREFS;
-      process.env.OPENCLAW_TTS_PREFS = `/tmp/tts-test-${Date.now()}.json`;
-      try {
-        await withMockedSpeechFetch(run, 1);
-      } finally {
-        process.env.OPENCLAW_TTS_PREFS = prevPrefs;
-      }
+      await withMockedSpeechFetch(run, 1);
     };
 
     const taggedCfg: OpenClawConfig = {

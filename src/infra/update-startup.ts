@@ -2,32 +2,19 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
-import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { VERSION } from "../version.js";
 import { isTruthyEnvValue } from "./env.js";
-import { writeJson } from "./json-files.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import { normalizeUpdateChannel, DEFAULT_PACKAGE_CHANNEL } from "./update-channels.js";
+import {
+  readUpdateCheckStateFromSqlite,
+  writeUpdateCheckStateToSqlite,
+  type UpdateCheckState,
+} from "./update-check-state.js";
 import { compareSemverStrings, resolveNpmChannelTag, checkUpdateStatus } from "./update-check.js";
-
-type UpdateCheckState = {
-  lastCheckedAt?: string;
-  lastNotifiedVersion?: string;
-  lastNotifiedTag?: string;
-  lastAvailableVersion?: string;
-  lastAvailableTag?: string;
-  autoInstallId?: string;
-  autoFirstSeenVersion?: string;
-  autoFirstSeenTag?: string;
-  autoFirstSeenAt?: string;
-  autoLastAttemptVersion?: string;
-  autoLastAttemptAt?: string;
-  autoLastSuccessVersion?: string;
-  autoLastSuccessAt?: string;
-};
 
 type AutoUpdatePolicy = {
   enabled: boolean;
@@ -60,7 +47,6 @@ export function resetUpdateAvailableStateForTest(): void {
   updateAvailableCache = null;
 }
 
-const UPDATE_CHECK_FILENAME = "update-check.json";
 const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const ONE_HOUR_MS = 60 * 60 * 1000;
 const AUTO_UPDATE_COMMAND_TIMEOUT_MS = 45 * 60 * 1000;
@@ -116,18 +102,12 @@ function resolveCheckIntervalMs(cfg: OpenClawConfig): number {
   return UPDATE_CHECK_INTERVAL_MS;
 }
 
-async function readState(statePath: string): Promise<UpdateCheckState> {
-  try {
-    const raw = await fs.readFile(statePath, "utf-8");
-    const parsed = JSON.parse(raw) as UpdateCheckState;
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
+function readState(env: NodeJS.ProcessEnv = process.env): UpdateCheckState {
+  return readUpdateCheckStateFromSqlite(env);
 }
 
-async function writeState(statePath: string, state: UpdateCheckState): Promise<void> {
-  await writeJson(statePath, state);
+function writeState(state: UpdateCheckState, env: NodeJS.ProcessEnv = process.env): void {
+  writeUpdateCheckStateToSqlite(state, env);
 }
 
 function sameUpdateAvailable(a: UpdateAvailable | null, b: UpdateAvailable | null): boolean {
@@ -325,8 +305,7 @@ export async function runGatewayUpdateCheck(params: {
     return;
   }
 
-  const statePath = path.join(resolveStateDir(), UPDATE_CHECK_FILENAME);
-  const state = await readState(statePath);
+  const state = readState();
   const now = Date.now();
   const lastCheckedAt = state.lastCheckedAt ? Date.parse(state.lastCheckedAt) : null;
   if (shouldRunUpdateHints) {
@@ -375,7 +354,7 @@ export async function runGatewayUpdateCheck(params: {
       next: null,
       onUpdateAvailableChange: params.onUpdateAvailableChange,
     });
-    await writeState(statePath, nextState);
+    writeState(nextState);
     return;
   }
 
@@ -383,7 +362,7 @@ export async function runGatewayUpdateCheck(params: {
   const resolved = await resolveNpmChannelTag({ channel, timeoutMs: 2500 });
   const tag = resolved.tag;
   if (!resolved.version) {
-    await writeState(statePath, nextState);
+    writeState(nextState);
     return;
   }
 
@@ -494,7 +473,7 @@ export async function runGatewayUpdateCheck(params: {
     });
   }
 
-  await writeState(statePath, nextState);
+  writeState(nextState);
 }
 
 export function scheduleGatewayUpdateCheck(params: {

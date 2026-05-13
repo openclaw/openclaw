@@ -28,10 +28,8 @@ export { runEmbeddedPiAgent } from "./agents/pi-embedded.js";
 export { resolveAgentTimeoutMs } from "./agents/timeout.js";
 export { ensureAgentWorkspace } from "./agents/workspace.js";
 export {
-  resolveStorePath,
-  loadSessionStore,
-  saveSessionStore,
-  updateSessionStore,
-  updateSessionStoreEntry,
-  resolveSessionFilePath,
+  getSessionEntry,
+  listSessionEntries,
+  patchSessionEntry,
+  upsertSessionEntry,
 } from "./config/sessions.js";

@@ -3,7 +3,6 @@ import {
   ensureAuthProfileStore,
   externalCliDiscoveryForProviderAuth,
   resolveAuthProfileDisplayLabel,
-  resolveAuthStatePathForDisplay,
   type AuthProfileCredential,
   type AuthProfileStore,
   type ProfileUsageStats,
@@ -152,7 +151,7 @@ export async function modelsAuthListCommand(
     writeRuntimeJson(runtime, {
       agentId,
       agentDir: shortenHomePath(agentDir),
-      authStatePath: shortenHomePath(resolveAuthStatePathForDisplay(agentDir)),
+      authStateStore: "sqlite",
       provider: providerFilter.provider ?? null,
       profiles,
     });
@@ -160,7 +159,7 @@ export async function modelsAuthListCommand(
   }
 
   runtime.log(`Agent: ${agentId}`);
-  runtime.log(`Auth state file: ${shortenHomePath(resolveAuthStatePathForDisplay(agentDir))}`);
+  runtime.log("Auth runtime state: SQLite");
   if (providerFilter.provider) {
     runtime.log(`Provider: ${providerFilter.provider}`);
   }

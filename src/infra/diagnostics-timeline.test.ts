@@ -1,8 +1,10 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { listDiagnosticEvents } from "./diagnostic-events-store.js";
 import {
   emitDiagnosticsTimelineEvent,
   flushDiagnosticsTimelineForTest,
@@ -21,18 +23,16 @@ async function createTimelineEnv() {
       OPENCLAW_DIAGNOSTICS: "timeline",
       OPENCLAW_DIAGNOSTICS_RUN_ID: "run-1",
       OPENCLAW_DIAGNOSTICS_ENV: "env-1",
-      OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: join(dir, "nested", "timeline.jsonl"),
+      OPENCLAW_STATE_DIR: join(dir, "state"),
     } as NodeJS.ProcessEnv,
-    path: join(dir, "nested", "timeline.jsonl"),
   };
 }
 
-async function readTimeline(path: string) {
+async function readTimeline(env: NodeJS.ProcessEnv) {
   await flushDiagnosticsTimelineForTest();
-  return (await readFile(path, "utf8"))
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line) as Record<string, unknown>);
+  return listDiagnosticEvents<Record<string, unknown>>("diagnostics.timeline", { env }).map(
+    (entry) => entry.value,
+  );
 }
 
 function eventRecord(events: Record<string, unknown>[], index: number): Record<string, unknown> {
@@ -55,6 +55,7 @@ function attributesRecord(event: Record<string, unknown>): Record<string, unknow
 }
 
 afterEach(async () => {
+  closeOpenClawStateDatabaseForTest();
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
@@ -85,11 +86,6 @@ describe("diagnostics timeline", () => {
     expect(isDiagnosticsTimelineEnabled({ env: { ...env, OPENCLAW_DIAGNOSTICS: "0" } })).toBe(
       false,
     );
-    expect(
-      isDiagnosticsTimelineEnabled({
-        env: { ...env, OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: "" },
-      }),
-    ).toBe(false);
   });
 
   it("honors config diagnostics flags after config is available", async () => {
@@ -123,8 +119,8 @@ describe("diagnostics timeline", () => {
     ).toBe(false);
   });
 
-  it("writes JSONL diagnostic events with the stable envelope", async () => {
-    const { env, path } = await createTimelineEnv();
+  it("writes SQLite diagnostic events with the stable envelope", async () => {
+    const { env } = await createTimelineEnv();
 
     emitDiagnosticsTimelineEvent(
       {
@@ -140,7 +136,7 @@ describe("diagnostics timeline", () => {
       { env },
     );
 
-    const [event] = await readTimeline(path);
+    const [event] = await readTimeline(env);
     expect(event?.schemaVersion).toBe("openclaw.diagnostics.v1");
     expect(event?.type).toBe("mark");
     expect(event?.name).toBe("gateway.ready");
@@ -156,7 +152,7 @@ describe("diagnostics timeline", () => {
   });
 
   it("records span start and end events around successful work", async () => {
-    const { env, path } = await createTimelineEnv();
+    const { env } = await createTimelineEnv();
     const configOnlyEnv = { ...env };
     delete configOnlyEnv.OPENCLAW_DIAGNOSTICS;
 
@@ -169,7 +165,7 @@ describe("diagnostics timeline", () => {
       }),
     ).resolves.toBe("ok");
 
-    const events = await readTimeline(path);
+    const events = await readTimeline(env);
     expect(events).toHaveLength(2);
     const start = eventRecord(events, 0);
     const end = eventRecord(events, 1);
@@ -186,7 +182,7 @@ describe("diagnostics timeline", () => {
   });
 
   it("records span error events and rethrows failures", async () => {
-    const { env, path } = await createTimelineEnv();
+    const { env } = await createTimelineEnv();
 
     await expect(
       measureDiagnosticsTimelineSpan(
@@ -198,7 +194,7 @@ describe("diagnostics timeline", () => {
       ),
     ).rejects.toThrow("bad plugin");
 
-    const events = await readTimeline(path);
+    const events = await readTimeline(env);
     expect(events).toHaveLength(2);
     const errorEvent = eventRecord(events, 1);
     expect(errorEvent.type).toBe("span.error");
@@ -209,7 +205,7 @@ describe("diagnostics timeline", () => {
   });
 
   it("records synchronous spans", async () => {
-    const { env, path } = await createTimelineEnv();
+    const { env } = await createTimelineEnv();
 
     const result = measureDiagnosticsTimelineSpanSync("plugins.metadata.scan", () => 42, {
       env,
@@ -217,7 +213,7 @@ describe("diagnostics timeline", () => {
     });
 
     expect(result).toBe(42);
-    const events = await readTimeline(path);
+    const events = await readTimeline(env);
     expect(events).toHaveLength(2);
     const start = eventRecord(events, 0);
     const end = eventRecord(events, 1);
@@ -228,7 +224,7 @@ describe("diagnostics timeline", () => {
   });
 
   it("lets nested spans inherit the active timeline phase and parent span", async () => {
-    const { env, path } = await createTimelineEnv();
+    const { env } = await createTimelineEnv();
 
     const result = await measureDiagnosticsTimelineSpan(
       "reply.run_agent_turn",
@@ -243,7 +239,7 @@ describe("diagnostics timeline", () => {
     );
 
     expect(result).toBe(42);
-    const events = await readTimeline(path);
+    const events = await readTimeline(env);
     expect(events).toHaveLength(4);
     const [parentStart, childStart, childEnd, parentEnd] = events;
     expect(parentStart?.type).toBe("span.start");

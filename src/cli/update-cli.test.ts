@@ -42,9 +42,6 @@ const updateNpmInstalledPlugins = vi.fn();
 const loadInstalledPluginIndexInstallRecords = vi.fn(
   async (params: { config?: OpenClawConfig } = {}) => params.config?.plugins?.installs ?? {},
 );
-const legacyConfigRepairMocks = vi.hoisted(() => ({
-  repairLegacyConfigForUpdateChannel: vi.fn(),
-}));
 const nodeVersionSatisfiesEngine = vi.fn();
 const spawn = vi.fn();
 const { defaultRuntime: runtimeCapture, resetRuntimeCapture } = createCliRuntimeCapture();
@@ -250,9 +247,6 @@ vi.mock("./update-cli/restart-helper.js", () => ({
 vi.mock("../commands/doctor.js", () => ({
   doctorCommand: vi.fn(),
 }));
-vi.mock("../commands/doctor/legacy-config-repair.js", () => ({
-  repairLegacyConfigForUpdateChannel: legacyConfigRepairMocks.repairLegacyConfigForUpdateChannel,
-}));
 // Mock the daemon-cli module
 vi.mock("./daemon-cli.js", () => ({
   runDaemonInstall: mockedRunDaemonInstall,
@@ -416,8 +410,16 @@ describe("update-cli", () => {
     >;
     return calls[index]?.[0];
   };
+  const lastNpmPluginUpdateCall = () =>
+    npmPluginUpdateCall(updateNpmInstalledPlugins.mock.calls.length - 1);
 
   const replaceConfigCall = (index = 0) => vi.mocked(replaceConfigFile).mock.calls[index]?.[0];
+  const lastReplaceConfigCall = () =>
+    replaceConfigCall(vi.mocked(replaceConfigFile).mock.calls.length - 1);
+
+  const writeJsonCall = (index = 0) => vi.mocked(defaultRuntime.writeJson).mock.calls[index]?.[0];
+  const lastWriteJsonCall = () =>
+    writeJsonCall(vi.mocked(defaultRuntime.writeJson).mock.calls.length - 1);
 
   const probeGatewayCall = (index = 0) => probeGateway.mock.calls[index]?.[0];
 
@@ -557,7 +559,7 @@ describe("update-cli", () => {
     vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue({
       target: "latest",
       version: "9999.0.0",
-      nodeEngine: ">=22.16.0",
+      nodeEngine: ">=24.0.0",
     });
     vi.mocked(resolveNpmChannelTag).mockResolvedValue({
       tag: "latest",
@@ -660,12 +662,6 @@ describe("update-cli", () => {
     vi.mocked(runDaemonInstall).mockResolvedValue(undefined);
     vi.mocked(runDaemonRestart).mockResolvedValue(true);
     vi.mocked(doctorCommand).mockResolvedValue(undefined);
-    legacyConfigRepairMocks.repairLegacyConfigForUpdateChannel.mockImplementation(
-      async (params: { configSnapshot: ConfigFileSnapshot }) => ({
-        snapshot: params.configSnapshot,
-        repaired: false,
-      }),
-    );
     confirm.mockResolvedValue(false);
     select.mockResolvedValue("stable");
     vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
@@ -685,19 +681,6 @@ describe("update-cli", () => {
     tempDirsToCleanup.clear();
   });
 
-  it("bounds completion cache refresh during update follow-up", async () => {
-    const root = createCaseDir("openclaw-completion-timeout");
-    pathExists.mockResolvedValue(true);
-
-    await updateCliShared.tryWriteCompletionCache(root, false);
-
-    const call = spawnSyncCall();
-    expect(typeof call?.[0]).toBe("string");
-    expect(call?.[1]).toEqual([path.join(root, "openclaw.mjs"), "completion", "--write-state"]);
-    expect(call?.[2]?.env?.OPENCLAW_COMPLETION_SKIP_PLUGIN_COMMANDS).toBe("1");
-    expect(call?.[2]?.timeout).toBe(30_000);
-  });
-
   it("refuses mutating updates in Nix mode before update side effects", async () => {
     await withEnvAsync({ OPENCLAW_NIX_MODE: "1" }, async () => {
       await expect(updateCommand({ yes: true })).rejects.toThrow("OPENCLAW_NIX_MODE=1");
@@ -706,31 +689,6 @@ describe("update-cli", () => {
     expect(runGatewayUpdate).not.toHaveBeenCalled();
     expect(replaceConfigFile).not.toHaveBeenCalled();
     expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
-  });
-
-  it("logs friendly hint with manual refresh command when completion cache write times out", async () => {
-    const root = createCaseDir("openclaw-completion-timeout-msg");
-    pathExists.mockResolvedValue(true);
-    const timeoutErr = Object.assign(new Error("spawnSync /usr/bin/node ETIMEDOUT"), {
-      code: "ETIMEDOUT",
-    });
-    vi.mocked(spawnSync).mockReturnValueOnce({
-      pid: 0,
-      output: [],
-      stdout: "",
-      stderr: "",
-      status: null,
-      signal: null,
-      error: timeoutErr,
-    });
-    vi.mocked(runtimeCapture.log).mockClear();
-
-    await updateCliShared.tryWriteCompletionCache(root, false);
-
-    const logs = vi.mocked(runtimeCapture.log).mock.calls.map((call) => String(call[0]));
-    expect(logs.some((line) => line.includes("timed out after 30s"))).toBe(true);
-    expect(logs.some((line) => line.includes("openclaw completion --write-state"))).toBe(true);
-    expect(logs.some((line) => line.includes("Error: spawnSync"))).toBe(false);
   });
 
   it("respawns into the updated package root before running post-update tasks", async () => {
@@ -1058,16 +1016,12 @@ describe("update-cli", () => {
       },
     );
 
-    const jsonOutput = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0] as
-      | UpdateRunResult
-      | undefined;
+    const jsonOutput = lastWriteJsonCall() as UpdateRunResult | undefined;
     expect(jsonOutput?.postUpdate?.plugins?.status).toBe("warning");
     expect(jsonOutput?.postUpdate?.plugins?.warnings?.[0]?.reason).toContain(
       "package.json is missing",
     );
-    const updateCall = updateNpmInstalledPlugins.mock.calls.at(-1)?.[0] as
-      | { skipIds?: Set<string> }
-      | undefined;
+    const updateCall = lastNpmPluginUpdateCall() as { skipIds?: Set<string> } | undefined;
     expect(updateCall?.skipIds?.has("demo")).toBe(true);
   });
 
@@ -1271,9 +1225,7 @@ describe("update-cli", () => {
 
     await updateCommand({ json: true, restart: false });
 
-    const jsonOutput = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0] as
-      | UpdateRunResult
-      | undefined;
+    const jsonOutput = lastWriteJsonCall() as UpdateRunResult | undefined;
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
     expect(jsonOutput?.status).toBe("ok");
     expect(jsonOutput?.reason).toBeUndefined();
@@ -1344,13 +1296,9 @@ describe("update-cli", () => {
 
     await updateCommand({ json: true, restart: false });
 
-    const updateCall = updateNpmInstalledPlugins.mock.calls.at(-1)?.[0] as
-      | { skipIds?: Set<string> }
-      | undefined;
+    const updateCall = lastNpmPluginUpdateCall() as { skipIds?: Set<string> } | undefined;
     expect(updateCall?.skipIds?.has("demo")).toBe(true);
-    const jsonOutput = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0] as
-      | UpdateRunResult
-      | undefined;
+    const jsonOutput = lastWriteJsonCall() as UpdateRunResult | undefined;
     expect(jsonOutput?.status).toBe("ok");
     expect(jsonOutput?.postUpdate?.plugins?.status).toBe("warning");
     expect(pluginWarning(jsonOutput)?.pluginId).toBe("demo");
@@ -1410,9 +1358,7 @@ describe("update-cli", () => {
 
     await updateCommand({ json: true, restart: false });
 
-    const jsonOutput = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0] as
-      | UpdateRunResult
-      | undefined;
+    const jsonOutput = lastWriteJsonCall() as UpdateRunResult | undefined;
     expect(jsonOutput?.postUpdate?.plugins?.status).toBe("warning");
     expect(pluginWarning(jsonOutput)?.pluginId).toBe("demo");
     expect(pluginWarning(jsonOutput)?.guidance).toEqual([
@@ -1496,9 +1442,7 @@ describe("update-cli", () => {
 
     await updateCommand({ yes: true, json: true, restart: false });
 
-    const jsonOutput = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0] as
-      | UpdateRunResult
-      | undefined;
+    const jsonOutput = lastWriteJsonCall() as UpdateRunResult | undefined;
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
     expect(jsonOutput?.status).toBe("ok");
     expect(jsonOutput?.reason).toBeUndefined();
@@ -1561,10 +1505,7 @@ describe("update-cli", () => {
         await updateStatusCommand({ json: true });
       },
       assert: () => {
-        const last = requireValue(
-          vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0],
-          "update status JSON output",
-        );
+        const last = requireValue(lastWriteJsonCall(), "update status JSON output");
         const parsed = last as Record<string, unknown>;
         const channel = parsed.channel as { value?: unknown };
         expect(channel.value).toBe(isBetaTag(VERSION) ? "beta" : "stable");
@@ -1584,10 +1525,7 @@ describe("update-cli", () => {
 
     await updateStatusCommand({ json: true });
 
-    const last = requireValue(
-      vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0],
-      "update status JSON output",
-    );
+    const last = requireValue(lastWriteJsonCall(), "update status JSON output");
     const parsed = last as Record<string, unknown>;
     const channel = parsed.channel as { value?: unknown; config?: unknown };
     expect(channel.value).toBe("dev");
@@ -1906,7 +1844,7 @@ describe("update-cli", () => {
     vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue({
       target: "latest",
       version: "2026.3.23-2",
-      nodeEngine: ">=22.16.0",
+      nodeEngine: ">=24.0.0",
     });
     nodeVersionSatisfiesEngine.mockReturnValue(false);
 
@@ -2533,10 +2471,7 @@ describe("update-cli", () => {
         await updateCommand({ json: true });
       },
       assert: () => {
-        requireValue(
-          vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0],
-          "update JSON output",
-        );
+        requireValue(lastWriteJsonCall(), "update JSON output");
       },
     },
     {
@@ -2590,7 +2525,7 @@ describe("update-cli", () => {
     );
   });
 
-  it("repairs legacy config before persisting a requested update channel", async () => {
+  it("does not repair invalid legacy config before persisting a requested update channel", async () => {
     const tempDir = createCaseDir("openclaw-update");
     mockPackageInstallStatus(tempDir);
     const legacyConfig = {
@@ -2601,157 +2536,6 @@ describe("update-cli", () => {
         },
         telegram: {
           streaming: "block",
-        },
-      },
-    } as OpenClawConfig;
-    const migratedConfig = {
-      channels: {
-        slack: {
-          streaming: {
-            mode: "partial",
-            nativeTransport: false,
-          },
-        },
-        telegram: {
-          streaming: {
-            mode: "block",
-          },
-        },
-      },
-    } as OpenClawConfig;
-    vi.mocked(readConfigFileSnapshot)
-      .mockResolvedValueOnce({
-        ...baseSnapshot,
-        parsed: legacyConfig,
-        resolved: legacyConfig,
-        sourceConfig: legacyConfig,
-        config: legacyConfig,
-        runtimeConfig: legacyConfig,
-        valid: false,
-        hash: "legacy-hash",
-        issues: [
-          {
-            path: "channels.slack.streaming",
-            message: "Invalid input: expected object, received string",
-          },
-        ],
-        legacyIssues: [
-          {
-            path: "channels.slack",
-            message: "legacy slack streaming keys",
-          },
-          {
-            path: "channels.telegram",
-            message: "legacy telegram streaming keys",
-          },
-        ],
-      })
-      .mockResolvedValueOnce({
-        ...baseSnapshot,
-        parsed: migratedConfig,
-        resolved: migratedConfig,
-        sourceConfig: migratedConfig,
-        config: migratedConfig,
-        runtimeConfig: migratedConfig,
-        valid: true,
-        hash: "migrated-hash",
-      });
-    legacyConfigRepairMocks.repairLegacyConfigForUpdateChannel.mockImplementationOnce(
-      async (params: { configSnapshot: ConfigFileSnapshot; jsonMode: boolean }) => {
-        await replaceConfigFile({
-          nextConfig: migratedConfig,
-          baseHash: params.configSnapshot.hash,
-          writeOptions: {
-            allowConfigSizeDrop: true,
-            skipOutputLogs: params.jsonMode,
-          },
-        });
-        return {
-          snapshot: await readConfigFileSnapshot(),
-          repaired: true,
-        };
-      },
-    );
-
-    await updateCommand({ channel: "beta", yes: true });
-
-    const repairCall =
-      legacyConfigRepairMocks.repairLegacyConfigForUpdateChannel.mock.calls[0]?.[0];
-    expect(repairCall?.configSnapshot.hash).toBe("legacy-hash");
-    expect(repairCall?.configSnapshot.valid).toBe(false);
-    expect(repairCall?.jsonMode).toBe(false);
-    expect(replaceConfigFile).toHaveBeenCalledTimes(2);
-    const replaceCalls = vi.mocked(replaceConfigFile).mock.calls.map((call) => call[0]);
-    expect(replaceCalls[0]).toEqual({
-      nextConfig: migratedConfig,
-      baseHash: "legacy-hash",
-      writeOptions: {
-        allowConfigSizeDrop: true,
-        skipOutputLogs: false,
-      },
-    });
-    expect(replaceCalls[1]).toEqual({
-      nextConfig: {
-        ...migratedConfig,
-        update: {
-          channel: "beta",
-        },
-      },
-      baseHash: "migrated-hash",
-    });
-    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
-  });
-
-  it("does not auto-repair legacy config when authored includes are present", async () => {
-    const tempDir = createCaseDir("openclaw-update");
-    mockPackageInstallStatus(tempDir);
-    const legacyConfigWithInclude = {
-      $include: "./channels.json5",
-      channels: {
-        slack: {
-          streaming: "partial",
-          nativeStreaming: false,
-        },
-      },
-    } as unknown as OpenClawConfig;
-    vi.mocked(readConfigFileSnapshot).mockResolvedValueOnce({
-      ...baseSnapshot,
-      parsed: legacyConfigWithInclude,
-      resolved: legacyConfigWithInclude,
-      sourceConfig: legacyConfigWithInclude,
-      config: legacyConfigWithInclude,
-      runtimeConfig: legacyConfigWithInclude,
-      valid: false,
-      hash: "legacy-include-hash",
-      issues: [
-        {
-          path: "channels.slack.streaming",
-          message: "Invalid input: expected object, received string",
-        },
-      ],
-      legacyIssues: [
-        {
-          path: "channels.slack",
-          message: "legacy slack streaming keys",
-        },
-      ],
-    });
-
-    await updateCommand({ channel: "beta", yes: true });
-
-    expect(replaceConfigFile).not.toHaveBeenCalled();
-    expect(runCommandWithTimeout).not.toHaveBeenCalled();
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
-  });
-
-  it("does not repair legacy config during a dry run", async () => {
-    const tempDir = createCaseDir("openclaw-update");
-    mockPackageInstallStatus(tempDir);
-    const legacyConfig = {
-      channels: {
-        slack: {
-          streaming: "partial",
-          nativeStreaming: false,
         },
       },
     } as OpenClawConfig;
@@ -2778,7 +2562,7 @@ describe("update-cli", () => {
       ],
     });
 
-    await updateCommand({ dryRun: true, channel: "beta", yes: true });
+    await updateCommand({ channel: "beta", yes: true });
 
     expect(replaceConfigFile).not.toHaveBeenCalled();
     expect(runCommandWithTimeout).not.toHaveBeenCalled();
@@ -2836,7 +2620,7 @@ describe("update-cli", () => {
 
     await updateCommand({ channel: "beta", yes: true });
 
-    const lastWrite = vi.mocked(replaceConfigFile).mock.calls.at(-1)?.[0] as
+    const lastWrite = lastReplaceConfigCall() as
       | { nextConfig?: { update?: { channel?: string } } }
       | undefined;
     expect(lastWrite?.nextConfig?.update?.channel).toBe("beta");
@@ -2907,9 +2691,6 @@ describe("update-cli", () => {
   it("persists channel and runs post-update work after switching from package to git", async () => {
     const tempDir = createCaseDir("openclaw-update");
     const gitRoot = path.join(tempDir, "..", "openclaw");
-    const completionCacheSpy = vi
-      .spyOn(updateCliShared, "tryWriteCompletionCache")
-      .mockResolvedValue(undefined);
     mockPackageInstallStatus(tempDir);
     vi.mocked(readConfigFileSnapshot).mockResolvedValue({
       ...baseSnapshot,
@@ -2953,7 +2734,6 @@ describe("update-cli", () => {
     expect(syncCall?.config?.update?.channel).toBe("dev");
     expect(syncCall?.workspaceDir).toBe(gitRoot);
     expect(npmPluginUpdateCall()?.config?.update?.channel).toBe("dev");
-    expect(completionCacheSpy).toHaveBeenCalledWith(gitRoot, false);
     expect(runRestartScript).not.toHaveBeenCalled();
     expect(runDaemonRestart).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);

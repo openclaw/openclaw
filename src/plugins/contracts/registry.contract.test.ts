@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { uniqueSortedStrings } from "../../plugin-sdk/test-helpers/string-utils.js";
 import { loadPluginManifestRegistry, type PluginManifestRecord } from "../manifest-registry.js";
@@ -27,7 +28,14 @@ describe("plugin contract registry", () => {
     const snapshotPluginIds = new Set(
       BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.map((entry) => entry.pluginId),
     );
-    return loadPluginManifestRegistry({})
+    return loadPluginManifestRegistry({
+      config: {},
+      env: {
+        ...process.env,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: resolve(process.cwd(), "extensions"),
+        OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+      },
+    })
       .plugins.filter((plugin) => snapshotPluginIds.has(plugin.id) && predicate(plugin))
       .map((plugin) => plugin.id)
       .toSorted((left, right) => left.localeCompare(right));

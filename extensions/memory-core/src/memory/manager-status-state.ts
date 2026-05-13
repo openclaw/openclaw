@@ -1,5 +1,8 @@
 import type { SQLInputValue } from "node:sqlite";
-import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  MEMORY_INDEX_TABLE_NAMES,
+  type MemorySource,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
 type StatusProvider = {
   id: string;
@@ -19,9 +22,9 @@ type StatusAggregateDb = {
 };
 
 export const MEMORY_STATUS_AGGREGATE_SQL =
-  `SELECT 'files' AS kind, source, COUNT(*) as c FROM files WHERE 1=1__FILTER__ GROUP BY source\n` +
+  `SELECT 'files' AS kind, source_kind AS source, COUNT(*) as c FROM ${MEMORY_INDEX_TABLE_NAMES.sources} WHERE 1=1__FILTER__ GROUP BY source_kind\n` +
   `UNION ALL\n` +
-  `SELECT 'chunks' AS kind, source, COUNT(*) as c FROM chunks WHERE 1=1__FILTER__ GROUP BY source`;
+  `SELECT 'chunks' AS kind, source_kind AS source, COUNT(*) as c FROM ${MEMORY_INDEX_TABLE_NAMES.chunks} WHERE 1=1__FILTER__ GROUP BY source_kind`;
 
 export function resolveInitialMemoryDirty(params: {
   hasMemorySource: boolean;

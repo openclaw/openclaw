@@ -253,7 +253,7 @@ afterAll(async () => {
 export async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   const home = join(suiteTempHomeRoot, `case-${++suiteTempHomeId}`);
   const snapshot = snapshotTempHomeEnv();
-  await fs.mkdir(join(home, ".openclaw", "agents", "main", "sessions"), { recursive: true });
+  await fs.mkdir(join(home, ".openclaw", "agents", "main", "agent"), { recursive: true });
   setTempHomeEnv(home);
 
   try {
@@ -300,7 +300,6 @@ export function makeCfg(home: string): OpenClawConfig {
         debounceMs: 0,
       },
     },
-    session: { store: join(home, "sessions.json") },
   } as OpenClawConfig);
 }
 
@@ -317,14 +316,6 @@ export function installTriggerHandlingReplyHarness(
     setGetReplyFromConfig(await loadGetReplyFromConfig());
   });
   installTriggerHandlingE2eTestHooks();
-}
-
-export function requireSessionStorePath(cfg: { session?: { store?: string } }): string {
-  const storePath = cfg.session?.store;
-  if (!storePath) {
-    throw new Error("expected session store path");
-  }
-  return storePath;
 }
 
 export async function expectInlineCommandHandledAndStripped(params: {
@@ -354,7 +345,8 @@ export async function expectInlineCommandHandledAndStripped(params: {
   expect(blockReplies.length).toBe(1);
   expect(blockReplies[0]?.text).toContain(params.blockReplyContains);
   expect(runEmbeddedPiAgentMock).toHaveBeenCalled();
-  const prompt = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0]?.prompt ?? "";
+  const lastCall = runEmbeddedPiAgentMock.mock.calls[runEmbeddedPiAgentMock.mock.calls.length - 1];
+  const prompt = lastCall?.[0]?.prompt ?? "";
   expect(prompt).not.toContain(params.stripToken);
   expect(text).toBe("ok");
 }

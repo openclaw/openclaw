@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { saveMatrixCredentialsState } from "./matrix/credentials-read.js";
 
 export const MATRIX_TEST_HOMESERVER = "https://matrix.example.org";
 export const MATRIX_DEFAULT_USER_ID = "@bot:example.org";
@@ -26,17 +27,16 @@ export function writeMatrixCredentials(
   },
 ) {
   const accountId = params?.accountId ?? MATRIX_OPS_ACCOUNT_ID;
-  writeFile(
-    path.join(stateDir, "credentials", "matrix", `credentials-${accountId}.json`),
-    JSON.stringify(
-      {
-        homeserver: params?.homeserver ?? MATRIX_TEST_HOMESERVER,
-        userId: params?.userId ?? MATRIX_OPS_USER_ID,
-        accessToken: params?.accessToken ?? MATRIX_OPS_ACCESS_TOKEN,
-        deviceId: params?.deviceId ?? MATRIX_OPS_DEVICE_ID,
-      },
-      null,
-      2,
-    ),
+  saveMatrixCredentialsState(
+    {
+      homeserver: params?.homeserver ?? MATRIX_TEST_HOMESERVER,
+      userId: params?.userId ?? MATRIX_OPS_USER_ID,
+      accessToken: params?.accessToken ?? MATRIX_OPS_ACCESS_TOKEN,
+      deviceId: params?.deviceId ?? MATRIX_OPS_DEVICE_ID,
+      createdAt: "2026-03-12T00:00:00.000Z",
+      lastUsedAt: "2026-03-12T00:00:00.000Z",
+    },
+    { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    accountId,
   );
 }

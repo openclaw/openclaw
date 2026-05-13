@@ -16,7 +16,7 @@ function buildQaMockProfileId(provider: string): string {
  * In mock provider modes the qa suite runs against an embedded mock server
  * instead of a real provider API. The mock does not validate credentials, but
  * the agent auth layer still needs a matching `api_key` auth profile in
- * `auth-profiles.json` before it will route the request through
+ * SQLite before it will route the request through
  * `providerBaseUrl`. Without this staging step, every scenario fails with
  * `FailoverError: No API key found for provider "openai"` before the mock
  * server ever sees a request.
@@ -43,6 +43,7 @@ export async function stageQaMockAuthProfiles(params: {
   for (const agentId of agentIds) {
     await writeQaAuthProfiles({
       agentDir: resolveQaAgentAuthDir({ stateDir: params.stateDir, agentId }),
+      stateDir: params.stateDir,
       profiles: Object.fromEntries(
         providers.map((provider) => [
           buildQaMockProfileId(provider),

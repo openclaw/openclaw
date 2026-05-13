@@ -1,14 +1,15 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { normalizeChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import type { AgentMessage } from "../agent-core-contract.js";
 import { normalizeProviderId } from "../provider-id.js";
 
-const THREAD_SUFFIX_REGEX = /^(.*)(?::(?:thread|topic):\d+)$/i;
-
-function stripThreadSuffix(value: string): string {
-  const match = value.match(THREAD_SUFFIX_REGEX);
-  return match?.[1] ?? value;
-}
+export type HistoryLimitSessionRouting = {
+  channel?: string;
+  chatType?: string;
+  conversationKind?: string;
+  conversationPeerId?: string;
+};
 
 /**
  * Limits conversation history to the last N user turns (and their associated
@@ -37,30 +38,22 @@ export function limitHistoryTurns(
   return messages;
 }
 
-/**
- * Extract provider + user ID from a session key and look up dmHistoryLimit.
- * Supports per-DM overrides and provider defaults.
- * For channel/group sessions, uses historyLimit from provider config.
- */
-export function getHistoryLimitFromSessionKey(
-  sessionKey: string | undefined,
+export function getHistoryLimitForSessionRouting(
+  routing: HistoryLimitSessionRouting | undefined,
   config: OpenClawConfig | undefined,
 ): number | undefined {
-  if (!sessionKey || !config) {
+  if (!routing || !config) {
     return undefined;
   }
 
-  const parts = sessionKey.split(":").filter(Boolean);
-  const providerParts = parts.length >= 3 && parts[0] === "agent" ? parts.slice(2) : parts;
-
-  const provider = normalizeProviderId(providerParts[0] ?? "");
+  const provider = normalizeProviderId(routing.channel ?? "");
   if (!provider) {
     return undefined;
   }
 
-  const kind = normalizeOptionalLowercaseString(providerParts[1]);
-  const userIdRaw = providerParts.slice(2).join(":");
-  const userId = stripThreadSuffix(userIdRaw);
+  const chatType =
+    normalizeChatType(routing.chatType) ?? normalizeChatType(routing.conversationKind);
+  const peerId = normalizeOptionalString(routing.conversationPeerId);
 
   const resolveProviderConfig = (
     cfg: OpenClawConfig | undefined,
@@ -99,18 +92,14 @@ export function getHistoryLimitFromSessionKey(
     return undefined;
   }
 
-  // For DM sessions: per-DM override -> dmHistoryLimit.
-  // Accept both "direct" (new) and "dm" (legacy) for backward compat.
-  if (kind === "dm" || kind === "direct") {
-    if (userId && providerConfig.dms?.[userId]?.historyLimit !== undefined) {
-      return providerConfig.dms[userId].historyLimit;
+  if (chatType === "direct") {
+    if (peerId && providerConfig.dms?.[peerId]?.historyLimit !== undefined) {
+      return providerConfig.dms[peerId].historyLimit;
     }
     return providerConfig.dmHistoryLimit;
   }
 
-  // For channel/group sessions: use historyLimit from provider config
-  // This prevents context overflow in long-running channel sessions
-  if (kind === "channel" || kind === "group") {
+  if (chatType === "channel" || chatType === "group") {
     return providerConfig.historyLimit;
   }
 

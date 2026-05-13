@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
 import {
   ssrfPolicyFromDangerouslyAllowPrivateNetwork,
@@ -7,11 +6,7 @@ import {
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MatrixClient } from "../sdk.js";
 import { resolveValidatedMatrixHomeserverUrl } from "./config.js";
-import {
-  maybeMigrateLegacyStorage,
-  resolveMatrixStoragePaths,
-  writeStorageMeta,
-} from "./storage.js";
+import { resolveMatrixStoragePaths, writeStorageMeta } from "./storage.js";
 
 type MatrixCreateClientRuntimeDeps = {
   MatrixClient: typeof import("../sdk.js").MatrixClient;
@@ -68,11 +63,6 @@ export async function createMatrixClient(params: {
     : null;
 
   if (storagePaths) {
-    await maybeMigrateLegacyStorage({
-      storagePaths,
-      env: process.env,
-    });
-    fs.mkdirSync(storagePaths.rootDir, { recursive: true });
     writeStorageMeta({
       storagePaths,
       homeserver,
@@ -93,9 +83,19 @@ export async function createMatrixClient(params: {
     encryption: params.encryption,
     localTimeoutMs: params.localTimeoutMs,
     initialSyncLimit: params.initialSyncLimit,
-    storagePath: storagePaths?.storagePath,
-    recoveryKeyPath: storagePaths?.recoveryKeyPath,
-    idbSnapshotPath: storagePaths?.idbSnapshotPath,
+    storageRootDir: storagePaths?.rootDir,
+    recoveryKeyRef: storagePaths
+      ? {
+          stateDir: storagePaths.stateDir,
+          storageKey: storagePaths.recoveryKeyStorageKey,
+        }
+      : undefined,
+    idbSnapshotRef: storagePaths
+      ? {
+          stateDir: storagePaths.stateDir,
+          storageKey: storagePaths.idbSnapshotStorageKey,
+        }
+      : undefined,
     cryptoDatabasePrefix,
     autoBootstrapCrypto: params.autoBootstrapCrypto,
     ssrfPolicy:

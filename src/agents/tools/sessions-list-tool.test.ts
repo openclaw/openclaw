@@ -73,7 +73,7 @@ describe("sessions-list-tool", () => {
       const request = opts as { method?: string };
       if (request.method === "sessions.list") {
         return {
-          path: "/tmp/sessions.json",
+          databasePath: "/tmp/openclaw-agent.sqlite",
           sessions: [
             {
               key: "agent:main:dashboard:child",
@@ -126,7 +126,7 @@ describe("sessions-list-tool", () => {
       const request = opts as { method?: string };
       if (request.method === "sessions.list") {
         return {
-          path: "/tmp/sessions.json",
+          databasePath: "/tmp/openclaw-agent.sqlite",
           sessions: [
             {
               key: "agent:main:telegram:group:-100123:topic:99",
@@ -162,7 +162,7 @@ describe("sessions-list-tool", () => {
       const request = opts as { method?: string };
       if (request.method === "sessions.list") {
         return {
-          path: "/tmp/sessions.json",
+          databasePath: "/tmp/openclaw-agent.sqlite",
           sessions: [
             {
               key: "main",

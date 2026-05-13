@@ -1,7 +1,17 @@
 import { createHash, randomUUID } from "node:crypto";
-import path from "node:path";
-import { resolveStateDir } from "../config/paths.js";
-import { createAsyncLock, tryReadJson, writeJson } from "./json-files.js";
+import type { Insertable, Selectable } from "kysely";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
+import { createAsyncLock } from "./async-lock.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "./kysely-sync.js";
 
 // --- Types ---
 
@@ -13,11 +23,11 @@ type WebPushSubscription = {
   updatedAtMs: number;
 };
 
-type WebPushRegistrationState = {
+export type WebPushRegistrationState = {
   subscriptionsByEndpointHash: Record<string, WebPushSubscription>;
 };
 
-type VapidKeyPair = {
+export type VapidKeyPair = {
   publicKey: string;
   privateKey: string;
   subject: string;
@@ -32,8 +42,7 @@ type WebPushSendResult = {
 
 // --- Constants ---
 
-const WEB_PUSH_STATE_FILENAME = "push/web-push-subscriptions.json";
-const VAPID_KEYS_FILENAME = "push/vapid-keys.json";
+const WEB_PUSH_VAPID_KEY_ID = "default";
 const MAX_ENDPOINT_LENGTH = 2048;
 const MAX_KEY_LENGTH = 512;
 const DEFAULT_VAPID_SUBJECT = "mailto:openclaw@localhost";
@@ -45,6 +54,20 @@ type WebPushRuntimeModule = WebPushRuntime & { default?: WebPushRuntime };
 
 let webPushRuntimePromise: Promise<WebPushRuntime> | undefined;
 
+type WebPushDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "web_push_subscriptions" | "web_push_vapid_keys"
+>;
+
+type WebPushSubscriptionRow = Selectable<WebPushDatabase["web_push_subscriptions"]>;
+type WebPushSubscriptionInsert = Insertable<WebPushDatabase["web_push_subscriptions"]>;
+
+type VapidKeyRow = {
+  public_key: string;
+  private_key: string;
+  subject: string;
+};
+
 async function loadWebPushRuntime(): Promise<WebPushRuntime> {
   webPushRuntimePromise ??= import("web-push").then(
     (mod: WebPushRuntimeModule) => mod.default ?? mod,
@@ -54,14 +77,17 @@ async function loadWebPushRuntime(): Promise<WebPushRuntime> {
 
 // --- Helpers ---
 
-function resolveWebPushStatePath(baseDir?: string): string {
-  const root = baseDir ?? resolveStateDir();
-  return path.join(root, WEB_PUSH_STATE_FILENAME);
+function sqliteOptionsForBaseDir(baseDir: string | undefined): OpenClawStateDatabaseOptions {
+  return baseDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: baseDir } } : {};
 }
 
-function resolveVapidKeysPath(baseDir?: string): string {
-  const root = baseDir ?? resolveStateDir();
-  return path.join(root, VAPID_KEYS_FILENAME);
+function openWebPushDatabase(baseDir?: string) {
+  const database = openOpenClawStateDatabase(sqliteOptionsForBaseDir(baseDir));
+  return { database, db: getNodeSqliteKysely<WebPushDatabase>(database.db) };
+}
+
+function sqliteIntegerToNumber(value: number | bigint): number {
+  return typeof value === "bigint" ? Number(value) : value;
 }
 
 function hashEndpoint(endpoint: string): string {
@@ -86,15 +112,109 @@ function isValidKey(key: string): boolean {
 
 // --- State persistence ---
 
+function rowToSubscription(row: WebPushSubscriptionRow): WebPushSubscription {
+  return {
+    subscriptionId: row.subscription_id,
+    endpoint: row.endpoint,
+    keys: { p256dh: row.p256dh, auth: row.auth },
+    createdAtMs: sqliteIntegerToNumber(row.created_at_ms),
+    updatedAtMs: sqliteIntegerToNumber(row.updated_at_ms),
+  };
+}
+
+function subscriptionToRow(
+  endpointHash: string,
+  subscription: WebPushSubscription,
+): WebPushSubscriptionInsert {
+  return {
+    endpoint_hash: endpointHash,
+    subscription_id: subscription.subscriptionId,
+    endpoint: subscription.endpoint,
+    p256dh: subscription.keys.p256dh,
+    auth: subscription.keys.auth,
+    created_at_ms: subscription.createdAtMs,
+    updated_at_ms: subscription.updatedAtMs,
+  };
+}
+
 async function loadState(baseDir?: string): Promise<WebPushRegistrationState> {
-  const filePath = resolveWebPushStatePath(baseDir);
-  const state = await tryReadJson<WebPushRegistrationState>(filePath);
-  return state ?? { subscriptionsByEndpointHash: {} };
+  const { database, db } = openWebPushDatabase(baseDir);
+  const rows = executeSqliteQuerySync(
+    database.db,
+    db
+      .selectFrom("web_push_subscriptions")
+      .select([
+        "endpoint_hash",
+        "subscription_id",
+        "endpoint",
+        "p256dh",
+        "auth",
+        "created_at_ms",
+        "updated_at_ms",
+      ])
+      .orderBy("created_at_ms", "asc")
+      .orderBy("subscription_id", "asc"),
+  ).rows;
+  const subscriptionsByEndpointHash: Record<string, WebPushSubscription> = {};
+  for (const row of rows) {
+    subscriptionsByEndpointHash[row.endpoint_hash] = rowToSubscription(row);
+  }
+  return { subscriptionsByEndpointHash };
 }
 
 async function persistState(state: WebPushRegistrationState, baseDir?: string): Promise<void> {
-  const filePath = resolveWebPushStatePath(baseDir);
-  await writeJson(filePath, state, { trailingNewline: true });
+  const rows = Object.entries(state.subscriptionsByEndpointHash ?? {}).map(
+    ([endpointHash, subscription]) => subscriptionToRow(endpointHash, subscription),
+  );
+  runOpenClawStateWriteTransaction((database) => {
+    const db = getNodeSqliteKysely<WebPushDatabase>(database.db);
+    if (rows.length === 0) {
+      executeSqliteQuerySync(database.db, db.deleteFrom("web_push_subscriptions"));
+      return;
+    }
+    const endpointHashes = rows.map((row) => row.endpoint_hash);
+    const subscriptionIds = rows.map((row) => row.subscription_id);
+    executeSqliteQuerySync(
+      database.db,
+      db.deleteFrom("web_push_subscriptions").where("endpoint_hash", "not in", endpointHashes),
+    );
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .deleteFrom("web_push_subscriptions")
+        .where("subscription_id", "in", subscriptionIds)
+        .where("endpoint_hash", "not in", endpointHashes),
+    );
+    for (const row of rows) {
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .insertInto("web_push_subscriptions")
+          .values(row)
+          .onConflict((conflict) =>
+            conflict.column("endpoint_hash").doUpdateSet({
+              subscription_id: (eb) => eb.ref("excluded.subscription_id"),
+              endpoint: (eb) => eb.ref("excluded.endpoint"),
+              p256dh: (eb) => eb.ref("excluded.p256dh"),
+              auth: (eb) => eb.ref("excluded.auth"),
+              created_at_ms: (eb) => eb.ref("excluded.created_at_ms"),
+              updated_at_ms: (eb) => eb.ref("excluded.updated_at_ms"),
+            }),
+          ),
+      );
+    }
+  }, sqliteOptionsForBaseDir(baseDir));
+}
+
+export async function writeWebPushRegistrationStateSnapshot(
+  state: WebPushRegistrationState,
+  baseDir?: string,
+): Promise<void> {
+  await persistState(state, baseDir);
+}
+
+export function writeWebPushVapidKeysSnapshot(keys: VapidKeyPair, baseDir?: string): void {
+  persistVapidKeys(keys, baseDir);
 }
 
 // --- VAPID keys ---
@@ -115,13 +235,12 @@ export async function resolveVapidKeys(baseDir?: string): Promise<VapidKeyPair> 
   // Fall back to persisted keys, generating on first use under a lock to
   // prevent concurrent bootstraps from writing different keypairs.
   return await withLock(async () => {
-    const filePath = resolveVapidKeysPath(baseDir);
-    const existing = await tryReadJson<VapidKeyPair>(filePath);
-    if (existing?.publicKey && existing?.privateKey) {
+    const existing = readPersistedVapidKeys(baseDir);
+    if (existing) {
       return {
         publicKey: existing.publicKey,
         privateKey: existing.privateKey,
-        // Env var always wins so operators can change subject without deleting vapid-keys.json.
+        // Env var always wins so operators can change subject without touching persisted keys.
         subject: resolveVapidSubjectFromEnv(),
       };
     }
@@ -133,9 +252,55 @@ export async function resolveVapidKeys(baseDir?: string): Promise<VapidKeyPair> 
       privateKey: keys.privateKey,
       subject: resolveVapidSubjectFromEnv(),
     };
-    await writeJson(filePath, pair, { trailingNewline: true });
+    persistVapidKeys(pair, baseDir);
     return pair;
   });
+}
+
+function readPersistedVapidKeys(baseDir?: string): VapidKeyPair | null {
+  const { database, db } = openWebPushDatabase(baseDir);
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("web_push_vapid_keys")
+      .select(["public_key", "private_key", "subject"])
+      .where("key_id", "=", WEB_PUSH_VAPID_KEY_ID),
+  ) as VapidKeyRow | undefined;
+  if (!row?.public_key || !row.private_key) {
+    return null;
+  }
+  return {
+    publicKey: row.public_key,
+    privateKey: row.private_key,
+    subject: row.subject || DEFAULT_VAPID_SUBJECT,
+  };
+}
+
+function persistVapidKeys(keys: VapidKeyPair, baseDir?: string): void {
+  const updatedAtMs = Date.now();
+  runOpenClawStateWriteTransaction((database) => {
+    const db = getNodeSqliteKysely<WebPushDatabase>(database.db);
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .insertInto("web_push_vapid_keys")
+        .values({
+          key_id: WEB_PUSH_VAPID_KEY_ID,
+          public_key: keys.publicKey,
+          private_key: keys.privateKey,
+          subject: keys.subject || DEFAULT_VAPID_SUBJECT,
+          updated_at_ms: updatedAtMs,
+        })
+        .onConflict((conflict) =>
+          conflict.column("key_id").doUpdateSet({
+            public_key: keys.publicKey,
+            private_key: keys.privateKey,
+            subject: keys.subject || DEFAULT_VAPID_SUBJECT,
+            updated_at_ms: updatedAtMs,
+          }),
+        ),
+    );
+  }, sqliteOptionsForBaseDir(baseDir));
 }
 
 function resolveVapidSubjectFromEnv(): string {
@@ -171,21 +336,52 @@ export async function registerWebPushSubscription(
   }
 
   return await withLock(async () => {
-    const state = await loadState(baseDir);
     const hash = hashEndpoint(endpoint);
     const now = Date.now();
-
-    const existing = state.subscriptionsByEndpointHash[hash];
+    const { database, db } = openWebPushDatabase(baseDir);
+    const existingRow = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("web_push_subscriptions")
+        .select(["subscription_id", "created_at_ms"])
+        .where("endpoint_hash", "=", hash),
+    );
     const subscription: WebPushSubscription = {
-      subscriptionId: existing?.subscriptionId ?? randomUUID(),
+      subscriptionId: existingRow?.subscription_id ?? randomUUID(),
       endpoint,
       keys: { p256dh: keys.p256dh, auth: keys.auth },
-      createdAtMs: existing?.createdAtMs ?? now,
+      createdAtMs: existingRow?.created_at_ms
+        ? sqliteIntegerToNumber(existingRow.created_at_ms)
+        : now,
       updatedAtMs: now,
     };
 
-    state.subscriptionsByEndpointHash[hash] = subscription;
-    await persistState(state, baseDir);
+    runOpenClawStateWriteTransaction((stateDatabase) => {
+      const stateDb = getNodeSqliteKysely<WebPushDatabase>(stateDatabase.db);
+      executeSqliteQuerySync(
+        stateDatabase.db,
+        stateDb
+          .insertInto("web_push_subscriptions")
+          .values({
+            endpoint_hash: hash,
+            subscription_id: subscription.subscriptionId,
+            endpoint,
+            p256dh: keys.p256dh,
+            auth: keys.auth,
+            created_at_ms: subscription.createdAtMs,
+            updated_at_ms: now,
+          })
+          .onConflict((conflict) =>
+            conflict.column("endpoint_hash").doUpdateSet({
+              subscription_id: subscription.subscriptionId,
+              endpoint,
+              p256dh: keys.p256dh,
+              auth: keys.auth,
+              updated_at_ms: now,
+            }),
+          ),
+      );
+    }, sqliteOptionsForBaseDir(baseDir));
     return subscription;
   });
 }
@@ -194,13 +390,23 @@ export async function loadWebPushSubscription(
   subscriptionId: string,
   baseDir?: string,
 ): Promise<WebPushSubscription | null> {
-  const state = await loadState(baseDir);
-  for (const sub of Object.values(state.subscriptionsByEndpointHash)) {
-    if (sub.subscriptionId === subscriptionId) {
-      return sub;
-    }
-  }
-  return null;
+  const { database, db } = openWebPushDatabase(baseDir);
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("web_push_subscriptions")
+      .select([
+        "endpoint_hash",
+        "subscription_id",
+        "endpoint",
+        "p256dh",
+        "auth",
+        "created_at_ms",
+        "updated_at_ms",
+      ])
+      .where("subscription_id", "=", subscriptionId),
+  );
+  return row ? rowToSubscription(row) : null;
 }
 
 export async function listWebPushSubscriptions(baseDir?: string): Promise<WebPushSubscription[]> {
@@ -213,15 +419,14 @@ export async function clearWebPushSubscription(
   baseDir?: string,
 ): Promise<boolean> {
   return await withLock(async () => {
-    const state = await loadState(baseDir);
-    for (const [hash, sub] of Object.entries(state.subscriptionsByEndpointHash)) {
-      if (sub.subscriptionId === subscriptionId) {
-        delete state.subscriptionsByEndpointHash[hash];
-        await persistState(state, baseDir);
-        return true;
-      }
-    }
-    return false;
+    return runOpenClawStateWriteTransaction((database) => {
+      const db = getNodeSqliteKysely<WebPushDatabase>(database.db);
+      const result = executeSqliteQuerySync(
+        database.db,
+        db.deleteFrom("web_push_subscriptions").where("subscription_id", "=", subscriptionId),
+      );
+      return Number(result.numAffectedRows ?? 0) > 0;
+    }, sqliteOptionsForBaseDir(baseDir));
   });
 }
 
@@ -230,14 +435,15 @@ export async function clearWebPushSubscriptionByEndpoint(
   baseDir?: string,
 ): Promise<boolean> {
   return await withLock(async () => {
-    const state = await loadState(baseDir);
     const hash = hashEndpoint(endpoint);
-    if (state.subscriptionsByEndpointHash[hash]) {
-      delete state.subscriptionsByEndpointHash[hash];
-      await persistState(state, baseDir);
-      return true;
-    }
-    return false;
+    return runOpenClawStateWriteTransaction((database) => {
+      const db = getNodeSqliteKysely<WebPushDatabase>(database.db);
+      const result = executeSqliteQuerySync(
+        database.db,
+        db.deleteFrom("web_push_subscriptions").where("endpoint_hash", "=", hash),
+      );
+      return Number(result.numAffectedRows ?? 0) > 0;
+    }, sqliteOptionsForBaseDir(baseDir));
   });
 }
 

@@ -8,63 +8,57 @@ type TargetedSyncProgress = {
   report: (update: MemorySyncProgressUpdate) => void;
 };
 
-export function clearMemorySyncedSessionFiles(params: {
-  sessionsDirtyFiles: Set<string>;
-  targetSessionFiles?: Iterable<string> | null;
+export function clearMemorySyncedSessionTranscripts(params: {
+  dirtySessionTranscripts: Set<string>;
+  targetSessionTranscriptKeys?: Iterable<string> | null;
 }): boolean {
-  if (!params.targetSessionFiles) {
-    params.sessionsDirtyFiles.clear();
+  if (!params.targetSessionTranscriptKeys) {
+    params.dirtySessionTranscripts.clear();
   } else {
-    for (const targetSessionFile of params.targetSessionFiles) {
-      params.sessionsDirtyFiles.delete(targetSessionFile);
+    for (const targetSessionTranscript of params.targetSessionTranscriptKeys) {
+      params.dirtySessionTranscripts.delete(targetSessionTranscript);
     }
   }
-  return params.sessionsDirtyFiles.size > 0;
+  return params.dirtySessionTranscripts.size > 0;
 }
 
 export async function runMemoryTargetedSessionSync(params: {
   hasSessionSource: boolean;
-  targetSessionFiles: Set<string> | null;
+  targetSessionTranscriptKeys: Set<string> | null;
   reason?: string;
   progress?: TargetedSyncProgress;
-  useUnsafeReindex: boolean;
-  sessionsDirtyFiles: Set<string>;
-  syncSessionFiles: (params: {
+  dirtySessionTranscripts: Set<string>;
+  syncSessionTranscripts: (params: {
     needsFullReindex: boolean;
-    targetSessionFiles?: string[];
+    targetSessionTranscriptKeys?: string[];
     progress?: TargetedSyncProgress;
   }) => Promise<void>;
   shouldFallbackOnError: (message: string) => boolean;
   activateFallbackProvider: (reason: string) => Promise<boolean>;
-  runSafeReindex: (params: {
-    reason?: string;
-    force?: boolean;
-    progress?: TargetedSyncProgress;
-  }) => Promise<void>;
-  runUnsafeReindex: (params: {
+  runFullReindex: (params: {
     reason?: string;
     force?: boolean;
     progress?: TargetedSyncProgress;
   }) => Promise<void>;
 }): Promise<{ handled: boolean; sessionsDirty: boolean }> {
-  if (!params.hasSessionSource || !params.targetSessionFiles) {
+  if (!params.hasSessionSource || !params.targetSessionTranscriptKeys) {
     return {
       handled: false,
-      sessionsDirty: params.sessionsDirtyFiles.size > 0,
+      sessionsDirty: params.dirtySessionTranscripts.size > 0,
     };
   }
 
   try {
-    await params.syncSessionFiles({
+    await params.syncSessionTranscripts({
       needsFullReindex: false,
-      targetSessionFiles: Array.from(params.targetSessionFiles),
+      targetSessionTranscriptKeys: Array.from(params.targetSessionTranscriptKeys),
       progress: params.progress,
     });
     return {
       handled: true,
-      sessionsDirty: clearMemorySyncedSessionFiles({
-        sessionsDirtyFiles: params.sessionsDirtyFiles,
-        targetSessionFiles: params.targetSessionFiles,
+      sessionsDirty: clearMemorySyncedSessionTranscripts({
+        dirtySessionTranscripts: params.dirtySessionTranscripts,
+        targetSessionTranscriptKeys: params.targetSessionTranscriptKeys,
       }),
     };
   } catch (err) {
@@ -79,14 +73,10 @@ export async function runMemoryTargetedSessionSync(params: {
       force: true,
       progress: params.progress,
     };
-    if (params.useUnsafeReindex) {
-      await params.runUnsafeReindex(reindexParams);
-    } else {
-      await params.runSafeReindex(reindexParams);
-    }
+    await params.runFullReindex(reindexParams);
     return {
       handled: true,
-      sessionsDirty: params.sessionsDirtyFiles.size > 0,
+      sessionsDirty: params.dirtySessionTranscripts.size > 0,
     };
   }
 }

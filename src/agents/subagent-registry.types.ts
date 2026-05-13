@@ -68,7 +68,4 @@ export type SubagentRunRecord = {
   pendingFinalDeliveryLastError?: string | null;
   pendingFinalDeliveryPayload?: PendingFinalDeliveryPayload;
   completionAnnouncedAt?: number;
-  attachmentsDir?: string;
-  attachmentsRootDir?: string;
-  retainAttachmentsOnKeep?: boolean;
 };

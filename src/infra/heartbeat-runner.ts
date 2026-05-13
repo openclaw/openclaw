@@ -13,7 +13,6 @@ import {
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import { appendCronStyleCurrentTimeLine } from "../agents/current-time.js";
-import { isNestedAgentLane } from "../agents/lanes.js";
 import { resolveModelRefFromString, type ModelRef } from "../agents/model-selection.js";
 import { resolveEmbeddedSessionLane } from "../agents/pi-embedded-runner/lanes.js";
 import { formatReasoningMessage } from "../agents/pi-embedded-utils.js";
@@ -58,9 +57,14 @@ import {
   canonicalizeMainSessionAlias,
   resolveAgentMainSessionKey,
 } from "../config/sessions/main-session.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
-import { loadSessionStore } from "../config/sessions/store-load.js";
-import { archiveRemovedSessionTranscripts, updateSessionStore } from "../config/sessions/store.js";
+import {
+  deleteSessionEntry,
+  getSessionEntry,
+  listSessionEntries,
+  patchSessionEntry,
+  upsertSessionEntry,
+} from "../config/sessions/store.js";
+import { deleteSqliteSessionTranscript } from "../config/sessions/transcript-store.sqlite.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -156,7 +160,6 @@ function loadHeartbeatRunnerRuntime() {
 }
 
 const HEARTBEAT_ALWAYS_BUSY_LANES = [CommandLane.Cron, CommandLane.CronNested] as const;
-const HEARTBEAT_OPT_IN_BUSY_LANES = [CommandLane.Subagent, CommandLane.Nested] as const;
 
 function hasQueuedWorkInLanes(
   lanes: readonly string[],
@@ -174,14 +177,47 @@ function hasQueuedWorkInLaneSnapshots(
   );
 }
 
-function hasOptInBusyLaneWork(
-  getSize: (lane?: string) => number,
+/**
+ * Return true when `lane` carries a session-key suffix that parses to
+ * `agentId`. Lane name shapes covered:
+ *
+ * - `session:agent:<agentId>:...` — embedded-runner per-session lanes
+ *   (subagent runs, compaction, context maintenance).
+ * - `nested:agent:<agentId>:...` — per-session nested-agent lanes.
+ *
+ * The generic `subagent` and `nested` global lanes carry no agent identity,
+ * so they cannot be scoped here; rely on the session-keyed variants and the
+ * per-session `session-lane-busy` skip at the heartbeat dispatch site.
+ */
+function laneBelongsToAgent(lane: string, agentId: string): boolean {
+  let suffix: string | undefined;
+  if (lane.startsWith("session:")) {
+    suffix = lane.slice("session:".length);
+  } else if (lane.startsWith("nested:")) {
+    suffix = lane.slice("nested:".length);
+  }
+  if (!suffix) {
+    return false;
+  }
+  const parsed = parseAgentSessionKey(suffix);
+  if (!parsed) {
+    return false;
+  }
+  return normalizeAgentId(parsed.agentId) === normalizeAgentId(agentId);
+}
+
+/**
+ * Per-agent variant of the opt-in busy check. Previously the runner consulted
+ * a global `subagent` lane size, which meant a zombie subagent on any one
+ * agent silently disabled every other agent's heartbeat. Restrict the check
+ * to lanes attributable to `agentId` via session-key parsing so a stuck
+ * subagent on `main` no longer starves `tank`, `narcissus`, or `shiva`.
+ */
+function hasAgentOptInBusyLaneWork(
+  agentId: string,
   getSnapshots: () => readonly CommandLaneSnapshot[],
 ): boolean {
-  return (
-    hasQueuedWorkInLanes(HEARTBEAT_OPT_IN_BUSY_LANES, getSize) ||
-    hasQueuedWorkInLaneSnapshots(getSnapshots(), isNestedAgentLane)
-  );
+  return hasQueuedWorkInLaneSnapshots(getSnapshots(), (lane) => laneBelongsToAgent(lane, agentId));
 }
 
 function resolveHeartbeatChannelPlugin(channel: string): ChannelPlugin | undefined {
@@ -479,17 +515,15 @@ function resolveHeartbeatSession(
   const mainSessionKey =
     scope === "global" ? "global" : resolveAgentMainSessionKey({ cfg, agentId: resolvedAgentId });
   const storeAgentId = scope === "global" ? resolveDefaultAgentId(cfg) : resolvedAgentId;
-  const storePath = resolveStorePath(sessionCfg?.store, {
+  const mainEntry = getSessionEntry({
     agentId: storeAgentId,
+    sessionKey: mainSessionKey,
   });
-  const store = loadSessionStore(storePath);
-  const mainEntry = store[mainSessionKey];
 
   if (scope === "global") {
     return {
+      agentId: storeAgentId,
       sessionKey: mainSessionKey,
-      storePath,
-      store,
       entry: mainEntry,
       suppressOriginatingContext: false,
     };
@@ -499,9 +533,8 @@ function resolveHeartbeatSession(
   const forced = forcedSessionKey?.trim();
   if (forced && isSubagentSessionKey(forced)) {
     return {
+      agentId: storeAgentId,
       sessionKey: mainSessionKey,
-      storePath,
-      store,
       entry: mainEntry,
       suppressOriginatingContext: true,
     };
@@ -523,10 +556,12 @@ function resolveHeartbeatSession(
         const sessionAgentId = resolveAgentIdFromSessionKey(forcedCanonical);
         if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
           return {
+            agentId: storeAgentId,
             sessionKey: forcedCanonical,
-            storePath,
-            store,
-            entry: store[forcedCanonical],
+            entry: getSessionEntry({
+              agentId: storeAgentId,
+              sessionKey: forcedCanonical,
+            }),
             suppressOriginatingContext: false,
           };
         }
@@ -537,9 +572,8 @@ function resolveHeartbeatSession(
   const trimmed = heartbeat?.session?.trim() ?? "";
   if (!trimmed || isSubagentSessionKey(trimmed)) {
     return {
+      agentId: storeAgentId,
       sessionKey: mainSessionKey,
-      storePath,
-      store,
       entry: mainEntry,
       suppressOriginatingContext: false,
     };
@@ -548,9 +582,8 @@ function resolveHeartbeatSession(
   const normalized = normalizeLowercaseStringOrEmpty(trimmed);
   if (normalized === "main" || normalized === "global") {
     return {
+      agentId: storeAgentId,
       sessionKey: mainSessionKey,
-      storePath,
-      store,
       entry: mainEntry,
       suppressOriginatingContext: false,
     };
@@ -563,9 +596,8 @@ function resolveHeartbeatSession(
   });
   if (isSubagentSessionKey(candidate)) {
     return {
+      agentId: storeAgentId,
       sessionKey: mainSessionKey,
-      storePath,
-      store,
       entry: mainEntry,
       suppressOriginatingContext: false,
     };
@@ -579,19 +611,20 @@ function resolveHeartbeatSession(
     const sessionAgentId = resolveAgentIdFromSessionKey(canonical);
     if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
       return {
+        agentId: storeAgentId,
         sessionKey: canonical,
-        storePath,
-        store,
-        entry: store[canonical],
+        entry: getSessionEntry({
+          agentId: storeAgentId,
+          sessionKey: canonical,
+        }),
         suppressOriginatingContext: false,
       };
     }
   }
 
   return {
+    agentId: storeAgentId,
     sessionKey: mainSessionKey,
-    storePath,
-    store,
     entry: mainEntry,
     suppressOriginatingContext: false,
   };
@@ -686,16 +719,15 @@ function resolveHeartbeatReasoningPayloads(
 }
 
 async function restoreHeartbeatUpdatedAt(params: {
-  storePath: string;
+  agentId: string;
   sessionKey: string;
   updatedAt?: number;
 }) {
-  const { storePath, sessionKey, updatedAt } = params;
+  const { agentId, sessionKey, updatedAt } = params;
   if (typeof updatedAt !== "number") {
     return;
   }
-  const store = loadSessionStore(storePath);
-  const entry = store[sessionKey];
+  const entry = getSessionEntry({ agentId, sessionKey });
   if (!entry) {
     return;
   }
@@ -703,16 +735,13 @@ async function restoreHeartbeatUpdatedAt(params: {
   if (entry.updatedAt === nextUpdatedAt) {
     return;
   }
-  await updateSessionStore(storePath, (nextStore) => {
-    const nextEntry = nextStore[sessionKey] ?? entry;
-    if (!nextEntry) {
-      return;
-    }
-    const resolvedUpdatedAt = Math.max(nextEntry.updatedAt ?? 0, updatedAt);
-    if (nextEntry.updatedAt === resolvedUpdatedAt) {
-      return;
-    }
-    nextStore[sessionKey] = { ...nextEntry, updatedAt: resolvedUpdatedAt };
+  upsertSessionEntry({
+    agentId,
+    sessionKey,
+    entry: {
+      ...entry,
+      updatedAt: nextUpdatedAt,
+    },
   });
 }
 
@@ -1058,6 +1087,27 @@ function stripHeartbeatTasksBlock(content: string): string {
   return kept.join("\n");
 }
 
+/**
+ * Append the workspace HEARTBEAT.md directives (everything outside the
+ * `tasks:` block) to the prompt. Runs on every heartbeat path that actually
+ * dispatches a model call, so prose-style runbooks (the common case in
+ * production setups) reach the model — not only files that happen to declare
+ * periodic tasks.
+ */
+function appendHeartbeatFileDirectives(prompt: string, heartbeatFileContent?: string): string {
+  if (!heartbeatFileContent) {
+    return prompt;
+  }
+  const directives = stripHeartbeatTasksBlock(heartbeatFileContent).trim();
+  if (!directives) {
+    return prompt;
+  }
+  if (prompt.includes(directives)) {
+    return prompt;
+  }
+  return `${prompt}\n\nAdditional context from HEARTBEAT.md:\n${directives}`;
+}
+
 function resolveHeartbeatRunPrompt(params: {
   cfg: OpenClawConfig;
   heartbeat?: HeartbeatConfig;
@@ -1100,18 +1150,12 @@ function resolveHeartbeatRunPrompt(params: {
       const completionInstruction = params.useHeartbeatResponseTool
         ? "After completing all due tasks, use heartbeat_respond to report the outcome. Set notify=false when nothing needs the user's attention."
         : "After completing all due tasks, reply HEARTBEAT_OK.";
-      let prompt = `Run the following periodic tasks (only those due based on their intervals):
+      const taskListPrompt = `Run the following periodic tasks (only those due based on their intervals):
 
 ${taskList}
 
 ${completionInstruction}`;
-
-      if (params.heartbeatFileContent) {
-        const directives = stripHeartbeatTasksBlock(params.heartbeatFileContent).trim();
-        if (directives) {
-          prompt += `\n\nAdditional context from HEARTBEAT.md:\n${directives}`;
-        }
-      }
+      const prompt = appendHeartbeatFileDirectives(taskListPrompt, params.heartbeatFileContent);
       return {
         prompt,
         hasExecCompletion: false,
@@ -1123,7 +1167,7 @@ ${completionInstruction}`;
     }
     if (commitmentPrompt) {
       return {
-        prompt: commitmentPrompt,
+        prompt: appendHeartbeatFileDirectives(commitmentPrompt, params.heartbeatFileContent),
         hasExecCompletion: false,
         hasRelayableExecCompletion: false,
         hasCronEvents: false,
@@ -1155,9 +1199,14 @@ ${completionInstruction}`;
       : baseUsesHeartbeatResponseTool
         ? resolveHeartbeatResponseToolPrompt(params.cfg, params.heartbeat)
         : resolveHeartbeatPrompt(params.cfg, params.heartbeat);
+  const basePromptWithHint = appendHeartbeatWorkspacePathHint(basePrompt, params.workspaceDir);
+  const basePromptWithDirectives = appendHeartbeatFileDirectives(
+    basePromptWithHint,
+    params.heartbeatFileContent,
+  );
   const prompt = commitmentPrompt
-    ? `${appendHeartbeatWorkspacePathHint(basePrompt, params.workspaceDir)}\n\n${commitmentPrompt}`
-    : appendHeartbeatWorkspacePathHint(basePrompt, params.workspaceDir);
+    ? `${basePromptWithDirectives}\n\n${commitmentPrompt}`
+    : basePromptWithDirectives;
 
   return {
     prompt,
@@ -1245,7 +1294,7 @@ export async function runHeartbeatOnce(opts: {
     return { status: "skipped", reason: HEARTBEAT_SKIP_CRON_IN_PROGRESS };
   }
 
-  if (heartbeat?.skipWhenBusy === true && hasOptInBusyLaneWork(getSize, getSnapshots)) {
+  if (heartbeat?.skipWhenBusy === true && hasAgentOptInBusyLaneWork(agentId, getSnapshots)) {
     emitHeartbeatEvent({
       status: "skipped",
       reason: HEARTBEAT_SKIP_LANES_BUSY,
@@ -1298,7 +1347,12 @@ export async function runHeartbeatOnce(opts: {
     });
     return { status: "skipped", reason: preflight.skipReason };
   }
-  const { entry, sessionKey, storePath, suppressOriginatingContext } = preflight.session;
+  const {
+    agentId: sessionAgentId,
+    entry,
+    sessionKey,
+    suppressOriginatingContext,
+  } = preflight.session;
 
   // Check the resolved session lane — if it is busy, skip to avoid interrupting
   // an active streaming turn.  The wake-layer retry (heartbeat-wake.ts) will
@@ -1440,51 +1494,47 @@ export async function runHeartbeatOnce(opts: {
       configuredSessionKey: configuredSession.sessionKey,
       sessionEntry: entry,
     });
-    const isolatedStorePath = resolveStorePath(cfg.session?.store, { agentId });
     const staleIsolatedSessionKey = resolveStaleHeartbeatIsolatedSessionKey({
       sessionKey,
       isolatedSessionKey,
       isolatedBaseSessionKey,
     });
-    const removedSessionFiles = new Map<string, string | undefined>();
-    let referencedSessionIds = new Set<string>();
-    await updateSessionStore(isolatedStorePath, (store) => {
-      const cronSession = resolveCronSession({
-        cfg,
-        sessionKey: isolatedSessionKey,
-        agentId,
-        nowMs: startedAt,
-        forceNew: true,
-        store,
-      });
-      if (staleIsolatedSessionKey) {
-        const staleEntry = store[staleIsolatedSessionKey];
-        if (staleEntry?.sessionId) {
-          removedSessionFiles.set(staleEntry.sessionId, staleEntry.sessionFile);
-        }
-        delete store[staleIsolatedSessionKey];
-      }
-      store[isolatedSessionKey] = {
+    const staleEntry = staleIsolatedSessionKey
+      ? getSessionEntry({ agentId, sessionKey: staleIsolatedSessionKey })
+      : undefined;
+    const cronSession = resolveCronSession({
+      cfg,
+      sessionKey: isolatedSessionKey,
+      agentId,
+      nowMs: startedAt,
+      forceNew: true,
+    });
+    upsertSessionEntry({
+      agentId,
+      sessionKey: isolatedSessionKey,
+      entry: {
         ...cronSession.sessionEntry,
         heartbeatIsolatedBaseSessionKey: isolatedBaseSessionKey,
-      };
-      referencedSessionIds = new Set(
-        Object.values(store)
-          .map((sessionEntry) => sessionEntry?.sessionId)
-          .filter((sessionId): sessionId is string => Boolean(sessionId)),
-      );
+      },
     });
-    if (removedSessionFiles.size > 0) {
+    if (staleEntry && staleIsolatedSessionKey && staleIsolatedSessionKey !== isolatedSessionKey) {
+      deleteSessionEntry({ agentId, sessionKey: staleIsolatedSessionKey });
+    }
+    if (staleEntry?.sessionId) {
       try {
-        await archiveRemovedSessionTranscripts({
-          removedSessionFiles,
-          referencedSessionIds,
-          storePath: isolatedStorePath,
-          reason: "deleted",
-          restrictToStoreDir: true,
-        });
+        const referencedSessionIds = new Set(
+          listSessionEntries({ agentId })
+            .map((row) => row.entry.sessionId)
+            .filter((sessionId): sessionId is string => Boolean(sessionId)),
+        );
+        if (!referencedSessionIds.has(staleEntry.sessionId)) {
+          deleteSqliteSessionTranscript({
+            agentId,
+            sessionId: staleEntry.sessionId,
+          });
+        }
       } catch (err) {
-        log.warn("heartbeat: failed to archive stale isolated session transcript", {
+        log.warn("heartbeat: failed to delete stale isolated session transcript", {
           err: String(err),
           sessionKey: staleIsolatedSessionKey,
         });
@@ -1511,27 +1561,27 @@ export async function runHeartbeatOnce(opts: {
     }
     const tasks = preflight.tasks;
 
-    await updateSessionStore(storePath, (store) => {
-      const current = store[sessionKey];
+    await patchSessionEntry({
+      agentId: sessionAgentId,
+      sessionKey,
       // Initialize stub entry on first run when current doesn't exist.
-      const base = current ?? {
+      fallbackEntry: {
         // Generate valid sessionId - derive from sessionKey without colons.
         sessionId: sessionKey.replace(/:/g, "_"),
         updatedAt: startedAt,
-        createdAt: startedAt,
-        messageCount: 0,
-        lastMessageAt: startedAt,
         heartbeatTaskState: {},
-      };
-      const taskState = { ...base.heartbeatTaskState };
+      },
+      update: (current) => {
+        const taskState = { ...current.heartbeatTaskState };
 
-      for (const task of tasks) {
-        if (isTaskDue(taskState[task.name], task.interval, startedAt)) {
-          taskState[task.name] = startedAt;
+        for (const task of tasks) {
+          if (isTaskDue(taskState[task.name], task.interval, startedAt)) {
+            taskState[task.name] = startedAt;
+          }
         }
-      }
 
-      store[sessionKey] = { ...base, heartbeatTaskState: taskState };
+        return { heartbeatTaskState: taskState };
+      },
     });
   };
 
@@ -1683,7 +1733,7 @@ export async function runHeartbeatOnce(opts: {
 
     if (heartbeatToolResponse && !heartbeatToolResponse.notify) {
       await restoreHeartbeatUpdatedAt({
-        storePath,
+        agentId: sessionAgentId,
         sessionKey,
         updatedAt: previousUpdatedAt,
       });
@@ -1712,7 +1762,7 @@ export async function runHeartbeatOnce(opts: {
 
     if (!heartbeatToolResponse && (!replyPayload || !hasOutboundReplyContent(replyPayload))) {
       await restoreHeartbeatUpdatedAt({
-        storePath,
+        agentId: sessionAgentId,
         sessionKey,
         updatedAt: previousUpdatedAt,
       });
@@ -1762,7 +1812,7 @@ export async function runHeartbeatOnce(opts: {
       normalized.shouldSkip && !normalized.hasMedia && !hasRelayableExecCompletion;
     if (shouldSkipMain && reasoningPayloads.length === 0) {
       await restoreHeartbeatUpdatedAt({
-        storePath,
+        agentId: sessionAgentId,
         sessionKey,
         updatedAt: previousUpdatedAt,
       });
@@ -1809,7 +1859,7 @@ export async function runHeartbeatOnce(opts: {
 
     if (isDuplicateMain) {
       await restoreHeartbeatUpdatedAt({
-        storePath,
+        agentId: sessionAgentId,
         sessionKey,
         updatedAt: previousUpdatedAt,
       });
@@ -1859,7 +1909,7 @@ export async function runHeartbeatOnce(opts: {
     if (!visibility.showAlerts) {
       await updateTaskTimestamps();
       await restoreHeartbeatUpdatedAt({
-        storePath,
+        agentId: sessionAgentId,
         sessionKey,
         updatedAt: previousUpdatedAt,
       });
@@ -1935,16 +1985,13 @@ export async function runHeartbeatOnce(opts: {
 
     // Record last delivered heartbeat payload for dedupe.
     if (!shouldSkipMain && normalized.text.trim()) {
-      await updateSessionStore(storePath, (store) => {
-        const current = store[sessionKey];
-        if (!current) {
-          return;
-        }
-        store[sessionKey] = {
-          ...current,
+      await patchSessionEntry({
+        agentId: sessionAgentId,
+        sessionKey,
+        update: () => ({
           lastHeartbeatText: normalized.text,
           lastHeartbeatSentAt: startedAt,
-        };
+        }),
       });
     }
 
@@ -2283,10 +2330,20 @@ export function startHeartbeatRunner(opts: {
         }
       }
 
-      for (const agent of state.agents.values()) {
+      // Run each agent's wake concurrently. Heartbeat work is per-agent —
+      // separate session stores, lanes, and delivery targets — so awaiting
+      // one slow agent (e.g. one whose heartbeat spawns a multi-minute
+      // subagent) must not starve the others. Bookkeeping mutations only
+      // touch the owning agent's `HeartbeatAgentState`, so the per-agent
+      // closures are safe to fan out under `Promise.all`.
+      type AgentWakeOutcome = {
+        ran: boolean;
+        retryableBusySkip?: HeartbeatRunResult;
+      };
+      const runOneAgent = async (agent: HeartbeatAgentState): Promise<AgentWakeOutcome> => {
         const deferral = evaluateWakeDeferral(agent, now, reason, intent);
         if (deferral.defer) {
-          continue;
+          return { ran: false };
         }
 
         let res: HeartbeatRunResult;
@@ -2302,29 +2359,28 @@ export function startHeartbeatRunner(opts: {
           });
         } catch (err) {
           const errMsg = formatErrorMessage(err);
-          log.error(`heartbeat runner: runOnce threw unexpectedly: ${errMsg}`, { error: errMsg });
-          // Throw counts as a non-retryable terminal attempt — see comment in
-          // targeted branch above.
+          log.error(`heartbeat runner: runOnce threw unexpectedly: ${errMsg}`, {
+            error: errMsg,
+            agentId: agent.agentId,
+          });
+          // Throw counts as a non-retryable terminal attempt for cooldown
+          // purposes — record bookkeeping so the wake layer doesn't tight-loop
+          // on the same reason.
           recordRunBookkeeping(agent, now);
           advanceAgentSchedule(agent, now, reason);
-          continue;
+          return { ran: false };
         }
         if (res.status === "skipped" && isRetryableHeartbeatBusySkipReason(res.reason)) {
-          // Do not advance the schedule or record run bookkeeping — the main
-          // lane is busy and the wake layer will retry the same reason shortly
-          // (DEFAULT_RETRY_MS = 1 s). Recording here would convert the retry
-          // into a false `not-due`/`min-spacing` defer.
-          retryableBusySkip = true;
-          return res;
+          // Do not advance the schedule or record run bookkeeping for this
+          // agent — its target runtime is busy and the wake layer retries.
+          return { ran: false, retryableBusySkip: res };
         }
         // Non-retryable outcome — record bookkeeping for cooldown gates.
         recordRunBookkeeping(agent, now);
         if (res.status !== "skipped" || res.reason !== "disabled") {
           advanceAgentSchedule(agent, now, reason);
         }
-        if (res.status === "ran") {
-          ran = true;
-        }
+        let agentRan = res.status === "ran";
 
         const defaultSessionKey = resolveHeartbeatSession(
           state.cfg,
@@ -2357,6 +2413,7 @@ export function startHeartbeatRunner(opts: {
             const errMsg = formatErrorMessage(err);
             log.error(`heartbeat runner: commitment runOnce threw unexpectedly: ${errMsg}`, {
               error: errMsg,
+              agentId: agent.agentId,
             });
             continue;
           }
@@ -2364,13 +2421,34 @@ export function startHeartbeatRunner(opts: {
             commitmentRes.status === "skipped" &&
             isRetryableHeartbeatBusySkipReason(commitmentRes.reason)
           ) {
-            retryableBusySkip = true;
-            return commitmentRes;
+            return { ran: agentRan, retryableBusySkip: commitmentRes };
           }
           if (commitmentRes.status === "ran") {
-            ran = true;
+            agentRan = true;
           }
         }
+
+        return { ran: agentRan };
+      };
+
+      const agentOutcomes = await Promise.all(
+        Array.from(state.agents.values()).map((agent) => runOneAgent(agent)),
+      );
+      let firstRetryableBusy: HeartbeatRunResult | undefined;
+      for (const outcome of agentOutcomes) {
+        if (outcome.ran) {
+          ran = true;
+        }
+        if (outcome.retryableBusySkip && !firstRetryableBusy) {
+          firstRetryableBusy = outcome.retryableBusySkip;
+        }
+      }
+      if (firstRetryableBusy) {
+        // At least one agent's runtime was busy. The wake layer schedules a
+        // retry; on retry, agents that already advanced their schedule will
+        // defer via cooldown, so only the still-busy agent actually re-runs.
+        retryableBusySkip = true;
+        return firstRetryableBusy;
       }
 
       if (ran) {

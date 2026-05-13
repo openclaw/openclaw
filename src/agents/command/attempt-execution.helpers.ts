@@ -1,6 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import readline from "node:readline";
 import {
   isSilentReplyPrefixText,
@@ -9,14 +7,15 @@ import {
   startsWithSilentToken,
   stripLeadingSilentToken,
 } from "../../auto-reply/tokens.js";
+import { loadSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
 import {
   type ClaudeCliFallbackSeed,
   readClaudeCliFallbackSeed,
+  resolveClaudeCliHistoryJsonlPath,
 } from "../../gateway/cli-session-history.js";
 
-/** Maximum number of JSONL records to inspect before giving up. */
-const SESSION_FILE_MAX_RECORDS = 500;
-const CLAUDE_PROJECTS_RELATIVE_DIR = path.join(".claude", "projects");
+/** Maximum number of external Claude CLI JSONL records to inspect before giving up. */
+const CLAUDE_CLI_HISTORY_MAX_RECORDS = 500;
 
 function normalizeClaudeCliSessionId(sessionId: string | undefined): string | undefined {
   const trimmed = sessionId?.trim();
@@ -26,7 +25,9 @@ function normalizeClaudeCliSessionId(sessionId: string | undefined): string | un
   return trimmed;
 }
 
-async function jsonlFileHasAssistantMessage(filePath: string | undefined): Promise<boolean> {
+async function claudeCliHistoryJsonlHasAssistantMessage(
+  filePath: string | undefined,
+): Promise<boolean> {
   if (!filePath) {
     return false;
   }
@@ -45,7 +46,7 @@ async function jsonlFileHasAssistantMessage(filePath: string | undefined): Promi
           continue;
         }
         recordCount++;
-        if (recordCount > SESSION_FILE_MAX_RECORDS) {
+        if (recordCount > CLAUDE_CLI_HISTORY_MAX_RECORDS) {
           break;
         }
         let obj: unknown;
@@ -68,13 +69,25 @@ async function jsonlFileHasAssistantMessage(filePath: string | undefined): Promi
   }
 }
 
-/**
- * Check whether a session transcript file exists and contains at least one
- * assistant message, indicating that the SessionManager has flushed the
- * initial user+assistant exchange to disk.
- */
-export async function sessionFileHasContent(sessionFile: string | undefined): Promise<boolean> {
-  return await jsonlFileHasAssistantMessage(sessionFile);
+function sqliteTranscriptHasAssistantMessage(
+  scope: { agentId?: string; sessionId?: string } | undefined,
+): boolean {
+  const agentId = scope?.agentId?.trim();
+  const sessionId = scope?.sessionId?.trim();
+  if (!agentId || !sessionId) {
+    return false;
+  }
+  return loadSqliteSessionTranscriptEvents({ agentId, sessionId }).some((entry) => {
+    const record = entry.event as Record<string, unknown> | null;
+    return (record?.message as Record<string, unknown> | undefined)?.role === "assistant";
+  });
+}
+
+/** Check whether the SQLite transcript contains at least one assistant message. */
+export async function sessionTranscriptHasContent(
+  scope: { agentId?: string; sessionId?: string } | undefined,
+): Promise<boolean> {
+  return sqliteTranscriptHasAssistantMessage(scope);
 }
 
 export async function claudeCliSessionTranscriptHasContent(params: {
@@ -85,24 +98,11 @@ export async function claudeCliSessionTranscriptHasContent(params: {
   if (!sessionId) {
     return false;
   }
-  const homeDir = params.homeDir?.trim() || process.env.HOME || os.homedir();
-  const projectsDir = path.join(homeDir, CLAUDE_PROJECTS_RELATIVE_DIR);
-  let projectEntries: import("node:fs").Dirent[];
-  try {
-    projectEntries = await fs.readdir(projectsDir, { withFileTypes: true });
-  } catch {
-    return false;
-  }
-  for (const entry of projectEntries) {
-    if (!entry.isDirectory()) {
-      continue;
-    }
-    const candidate = path.join(projectsDir, entry.name, `${sessionId}.jsonl`);
-    if (await jsonlFileHasAssistantMessage(candidate)) {
-      return true;
-    }
-  }
-  return false;
+  const filePath = resolveClaudeCliHistoryJsonlPath({
+    cliSessionId: sessionId,
+    homeDir: params.homeDir,
+  });
+  return await claudeCliHistoryJsonlHasAssistantMessage(filePath);
 }
 
 export function resolveFallbackRetryPrompt(params: {
@@ -262,8 +262,8 @@ export function formatClaudeCliFallbackPrelude(
 
 /**
  * Read the Claude CLI session pointed to by `cliSessionId` and format a
- * fallback prelude. Returns `""` when no session file is found or when the
- * harvested seed has no usable content.
+ * fallback prelude. Returns `""` when no Claude CLI session JSONL is found or
+ * when the harvested seed has no usable content.
  */
 export function buildClaudeCliFallbackContextPrelude(params: {
   cliSessionId: string | undefined;

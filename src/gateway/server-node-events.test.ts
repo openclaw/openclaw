@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { NodeRegistry } from "./node-registry.js";
+import { PROTOCOL_VERSION } from "./protocol/index.js";
+import type { GatewayWsClient } from "./server/ws-types.js";
 import type { loadSessionEntry as loadSessionEntryType } from "./session-utils.js";
 
 const buildSessionLookup = (
@@ -8,10 +11,12 @@ const buildSessionLookup = (
     sessionId?: string;
     model?: string;
     modelProvider?: string;
-    lastChannel?: string;
-    lastTo?: string;
-    lastAccountId?: string;
-    lastThreadId?: string | number;
+    deliveryContext?: {
+      channel?: string;
+      to?: string;
+      accountId?: string;
+      threadId?: string | number;
+    };
     updatedAt?: number;
     label?: string;
     spawnedBy?: string;
@@ -19,23 +24,19 @@ const buildSessionLookup = (
   } = {},
 ): ReturnType<typeof loadSessionEntryType> => ({
   cfg: { session: { mainKey: "agent:main:main" } } as OpenClawConfig,
-  storePath: "/tmp/sessions.json",
+  agentId: "main",
   store: {} as ReturnType<typeof loadSessionEntryType>["store"],
   entry: {
     sessionId: entry.sessionId ?? `sid-${sessionKey}`,
     updatedAt: entry.updatedAt ?? Date.now(),
     model: entry.model,
     modelProvider: entry.modelProvider,
-    lastChannel: entry.lastChannel,
-    lastTo: entry.lastTo,
-    lastAccountId: entry.lastAccountId,
-    lastThreadId: entry.lastThreadId,
+    deliveryContext: entry.deliveryContext,
     label: entry.label,
     spawnedBy: entry.spawnedBy,
     parentSessionKey: entry.parentSessionKey,
   },
   canonicalKey: sessionKey,
-  legacyKey: undefined,
 });
 
 const ingressAgentCommandMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
@@ -79,13 +80,6 @@ const runtimeMocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({ session: { mainKey: "agent:main:main" } })),
   loadOrCreateDeviceIdentity: loadOrCreateDeviceIdentityMock,
   loadSessionEntry: vi.fn((sessionKey: string) => buildSessionLookup(sessionKey)),
-  migrateAndPruneGatewaySessionStoreKey: vi.fn(
-    ({ key, store }: { key: string; store: Record<string, unknown> }) => ({
-      target: { canonicalKey: key, storeKeys: [key] },
-      primaryKey: key,
-      entry: store[key],
-    }),
-  ),
   normalizeChannelId: normalizeChannelIdMock,
   normalizeMainKey: vi.fn((key?: string | null) => key?.trim() || "agent:main:main"),
   normalizeRpcAttachmentsToChatAttachments: vi.fn((attachments?: unknown[]) => attachments ?? []),
@@ -130,7 +124,7 @@ const runtimeMocks = vi.hoisted(() => ({
       ? { ...wakeOptions, sessionKey: sessionKey as string }
       : wakeOptions;
   }),
-  updateSessionStore: vi.fn(),
+  patchSessionEntry: vi.fn(),
 }));
 
 vi.mock("./server-node-events.runtime.js", () => runtimeMocks);
@@ -154,12 +148,14 @@ const enqueueSystemEventMock = runtimeMocks.enqueueSystemEvent;
 const requestHeartbeatMock = runtimeMocks.requestHeartbeat;
 const loadConfigMock = runtimeMocks.getRuntimeConfig;
 const agentCommandMock = runtimeMocks.agentCommandFromIngress;
-const updateSessionStoreMock = runtimeMocks.updateSessionStore;
+const patchSessionEntryMock = runtimeMocks.patchSessionEntry;
 const loadSessionEntryMock = runtimeMocks.loadSessionEntry;
 const registerApnsRegistrationVi = runtimeMocks.registerApnsRegistration;
 const normalizeChannelIdVi = runtimeMocks.normalizeChannelId;
 
-function buildCtx(): NodeEventContext {
+function buildCtx(
+  opts: { authorizeNodeSystemRunEvent?: NodeEventContext["authorizeNodeSystemRunEvent"] } = {},
+): NodeEventContext {
   return {
     deps: {} as CliDeps,
     broadcast: () => {},
@@ -178,7 +174,43 @@ function buildCtx(): NodeEventContext {
     getHealthCache: () => null,
     refreshHealthSnapshot: async () => ({}) as HealthSummary,
     loadGatewayModelCatalog: async () => [],
+    authorizeNodeSystemRunEvent: opts.authorizeNodeSystemRunEvent ?? (() => false),
     logGateway: { warn: () => {} },
+  };
+}
+
+function buildExecCtx() {
+  return buildCtx({ authorizeNodeSystemRunEvent: () => true });
+}
+
+function makeNodeClient(connId: string, nodeId: string, sent: string[] = []): GatewayWsClient {
+  return {
+    connId,
+    usesSharedGatewayAuth: false,
+    socket: {
+      send(frame: unknown) {
+        if (typeof frame === "string") {
+          sent.push(frame);
+        }
+      },
+    } as unknown as GatewayWsClient["socket"],
+    connect: {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "node-host",
+        version: "1.0.0",
+        platform: "linux",
+        mode: "node",
+      },
+      device: {
+        id: nodeId,
+        publicKey: "public-key",
+        signature: "signature",
+        signedAt: 1,
+        nonce: "nonce",
+      },
+    } as GatewayWsClient["connect"],
   };
 }
 
@@ -231,7 +263,7 @@ describe("node exec events", () => {
   });
 
   it("enqueues exec.started events", async () => {
-    const ctx = buildCtx();
+    const ctx = buildExecCtx();
     await handleNodeEvent(ctx, "node-1", {
       event: "exec.started",
       payloadJSON: JSON.stringify({
@@ -251,8 +283,112 @@ describe("node exec events", () => {
     });
   });
 
-  it("enqueues exec.finished events with output", async () => {
+  it("rejects exec lifecycle events without a pending node run", async () => {
     const ctx = buildCtx();
+    const result = await handleNodeEvent(
+      ctx,
+      "node-1",
+      {
+        event: "exec.finished",
+        payloadJSON: JSON.stringify({
+          sessionKey: "agent:main:main",
+          runId: "forged-run",
+          exitCode: 0,
+          output: "done",
+        }),
+      },
+      { connId: "conn-1" },
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      event: "exec.finished",
+      handled: false,
+      reason: "unmatched_exec_event",
+    });
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps a node run authorized from exec.started through exec.finished", async () => {
+    const registry = new NodeRegistry();
+    const frames: string[] = [];
+    registry.register(makeNodeClient("conn-1", "node-1", frames), {});
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "system.run",
+      params: { runId: "run-seq", sessionKey: "agent:main:main" },
+      timeoutMs: 1_000,
+    });
+    const invokeSettled = invoke.catch(() => {});
+    const ctx = buildCtx({
+      authorizeNodeSystemRunEvent: (params) => registry.authorizeSystemRunEvent(params),
+    });
+
+    await handleNodeEvent(
+      ctx,
+      "node-1",
+      {
+        event: "exec.started",
+        payloadJSON: JSON.stringify({
+          sessionKey: "agent:main:main",
+          runId: "run-seq",
+          command: "printf ok",
+        }),
+      },
+      { connId: "conn-1" },
+    );
+    await handleNodeEvent(
+      ctx,
+      "node-1",
+      {
+        event: "exec.finished",
+        payloadJSON: JSON.stringify({
+          sessionKey: "agent:main:main",
+          runId: "run-seq",
+          command: "printf ok",
+          exitCode: 0,
+          timedOut: false,
+          output: "done",
+        }),
+      },
+      { connId: "conn-1" },
+    );
+
+    expect(enqueueSystemEventMock).toHaveBeenNthCalledWith(
+      1,
+      "Exec started (node=node-1 id=run-seq): printf ok",
+      { sessionKey: "agent:main:main", contextKey: "exec:run-seq", trusted: false },
+    );
+    expect(enqueueSystemEventMock).toHaveBeenNthCalledWith(
+      2,
+      "Exec finished (node=node-1 id=run-seq, code 0)\ndone",
+      { sessionKey: "agent:main:main", contextKey: "exec:run-seq", trusted: false },
+    );
+    expect(requestHeartbeatMock).toHaveBeenNthCalledWith(1, {
+      reason: "exec-event",
+      sessionKey: "agent:main:main",
+    });
+    expect(requestHeartbeatMock).toHaveBeenNthCalledWith(2, {
+      reason: "exec-event",
+      sessionKey: "agent:main:main",
+    });
+    expect(
+      registry.authorizeSystemRunEvent({
+        nodeId: "node-1",
+        connId: "conn-1",
+        runId: "run-seq",
+        sessionKey: "agent:main:main",
+        terminal: false,
+      }),
+    ).toBe(false);
+
+    registry.unregister("conn-1");
+    await invokeSettled;
+  });
+
+  it("enqueues exec.finished events with output", async () => {
+    const ctx = buildExecCtx();
     await handleNodeEvent(ctx, "node-2", {
       event: "exec.finished",
       payloadJSON: JSON.stringify({
@@ -270,8 +406,42 @@ describe("node exec events", () => {
     expect(requestHeartbeatMock).toHaveBeenCalledWith({ reason: "exec-event" });
   });
 
+  it("accepts legacy exec.finished events when authorization matches without runId", async () => {
+    const authorizeNodeSystemRunEvent = vi.fn(() => true);
+    const ctx = buildCtx({ authorizeNodeSystemRunEvent });
+    await handleNodeEvent(
+      ctx,
+      "node-2",
+      {
+        event: "exec.finished",
+        payloadJSON: JSON.stringify({
+          sessionKey: "agent:main:main",
+          exitCode: 0,
+          timedOut: false,
+          output: "done",
+        }),
+      },
+      { connId: "conn-1" },
+    );
+
+    expect(authorizeNodeSystemRunEvent).toHaveBeenCalledWith({
+      nodeId: "node-2",
+      connId: "conn-1",
+      sessionKey: "agent:main:main",
+      terminal: true,
+    });
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "Exec finished (node=node-2, code 0)\ndone",
+      { sessionKey: "agent:main:main", contextKey: "exec", trusted: false },
+    );
+    expect(requestHeartbeatMock).toHaveBeenCalledWith({
+      reason: "exec-event",
+      sessionKey: "agent:main:main",
+    });
+  });
+
   it("dedupes duplicate exec.finished events for the same runId on the same session", async () => {
-    const ctx = buildCtx();
+    const ctx = buildExecCtx();
     const payloadJSON = JSON.stringify({
       sessionKey: "agent:main:main",
       runId: "run-dup-finished",
@@ -306,7 +476,7 @@ describe("node exec events", () => {
       ...buildSessionLookup("node-node-2"),
       canonicalKey: "agent:main:node-node-2",
     });
-    const ctx = buildCtx();
+    const ctx = buildExecCtx();
     await handleNodeEvent(ctx, "node-2", {
       event: "exec.finished",
       payloadJSON: JSON.stringify({
@@ -329,7 +499,7 @@ describe("node exec events", () => {
   });
 
   it("suppresses noisy exec.finished success events with empty output", async () => {
-    const ctx = buildCtx();
+    const ctx = buildExecCtx();
     await handleNodeEvent(ctx, "node-2", {
       event: "exec.finished",
       payloadJSON: JSON.stringify({
@@ -345,7 +515,7 @@ describe("node exec events", () => {
   });
 
   it("truncates long exec.finished output in system events", async () => {
-    const ctx = buildCtx();
+    const ctx = buildExecCtx();
     await handleNodeEvent(ctx, "node-2", {
       event: "exec.finished",
       payloadJSON: JSON.stringify({
@@ -365,7 +535,7 @@ describe("node exec events", () => {
   });
 
   it("enqueues exec.denied events with reason", async () => {
-    const ctx = buildCtx();
+    const ctx = buildExecCtx();
     await handleNodeEvent(ctx, "node-3", {
       event: "exec.denied",
       payloadJSON: JSON.stringify({
@@ -394,7 +564,7 @@ describe("node exec events", () => {
       session: { mainKey: string };
       tools: { exec: { notifyOnExit: boolean } };
     });
-    const ctx = buildCtx();
+    const ctx = buildExecCtx();
     await handleNodeEvent(ctx, "node-1", {
       event: "exec.started",
       payloadJSON: JSON.stringify({
@@ -416,7 +586,7 @@ describe("node exec events", () => {
       session: { mainKey: string };
       tools: { exec: { notifyOnExit: boolean } };
     });
-    const ctx = buildCtx();
+    const ctx = buildExecCtx();
     await handleNodeEvent(ctx, "node-2", {
       event: "exec.finished",
       payloadJSON: JSON.stringify({
@@ -439,7 +609,7 @@ describe("node exec events", () => {
       session: { mainKey: string };
       tools: { exec: { notifyOnExit: boolean } };
     });
-    const ctx = buildCtx();
+    const ctx = buildExecCtx();
     await handleNodeEvent(ctx, "node-3", {
       event: "exec.denied",
       payloadJSON: JSON.stringify({
@@ -455,7 +625,7 @@ describe("node exec events", () => {
   });
 
   it("sanitizes remote exec event content before enqueue", async () => {
-    const ctx = buildCtx();
+    const ctx = buildExecCtx();
     await handleNodeEvent(ctx, "node-4", {
       event: "exec.denied",
       payloadJSON: JSON.stringify({
@@ -549,10 +719,11 @@ describe("node exec events", () => {
 describe("voice transcript events", () => {
   beforeEach(() => {
     agentCommandMock.mockClear();
-    updateSessionStoreMock.mockClear();
+    patchSessionEntryMock.mockClear();
     agentCommandMock.mockResolvedValue({ status: "ok" } as never);
-    updateSessionStoreMock.mockImplementation(async (_storePath, update) => {
-      update({});
+    patchSessionEntryMock.mockImplementation(async ({ fallbackEntry, update }) => {
+      const patch = await update(fallbackEntry ?? { sessionId: "sid", updatedAt: 0 });
+      return patch ? { ...fallbackEntry, ...patch } : (fallbackEntry ?? null);
     });
   });
 
@@ -577,7 +748,7 @@ describe("voice transcript events", () => {
 
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
     expect(addChatRun).toHaveBeenCalledTimes(1);
-    expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
+    expect(patchSessionEntryMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not dedupe identical text when source event IDs differ", async () => {
@@ -601,7 +772,7 @@ describe("voice transcript events", () => {
     });
 
     expect(agentCommandMock).toHaveBeenCalledTimes(2);
-    expect(updateSessionStoreMock).toHaveBeenCalledTimes(2);
+    expect(patchSessionEntryMock).toHaveBeenCalledTimes(2);
   });
 
   it("forwards transcript with voice provenance", async () => {
@@ -640,11 +811,11 @@ describe("voice transcript events", () => {
     expect(clientRunId).toMatch(/^voice-/);
   });
 
-  it("does not block agent dispatch when session-store touch fails", async () => {
+  it("does not block agent dispatch when session row touch fails", async () => {
     const warn = vi.fn();
     const ctx = buildCtx();
     ctx.logGateway = { warn };
-    updateSessionStoreMock.mockRejectedValueOnce(new Error("disk down"));
+    patchSessionEntryMock.mockRejectedValueOnce(new Error("disk down"));
 
     await handleNodeEvent(ctx, "node-v3", {
       event: "voice.transcript",
@@ -656,8 +827,7 @@ describe("voice transcript events", () => {
     await Promise.resolve();
 
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
-    expect(warn).toHaveBeenCalledTimes(1);
-    expect(String(mockCallArg(warn))).toContain("voice session-store update failed");
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("voice session row update failed"));
   });
 
   it("preserves existing session metadata when touching the store for voice transcripts", async () => {
@@ -669,30 +839,37 @@ describe("voice transcript events", () => {
         label: "existing label",
         spawnedBy: "agent:main:parent",
         parentSessionKey: "agent:main:parent",
-        lastChannel: "discord",
-        lastTo: "thread-1",
-        lastAccountId: "acct-1",
-        lastThreadId: 42,
+        deliveryContext: {
+          channel: "discord",
+          to: "thread-1",
+          accountId: "acct-1",
+          threadId: 42,
+        },
       }),
     );
 
     let updatedStore: Record<string, unknown> | undefined;
-    updateSessionStoreMock.mockImplementationOnce(async (_storePath, update) => {
-      const store = {
-        "voice-preserve-session": {
-          sessionId: "sess-preserve",
-          updatedAt: 10,
-          label: "existing label",
-          spawnedBy: "agent:main:parent",
-          parentSessionKey: "agent:main:parent",
-          lastChannel: "discord",
-          lastTo: "thread-1",
-          lastAccountId: "acct-1",
-          lastThreadId: 42,
+    patchSessionEntryMock.mockImplementationOnce(async ({ fallbackEntry, update }) => {
+      const existing = fallbackEntry ?? {
+        sessionId: "sess-preserve",
+        updatedAt: 10,
+        label: "existing label",
+        spawnedBy: "agent:main:parent",
+        parentSessionKey: "agent:main:parent",
+        deliveryContext: {
+          channel: "discord",
+          to: "thread-1",
+          accountId: "acct-1",
+          threadId: 42,
         },
       };
-      update(store);
-      updatedStore = structuredClone(store);
+      const patch = await update(existing);
+      updatedStore = {
+        "voice-preserve-session": {
+          ...existing,
+          ...patch,
+        },
+      };
     });
 
     await handleNodeEvent(ctx, "node-v4", {
@@ -709,10 +886,12 @@ describe("voice transcript events", () => {
       label: "existing label",
       spawnedBy: "agent:main:parent",
       parentSessionKey: "agent:main:parent",
-      lastChannel: "discord",
-      lastTo: "thread-1",
-      lastAccountId: "acct-1",
-      lastThreadId: 42,
+      deliveryContext: {
+        channel: "discord",
+        to: "thread-1",
+        accountId: "acct-1",
+        threadId: 42,
+      },
     });
   });
 });
@@ -904,7 +1083,7 @@ describe("agent request events", () => {
   beforeEach(() => {
     agentCommandMock.mockClear();
     parseMessageWithAttachmentsMock.mockReset();
-    updateSessionStoreMock.mockClear();
+    patchSessionEntryMock.mockClear();
     loadSessionEntryMock.mockClear();
     normalizeChannelIdVi.mockClear();
     normalizeChannelIdVi.mockImplementation((channel?: string | null) => channel ?? null);
@@ -915,8 +1094,9 @@ describe("agent request events", () => {
       offloadedRefs: [],
     });
     agentCommandMock.mockResolvedValue({ status: "ok" } as never);
-    updateSessionStoreMock.mockImplementation(async (_storePath, update) => {
-      update({});
+    patchSessionEntryMock.mockImplementation(async ({ fallbackEntry, update }) => {
+      const patch = await update(fallbackEntry ?? { sessionId: "sid", updatedAt: 0 });
+      return patch ? { ...fallbackEntry, ...patch } : (fallbackEntry ?? null);
     });
     loadSessionEntryMock.mockImplementation((sessionKey: string) => buildSessionLookup(sessionKey));
   });
@@ -953,8 +1133,10 @@ describe("agent request events", () => {
     loadSessionEntryMock.mockReturnValueOnce({
       ...buildSessionLookup("agent:main:main", {
         sessionId: "sid-current",
-        lastChannel: "telegram",
-        lastTo: "123",
+        deliveryContext: {
+          channel: "telegram",
+          to: "123",
+        },
       }),
       canonicalKey: "agent:main:main",
     });

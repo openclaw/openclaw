@@ -31,14 +31,14 @@ describe("buildStatusAllReportLines", () => {
             bootstrapPending: true,
             sessionsCount: 1,
             lastActiveAgeMs: 12_000,
-            sessionsPath: "/tmp/main-sessions.json",
+            sessionsDatabasePath: "/tmp/main.sqlite",
           },
           {
             id: "ops",
             bootstrapPending: false,
             sessionsCount: 0,
             lastActiveAgeMs: null,
-            sessionsPath: "/tmp/ops-sessions.json",
+            sessionsDatabasePath: "/tmp/ops.sqlite",
           },
         ],
       },
@@ -74,7 +74,7 @@ describe("buildStatusAllReportLines", () => {
     expect(output).toContain("PRESENT");
     expect(output).toContain("ABSENT");
     expect(diagnosisSpy).toHaveBeenCalledOnce();
-    const [diagnosisOptions] = diagnosisSpy.mock.calls.at(0) as unknown as [
+    const [diagnosisOptions] = diagnosisSpy.mock.calls[0] as unknown as [
       { secretDiagnostics?: unknown[] },
     ];
     expect(diagnosisOptions?.secretDiagnostics).toEqual([]);

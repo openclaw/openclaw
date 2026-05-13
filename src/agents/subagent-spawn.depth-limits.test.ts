@@ -1,7 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSubagentSpawnTestConfig,
-  installSessionStoreCaptureMock,
+  installSessionEntryCaptureMock,
   loadSubagentSpawnModuleForTest,
   setupAcceptedSubagentGatewayMock,
 } from "./subagent-spawn.test-helpers.js";
@@ -11,7 +11,7 @@ const hoisted = vi.hoisted(() => ({
   callGatewayMock: vi.fn(),
   configOverride: {} as Record<string, unknown>,
   depthBySession: new Map<string, number>(),
-  updateSessionStoreMock: vi.fn(),
+  upsertSessionEntryMock: vi.fn(),
   registerSubagentRunMock: vi.fn(),
 }));
 
@@ -76,8 +76,9 @@ describe("subagent spawn depth + child limits", () => {
       callGatewayMock: hoisted.callGatewayMock,
       getRuntimeConfig: () => hoisted.configOverride,
       registerSubagentRunMock: hoisted.registerSubagentRunMock,
-      updateSessionStoreMock: hoisted.updateSessionStoreMock,
-      getSubagentDepthFromSessionStore: (sessionKey) => hoisted.depthBySession.get(sessionKey) ?? 0,
+      upsertSessionEntryMock: hoisted.upsertSessionEntryMock,
+      getSubagentDepthFromSessionEntries: (sessionKey) =>
+        hoisted.depthBySession.get(sessionKey) ?? 0,
       countActiveRunsForSession: (sessionKey) =>
         hoisted.activeChildrenBySession.get(sessionKey) ?? 0,
       resetModules: false,
@@ -89,9 +90,9 @@ describe("subagent spawn depth + child limits", () => {
     hoisted.depthBySession.clear();
     hoisted.callGatewayMock.mockClear();
     hoisted.registerSubagentRunMock.mockClear();
-    hoisted.updateSessionStoreMock.mockReset();
+    hoisted.upsertSessionEntryMock.mockReset();
     persistedStore = undefined;
-    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
+    installSessionEntryCaptureMock(hoisted.upsertSessionEntryMock, {
       onStore: (store) => {
         persistedStore = store;
       },
@@ -129,6 +130,30 @@ describe("subagent spawn depth + child limits", () => {
     expect(childSession.subagentRole).toBe("leaf");
     expect(childSession.subagentControlScope).toBe("none");
     expect(typeof childSession?.spawnedWorkspaceDir).toBe("string");
+  });
+
+  it("persists inherited tool denies on spawned child sessions", async () => {
+    hoisted.configOverride = createDepthLimitConfig({ maxSpawnDepth: 2 });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "hello",
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        workspaceDir: "/tmp/workspace-main",
+        inheritedToolAllowlist: ["sessions_spawn", "read", ""],
+        inheritedToolDenylist: ["bash", "exec", "read", ""],
+      },
+    );
+
+    const accepted = expectAccepted(result, "run-1");
+    const childSession = persistedStore?.[accepted.childSessionKey];
+    if (!childSession) {
+      throw new Error("Expected persisted child session");
+    }
+    expect(childSession.inheritedToolAllow).toEqual(["sessions_spawn", "read"]);
+    expect(childSession.inheritedToolDeny).toEqual(["exec", "read"]);
   });
 
   it("rejects callers when stored spawn depth is already at the configured max", async () => {
@@ -183,7 +208,7 @@ describe("subagent spawn depth + child limits", () => {
         return {};
       },
     );
-    hoisted.updateSessionStoreMock.mockRejectedValueOnce(new Error("invalid model: bad-model"));
+    hoisted.upsertSessionEntryMock.mockRejectedValueOnce(new Error("invalid model: bad-model"));
 
     const result = await spawnFrom("main", { model: "bad-model" });
 

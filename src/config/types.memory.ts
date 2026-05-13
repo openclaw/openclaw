@@ -18,7 +18,6 @@ export type MemoryQmdConfig = {
   searchTool?: string;
   includeDefaultMemory?: boolean;
   paths?: MemoryQmdIndexPath[];
-  sessions?: MemoryQmdSessionConfig;
   update?: MemoryQmdUpdateConfig;
   limits?: MemoryQmdLimitsConfig;
   scope?: SessionSendPolicyConfig;
@@ -42,12 +41,6 @@ export type MemoryQmdIndexPath = {
   path: string;
   name?: string;
   pattern?: string;
-};
-
-export type MemoryQmdSessionConfig = {
-  enabled?: boolean;
-  exportDir?: string;
-  retentionDays?: number;
 };
 
 export type MemoryQmdUpdateConfig = {

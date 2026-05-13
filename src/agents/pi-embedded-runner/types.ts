@@ -6,7 +6,6 @@ import type { MessagingToolSend } from "../pi-embedded-messaging.types.js";
 
 export type EmbeddedPiAgentMeta = {
   sessionId: string;
-  sessionFile?: string;
   provider: string;
   model: string;
   contextTokens?: number;
@@ -36,7 +35,7 @@ export type EmbeddedPiAgentMeta = {
   /**
    * Usage from the last individual API call (not accumulated across tool-use
    * loops or compaction retries). Used for context-window utilization display
-   * (`totalTokens` in sessions.json) because the accumulated `usage.input`
+   * (`totalTokens` in the SQLite session row) because the accumulated `usage.input`
    * sums input tokens from every API call in the run, which overstates the
    * actual context size.
    */
@@ -209,7 +208,6 @@ export type EmbeddedPiCompactResult = {
     tokensAfter?: number;
     details?: unknown;
     sessionId?: string;
-    sessionFile?: string;
   };
 };
 

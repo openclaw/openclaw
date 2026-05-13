@@ -42,7 +42,6 @@ export function createMessageHandlerDeps(
     resolveAgentRoute,
     hasControlCommand: options.hasControlCommand,
     resolveTextChunkLimit: () => 4000,
-    resolveStorePath: () => "/tmp/test-store",
   });
 
   const conversationStore = {

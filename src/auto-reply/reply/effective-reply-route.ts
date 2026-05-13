@@ -6,10 +6,7 @@ export type EffectiveReplyRouteContext = Pick<
   "Provider" | "OriginatingChannel" | "OriginatingTo" | "AccountId"
 >;
 
-export type EffectiveReplyRouteEntry = Pick<
-  SessionEntry,
-  "deliveryContext" | "lastChannel" | "lastTo" | "lastAccountId"
->;
+export type EffectiveReplyRouteEntry = Pick<SessionEntry, "deliveryContext">;
 
 export type EffectiveReplyRoute = {
   channel?: string;
@@ -34,12 +31,8 @@ export function resolveEffectiveReplyRoute(params: {
   }
   const persistedDeliveryContext = params.entry?.deliveryContext;
   return {
-    channel:
-      params.ctx.OriginatingChannel ??
-      persistedDeliveryContext?.channel ??
-      params.entry?.lastChannel,
-    to: params.ctx.OriginatingTo ?? persistedDeliveryContext?.to ?? params.entry?.lastTo,
-    accountId:
-      params.ctx.AccountId ?? persistedDeliveryContext?.accountId ?? params.entry?.lastAccountId,
+    channel: params.ctx.OriginatingChannel ?? persistedDeliveryContext?.channel,
+    to: params.ctx.OriginatingTo ?? persistedDeliveryContext?.to,
+    accountId: params.ctx.AccountId ?? persistedDeliveryContext?.accountId,
   };
 }

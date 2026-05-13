@@ -1,13 +1,11 @@
-import fs from "node:fs";
-import path from "node:path";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { modelKey, normalizeModelRef, normalizeProviderId } from "../agents/model-selection.js";
+import { readStoredModelsConfigRaw } from "../agents/models-config-store.js";
 import type { NormalizedUsage } from "../agents/usage.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGatewayModelPricingCacheFingerprint } from "../gateway/model-pricing-cache-state.js";
 import { getCachedGatewayModelPricing } from "../gateway/model-pricing-cache.js";
-import { tryReadJsonSync } from "../infra/json-files.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 /**
@@ -55,15 +53,15 @@ export type UsageTotals = {
   total?: number;
 };
 
-type ModelsJsonCostCache = {
-  path: string;
-  mtimeMs: number;
+type StoredModelCatalogCostCache = {
+  agentDir: string;
+  updatedAt: number;
   providers: Record<string, ModelProviderConfig> | undefined;
   normalizedEntries: Map<string, ModelCostConfig> | null;
   rawEntries: Map<string, ModelCostConfig> | null;
 };
 
-let modelsJsonCostCache: ModelsJsonCostCache | null = null;
+let storedModelCatalogCostCache: StoredModelCatalogCostCache | null = null;
 
 export function formatTokenCount(value?: number): string {
   if (value === undefined || !Number.isFinite(value)) {
@@ -132,7 +130,7 @@ function shouldUseNormalizedCostLookup(params: { provider?: string; model?: stri
 }
 
 /**
- * Normalize a raw tieredPricing array from models.json / config.
+ * Normalize a raw tieredPricing array from the stored model catalog / config.
  * Supports open-ended ranges such as `[128000]` or `[128000, -1]`,
  * which are converted to `[128000, Infinity]`.
  */
@@ -201,24 +199,27 @@ function buildProviderCostIndex(
   return entries;
 }
 
-function loadModelsJsonCostIndex(options?: {
+function loadStoredModelCatalogCostIndex(options?: {
   allowPluginNormalization?: boolean;
 }): Map<string, ModelCostConfig> {
   const useRawEntries = options?.allowPluginNormalization === false;
-  const modelsPath = path.join(resolveDefaultAgentDir({}), "models.json");
+  const agentDir = resolveDefaultAgentDir({});
   try {
-    const stat = fs.statSync(modelsPath);
+    const stored = readStoredModelsConfigRaw(agentDir);
+    if (!stored) {
+      throw new Error("stored model catalog missing");
+    }
     if (
-      !modelsJsonCostCache ||
-      modelsJsonCostCache.path !== modelsPath ||
-      modelsJsonCostCache.mtimeMs !== stat.mtimeMs
+      !storedModelCatalogCostCache ||
+      storedModelCatalogCostCache.agentDir !== agentDir ||
+      storedModelCatalogCostCache.updatedAt !== stored.updatedAt
     ) {
-      const parsed = tryReadJsonSync<{
+      const parsed = JSON.parse(stored.raw) as {
         providers?: Record<string, ModelProviderConfig>;
-      }>(modelsPath);
-      modelsJsonCostCache = {
-        path: modelsPath,
-        mtimeMs: stat.mtimeMs,
+      };
+      storedModelCatalogCostCache = {
+        agentDir,
+        updatedAt: stored.updatedAt,
         providers: parsed?.providers,
         normalizedEntries: null,
         rawEntries: null,
@@ -226,19 +227,24 @@ function loadModelsJsonCostIndex(options?: {
     }
 
     if (useRawEntries) {
-      modelsJsonCostCache.rawEntries ??= buildProviderCostIndex(modelsJsonCostCache.providers, {
-        allowPluginNormalization: false,
-      });
-      return modelsJsonCostCache.rawEntries;
+      storedModelCatalogCostCache.rawEntries ??= buildProviderCostIndex(
+        storedModelCatalogCostCache.providers,
+        {
+          allowPluginNormalization: false,
+        },
+      );
+      return storedModelCatalogCostCache.rawEntries;
     }
 
-    modelsJsonCostCache.normalizedEntries ??= buildProviderCostIndex(modelsJsonCostCache.providers);
-    return modelsJsonCostCache.normalizedEntries;
+    storedModelCatalogCostCache.normalizedEntries ??= buildProviderCostIndex(
+      storedModelCatalogCostCache.providers,
+    );
+    return storedModelCatalogCostCache.normalizedEntries;
   } catch {
     const empty = new Map<string, ModelCostConfig>();
-    modelsJsonCostCache = {
-      path: modelsPath,
-      mtimeMs: -1,
+    storedModelCatalogCostCache = {
+      agentDir,
+      updatedAt: -1,
       providers: undefined,
       normalizedEntries: empty,
       rawEntries: empty,
@@ -292,8 +298,10 @@ export function resolveModelCostConfigFingerprint(config?: OpenClawConfig): stri
       buildProviderCostIndex(config?.models?.providers, { allowPluginNormalization: false }),
     ),
     configuredNormalized: serializeCostIndex(buildProviderCostIndex(config?.models?.providers)),
-    modelsJsonRaw: serializeCostIndex(loadModelsJsonCostIndex({ allowPluginNormalization: false })),
-    modelsJsonNormalized: serializeCostIndex(loadModelsJsonCostIndex()),
+    storedModelCatalogRaw: serializeCostIndex(
+      loadStoredModelCatalogCostIndex({ allowPluginNormalization: false }),
+    ),
+    storedModelCatalogNormalized: serializeCostIndex(loadStoredModelCatalogCostIndex()),
     gatewayPricing: getGatewayModelPricingCacheFingerprint(),
   });
 }
@@ -311,11 +319,11 @@ export function resolveModelCostConfig(params: {
 
   // Favor direct configured keys first so local pricing/status lookups stay
   // synchronous and do not drag plugin/provider discovery into the hot path.
-  const rawModelsJsonCost = loadModelsJsonCostIndex({
+  const rawStoredCatalogCost = loadStoredModelCatalogCostIndex({
     allowPluginNormalization: false,
   }).get(rawKey);
-  if (rawModelsJsonCost) {
-    return rawModelsJsonCost;
+  if (rawStoredCatalogCost) {
+    return rawStoredCatalogCost;
   }
 
   const rawConfiguredCost = findConfiguredProviderCost({
@@ -333,9 +341,9 @@ export function resolveModelCostConfig(params: {
   if (shouldUseNormalizedCostLookup(params)) {
     const key = toResolvedModelKey(params);
     if (key && key !== rawKey) {
-      const modelsJsonCost = loadModelsJsonCostIndex().get(key);
-      if (modelsJsonCost) {
-        return modelsJsonCost;
+      const storedCatalogCost = loadStoredModelCatalogCostIndex().get(key);
+      if (storedCatalogCost) {
+        return storedCatalogCost;
       }
 
       const configuredCost = findConfiguredProviderCost(params);
@@ -429,5 +437,5 @@ export function estimateUsageCost(params: {
 }
 
 export function __resetUsageFormatCachesForTest(): void {
-  modelsJsonCostCache = null;
+  storedModelCatalogCostCache = null;
 }
