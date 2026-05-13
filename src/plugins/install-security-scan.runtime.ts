@@ -576,7 +576,7 @@ function isKnownBenignLanceDbFinding(params: {
   const evidence = params.finding.evidence ?? "";
   if (params.finding.ruleId === "dangerous-exec" && relativePath === "dist/native.js") {
     return (
-      /child_process/.test(evidence) &&
+      evidence.includes("child_process") &&
       /\bexecSync\(\s*['"](?:ldd --version|which ldd)['"]/.test(evidence)
     );
   }
