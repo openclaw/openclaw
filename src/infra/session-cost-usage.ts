@@ -221,14 +221,31 @@ function isMalformedUsageCostCacheLockRecent(mtimeMs: number): boolean {
   return Date.now() - mtimeMs < USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS;
 }
 
+// Filesystems without hard-link support (SMB/CIFS, certain NFS configs,
+// virtiofs/9p shared folders, some FUSE stacks) reject link(2) with these
+// codes; in that case, fall back to writing the lock directly with O_EXCL,
+// which provides the same EEXIST contention semantics for a single-step
+// write of a fully-formed payload.
+const HARD_LINK_UNSUPPORTED_CODES = new Set(["ENOTSUP", "EPERM", "EXDEV", "EOPNOTSUPP"]);
+
 async function writeUsageCostCacheLockAtomically(
   lockPath: string,
   lock: UsageCostCacheLock,
 ): Promise<void> {
+  const payload = `${JSON.stringify(lock)}\n`;
   const tempPath = `${lockPath}.${process.pid}.${process.hrtime.bigint()}.tmp`;
-  await fs.promises.writeFile(tempPath, `${JSON.stringify(lock)}\n`, { flag: "wx" });
+  await fs.promises.writeFile(tempPath, payload, { flag: "wx" });
   try {
-    await fs.promises.link(tempPath, lockPath);
+    try {
+      await fs.promises.link(tempPath, lockPath);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code && HARD_LINK_UNSUPPORTED_CODES.has(code)) {
+        await fs.promises.writeFile(lockPath, payload, { flag: "wx" });
+        return;
+      }
+      throw err;
+    }
   } finally {
     await fs.promises.rm(tempPath, { force: true }).catch(() => undefined);
   }

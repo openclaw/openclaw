@@ -2983,4 +2983,31 @@ example
 
     expect(logs?.map((log) => log.content)).toEqual(["third", "fourth"]);
   });
+  it("acquires the refresh lock on filesystems where fs.link rejects with ENOTSUP (#81089)", async () => {
+    const root = await makeSessionCostRoot("lock-enotsup");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const lockPath = path.join(sessionsDir, ".usage-cost-cache.json.lock");
+
+    const linkSpy = vi.spyOn(fs, "link").mockImplementation(async () => {
+      const err = new Error(
+        "ENOTSUP: operation not supported on socket, link",
+      ) as NodeJS.ErrnoException;
+      err.code = "ENOTSUP";
+      throw err;
+    });
+
+    try {
+      await withStateDir(root, async () => {
+        const result = await refreshCostUsageCache({ agentId: "main" });
+        expect(result).toBeDefined();
+        expect(result).not.toBe("busy");
+      });
+
+      expect(linkSpy).toHaveBeenCalled();
+      await expect(fs.access(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      linkSpy.mockRestore();
+    }
+  });
 });
