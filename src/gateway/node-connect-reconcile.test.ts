@@ -45,12 +45,18 @@ describe("reconcileNodePairingOnConnect", () => {
       requestPairing,
     });
 
-    expect(requestPairing).toHaveBeenCalledWith(
-      expect.objectContaining({
-        nodeId: "openclaw-ios",
-        permissions: { camera: true, notifications: false },
-      }),
-    );
+    expect(requestPairing).toHaveBeenCalledWith({
+      nodeId: "openclaw-ios",
+      displayName: undefined,
+      platform: "ios",
+      version: "test",
+      deviceFamily: undefined,
+      modelIdentifier: undefined,
+      caps: [],
+      commands: [],
+      permissions: { camera: true, notifications: false },
+      remoteIp: undefined,
+    });
   });
 
   it("requires a fresh pairing request when paired node capabilities change", async () => {
@@ -73,12 +79,18 @@ describe("reconcileNodePairingOnConnect", () => {
       requestPairing,
     });
 
-    expect(requestPairing).toHaveBeenCalledWith(
-      expect.objectContaining({
-        caps: ["camera", "screen"],
-        commands: [],
-      }),
-    );
+    expect(requestPairing).toHaveBeenCalledWith({
+      nodeId: "openclaw-ios",
+      displayName: undefined,
+      platform: "ios",
+      version: "test",
+      deviceFamily: undefined,
+      modelIdentifier: undefined,
+      caps: ["camera", "screen"],
+      commands: [],
+      permissions: undefined,
+      remoteIp: undefined,
+    });
     expect(result.effectiveCaps).toEqual(["camera"]);
     expect(result.effectiveCommands).toEqual([]);
     expect(result.pendingPairing?.request.requestId).toBe("req-caps");
@@ -104,12 +116,18 @@ describe("reconcileNodePairingOnConnect", () => {
       requestPairing,
     });
 
-    expect(requestPairing).toHaveBeenCalledWith(
-      expect.objectContaining({
-        commands: [],
-        permissions: { camera: true, notifications: false },
-      }),
-    );
+    expect(requestPairing).toHaveBeenCalledWith({
+      nodeId: "openclaw-ios",
+      displayName: undefined,
+      platform: "ios",
+      version: "test",
+      deviceFamily: undefined,
+      modelIdentifier: undefined,
+      caps: [],
+      commands: [],
+      permissions: { camera: true, notifications: false },
+      remoteIp: undefined,
+    });
     expect(result.effectiveCommands).toEqual([]);
     expect(result.effectivePermissions).toEqual({ camera: true, notifications: false });
     expect(result.pendingPairing?.request.requestId).toBe("req-permissions");
@@ -137,12 +155,18 @@ describe("reconcileNodePairingOnConnect", () => {
       requestPairing,
     });
 
-    expect(requestPairing).toHaveBeenCalledWith(
-      expect.objectContaining({
-        caps: ["camera"],
-        permissions: { camera: false },
-      }),
-    );
+    expect(requestPairing).toHaveBeenCalledWith({
+      nodeId: "openclaw-ios",
+      displayName: undefined,
+      platform: "ios",
+      version: "test",
+      deviceFamily: undefined,
+      modelIdentifier: undefined,
+      caps: ["camera"],
+      commands: [],
+      permissions: { camera: false },
+      remoteIp: undefined,
+    });
     expect(result.effectiveCaps).toEqual(["camera"]);
     expect(result.effectiveCommands).toEqual([]);
     expect(result.effectivePermissions).toEqual({ camera: false });

@@ -183,11 +183,11 @@ describe("QmdMemoryManager", () => {
   }
 
   function expectMockMessageContains(mock: Mock, text: string): void {
-    expect(mockMessages(mock).some((message) => message.includes(text))).toBe(true);
+    expect(mockMessages(mock).join("\n")).toContain(text);
   }
 
   function expectMockMessageNotContains(mock: Mock, text: string): void {
-    expect(mockMessages(mock).every((message) => !message.includes(text))).toBe(true);
+    expect(mockMessages(mock).join("\n")).not.toContain(text);
   }
 
   async function expectPathMissing(targetPath: string): Promise<void> {

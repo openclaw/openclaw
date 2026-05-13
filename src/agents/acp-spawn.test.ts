@@ -341,6 +341,14 @@ function expectRecordFields(
   return actual;
 }
 
+function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`Expected ${label} to be called`);
+  }
+  return call;
+}
+
 function gatewayRequests(): Array<{ method?: string; params?: Record<string, unknown> }> {
   return hoisted.callGatewayMock.mock.calls.map(
     (call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> },
@@ -364,7 +372,10 @@ function expectSessionPatchFields(expected: Record<string, unknown>): void {
 }
 
 function expectInitializeSessionFields(expected: Record<string, unknown>): Record<string, unknown> {
-  return expectRecordFields(hoisted.initializeSessionMock.mock.calls.at(0)?.[0], expected);
+  return expectRecordFields(
+    firstMockCall(hoisted.initializeSessionMock, "session initialization")[0],
+    expected,
+  );
 }
 
 function expectBindingCallFields(expected: {
@@ -1942,11 +1953,14 @@ describe("spawnAcpDirect", () => {
     expect(accepted.streamLogPath).toBeUndefined();
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
     if (expectTranscriptPersistence) {
-      expectRecordFields(hoisted.resolveSessionTranscriptFileMock.mock.calls.at(0)?.[0], {
-        sessionId: "sess-123",
-        storePath: "/tmp/codex-sessions.json",
-        agentId: "codex",
-      });
+      expectRecordFields(
+        firstMockCall(hoisted.resolveSessionTranscriptFileMock, "transcript file resolution")[0],
+        {
+          sessionId: "sess-123",
+          storePath: "/tmp/codex-sessions.json",
+          agentId: "codex",
+        },
+      );
     }
     expectAgentGatewayCall(expectedAgentCall);
   });
@@ -2162,7 +2176,7 @@ describe("spawnAcpDirect", () => {
     expect(relayRuns).toContain(agentCall?.params?.idempotencyKey);
     expect(relayRuns).toContain(accepted.runId);
     const streamPathInput = expectRecordFields(
-      hoisted.resolveAcpSpawnStreamLogPathMock.mock.calls.at(0)?.[0],
+      firstMockCall(hoisted.resolveAcpSpawnStreamLogPathMock, "stream log path resolution")[0],
       {},
     );
     expect(streamPathInput.childSessionKey).toMatch(/^agent:codex:acp:/);

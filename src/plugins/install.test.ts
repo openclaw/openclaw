@@ -309,11 +309,11 @@ function expectFailedInstallResult<
 }
 
 function expectWarningIncludes(warnings: readonly string[], fragment: string) {
-  expect(warnings.some((warning) => warning.includes(fragment))).toBe(true);
+  expect(warnings.join("\n")).toContain(fragment);
 }
 
 function expectWarningExcludes(warnings: readonly string[], fragment: string) {
-  expect(warnings.some((warning) => warning.includes(fragment))).toBe(false);
+  expect(warnings.join("\n")).not.toContain(fragment);
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -323,8 +323,12 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function firstMockCall(mock: { mock: { calls: unknown[][] } }): unknown[] | undefined {
+  return mock.mock.calls[0];
+}
+
 function requireHookPayload(handler: ReturnType<typeof vi.fn>): Record<string, unknown> {
-  const payload = handler.mock.calls.at(0)?.[0];
+  const payload = firstMockCall(handler)?.[0];
   return requireRecord(payload, "before_install hook payload");
 }
 
@@ -664,7 +668,9 @@ describe("installPluginFromArchive", () => {
     });
 
     expect(result.ok).toBe(true);
-    const commandRun = vi.mocked(runCommandWithTimeout).mock.calls.at(0);
+    const commandRun = firstMockCall(vi.mocked(runCommandWithTimeout)) as
+      | Parameters<typeof runCommandWithTimeout>
+      | undefined;
     expect(commandRun?.[0]).toContain("npm");
     expect(commandRun?.[0]).toContain("install");
     const commandOptions = commandRun?.[1];
@@ -2412,7 +2418,7 @@ describe("installPluginFromArchive", () => {
       version: "1.0.0",
       extensions: ["index.js"],
     });
-    expect(handler.mock.calls.at(0)?.[1]).toEqual({
+    expect(firstMockCall(handler)?.[1]).toEqual({
       origin: "plugin-package",
       targetType: "plugin",
       requestKind: "plugin-dir",
