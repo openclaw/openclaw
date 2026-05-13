@@ -10,7 +10,7 @@ import {
 } from "../infra/exec-approvals.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { isDangerousHostInheritedEnvVarName } from "../infra/host-env-security.js";
-import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
+import { findPathKey, mergePathPrepend, removePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { resolveEventSessionKey, scopedHeartbeatWakeOptions } from "../routing/session-key.js";
 import { isSubagentSessionKey } from "../sessions/session-key-utils.js";
@@ -578,6 +578,37 @@ export function buildExecRuntimeErrorOutcome(params: {
   };
 }
 
+/**
+ * Apply PATH prepends inside the shell command.
+ * This ensures our paths take precedence even if user RC files (e.g. ~/.zshenv)
+ * prepend their own entries to PATH during shell startup.
+ */
+function wrapPosixCommandWithPathPrepend(command: string, env: Record<string, string>, pathPrepend?: string[]): string {
+  if (process.platform === "win32") {
+    return command;
+  }
+
+  if (!pathPrepend || pathPrepend.length === 0) {
+    return command;
+  }
+
+  // Strip prepended entries from the base env.PATH to avoid duplicate segments.
+  // The wrapper will re-apply them after shell startup.
+  const pathKey = findPathKey(env);
+  const currentPath = env[pathKey];
+  if (currentPath) {
+    const newPath = removePathPrepend(currentPath, pathPrepend);
+    if (newPath !== undefined) {
+      env[pathKey] = newPath;
+    }
+  }
+
+  // Pass the prepend string safely via a temporary environment variable.
+  env.OPENCLAW_PREPEND_PATH = pathPrepend.join(path.delimiter);
+
+  return `export PATH="\${OPENCLAW_PREPEND_PATH}\${PATH:+:$PATH}"; unset OPENCLAW_PREPEND_PATH; ${command}`;
+}
+
 export async function runExecProcess(opts: {
   command: string;
   // Execute this instead of `command` (which is kept for display/session/logging).
@@ -585,6 +616,7 @@ export async function runExecProcess(opts: {
   execCommand?: string;
   workdir: string;
   env: Record<string, string>;
+  pathPrepend?: string[];
   sandbox?: BashSandboxConfig;
   containerWorkdir?: string | null;
   usePty: boolean;
@@ -762,11 +794,15 @@ export async function runExecProcess(opts: {
       };
     }
     const { shell, args: shellArgs } = getShellConfig();
-    const childArgv = [shell, ...shellArgs, execCommand];
+    
+    // Wrap the command to enforce PATH prepend precedence over shell RC overrides.
+    const commandWithPathPrepend = wrapPosixCommandWithPathPrepend(execCommand, shellRuntimeEnv, opts.pathPrepend);
+
+    const childArgv = [shell, ...shellArgs, commandWithPathPrepend];
     if (opts.usePty) {
       return {
         mode: "pty" as const,
-        ptyCommand: execCommand,
+        ptyCommand: commandWithPathPrepend,
         childFallbackArgv: childArgv,
         env: shellRuntimeEnv,
         stdinMode: "pipe-open" as const,

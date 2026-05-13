@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
@@ -843,6 +845,39 @@ describe("exec PATH handling", () => {
     expect(baseIndex).toBeGreaterThanOrEqual(0);
     for (const index of prependIndexes) {
       expect(index).toBeLessThan(baseIndex);
+    }
+  });
+
+  it("protects POSIX prepended paths from RC file overrides", async () => {
+    if (isWin) {
+      return;
+    }
+    const basePath = "/usr/bin";
+    const tool = createTestExecTool({ pathPrepend: ["/custom/bin"] });
+
+    // Set up a mock "login shell" RC file that attempts to prepend its own path (/evil/bin)
+    // to verify that our prepend logic still forces our paths to be absolute first.
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-"));
+    const rcFile = path.join(tempDir, "evil-rc.sh");
+    fs.writeFileSync(rcFile, "export PATH=/evil/bin:$PATH\n", "utf8");
+
+    try {
+      process.env.PATH = basePath;
+      // Force bash to load our mock RC file before running the command
+      process.env.BASH_ENV = rcFile;
+
+      const result = await executeExecCommand(tool, COMMAND_PRINT_PATH);
+      
+      const text = readNormalizedTextContent(result.content);
+      const entries = text.split(path.delimiter);
+      
+      // The Shell executes the RC file first during initialization (putting /evil/bin first).
+      // Then our wrapper executes inside the shell, which securely re-prepends /custom/bin.
+      // Final order must be: /custom/bin -> /evil/bin -> /usr/bin
+      expect(entries).toEqual(["/custom/bin", "/evil/bin", "/usr/bin"]);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      delete process.env.BASH_ENV;
     }
   });
 });
