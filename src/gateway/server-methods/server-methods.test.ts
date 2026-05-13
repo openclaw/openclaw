@@ -1161,14 +1161,14 @@ describe("exec approval handlers", () => {
         client: { id: "client-owner" },
         device: { id: "device-owner" },
       },
-    } as ExecApprovalResolveArgs["client"];
+    } as unknown as ExecApprovalResolveArgs["client"];
     const otherClient = {
       connId: "conn-other",
       connect: {
         client: { id: "client-other" },
         device: { id: "device-other" },
       },
-    } as ExecApprovalResolveArgs["client"];
+    } as unknown as ExecApprovalResolveArgs["client"];
 
     const visible = manager.create({ command: "echo visible" }, 60_000, "approval-abcd-visible");
     visible.requestedByDeviceId = "device-owner";
@@ -2088,7 +2088,7 @@ describe("exec approval handlers", () => {
           device: { id: "device-owner" },
           scopes: ["operator.approvals"],
         },
-      } as ExecApprovalRequestArgs["client"],
+      } as unknown as ExecApprovalRequestArgs["client"],
       params: {
         timeoutMs: 60_000,
         id: "approval-ios-hidden-push",

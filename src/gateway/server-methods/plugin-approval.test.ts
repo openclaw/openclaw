@@ -502,7 +502,7 @@ describe("createPluginApprovalHandlers", () => {
                 client: { id: "client-owner" },
                 device: { id: "device-owner" },
               },
-            } as GatewayRequestHandlerOptions["client"],
+            } as unknown as GatewayRequestHandlerOptions["client"],
           },
         ),
       );
@@ -559,7 +559,7 @@ describe("createPluginApprovalHandlers", () => {
               device: { id: "device-other" },
               scopes: ["operator.approvals"],
             },
-          } as GatewayRequestHandlerOptions["client"],
+          } as unknown as GatewayRequestHandlerOptions["client"],
         },
       );
       await handlers["plugin.approval.waitDecision"](opts);
@@ -648,7 +648,7 @@ describe("createPluginApprovalHandlers", () => {
           client: { id: "client-owner" },
           device: { id: "device-owner" },
         },
-      } as GatewayRequestHandlerOptions["client"];
+      } as unknown as GatewayRequestHandlerOptions["client"];
       const resolveRespond = vi.fn();
       await handlers["plugin.approval.resolve"](
         createMockOptions(

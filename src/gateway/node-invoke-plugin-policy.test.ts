@@ -180,20 +180,18 @@ describe("applyPluginNodeInvokePolicy", () => {
   it("binds plugin policy approval requests to the invoking client", async () => {
     const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
     const visibleConnIds = new Set(["conn-owner-approval"]);
-    const getApprovalClientConnIds = vi.fn(
-      createApprovalClientLookup([
-        createApprovalClient({
-          connId: "conn-owner-approval",
-          clientId: "client-owner",
-          deviceId: "device-owner",
-        }),
-        createApprovalClient({
-          connId: "conn-other-approval",
-          clientId: "client-other",
-          deviceId: "device-other",
-        }),
-      ]),
-    );
+    const getApprovalClientConnIds = createApprovalClientLookup([
+      createApprovalClient({
+        connId: "conn-owner-approval",
+        clientId: "client-owner",
+        deviceId: "device-owner",
+      }),
+      createApprovalClient({
+        connId: "conn-other-approval",
+        clientId: "client-other",
+        deviceId: "device-other",
+      }),
+    ]);
     registryState.current = {
       nodeHostCommands: [
         {

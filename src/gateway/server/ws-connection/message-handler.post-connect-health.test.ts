@@ -1,6 +1,7 @@
 import type { IncomingMessage } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
+import type { HealthSummary } from "../../../commands/health.types.js";
 import type { ResolvedGatewayAuth } from "../../auth.js";
 import { getOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
 import { PROTOCOL_VERSION } from "../../protocol/index.js";
@@ -75,6 +76,25 @@ function createLogger() {
   };
 }
 
+function createHealthSummary(): HealthSummary {
+  return {
+    ok: true,
+    ts: 1,
+    durationMs: 1,
+    channels: {},
+    channelOrder: [],
+    channelLabels: {},
+    heartbeatSeconds: 0,
+    defaultAgentId: "main",
+    agents: [],
+    sessions: {
+      path: "",
+      count: 0,
+      recent: [],
+    },
+  };
+}
+
 describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -82,12 +102,12 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
 
   it("uses the injected runtime-aware health refresh after hello", async () => {
     let resolveRefresh: (() => void) | undefined;
-    const refreshHealthSnapshot = vi.fn(
+    const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(
       () =>
         new Promise((resolve) => {
-          resolveRefresh = () => resolve({} as never);
+          resolveRefresh = () => resolve(createHealthSummary());
         }),
-    ) as GatewayRequestContext["refreshHealthSnapshot"];
+    );
     const socketSend = vi.fn((_payload: string, cb?: (err?: Error) => void) => {
       cb?.();
     });
@@ -183,9 +203,9 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
   });
 
   it("does not mark local backend self-pairing clients as approval runtimes", async () => {
-    const refreshHealthSnapshot = vi.fn(
-      async () => ({}),
-    ) as GatewayRequestContext["refreshHealthSnapshot"];
+    const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(async () =>
+      createHealthSummary(),
+    );
     const socketSend = vi.fn((_payload: string, cb?: (err?: Error) => void) => {
       cb?.();
     });
@@ -279,9 +299,9 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
   });
 
   it("marks operator approval clients with the server runtime token", async () => {
-    const refreshHealthSnapshot = vi.fn(
-      async () => ({}),
-    ) as GatewayRequestContext["refreshHealthSnapshot"];
+    const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(async () =>
+      createHealthSummary(),
+    );
     const socketSend = vi.fn((_payload: string, cb?: (err?: Error) => void) => {
       cb?.();
     });
