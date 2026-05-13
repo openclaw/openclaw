@@ -124,6 +124,15 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
+  it("uses configured identity name in the runtime agent display", () => {
+    const line = buildRuntimeLine({ agentId: "main", agentName: "Runt", host: "test-host" });
+
+    expect(line).toContain("agent=Runt");
+    expect(line).toContain("agent_id=main");
+    expect(line).toContain("host=test-host");
+    expect(line).not.toContain("agent=main");
+  });
+
   it("omits extended sections in minimal prompt mode", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

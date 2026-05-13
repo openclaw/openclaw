@@ -708,6 +708,7 @@ export function buildAgentSystemPrompt(params: {
   nativeCommandGuidanceLines?: string[];
   runtimeInfo?: {
     agentId?: string;
+    agentName?: string;
     host?: string;
     os?: string;
     arch?: string;
@@ -1337,6 +1338,7 @@ function buildActiveProcessSessionReferenceLines(
 export function buildRuntimeLine(
   runtimeInfo?: {
     agentId?: string;
+    agentName?: string;
     host?: string;
     os?: string;
     arch?: string;
@@ -1352,8 +1354,14 @@ export function buildRuntimeLine(
   defaultThinkLevel?: ThinkLevel,
 ): string {
   const normalizedRuntimeCapabilities = normalizePromptCapabilityIds(runtimeCapabilities);
+  const agentName = runtimeInfo?.agentName?.trim();
+  const agentId = runtimeInfo?.agentId?.trim();
+  const agentDisplay = agentName || agentId;
   return `Runtime: ${[
-    runtimeInfo?.agentId ? `agent=${runtimeInfo.agentId}` : "",
+    agentDisplay ? `agent=${sanitizeForPromptLiteral(agentDisplay)}` : "",
+    agentName && agentId && agentName !== agentId
+      ? `agent_id=${sanitizeForPromptLiteral(agentId)}`
+      : "",
     runtimeInfo?.host ? `host=${runtimeInfo.host}` : "",
     runtimeInfo?.repoRoot ? `repo=${runtimeInfo.repoRoot}` : "",
     runtimeInfo?.os

@@ -13,9 +13,15 @@ async function makeRepoRoot(root: string): Promise<void> {
   await fs.mkdir(path.join(root, ".git"), { recursive: true });
 }
 
-function buildParams(params: { config?: OpenClawConfig; workspaceDir?: string; cwd?: string }) {
+function buildParams(params: {
+  config?: OpenClawConfig;
+  agentId?: string;
+  workspaceDir?: string;
+  cwd?: string;
+}) {
   return buildSystemPromptParams({
     config: params.config,
+    agentId: params.agentId ?? "main",
     workspaceDir: params.workspaceDir,
     cwd: params.cwd,
     runtime: {
@@ -29,6 +35,34 @@ function buildParams(params: { config?: OpenClawConfig; workspaceDir?: string; c
 }
 
 describe("buildSystemPromptParams repo root", () => {
+  it("threads configured agent identity name into runtime info", async () => {
+    const workspaceDir = await makeTempDir("agent-identity");
+    const config: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", identity: { name: "Runt" } }],
+      },
+    };
+
+    const { runtimeInfo } = buildParams({ config, workspaceDir });
+
+    expect(runtimeInfo.agentId).toBe("main");
+    expect(runtimeInfo.agentName).toBe("Runt");
+  });
+
+  it("resolves agent identity name through normalized agent ids", async () => {
+    const workspaceDir = await makeTempDir("agent-identity-normalized");
+    const config: OpenClawConfig = {
+      agents: {
+        list: [{ id: "Work", identity: { name: "Runt" } }],
+      },
+    };
+
+    const { runtimeInfo } = buildParams({ config, agentId: "work", workspaceDir });
+
+    expect(runtimeInfo.agentId).toBe("work");
+    expect(runtimeInfo.agentName).toBe("Runt");
+  });
+
   it("detects repo root from workspaceDir", async () => {
     const temp = await makeTempDir("workspace");
     const repoRoot = path.join(temp, "repo");
