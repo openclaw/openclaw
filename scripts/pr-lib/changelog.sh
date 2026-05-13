@@ -1,3 +1,11 @@
+changelog_helper_root() {
+  cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd
+}
+
+changelog_attribution_script() {
+  printf '%s\n' "$(changelog_helper_root)/scripts/check-changelog-attributions.mjs"
+}
+
 normalize_pr_changelog_entries() {
   local pr="$1"
   local changelog_path="CHANGELOG.md"
@@ -156,19 +164,13 @@ EOF_NODE
 }
 
 validate_changelog_attribution_policy() {
-  node scripts/check-changelog-attributions.mjs CHANGELOG.md
+  node "$(changelog_attribution_script)" CHANGELOG.md
 }
 
 changelog_thanks_required_for_contributor() {
   local contrib="${1:-}"
-  local normalized
-  normalized=$(printf '%s' "$contrib" | tr '[:upper:]' '[:lower:]')
-
-  case "$normalized" in
-    ""|"null"|"app/"*|"codex"|"openclaw"|"steipete"|*clawsweeper*)
-      return 1
-      ;;
-  esac
+  [ -n "$contrib" ] || return 1
+  node "$(changelog_attribution_script)" --is-forbidden-handle "$contrib" && return 1
 
   return 0
 }

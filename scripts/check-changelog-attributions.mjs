@@ -8,8 +8,11 @@ export const FORBIDDEN_CHANGELOG_THANKS_HANDLES = ["codex", "openclaw", "steipet
 
 const THANKS_HANDLE_PATTERN = /\bThanks\b[^\n]*@([-_/A-Za-z0-9]+(?:\[bot\])?)/iu;
 
-function isForbiddenThanksHandle(handle) {
+export function isForbiddenChangelogThanksHandle(handle) {
   const normalized = handle.toLowerCase();
+  if (normalized === "null" || normalized.startsWith("app/")) {
+    return true;
+  }
   return FORBIDDEN_CHANGELOG_THANKS_HANDLES.some((forbidden) =>
     forbidden === "clawsweeper" ? normalized.includes(forbidden) : normalized === forbidden,
   );
@@ -20,7 +23,7 @@ export function findForbiddenChangelogThanks(content) {
     .split(/\r?\n/u)
     .map((text, index) => {
       const match = text.match(THANKS_HANDLE_PATTERN);
-      if (!match || !isForbiddenThanksHandle(match[1])) {
+      if (!match || !isForbiddenChangelogThanksHandle(match[1])) {
         return null;
       }
       return { line: index + 1, handle: match[1].toLowerCase(), text };
@@ -29,6 +32,11 @@ export function findForbiddenChangelogThanks(content) {
 }
 
 export async function main(argv = process.argv.slice(2)) {
+  if (argv[0] === "--is-forbidden-handle") {
+    process.exitCode = isForbiddenChangelogThanksHandle(argv[1] ?? "") ? 0 : 1;
+    return;
+  }
+
   const changelogPath = argv[0] ?? "CHANGELOG.md";
   const absolutePath = path.resolve(process.cwd(), changelogPath);
   const content = fs.readFileSync(absolutePath, "utf8");

@@ -3,7 +3,10 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { findForbiddenChangelogThanks } from "../../scripts/check-changelog-attributions.mjs";
+import {
+  findForbiddenChangelogThanks,
+  isForbiddenChangelogThanksHandle,
+} from "../../scripts/check-changelog-attributions.mjs";
 
 const changelogScriptPath = path.join(process.cwd(), "scripts", "pr-lib", "changelog.sh");
 
@@ -80,6 +83,13 @@ describe("check-changelog-attributions", () => {
     ).toStrictEqual([]);
   });
 
+  it("uses one attribution predicate for scanner and shell checks", () => {
+    expect(isForbiddenChangelogThanksHandle("codex")).toBe(true);
+    expect(isForbiddenChangelogThanksHandle("app/clawsweeper")).toBe(true);
+    expect(isForbiddenChangelogThanksHandle("openclaw-clawsweeper[bot]")).toBe(true);
+    expect(isForbiddenChangelogThanksHandle("Ziy1-Tan")).toBe(false);
+  });
+
   it("requires explicit human thanks for bot PR changelog entries", () => {
     const repo = initChangelogRepo("- Bot repair (#123).");
     try {
@@ -113,11 +123,10 @@ describe("check-changelog-attributions", () => {
 
     expect(commonLib).toContain("pr_contributor_allows_human_trailers");
     expect(commonLib).toContain("resolve_contributor_coauthor_email");
-    expect(changelogLib).toContain("node scripts/check-changelog-attributions.mjs CHANGELOG.md");
+    expect(changelogLib).toContain("changelog_attribution_script");
+    expect(changelogLib).toContain("--is-forbidden-handle");
     expect(changelogLib).toContain("changelog_thanks_required_for_contributor");
     expect(changelogLib).toContain("Choose the credited original contributor");
-    expect(changelogLib).toContain('"app/"*');
-    expect(changelogLib).toContain("*clawsweeper*");
     expect(gates).toContain("validate_changelog_attribution_policy");
     expect(prepareCore).toContain("resolve_contributor_coauthor_email");
     expect(mergeLib).toContain("pr_contributor_allows_human_trailers");
