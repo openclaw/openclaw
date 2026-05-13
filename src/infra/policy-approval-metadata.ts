@@ -32,6 +32,7 @@ export function policyApprovalMetadataEntries(
     return [];
   }
   const policy = asRecord(root.policy);
+  const attestation = asRecord(root.attestation);
   const workspace = asRecord(root.workspace);
   const entries: ApprovalMetadataView[] = [];
   const policyHash = recordString(policy, "hash") ?? recordString(policy, "expectedHash");
@@ -41,6 +42,14 @@ export function policyApprovalMetadataEntries(
   const workspaceHash = recordString(workspace, "hash");
   if (workspaceHash) {
     entries.push({ label: "Workspace Hash", value: workspaceHash });
+  }
+  const attestationHash = recordString(attestation, "hash");
+  if (attestationHash) {
+    entries.push({ label: "Attestation Hash", value: attestationHash });
+  }
+  const expectedAttestationHash = recordString(attestation, "expectedHash");
+  if (expectedAttestationHash) {
+    entries.push({ label: "Expected Attestation", value: expectedAttestationHash });
   }
   const target = recordString(root, "target");
   if (target) {
