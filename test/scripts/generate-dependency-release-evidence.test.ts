@@ -104,7 +104,7 @@ describe("generate-dependency-release-evidence", () => {
   });
 
   it("collects report counts and renders human summaries", async () => {
-    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-dependency-evidence-test-"));
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-release-dependency-evidence-test-"));
     await writeJson(dir, "dependency-vulnerability-gate.json", {
       blockers: [{ id: "GHSA-blocker" }],
       findings: [{ id: "GHSA-blocker" }, { id: "GHSA-report" }],
@@ -150,18 +150,20 @@ describe("generate-dependency-release-evidence", () => {
       baseRef: "v2026.5.1",
       counts,
     });
-    expect(summary).toContain("- Known vulnerability hard blockers: 1");
+    expect(summary).toContain("- npm advisory vulnerability hard blockers: 1");
     expect(summary).toContain("- Transitive manifest reported risk signals: 17");
     expect(summary).toContain("- Dependency change baseline: `v2026.5.1`");
     expect(summary).toContain("- Resolved package changes: +5 -6 changed 7");
 
     const stepSummary = renderDependencyEvidenceStepSummary({
-      evidenceArtifactName: "openclaw-dependency-evidence-v2026.5.13",
+      evidenceArtifactName: "openclaw-release-dependency-evidence-v2026.5.13",
       baseRef: "v2026.5.1",
       counts,
     });
-    expect(stepSummary).toContain("- Evidence artifact: `openclaw-dependency-evidence-v2026.5.13`");
-    expect(stepSummary).toContain("- Known vulnerability hard blockers: `1`");
+    expect(stepSummary).toContain(
+      "- Evidence artifact: `openclaw-release-dependency-evidence-v2026.5.13`",
+    );
+    expect(stepSummary).toContain("- npm advisory vulnerability hard blockers: `1`");
 
     await expect(
       readFile(path.join(dir, "dependency-vulnerability-gate.json"), "utf8"),

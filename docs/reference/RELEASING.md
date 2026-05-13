@@ -195,13 +195,13 @@ the maintainer-only release runbook.
   requiring Opik, Langfuse, or another external collector.
 - Run `pnpm release:check` before every tagged release
 - `OpenClaw NPM Release` preflight generates dependency release evidence before
-  it packs the npm tarball. The evidence includes the hard-blocking known
-  vulnerability gate plus report-only transitive manifest risk, dependency
-  ownership/install surface, and dependency change reports. The dependency
-  change report compares the release candidate with the previous reachable
-  release tag.
+  it packs the npm tarball. The npm advisory vulnerability gate is
+  release-blocking. The transitive manifest risk, dependency ownership/install
+  surface, and dependency change reports are release evidence only. The
+  dependency change report compares the release candidate with the previous
+  reachable release tag.
 - The preflight uploads dependency evidence as
-  `openclaw-dependency-evidence-<tag>` and also embeds it under
+  `openclaw-release-dependency-evidence-<tag>` and also embeds it under
   `dependency-evidence/` inside the prepared npm preflight artifact. The real
   publish path reuses that preflight artifact, then attaches the same evidence
   to the GitHub release as `openclaw-<version>-dependency-evidence.zip`.

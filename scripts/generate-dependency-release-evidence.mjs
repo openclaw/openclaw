@@ -7,7 +7,7 @@ import process from "node:process";
 
 export const DEPENDENCY_EVIDENCE_REPORTS = [
   {
-    name: "Known vulnerability gate",
+    name: "npm advisory vulnerability gate",
     command: "pnpm deps:vuln:gate",
     policy: "hard-blocking",
     json: "dependency-vulnerability-gate.json",
@@ -179,8 +179,8 @@ export function renderDependencyEvidenceSummary({ releaseTag, releaseSha, baseRe
     "",
     "## Summary",
     "",
-    `- Known vulnerability hard blockers: ${counts.vulnerabilityBlockers}`,
-    `- Known vulnerability total findings: ${counts.vulnerabilityFindings}`,
+    `- npm advisory vulnerability hard blockers: ${counts.vulnerabilityBlockers}`,
+    `- npm advisory vulnerability total findings: ${counts.vulnerabilityFindings}`,
     `- Transitive manifest reported risk signals: ${counts.transitiveRiskSignals}`,
     `- Workspace-policy excluded transitive signals: ${counts.workspaceExcludedTransitiveSignals}`,
     `- Transitive manifest metadata failures: ${counts.transitiveMetadataFailures}`,
@@ -205,7 +205,7 @@ export function renderDependencyEvidenceStepSummary({ evidenceArtifactName, base
     "",
     `- Evidence artifact: \`${evidenceArtifactName}\``,
     `- Dependency change baseline: \`${baseRef}\``,
-    `- Known vulnerability hard blockers: \`${counts.vulnerabilityBlockers}\``,
+    `- npm advisory vulnerability hard blockers: \`${counts.vulnerabilityBlockers}\``,
     `- Transitive manifest reported risk signals: \`${counts.transitiveRiskSignals}\``,
     `- Workspace-policy excluded transitive signals: \`${counts.workspaceExcludedTransitiveSignals}\``,
     `- Ownership/install surface lockfile packages: \`${counts.ownershipLockfilePackages}\``,
@@ -340,7 +340,7 @@ export async function generateDependencyReleaseEvidence({
     await appendFile(
       githubStepSummary,
       renderDependencyEvidenceStepSummary({
-        evidenceArtifactName: `openclaw-dependency-evidence-${releaseRef}`,
+        evidenceArtifactName: `openclaw-release-dependency-evidence-${releaseRef}`,
         baseRef: dependencyChangeBaseRef,
         counts,
       }),

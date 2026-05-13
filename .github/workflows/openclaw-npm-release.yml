@@ -179,7 +179,7 @@ jobs:
           node scripts/generate-dependency-release-evidence.mjs \
             --release-ref "$RELEASE_REF" \
             --npm-dist-tag "$RELEASE_NPM_DIST_TAG" \
-            --output-dir "$RUNNER_TEMP/openclaw-dependency-evidence" \
+            --output-dir "$RUNNER_TEMP/openclaw-release-dependency-evidence" \
             --github-output "$GITHUB_OUTPUT" \
             --github-step-summary "$GITHUB_STEP_SUMMARY"
 
@@ -290,7 +290,7 @@ jobs:
       - name: Upload dependency release evidence
         uses: actions/upload-artifact@v7
         with:
-          name: openclaw-dependency-evidence-${{ inputs.tag }}
+          name: openclaw-release-dependency-evidence-${{ inputs.tag }}
           path: ${{ steps.dependency_evidence.outputs.dir }}
           if-no-files-found: error
 

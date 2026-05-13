@@ -404,7 +404,7 @@ jobs:
           upload_dependency_evidence_release_asset() {
             local release_version download_dir asset_path asset_name
             release_version="${RELEASE_TAG#v}"
-            download_dir="${RUNNER_TEMP}/openclaw-dependency-evidence-asset"
+            download_dir="${RUNNER_TEMP}/openclaw-release-dependency-evidence-asset"
             asset_name="openclaw-${release_version}-dependency-evidence.zip"
             asset_path="${RUNNER_TEMP}/${asset_name}"
 
