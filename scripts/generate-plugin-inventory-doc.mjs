@@ -560,11 +560,12 @@ openclaw gateway restart
 openclaw plugins inspect discord --runtime --json
 \`\`\`
 
-Bare package specs try ClawHub first, then npm fallback. To force a source, use
-\`clawhub:@openclaw/discord\` or \`npm:@openclaw/discord\`. After install, follow
-the plugin's setup doc, such as [Discord](/channels/discord), to add credentials
-and channel config. See [Manage plugins](/plugins/manage-plugins) for update,
-uninstall, and publishing commands.
+During the launch cutover, ordinary bare package specs still install from npm.
+Use \`clawhub:@openclaw/discord\` or \`npm:@openclaw/discord\` when you need an
+explicit source. After install, follow the plugin's setup doc, such as
+[Discord](/channels/discord), to add credentials and channel config. See
+[Manage plugins](/plugins/manage-plugins) for update, uninstall, and publishing
+commands.
 
 ## Core npm package
 
