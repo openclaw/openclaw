@@ -292,13 +292,14 @@ function saveAuthProfileStoreInTransaction(
   store: AuthProfileStore,
   agentDir?: string,
   options?: SaveAuthProfileStoreOptions,
-): void {
+): AuthProfileStore {
   const localStore = buildLocalAuthProfileStoreForSave({ store, agentDir, options });
   const previous = loadPersistedAuthProfileStoreEntryFromDatabase(database, agentDir);
-  const payload = buildPersistedAuthProfileSecretsStore(localStore);
+  const payload = buildPersistedAuthProfileSecretsStore(localStore, undefined, { agentDir });
   savePersistedAuthProfileSecretsStoreInTransaction(database, payload, agentDir);
   removeDetachedOAuthProfileSecrets({ previousRaw: previous?.store, nextStore: payload });
   savePersistedAuthProfileStateInTransaction(database, localStore, agentDir);
+  return localStore;
 }
 
 export async function updateAuthProfileStoreWithLock(params: {
@@ -368,16 +369,15 @@ function loadAuthProfileStoreForAgent(
       return cached;
     }
   }
-  const asStore = loadPersistedAuthProfileStore(agentDir, { env: options?.env });
-  if (asStore) {
+  if (persisted) {
     if (!readOnly) {
       writeCachedAuthProfileStore({
         storeKey,
         authMtimeMs,
-        store: asStore,
+        store: persisted.store,
       });
     }
-    return asStore;
+    return persisted.store;
   }
 
   const store: AuthProfileStore = {
@@ -563,9 +563,10 @@ export function saveAuthProfileStore(
 ): void {
   const storeKey = resolveAuthProfileStoreKey(agentDir);
   let updatedAt: number | null = null;
+  let savedStore = store;
   runOpenClawStateWriteTransaction(
     (database) => {
-      saveAuthProfileStoreInTransaction(database, store, agentDir, options);
+      savedStore = saveAuthProfileStoreInTransaction(database, store, agentDir, options);
       updatedAt = Date.now();
     },
     { env: options?.env },
@@ -573,9 +574,9 @@ export function saveAuthProfileStore(
   writeCachedAuthProfileStore({
     storeKey,
     authMtimeMs: updatedAt,
-    store,
+    store: savedStore,
   });
   if (hasRuntimeAuthProfileStoreSnapshot(agentDir)) {
-    setRuntimeAuthProfileStoreSnapshot(store, agentDir);
+    setRuntimeAuthProfileStoreSnapshot(savedStore, agentDir);
   }
 }

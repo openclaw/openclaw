@@ -4,7 +4,8 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../../test-utils/env.js";
 import { OAUTH_AGENT_ENV_KEYS, createExpiredOauthStore } from "./oauth-test-utils.js";
-import { loadPersistedAuthProfileStore } from "./persisted.js";
+import { authProfileStoreKey } from "./persisted.js";
+import { readAuthProfileStorePayloadResult } from "./sqlite-storage.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
@@ -68,12 +69,12 @@ afterAll(() => {
   vi.doUnmock("../../plugins/provider-runtime.js");
 });
 
-async function readPersistedStore(agentDir: string): Promise<AuthProfileStore> {
-  const store = loadPersistedAuthProfileStore(agentDir);
-  if (!store) {
+async function readRawPersistedStore(agentDir: string): Promise<AuthProfileStore> {
+  const result = readAuthProfileStorePayloadResult(authProfileStoreKey(agentDir));
+  if (!result.exists || !result.value) {
     throw new Error(`Expected persisted auth store for ${agentDir}`);
   }
-  return store;
+  return result.value as AuthProfileStore;
 }
 
 function mockRotatedOpenAICodexRefresh() {
@@ -246,7 +247,7 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
       email: undefined,
     });
 
-    const persisted = await readPersistedStore(agentDir);
+    const persisted = await readRawPersistedStore(agentDir);
     expectPersistedOpenAICodexProfileWithoutInlineTokens(persisted.profiles[profileId], {
       accountId: "acct-rotated",
     });
@@ -299,7 +300,7 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
       provider: "openai-codex",
       email: undefined,
     });
-    const persisted = await readPersistedStore(agentDir);
+    const persisted = await readRawPersistedStore(agentDir);
     expectPersistedOpenAICodexProfileWithoutInlineTokens(persisted.profiles[profileId], {
       accountId: "acct-rotated",
     });
@@ -362,7 +363,7 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
       email: undefined,
     });
 
-    const persisted = await readPersistedStore(agentDir);
+    const persisted = await readRawPersistedStore(agentDir);
     expectPersistedOpenAICodexProfileWithoutInlineTokens(persisted.profiles[profileId], {
       accountId: "acct-local",
     });
@@ -429,7 +430,7 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
       email: undefined,
     });
 
-    const persisted = await readPersistedStore(agentDir);
+    const persisted = await readRawPersistedStore(agentDir);
     expectPersistedOpenAICodexProfileWithoutInlineTokens(persisted.profiles[profileId]);
     expect(JSON.stringify(persisted)).not.toContain("fresh-access-token");
     expect(JSON.stringify(persisted)).not.toContain("fresh-refresh-token");
@@ -541,7 +542,7 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     });
 
     expect(getOAuthApiKeyMock).toHaveBeenCalledTimes(2);
-    const persisted = await readPersistedStore(agentDir);
+    const persisted = await readRawPersistedStore(agentDir);
     expectPersistedOpenAICodexProfileWithoutInlineTokens(persisted.profiles[profileId]);
     expect(JSON.stringify(persisted)).not.toContain("retried-access-token");
     expect(JSON.stringify(persisted)).not.toContain("retried-refresh-token");

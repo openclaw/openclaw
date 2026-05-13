@@ -8,6 +8,7 @@ import { appendSessionTranscriptMessage } from "../../config/sessions/transcript
 import { loadSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { saveAuthProfileStore } from "../auth-profiles/store.js";
 import { FailoverError } from "../failover-error.js";
 import { runEmbeddedPiAgent, type EmbeddedPiRunResult } from "../pi-embedded.js";
 import { persistCliTurnTranscript, runAgentAttempt } from "./attempt-execution.js";
@@ -984,11 +985,14 @@ describe("embedded attempt harness pinning", () => {
 
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-embedded-attempt-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
     runCliAgentMock.mockReset();
     runEmbeddedPiAgentMock.mockReset();
   });
 
   afterEach(async () => {
+    closeOpenClawStateDatabaseForTest();
+    vi.unstubAllEnvs();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
@@ -1167,9 +1171,8 @@ describe("embedded attempt harness pinning", () => {
       sessionId: "codex-auth-session",
       updatedAt: Date.now(),
     };
-    await fs.writeFile(
-      path.join(tmpDir, "auth-profiles.json"),
-      JSON.stringify({
+    saveAuthProfileStore(
+      {
         version: 1,
         profiles: {
           "openai-codex:work": {
@@ -1180,7 +1183,8 @@ describe("embedded attempt harness pinning", () => {
             expires: Date.now() + 60_000,
           },
         },
-      }),
+      },
+      tmpDir,
     );
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       meta: { durationMs: 1 },
