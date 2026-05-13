@@ -4,8 +4,19 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const FORBIDDEN_CHANGELOG_THANKS_HANDLES = ["codex", "openclaw", "steipete", "clawsweeper"];
+export const FORBIDDEN_CHANGELOG_THANKS_EXACT_HANDLES = [
+  "",
+  "null",
+  "codex",
+  "openclaw",
+  "steipete",
+  "clawsweeper",
+  "openclaw-clawsweeper",
+  "clawsweeper[bot]",
+  "openclaw-clawsweeper[bot]",
+];
 export const FORBIDDEN_CHANGELOG_THANKS_HANDLE_PREFIXES = ["app/"];
+export const FORBIDDEN_CHANGELOG_THANKS_HANDLE_SUBSTRINGS = ["clawsweeper"];
 
 const THANKS_PATTERN = /\bThanks\b/iu;
 const THANKED_HANDLE_PATTERN = /@([-_/A-Za-z0-9]+(?:\[bot\])?)/giu;
@@ -13,22 +24,17 @@ const THANKED_HANDLE_PATTERN = /@([-_/A-Za-z0-9]+(?:\[bot\])?)/giu;
 export function isForbiddenChangelogThanksHandle(handle, options = {}) {
   const { strictBotHandle = false } = options;
   const normalized = handle.toLowerCase();
-  if (normalized === "" || normalized === "null") {
+  if (
+    FORBIDDEN_CHANGELOG_THANKS_EXACT_HANDLES.includes(normalized) ||
+    FORBIDDEN_CHANGELOG_THANKS_HANDLE_PREFIXES.some((prefix) => normalized.startsWith(prefix))
+  ) {
     return true;
   }
-  if (FORBIDDEN_CHANGELOG_THANKS_HANDLE_PREFIXES.some((prefix) => normalized.startsWith(prefix))) {
-    return true;
+  if (strictBotHandle) {
+    return false;
   }
-  if (strictBotHandle && normalized.includes("clawsweeper")) {
-    return (
-      normalized === "clawsweeper" ||
-      normalized === "clawsweeper[bot]" ||
-      normalized === "openclaw-clawsweeper" ||
-      normalized === "openclaw-clawsweeper[bot]"
-    );
-  }
-  return FORBIDDEN_CHANGELOG_THANKS_HANDLES.some((forbidden) =>
-    forbidden === "clawsweeper" ? normalized.includes(forbidden) : normalized === forbidden,
+  return FORBIDDEN_CHANGELOG_THANKS_HANDLE_SUBSTRINGS.some((substring) =>
+    normalized.includes(substring),
   );
 }
 
@@ -73,7 +79,11 @@ export async function main(argv = process.argv.slice(2)) {
     console.error(`- ${relativePath}:${violation.line} uses Thanks @${violation.handle}`);
   }
   console.error(
-    `Use a credited external GitHub username instead of ${FORBIDDEN_CHANGELOG_THANKS_HANDLES.map((handle) => `@${handle}`).join(", ")}.`,
+    `Use a credited external GitHub username instead of ${FORBIDDEN_CHANGELOG_THANKS_EXACT_HANDLES.filter(
+      Boolean,
+    )
+      .map((handle) => `@${handle}`)
+      .join(", ")}.`,
   );
   process.exitCode = 1;
 }
