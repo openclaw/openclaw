@@ -180,6 +180,14 @@ function ensureDistExists(repoRoot) {
   return distDir;
 }
 
+function ensureHooksDisabled(repoRoot, logStream, reason) {
+  const disabledDirName = "git-hooks-disabled";
+  const disabledDirAbs = path.join(repoRoot, disabledDirName);
+  fs.mkdirSync(disabledDirAbs, { recursive: true });
+  banner(logStream, `Disabling git hooks (${reason}) via core.hooksPath=${disabledDirName}`);
+  sh("git", ["config", "core.hooksPath", disabledDirName], { cwd: repoRoot });
+}
+
 function getGlobalPrefix() {
   // This host uses ~/.npm-global; keep it explicit so installs land where systemd expects.
   return "/home/ec2-user/.npm-global";
@@ -187,11 +195,58 @@ function getGlobalPrefix() {
 
 function npmPack(repoRoot, outDir, tarballName) {
   fs.mkdirSync(outDir, { recursive: true });
-  // npm pack writes the tarball filename to stdout.
-  const packed = sh("npm", ["pack", "--silent", "--pack-destination", outDir], { cwd: repoRoot });
-  const produced = path.join(outDir, packed);
+  const listTgzs = () => {
+    try {
+      return new Set(
+        fs
+          .readdirSync(outDir, { withFileTypes: true })
+          .filter((e) => e.isFile() && e.name.endsWith(".tgz"))
+          .map((e) => e.name),
+      );
+    } catch {
+      return new Set();
+    }
+  };
+
+  // `npm pack` usually prints the tarball filename to stdout, but stdout can be noisy in practice.
+  // Prefer detecting the actual produced artifact(s) in `outDir` reliably.
+  const before = listTgzs();
+  const stdout = execFileSync("npm", ["pack", "--silent", "--pack-destination", outDir], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const after = listTgzs();
+
+  const created = [...after].filter((name) => !before.has(name));
+  let producedName = created.length === 1 ? String(created[0]) : null;
+
+  if (!producedName) {
+    // Defensive parsing fallback: pick the last non-empty line that looks like a tarball name.
+    // Some npm configurations/plugins print additional content to stdout.
+    const lines = String(stdout || "")
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+    const lastTgz = [...lines].toReversed().find((l) => l.endsWith(".tgz"));
+    if (lastTgz) {
+      const candidate = path.basename(lastTgz);
+      if (after.has(candidate)) {
+        producedName = candidate;
+      }
+    }
+  }
+
+  if (!producedName) {
+    const createdList = created.length ? created.join(", ") : "(none)";
+    fail(
+      `failed to identify npm pack output tarball in ${outDir} (created=${createdList}; stdout=${JSON.stringify(stdout)})`,
+    );
+  }
+
+  const produced = path.join(outDir, producedName);
   if (!fs.existsSync(produced)) {
-    fail(`npm pack reported ${packed} but file not found at ${produced}`);
+    fail(`npm pack produced ${producedName} but file not found at ${produced}`);
   }
 
   const target = path.join(outDir, tarballName);
@@ -273,7 +328,11 @@ await shTee(logStream, "git", ["tag", "-a", polyTag, "-m", `Polytropos release $
 
 // Build dist/
 banner(logStream, "Building dist/");
+ensureHooksDisabled(repoRoot, logStream, "before pnpm install");
 await shTee(logStream, "pnpm", ["install"], { cwd: repoRoot });
+// `pnpm install` runs the repo `prepare` script, which sets core.hooksPath to `git-hooks`.
+// Re-disable hooks explicitly so the release flow never leaves hooks enabled on the host.
+ensureHooksDisabled(repoRoot, logStream, "after pnpm install (prepare may reset core.hooksPath)");
 await shTee(logStream, "pnpm", ["ui:build"], { cwd: repoRoot });
 await shTee(logStream, "pnpm", ["build"], { cwd: repoRoot });
 
