@@ -8,11 +8,7 @@ import {
 import { persistPluginInstall } from "../../cli/plugins-install-persist.js";
 import type { ConfigSnapshotForInstallPersist } from "../../cli/plugins-install-persist.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
-import {
-  readConfigFileSnapshot,
-  transformConfigFileWithRetry,
-  validateConfigObjectWithPlugins,
-} from "../../config/config.js";
+import { readConfigFileSnapshot } from "../../config/config.js";
 import { assertConfigWriteAllowedInCurrentMode } from "../../config/nix-mode-write-guard.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
@@ -37,7 +33,6 @@ import {
   formatPluginCompatibilityNotice,
   type PluginStatusReport,
 } from "../../plugins/status.js";
-import { setPluginEnabledInConfig } from "../../plugins/toggle-config.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
@@ -48,13 +43,12 @@ import {
   requireGatewayClientScope,
 } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
+import { AutoReplyConfigMutationError, setPluginEnabledFromCommand } from "./config-mutations.js";
 import { parsePluginsCommand } from "./plugins-commands.js";
 
 function renderJsonBlock(label: string, value: unknown): string {
   return `${label}\n\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\``;
 }
-
-class PluginsCommandMutationError extends Error {}
 
 function buildPluginInspectJson(params: {
   id: string;
@@ -539,27 +533,13 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
 
   let committedConfig: OpenClawConfig;
   try {
-    const committed = await transformConfigFileWithRetry({
-      afterWrite: { mode: "auto" },
-      transform: (currentConfig) => {
-        const next = setPluginEnabledInConfig(
-          structuredClone(currentConfig),
-          plugin.id,
-          pluginsCommand.action === "enable",
-        );
-        const validated = validateConfigObjectWithPlugins(next);
-        if (!validated.ok) {
-          const issue = validated.issues[0];
-          throw new PluginsCommandMutationError(
-            `Config invalid after /plugins ${pluginsCommand.action} (${issue.path}: ${issue.message}).`,
-          );
-        }
-        return { nextConfig: validated.config };
-      },
+    committedConfig = await setPluginEnabledFromCommand({
+      pluginId: plugin.id,
+      enabled: pluginsCommand.action === "enable",
+      action: pluginsCommand.action,
     });
-    committedConfig = committed.nextConfig;
   } catch (error) {
-    if (error instanceof PluginsCommandMutationError) {
+    if (error instanceof AutoReplyConfigMutationError) {
       return { shouldContinue: false, reply: { text: `⚠️ ${error.message}` } };
     }
     throw error;

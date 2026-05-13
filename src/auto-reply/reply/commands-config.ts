@@ -1,16 +1,7 @@
 import { resolveConfigWriteTargetFromPath } from "../../channels/plugins/config-writes.js";
 import { normalizeChannelId } from "../../channels/registry.js";
-import {
-  getConfigValueAtPath,
-  parseConfigPath,
-  setConfigValueAtPath,
-  unsetConfigValueAtPath,
-} from "../../config/config-paths.js";
-import {
-  readConfigFileSnapshot,
-  transformConfigFileWithRetry,
-  validateConfigObjectWithPlugins,
-} from "../../config/config.js";
+import { getConfigValueAtPath, parseConfigPath } from "../../config/config-paths.js";
+import { readConfigFileSnapshot } from "../../config/config.js";
 import {
   getConfigOverrides,
   resetConfigOverrides,
@@ -28,14 +19,13 @@ import {
 } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 import { parseConfigCommand } from "./config-commands.js";
+import {
+  formatAutoReplyConfigMutationError,
+  setConfigPath,
+  unsetConfigPath,
+} from "./config-mutations.js";
 import { resolveConfigWriteDeniedText } from "./config-write-authorization.js";
 import { parseDebugCommand } from "./debug-commands.js";
-
-class ConfigCommandMutationError extends Error {}
-
-function formatConfigCommandMutationError(error: unknown): string | null {
-  return error instanceof ConfigCommandMutationError ? error.message : null;
-}
 
 export const handleConfigCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
@@ -149,40 +139,20 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
 
   if (configCommand.action === "unset") {
     const path = parsedWritePath ?? [];
-    let removed = false;
     try {
-      const result = await transformConfigFileWithRetry<{ removed: boolean }>({
-        base: "source",
-        afterWrite: { mode: "auto" },
-        transform: (currentConfig) => {
-          const next = structuredClone(currentConfig) as Record<string, unknown>;
-          const removed = unsetConfigValueAtPath(next, path);
-          if (!removed) {
-            return { nextConfig: currentConfig, result: { removed: false } };
-          }
-          const validated = validateConfigObjectWithPlugins(next);
-          if (!validated.ok) {
-            const issue = validated.issues[0];
-            throw new ConfigCommandMutationError(
-              `Config invalid after unset (${issue.path}: ${issue.message}).`,
-            );
-          }
-          return { nextConfig: validated.config, result: { removed: true } };
-        },
-      });
-      removed = Boolean(result.result?.removed);
+      const removed = await unsetConfigPath(path);
+      if (!removed) {
+        return {
+          shouldContinue: false,
+          reply: { text: `⚙️ No config value found for ${configCommand.path}.` },
+        };
+      }
     } catch (error) {
-      const message = formatConfigCommandMutationError(error);
+      const message = formatAutoReplyConfigMutationError(error);
       if (message) {
         return { shouldContinue: false, reply: { text: `⚠️ ${message}` } };
       }
       throw error;
-    }
-    if (!removed) {
-      return {
-        shouldContinue: false,
-        reply: { text: `⚙️ No config value found for ${configCommand.path}.` },
-      };
     }
     return {
       shouldContinue: false,
@@ -193,24 +163,9 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
   if (configCommand.action === "set") {
     const path = parsedWritePath ?? [];
     try {
-      await transformConfigFileWithRetry({
-        base: "source",
-        afterWrite: { mode: "auto" },
-        transform: (currentConfig) => {
-          const next = structuredClone(currentConfig) as Record<string, unknown>;
-          setConfigValueAtPath(next, path, configCommand.value);
-          const validated = validateConfigObjectWithPlugins(next);
-          if (!validated.ok) {
-            const issue = validated.issues[0];
-            throw new ConfigCommandMutationError(
-              `Config invalid after set (${issue.path}: ${issue.message}).`,
-            );
-          }
-          return { nextConfig: validated.config };
-        },
-      });
+      await setConfigPath(path, configCommand.value);
     } catch (error) {
-      const message = formatConfigCommandMutationError(error);
+      const message = formatAutoReplyConfigMutationError(error);
       if (message) {
         return { shouldContinue: false, reply: { text: `⚠️ ${message}` } };
       }

@@ -1,11 +1,7 @@
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { normalizeChannelId } from "../../channels/registry.js";
-import {
-  readConfigFileSnapshot,
-  transformConfigFileWithRetry,
-  validateConfigObjectWithPlugins,
-} from "../../config/config.js";
+import { readConfigFileSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   addChannelAllowFromStoreEntry,
@@ -25,6 +21,7 @@ import {
   requireGatewayClientScope,
 } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
+import { applyAllowlistConfigMutation, AutoReplyConfigMutationError } from "./config-mutations.js";
 import { resolveConfigWriteDeniedText } from "./config-write-authorization.js";
 
 type AllowlistScope = "dm" | "group" | "all";
@@ -35,8 +32,6 @@ type ResolvedAllowlistName = {
   resolved: boolean;
   name?: string | null;
 };
-
-class AllowlistCommandMutationError extends Error {}
 
 type AllowlistCommand =
   | {
@@ -512,37 +507,16 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
 
     if (configChanged) {
       try {
-        await transformConfigFileWithRetry({
-          base: "source",
-          afterWrite: { mode: "auto" },
-          transform: async (currentConfig) => {
-            const latestParsedConfig = structuredClone(currentConfig) as Record<string, unknown>;
-            const latestEditResult = await applyConfigEdit({
-              cfg: currentConfig,
-              parsedConfig: latestParsedConfig,
-              accountId,
-              scope: editScope,
-              action: parsed.action,
-              entry: parsed.entry,
-            });
-            if (!latestEditResult || latestEditResult.kind === "invalid-entry") {
-              throw new AllowlistCommandMutationError("Invalid allowlist entry.");
-            }
-            if (!latestEditResult.changed) {
-              return { nextConfig: currentConfig };
-            }
-            const validated = validateConfigObjectWithPlugins(latestParsedConfig);
-            if (!validated.ok) {
-              const issue = validated.issues[0];
-              throw new AllowlistCommandMutationError(
-                `Config invalid after update (${issue.path}: ${issue.message}).`,
-              );
-            }
-            return { nextConfig: validated.config };
-          },
+        await applyAllowlistConfigMutation({
+          cfg: params.cfg,
+          accountId,
+          scope: editScope,
+          action: parsed.action,
+          entry: parsed.entry,
+          applyConfigEdit,
         });
       } catch (error) {
-        if (error instanceof AllowlistCommandMutationError) {
+        if (error instanceof AutoReplyConfigMutationError) {
           return { shouldContinue: false, reply: { text: `⚠️ ${error.message}` } };
         }
         throw error;

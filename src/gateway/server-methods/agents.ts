@@ -20,13 +20,7 @@ import {
   ensureAgentWorkspace,
   isWorkspaceSetupCompleted,
 } from "../../agents/workspace.js";
-import {
-  applyAgentConfig,
-  findAgentEntryIndex,
-  listAgentEntries,
-  pruneAgentConfig,
-} from "../../commands/agents.config.js";
-import { mutateConfigFileWithRetry } from "../../config/config.js";
+import { applyAgentConfig } from "../../commands/agents.config.js";
 import {
   purgeAgentSessionStoreEntries,
   resolveSessionTranscriptsDirForAgent,
@@ -50,14 +44,14 @@ import {
   validateAgentsUpdateParams,
 } from "../protocol/index.js";
 import { listAgentsForGateway } from "../session-utils.js";
+import {
+  AgentConfigPreconditionError,
+  createAgentConfigEntry,
+  deleteAgentConfigEntry,
+  isConfiguredAgent,
+  updateAgentConfigEntry,
+} from "./agents-config-mutations.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
-
-type AgentDeleteMutationResult = {
-  workspaceDir: string;
-  agentDir: string;
-  sessionsDir: string;
-  removedBindings: number;
-};
 
 const BOOTSTRAP_FILE_NAMES = [
   DEFAULT_AGENTS_FILENAME,
@@ -290,26 +284,8 @@ function respondInvalidMethodParams(
   );
 }
 
-function isConfiguredAgent(cfg: OpenClawConfig, agentId: string): boolean {
-  return findAgentEntryIndex(listAgentEntries(cfg), agentId) >= 0;
-}
-
 function respondAgentNotFound(respond: RespondFn, agentId: string): void {
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `agent "${agentId}" not found`));
-}
-
-class AgentConfigPreconditionError extends Error {
-  constructor(
-    readonly kind: "already-exists" | "not-found",
-    readonly agentId: string,
-  ) {
-    super(
-      kind === "already-exists"
-        ? `agent "${agentId}" already exists`
-        : `agent "${agentId}" not found`,
-    );
-    this.name = "AgentConfigPreconditionError";
-  }
 }
 
 function respondAgentConfigPreconditionError(
@@ -517,7 +493,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    if (findAgentEntryIndex(listAgentEntries(cfg), agentId) >= 0) {
+    if (isConfiguredAgent(cfg, agentId)) {
       respond(
         false,
         undefined,
@@ -583,22 +559,13 @@ export const agentsHandlers: GatewayRequestHandlers = {
       }
     }
     try {
-      await mutateConfigFileWithRetry({
-        afterWrite: { mode: "auto" },
-        mutate: (draft) => {
-          if (findAgentEntryIndex(listAgentEntries(draft), agentId) >= 0) {
-            throw new AgentConfigPreconditionError("already-exists", agentId);
-          }
-          const latestNextConfig = applyAgentConfig(draft, {
-            agentId,
-            name: safeName,
-            workspace: workspaceDir,
-            model,
-            identity,
-            agentDir,
-          });
-          Object.assign(draft, latestNextConfig);
-        },
+      await createAgentConfigEntry({
+        agentId,
+        name: safeName,
+        workspace: workspaceDir,
+        model,
+        identity,
+        agentDir,
       });
     } catch (error) {
       if (error instanceof AgentConfigPreconditionError) {
@@ -696,21 +663,12 @@ export const agentsHandlers: GatewayRequestHandlers = {
     }
 
     try {
-      await mutateConfigFileWithRetry({
-        afterWrite: { mode: "auto" },
-        mutate: (draft) => {
-          if (!isConfiguredAgent(draft, agentId)) {
-            throw new AgentConfigPreconditionError("not-found", agentId);
-          }
-          const latestNextConfig = applyAgentConfig(draft, {
-            agentId,
-            ...(safeName ? { name: safeName } : {}),
-            ...(workspaceDir ? { workspace: workspaceDir } : {}),
-            ...(model ? { model } : {}),
-            ...(identity ? { identity } : {}),
-          });
-          Object.assign(draft, latestNextConfig);
-        },
+      await updateAgentConfigEntry({
+        agentId,
+        ...(safeName ? { name: safeName } : {}),
+        ...(workspaceDir ? { workspace: workspaceDir } : {}),
+        ...(model ? { model } : {}),
+        ...(identity ? { identity } : {}),
       });
     } catch (error) {
       if (error instanceof AgentConfigPreconditionError) {
@@ -744,27 +702,9 @@ export const agentsHandlers: GatewayRequestHandlers = {
     }
 
     const deleteFiles = typeof params.deleteFiles === "boolean" ? params.deleteFiles : true;
-    let committed: Awaited<ReturnType<typeof mutateConfigFileWithRetry<AgentDeleteMutationResult>>>;
+    let committed: Awaited<ReturnType<typeof deleteAgentConfigEntry>>;
     try {
-      committed = await mutateConfigFileWithRetry({
-        afterWrite: { mode: "auto" },
-        mutate: (draft) => {
-          if (!isConfiguredAgent(draft, agentId)) {
-            throw new AgentConfigPreconditionError("not-found", agentId);
-          }
-          const workspaceDir = resolveAgentWorkspaceDir(draft, agentId);
-          const agentDir = resolveAgentDir(draft, agentId);
-          const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
-          const result = pruneAgentConfig(draft, agentId);
-          Object.assign(draft, result.config);
-          return {
-            workspaceDir,
-            agentDir,
-            sessionsDir,
-            removedBindings: result.removedBindings,
-          };
-        },
-      });
+      committed = await deleteAgentConfigEntry({ agentId });
     } catch (error) {
       if (error instanceof AgentConfigPreconditionError) {
         respondAgentConfigPreconditionError(respond, error);
