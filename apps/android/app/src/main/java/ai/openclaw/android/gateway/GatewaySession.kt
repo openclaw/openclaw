@@ -384,6 +384,12 @@ class GatewaySession(
         }
 
       val signedAtMs = System.currentTimeMillis()
+      val signatureToken =
+        when {
+          authToken.isNotEmpty() -> authToken
+          authBootstrapToken.isNotEmpty() -> authBootstrapToken
+          else -> null
+        }
       val payload =
         buildDeviceAuthPayload(
           deviceId = identity.deviceId,
@@ -392,7 +398,7 @@ class GatewaySession(
           role = options.role,
           scopes = options.scopes,
           signedAtMs = signedAtMs,
-          token = if (authToken.isNotEmpty()) authToken else null,
+          token = signatureToken,
           nonce = connectNonce,
         )
       val signature = identityStore.signPayload(payload, identity)
