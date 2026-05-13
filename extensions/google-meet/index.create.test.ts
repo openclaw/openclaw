@@ -227,6 +227,16 @@ describe("google-meet create flow", () => {
       expect(createSpaceInit.body).toBe(
         JSON.stringify({ config: { accessType: "OPEN", entryPointAccess: "ALL" } }),
       );
+      expect(fetchGuardMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+        expect.objectContaining({
+          auditContext: "google-meet.oauth.token",
+          policy: {
+            allowedHostnames: ["oauth2.googleapis.com"],
+            allowPrivateNetwork: true,
+          },
+          url: "https://oauth2.googleapis.com/token",
+        }),
+      );
     } finally {
       stdout.restore();
     }

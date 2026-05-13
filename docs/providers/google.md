@@ -121,6 +121,16 @@ Choose your preferred auth method and follow the setup steps.
     command is installed and on `PATH`.
     </Note>
 
+    <Note>
+    In trusted fake-IP or TUN proxy environments such as Clash, Mihomo, or
+    Surge, Google OAuth hostnames can resolve to `198.18.0.0/15` or other
+    private/internal addresses. OpenClaw keeps the OAuth SSRF guard scoped to
+    Google OAuth/API hostnames and allows those fake-IP DNS answers for the
+    Gemini CLI OAuth token and project-discovery requests. If an older build
+    fails with `SsrFBlockedError` for `oauth2.googleapis.com`, update OpenClaw
+    or temporarily disable fake-IP DNS while running the login command.
+    </Note>
+
     `google-gemini-cli/*` model refs are legacy compatibility aliases. New
     configs should use `google/*` model refs plus the `google-gemini-cli`
     runtime when they want local Gemini CLI execution.
