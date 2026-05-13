@@ -18,7 +18,7 @@ function run(cwd: string, command: string, args: string[], env?: NodeJS.ProcessE
   }).trim();
 }
 
-function initChangelogRepo(entry: string): string {
+function createRepoWithPrChangelogDiff(entry: string): string {
   const repo = mkdtempSync(path.join(os.tmpdir(), "openclaw-changelog-credit-"));
   run(repo, "git", ["init", "-q", "--initial-branch=main"]);
   run(repo, "git", ["config", "user.email", "test@example.com"]);
@@ -27,6 +27,8 @@ function initChangelogRepo(entry: string): string {
   run(repo, "git", ["add", "CHANGELOG.md"]);
   run(repo, "git", ["commit", "-qm", "seed"]);
   const baseSha = run(repo, "git", ["rev-parse", "HEAD"]);
+  // validate_changelog_entry_for_pr reads origin/main...HEAD, so the test
+  // fixture needs a real base ref plus a feature-branch changelog diff.
   run(repo, "git", ["update-ref", "refs/remotes/origin/main", baseSha]);
   run(repo, "git", ["checkout", "-qb", "feature"]);
   writeFileSync(
@@ -115,7 +117,7 @@ describe("check-changelog-attributions", () => {
   });
 
   it("requires explicit human thanks for bot PR changelog entries", () => {
-    const repo = initChangelogRepo("- Bot repair (#123).");
+    const repo = createRepoWithPrChangelogDiff("- Bot repair (#123).");
     try {
       let output = "";
       try {
@@ -130,7 +132,7 @@ describe("check-changelog-attributions", () => {
   });
 
   it("accepts explicit human thanks for bot PR changelog entries", () => {
-    const repo = initChangelogRepo("- Bot repair (#123). Thanks @Ziy1-Tan.");
+    const repo = createRepoWithPrChangelogDiff("- Bot repair (#123). Thanks @Ziy1-Tan.");
     try {
       expect(validateChangelogEntry(repo, "clawsweeper[bot]")).toContain("explicit thanks");
     } finally {
