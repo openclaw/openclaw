@@ -57,6 +57,62 @@ describe("buildReplyPromptEnvelope", () => {
     });
   });
 
+  it("projects room events as context instead of user requests", () => {
+    const sessionCtx = finalizeInboundContext({
+      Body: "No wtf",
+      BodyStripped: "No wtf",
+      Provider: "telegram",
+      ChatType: "group",
+      InboundTurnKind: "room_event",
+      MessageSid: "35676",
+      SenderName: "Keśava",
+    });
+
+    const envelope = buildReplyPromptEnvelope({
+      ctx: sessionCtx,
+      sessionCtx,
+      baseBody: "No wtf",
+      hasUserBody: true,
+      inboundUserContext: [
+        "Conversation info (untrusted metadata):",
+        "```json",
+        JSON.stringify({ message_id: "35676", turn_kind: "room_event" }, null, 2),
+        "```",
+        "",
+        "Conversation context (untrusted, chronological, selected for current message):",
+        "#35674 Other: I wish I could enjoy 5.5",
+        "#35675 User ->#35674: Are you fr fr",
+      ].join("\n"),
+      isBareSessionReset: false,
+      startupAction: "new",
+      turnKind: "room_event",
+    });
+
+    expect(envelope.prefixedCommandBody).toBe("[OpenClaw room event]");
+    expect(envelope.queuedBody).toBe("[OpenClaw room event]");
+    expect(envelope.transcriptCommandBody).toBe("");
+    expect(envelope.currentTurnContext?.text).toBe(
+      [
+        "[OpenClaw turn]",
+        "kind: room_event",
+        "visible_reply_contract: message_tool_only",
+        [
+          "Room context:",
+          "Conversation info (untrusted metadata):",
+          "```json",
+          JSON.stringify({ message_id: "35676", turn_kind: "room_event" }, null, 2),
+          "```",
+          "",
+          "Conversation context (untrusted, chronological, selected for current message):",
+          "#35674 Other: I wish I could enjoy 5.5",
+          "#35675 User ->#35674: Are you fr fr",
+        ].join("\n"),
+        "Current event:\n#35676 Keśava: No wtf",
+        "Treat this as observed room activity. Decide whether to act.",
+      ].join("\n\n"),
+    );
+  });
+
   it("keeps soft reset user notes visible without leaking startup context into transcripts", () => {
     const sessionCtx = finalizeInboundContext({
       Body: "",
