@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Telegram: discard legacy long-poll update offsets that cannot be tied to the current bot token, so token rotation no longer leaves bots silently skipping new messages. (#80671) Thanks @sxxtony.
 - browser: enforce navigation checks for act interactions [AI]. (#81070) Thanks @pgondhi987.
 - Validate node exec event provenance [AI]. (#81071) Thanks @pgondhi987.
 - Limit hook CLI tool authority [AI]. (#81065) Thanks @pgondhi987.
