@@ -71,7 +71,10 @@ function isSerializedEventPayload(value: unknown): value is SerializedEventPaylo
   return (
     typeof value === "object" &&
     value !== null &&
-    (value as { [SERIALIZED_EVENT_PAYLOAD]?: unknown })[SERIALIZED_EVENT_PAYLOAD] === true &&
+    Object.is(
+      (value as { [SERIALIZED_EVENT_PAYLOAD]?: unknown })[SERIALIZED_EVENT_PAYLOAD],
+      true,
+    ) &&
     typeof (value as { json?: unknown }).json === "string"
   );
 }
