@@ -162,5 +162,9 @@ export function resolveModelRuntimePolicy(params: {
   if (hasRuntimePolicy(providerConfig?.agentRuntime)) {
     return { policy: providerConfig?.agentRuntime, source: "provider" };
   }
+  const defaultsRuntime = params.config?.agents?.defaults?.agentRuntime;
+  if (hasRuntimePolicy(defaultsRuntime)) {
+    return { policy: defaultsRuntime, source: "provider" };
+  }
   return {};
 }
