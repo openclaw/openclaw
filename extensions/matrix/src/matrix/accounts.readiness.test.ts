@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { installMatrixTestRuntime } from "../test-runtime.js";
+import { installMatrixTestRuntime } from "../test-support/test-runtime.js";
 import type { CoreConfig } from "../types.js";
 import { resolveMatrixAccount } from "./accounts.js";
 

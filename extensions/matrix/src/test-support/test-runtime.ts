@@ -4,8 +4,8 @@ import {
 } from "openclaw/plugin-sdk/channel-mention-gating";
 import { createPluginRuntimeMediaMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { vi } from "vitest";
-import type { PluginRuntime } from "./runtime-api.js";
-import { setMatrixRuntime } from "./runtime.js";
+import type { PluginRuntime } from "../runtime-api.js";
+import { setMatrixRuntime } from "../runtime.js";
 
 type MatrixTestRuntimeOptions = {
   cfg?: Record<string, unknown>;

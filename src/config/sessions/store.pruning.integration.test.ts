@@ -17,6 +17,7 @@ vi.mock("../config.js", async () => ({
 
 import { getRuntimeConfig } from "../config.js";
 import { runSessionsCleanup } from "./cleanup-service.js";
+import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-runtime.js";
 import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
@@ -866,6 +867,27 @@ describe("Integration: saveSessionStore with pruning", () => {
       name.startsWith(`${oldestSessionId}.jsonl.deleted.`),
     );
     expect(archivedOldestTranscripts.length).toBeGreaterThan(0);
+  });
+
+  it("keeps provider-preserved entries when maxEntries capping runs", async () => {
+    applyCappedMaintenanceConfig(mockLoadConfig);
+
+    const now = Date.now();
+    const unregister = registerSessionMaintenancePreserveKeysProvider(() => ["oldest", "newest"]);
+    try {
+      const store: Record<string, SessionEntry> = {
+        oldest: { sessionId: "oldest-session", updatedAt: now - DAY_MS },
+        newest: { sessionId: "newest-session", updatedAt: now },
+      };
+
+      await saveSessionStore(storePath, store);
+
+      const loaded = loadSessionStore(storePath, { skipCache: true });
+      expect(loaded).toHaveProperty("oldest");
+      expect(loaded).toHaveProperty("newest");
+    } finally {
+      unregister();
+    }
   });
 
   it("does not archive external transcript paths when capping entries", async () => {

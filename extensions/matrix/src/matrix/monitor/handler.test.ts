@@ -6,7 +6,7 @@ import {
   registerSessionBindingAdapter,
 } from "openclaw/plugin-sdk/session-binding-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
+import { installMatrixMonitorTestRuntime } from "../../test-support/test-runtime.js";
 import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY } from "../send/types.js";
 import { createMatrixRoomMessageHandler, MatrixRetryableInboundError } from "./handler.js";
 import {

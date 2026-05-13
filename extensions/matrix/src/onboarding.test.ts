@@ -14,7 +14,7 @@ import {
   runMatrixAddAccountAllowlistConfigure,
   runMatrixInteractiveConfigure,
 } from "./onboarding.test-harness.js";
-import { installMatrixTestRuntime } from "./test-runtime.js";
+import { installMatrixTestRuntime } from "./test-support/test-runtime.js";
 import type { CoreConfig } from "./types.js";
 
 vi.mock("./matrix/deps.js", () => ({

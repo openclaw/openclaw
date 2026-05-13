@@ -263,6 +263,25 @@ describe("node.invoke approval bypass", () => {
     return ws;
   };
 
+  const approveConnectedNodePairing = async (nodeId: string) => {
+    const ws = await connectOperator(["operator.pairing", "operator.admin"]);
+    try {
+      const listed = await rpcReq<{
+        pending?: Array<{ requestId?: string; nodeId?: string }>;
+      }>(ws, "node.pair.list", {});
+      expect(listed.ok).toBe(true);
+      const pending = listed.payload?.pending?.find((entry) => entry.nodeId === nodeId);
+      if (pending?.requestId) {
+        const approved = await rpcReq(ws, "node.pair.approve", {
+          requestId: pending.requestId,
+        });
+        expect(approved.ok).toBe(true);
+      }
+    } finally {
+      ws.close();
+    }
+  };
+
   const connectOperatorWithNewDevice = async (scopes: string[]) => {
     const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
     const publicKeyPem = publicKey.export({ type: "spki", format: "pem" });
@@ -359,6 +378,7 @@ describe("node.invoke approval bypass", () => {
         clearTimeout(timer);
       }
     }
+    await approveConnectedNodePairing(resolvedDeviceIdentity.deviceId);
     return client;
   };
 

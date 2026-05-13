@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveMatrixAccountStorageRoot } from "../../storage-paths.js";
-import { installMatrixTestRuntime } from "../../test-runtime.js";
+import { installMatrixTestRuntime } from "../../test-support/test-runtime.js";
 import {
   claimCurrentTokenStorageState,
   maybeMigrateLegacyStorage,

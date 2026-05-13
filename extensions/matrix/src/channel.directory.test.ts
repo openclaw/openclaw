@@ -4,7 +4,7 @@ import type { RuntimeEnv } from "../runtime-api.js";
 import { matrixPlugin } from "./channel.js";
 import { resolveMatrixAccount } from "./matrix/accounts.js";
 import { resolveMatrixConfigForAccount } from "./matrix/client/config.js";
-import { installMatrixTestRuntime } from "./test-runtime.js";
+import { installMatrixTestRuntime } from "./test-support/test-runtime.js";
 import type { CoreConfig } from "./types.js";
 
 function requireMatrixDirectory() {
