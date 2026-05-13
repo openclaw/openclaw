@@ -93,14 +93,20 @@ function shouldRotatePrompt(params: PromptDecisionParams): boolean {
   );
 }
 
+function isAssistantTimeoutFailure(params: AssistantDecisionParams): boolean {
+  return (
+    params.idleTimedOut ||
+    (params.timedOut && !params.timedOutDuringCompaction && !params.timedOutDuringToolExecution)
+  );
+}
+
 function shouldRotateAssistant(params: AssistantDecisionParams): boolean {
   if (isTerminalFormatFailure(params)) {
     return false;
   }
   return (
     (!params.aborted && (params.failoverFailure || params.failoverReason !== null)) ||
-    (params.timedOut && !params.timedOutDuringCompaction && !params.timedOutDuringToolExecution) ||
-    params.idleTimedOut
+    isAssistantTimeoutFailure(params)
   );
 }
 
@@ -180,8 +186,7 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
   if (assistantShouldRotate && params.fallbackConfigured) {
     return {
       action: "fallback_model",
-      reason:
-        params.timedOut || params.idleTimedOut ? "timeout" : (params.failoverReason ?? "unknown"),
+      reason: isAssistantTimeoutFailure(params) ? "timeout" : (params.failoverReason ?? "unknown"),
     };
   }
   if (!assistantShouldRotate) {

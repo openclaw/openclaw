@@ -279,6 +279,48 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
+  it("treats idle watchdog timeouts during tool execution as model silence", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "assistant",
+        aborted: true,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: false,
+        failoverReason: null,
+        timedOut: true,
+        idleTimedOut: true,
+        timedOutDuringCompaction: false,
+        timedOutDuringToolExecution: true,
+        profileRotated: false,
+      }),
+    ).toEqual({
+      action: "rotate_profile",
+      reason: null,
+    });
+  });
+
+  it("falls back after idle watchdog timeout during tool execution exhausts profile rotation", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "assistant",
+        aborted: true,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: false,
+        failoverReason: null,
+        timedOut: true,
+        idleTimedOut: true,
+        timedOutDuringCompaction: false,
+        timedOutDuringToolExecution: true,
+        profileRotated: true,
+      }),
+    ).toEqual({
+      action: "fallback_model",
+      reason: "timeout",
+    });
+  });
+
   it("does not rotate or fallback assistant timeouts after an external abort", () => {
     expect(
       resolveRunFailoverDecision({
@@ -301,9 +343,6 @@ describe("resolveRunFailoverDecision", () => {
   });
 
   it("rotates profile on LLM idle timeout before falling back", () => {
-    // idleTimedOut = model produced no tokens; no provider API error was classified.
-    // Before this fix, failoverReason=null + timedOut=false → shouldRotateAssistant=false
-    // → continue_normal, causing a silent agent freeze.
     expect(
       resolveRunFailoverDecision({
         stage: "assistant",
