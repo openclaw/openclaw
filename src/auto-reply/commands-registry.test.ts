@@ -234,6 +234,29 @@ describe("commands registry", () => {
     expect(requireNativeSpec(listNativeCommandSpecs(), "side").acceptsArgs).toBe(true);
   });
 
+  it("preserves multiline args while normalizing arg-accepting command heads", () => {
+    expect(normalizeCommandBody("/side\nfirst line\nsecond line")).toBe(
+      "/btw\nfirst line\nsecond line",
+    );
+    expect(normalizeCommandBody("/side first line\nsecond line")).toBe(
+      "/btw first line\nsecond line",
+    );
+    expect(normalizeCommandBody("/skill demo-skill\nfirst line\nsecond line")).toBe(
+      "/skill demo-skill\nfirst line\nsecond line",
+    );
+    expect(normalizeCommandBody("/demo_skill\nfirst line\nsecond line")).toBe(
+      "/demo_skill\nfirst line\nsecond line",
+    );
+  });
+
+  it("keeps multiline args after telegram-style bot mention cleanup", () => {
+    expect(
+      normalizeCommandBody("/skill@openclaw demo-skill\nfirst line\nsecond line", {
+        botUsername: "openclaw",
+      }),
+    ).toBe("/skill demo-skill\nfirst line\nsecond line");
+  });
+
   it("filters commands based on config flags", () => {
     const disabled = listChatCommandsForConfig({
       commands: { config: false, plugins: false, debug: false },

@@ -171,6 +171,24 @@ describe("resolveSkillCommandInvocation", () => {
     expect(invocation?.args).toBe("do the thing");
   });
 
+  it("preserves multiline args for direct skill commands", () => {
+    const invocation = resolveSkillCommandInvocation({
+      commandBodyNormalized: "/demo_skill\nfirst line\nsecond line",
+      skillCommands: [{ name: "demo_skill", skillName: "demo-skill", description: "Demo" }],
+    });
+    expect(invocation?.command.skillName).toBe("demo-skill");
+    expect(invocation?.args).toBe("first line\nsecond line");
+  });
+
+  it("preserves multiline args for /skill dispatch", () => {
+    const invocation = resolveSkillCommandInvocation({
+      commandBodyNormalized: "/skill demo_skill\nfirst line\nsecond line",
+      skillCommands: [{ name: "demo_skill", skillName: "demo-skill", description: "Demo" }],
+    });
+    expect(invocation?.command.skillName).toBe("demo-skill");
+    expect(invocation?.args).toBe("first line\nsecond line");
+  });
+
   it("normalizes /skill lookup names", () => {
     const invocation = resolveSkillCommandInvocation({
       commandBodyNormalized: "/skill demo-skill",
