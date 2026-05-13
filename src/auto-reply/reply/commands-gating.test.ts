@@ -23,6 +23,7 @@ const getConfigOverridesMock = vi.hoisted(() => vi.fn(() => ({})));
 const getConfigValueAtPathMock = vi.hoisted(() => vi.fn());
 const parseConfigPathMock = vi.hoisted(() => vi.fn());
 const setConfigValueAtPathMock = vi.hoisted(() => vi.fn());
+const unsetConfigValueAtPathMock = vi.hoisted(() => vi.fn(() => true));
 const resolveConfigWriteDeniedTextMock = vi.hoisted(() =>
   vi.fn<(...args: never[]) => string | null>(() => null),
 );
@@ -124,7 +125,7 @@ vi.mock("../../config/config-paths.js", () => ({
   getConfigValueAtPath: getConfigValueAtPathMock,
   parseConfigPath: parseConfigPathMock,
   setConfigValueAtPath: setConfigValueAtPathMock,
-  unsetConfigValueAtPath: vi.fn(() => true),
+  unsetConfigValueAtPath: unsetConfigValueAtPathMock,
 }));
 
 vi.mock("../../config/config.js", () => ({
@@ -270,6 +271,7 @@ describe("command gating", () => {
         }
       },
     );
+    unsetConfigValueAtPathMock.mockReturnValue(true);
   });
 
   it("blocks disabled bash", async () => {
@@ -630,5 +632,24 @@ describe("command gating", () => {
       nextConfig: {},
       afterWrite: { mode: "auto" },
     });
+  });
+
+  it("does not write config when /config unset misses", async () => {
+    unsetConfigValueAtPathMock.mockReturnValue(false);
+    readConfigFileSnapshotMock.mockResolvedValue({
+      valid: true,
+      parsed: { messages: {} },
+    });
+    const params = buildParams("/config unset messages.missing", {
+      commands: { config: true, text: true },
+    } as OpenClawConfig);
+    params.ctx.GatewayClientScopes = ["operator.admin"];
+    params.command.senderIsOwner = true;
+
+    const result = await handleConfigCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("No config value found");
+    expect(replaceConfigFileMock).not.toHaveBeenCalled();
   });
 });

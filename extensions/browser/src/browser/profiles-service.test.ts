@@ -174,6 +174,32 @@ describe("BrowserProfilesService", () => {
     expect(profiles.work?.cdpPort).toBe(18802);
   });
 
+  it("allocates local ports from the rebased CDP range end", async () => {
+    const resolved = resolveBrowserConfig({ cdpPortRangeStart: 19000 });
+    const { ctx, state } = createCtx(resolved);
+    vi.mocked(getRuntimeConfig)
+      .mockReturnValueOnce({
+        browser: {
+          cdpPortRangeStart: 19000,
+          profiles: {},
+        },
+      } as OpenClawConfig)
+      .mockReturnValue({
+        browser: {
+          cdpPortRangeEnd: 18801,
+          profiles: {},
+        },
+      } as unknown as OpenClawConfig);
+
+    const service = createBrowserProfilesService(ctx);
+    const result = await service.createProfile({ name: "work" });
+
+    expect(result.cdpPort).toBe(18800);
+    expect(state.resolved.profiles.work?.cdpPort).toBe(18800);
+    const profiles = writtenBrowserConfig().profiles as Record<string, { cdpPort?: number }>;
+    expect(profiles.work?.cdpPort).toBe(18800);
+  });
+
   it("accepts per-profile cdpUrl for remote Chrome", async () => {
     const resolved = resolveBrowserConfig({
       ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },

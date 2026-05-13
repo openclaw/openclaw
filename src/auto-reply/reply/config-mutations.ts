@@ -8,6 +8,8 @@ import { setPluginEnabledInConfig } from "../../plugins/toggle-config.js";
 
 export class AutoReplyConfigMutationError extends Error {}
 
+class AutoReplyConfigNoopMutation extends Error {}
+
 export function formatAutoReplyConfigMutationError(error: unknown): string | null {
   return error instanceof AutoReplyConfigMutationError ? error.message : null;
 }
@@ -27,22 +29,28 @@ function assertValidConfig(
 }
 
 export async function unsetConfigPath(path: string[]): Promise<boolean> {
-  const result = await transformConfigFileWithRetry<{ removed: boolean }>({
-    base: "source",
-    afterWrite: { mode: "auto" },
-    transform: (currentConfig) => {
-      const next = structuredClone(currentConfig) as Record<string, unknown>;
-      const removed = unsetConfigValueAtPath(next, path);
-      if (!removed) {
-        return { nextConfig: currentConfig, result: { removed: false } };
-      }
-      return {
-        nextConfig: assertValidConfig(next, "unset").config,
-        result: { removed: true },
-      };
-    },
-  });
-  return Boolean(result.result?.removed);
+  try {
+    await transformConfigFileWithRetry({
+      base: "source",
+      afterWrite: { mode: "auto" },
+      transform: (currentConfig) => {
+        const next = structuredClone(currentConfig) as Record<string, unknown>;
+        const removed = unsetConfigValueAtPath(next, path);
+        if (!removed) {
+          throw new AutoReplyConfigNoopMutation();
+        }
+        return {
+          nextConfig: assertValidConfig(next, "unset").config,
+        };
+      },
+    });
+    return true;
+  } catch (error) {
+    if (error instanceof AutoReplyConfigNoopMutation) {
+      return false;
+    }
+    throw error;
+  }
 }
 
 export async function setConfigPath(path: string[], value: unknown): Promise<void> {

@@ -73,11 +73,15 @@ export async function createBrowserProfileConfig(params: {
   const mutation = await mutateConfigFile<BrowserProfileConfig>({
     afterWrite: { mode: "auto" },
     mutate: async (draft) => {
-      const latestResolved = resolveBrowserConfig({
-        ...params.resolved,
-        ...draft.browser,
-        profiles: draft.browser?.profiles ?? params.resolved.profiles,
-      });
+      const latestResolved = resolveBrowserConfig(
+        {
+          ...params.resolved,
+          ...draft.browser,
+          profiles: draft.browser?.profiles ?? params.resolved.profiles,
+        },
+        draft,
+      );
+      const latestRootResolved = resolveBrowserConfig(draft.browser, draft);
       const latestProfiles = draft.browser?.profiles ?? {};
       if (params.name in latestProfiles || params.name in latestResolved.profiles) {
         throw new BrowserConflictError(`profile "${params.name}" already exists`);
@@ -106,14 +110,22 @@ export async function createBrowserProfileConfig(params: {
         };
       } else {
         const usedPorts = getUsedPorts(latestResolved.profiles);
-        const rangeStart = draft.browser?.cdpPortRangeStart ?? params.resolved.cdpPortRangeStart;
+        const rawDraftBrowser = draft.browser as
+          | (NonNullable<typeof draft.browser> & { cdpPortRangeEnd?: unknown })
+          | undefined;
+        const draftCdpPortRangeEnd =
+          typeof rawDraftBrowser?.cdpPortRangeEnd === "number"
+            ? rawDraftBrowser.cdpPortRangeEnd
+            : undefined;
+        const useRebasedPortRange =
+          draft.gateway?.port !== undefined ||
+          draft.browser?.cdpPortRangeStart !== undefined ||
+          draftCdpPortRangeEnd !== undefined;
+        const rangeSource = useRebasedPortRange ? latestRootResolved : params.resolved;
         const range = cdpPortRange({
-          controlPort: params.resolved.controlPort,
-          cdpPortRangeStart: rangeStart,
-          cdpPortRangeEnd:
-            draft.browser?.cdpPortRangeStart === undefined
-              ? params.resolved.cdpPortRangeEnd
-              : latestResolved.cdpPortRangeEnd,
+          controlPort: rangeSource.controlPort,
+          cdpPortRangeStart: rangeSource.cdpPortRangeStart,
+          cdpPortRangeEnd: draftCdpPortRangeEnd ?? rangeSource.cdpPortRangeEnd,
         });
         const cdpPort = allocateCdpPort(usedPorts, range);
         if (cdpPort === null) {
