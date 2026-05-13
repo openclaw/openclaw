@@ -644,7 +644,7 @@ Docs: https://docs.openclaw.ai
 - Agents/config: allow `agents.list[].experimental.localModelLean` so lean local-model mode can be enabled for one configured agent instead of globally. (#84073) Thanks @dutifulbob.
 - Providers/xAI: add device-code OAuth login so remote and headless setups can authorize xAI without a localhost browser callback. (#84005) Thanks @fuller-stack-dev.
 - Providers/OpenRouter: honor provider-level `params.provider` routing policy for OpenRouter requests, with model and agent params overriding the defaults. Thanks @amknight.
-- Doctor/plugins: add `openclaw doctor --post-upgrade --json` mode that emits structured plugin-compat findings (`plugin.entry_unresolved`, `plugin.manifest_drift`) for use by post-upgrade smoke checks, CI, and the community `fork-upgrade` skill, exiting non-zero when any finding has `level: "error"`.
+- Doctor/plugins: add `openclaw doctor --post-upgrade --json` mode that emits structured plugin-compat findings (`plugin.entry_unresolved`, `plugin.manifest_drift`) for use by post-upgrade smoke checks, CI, and the community `fork-upgrade` skill, exiting non-zero when any finding has `level: "error"`. The probe now delegates entry validation to the install-time resolver so `openclaw.runtimeExtensions` shape, plugin-root boundary enforcement, and inferred-built-output / TypeScript-source-only handling stay in sync with plugin install/discovery.
 
 ### Fixes
 

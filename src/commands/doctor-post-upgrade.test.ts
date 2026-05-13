@@ -110,6 +110,221 @@ describe("runPostUpgradeProbes — plugin.entry_unresolved", () => {
     }
   });
 
+  it("flags an entry that escapes the plugin package directory", async () => {
+    const root = await makeFixtureRoot("entry-escape");
+    try {
+      const pluginDir = path.join(root, "user-plugins", "escape");
+      await fs.mkdir(pluginDir, { recursive: true });
+      // Create a sibling file outside the plugin root that the entry resolves to.
+      const outsideDir = path.join(root, "outside");
+      await fs.mkdir(outsideDir, { recursive: true });
+      await fs.writeFile(path.join(outsideDir, "leak.js"), "export default {};", "utf-8");
+      await fs.writeFile(
+        path.join(pluginDir, "package.json"),
+        JSON.stringify({
+          name: "escape",
+          version: "0.0.1",
+          type: "module",
+          openclaw: { extensions: ["../outside/leak.js"] },
+        }),
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(pluginDir, "openclaw.plugin.json"),
+        JSON.stringify({ id: "escape" }),
+        "utf-8",
+      );
+
+      const installsPath = path.join(root, "plugins", "installs.json");
+      await fs.mkdir(path.dirname(installsPath), { recursive: true });
+      await fs.writeFile(
+        installsPath,
+        JSON.stringify({
+          version: 1,
+          plugins: [
+            {
+              pluginId: "escape",
+              manifestPath: path.join(pluginDir, "openclaw.plugin.json"),
+              rootDir: pluginDir,
+              enabled: true,
+              packageJson: { path: "package.json" },
+            },
+          ],
+        }),
+        "utf-8",
+      );
+
+      const report = await runPostUpgradeProbes({ installsPath });
+      const finding = report.findings.find((f) => f.code === "plugin.entry_unresolved");
+      expect(finding).toBeDefined();
+      expect(finding?.level).toBe("error");
+      expect(finding?.plugin).toBe("escape");
+      expect(finding?.message).toMatch(/escapes plugin directory/);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts a TypeScript source entry that ships a compiled dist peer", async () => {
+    const root = await makeFixtureRoot("ts-with-dist");
+    try {
+      const pluginDir = path.join(root, "user-plugins", "ts-dist");
+      await fs.mkdir(path.join(pluginDir, "src"), { recursive: true });
+      await fs.mkdir(path.join(pluginDir, "dist"), { recursive: true });
+      await fs.writeFile(path.join(pluginDir, "src", "index.ts"), "export default {};", "utf-8");
+      await fs.writeFile(path.join(pluginDir, "dist", "index.js"), "export default {};", "utf-8");
+      // No explicit runtimeExtensions; the resolver should infer dist/index.js.
+      await fs.writeFile(
+        path.join(pluginDir, "package.json"),
+        JSON.stringify({
+          name: "ts-dist",
+          version: "0.0.1",
+          type: "module",
+          openclaw: { extensions: ["./src/index.ts"] },
+        }),
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(pluginDir, "openclaw.plugin.json"),
+        JSON.stringify({ id: "ts-dist" }),
+        "utf-8",
+      );
+
+      const installsPath = path.join(root, "plugins", "installs.json");
+      await fs.mkdir(path.dirname(installsPath), { recursive: true });
+      await fs.writeFile(
+        installsPath,
+        JSON.stringify({
+          version: 1,
+          plugins: [
+            {
+              pluginId: "ts-dist",
+              manifestPath: path.join(pluginDir, "openclaw.plugin.json"),
+              rootDir: pluginDir,
+              enabled: true,
+              packageJson: { path: "package.json" },
+            },
+          ],
+        }),
+        "utf-8",
+      );
+
+      const report = await runPostUpgradeProbes({ installsPath });
+      expect(report.findings.filter((f) => f.code === "plugin.entry_unresolved")).toHaveLength(0);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("flags a TypeScript source-only entry with no compiled output", async () => {
+    const root = await makeFixtureRoot("ts-source-only");
+    try {
+      const pluginDir = path.join(root, "user-plugins", "ts-only");
+      await fs.mkdir(path.join(pluginDir, "src"), { recursive: true });
+      await fs.writeFile(path.join(pluginDir, "src", "index.ts"), "export default {};", "utf-8");
+      // Source exists, no dist peer — installed plugins must ship compiled JS.
+      await fs.writeFile(
+        path.join(pluginDir, "package.json"),
+        JSON.stringify({
+          name: "ts-only",
+          version: "0.0.1",
+          type: "module",
+          openclaw: { extensions: ["./src/index.ts"] },
+        }),
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(pluginDir, "openclaw.plugin.json"),
+        JSON.stringify({ id: "ts-only" }),
+        "utf-8",
+      );
+
+      const installsPath = path.join(root, "plugins", "installs.json");
+      await fs.mkdir(path.dirname(installsPath), { recursive: true });
+      await fs.writeFile(
+        installsPath,
+        JSON.stringify({
+          version: 1,
+          plugins: [
+            {
+              pluginId: "ts-only",
+              manifestPath: path.join(pluginDir, "openclaw.plugin.json"),
+              rootDir: pluginDir,
+              enabled: true,
+              packageJson: { path: "package.json" },
+            },
+          ],
+        }),
+        "utf-8",
+      );
+
+      const report = await runPostUpgradeProbes({ installsPath });
+      const finding = report.findings.find((f) => f.code === "plugin.entry_unresolved");
+      expect(finding).toBeDefined();
+      expect(finding?.level).toBe("error");
+      expect(finding?.plugin).toBe("ts-only");
+      expect(finding?.message).toMatch(/compiled runtime output/);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("flags a runtimeExtensions length mismatch", async () => {
+    const root = await makeFixtureRoot("runtime-len-mismatch");
+    try {
+      const pluginDir = path.join(root, "user-plugins", "len-mismatch");
+      await fs.mkdir(path.join(pluginDir, "dist"), { recursive: true });
+      await fs.writeFile(path.join(pluginDir, "dist", "a.js"), "export default {};", "utf-8");
+      await fs.writeFile(path.join(pluginDir, "dist", "b.js"), "export default {};", "utf-8");
+      await fs.writeFile(
+        path.join(pluginDir, "package.json"),
+        JSON.stringify({
+          name: "len-mismatch",
+          version: "0.0.1",
+          type: "module",
+          openclaw: {
+            extensions: ["./dist/a.js", "./dist/b.js"],
+            runtimeExtensions: ["./dist/a.js"],
+          },
+        }),
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(pluginDir, "openclaw.plugin.json"),
+        JSON.stringify({ id: "len-mismatch" }),
+        "utf-8",
+      );
+
+      const installsPath = path.join(root, "plugins", "installs.json");
+      await fs.mkdir(path.dirname(installsPath), { recursive: true });
+      await fs.writeFile(
+        installsPath,
+        JSON.stringify({
+          version: 1,
+          plugins: [
+            {
+              pluginId: "len-mismatch",
+              manifestPath: path.join(pluginDir, "openclaw.plugin.json"),
+              rootDir: pluginDir,
+              enabled: true,
+              packageJson: { path: "package.json" },
+            },
+          ],
+        }),
+        "utf-8",
+      );
+
+      const report = await runPostUpgradeProbes({ installsPath });
+      const finding = report.findings.find((f) => f.code === "plugin.entry_unresolved");
+      expect(finding).toBeDefined();
+      expect(finding?.level).toBe("error");
+      expect(finding?.plugin).toBe("len-mismatch");
+      expect(finding?.message).toMatch(/runtimeExtensions length/);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("does not flag entry_unresolved when runtimeExtensions exists even if source entry is missing", async () => {
     const root = await makeFixtureRoot("runtime-extensions");
     try {
