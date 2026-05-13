@@ -179,18 +179,68 @@ const RUNTIME_MODEL_AUTH_CANDIDATES = [
 ] as const;
 const RUNTIME_MODEL_AUTH_EXTENSIONS = [".js", ".ts", ".mjs", ".mts", ".cjs", ".cts"] as const;
 
-function resolveRuntimeModelAuthModuleHref(): string {
-  const baseDir = path.dirname(fileURLToPath(import.meta.url));
+type RuntimeModelAuthResolverDeps = {
+  existsSync: typeof fs.existsSync;
+  statSync: typeof fs.statSync;
+  readdirSync: typeof fs.readdirSync;
+  dirname: typeof path.dirname;
+  basename: typeof path.basename;
+  resolve: typeof path.resolve;
+  join: typeof path.join;
+  pathToFileURL: typeof pathToFileURL;
+};
+
+function resolveRuntimeModelAuthModuleHrefFrom(
+  baseDir: string,
+  deps: RuntimeModelAuthResolverDeps,
+): string {
   for (const relativeBase of RUNTIME_MODEL_AUTH_CANDIDATES) {
     for (const ext of RUNTIME_MODEL_AUTH_EXTENSIONS) {
-      const candidate = path.resolve(baseDir, `${relativeBase}${ext}`);
-      if (fs.existsSync(candidate)) {
-        return pathToFileURL(candidate).href;
+      const candidate = deps.resolve(baseDir, `${relativeBase}${ext}`);
+      if (deps.existsSync(candidate)) {
+        return deps.pathToFileURL(candidate).href;
       }
+    }
+
+    const relativeDir = deps.dirname(relativeBase);
+    const baseName = deps.basename(relativeBase);
+    const searchDir = deps.resolve(baseDir, relativeDir);
+    if (!deps.existsSync(searchDir) || !deps.statSync(searchDir).isDirectory()) {
+      continue;
+    }
+
+    const hashedMatch = deps
+      .readdirSync(searchDir)
+      .find(
+        (name) =>
+          name.startsWith(`${baseName}-`) &&
+          RUNTIME_MODEL_AUTH_EXTENSIONS.some((ext) => name.endsWith(ext)),
+      );
+
+    if (hashedMatch) {
+      return deps.pathToFileURL(deps.join(searchDir, hashedMatch)).href;
     }
   }
   throw new Error(`Unable to resolve runtime model auth module from ${import.meta.url}`);
 }
+
+export function resolveRuntimeModelAuthModuleHref(): string {
+  const baseDir = path.dirname(fileURLToPath(import.meta.url));
+  return resolveRuntimeModelAuthModuleHrefFrom(baseDir, {
+    existsSync: fs.existsSync,
+    statSync: fs.statSync,
+    readdirSync: fs.readdirSync,
+    dirname: path.dirname,
+    basename: path.basename,
+    resolve: path.resolve,
+    join: path.join,
+    pathToFileURL,
+  });
+}
+
+export const __testOnly = {
+  resolveRuntimeModelAuthModuleHrefFrom,
+};
 
 async function loadRuntimeModelAuthModule(): Promise<RuntimeModelAuthModule> {
   return (await import(resolveRuntimeModelAuthModuleHref())) as RuntimeModelAuthModule;

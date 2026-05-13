@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import * as providerAuthRuntime from "./provider-auth-runtime.js";
 
@@ -24,5 +27,26 @@ describe("plugin-sdk provider-auth-runtime", () => {
     expect(providerAuthRuntime.parseOAuthCallbackInput("abc")).toEqual({
       error: "Paste the full redirect URL, not just the code.",
     });
+  });
+
+  it("resolves hashed runtime auth chunks when the stable alias is absent", () => {
+    const baseDir = "/virtual/plugin-sdk";
+    const hashedFile = "runtime-model-auth.runtime-Hash123.js";
+
+    const href = providerAuthRuntime.__testOnly.resolveRuntimeModelAuthModuleHrefFrom(baseDir, {
+      existsSync: (value) => value === baseDir,
+      statSync: ((value: string) => ({
+        isDirectory: () => value === baseDir,
+      })) as typeof fs.statSync,
+      readdirSync: ((value: string) =>
+        value === baseDir ? [hashedFile] : []) as typeof fs.readdirSync,
+      dirname: path.dirname,
+      basename: path.basename,
+      resolve: path.resolve,
+      join: path.join,
+      pathToFileURL,
+    });
+
+    expect(href).toBe(`file://${baseDir}/${hashedFile}`);
   });
 });
