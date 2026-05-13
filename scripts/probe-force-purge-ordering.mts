@@ -111,7 +111,7 @@ async function main(): Promise<void> {
     console.log("auth-profiles.json AFTER  purge:");
     console.log(rawAfter);
     const afterIds = await snapshotProfilesFromDisk(agentDir);
-    console.log("listProfilesForProvider(...,'openai-codex') AFTER: ", JSON.stringify(afterIds));
+    console.log("listProfilesForProvider(...,'openai-codex') AFTER:", JSON.stringify(afterIds));
 
     if (beforeIds.length !== 1 || afterIds.length !== 0) {
       throw new Error("Scenario A FAILED: purge did not behave as expected on real disk");
@@ -122,7 +122,9 @@ async function main(): Promise<void> {
     const { snippet, markers } = await readSourceWindow();
     console.log(snippet);
     console.log("");
-    for (const m of markers) console.log(m);
+    for (const m of markers) {
+      console.log(m);
+    }
     if (!markers[markers.length - 1].includes("FIX APPLIED")) {
       throw new Error("Scenario B FAILED: source-code ordering not as expected");
     }
