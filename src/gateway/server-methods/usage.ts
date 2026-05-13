@@ -43,6 +43,7 @@ import {
   formatValidationErrors,
   validateSessionsUsageParams,
 } from "../protocol/index.js";
+import { resolveSessionStoreKey } from "../session-store-key.js";
 import {
   listAgentsForGateway,
   loadCombinedSessionStoreForGateway,
@@ -862,19 +863,29 @@ export const usageHandlers: GatewayRequestHandlers = {
 
     // Optimization: If a specific key is requested, skip full directory scan
     if (specificKey) {
-      const parsed = parseAgentSessionKey(specificKey);
-      const agentIdFromKey = parsed?.agentId;
-      const keyRest = parsed?.rest ?? specificKey;
+      const scopedSpecificKey = resolveSessionStoreKey({
+        cfg: config,
+        sessionKey: specificKey,
+        storeAgentId: effectiveAgentId,
+      });
+      const scopedParsed = parseAgentSessionKey(scopedSpecificKey);
+      const agentIdFromKey = scopedParsed?.agentId ?? effectiveAgentId;
+      const keyRest = scopedParsed?.rest ?? specificKey;
 
       // Prefer the store entry when available, even if the caller provides a discovered key
       // (`agent:<id>:<sessionId>`) for a session that now has a canonical store key.
       const storeBySessionId = buildStoreBySessionId(store);
 
-      const storeMatch = store[specificKey]
-        ? { key: specificKey, entry: store[specificKey] }
-        : null;
-      const storeByIdMatch = storeBySessionId.get(keyRest) ?? null;
-      const resolvedStoreKey = storeMatch?.key ?? storeByIdMatch?.key ?? specificKey;
+      const storeMatch = store[scopedSpecificKey]
+        ? { key: scopedSpecificKey, entry: store[scopedSpecificKey] }
+        : store[specificKey]
+          ? { key: specificKey, entry: store[specificKey] }
+          : null;
+      const storeByIdMatch =
+        storeBySessionId.get(keyRest) ??
+        (keyRest !== specificKey ? storeBySessionId.get(specificKey) : undefined) ??
+        null;
+      const resolvedStoreKey = storeMatch?.key ?? storeByIdMatch?.key ?? scopedSpecificKey;
       const storeEntry = storeMatch?.entry ?? storeByIdMatch?.entry;
       const sessionId = storeEntry?.sessionId ?? keyRest;
 

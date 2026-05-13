@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   normalizeAgentId,
   parseAgentSessionKey,
@@ -16,6 +17,7 @@ import {
   validateArtifactsListParams,
 } from "../protocol/index.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
+import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "../session-store-key.js";
 import { loadSessionEntry, visitSessionMessagesAsync } from "../session-utils.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -53,17 +55,24 @@ function asNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function resolveRequesterSessionAgentId(sessionKey: string | undefined): string | undefined {
+function resolveRequesterSessionAgentId(
+  sessionKey: string | undefined,
+  cfg?: OpenClawConfig,
+): string | undefined {
   const key = asNonEmptyString(sessionKey);
   if (!key) {
     return undefined;
   }
   const parsed = parseAgentSessionKey(key);
+  if (!parsed && key.toLowerCase().startsWith("agent:")) {
+    return undefined;
+  }
+  if (cfg) {
+    const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey: key });
+    return resolveSessionStoreAgentId(cfg, canonicalKey);
+  }
   if (parsed) {
     return parsed.agentId;
-  }
-  if (key.toLowerCase().startsWith("agent:")) {
-    return undefined;
   }
   return resolveAgentIdFromSessionKey(key);
 }
@@ -325,7 +334,7 @@ function collectArtifactsFromMessage(params: {
   }
 }
 
-function resolveQuerySessionKey(query: ArtifactQuery): string | undefined {
+function resolveQuerySessionKey(query: ArtifactQuery, cfg?: OpenClawConfig): string | undefined {
   if (query.sessionKey) {
     return resolveScopedArtifactSessionKey(query.sessionKey, query.agentId);
   }
@@ -340,7 +349,7 @@ function resolveQuerySessionKey(query: ArtifactQuery): string | undefined {
     const task = getTaskSessionLookupByIdForStatus(query.taskId);
     const requesterSessionKey = asNonEmptyString(task?.requesterSessionKey);
     const taskAgentId =
-      asNonEmptyString(task?.agentId) ?? resolveRequesterSessionAgentId(requesterSessionKey);
+      asNonEmptyString(task?.agentId) ?? resolveRequesterSessionAgentId(requesterSessionKey, cfg);
     if (
       query.agentId &&
       taskAgentId &&
@@ -363,8 +372,9 @@ function resolveQuerySessionKey(query: ArtifactQuery): string | undefined {
 
 async function loadArtifacts(
   query: ArtifactQuery,
+  cfg?: OpenClawConfig,
 ): Promise<{ artifacts: ArtifactRecord[]; sessionKey?: string }> {
-  const sessionKey = resolveQuerySessionKey(query);
+  const sessionKey = resolveQuerySessionKey(query, cfg);
   if (!sessionKey) {
     return { artifacts: [] };
   }
@@ -414,11 +424,14 @@ function requireQueryable(params: ArtifactQuery, respond: RespondFn): boolean {
   return false;
 }
 
-async function findArtifact(params: ArtifactsGetParams): Promise<{
+async function findArtifact(
+  params: ArtifactsGetParams,
+  cfg?: OpenClawConfig,
+): Promise<{
   artifact?: ArtifactRecord;
   sessionKey?: string;
 }> {
-  const loaded = await loadArtifacts(params);
+  const loaded = await loadArtifacts(params, cfg);
   return {
     sessionKey: loaded.sessionKey,
     artifact: loaded.artifacts.find((artifact) => artifact.id === params.artifactId),
@@ -431,14 +444,14 @@ function toSummary(artifact: ArtifactRecord): ArtifactSummary {
 }
 
 export const artifactsHandlers: GatewayRequestHandlers = {
-  "artifacts.list": async ({ params, respond }) => {
+  "artifacts.list": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateArtifactsListParams, "artifacts.list", respond)) {
       return;
     }
     if (!requireQueryable(params, respond)) {
       return;
     }
-    const { artifacts, sessionKey } = await loadArtifacts(params);
+    const { artifacts, sessionKey } = await loadArtifacts(params, context.getRuntimeConfig?.());
     if (!sessionKey && (params.runId || params.taskId)) {
       respond(
         false,
@@ -449,14 +462,14 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     }
     respond(true, { artifacts: artifacts.map(toSummary) });
   },
-  "artifacts.get": async ({ params, respond }) => {
+  "artifacts.get": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateArtifactsGetParams, "artifacts.get", respond)) {
       return;
     }
     if (!requireQueryable(params, respond)) {
       return;
     }
-    const { artifact } = await findArtifact(params);
+    const { artifact } = await findArtifact(params, context.getRuntimeConfig?.());
     if (!artifact) {
       respond(
         false,
@@ -469,7 +482,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     }
     respond(true, { artifact: toSummary(artifact) });
   },
-  "artifacts.download": async ({ params, respond }) => {
+  "artifacts.download": async ({ params, respond, context }) => {
     if (
       !assertValidParams(params, validateArtifactsDownloadParams, "artifacts.download", respond)
     ) {
@@ -478,7 +491,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     if (!requireQueryable(params, respond)) {
       return;
     }
-    const { artifact } = await findArtifact(params);
+    const { artifact } = await findArtifact(params, context.getRuntimeConfig?.());
     if (!artifact) {
       respond(
         false,

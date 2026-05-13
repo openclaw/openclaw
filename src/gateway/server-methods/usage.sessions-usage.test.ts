@@ -198,6 +198,50 @@ describe("sessions.usage", () => {
     expect(sessions[0].agentId).toBe("opus");
   });
 
+  it("uses the requested agent for legacy specific session keys", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-usage-test-"));
+
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const agentSessionsDir = path.join(stateDir, "agents", "opus", "sessions");
+        fs.mkdirSync(agentSessionsDir, { recursive: true });
+        const sessionFile = path.join(agentSessionsDir, "main.jsonl");
+        fs.writeFileSync(sessionFile, "", "utf-8");
+
+        vi.mocked(loadCombinedSessionStoreForGateway).mockReturnValue({
+          storePath: "(multiple)",
+          store: {
+            "agent:opus:main": {
+              sessionId: "main",
+              sessionFile: "main.jsonl",
+              label: "Opus main",
+              updatedAt: 999,
+            },
+          },
+        });
+
+        const respond = await runSessionsUsage({
+          ...BASE_USAGE_RANGE,
+          key: "main",
+          agentId: "opus",
+        });
+
+        const sessions = expectSuccessfulSessionsUsage(respond);
+        expect(sessions).toHaveLength(1);
+        expect(sessions[0]?.key).toBe("agent:opus:main");
+        expect(vi.mocked(loadSessionCostSummaryFromCache)).toHaveBeenCalledWith(
+          expect.objectContaining({
+            agentId: "opus",
+            sessionFile,
+            sessionId: "main",
+          }),
+        );
+      });
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("resolves store entries by sessionId when queried via discovered agent-prefixed key", async () => {
     const storeKey = "agent:opus:slack:dm:u123";
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-usage-test-"));
