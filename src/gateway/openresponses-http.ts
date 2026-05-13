@@ -396,7 +396,7 @@ async function runResponsesAgentCommand(params: {
   clientTools: ClientToolDefinition[];
   extraSystemPrompt: string;
   modelOverride?: string;
-  streamParams: { maxTokens: number } | undefined;
+  streamParams: { maxTokens?: number; temperature?: number; topP?: number } | undefined;
   sessionKey: string;
   runId: string;
   messageChannel: string;
@@ -673,9 +673,18 @@ export async function handleOpenResponsesHttpRequest(
   const outputItemId = `msg_${randomUUID()}`;
   const deps = createDefaultDeps();
   const abortController = new AbortController();
+  const streamMaxTokens =
+    typeof payload.max_output_tokens === "number" ? payload.max_output_tokens : undefined;
+  const streamTemperature =
+    typeof payload.temperature === "number" ? payload.temperature : undefined;
+  const streamTopP = typeof payload.top_p === "number" ? payload.top_p : undefined;
   const streamParams =
-    typeof payload.max_output_tokens === "number"
-      ? { maxTokens: payload.max_output_tokens }
+    streamMaxTokens !== undefined || streamTemperature !== undefined || streamTopP !== undefined
+      ? {
+          ...(streamMaxTokens !== undefined ? { maxTokens: streamMaxTokens } : {}),
+          ...(streamTemperature !== undefined ? { temperature: streamTemperature } : {}),
+          ...(streamTopP !== undefined ? { topP: streamTopP } : {}),
+        }
       : undefined;
 
   if (!stream) {

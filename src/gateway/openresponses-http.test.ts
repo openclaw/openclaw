@@ -650,6 +650,21 @@ describe("OpenResponses HTTP API (e2e)", () => {
       ).toBe(123);
       await ensureResponseConsumed(resMaxTokens);
 
+      mockAgentOnce([{ text: "ok" }]);
+      const resSampling = await postResponses(port, {
+        model: "openclaw",
+        input: "hi",
+        temperature: 0.2,
+        top_p: 0.9,
+      });
+      expect(resSampling.status).toBe(200);
+      const samplingStreamParams = (
+        firstAgentOpts() as { streamParams?: { temperature?: number; topP?: number } } | undefined
+      )?.streamParams;
+      expect(samplingStreamParams?.temperature).toBe(0.2);
+      expect(samplingStreamParams?.topP).toBe(0.9);
+      await ensureResponseConsumed(resSampling);
+
       mockAgentOnce([{ text: "ok" }], {
         agentMeta: {
           usage: { input: 3, output: 5, cacheRead: 1, cacheWrite: 1 },

@@ -111,7 +111,7 @@ type FirstAgentCommandOptions = {
   model?: string;
   senderIsOwner?: boolean;
   sessionKey?: string;
-  streamParams?: { maxTokens?: number };
+  streamParams?: { maxTokens?: number; temperature?: number; topP?: number };
 };
 
 function firstAgentCommandOptions() {
@@ -1319,6 +1319,53 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       });
       expect(res.status).toBe(200);
       expect(getFirstAgentMaxTokens()).toBeUndefined();
+      await res.text();
+    }
+  });
+
+  it("forwards inbound temperature and top_p into streamParams", async () => {
+    const port = enabledPort;
+    const mockAgentOnce = (payloads: Array<{ text: string }>) => {
+      agentCommand.mockClear();
+      agentCommand.mockResolvedValueOnce({ payloads } as never);
+    };
+    const getStreamParams = () => firstAgentCommandOptions()?.streamParams;
+
+    {
+      mockAgentOnce([{ text: "hello" }]);
+      const res = await postChatCompletions(port, {
+        model: "openclaw",
+        temperature: 0.3,
+        top_p: 0.95,
+        messages: [{ role: "user", content: "hi" }],
+      });
+      expect(res.status).toBe(200);
+      expect(getStreamParams()).toMatchObject({ temperature: 0.3, topP: 0.95 });
+      await res.text();
+    }
+
+    {
+      mockAgentOnce([{ text: "hello" }]);
+      const res = await postChatCompletions(port, {
+        model: "openclaw",
+        temperature: 0,
+        messages: [{ role: "user", content: "hi" }],
+      });
+      expect(res.status).toBe(200);
+      const params = getStreamParams();
+      expect(params?.temperature).toBe(0);
+      expect(params?.topP).toBeUndefined();
+      await res.text();
+    }
+
+    {
+      mockAgentOnce([{ text: "hello" }]);
+      const res = await postChatCompletions(port, {
+        model: "openclaw",
+        messages: [{ role: "user", content: "hi" }],
+      });
+      expect(res.status).toBe(200);
+      expect(getStreamParams()).toBeUndefined();
       await res.text();
     }
   });
