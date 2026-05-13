@@ -76,6 +76,9 @@ Before installing a plugin, make sure you have:
 
     If your config uses a restrictive `plugins.allow` list, the installed plugin
     id must be present there before the plugin can load.
+    `openclaw plugins install` adds the installed id to an existing
+    `plugins.allow` list and removes the same id from `plugins.deny` so the
+    explicit install can load after restart.
 
   </Step>
 
@@ -145,7 +148,8 @@ The common plugin config shape is:
 Key policy rules:
 
 - `plugins.enabled: false` disables all plugins and skips plugin discovery/load
-  work.
+  work. Stale plugin references are inert while this is active; re-enable
+  plugins before running doctor cleanup when you want stale ids removed.
 - `plugins.deny` wins over allow and per-plugin enablement.
 - `plugins.allow` is an exclusive allowlist. Plugin-owned tools outside the
   allowlist stay unavailable, even when `tools.allow` includes `"*"`.
@@ -216,11 +220,22 @@ supervisor.
 | `OPENCLAW_NIX_MODE=1` blocks lifecycle commands                | Confirm the install is managed by Nix                                                                                                      | Change plugin selection in the Nix source instead of using plugin mutator commands                      |
 | Dependency import fails at runtime                             | Check whether the plugin was installed through npm/git/ClawHub or loaded from a local path                                                 | Run `openclaw plugins update <id>`, reinstall the source, or install local plugin dependencies yourself |
 
+When stale plugin config still names a no-longer-discoverable channel plugin,
+Gateway startup skips that plugin-backed channel instead of blocking every
+other channel. Run `openclaw doctor --fix` to remove stale plugin and channel
+entries. Unknown channel keys without stale-plugin evidence still fail
+validation so typos stay visible.
+
 For intentional channel replacement, the preferred plugin should declare
 `channelConfigs.<channel-id>.preferOver` with the legacy or lower-priority
 plugin id. If both plugins are explicitly enabled, OpenClaw keeps that request
 and reports duplicate channel or tool diagnostics instead of silently choosing
 one owner.
+
+If an installed package reports that it `requires compiled runtime output for
+TypeScript entry ...`, the package was published without the JavaScript files
+OpenClaw needs at runtime. Update or reinstall after the publisher ships
+compiled JavaScript, or disable/uninstall the plugin until then.
 
 ### Blocked plugin path ownership
 
