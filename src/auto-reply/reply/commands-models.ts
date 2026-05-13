@@ -1,4 +1,3 @@
-import { CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS } from "../../../extensions/anthropic/cli-constants.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -207,33 +206,16 @@ export async function buildModelsProviderData(
   // For CLI runtime providers, surface every model in the unfiltered catalog —
   // user `agents.defaults.models` only declares per-ref metadata (alias,
   // runtime params, etc.) and must not gate picker discovery for runtimes
-  // whose model set is owned by an external CLI binary. Auth gate still
+  // whose model set is owned by an external CLI binary. The catalog itself
+  // is populated by each provider plugin's ProviderPluginCatalog seam (e.g.
+  // `extensions/anthropic/provider-discovery.ts` contributes the full
+  // `claude-cli` allowlist via its catalog hook), so iterating the
+  // unfiltered catalog here picks up the CLI-supported set without core
+  // needing to know provider-specific allowlist details. Auth gate still
   // applies so unauthenticated CLI providers stay hidden.
   for (const entry of catalog) {
     if (isCliRuntimeProvider(entry.provider) && hasAuth(entry.provider)) {
       add(entry.provider, entry.id);
-    }
-  }
-
-  // Explicitly seed claude-cli from CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS. On
-  // fresh installs the model catalog for `claude-cli` is often sparse —
-  // `seedClaudeCliAllowlist` migration timing can leave it populated only by
-  // user config (often 2 entries) — so iterating the catalog alone is not
-  // sufficient to guarantee the full CLI-supported set surfaces. The
-  // allowlist constant is the source of truth for what the claude-cli binary
-  // supports, so we seed directly from it — but only when the user actually
-  // has claude-cli auth, otherwise picker buttons would lead to a
-  // non-functional runtime.
-  //
-  // Asymmetry: only `claude-cli` has a corresponding allowlist constant.
-  // `codex-cli` (extensions/openai/cli-backend.ts) and `google-gemini-cli`
-  // (extensions/google/cli-backend.ts) only define a default model ref, not
-  // an allowlist, so the catalog-iteration loop above is what we rely on for
-  // those runtimes — adequate as long as their plugin manifests contribute
-  // models to the catalog.
-  if (hasAuth("claude-cli")) {
-    for (const ref of CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS) {
-      addRawModelRef(ref);
     }
   }
 
