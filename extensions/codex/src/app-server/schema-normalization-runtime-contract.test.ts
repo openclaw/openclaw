@@ -45,6 +45,8 @@ function createAppServerOptions(): Parameters<typeof startOrResumeThread>[0]["ap
     codeModeOnly: false,
     requestTimeoutMs: 60_000,
     turnCompletionIdleTimeoutMs: 60_000,
+    turnTerminalIdleTimeoutMs: 180_000,
+    clientIsolation: "agent",
     approvalPolicy: "never",
     approvalsReviewer: "user",
     sandbox: "workspace-write",

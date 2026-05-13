@@ -7,7 +7,11 @@ import {
   readCodexComputerUseStatus,
   type CodexComputerUseSetupParams,
 } from "./app-server/computer-use.js";
-import { isCodexFastServiceTier, type CodexComputerUseConfig } from "./app-server/config.js";
+import {
+  isCodexFastServiceTier,
+  resolveCodexAppServerRuntimeOptions,
+  type CodexComputerUseConfig,
+} from "./app-server/config.js";
 import { listAllCodexAppServerModels } from "./app-server/models.js";
 import { isJsonObject, type JsonValue } from "./app-server/protocol.js";
 import { rememberCodexRateLimits } from "./app-server/rate-limit-cache.js";
@@ -169,7 +173,9 @@ type ParsedDiagnosticsArgs =
 type CodexDiagnosticsTarget = {
   threadId: string;
   sessionFile: string;
+  isolationKey?: string;
   sessionKey?: string;
+  runtimePolicySessionKey?: string;
   sessionId?: string;
   channel?: string;
   channelId?: string;
@@ -218,6 +224,83 @@ export function resetCodexDiagnosticsFeedbackStateForTests(): void {
   pendingCodexDiagnosticsConfirmationTokensByScope.clear();
 }
 
+function resolveCommandBindingIsolationKey(
+  pluginConfig: unknown,
+  ctx: PluginCommandContext,
+): string | undefined {
+  const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
+  if (appServer.clientIsolation !== "session") {
+    return undefined;
+  }
+  return ctx.runtimePolicySessionKey?.trim() || ctx.sessionKey?.trim() || ctx.sessionId;
+}
+
+function resolveCommandBindingLookup(pluginConfig: unknown, ctx: PluginCommandContext) {
+  const scope = resolveCodexConversationControlScope(ctx);
+  return {
+    agentDir: scope.agentDir,
+    config: ctx.config,
+    isolationKey: resolveCommandBindingIsolationKey(pluginConfig, ctx),
+  };
+}
+
+type CodexControlTarget = {
+  sessionFile?: string;
+  bindingLookup: ReturnType<typeof resolveCommandBindingLookup>;
+};
+
+async function resolveControlTarget(
+  pluginConfig: unknown,
+  ctx: PluginCommandContext,
+): Promise<CodexControlTarget> {
+  const binding = await ctx.getCurrentConversationBinding();
+  const data = readCodexConversationBindingData(binding);
+  if (data?.kind === "codex-app-server-session") {
+    return {
+      sessionFile: data.sessionFile,
+      bindingLookup: {
+        agentDir: data.agentDir ?? resolveCodexConversationControlScope(ctx).agentDir,
+        config: ctx.config,
+        isolationKey: data.isolationKey,
+      },
+    };
+  }
+  return {
+    sessionFile: ctx.sessionFile,
+    bindingLookup: resolveCommandBindingLookup(pluginConfig, ctx),
+  };
+}
+
+async function resolveControlSessionFile(
+  pluginConfig: unknown,
+  ctx: PluginCommandContext,
+): Promise<string | undefined> {
+  return (await resolveControlTarget(pluginConfig, ctx)).sessionFile;
+}
+
+function commandControlRequestOptions(
+  _ctx: PluginCommandContext,
+  bindingLookup: ReturnType<typeof resolveCommandBindingLookup>,
+): CodexControlRequestOptions | undefined {
+  return bindingLookup.agentDir || bindingLookup.isolationKey || bindingLookup.config
+    ? {
+        agentDir: bindingLookup.agentDir,
+        isolationKey: bindingLookup.isolationKey,
+        config: bindingLookup.config,
+      }
+    : undefined;
+}
+
+async function runCodexControlRequest(
+  deps: CodexCommandDeps,
+  pluginConfig: unknown,
+  method: CodexControlMethod,
+  requestParams: JsonValue | undefined,
+  options?: CodexControlRequestOptions,
+): Promise<JsonValue | undefined> {
+  return await deps.codexControlRequest(pluginConfig, method, requestParams, options);
+}
+
 export async function handleCodexSubcommand(
   ctx: PluginCommandContext,
   options: { pluginConfig?: unknown; deps?: Partial<CodexCommandDeps> },
@@ -264,7 +347,7 @@ export async function handleCodexSubcommand(
     if (rest.length > 0) {
       return { text: "Usage: /codex detach" };
     }
-    return { text: await detachConversation(deps, ctx) };
+    return { text: await detachConversation(deps, ctx, options.pluginConfig) };
   }
   if (normalized === "binding") {
     if (rest.length > 0) {
@@ -426,19 +509,17 @@ async function bindConversation(
       text: "Cannot bind Codex because this command did not include an OpenClaw session file.",
     };
   }
-  const scope = resolveCodexConversationControlScope(ctx);
   const workspaceDir = parsed.cwd ?? deps.resolveCodexDefaultWorkspaceDir(pluginConfig);
-  const existingBinding = await deps.readCodexAppServerBinding(ctx.sessionFile, {
-    agentDir: scope.agentDir,
-    config: ctx.config,
-  });
+  const bindingLookup = resolveCommandBindingLookup(pluginConfig, ctx);
+  const existingBinding = await deps.readCodexAppServerBinding(ctx.sessionFile, bindingLookup);
   const authProfileId = existingBinding?.authProfileId;
   const startParams: Parameters<CodexCommandDeps["startCodexConversationThread"]>[0] = {
     pluginConfig,
     config: ctx.config,
     sessionFile: ctx.sessionFile,
+    agentDir: bindingLookup.agentDir,
+    isolationKey: bindingLookup.isolationKey,
     workspaceDir,
-    agentDir: scope.agentDir,
     threadId: parsed.threadId,
     model: parsed.model,
     modelProvider: parsed.provider,
@@ -447,10 +528,7 @@ async function bindConversation(
     startParams.authProfileId = authProfileId;
   }
   const data = await deps.startCodexConversationThread(startParams);
-  const binding = await deps.readCodexAppServerBinding(ctx.sessionFile, {
-    agentDir: scope.agentDir,
-    config: ctx.config,
-  });
+  const binding = await deps.readCodexAppServerBinding(ctx.sessionFile, bindingLookup);
   const threadId = binding?.threadId ?? parsed.threadId ?? "new thread";
   const summary = `Codex app-server thread ${formatCodexDisplayText(threadId)} in ${formatCodexDisplayText(workspaceDir)}`;
   let request: Awaited<ReturnType<PluginCommandContext["requestConversationBinding"]>>;
@@ -461,7 +539,7 @@ async function bindConversation(
       data,
     });
   } catch (error) {
-    await deps.clearCodexAppServerBinding(ctx.sessionFile);
+    await deps.clearCodexAppServerBinding(ctx.sessionFile, bindingLookup);
     throw error;
   }
   if (request.status === "bound") {
@@ -474,21 +552,25 @@ async function bindConversation(
   if (request.status === "pending") {
     return request.reply;
   }
-  await deps.clearCodexAppServerBinding(ctx.sessionFile);
+  await deps.clearCodexAppServerBinding(ctx.sessionFile, bindingLookup);
   return { text: formatCodexDisplayText(request.message) };
 }
 
 async function detachConversation(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
+  pluginConfig: unknown,
 ): Promise<string> {
   const current = await ctx.getCurrentConversationBinding();
   const data = readCodexConversationBindingData(current);
   const detached = await ctx.detachConversationBinding();
   if (data?.kind === "codex-app-server-session") {
-    await deps.clearCodexAppServerBinding(data.sessionFile);
+    await deps.clearCodexAppServerBinding(data.sessionFile, { isolationKey: data.isolationKey });
   } else if (ctx.sessionFile) {
-    await deps.clearCodexAppServerBinding(ctx.sessionFile);
+    await deps.clearCodexAppServerBinding(
+      ctx.sessionFile,
+      resolveCommandBindingLookup(pluginConfig, ctx),
+    );
   }
   return detached.removed
     ? "Detached this conversation from Codex."
@@ -514,11 +596,13 @@ async function describeConversationBinding(
       "- Active run: not tracked",
     ].join("\n");
   }
-  const threadBinding = await deps.readCodexAppServerBinding(data.sessionFile, {
-    agentDir: data.agentDir,
+  const bindingLookup = {
+    agentDir: data.agentDir ?? resolveCodexConversationControlScope(ctx).agentDir,
     config: ctx.config,
-  });
-  const active = deps.readCodexConversationActiveTurn(data.sessionFile);
+    isolationKey: data.isolationKey,
+  };
+  const threadBinding = await deps.readCodexAppServerBinding(data.sessionFile, bindingLookup);
+  const active = deps.readCodexConversationActiveTurn(data.sessionFile, bindingLookup.isolationKey);
   return [
     "Codex conversation binding:",
     `- Thread: ${formatCodexDisplayText(threadBinding?.threadId ?? "unknown")}`,
@@ -579,22 +663,29 @@ async function resumeThread(
   if (!ctx.sessionFile) {
     return "Cannot attach a Codex thread because this command did not include an OpenClaw session file.";
   }
-  const response = await deps.codexControlRequest(
+  const bindingLookup = resolveCommandBindingLookup(pluginConfig, ctx);
+  const response = await runCodexControlRequest(
+    deps,
     pluginConfig,
     CODEX_CONTROL_METHODS.resumeThread,
     {
       threadId: normalizedThreadId,
       persistExtendedHistory: true,
     },
+    commandControlRequestOptions(ctx, bindingLookup),
   );
   const thread = isJsonObject(response) && isJsonObject(response.thread) ? response.thread : {};
   const effectiveThreadId = readString(thread, "id") ?? normalizedThreadId;
-  await deps.writeCodexAppServerBinding(ctx.sessionFile, {
-    threadId: effectiveThreadId,
-    cwd: readString(thread, "cwd") ?? "",
-    model: isJsonObject(response) ? readString(response, "model") : undefined,
-    modelProvider: isJsonObject(response) ? readString(response, "modelProvider") : undefined,
-  });
+  await deps.writeCodexAppServerBinding(
+    ctx.sessionFile,
+    {
+      threadId: effectiveThreadId,
+      cwd: readString(thread, "cwd") ?? "",
+      model: isJsonObject(response) ? readString(response, "model") : undefined,
+      modelProvider: isJsonObject(response) ? readString(response, "modelProvider") : undefined,
+    },
+    bindingLookup,
+  );
   return `Attached this OpenClaw session to Codex thread ${formatCodexDisplayText(
     effectiveThreadId,
   )}.`;
@@ -646,16 +737,17 @@ async function stopConversationTurn(
   ctx: PluginCommandContext,
   pluginConfig: unknown,
 ): Promise<string> {
-  const target = await resolveControlTarget(ctx);
-  if (!target) {
+  const target = await resolveControlTarget(pluginConfig, ctx);
+  if (!target.sessionFile) {
     return "Cannot stop Codex because this command did not include an OpenClaw session file.";
   }
   return (
     await deps.stopCodexConversationTurn({
       sessionFile: target.sessionFile,
       pluginConfig,
-      agentDir: target.agentDir,
-      config: ctx.config,
+      agentDir: target.bindingLookup.agentDir,
+      isolationKey: target.bindingLookup.isolationKey,
+      config: target.bindingLookup.config,
     })
   ).message;
 }
@@ -666,8 +758,8 @@ async function steerConversationTurn(
   pluginConfig: unknown,
   message: string,
 ): Promise<string> {
-  const target = await resolveControlTarget(ctx);
-  if (!target) {
+  const target = await resolveControlTarget(pluginConfig, ctx);
+  if (!target.sessionFile) {
     return "Cannot steer Codex because this command did not include an OpenClaw session file.";
   }
   return (
@@ -675,8 +767,9 @@ async function steerConversationTurn(
       sessionFile: target.sessionFile,
       pluginConfig,
       message,
-      agentDir: target.agentDir,
-      config: ctx.config,
+      agentDir: target.bindingLookup.agentDir,
+      isolationKey: target.bindingLookup.isolationKey,
+      config: target.bindingLookup.config,
     })
   ).message;
 }
@@ -690,17 +783,14 @@ async function setConversationModel(
   if (args.length > 1) {
     return "Usage: /codex model <model>";
   }
-  const target = await resolveControlTarget(ctx);
-  if (!target) {
+  const target = await resolveControlTarget(pluginConfig, ctx);
+  if (!target.sessionFile) {
     return "Cannot set Codex model because this command did not include an OpenClaw session file.";
   }
   const [model = ""] = args;
   const normalized = model.trim();
   if (!normalized) {
-    const binding = await deps.readCodexAppServerBinding(target.sessionFile, {
-      agentDir: target.agentDir,
-      config: ctx.config,
-    });
+    const binding = await deps.readCodexAppServerBinding(target.sessionFile, target.bindingLookup);
     return binding?.model
       ? `Codex model: ${formatCodexDisplayText(binding.model)}`
       : "Usage: /codex model <model>";
@@ -709,8 +799,9 @@ async function setConversationModel(
     sessionFile: target.sessionFile,
     pluginConfig,
     model: normalized,
-    agentDir: target.agentDir,
-    config: ctx.config,
+    agentDir: target.bindingLookup.agentDir,
+    isolationKey: target.bindingLookup.isolationKey,
+    config: target.bindingLookup.config,
   });
 }
 
@@ -723,8 +814,8 @@ async function setConversationFastMode(
   if (args.length > 1) {
     return "Usage: /codex fast [on|off|status]";
   }
-  const target = await resolveControlTarget(ctx);
-  if (!target) {
+  const target = await resolveControlTarget(pluginConfig, ctx);
+  if (!target.sessionFile) {
     return "Cannot set Codex fast mode because this command did not include an OpenClaw session file.";
   }
   const value = args[0];
@@ -736,8 +827,9 @@ async function setConversationFastMode(
     sessionFile: target.sessionFile,
     pluginConfig,
     enabled: parsed,
-    agentDir: target.agentDir,
-    config: ctx.config,
+    agentDir: target.bindingLookup.agentDir,
+    isolationKey: target.bindingLookup.isolationKey,
+    config: target.bindingLookup.config,
   });
 }
 
@@ -750,8 +842,8 @@ async function setConversationPermissions(
   if (args.length > 1) {
     return "Usage: /codex permissions [default|yolo|status]";
   }
-  const target = await resolveControlTarget(ctx);
-  if (!target) {
+  const target = await resolveControlTarget(pluginConfig, ctx);
+  if (!target.sessionFile) {
     return "Cannot set Codex permissions because this command did not include an OpenClaw session file.";
   }
   const value = args[0];
@@ -763,33 +855,10 @@ async function setConversationPermissions(
     sessionFile: target.sessionFile,
     pluginConfig,
     mode: parsed,
-    agentDir: target.agentDir,
-    config: ctx.config,
+    agentDir: target.bindingLookup.agentDir,
+    isolationKey: target.bindingLookup.isolationKey,
+    config: target.bindingLookup.config,
   });
-}
-
-type CodexConversationControlTarget = {
-  sessionFile: string;
-  agentDir: string;
-};
-
-async function resolveControlTarget(
-  ctx: PluginCommandContext,
-): Promise<CodexConversationControlTarget | undefined> {
-  const binding = await ctx.getCurrentConversationBinding();
-  const data = readCodexConversationBindingData(binding);
-  const scope = resolveCodexConversationControlScope(ctx);
-  if (data?.kind === "codex-app-server-session") {
-    return {
-      sessionFile: data.sessionFile,
-      agentDir: data.agentDir ?? scope.agentDir,
-    };
-  }
-  return ctx.sessionFile ? { sessionFile: ctx.sessionFile, agentDir: scope.agentDir } : undefined;
-}
-
-async function resolveControlSessionFile(ctx: PluginCommandContext): Promise<string | undefined> {
-  return (await resolveControlTarget(ctx))?.sessionFile;
 }
 
 function resolveCodexConversationControlScope(ctx: PluginCommandContext): { agentDir: string } {
@@ -831,24 +900,31 @@ async function handleCodexDiagnosticsFeedback(
   }
   if (ctx.diagnosticsPreviewOnly === true) {
     return {
-      text: await previewCodexDiagnosticsFeedbackApproval(deps, ctx, parsed.note),
+      text: await previewCodexDiagnosticsFeedbackApproval(deps, ctx, pluginConfig, parsed.note),
     };
   }
-  return await requestCodexDiagnosticsFeedbackApproval(deps, ctx, parsed.note, commandPrefix);
+  return await requestCodexDiagnosticsFeedbackApproval(
+    deps,
+    ctx,
+    pluginConfig,
+    parsed.note,
+    commandPrefix,
+  );
 }
 
 async function requestCodexDiagnosticsFeedbackApproval(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
+  pluginConfig: unknown,
   note: string,
   commandPrefix: string,
 ): Promise<PluginCommandResult> {
-  if (!(await hasAnyCodexDiagnosticsSessionFile(ctx))) {
+  if (!(await hasAnyCodexDiagnosticsSessionFile(ctx, pluginConfig))) {
     return {
       text: "Cannot send Codex diagnostics because this command did not include an OpenClaw session file.",
     };
   }
-  const targets = await resolveCodexDiagnosticsTargets(deps, ctx);
+  const targets = await resolveCodexDiagnosticsTargets(deps, ctx, pluginConfig);
   if (targets.length === 0) {
     return {
       text: [
@@ -911,12 +987,13 @@ async function requestCodexDiagnosticsFeedbackApproval(
 async function previewCodexDiagnosticsFeedbackApproval(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
+  pluginConfig: unknown,
   note: string,
 ): Promise<string> {
-  if (!(await hasAnyCodexDiagnosticsSessionFile(ctx))) {
+  if (!(await hasAnyCodexDiagnosticsSessionFile(ctx, pluginConfig))) {
     return "Cannot send Codex diagnostics because this command did not include an OpenClaw session file.";
   }
-  const targets = await resolveCodexDiagnosticsTargets(deps, ctx);
+  const targets = await resolveCodexDiagnosticsTargets(deps, ctx, pluginConfig);
   if (targets.length === 0) {
     return [
       "No Codex thread is attached to this OpenClaw session yet.",
@@ -964,12 +1041,12 @@ async function confirmCodexDiagnosticsFeedback(
     return scopeMismatch.confirmMessage;
   }
   deletePendingCodexDiagnosticsConfirmation(token);
-  if (!pending.privateRouted && !(await hasAnyCodexDiagnosticsSessionFile(ctx))) {
+  if (!pending.privateRouted && !(await hasAnyCodexDiagnosticsSessionFile(ctx, pluginConfig))) {
     return "Cannot send Codex diagnostics because this command did not include an OpenClaw session file.";
   }
   const currentTargets = pending.privateRouted
     ? await resolvePendingCodexDiagnosticsTargets(deps, pending.targets)
-    : await resolveCodexDiagnosticsTargets(deps, ctx);
+    : await resolveCodexDiagnosticsTargets(deps, ctx, pluginConfig);
   if (!codexDiagnosticsTargetsMatch(pending.targets, currentTargets)) {
     return "The Codex diagnostics sessions changed before confirmation. Run /diagnostics again for the current threads.";
   }
@@ -1014,10 +1091,10 @@ async function sendCodexDiagnosticsFeedbackForContext(
   pluginConfig: unknown,
   note: string,
 ): Promise<string> {
-  if (!(await hasAnyCodexDiagnosticsSessionFile(ctx))) {
+  if (!(await hasAnyCodexDiagnosticsSessionFile(ctx, pluginConfig))) {
     return "Cannot send Codex diagnostics because this command did not include an OpenClaw session file.";
   }
-  const targets = await resolveCodexDiagnosticsTargets(deps, ctx);
+  const targets = await resolveCodexDiagnosticsTargets(deps, ctx, pluginConfig);
   if (targets.length === 0) {
     return [
       "No Codex thread is attached to this OpenClaw session yet.",
@@ -1073,8 +1150,11 @@ async function sendCodexDiagnosticsFeedbackForTargets(
   return formatCodexDiagnosticsUploadResult(sent, failed);
 }
 
-async function hasAnyCodexDiagnosticsSessionFile(ctx: PluginCommandContext): Promise<boolean> {
-  if (await resolveControlSessionFile(ctx)) {
+async function hasAnyCodexDiagnosticsSessionFile(
+  ctx: PluginCommandContext,
+  pluginConfig: unknown,
+): Promise<boolean> {
+  if (await resolveControlSessionFile(pluginConfig, ctx)) {
     return true;
   }
   return (ctx.diagnosticsSessions ?? []).some((session) => Boolean(session.sessionFile));
@@ -1083,14 +1163,18 @@ async function hasAnyCodexDiagnosticsSessionFile(ctx: PluginCommandContext): Pro
 async function resolveCodexDiagnosticsTargets(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
+  pluginConfig: unknown,
 ): Promise<CodexDiagnosticsTarget[]> {
-  const activeSessionFile = await resolveControlSessionFile(ctx);
+  const activeSessionFile = await resolveControlSessionFile(pluginConfig, ctx);
+  const activeBindingLookup = resolveCommandBindingLookup(pluginConfig, ctx);
   const candidates: CodexDiagnosticsTarget[] = [];
   if (activeSessionFile) {
     candidates.push({
       threadId: "",
       sessionFile: activeSessionFile,
+      isolationKey: activeBindingLookup.isolationKey,
       sessionKey: ctx.sessionKey,
+      runtimePolicySessionKey: ctx.runtimePolicySessionKey,
       sessionId: ctx.sessionId,
       channel: ctx.channel,
       channelId: ctx.channelId,
@@ -1106,7 +1190,9 @@ async function resolveCodexDiagnosticsTargets(
     candidates.push({
       threadId: "",
       sessionFile: session.sessionFile,
+      isolationKey: resolveDiagnosticsSessionBindingIsolationKey(pluginConfig, session),
       sessionKey: session.sessionKey,
+      runtimePolicySessionKey: session.runtimePolicySessionKey,
       sessionId: session.sessionId,
       channel: session.channel,
       channelId: session.channelId,
@@ -1123,7 +1209,9 @@ async function resolveCodexDiagnosticsTargets(
       continue;
     }
     seenSessionFiles.add(candidate.sessionFile);
-    const binding = await deps.readCodexAppServerBinding(candidate.sessionFile);
+    const binding = await deps.readCodexAppServerBinding(candidate.sessionFile, {
+      isolationKey: candidate.isolationKey,
+    });
     if (!binding?.threadId || seenThreadIds.has(binding.threadId)) {
       continue;
     }
@@ -1133,13 +1221,31 @@ async function resolveCodexDiagnosticsTargets(
   return targets;
 }
 
+function resolveDiagnosticsSessionBindingIsolationKey(
+  pluginConfig: unknown,
+  session: NonNullable<PluginCommandContext["diagnosticsSessions"]>[number],
+): string | undefined {
+  const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
+  if (appServer.clientIsolation !== "session") {
+    return undefined;
+  }
+  return (
+    session.runtimePolicySessionKey?.trim() ||
+    session.sessionKey?.trim() ||
+    session.sessionId?.trim() ||
+    undefined
+  );
+}
+
 async function resolvePendingCodexDiagnosticsTargets(
   deps: CodexCommandDeps,
   targets: readonly CodexDiagnosticsTarget[],
 ): Promise<CodexDiagnosticsTarget[]> {
   const resolved: CodexDiagnosticsTarget[] = [];
   for (const target of targets) {
-    const binding = await deps.readCodexAppServerBinding(target.sessionFile);
+    const binding = await deps.readCodexAppServerBinding(target.sessionFile, {
+      isolationKey: target.isolationKey,
+    });
     if (!binding?.threadId) {
       continue;
     }
@@ -1661,19 +1767,17 @@ async function startThreadAction(
   if (args.length > 0) {
     return `Usage: /codex ${label === "compaction" ? "compact" : label}`;
   }
-  const target = await resolveControlTarget(ctx);
-  if (!target) {
+  const target = await resolveControlTarget(pluginConfig, ctx);
+  if (!target.sessionFile) {
     return `Cannot start Codex ${label} because this command did not include an OpenClaw session file.`;
   }
-  const binding = await deps.readCodexAppServerBinding(target.sessionFile, {
-    agentDir: target.agentDir,
-    config: ctx.config,
-  });
+  const binding = await deps.readCodexAppServerBinding(target.sessionFile, target.bindingLookup);
   if (!binding?.threadId) {
     return `No Codex thread is attached to this OpenClaw session yet.`;
   }
   if (method === CODEX_CONTROL_METHODS.review) {
-    await deps.codexControlRequest(
+    await runCodexControlRequest(
+      deps,
       pluginConfig,
       method,
       {
@@ -1681,20 +1785,19 @@ async function startThreadAction(
         target: { type: "uncommittedChanges" },
       },
       {
-        agentDir: target.agentDir,
+        ...commandControlRequestOptions(ctx, target.bindingLookup),
         authProfileId: binding.authProfileId,
-        config: ctx.config,
       },
     );
   } else {
-    await deps.codexControlRequest(
+    await runCodexControlRequest(
+      deps,
       pluginConfig,
       method,
       { threadId: binding.threadId },
       {
-        agentDir: target.agentDir,
+        ...commandControlRequestOptions(ctx, target.bindingLookup),
         authProfileId: binding.authProfileId,
-        config: ctx.config,
       },
     );
   }

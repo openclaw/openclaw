@@ -61,6 +61,10 @@ const sessionCleanupMocks = vi.hoisted(() => ({
   stopSubagentsForRequester: vi.fn(() => ({ stopped: 0 })),
 }));
 
+const agentHarnessMocks = vi.hoisted(() => ({
+  resetRegisteredAgentHarnessSessions: vi.fn(async () => undefined),
+}));
+
 const bootstrapCacheMocks = vi.hoisted(() => ({
   clearBootstrapSnapshot: vi.fn(),
 }));
@@ -154,6 +158,16 @@ vi.mock("../../agents/bootstrap-cache.js", async () => {
   return {
     ...actual,
     clearBootstrapSnapshot: bootstrapCacheMocks.clearBootstrapSnapshot,
+  };
+});
+
+vi.mock("../../agents/harness/registry.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/harness/registry.js")>(
+    "../../agents/harness/registry.js",
+  );
+  return {
+    ...actual,
+    resetRegisteredAgentHarnessSessions: agentHarnessMocks.resetRegisteredAgentHarnessSessions,
   };
 });
 
@@ -263,6 +277,7 @@ export function setupGatewaySessionsTestHarness() {
     clearConfigCache();
     sessionCleanupMocks.clearSessionQueues.mockClear();
     sessionCleanupMocks.stopSubagentsForRequester.mockClear();
+    agentHarnessMocks.resetRegisteredAgentHarnessSessions.mockClear();
     bootstrapCacheMocks.clearBootstrapSnapshot.mockReset();
     sessionHookMocks.hasInternalHookListeners.mockReset();
     sessionHookMocks.hasInternalHookListeners.mockReturnValue(true);
@@ -501,6 +516,7 @@ export function isInternalHookEvent(value: unknown): value is InternalHookEvent 
 }
 
 export {
+  agentHarnessMocks,
   bootstrapCacheMocks,
   sessionHookMocks,
   beforeResetHookMocks,

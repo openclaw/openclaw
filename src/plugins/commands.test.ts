@@ -1106,6 +1106,110 @@ describe("registerPluginCommand", () => {
     expect(receivedCtx?.sessionId).toBe("session-123");
   });
 
+  it("derives a direct runtime-policy session key for native plugin commands", async () => {
+    let receivedCtx:
+      | {
+          runtimePolicySessionKey?: string;
+        }
+      | undefined;
+    const handler = async (ctx: { runtimePolicySessionKey?: string }) => {
+      receivedCtx = ctx;
+      return { text: "ok" };
+    };
+
+    const result = await executePluginCommand({
+      command: {
+        name: "policycheck",
+        description: "Demo command",
+        acceptsArgs: false,
+        handler,
+        pluginId: "demo-plugin",
+      },
+      channel: "telegram",
+      senderId: "12345",
+      isAuthorizedSender: true,
+      sessionKey: "agent:main:main",
+      commandBody: "/policycheck",
+      config: {} as never,
+      from: "telegram:12345",
+      to: "telegram:12345",
+      accountId: "default",
+    });
+
+    expect(result).toEqual({ text: "ok" });
+    expect(receivedCtx?.runtimePolicySessionKey).toBe("agent:main:telegram:default:direct:12345");
+  });
+
+  it("derives direct runtime-policy session keys for threaded Telegram DM plugin commands", async () => {
+    let receivedCtx:
+      | {
+          runtimePolicySessionKey?: string;
+        }
+      | undefined;
+    const handler = async (ctx: { runtimePolicySessionKey?: string }) => {
+      receivedCtx = ctx;
+      return { text: "ok" };
+    };
+
+    const result = await executePluginCommand({
+      command: {
+        name: "policycheck",
+        description: "Demo command",
+        acceptsArgs: false,
+        handler,
+        pluginId: "demo-plugin",
+      },
+      channel: "telegram",
+      senderId: "12345",
+      isAuthorizedSender: true,
+      sessionKey: "agent:main:main",
+      commandBody: "/policycheck",
+      config: {} as never,
+      from: "telegram:12345",
+      to: "telegram:12345",
+      accountId: "default",
+      messageThreadId: 77,
+    });
+
+    expect(result).toEqual({ text: "ok" });
+    expect(receivedCtx?.runtimePolicySessionKey).toBe("agent:main:telegram:default:direct:12345");
+  });
+
+  it("does not derive direct runtime-policy session keys for threaded group plugin commands", async () => {
+    let receivedCtx:
+      | {
+          runtimePolicySessionKey?: string;
+        }
+      | undefined;
+    const handler = async (ctx: { runtimePolicySessionKey?: string }) => {
+      receivedCtx = ctx;
+      return { text: "ok" };
+    };
+
+    const result = await executePluginCommand({
+      command: {
+        name: "policycheck",
+        description: "Demo command",
+        acceptsArgs: false,
+        handler,
+        pluginId: "demo-plugin",
+      },
+      channel: "telegram",
+      senderId: "12345",
+      isAuthorizedSender: true,
+      sessionKey: "agent:main:main",
+      commandBody: "/policycheck",
+      config: {} as never,
+      from: "telegram:group:-10012345:topic:77",
+      to: "slash:12345",
+      accountId: "default",
+      messageThreadId: 77,
+    });
+
+    expect(result).toEqual({ text: "ok" });
+    expect(receivedCtx?.runtimePolicySessionKey).toBeUndefined();
+  });
+
   it("normalizes undefined plugin command handler results to an empty reply payload", async () => {
     const handler = async () => undefined as never;
 

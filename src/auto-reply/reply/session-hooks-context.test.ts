@@ -97,6 +97,7 @@ async function createStoredSession(params: {
   sessionId: string;
   text?: string;
   updatedAt?: number;
+  entry?: Partial<SessionEntry>;
 }): Promise<{ storePath: string; transcriptPath: string }> {
   const storePath = await createStorePath(params.prefix);
   const transcriptPath = await writeTranscript(storePath, params.sessionId, params.text);
@@ -105,6 +106,7 @@ async function createStoredSession(params: {
       sessionId: params.sessionId,
       sessionFile: transcriptPath,
       updatedAt: params.updatedAt ?? Date.now(),
+      ...params.entry,
     },
   });
   return { storePath, transcriptPath };
@@ -233,6 +235,74 @@ describe("session hook context wiring", () => {
     expectFields(startEvent, { resumedFrom: "old-session" });
     expect(event?.nextSessionId).toBe(startEvent?.sessionId);
     expectFields(startContext, { sessionId: startEvent?.sessionId });
+  });
+
+  it("passes the runtime-policy session key to agent harness reset hooks", async () => {
+    const sessionKey = "agent:main:main";
+    const { storePath } = await createStoredSession({
+      prefix: "openclaw-session-hook-runtime-policy-reset",
+      sessionKey,
+      sessionId: "old-session",
+    });
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    await initSessionState({
+      ctx: {
+        Body: "/new",
+        SessionKey: sessionKey,
+        ChatType: "direct",
+        Provider: "telegram",
+        AccountId: "default",
+        SenderId: "12345",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(sessionCleanupMocks.resetRegisteredAgentHarnessSessions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+        sandboxSessionKey: "agent:main:telegram:default:direct:12345",
+      }),
+    );
+  });
+
+  it("uses the previous session origin for agent harness reset isolation", async () => {
+    const sessionKey = "agent:main:main";
+    const { storePath } = await createStoredSession({
+      prefix: "openclaw-session-hook-previous-origin-reset",
+      sessionKey,
+      sessionId: "old-session",
+      entry: {
+        origin: {
+          provider: "telegram",
+          chatType: "direct",
+          from: "old-user",
+          accountId: "default",
+        },
+      },
+    });
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    await initSessionState({
+      ctx: {
+        Body: "/new",
+        SessionKey: sessionKey,
+        ChatType: "direct",
+        Provider: "telegram",
+        AccountId: "default",
+        SenderId: "new-user",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(sessionCleanupMocks.resetRegisteredAgentHarnessSessions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+        sandboxSessionKey: "agent:main:telegram:default:direct:old-user",
+      }),
+    );
   });
 
   it("marks explicit /reset rollovers with reason reset", async () => {

@@ -245,6 +245,17 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
       main: sessionStoreEntry("sess-main", {
         thinkingLevel: "medium",
         reasoningLevel: "stream",
+        chatType: "direct",
+        deliveryContext: {
+          channel: "whatsapp",
+          accountId: "default",
+          to: "15550001",
+        },
+        origin: {
+          provider: "whatsapp",
+          accountId: "default",
+          nativeDirectUserId: "15550001",
+        },
       }),
     },
   });
@@ -317,6 +328,7 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
         model?: string;
         provider?: string;
         reasoningLevel?: string;
+        sandboxSessionKey?: string;
         sessionFile?: string;
         sessionId?: string;
         sessionKey?: string;
@@ -333,6 +345,7 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
   };
   expect(compactionCall.sessionId).toBe("sess-main");
   expect(compactionCall.sessionKey).toBe("agent:main:main");
+  expect(compactionCall.sandboxSessionKey).toBe("agent:main:whatsapp:default:direct:15550001");
   if (!compactionCall.sessionFile) {
     throw new Error("expected embedded compaction session file");
   }

@@ -106,9 +106,16 @@ export async function runCodexAppServerSideQuestion(
     };
   } = {},
 ): Promise<AgentHarnessSideQuestionResult> {
+  const pluginConfig = readCodexPluginConfig(options.pluginConfig);
+  const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
+  const appServerClientIsolationKey =
+    appServer.clientIsolation === "session"
+      ? params.sandboxSessionKey?.trim() || params.sessionKey?.trim() || params.sessionId
+      : undefined;
   const binding = await readCodexAppServerBinding(params.sessionFile, {
     agentDir: params.agentDir,
     config: params.cfg,
+    isolationKey: appServerClientIsolationKey,
   });
   if (!binding?.threadId) {
     throw new Error(
@@ -116,8 +123,6 @@ export async function runCodexAppServerSideQuestion(
     );
   }
 
-  const pluginConfig = readCodexPluginConfig(options.pluginConfig);
-  const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
   const authProfileId = params.authProfileId ?? binding.authProfileId;
   const client = await getSharedCodexAppServerClient({
     startOptions: appServer.start,
@@ -125,6 +130,7 @@ export async function runCodexAppServerSideQuestion(
     authProfileId,
     agentDir: params.agentDir,
     config: params.cfg,
+    isolationKey: appServerClientIsolationKey,
   });
   const collector = new CodexSideQuestionCollector(params);
   const removeNotificationHandler = client.addNotificationHandler((notification) =>
@@ -476,7 +482,10 @@ async function createCodexSideToolBridge(input: {
     const createOpenClawCodingTools = (await import("openclaw/plugin-sdk/agent-harness"))
       .createOpenClawCodingTools;
     const sandboxSessionKey =
-      input.params.sessionKey?.trim() || input.params.sessionId || input.sessionAgentId;
+      input.params.sandboxSessionKey?.trim() ||
+      input.params.sessionKey?.trim() ||
+      input.params.sessionId ||
+      input.sessionAgentId;
     const sandbox = await resolveSandboxContext({
       config: input.params.cfg,
       sessionKey: sandboxSessionKey,

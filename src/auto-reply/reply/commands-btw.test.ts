@@ -102,6 +102,7 @@ describe("handleBtwCommand", () => {
   it("still delegates while the session is actively running", async () => {
     const params = buildParams("/btw what changed?");
     params.agentDir = "/tmp/agent";
+    params.runtimePolicySessionKey = "agent:main:telegram:default:direct:12345";
     params.sessionEntry = {
       sessionId: "session-1",
       updatedAt: Date.now(),
@@ -113,6 +114,7 @@ describe("handleBtwCommand", () => {
     expectObjectFields(mockFirstObjectArg(runBtwSideQuestionMock), {
       question: "what changed?",
       sessionEntry: params.sessionEntry,
+      sandboxSessionKey: "agent:main:telegram:default:direct:12345",
       resolvedThinkLevel: "off",
       resolvedReasoningLevel: "off",
     });

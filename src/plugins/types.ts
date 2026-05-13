@@ -1912,6 +1912,8 @@ export type OpenClawPluginGatewayMethod = {
 export type PluginCommandDiagnosticsSession = {
   /** Stable host session key when available. */
   sessionKey?: string;
+  /** Runtime-policy session key used for per-origin runtime isolation when it differs from sessionKey. */
+  runtimePolicySessionKey?: string;
   /** Ephemeral OpenClaw session id when available. */
   sessionId?: string;
   /** Transcript file for this OpenClaw session when available. */
@@ -1948,6 +1950,8 @@ export type PluginCommandContext = {
   gatewayClientScopes?: string[];
   /** Stable host session key for the active conversation when available. */
   sessionKey?: string;
+  /** Runtime-policy session key for per-origin runtime isolation when it differs from sessionKey. */
+  runtimePolicySessionKey?: string;
   /** Ephemeral host session id for the active conversation when available. */
   sessionId?: string;
   /** Transcript file for the active OpenClaw session when available. */

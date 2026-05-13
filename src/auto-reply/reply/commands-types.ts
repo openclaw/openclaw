@@ -47,6 +47,7 @@ export type HandleCommandsParams = {
   previousSessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey: string;
+  runtimePolicySessionKey?: string;
   storePath?: string;
   sessionScope?: SessionScope;
   workspaceDir: string;

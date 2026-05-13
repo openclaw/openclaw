@@ -311,7 +311,14 @@ async function compactCodexNativeThread(
   options: { pluginConfig?: unknown; clientFactory?: CodexAppServerClientFactory } = {},
 ): Promise<EmbeddedPiCompactResult | undefined> {
   const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig: options.pluginConfig });
-  const binding = await readCodexAppServerBinding(params.sessionFile, { config: params.config });
+  const appServerClientIsolationKey =
+    appServer.clientIsolation === "session"
+      ? resolveCodexAppServerCompactionIsolationKey(params)
+      : undefined;
+  const binding = await readCodexAppServerBinding(params.sessionFile, {
+    config: params.config,
+    isolationKey: appServerClientIsolationKey,
+  });
   if (!binding?.threadId) {
     return { ok: false, compacted: false, reason: "no codex app-server thread binding" };
   }
@@ -330,6 +337,7 @@ async function compactCodexNativeThread(
     requestedAuthProfileId ?? binding.authProfileId,
     params.agentDir,
     params.config,
+    appServerClientIsolationKey,
   );
   const waiter = createCodexNativeCompactionWaiter(client, binding.threadId);
   let completion: CodexNativeCompactionCompletion;
@@ -374,6 +382,16 @@ async function compactCodexNativeThread(
       },
     },
   };
+}
+
+function resolveCodexAppServerCompactionIsolationKey(
+  params: CompactEmbeddedPiSessionParams,
+): string {
+  return (
+    params.sandboxSessionKey?.trim() ||
+    params.sessionKey?.trim() ||
+    params.sessionId
+  ).replace(/:run:[^:]+$/, "");
 }
 
 function createCodexNativeCompactionWaiter(

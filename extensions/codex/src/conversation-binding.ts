@@ -66,6 +66,7 @@ type CodexConversationStartParams = {
   sessionFile: string;
   workspaceDir?: string;
   agentDir?: string;
+  isolationKey?: string;
   threadId?: string;
   model?: string;
   modelProvider?: string;
@@ -99,10 +100,12 @@ export async function startCodexConversationThread(
   const workspaceDir =
     params.workspaceDir?.trim() || resolveCodexDefaultWorkspaceDir(params.pluginConfig);
   const agentDir = params.agentDir?.trim();
-  const agentLookup = buildAgentLookup({ agentDir, config: params.config });
-  const existingBinding = await readCodexAppServerBinding(params.sessionFile, {
-    ...agentLookup,
+  const agentLookup = buildAgentLookup({
+    agentDir,
+    config: params.config,
+    isolationKey: params.isolationKey,
   });
+  const existingBinding = await readCodexAppServerBinding(params.sessionFile, agentLookup);
   const authProfileId = resolveCodexAppServerAuthProfileIdForAgent({
     authProfileId: params.authProfileId ?? existingBinding?.authProfileId,
     ...agentLookup,
@@ -114,6 +117,7 @@ export async function startCodexConversationThread(
       threadId: params.threadId.trim(),
       workspaceDir,
       ...(agentDir ? { agentDir } : {}),
+      isolationKey: params.isolationKey,
       model: params.model,
       modelProvider: params.modelProvider,
       authProfileId,
@@ -128,6 +132,7 @@ export async function startCodexConversationThread(
       sessionFile: params.sessionFile,
       workspaceDir,
       ...(agentDir ? { agentDir } : {}),
+      isolationKey: params.isolationKey,
       model: params.model,
       modelProvider: params.modelProvider,
       authProfileId,
@@ -141,6 +146,7 @@ export async function startCodexConversationThread(
     sessionFile: params.sessionFile,
     workspaceDir,
     ...(agentDir ? { agentDir } : {}),
+    isolationKey: params.isolationKey,
   });
 }
 
@@ -222,7 +228,9 @@ export async function handleCodexConversationBindingResolved(
   if (!data || data.kind !== "codex-app-server-session") {
     return;
   }
-  await clearCodexAppServerBinding(data.sessionFile);
+  await clearCodexAppServerBinding(data.sessionFile, {
+    isolationKey: data.isolationKey,
+  });
 }
 
 async function attachExistingThread(params: {
@@ -231,6 +239,7 @@ async function attachExistingThread(params: {
   threadId: string;
   workspaceDir: string;
   agentDir?: string;
+  isolationKey?: string;
   model?: string;
   modelProvider?: string;
   authProfileId?: string;
@@ -242,7 +251,11 @@ async function attachExistingThread(params: {
   const runtime = resolveCodexAppServerRuntimeOptions({
     pluginConfig: params.pluginConfig,
   });
-  const agentLookup = buildAgentLookup({ agentDir: params.agentDir, config: params.config });
+  const agentLookup = buildAgentLookup({
+    agentDir: params.agentDir,
+    config: params.config,
+    isolationKey: params.isolationKey,
+  });
   const modelProvider = resolveThreadRequestModelProvider({
     authProfileId: params.authProfileId,
     modelProvider: params.modelProvider,
@@ -300,6 +313,7 @@ async function createThread(params: {
   sessionFile: string;
   workspaceDir: string;
   agentDir?: string;
+  isolationKey?: string;
   model?: string;
   modelProvider?: string;
   authProfileId?: string;
@@ -311,7 +325,11 @@ async function createThread(params: {
   const runtime = resolveCodexAppServerRuntimeOptions({
     pluginConfig: params.pluginConfig,
   });
-  const agentLookup = buildAgentLookup({ agentDir: params.agentDir, config: params.config });
+  const agentLookup = buildAgentLookup({
+    agentDir: params.agentDir,
+    config: params.config,
+    isolationKey: params.isolationKey,
+  });
   const modelProvider = resolveThreadRequestModelProvider({
     authProfileId: params.authProfileId,
     modelProvider: params.modelProvider,
@@ -376,7 +394,10 @@ async function runBoundTurn(params: {
   const runtime = resolveCodexAppServerRuntimeOptions({
     pluginConfig: params.pluginConfig,
   });
-  const agentLookup = buildAgentLookup({ agentDir: params.data.agentDir });
+  const agentLookup = buildAgentLookup({
+    agentDir: params.data.agentDir,
+    isolationKey: params.data.isolationKey,
+  });
   const binding = await readCodexAppServerBinding(params.data.sessionFile, agentLookup);
   const threadId = binding?.threadId;
   if (!threadId) {
@@ -457,6 +478,7 @@ async function runBoundTurn(params: {
       sessionFile: params.data.sessionFile,
       threadId,
       turnId,
+      isolationKey: params.data.isolationKey,
     });
     collector.setTurnId(turnId);
     const completion = await collector
@@ -489,13 +511,17 @@ async function runBoundTurnWithMissingThreadRecovery(params: {
     if (!isCodexThreadNotFoundError(error)) {
       throw error;
     }
-    const agentLookup = buildAgentLookup({ agentDir: params.data.agentDir });
+    const agentLookup = buildAgentLookup({
+      agentDir: params.data.agentDir,
+      isolationKey: params.data.isolationKey,
+    });
     const binding = await readCodexAppServerBinding(params.data.sessionFile, agentLookup);
     await startCodexConversationThread({
       pluginConfig: params.pluginConfig,
       sessionFile: params.data.sessionFile,
       workspaceDir: binding?.cwd || params.data.workspaceDir,
       ...agentLookup,
+      isolationKey: params.data.isolationKey,
       model: binding?.model,
       modelProvider: binding?.modelProvider,
       authProfileId: binding?.authProfileId,
@@ -551,11 +577,14 @@ function resolveThreadRequestModelProvider(params: {
 
 function buildAgentLookup(params: {
   agentDir?: string;
+  isolationKey?: string;
   config?: CodexAppServerAuthProfileLookup["config"];
-}): Pick<CodexAppServerAuthProfileLookup, "agentDir" | "config"> {
+}): Pick<CodexAppServerAuthProfileLookup, "agentDir" | "config" | "isolationKey"> {
   const agentDir = params.agentDir?.trim();
+  const isolationKey = params.isolationKey?.trim();
   return {
     ...(agentDir ? { agentDir } : {}),
+    ...(isolationKey ? { isolationKey } : {}),
     ...(params.config ? { config: params.config } : {}),
   };
 }

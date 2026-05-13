@@ -7,6 +7,7 @@ import { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
 import { readAcpSessionEntry, upsertAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { clearBootstrapSnapshot } from "../agents/bootstrap-cache.js";
+import { resetRegisteredAgentHarnessSessions } from "../agents/harness/registry.js";
 import { retireSessionMcpRuntime } from "../agents/pi-bundle-mcp-tools.js";
 import { abortEmbeddedPiRun, waitForEmbeddedPiRunEnd } from "../agents/pi-embedded.js";
 import { stopSubagentsForRequester } from "../auto-reply/reply/abort.js";
@@ -47,6 +48,7 @@ import {
   noteActiveSessionForShutdown,
 } from "./active-sessions-shutdown-tracker.js";
 import { ErrorCodes, errorShape } from "./protocol/index.js";
+import { resolveGatewaySessionRuntimePolicySessionKey } from "./session-runtime-policy-session-key.js";
 import {
   archiveSessionTranscriptsDetailed,
   resolveStableSessionEndTranscript,
@@ -562,7 +564,9 @@ export async function cleanupSessionBeforeMutation(params: {
   legacyKey?: string;
   canonicalKey?: string;
   reason: "session-reset" | "session-delete";
+  harnessResetReason?: "new" | "reset" | "deleted";
 }) {
+  const sessionKey = params.target.canonicalKey ?? params.canonicalKey ?? params.key;
   const cleanupError = await ensureSessionRuntimeCleanup({
     cfg: params.cfg,
     key: params.key,
@@ -572,6 +576,17 @@ export async function cleanupSessionBeforeMutation(params: {
   if (cleanupError) {
     return cleanupError;
   }
+  await resetRegisteredAgentHarnessSessions({
+    sessionId: params.entry?.sessionId,
+    sessionKey,
+    sandboxSessionKey: resolveGatewaySessionRuntimePolicySessionKey({
+      cfg: params.cfg,
+      sessionKey,
+      entry: params.entry,
+    }),
+    sessionFile: params.entry?.sessionFile,
+    reason: params.harnessResetReason ?? (params.reason === "session-delete" ? "deleted" : "reset"),
+  });
   const pluginCleanup = await runPluginHostCleanup({
     cfg: params.cfg,
     registry: getActivePluginRegistry(),
@@ -680,6 +695,7 @@ export async function performGatewaySessionReset(params: {
     legacyKey,
     canonicalKey,
     reason: "session-reset",
+    harnessResetReason: params.reason,
   });
   if (mutationCleanupError) {
     return { ok: false, error: mutationCleanupError };

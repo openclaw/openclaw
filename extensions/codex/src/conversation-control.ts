@@ -17,6 +17,7 @@ type ActiveTurn = {
   sessionFile: string;
   threadId: string;
   turnId: string;
+  isolationKey?: string;
 };
 
 type CodexAppServerBindingLookup = NonNullable<Parameters<typeof readCodexAppServerBinding>[1]>;
@@ -35,26 +36,31 @@ function getActiveTurns(): Map<string, ActiveTurn> {
 
 export function trackCodexConversationActiveTurn(active: ActiveTurn): () => void {
   const activeTurns = getActiveTurns();
-  activeTurns.set(active.sessionFile, active);
+  const key = activeTurnKey(active.sessionFile, active.isolationKey);
+  activeTurns.set(key, active);
   return () => {
-    const current = activeTurns.get(active.sessionFile);
+    const current = activeTurns.get(key);
     if (current?.turnId === active.turnId) {
-      activeTurns.delete(active.sessionFile);
+      activeTurns.delete(key);
     }
   };
 }
 
-export function readCodexConversationActiveTurn(sessionFile: string): ActiveTurn | undefined {
-  return getActiveTurns().get(sessionFile);
+export function readCodexConversationActiveTurn(
+  sessionFile: string,
+  isolationKey?: string,
+): ActiveTurn | undefined {
+  return getActiveTurns().get(activeTurnKey(sessionFile, isolationKey));
 }
 
 export async function stopCodexConversationTurn(params: {
   sessionFile: string;
   pluginConfig?: unknown;
   agentDir?: string;
+  isolationKey?: string;
   config?: CodexAppServerBindingLookup["config"];
 }): Promise<{ stopped: boolean; message: string }> {
-  const active = readCodexConversationActiveTurn(params.sessionFile);
+  const active = readCodexConversationActiveTurn(params.sessionFile, params.isolationKey);
   if (!active) {
     return { stopped: false, message: "No active Codex run to stop." };
   }
@@ -83,9 +89,10 @@ export async function steerCodexConversationTurn(params: {
   message: string;
   pluginConfig?: unknown;
   agentDir?: string;
+  isolationKey?: string;
   config?: CodexAppServerBindingLookup["config"];
 }): Promise<{ steered: boolean; message: string }> {
-  const active = readCodexConversationActiveTurn(params.sessionFile);
+  const active = readCodexConversationActiveTurn(params.sessionFile, params.isolationKey);
   const text = params.message.trim();
   if (!text) {
     return { steered: false, message: "Usage: /codex steer <message>" };
@@ -114,11 +121,16 @@ export async function steerCodexConversationTurn(params: {
   return { steered: true, message: "Sent steer message to Codex." };
 }
 
+function activeTurnKey(sessionFile: string, isolationKey?: string): string {
+  return isolationKey ? `${sessionFile}\0${isolationKey}` : sessionFile;
+}
+
 export async function setCodexConversationModel(params: {
   sessionFile: string;
   model: string;
   pluginConfig?: unknown;
   agentDir?: string;
+  isolationKey?: string;
   config?: CodexAppServerBindingLookup["config"];
 }): Promise<string> {
   const model = params.model.trim();
@@ -156,6 +168,7 @@ export async function setCodexConversationFastMode(params: {
   enabled?: boolean;
   pluginConfig?: unknown;
   agentDir?: string;
+  isolationKey?: string;
   config?: CodexAppServerBindingLookup["config"];
 }): Promise<string> {
   const lookup = buildBindingLookup(params);
@@ -182,6 +195,7 @@ export async function setCodexConversationPermissions(params: {
   mode?: PermissionsMode;
   pluginConfig?: unknown;
   agentDir?: string;
+  isolationKey?: string;
   config?: CodexAppServerBindingLookup["config"];
 }): Promise<string> {
   const lookup = buildBindingLookup(params);
@@ -254,6 +268,7 @@ async function resumeThreadWithOverrides(params: {
   threadId: string;
   authProfileId?: string;
   agentDir?: string;
+  isolationKey?: string;
   config?: CodexAppServerBindingLookup["config"];
   model?: string;
   approvalPolicy?: CodexAppServerApprovalPolicy;
@@ -284,11 +299,14 @@ async function resumeThreadWithOverrides(params: {
 
 function buildBindingLookup(params: {
   agentDir?: string;
+  isolationKey?: string;
   config?: CodexAppServerBindingLookup["config"];
 }): CodexAppServerBindingLookup {
   const agentDir = params.agentDir?.trim();
+  const isolationKey = params.isolationKey?.trim();
   return {
     ...(agentDir ? { agentDir } : {}),
+    ...(isolationKey ? { isolationKey } : {}),
     ...(params.config ? { config: params.config } : {}),
   };
 }

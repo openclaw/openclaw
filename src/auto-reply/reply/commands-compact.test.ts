@@ -157,6 +157,7 @@ describe("handleCompactCommand", () => {
           SenderE164: "+15551234567",
         },
         agentDir: "/tmp/openclaw-agent-compact",
+        runtimePolicySessionKey: "agent:main:whatsapp:default:direct:15550001",
         sessionEntry: {
           sessionId: "session-1",
           updatedAt: Date.now(),
@@ -175,6 +176,7 @@ describe("handleCompactCommand", () => {
     const call = requireCompactEmbeddedPiSessionCall();
     expect(call.sessionId).toBe("session-1");
     expect(call.sessionKey).toBe("agent:main:main");
+    expect(call.sandboxSessionKey).toBe("agent:main:whatsapp:default:direct:15550001");
     expect(call.allowGatewaySubagentBinding).toBe(true);
     expect(call.trigger).toBe("manual");
     expect(call.customInstructions).toBe("focus on decisions");

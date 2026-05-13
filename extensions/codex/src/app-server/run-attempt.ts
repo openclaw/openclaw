@@ -679,6 +679,7 @@ function maxFiniteNumber(values: Array<number | undefined>): number | undefined 
 async function rotateOversizedCodexAppServerStartupBinding(params: {
   binding: CodexAppServerThreadBinding | undefined;
   sessionFile: string;
+  isolationKey?: string;
   agentDir: string;
   codexHome?: string;
   config: EmbeddedRunAttemptParams["config"] | undefined;
@@ -710,7 +711,7 @@ async function rotateOversizedCodexAppServerStartupBinding(params: {
           files: oversizedFiles.map((file) => ({ path: file.path, bytes: file.bytes })),
         },
       );
-      await clearCodexAppServerBinding(params.sessionFile);
+      await clearCodexAppServerBinding(params.sessionFile, { isolationKey: params.isolationKey });
       return undefined;
     }
   }
@@ -737,10 +738,20 @@ async function rotateOversizedCodexAppServerStartupBinding(params: {
         nativeTokens,
       },
     );
-    await clearCodexAppServerBinding(params.sessionFile);
+    await clearCodexAppServerBinding(params.sessionFile, { isolationKey: params.isolationKey });
     return undefined;
   }
   return binding;
+}
+
+function resolveCodexAppServerRunIsolationKey(
+  params: EmbeddedRunAttemptParams,
+  sandboxSessionKey: string,
+): string {
+  if (params.trigger !== "cron") {
+    return sandboxSessionKey;
+  }
+  return sandboxSessionKey.replace(/:run:[^:]+$/, "");
 }
 
 export async function runCodexAppServerAttempt(
@@ -794,6 +805,10 @@ export async function runCodexAppServerAttempt(
       configuredAppServer.start.transport !== "stdio" ||
       isCodexAppServerApprovalPolicyAllowedByRequirements("untrusted"),
   });
+  const appServerClientIsolationKey =
+    appServer.clientIsolation === "session"
+      ? resolveCodexAppServerRunIsolationKey(params, sandboxSessionKey)
+      : undefined;
   let pluginAppServer: CodexAppServerRuntimeOptions = appServer;
   const nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
     configuredEvents: options.nativeHookRelay?.events,
@@ -816,11 +831,14 @@ export async function runCodexAppServerAttempt(
     agentId: params.agentId,
   });
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
-  let startupBinding = await readCodexAppServerBinding(params.sessionFile);
+  let startupBinding = await readCodexAppServerBinding(params.sessionFile, {
+    isolationKey: appServerClientIsolationKey,
+  });
   const startupBindingAuthProfileId = startupBinding?.authProfileId;
   startupBinding = await rotateOversizedCodexAppServerStartupBinding({
     binding: startupBinding,
     sessionFile: params.sessionFile,
+    isolationKey: appServerClientIsolationKey,
     agentDir,
     codexHome: appServer.start.env?.CODEX_HOME,
     config: params.config,
@@ -1210,6 +1228,7 @@ export async function runCodexAppServerAttempt(
             startupAuthProfileId,
             agentDir,
             params.config,
+            appServerClientIsolationKey,
           );
           attemptedClient = startupClient;
           startupClientForCleanup = startupClient;
@@ -1358,7 +1377,7 @@ export async function runCodexAppServerAttempt(
     options.turnAssistantCompletionIdleTimeoutMs,
   );
   const turnTerminalIdleTimeoutMs = resolveCodexTurnTerminalIdleTimeoutMs(
-    options.turnTerminalIdleTimeoutMs,
+    options.turnTerminalIdleTimeoutMs ?? appServer.turnTerminalIdleTimeoutMs,
   );
   let turnCompletionIdleTimer: ReturnType<typeof setTimeout> | undefined;
   let turnCompletionIdleWatchArmed = false;
@@ -2257,9 +2276,13 @@ export async function runCodexAppServerAttempt(
       );
       const preRetrySessionFile = activeSessionFile;
       const compactedForRetry = await forceContextEngineCompactionForCodexOverflow(turnStartError);
-      await clearCodexAppServerBinding(preRetrySessionFile);
+      await clearCodexAppServerBinding(preRetrySessionFile, {
+        isolationKey: appServerClientIsolationKey,
+      });
       if (activeSessionFile !== preRetrySessionFile) {
-        await clearCodexAppServerBinding(activeSessionFile);
+        await clearCodexAppServerBinding(activeSessionFile, {
+          isolationKey: appServerClientIsolationKey,
+        });
       }
       if (compactedForRetry) {
         await rebuildPromptAfterContextEngineCompaction();
@@ -2285,11 +2308,15 @@ export async function runCodexAppServerAttempt(
       });
       const turnStartErrorMessage = usageLimitError?.message ?? formatErrorMessage(turnStartError);
       if (isInvalidCodexImagePayloadError(turnStartErrorMessage)) {
-        await clearCodexBindingAfterInvalidImagePayload(activeSessionFile, {
-          phase: "turn_start",
-          threadId: thread.threadId,
-          error: turnStartErrorMessage,
-        });
+        await clearCodexBindingAfterInvalidImagePayload(
+          activeSessionFile,
+          {
+            phase: "turn_start",
+            threadId: thread.threadId,
+            error: turnStartErrorMessage,
+          },
+          appServerClientIsolationKey,
+        );
       }
       emitCodexAppServerEvent(params, {
         stream: "codex_app_server.lifecycle",
@@ -2495,12 +2522,16 @@ export async function runCodexAppServerAttempt(
           ? formatErrorMessage(finalPromptError)
           : undefined;
     if (isInvalidCodexImagePayloadError(finalPromptErrorMessage)) {
-      await clearCodexBindingAfterInvalidImagePayload(activeSessionFile, {
-        phase: "turn_completed",
-        threadId: thread.threadId,
-        turnId: activeTurnId,
-        error: finalPromptErrorMessage,
-      });
+      await clearCodexBindingAfterInvalidImagePayload(
+        activeSessionFile,
+        {
+          phase: "turn_completed",
+          threadId: thread.threadId,
+          turnId: activeTurnId,
+          error: finalPromptErrorMessage,
+        },
+        appServerClientIsolationKey,
+      );
     }
     if (shouldRefreshCodexRateLimitsForUsageLimitMessage(finalPromptErrorMessage)) {
       finalPromptError = await refreshCodexUsageLimitErrorMessage({
@@ -3579,8 +3610,9 @@ function isInvalidCodexImagePayloadError(message: unknown): boolean {
 async function clearCodexBindingAfterInvalidImagePayload(
   sessionFile: string,
   fields: { phase: string; threadId?: string; turnId?: string; error?: string },
+  isolationKey?: string,
 ): Promise<void> {
-  const currentBinding = await readCodexAppServerBinding(sessionFile);
+  const currentBinding = await readCodexAppServerBinding(sessionFile, { isolationKey });
   if (fields.threadId && currentBinding && currentBinding.threadId !== fields.threadId) {
     embeddedAgentLog.warn(
       "codex app-server image payload error detected for unbound thread; preserving thread binding",
@@ -3592,7 +3624,7 @@ async function clearCodexBindingAfterInvalidImagePayload(
     "codex app-server image payload error detected; clearing thread binding",
     fields,
   );
-  await clearCodexAppServerBinding(sessionFile);
+  await clearCodexAppServerBinding(sessionFile, { isolationKey });
 }
 
 function describeNotificationActivity(

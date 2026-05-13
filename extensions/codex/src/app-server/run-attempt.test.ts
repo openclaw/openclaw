@@ -234,7 +234,11 @@ function mockCall(mock: unknown, label: string, index = 0): unknown[] {
 function createAppServerHarness(
   requestImpl: (method: string, params: unknown) => Promise<unknown>,
   options: {
-    onStart?: (authProfileId: string | undefined, agentDir: string | undefined) => void;
+    onStart?: (
+      authProfileId: string | undefined,
+      agentDir: string | undefined,
+      isolationKey: string | undefined,
+    ) => void;
   } = {},
 ) {
   const requests: Array<{ method: string; params: unknown }> = [];
@@ -246,24 +250,26 @@ function createAppServerHarness(
     return requestImpl(method, params);
   });
 
-  setCodexAppServerClientFactoryForTest(async (_startOptions, authProfileId, agentDir) => {
-    options.onStart?.(authProfileId, agentDir);
-    return {
-      request,
-      addNotificationHandler: (handler: typeof notify) => {
-        notify = handler;
-        return () => undefined;
-      },
-      addRequestHandler: (handler: AppServerRequestHandler) => {
-        handleServerRequest = handler;
-        return () => undefined;
-      },
-      addCloseHandler: (handler: () => void) => {
-        closeHandlers.add(handler);
-        return () => closeHandlers.delete(handler);
-      },
-    } as never;
-  });
+  setCodexAppServerClientFactoryForTest(
+    async (_startOptions, authProfileId, agentDir, _config, isolationKey) => {
+      options.onStart?.(authProfileId, agentDir, isolationKey);
+      return {
+        request,
+        addNotificationHandler: (handler: typeof notify) => {
+          notify = handler;
+          return () => undefined;
+        },
+        addRequestHandler: (handler: AppServerRequestHandler) => {
+          handleServerRequest = handler;
+          return () => undefined;
+        },
+        addCloseHandler: (handler: () => void) => {
+          closeHandlers.add(handler);
+          return () => closeHandlers.delete(handler);
+        },
+      } as never;
+    },
+  );
 
   const waitForServerRequestHandler = async () => {
     await vi.waitFor(() => expect(handleServerRequest).toBeTypeOf("function"), {
@@ -320,7 +326,11 @@ function createAppServerHarness(
 function createStartedThreadHarness(
   requestImpl: (method: string, params: unknown) => Promise<unknown> = async () => undefined,
   options: {
-    onStart?: (authProfileId: string | undefined, agentDir: string | undefined) => void;
+    onStart?: (
+      authProfileId: string | undefined,
+      agentDir: string | undefined,
+      isolationKey: string | undefined,
+    ) => void;
   } = {},
 ) {
   return createAppServerHarness(async (method, params) => {
@@ -390,6 +400,8 @@ function createThreadLifecycleAppServerOptions(): Parameters<
     },
     requestTimeoutMs: 60_000,
     turnCompletionIdleTimeoutMs: 60_000,
+    turnTerminalIdleTimeoutMs: 30 * 60_000,
+    clientIsolation: "agent",
     approvalPolicy: "never",
     approvalsReviewer: "user",
     sandbox: "workspace-write",
@@ -723,6 +735,37 @@ describe("runCodexAppServerAttempt", () => {
     ]) {
       expect(dynamicToolNames).not.toContain(toolName);
     }
+  });
+
+  it("uses a stable session isolation key for cron run-scoped sessions", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    let seenIsolationKey: string | undefined;
+    const harness = createStartedThreadHarness(undefined, {
+      onStart: (_authProfileId, _agentDir, isolationKey) => {
+        seenIsolationKey = isolationKey;
+      },
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.trigger = "cron";
+    params.sessionKey = "agent:main:cron:job-a:run:run-1";
+
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: { appServer: { clientIsolation: "session" } },
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await expect(run).resolves.toMatchObject({ aborted: false, timedOut: false });
+
+    expect(seenIsolationKey).toBe("agent:main:cron:job-a");
+    await expect(
+      readCodexAppServerBinding(sessionFile, { isolationKey: "agent:main:cron:job-a" }),
+    ).resolves.toMatchObject({ threadId: "thread-1" });
+    await expect(
+      readCodexAppServerBinding(sessionFile, {
+        isolationKey: "agent:main:cron:job-a:run:run-1",
+      }),
+    ).resolves.toBeUndefined();
   });
 
   it("passes MCP server config through to Codex thread/start", async () => {
@@ -8350,6 +8393,8 @@ describe("runCodexAppServerAttempt", () => {
       codeModeOnly: false,
       requestTimeoutMs: 60_000,
       turnCompletionIdleTimeoutMs: 60_000,
+      turnTerminalIdleTimeoutMs: 60_000,
+      clientIsolation: "agent" as const,
       approvalPolicy: "on-request" as const,
       approvalsReviewer: "guardian_subagent" as const,
       sandbox: "danger-full-access" as const,
@@ -8467,6 +8512,8 @@ describe("runCodexAppServerAttempt", () => {
         codeModeOnly: false,
         requestTimeoutMs: 60_000,
         turnCompletionIdleTimeoutMs: 60_000,
+        turnTerminalIdleTimeoutMs: 60_000,
+        clientIsolation: "agent",
         approvalPolicy: "never",
         approvalsReviewer: "user",
         sandbox: "workspace-write",

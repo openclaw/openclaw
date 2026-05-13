@@ -37,6 +37,7 @@ type DiagnosticsSession = {
   accountId?: string;
   agentHarnessId?: string;
   channel?: string;
+  runtimePolicySessionKey?: string;
   sessionFile?: string;
   sessionId?: string;
   sessionKey?: string;
@@ -401,6 +402,9 @@ describe("diagnostics command", () => {
     expect(diagnosticsSessions[0]?.agentHarnessId).toBe("codex");
     expect(diagnosticsSessions[0]?.sessionId).toBe("session-1");
     expect(diagnosticsSessions[0]?.sessionFile).toBe("/tmp/session.jsonl");
+    expect(diagnosticsSessions[0]?.runtimePolicySessionKey).toBe(
+      "agent:main:whatsapp:direct:user-1",
+    );
     expect(diagnosticsSessions[0]?.channel).toBe("whatsapp");
     expect(diagnosticsSessions[0]?.accountId).toBe("account-1");
     const { defaults } = requireExecCall(execCalls);
@@ -453,15 +457,46 @@ describe("diagnostics command", () => {
     const diagnosticsSessions = requireDiagnosticsSessions(calls[0]);
     expect(diagnosticsSessions).toHaveLength(2);
     expect(diagnosticsSessions[0]?.sessionKey).toBe("agent:main:telegram:direct:user-1");
+    expect(diagnosticsSessions[0]?.runtimePolicySessionKey).toBe(
+      "agent:main:telegram:direct:user-1",
+    );
     expect(diagnosticsSessions[0]?.sessionId).toBe("telegram-session");
     expect(diagnosticsSessions[0]?.sessionFile).toBe("/tmp/telegram.jsonl");
     expect(diagnosticsSessions[0]?.channel).toBe("whatsapp");
     expect(diagnosticsSessions[1]?.sessionKey).toBe("agent:main:discord:channel:123");
+    expect(diagnosticsSessions[1]?.runtimePolicySessionKey).toBe("agent:main:discord:channel:123");
     expect(diagnosticsSessions[1]?.sessionId).toBe("discord-session");
     expect(diagnosticsSessions[1]?.sessionFile).toBe("/tmp/discord.jsonl");
     expect(diagnosticsSessions[1]?.channel).toBe("discord");
     expect(requireExecCall(execCalls).defaults.approvalWarningText).toContain(
       "OpenAI Codex harness:",
+    );
+  });
+
+  it("rebuilds diagnostics runtime-policy keys from stored origin from ids", async () => {
+    const { calls } = registerCodexDiagnosticsCommandForTest(async () => null);
+    const { handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
+    await handleDiagnosticsCommand(
+      buildDiagnosticsParams("/diagnostics", {
+        sessionKey: "agent:main:main",
+        sessionEntry: {
+          sessionId: "main-session",
+          sessionFile: "/tmp/main.jsonl",
+          updatedAt: 1,
+          origin: {
+            provider: "telegram",
+            chatType: "direct",
+            from: "user-1",
+            accountId: "default",
+          },
+        },
+      }),
+      true,
+    );
+
+    const diagnosticsSessions = requireDiagnosticsSessions(calls[0]);
+    expect(diagnosticsSessions[0]?.runtimePolicySessionKey).toBe(
+      "agent:main:telegram:default:direct:user-1",
     );
   });
 

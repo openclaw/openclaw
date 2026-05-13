@@ -9,9 +9,11 @@ import {
   writeCodexAppServerBinding,
 } from "./app-server/session-binding.js";
 import {
+  stopCodexConversationTurn,
   setCodexConversationFastMode,
   setCodexConversationModel,
   setCodexConversationPermissions,
+  trackCodexConversationActiveTurn,
 } from "./conversation-control.js";
 
 let tempDir: string;
@@ -122,5 +124,54 @@ describe("codex conversation controls", () => {
     await expect(setCodexConversationModel({ sessionFile, model: "gpt-5.5" })).resolves.toBe(
       "Codex model set to gpt-5.5 &lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09.",
     );
+  });
+
+  it("stops only the active turn for the requested isolation key", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await writeCodexAppServerBinding(
+      sessionFile,
+      { threadId: "thread-a", cwd: tempDir },
+      { isolationKey: "topic-a" },
+    );
+    await writeCodexAppServerBinding(
+      sessionFile,
+      { threadId: "thread-b", cwd: tempDir },
+      { isolationKey: "topic-b" },
+    );
+    const request = vi.fn(async () => ({}));
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
+    const cleanupA = trackCodexConversationActiveTurn({
+      sessionFile,
+      threadId: "thread-a",
+      turnId: "turn-a",
+      isolationKey: "topic-a",
+    });
+    const cleanupB = trackCodexConversationActiveTurn({
+      sessionFile,
+      threadId: "thread-b",
+      turnId: "turn-b",
+      isolationKey: "topic-b",
+    });
+
+    try {
+      await expect(
+        stopCodexConversationTurn({
+          sessionFile,
+          isolationKey: "topic-a",
+        }),
+      ).resolves.toEqual({ stopped: true, message: "Codex stop requested." });
+
+      expect(request).toHaveBeenCalledWith(
+        "turn/interrupt",
+        {
+          threadId: "thread-a",
+          turnId: "turn-a",
+        },
+        expect.any(Object),
+      );
+    } finally {
+      cleanupA();
+      cleanupB();
+    }
   });
 });

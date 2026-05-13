@@ -76,6 +76,7 @@ export async function getSharedCodexAppServerClient(options?: {
   authProfileId?: string | null;
   agentDir?: string;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
+  isolationKey?: string;
 }): Promise<CodexAppServerClient> {
   const agentDir = options?.agentDir ?? resolveDefaultAgentDir(options?.config ?? {});
   const usesNativeAuth = options?.authProfileId === null;
@@ -97,10 +98,13 @@ export async function getSharedCodexAppServerClient(options?: {
     authProfileId: usesNativeAuth ? null : authProfileId,
     config: options?.config,
   });
-  const key = codexAppServerStartOptionsKey(startOptions, {
-    authProfileId,
-    agentDir: usesNativeAuth ? undefined : agentDir,
-  });
+  const key = sharedClientKeyForIsolation(
+    options?.isolationKey,
+    codexAppServerStartOptionsKey(startOptions, {
+      authProfileId,
+      agentDir: usesNativeAuth ? undefined : agentDir,
+    }),
+  );
   const state = getSharedCodexAppServerClientState();
   const entry = getOrCreateSharedClientEntry(state, key);
   const sharedPromise =
@@ -218,6 +222,24 @@ export function clearSharedCodexAppServerClientIfCurrent(
   return false;
 }
 
+export function clearSharedCodexAppServerClientForIsolationKey(
+  isolationKey: string | undefined,
+): boolean {
+  const resolvedIsolationKey = resolveSharedCodexAppServerClientIsolationKey(isolationKey);
+  if (resolvedIsolationKey === DEFAULT_SHARED_CODEX_APP_SERVER_CLIENT_ISOLATION_KEY) {
+    return false;
+  }
+  const state = getSharedCodexAppServerClientState();
+  let cleared = false;
+  for (const [key, entry] of state.clients) {
+    if (readIsolationKeyFromSharedClientKey(key) === resolvedIsolationKey) {
+      clearSharedClientEntry(key, entry);
+      cleared = true;
+    }
+  }
+  return cleared;
+}
+
 export async function clearSharedCodexAppServerClientIfCurrentAndWait(
   client: CodexAppServerClient | undefined,
   options?: {
@@ -247,6 +269,23 @@ export async function clearSharedCodexAppServerClientAndWait(options?: {
   const clients = collectSharedClients(state);
   state.clients.clear();
   await Promise.all(clients.map((client) => client.closeAndWait(options)));
+}
+
+const DEFAULT_SHARED_CODEX_APP_SERVER_CLIENT_ISOLATION_KEY = "agent";
+
+function resolveSharedCodexAppServerClientIsolationKey(isolationKey: string | undefined): string {
+  return isolationKey?.trim() || DEFAULT_SHARED_CODEX_APP_SERVER_CLIENT_ISOLATION_KEY;
+}
+
+function sharedClientKeyForIsolation(isolationKey: string | undefined, key: string): string {
+  return `${resolveSharedCodexAppServerClientIsolationKey(isolationKey)}\0${key}`;
+}
+
+function readIsolationKeyFromSharedClientKey(key: string): string {
+  const separator = key.indexOf("\0");
+  return separator >= 0
+    ? key.slice(0, separator)
+    : DEFAULT_SHARED_CODEX_APP_SERVER_CLIENT_ISOLATION_KEY;
 }
 
 function getOrCreateSharedClientEntry(

@@ -33,6 +33,9 @@ const mergeOrigin = (
   if (next?.from) {
     merged.from = next.from;
   }
+  if (next?.senderId) {
+    merged.senderId = next.senderId;
+  }
   if (next?.to) {
     merged.to = next.to;
   }
@@ -69,6 +72,7 @@ export function deriveSessionOrigin(
   const surface = normalizeOptionalLowercaseString(ctx.Surface);
   const chatType = normalizeChatType(ctx.ChatType) ?? undefined;
   const from = normalizeOptionalString(ctx.From);
+  const senderId = normalizeOptionalString(ctx.SenderId);
   const to = normalizeOptionalString(
     typeof ctx.OriginatingTo === "string" ? ctx.OriginatingTo : ctx.To,
   );
@@ -92,6 +96,9 @@ export function deriveSessionOrigin(
   }
   if (from) {
     origin.from = from;
+  }
+  if (senderId) {
+    origin.senderId = senderId;
   }
   if (to) {
     origin.to = to;

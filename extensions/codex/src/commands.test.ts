@@ -16,6 +16,10 @@ import {
   readRecentCodexRateLimits,
   resetCodexRateLimitCacheForTests,
 } from "./app-server/rate-limit-cache.js";
+import {
+  readCodexAppServerBinding,
+  writeCodexAppServerBinding,
+} from "./app-server/session-binding.js";
 import { resetSharedCodexAppServerClientForTests } from "./app-server/shared-client.js";
 import {
   resetCodexDiagnosticsFeedbackStateForTests,
@@ -246,6 +250,51 @@ describe("codex command", () => {
     ]);
     await expect(fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8")).resolves.toContain(
       '"threadId": "thread-123"',
+    );
+  });
+
+  it("attaches resumed Codex threads to the runtime-policy binding when session isolation is enabled", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const codexControlRequest = vi.fn(async () => ({
+      thread: { id: "thread-isolated", cwd: "/repo" },
+      model: "gpt-5.4",
+      modelProvider: "openai",
+    }));
+    const deps = createDeps({
+      codexControlRequest,
+    });
+
+    await expect(
+      handleCodexCommand(
+        createContext("resume thread-isolated", sessionFile, {
+          sessionKey: "agent:main:main",
+          runtimePolicySessionKey: "agent:main:telegram:default:direct:12345",
+        }),
+        {
+          pluginConfig: { appServer: { clientIsolation: "session" } },
+          deps,
+        },
+      ),
+    ).resolves.toEqual({
+      text: "Attached this OpenClaw session to Codex thread thread-isolated.",
+    });
+
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
+    await expect(
+      readCodexAppServerBinding(sessionFile, {
+        isolationKey: "agent:main:telegram:default:direct:12345",
+      }),
+    ).resolves.toMatchObject({ threadId: "thread-isolated" });
+    expect(codexControlRequest).toHaveBeenCalledWith(
+      { appServer: { clientIsolation: "session" } },
+      CODEX_CONTROL_METHODS.resumeThread,
+      {
+        threadId: "thread-isolated",
+        persistExtendedHistory: true,
+      },
+      expect.objectContaining({
+        isolationKey: "agent:main:telegram:default:direct:12345",
+      }),
     );
   });
 
@@ -1328,6 +1377,44 @@ describe("codex command", () => {
     );
   });
 
+  it("starts compaction from the runtime-policy binding when session isolation is enabled", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await writeCodexAppServerBinding(
+      sessionFile,
+      {
+        threadId: "thread-isolated",
+        cwd: "/repo",
+      },
+      { isolationKey: "agent:main:telegram:default:direct:12345" },
+    );
+    const codexControlRequest = vi.fn(async () => ({}));
+
+    await expect(
+      handleCodexCommand(
+        createContext("compact", sessionFile, {
+          sessionKey: "agent:main:main",
+          runtimePolicySessionKey: "agent:main:telegram:default:direct:12345",
+        }),
+        {
+          pluginConfig: { appServer: { clientIsolation: "session" } },
+          deps: createDeps({ codexControlRequest }),
+        },
+      ),
+    ).resolves.toEqual({
+      text: "Started Codex compaction for thread thread-isolated.",
+    });
+    expect(codexControlRequest).toHaveBeenCalledWith(
+      { appServer: { clientIsolation: "session" } },
+      CODEX_CONTROL_METHODS.compact,
+      {
+        threadId: "thread-isolated",
+      },
+      expect.objectContaining({
+        isolationKey: "agent:main:telegram:default:direct:12345",
+      }),
+    );
+  });
+
   it("starts review with the generated app-server target shape", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await fs.writeFile(
@@ -1620,6 +1707,128 @@ describe("codex command", () => {
     );
   });
 
+  it("sends diagnostics through the runtime-policy binding when session isolation is enabled", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await writeCodexAppServerBinding(
+      sessionFile,
+      { threadId: "thread-isolated", cwd: "/repo" },
+      { isolationKey: "agent:main:telegram:default:direct:12345" },
+    );
+    const safeCodexControlRequest = vi.fn(async () => ({
+      ok: true as const,
+      value: { threadId: "thread-isolated" },
+    }));
+    const deps = createDeps({ safeCodexControlRequest });
+    const pluginConfig = { appServer: { clientIsolation: "session" } };
+
+    const request = await handleCodexCommand(
+      createContext("diagnostics isolated repro", sessionFile, {
+        senderId: "user-1",
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        runtimePolicySessionKey: "agent:main:telegram:default:direct:12345",
+      }),
+      { deps, pluginConfig },
+    );
+
+    const token = readDiagnosticsConfirmationToken(request);
+    expect(request.text).toContain("thread-isolated");
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
+
+    await expect(
+      handleCodexCommand(
+        createContext(`diagnostics confirm ${token}`, sessionFile, {
+          senderId: "user-1",
+          sessionId: "session-1",
+          sessionKey: "agent:main:main",
+          runtimePolicySessionKey: "agent:main:telegram:default:direct:12345",
+        }),
+        { deps, pluginConfig },
+      ),
+    ).resolves.toMatchObject({
+      text: expect.stringContaining("Codex diagnostics sent to OpenAI servers:"),
+    });
+    expect(safeCodexControlRequest).toHaveBeenCalledWith(
+      pluginConfig,
+      CODEX_CONTROL_METHODS.feedback,
+      expect.objectContaining({
+        classification: "bug",
+        reason: "isolated repro",
+        threadId: "thread-isolated",
+      }),
+      expect.objectContaining({
+        isolationKey: "agent:main:telegram:default:direct:12345",
+      }),
+    );
+  });
+
+  it("sends bound diagnostics through the stored Codex isolation key", async () => {
+    const hostSessionFile = path.join(tempDir, "host-session.jsonl");
+    await writeCodexAppServerBinding(
+      hostSessionFile,
+      { threadId: "thread-bound", cwd: "/repo" },
+      { isolationKey: "agent:main:slack:default:direct:u123" },
+    );
+    const safeCodexControlRequest = vi.fn(async () => ({
+      ok: true as const,
+      value: { threadId: "thread-bound" },
+    }));
+    const deps = createDeps({ safeCodexControlRequest });
+    const pluginConfig = { appServer: { clientIsolation: "session" } };
+    const bindingContext = {
+      senderId: "user-1",
+      sessionId: "plugin-session",
+      sessionKey: "plugin-binding:codex:bound",
+      runtimePolicySessionKey: "agent:main:slack:default:direct:u999",
+      getCurrentConversationBinding: async () => ({
+        bindingId: "binding-1",
+        pluginId: "codex",
+        pluginRoot: "/plugin",
+        channel: "slack",
+        accountId: "default",
+        conversationId: "user:U123",
+        boundAt: 1,
+        data: {
+          kind: "codex-app-server-session",
+          version: 1,
+          sessionFile: hostSessionFile,
+          workspaceDir: tempDir,
+          isolationKey: "agent:main:slack:default:direct:u123",
+        },
+      }),
+    } satisfies Partial<PluginCommandContext>;
+
+    const request = await handleCodexCommand(
+      createContext("diagnostics bound repro", undefined, bindingContext),
+      { deps, pluginConfig },
+    );
+
+    const token = readDiagnosticsConfirmationToken(request);
+    expect(request.text).toContain("thread-bound");
+    await expect(readCodexAppServerBinding(hostSessionFile)).resolves.toBeUndefined();
+
+    await expect(
+      handleCodexCommand(createContext(`diagnostics confirm ${token}`, undefined, bindingContext), {
+        deps,
+        pluginConfig,
+      }),
+    ).resolves.toMatchObject({
+      text: expect.stringContaining("Codex diagnostics sent to OpenAI servers:"),
+    });
+    expect(safeCodexControlRequest).toHaveBeenCalledWith(
+      pluginConfig,
+      CODEX_CONTROL_METHODS.feedback,
+      expect.objectContaining({
+        classification: "bug",
+        reason: "bound repro",
+        threadId: "thread-bound",
+      }),
+      expect.objectContaining({
+        isolationKey: "agent:main:slack:default:direct:u123",
+      }),
+    );
+  });
+
   it("rejects malformed diagnostics confirmation commands without consuming the token", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await fs.writeFile(
@@ -1855,6 +2064,47 @@ describe("codex command", () => {
     const secondFeedbackParams = requestParams(safeCodexControlRequest, 1);
     expect(secondFeedbackParams.threadId).toBe("thread-222");
     expect(secondFeedbackParams.includeLogs).toBe(true);
+  });
+
+  it("looks up diagnostics sessions with session-isolated Codex bindings", async () => {
+    const sessionFile = path.join(tempDir, "session-one.jsonl");
+    await writeCodexAppServerBinding(
+      sessionFile,
+      {
+        threadId: "thread-isolated",
+        cwd: "/repo",
+      },
+      { isolationKey: "agent:main:telegram:default:direct:user-1" },
+    );
+    const diagnosticsSessions = [
+      {
+        sessionKey: "agent:main:telegram:default:direct:user-1",
+        runtimePolicySessionKey: "agent:main:telegram:default:direct:user-1",
+        sessionId: "session-one",
+        sessionFile,
+        channel: "telegram",
+      },
+    ];
+
+    const request = await handleCodexCommand(
+      createContext("diagnostics multi-session repro", sessionFile, {
+        senderId: "user-1",
+        channel: "telegram",
+        sessionKey: "agent:main",
+        sessionId: "session-main",
+        diagnosticsSessions,
+      }),
+      {
+        deps: createDeps(),
+        pluginConfig: { appServer: { clientIsolation: "session" } },
+      },
+    );
+
+    expect(request.text).toContain("Codex runtime thread detected.");
+    expect(request.text).toContain(
+      "OpenClaw session key: `agent:main:telegram:default:direct:user-1`",
+    );
+    expect(request.text).toContain("Codex thread id: `thread-isolated`");
   });
 
   it("requires an owner for Codex diagnostics feedback uploads", async () => {
@@ -2702,6 +2952,57 @@ describe("codex command", () => {
     });
   });
 
+  it("binds conversations through the runtime-policy binding when session isolation is enabled", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const startCodexConversationThread = vi.fn(async () => ({
+      kind: "codex-app-server-session" as const,
+      version: 1 as const,
+      sessionFile,
+      workspaceDir: "/repo",
+      isolationKey: "agent:main:telegram:default:direct:12345",
+    }));
+    const requestConversationBinding = vi.fn(async () => ({
+      status: "bound" as const,
+      binding: {
+        bindingId: "binding-1",
+        pluginId: "codex",
+        pluginRoot: "/plugin",
+        channel: "test",
+        accountId: "default",
+        conversationId: "conversation",
+        boundAt: 1,
+      },
+    }));
+
+    await handleCodexCommand(
+      createContext("bind thread-123 --cwd /repo", sessionFile, {
+        sessionKey: "agent:main:main",
+        runtimePolicySessionKey: "agent:main:telegram:default:direct:12345",
+        requestConversationBinding,
+      }),
+      {
+        pluginConfig: { appServer: { clientIsolation: "session" } },
+        deps: createDeps({
+          startCodexConversationThread,
+          resolveCodexDefaultWorkspaceDir: vi.fn(() => "/default"),
+        }),
+      },
+    );
+
+    expect(startCodexConversationThread).toHaveBeenCalledWith(
+      expect.objectContaining({
+        isolationKey: "agent:main:telegram:default:direct:12345",
+      }),
+    );
+    expect(requestConversationBinding).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          isolationKey: "agent:main:telegram:default:direct:12345",
+        }),
+      }),
+    );
+  });
+
   it("binds quoted workspace paths that contain spaces", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const startCodexConversationThread = vi.fn(async () => ({
@@ -2920,7 +3221,9 @@ describe("codex command", () => {
     ).resolves.toEqual({
       text: "binding unsupported &lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09",
     });
-    expect(clearCodexAppServerBinding).toHaveBeenCalledWith(sessionFile);
+    expect(clearCodexAppServerBinding).toHaveBeenCalledWith(sessionFile, {
+      isolationKey: undefined,
+    });
   });
 
   it("detaches the current conversation and clears the Codex app-server thread binding", async () => {
@@ -2931,6 +3234,8 @@ describe("codex command", () => {
     await expect(
       handleCodexCommand(
         createContext("detach", sessionFile, {
+          sessionKey: "agent:main:main",
+          runtimePolicySessionKey: "agent:main:telegram:default:direct:12345",
           detachConversationBinding,
           getCurrentConversationBinding: async () => ({
             bindingId: "binding-1",
@@ -2948,13 +3253,59 @@ describe("codex command", () => {
             },
           }),
         }),
-        { deps: createDeps({ clearCodexAppServerBinding }) },
+        {
+          deps: createDeps({ clearCodexAppServerBinding }),
+          pluginConfig: { appServer: { clientIsolation: "session" } },
+        },
       ),
     ).resolves.toEqual({
       text: "Detached this conversation from Codex.",
     });
     expect(detachConversationBinding).toHaveBeenCalled();
-    expect(clearCodexAppServerBinding).toHaveBeenCalledWith(sessionFile);
+    expect(clearCodexAppServerBinding).toHaveBeenCalledWith(sessionFile, {
+      isolationKey: undefined,
+    });
+  });
+
+  it("detaches using the stored Codex isolation key", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const clearCodexAppServerBinding = vi.fn(async () => {});
+    const detachConversationBinding = vi.fn(async () => ({ removed: true }));
+
+    await expect(
+      handleCodexCommand(
+        createContext("detach", sessionFile, {
+          sessionKey: "agent:main:main",
+          detachConversationBinding,
+          getCurrentConversationBinding: async () => ({
+            bindingId: "binding-1",
+            pluginId: "codex",
+            pluginRoot: "/plugin",
+            channel: "test",
+            accountId: "default",
+            conversationId: "conversation",
+            boundAt: 1,
+            data: {
+              kind: "codex-app-server-session",
+              version: 1,
+              sessionFile,
+              workspaceDir: "/repo",
+              isolationKey: "agent:main:telegram:default:direct:12345",
+            },
+          }),
+        }),
+        {
+          deps: createDeps({ clearCodexAppServerBinding }),
+          pluginConfig: { appServer: { clientIsolation: "session" } },
+        },
+      ),
+    ).resolves.toEqual({
+      text: "Detached this conversation from Codex.",
+    });
+    expect(detachConversationBinding).toHaveBeenCalled();
+    expect(clearCodexAppServerBinding).toHaveBeenCalledWith(sessionFile, {
+      isolationKey: "agent:main:telegram:default:direct:12345",
+    });
   });
 
   it("rejects malformed detach commands before clearing bindings", async () => {
@@ -3159,10 +3510,13 @@ describe("codex command", () => {
     const hostSessionFile = path.join(tempDir, "host-session.jsonl");
     const pluginSessionFile = path.join(tempDir, "plugin-session.jsonl");
     const setCodexConversationFastMode = vi.fn(async () => "Codex fast mode enabled.");
+    const pluginConfig = { appServer: { clientIsolation: "session" } };
 
     await expect(
       handleCodexCommand(
         createContext("fast on", pluginSessionFile, {
+          sessionKey: "plugin-binding:codex:bound",
+          runtimePolicySessionKey: "agent:main:slack:default:direct:u999",
           getCurrentConversationBinding: async () => ({
             bindingId: "binding-1",
             pluginId: "codex",
@@ -3183,13 +3537,60 @@ describe("codex command", () => {
           deps: createDeps({
             setCodexConversationFastMode,
           }),
+          pluginConfig,
         },
       ),
     ).resolves.toEqual({ text: "Codex fast mode enabled." });
 
     expect(setCodexConversationFastMode).toHaveBeenCalledWith({
       sessionFile: hostSessionFile,
-      pluginConfig: undefined,
+      pluginConfig,
+      isolationKey: undefined,
+      enabled: true,
+    });
+  });
+
+  it("uses stored plugin binding isolation for follow-up control commands", async () => {
+    const hostSessionFile = path.join(tempDir, "host-session.jsonl");
+    const pluginSessionFile = path.join(tempDir, "plugin-session.jsonl");
+    const setCodexConversationFastMode = vi.fn(async () => "Codex fast mode enabled.");
+    const pluginConfig = { appServer: { clientIsolation: "session" } };
+
+    await expect(
+      handleCodexCommand(
+        createContext("fast on", pluginSessionFile, {
+          sessionKey: "plugin-binding:codex:bound",
+          runtimePolicySessionKey: "agent:main:slack:default:direct:u999",
+          getCurrentConversationBinding: async () => ({
+            bindingId: "binding-1",
+            pluginId: "codex",
+            pluginRoot: "/plugin",
+            channel: "slack",
+            accountId: "default",
+            conversationId: "user:U123",
+            boundAt: 1,
+            data: {
+              kind: "codex-app-server-session",
+              version: 1,
+              sessionFile: hostSessionFile,
+              workspaceDir: tempDir,
+              isolationKey: "agent:main:slack:default:direct:u123",
+            },
+          }),
+        }),
+        {
+          deps: createDeps({
+            setCodexConversationFastMode,
+          }),
+          pluginConfig,
+        },
+      ),
+    ).resolves.toEqual({ text: "Codex fast mode enabled." });
+
+    expect(setCodexConversationFastMode).toHaveBeenCalledWith({
+      sessionFile: hostSessionFile,
+      pluginConfig,
+      isolationKey: "agent:main:slack:default:direct:u123",
       enabled: true,
       agentDir: path.join(tempDir, "agents", "main", "agent"),
       config: {},
@@ -3214,6 +3615,8 @@ describe("codex command", () => {
     await expect(
       handleCodexCommand(
         createContext("binding", sessionFile, {
+          sessionKey: "agent:main:main",
+          runtimePolicySessionKey: "agent:main:telegram:default:direct:12345",
           getCurrentConversationBinding: async () => ({
             bindingId: "binding-1",
             pluginId: "codex",
@@ -3231,6 +3634,7 @@ describe("codex command", () => {
           }),
         }),
         {
+          pluginConfig: { appServer: { clientIsolation: "session" } },
           deps: createDeps({
             readCodexConversationActiveTurn: vi.fn(() => ({
               sessionFile,

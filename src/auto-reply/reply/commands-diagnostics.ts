@@ -20,6 +20,7 @@ import {
   type PrivateCommandRouteTarget,
 } from "./commands-private-route.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
+import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 
 const DIAGNOSTICS_COMMAND = "/diagnostics";
 const CODEX_DIAGNOSTICS_COMMAND = "/codex diagnostics";
@@ -457,6 +458,7 @@ async function executeCodexDiagnosticsAddon(
     senderIsOwner: params.command.senderIsOwner,
     gatewayClientScopes: params.ctx.GatewayClientScopes,
     sessionKey: params.sessionKey,
+    runtimePolicySessionKey: params.runtimePolicySessionKey,
     sessionId: targetSessionEntry?.sessionId,
     sessionFile: targetSessionEntry?.sessionFile,
     commandBody,
@@ -500,6 +502,11 @@ function buildCodexDiagnosticsSessions(
     .filter(([, entry]) => Boolean(entry.sessionFile))
     .map(([sessionKey, entry]) => ({
       sessionKey,
+      runtimePolicySessionKey: resolveDiagnosticsSessionRuntimePolicySessionKey(
+        params,
+        sessionKey,
+        entry,
+      ),
       sessionId: entry.sessionId,
       sessionFile: entry.sessionFile,
       agentHarnessId: entry.agentHarnessId,
@@ -524,6 +531,49 @@ function buildCodexDiagnosticsSessions(
           ? normalizeOptionalString(params.ctx.ThreadParentId)
           : undefined,
     }));
+}
+
+function resolveDiagnosticsSessionRuntimePolicySessionKey(
+  params: HandleCommandsParams,
+  sessionKey: string,
+  entry: SessionEntry,
+): string | undefined {
+  if (sessionKey === params.sessionKey && params.runtimePolicySessionKey) {
+    return params.runtimePolicySessionKey;
+  }
+  const accountId =
+    normalizeOptionalString(entry.deliveryContext?.accountId) ??
+    normalizeOptionalString(entry.origin?.accountId) ??
+    normalizeOptionalString(entry.lastAccountId) ??
+    (sessionKey === params.sessionKey ? (params.ctx.AccountId ?? undefined) : undefined);
+  const channel =
+    normalizeOptionalString(entry.deliveryContext?.channel) ??
+    normalizeOptionalString(entry.origin?.provider) ??
+    normalizeOptionalString(entry.channel) ??
+    normalizeOptionalString(entry.lastChannel);
+  const to =
+    normalizeOptionalString(entry.deliveryContext?.to) ??
+    normalizeOptionalString(entry.origin?.to) ??
+    normalizeOptionalString(entry.lastTo);
+  return resolveRuntimePolicySessionKey({
+    cfg: params.cfg,
+    sessionKey,
+    ctx: {
+      AccountId: accountId,
+      ChatType: entry.origin?.chatType ?? entry.chatType,
+      From:
+        normalizeOptionalString(entry.origin?.from) ??
+        (sessionKey === params.sessionKey ? params.command.from : undefined),
+      NativeDirectUserId: entry.origin?.nativeDirectUserId,
+      OriginatingChannel: channel,
+      OriginatingTo: to,
+      Provider: normalizeOptionalString(entry.origin?.provider) ?? channel,
+      SenderId: entry.origin?.senderId,
+      SessionKey: sessionKey,
+      Surface: entry.origin?.surface,
+      To: to,
+    },
+  });
 }
 
 function resolveDiagnosticsSessionChannel(

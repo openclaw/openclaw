@@ -175,6 +175,16 @@
             "minimum": 1,
             "default": 60000
           },
+          "turnTerminalIdleTimeoutMs": {
+            "type": "number",
+            "minimum": 1,
+            "default": 1800000
+          },
+          "clientIsolation": {
+            "type": "string",
+            "enum": ["agent", "session"],
+            "default": "agent"
+          },
           "approvalPolicy": {
             "type": "string",
             "enum": ["never", "on-request", "on-failure", "untrusted"]
@@ -343,6 +353,16 @@
     "appServer.turnCompletionIdleTimeoutMs": {
       "label": "Turn Completion Idle Timeout",
       "help": "Maximum quiet time after Codex accepts a turn or after a turn-scoped app-server request before OpenClaw interrupts the turn while waiting for turn/completed.",
+      "advanced": true
+    },
+    "appServer.turnTerminalIdleTimeoutMs": {
+      "label": "Turn Terminal Idle Timeout",
+      "help": "Maximum quiet time during an accepted Codex app-server turn before OpenClaw interrupts the turn while waiting for a terminal event.",
+      "advanced": true
+    },
+    "appServer.clientIsolation": {
+      "label": "Client Isolation",
+      "help": "Controls whether Codex app-server clients are shared per agent or isolated per OpenClaw session/topic.",
       "advanced": true
     },
     "appServer.approvalPolicy": {

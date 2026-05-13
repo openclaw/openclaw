@@ -81,6 +81,7 @@ import {
   listSessionCompactionCheckpoints,
 } from "../session-compaction-checkpoints.js";
 import { triggerSessionPatchHook } from "../session-patch-hooks.js";
+import { resolveGatewaySessionRuntimePolicySessionKey } from "../session-runtime-policy-session-key.js";
 import {
   resolveSessionStoreAgentId,
   resolveSessionStoreKey,
@@ -2292,6 +2293,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         result = await compactEmbeddedPiSession({
           sessionId,
           sessionKey: target.canonicalKey,
+          sandboxSessionKey: resolveGatewaySessionRuntimePolicySessionKey({
+            cfg,
+            sessionKey: target.canonicalKey,
+            entry,
+          }),
           allowGatewaySubagentBinding: true,
           sessionFile: filePath,
           workspaceDir,

@@ -104,6 +104,10 @@ export async function startOrResumeThread(params: {
     params.params,
     params.contextEngineProjection,
   );
+  const bindingIsolationKey = resolveCodexAppServerThreadBindingIsolationKey(
+    params.appServer,
+    params.params,
+  );
   const userMcpServersConfigPatch =
     params.userMcpServersEnabled === false
       ? undefined
@@ -115,6 +119,7 @@ export async function startOrResumeThread(params: {
     authProfileStore: params.params.authProfileStore,
     agentDir: params.params.agentDir,
     config: params.params.config,
+    isolationKey: bindingIsolationKey,
   });
   let preserveExistingBinding = false;
   let rotatedContextEngineBinding = false;
@@ -148,7 +153,9 @@ export async function startOrResumeThread(params: {
           previousPolicyFingerprint: binding.contextEngine?.policyFingerprint,
         },
       );
-      await clearCodexAppServerBinding(params.params.sessionFile);
+      await clearCodexAppServerBinding(params.params.sessionFile, {
+        isolationKey: bindingIsolationKey,
+      });
       binding = undefined;
       rotatedContextEngineBinding = true;
     }
@@ -157,7 +164,9 @@ export async function startOrResumeThread(params: {
     embeddedAgentLog.debug("codex app-server user MCP config changed; starting a new thread", {
       threadId: binding.threadId,
     });
-    await clearCodexAppServerBinding(params.params.sessionFile);
+    await clearCodexAppServerBinding(params.params.sessionFile, {
+      isolationKey: bindingIsolationKey,
+    });
     binding = undefined;
   }
   if (
@@ -168,7 +177,9 @@ export async function startOrResumeThread(params: {
     embeddedAgentLog.debug("codex app-server MCP config changed; starting a new thread", {
       threadId: binding.threadId,
     });
-    await clearCodexAppServerBinding(params.params.sessionFile);
+    await clearCodexAppServerBinding(params.params.sessionFile, {
+      isolationKey: bindingIsolationKey,
+    });
     binding = undefined;
   }
   if (binding?.threadId) {
@@ -201,7 +212,9 @@ export async function startOrResumeThread(params: {
       embeddedAgentLog.debug("codex app-server plugin app config changed; starting a new thread", {
         threadId: binding.threadId,
       });
-      await clearCodexAppServerBinding(params.params.sessionFile);
+      await clearCodexAppServerBinding(params.params.sessionFile, {
+        isolationKey: bindingIsolationKey,
+      });
       binding = undefined;
     }
   }
@@ -213,7 +226,9 @@ export async function startOrResumeThread(params: {
     embeddedAgentLog.debug("codex app-server MCP config changed; starting a new thread", {
       threadId: binding.threadId,
     });
-    await clearCodexAppServerBinding(params.params.sessionFile);
+    await clearCodexAppServerBinding(params.params.sessionFile, {
+      isolationKey: bindingIsolationKey,
+    });
     binding = undefined;
   }
   if (binding?.threadId) {
@@ -244,7 +259,9 @@ export async function startOrResumeThread(params: {
             threadId: binding.threadId,
           },
         );
-        await clearCodexAppServerBinding(params.params.sessionFile);
+        await clearCodexAppServerBinding(params.params.sessionFile, {
+          isolationKey: bindingIsolationKey,
+        });
       }
     } else {
       try {
@@ -301,6 +318,7 @@ export async function startOrResumeThread(params: {
             authProfileStore: params.params.authProfileStore,
             agentDir: params.params.agentDir,
             config: params.params.config,
+            isolationKey: bindingIsolationKey,
           },
         );
         if (contextEngineBinding) {
@@ -337,7 +355,9 @@ export async function startOrResumeThread(params: {
         embeddedAgentLog.warn("codex app-server thread resume failed; starting a new thread", {
           error,
         });
-        await clearCodexAppServerBinding(params.params.sessionFile);
+        await clearCodexAppServerBinding(params.params.sessionFile, {
+          isolationKey: bindingIsolationKey,
+        });
       }
     }
   }
@@ -380,6 +400,7 @@ export async function startOrResumeThread(params: {
       params.params.sessionFile,
       {
         threadId: response.thread.id,
+        isolationKey: bindingIsolationKey,
         cwd: params.cwd,
         authProfileId: params.params.authProfileId,
         model: response.model ?? params.params.modelId,
@@ -397,6 +418,7 @@ export async function startOrResumeThread(params: {
         authProfileStore: params.params.authProfileStore,
         agentDir: params.params.agentDir,
         config: params.params.config,
+        isolationKey: bindingIsolationKey,
       },
     );
     if (contextEngineBinding) {
@@ -415,6 +437,7 @@ export async function startOrResumeThread(params: {
     schemaVersion: 1,
     threadId: response.thread.id,
     sessionFile: params.params.sessionFile,
+    isolationKey: bindingIsolationKey,
     cwd: params.cwd,
     authProfileId: params.params.authProfileId,
     model: response.model ?? params.params.modelId,
@@ -477,6 +500,20 @@ function buildContextEngineProjectionBinding(
     epoch: projection.epoch,
     fingerprint: projection.fingerprint,
   };
+}
+
+function resolveCodexAppServerThreadBindingIsolationKey(
+  appServer: CodexAppServerRuntimeOptions,
+  params: EmbeddedRunAttemptParams,
+): string | undefined {
+  if (appServer.clientIsolation !== "session") {
+    return undefined;
+  }
+  const sessionKey = params.sessionKey?.trim() || params.sessionId;
+  if (params.trigger !== "cron") {
+    return sessionKey;
+  }
+  return sessionKey.replace(/:run:[^:]+$/, "");
 }
 
 export function isContextEngineBindingCompatible(

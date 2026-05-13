@@ -9,7 +9,17 @@ import { resolveConversationBindingContext } from "../channels/conversation-bind
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ADMIN_SCOPE, isOperatorScope } from "../gateway/operator-scopes.js";
 import { logVerbose } from "../globals.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import {
+  buildAgentMainSessionKey,
+  buildAgentPeerSessionKey,
+  normalizeAgentId,
+  normalizeMainKey,
+  resolveAgentIdFromSessionKey,
+} from "../routing/session-key.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import {
   clearPluginCommands,
   clearPluginCommandsForPlugin,
@@ -169,6 +179,88 @@ function resolveBindingConversationFromCommand(params: {
   });
 }
 
+function isMainSessionAlias(params: {
+  config?: OpenClawConfig;
+  agentId: string;
+  sessionKey: string;
+}): boolean {
+  const raw = normalizeLowercaseStringOrEmpty(params.sessionKey);
+  if (!raw) {
+    return false;
+  }
+  const agentId = normalizeAgentId(params.agentId);
+  const mainKey = normalizeMainKey(params.config?.session?.mainKey);
+  return (
+    raw === "main" ||
+    raw === mainKey ||
+    raw === buildAgentMainSessionKey({ agentId, mainKey }) ||
+    raw === buildAgentMainSessionKey({ agentId, mainKey: "main" }) ||
+    raw === buildAgentMainSessionKey({ agentId: "main", mainKey }) ||
+    raw === buildAgentMainSessionKey({ agentId: "main", mainKey: "main" }) ||
+    (params.config?.session?.scope === "global" && raw === "global")
+  );
+}
+
+function isLikelyDirectPluginCommandContext(params: {
+  from?: string;
+  messageThreadId?: string | number;
+  threadParentId?: string;
+}): boolean {
+  const from = normalizeOptionalString(params.from);
+  if (from) {
+    return !/(^|:)(?:group|channel)(?::|$)/i.test(from);
+  }
+  if (params.messageThreadId != null || normalizeOptionalString(params.threadParentId)) {
+    return false;
+  }
+  return true;
+}
+
+function resolvePluginCommandRuntimePolicySessionKey(params: {
+  config?: OpenClawConfig;
+  sessionKey?: string;
+  runtimePolicySessionKey?: string;
+  channel: string;
+  accountId?: string;
+  senderId?: string;
+  from?: string;
+  to?: string;
+  messageThreadId?: string | number;
+  threadParentId?: string;
+}): string | undefined {
+  const explicitPolicySessionKey = normalizeOptionalString(params.runtimePolicySessionKey);
+  if (explicitPolicySessionKey) {
+    return explicitPolicySessionKey;
+  }
+  const sessionKey = normalizeOptionalString(params.sessionKey);
+  if (!sessionKey) {
+    return undefined;
+  }
+  const agentId = resolveAgentIdFromSessionKey(sessionKey);
+  if (!isMainSessionAlias({ config: params.config, agentId, sessionKey })) {
+    return undefined;
+  }
+  if (!isLikelyDirectPluginCommandContext(params)) {
+    return undefined;
+  }
+  const channel = normalizeLowercaseStringOrEmpty(params.channel);
+  const peerId = [params.senderId, params.from, params.to]
+    .map((value) => normalizeOptionalString(value))
+    .find(Boolean);
+  if (!channel || !peerId) {
+    return undefined;
+  }
+  return buildAgentPeerSessionKey({
+    agentId,
+    channel,
+    accountId: params.accountId,
+    peerKind: "direct",
+    peerId,
+    dmScope: "per-account-channel-peer",
+    identityLinks: params.config?.session?.identityLinks,
+  });
+}
+
 /**
  * Execute a plugin command handler.
  *
@@ -185,6 +277,7 @@ export async function executePluginCommand(params: {
   senderIsOwner?: boolean;
   gatewayClientScopes?: PluginCommandContext["gatewayClientScopes"];
   sessionKey?: PluginCommandContext["sessionKey"];
+  runtimePolicySessionKey?: PluginCommandContext["runtimePolicySessionKey"];
   sessionId?: PluginCommandContext["sessionId"];
   sessionFile?: PluginCommandContext["sessionFile"];
   commandBody: string;
@@ -254,6 +347,18 @@ export async function executePluginCommand(params: {
     threadParentId: params.threadParentId,
   });
   const effectiveAccountId = bindingConversation?.accountId ?? params.accountId;
+  const runtimePolicySessionKey = resolvePluginCommandRuntimePolicySessionKey({
+    config,
+    channel,
+    senderId,
+    sessionKey: params.sessionKey,
+    runtimePolicySessionKey: params.runtimePolicySessionKey,
+    accountId: effectiveAccountId,
+    from: params.from,
+    to: params.to,
+    messageThreadId: params.messageThreadId,
+    threadParentId: params.threadParentId,
+  });
   const senderIsOwnerForCommand =
     requiredScopes.length > 0 ||
     (isTrustedReservedCommandOwner(command) &&
@@ -292,6 +397,7 @@ export async function executePluginCommand(params: {
     ...(senderIsOwnerForCommand === undefined ? {} : { senderIsOwner: senderIsOwnerForCommand }),
     gatewayClientScopes: params.gatewayClientScopes,
     sessionKey: params.sessionKey,
+    runtimePolicySessionKey,
     sessionId: params.sessionId,
     sessionFile: params.sessionFile,
     args: sanitizedArgs,

@@ -3,6 +3,7 @@ import { runBtwSideQuestion } from "../../agents/btw.js";
 import { extractBtwQuestion } from "./btw-command.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
+import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 
 const BTW_USAGE = "Usage: /btw [side question]";
 
@@ -63,6 +64,13 @@ export const handleBtwCommand: CommandHandler = async (params, allowTextCommands
       sessionEntry: targetSessionEntry,
       sessionStore: params.sessionStore,
       sessionKey: params.sessionKey,
+      sandboxSessionKey:
+        params.runtimePolicySessionKey ??
+        resolveRuntimePolicySessionKey({
+          cfg: params.cfg,
+          ctx: params.ctx,
+          sessionKey: params.sessionKey,
+        }),
       storePath: params.storePath,
       // BTW is intentionally a quick side question, so do not inherit slower
       // session-level think/reasoning settings from the main run.

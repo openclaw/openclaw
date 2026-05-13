@@ -25,6 +25,7 @@ export type CodexControlRequestOptions = {
   authProfileId?: string;
   agentDir?: string;
   isolated?: boolean;
+  isolationKey?: string;
 };
 
 export function requestOptions(
@@ -71,6 +72,7 @@ export async function codexControlRequest(
     authProfileId: options.authProfileId,
     agentDir: options.agentDir,
     isolated: options.isolated,
+    isolationKey: options.isolationKey,
   });
 }
 

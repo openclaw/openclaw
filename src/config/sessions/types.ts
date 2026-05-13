@@ -18,6 +18,7 @@ export type SessionOrigin = {
   surface?: string;
   chatType?: SessionChatType;
   from?: string;
+  senderId?: string;
   to?: string;
   nativeChannelId?: string;
   nativeDirectUserId?: string;

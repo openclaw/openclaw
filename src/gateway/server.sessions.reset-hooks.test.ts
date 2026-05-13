@@ -4,6 +4,7 @@ import { expect, test } from "vitest";
 import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
+  agentHarnessMocks,
   bootstrapCacheMocks,
   sessionHookMocks,
   beforeResetHookMocks,
@@ -112,6 +113,126 @@ test("sessions.reset emits internal command hook with reason", async () => {
   expect(event.sessionKey).toBe("agent:main:main");
   expect(event.context?.commandSource).toBe("gateway:sessions.reset");
   expect(event.context?.previousSessionEntry?.sessionId).toBe("sess-main");
+});
+
+test("sessions.reset notifies agent harness cleanup with the runtime-policy session key", async () => {
+  const { dir } = await createSessionStoreDir();
+  const transcriptPath = path.join(dir, "sess-main.jsonl");
+  await fs.writeFile(transcriptPath, `${JSON.stringify({ role: "user", content: "hello" })}\n`);
+
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-main", {
+        sessionFile: transcriptPath,
+        chatType: "direct",
+        deliveryContext: {
+          channel: "whatsapp",
+          accountId: "default",
+          to: "15550001",
+        },
+        origin: {
+          provider: "whatsapp",
+          accountId: "default",
+          nativeDirectUserId: "15550001",
+        },
+      }),
+    },
+  });
+
+  const reset = await directSessionReq<{ ok: true; key: string }>("sessions.reset", {
+    key: "main",
+    reason: "new",
+  });
+
+  expect(reset.ok).toBe(true);
+  expect(agentHarnessMocks.resetRegisteredAgentHarnessSessions).toHaveBeenCalledWith({
+    sessionId: "sess-main",
+    sessionKey: "agent:main:main",
+    sandboxSessionKey: "agent:main:whatsapp:default:direct:15550001",
+    sessionFile: transcriptPath,
+    reason: "new",
+  });
+});
+
+test("sessions.reset reconstructs direct runtime-policy keys from stored sender identity", async () => {
+  const { dir } = await createSessionStoreDir();
+  const transcriptPath = path.join(dir, "sess-main.jsonl");
+  await fs.writeFile(transcriptPath, `${JSON.stringify({ role: "user", content: "hello" })}\n`);
+
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-main", {
+        sessionFile: transcriptPath,
+        chatType: "direct",
+        deliveryContext: {
+          channel: "telegram",
+          accountId: "default",
+          to: "bot-dm-channel",
+        },
+        origin: {
+          provider: "telegram",
+          accountId: "default",
+          chatType: "direct",
+          from: "sender-legacy",
+          senderId: "12345",
+          to: "bot-dm-channel",
+        },
+      }),
+    },
+  });
+
+  const reset = await directSessionReq<{ ok: true; key: string }>("sessions.reset", {
+    key: "main",
+    reason: "new",
+  });
+
+  expect(reset.ok).toBe(true);
+  expect(agentHarnessMocks.resetRegisteredAgentHarnessSessions).toHaveBeenCalledWith({
+    sessionId: "sess-main",
+    sessionKey: "agent:main:main",
+    sandboxSessionKey: "agent:main:telegram:default:direct:12345",
+    sessionFile: transcriptPath,
+    reason: "new",
+  });
+});
+
+test("sessions.delete notifies agent harness cleanup for the deleted session", async () => {
+  const { dir } = await createSessionStoreDir();
+  const sessionKey = "agent:main:telegram:direct:42";
+  const transcriptPath = path.join(dir, "sess-direct.jsonl");
+  await fs.writeFile(transcriptPath, `${JSON.stringify({ role: "user", content: "hello" })}\n`);
+
+  await writeSessionStore({
+    entries: {
+      [sessionKey]: sessionStoreEntry("sess-direct", {
+        sessionFile: transcriptPath,
+        origin: {
+          chatType: "direct",
+          provider: "telegram",
+          accountId: "default",
+          nativeDirectUserId: "42",
+        },
+      }),
+    },
+  });
+
+  const deleted = await directSessionReq<{ ok: true; key: string; deleted: boolean }>(
+    "sessions.delete",
+    {
+      key: sessionKey,
+      deleteTranscript: false,
+    },
+  );
+
+  expect(deleted.ok).toBe(true);
+  expect(deleted.payload?.deleted).toBe(true);
+  expect(agentHarnessMocks.resetRegisteredAgentHarnessSessions).toHaveBeenCalledWith({
+    sessionId: "sess-direct",
+    sessionKey,
+    sandboxSessionKey: sessionKey,
+    sessionFile: transcriptPath,
+    reason: "deleted",
+  });
 });
 
 test("sessions.reset emits before_reset hook with transcript context", async () => {

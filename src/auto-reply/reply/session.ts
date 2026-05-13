@@ -62,6 +62,10 @@ import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { isResetAuthorizedForContext } from "./reset-authorization.js";
 import {
+  resolveRuntimePolicySessionKey,
+  resolveRuntimePolicySessionKeyForSessionEntry,
+} from "./runtime-policy-session-key.js";
+import {
   maybeRetireLegacyMainDeliveryRoute,
   resolveLastChannelRaw,
   resolveLastToRaw,
@@ -851,6 +855,17 @@ export async function initSessionState(params: {
     await resetRegisteredAgentHarnessSessions({
       sessionId: previousSessionEntry.sessionId,
       sessionKey,
+      sandboxSessionKey:
+        resolveRuntimePolicySessionKeyForSessionEntry({
+          cfg,
+          sessionKey,
+          entry: previousSessionEntry,
+        }) ??
+        resolveRuntimePolicySessionKey({
+          cfg,
+          ctx: sessionCtxForState,
+          sessionKey,
+        }),
       sessionFile: previousSessionEntry.sessionFile,
       reason: previousSessionEndReason ?? "unknown",
     });

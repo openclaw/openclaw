@@ -1,4 +1,5 @@
 import { normalizeChatType } from "../../channels/chat-type.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   buildAgentMainSessionKey,
@@ -121,5 +122,66 @@ export function resolveRuntimePolicySessionKey(params: {
     peerId,
     dmScope: "per-account-channel-peer",
     identityLinks: params.cfg?.session?.identityLinks,
+  });
+}
+
+export function resolveRuntimePolicySessionKeyForSessionEntry(params: {
+  cfg?: OpenClawConfig;
+  sessionKey: string;
+  entry?: SessionEntry;
+}): string | undefined {
+  const entry = params.entry;
+  if (!entry) {
+    return undefined;
+  }
+  const origin = entry.origin;
+  const delivery = entry.deliveryContext;
+  const channel =
+    normalizeOptionalString(delivery?.channel) ??
+    normalizeOptionalString(origin?.provider) ??
+    normalizeOptionalString(entry.channel) ??
+    normalizeOptionalString(entry.lastChannel);
+  const to =
+    normalizeOptionalString(delivery?.to) ??
+    normalizeOptionalString(origin?.to) ??
+    normalizeOptionalString(entry.lastTo);
+  const hasStoredRuntimeContext = Boolean(
+    channel ||
+    to ||
+    delivery?.accountId ||
+    origin?.accountId ||
+    entry.lastAccountId ||
+    origin?.chatType ||
+    entry.chatType ||
+    origin?.from ||
+    origin?.nativeDirectUserId ||
+    origin?.senderId ||
+    origin?.surface,
+  );
+  if (!hasStoredRuntimeContext) {
+    return undefined;
+  }
+  return resolveRuntimePolicySessionKey({
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+    ctx: {
+      AccountId:
+        normalizeOptionalString(delivery?.accountId) ??
+        normalizeOptionalString(origin?.accountId) ??
+        normalizeOptionalString(entry.lastAccountId),
+      ChatType: origin?.chatType ?? entry.chatType,
+      From: normalizeOptionalString(origin?.from),
+      NativeDirectUserId: normalizeOptionalString(origin?.nativeDirectUserId),
+      OriginatingChannel: channel,
+      OriginatingTo: to,
+      Provider: normalizeOptionalString(origin?.provider) ?? channel,
+      SenderId: normalizeOptionalString(origin?.senderId) ?? normalizeOptionalString(origin?.from),
+      SessionKey: params.sessionKey,
+      Surface:
+        normalizeOptionalString(origin?.surface) ??
+        normalizeOptionalString(origin?.provider) ??
+        channel,
+      To: to,
+    },
   });
 }

@@ -55,9 +55,23 @@ export function createCodexAppServerAgentHarness(options?: {
       return maybeCompactCodexAppServerSession(params, { pluginConfig: options?.pluginConfig });
     },
     reset: async (params) => {
+      const { resolveCodexAppServerRuntimeOptions } = await import("./src/app-server/config.js");
+      const appServer = resolveCodexAppServerRuntimeOptions({
+        pluginConfig: options?.pluginConfig,
+      });
+      const isolationKey =
+        appServer.clientIsolation === "session"
+          ? params.sandboxSessionKey?.trim() || params.sessionKey?.trim() || params.sessionId
+          : undefined;
       if (params.sessionFile) {
-        const { clearCodexAppServerBinding } = await import("./src/app-server/session-binding.js");
-        await clearCodexAppServerBinding(params.sessionFile);
+        const { clearAllCodexAppServerBindings } =
+          await import("./src/app-server/session-binding.js");
+        await clearAllCodexAppServerBindings(params.sessionFile);
+      }
+      if (isolationKey) {
+        const { clearSharedCodexAppServerClientForIsolationKey } =
+          await import("./src/app-server/shared-client.js");
+        clearSharedCodexAppServerClientForIsolationKey(isolationKey);
       }
     },
     dispose: async () => {

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  clearAllCodexAppServerBindings,
   clearCodexAppServerBinding,
   readCodexAppServerBinding,
   resolveCodexAppServerBindingPath,
@@ -74,6 +75,69 @@ describe("codex app-server session binding", () => {
     expect(binding?.userMcpServersFingerprint).toBe("user-mcp-v1");
     const bindingStat = await fs.stat(resolveCodexAppServerBindingPath(sessionFile));
     expect(bindingStat.isFile()).toBe(true);
+  });
+
+  it("stores session-isolated thread bindings beside the same transcript separately", async () => {
+    const sessionFile = path.join(tempDir, "session.json");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-default",
+      cwd: tempDir,
+    });
+    await writeCodexAppServerBinding(
+      sessionFile,
+      {
+        threadId: "thread-topic-a",
+        cwd: tempDir,
+      },
+      { isolationKey: "agent:main:topic-a" },
+    );
+
+    expect(resolveCodexAppServerBindingPath(sessionFile)).not.toBe(
+      resolveCodexAppServerBindingPath(sessionFile, { isolationKey: "agent:main:topic-a" }),
+    );
+    expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe("thread-default");
+    const isolated = await readCodexAppServerBinding(sessionFile, {
+      isolationKey: "agent:main:topic-a",
+    });
+    expect(isolated?.threadId).toBe("thread-topic-a");
+    expect(isolated?.isolationKey).toBe("agent:main:topic-a");
+    await expect(
+      readCodexAppServerBinding(sessionFile, { isolationKey: "agent:main:topic-b" }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("clears every isolated binding beside a session file", async () => {
+    const sessionFile = path.join(tempDir, "session.json");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-default",
+      cwd: tempDir,
+    });
+    await writeCodexAppServerBinding(
+      sessionFile,
+      {
+        threadId: "thread-topic-a",
+        cwd: tempDir,
+      },
+      { isolationKey: "agent:main:topic-a" },
+    );
+    await writeCodexAppServerBinding(
+      sessionFile,
+      {
+        threadId: "thread-topic-b",
+        cwd: tempDir,
+      },
+      { isolationKey: "agent:main:topic-b" },
+    );
+
+    await clearAllCodexAppServerBindings(sessionFile);
+
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
+    await expect(
+      readCodexAppServerBinding(sessionFile, { isolationKey: "agent:main:topic-a" }),
+    ).resolves.toBeUndefined();
+    await expect(
+      readCodexAppServerBinding(sessionFile, { isolationKey: "agent:main:topic-b" }),
+    ).resolves.toBeUndefined();
   });
 
   it("round-trips plugin app policy context with app ids as record keys", async () => {

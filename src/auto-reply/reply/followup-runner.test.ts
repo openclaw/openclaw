@@ -1063,6 +1063,38 @@ describe("createFollowupRunner runtime config", () => {
     });
   });
 
+  it("passes queued runtime-policy keys into preflight compaction and embedded runs", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+    const runtimePolicySessionKey = "agent:main:telegram:default:direct:12345";
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.4",
+      sessionKey: "agent:main:main",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          sessionKey: "agent:main:main",
+          runtimePolicySessionKey,
+          provider: "openai",
+          model: "gpt-5.4",
+        },
+      }),
+    );
+
+    expect(requireMockCallArg(runPreflightCompactionIfNeededMock, 0).runtimePolicySessionKey).toBe(
+      runtimePolicySessionKey,
+    );
+    expect(requireMockCallArg(runEmbeddedPiAgentMock, 0).sandboxSessionKey).toBe(
+      runtimePolicySessionKey,
+    );
+  });
+
   it("passes queued images into queued embedded followup runs", async () => {
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [],
