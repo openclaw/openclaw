@@ -935,6 +935,7 @@ describe("channel turn kernel", () => {
         ingest: () => ({ id: "msg-1", rawText: "hello" }),
         preflight: () => ({ kind: "dispatch" }),
         resolveTurn: () => ({
+          cfg: {} as OpenClawConfig,
           channel: "test",
           agentId: "main",
           routeSessionKey: "agent:main:test:original",
@@ -972,6 +973,7 @@ describe("channel turn kernel", () => {
         ingest: () => ({ id: "msg-1", rawText: "hello" }),
         preflight: () => ({ kind: "dispatch" }),
         resolveTurn: () => ({
+          cfg: {} as OpenClawConfig,
           channel: "test",
           agentId: "main",
           routeSessionKey: "agent:main:test:peer",
