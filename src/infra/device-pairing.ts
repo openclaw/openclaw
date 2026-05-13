@@ -430,6 +430,27 @@ function resolveRoleScopedDeviceTokenScopes(role: string, scopes: string[] | und
   return normalized.filter((scope) => !scope.startsWith(OPERATOR_SCOPE_PREFIX));
 }
 
+function preserveRoleScopedApprovalScopes(role: string, scopes: string[] | undefined): string[] {
+  if (!Array.isArray(scopes)) {
+    return [];
+  }
+  const out = new Set<string>();
+  for (const scope of scopes) {
+    const trimmed = scope.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const belongsToRole =
+      role === OPERATOR_ROLE
+        ? trimmed.startsWith(OPERATOR_SCOPE_PREFIX)
+        : !trimmed.startsWith(OPERATOR_SCOPE_PREFIX);
+    if (belongsToRole) {
+      out.add(trimmed);
+    }
+  }
+  return [...out];
+}
+
 function resolveApprovedTokenScopes(params: {
   role: string;
   pending: DevicePairingPendingRequest;
@@ -729,7 +750,7 @@ export async function approveBootstrapDevicePairing(
       (existingRole) =>
         grantedRoleSet.has(existingRole)
           ? []
-          : resolveRoleScopedDeviceTokenScopes(
+          : preserveRoleScopedApprovalScopes(
               existingRole,
               existing?.approvedScopes ?? existing?.scopes,
             ),
