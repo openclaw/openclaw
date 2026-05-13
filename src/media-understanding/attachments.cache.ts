@@ -4,7 +4,7 @@ import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { FsSafeError, openLocalFileSafely } from "../infra/fs-safe.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { isAbortError } from "../infra/unhandled-rejections.js";
-import { fetchRemoteMedia, MediaFetchError } from "../media/fetch.js";
+import { readRemoteMediaBuffer, MediaFetchError } from "../media/fetch.js";
 import { isInboundPathAllowed, mergeInboundPathRoots } from "../media/inbound-path-policy.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { detectMime } from "../media/mime.js";
@@ -162,7 +162,7 @@ export class MediaAttachmentCache {
     try {
       const fetchImpl = (input: RequestInfo | URL, init?: RequestInit) =>
         fetchWithTimeout(resolveRequestUrl(input), init ?? {}, params.timeoutMs, globalThis.fetch);
-      const fetched = await fetchRemoteMedia({
+      const fetched = await readRemoteMediaBuffer({
         url,
         fetchImpl,
         maxBytes: params.maxBytes,

@@ -33,7 +33,7 @@ export function startGatewayMaintenanceTimers(params: {
   logHealth: { error: (msg: string) => void };
   dedupe: Map<string, DedupeEntry>;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
-  chatRunState: { abortedRuns: Map<string, number> };
+  chatRunState: { abortedRuns: Map<string, number>; deltaLastBroadcastText: Map<string, string> };
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;
   chatDeltaLastBroadcastLen: Map<string, number>;
@@ -137,6 +137,7 @@ export function startGatewayMaintenanceTimers(params: {
           chatRunBuffers: params.chatRunBuffers,
           chatDeltaSentAt: params.chatDeltaSentAt,
           chatDeltaLastBroadcastLen: params.chatDeltaLastBroadcastLen,
+          chatDeltaLastBroadcastText: params.chatRunState.deltaLastBroadcastText,
           chatAbortedRuns: params.chatRunState.abortedRuns,
           removeChatRun: params.removeChatRun,
           agentRunSeq: params.agentRunSeq,
@@ -156,6 +157,7 @@ export function startGatewayMaintenanceTimers(params: {
       params.chatRunBuffers.delete(runId);
       params.chatDeltaSentAt.delete(runId);
       params.chatDeltaLastBroadcastLen.delete(runId);
+      params.chatRunState.deltaLastBroadcastText.delete(runId);
     }
 
     // Prune expired control-plane rate-limit buckets to prevent unbounded
@@ -178,6 +180,7 @@ export function startGatewayMaintenanceTimers(params: {
       params.chatRunBuffers.delete(runId);
       params.chatDeltaSentAt.delete(runId);
       params.chatDeltaLastBroadcastLen.delete(runId);
+      params.chatRunState.deltaLastBroadcastText.delete(runId);
     }
     // Sweep stale agent run contexts (orphaned when lifecycle end/error is missed).
     sweepStaleRunContexts();

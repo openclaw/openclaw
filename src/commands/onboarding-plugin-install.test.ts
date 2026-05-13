@@ -119,6 +119,7 @@ type NpmPackInstallCall = {
 type NpmSpecInstallCall = {
   expectedIntegrity?: string;
   expectedPluginId?: string;
+  mode?: string;
   spec?: string;
   timeoutMs?: number;
   trustedSourceLinkedOfficialInstall?: boolean;
@@ -445,6 +446,7 @@ describe("ensureOnboardingPluginInstalled", () => {
       NpmSpecInstallCall,
     ];
     expect(npmCall.spec).toBe("@wecom/wecom-openclaw-plugin@1.2.3");
+    expect(npmCall.mode).toBe("update");
     expect(npmCall.expectedPluginId).toBe("demo-plugin");
     expect(npmCall.expectedIntegrity).toBe("sha512-wecom");
     expect(npmCall.trustedSourceLinkedOfficialInstall).toBe(true);
@@ -476,6 +478,45 @@ describe("ensureOnboardingPluginInstalled", () => {
     expect(installed?.source).toBe("npm");
     expect(installed?.spec).toBe("@wecom/wecom-openclaw-plugin@1.2.3");
     expect(refreshPluginRegistryAfterConfigMutation).not.toHaveBeenCalled();
+  });
+
+  it("logs npm install warnings once while shortening the progress label", async () => {
+    const warning =
+      "npm rejected managed npm alias overrides; retrying plugin install without alias overrides for this npm version.";
+    installPluginFromNpmSpec.mockImplementation(async (params) => {
+      params.logger?.warn?.(warning);
+      return {
+        ok: true,
+        pluginId: "codex",
+        targetDir: "/tmp/openclaw/extensions/codex",
+        version: "2026.5.10-beta.5",
+      };
+    });
+    const log = vi.fn();
+    const stop = vi.fn();
+    const update = vi.fn();
+
+    const result = await ensureOnboardingPluginInstalled({
+      cfg: {},
+      entry: {
+        pluginId: "codex",
+        label: "Codex",
+        install: {
+          npmSpec: "@openclaw/codex@beta",
+        },
+      },
+      prompter: {
+        select: vi.fn(async () => "npm"),
+        progress: vi.fn(() => ({ update, stop })),
+      } as never,
+      runtime: { log } as never,
+    });
+
+    expect(update).toHaveBeenCalledWith("Retrying");
+    expect(update).not.toHaveBeenCalledWith(warning);
+    expect(log).toHaveBeenCalledWith(`${warning}\n`);
+    expect(stop).toHaveBeenCalledWith("Installed Codex plugin");
+    expect(result.status).toBe("installed");
   });
 
   it("returns a timed out status and notes the retry path when npm install hangs", async () => {

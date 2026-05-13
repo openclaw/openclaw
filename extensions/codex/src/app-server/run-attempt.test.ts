@@ -25,20 +25,18 @@ function queueActiveRunMessageForTest(
   return queueAgentHarnessMessage(...args);
 }
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
-import {
-  buildCodexAppInventoryCacheKey,
-  defaultCodexAppInventoryCache,
-} from "./app-inventory-cache.js";
-import {
-  resolveCodexAppServerEnvApiKeyCacheKey,
-  resolveCodexAppServerHomeDir,
-} from "./auth-bridge.js";
+import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
+import { resolveCodexAppServerEnvApiKeyCacheKey } from "./auth-bridge.js";
 import { readCodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
 import {
   CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
   createCodexDynamicToolBridge,
 } from "./dynamic-tools.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
+import {
+  buildCodexPluginAppCacheKey,
+  resolveCodexPluginAppCacheEndpoint,
+} from "./plugin-app-cache-key.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { rememberCodexRateLimits, resetCodexRateLimitCacheForTests } from "./rate-limit-cache.js";
 import { runCodexAppServerAttempt, __testing } from "./run-attempt.js";
@@ -727,9 +725,9 @@ describe("runCodexAppServerAttempt", () => {
     });
 
     expect(factoryOptions).toHaveLength(1);
-    expect(factoryOptions[0]).toMatchObject({
+    expect((factoryOptions[0] as { authProfileStore?: unknown }).authProfileStore).toBe(
       authProfileStore,
-    });
+    );
   });
 
   it("normalizes Codex dynamic toolsAllow entries before filtering", () => {
@@ -1670,7 +1668,12 @@ describe("runCodexAppServerAttempt", () => {
     await harness.notify(rateLimitsUpdated(Date.now() + 60_000));
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    await expect(run).resolves.toMatchObject({
+    const result = await run;
+    expect({
+      aborted: result.aborted,
+      timedOut: result.timedOut,
+      promptError: result.promptError,
+    }).toEqual({
       aborted: true,
       timedOut: true,
       promptError: "codex app-server turn idle timed out waiting for turn/completed",
@@ -1738,7 +1741,13 @@ describe("runCodexAppServerAttempt", () => {
       },
     });
 
-    await expect(run).resolves.toMatchObject({
+    const result = await run;
+    expect({
+      aborted: result.aborted,
+      timedOut: result.timedOut,
+      promptError: result.promptError,
+      assistantTexts: result.assistantTexts,
+    }).toEqual({
       aborted: false,
       timedOut: false,
       promptError: null,
@@ -1815,7 +1824,13 @@ describe("runCodexAppServerAttempt", () => {
       },
     });
 
-    await expect(run).resolves.toMatchObject({
+    const result = await run;
+    expect({
+      aborted: result.aborted,
+      timedOut: result.timedOut,
+      promptError: result.promptError,
+      assistantTexts: result.assistantTexts,
+    }).toEqual({
       aborted: false,
       timedOut: false,
       promptError: null,
@@ -1900,7 +1915,13 @@ describe("runCodexAppServerAttempt", () => {
       },
     });
 
-    await expect(run).resolves.toMatchObject({
+    const result = await run;
+    expect({
+      aborted: result.aborted,
+      timedOut: result.timedOut,
+      promptError: result.promptError,
+      assistantTexts: result.assistantTexts,
+    }).toEqual({
       aborted: false,
       timedOut: false,
       promptError: null,
@@ -1986,7 +2007,13 @@ describe("runCodexAppServerAttempt", () => {
       },
     });
 
-    await expect(run).resolves.toMatchObject({
+    const result = await run;
+    expect({
+      aborted: result.aborted,
+      timedOut: result.timedOut,
+      promptError: result.promptError,
+      assistantTexts: result.assistantTexts,
+    }).toEqual({
       aborted: false,
       timedOut: false,
       promptError: null,
@@ -2046,7 +2073,12 @@ describe("runCodexAppServerAttempt", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    await expect(run).resolves.toMatchObject({
+    const result = await run;
+    expect({
+      aborted: result.aborted,
+      timedOut: result.timedOut,
+      promptError: result.promptError,
+    }).toEqual({
       aborted: true,
       timedOut: true,
       promptError: "codex app-server turn idle timed out waiting for turn/completed",
@@ -2122,7 +2154,13 @@ describe("runCodexAppServerAttempt", () => {
       },
     });
 
-    await expect(run).resolves.toMatchObject({
+    const result = await run;
+    expect({
+      aborted: result.aborted,
+      timedOut: result.timedOut,
+      promptError: result.promptError,
+      assistantTexts: result.assistantTexts,
+    }).toEqual({
       aborted: false,
       timedOut: false,
       promptError: null,
@@ -3135,6 +3173,67 @@ describe("runCodexAppServerAttempt", () => {
     await run;
   });
 
+  it("resolves queued steering only after turn/steer is accepted", async () => {
+    const request = vi.fn(async () => ({ turnId: "turn-1" }));
+    const queue = __testing.createCodexSteeringQueue({
+      client: { request } as never,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      answerPendingUserInput: () => false,
+      signal: new AbortController().signal,
+    });
+
+    await expect(queue.queue("accepted", { debounceMs: 0 })).resolves.toBeUndefined();
+
+    expect(request).toHaveBeenCalledWith("turn/steer", {
+      threadId: "thread-1",
+      expectedTurnId: "turn-1",
+      input: [{ type: "text", text: "accepted", text_elements: [] }],
+    });
+  });
+
+  it("rejects queued steering when turn/steer is rejected", async () => {
+    const request = vi.fn(async () => {
+      throw new Error("cannot steer a compact turn");
+    });
+    const queue = __testing.createCodexSteeringQueue({
+      client: { request } as never,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      answerPendingUserInput: () => false,
+      signal: new AbortController().signal,
+    });
+
+    await expect(queue.queue("rejected", { debounceMs: 0 })).rejects.toThrow(
+      "cannot steer a compact turn",
+    );
+
+    expect(request).toHaveBeenCalledWith("turn/steer", {
+      threadId: "thread-1",
+      expectedTurnId: "turn-1",
+      input: [{ type: "text", text: "rejected", text_elements: [] }],
+    });
+  });
+
+  it("rejects queued steering when the run aborts before debounce flush", async () => {
+    const controller = new AbortController();
+    const request = vi.fn(async () => ({ turnId: "turn-1" }));
+    const queue = __testing.createCodexSteeringQueue({
+      client: { request } as never,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      answerPendingUserInput: () => false,
+      signal: controller.signal,
+    });
+
+    const queued = queue.queue("aborted", { debounceMs: 0 });
+    const rejected = expect(queued).rejects.toThrow("codex app-server steering queue aborted");
+    controller.abort();
+
+    await rejected;
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("flushes pending default queued steering during normal turn cleanup", async () => {
     const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
 
@@ -3162,7 +3261,7 @@ describe("runCodexAppServerAttempt", () => {
     ]);
   });
 
-  it("keeps legacy queue steering as separate turn/steer requests", async () => {
+  it("batches explicit all-mode steering before sending turn/steer", async () => {
     const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
 
     const run = runCodexAppServerAttempt(
@@ -3170,12 +3269,8 @@ describe("runCodexAppServerAttempt", () => {
     );
     await waitForMethod("turn/start");
 
-    expect(
-      queueActiveRunMessageForTest("session-1", "first", { steeringMode: "one-at-a-time" }),
-    ).toBe(true);
-    expect(
-      queueActiveRunMessageForTest("session-1", "second", { steeringMode: "one-at-a-time" }),
-    ).toBe(true);
+    expect(queueActiveRunMessageForTest("session-1", "first", { steeringMode: "all" })).toBe(true);
+    expect(queueActiveRunMessageForTest("session-1", "second", { steeringMode: "all" })).toBe(true);
 
     await vi.waitFor(
       () =>
@@ -3185,15 +3280,10 @@ describe("runCodexAppServerAttempt", () => {
             params: {
               threadId: "thread-1",
               expectedTurnId: "turn-1",
-              input: [{ type: "text", text: "first", text_elements: [] }],
-            },
-          },
-          {
-            method: "turn/steer",
-            params: {
-              threadId: "thread-1",
-              expectedTurnId: "turn-1",
-              input: [{ type: "text", text: "second", text_elements: [] }],
+              input: [
+                { type: "text", text: "first", text_elements: [] },
+                { type: "text", text: "second", text_elements: [] },
+              ],
             },
           },
         ]),
@@ -3734,9 +3824,9 @@ describe("runCodexAppServerAttempt", () => {
     });
     defaultCodexAppInventoryCache.clear();
     await defaultCodexAppInventoryCache.refreshNow({
-      key: buildCodexAppInventoryCacheKey({
-        codexHome: resolveCodexAppServerHomeDir(agentDir),
-        endpoint: __testing.resolveCodexPluginAppCacheEndpoint(appServer),
+      key: buildCodexPluginAppCacheKey({
+        appServer,
+        agentDir,
       }),
       request: async () => ({
         data: [
@@ -3936,9 +4026,9 @@ describe("runCodexAppServerAttempt", () => {
     });
     defaultCodexAppInventoryCache.clear();
     await defaultCodexAppInventoryCache.refreshNow({
-      key: buildCodexAppInventoryCacheKey({
-        codexHome: resolveCodexAppServerHomeDir(agentDir),
-        endpoint: __testing.resolveCodexPluginAppCacheEndpoint(appServer),
+      key: buildCodexPluginAppCacheKey({
+        appServer,
+        agentDir,
         authProfileId,
         accountId: "account-work",
       }),
@@ -4077,9 +4167,9 @@ describe("runCodexAppServerAttempt", () => {
     });
     defaultCodexAppInventoryCache.clear();
     await defaultCodexAppInventoryCache.refreshNow({
-      key: buildCodexAppInventoryCacheKey({
-        codexHome: resolveCodexAppServerHomeDir(agentDir),
-        endpoint: __testing.resolveCodexPluginAppCacheEndpoint(appServer),
+      key: buildCodexPluginAppCacheKey({
+        appServer,
+        agentDir,
         envApiKeyFingerprint: resolveCodexAppServerEnvApiKeyCacheKey({
           startOptions: appServer.start,
           baseEnv: { CODEX_API_KEY: "old-codex-env-key" },
@@ -5247,7 +5337,7 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("keys plugin app inventory by websocket credentials without exposing them", () => {
-    const first = __testing.resolveCodexPluginAppCacheEndpoint({
+    const first = resolveCodexPluginAppCacheEndpoint({
       start: {
         transport: "websocket",
         command: "codex",
@@ -5256,13 +5346,8 @@ describe("runCodexAppServerAttempt", () => {
         authToken: "token-first",
         headers: { Authorization: "Bearer first" },
       },
-      requestTimeoutMs: 60_000,
-      turnCompletionIdleTimeoutMs: 5,
-      approvalPolicy: "never",
-      approvalsReviewer: "user",
-      sandbox: "workspace-write",
     });
-    const second = __testing.resolveCodexPluginAppCacheEndpoint({
+    const second = resolveCodexPluginAppCacheEndpoint({
       start: {
         transport: "websocket",
         command: "codex",
@@ -5271,11 +5356,6 @@ describe("runCodexAppServerAttempt", () => {
         authToken: "token-second",
         headers: { Authorization: "Bearer second" },
       },
-      requestTimeoutMs: 60_000,
-      turnCompletionIdleTimeoutMs: 5,
-      approvalPolicy: "never",
-      approvalsReviewer: "user",
-      sandbox: "workspace-write",
     });
 
     expect(first).not.toEqual(second);

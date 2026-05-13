@@ -41,7 +41,7 @@ function createMaintenanceTimerDeps() {
     logHealth: { error: () => {} },
     dedupe: new Map(),
     chatAbortControllers: new Map(),
-    chatRunState: { abortedRuns: new Map() },
+    chatRunState: { abortedRuns: new Map(), deltaLastBroadcastText: new Map() },
     chatRunBuffers: new Map(),
     chatDeltaSentAt: new Map(),
     chatDeltaLastBroadcastLen: new Map(),
@@ -172,6 +172,7 @@ describe("startGatewayMaintenanceTimers", () => {
     deps.chatRunBuffers.set(runId, "buffer");
     deps.chatDeltaSentAt.set(runId, Date.now() - ABORTED_RUN_TTL_MS - 1);
     deps.chatDeltaLastBroadcastLen.set(runId, 6);
+    deps.chatRunState.deltaLastBroadcastText.set(runId, "buffer");
 
     const timers = startGatewayMaintenanceTimers(deps);
 
@@ -180,6 +181,7 @@ describe("startGatewayMaintenanceTimers", () => {
     expect(deps.chatRunBuffers.get(runId)).toBe("buffer");
     expect(deps.chatDeltaSentAt.has(runId)).toBe(true);
     expect(deps.chatDeltaLastBroadcastLen.get(runId)).toBe(6);
+    expect(deps.chatRunState.deltaLastBroadcastText.get(runId)).toBe("buffer");
 
     stopMaintenanceTimers(timers);
   });
@@ -193,6 +195,7 @@ describe("startGatewayMaintenanceTimers", () => {
     deps.chatRunBuffers.set(runId, "buffer");
     deps.chatDeltaSentAt.set(runId, Date.now() - ABORTED_RUN_TTL_MS - 1);
     deps.chatDeltaLastBroadcastLen.set(runId, 6);
+    deps.chatRunState.deltaLastBroadcastText.set(runId, "buffer");
 
     const timers = startGatewayMaintenanceTimers(deps);
 
@@ -201,6 +204,7 @@ describe("startGatewayMaintenanceTimers", () => {
     expect(deps.chatRunBuffers.has(runId)).toBe(false);
     expect(deps.chatDeltaSentAt.has(runId)).toBe(false);
     expect(deps.chatDeltaLastBroadcastLen.has(runId)).toBe(false);
+    expect(deps.chatRunState.deltaLastBroadcastText.has(runId)).toBe(false);
 
     stopMaintenanceTimers(timers);
   });
@@ -215,6 +219,7 @@ describe("startGatewayMaintenanceTimers", () => {
     deps.chatRunBuffers.set(runId, "buffer");
     deps.chatDeltaSentAt.set(runId, Date.now() - ABORTED_RUN_TTL_MS - 1);
     deps.chatDeltaLastBroadcastLen.set(runId, 6);
+    deps.chatRunState.deltaLastBroadcastText.set(runId, "buffer");
 
     const timers = startGatewayMaintenanceTimers(deps);
 
@@ -224,6 +229,7 @@ describe("startGatewayMaintenanceTimers", () => {
     expect(deps.chatRunBuffers.has(runId)).toBe(false);
     expect(deps.chatDeltaSentAt.has(runId)).toBe(false);
     expect(deps.chatDeltaLastBroadcastLen.has(runId)).toBe(false);
+    expect(deps.chatRunState.deltaLastBroadcastText.has(runId)).toBe(false);
 
     stopMaintenanceTimers(timers);
   });
