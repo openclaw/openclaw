@@ -248,8 +248,8 @@ export type SessionMaintenanceConfig = {
    */
   highWaterBytes?: number | string;
   /**
-   * Session keys that should never be pruned (e.g., ["agent:ceo:main"]).
-   * Supports exact key matches only. Merged with runtime preserve sets.
+   * Session keys that should never be pruned, even if they exceed retention limits.
+   * Useful for preserving primary sessions like the main WebUI session.
    */
   preserveKeys?: string[];
 };
