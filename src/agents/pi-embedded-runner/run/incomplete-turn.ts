@@ -11,6 +11,7 @@ import {
   isStrictAgenticSupportedProviderModel,
   stripProviderPrefix,
 } from "../../execution-contract.js";
+import { isLikelyContextOverflowError } from "../../pi-embedded-helpers.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
 import {
   hasCommittedMessagingToolDeliveryEvidence,
@@ -85,6 +86,47 @@ const REPLAY_UNSAFE_FALLBACK_METADATA: EmbeddedRunAttemptResult["replayMetadata"
   hadPotentialSideEffects: true,
   replaySafe: false,
 };
+
+const CONTEXT_OVERFLOW_INCOMPLETE_TURN_TEXT =
+  "Context overflow: prompt too large for the model. " +
+  "Try /reset (or /new) to start a fresh session, or use a larger-context model.";
+const CONTEXT_OVERFLOW_INCOMPLETE_TURN_WITH_SIDE_EFFECTS_TEXT =
+  `${CONTEXT_OVERFLOW_INCOMPLETE_TURN_TEXT} ` +
+  "Note: some tool actions may have already been executed — please verify before retrying.";
+
+function stringifyAssistantErrorCandidate(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value.trim() || undefined;
+  }
+  if (value instanceof Error) {
+    return value.message.trim() || undefined;
+  }
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  try {
+    const serialized = JSON.stringify(value);
+    return serialized.length > 0 ? serialized.slice(0, 4000) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveAssistantContextOverflowErrorText(assistant: unknown): string | undefined {
+  if (!assistant || typeof assistant !== "object") {
+    return undefined;
+  }
+  const record = assistant as {
+    errorMessage?: unknown;
+    message?: unknown;
+    error?: unknown;
+    stopReason?: unknown;
+  };
+  const candidates = [record.errorMessage, record.message, record.error, record.stopReason]
+    .map((candidate) => stringifyAssistantErrorCandidate(candidate))
+    .filter((candidate): candidate is string => Boolean(candidate));
+  return candidates.find((candidate) => isLikelyContextOverflowError(candidate));
+}
 
 export function isIncompleteTerminalAssistantTurn(params: {
   hasAssistantVisibleText: boolean;
@@ -273,7 +315,17 @@ export function resolveIncompleteTurnPayloadText(params: {
     return null;
   }
 
-  return resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects
+  const replayMetadata = resolveAttemptReplayMetadata(params.attempt);
+  const contextOverflowErrorText = resolveAssistantContextOverflowErrorText(
+    params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant,
+  );
+  if (contextOverflowErrorText) {
+    return replayMetadata.hadPotentialSideEffects
+      ? CONTEXT_OVERFLOW_INCOMPLETE_TURN_WITH_SIDE_EFFECTS_TEXT
+      : CONTEXT_OVERFLOW_INCOMPLETE_TURN_TEXT;
+  }
+
+  return replayMetadata.hadPotentialSideEffects
     ? "⚠️ Agent couldn't generate a response. Note: some tool actions may have already been executed — please verify before retrying."
     : "⚠️ Agent couldn't generate a response. Please try again.";
 }

@@ -14,10 +14,31 @@ const REQUIRED_SUMMARY_SECTIONS = [
   "## Pending user asks",
   "## Exact identifiers",
 ] as const;
+const ENHANCED_SUMMARY_SECTIONS = [
+  "## Current objective",
+  "## Latest user ask",
+  "## Decisions",
+  "## Constraints/Rules",
+  "## Open questions",
+  "## Artifacts and paths",
+  "## Changed files",
+  "## Verification state",
+  "## Open TODOs",
+  "## Pending user asks",
+  "## Exact identifiers",
+  "## Next step",
+] as const;
 const STRICT_EXACT_IDENTIFIERS_INSTRUCTION =
   "For ## Exact identifiers, preserve literal values exactly as seen (IDs, URLs, file paths, ports, hashes, dates, times).";
 const POLICY_OFF_EXACT_IDENTIFIERS_INSTRUCTION =
   "For ## Exact identifiers, include identifiers only when needed for continuity; do not enforce literal-preservation rules.";
+const MAX_EXPLICIT_CONSTRAINTS = 8;
+const MAX_EXPLICIT_CONSTRAINT_CHARS = 260;
+const MAX_ARTIFACT_PATHS = 12;
+const CONSTRAINT_PATTERNS = [
+  /\b(?:do not|don't|must not|never|forbidden|without explicit approval|approval required|required approval|read-only|preview-only|draft-only|no-send|no-merge|no-deploy|no-push|no-live-promote|no-config-apply)\b[^\n.!?]*(?:[.!?]|$)/giu,
+  /\bno\s+(?:push|merge|deploy|restart|send|publish|config|cron|external messages?|destructive actions?)\b[^\n.!?]*(?:[.!?]|$)/giu,
+] as const;
 
 export function wrapUntrustedInstructionBlock(label: string, text: string): string {
   return wrapUntrustedPromptDataBlock({
@@ -57,8 +78,14 @@ export function buildCompactionStructureInstructions(
     resolveExactIdentifierSectionInstruction(summarizationInstructions);
   const sectionsTemplate = [
     "Produce a compact, factual summary with these exact section headings:",
-    ...REQUIRED_SUMMARY_SECTIONS,
+    ...ENHANCED_SUMMARY_SECTIONS,
     identifierSectionInstruction,
+    "For ## Current objective, state the active goal or task in one or two factual bullets.",
+    "For ## Latest user ask, preserve the latest substantive user request verbatim or near-verbatim when present.",
+    "For ## Constraints/Rules, preserve explicit safety, approval, and scope boundaries verbatim or near-verbatim when present.",
+    "For ## Artifacts and paths, preserve referenced artifact paths, URLs, session IDs, PR/issue IDs, and file paths exactly when present.",
+    "For ## Changed files and ## Verification state, include none/unknown explicitly instead of omitting the section.",
+    "For ## Next step, name the immediate next action or blocker.",
     "Do not omit unresolved asks from the user.",
     "When prior compaction summaries are present, re-distill them with new messages and remove stale duplicate detail.",
   ].join("\n");
@@ -96,20 +123,54 @@ function hasRequiredSummarySections(summary: string): boolean {
 export function buildStructuredFallbackSummary(
   previousSummary: string | undefined,
   _summarizationInstructions?: CompactionSummarizationInstructions,
+  pinnedContext?: {
+    latestAsk?: string | null;
+    explicitConstraints?: string[];
+    artifactPaths?: string[];
+    changedFiles?: string[];
+  },
 ): string {
   const trimmedPreviousSummary = previousSummary?.trim() ?? "";
   if (trimmedPreviousSummary && hasRequiredSummarySections(trimmedPreviousSummary)) {
     return trimmedPreviousSummary;
   }
   const exactIdentifiersSummary = "None captured.";
+  const latestAsk = pinnedContext?.latestAsk?.trim() || "None captured.";
+  const constraints = pinnedContext?.explicitConstraints?.length
+    ? pinnedContext.explicitConstraints.map((constraint) => `- ${constraint}`).join("\n")
+    : "None.";
+  const artifacts = pinnedContext?.artifactPaths?.length
+    ? pinnedContext.artifactPaths.map((artifactPath) => `- ${artifactPath}`).join("\n")
+    : "None captured.";
+  const changedFiles = pinnedContext?.changedFiles?.length
+    ? pinnedContext.changedFiles.map((changedFile) => `- ${changedFile}`).join("\n")
+    : "None captured.";
   return [
+    "## Current objective",
+    "Unknown after fallback; reconstruct from recent turns and active-state files when available.",
+    "",
+    "## Latest user ask",
+    latestAsk,
+    "",
     "## Decisions",
     trimmedPreviousSummary || "No prior history.",
     "",
-    "## Open TODOs",
-    "None.",
-    "",
     "## Constraints/Rules",
+    constraints,
+    "",
+    "## Open questions",
+    "None captured.",
+    "",
+    "## Artifacts and paths",
+    artifacts,
+    "",
+    "## Changed files",
+    changedFiles,
+    "",
+    "## Verification state",
+    "Unknown; verify before completion claims.",
+    "",
+    "## Open TODOs",
     "None.",
     "",
     "## Pending user asks",
@@ -117,6 +178,9 @@ export function buildStructuredFallbackSummary(
     "",
     "## Exact identifiers",
     exactIdentifiersSummary,
+    "",
+    "## Next step",
+    "Rehydrate context, identify approval boundaries, and continue with read-only/reversible checks first.",
   ].join("\n");
 }
 
@@ -165,6 +229,40 @@ export function extractOpaqueIdentifiers(text: string): string[] {
         .filter((value) => value.length >= 4),
     ),
   ).slice(0, MAX_EXTRACTED_IDENTIFIERS);
+}
+
+export function extractArtifactPaths(text: string): string[] {
+  return extractOpaqueIdentifiers(text)
+    .filter((value) => /^(?:https?:\/\/|\/|[A-Za-z]:\\)/u.test(value))
+    .slice(0, MAX_ARTIFACT_PATHS);
+}
+
+function normalizeConstraintText(value: string): string {
+  return value.replace(/\s+/gu, " ").trim().slice(0, MAX_EXPLICIT_CONSTRAINT_CHARS);
+}
+
+export function extractExplicitConstraints(text: string): string[] {
+  const constraints: string[] = [];
+  const seen = new Set<string>();
+  for (const pattern of CONSTRAINT_PATTERNS) {
+    pattern.lastIndex = 0;
+    for (const match of text.matchAll(pattern)) {
+      const constraint = normalizeConstraintText(match[0] ?? "");
+      if (!constraint) {
+        continue;
+      }
+      const key = localeLowercasePreservingWhitespace(constraint);
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      constraints.push(constraint);
+      if (constraints.length >= MAX_EXPLICIT_CONSTRAINTS) {
+        return constraints;
+      }
+    }
+  }
+  return constraints;
 }
 
 function tokenizeAskOverlapText(text: string): string[] {
@@ -221,6 +319,8 @@ export function auditSummaryQuality(params: {
   summary: string;
   identifiers: string[];
   latestAsk: string | null;
+  explicitConstraints?: string[];
+  artifactPaths?: string[];
   identifierPolicy?: CompactionSummarizationInstructions["identifierPolicy"];
 }): { ok: boolean; reasons: string[] } {
   const reasons: string[] = [];
@@ -241,6 +341,23 @@ export function auditSummaryQuality(params: {
   }
   if (!hasAskOverlap(params.summary, params.latestAsk)) {
     reasons.push("latest_user_ask_not_reflected");
+  }
+  const missingConstraints = (params.explicitConstraints ?? []).filter(
+    (constraint) => !hasAskOverlap(params.summary, constraint),
+  );
+  if (missingConstraints.length > 0) {
+    reasons.push(
+      `explicit_constraints_not_reflected:${missingConstraints
+        .slice(0, 2)
+        .map((constraint) => constraint.slice(0, 80))
+        .join("|")}`,
+    );
+  }
+  const missingArtifactPaths = (params.artifactPaths ?? []).filter(
+    (artifactPath) => !summaryIncludesIdentifier(params.summary, artifactPath),
+  );
+  if (missingArtifactPaths.length > 0) {
+    reasons.push(`missing_artifact_paths:${missingArtifactPaths.slice(0, 3).join(",")}`);
   }
   return { ok: reasons.length === 0, reasons };
 }

@@ -1076,6 +1076,30 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(incompleteTurnText).toContain("couldn't generate a response");
   });
 
+  it("names context overflow for incomplete tool-use turns with context_length_exceeded", () => {
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "read", meta: "path=src/index.ts" }],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "toolUse",
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          errorMessage:
+            '{"error":{"code":"context_length_exceeded","message":"This model exceeded its context window."}}',
+          content: [],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(incompleteTurnText).toContain("Context overflow");
+    expect(incompleteTurnText).not.toContain("couldn't generate a response");
+  });
+
   it("surfaces tool-use terminal with pre-tool text and side effects as replay-unsafe (#76477)", () => {
     const incompleteTurnText = resolveIncompleteTurnPayloadText({
       payloadCount: 1,

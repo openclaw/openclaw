@@ -247,6 +247,7 @@ function looksLikeGenericContextOverflowError(raw: string): boolean {
     (lower.includes("invalid_argument") && lower.includes("maximum number of tokens")) ||
     lower.includes("request exceeds the maximum size") ||
     lower.includes("context length exceeded") ||
+    lower.includes("context_length_exceeded") ||
     lower.includes("maximum context length") ||
     lower.includes("prompt is too long") ||
     lower.includes("prompt too long") ||

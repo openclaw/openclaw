@@ -395,11 +395,16 @@ describe("installSessionToolResultGuard", () => {
     const sm = SessionManager.inMemory();
     installSessionToolResultGuard(sm);
 
-    appendToolResultText(sm, "x".repeat(500_000));
+    appendToolResultText(sm, `head-line\n${"x".repeat(500_000)}\ntail-line`);
 
     const text = getToolResultText(getPersistedMessages(sm));
-    expect(text.length).toBeLessThan(500_000);
-    expect(text).toContain("truncated");
+    expect(text.length).toBeLessThanOrEqual(16_000);
+    expect(text).toContain("OpenClaw truncated an oversized tool result");
+    expect(text).toContain("Tool: read");
+    expect(text).toContain("Tool call: call_1");
+    expect(text).toContain("Original size:");
+    expect(text).toContain("head-line");
+    expect(text).toContain("tail-line");
   });
 
   it("does not truncate tool results under the limit", () => {

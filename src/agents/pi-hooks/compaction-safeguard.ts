@@ -42,6 +42,8 @@ import {
   auditSummaryQuality,
   buildCompactionStructureInstructions,
   buildStructuredFallbackSummary,
+  extractArtifactPaths,
+  extractExplicitConstraints,
   extractOpaqueIdentifiers,
   wrapUntrustedInstructionBlock,
 } from "./compaction-safeguard-quality.js";
@@ -68,6 +70,7 @@ const DEFAULT_QUALITY_GUARD_MAX_RETRIES = 1;
 const MAX_RECENT_TURNS_PRESERVE = 12;
 const MAX_QUALITY_GUARD_MAX_RETRIES = 3;
 const MAX_RECENT_TURN_TEXT_CHARS = 600;
+const MAX_PINNED_LATEST_ASK_CHARS = 900;
 const PREVIOUS_SUMMARY_REDISTILL_PREFIX =
   "Previous compaction summary to re-distill with the current conversation. " +
   "Prune stale, duplicate, or superseded details instead of preserving it verbatim.";
@@ -818,6 +821,58 @@ function extractLatestUserAsk(messages: AgentMessage[]): string | null {
   return null;
 }
 
+function truncatePinnedValue(value: string, maxChars: number): string {
+  if (value.length <= maxChars) {
+    return value;
+  }
+  return `${value.slice(0, Math.max(0, maxChars - 3))}...`;
+}
+
+function buildPinnedContextInstructions(params: {
+  latestUserAsk: string | null;
+  explicitConstraints: string[];
+  artifactPaths: string[];
+  changedFiles: string[];
+}): string {
+  const lines: string[] = [];
+  if (params.latestUserAsk) {
+    lines.push(
+      "Latest user ask to preserve near-verbatim:",
+      truncatePinnedValue(params.latestUserAsk, MAX_PINNED_LATEST_ASK_CHARS),
+    );
+  }
+  if (params.explicitConstraints.length > 0) {
+    lines.push(
+      "Explicit constraints to preserve:",
+      ...params.explicitConstraints.map((constraint) => `- ${constraint}`),
+    );
+  }
+  if (params.artifactPaths.length > 0) {
+    lines.push(
+      "Artifacts and paths to preserve exactly:",
+      ...params.artifactPaths.map((artifactPath) => `- ${artifactPath}`),
+    );
+  }
+  if (params.changedFiles.length > 0) {
+    lines.push(
+      "Changed files to preserve exactly:",
+      ...params.changedFiles.map((changedFile) => `- ${changedFile}`),
+    );
+  }
+  const pinnedText = lines.join("\n").trim();
+  if (!pinnedText) {
+    return "";
+  }
+  return wrapUntrustedInstructionBlock(
+    "Pinned context that the compaction summary must preserve",
+    pinnedText,
+  );
+}
+
+function formatQualityReasons(reasons: string[]): string {
+  return reasons.join(", ");
+}
+
 /**
  * Read and format critical workspace context for compaction summary.
  * Extracts "Session Startup" and "Red Lines" from AGENTS.md.
@@ -941,6 +996,23 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     const identifierPolicy = runtime?.identifierPolicy ?? "strict";
     const providerId = runtime?.provider;
     const turnPrefixMessages = baseTurnPrefixMessages;
+    const allBaseMessages = [...baseMessagesToSummarize, ...turnPrefixMessages];
+    const latestUserAsk = extractLatestUserAsk(allBaseMessages);
+    const pinnedContextSeedText = allBaseMessages
+      .slice(-12)
+      .map((message) => extractMessageText(message))
+      .filter(Boolean)
+      .map((text) => truncatePinnedValue(text, MAX_RECENT_TURN_TEXT_CHARS))
+      .join("\n");
+    const fileContextSeedText = [...readFiles, ...modifiedFiles].join("\n");
+    const identifierSeedText = [pinnedContextSeedText, fileContextSeedText]
+      .filter(Boolean)
+      .join("\n");
+    const identifiers = extractOpaqueIdentifiers(identifierSeedText);
+    const explicitConstraints = extractExplicitConstraints(pinnedContextSeedText);
+    const artifactPaths = Array.from(
+      new Set([...extractArtifactPaths(identifierSeedText), ...readFiles, ...modifiedFiles]),
+    ).slice(0, 12);
     const recentTurnsPreserve = resolveRecentTurnsPreserve(runtime?.recentTurnsPreserve);
     const { preservedMessages: providerPreservedMessages } = splitPreservedRecentTurns({
       messages: baseMessagesToSummarize,
@@ -950,10 +1022,39 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     const splitTurnSection = preparation.isSplitTurn
       ? formatSplitTurnContextSection(turnPrefixMessages)
       : "";
-    const structuredInstructions = buildCompactionStructureInstructions(
+    const baseStructuredInstructions = buildCompactionStructureInstructions(
       customInstructions,
       summarizationInstructions,
     );
+    const pinnedInstructions = buildPinnedContextInstructions({
+      latestUserAsk,
+      explicitConstraints,
+      artifactPaths,
+      changedFiles: modifiedFiles,
+    });
+    const structuredInstructions = [baseStructuredInstructions, pinnedInstructions]
+      .filter(Boolean)
+      .join("\n\n");
+    const compactionReasonRaw = (preparation as { reason?: unknown }).reason;
+    const compactionReason =
+      typeof compactionReasonRaw === "string" && compactionReasonRaw.trim()
+        ? compactionReasonRaw.trim()
+        : preparation.isSplitTurn
+          ? "split-turn"
+          : "context-threshold";
+    log.info("Compaction safeguard: preparing structured compaction.", {
+      reason: compactionReason,
+      tokensBefore: preparation.tokensBefore,
+      messagesToSummarize: baseMessagesToSummarize.length,
+      turnPrefixMessages: turnPrefixMessages.length,
+      readFiles: readFiles.length,
+      modifiedFiles: modifiedFiles.length,
+      latestUserAskPresent: Boolean(latestUserAsk),
+      explicitConstraints: explicitConstraints.length,
+      artifactPaths: artifactPaths.length,
+      identifiers: identifiers.length,
+      providerId,
+    });
 
     // -----------------------------------------------------------------------
     // Provider path — one call with all messages, no LLM-specific prep.
@@ -975,8 +1076,9 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           });
 
           if (providerResult !== undefined) {
-            // Provider succeeded — assemble suffix metadata and return.
-            // No quality guard: the provider is trusted.
+            // Provider succeeded — assemble suffix metadata and return. The provider path
+            // remains trusted by default; the LLM quality guard is scoped to generated
+            // summaries where we can retry with feedback.
             const workspaceContext = await readWorkspaceContextForSummary();
             const suffix = assembleSuffix({
               splitTurnSection,
@@ -986,6 +1088,14 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               workspaceContext,
             });
             const summary = capCompactionSummaryPreservingSuffix(providerResult, suffix);
+            log.info("Compaction safeguard: provider compaction accepted.", {
+              reason: compactionReason,
+              providerId,
+              tokensBefore: preparation.tokensBefore,
+              summaryChars: summary.length,
+              artifactPaths: artifactPaths.length,
+              explicitConstraints: explicitConstraints.length,
+            });
             return {
               compaction: {
                 summary,
@@ -1136,13 +1246,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       });
       messagesToSummarize = summaryTargetMessages;
       const preservedTurnsSection = formatPreservedTurnsSection(preservedRecentMessages);
-      const latestUserAsk = extractLatestUserAsk([...messagesToSummarize, ...turnPrefixMessages]);
-      const identifierSeedText = [...messagesToSummarize, ...turnPrefixMessages]
-        .slice(-10)
-        .map((message) => extractMessageText(message))
-        .filter(Boolean)
-        .join("\n");
-      const identifiers = extractOpaqueIdentifiers(identifierSeedText);
+      const auditLatestUserAsk = extractLatestUserAsk([
+        ...messagesToSummarize,
+        ...turnPrefixMessages,
+      ]);
 
       // Use adaptive chunk ratio based on message sizes, reserving headroom for
       // the summarization prompt, system prompt, previous summary, and reasoning budget
@@ -1155,6 +1262,20 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       );
       const reserveTokens = resolveSummaryReserveTokens(preparation.settings.reserveTokens, model);
 
+      log.info("Compaction safeguard: LLM compaction budget snapshot.", {
+        reason: compactionReason,
+        tokensBefore,
+        contextWindowTokens,
+        maxHistoryShare,
+        reserveTokens,
+        maxChunkTokens,
+        qualityGuardEnabled,
+        qualityGuardMaxRetries,
+        summarizableMessages: messagesToSummarize.length,
+        preservedRecentMessages: preservedRecentMessages.length,
+        turnPrefixMessages: turnPrefixMessages.length,
+      });
+
       // Feed dropped-messages summary as previousSummary so the main summarization
       // incorporates context from pruned messages instead of losing it entirely.
       const effectivePreviousSummary = droppedSummary ?? preparation.previousSummary;
@@ -1165,6 +1286,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       let currentInstructions = structuredInstructions;
       const totalAttempts = qualityGuardEnabled ? qualityGuardMaxRetries + 1 : 1;
       let lastSuccessfulSummary: string | null = null;
+      let finalQuality: { ok: boolean; reasons: string[] } | null = null;
 
       for (let attempt = 0; attempt < totalAttempts; attempt += 1) {
         let summaryWithoutPreservedTurns = "";
@@ -1187,7 +1309,16 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   summarizationInstructions,
                   previousSummary: effectivePreviousSummary,
                 })
-              : buildStructuredFallbackSummary(effectivePreviousSummary, summarizationInstructions);
+              : buildStructuredFallbackSummary(
+                  effectivePreviousSummary,
+                  summarizationInstructions,
+                  {
+                    latestAsk: latestUserAsk,
+                    explicitConstraints,
+                    artifactPaths,
+                    changedFiles: modifiedFiles,
+                  },
+                );
 
           summaryWithoutPreservedTurns = historySummary;
           if (preparation.isSplitTurn && turnPrefixMessages.length > 0) {
@@ -1223,6 +1354,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                 `keeping last successful summary: ${formatErrorMessage(attemptError)}`,
             );
             summary = lastSuccessfulSummary;
+            finalQuality = null;
             break;
           }
           throw attemptError;
@@ -1234,21 +1366,20 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         const canRegenerate =
           messagesToSummarize.length > 0 ||
           (preparation.isSplitTurn && turnPrefixMessages.length > 0);
-        if (!qualityGuardEnabled || !canRegenerate) {
-          summary = summaryWithPreservedTurns;
-          break;
-        }
         const quality = auditSummaryQuality({
           summary: summaryWithoutPreservedTurns,
           identifiers,
-          latestAsk: latestUserAsk,
+          latestAsk: auditLatestUserAsk,
+          explicitConstraints,
+          artifactPaths,
           identifierPolicy,
         });
+        finalQuality = quality;
         summary = summaryWithPreservedTurns;
-        if (quality.ok || attempt >= totalAttempts - 1) {
+        if (quality.ok || !qualityGuardEnabled || !canRegenerate || attempt >= totalAttempts - 1) {
           break;
         }
-        const reasons = quality.reasons.join(", ");
+        const reasons = formatQualityReasons(quality.reasons);
         const qualityFeedbackInstruction =
           identifierPolicy === "strict"
             ? "Fix all issues and include every required section with exact identifiers preserved."
@@ -1260,6 +1391,13 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         currentInstructions = qualityFeedbackReasons
           ? `${structuredInstructions}\n\n${qualityFeedbackInstruction}\n\n${qualityFeedbackReasons}`
           : `${structuredInstructions}\n\n${qualityFeedbackInstruction}`;
+      }
+
+      if (qualityGuardEnabled && finalQuality && !finalQuality.ok) {
+        const reasons = formatQualityReasons(finalQuality.reasons);
+        log.warn(
+          `Compaction safeguard: final summary still failed quality checks after retries; accepting the best available summary: ${reasons}`,
+        );
       }
 
       // Cap the main history body first, then append split-turn context, preserved
@@ -1274,6 +1412,14 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       });
       const bodyToCap = lastHistorySummary || summary;
       summary = capCompactionSummaryPreservingSuffix(bodyToCap, suffix);
+      log.info("Compaction safeguard: LLM compaction accepted.", {
+        reason: compactionReason,
+        tokensBefore: preparation.tokensBefore,
+        summaryChars: summary.length,
+        artifactPaths: artifactPaths.length,
+        explicitConstraints: explicitConstraints.length,
+        identifiers: identifiers.length,
+      });
 
       return {
         compaction: {
@@ -1312,6 +1458,8 @@ export const __testing = {
   appendSummarySection,
   resolveRecentTurnsPreserve,
   resolveQualityGuardMaxRetries,
+  extractArtifactPaths,
+  extractExplicitConstraints,
   extractOpaqueIdentifiers,
   auditSummaryQuality,
   capCompactionSummary,

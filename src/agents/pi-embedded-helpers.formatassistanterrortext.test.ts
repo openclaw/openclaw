@@ -45,6 +45,12 @@ describe("formatAssistantErrorText", () => {
     );
     expect(formatAssistantErrorText(msg)).toContain("Context overflow");
   });
+  it("returns context overflow for OpenAI context_length_exceeded errors", () => {
+    const msg = makeAssistantError(
+      '{"error":{"code":"context_length_exceeded","message":"This model\'s maximum context length was exceeded."}}',
+    );
+    expect(formatAssistantErrorText(msg)).toContain("Context overflow");
+  });
   it("returns a reasoning-required message for mandatory reasoning endpoint errors", () => {
     const msg = makeAssistantError(
       "400 Reasoning is mandatory for this endpoint and cannot be disabled.",

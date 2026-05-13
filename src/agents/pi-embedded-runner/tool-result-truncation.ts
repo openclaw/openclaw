@@ -255,6 +255,215 @@ export function getToolResultTextLength(msg: AgentMessage): number {
   return totalLength;
 }
 
+function readRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function readStringField(
+  record: Record<string, unknown> | undefined,
+  key: string,
+): string | undefined {
+  const value = record?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readNumberField(
+  record: Record<string, unknown> | undefined,
+  key: string,
+): number | undefined {
+  const value = record?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function readBooleanField(
+  record: Record<string, unknown> | undefined,
+  key: string,
+): boolean | undefined {
+  const value = record?.[key];
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function extractReferenceFromUnknown(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim()) {
+    return value.trim();
+  }
+  const record = readRecord(value);
+  if (!record) {
+    return undefined;
+  }
+  return (
+    readStringField(record, "fullOutputPath") ??
+    readStringField(record, "outputPath") ??
+    readStringField(record, "artifactPath") ??
+    readStringField(record, "logPath") ??
+    readStringField(record, "path") ??
+    readStringField(record, "url")
+  );
+}
+
+function extractToolResultReference(
+  details: Record<string, unknown> | undefined,
+): string | undefined {
+  const direct =
+    readStringField(details, "fullOutputPath") ??
+    readStringField(details, "outputPath") ??
+    readStringField(details, "artifactPath") ??
+    readStringField(details, "logPath");
+  if (direct) {
+    return direct;
+  }
+  const artifact = extractReferenceFromUnknown(details?.artifact);
+  if (artifact) {
+    return artifact;
+  }
+  const artifacts = details?.artifacts;
+  if (Array.isArray(artifacts)) {
+    for (const entry of artifacts) {
+      const ref = extractReferenceFromUnknown(entry);
+      if (ref) {
+        return ref;
+      }
+    }
+  }
+  return undefined;
+}
+
+type ToolResultSummaryMetadata = {
+  toolName?: string;
+  toolCallId?: string;
+  status?: string;
+  exitCode?: number;
+  exitSignal?: string;
+  isError?: boolean;
+  reference?: string;
+};
+
+function collectToolResultSummaryMetadata(msg: AgentMessage): ToolResultSummaryMetadata {
+  const record = msg as unknown as Record<string, unknown>;
+  const details = readRecord(record.details);
+  const toolName = readStringField(record, "toolName") ?? readStringField(details, "toolName");
+  const toolCallId =
+    readStringField(record, "toolCallId") ??
+    readStringField(record, "toolUseId") ??
+    readStringField(details, "toolCallId") ??
+    readStringField(details, "toolUseId") ??
+    readStringField(details, "sessionId");
+  const exitSignalValue = details?.exitSignal;
+  return {
+    toolName,
+    toolCallId,
+    status: readStringField(details, "status"),
+    exitCode: readNumberField(details, "exitCode"),
+    exitSignal:
+      typeof exitSignalValue === "string" || typeof exitSignalValue === "number"
+        ? String(exitSignalValue)
+        : undefined,
+    isError: readBooleanField(record, "isError"),
+    reference: extractToolResultReference(details),
+  };
+}
+
+function pushMetadataLine(
+  lines: string[],
+  label: string,
+  value: string | number | boolean | undefined,
+) {
+  if (value !== undefined && value !== "") {
+    lines.push(`${label}: ${value}`);
+  }
+}
+
+function formatToolResultSummaryHeader(params: {
+  metadata: ToolResultSummaryMetadata;
+  originalChars: number;
+  originalBytes: number;
+  maxChars: number;
+}): string {
+  const lines = [
+    "⚠️ OpenClaw truncated an oversized tool result before adding it to live session context.",
+  ];
+  pushMetadataLine(lines, "Tool", params.metadata.toolName);
+  pushMetadataLine(lines, "Tool call", params.metadata.toolCallId);
+  pushMetadataLine(lines, "Status", params.metadata.status);
+  pushMetadataLine(lines, "Exit code", params.metadata.exitCode);
+  pushMetadataLine(lines, "Exit signal", params.metadata.exitSignal);
+  if (params.metadata.isError === true) {
+    lines.push("Tool result marked error: true");
+  }
+  lines.push(`Original size: ${params.originalChars} chars, ${params.originalBytes} UTF-8 bytes`);
+  lines.push(`Live transcript budget: ${params.maxChars} chars`);
+  pushMetadataLine(lines, "Full output reference", params.metadata.reference);
+  lines.push(
+    "Showing first and last excerpts; retrieve/read the reference for full raw output when available.",
+  );
+  return lines.join("\n");
+}
+
+function buildToolResultBudgetedExcerpt(params: {
+  text: string;
+  maxChars: number;
+  metadata: ToolResultSummaryMetadata;
+  suffixFactory: (truncatedChars: number) => string;
+}): string {
+  const originalChars = params.text.length;
+  if (originalChars <= params.maxChars) {
+    return params.text;
+  }
+
+  const originalBytes = Buffer.byteLength(params.text, "utf8");
+  const header = formatToolResultSummaryHeader({
+    metadata: params.metadata,
+    originalChars,
+    originalBytes,
+    maxChars: params.maxChars,
+  });
+  const firstLabel = "\n\n--- first excerpt ---\n";
+  const middleLabel = (omittedChars: number) =>
+    `\n\n--- middle omitted: ${omittedChars} chars ---\n\n--- last excerpt ---\n`;
+  const suffix = params.suffixFactory(Math.max(1, originalChars - params.maxChars));
+  const fixedBudget =
+    header.length + firstLabel.length + middleLabel(originalChars).length + suffix.length;
+
+  if (fixedBudget + 2 > params.maxChars) {
+    return appendBoundedTruncationSuffix({
+      keptText: header,
+      originalTextLength: originalChars,
+      maxChars: params.maxChars,
+      suffixFactory: params.suffixFactory,
+    });
+  }
+
+  const excerptBudget = Math.max(0, params.maxChars - fixedBudget);
+  const tailBudget = Math.min(Math.max(1, Math.floor(excerptBudget * 0.4)), 4_000);
+  const headBudget = Math.max(1, excerptBudget - tailBudget);
+  let headCut = Math.min(headBudget, originalChars);
+  const headNewline = params.text.lastIndexOf("\n", headCut);
+  if (headNewline > headBudget * 0.75) {
+    headCut = headNewline;
+  }
+  let tailStart = Math.max(headCut, originalChars - tailBudget);
+  const tailNewline = params.text.indexOf("\n", tailStart);
+  if (tailNewline !== -1 && tailNewline < tailStart + tailBudget * 0.25) {
+    tailStart = tailNewline + 1;
+  }
+  const omittedChars = Math.max(0, tailStart - headCut);
+  const keptText =
+    header +
+    firstLabel +
+    params.text.slice(0, headCut) +
+    middleLabel(omittedChars) +
+    params.text.slice(tailStart);
+
+  return appendBoundedTruncationSuffix({
+    keptText,
+    originalTextLength: originalChars,
+    maxChars: params.maxChars,
+    suffixFactory: params.suffixFactory,
+  });
+}
+
 /**
  * Truncate a tool result message's text content blocks to fit within maxChars.
  * Returns a new message (does not mutate the original).
@@ -265,50 +474,41 @@ export function truncateToolResultMessage(
   options: ToolResultTruncationOptions = {},
 ): AgentMessage {
   const suffixFactory = resolveSuffixFactory(options.suffix);
-  const minKeepChars = resolveEffectiveMinKeepChars({
-    maxChars,
-    minKeepChars: options.minKeepChars ?? MIN_KEEP_CHARS,
-    suffixFactory,
-  });
   const content = (msg as { content?: unknown }).content;
   if (!Array.isArray(content)) {
     return msg;
   }
 
-  // Calculate total text size
   const totalTextChars = getToolResultTextLength(msg);
   if (totalTextChars <= maxChars) {
     return msg;
   }
 
-  // Distribute the budget proportionally among text blocks
-  const newContent = content.map((block: unknown) => {
-    if (!block || typeof block !== "object" || (block as { type?: string }).type !== "text") {
-      return block; // Keep non-text blocks (images) as-is
-    }
-    const textBlock = block as TextContent;
-    if (typeof textBlock.text !== "string") {
-      return block;
-    }
-    // Proportional budget for this block
-    const blockShare = textBlock.text.length / totalTextChars;
-    const defaultSuffix = suffixFactory(
-      Math.max(1, textBlock.text.length - Math.floor(maxChars * blockShare)),
-    );
-    const proportionalBudget = Math.floor(maxChars * blockShare);
-    const blockBudget = Math.max(
-      1,
-      Math.min(maxChars, Math.max(minKeepChars + defaultSuffix.length, proportionalBudget)),
-    );
-    return Object.assign({}, textBlock, {
-      text: truncateToolResultText(textBlock.text, blockBudget, {
-        suffix: suffixFactory,
-        minKeepChars,
-      }),
-    });
-  });
+  const textBlocks = content.filter(
+    (block): block is TextContent =>
+      Boolean(block) &&
+      typeof block === "object" &&
+      (block as { type?: string }).type === "text" &&
+      typeof (block as TextContent).text === "string",
+  );
+  if (textBlocks.length === 0) {
+    return msg;
+  }
 
-  return { ...msg, content: newContent } as AgentMessage;
+  const combinedText = textBlocks.map((block) => block.text).join("\n\n");
+  const summaryText = buildToolResultBudgetedExcerpt({
+    text: combinedText,
+    maxChars: Math.max(1, maxChars),
+    metadata: collectToolResultSummaryMetadata(msg),
+    suffixFactory,
+  });
+  const firstTextBlock = textBlocks[0];
+  const summaryBlock = { ...firstTextBlock, text: summaryText };
+  const nonTextBlocks = content.filter(
+    (block) => !block || typeof block !== "object" || (block as { type?: string }).type !== "text",
+  );
+
+  return { ...msg, content: [summaryBlock, ...nonTextBlocks] } as AgentMessage;
 }
 
 /**

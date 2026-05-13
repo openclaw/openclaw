@@ -169,6 +169,16 @@ describe("getToolResultTextLength", () => {
 });
 
 describe("truncateToolResultMessage", () => {
+  it("leaves boundary-size tool results unchanged", () => {
+    const text = "b".repeat(1_000);
+    const msg = makeToolResult(text);
+
+    const result = truncateToolResultMessage(msg, text.length);
+
+    expect(result).toBe(msg);
+    expect(getFirstToolResultText(result)).toBe(text);
+  });
+
   it("truncates with a custom suffix", () => {
     const msg: ToolResultMessage = {
       role: "toolResult",
@@ -188,6 +198,79 @@ describe("truncateToolResultMessage", () => {
       throw new Error("expected toolResult");
     }
     expect(getFirstToolResultText(result)).toContain("[persist-truncated]");
+  });
+
+  it("summarizes oversized tool results with metadata, first excerpt, tail excerpt, and reference", () => {
+    const msg: ToolResultMessage & { details: Record<string, unknown> } = {
+      role: "toolResult",
+      toolCallId: "call_exec",
+      toolName: "exec",
+      content: [
+        {
+          type: "text",
+          text: `FIRST-LINE\n${"middle\n".repeat(4_000)}TAIL-ERROR: command failed`,
+        },
+      ],
+      isError: true,
+      timestamp: nextTimestamp(),
+      details: {
+        status: "failed",
+        exitCode: 2,
+        fullOutputPath: "/tmp/openclaw/full-output.log",
+      },
+    };
+
+    const result = truncateToolResultMessage(msg, 4_000);
+    const text = getFirstToolResultText(result);
+
+    expect(text.length).toBeLessThanOrEqual(4_000);
+    expect(text).toContain("OpenClaw truncated an oversized tool result");
+    expect(text).toContain("Tool: exec");
+    expect(text).toContain("Tool call: call_exec");
+    expect(text).toContain("Status: failed");
+    expect(text).toContain("Exit code: 2");
+    expect(text).toContain("Full output reference: /tmp/openclaw/full-output.log");
+    expect(text).toContain("Original size:");
+    expect(text).toContain("UTF-8 bytes");
+    expect(text).toContain("--- first excerpt ---");
+    expect(text).toContain("FIRST-LINE");
+    expect(text).toContain("--- last excerpt ---");
+    expect(text).toContain("TAIL-ERROR: command failed");
+  });
+
+  it("caps multiple text blocks as one live transcript summary", () => {
+    const msg: ToolResultMessage = {
+      role: "toolResult",
+      toolCallId: "call_multi",
+      toolName: "exec",
+      content: [
+        { type: "text", text: `HEAD-BLOCK\n${"a".repeat(6_000)}` },
+        { type: "text", text: `${"b".repeat(6_000)}\nTAIL-BLOCK` },
+      ],
+      isError: false,
+      timestamp: nextTimestamp(),
+    };
+
+    const result = truncateToolResultMessage(msg, 3_000);
+
+    expect(getToolResultTextLength(result)).toBeLessThanOrEqual(3_000);
+    const text = getFirstToolResultText(result);
+    expect(text).toContain("HEAD-BLOCK");
+    expect(text).toContain("TAIL-BLOCK");
+    expect(text).toContain("middle omitted");
+  });
+
+  it("keeps tail signal for very large synthetic output", () => {
+    const giant = `BEGIN\n${"0123456789abcdef\n".repeat(120_000)}\nFINAL-SUMMARY exit code 1`;
+    const msg = makeToolResult(giant, "call_giant");
+
+    const result = truncateToolResultMessage(msg, 16_000);
+    const text = getFirstToolResultText(result);
+
+    expect(text.length).toBeLessThanOrEqual(16_000);
+    expect(text).toContain("BEGIN");
+    expect(text).toContain("FINAL-SUMMARY exit code 1");
+    expect(text).toContain("Original size:");
   });
 });
 

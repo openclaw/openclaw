@@ -55,6 +55,7 @@ describe("overflow compaction in run loop", () => {
         lower.includes("request_too_large") ||
         lower.includes("request size exceeds") ||
         lower.includes("context window exceeded") ||
+        lower.includes("context_length_exceeded") ||
         lower.includes("prompt too large")
       );
     });
@@ -589,6 +590,38 @@ describe("overflow compaction in run loop", () => {
         summary: "Compacted session",
         firstKeptEntryId: "entry-5",
         tokensBefore: 150000,
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(mockedLog.warn).toHaveBeenCalledWith(expect.stringContaining("source=assistantError"));
+    expect(result.meta.error).toBeUndefined();
+  });
+
+  it("retries after successful compaction on context_length_exceeded surfaced with toolUse", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: [],
+          promptError: null,
+          lastAssistant: {
+            stopReason: "toolUse",
+            errorMessage:
+              '{"error":{"code":"context_length_exceeded","message":"This model exceeded its context window."}}',
+            content: [],
+          } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
+      )
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted session after OpenAI overflow",
+        firstKeptEntryId: "entry-9",
+        tokensBefore: 210000,
       }),
     );
 

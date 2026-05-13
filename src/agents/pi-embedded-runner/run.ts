@@ -1404,6 +1404,11 @@ export async function runEmbeddedPiAgent(
             sessionLastAssistant?.stopReason === "error"
               ? sessionLastAssistant.errorMessage?.trim() || formattedAssistantErrorText
               : undefined;
+          const assistantContextOverflowText = [
+            assistantErrorText,
+            sessionLastAssistant?.errorMessage?.trim(),
+            formattedAssistantErrorText,
+          ].find((text): text is string => Boolean(text && isLikelyContextOverflowError(text)));
           const canRestartForLiveSwitch =
             !hasMessagingToolDeliveryEvidence(attempt) &&
             !attempt.didSendDeterministicApprovalPrompt &&
@@ -1574,9 +1579,9 @@ export async function runEmbeddedPiAgent(
                   // inspect prior assistant errors from history for this attempt.
                   return null;
                 }
-                if (assistantErrorText && isLikelyContextOverflowError(assistantErrorText)) {
+                if (assistantContextOverflowText) {
                   return {
-                    text: assistantErrorText,
+                    text: assistantContextOverflowText,
                     source: "assistantError" as const,
                   };
                 }
