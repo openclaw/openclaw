@@ -9,8 +9,6 @@ sidebarTitle: "Getting Started"
 doc-schema-version: 1
 ---
 
-## Overview
-
 Plugins extend OpenClaw with channels, model providers, agent harnesses, tools,
 skills, speech, realtime transcription, voice, media understanding, generation,
 web fetch, web search, and other runtime capabilities.
@@ -159,9 +157,7 @@ Key policy rules:
 Run `openclaw doctor` or `openclaw doctor --fix` when config validation reports
 stale plugin ids, allowlist/tool mismatches, or legacy bundled plugin paths.
 
-## Subtopics
-
-### Understand plugin formats
+## Understand plugin formats
 
 OpenClaw recognizes two plugin formats:
 
@@ -175,7 +171,7 @@ Both formats appear in `openclaw plugins list`, `openclaw plugins inspect`,
 [Plugin bundles](/plugins/bundles) for the bundle compatibility boundary and
 [Building plugins](/plugins/building-plugins) for native plugin authoring.
 
-### Verify the active Gateway
+## Verify the active Gateway
 
 `openclaw plugins list` and plain `openclaw plugins inspect` read cold config,
 manifest, and registry state. They do not prove that an already-running Gateway
@@ -193,7 +189,7 @@ On VPS or container installs, make sure the process you restart is the actual
 `openclaw gateway run` child that serves your channels, not only a wrapper or
 supervisor.
 
-## Troubleshoot common install and config failures
+## Troubleshooting
 
 | Symptom                                                        | Check                                                                                                                          | Fix                                                                                                     |
 | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
@@ -252,6 +248,10 @@ The summary lists total factory time and the slowest plugin tool factories,
 including plugin id, declared tool names, result shape, and whether the tool is
 optional. Slow lines are promoted to warnings when a single factory takes at
 least 1s or total plugin tool factory prep takes at least 5s.
+
+OpenClaw caches successful plugin tool factory results for repeated resolutions
+in the same process. If timings stay high, the plugin may be doing expensive
+work before returning its tool definitions.
 
 If one plugin dominates the timing, inspect its runtime registrations:
 

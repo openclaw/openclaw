@@ -110,6 +110,9 @@ USER.md
 
 # Local project-agent skill installs. Only repo-owned skills are visible by
 # default; promoting a new repo skill should require an intentional `git add -f`.
+!.agents/
+.agents/*
+!.agents/skills/
 .agents/skills/*
 !.agents/skills/blacksmith-testbox/
 !.agents/skills/blacksmith-testbox/**
@@ -120,6 +123,8 @@ USER.md
 !.agents/skills/gitcrawl/
 !.agents/skills/gitcrawl/**
 !.agents/skills/openclaw-docs/**
+!.agents/skills/openclaw-docs-audit/
+!.agents/skills/openclaw-docs-audit/**
 !.agents/skills/openclaw-refactor-docs/
 !.agents/skills/openclaw-refactor-docs/**
 !.agents/skills/openclaw-debugging/

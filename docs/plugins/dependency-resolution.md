@@ -118,6 +118,14 @@ Packaged installs must ship that JavaScript runtime output. The TypeScript
 source fallback is for source checkouts and local development paths, not for npm
 packages installed into OpenClaw's managed plugin root.
 
+Untracked directories dropped into the global extensions root are treated as
+local source checkouts and can load TypeScript entries directly. Directories
+still named by an install record, including `installPath` or `sourcePath`, stay
+managed and keep the compiled-output requirement even when the global scan sees
+them. If you intentionally convert a managed install into an untracked local
+checkout, remove the stale install record first with `openclaw plugins uninstall`
+or `openclaw doctor --fix`.
+
 Use `openclaw.runtimeExtensions` when published runtime files do not live at the
 same paths as the source entries. When present, `runtimeExtensions` must contain
 exactly one entry for every `extensions` entry. Mismatched lists fail install and
@@ -224,6 +232,17 @@ plugin config fails closed like any other invalid config.
 `openclaw doctor --fix` can quarantine invalid plugin config by disabling the
 plugin entry and removing its invalid config payload; the normal config backup
 keeps the previous values.
+
+When a channel config references a plugin that is no longer discoverable but the
+same stale plugin id remains in plugin config or install records, Gateway
+startup logs warnings and skips that channel instead of blocking every other
+channel. Run `openclaw doctor --fix` to remove the stale channel and plugin
+entries; unknown channel keys without stale-plugin evidence still fail
+validation so typos stay visible. If `plugins.enabled: false` is set, stale
+plugin references are inert: Gateway startup skips plugin discovery/load work,
+and `openclaw doctor` preserves the disabled plugin config instead of
+auto-removing it. Re-enable plugins before running doctor cleanup if you want
+stale plugin ids removed.
 
 ## Bundled plugins
 

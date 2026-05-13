@@ -1,0 +1,754 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Audit Viewer</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #090d15;
+        --panel: #10151f;
+        --border: #242d3d;
+        --border-strong: #364257;
+        --text: #e7ecf5;
+        --muted: #9aa6b8;
+        --faint: #647085;
+        --accent: #e6b82f;
+        --accent-soft: rgba(230, 184, 47, 0.12);
+        --green: #67d391;
+        --blue: #74b7ff;
+        --red: #f08383;
+        --code-bg: #080b11;
+        --shadow: 0 18px 60px rgba(0, 0, 0, 0.35);
+        font-family:
+          Inter,
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        height: 100%;
+      }
+      body {
+        margin: 0;
+        background:
+          radial-gradient(circle at 30% -10%, rgba(88, 117, 169, 0.17), transparent 30%), var(--bg);
+        color: var(--text);
+        overflow: hidden;
+      }
+      button,
+      input {
+        font: inherit;
+      }
+      .app {
+        display: grid;
+        grid-template-columns: minmax(320px, 28vw) 1fr;
+        height: 100vh;
+        min-height: 0;
+        overflow: hidden;
+      }
+      .sidebar {
+        min-width: 0;
+        min-height: 0;
+        height: 100vh;
+        display: grid;
+        grid-template-rows: auto auto 1fr;
+        border-right: 1px solid var(--border);
+        background: rgba(13, 18, 28, 0.92);
+        box-shadow: var(--shadow);
+        overflow: hidden;
+      }
+      .brand {
+        padding: 22px 22px 16px;
+        border-bottom: 1px solid var(--border);
+      }
+      .eyebrow {
+        color: var(--accent);
+        font-size: 11px;
+        line-height: 1;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        font-weight: 700;
+      }
+      h1 {
+        margin: 9px 0 8px;
+        font-size: 20px;
+        line-height: 1.2;
+        letter-spacing: 0;
+      }
+      .meta {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+      .filters {
+        display: grid;
+        gap: 10px;
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--border);
+      }
+      .search {
+        width: 100%;
+        border: 1px solid var(--border-strong);
+        background: #0b1019;
+        color: var(--text);
+        border-radius: 8px;
+        padding: 10px 12px;
+        outline: none;
+      }
+      .search:focus {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px var(--accent-soft);
+      }
+      .legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        min-height: 22px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 3px 8px;
+        color: var(--muted);
+        background: rgba(255, 255, 255, 0.03);
+        font-size: 11px;
+        line-height: 1.2;
+        white-space: nowrap;
+      }
+      .chip.covered {
+        color: var(--green);
+        border-color: rgba(103, 211, 145, 0.35);
+      }
+      .chip.partial,
+      .chip.needs {
+        color: var(--accent);
+        border-color: rgba(230, 184, 47, 0.45);
+      }
+      .chip.missing,
+      .chip.removed {
+        color: var(--red);
+        border-color: rgba(240, 131, 131, 0.4);
+      }
+      .list {
+        min-height: 0;
+        height: 100%;
+        overflow-x: hidden;
+        overflow-y: auto;
+        overscroll-behavior: contain;
+        -webkit-overflow-scrolling: touch;
+        padding: 14px 12px 24px;
+      }
+      .list:focus {
+        outline: 2px solid var(--accent);
+        outline-offset: -2px;
+      }
+      .page-group {
+        margin-bottom: 18px;
+      }
+      .page-title {
+        position: sticky;
+        top: -14px;
+        z-index: 2;
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 10px 8px;
+        color: var(--faint);
+        background: rgba(13, 18, 28, 0.96);
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        font-weight: 800;
+      }
+      .row {
+        width: 100%;
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 10px;
+        margin: 7px 0;
+        padding: 11px 10px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.025);
+        color: inherit;
+        text-align: left;
+        cursor: pointer;
+      }
+      .row:hover {
+        border-color: var(--border-strong);
+        background: rgba(255, 255, 255, 0.045);
+      }
+      .row.active {
+        border-color: var(--accent);
+        background: rgba(230, 184, 47, 0.1);
+      }
+      .id-pill {
+        display: grid;
+        place-items: center;
+        width: 44px;
+        height: 26px;
+        border-radius: 999px;
+        background: #171e2c;
+        color: var(--accent);
+        font-size: 12px;
+        font-weight: 800;
+      }
+      .row.active .id-pill {
+        background: var(--accent);
+        color: #18140a;
+      }
+      .row-main {
+        min-width: 0;
+      }
+      .row-label {
+        overflow: hidden;
+        color: var(--text);
+        font-size: 13px;
+        line-height: 1.25;
+        font-weight: 760;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .row-summary {
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.35;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
+      .row-tags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+        margin-top: 8px;
+      }
+      .main {
+        min-width: 0;
+        min-height: 0;
+        display: grid;
+        grid-template-rows: auto 1fr;
+      }
+      .toolbar {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 18px;
+        align-items: start;
+        min-width: 0;
+        padding: 20px 24px 16px;
+        border-bottom: 1px solid var(--border);
+        background: rgba(9, 13, 21, 0.72);
+      }
+      .selected-id {
+        color: var(--accent);
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+      }
+      h2 {
+        margin: 6px 0 7px;
+        font-size: 23px;
+        line-height: 1.18;
+        letter-spacing: 0;
+      }
+      .summary {
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.45;
+        max-width: 980px;
+      }
+      .toolbar-tags {
+        display: flex;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+        gap: 7px;
+        min-width: 260px;
+      }
+      .preview {
+        min-height: 0;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 14px;
+        padding: 14px;
+      }
+      .pane {
+        min-width: 0;
+        min-height: 0;
+        display: grid;
+        grid-template-rows: auto 1fr;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: rgba(16, 21, 31, 0.82);
+        overflow: hidden;
+      }
+      .pane-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 13px 15px;
+        border-bottom: 1px solid var(--border);
+        background: rgba(255, 255, 255, 0.025);
+      }
+      .pane-title {
+        color: var(--text);
+        font-size: 13px;
+        font-weight: 800;
+        line-height: 1.2;
+      }
+      .ref {
+        color: var(--muted);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 11px;
+        line-height: 1.3;
+        text-align: right;
+      }
+      .pane-body {
+        min-height: 0;
+        overflow: auto;
+        padding: 0;
+      }
+      .snippet {
+        border-bottom: 1px solid var(--border);
+      }
+      .snippet:last-child {
+        border-bottom: 0;
+      }
+      .snippet-meta {
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 11px 14px;
+        color: var(--muted);
+        background: rgba(0, 0, 0, 0.16);
+        font-size: 12px;
+      }
+      pre {
+        margin: 0;
+        padding: 13px 0 15px;
+        background: var(--code-bg);
+        color: #d7deeb;
+        overflow: auto;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 12px;
+        line-height: 1.55;
+        tab-size: 2;
+      }
+      .code-line {
+        display: grid;
+        grid-template-columns: 64px minmax(0, 1fr);
+        min-width: max-content;
+        padding: 0 14px 0 0;
+      }
+      .line-no {
+        color: #586274;
+        padding-right: 12px;
+        text-align: right;
+        user-select: none;
+      }
+      .line-text {
+        white-space: pre;
+      }
+      .empty {
+        height: 100%;
+        display: grid;
+        align-content: center;
+        gap: 9px;
+        padding: 28px;
+        color: var(--muted);
+        text-align: center;
+      }
+      .empty strong {
+        color: var(--text);
+      }
+      details.generator {
+        border-top: 1px solid var(--border);
+        background: rgba(116, 183, 255, 0.05);
+      }
+      details.generator summary {
+        cursor: pointer;
+        padding: 10px 14px;
+        color: var(--blue);
+        font-size: 12px;
+        font-weight: 700;
+      }
+      @media (max-width: 1100px) {
+        body {
+          overflow: auto;
+        }
+        .app {
+          grid-template-columns: 1fr;
+          height: auto;
+          min-height: 100vh;
+        }
+        .sidebar {
+          height: 48vh;
+          max-height: 48vh;
+          border-right: 0;
+          border-bottom: 1px solid var(--border);
+        }
+        .main {
+          min-height: 720px;
+        }
+      }
+      @media (max-width: 820px) {
+        .toolbar {
+          grid-template-columns: 1fr;
+        }
+        .toolbar-tags {
+          justify-content: flex-start;
+          min-width: 0;
+        }
+        .preview {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <aside class="sidebar">
+        <header class="brand">
+          <div class="eyebrow">OpenClaw Docs Audit</div>
+          <h1 id="viewerTitle">Migration Map</h1>
+          <div class="meta" id="datasetMeta"></div>
+        </header>
+        <section class="filters" aria-label="Filters">
+          <input
+            id="search"
+            class="search"
+            type="search"
+            placeholder="Search units, notes, destinations"
+          />
+          <div class="legend" id="legend"></div>
+        </section>
+        <nav class="list" id="unitList" aria-label="Audit units" tabindex="0"></nav>
+      </aside>
+      <main class="main">
+        <header class="toolbar">
+          <div>
+            <div class="selected-id" id="selectedId"></div>
+            <h2 id="selectedTitle"></h2>
+            <div class="summary" id="selectedSummary"></div>
+          </div>
+          <div class="toolbar-tags" id="selectedTags"></div>
+        </header>
+        <section class="preview" aria-label="Source and destination preview">
+          <article class="pane">
+            <div class="pane-head">
+              <div class="pane-title">Source block</div>
+              <div class="ref" id="sourceRef"></div>
+            </div>
+            <div class="pane-body" id="sourcePane"></div>
+          </article>
+          <article class="pane">
+            <div class="pane-head">
+              <div class="pane-title">Destination content</div>
+              <div class="ref" id="destinationCount"></div>
+            </div>
+            <div class="pane-body" id="destinationPane"></div>
+          </article>
+        </section>
+      </main>
+    </div>
+    <script type="application/json" id="audit-data">
+      __AUDIT_DATA__
+    </script>
+    <script>
+      (function () {
+        const data = JSON.parse(document.getElementById("audit-data").textContent);
+        const units = data.pages.flatMap(function (page) {
+          return page.units;
+        });
+        const state = { selectedId: units[0] ? units[0].id : null, query: "" };
+        const els = {
+          datasetMeta: document.getElementById("datasetMeta"),
+          destinationCount: document.getElementById("destinationCount"),
+          destinationPane: document.getElementById("destinationPane"),
+          legend: document.getElementById("legend"),
+          search: document.getElementById("search"),
+          selectedId: document.getElementById("selectedId"),
+          selectedSummary: document.getElementById("selectedSummary"),
+          selectedTags: document.getElementById("selectedTags"),
+          selectedTitle: document.getElementById("selectedTitle"),
+          sourcePane: document.getElementById("sourcePane"),
+          sourceRef: document.getElementById("sourceRef"),
+          unitList: document.getElementById("unitList"),
+          viewerTitle: document.getElementById("viewerTitle"),
+        };
+
+        function escapeHtml(value) {
+          return String(value || "")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#39;");
+        }
+
+        function refLabel(ref) {
+          if (!ref) return "";
+          return ref.path + ":" + ref.start + (ref.end !== ref.start ? "-" + ref.end : "");
+        }
+
+        function statusClass(status) {
+          if (status === "covered") return "covered";
+          if (status === "partially-covered") return "partial";
+          if (status === "missing") return "missing";
+          if (status === "intentionally-removed") return "removed";
+          if (status === "needs-source-check") return "needs";
+          return "";
+        }
+
+        function chip(label, className) {
+          return (
+            '<span class="chip ' +
+            escapeHtml(className || "") +
+            '">' +
+            escapeHtml(label) +
+            "</span>"
+          );
+        }
+
+        function searchable(unit) {
+          return [
+            unit.id,
+            unit.label,
+            unit.page,
+            unit.summary,
+            unit.action,
+            unit.reason,
+            unit.status,
+            unit.notes,
+            unit.destinations
+              .map(function (dest) {
+                return [refLabel(dest.ref), refLabel(dest.generator), dest.note].join(" ");
+              })
+              .join(" "),
+          ]
+            .join(" ")
+            .toLowerCase();
+        }
+
+        function renderCode(lines) {
+          if (!lines || lines.length === 0) {
+            return '<div class="empty"><strong>No repo lines available</strong><span>This unit has no preserved line range in the viewer data.</span></div>';
+          }
+          return (
+            "<pre>" +
+            lines
+              .map(function (line) {
+                return (
+                  '<span class="code-line"><span class="line-no">' +
+                  line.number +
+                  '</span><span class="line-text">' +
+                  escapeHtml(line.text) +
+                  "</span></span>"
+                );
+              })
+              .join("") +
+            "</pre>"
+          );
+        }
+
+        function renderList() {
+          const query = state.query.trim().toLowerCase();
+          const html = data.pages
+            .map(function (page) {
+              const pageUnits = page.units.filter(function (unit) {
+                return !query || searchable(unit).includes(query);
+              });
+              if (pageUnits.length === 0) return "";
+              return (
+                '<section class="page-group"><div class="page-title"><span>' +
+                escapeHtml(page.page) +
+                "</span><span>" +
+                pageUnits.length +
+                "</span></div>" +
+                pageUnits
+                  .map(function (unit) {
+                    const active = unit.id === state.selectedId ? " active" : "";
+                    return (
+                      '<button class="row' +
+                      active +
+                      '" data-id="' +
+                      escapeHtml(unit.id) +
+                      '">' +
+                      '<span class="id-pill">' +
+                      escapeHtml(unit.id.replace("P", "")) +
+                      "</span>" +
+                      '<span class="row-main"><span class="row-label">' +
+                      escapeHtml(unit.label) +
+                      "</span>" +
+                      '<span class="row-summary">' +
+                      escapeHtml(unit.summary) +
+                      "</span>" +
+                      '<span class="row-tags">' +
+                      chip(unit.status, statusClass(unit.status)) +
+                      chip(unit.action, "") +
+                      "</span></span>" +
+                      "</button>"
+                    );
+                  })
+                  .join("") +
+                "</section>"
+              );
+            })
+            .join("");
+          els.unitList.innerHTML =
+            html ||
+            '<div class="empty"><strong>No matching units</strong><span>Try a different filter.</span></div>';
+          els.unitList.querySelectorAll(".row").forEach(function (button) {
+            button.addEventListener("click", function () {
+              state.selectedId = button.getAttribute("data-id");
+              render();
+            });
+          });
+        }
+
+        function renderDetails() {
+          const unit =
+            units.find(function (candidate) {
+              return candidate.id === state.selectedId;
+            }) || units[0];
+          if (!unit) return;
+          state.selectedId = unit.id;
+          els.selectedId.textContent = unit.id + " / " + unit.page;
+          els.selectedTitle.textContent = unit.label;
+          els.selectedSummary.textContent = unit.summary;
+          els.selectedTags.innerHTML =
+            chip(unit.status, statusClass(unit.status)) +
+            chip(unit.action, "") +
+            chip(unit.reason, "") +
+            (unit.destinations.length
+              ? chip(
+                  unit.destinations.length +
+                    " destination" +
+                    (unit.destinations.length === 1 ? "" : "s"),
+                  "",
+                )
+              : chip("no destination", "removed"));
+          els.sourceRef.textContent =
+            refLabel(unit.source.ref) + " from " + data.sourceArchive.gitRef;
+          els.sourcePane.innerHTML = renderCode(unit.source.lines);
+          els.destinationCount.textContent = unit.destinations.length
+            ? unit.destinations.length +
+              " mapped range" +
+              (unit.destinations.length === 1 ? "" : "s")
+            : "removed";
+          if (unit.destinations.length === 0) {
+            els.destinationPane.innerHTML =
+              '<div class="empty"><strong>No destination range</strong><span>' +
+              escapeHtml(unit.notes || "The audit marks this content as intentionally removed.") +
+              "</span></div>";
+            return;
+          }
+          els.destinationPane.innerHTML = unit.destinations
+            .map(function (dest, index) {
+              const generator = dest.generator
+                ? '<details class="generator"><summary>Generator source: ' +
+                  escapeHtml(refLabel(dest.generator)) +
+                  "</summary>" +
+                  renderCode(dest.generatorLines) +
+                  "</details>"
+                : "";
+              const title = dest.ref
+                ? refLabel(dest.ref)
+                : escapeHtml(dest.note || "external source; no repo line");
+              return (
+                '<section class="snippet"><div class="snippet-meta"><span>Destination ' +
+                (index + 1) +
+                "</span><span>" +
+                title +
+                "</span></div>" +
+                renderCode(dest.lines) +
+                generator +
+                "</section>"
+              );
+            })
+            .join("");
+        }
+
+        function renderLegend() {
+          const counts = units.reduce(function (acc, unit) {
+            acc[unit.status] = (acc[unit.status] || 0) + 1;
+            return acc;
+          }, {});
+          els.legend.innerHTML = Object.keys(counts)
+            .sort()
+            .map(function (status) {
+              return chip(status + ": " + counts[status], statusClass(status));
+            })
+            .join("");
+        }
+
+        function renderMeta() {
+          const unitCount = units.length;
+          const pageCount = data.pages.length;
+          els.viewerTitle.textContent = data.viewerTitle || data.title || "Migration Map";
+          els.datasetMeta.textContent =
+            unitCount +
+            " units across " +
+            pageCount +
+            " source page" +
+            (pageCount === 1 ? "" : "s") +
+            ". Source archive: " +
+            data.sourceArchive.gitRef +
+            ".";
+        }
+
+        function render() {
+          renderList();
+          renderDetails();
+        }
+
+        function scrollUnitList(deltaY) {
+          const maxScroll = els.unitList.scrollHeight - els.unitList.clientHeight;
+          const nextScroll = Math.max(0, Math.min(maxScroll, els.unitList.scrollTop + deltaY));
+          if (nextScroll === els.unitList.scrollTop) return false;
+          els.unitList.scrollTop = nextScroll;
+          return true;
+        }
+
+        document.querySelector(".sidebar").addEventListener(
+          "wheel",
+          function (event) {
+            if (scrollUnitList(event.deltaY)) event.preventDefault();
+          },
+          { passive: false },
+        );
+
+        els.unitList.addEventListener("keydown", function (event) {
+          const keyScroll = {
+            ArrowDown: 48,
+            ArrowUp: -48,
+            PageDown: Math.max(160, els.unitList.clientHeight - 80),
+            PageUp: -Math.max(160, els.unitList.clientHeight - 80),
+          }[event.key];
+          if (keyScroll && scrollUnitList(keyScroll)) event.preventDefault();
+        });
+
+        els.search.addEventListener("input", function () {
+          state.query = els.search.value;
+          renderList();
+        });
+
+        renderMeta();
+        renderLegend();
+        render();
+      })();
+    </script>
+  </body>
+</html>
