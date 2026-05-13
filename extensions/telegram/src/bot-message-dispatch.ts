@@ -546,6 +546,15 @@ export const dispatchTelegramMessage = async ({
   const draftMinInitialChars = streamMode === "progress" ? 0 : DRAFT_MIN_INITIAL_CHARS;
   const progressSeed = `${route.accountId}:${chatId}:${threadSpec.id ?? ""}`;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
+  const retainedAnswerToolProgressPreviewIds = new Set<number>();
+  let activeAnswerDraftIsToolProgressOnly = false;
+  const deleteSupersededDraftPreview = (laneName: LaneName, messageId: number) => {
+    void bot.api.deleteMessage(chatId, messageId).catch((err: unknown) => {
+      logVerbose(
+        `telegram: superseded ${laneName} stream cleanup failed (${messageId}): ${String(err)}`,
+      );
+    });
+  };
   const createDraftLane = (laneName: LaneName, enabled: boolean): DraftLaneState => {
     const stream = enabled
       ? (telegramDeps.createTelegramDraftStream ?? createTelegramDraftStream)({
@@ -558,13 +567,16 @@ export const dispatchTelegramMessage = async ({
           renderText: renderStreamText,
           onSupersededPreview: (superseded) => {
             if (superseded.retain) {
+              if (
+                laneName === "answer" &&
+                streamMode === "progress" &&
+                activeAnswerDraftIsToolProgressOnly
+              ) {
+                retainedAnswerToolProgressPreviewIds.add(superseded.messageId);
+              }
               return;
             }
-            void bot.api.deleteMessage(chatId, superseded.messageId).catch((err: unknown) => {
-              logVerbose(
-                `telegram: superseded ${laneName} stream cleanup failed (${superseded.messageId}): ${String(err)}`,
-              );
-            });
+            deleteSupersededDraftPreview(laneName, superseded.messageId);
           },
           log: logVerbose,
           warn: logVerbose,
@@ -588,10 +600,21 @@ export const dispatchTelegramMessage = async ({
   let streamToolProgressSuppressed = false;
   let streamToolProgressLines: string[] = [];
   let lastAnswerPartialText = "";
-  let activeAnswerDraftIsToolProgressOnly = false;
   function resetAnswerToolProgressDraft() {
     activeAnswerDraftIsToolProgressOnly = false;
   }
+  const clearRetainedAnswerToolProgressPreviews = async () => {
+    const messageIds = [...retainedAnswerToolProgressPreviewIds];
+    retainedAnswerToolProgressPreviewIds.clear();
+    for (const messageId of messageIds) {
+      try {
+        await bot.api.deleteMessage(chatId, messageId);
+        logVerbose(`telegram progress preview deleted (chat=${chatId}, message=${messageId})`);
+      } catch (err) {
+        logVerbose(`telegram progress preview cleanup failed (${messageId}): ${String(err)}`);
+      }
+    }
+  };
   async function prepareAnswerLaneForToolProgress() {
     if (activeAnswerDraftIsToolProgressOnly) {
       return;
@@ -764,8 +787,13 @@ export const dispatchTelegramMessage = async ({
     if (!activeAnswerDraftIsToolProgressOnly) {
       return false;
     }
-    await answerLane.stream?.clear();
-    answerLane.stream?.forceNewMessage();
+    if (streamMode === "progress") {
+      await answerLane.stream?.clear();
+      await clearRetainedAnswerToolProgressPreviews();
+    } else {
+      await answerLane.stream?.clear();
+      answerLane.stream?.forceNewMessage();
+    }
     resetDraftLaneState(answerLane);
     streamToolProgressSuppressed = true;
     streamToolProgressLines = [];
