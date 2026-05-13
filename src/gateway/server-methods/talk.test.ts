@@ -820,7 +820,7 @@ describe("talk.session unified handlers", () => {
         agentId: "main",
         spawnedBy: "agent:main:parent",
       },
-      client: { connId: "conn-1" } as never,
+      client: { connId: "conn-1", connect: { scopes: ["operator.admin"] } } as never,
       isWebchatConnect: () => false,
       respond: createRespond as never,
       context: {
@@ -844,7 +844,7 @@ describe("talk.session unified handlers", () => {
     });
   });
 
-  it("rejects unscoped managed-room session keys without admin scope", async () => {
+  it("rejects caller-scoped managed-room session keys without admin scope", async () => {
     const createRespond = vi.fn();
     await talkHandlers["talk.session.create"]({
       req: { type: "req", id: "1", method: "talk.session.create" },
@@ -852,6 +852,8 @@ describe("talk.session unified handlers", () => {
         mode: "stt-tts",
         transport: "managed-room",
         sessionKey: "agent:worker:main",
+        agentId: "worker",
+        spawnedBy: "agent:worker:parent",
       },
       client: { connId: "conn-1", connect: { scopes: ["operator.write"] } } as never,
       isWebchatConnect: () => false,
@@ -863,8 +865,7 @@ describe("talk.session unified handlers", () => {
 
     expectRespondError(createRespond, {
       code: ErrorCodes.INVALID_REQUEST,
-      message:
-        "talk.session.create managed-room sessionKey requires spawnedBy or gateway scope: operator.admin",
+      message: "talk.session.create managed-room sessionKey requires gateway scope: operator.admin",
     });
     expect(mocks.resolveSessionKeyFromResolveParams).not.toHaveBeenCalled();
   });
