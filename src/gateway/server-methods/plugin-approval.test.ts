@@ -17,6 +17,7 @@ function createMockOptions(
     req: { method, params, id: "req-1" },
     params,
     client: {
+      connId: "conn-test-client",
       connect: {
         client: { id: "test-client", displayName: "Test Client" },
       },
