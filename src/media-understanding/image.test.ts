@@ -836,7 +836,7 @@ describe("describeImageWithModel", () => {
       githubToken: "oauth-test",
     });
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("github-copilot", "copilot-api-token");
-    const [completionModel, context, options] = providerStreamFn.mock.calls[0] as [
+    const [completionModel, context, options] = providerStreamFn.mock.calls[0] as unknown as [
       { baseUrl?: string },
       { systemPrompt?: string; messages?: Array<{ role: string; content: unknown[] }> },
       { apiKey?: string; headers?: Record<string, string> },
