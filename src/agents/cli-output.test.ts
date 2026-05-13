@@ -584,4 +584,130 @@ describe("createCliJsonlStreamingParser", () => {
       { text: "hello", delta: "hello", sessionId: "session-stream", usage: undefined },
     ]);
   });
+
+  it("returns terminal-priority output from streamed JSONL records", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "codex",
+        output: "jsonl",
+      },
+      providerId: "openai-cli",
+      onAssistantDelta: () => {
+        throw new Error("unexpected streaming delta");
+      },
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "response_start", thread_id: "thread-stream-1" }),
+        JSON.stringify({
+          item: {
+            type: "message",
+            text: "Commentary text",
+            phase: "commentary",
+          },
+        }),
+        JSON.stringify({
+          item: {
+            type: "message",
+            text: "Generic item text",
+          },
+        }),
+        JSON.stringify({
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "assistant",
+            phase: "final_answer",
+            content: [{ type: "output_text", text: "Final answer text" }],
+          },
+        }),
+        JSON.stringify({
+          type: "event_msg",
+          payload: {
+            type: "task_complete",
+            last_agent_message: "Task complete text",
+          },
+          usage: {
+            input_tokens: 11,
+            output_tokens: 5,
+          },
+        }),
+      ].join("\n"),
+    );
+    parser.finish();
+
+    expect(parser.getOutput()).toEqual({
+      text: "Task complete text",
+      sessionId: "thread-stream-1",
+      usage: {
+        input: 11,
+        output: 5,
+        cacheRead: undefined,
+        cacheWrite: undefined,
+        total: undefined,
+      },
+    });
+
+    const finalAnswerParser = createCliJsonlStreamingParser({
+      backend: {
+        command: "codex",
+        output: "jsonl",
+      },
+      providerId: "openai-cli",
+      onAssistantDelta: () => undefined,
+    });
+    finalAnswerParser.push(
+      [
+        JSON.stringify({
+          item: {
+            type: "message",
+            text: "Generic item text",
+          },
+        }),
+        JSON.stringify({
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "assistant",
+            phase: "final_answer",
+            content: [{ type: "output_text", text: "Final answer text" }],
+          },
+        }),
+      ].join("\n"),
+    );
+    finalAnswerParser.finish();
+
+    expect(finalAnswerParser.getOutput()).toEqual({
+      text: "Final answer text",
+      sessionId: undefined,
+      usage: undefined,
+    });
+
+    const commentaryParser = createCliJsonlStreamingParser({
+      backend: {
+        command: "codex",
+        output: "jsonl",
+      },
+      providerId: "openai-cli",
+      onAssistantDelta: () => undefined,
+    });
+    commentaryParser.push(
+      JSON.stringify({
+        type: "response_item",
+        item: {
+          type: "message",
+          text: "Commentary text",
+          phase: "commentary",
+        },
+      }),
+    );
+    commentaryParser.finish();
+
+    expect(commentaryParser.getOutput()).toEqual({
+      text: "",
+      sessionId: undefined,
+      usage: undefined,
+    });
+  });
 });
