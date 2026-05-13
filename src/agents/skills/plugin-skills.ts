@@ -220,11 +220,16 @@ function publishPluginSkills(skillDirs: string[], opts?: { pluginSkillsDir?: str
       // best-effort; symlink will fail below if dir is truly unusable
     }
     try {
-      const existingTarget = fs.readlinkSync(linkPath);
-      if (existingTarget === target) {
+      const existingEntry = fs.lstatSync(linkPath);
+      if (existingEntry.isSymbolicLink()) {
+        const existingTarget = fs.readlinkSync(linkPath);
+        if (existingTarget === target) {
+          continue;
+        }
+        removeGeneratedPluginSkillEntry(linkPath);
+      } else {
         continue;
       }
-      removeGeneratedPluginSkillEntry(linkPath);
     } catch (err) {
       if (!isNotFoundError(err)) {
         log.warn(`failed to inspect plugin skill symlink "${linkPath}": ${String(err)}`);

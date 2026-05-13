@@ -504,6 +504,21 @@ describe("publishPluginSkills", () => {
     expect(fsSync.existsSync(staleDir)).toBe(false);
   });
 
+  it("leaves existing regular directories in place when publishing matching skill names", async () => {
+    const skillParent = await tempDirs.make("plugin-skills-");
+    const managedDir = await tempDirs.make("managed-skills-");
+
+    const dir = await writeSkillDir(skillParent, "my-skill");
+    const existingDir = path.join(managedDir, "my-skill");
+    await fs.mkdir(existingDir, { recursive: true });
+    const readlinkSpy = vi.spyOn(fsSync, "readlinkSync");
+
+    publishPluginSkills([dir], { pluginSkillsDir: managedDir });
+
+    expect((await fs.lstat(existingDir)).isDirectory()).toBe(true);
+    expect(readlinkSpy).not.toHaveBeenCalledWith(existingDir);
+  });
+
   it("treats Windows directory entries as generated plugin skill entries", () => {
     const directoryEntry = {
       isDirectory: () => true,
