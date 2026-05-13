@@ -24,6 +24,7 @@ export function mockDeletedAgentSession(orphanKey = "agent:deleted-agent:main"):
   deletedAgentSessionMocks.loadSessionEntry.mockReturnValue({
     cfg: {},
     canonicalKey: orphanKey,
+    storePath: "/tmp/sessions.json",
     entry: { sessionId: "sess-orphan" },
   });
   deletedAgentSessionMocks.resolveDeletedAgentIdFromSessionKey.mockReturnValue("deleted-agent");

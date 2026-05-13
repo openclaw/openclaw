@@ -92,6 +92,8 @@ describe("route-args", () => {
         "--all-agents",
         "--agent",
         "default",
+        "--store",
+        "sqlite",
         "--active",
         "true",
         "--limit",
@@ -101,6 +103,7 @@ describe("route-args", () => {
       json: true,
       allAgents: true,
       agent: "default",
+      store: "sqlite",
       active: "true",
       limit: "25",
     });

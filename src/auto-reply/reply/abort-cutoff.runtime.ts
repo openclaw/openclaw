@@ -1,5 +1,4 @@
-import { resolveAgentIdFromSessionKey } from "../../config/sessions/main-session.js";
-import { getSessionEntry, upsertSessionEntry } from "../../config/sessions/store.js";
+import { updateSessionStore } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { applyAbortCutoffToSessionEntry, hasAbortCutoff } from "./abort-cutoff.js";
 
@@ -7,8 +6,9 @@ export async function clearAbortCutoffInSessionRuntime(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
+  storePath?: string;
 }): Promise<boolean> {
-  const { sessionEntry, sessionStore, sessionKey } = params;
+  const { sessionEntry, sessionStore, sessionKey, storePath } = params;
   if (!sessionEntry || !sessionStore || !sessionKey || !hasAbortCutoff(sessionEntry)) {
     return false;
   }
@@ -17,15 +17,17 @@ export async function clearAbortCutoffInSessionRuntime(params: {
   sessionEntry.updatedAt = Date.now();
   sessionStore[sessionKey] = sessionEntry;
 
-  const agentId = resolveAgentIdFromSessionKey(sessionKey);
-  const existing = getSessionEntry({ agentId, sessionKey }) ?? sessionEntry;
-  applyAbortCutoffToSessionEntry(existing, undefined);
-  existing.updatedAt = Date.now();
-  upsertSessionEntry({
-    agentId,
-    sessionKey,
-    entry: existing,
-  });
+  if (storePath) {
+    await updateSessionStore(storePath, (store) => {
+      const existing = store[sessionKey] ?? sessionEntry;
+      if (!existing) {
+        return;
+      }
+      applyAbortCutoffToSessionEntry(existing, undefined);
+      existing.updatedAt = Date.now();
+      store[sessionKey] = existing;
+    });
+  }
 
   return true;
 }

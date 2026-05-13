@@ -47,7 +47,7 @@ export type TelegramNetworkConfig = {
   /**
    * DNS result order for network requests ("ipv4first" | "verbatim").
    * Set to "ipv4first" to prioritize IPv4 addresses and work around IPv6 issues.
-   * Default: "ipv4first" on Node 24+ to avoid common fetch failures.
+   * Default: "ipv4first" on Node 22+ to avoid common fetch failures.
    */
   dnsResultOrder?: "ipv4first" | "verbatim";
   /**

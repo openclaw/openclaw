@@ -162,7 +162,7 @@ function absolutizeBundleMcpServer(params: {
   return next;
 }
 
-function loadBundleReferencedMcpConfig(params: { rootDir: string; relativePath: string }): {
+function loadBundleFileBackedMcpConfig(params: { rootDir: string; relativePath: string }): {
   config: BundleMcpConfig;
   diagnostics: string[];
 } {
@@ -251,7 +251,7 @@ function loadBundleMcpConfig(params: {
   });
   const diagnostics: string[] = [];
   for (const relativePath of filePaths) {
-    const loaded = loadBundleReferencedMcpConfig({
+    const loaded = loadBundleFileBackedMcpConfig({
       rootDir: params.rootDir,
       relativePath,
     });

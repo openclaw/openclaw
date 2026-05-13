@@ -92,12 +92,6 @@ export const pluginSdkDocMetadata = {
   "provider-selection-runtime": {
     category: "provider",
   },
-  "provider-ai": {
-    category: "provider",
-  },
-  "provider-ai-oauth": {
-    category: "provider",
-  },
   "runtime-store": {
     category: "runtime",
   },
@@ -114,33 +108,6 @@ export const pluginSdkDocMetadata = {
     category: "utilities",
   },
   "reply-payload": {
-    category: "utilities",
-  },
-  testing: {
-    category: "utilities",
-  },
-  "channel-test-helpers": {
-    category: "utilities",
-  },
-  "agent-core": {
-    category: "runtime",
-  },
-  "agent-runtime-test-contracts": {
-    category: "utilities",
-  },
-  "channel-target-testing": {
-    category: "utilities",
-  },
-  "provider-test-contracts": {
-    category: "utilities",
-  },
-  "provider-http-test-mocks": {
-    category: "utilities",
-  },
-  "test-env": {
-    category: "utilities",
-  },
-  "test-fixtures": {
     category: "utilities",
   },
 } as const satisfies Record<string, PluginSdkDocMetadata>;

@@ -48,6 +48,8 @@ enum VoiceWakeForwarder {
     struct SessionRouteEntry: Decodable, Equatable {
         let key: String
         let channel: String?
+        let lastChannel: String?
+        let lastTo: String?
         let deliveryContext: DeliveryContext?
     }
 
@@ -82,6 +84,7 @@ enum VoiceWakeForwarder {
         let parsedRoute = self.parseSessionKeyRoute(sessionKey)
         let channelRaw = self.firstNonEmpty(
             routeEntry?.deliveryContext?.channel,
+            routeEntry?.lastChannel,
             routeEntry?.channel,
             parsedRoute?.channel)
         let channel = channelRaw
@@ -89,6 +92,7 @@ enum VoiceWakeForwarder {
             ?? .webchat
         let to = self.firstNonEmpty(
             routeEntry?.deliveryContext?.to,
+            routeEntry?.lastTo,
             parsedRoute?.to)
 
         return ForwardOptions(

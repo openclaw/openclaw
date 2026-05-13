@@ -85,6 +85,7 @@ beforeAll(async () => {
     resolveSandboxRuntimeStatus: (params: { cfg?: Record<string, unknown>; sessionKey?: string }) =>
       resolveSandboxRuntimeStatusFromConfig(params),
     resetModules: false,
+    sessionStorePath: "/tmp/subagent-spawn-allowlist-session-store.json",
   }));
 });
 

@@ -3,6 +3,7 @@ package ai.openclaw.app.gateway
 import android.content.Context
 import android.util.Base64
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 import java.io.File
 import java.security.MessageDigest
 
@@ -17,8 +18,8 @@ data class DeviceIdentity(
 class DeviceIdentityStore(
   context: Context,
 ) {
-  private val stateStore = OpenClawSQLiteStateStore(context)
-  private val legacyIdentityFile = File(context.filesDir, "openclaw/identity/device.json")
+  private val json = Json { ignoreUnknownKeys = true }
+  private val identityFile = File(context.filesDir, "openclaw/identity/device.json")
 
   @Volatile private var cachedIdentity: DeviceIdentity? = null
 
@@ -27,13 +28,15 @@ class DeviceIdentityStore(
     cachedIdentity?.let { return it }
     val existing = load()
     if (existing != null) {
+      val derived = deriveDeviceId(existing.publicKeyRawBase64)
+      if (derived != null && derived != existing.deviceId) {
+        val updated = existing.copy(deviceId = derived)
+        save(updated)
+        cachedIdentity = updated
+        return updated
+      }
       cachedIdentity = existing
       return existing
-    }
-    if (legacyIdentityFile.exists()) {
-      throw IllegalStateException(
-        "Legacy OpenClaw device identity file exists. Run openclaw doctor --fix before starting runtime.",
-      )
     }
     val fresh = generate()
     save(fresh)
@@ -108,33 +111,34 @@ class DeviceIdentityStore(
       null
     }
 
-  private fun load(): DeviceIdentity? {
-    val row = stateStore.readDeviceIdentity(IDENTITY_KEY) ?: return null
-    return readIdentity(row)
-      ?: throw IllegalStateException(
-        "Stored OpenClaw device identity is invalid. Run openclaw doctor --fix.",
-      )
+  private fun load(): DeviceIdentity? = readIdentity(identityFile)
+
+  private fun readIdentity(file: File): DeviceIdentity? {
+    return try {
+      if (!file.exists()) return null
+      val raw = file.readText(Charsets.UTF_8)
+      val decoded = json.decodeFromString(DeviceIdentity.serializer(), raw)
+      if (decoded.deviceId.isBlank() ||
+        decoded.publicKeyRawBase64.isBlank() ||
+        decoded.privateKeyPkcs8Base64.isBlank()
+      ) {
+        null
+      } else {
+        decoded
+      }
+    } catch (_: Throwable) {
+      null
+    }
   }
 
-  private fun readIdentity(row: OpenClawSQLiteDeviceIdentityRow): DeviceIdentity? =
-    PersistedDeviceIdentity(
-      deviceId = row.deviceId,
-      publicKeyPem = row.publicKeyPem,
-      privateKeyPem = row.privateKeyPem,
-      createdAtMs = row.createdAtMs,
-    ).toRuntimeIdentity()
-
   private fun save(identity: DeviceIdentity) {
-    val persisted = PersistedDeviceIdentity.fromRuntimeIdentity(identity)
-    stateStore.writeDeviceIdentity(
-      OpenClawSQLiteDeviceIdentityRow(
-        deviceId = persisted.deviceId,
-        publicKeyPem = persisted.publicKeyPem,
-        privateKeyPem = persisted.privateKeyPem,
-        createdAtMs = persisted.createdAtMs,
-      ),
-      identityKey = IDENTITY_KEY,
-    )
+    try {
+      identityFile.parentFile?.mkdirs()
+      val encoded = json.encodeToString(DeviceIdentity.serializer(), identity)
+      identityFile.writeText(encoded, Charsets.UTF_8)
+    } catch (_: Throwable) {
+      // best-effort only
+    }
   }
 
   private fun generate(): DeviceIdentity {
@@ -164,6 +168,14 @@ class DeviceIdentityStore(
     )
   }
 
+  private fun deriveDeviceId(publicKeyRawBase64: String): String? =
+    try {
+      val raw = Base64.decode(publicKeyRawBase64, Base64.DEFAULT)
+      sha256Hex(raw)
+    } catch (_: Throwable) {
+      null
+    }
+
   private fun sha256Hex(data: ByteArray): String {
     val digest = MessageDigest.getInstance("SHA-256").digest(data)
     val out = CharArray(digest.size * 2)
@@ -182,91 +194,7 @@ class DeviceIdentityStore(
       Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
     )
 
-  @Serializable
-  private data class PersistedDeviceIdentity(
-    val version: Int = 1,
-    val deviceId: String,
-    val publicKeyPem: String,
-    val privateKeyPem: String,
-    val createdAtMs: Long,
-  ) {
-    fun toRuntimeIdentity(): DeviceIdentity? {
-      if (version != 1 || deviceId.isBlank() || publicKeyPem.isBlank() || privateKeyPem.isBlank()) {
-        return null
-      }
-      val publicDer = decodePem(publicKeyPem, "PUBLIC KEY") ?: return null
-      if (!publicDer.startsWith(PUBLIC_KEY_INFO_PREFIX)) return null
-      val publicRaw = publicDer.copyOfRange(PUBLIC_KEY_INFO_PREFIX.size, publicDer.size)
-      if (publicRaw.size != ED25519_KEY_SIZE) return null
-      val derivedDeviceId = sha256HexStatic(publicRaw)
-      if (derivedDeviceId != deviceId.lowercase()) return null
-      val privateDer = decodePem(privateKeyPem, "PRIVATE KEY") ?: return null
-      return DeviceIdentity(
-        deviceId = derivedDeviceId,
-        publicKeyRawBase64 = Base64.encodeToString(publicRaw, Base64.NO_WRAP),
-        privateKeyPkcs8Base64 = Base64.encodeToString(privateDer, Base64.NO_WRAP),
-        createdAtMs = createdAtMs,
-      )
-    }
-
-    companion object {
-      fun fromRuntimeIdentity(identity: DeviceIdentity): PersistedDeviceIdentity {
-        val publicRaw = Base64.decode(identity.publicKeyRawBase64, Base64.DEFAULT)
-        val privateDer = Base64.decode(identity.privateKeyPkcs8Base64, Base64.DEFAULT)
-        return PersistedDeviceIdentity(
-          deviceId = identity.deviceId,
-          publicKeyPem = encodePem("PUBLIC KEY", PUBLIC_KEY_INFO_PREFIX + publicRaw),
-          privateKeyPem = encodePem("PRIVATE KEY", privateDer),
-          createdAtMs = identity.createdAtMs,
-        )
-      }
-    }
-  }
-
   companion object {
-    private const val IDENTITY_KEY = "default"
-    private const val ED25519_KEY_SIZE = 32
     private val HEX = "0123456789abcdef".toCharArray()
-    private val PUBLIC_KEY_INFO_PREFIX =
-      byteArrayOf(0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00)
-
-    private fun ByteArray.startsWith(prefix: ByteArray): Boolean = size >= prefix.size && prefix.indices.all { this[it] == prefix[it] }
-
-    private fun encodePem(
-      label: String,
-      bytes: ByteArray,
-    ): String {
-      val body = Base64.encodeToString(bytes, Base64.NO_WRAP)
-      val wrapped = body.chunked(64).joinToString("\n")
-      return "-----BEGIN $label-----\n$wrapped\n-----END $label-----\n"
-    }
-
-    private fun decodePem(
-      pem: String,
-      label: String,
-    ): ByteArray? {
-      val header = "-----BEGIN $label-----"
-      val footer = "-----END $label-----"
-      val trimmed = pem.trim()
-      if (!trimmed.startsWith(header) || !trimmed.endsWith(footer)) return null
-      val body =
-        trimmed
-          .removePrefix(header)
-          .removeSuffix(footer)
-          .replace("\\s".toRegex(), "")
-      return runCatching { Base64.decode(body, Base64.DEFAULT) }.getOrNull()
-    }
-
-    private fun sha256HexStatic(data: ByteArray): String {
-      val digest = MessageDigest.getInstance("SHA-256").digest(data)
-      val out = CharArray(digest.size * 2)
-      var i = 0
-      for (byte in digest) {
-        val v = byte.toInt() and 0xff
-        out[i++] = HEX[v ushr 4]
-        out[i++] = HEX[v and 0x0f]
-      }
-      return String(out)
-    }
   }
 }

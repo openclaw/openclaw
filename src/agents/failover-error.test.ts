@@ -8,6 +8,7 @@ import {
   resolveFailoverStatus,
 } from "./failover-error.js";
 import { classifyFailoverSignal } from "./pi-embedded-helpers/errors.js";
+import { SessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 
 // OpenAI 429 example shape: https://help.openai.com/en/articles/5955604-how-can-i-solve-429-too-many-requests-errors
 const OPENAI_RATE_LIMIT_MESSAGE =
@@ -360,6 +361,87 @@ describe("failover-error", () => {
         message: '{"error":{"message":"The model is overloaded. Please try later"}}',
       }),
     ).toBe("overloaded");
+  });
+
+  it("does not classify session lock wait errors as model timeout failover", () => {
+    const sessionLockError = new SessionWriteLockTimeoutError({
+      timeoutMs: 10_000,
+      owner: "pid=37121",
+      lockPath: "/tmp/openclaw/session.jsonl.lock",
+    });
+    expect(resolveFailoverReasonFromError(sessionLockError)).toBeNull();
+    expect(isTimeoutError(sessionLockError)).toBe(false);
+
+    const wrappedLockError = Object.assign(new Error("operation timed out"), {
+      name: "AbortError",
+      cause: sessionLockError,
+    });
+    expect(resolveFailoverReasonFromError(wrappedLockError)).toBeNull();
+    expect(isTimeoutError(wrappedLockError)).toBe(false);
+
+    const abortWrappedLockError = Object.assign(new Error("request was aborted"), {
+      name: "AbortError",
+      cause: sessionLockError,
+    });
+    expect(resolveFailoverReasonFromError(abortWrappedLockError)).toBeNull();
+    expect(isTimeoutError(abortWrappedLockError)).toBe(false);
+  });
+
+  it("keeps explicit provider failover metadata authoritative over nested session lock text", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 429,
+        code: "RESOURCE_EXHAUSTED",
+        message: "upstream quota pressure",
+        cause: new SessionWriteLockTimeoutError({
+          timeoutMs: 10_000,
+          owner: "pid=37121",
+          lockPath: "/tmp/openclaw/session.jsonl.lock",
+        }),
+      }),
+    ).toBe("rate_limit");
+  });
+
+  it("keeps inferred HTTP failover metadata authoritative over nested session lock text", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: "HTTP 429: upstream quota pressure",
+        cause: new SessionWriteLockTimeoutError({
+          timeoutMs: 10_000,
+          owner: "pid=37121",
+          lockPath: "/tmp/openclaw/session.jsonl.lock",
+        }),
+      }),
+    ).toBe("rate_limit");
+  });
+
+  it("does not treat generic abort codes as explicit failover metadata over nested session lock text", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        name: "AbortError",
+        code: "ABORT_ERR",
+        message: "The operation was aborted",
+        cause: new SessionWriteLockTimeoutError({
+          timeoutMs: 10_000,
+          owner: "pid=37121",
+          lockPath: "/tmp/openclaw/session.jsonl.lock",
+        }),
+      }),
+    ).toBeNull();
+  });
+
+  it("does not let cause-based failover classification bypass wrapper session lock suppression", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: "wrapper",
+        reason: new SessionWriteLockTimeoutError({
+          timeoutMs: 10_000,
+          owner: "pid=37121",
+          lockPath: "/tmp/openclaw/session.jsonl.lock",
+        }),
+        cause: new Error("operation timed out"),
+      }),
+    ).toBeNull();
   });
 
   it("classifies bare pi-ai stream wrapper as timeout regardless of provider (#71620)", () => {

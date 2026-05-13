@@ -1,13 +1,13 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
 import {
   replaceManagedMarkdownBlock,
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
 import { compileMemoryWikiVault } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
-import { readMemoryWikiImportRunRecord, writeMemoryWikiImportRunRecord } from "./import-runs.js";
 import { appendMemoryWikiLog } from "./log.js";
 import {
   parseWikiMarkdown,
@@ -654,6 +654,10 @@ function resolveImportRunsDir(vaultRoot: string): string {
   return path.join(vaultRoot, ".openclaw-wiki", "import-runs");
 }
 
+function resolveImportRunPath(vaultRoot: string, runId: string): string {
+  return path.join(resolveImportRunsDir(vaultRoot), `${runId}.json`);
+}
+
 function normalizeConversationActions(
   records: ChatGptConversationRecord[],
   operations: Map<string, ChatGptImportOperation>,
@@ -675,14 +679,17 @@ async function writeImportRunRecord(
   vaultRoot: string,
   record: ChatGptImportRunRecord,
 ): Promise<void> {
-  await writeMemoryWikiImportRunRecord(vaultRoot, record);
+  const recordPath = resolveImportRunPath(vaultRoot, record.runId);
+  await writeJsonFileAtomically(recordPath, record);
 }
 
 async function readImportRunRecord(
   vaultRoot: string,
   runId: string,
 ): Promise<ChatGptImportRunRecord> {
-  return await readMemoryWikiImportRunRecord<ChatGptImportRunRecord>(vaultRoot, runId);
+  const recordPath = resolveImportRunPath(vaultRoot, runId);
+  const raw = await fs.readFile(recordPath, "utf8");
+  return JSON.parse(raw) as ChatGptImportRunRecord;
 }
 
 async function writeTrackedImportPage(params: {

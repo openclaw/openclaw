@@ -13,7 +13,7 @@ const contextTestState = vi.hoisted(() => {
   const state = {
     loadConfigImpl: () => ({}) as unknown,
     discoveredModels: [] as DiscoveredModel[],
-    ensureOpenClawModelCatalog: vi.fn(async () => {}),
+    ensureOpenClawModelsJson: vi.fn(async () => {}),
     discoverAuthStorage: vi.fn(() => ({})),
     discoverModels: vi.fn(
       (_authStorage: unknown, _agentDir: string, _options?: { normalizeModels?: boolean }) => ({
@@ -29,7 +29,7 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("./models-config.runtime.js", () => ({
-  ensureOpenClawModelCatalog: contextTestState.ensureOpenClawModelCatalog,
+  ensureOpenClawModelsJson: contextTestState.ensureOpenClawModelsJson,
 }));
 
 vi.mock("./pi-model-discovery-runtime.js", () => ({
@@ -43,8 +43,8 @@ function mockContextDeps(params: {
 }) {
   contextTestState.loadConfigImpl = params.getRuntimeConfig;
   contextTestState.discoveredModels = params.discoveredModels ?? [];
-  contextTestState.ensureOpenClawModelCatalog.mockClear();
-  return { ensureOpenClawModelCatalog: contextTestState.ensureOpenClawModelCatalog };
+  contextTestState.ensureOpenClawModelsJson.mockClear();
+  return { ensureOpenClawModelsJson: contextTestState.ensureOpenClawModelsJson };
 }
 
 function mockContextModuleDeps(loadConfigImpl: () => unknown) {
@@ -111,7 +111,7 @@ describe("lookupContextTokens", () => {
   beforeEach(() => {
     contextTestState.loadConfigImpl = () => ({});
     contextTestState.discoveredModels = [];
-    contextTestState.ensureOpenClawModelCatalog.mockClear();
+    contextTestState.ensureOpenClawModelsJson.mockClear();
     contextTestState.discoverAuthStorage.mockClear();
     contextTestState.discoverModels.mockClear();
     contextModule.resetContextWindowCacheForTest();
@@ -299,13 +299,17 @@ describe("lookupContextTokens", () => {
     await flushAsyncWarmup();
 
     expect(contextTestState.discoverModels).toHaveBeenCalledTimes(1);
-    const discoverCall = contextTestState.discoverModels.mock.calls[0];
-    expect(discoverCall?.[0]).toEqual({});
-    expect(typeof discoverCall?.[1]).toBe("string");
+    const discoverCall = contextTestState.discoverModels.mock.calls.at(0);
+    if (!discoverCall) {
+      throw new Error("expected discoverModels to be called");
+    }
+    const discoverAgentDir = discoverCall[1];
+    expect(discoverCall[0]).toEqual({});
+    expect(typeof discoverAgentDir).toBe("string");
     expect(
-      path.normalize(discoverCall?.[1]).endsWith(path.join(".openclaw", "agents", "main", "agent")),
+      path.normalize(discoverAgentDir).endsWith(path.join(".openclaw", "agents", "main", "agent")),
     ).toBe(true);
-    expect(discoverCall?.[2]).toEqual({ normalizeModels: false });
+    expect(discoverCall[2]).toEqual({ normalizeModels: false });
     expect(lookupContextTokens("anthropic/claude-opus-4.7-20260219")).toBe(1_048_576);
   });
 

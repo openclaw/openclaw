@@ -17,8 +17,8 @@ NC='\033[0m' # No Color
 
 DEFAULT_TAGLINE="All your chats, one OpenClaw."
 NODE_DEFAULT_MAJOR=24
-NODE_MIN_MAJOR=24
-NODE_MIN_MINOR=0
+NODE_MIN_MAJOR=22
+NODE_MIN_MINOR=14
 NODE_MIN_VERSION="${NODE_MIN_MAJOR}.${NODE_MIN_MINOR}"
 
 ORIGINAL_PATH="${PATH:-}"
@@ -1493,7 +1493,7 @@ ensure_macos_default_node_active() {
     return 1
 }
 
-ensure_macos_node24_active() {
+ensure_macos_node22_active() {
     ensure_macos_default_node_active "$@"
 }
 

@@ -25,11 +25,16 @@ import {
   getSubagentSessionStartedAt,
   persistSubagentSessionTiming,
   resolveArchiveAfterMs,
+  safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const log = createSubsystemLogger("agents/subagent-registry");
 const RECOVERABLE_WAIT_RETRY_DELAY_MS = process.env.OPENCLAW_TEST_FAST === "1" ? 25 : 5_000;
+
+function shouldDeleteAttachments(entry: SubagentRunRecord) {
+  return entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep;
+}
 
 export function markSubagentRunPausedAfterYield(params: {
   entry: SubagentRunRecord;
@@ -92,6 +97,9 @@ export type RegisterSubagentRunParams = {
   runTimeoutSeconds?: number;
   expectsCompletionMessage?: boolean;
   spawnMode?: "run" | "session";
+  attachmentsDir?: string;
+  attachmentsRootDir?: string;
+  retainAttachmentsOnKeep?: boolean;
 };
 
 export function createSubagentRunManager(params: {
@@ -297,6 +305,9 @@ export function createSubagentRunManager(params: {
 
     if (previousRunId !== nextRunId) {
       params.clearPendingLifecycleError(previousRunId);
+      if (shouldDeleteAttachments(source)) {
+        void safeRemoveAttachmentsDir(source);
+      }
       params.runs.delete(previousRunId);
       params.resumedRuns.delete(previousRunId);
     }
@@ -406,6 +417,9 @@ export function createSubagentRunManager(params: {
       cleanupHandled: false,
       completionAnnouncedAt: undefined,
       wakeOnDescendantSettle: undefined,
+      attachmentsDir: registerParams.attachmentsDir,
+      attachmentsRootDir: registerParams.attachmentsRootDir,
+      retainAttachmentsOnKeep: registerParams.retainAttachmentsOnKeep,
     };
     params.runs.set(runId, entry);
     try {
@@ -443,6 +457,9 @@ export function createSubagentRunManager(params: {
     params.clearPendingLifecycleError(runId);
     const entry = params.runs.get(runId);
     if (entry) {
+      if (shouldDeleteAttachments(entry)) {
+        void safeRemoveAttachmentsDir(entry);
+      }
       void params.notifyContextEngineSubagentEnded({
         childSessionKey: entry.childSessionKey,
         reason: "released",
@@ -530,6 +547,9 @@ export function createSubagentRunManager(params: {
             childSessionKey: entry.childSessionKey,
           });
         });
+        if (shouldDeleteAttachments(entry)) {
+          void safeRemoveAttachmentsDir(entry);
+        }
         params.completeCleanupBookkeeping({
           runId: entry.runId,
           entry,

@@ -5,11 +5,7 @@ import {
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { channelRouteTargetsShareConversation } from "../../plugin-sdk/channel-route.js";
-import {
-  deliveryContextFromSession,
-  normalizeDeliveryContext,
-} from "../../utils/delivery-context.shared.js";
-import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
@@ -52,7 +48,6 @@ function parseExplicitTargetWithPlugin(params: {
 
 export function resolveSessionDeliveryTarget(params: {
   entry?: SessionEntry;
-  deliveryContext?: DeliveryContext;
   requestedChannel?: GatewayMessageChannel;
   explicitTo?: string;
   explicitThreadId?: string | number;
@@ -70,8 +65,7 @@ export function resolveSessionDeliveryTarget(params: {
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
 }): SessionDeliveryTarget {
-  const context =
-    normalizeDeliveryContext(params.deliveryContext) ?? deliveryContextFromSession(params.entry);
+  const context = deliveryContextFromSession(params.entry);
   const sessionLastChannel =
     context?.channel && isDeliverableMessageChannel(context.channel) ? context.channel : undefined;
   const parsedSessionTarget = sessionLastChannel

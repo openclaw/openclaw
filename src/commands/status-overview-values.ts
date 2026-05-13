@@ -14,7 +14,7 @@ type PluginCompatibilityNoticeLike = {
 
 type SummarySessionsLike = {
   count: number;
-  databasePaths: string[];
+  paths: string[];
   defaults: {
     model?: string | null;
     contextTokens?: number | null;
@@ -81,8 +81,8 @@ export function buildStatusSessionsOverviewValue(params: {
     ? ` (${params.formatKTokens(params.sessions.defaults.contextTokens)} ctx)`
     : "";
   const storeLabel =
-    params.sessions.databasePaths.length > 1
-      ? `${params.sessions.databasePaths.length} databases`
-      : (params.sessions.databasePaths[0] ?? "unknown");
+    params.sessions.paths.length > 1
+      ? `${params.sessions.paths.length} stores`
+      : (params.sessions.paths[0] ?? "unknown");
   return `${params.sessions.count} active · default ${params.sessions.defaults.model ?? "unknown"}${defaultCtx} · ${storeLabel}`;
 }

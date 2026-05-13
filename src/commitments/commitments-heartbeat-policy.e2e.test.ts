@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "../infra/heartbeat-runner.test-harness.js";
 import {
-  seedHeartbeatSession,
+  seedSessionStore,
   withTempHeartbeatSandbox,
 } from "../infra/heartbeat-runner.test-utils.js";
 import { saveCommitmentStore, loadCommitmentStore } from "./store.js";
@@ -50,7 +50,7 @@ describe("commitments heartbeat delivery policy e2e", () => {
   }
 
   it("does not send externally when heartbeat target is none", async () => {
-    await withTempHeartbeatSandbox(async ({ tmpDir, replySpy }) => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
       const cfg: OpenClawConfig = {
         agents: {
@@ -63,14 +63,15 @@ describe("commitments heartbeat delivery policy e2e", () => {
           },
         },
         channels: { telegram: { allowFrom: ["*"] } },
-        session: {},
+        session: { store: storePath },
         commitments: { enabled: true },
       };
-      await seedHeartbeatSession("main", sessionKey, {
+      await seedSessionStore(storePath, sessionKey, {
         lastChannel: "telegram",
+        lastProvider: "telegram",
         lastTo: "155462274",
       });
-      await saveCommitmentStore({
+      await saveCommitmentStore(undefined, {
         version: 1,
         commitments: [commitment()],
       });

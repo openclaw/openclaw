@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import path from "node:path";
-import { resetPluginBlobStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDiffsHttpHandler } from "./http.js";
@@ -23,7 +22,6 @@ describe("DiffArtifactStore", () => {
 
   afterEach(async () => {
     vi.useRealTimers();
-    resetPluginBlobStoreForTests();
     await cleanupRootDir();
   });
 
@@ -50,28 +48,6 @@ describe("DiffArtifactStore", () => {
       agentAccountId: "default",
     });
     expect(await store.readHtml(artifact.id)).toBe("<html>demo</html>");
-  });
-
-  it("does not write file-backed viewer metadata or html", async () => {
-    const artifact = await store.createArtifact({
-      html: "<html>sqlite</html>",
-      title: "SQLite",
-      inputKind: "patch",
-      fileCount: 1,
-    });
-
-    expect(artifact.htmlPath).toBe(`sqlite:diffs/artifacts/view:${artifact.id}`);
-    await expect(fs.stat(path.join(rootDir, artifact.id, "meta.json"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-    await expect(fs.stat(path.join(rootDir, artifact.id, "viewer.html"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-    expect(await store.getArtifact(artifact.id, artifact.token)).toMatchObject({
-      id: artifact.id,
-      title: "SQLite",
-    });
-    expect(await store.readHtml(artifact.id)).toBe("<html>sqlite</html>");
   });
 
   it("expires artifacts after the ttl", async () => {
@@ -117,6 +93,22 @@ describe("DiffArtifactStore", () => {
     await expect(store.updateFilePath(artifact.id, "../outside.png")).rejects.toThrow(
       "escapes store root",
     );
+  });
+
+  it("rejects tampered html metadata paths outside the store root", async () => {
+    const artifact = await store.createArtifact({
+      html: "<html>demo</html>",
+      title: "Demo",
+      inputKind: "before_after",
+      fileCount: 1,
+    });
+    const metaPath = path.join(rootDir, artifact.id, "meta.json");
+    const rawMeta = await fs.readFile(metaPath, "utf8");
+    const meta = JSON.parse(rawMeta) as { htmlPath: string };
+    meta.htmlPath = "../outside.html";
+    await fs.writeFile(metaPath, JSON.stringify(meta), "utf8");
+
+    await expect(store.readHtml(artifact.id)).rejects.toThrow("escapes store root");
   });
 
   it("creates standalone file artifacts with managed metadata", async () => {
@@ -193,14 +185,10 @@ describe("DiffArtifactStore", () => {
     vi.useFakeTimers();
     const now = new Date("2026-02-27T16:00:00Z");
     vi.setSystemTime(now);
-    await cleanupRootDir();
-    ({
+    store = new DiffArtifactStore({
       rootDir,
-      store,
-      cleanup: cleanupRootDir,
-    } = await createDiffStoreHarness("openclaw-diffs-store-cleanup-", {
       cleanupIntervalMs: 60_000,
-    }));
+    });
     const cleanupSpy = vi.spyOn(store, "cleanupExpired").mockResolvedValue();
 
     await store.createArtifact({

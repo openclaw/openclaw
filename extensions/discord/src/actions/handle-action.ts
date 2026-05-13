@@ -1,4 +1,4 @@
-import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import {
   readNumberParam,
   readStringArrayParam,
@@ -46,7 +46,7 @@ export async function handleDiscordMessageAction(
     | "mediaLocalRoots"
     | "mediaReadFile"
   >,
-): Promise<AgentToolResult> {
+): Promise<AgentToolResult<unknown>> {
   const { action, params, cfg } = ctx;
   const accountId = ctx.accountId ?? readStringParam(params, "accountId");
   const actionOptions = {

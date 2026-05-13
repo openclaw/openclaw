@@ -17,7 +17,7 @@ const loadPluginMetadataSnapshotMock = vi.hoisted(() =>
   })),
 );
 
-vi.mock("../commands/doctor/shared/channel-legacy-config-rules.js", () => ({
+vi.mock("../channels/plugins/legacy-config.js", () => ({
   collectChannelLegacyConfigRules: collectChannelLegacyConfigRulesMock,
 }));
 

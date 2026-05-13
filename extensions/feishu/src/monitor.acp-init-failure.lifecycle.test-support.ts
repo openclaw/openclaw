@@ -156,6 +156,7 @@ describe("Feishu ACP-init failure lifecycle", () => {
       finalizeInboundContextMock,
       dispatchReplyFromConfigMock,
       withReplyDispatcherMock,
+      storePath: "/tmp/feishu-acp-failure-sessions.json",
     });
   });
 

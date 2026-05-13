@@ -1,9 +1,9 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { createExecTool } from "../../agents/bash-tools.js";
 import type { ExecToolDetails } from "../../agents/bash-tools.js";
-import { hasSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { ExecApprovalRequest } from "../../infra/exec-approvals.js";
+import { pathExists } from "../../infra/fs-safe.js";
 import {
   exportTrajectoryForCommand,
   formatTrajectoryCommandExportSummary,
@@ -135,12 +135,10 @@ export async function buildExportTrajectoryReply(
   if (isReplyPayload(sessionTarget)) {
     return sessionTarget;
   }
-  const { agentId, entry } = sessionTarget;
+  const { entry, sessionFile } = sessionTarget;
 
-  if (!hasSqliteSessionTranscriptEvents({ agentId, sessionId: entry.sessionId })) {
-    return {
-      text: "❌ Session transcript has not been migrated into SQLite. Run `openclaw doctor --fix` and try again.",
-    };
+  if (!(await pathExists(sessionFile))) {
+    return { text: "❌ Session file not found." };
   }
 
   let outputDir: string;
@@ -159,8 +157,8 @@ export async function buildExportTrajectoryReply(
   let summary: TrajectoryCommandExportSummary;
   try {
     summary = await exportTrajectoryForCommand({
-      agentId,
       outputDir,
+      sessionFile,
       sessionId: entry.sessionId,
       sessionKey: params.sessionKey,
       workspaceDir: params.workspaceDir,
@@ -324,6 +322,7 @@ type TrajectoryExportCliRequest = {
   sessionKey: string;
   workspace: string;
   output?: string;
+  store?: string;
   agent?: string;
 };
 
@@ -345,6 +344,9 @@ function buildTrajectoryExportExecRequest(
   };
   if (outputPath) {
     request.output = outputPath;
+  }
+  if (params.storePath && params.storePath !== "(multiple)") {
+    request.store = params.storePath;
   }
   if (params.agentId) {
     request.agent = params.agentId;
@@ -369,6 +371,9 @@ function formatTrajectoryExportRequestDetails(request: TrajectoryExportCliReques
     `Workspace: ${request.workspace}`,
     `Output: ${request.output ?? "(default)"}`,
   ];
+  if (request.store) {
+    lines.push(`Store: ${request.store}`);
+  }
   if (request.agent) {
     lines.push(`Agent: ${request.agent}`);
   }

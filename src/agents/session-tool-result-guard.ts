@@ -1,3 +1,5 @@
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { SessionManager } from "@earendil-works/pi-coding-agent";
 import {
   boundedJsonUtf8Bytes,
   firstEnumerableOwnKeys,
@@ -15,7 +17,6 @@ import type {
 } from "../plugins/types.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import type { AgentMessage } from "./agent-core-contract.js";
 import { formatContextLimitTruncationNotice } from "./pi-embedded-runner/context-truncation-notice.js";
 import {
   DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
@@ -28,7 +29,6 @@ import {
 import { createPendingToolCallState } from "./session-tool-result-state.js";
 import { makeMissingToolResult, sanitizeToolCallInputs } from "./session-transcript-repair.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
-import type { SessionManager } from "./transcript/session-transcript-contract.js";
 
 /**
  * Truncate oversized text content blocks in a tool result message.
@@ -56,8 +56,8 @@ function isUserAgentMessage(message: AgentMessage): message is UserAgentMessage 
 }
 
 // `details` is runtime/UI metadata, not model-visible tool output. Keep the
-// transcript useful for debugging without letting metadata blobs dominate
-// replay repair, transcript broadcasts, or future tooling that reads persisted
+// session JSONL useful for debugging without letting metadata blobs dominate
+// disk, replay repair, transcript broadcasts, or future tooling that reads raw
 // sessions. Model-visible text belongs in tool result `content`.
 const MAX_PERSISTED_TOOL_RESULT_DETAILS_BYTES = 8_192;
 const MAX_PERSISTED_DETAIL_STRING_CHARS = 2_000;
@@ -472,9 +472,6 @@ export function installSessionToolResultGuard(
   opts?: {
     /** Optional session key for transcript update broadcasts. */
     sessionKey?: string;
-    /** Optional agent/session identity for SQLite-backed transcript broadcasts. */
-    agentId?: string;
-    sessionId?: string;
     /**
      * Optional transform applied to any message before persistence.
      */
@@ -499,7 +496,7 @@ export function installSessionToolResultGuard(
      */
     allowedToolNames?: Iterable<string>;
     /**
-     * Synchronous hook invoked before any message is written to the persisted transcript.
+     * Synchronous hook invoked before any message is written to the session JSONL.
      * If the hook returns { block: true }, the message is silently dropped.
      * If it returns { message }, the modified message is written instead.
      */
@@ -680,10 +677,12 @@ export function installSessionToolResultGuard(
     }
     const result = originalAppend(finalMessage as never);
 
-    if (opts?.sessionId || opts?.sessionKey) {
+    const sessionFile = (
+      sessionManager as { getSessionFile?: () => string | null }
+    ).getSessionFile?.();
+    if (sessionFile) {
       emitSessionTranscriptUpdate({
-        ...(opts?.agentId ? { agentId: opts.agentId } : {}),
-        ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}),
+        sessionFile,
         sessionKey: opts?.sessionKey,
         message: finalMessage,
         messageId: typeof result === "string" ? result : undefined,

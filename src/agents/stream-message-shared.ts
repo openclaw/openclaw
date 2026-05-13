@@ -1,4 +1,4 @@
-import type { AssistantMessage, StopReason, Usage } from "./pi-ai-contract.js";
+import type { AssistantMessage, StopReason, Usage } from "@earendil-works/pi-ai";
 
 type StreamModelDescriptor = {
   api: string;
@@ -76,7 +76,7 @@ export function buildAssistantMessageWithZeroUsage(params: {
 // that failed before the model produced its own content. AWS Bedrock Converse
 // rejects assistant messages with `content: []` during replay ("The content
 // field in the Message object at messages.N is empty."), which can persist into
-// the transcript and trap subsequent turns in a validation-failure loop. The
+// the session file and trap subsequent turns in a validation-failure loop. The
 // raw provider error text is intentionally NOT placed in `content` because that
 // array is replayed back to the model on the next turn — provider error strings
 // can carry hostnames or upstream metadata, and replaying them as assistant
@@ -85,7 +85,7 @@ export function buildAssistantMessageWithZeroUsage(params: {
 // providers do not include in their wire payloads.
 //
 // This constant is the single source of truth used by replay normalization and
-// transcript-state repair as well, so a session repaired offline reads identically
+// session-file repair as well, so a session repaired offline reads identically
 // to a live stream-error turn (and the repair pass remains idempotent).
 export const STREAM_ERROR_FALLBACK_TEXT = "[assistant turn failed before producing content]";
 

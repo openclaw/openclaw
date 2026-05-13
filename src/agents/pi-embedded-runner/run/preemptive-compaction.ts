@@ -1,6 +1,6 @@
-import type { AgentMessage } from "../../agent-core-contract.js";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { estimateTokens } from "@earendil-works/pi-coding-agent";
 import { SAFETY_MARGIN, estimateMessagesTokens } from "../../compaction.js";
-import { estimateTokens } from "../../pi-coding-agent-contract.js";
 import {
   MIN_PROMPT_BUDGET_RATIO,
   MIN_PROMPT_BUDGET_TOKENS,

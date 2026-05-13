@@ -1,11 +1,11 @@
-import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   installOpenClawOwnedToolHooks,
   resetOpenClawOwnedToolHooks,
   textToolResult,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ExtensionContext } from "./agent-extension-contract.js";
 import type { MessagingToolSend } from "./pi-embedded-messaging.types.js";
 import {
   handleToolExecutionEnd,
@@ -95,7 +95,7 @@ async function waitForAfterToolCall(hooks: {
   await vi.waitFor(() => {
     expect(hooks.afterToolCall).toHaveBeenCalledTimes(1);
   });
-  const call = hooks.afterToolCall.mock.calls[0];
+  const call = hooks.afterToolCall.mock.calls.at(0);
   if (!call) {
     throw new Error("Expected afterToolCall hook call");
   }

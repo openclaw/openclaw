@@ -1,4 +1,4 @@
-import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import type { ClientToolDefinition } from "./pi-embedded-runner/run/params.js";

@@ -3,8 +3,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type {
-  BundledChannelDoctorSessionMigrationSurface,
-  BundledChannelDoctorLegacyStateDetector,
+  BundledChannelLegacySessionSurface,
+  BundledChannelLegacyStateMigrationDetector,
   BundledEntryModuleLoadOptions,
 } from "../../plugin-sdk/channel-entry-contract.js";
 import {
@@ -52,22 +52,22 @@ type BundledChannelSetupEntryRuntimeContract = {
   loadSetupSecrets?: (
     options?: BundledEntryModuleLoadOptions,
   ) => ChannelPlugin["secrets"] | undefined;
-  loadDoctorLegacyStateDetector?: (
+  loadLegacyStateMigrationDetector?: (
     options?: BundledEntryModuleLoadOptions,
-  ) => BundledChannelDoctorLegacyStateDetector;
-  loadDoctorSessionMigrationSurface?: (
+  ) => BundledChannelLegacyStateMigrationDetector;
+  loadLegacySessionSurface?: (
     options?: BundledEntryModuleLoadOptions,
-  ) => BundledChannelDoctorSessionMigrationSurface;
+  ) => BundledChannelLegacySessionSurface;
   features?: {
-    doctorLegacyState?: boolean;
-    doctorSessionMigrationSurface?: boolean;
+    legacyStateMigrations?: boolean;
+    legacySessionSurfaces?: boolean;
   };
 };
 
 type BundledChannelPackageSetupFeature =
   | "configPromotion"
-  | "doctorLegacyState"
-  | "doctorSessionMigrationSurface";
+  | "legacyStateMigrations"
+  | "legacySessionSurfaces";
 
 type GeneratedBundledChannelEntry = {
   id: string;
@@ -715,39 +715,49 @@ export function listBundledChannelSetupPluginsByFeature(
   });
 }
 
-export function listBundledChannelDoctorSessionMigrationSurfaces(
+export function listBundledChannelLegacySessionSurfaces(
   options: {
     config?: OpenClawConfig;
   } = {},
-): readonly BundledChannelDoctorSessionMigrationSurface[] {
+): readonly BundledChannelLegacySessionSurface[] {
   const { rootScope, loadContext } = resolveActiveBundledChannelLoadScope();
-  return listBundledChannelPluginIdsForSetupFeature(rootScope, "doctorSessionMigrationSurface", {
+  return listBundledChannelPluginIdsForSetupFeature(rootScope, "legacySessionSurfaces", {
     config: options.config,
   }).flatMap((id) => {
     const setupEntry = getLazyGeneratedBundledChannelSetupEntryForRoot(id, rootScope, loadContext);
-    const surface = setupEntry?.loadDoctorSessionMigrationSurface?.();
+    const surface = setupEntry?.loadLegacySessionSurface?.();
     if (surface) {
       return [surface];
     }
-    return [];
+    if (!hasSetupEntryFeature(setupEntry, "legacySessionSurfaces")) {
+      return [];
+    }
+    const plugin = getBundledChannelSetupPluginForRoot(id, rootScope, loadContext);
+    return plugin?.messaging ? [plugin.messaging] : [];
   });
 }
 
-export function listBundledChannelDoctorLegacyStateDetectors(
+export function listBundledChannelLegacyStateMigrationDetectors(
   options: {
     config?: OpenClawConfig;
   } = {},
-): readonly BundledChannelDoctorLegacyStateDetector[] {
+): readonly BundledChannelLegacyStateMigrationDetector[] {
   const { rootScope, loadContext } = resolveActiveBundledChannelLoadScope();
-  return listBundledChannelPluginIdsForSetupFeature(rootScope, "doctorLegacyState", {
+  return listBundledChannelPluginIdsForSetupFeature(rootScope, "legacyStateMigrations", {
     config: options.config,
   }).flatMap((id) => {
     const setupEntry = getLazyGeneratedBundledChannelSetupEntryForRoot(id, rootScope, loadContext);
-    const detector = setupEntry?.loadDoctorLegacyStateDetector?.();
+    const detector = setupEntry?.loadLegacyStateMigrationDetector?.();
     if (detector) {
       return [detector];
     }
-    return [];
+    if (!hasSetupEntryFeature(setupEntry, "legacyStateMigrations")) {
+      return [];
+    }
+    const plugin = getBundledChannelSetupPluginForRoot(id, rootScope, loadContext);
+    return plugin?.lifecycle?.detectLegacyStateMigrations
+      ? [plugin.lifecycle.detectLegacyStateMigrations]
+      : [];
   });
 }
 

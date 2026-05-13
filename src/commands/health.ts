@@ -11,7 +11,7 @@ import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
 import { withProgress } from "../cli/progress.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { listSessionEntries } from "../config/sessions/store.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import {
@@ -32,7 +32,6 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { asNullableRecord } from "../shared/record-coerce.js";
-import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { styleHealthChannelLine } from "../terminal/health-style.js";
 import { isRich } from "../terminal/theme.js";
 import { formatHealthChannelLines } from "./health-format.js";
@@ -198,10 +197,12 @@ const resolveAgentOrder = (cfg: OpenClawConfig) => {
   return { defaultAgentId, ordered };
 };
 
-const buildSessionSummary = async (params: { agentId: string; databasePath: string }) => {
-  const sessions = listSessionEntries({ agentId: params.agentId })
-    .filter((row) => row.sessionKey !== "global" && row.sessionKey !== "unknown")
-    .map((row) => ({ key: row.sessionKey, updatedAt: row.entry.updatedAt ?? 0 }))
+const buildSessionSummary = async (storePath: string) => {
+  const { loadSessionStore } = await import("../config/sessions/store.js");
+  const store = loadSessionStore(storePath);
+  const sessions = Object.entries(store)
+    .filter(([key]) => key !== "global" && key !== "unknown")
+    .map(([key, entry]) => ({ key, updatedAt: entry?.updatedAt ?? 0 }))
     .toSorted((a, b) => b.updatedAt - a.updatedAt);
   const recent = sessions.slice(0, 5).map((s) => ({
     key: s.key,
@@ -209,7 +210,7 @@ const buildSessionSummary = async (params: { agentId: string; databasePath: stri
     age: s.updatedAt ? Date.now() - s.updatedAt : null,
   }));
   return {
-    databasePath: params.databasePath,
+    path: storePath,
     count: sessions.length,
     recent,
   } satisfies HealthSummary["sessions"];
@@ -385,11 +386,9 @@ export async function getHealthSnapshot(params?: {
   const sessionCache = new Map<string, HealthSummary["sessions"]>();
   const agents: AgentHealthSummary[] = [];
   for (const entry of ordered) {
-    const databasePath = resolveOpenClawAgentSqlitePath({ agentId: entry.id });
-    const sessions =
-      sessionCache.get(entry.id) ??
-      (await buildSessionSummary({ agentId: entry.id, databasePath }));
-    sessionCache.set(entry.id, sessions);
+    const storePath = resolveStorePath(cfg.session?.store, { agentId: entry.id });
+    const sessions = sessionCache.get(storePath) ?? (await buildSessionSummary(storePath));
+    sessionCache.set(storePath, sessions);
     agents.push({
       agentId: entry.id,
       name: entry.name,
@@ -404,10 +403,7 @@ export async function getHealthSnapshot(params?: {
     : 0;
   const sessions =
     defaultAgent?.sessions ??
-    (await buildSessionSummary({
-      agentId: defaultAgentId,
-      databasePath: resolveOpenClawAgentSqlitePath({ agentId: defaultAgentId }),
-    }));
+    (await buildSessionSummary(resolveStorePath(cfg.session?.store, { agentId: defaultAgentId })));
 
   const start = Date.now();
   const cappedTimeout = timeoutMs === undefined ? DEFAULT_TIMEOUT_MS : Math.max(50, timeoutMs);
@@ -585,7 +581,7 @@ export async function getHealthSnapshot(params?: {
     defaultAgentId,
     agents,
     sessions: {
-      databasePath: sessions.databasePath,
+      path: sessions.path,
       count: sessions.count,
       recent: sessions.recent,
     },
@@ -644,13 +640,13 @@ export async function healthCommand(
     const agents = Array.isArray(summary.agents) ? summary.agents : [];
     const fallbackAgents: AgentHealthSummary[] = [];
     for (const entry of localAgents.ordered) {
-      const databasePath = resolveOpenClawAgentSqlitePath({ agentId: entry.id });
+      const storePath = resolveStorePath(cfg.session?.store, { agentId: entry.id });
       fallbackAgents.push({
         agentId: entry.id,
         name: entry.name,
         isDefault: entry.id === localAgents.defaultAgentId,
         heartbeat: resolveHeartbeatSummary(cfg, entry.id),
-        sessions: await buildSessionSummary({ agentId: entry.id, databasePath }),
+        sessions: await buildSessionSummary(storePath),
       });
     }
     const resolvedAgents = agents.length > 0 ? agents : fallbackAgents;
@@ -834,9 +830,7 @@ export async function healthCommand(
     }
     if (displayAgents.length === 0) {
       runtime.log(
-        info(
-          `Session database: ${summary.sessions.databasePath} (${summary.sessions.count} entries)`,
-        ),
+        info(`Session store: ${summary.sessions.path} (${summary.sessions.count} entries)`),
       );
       if (summary.sessions.recent.length > 0) {
         for (const r of summary.sessions.recent) {
@@ -849,7 +843,7 @@ export async function healthCommand(
       for (const agent of displayAgents) {
         runtime.log(
           info(
-            `Session database (${agent.agentId}): ${agent.sessions.databasePath} (${agent.sessions.count} entries)`,
+            `Session store (${agent.agentId}): ${agent.sessions.path} (${agent.sessions.count} entries)`,
           ),
         );
         if (agent.sessions.recent.length > 0) {

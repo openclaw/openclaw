@@ -48,6 +48,7 @@ export function expectDirectTelegramDelivery(
 
 export async function runTelegramAnnounceTurn(params: {
   home: string;
+  storePath: string;
   deps: CliDeps;
   delivery: {
     mode: "announce";
@@ -57,7 +58,7 @@ export async function runTelegramAnnounceTurn(params: {
   };
 }): Promise<Awaited<ReturnType<typeof runCronIsolatedAgentTurn>>> {
   return runCronIsolatedAgentTurn({
-    cfg: makeCfg(params.home, {
+    cfg: makeCfg(params.home, params.storePath, {
       channels: { telegram: { botToken: "t-1" } },
     }),
     deps: params.deps,

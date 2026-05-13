@@ -1,13 +1,20 @@
 import { randomBytes } from "node:crypto";
+import { rmSync } from "node:fs";
+import { readdir, readFile, stat, unlink } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { join } from "node:path";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
-import { createPluginBlobStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { resolveWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 
 const ZALO_OUTBOUND_MEDIA_TTL_MS = 2 * 60_000;
-const ZALO_OUTBOUND_MEDIA_MAX_ENTRIES = 100;
 const ZALO_OUTBOUND_MEDIA_SEGMENT = "media";
 const ZALO_OUTBOUND_MEDIA_PREFIX = `/${ZALO_OUTBOUND_MEDIA_SEGMENT}/`;
+const ZALO_OUTBOUND_MEDIA_DIR = join(
+  resolvePreferredOpenClawTmpDir(),
+  "openclaw-zalo-outbound-media",
+);
 const ZALO_OUTBOUND_MEDIA_ID_RE = /^[a-f0-9]{24}$/;
 
 type HostedZaloMediaMetadata = {
@@ -17,10 +24,13 @@ type HostedZaloMediaMetadata = {
   expiresAt: number;
 };
 
-const hostedZaloMediaStore = createPluginBlobStore<HostedZaloMediaMetadata>("zalo", {
-  namespace: "outbound-media",
-  maxEntries: ZALO_OUTBOUND_MEDIA_MAX_ENTRIES,
-});
+function resolveHostedZaloMediaMetadataPath(id: string): string {
+  return join(ZALO_OUTBOUND_MEDIA_DIR, `${id}.json`);
+}
+
+function resolveHostedZaloMediaBufferPath(id: string): string {
+  return join(ZALO_OUTBOUND_MEDIA_DIR, `${id}.bin`);
+}
 
 function createHostedZaloMediaId(): string {
   return randomBytes(12).toString("hex");
@@ -30,16 +40,41 @@ function createHostedZaloMediaToken(): string {
   return randomBytes(24).toString("hex");
 }
 
+async function ensureHostedZaloMediaDir(): Promise<void> {
+  await privateFileStore(ZALO_OUTBOUND_MEDIA_DIR).writeText(".ready", "");
+  await unlink(join(ZALO_OUTBOUND_MEDIA_DIR, ".ready")).catch(() => undefined);
+}
+
 async function deleteHostedZaloMediaEntry(id: string): Promise<void> {
-  await hostedZaloMediaStore.delete(id);
+  await Promise.all([
+    unlink(resolveHostedZaloMediaMetadataPath(id)).catch(() => undefined),
+    unlink(resolveHostedZaloMediaBufferPath(id)).catch(() => undefined),
+  ]);
 }
 
 async function cleanupExpiredHostedZaloMedia(nowMs = Date.now()): Promise<void> {
-  const entries = await hostedZaloMediaStore.entries();
+  let fileNames: string[];
+  try {
+    fileNames = await readdir(ZALO_OUTBOUND_MEDIA_DIR);
+  } catch {
+    return;
+  }
+
   await Promise.all(
-    entries
-      .filter((entry) => entry.metadata.expiresAt <= nowMs)
-      .map((entry) => hostedZaloMediaStore.delete(entry.key)),
+    fileNames
+      .filter((fileName) => fileName.endsWith(".json"))
+      .map(async (fileName) => {
+        const id = fileName.slice(0, -5);
+        try {
+          const metadataRaw = await readFile(resolveHostedZaloMediaMetadataPath(id), "utf8");
+          const metadata = JSON.parse(metadataRaw) as HostedZaloMediaMetadata;
+          if (metadata.expiresAt <= nowMs) {
+            await deleteHostedZaloMediaEntry(id);
+          }
+        } catch {
+          await deleteHostedZaloMediaEntry(id);
+        }
+      }),
   );
 }
 
@@ -47,14 +82,18 @@ async function readHostedZaloMediaEntry(id: string): Promise<{
   metadata: HostedZaloMediaMetadata;
   buffer: Buffer;
 } | null> {
-  const entry = await hostedZaloMediaStore.lookup(id);
-  if (!entry) {
+  try {
+    const [metadataRaw, buffer] = await Promise.all([
+      readFile(resolveHostedZaloMediaMetadataPath(id), "utf8"),
+      readFile(resolveHostedZaloMediaBufferPath(id)),
+    ]);
+    return {
+      metadata: JSON.parse(metadataRaw) as HostedZaloMediaMetadata,
+      buffer,
+    };
+  } catch {
     return null;
   }
-  return {
-    metadata: entry.metadata,
-    buffer: entry.blob,
-  };
 }
 
 export function resolveHostedZaloMediaRoutePrefix(params: {
@@ -88,6 +127,7 @@ export async function prepareHostedZaloMediaUrl(params: {
   maxBytes: number;
   proxyUrl?: string;
 }): Promise<string> {
+  await ensureHostedZaloMediaDir();
   await cleanupExpiredHostedZaloMedia();
 
   const media = await loadOutboundMediaFromUrl(params.mediaUrl, {
@@ -103,16 +143,19 @@ export async function prepareHostedZaloMediaUrl(params: {
   const token = createHostedZaloMediaToken();
   const publicBaseUrl = new URL(params.webhookUrl).origin;
 
-  await hostedZaloMediaStore.register(
-    id,
-    {
+  const store = privateFileStore(ZALO_OUTBOUND_MEDIA_DIR);
+  await store.writeText(`${id}.bin`, media.buffer);
+  try {
+    await store.writeJson(`${id}.json`, {
       routePath,
       token,
       contentType: media.contentType,
       expiresAt: Date.now() + ZALO_OUTBOUND_MEDIA_TTL_MS,
-    } satisfies HostedZaloMediaMetadata,
-    media.buffer,
-  );
+    } satisfies HostedZaloMediaMetadata);
+  } catch (error) {
+    await deleteHostedZaloMediaEntry(id);
+    throw error;
+  }
 
   return `${publicBaseUrl}${routePath}${id}?token=${token}`;
 }
@@ -174,7 +217,10 @@ export async function tryHandleHostedZaloMediaRequest(
   }
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("Content-Length", String(entry.buffer.byteLength));
+  const bufferStats = await stat(resolveHostedZaloMediaBufferPath(id)).catch(() => null);
+  if (bufferStats) {
+    res.setHeader("Content-Length", String(bufferStats.size));
+  }
 
   if (method === "HEAD") {
     res.statusCode = 200;
@@ -188,6 +234,6 @@ export async function tryHandleHostedZaloMediaRequest(
   return true;
 }
 
-export async function clearHostedZaloMediaForTest(): Promise<void> {
-  await hostedZaloMediaStore.clear();
+export function clearHostedZaloMediaForTest(): void {
+  rmSync(ZALO_OUTBOUND_MEDIA_DIR, { recursive: true, force: true });
 }

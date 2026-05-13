@@ -17,6 +17,8 @@ export type ActiveSessionForShutdown = {
   cfg: OpenClawConfig;
   sessionKey: string;
   sessionId: string;
+  storePath: string;
+  sessionFile?: string;
   agentId?: string;
 };
 

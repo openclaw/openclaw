@@ -57,14 +57,9 @@ import {
   canonicalizeMainSessionAlias,
   resolveAgentMainSessionKey,
 } from "../config/sessions/main-session.js";
-import {
-  deleteSessionEntry,
-  getSessionEntry,
-  listSessionEntries,
-  patchSessionEntry,
-  upsertSessionEntry,
-} from "../config/sessions/store.js";
-import { deleteSqliteSessionTranscript } from "../config/sessions/transcript-store.sqlite.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
+import { loadSessionStore } from "../config/sessions/store-load.js";
+import { archiveRemovedSessionTranscripts, updateSessionStore } from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -515,15 +510,17 @@ function resolveHeartbeatSession(
   const mainSessionKey =
     scope === "global" ? "global" : resolveAgentMainSessionKey({ cfg, agentId: resolvedAgentId });
   const storeAgentId = scope === "global" ? resolveDefaultAgentId(cfg) : resolvedAgentId;
-  const mainEntry = getSessionEntry({
+  const storePath = resolveStorePath(sessionCfg?.store, {
     agentId: storeAgentId,
-    sessionKey: mainSessionKey,
   });
+  const store = loadSessionStore(storePath);
+  const mainEntry = store[mainSessionKey];
 
   if (scope === "global") {
     return {
-      agentId: storeAgentId,
       sessionKey: mainSessionKey,
+      storePath,
+      store,
       entry: mainEntry,
       suppressOriginatingContext: false,
     };
@@ -533,8 +530,9 @@ function resolveHeartbeatSession(
   const forced = forcedSessionKey?.trim();
   if (forced && isSubagentSessionKey(forced)) {
     return {
-      agentId: storeAgentId,
       sessionKey: mainSessionKey,
+      storePath,
+      store,
       entry: mainEntry,
       suppressOriginatingContext: true,
     };
@@ -556,12 +554,10 @@ function resolveHeartbeatSession(
         const sessionAgentId = resolveAgentIdFromSessionKey(forcedCanonical);
         if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
           return {
-            agentId: storeAgentId,
             sessionKey: forcedCanonical,
-            entry: getSessionEntry({
-              agentId: storeAgentId,
-              sessionKey: forcedCanonical,
-            }),
+            storePath,
+            store,
+            entry: store[forcedCanonical],
             suppressOriginatingContext: false,
           };
         }
@@ -572,8 +568,9 @@ function resolveHeartbeatSession(
   const trimmed = heartbeat?.session?.trim() ?? "";
   if (!trimmed || isSubagentSessionKey(trimmed)) {
     return {
-      agentId: storeAgentId,
       sessionKey: mainSessionKey,
+      storePath,
+      store,
       entry: mainEntry,
       suppressOriginatingContext: false,
     };
@@ -582,8 +579,9 @@ function resolveHeartbeatSession(
   const normalized = normalizeLowercaseStringOrEmpty(trimmed);
   if (normalized === "main" || normalized === "global") {
     return {
-      agentId: storeAgentId,
       sessionKey: mainSessionKey,
+      storePath,
+      store,
       entry: mainEntry,
       suppressOriginatingContext: false,
     };
@@ -596,8 +594,9 @@ function resolveHeartbeatSession(
   });
   if (isSubagentSessionKey(candidate)) {
     return {
-      agentId: storeAgentId,
       sessionKey: mainSessionKey,
+      storePath,
+      store,
       entry: mainEntry,
       suppressOriginatingContext: false,
     };
@@ -611,20 +610,19 @@ function resolveHeartbeatSession(
     const sessionAgentId = resolveAgentIdFromSessionKey(canonical);
     if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
       return {
-        agentId: storeAgentId,
         sessionKey: canonical,
-        entry: getSessionEntry({
-          agentId: storeAgentId,
-          sessionKey: canonical,
-        }),
+        storePath,
+        store,
+        entry: store[canonical],
         suppressOriginatingContext: false,
       };
     }
   }
 
   return {
-    agentId: storeAgentId,
     sessionKey: mainSessionKey,
+    storePath,
+    store,
     entry: mainEntry,
     suppressOriginatingContext: false,
   };
@@ -719,15 +717,16 @@ function resolveHeartbeatReasoningPayloads(
 }
 
 async function restoreHeartbeatUpdatedAt(params: {
-  agentId: string;
+  storePath: string;
   sessionKey: string;
   updatedAt?: number;
 }) {
-  const { agentId, sessionKey, updatedAt } = params;
+  const { storePath, sessionKey, updatedAt } = params;
   if (typeof updatedAt !== "number") {
     return;
   }
-  const entry = getSessionEntry({ agentId, sessionKey });
+  const store = loadSessionStore(storePath);
+  const entry = store[sessionKey];
   if (!entry) {
     return;
   }
@@ -735,13 +734,16 @@ async function restoreHeartbeatUpdatedAt(params: {
   if (entry.updatedAt === nextUpdatedAt) {
     return;
   }
-  upsertSessionEntry({
-    agentId,
-    sessionKey,
-    entry: {
-      ...entry,
-      updatedAt: nextUpdatedAt,
-    },
+  await updateSessionStore(storePath, (nextStore) => {
+    const nextEntry = nextStore[sessionKey] ?? entry;
+    if (!nextEntry) {
+      return;
+    }
+    const resolvedUpdatedAt = Math.max(nextEntry.updatedAt ?? 0, updatedAt);
+    if (nextEntry.updatedAt === resolvedUpdatedAt) {
+      return;
+    }
+    nextStore[sessionKey] = { ...nextEntry, updatedAt: resolvedUpdatedAt };
   });
 }
 
@@ -1347,12 +1349,7 @@ export async function runHeartbeatOnce(opts: {
     });
     return { status: "skipped", reason: preflight.skipReason };
   }
-  const {
-    agentId: sessionAgentId,
-    entry,
-    sessionKey,
-    suppressOriginatingContext,
-  } = preflight.session;
+  const { entry, sessionKey, storePath, suppressOriginatingContext } = preflight.session;
 
   // Check the resolved session lane — if it is busy, skip to avoid interrupting
   // an active streaming turn.  The wake-layer retry (heartbeat-wake.ts) will
@@ -1494,47 +1491,51 @@ export async function runHeartbeatOnce(opts: {
       configuredSessionKey: configuredSession.sessionKey,
       sessionEntry: entry,
     });
+    const isolatedStorePath = resolveStorePath(cfg.session?.store, { agentId });
     const staleIsolatedSessionKey = resolveStaleHeartbeatIsolatedSessionKey({
       sessionKey,
       isolatedSessionKey,
       isolatedBaseSessionKey,
     });
-    const staleEntry = staleIsolatedSessionKey
-      ? getSessionEntry({ agentId, sessionKey: staleIsolatedSessionKey })
-      : undefined;
-    const cronSession = resolveCronSession({
-      cfg,
-      sessionKey: isolatedSessionKey,
-      agentId,
-      nowMs: startedAt,
-      forceNew: true,
-    });
-    upsertSessionEntry({
-      agentId,
-      sessionKey: isolatedSessionKey,
-      entry: {
+    const removedSessionFiles = new Map<string, string | undefined>();
+    let referencedSessionIds = new Set<string>();
+    await updateSessionStore(isolatedStorePath, (store) => {
+      const cronSession = resolveCronSession({
+        cfg,
+        sessionKey: isolatedSessionKey,
+        agentId,
+        nowMs: startedAt,
+        forceNew: true,
+        store,
+      });
+      if (staleIsolatedSessionKey) {
+        const staleEntry = store[staleIsolatedSessionKey];
+        if (staleEntry?.sessionId) {
+          removedSessionFiles.set(staleEntry.sessionId, staleEntry.sessionFile);
+        }
+        delete store[staleIsolatedSessionKey];
+      }
+      store[isolatedSessionKey] = {
         ...cronSession.sessionEntry,
         heartbeatIsolatedBaseSessionKey: isolatedBaseSessionKey,
-      },
+      };
+      referencedSessionIds = new Set(
+        Object.values(store)
+          .map((sessionEntry) => sessionEntry?.sessionId)
+          .filter((sessionId): sessionId is string => Boolean(sessionId)),
+      );
     });
-    if (staleEntry && staleIsolatedSessionKey && staleIsolatedSessionKey !== isolatedSessionKey) {
-      deleteSessionEntry({ agentId, sessionKey: staleIsolatedSessionKey });
-    }
-    if (staleEntry?.sessionId) {
+    if (removedSessionFiles.size > 0) {
       try {
-        const referencedSessionIds = new Set(
-          listSessionEntries({ agentId })
-            .map((row) => row.entry.sessionId)
-            .filter((sessionId): sessionId is string => Boolean(sessionId)),
-        );
-        if (!referencedSessionIds.has(staleEntry.sessionId)) {
-          deleteSqliteSessionTranscript({
-            agentId,
-            sessionId: staleEntry.sessionId,
-          });
-        }
+        await archiveRemovedSessionTranscripts({
+          removedSessionFiles,
+          referencedSessionIds,
+          storePath: isolatedStorePath,
+          reason: "deleted",
+          restrictToStoreDir: true,
+        });
       } catch (err) {
-        log.warn("heartbeat: failed to delete stale isolated session transcript", {
+        log.warn("heartbeat: failed to archive stale isolated session transcript", {
           err: String(err),
           sessionKey: staleIsolatedSessionKey,
         });
@@ -1561,27 +1562,27 @@ export async function runHeartbeatOnce(opts: {
     }
     const tasks = preflight.tasks;
 
-    await patchSessionEntry({
-      agentId: sessionAgentId,
-      sessionKey,
+    await updateSessionStore(storePath, (store) => {
+      const current = store[sessionKey];
       // Initialize stub entry on first run when current doesn't exist.
-      fallbackEntry: {
+      const base = current ?? {
         // Generate valid sessionId - derive from sessionKey without colons.
         sessionId: sessionKey.replace(/:/g, "_"),
         updatedAt: startedAt,
+        createdAt: startedAt,
+        messageCount: 0,
+        lastMessageAt: startedAt,
         heartbeatTaskState: {},
-      },
-      update: (current) => {
-        const taskState = { ...current.heartbeatTaskState };
+      };
+      const taskState = { ...base.heartbeatTaskState };
 
-        for (const task of tasks) {
-          if (isTaskDue(taskState[task.name], task.interval, startedAt)) {
-            taskState[task.name] = startedAt;
-          }
+      for (const task of tasks) {
+        if (isTaskDue(taskState[task.name], task.interval, startedAt)) {
+          taskState[task.name] = startedAt;
         }
+      }
 
-        return { heartbeatTaskState: taskState };
-      },
+      store[sessionKey] = { ...base, heartbeatTaskState: taskState };
     });
   };
 
@@ -1733,7 +1734,7 @@ export async function runHeartbeatOnce(opts: {
 
     if (heartbeatToolResponse && !heartbeatToolResponse.notify) {
       await restoreHeartbeatUpdatedAt({
-        agentId: sessionAgentId,
+        storePath,
         sessionKey,
         updatedAt: previousUpdatedAt,
       });
@@ -1762,7 +1763,7 @@ export async function runHeartbeatOnce(opts: {
 
     if (!heartbeatToolResponse && (!replyPayload || !hasOutboundReplyContent(replyPayload))) {
       await restoreHeartbeatUpdatedAt({
-        agentId: sessionAgentId,
+        storePath,
         sessionKey,
         updatedAt: previousUpdatedAt,
       });
@@ -1812,7 +1813,7 @@ export async function runHeartbeatOnce(opts: {
       normalized.shouldSkip && !normalized.hasMedia && !hasRelayableExecCompletion;
     if (shouldSkipMain && reasoningPayloads.length === 0) {
       await restoreHeartbeatUpdatedAt({
-        agentId: sessionAgentId,
+        storePath,
         sessionKey,
         updatedAt: previousUpdatedAt,
       });
@@ -1859,7 +1860,7 @@ export async function runHeartbeatOnce(opts: {
 
     if (isDuplicateMain) {
       await restoreHeartbeatUpdatedAt({
-        agentId: sessionAgentId,
+        storePath,
         sessionKey,
         updatedAt: previousUpdatedAt,
       });
@@ -1909,7 +1910,7 @@ export async function runHeartbeatOnce(opts: {
     if (!visibility.showAlerts) {
       await updateTaskTimestamps();
       await restoreHeartbeatUpdatedAt({
-        agentId: sessionAgentId,
+        storePath,
         sessionKey,
         updatedAt: previousUpdatedAt,
       });
@@ -1985,13 +1986,16 @@ export async function runHeartbeatOnce(opts: {
 
     // Record last delivered heartbeat payload for dedupe.
     if (!shouldSkipMain && normalized.text.trim()) {
-      await patchSessionEntry({
-        agentId: sessionAgentId,
-        sessionKey,
-        update: () => ({
+      await updateSessionStore(storePath, (store) => {
+        const current = store[sessionKey];
+        if (!current) {
+          return;
+        }
+        store[sessionKey] = {
+          ...current,
           lastHeartbeatText: normalized.text,
           lastHeartbeatSentAt: startedAt,
-        }),
+        };
       });
     }
 

@@ -74,7 +74,7 @@ async function expectPairingApprovalRejected(params: {
     await connectOk(pairingWs, {
       skipDefaultAuth: true,
       deviceToken: approver.token,
-      deviceIdentityKey: approver.identityKey,
+      deviceIdentityPath: approver.identityPath,
       scopes: params.connectedScopes,
     });
 
@@ -219,7 +219,7 @@ describe("gateway node pairing authorization", () => {
       await connectOk(pairingWs, {
         skipDefaultAuth: true,
         deviceToken: approver.token,
-        deviceIdentityKey: approver.identityKey,
+        deviceIdentityPath: approver.identityPath,
         scopes: ["operator.pairing"],
       });
 

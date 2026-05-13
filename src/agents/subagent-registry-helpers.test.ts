@@ -10,6 +10,7 @@ function createRunEntry(overrides: Partial<SubagentRunRecord> = {}): SubagentRun
     requesterDisplayKey: "main",
     task: "finish the task",
     cleanup: "keep",
+    retainAttachmentsOnKeep: true,
     createdAt: 500,
     startedAt: 1_000,
     ...overrides,

@@ -176,7 +176,7 @@ Verify the architecture with `uname -m` (should print `aarch64`). For binaries w
 
 OpenClaw state lives under:
 
-- `~/.openclaw/` — `openclaw.json`, SQLite state databases with auth profiles and sessions, and channel/provider state.
+- `~/.openclaw/` — `openclaw.json`, per-agent `auth-profiles.json`, channel/provider state, and session data.
 - `~/.openclaw/workspace/` — the agent workspace (SOUL.md, memory, artifacts).
 
 These survive reboots. To take a portable snapshot:

@@ -82,7 +82,7 @@ struct MenuSessionsInjectorTests {
                 model: "claude-opus-4-6"),
         ]
         let snapshot = SessionStoreSnapshot(
-            databasePath: "/tmp/openclaw-agent.sqlite",
+            storePath: "/tmp/sessions.json",
             defaults: defaults,
             rows: rows)
         injector.setTestingSnapshot(snapshot, errorText: nil)

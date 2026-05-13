@@ -559,7 +559,7 @@ function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | n
   // - <channel>:<accountId>:direct:<peerId>
   // - <channel>:group:<peerId>
   // - <channel>:channel:<peerId>
-  // Some channel session keys use "dm" as the direct-chat marker.
+  // Note: legacy keys may use "dm" instead of "direct".
   // Threaded sessions append :thread:<id>, which we strip so delivery targets the parent peer.
   // NOTE: Telegram forum topics encode as <chatId>:topic:<topicId> and should be preserved.
   const markerIndex = parts.findIndex(

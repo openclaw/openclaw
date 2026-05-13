@@ -180,7 +180,7 @@ describe("models-config merge helpers", () => {
     expect(merged["custom-proxy"]?.baseUrl).toBe("http://localhost:4000/v1");
   });
 
-  it("preserves non-empty existing apiKey and baseUrl from the stored model catalog", () => {
+  it("preserves non-empty existing apiKey and baseUrl from models.json", () => {
     const merged = mergeWithExistingProviderSecrets({
       nextProviders: {
         custom: createConfigProvider(),

@@ -205,7 +205,7 @@ describe("sendExecApprovalFollowupResult", () => {
 });
 
 describe("resolveExecHostApprovalContext", () => {
-  it("does not let host exec approvals broaden security beyond the requested policy", () => {
+  it("does not let exec-approvals.json broaden security beyond the requested policy", () => {
     mocks.resolveExecApprovals.mockReturnValue({
       defaults: {
         security: "allowlist",

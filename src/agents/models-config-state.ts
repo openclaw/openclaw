@@ -1,6 +1,6 @@
-const MODEL_CATALOG_STATE_KEY = Symbol.for("openclaw.modelCatalogState");
+const MODELS_JSON_STATE_KEY = Symbol.for("openclaw.modelsJsonState");
 
-type ModelCatalogState = {
+type ModelsJsonState = {
   writeLocks: Map<string, Promise<void>>;
   readyCache: Map<
     string,
@@ -8,12 +8,12 @@ type ModelCatalogState = {
   >;
 };
 
-export const MODEL_CATALOG_STATE = (() => {
+export const MODELS_JSON_STATE = (() => {
   const globalState = globalThis as typeof globalThis & {
-    [MODEL_CATALOG_STATE_KEY]?: ModelCatalogState;
+    [MODELS_JSON_STATE_KEY]?: ModelsJsonState;
   };
-  if (!globalState[MODEL_CATALOG_STATE_KEY]) {
-    globalState[MODEL_CATALOG_STATE_KEY] = {
+  if (!globalState[MODELS_JSON_STATE_KEY]) {
+    globalState[MODELS_JSON_STATE_KEY] = {
       writeLocks: new Map<string, Promise<void>>(),
       readyCache: new Map<
         string,
@@ -21,10 +21,10 @@ export const MODEL_CATALOG_STATE = (() => {
       >(),
     };
   }
-  return globalState[MODEL_CATALOG_STATE_KEY];
+  return globalState[MODELS_JSON_STATE_KEY];
 })();
 
-export function resetModelCatalogReadyCacheForTest(): void {
-  MODEL_CATALOG_STATE.writeLocks.clear();
-  MODEL_CATALOG_STATE.readyCache.clear();
+export function resetModelsJsonReadyCacheForTest(): void {
+  MODELS_JSON_STATE.writeLocks.clear();
+  MODELS_JSON_STATE.readyCache.clear();
 }

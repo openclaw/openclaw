@@ -12,8 +12,12 @@ vi.mock("../../config/sessions/main-session.js", () => ({
   resolveAgentMainSessionKey: vi.fn().mockReturnValue("agent:test:main"),
 }));
 
-vi.mock("../../config/sessions/store.js", () => ({
-  getSessionEntry: vi.fn().mockReturnValue(undefined),
+vi.mock("../../config/sessions/paths.js", () => ({
+  resolveStorePath: vi.fn().mockReturnValue("/tmp/test-store.json"),
+}));
+
+vi.mock("../../config/sessions/store-load.js", () => ({
+  loadSessionStore: vi.fn().mockReturnValue({}),
 }));
 
 vi.mock("../../infra/outbound/channel-selection.runtime.js", () => ({
@@ -35,15 +39,15 @@ vi.mock("../../infra/outbound/targets.runtime.js", () => ({
 }));
 const mockedModuleIds = [
   "../../config/sessions/main-session.js",
-  "../../config/sessions/store.js",
+  "../../config/sessions/paths.js",
+  "../../config/sessions/store-load.js",
   "../../infra/outbound/channel-selection.runtime.js",
   "../../infra/outbound/targets.runtime.js",
   "../../infra/outbound/target-id-resolution.js",
   "../../pairing/allow-from-store-read.js",
 ];
 
-import { getSessionEntry } from "../../config/sessions/store.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import { loadSessionStore } from "../../config/sessions/store-load.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.runtime.js";
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-id-resolution.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.runtime.js";
@@ -101,8 +105,6 @@ beforeEach(() => {
   normalizeTelegramTargetForDeliveryTest.mockClear();
   vi.mocked(readChannelAllowFromStoreEntriesSync).mockReset();
   vi.mocked(readChannelAllowFromStoreEntriesSync).mockReturnValue([]);
-  vi.mocked(getSessionEntry).mockReset();
-  vi.mocked(getSessionEntry).mockReturnValue(undefined);
   vi.mocked(resolveOutboundTarget).mockReset();
   setActivePluginRegistry(
     createTestRegistry([
@@ -176,12 +178,10 @@ const DEFAULT_TARGET = {
   to: "room:default",
 };
 
-type SessionStore = Record<string, SessionEntry>;
+type SessionStore = ReturnType<typeof loadSessionStore>;
 
 function setSessionStore(store: SessionStore) {
-  vi.mocked(getSessionEntry).mockImplementation(
-    ({ sessionKey }: { sessionKey: string }) => store[sessionKey],
-  );
+  vi.mocked(loadSessionStore).mockReturnValue(store);
 }
 
 function setMainSessionEntry(entry?: SessionStore[string]) {

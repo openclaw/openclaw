@@ -1,4 +1,8 @@
 import { DEFAULT_EMOJIS, DEFAULT_TIMING } from "openclaw/plugin-sdk/channel-feedback";
+import {
+  recordChannelBotPairLoopAndCheckSuppression,
+  type ChannelBotLoopProtectionFacts,
+} from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
@@ -159,8 +163,12 @@ const recordInboundSession = vi.hoisted(() =>
 );
 const configSessionsMocks = vi.hoisted(() => ({
   readSessionUpdatedAt: vi.fn<(params?: unknown) => number | undefined>(() => undefined),
+  resolveStorePath: vi.fn<(path?: unknown, opts?: unknown) => string>(
+    () => "/tmp/openclaw-discord-process-test-sessions.json",
+  ),
 }));
 const readSessionUpdatedAt = configSessionsMocks.readSessionUpdatedAt;
+const resolveStorePath = configSessionsMocks.resolveStorePath;
 const createDiscordRestClientSpy = vi.hoisted(() =>
   vi.fn<
     (params: unknown) => {
@@ -250,6 +258,7 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
 
 vi.mock("openclaw/plugin-sdk/session-store-runtime", () => ({
   readSessionUpdatedAt: (...args: unknown[]) => configSessionsMocks.readSessionUpdatedAt(...args),
+  resolveStorePath: (...args: unknown[]) => configSessionsMocks.resolveStorePath(...args),
 }));
 
 vi.mock("../client.js", () => ({
@@ -340,10 +349,12 @@ beforeEach(() => {
   dispatchInboundMessage.mockClear();
   recordInboundSession.mockClear();
   readSessionUpdatedAt.mockClear();
+  resolveStorePath.mockClear();
   createDiscordRestClientSpy.mockClear();
   dispatchInboundMessage.mockResolvedValue(createNoQueuedDispatchResult());
   recordInboundSession.mockResolvedValue(undefined);
   readSessionUpdatedAt.mockReturnValue(undefined);
+  resolveStorePath.mockReturnValue("/tmp/openclaw-discord-process-test-sessions.json");
   threadBindingTesting.resetThreadBindingsForTests();
 });
 
@@ -590,6 +601,55 @@ function expectSinglePreviewEdit() {
 }
 
 describe("processDiscordMessage ack reactions", () => {
+  it("drops bot-loop-suppressed messages before Discord side effects", async () => {
+    const botLoopProtection: ChannelBotLoopProtectionFacts = {
+      scopeId: "discord-process-side-effect-test",
+      conversationId: "c-loop-side-effects",
+      senderId: "bot-a",
+      receiverId: "bot-b",
+      config: {
+        maxEventsPerWindow: 1,
+        windowSeconds: 60,
+        cooldownSeconds: 60,
+      },
+      defaultEnabled: true,
+      nowMs: 10_000,
+    };
+    expect(recordChannelBotPairLoopAndCheckSuppression(botLoopProtection)).toEqual({
+      suppressed: false,
+    });
+    const observer = { onReplyPlanResolved: vi.fn() };
+    const ctx = await createAutomaticSourceDeliveryContext({
+      messageChannelId: botLoopProtection.conversationId,
+      message: {
+        id: "m-loop-side-effects",
+        channelId: botLoopProtection.conversationId,
+        timestamp: new Date().toISOString(),
+        attachments: [
+          {
+            id: "att-loop",
+            url: "https://cdn.discordapp.test/loop.png",
+            contentType: "image/png",
+            filename: "loop.png",
+            size: 16,
+          },
+        ],
+      },
+      botLoopProtection: {
+        ...botLoopProtection,
+        nowMs: 10_001,
+      },
+    });
+
+    await processDiscordMessage(ctx, observer);
+
+    expect(observer.onReplyPlanResolved).not.toHaveBeenCalled();
+    expect(createDiscordRestClientSpy).not.toHaveBeenCalled();
+    expect(sendMocks.reactMessageDiscord).not.toHaveBeenCalled();
+    expect(recordInboundSession).not.toHaveBeenCalled();
+    expect(dispatchInboundMessage).not.toHaveBeenCalled();
+  });
+
   it("skips ack reactions for group-mentions when mentions are not required", async () => {
     const ctx = await createBaseContext({
       shouldRequireMention: false,
@@ -828,7 +888,7 @@ describe("processDiscordMessage ack reactions", () => {
             timing: { debounceMs: 0 },
           },
         },
-        session: {},
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
       },
     });
 
@@ -854,7 +914,7 @@ describe("processDiscordMessage ack reactions", () => {
             timing: { debounceMs: 0 },
           },
         },
-        session: {},
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
       },
     });
 
@@ -881,7 +941,7 @@ describe("processDiscordMessage ack reactions", () => {
             timing: { debounceMs: 0 },
           },
         },
-        session: {},
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
       },
     });
 
@@ -909,7 +969,7 @@ describe("processDiscordMessage ack reactions", () => {
           ackReaction: "👀",
           removeAckAfterReply: true,
         },
-        session: {},
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
       },
     });
 
@@ -933,7 +993,7 @@ describe("processDiscordMessage ack reactions", () => {
             enabled: false,
           },
         },
-        session: {},
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
       },
     });
 
@@ -1023,6 +1083,7 @@ describe("processDiscordMessage session routing", () => {
       cfg: {
         messages: { ackReaction: "👀" },
         session: {
+          store: "/tmp/openclaw-discord-process-test-sessions.json",
           dmScope: "main",
         },
       },
@@ -1110,7 +1171,7 @@ describe("processDiscordMessage session routing", () => {
             timing: { debounceMs: 0 },
           },
         },
-        session: {},
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
       },
       route: BASE_CHANNEL_ROUTE,
     });
@@ -1142,7 +1203,7 @@ describe("processDiscordMessage session routing", () => {
             timing: { debounceMs: 0 },
           },
         },
-        session: {},
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
       },
       route: BASE_CHANNEL_ROUTE,
     });
@@ -1199,7 +1260,7 @@ describe("processDiscordMessage session routing", () => {
               visibleReplies: "automatic",
             },
           },
-          session: {},
+          session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
         },
         route: BASE_CHANNEL_ROUTE,
       }),
@@ -1348,7 +1409,7 @@ describe("processDiscordMessage draft streaming", () => {
     return await createAutomaticSourceDeliveryContext({
       cfg: {
         messages: { ackReaction: "👀" },
-        session: {},
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
         channels: {
           discord: {
             draftChunk: { minChars: 1, maxChars: 5, breakPreference: "newline" },
@@ -1422,7 +1483,7 @@ describe("processDiscordMessage draft streaming", () => {
     const ctx = await createAutomaticSourceDeliveryContext({
       cfg: {
         messages: { ackReaction: "👀" },
-        session: {},
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
         channels: {
           discord: {
             maxLinesPerMessage: 120,

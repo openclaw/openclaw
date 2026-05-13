@@ -1,7 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSubagentSpawnTestConfig,
-  installSessionEntryCaptureMock,
+  installSessionStoreCaptureMock,
   loadSubagentSpawnModuleForTest,
   setupAcceptedSubagentGatewayMock,
 } from "./subagent-spawn.test-helpers.js";
@@ -11,7 +11,7 @@ const hoisted = vi.hoisted(() => ({
   callGatewayMock: vi.fn(),
   configOverride: {} as Record<string, unknown>,
   depthBySession: new Map<string, number>(),
-  upsertSessionEntryMock: vi.fn(),
+  updateSessionStoreMock: vi.fn(),
   registerSubagentRunMock: vi.fn(),
 }));
 
@@ -76,9 +76,8 @@ describe("subagent spawn depth + child limits", () => {
       callGatewayMock: hoisted.callGatewayMock,
       getRuntimeConfig: () => hoisted.configOverride,
       registerSubagentRunMock: hoisted.registerSubagentRunMock,
-      upsertSessionEntryMock: hoisted.upsertSessionEntryMock,
-      getSubagentDepthFromSessionEntries: (sessionKey) =>
-        hoisted.depthBySession.get(sessionKey) ?? 0,
+      updateSessionStoreMock: hoisted.updateSessionStoreMock,
+      getSubagentDepthFromSessionStore: (sessionKey) => hoisted.depthBySession.get(sessionKey) ?? 0,
       countActiveRunsForSession: (sessionKey) =>
         hoisted.activeChildrenBySession.get(sessionKey) ?? 0,
       resetModules: false,
@@ -90,9 +89,9 @@ describe("subagent spawn depth + child limits", () => {
     hoisted.depthBySession.clear();
     hoisted.callGatewayMock.mockClear();
     hoisted.registerSubagentRunMock.mockClear();
-    hoisted.upsertSessionEntryMock.mockReset();
+    hoisted.updateSessionStoreMock.mockReset();
     persistedStore = undefined;
-    installSessionEntryCaptureMock(hoisted.upsertSessionEntryMock, {
+    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
       onStore: (store) => {
         persistedStore = store;
       },
@@ -208,7 +207,7 @@ describe("subagent spawn depth + child limits", () => {
         return {};
       },
     );
-    hoisted.upsertSessionEntryMock.mockRejectedValueOnce(new Error("invalid model: bad-model"));
+    hoisted.updateSessionStoreMock.mockRejectedValueOnce(new Error("invalid model: bad-model"));
 
     const result = await spawnFrom("main", { model: "bad-model" });
 

@@ -1,7 +1,6 @@
-import { getSessionEntry, upsertSessionEntry } from "../config/sessions/store.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
+import { loadSessionStore, updateSessionStore } from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
   normalizeStoredOverrideModel,
   resolveDefaultModelForAgent,
@@ -16,23 +15,8 @@ import {
 export { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 export type LiveSessionModelSelection = EmbeddedRunModelSwitchRequest;
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-
-function resolveSessionEntryAgentId(params: { agentId?: string; sessionKey: string }): string {
-  return normalizeOptionalString(params.agentId) ?? resolveAgentIdFromSessionKey(params.sessionKey);
-}
-
-function readLiveSessionEntry(params: {
-  agentId?: string;
-  sessionKey: string;
-}): SessionEntry | undefined {
-  return getSessionEntry({
-    agentId: resolveSessionEntryAgentId(params),
-    sessionKey: params.sessionKey,
-  });
-}
-
 export function resolveLiveSessionModelSelection(params: {
-  cfg?: OpenClawConfig | undefined;
+  cfg?: { session?: { store?: string } } | undefined;
   sessionKey?: string;
   agentId?: string;
   defaultProvider: string;
@@ -50,7 +34,10 @@ export function resolveLiveSessionModelSelection(params: {
         agentId,
       })
     : { provider: params.defaultProvider, model: params.defaultModel };
-  const entry = readLiveSessionEntry({ agentId, sessionKey });
+  const storePath = resolveStorePath(cfg.session?.store, {
+    agentId,
+  });
+  const entry = loadSessionStore(storePath, { skipCache: true })[sessionKey];
   const normalizedSelection = normalizeStoredOverrideModel({
     providerOverride: entry?.providerOverride,
     modelOverride: entry?.modelOverride,
@@ -154,7 +141,7 @@ export function shouldTrackPersistedLiveSessionModelSelection(
  * user-initiated `/model` switches and system-initiated fallback rotations.
  */
 export function shouldSwitchToLiveModel(params: {
-  cfg?: OpenClawConfig | undefined;
+  cfg?: { session?: { store?: string } } | undefined;
   sessionKey?: string;
   agentId?: string;
   defaultProvider: string;
@@ -169,7 +156,10 @@ export function shouldSwitchToLiveModel(params: {
   if (!cfg || !sessionKey) {
     return undefined;
   }
-  const entry = readLiveSessionEntry({ agentId: params.agentId, sessionKey });
+  const storePath = resolveStorePath(cfg.session?.store, {
+    agentId: params.agentId?.trim(),
+  });
+  const entry = loadSessionStore(storePath, { skipCache: true })[sessionKey];
   if (!entry?.liveModelSwitchPending) {
     return undefined;
   }
@@ -211,7 +201,7 @@ export function shouldSwitchToLiveModel(params: {
  * subsequent retry iterations do not re-trigger the switch.
  */
 export async function clearLiveModelSwitchPending(params: {
-  cfg?: OpenClawConfig | undefined;
+  cfg?: { session?: { store?: string } } | undefined;
   sessionKey?: string;
   agentId?: string;
 }): Promise<void> {
@@ -220,18 +210,16 @@ export async function clearLiveModelSwitchPending(params: {
   if (!cfg || !sessionKey) {
     return;
   }
-  const agentId = resolveSessionEntryAgentId({ agentId: params.agentId, sessionKey });
-  const entry = getSessionEntry({ agentId, sessionKey });
-  if (!entry?.liveModelSwitchPending) {
+  const storePath = resolveStorePath(cfg.session?.store, {
+    agentId: params.agentId?.trim(),
+  });
+  if (!storePath) {
     return;
   }
-  const next: SessionEntry = {
-    ...entry,
-  };
-  delete next.liveModelSwitchPending;
-  upsertSessionEntry({
-    agentId,
-    sessionKey,
-    entry: next,
+  await updateSessionStore(storePath, (store) => {
+    const entry = store[sessionKey];
+    if (entry) {
+      delete entry.liveModelSwitchPending;
+    }
   });
 }

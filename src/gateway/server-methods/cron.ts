@@ -2,8 +2,9 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveCronDeliveryPreviews } from "../../cron/delivery-preview.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import {
-  readCronRunLogEntriesPageAllFromSqlite,
-  readCronRunLogEntriesPageFromSqlite,
+  readCronRunLogEntriesPage,
+  readCronRunLogEntriesPageAll,
+  resolveCronRunLogPath,
 } from "../../cron/run-log.js";
 import { applyJobPatch } from "../../cron/service/jobs.js";
 import { isInvalidCronSessionTargetIdError } from "../../cron/session-target.js";
@@ -190,7 +191,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     const result = context.cron.wake({
       mode: p.mode,
       text: p.text,
-      ...(p.sessionKey ? { sessionKey: p.sessionKey } : {}),
+      ...(sessionKey ? { sessionKey } : {}),
     });
     respond(true, result, undefined);
   },
@@ -558,8 +559,8 @@ export const cronHandlers: GatewayRequestHandlers = {
           .filter((job) => typeof job.id === "string" && typeof job.name === "string")
           .map((job) => [job.id, job.name]),
       );
-      const page = await readCronRunLogEntriesPageAllFromSqlite({
-        storeKey: context.cronStoreKey,
+      const page = await readCronRunLogEntriesPageAll({
+        storePath: context.cronStorePath,
         limit: p.limit,
         offset: p.offset,
         statuses: p.statuses,
@@ -573,25 +574,31 @@ export const cronHandlers: GatewayRequestHandlers = {
       respond(true, page, undefined);
       return;
     }
+    let logPath: string;
     try {
-      const page = await readCronRunLogEntriesPageFromSqlite(context.cronStoreKey, {
-        limit: p.limit,
-        offset: p.offset,
+      logPath = resolveCronRunLogPath({
+        storePath: context.cronStorePath,
         jobId: jobId as string,
-        statuses: p.statuses,
-        status: p.status,
-        deliveryStatuses: p.deliveryStatuses,
-        deliveryStatus: p.deliveryStatus,
-        query: p.query,
-        sortDir: p.sortDir,
       });
-      respond(true, page, undefined);
     } catch {
       respond(
         false,
         undefined,
         errorShape(ErrorCodes.INVALID_REQUEST, "invalid cron.runs params: invalid id"),
       );
+      return;
     }
+    const page = await readCronRunLogEntriesPage(logPath, {
+      limit: p.limit,
+      offset: p.offset,
+      jobId: jobId as string,
+      statuses: p.statuses,
+      status: p.status,
+      deliveryStatuses: p.deliveryStatuses,
+      deliveryStatus: p.deliveryStatus,
+      query: p.query,
+      sortDir: p.sortDir,
+    });
+    respond(true, page, undefined);
   },
 };

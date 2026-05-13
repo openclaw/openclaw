@@ -300,14 +300,10 @@ describe("nextcloud-talk inbound behavior", () => {
       runtime: createRuntimeEnv(),
     });
 
-    expect(coreRuntime.channel.session.recordInboundSession).toHaveBeenCalledTimes(1);
-    expect(coreRuntime.channel.reply.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ctx: expect.objectContaining({
-          Provider: "nextcloud-talk",
-          AccountId: "default",
-        }),
-      }),
-    );
+    const assembledRequest = requireFirstMockArg(
+      coreRuntime.channel.turn.runAssembled as ReturnType<typeof vi.fn>,
+      "Nextcloud Talk assembled request",
+    ) as { replyPipeline?: unknown };
+    expect(assembledRequest.replyPipeline).toEqual({});
   });
 });

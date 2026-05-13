@@ -6,7 +6,7 @@ const sessionStoreRuntimeLoader = createLazyImportLoader(
   () => import("../../config/sessions/store.runtime.js"),
 );
 
-function loadSessionRowRuntime() {
+function loadSessionStoreRuntime() {
   return sessionStoreRuntimeLoader.load();
 }
 
@@ -16,6 +16,7 @@ export async function applySessionHints(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
+  storePath?: string;
   abortKey?: string;
 }): Promise<string> {
   let prefixedBodyBase = params.baseBody;
@@ -28,20 +29,19 @@ export async function applySessionHints(params: {
       params.sessionEntry.abortedLastRun = false;
       params.sessionEntry.updatedAt = Date.now();
       params.sessionStore[params.sessionKey] = params.sessionEntry;
-      const sessionKey = params.sessionKey;
-      const { getSessionEntry, resolveAgentIdFromSessionKey, upsertSessionEntry } =
-        await loadSessionRowRuntime();
-      const agentId = resolveAgentIdFromSessionKey(sessionKey);
-      const entry = getSessionEntry({ agentId, sessionKey }) ?? params.sessionEntry;
-      if (entry) {
-        upsertSessionEntry({
-          agentId,
-          sessionKey,
-          entry: {
+      if (params.storePath) {
+        const sessionKey = params.sessionKey;
+        const { updateSessionStore } = await loadSessionStoreRuntime();
+        await updateSessionStore(params.storePath, (store) => {
+          const entry = store[sessionKey] ?? params.sessionEntry;
+          if (!entry) {
+            return;
+          }
+          store[sessionKey] = {
             ...entry,
             abortedLastRun: false,
             updatedAt: Date.now(),
-          },
+          };
         });
       }
     } else if (params.abortKey) {

@@ -1034,8 +1034,8 @@ describe("qa mock openai server", () => {
     };
     expect(embeddingPayload.model).toBe("text-embedding-3-small");
     expect(embeddingPayload.data).toHaveLength(2);
-    expect(embeddingPayload.data?.[0]?.index).toBe(0);
-    expect(embeddingPayload.data?.[0]?.embedding?.length).toBeGreaterThan(0);
+    expect(embeddingPayload.data?.map((item) => item.index)).toStrictEqual([0, 1]);
+    expect(embeddingPayload.data?.map((item) => item.embedding?.length)).toStrictEqual([16, 16]);
   });
 
   it("requests non-threaded subagent handoff for QA channel runs", async () => {
@@ -1511,7 +1511,7 @@ describe("qa mock openai server", () => {
             output: JSON.stringify({
               results: [
                 {
-                  path: "transcript:main:qa-session-memory-ranking",
+                  path: "sessions/qa-session-memory-ranking.jsonl",
                   startLine: 2,
                   endLine: 3,
                 },

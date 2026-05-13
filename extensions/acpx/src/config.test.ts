@@ -11,13 +11,8 @@ function expectedSourceMcpServerArgs(entrypoint: string): string[] {
   return ["--import", TSX_IMPORT, path.resolve(entrypoint)];
 }
 
-function expectedMcpServerArgs(params: { distEntry: string; sourceEntry: string }): string[] {
-  const distEntry = path.resolve(params.distEntry);
-  return fs.existsSync(distEntry) ? [distEntry] : expectedSourceMcpServerArgs(params.sourceEntry);
-}
-
 describe("embedded acpx plugin config", () => {
-  it("resolves workspace cwd by default", () => {
+  it("resolves workspace stateDir and cwd by default", () => {
     const workspaceDir = path.resolve("/tmp/openclaw-acpx");
     const resolved = resolveAcpxPluginConfig({
       rawConfig: undefined,
@@ -25,6 +20,7 @@ describe("embedded acpx plugin config", () => {
     });
 
     expect(resolved.cwd).toBe(workspaceDir);
+    expect(resolved.stateDir).toBe(path.join(workspaceDir, "state"));
     expect(resolved.permissionMode).toBe("approve-reads");
     expect(resolved.nonInteractivePermissions).toBe("fail");
     expect(resolved.timeoutSeconds).toBe(120);
@@ -168,10 +164,7 @@ describe("embedded acpx plugin config", () => {
     const server = resolved.mcpServers["openclaw-plugin-tools"];
     expect(server).toEqual({
       command: process.execPath,
-      args: expectedMcpServerArgs({
-        distEntry: "dist/mcp/plugin-tools-serve.js",
-        sourceEntry: "src/mcp/plugin-tools-serve.ts",
-      }),
+      args: expectedSourceMcpServerArgs("src/mcp/plugin-tools-serve.ts"),
     });
   });
 
@@ -186,10 +179,7 @@ describe("embedded acpx plugin config", () => {
     const server = resolved.mcpServers["openclaw-tools"];
     expect(server).toEqual({
       command: process.execPath,
-      args: expectedMcpServerArgs({
-        distEntry: "dist/mcp/openclaw-tools-serve.js",
-        sourceEntry: "src/mcp/openclaw-tools-serve.ts",
-      }),
+      args: expectedSourceMcpServerArgs("src/mcp/openclaw-tools-serve.ts"),
     });
   });
 
@@ -211,6 +201,10 @@ describe("embedded acpx plugin config", () => {
       additionalProperties: false,
       properties: {
         cwd: {
+          type: "string",
+          minLength: 1,
+        },
+        stateDir: {
           type: "string",
           minLength: 1,
         },

@@ -1,16 +1,16 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   clearCompactionProviders,
   registerCompactionProvider,
 } from "../../plugins/compaction-provider.js";
-import type { ExtensionAPI, ExtensionContext } from "../agent-extension-contract.js";
 import * as compactionModule from "../compaction.js";
-import type { Api, Model } from "../pi-ai-contract.js";
 import { buildEmbeddedExtensionFactories } from "../pi-embedded-runner/extensions.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
@@ -72,6 +72,7 @@ function stubSessionManager(): ExtensionContext["sessionManager"] {
     getCwd: () => "/stub",
     getSessionDir: () => "/stub",
     getSessionId: () => "stub-id",
+    getSessionFile: () => undefined,
     getLeafId: () => null,
     getLeafEntry: () => undefined,
     getEntry: () => undefined,
@@ -1428,7 +1429,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(summaryCall.headers?.["Copilot-Integration-Id"]).toBe("vscode-chat");
     expect(summaryCall.headers?.["Editor-Plugin-Version"]).toBe("copilot-chat/0.35.0");
     expect(summaryCall.headers?.["Openai-Organization"]).toBe("github-copilot");
-    expect(summaryCall.headers?.["User-Agent"]).toBe("GitHubCopilotChat/0.26.7");
+    expect(summaryCall.headers?.["User-Agent"]).toBe("GitHubCopilotChat/0.35.0");
     expect(summaryCall.headers?.["X-Test"]).toBe("1");
     expect(summaryCall.headers?.["x-initiator"]).toBe("user");
   });

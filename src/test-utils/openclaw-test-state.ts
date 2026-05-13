@@ -1,11 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolveAuthProfileStoreLocationForDisplay } from "../agents/auth-profiles/paths.js";
-import { savePersistedAuthProfileSecretsStore } from "../agents/auth-profiles/persisted.js";
-import type { AuthProfileSecretsStore } from "../agents/auth-profiles/types.js";
 import { captureEnv } from "./env.js";
-import { cleanupOpenClawStateForTest } from "./openclaw-state-cleanup.js";
+import { cleanupSessionStateForTest } from "./session-state-cleanup.js";
 
 type OpenClawTestStateLayout = "home" | "state-only" | "split";
 
@@ -42,6 +39,7 @@ export type OpenClawTestState = {
   path: (...parts: string[]) => string;
   statePath: (...parts: string[]) => string;
   agentDir: (agentId?: string) => string;
+  sessionsDir: (agentId?: string) => string;
   writeConfig: (config: unknown) => Promise<string>;
   writeJson: (relativePath: string, value: unknown) => Promise<string>;
   writeText: (relativePath: string, value: string) => Promise<string>;
@@ -281,6 +279,8 @@ export async function createOpenClawTestState(
   let envApplied = false;
   let cleaned = false;
   const agentDir = (agentId = "main") => path.join(paths.stateDir, "agents", agentId, "agent");
+  const sessionsDir = (agentId = "main") =>
+    path.join(paths.stateDir, "agents", agentId, "sessions");
 
   const state: OpenClawTestState = {
     root,
@@ -290,6 +290,7 @@ export async function createOpenClawTestState(
     path: (...parts) => path.join(root, ...parts),
     statePath: (...parts) => path.join(paths.stateDir, ...parts),
     agentDir,
+    sessionsDir,
     writeConfig: (value) => writeJsonFile(paths.configPath, value),
     writeJson: (relativePath, value) =>
       writeJsonFile(path.join(paths.stateDir, relativePath), value),
@@ -299,12 +300,9 @@ export async function createOpenClawTestState(
       await fs.writeFile(filePath, value, "utf8");
       return filePath;
     },
-    writeAuthProfiles: async (store, agentId = "main") => {
-      const targetAgentDir = agentDir(agentId);
-      savePersistedAuthProfileSecretsStore(store as AuthProfileSecretsStore, targetAgentDir, {
-        env,
-      });
-      return resolveAuthProfileStoreLocationForDisplay(targetAgentDir, env);
+    writeAuthProfiles: (store, agentId = "main") => {
+      const filePath = path.join(agentDir(agentId), "auth-profiles.json");
+      return writeJsonFile(filePath, store);
     },
     applyEnv: () => {
       for (const [key, value] of Object.entries(envVars)) {
@@ -327,7 +325,7 @@ export async function createOpenClawTestState(
         return;
       }
       cleaned = true;
-      await cleanupOpenClawStateForTest().catch(() => undefined);
+      await cleanupSessionStateForTest().catch(() => undefined);
       state.restoreEnv();
       await fs.rm(root, { recursive: true, force: true });
     },

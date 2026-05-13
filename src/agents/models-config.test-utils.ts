@@ -1,10 +1,11 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
-import { readStoredModelsConfigRaw } from "./models-config-store.js";
 
-export async function readStoredModelCatalog<T>(agentDir = resolveDefaultAgentDir({})): Promise<T> {
-  const stored = readStoredModelsConfigRaw(agentDir);
-  if (!stored) {
-    throw new Error(`expected stored model catalog for ${agentDir}`);
-  }
-  return JSON.parse(stored.raw) as T;
+export async function readGeneratedModelsJson<T>(
+  agentDir = resolveDefaultAgentDir({}),
+): Promise<T> {
+  const modelPath = path.join(agentDir, "models.json");
+  const raw = await fs.readFile(modelPath, "utf8");
+  return JSON.parse(raw) as T;
 }

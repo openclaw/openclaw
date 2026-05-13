@@ -5,6 +5,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
+import { deriveSessionChatType } from "./session-chat-type.js";
 
 export type SessionSendPolicyDecision = "allow" | "deny";
 
@@ -36,6 +37,40 @@ function stripAgentSessionKeyPrefix(key?: string): string | undefined {
   return key;
 }
 
+function deriveChannelFromKey(key?: string) {
+  const normalizedKey = stripAgentSessionKeyPrefix(key);
+  if (!normalizedKey) {
+    return undefined;
+  }
+  const parts = normalizedKey.split(":").filter(Boolean);
+  if (parts.length >= 3 && (parts[1] === "group" || parts[1] === "channel")) {
+    return normalizeMatchValue(parts[0]);
+  }
+  return undefined;
+}
+
+function deriveChatTypeFromKey(key?: string): SessionChatType | undefined {
+  const normalizedKey = normalizeOptionalLowercaseString(stripAgentSessionKeyPrefix(key));
+  if (!normalizedKey) {
+    return undefined;
+  }
+  const tokens = new Set(normalizedKey.split(":").filter(Boolean));
+  if (tokens.has("group")) {
+    return "group";
+  }
+  if (tokens.has("channel")) {
+    return "channel";
+  }
+  if (tokens.has("direct") || tokens.has("dm")) {
+    return "direct";
+  }
+  const derived = deriveSessionChatType(normalizedKey);
+  if (derived !== "unknown") {
+    return derived;
+  }
+  return undefined;
+}
+
 export function resolveSendPolicy(params: {
   cfg: OpenClawConfig;
   entry?: SessionEntry;
@@ -63,11 +98,14 @@ export function resolveSendPolicy(params: {
     channel ??=
       normalizeMatchValue(params.channel) ??
       normalizeMatchValue(params.entry?.channel) ??
-      normalizeMatchValue(params.entry?.deliveryContext?.channel);
+      normalizeMatchValue(params.entry?.lastChannel) ??
+      deriveChannelFromKey(params.sessionKey);
     return channel;
   };
   const getChatType = () => {
-    chatType ??= normalizeChatType(params.chatType ?? params.entry?.chatType);
+    chatType ??=
+      normalizeChatType(params.chatType ?? params.entry?.chatType) ??
+      normalizeChatType(deriveChatTypeFromKey(params.sessionKey));
     return chatType;
   };
 

@@ -14,8 +14,8 @@ import { getSessionBindingService } from "../../infra/outbound/session-binding-s
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import {
   buildRestartSuccessContinuation,
-  clearRestartSentinel,
   formatDoctorNonInteractiveHint,
+  removeRestartSentinelFile,
   type RestartSentinelPayload,
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
@@ -29,11 +29,16 @@ import {
 import { formatTokenCount, formatUsd } from "../../utils/usage-format.js";
 import { parseActivationCommand } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";
-import { normalizeFastMode, normalizeUsageDisplay, resolveResponseUsageMode } from "../thinking.js";
+import {
+  isSessionDefaultDirectiveValue,
+  normalizeFastMode,
+  normalizeUsageDisplay,
+  resolveResponseUsageMode,
+} from "../thinking.js";
 import { resolveCommandSurfaceChannel } from "./channel-context.js";
 import { rejectNonOwnerCommand, rejectUnauthorizedCommand } from "./command-gates.js";
 import { handleAbortTrigger, handleStopCommand } from "./commands-session-abort.js";
-import { persistSessionEntry } from "./commands-session-entry.js";
+import { persistSessionEntry } from "./commands-session-store.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 import { resolveConversationBindingContextFromAcpCommand } from "./conversation-binding-input.js";
 
@@ -304,6 +309,7 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
     const sessionSummary = await loadSessionCostSummary({
       sessionId: targetSessionEntry?.sessionId,
       sessionEntry: targetSessionEntry,
+      sessionFile: targetSessionEntry?.sessionFile,
       config: params.cfg,
       agentId: sessionAgentId,
     });
@@ -411,17 +417,29 @@ export const handleFastCommand: CommandHandler = async (params, allowTextCommand
     };
   }
 
-  const nextMode = normalizeFastMode(rawMode);
+  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+  const resetsToDefault = isSessionDefaultDirectiveValue(rawMode);
+  const nextMode = resetsToDefault ? undefined : normalizeFastMode(rawMode);
   if (nextMode === undefined) {
+    if (resetsToDefault) {
+      if (targetSessionEntry && params.sessionStore && params.sessionKey) {
+        delete targetSessionEntry.fastMode;
+        await persistSessionEntry({ ...params, sessionEntry: targetSessionEntry });
+      }
+      return {
+        shouldContinue: false,
+        reply: { text: "⚙️ Fast mode reset to default." },
+      };
+    }
     return {
       shouldContinue: false,
-      reply: { text: "⚙️ Usage: /fast status|on|off" },
+      reply: { text: "⚙️ Usage: /fast status|on|off|default" },
     };
   }
 
-  if (params.sessionEntry && params.sessionStore && params.sessionKey) {
-    params.sessionEntry.fastMode = nextMode;
-    await persistSessionEntry(params);
+  if (targetSessionEntry && params.sessionStore && params.sessionKey) {
+    targetSessionEntry.fastMode = nextMode;
+    await persistSessionEntry({ ...params, sessionEntry: targetSessionEntry });
   }
 
   return {
@@ -677,15 +695,16 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
   const hasSigusr1Listener = process.listenerCount("SIGUSR1") > 0;
   const sentinelPayload = buildRestartCommandSentinel(params);
   if (hasSigusr1Listener) {
+    let sentinelPath: string | null = null;
     scheduleGatewaySigusr1Restart({
       reason: "/restart",
       emitHooks: sentinelPayload
         ? {
             beforeEmit: async () => {
-              await writeRestartSentinel(sentinelPayload);
+              sentinelPath = await writeRestartSentinel(sentinelPayload);
             },
             afterEmitRejected: async () => {
-              await clearRestartSentinel();
+              await removeRestartSentinelFile(sentinelPath);
             },
           }
         : undefined,
@@ -697,9 +716,10 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
       },
     };
   }
+  let sentinelPath: string | null = null;
   try {
     if (sentinelPayload) {
-      await writeRestartSentinel(sentinelPayload);
+      sentinelPath = await writeRestartSentinel(sentinelPayload);
     }
   } catch (err) {
     logVerbose(`failed to write /restart sentinel: ${String(err)}`);
@@ -712,7 +732,7 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
   }
   const restartMethod = triggerOpenClawRestart();
   if (!restartMethod.ok) {
-    await clearRestartSentinel();
+    await removeRestartSentinelFile(sentinelPath);
     const detail = restartMethod.detail ? ` Details: ${restartMethod.detail}` : "";
     return {
       shouldContinue: false,

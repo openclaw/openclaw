@@ -378,13 +378,7 @@ async function handleImageMessage(params: ZaloImageMessageParams): Promise<void>
   if (photo_url) {
     try {
       const maxBytes = mediaMaxMb * 1024 * 1024;
-      const fetched = await core.channel.media.fetchRemoteMedia({ url: photo_url, maxBytes });
-      const saved = await core.channel.media.saveMediaBuffer(
-        fetched.buffer,
-        fetched.contentType,
-        "inbound",
-        maxBytes,
-      );
+      const saved = await core.channel.media.saveRemoteMedia({ url: photo_url, maxBytes });
       mediaPath = saved.path;
       mediaType = saved.contentType;
     } catch (err) {
@@ -563,6 +557,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
       id: chatId,
     },
     runtime: core.channel,
+    sessionStore: config.session?.store,
   });
 
   if (
@@ -575,7 +570,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
   }
 
   const fromLabel = isGroup ? `group:${chatId}` : senderName || `user:${senderId}`;
-  const { body } = buildEnvelope({
+  const { storePath, body } = buildEnvelope({
     channel: "Zalo",
     from: fromLabel,
     timestamp: date ? date * 1000 : undefined,
@@ -669,7 +664,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
     accountId: account.accountId,
     agentId: route.agentId,
     routeSessionKey: route.sessionKey,
-    messageId: message_id,
+    storePath,
     ctxPayload,
     recordInboundSession: core.channel.session.recordInboundSession,
     dispatchReplyWithBufferedBlockDispatcher:

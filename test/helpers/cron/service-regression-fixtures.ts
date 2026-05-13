@@ -4,15 +4,14 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
 import { clearAllBootstrapSnapshots } from "../../../src/agents/bootstrap-cache.js";
+import { clearSessionStoreCacheForTest } from "../../../src/config/sessions/store.js";
 import { createCronServiceState, type CronServiceDeps } from "../../../src/cron/service/state.js";
-import { saveCronStore } from "../../../src/cron/store.js";
 import type { CronJob, CronJobState } from "../../../src/cron/types.js";
 import { resetAgentRunContextForTest } from "../../../src/infra/agent-events.js";
 import {
   resetCommandQueueStateForTest,
   waitForActiveTasks,
 } from "../../../src/process/command-queue.js";
-import { closeOpenClawStateDatabaseForTest } from "../../../src/state/openclaw-state-db.js";
 import { useFrozenTime, useRealTime } from "../../../src/test-utils/frozen-time.js";
 
 const TOP_OF_HOUR_STAGGER_MS = 5 * 60 * 1_000;
@@ -28,12 +27,9 @@ export const noopLogger = {
 export function setupCronRegressionFixtures(options?: { prefix?: string; baseTimeIso?: string }) {
   let fixtureRoot = "";
   let fixtureCount = 0;
-  let originalOpenClawStateDir: string | undefined;
 
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), options?.prefix ?? "cron-issues-"));
-    originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = path.join(fixtureRoot, "state");
   });
 
   beforeEach(() => {
@@ -47,26 +43,21 @@ export function setupCronRegressionFixtures(options?: { prefix?: string; baseTim
     useRealTime();
     await waitForActiveTasks(250);
     resetCommandQueueStateForTest();
+    clearSessionStoreCacheForTest();
     resetAgentRunContextForTest();
     clearAllBootstrapSnapshots();
   });
 
   afterAll(async () => {
-    closeOpenClawStateDatabaseForTest();
-    if (originalOpenClawStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
-    }
     useRealTime();
     await waitForActiveTasks(250);
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
   return {
-    makeStoreKey() {
+    makeStorePath() {
       return {
-        storeKey: `case-${fixtureCount++}`,
+        storePath: path.join(fixtureRoot, `case-${fixtureCount++}.jobs.json`),
       };
     },
   };
@@ -83,14 +74,14 @@ export function createDeferred<T>() {
 }
 
 export function createRunningCronServiceState(params: {
-  storeKey?: string;
+  storePath: string;
   log: CronServiceDeps["log"];
   nowMs: () => number;
   jobs: CronJob[];
 }) {
   const state = createCronServiceState({
     cronEnabled: true,
-    storeKey: params.storeKey ?? "default",
+    storePath: params.storePath,
     log: params.log,
     nowMs: params.nowMs,
     enqueueSystemEvent: vi.fn(),
@@ -189,10 +180,10 @@ export function createIsolatedRegressionJob(params: {
   };
 }
 
-export async function writeCronJobs(storeKey: string, jobs: CronJob[]) {
-  await saveCronStore(storeKey, { version: 1, jobs });
+export async function writeCronJobs(storePath: string, jobs: CronJob[]) {
+  await fs.writeFile(storePath, JSON.stringify({ version: 1, jobs }), "utf-8");
 }
 
-export async function writeCronStoreSnapshot(storeKey: string, jobs: unknown[]) {
-  await saveCronStore(storeKey, { version: 1, jobs: jobs as CronJob[] });
+export async function writeCronStoreSnapshot(storePath: string, jobs: unknown[]) {
+  await fs.writeFile(storePath, JSON.stringify({ version: 1, jobs }), "utf-8");
 }

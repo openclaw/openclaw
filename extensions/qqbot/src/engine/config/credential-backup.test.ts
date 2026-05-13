@@ -1,30 +1,40 @@
 import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { getCredentialBackupFile, getLegacyCredentialBackupFile } from "../utils/data-paths.js";
 import { loadCredentialBackup, saveCredentialBackup } from "./credential-backup.js";
 
+/**
+ * These tests write to `~/.openclaw/qqbot/data` under a test-specific
+ * accountId prefix and clean up after themselves. Mirrors the approach
+ * used by `platform.test.ts` in the same package.
+ */
 describe("engine/config/credential-backup", () => {
   const acct = `test-cb-${process.pid}-${Date.now()}`;
-  let previousStateDir: string | undefined;
-  let stateRoot = "";
+  const legacyPath = getLegacyCredentialBackupFile();
+  let legacyBackup: string | null = null;
 
   beforeEach(() => {
-    previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "qqbot-credential-backup-"));
-    process.env.OPENCLAW_STATE_DIR = path.join(stateRoot, ".openclaw");
-    resetPluginStateStoreForTests();
+    // Preserve any legacy backup that might happen to live in the user's
+    // real home so we can restore it after the test.
+    legacyBackup = null;
+    if (fs.existsSync(legacyPath)) {
+      legacyBackup = fs.readFileSync(legacyPath, "utf8");
+      fs.unlinkSync(legacyPath);
+    }
   });
 
   afterEach(() => {
-    resetPluginStateStoreForTests();
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    try {
+      fs.unlinkSync(getCredentialBackupFile(acct));
+    } catch {
+      /* ignore */
     }
-    fs.rmSync(stateRoot, { recursive: true, force: true });
+    if (fs.existsSync(legacyPath)) {
+      fs.unlinkSync(legacyPath);
+    }
+    if (legacyBackup != null) {
+      fs.writeFileSync(legacyPath, legacyBackup);
+    }
   });
 
   it("round-trips a credential snapshot", () => {
@@ -33,16 +43,46 @@ describe("engine/config/credential-backup", () => {
     expect(loaded?.appId).toBe("app-1");
     expect(loaded?.clientSecret).toBe("secret-1");
     expect(loaded?.accountId).toBe(acct);
-    expect(fs.existsSync(path.join(stateRoot, ".openclaw", "state", "openclaw.sqlite"))).toBe(true);
+    expect(fs.existsSync(getCredentialBackupFile(acct))).toBe(true);
   });
 
   it("returns null when no backup exists", () => {
     expect(loadCredentialBackup(acct)).toBeNull();
   });
 
+  it("returns null when legacy backup belongs to a different accountId", () => {
+    fs.writeFileSync(
+      legacyPath,
+      JSON.stringify({
+        accountId: "other-acct",
+        appId: "app-old",
+        clientSecret: "secret-old",
+        savedAt: new Date().toISOString(),
+      }),
+    );
+    expect(loadCredentialBackup(acct)).toBeNull();
+  });
+
+  it("migrates legacy single-file backup to per-account path on load", () => {
+    fs.writeFileSync(
+      legacyPath,
+      JSON.stringify({
+        accountId: acct,
+        appId: "app-1",
+        clientSecret: "secret-1",
+        savedAt: new Date().toISOString(),
+      }),
+    );
+
+    const loaded = loadCredentialBackup(acct);
+    expect(loaded?.appId).toBe("app-1");
+    expect(fs.existsSync(legacyPath)).toBe(false);
+    expect(fs.existsSync(getCredentialBackupFile(acct))).toBe(true);
+  });
+
   it("ignores empty appId/clientSecret on save", () => {
     saveCredentialBackup(acct, "", "secret");
     saveCredentialBackup(acct, "app", "");
-    expect(loadCredentialBackup(acct)).toBeNull();
+    expect(fs.existsSync(getCredentialBackupFile(acct))).toBe(false);
   });
 });

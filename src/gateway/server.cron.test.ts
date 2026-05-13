@@ -5,8 +5,6 @@ import { setImmediate as setImmediatePromise } from "node:timers/promises";
 import { afterAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type WebSocket from "ws";
 import { resetConfigRuntimeState } from "../config/config.js";
-import { resolveCronStoreKey, saveCronStore } from "../cron/store.js";
-import type { CronStoreSnapshot } from "../cron/types.js";
 import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
 import type { GatewayCronState } from "./server-cron.js";
 import {
@@ -59,7 +57,7 @@ vi.mock("../plugin-sdk/browser-maintenance.js", () => ({
 
 installGatewayTestHooks({ scope: "suite" });
 const CRON_WAIT_TIMEOUT_MS = 10_000;
-const EMPTY_CRON_STORE: CronStoreSnapshot = { version: 1, jobs: [] };
+const EMPTY_CRON_STORE_CONTENT = JSON.stringify({ version: 1, jobs: [] });
 let cronSuiteTempRootPromise: Promise<string> | null = null;
 let cronSuiteCaseId = 0;
 
@@ -109,12 +107,13 @@ async function waitForCronEvent(
 
 async function createCronCasePaths(tempPrefix: string): Promise<{
   dir: string;
-  storeKey: string;
+  storePath: string;
 }> {
   const suiteRoot = await getCronSuiteTempRoot();
   const dir = path.join(suiteRoot, `${tempPrefix}${cronSuiteCaseId++}`);
-  const storeKey = resolveCronStoreKey();
-  return { dir, storeKey };
+  const storePath = path.join(dir, "cron", "jobs.json");
+  await fs.mkdir(path.dirname(storePath), { recursive: true });
+  return { dir, storePath };
 }
 
 async function cleanupCronTestRun(params: {
@@ -127,7 +126,7 @@ async function cleanupCronTestRun(params: {
   params.ws?.close();
   await params.server?.close();
   params.cronState?.cron.stop();
-  testState.cronStoreKey = undefined;
+  testState.cronStorePath = undefined;
   if (params.clearSessionConfig) {
     testState.sessionConfig = undefined;
   }
@@ -147,14 +146,14 @@ async function setupCronTestRun(params: {
 }): Promise<{ prevSkipCron: string | undefined; dir: string }> {
   const prevSkipCron = process.env.OPENCLAW_SKIP_CRON;
   process.env.OPENCLAW_SKIP_CRON = "0";
-  const { dir, storeKey } = await createCronCasePaths(params.tempPrefix);
-  testState.cronStoreKey = storeKey;
+  const { dir, storePath } = await createCronCasePaths(params.tempPrefix);
+  testState.cronStorePath = storePath;
   testState.sessionConfig = params.sessionConfig;
   testState.cronEnabled = params.cronEnabled;
-  await saveCronStore(testState.cronStoreKey, {
-    version: 1,
-    jobs: (params.jobs ?? EMPTY_CRON_STORE.jobs) as CronStoreSnapshot["jobs"],
-  });
+  await fs.writeFile(
+    testState.cronStorePath,
+    params.jobs ? JSON.stringify({ version: 1, jobs: params.jobs }) : EMPTY_CRON_STORE_CONTENT,
+  );
   return { prevSkipCron, dir };
 }
 
@@ -257,7 +256,7 @@ async function directCronReq(
       respond,
       context: {
         cron: cronState.cron,
-        cronStoreKey: cronState.storeKey,
+        cronStorePath: cronState.storePath,
         logGateway: {
           info: vi.fn(),
           warn: vi.fn(),
@@ -1000,11 +999,11 @@ describe("gateway server cron", () => {
       const statusRes = await directCronReq(cronState, "cron.status", {});
       expect(statusRes.ok).toBe(true);
       const statusPayload = statusRes.payload as
-        | { enabled?: unknown; storeKey?: unknown }
+        | { enabled?: unknown; storePath?: unknown }
         | undefined;
       expect(statusPayload?.enabled).toBe(true);
-      const storeKey = typeof statusPayload?.storeKey === "string" ? statusPayload.storeKey : "";
-      expect(storeKey).toBe("default");
+      const storePath = typeof statusPayload?.storePath === "string" ? statusPayload.storePath : "";
+      expect(storePath).toContain("jobs.json");
 
       const autoRes = await directCronReq(cronState, "cron.add", {
         name: "auto run test",
@@ -1224,7 +1223,7 @@ describe("gateway server cron", () => {
 
     try {
       const runRes = await rpcReq(ws, "cron.run", { id: "future-job", mode: "due" }, 1_000);
-      expect(runRes.ok, JSON.stringify(runRes)).toBe(true);
+      expect(runRes.ok).toBe(true);
       expect(runRes.payload).toEqual({ ok: true, ran: false, reason: "not-due" });
       expect(cronIsolatedRun).not.toHaveBeenCalled();
     } finally {
@@ -1232,15 +1231,29 @@ describe("gateway server cron", () => {
     }
   });
 
-  test("posts webhooks for delivery mode only when summary exists", async () => {
+  test("posts webhooks for delivery mode and legacy notify fallback only when summary exists", async () => {
+    const legacyNotifyJob = {
+      id: "legacy-notify-job",
+      name: "legacy notify job",
+      enabled: true,
+      notify: true,
+      createdAtMs: Date.now(),
+      updatedAtMs: Date.now(),
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "legacy webhook" },
+      state: {},
+    };
     const { prevSkipCron } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-webhook-",
       cronEnabled: false,
-      jobs: [],
+      jobs: [legacyNotifyJob],
     });
 
     await writeCronConfig({
       cron: {
+        webhook: "https://legacy.example.invalid/cron-finished",
         webhookToken: "cron-webhook-token",
       },
     });
@@ -1277,6 +1290,27 @@ describe("gateway server cron", () => {
       expect(notifyBody.action).toBe("finished");
       expect(notifyBody.jobId).toBe(notifyJobId);
 
+      const legacyFinished = waitForCronEvent(
+        ws,
+        (payload) => payload?.jobId === "legacy-notify-job" && payload?.action === "finished",
+      );
+      const legacyRunRes = await rpcReq(
+        ws,
+        "cron.run",
+        { id: "legacy-notify-job", mode: "force" },
+        20_000,
+      );
+      expect(legacyRunRes.ok).toBe(true);
+      expectEnqueuedRunPayload(legacyRunRes.payload);
+      await legacyFinished;
+      const legacyCall = getWebhookCall(1);
+      expect(legacyCall.url).toBe("https://legacy.example.invalid/cron-finished");
+      expect(legacyCall.init.method).toBe("POST");
+      expect(legacyCall.init.headers?.Authorization).toBe("Bearer cron-webhook-token");
+      const legacyBody = legacyCall.body;
+      expect(legacyBody.action).toBe("finished");
+      expect(legacyBody.jobId).toBe("legacy-notify-job");
+
       const silentRes = await rpcReq(ws, "cron.add", {
         name: "webhook disabled",
         enabled: true,
@@ -1298,7 +1332,7 @@ describe("gateway server cron", () => {
       expect(silentRunRes.ok).toBe(true);
       expectEnqueuedRunPayload(silentRunRes.payload);
       await silentFinished;
-      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
 
       fetchWithSsrFGuardMock.mockClear();
       cronIsolatedRun.mockResolvedValueOnce({ status: "error", summary: "delivery failed" });

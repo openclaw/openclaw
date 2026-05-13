@@ -25,8 +25,8 @@ export {
   resolveAuthProfileOrder,
 } from "./auth-profiles/order.js";
 export {
-  resolveAuthProfileStoreAgentDir,
-  resolveAuthProfileStoreLocationForDisplay,
+  resolveAuthStatePathForDisplay,
+  resolveAuthStorePathForDisplay,
 } from "./auth-profiles/paths.js";
 export {
   dedupeProfileIds,

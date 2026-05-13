@@ -1,5 +1,5 @@
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AssistantMessage } from "../pi-ai-contract.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
@@ -55,6 +55,7 @@ describe("runEmbeddedPiAgent usage reporting", () => {
     await runEmbeddedPiAgent({
       sessionId: "test-session",
       sessionKey: "test-key",
+      sessionFile: "/tmp/session.json",
       workspaceDir: "/tmp/workspace",
       prompt: "hello",
       timeoutMs: 30000,
@@ -77,6 +78,7 @@ describe("runEmbeddedPiAgent usage reporting", () => {
     await runEmbeddedPiAgent({
       sessionId: "test-session",
       sessionKey: "test-key",
+      sessionFile: "/tmp/session.json",
       workspaceDir: "/tmp/workspace",
       prompt: "hello",
       timeoutMs: 30000,
@@ -102,6 +104,7 @@ describe("runEmbeddedPiAgent usage reporting", () => {
     await runEmbeddedPiAgent({
       sessionId: "test-session",
       sessionKey: "test-key",
+      sessionFile: "/tmp/session.json",
       workspaceDir: "/tmp/workspace",
       prompt: "hello",
       timeoutMs: 30000,
@@ -129,6 +132,7 @@ describe("runEmbeddedPiAgent usage reporting", () => {
     await runEmbeddedPiAgent({
       sessionId: "test-session",
       sessionKey: "test-key",
+      sessionFile: "/tmp/session.json",
       workspaceDir: "/tmp/workspace",
       prompt: "flush",
       timeoutMs: 30000,
@@ -171,6 +175,7 @@ describe("runEmbeddedPiAgent usage reporting", () => {
     const result = await runEmbeddedPiAgent({
       sessionId: "test-session",
       sessionKey: "test-key",
+      sessionFile: "/tmp/session.json",
       workspaceDir: "/tmp/workspace",
       prompt: "hello",
       timeoutMs: 30000,
@@ -217,6 +222,7 @@ describe("runEmbeddedPiAgent usage reporting", () => {
     const result = await runEmbeddedPiAgent({
       sessionId: "test-session",
       sessionKey: "test-key",
+      sessionFile: "/tmp/session.json",
       workspaceDir: "/tmp/workspace",
       prompt: "hello",
       provider: "openrouter",

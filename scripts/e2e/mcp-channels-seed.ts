@@ -1,17 +1,18 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { upsertSessionEntry } from "../../dist/config/sessions/store.js";
-import { replaceSqliteSessionTranscriptEvents } from "../../dist/config/sessions/transcript-store.sqlite.js";
-import { resolveOpenClawAgentSqlitePath } from "../../dist/state/openclaw-agent-db.js";
 import { applyDockerOpenAiProviderConfig, type OpenClawConfig } from "./docker-openai-seed.ts";
 
 async function main() {
   const stateDir = process.env.OPENCLAW_STATE_DIR?.trim() || path.join(os.homedir(), ".openclaw");
   const configPath =
     process.env.OPENCLAW_CONFIG_PATH?.trim() || path.join(stateDir, "openclaw.json");
+  const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
+  const sessionFile = path.join(sessionsDir, "sess-main.jsonl");
+  const storePath = path.join(sessionsDir, "sessions.json");
   const now = Date.now();
 
+  await fs.mkdir(sessionsDir, { recursive: true });
   await fs.mkdir(path.dirname(configPath), { recursive: true });
 
   const seededConfig = applyDockerOpenAiProviderConfig(
@@ -38,39 +39,44 @@ async function main() {
 
   await fs.writeFile(configPath, JSON.stringify(seededConfig, null, 2), "utf-8");
 
-  upsertSessionEntry({
-    agentId: "main",
-    sessionKey: "agent:main:main",
-    entry: {
-      sessionId: "sess-main",
-      updatedAt: now,
-      deliveryContext: {
-        channel: "imessage",
-        to: "+15551234567",
-        accountId: "imessage-default",
-        threadId: "thread-42",
-      },
-      displayName: "Docker MCP Channel Smoke",
-      derivedTitle: "Docker MCP Channel Smoke",
-      lastMessagePreview: "seeded transcript",
-    },
-  });
-
-  replaceSqliteSessionTranscriptEvents({
-    agentId: "main",
-    sessionId: "sess-main",
-    now: () => now,
-    events: [
-      { type: "session", version: 1, id: "sess-main" },
+  await fs.writeFile(
+    storePath,
+    JSON.stringify(
       {
+        "agent:main:main": {
+          sessionId: "sess-main",
+          sessionFile,
+          updatedAt: now,
+          deliveryContext: {
+            channel: "imessage",
+            to: "+15551234567",
+            accountId: "imessage-default",
+            threadId: "thread-42",
+          },
+          displayName: "Docker MCP Channel Smoke",
+          derivedTitle: "Docker MCP Channel Smoke",
+          lastMessagePreview: "seeded transcript",
+        },
+      },
+      null,
+      2,
+    ),
+    "utf-8",
+  );
+
+  await fs.writeFile(
+    sessionFile,
+    [
+      JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
+      JSON.stringify({
         id: "msg-1",
         message: {
           role: "assistant",
           content: [{ type: "text", text: "hello from seeded transcript" }],
           timestamp: now,
         },
-      },
-      {
+      }),
+      JSON.stringify({
         id: "msg-attachment",
         message: {
           role: "assistant",
@@ -87,17 +93,18 @@ async function main() {
           ],
           timestamp: now + 1,
         },
-      },
-    ],
-  });
+      }),
+    ].join("\n") + "\n",
+    "utf-8",
+  );
 
   process.stdout.write(
     JSON.stringify({
       ok: true,
       stateDir,
       configPath,
-      agentDatabasePath: resolveOpenClawAgentSqlitePath({ agentId: "main" }),
-      sessionId: "sess-main",
+      storePath,
+      sessionFile,
     }) + "\n",
   );
 }

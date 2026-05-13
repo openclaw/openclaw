@@ -17,10 +17,8 @@ import {
   type MemorySearchManager,
   type MemorySearchRuntimeDebug,
   type MemorySearchResult,
-  type MemorySessionTranscriptScope,
   type MemorySource,
   type MemorySyncProgressUpdate,
-  MEMORY_INDEX_TABLE_NAMES,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   createEmbeddingProvider,
@@ -58,10 +56,9 @@ import {
 } from "./manager-sync-control.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 const SNIPPET_MAX_CHARS = 700;
-const VECTOR_TABLE = MEMORY_INDEX_TABLE_NAMES.vector;
-const FTS_TABLE = MEMORY_INDEX_TABLE_NAMES.fts;
-const CHUNKS_TABLE = MEMORY_INDEX_TABLE_NAMES.chunks;
-const EMBEDDING_CACHE_TABLE = MEMORY_INDEX_TABLE_NAMES.embeddingCache;
+const VECTOR_TABLE = "chunks_vec";
+const FTS_TABLE = "chunks_fts";
+const EMBEDDING_CACHE_TABLE = "embedding_cache";
 const MEMORY_INDEX_MANAGER_CACHE_KEY = Symbol.for("openclaw.memoryIndexManagerCache");
 export const EMBEDDING_PROBE_CACHE_TTL_MS = 30_000;
 const log = createSubsystemLogger("memory");
@@ -140,15 +137,15 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   protected override closed = false;
   protected override dirty = false;
   protected override sessionsDirty = false;
-  protected override dirtySessionTranscripts = new Set<string>();
-  protected override pendingSessionTranscripts = new Set<string>();
+  protected override sessionsDirtyFiles = new Set<string>();
+  protected override sessionPendingFiles = new Set<string>();
   protected override sessionDeltas = new Map<
     string,
-    { lastSize: number; lastMessages: number; pendingBytes: number; pendingMessages: number }
+    { lastSize: number; pendingBytes: number; pendingMessages: number }
   >();
   private sessionWarm = new Set<string>();
   private syncing: Promise<void> | null = null;
-  private queuedSessionTranscriptScopes = new Map<string, MemorySessionTranscriptScope>();
+  private queuedSessionFiles = new Set<string>();
   private queuedSessionSync: Promise<void> | null = null;
   private readonlyRecoveryAttempts = 0;
   private readonlyRecoverySuccesses = 0;
@@ -507,7 +504,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   private hasIndexedContent(): boolean {
-    const chunkRow = this.db.prepare(`SELECT 1 as found FROM ${CHUNKS_TABLE} LIMIT 1`).get() as
+    const chunkRow = this.db.prepare(`SELECT 1 as found FROM chunks LIMIT 1`).get() as
       | {
           found?: number;
         }
@@ -538,7 +535,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     const results = await searchVector({
       db: this.db,
       vectorTable: VECTOR_TABLE,
-      chunksTable: CHUNKS_TABLE,
       providerModel: this.provider.model,
       queryVec,
       limit,
@@ -563,14 +559,12 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (!this.fts.enabled || !this.fts.available) {
       return [];
     }
-    const sourceFilter = this.buildFtsSourceFilter(sourceFilterList);
+    const sourceFilter = this.buildSourceFilter(undefined, sourceFilterList);
     // In FTS-only mode (no provider), search all models; otherwise filter by current provider's model
     const providerModel = this.provider?.model;
     const results = await searchKeyword({
       db: this.db,
       ftsTable: FTS_TABLE,
-      chunksTable: CHUNKS_TABLE,
-      requireChunkBacklink: true,
       providerModel,
       query,
       ftsTokenizer: this.settings.store.fts.tokenizer,
@@ -582,18 +576,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       boostFallbackRanking: options?.boostFallbackRanking,
     });
     return results.map((entry) => entry as MemorySearchResult & { id: string; textScore: number });
-  }
-
-  private buildFtsSourceFilter(sourcesOverride?: MemorySource[]): {
-    sql: string;
-    params: MemorySource[];
-  } {
-    const sources = sourcesOverride ?? Array.from(this.sources);
-    if (sources.length === 0) {
-      return { sql: "", params: [] };
-    }
-    const placeholders = sources.map(() => "?").join(", ");
-    return { sql: ` AND source IN (${placeholders})`, params: sources };
   }
 
   private mergeHybridResults(params: {
@@ -634,7 +616,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   async sync(params?: {
     reason?: string;
     force?: boolean;
-    sessionTranscriptScopes?: MemorySessionTranscriptScope[];
+    sessionFiles?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void> {
     if (this.closed) {
@@ -642,8 +624,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
     await this.ensureProviderInitialized();
     if (this.syncing) {
-      if (params?.sessionTranscriptScopes?.some((scope) => scope.sessionId.trim().length > 0)) {
-        return this.enqueueTargetedSessionSync(params.sessionTranscriptScopes);
+      if (params?.sessionFiles?.some((sessionFile) => sessionFile.trim().length > 0)) {
+        return this.enqueueTargetedSessionSync(params.sessionFiles);
       }
       return this.syncing;
     }
@@ -653,28 +635,26 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     return this.syncing ?? Promise.resolve();
   }
 
-  private enqueueTargetedSessionSync(
-    sessionTranscriptScopes?: MemorySessionTranscriptScope[],
-  ): Promise<void> {
+  private enqueueTargetedSessionSync(sessionFiles?: string[]): Promise<void> {
     return enqueueMemoryTargetedSessionSync(
       {
         isClosed: () => this.closed,
         getSyncing: () => this.syncing,
-        getQueuedSessionTranscriptScopes: () => this.queuedSessionTranscriptScopes,
+        getQueuedSessionFiles: () => this.queuedSessionFiles,
         getQueuedSessionSync: () => this.queuedSessionSync,
         setQueuedSessionSync: (value) => {
           this.queuedSessionSync = value;
         },
         sync: async (params) => await this.sync(params),
       },
-      sessionTranscriptScopes,
+      sessionFiles,
     );
   }
 
   private async runSyncWithReadonlyRecovery(params?: {
     reason?: string;
     force?: boolean;
-    sessionTranscriptScopes?: MemorySessionTranscriptScope[];
+    sessionFiles?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }): Promise<void> {
     const getClosed = () => this.closed;
@@ -788,7 +768,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       chunks: aggregateState.chunks,
       dirty: this.dirty || this.sessionsDirty,
       workspaceDir: this.workspaceDir,
-      dbPath: this.settings.store.databasePath,
+      dbPath: this.settings.store.path,
       provider: providerInfo.provider,
       model: providerInfo.model,
       requestedProvider: this.requestedProvider,

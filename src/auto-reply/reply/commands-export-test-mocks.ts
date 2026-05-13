@@ -4,13 +4,16 @@ type ViLike = Pick<typeof vi, "fn">;
 
 export function createExportCommandSessionMocks(viInstance: ViLike) {
   return {
-    sessionRowsMock: viInstance.fn(
-      (): Record<string, { sessionId: string; updatedAt: number }> => ({
-        "agent:target:session": {
-          sessionId: "session-1",
-          updatedAt: 1,
-        },
-      }),
+    resolveDefaultSessionStorePathMock: viInstance.fn(() => "/tmp/target-store/sessions.json"),
+    resolveSessionFilePathMock: viInstance.fn(() => "/tmp/target-store/session.jsonl"),
+    resolveSessionFilePathOptionsMock: viInstance.fn(
+      (params: { agentId: string; storePath: string }) => params,
     ),
+    loadSessionStoreMock: viInstance.fn(() => ({
+      "agent:target:session": {
+        sessionId: "session-1",
+        updatedAt: 1,
+      },
+    })),
   };
 }

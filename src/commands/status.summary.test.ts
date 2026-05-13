@@ -3,9 +3,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 const statusSummaryMocks = vi.hoisted(() => ({
   hasConfiguredChannelsForReadOnlyScope: vi.fn(() => true),
   buildChannelSummary: vi.fn(async () => ["ok"]),
-  listSessionEntries: vi.fn(
-    () => [] as Array<{ sessionKey: string; entry: Record<string, unknown> }>,
-  ),
+  readSessionStoreReadOnly: vi.fn(() => ({})),
 }));
 
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
@@ -42,8 +40,12 @@ vi.mock("../config/config.js", () => ({
   getRuntimeConfig: vi.fn(() => ({})),
 }));
 
-vi.mock("../config/sessions/store.js", () => ({
-  listSessionEntries: statusSummaryMocks.listSessionEntries,
+vi.mock("../config/sessions/paths.js", () => ({
+  resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
+}));
+
+vi.mock("../config/sessions/store-read.js", () => ({
+  readSessionStoreReadOnly: statusSummaryMocks.readSessionStoreReadOnly,
 }));
 
 vi.mock("../gateway/agent-list.js", () => ({
@@ -108,7 +110,6 @@ vi.mock("../tasks/task-registry.maintenance.js", () => ({
 }));
 
 vi.mock("../routing/session-key.js", () => ({
-  DEFAULT_AGENT_ID: "main",
   normalizeAgentId: vi.fn((value: string) => value),
   normalizeMainKey: vi.fn((value?: string) => value ?? "main"),
   parseAgentSessionKey: vi.fn(() => null),
@@ -141,7 +142,7 @@ describe("getStatusSummary", () => {
     vi.clearAllMocks();
     statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope.mockReturnValue(true);
     statusSummaryMocks.buildChannelSummary.mockResolvedValue(["ok"]);
-    statusSummaryMocks.listSessionEntries.mockReturnValue([]);
+    statusSummaryMocks.readSessionStoreReadOnly.mockReturnValue({});
   });
 
   it("includes runtimeVersion in the status payload", async () => {
@@ -188,15 +189,12 @@ describe("getStatusSummary", () => {
 
   it("includes the selected agent runtime on recent sessions", async () => {
     vi.mocked(statusSummaryRuntime.resolveSessionRuntimeLabel).mockReturnValue("OpenAI Codex");
-    statusSummaryMocks.listSessionEntries.mockReturnValue([
-      {
-        sessionKey: "agent:main:main",
-        entry: {
-          sessionId: "session-1",
-          updatedAt: Date.now(),
-        },
+    statusSummaryMocks.readSessionStoreReadOnly.mockReturnValue({
+      "agent:main:main": {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
       },
-    ]);
+    });
 
     const summary = await getStatusSummary();
 

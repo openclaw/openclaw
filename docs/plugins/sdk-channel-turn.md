@@ -130,6 +130,7 @@ await runtime.channel.turn.runAssembled({
   accountId,
   agentId: route.agentId,
   routeSessionKey: route.sessionKey,
+  storePath,
   ctxPayload,
   recordInboundSession: runtime.channel.session.recordInboundSession,
   dispatchReplyWithBufferedBlockDispatcher:
@@ -158,6 +159,7 @@ const { dispatchResult } = await runtime.channel.turn.runPrepared({
   channel: "matrix",
   accountId,
   routeSessionKey,
+  storePath,
   ctxPayload,
   recordInboundSession,
   record: {

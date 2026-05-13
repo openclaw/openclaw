@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
   completeMock: vi.fn(),
-  ensureOpenClawModelCatalogMock: vi.fn(async () => {}),
+  ensureOpenClawModelsJsonMock: vi.fn(async () => {}),
   getApiKeyForModelMock: vi.fn(async () => ({
     apiKey: "oauth-test", // pragma: allowlist secret
     source: "test",
@@ -21,10 +21,11 @@ const hoisted = vi.hoisted(() => ({
   prepareProviderDynamicModelMock: vi.fn(async () => {}),
   resolveModelAsyncMock: vi.fn(),
   resolveModelWithRegistryMock: vi.fn(),
+  resolveCopilotApiTokenMock: vi.fn(),
 }));
 const {
   completeMock,
-  ensureOpenClawModelCatalogMock,
+  ensureOpenClawModelsJsonMock,
   getApiKeyForModelMock,
   resolveApiKeyForProviderMock,
   requireApiKeyMock,
@@ -35,6 +36,7 @@ const {
   prepareProviderDynamicModelMock,
   resolveModelAsyncMock,
   resolveModelWithRegistryMock,
+  resolveCopilotApiTokenMock,
 } = hoisted;
 
 type ResolveModelWithRegistryTestParams = {
@@ -48,24 +50,23 @@ type AuthRequestCall = {
   store?: unknown;
 };
 
-function requireFirstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error(`Expected ${label} call`);
-  }
-  return call;
-}
-
-function requireMockCallAt(
-  mock: { mock: { calls: unknown[][] } },
+function requireMockCallAt<const Calls extends readonly unknown[][]>(
+  mock: { mock: { calls: Calls } },
   index: number,
   label: string,
-): unknown[] {
+): Calls[number] {
   const call = mock.mock.calls[index];
   if (!call) {
-    throw new Error(`Expected ${label} call`);
+    throw new Error(`Expected ${label} call ${index}`);
   }
-  return call;
+  return call as Calls[number];
+}
+
+function requireFirstMockCall<const Calls extends readonly unknown[][]>(
+  mock: { mock: { calls: Calls } },
+  label: string,
+): Calls[number] {
+  return requireMockCallAt(mock, 0, label);
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -75,10 +76,9 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-vi.mock("../agents/pi-ai-contract.js", async () => {
-  const actual = await vi.importActual<typeof import("../agents/pi-ai-contract.js")>(
-    "../agents/pi-ai-contract.js",
-  );
+vi.mock("@earendil-works/pi-ai", async () => {
+  const actual =
+    await vi.importActual<typeof import("@earendil-works/pi-ai")>("@earendil-works/pi-ai");
   return {
     ...actual,
     complete: completeMock,
@@ -89,7 +89,7 @@ vi.mock("../agents/models-config.js", async () => ({
   ...(await vi.importActual<typeof import("../agents/models-config.js")>(
     "../agents/models-config.js",
   )),
-  ensureOpenClawModelCatalog: ensureOpenClawModelCatalogMock,
+  ensureOpenClawModelsJson: ensureOpenClawModelsJsonMock,
 }));
 
 vi.mock("../agents/model-auth.js", () => ({
@@ -118,7 +118,15 @@ vi.mock("../plugins/provider-runtime.js", async () => ({
 
 vi.mock("../agents/pi-embedded-runner/model.js", () => ({
   resolveModelAsync: resolveModelAsyncMock,
-  resolveModelWithRegistry: resolveModelWithRegistryMock,
+}));
+
+vi.mock("../plugin-sdk/provider-auth.js", () => ({
+  buildCopilotIdeHeaders: () => ({
+    "Editor-Version": "vscode/1.107.0",
+    "User-Agent": "GitHubCopilotChat/0.35.0",
+  }),
+  COPILOT_INTEGRATION_ID: "vscode-chat",
+  resolveCopilotApiToken: resolveCopilotApiTokenMock,
 }));
 
 const { describeImageWithModel } = await import("./image.js");
@@ -174,6 +182,12 @@ describe("describeImageWithModel", () => {
         return { authStorage, model, modelRegistry };
       },
     );
+    resolveCopilotApiTokenMock.mockResolvedValue({
+      token: "copilot-api-token",
+      expiresAt: Date.now() + 60_000,
+      source: "test",
+      baseUrl: "https://api.githubcopilot.com",
+    });
   });
 
   function getApiKeyForModelCall(index = 0): AuthRequestCall {
@@ -204,7 +218,7 @@ describe("describeImageWithModel", () => {
       text: "portal ok",
       model: "MiniMax-VL-01",
     });
-    expect(ensureOpenClawModelCatalogMock).toHaveBeenCalled();
+    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalled();
     const authRequest = getApiKeyForModelCall();
     expect(authRequest?.store).toBe(authStore);
     expect(requireApiKeyMock).toHaveBeenCalled();
@@ -430,12 +444,7 @@ describe("describeImageWithModel", () => {
     });
     expect(completeMock).toHaveBeenCalledOnce();
     const firstCall = requireFirstMockCall(completeMock, "image completion");
-    const [completionModel, contextRaw, optionsRaw] = firstCall;
-    const context = requireRecord(contextRaw, "image completion context") as {
-      systemPrompt?: string;
-      messages: Array<{ role?: string; content?: unknown }>;
-    };
-    const options = requireRecord(optionsRaw, "image completion options");
+    const [completionModel, context, options] = firstCall;
     expect(completionModel).toEqual({
       provider: "openai-codex",
       id: "gpt-5.4",
@@ -455,9 +464,8 @@ describe("describeImageWithModel", () => {
       throw new Error("expected image completion user message");
     }
     expect(userMessage.role).toBe("user");
-    const userContent = userMessage.content as unknown[];
-    expect(userContent).toHaveLength(1);
-    expect(userContent[0]).toEqual({
+    expect(userMessage.content).toHaveLength(1);
+    expect(userMessage.content[0]).toEqual({
       type: "image",
       data: Buffer.from("png-bytes").toString("base64"),
       mimeType: "image/png",
@@ -501,11 +509,7 @@ describe("describeImageWithModel", () => {
       model: "google/gemini-2.5-flash",
     });
     const firstCall = requireFirstMockCall(completeMock, "OpenRouter image completion");
-    const [, contextRaw] = firstCall;
-    const context = requireRecord(contextRaw, "OpenRouter image completion context") as {
-      systemPrompt?: string;
-      messages: Array<{ role?: string; content?: unknown }>;
-    };
+    const [, context] = firstCall;
     expect(context.systemPrompt).toBeUndefined();
     const userMessage = context.messages[0];
     if (!userMessage) {
@@ -625,10 +629,7 @@ describe("describeImageWithModel", () => {
       });
       expect(completeMock).toHaveBeenCalledTimes(2);
       const retryCall = requireMockCallAt(completeMock, 1, "retry image completion");
-      const [retryModel, , retryOptionsRaw] = retryCall;
-      const retryOptions = requireRecord(retryOptionsRaw, "retry image completion options") as {
-        onPayload?: (payload: unknown, model: unknown) => unknown;
-      };
+      const [retryModel, , retryOptions] = retryCall;
       if (!retryOptions?.onPayload) {
         throw new Error("expected retry payload mapper");
       }
@@ -673,12 +674,8 @@ describe("describeImageWithModel", () => {
     await vi.advanceTimersByTimeAsync(25);
     await assertion;
     const firstCall = requireFirstMockCall(completeMock, "timed image completion");
-    const [, , optionsRaw] = firstCall;
-    const options = requireRecord(optionsRaw, "timed image completion options") as {
-      signal?: AbortSignal;
-      timeoutMs?: number;
-    };
-    if (!options.signal) {
+    const [, , options] = firstCall;
+    if (!options?.signal) {
       throw new Error("Expected image completion abort signal");
     }
     expect(options.signal.aborted).toBe(true);
@@ -687,7 +684,7 @@ describe("describeImageWithModel", () => {
 
   it("rejects when image runtime setup exceeds the request timeout", async () => {
     vi.useFakeTimers();
-    ensureOpenClawModelCatalogMock.mockImplementationOnce(() => new Promise(() => {}));
+    ensureOpenClawModelsJsonMock.mockImplementationOnce(() => new Promise(() => {}));
 
     const result = describeImageWithModel({
       cfg: {},
@@ -795,5 +792,146 @@ describe("describeImageWithModel", () => {
     const authRequest = getApiKeyForModelCall();
     expect(authRequest?.profileId).toBe("google:default");
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("google", "oauth-test");
+  });
+
+  it("places image prompt in user content for github-copilot provider", async () => {
+    const providerStreamResult = {
+      role: "assistant",
+      api: "openai-completions",
+      provider: "github-copilot",
+      model: "gemini-3.1-pro-preview",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "A solid red square." }],
+    };
+    const providerStreamFn = vi.fn(() => ({
+      result: vi.fn(async () => providerStreamResult),
+    }));
+    registerProviderStreamForModelMock.mockReturnValueOnce(providerStreamFn);
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        provider: "github-copilot",
+        id: "gemini-3.1-pro-preview",
+        input: ["text", "image"],
+        api: "openai-completions",
+        baseUrl: "https://stale.example.test",
+      })),
+    });
+
+    await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "github-copilot",
+      model: "gemini-3.1-pro-preview",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(completeMock).not.toHaveBeenCalled();
+    expect(providerStreamFn).toHaveBeenCalledOnce();
+    expect(resolveCopilotApiTokenMock).toHaveBeenCalledWith({
+      githubToken: "oauth-test",
+    });
+    expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("github-copilot", "copilot-api-token");
+    const [completionModel, context, options] = providerStreamFn.mock.calls[0] as unknown as [
+      { baseUrl?: string },
+      { systemPrompt?: string; messages?: Array<{ role: string; content: unknown[] }> },
+      { apiKey?: string; headers?: Record<string, string> },
+    ];
+    expect(completionModel.baseUrl).toBe("https://api.githubcopilot.com");
+    expect(options.apiKey).toBe("copilot-api-token");
+    expect(options.headers).toMatchObject({
+      "Copilot-Integration-Id": "vscode-chat",
+      "Copilot-Vision-Request": "true",
+      "Editor-Version": "vscode/1.107.0",
+      "User-Agent": "GitHubCopilotChat/0.35.0",
+    });
+    expect(context.systemPrompt).toBeUndefined();
+    const userMessage = context.messages?.find((m) => m.role === "user");
+    expect(userMessage).toBeDefined();
+    const contentTypes = userMessage!.content.map((block) => (block as { type: string }).type);
+    expect(contentTypes).toContain("text");
+    expect(contentTypes).toContain("image");
+  });
+
+  it("fails github-copilot image runtime setup when token exchange fails", async () => {
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        provider: "github-copilot",
+        id: "gemini-3.1-pro-preview",
+        input: ["text", "image"],
+        api: "openai-completions",
+        baseUrl: "https://api.githubcopilot.com",
+      })),
+    });
+    resolveCopilotApiTokenMock.mockRejectedValueOnce(
+      new Error("Copilot token exchange failed: HTTP 401"),
+    );
+
+    await expect(
+      describeImageWithModel({
+        cfg: {},
+        agentDir: "/tmp/openclaw-agent",
+        provider: "github-copilot",
+        model: "gemini-3.1-pro-preview",
+        buffer: Buffer.from("png-bytes"),
+        fileName: "image.png",
+        mime: "image/png",
+        prompt: "Describe the image.",
+        timeoutMs: 1000,
+      }),
+    ).rejects.toThrow("Copilot token exchange failed: HTTP 401");
+
+    expect(setRuntimeApiKeyMock).not.toHaveBeenCalledWith("github-copilot", "oauth-test");
+    expect(completeMock).not.toHaveBeenCalled();
+  });
+
+  it("does not place image prompt in user content for non-copilot providers", async () => {
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        provider: "openai",
+        id: "gpt-4o",
+        input: ["text", "image"],
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+      })),
+    });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-4o",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "A solid red square." }],
+    });
+
+    await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "openai",
+      model: "gpt-4o",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(completeMock).toHaveBeenCalledOnce();
+    const [, context] = completeMock.mock.calls[0] as [
+      unknown,
+      { systemPrompt?: string; messages?: Array<{ role: string; content: unknown[] }> },
+    ];
+    // Non-Copilot providers keep prompt in system message, images in user message
+    expect(context.systemPrompt).toBe("Describe the image.");
+    const userMessage = context.messages?.find((m) => m.role === "user");
+    expect(userMessage).toBeDefined();
+    const contentTypes = userMessage!.content.map((block) => (block as { type: string }).type);
+    expect(contentTypes).not.toContain("text");
+    expect(contentTypes).toContain("image");
   });
 });

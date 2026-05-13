@@ -1,9 +1,6 @@
 import { Buffer } from "node:buffer";
-import fs from "node:fs/promises";
-import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeviceIdentity } from "../infra/device-identity.js";
-import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { captureEnv } from "../test-utils/env.js";
 import { MIN_CLIENT_PROTOCOL_VERSION, PROTOCOL_VERSION } from "./protocol/index.js";
 
@@ -295,19 +292,6 @@ describe("GatewayClient security checks", () => {
     expect(wsInstances.length).toBe(1); // WebSocket created
     expect(getLatestWs().options).not.toHaveProperty("agent");
     client.stop();
-  });
-
-  it("fails closed before creating a default identity when legacy identity needs doctor import", async () => {
-    await withStateDirEnv("gateway-client-legacy-identity-", async ({ stateDir }) => {
-      const identityPath = path.join(stateDir, "identity", "device.json");
-      await fs.mkdir(path.dirname(identityPath), { recursive: true });
-      await fs.writeFile(identityPath, '{"version":1,"deviceId":"legacy"}\n', "utf8");
-
-      expect(() => new GatewayClient({ url: "ws://127.0.0.1:18789" })).toThrow(
-        /openclaw doctor --fix/u,
-      );
-      expect(wsInstances.length).toBe(0);
-    });
   });
 
   it("bootstraps inherited managed proxy routing before proxy-mode loopback WebSocket creation", () => {
@@ -1198,6 +1182,37 @@ describe("GatewayClient connect auth payload", () => {
       reason: "connect failed",
       detailCode: "AUTH_TOKEN_MISSING",
     });
+  });
+
+  it("keeps reconnecting on PAIRING_REQUIRED when retry hints keep reconnect active", async () => {
+    vi.useFakeTimers();
+    const onReconnectPaused = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      bootstrapToken: "setup-bootstrap-token",
+      role: "node",
+      scopes: [],
+      onReconnectPaused,
+    });
+
+    try {
+      const { ws: ws1, connect: firstConnect } = startClientAndConnect({ client });
+      emitConnectFailure(ws1, firstConnect.id, {
+        code: "PAIRING_REQUIRED",
+        reason: "not-paired",
+        recommendedNextStep: "wait_then_retry",
+        pauseReconnect: false,
+      });
+
+      await vi.advanceTimersByTimeAsync(999);
+      expect(wsInstances).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(wsInstances).toHaveLength(2);
+      expect(onReconnectPaused).not.toHaveBeenCalled();
+    } finally {
+      client.stop();
+      vi.useRealTimers();
+    }
   });
 
   it("clears stale stored device tokens and does not reconnect on AUTH_DEVICE_TOKEN_MISMATCH", async () => {

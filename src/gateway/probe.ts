@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import path from "node:path";
+import { resolveStateDir } from "../config/paths.js";
 import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SystemPresence } from "../infra/system-presence.js";
@@ -168,8 +170,9 @@ export async function probeGateway(opts: {
       if (!URL.canParse(opts.url)) {
         return null;
       }
-      const { loadDeviceIdentityIfPresentForEnv } = await import("../infra/device-identity.js");
-      const identity = loadDeviceIdentityIfPresentForEnv(opts.env);
+      const { loadDeviceIdentityIfPresent } = await import("../infra/device-identity.js");
+      const stateDir = resolveStateDir(opts.env);
+      const identity = loadDeviceIdentityIfPresent(path.join(stateDir, "identity", "device.json"));
       if (!identity) {
         return null;
       }

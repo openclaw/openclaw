@@ -1,8 +1,9 @@
+import path from "node:path";
 import { createClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 
 const DEFAULT_REPLAY_TTL_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_MEMORY_MAX_SIZE = 1_000;
-const DEFAULT_STORAGE_MAX_ENTRIES = 10_000;
+const DEFAULT_FILE_MAX_ENTRIES = 10_000;
 
 function sanitizeSegment(value: string): string {
   const trimmed = value.trim();
@@ -22,11 +23,11 @@ function buildReplayKey(params: { roomToken: string; messageId: string }): strin
 }
 
 type NextcloudTalkReplayGuardOptions = {
-  scopeKey?: string;
+  stateDir?: string;
   ttlMs?: number;
   memoryMaxSize?: number;
-  maxEntries?: number;
-  onStorageError?: (error: unknown) => void;
+  fileMaxEntries?: number;
+  onDiskError?: (error: unknown) => void;
 };
 
 export type NextcloudTalkReplayGuard = {
@@ -56,18 +57,24 @@ export type NextcloudTalkReplayGuard = {
 export function createNextcloudTalkReplayGuard(
   options: NextcloudTalkReplayGuardOptions,
 ): NextcloudTalkReplayGuard {
-  const scopeKey = options.scopeKey?.trim();
+  const stateDir = options.stateDir?.trim();
   const baseOptions = {
     ttlMs: options.ttlMs ?? DEFAULT_REPLAY_TTL_MS,
     memoryMaxSize: options.memoryMaxSize ?? DEFAULT_MEMORY_MAX_SIZE,
   };
   const dedupe = createClaimableDedupe(
-    scopeKey
+    stateDir
       ? {
           ...baseOptions,
-          maxEntries: options.maxEntries ?? DEFAULT_STORAGE_MAX_ENTRIES,
-          resolveScopeKey: (namespace) => `${scopeKey}:${sanitizeSegment(namespace)}`,
-          onStorageError: options.onStorageError,
+          fileMaxEntries: options.fileMaxEntries ?? DEFAULT_FILE_MAX_ENTRIES,
+          resolveFilePath: (namespace) =>
+            path.join(
+              stateDir,
+              "nextcloud-talk",
+              "replay-dedupe",
+              `${sanitizeSegment(namespace)}.json`,
+            ),
+          onDiskError: options.onDiskError,
         }
       : baseOptions,
   );

@@ -473,6 +473,7 @@ describe("scripts/changed-lanes", () => {
       "guarded extension wildcard re-exports",
       "plugin-sdk wildcard re-exports",
       "duplicate scan target coverage",
+      "dependency pin guard",
       "typecheck core tests",
       "lint core",
       "lint scripts",
@@ -490,6 +491,7 @@ describe("scripts/changed-lanes", () => {
         "scripts/test-live-codex-harness-docker.sh",
         "scripts/test-live-gateway-models-docker.sh",
         "scripts/test-live-models-docker.sh",
+        "scripts/test-live-subagent-announce-docker.sh",
       ],
     });
     const schedulerDryRun = plan.commands.find(
@@ -752,6 +754,7 @@ describe("scripts/changed-lanes", () => {
       "lint:extensions:no-guarded-wildcard-reexports",
       "lint:extensions:no-plugin-sdk-wildcard-reexports",
       "dup:check:coverage",
+      "deps:pins:check",
       "release-metadata:check",
       "ios:version:check",
       "config:schema:check",
@@ -952,6 +955,7 @@ describe("scripts/changed-lanes", () => {
         args: ["lint:extensions:no-plugin-sdk-wildcard-reexports"],
       },
       { name: "duplicate scan target coverage", args: ["dup:check:coverage"] },
+      { name: "dependency pin guard", args: ["deps:pins:check"] },
     ]);
   });
 
@@ -972,6 +976,7 @@ describe("scripts/changed-lanes", () => {
         args: ["lint:extensions:no-plugin-sdk-wildcard-reexports"],
       },
       { name: "duplicate scan target coverage", args: ["dup:check:coverage"] },
+      { name: "dependency pin guard", args: ["deps:pins:check"] },
     ]);
   });
 });

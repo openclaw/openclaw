@@ -1,21 +1,14 @@
+import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "./kysely-sync.js";
 import {
   ackSessionDelivery,
   enqueueSessionDelivery,
   failSessionDelivery,
-  loadPendingSessionDelivery,
   loadPendingSessionDeliveries,
+  resolveSessionDeliveryQueueDir,
 } from "./session-delivery-queue.js";
-
-type SessionDeliveryQueueTestDatabase = Pick<OpenClawStateKyselyDatabase, "delivery_queue_entries">;
 
 describe("session-delivery queue storage", () => {
   it("dedupes entries when an idempotency key is reused", async () => {
@@ -67,123 +60,36 @@ describe("session-delivery queue storage", () => {
     });
   });
 
-  it("stores queryable routing and retry fields beside the replay payload", async () => {
+  it("cleans up orphaned temporary queue files during load", async () => {
     await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
-      const id = await enqueueSessionDelivery(
+      await enqueueSessionDelivery(
         {
-          kind: "agentTurn",
+          kind: "systemEvent",
           sessionKey: "agent:main:main",
-          message: "continue after restart",
-          messageId: "message-1",
-          route: {
-            accountId: "acct-1",
-            channel: "discord",
-            chatType: "direct",
-            to: "user-1",
-          },
+          text: "restart complete",
         },
         tempDir,
       );
+      const tmpPath = path.join(resolveSessionDeliveryQueueDir(tempDir), "orphan-entry.tmp");
+      fs.writeFileSync(tmpPath, "stale tmp");
+      const staleAt = new Date(Date.now() - 60_000);
+      fs.utimesSync(tmpPath, staleAt, staleAt);
 
-      await failSessionDelivery(id, "dispatch failed", tempDir);
+      await loadPendingSessionDeliveries(tempDir);
 
-      const database = openOpenClawStateDatabase({
-        env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
-      });
-      const db = getNodeSqliteKysely<SessionDeliveryQueueTestDatabase>(database.db);
-      const row = executeSqliteQueryTakeFirstSync(
-        database.db,
-        db
-          .selectFrom("delivery_queue_entries")
-          .select([
-            "account_id",
-            "channel",
-            "entry_kind",
-            "last_error",
-            "retry_count",
-            "session_key",
-            "target",
-          ])
-          .where("queue_name", "=", "session-delivery")
-          .where("id", "=", id),
-      );
-      expect(row).toMatchObject({
-        account_id: "acct-1",
-        channel: "discord",
-        entry_kind: "agentTurn",
-        last_error: "dispatch failed",
-        retry_count: 1,
-        session_key: "agent:main:main",
-        target: "user-1",
-      });
+      expect(fs.existsSync(tmpPath)).toBe(false);
     });
   });
 
-  it("loads routing and retry state from typed columns instead of replay JSON", async () => {
+  it("keeps fresh temporary queue files while a write may still be in flight", async () => {
     await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
-      const id = await enqueueSessionDelivery(
-        {
-          kind: "agentTurn",
-          sessionKey: "agent:main:main",
-          message: "continue after restart",
-          messageId: "message-1",
-          route: {
-            accountId: "acct-typed",
-            channel: "discord",
-            chatType: "direct",
-            to: "user-typed",
-          },
-        },
-        tempDir,
-      );
-      await failSessionDelivery(id, "typed dispatch failed", tempDir);
+      const tmpPath = path.join(resolveSessionDeliveryQueueDir(tempDir), "active-entry.tmp");
+      fs.mkdirSync(path.dirname(tmpPath), { recursive: true });
+      fs.writeFileSync(tmpPath, "active tmp");
 
-      const database = openOpenClawStateDatabase({
-        env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
-      });
-      const db = getNodeSqliteKysely<SessionDeliveryQueueTestDatabase>(database.db);
-      executeSqliteQuerySync(
-        database.db,
-        db
-          .updateTable("delivery_queue_entries")
-          .set({
-            entry_json: JSON.stringify({
-              id,
-              enqueuedAt: 1,
-              kind: "agentTurn",
-              lastAttemptAt: 1,
-              lastError: "json dispatch failed",
-              message: "continue after restart",
-              messageId: "message-1",
-              retryCount: 99,
-              route: {
-                accountId: "acct-json",
-                channel: "slack",
-                chatType: "direct",
-                to: "user-json",
-              },
-              sessionKey: "agent:json:main",
-            }),
-            updated_at: Date.now(),
-          })
-          .where("queue_name", "=", "session-delivery")
-          .where("id", "=", id),
-      );
+      await loadPendingSessionDeliveries(tempDir);
 
-      const entry = await loadPendingSessionDelivery(id, tempDir);
-
-      expect(entry).toMatchObject({
-        kind: "agentTurn",
-        lastError: "typed dispatch failed",
-        retryCount: 1,
-        route: {
-          accountId: "acct-typed",
-          channel: "discord",
-          to: "user-typed",
-        },
-        sessionKey: "agent:main:main",
-      });
-      expect(typeof entry?.lastAttemptAt).toBe("number");
+      expect(fs.existsSync(tmpPath)).toBe(true);
     });
   });
 });

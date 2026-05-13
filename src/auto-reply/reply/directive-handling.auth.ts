@@ -3,7 +3,7 @@ import {
   isConfiguredAwsSdkAuthProfileForProvider,
   isProfileInCooldown,
   resolveAuthProfileDisplayLabel,
-  resolveAuthProfileStoreLocationForDisplay,
+  resolveAuthStorePathForDisplay,
 } from "../../agents/auth-profiles.js";
 import {
   ensureAuthProfileStore,
@@ -201,7 +201,7 @@ export const resolveAuthLabel = async (
     });
     return {
       label: labels.join(", "),
-      source: `SQLite auth store: ${formatPath(resolveAuthProfileStoreLocationForDisplay(agentDir))}`,
+      source: `auth-profiles.json: ${formatPath(resolveAuthStorePathForDisplay(agentDir))}`,
     };
   }
 
@@ -217,7 +217,7 @@ export const resolveAuthLabel = async (
   if (customKey) {
     return {
       label: maskApiKey(customKey),
-      source: mode === "verbose" ? `stored model catalog: ${formatPath(modelsPath)}` : "",
+      source: mode === "verbose" ? `models.json: ${formatPath(modelsPath)}` : "",
     };
   }
   return { label: "missing", source: "missing" };

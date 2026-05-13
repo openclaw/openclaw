@@ -17,7 +17,3 @@ Experimental Canvas control and A2UI rendering surfaces for paired nodes.
 ## Surface
 
 contracts: tools
-
-Managed Canvas documents are stored in SQLite plugin blob rows. Set
-`plugins.entries.canvas.config.host.root` only when you intentionally want the
-host to serve operator-managed files from a directory.

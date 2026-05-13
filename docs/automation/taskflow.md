@@ -116,9 +116,9 @@ Example: three independent cron jobs that together form a "morning ops" routine.
 ## Durable state and revision tracking
 
 Each flow persists its own state and tracks revisions so progress survives gateway restarts. Revision tracking enables conflict detection when multiple sources attempt to advance the same flow concurrently.
-The flow registry persists in the shared SQLite state database at
-`~/.openclaw/state/openclaw.sqlite`, using the same bounded write-ahead-log
-maintenance as the rest of OpenClaw runtime state.
+The flow registry uses SQLite with bounded write-ahead-log maintenance, including
+periodic and shutdown checkpoints, so long-running gateways do not retain
+unbounded `registry.sqlite-wal` sidecar files.
 
 ## Cancel behavior
 

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { loadJsonFile } from "openclaw/plugin-sdk/json-store";
-import { getHomeDir, getQQBotMediaDir, isWindows } from "../../utils/platform.js";
+import { getHomeDir, getQQBotDataDir, isWindows } from "../../utils/platform.js";
 import type { SlashCommandResult } from "../slash-commands.js";
 
 /** Read user-configured log file paths from local config files. */
@@ -321,7 +321,7 @@ export function buildBotLogsResult(): SlashCommandResult {
     return `⚠️ 找到了日志文件，但无法读取。请检查文件权限。`;
   }
 
-  const tmpDir = getQQBotMediaDir("downloads");
+  const tmpDir = getQQBotDataDir("downloads");
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const tmpFile = writeNewTextFileSync(
     path.join(tmpDir, `bot-logs-${timestamp}.txt`),

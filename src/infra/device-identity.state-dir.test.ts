@@ -1,128 +1,73 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import {
-  restoreStateDirEnv,
-  setStateDirEnv,
-  snapshotStateDirEnv,
-  withStateDirEnv,
-} from "../test-helpers/state-dir-env.js";
-import {
-  DeviceIdentityMigrationRequiredError,
-  DeviceIdentityStorageError,
-  loadDeviceIdentityIfPresent,
-  loadDeviceIdentityIfPresentForEnv,
-  loadOrCreateDeviceIdentity,
-  writeStoredDeviceIdentitySnapshot,
-} from "./device-identity.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
-
-type DeviceIdentityTestDatabase = Pick<OpenClawStateKyselyDatabase, "device_identities">;
+import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
+import { loadOrCreateDeviceIdentity } from "./device-identity.js";
 
 describe("device identity state dir defaults", () => {
-  it("stores the default identity under OPENCLAW_STATE_DIR", async () => {
-    await withStateDirEnv("openclaw-identity-state-", async () => {
+  it("writes the default identity file under OPENCLAW_STATE_DIR", async () => {
+    await withStateDirEnv("openclaw-identity-state-", async ({ stateDir }) => {
       const identity = loadOrCreateDeviceIdentity();
-      expect(loadDeviceIdentityIfPresent()?.deviceId).toBe(identity.deviceId);
-      expect(loadDeviceIdentityIfPresentForEnv(process.env)?.deviceId).toBe(identity.deviceId);
+      const identityPath = path.join(stateDir, "identity", "device.json");
+      const raw = JSON.parse(await fs.readFile(identityPath, "utf8")) as { deviceId?: string };
+      expect(raw.deviceId).toBe(identity.deviceId);
     });
   });
 
   it("reuses the stored identity on subsequent loads", async () => {
-    await withStateDirEnv("openclaw-identity-state-", async () => {
+    await withStateDirEnv("openclaw-identity-state-", async ({ stateDir }) => {
       const first = loadOrCreateDeviceIdentity();
       const second = loadOrCreateDeviceIdentity();
+      const identityPath = path.join(stateDir, "identity", "device.json");
+      const raw = JSON.parse(await fs.readFile(identityPath, "utf8")) as {
+        deviceId?: string;
+        publicKeyPem?: string;
+      };
 
       expect(second).toEqual(first);
-      expect(loadDeviceIdentityIfPresent()).toEqual(first);
+      expect(raw.deviceId).toBe(first.deviceId);
+      expect(raw.publicKeyPem).toBe(first.publicKeyPem);
     });
   });
 
   it("repairs stored device IDs that no longer match the public key", async () => {
-    await withStateDirEnv("openclaw-identity-state-", async () => {
+    await withStateDirEnv("openclaw-identity-state-", async ({ stateDir }) => {
       const original = loadOrCreateDeviceIdentity();
-      const raw = {
-        version: 1,
-        deviceId: original.deviceId,
-        publicKeyPem: original.publicKeyPem,
-        privateKeyPem: original.privateKeyPem,
-        createdAtMs: Date.now(),
-      } as const;
+      const identityPath = path.join(stateDir, "identity", "device.json");
+      const raw = JSON.parse(await fs.readFile(identityPath, "utf8")) as Record<string, unknown>;
 
-      writeStoredDeviceIdentitySnapshot({ ...raw, deviceId: "stale-device-id" });
+      await fs.writeFile(
+        identityPath,
+        `${JSON.stringify({ ...raw, deviceId: "stale-device-id" }, null, 2)}\n`,
+        "utf8",
+      );
 
       const repaired = loadOrCreateDeviceIdentity();
+      const stored = JSON.parse(await fs.readFile(identityPath, "utf8")) as { deviceId?: string };
 
       expect(repaired.deviceId).toBe(original.deviceId);
-      expect(loadDeviceIdentityIfPresent()?.deviceId).toBe(original.deviceId);
+      expect(stored.deviceId).toBe(original.deviceId);
     });
   });
 
-  it("fails closed when a legacy identity file exists before doctor import", async () => {
-    await withStateDirEnv("openclaw-identity-state-", async ({ stateDir }) => {
-      const original = loadOrCreateDeviceIdentity({ key: "seed" });
-      const identityPath = path.join(stateDir, "identity", "device.json");
-      const legacy = {
-        version: 1,
-        deviceId: original.deviceId,
-        publicKeyPem: original.publicKeyPem,
-        privateKeyPem: original.privateKeyPem,
-        createdAtMs: Date.now(),
-      };
-
-      await fs.mkdir(path.dirname(identityPath), { recursive: true });
-      await fs.writeFile(identityPath, `${JSON.stringify(legacy, null, 2)}\n`, "utf8");
-
-      expect(() => loadOrCreateDeviceIdentity()).toThrow(DeviceIdentityMigrationRequiredError);
-      expect(() => loadOrCreateDeviceIdentity()).toThrow(/openclaw doctor --fix/u);
-    });
-  });
-
-  it("fails closed when the legacy identity file is invalid", async () => {
+  it("regenerates the identity when the stored file is invalid", async () => {
     await withStateDirEnv("openclaw-identity-state-", async ({ stateDir }) => {
       const identityPath = path.join(stateDir, "identity", "device.json");
       await fs.mkdir(path.dirname(identityPath), { recursive: true });
       await fs.writeFile(identityPath, '{"version":1,"deviceId":"broken"}\n', "utf8");
 
-      expect(() => loadOrCreateDeviceIdentity()).toThrow(DeviceIdentityMigrationRequiredError);
+      const regenerated = loadOrCreateDeviceIdentity();
+      const stored = JSON.parse(await fs.readFile(identityPath, "utf8")) as {
+        version?: number;
+        deviceId?: string;
+        publicKeyPem?: string;
+        privateKeyPem?: string;
+      };
+
+      expect(stored.version).toBe(1);
+      expect(stored.deviceId).toBe(regenerated.deviceId);
+      expect(stored.publicKeyPem).toBe(regenerated.publicKeyPem);
+      expect(stored.privateKeyPem).toBe(regenerated.privateKeyPem);
     });
-  });
-
-  it("fails closed when the SQLite identity row is invalid", async () => {
-    await withStateDirEnv("openclaw-identity-state-", async () => {
-      const database = openOpenClawStateDatabase();
-      const db = getNodeSqliteKysely<DeviceIdentityTestDatabase>(database.db);
-      executeSqliteQuerySync(
-        database.db,
-        db.insertInto("device_identities").values({
-          identity_key: "default",
-          device_id: "broken",
-          public_key_pem: "-----BEGIN PUBLIC KEY-----broken",
-          private_key_pem: "-----BEGIN PRIVATE KEY-----broken",
-          created_at_ms: 1,
-          updated_at_ms: 1,
-        }),
-      );
-
-      expect(() => loadOrCreateDeviceIdentity()).toThrow(DeviceIdentityStorageError);
-    });
-  });
-
-  it("fails closed when the SQLite identity store cannot be opened", async () => {
-    const snapshot = snapshotStateDirEnv();
-    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-identity-state-file-"));
-    const blockedStateDir = path.join(tempRoot, "state");
-    try {
-      await fs.writeFile(blockedStateDir, "not a directory", "utf8");
-      setStateDirEnv(blockedStateDir);
-
-      expect(() => loadOrCreateDeviceIdentity()).toThrow();
-    } finally {
-      restoreStateDirEnv(snapshot);
-      await fs.rm(tempRoot, { recursive: true, force: true });
-    }
   });
 });

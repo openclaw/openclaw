@@ -49,7 +49,7 @@ const resolveAgentScopedOutboundMediaAccessMock = vi.hoisted(() =>
   })),
 );
 const appendAssistantMessageToSessionTranscriptMock = vi.hoisted(() =>
-  vi.fn(async () => ({ ok: true, messageId: "mirror-message" })),
+  vi.fn(async () => ({ ok: true, sessionFile: "x" })),
 );
 
 const mocks = {

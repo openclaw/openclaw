@@ -1,9 +1,8 @@
-import fs from "node:fs/promises";
+import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
-  DeviceIdentityMigrationRequiredError,
   deriveDeviceIdFromPublicKey,
   loadDeviceIdentityIfPresent,
   loadOrCreateDeviceIdentity,
@@ -11,40 +10,65 @@ import {
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
   verifyDeviceSignature,
-  writeStoredDeviceIdentitySnapshot,
 } from "./device-identity.js";
+
+const SWIFT_RAW_DEVICE_ID = "56475aa75463474c0285df5dbf2bcab73da651358839e9b77481b2eab107708c";
+const SWIFT_RAW_PUBLIC_KEY = "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=";
+const SWIFT_RAW_PRIVATE_KEY = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="; // pragma: allowlist secret
+const MISMATCHED_SWIFT_RAW_PRIVATE_KEY = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="; // pragma: allowlist secret
 
 async function withIdentity(
   run: (identity: ReturnType<typeof loadOrCreateDeviceIdentity>) => void,
 ) {
   await withTempDir("openclaw-device-identity-", async (dir) => {
-    const identity = loadOrCreateDeviceIdentity({
-      env: { ...process.env, OPENCLAW_STATE_DIR: dir },
-      key: "crypto-helper",
-    });
+    const identity = loadOrCreateDeviceIdentity(path.join(dir, "device.json"));
     run(identity);
   });
 }
 
 describe("device identity crypto helpers", () => {
-  it("fails closed for legacy identities even when the state env is injected", async () => {
-    await withTempDir("openclaw-device-identity-legacy-env-", async (dir) => {
-      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
-      const original = loadOrCreateDeviceIdentity({
-        env,
-        key: "seed",
-      });
-      const legacyPath = path.join(dir, "identity", "device.json");
-      await fs.mkdir(path.dirname(legacyPath), { recursive: true });
-      await fs.writeFile(
-        legacyPath,
+  it("loads an existing identity without creating a missing file", async () => {
+    await withTempDir("openclaw-device-identity-readonly-", async (dir) => {
+      const identityPath = path.join(dir, "identity", "device.json");
+
+      expect(loadDeviceIdentityIfPresent(identityPath)).toBeNull();
+      expect(fs.existsSync(identityPath)).toBe(false);
+
+      const created = loadOrCreateDeviceIdentity(identityPath);
+
+      expect(loadDeviceIdentityIfPresent(identityPath)).toEqual(created);
+    });
+  });
+
+  it("does not repair mismatched stored device ids in read-only mode", async () => {
+    await withTempDir("openclaw-device-identity-readonly-", async (dir) => {
+      const identityPath = path.join(dir, "identity", "device.json");
+      loadOrCreateDeviceIdentity(identityPath);
+      const stored = JSON.parse(fs.readFileSync(identityPath, "utf8")) as Record<string, unknown>;
+      fs.writeFileSync(
+        identityPath,
+        `${JSON.stringify({ ...stored, deviceId: "mismatched" }, null, 2)}\n`,
+        "utf8",
+      );
+      const before = fs.readFileSync(identityPath, "utf8");
+
+      expect(loadDeviceIdentityIfPresent(identityPath)).toBeNull();
+      expect(fs.readFileSync(identityPath, "utf8")).toBe(before);
+    });
+  });
+
+  it("loads Swift raw-key identity files without generating a new device id", async () => {
+    await withTempDir("openclaw-device-identity-swift-", async (dir) => {
+      const identityPath = path.join(dir, "identity", "device.json");
+      fs.mkdirSync(path.dirname(identityPath), { recursive: true });
+      fs.writeFileSync(
+        identityPath,
         `${JSON.stringify(
           {
-            version: 1,
-            deviceId: original.deviceId,
-            publicKeyPem: original.publicKeyPem,
-            privateKeyPem: original.privateKeyPem,
-            createdAtMs: Date.now(),
+            deviceId: SWIFT_RAW_DEVICE_ID,
+            publicKey: SWIFT_RAW_PUBLIC_KEY,
+            privateKey: SWIFT_RAW_PRIVATE_KEY,
+            createdAtMs: 1_700_000_000_000,
           },
           null,
           2,
@@ -52,47 +76,92 @@ describe("device identity crypto helpers", () => {
         "utf8",
       );
 
-      expect(() => loadOrCreateDeviceIdentity({ env })).toThrow(
-        DeviceIdentityMigrationRequiredError,
+      const readonly = loadDeviceIdentityIfPresent(identityPath);
+      const loaded = loadOrCreateDeviceIdentity(identityPath);
+      const stored = JSON.parse(fs.readFileSync(identityPath, "utf8")) as Record<string, unknown>;
+
+      expect(readonly?.deviceId).toBe(SWIFT_RAW_DEVICE_ID);
+      expect(loaded.deviceId).toBe(SWIFT_RAW_DEVICE_ID);
+      expect(publicKeyRawBase64UrlFromPem(loaded.publicKeyPem)).toBe(
+        "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
       );
+      expect(
+        verifyDeviceSignature(
+          loaded.publicKeyPem,
+          "hello",
+          signDevicePayload(loaded.privateKeyPem, "hello"),
+        ),
+      ).toBe(true);
+      expect(stored.version).toBe(1);
+      expect(stored.deviceId).toBe(SWIFT_RAW_DEVICE_ID);
+      expect(typeof stored.publicKeyPem).toBe("string");
+      expect(typeof stored.privateKeyPem).toBe("string");
+      const publicKeyPem = stored.publicKeyPem as string;
+      const privateKeyPem = stored.privateKeyPem as string;
+      expect(publicKeyPem.startsWith("-----BEGIN PUBLIC KEY-----\n")).toBe(true);
+      expect(publicKeyPem.endsWith("-----END PUBLIC KEY-----\n")).toBe(true);
+      expect(privateKeyPem.startsWith("-----BEGIN PRIVATE KEY-----\n")).toBe(true);
+      expect(privateKeyPem.endsWith("-----END PRIVATE KEY-----\n")).toBe(true);
+      expect(stored.createdAtMs).toBe(1_700_000_000_000);
+      expect(stored).not.toHaveProperty("publicKey");
+      expect(stored).not.toHaveProperty("privateKey");
     });
   });
 
-  it("loads an existing identity from SQLite", async () => {
-    await withTempDir("openclaw-device-identity-readonly-", async (dir) => {
-      const store = { env: { ...process.env, OPENCLAW_STATE_DIR: dir }, key: "readonly" };
+  it("does not overwrite recognized invalid identity files", async () => {
+    await withTempDir("openclaw-device-identity-invalid-", async (dir) => {
+      const identityPath = path.join(dir, "identity", "device.json");
+      fs.mkdirSync(path.dirname(identityPath), { recursive: true });
+      fs.writeFileSync(
+        identityPath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            deviceId: "stale-device-id",
+            publicKeyPem: "not-a-valid-public-key",
+            privateKeyPem: "not-a-valid-private-key", // pragma: allowlist secret
+            createdAtMs: 1_700_000_000_000,
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      const before = fs.readFileSync(identityPath, "utf8");
 
-      expect(loadDeviceIdentityIfPresent(store)).toBeNull();
+      expect(loadDeviceIdentityIfPresent(identityPath)).toBeNull();
+      const loaded = loadOrCreateDeviceIdentity(identityPath);
 
-      const created = loadOrCreateDeviceIdentity(store);
-
-      expect(loadDeviceIdentityIfPresent(store)).toEqual(created);
+      expect(loaded.deviceId).not.toBe("stale-device-id");
+      expect(fs.readFileSync(identityPath, "utf8")).toBe(before);
     });
   });
 
-  it("stores generated key material as normalized PEM blocks", async () => {
-    await withIdentity((identity) => {
-      expect(identity.publicKeyPem.startsWith("-----BEGIN PUBLIC KEY-----\n")).toBe(true);
-      expect(identity.publicKeyPem.endsWith("-----END PUBLIC KEY-----\n")).toBe(true);
-      expect(identity.privateKeyPem.startsWith("-----BEGIN PRIVATE KEY-----\n")).toBe(true);
-      expect(identity.privateKeyPem.endsWith("-----END PRIVATE KEY-----\n")).toBe(true);
-    });
-  });
+  it("does not migrate Swift raw-key identity files with mismatched key material", async () => {
+    await withTempDir("openclaw-device-identity-swift-invalid-", async (dir) => {
+      const identityPath = path.join(dir, "identity", "device.json");
+      fs.mkdirSync(path.dirname(identityPath), { recursive: true });
+      fs.writeFileSync(
+        identityPath,
+        `${JSON.stringify(
+          {
+            deviceId: SWIFT_RAW_DEVICE_ID,
+            publicKey: SWIFT_RAW_PUBLIC_KEY,
+            privateKey: MISMATCHED_SWIFT_RAW_PRIVATE_KEY,
+            createdAtMs: 1_700_000_000_000,
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      const before = fs.readFileSync(identityPath, "utf8");
 
-  it("does not repair mismatched stored device ids in read-only mode", async () => {
-    await withTempDir("openclaw-device-identity-readonly-", async (dir) => {
-      const store = { env: { ...process.env, OPENCLAW_STATE_DIR: dir }, key: "mismatched" };
-      const created = loadOrCreateDeviceIdentity(store);
-      const stored = {
-        version: 1,
-        deviceId: created.deviceId,
-        publicKeyPem: created.publicKeyPem,
-        privateKeyPem: created.privateKeyPem,
-        createdAtMs: Date.now(),
-      } as const;
-      writeStoredDeviceIdentitySnapshot({ ...stored, deviceId: "mismatched" }, store);
+      expect(loadDeviceIdentityIfPresent(identityPath)).toBeNull();
+      const loaded = loadOrCreateDeviceIdentity(identityPath);
 
-      expect(loadDeviceIdentityIfPresent(store)).toBeNull();
+      expect(loaded.deviceId).not.toBe(SWIFT_RAW_DEVICE_ID);
+      expect(fs.readFileSync(identityPath, "utf8")).toBe(before);
     });
   });
 

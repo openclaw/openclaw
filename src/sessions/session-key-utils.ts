@@ -14,6 +14,13 @@ export type ParsedThreadSessionSuffix = {
   threadId: string | undefined;
 };
 
+export type RawSessionConversationRef = {
+  channel: string;
+  kind: "group" | "channel";
+  rawId: string;
+  prefix: string;
+};
+
 /**
  * Parse agent-scoped session keys in a canonical, case-insensitive way.
  * Returned values are normalized to lowercase for stable comparisons/routing.
@@ -108,4 +115,49 @@ export function parseThreadSessionSuffix(
   const threadId = normalizeOptionalString(threadIdRaw);
 
   return { baseSessionKey, threadId };
+}
+
+export function parseRawSessionConversationRef(
+  sessionKey: string | undefined | null,
+): RawSessionConversationRef | null {
+  const raw = normalizeOptionalString(sessionKey);
+  if (!raw) {
+    return null;
+  }
+
+  const rawParts = raw.split(":").filter(Boolean);
+  const bodyStartIndex =
+    rawParts.length >= 3 && normalizeOptionalLowercaseString(rawParts[0]) === "agent" ? 2 : 0;
+  const parts = rawParts.slice(bodyStartIndex);
+  if (parts.length < 3) {
+    return null;
+  }
+
+  const channel = normalizeOptionalLowercaseString(parts[0]);
+  const kind = normalizeOptionalLowercaseString(parts[1]);
+  if (!channel || (kind !== "group" && kind !== "channel")) {
+    return null;
+  }
+
+  const rawId = normalizeOptionalString(parts.slice(2).join(":"));
+  const prefix = normalizeOptionalString(rawParts.slice(0, bodyStartIndex + 2).join(":"));
+  if (!rawId || !prefix) {
+    return null;
+  }
+
+  return { channel, kind, rawId, prefix };
+}
+
+export function resolveThreadParentSessionKey(
+  sessionKey: string | undefined | null,
+): string | null {
+  const { baseSessionKey, threadId } = parseThreadSessionSuffix(sessionKey);
+  if (!threadId) {
+    return null;
+  }
+  const parent = normalizeOptionalString(baseSessionKey);
+  if (!parent) {
+    return null;
+  }
+  return parent;
 }

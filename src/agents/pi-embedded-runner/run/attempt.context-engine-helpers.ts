@@ -1,7 +1,7 @@
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ContextEngine } from "../../../context-engine/types.js";
-import type { AgentMessage } from "../../agent-core-contract.js";
 import type { BootstrapMode } from "../../bootstrap-mode.js";
-import type { AssistantMessage } from "../../pi-ai-contract.js";
 import { normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import type { PromptCacheChange } from "../prompt-cache-observability.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
@@ -23,12 +23,8 @@ export async function resolveAttemptBootstrapContext<TBootstrapFile, TContextFil
   bootstrapContextMode?: string;
   bootstrapContextRunKind?: string;
   bootstrapMode?: BootstrapMode;
-  agentId: string;
-  sessionId: string;
-  hasCompletedBootstrapSessionTurn: (scope: {
-    agentId: string;
-    sessionId: string;
-  }) => Promise<boolean>;
+  sessionFile: string;
+  hasCompletedBootstrapTurn: (sessionFile: string) => Promise<boolean>;
   resolveBootstrapContextForRun: () => Promise<
     AttemptBootstrapContext<TBootstrapFile, TContextFile>
   >;
@@ -42,10 +38,7 @@ export async function resolveAttemptBootstrapContext<TBootstrapFile, TContextFil
     params.bootstrapMode !== "full" &&
     params.contextInjectionMode === "continuation-skip" &&
     params.bootstrapContextRunKind !== "heartbeat" &&
-    (await params.hasCompletedBootstrapSessionTurn({
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-    }));
+    (await params.hasCompletedBootstrapTurn(params.sessionFile));
   const shouldSkipBootstrapInjection =
     params.contextInjectionMode === "never" || isContinuationTurn;
   const shouldRecordCompletedBootstrapTurn =

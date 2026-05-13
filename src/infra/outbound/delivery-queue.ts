@@ -1,6 +1,7 @@
 export {
   ackDelivery,
   enqueueDelivery,
+  ensureQueueDir,
   failDelivery,
   loadPendingDelivery,
   loadPendingDeliveries,

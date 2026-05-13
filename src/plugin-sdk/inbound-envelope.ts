@@ -24,18 +24,23 @@ type InboundRouteResolveParams<TConfig, TPeer extends RoutePeerLike> = {
   peer: TPeer;
 };
 
-/** Create an envelope formatter bound to one resolved route and session row reader. */
+/** Create an envelope formatter bound to one resolved route and session store. */
 export function createInboundEnvelopeBuilder<TConfig, TEnvelope>(params: {
   cfg: TConfig;
   route: RouteLike;
-  readSessionUpdatedAt: (params: { agentId?: string; sessionKey: string }) => number | undefined;
+  sessionStore?: string;
+  resolveStorePath: (store: string | undefined, opts: { agentId: string }) => string;
+  readSessionUpdatedAt: (params: { storePath: string; sessionKey: string }) => number | undefined;
   resolveEnvelopeFormatOptions: (cfg: TConfig) => TEnvelope;
   formatAgentEnvelope: (params: InboundEnvelopeFormatParams<TEnvelope>) => string;
 }) {
+  const storePath = params.resolveStorePath(params.sessionStore, {
+    agentId: params.route.agentId,
+  });
   const envelopeOptions = params.resolveEnvelopeFormatOptions(params.cfg);
   return (input: { channel: string; from: string; body: string; timestamp?: number }) => {
     const previousTimestamp = params.readSessionUpdatedAt({
-      agentId: params.route.agentId,
+      storePath,
       sessionKey: params.route.sessionKey,
     });
     const body = params.formatAgentEnvelope({
@@ -46,7 +51,7 @@ export function createInboundEnvelopeBuilder<TConfig, TEnvelope>(params: {
       envelope: envelopeOptions,
       body: input.body,
     });
-    return { agentId: params.route.agentId, body };
+    return { storePath, body };
   };
 }
 
@@ -62,7 +67,9 @@ export function resolveInboundRouteEnvelopeBuilder<
   accountId: string;
   peer: TPeer;
   resolveAgentRoute: (params: InboundRouteResolveParams<TConfig, TPeer>) => TRoute;
-  readSessionUpdatedAt: (params: { agentId?: string; sessionKey: string }) => number | undefined;
+  sessionStore?: string;
+  resolveStorePath: (store: string | undefined, opts: { agentId: string }) => string;
+  readSessionUpdatedAt: (params: { storePath: string; sessionKey: string }) => number | undefined;
   resolveEnvelopeFormatOptions: (cfg: TConfig) => TEnvelope;
   formatAgentEnvelope: (params: InboundEnvelopeFormatParams<TEnvelope>) => string;
 }): {
@@ -78,6 +85,8 @@ export function resolveInboundRouteEnvelopeBuilder<
   const buildEnvelope = createInboundEnvelopeBuilder({
     cfg: params.cfg,
     route,
+    sessionStore: params.sessionStore,
+    resolveStorePath: params.resolveStorePath,
     readSessionUpdatedAt: params.readSessionUpdatedAt,
     resolveEnvelopeFormatOptions: params.resolveEnvelopeFormatOptions,
     formatAgentEnvelope: params.formatAgentEnvelope,
@@ -95,7 +104,8 @@ type InboundRouteEnvelopeRuntime<
     resolveAgentRoute: (params: InboundRouteResolveParams<TConfig, TPeer>) => TRoute;
   };
   session: {
-    readSessionUpdatedAt: (params: { agentId?: string; sessionKey: string }) => number | undefined;
+    resolveStorePath: (store: string | undefined, opts: { agentId: string }) => string;
+    readSessionUpdatedAt: (params: { storePath: string; sessionKey: string }) => number | undefined;
   };
   reply: {
     resolveEnvelopeFormatOptions: (cfg: TConfig) => TEnvelope;
@@ -115,6 +125,7 @@ export function resolveInboundRouteEnvelopeBuilderWithRuntime<
   accountId: string;
   peer: TPeer;
   runtime: InboundRouteEnvelopeRuntime<TConfig, TEnvelope, TRoute, TPeer>;
+  sessionStore?: string;
 }): {
   route: TRoute;
   buildEnvelope: ReturnType<typeof createInboundEnvelopeBuilder<TConfig, TEnvelope>>;
@@ -125,6 +136,8 @@ export function resolveInboundRouteEnvelopeBuilderWithRuntime<
     accountId: params.accountId,
     peer: params.peer,
     resolveAgentRoute: (routeParams) => params.runtime.routing.resolveAgentRoute(routeParams),
+    sessionStore: params.sessionStore,
+    resolveStorePath: params.runtime.session.resolveStorePath,
     readSessionUpdatedAt: params.runtime.session.readSessionUpdatedAt,
     resolveEnvelopeFormatOptions: params.runtime.reply.resolveEnvelopeFormatOptions,
     formatAgentEnvelope: params.runtime.reply.formatAgentEnvelope,

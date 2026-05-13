@@ -3,7 +3,7 @@ import { renderExecTargetLabel } from "../../agents/bash-tools.exec-runtime.js";
 import { resolveExecDefaults } from "../../agents/exec-defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
-import { getSessionEntry, mergeSessionEntry, upsertSessionEntry } from "../../config/sessions.js";
+import { updateSessionStore } from "../../config/sessions.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyTraceOverride, applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
@@ -42,6 +42,7 @@ export async function handleDirectiveOnly(
     sessionEntry,
     sessionStore,
     sessionKey,
+    storePath,
     elevatedEnabled,
     elevatedAllowed,
     defaultProvider,
@@ -468,13 +469,11 @@ export async function handleDirectiveOnly(
     }
     sessionEntry.updatedAt = Date.now();
     sessionStore[sessionKey] = sessionEntry;
-    upsertSessionEntry({
-      agentId: activeAgentId,
-      sessionKey,
-      entry: mergeSessionEntry(getSessionEntry({ agentId: activeAgentId, sessionKey }), {
-        ...sessionEntry,
-      }),
-    });
+    if (storePath) {
+      await updateSessionStore(storePath, (store) => {
+        store[sessionKey] = sessionEntry;
+      });
+    }
     if (modelSelection && modelSelectionUpdated && sessionKey) {
       // `/model` should retarget queued/future work without interrupting the
       // active run. Refresh queued followups so they pick up the persisted

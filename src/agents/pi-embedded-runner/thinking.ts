@@ -1,6 +1,6 @@
+import type { AgentMessage, StreamFn } from "@earendil-works/pi-agent-core";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { formatErrorMessage } from "../../infra/errors.js";
-import type { AgentMessage, StreamFn } from "../agent-core-contract.js";
-import { createAssistantMessageEventStream } from "../pi-ai-contract.js";
 import { log } from "./logger.js";
 
 type AssistantContentBlock = Extract<AgentMessage, { role: "assistant" }>["content"][number];

@@ -1,10 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resetPluginBlobStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { compileMemoryWikiVault } from "./compile.js";
-import { readMemoryWikiCompiledDigestBundle } from "./digest-state.js";
 import { renderWikiMarkdown } from "./markdown.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
@@ -13,21 +11,12 @@ const { createVault } = createMemoryWikiTestHarness();
 describe("compileMemoryWikiVault", () => {
   let suiteRoot = "";
   let caseId = 0;
-  let previousStateDir: string | undefined;
 
   beforeAll(async () => {
     suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-compile-suite-"));
-    previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = path.join(suiteRoot, "state");
   });
 
   afterAll(async () => {
-    resetPluginBlobStoreForTests();
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
     if (suiteRoot) {
       await fs.rm(suiteRoot, { recursive: true, force: true });
     }
@@ -104,8 +93,9 @@ describe("compileMemoryWikiVault", () => {
     await expect(fs.readFile(path.join(rootDir, "sources", "index.md"), "utf8")).resolves.toContain(
       "[Alpha](sources/alpha.md)",
     );
-    const digestBundle = await readMemoryWikiCompiledDigestBundle(rootDir);
-    const agentDigest = JSON.parse(digestBundle.agentDigest ?? "") as {
+    const agentDigest = JSON.parse(
+      await fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "agent-digest.json"), "utf8"),
+    ) as {
       claimCount: number;
       pages: Array<{ path: string; claimCount: number; topClaims: Array<{ text: string }> }>;
     };
@@ -115,10 +105,9 @@ describe("compileMemoryWikiVault", () => {
     expect(alphaPage.topClaims.map((claim) => claim.text)).toEqual([
       "Alpha is the canonical source page.",
     ]);
-    expect(digestBundle.claimsDigest).toContain('"text":"Alpha is the canonical source page."');
-    await expect(fs.stat(path.join(rootDir, ".openclaw-wiki", "cache"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expect(
+      fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "claims.jsonl"), "utf8"),
+    ).resolves.toContain('"text":"Alpha is the canonical source page."');
   });
 
   it("renders obsidian-friendly links when configured", async () => {
@@ -365,8 +354,9 @@ describe("compileMemoryWikiVault", () => {
     await expect(
       fs.readFile(path.join(rootDir, "reports", "stale-pages.md"), "utf8"),
     ).resolves.toContain("[Alpha](entities/alpha.md): missing updatedAt");
-    const digestBundle = await readMemoryWikiCompiledDigestBundle(rootDir);
-    const agentDigest = JSON.parse(digestBundle.agentDigest ?? "") as {
+    const agentDigest = JSON.parse(
+      await fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "agent-digest.json"), "utf8"),
+    ) as {
       claimHealth: { missingEvidence: number; freshness: { unknown: number } };
       contradictionClusters: Array<{ key: string }>;
     };
@@ -476,8 +466,9 @@ describe("compileMemoryWikiVault", () => {
       fs.readFile(path.join(rootDir, "reports", "privacy-review.md"), "utf8"),
     ).resolves.toContain("confirm-before-use");
 
-    const digestBundle = await readMemoryWikiCompiledDigestBundle(rootDir);
-    const agentDigest = JSON.parse(digestBundle.agentDigest ?? "") as {
+    const agentDigest = JSON.parse(
+      await fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "agent-digest.json"), "utf8"),
+    ) as {
       pages: Array<{
         path: string;
         canonicalId?: string;
@@ -491,7 +482,9 @@ describe("compileMemoryWikiVault", () => {
     expect(bradPage.aliases).toEqual(["brad"]);
     expect(bradPage.personCard?.lane).toBe("Microsoft Teams");
     expect(bradPage.relationshipCount).toBe(1);
-    expect(digestBundle.claimsDigest).toContain('"evidenceKinds":["maintainer-whois"]');
+    await expect(
+      fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "claims.jsonl"), "utf8"),
+    ).resolves.toContain('"evidenceKinds":["maintainer-whois"]');
   });
 
   it("ignores generated related links when computing backlinks on repeated compile", async () => {

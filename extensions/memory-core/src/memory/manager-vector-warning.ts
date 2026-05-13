@@ -1,5 +1,3 @@
-import { MEMORY_INDEX_TABLE_NAMES } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-
 export function logMemoryVectorDegradedWrite(params: {
   vectorEnabled: boolean;
   vectorReady: boolean;
@@ -18,7 +16,7 @@ export function logMemoryVectorDegradedWrite(params: {
   }
   const errDetail = params.loadError ? `: ${params.loadError}` : "";
   params.warn(
-    `${MEMORY_INDEX_TABLE_NAMES.vector} not updated — sqlite-vec unavailable${errDetail}. Vector recall degraded. Further duplicate warnings suppressed.`,
+    `chunks_vec not updated — sqlite-vec unavailable${errDetail}. Vector recall degraded. Further duplicate warnings suppressed.`,
   );
   return true;
 }

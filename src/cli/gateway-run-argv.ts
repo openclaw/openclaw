@@ -9,6 +9,7 @@ const GATEWAY_RUN_VALUE_FLAGS = new Set([
   "--password-file",
   "--tailscale",
   "--ws-log",
+  "--raw-stream-path",
 ]);
 
 const GATEWAY_RUN_BOOLEAN_FLAGS = new Set([

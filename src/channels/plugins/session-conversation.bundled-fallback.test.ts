@@ -30,7 +30,7 @@ vi.mock("../../plugin-sdk/facade-runtime.js", async () => {
   };
 });
 
-import { resolveSessionConversation } from "./session-conversation.js";
+import { resolveSessionConversationRef, resolveSessionThreadInfo } from "./session-conversation.js";
 
 type ResolveSessionConversation = NonNullable<typeof fallbackState.resolveSessionConversation>;
 
@@ -78,15 +78,13 @@ describe("session conversation bundled fallback", () => {
   it("delegates pre-bootstrap thread parsing to the active bundled channel plugin", () => {
     enableThreadedFallback();
 
-    expect(
-      resolveSessionConversation({
-        channel: "mock-threaded",
-        kind: "group",
-        rawId: "room:topic:42",
-      }),
-    ).toEqual({
+    expect(resolveSessionConversationRef("agent:main:mock-threaded:group:room:topic:42")).toEqual({
+      channel: "mock-threaded",
+      kind: "group",
+      rawId: "room:topic:42",
       id: "room",
       threadId: "42",
+      baseSessionKey: "agent:main:mock-threaded:group:room",
       baseConversationId: "room",
       parentConversationCandidates: ["room"],
     });
@@ -96,17 +94,26 @@ describe("session conversation bundled fallback", () => {
     enableThreadedFallback();
 
     expect(
-      resolveSessionConversation({
-        channel: "mock-threaded",
-        kind: "group",
-        rawId: "room:topic:42",
+      resolveSessionConversationRef("agent:main:mock-threaded:group:room:topic:42", {
         bundledFallback: false,
       }),
     ).toEqual({
+      channel: "mock-threaded",
+      kind: "group",
+      rawId: "room:topic:42",
       id: "room:topic:42",
       threadId: undefined,
+      baseSessionKey: "agent:main:mock-threaded:group:room:topic:42",
       baseConversationId: "room:topic:42",
       parentConversationCandidates: [],
+    });
+    expect(
+      resolveSessionThreadInfo("agent:main:mock-threaded:group:room:topic:42", {
+        bundledFallback: false,
+      }),
+    ).toEqual({
+      baseSessionKey: "agent:main:mock-threaded:group:room:topic:42",
+      threadId: undefined,
     });
   });
 
@@ -118,14 +125,14 @@ describe("session conversation bundled fallback", () => {
     }));
 
     expect(
-      resolveSessionConversation({
-        channel: "mock-parent",
-        kind: "group",
-        rawId: "room:topic:root:sender:user",
-      }),
+      resolveSessionConversationRef("agent:main:mock-parent:group:room:topic:root:sender:user"),
     ).toEqual({
+      channel: "mock-parent",
+      kind: "group",
+      rawId: "room:topic:root:sender:user",
       id: "room:topic:root:sender:user",
       threadId: undefined,
+      baseSessionKey: "agent:main:mock-parent:group:room:topic:root:sender:user",
       baseConversationId: "room",
       parentConversationCandidates: ["room:topic:root", "room"],
     });
@@ -134,19 +141,13 @@ describe("session conversation bundled fallback", () => {
   it("delegates repeated fallback calls through the public-surface loader", () => {
     enableThreadedFallback();
 
-    const firstRef = resolveSessionConversation({
-      channel: "mock-threaded",
-      kind: "group",
-      rawId: "room:topic:42",
-    });
+    const firstRef = resolveSessionConversationRef("agent:main:mock-threaded:group:room:topic:42");
+    expect(firstRef?.channel).toBe("mock-threaded");
     expect(firstRef?.id).toBe("room");
     expect(firstRef?.threadId).toBe("42");
 
-    const secondRef = resolveSessionConversation({
-      channel: "mock-threaded",
-      kind: "group",
-      rawId: "room:topic:43",
-    });
+    const secondRef = resolveSessionConversationRef("agent:main:mock-threaded:group:room:topic:43");
+    expect(secondRef?.channel).toBe("mock-threaded");
     expect(secondRef?.id).toBe("room");
     expect(secondRef?.threadId).toBe("43");
     expect(fallbackState.loadCalls).toBe(2);

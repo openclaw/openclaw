@@ -1,5 +1,6 @@
-import { readSqliteSessionRoutingInfo } from "../config/sessions/session-entries.sqlite.js";
-import { getSessionEntry } from "../config/sessions/store.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
+import { loadSessionStore } from "../config/sessions/store-load.js";
+import { resolveMaintenanceConfigFromInput } from "../config/sessions/store-maintenance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalAccountId } from "../routing/account-id.js";
@@ -35,7 +36,11 @@ export function resolvePersistedApprovalRequestSessionEntry(params: {
   }
   const parsed = parseAgentSessionKey(sessionKey);
   const agentId = parsed?.agentId ?? params.request.request.agentId ?? "main";
-  const entry = getSessionEntry({ agentId, sessionKey });
+  const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
+  const store = loadSessionStore(storePath, {
+    maintenanceConfig: resolveMaintenanceConfigFromInput(params.cfg.session?.maintenance),
+  });
+  const entry = store[sessionKey];
   if (!entry) {
     return null;
   }
@@ -46,15 +51,13 @@ function resolvePersistedApprovalRequestSessionBinding(params: {
   cfg: OpenClawConfig;
   request: ApprovalRequestLike;
 }): ApprovalRequestSessionBinding | null {
-  const sessionKey = normalizeOptionalString(params.request.request.sessionKey);
-  if (!sessionKey) {
+  const persisted = resolvePersistedApprovalRequestSessionEntry(params);
+  if (!persisted) {
     return null;
   }
-  const parsed = parseAgentSessionKey(sessionKey);
-  const agentId = parsed?.agentId ?? params.request.request.agentId ?? "main";
-  const routingInfo = readSqliteSessionRoutingInfo({ agentId, sessionKey });
-  const channel = normalizeOptionalChannel(routingInfo?.channel);
-  const accountId = normalizeOptionalAccountId(routingInfo?.accountId);
+  const { entry } = persisted;
+  const channel = normalizeOptionalChannel(entry.origin?.provider ?? entry.lastChannel);
+  const accountId = normalizeOptionalAccountId(entry.origin?.accountId ?? entry.lastAccountId);
   return channel || accountId ? { channel, accountId } : null;
 }
 

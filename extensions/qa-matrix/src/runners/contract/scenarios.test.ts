@@ -1,11 +1,6 @@
-import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  createPluginStateKeyedStore,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
 import { describe, expect, it, beforeEach, vi } from "vitest";
 const { createMatrixQaClient } = vi.hoisted(() => ({
   createMatrixQaClient: vi.fn(),
@@ -29,32 +24,6 @@ const {
   runMatrixQaOpenClawCli: vi.fn(),
   startMatrixQaOpenClawCli: vi.fn(),
 }));
-
-const matrixInboundDedupeStore = createPluginStateKeyedStore<{
-  roomId: string;
-  eventId: string;
-  ts: number;
-}>("matrix", {
-  namespace: "inbound-dedupe",
-  maxEntries: 20_000,
-});
-
-const matrixStorageMetaStore = createPluginStateKeyedStore<{
-  accountId?: string;
-  rootDir?: string;
-  userId?: string;
-}>("matrix", {
-  namespace: "storage-meta",
-  maxEntries: 10_000,
-});
-
-const matrixSyncStore = createPluginStateKeyedStore<ReturnType<typeof matrixSyncStoreFixture>>(
-  "matrix",
-  {
-    namespace: "sync-store",
-    maxEntries: 1000,
-  },
-);
 
 vi.mock("../../substrate/client.js", () => ({
   createMatrixQaClient,
@@ -303,89 +272,14 @@ function matrixSyncStoreFixture(nextBatch: string) {
   };
 }
 
-function resolveMatrixPluginStateKey(pathname: string): string {
-  return createHash("sha256").update(path.resolve(pathname), "utf8").digest("hex").slice(0, 32);
-}
-
-async function withTestOpenClawStateDir<T>(stateDir: string, fn: () => Promise<T>): Promise<T> {
-  const previous = process.env.OPENCLAW_STATE_DIR;
-  process.env.OPENCLAW_STATE_DIR = stateDir;
-  try {
-    return await fn();
-  } finally {
-    if (previous == null) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previous;
-    }
-  }
-}
-
-async function writeMatrixStorageMetaEntry(params: {
-  accountId: string;
-  rootDir: string;
-  stateDir: string;
-  userId: string;
-}) {
-  await withTestOpenClawStateDir(params.stateDir, () =>
-    matrixStorageMetaStore.register(resolveMatrixPluginStateKey(params.rootDir), {
-      accountId: params.accountId,
-      rootDir: params.rootDir,
-      userId: params.userId,
-    }),
-  );
-}
-
-async function writeMatrixSyncStoreEntry(params: {
-  nextBatch: string;
-  rootDir: string;
-  stateDir: string;
-}) {
-  await withTestOpenClawStateDir(params.stateDir, () =>
-    matrixSyncStore.register(
-      resolveMatrixPluginStateKey(params.rootDir),
-      matrixSyncStoreFixture(params.nextBatch),
-    ),
-  );
-}
-
-async function readMatrixSyncStoreEntry(params: { rootDir: string; stateDir: string }) {
-  return withTestOpenClawStateDir(params.stateDir, () =>
-    matrixSyncStore.lookup(resolveMatrixPluginStateKey(params.rootDir)),
-  );
-}
-
 function matrixQaE2eeRoomKey(
   scenarioId: Parameters<typeof scenarioTesting.buildMatrixQaE2eeScenarioRoomKey>[0],
 ) {
   return scenarioTesting.buildMatrixQaE2eeScenarioRoomKey(scenarioId);
 }
 
-async function writeMatrixInboundDedupeEntry(params: {
-  accountId: string;
-  eventId: string;
-  roomId: string;
-  stateDir: string;
-}) {
-  await withTestOpenClawStateDir(params.stateDir, async () => {
-    const key = `${params.accountId}:${createHash("sha256")
-      .update(params.accountId)
-      .update("\0")
-      .update(params.roomId)
-      .update("\0")
-      .update(params.eventId)
-      .digest("hex")}`;
-    await matrixInboundDedupeStore.register(key, {
-      roomId: params.roomId,
-      eventId: params.eventId,
-      ts: Date.now(),
-    });
-  });
-}
-
 describe("matrix live qa scenarios", () => {
   beforeEach(() => {
-    resetPluginStateStoreForTests();
     createMatrixQaClient.mockReset();
     createMatrixQaE2eeScenarioClient.mockReset();
     runMatrixQaE2eeBootstrap.mockReset();
@@ -1831,18 +1725,14 @@ describe("matrix live qa scenarios", () => {
     try {
       const accountDir = path.join(stateRoot, "matrix", "accounts", "sut", "server", "token");
       const staleSyncRoomId = "!stale-sync:matrix-qa.test";
+      const syncStorePath = path.join(accountDir, "bot-storage.json");
+      const dedupeStorePath = path.join(accountDir, "inbound-dedupe.json");
       await mkdir(accountDir, { recursive: true });
-      await writeMatrixStorageMetaEntry({
+      await writeTestJsonFile(path.join(accountDir, "storage-meta.json"), {
         accountId: "sut",
-        rootDir: accountDir,
-        stateDir: stateRoot,
         userId: "@sut:matrix-qa.test",
       });
-      await writeMatrixSyncStoreEntry({
-        nextBatch: "driver-sync-start",
-        rootDir: accountDir,
-        stateDir: stateRoot,
-      });
+      await writeTestJsonFile(syncStorePath, matrixSyncStoreFixture("driver-sync-start"));
 
       const callOrder: string[] = [];
       const primeRoom = vi.fn().mockResolvedValue("driver-sync-start");
@@ -1861,11 +1751,14 @@ describe("matrix live qa scenarios", () => {
         const kind = token.includes("STALE_SYNC_DEDUPE_FRESH") ? "fresh" : "first";
         callOrder.push(`wait:${kind}`);
         if (kind === "first") {
-          await writeMatrixInboundDedupeEntry({
-            accountId: "sut",
-            roomId: staleSyncRoomId,
-            eventId: "$first-trigger",
-            stateDir: stateRoot,
+          await writeTestJsonFile(dedupeStorePath, {
+            version: 1,
+            entries: [
+              {
+                key: `${staleSyncRoomId}|$first-trigger`,
+                ts: Date.now(),
+              },
+            ],
           });
         }
         return {
@@ -1902,19 +1795,11 @@ describe("matrix live qa scenarios", () => {
         gatewayStateDir: stateRoot,
         restartGatewayAfterStateMutation: async (mutateState) => {
           callOrder.push("hard-restart");
-          await writeMatrixSyncStoreEntry({
-            nextBatch: "driver-sync-after-first",
-            rootDir: accountDir,
-            stateDir: stateRoot,
-          });
+          await writeTestJsonFile(syncStorePath, matrixSyncStoreFixture("driver-sync-after-first"));
           await mutateState({ stateDir: stateRoot });
-          const persisted = await readMatrixSyncStoreEntry({
-            rootDir: accountDir,
-            stateDir: stateRoot,
-          });
-          if (!persisted) {
-            throw new Error("missing persisted Matrix sync-store entry");
-          }
+          const persisted = JSON.parse(await readFile(syncStorePath, "utf8")) as {
+            savedSync?: { nextBatch?: string };
+          };
           expect(persisted.savedSync?.nextBatch).toBe("driver-sync-start");
         },
         roomId: "!room:matrix-qa.test",
@@ -1992,6 +1877,7 @@ describe("matrix live qa scenarios", () => {
         "server",
         "token",
       );
+      const syncStorePath = path.join(accountDir, "bot-storage.json");
       await mkdir(accountDir, { recursive: true });
       await writeTestJsonFile(gatewayConfigPath, {
         channels: {
@@ -2011,17 +1897,11 @@ describe("matrix live qa scenarios", () => {
           },
         },
       });
-      await writeMatrixStorageMetaEntry({
+      await writeTestJsonFile(path.join(accountDir, "storage-meta.json"), {
         accountId: "sync-state-loss-gateway",
-        rootDir: accountDir,
-        stateDir: stateRoot,
         userId: "@sync-gateway:matrix-qa.test",
       });
-      await writeMatrixSyncStoreEntry({
-        nextBatch: "sut-sync-before-loss",
-        rootDir: accountDir,
-        stateDir: stateRoot,
-      });
+      await writeTestJsonFile(syncStorePath, matrixSyncStoreFixture("sut-sync-before-loss"));
 
       const registerWithToken = vi.fn().mockResolvedValue({
         accessToken: "sync-gateway-token",
@@ -2125,20 +2005,20 @@ describe("matrix live qa scenarios", () => {
         waitGatewayAccountReady,
       });
       const artifacts = result.artifacts as {
-        deletedSyncStoreRoot?: unknown;
+        deletedSyncStorePath?: unknown;
         driverEventId?: unknown;
         replyEventId?: unknown;
         roomKey?: unknown;
       };
-      expect(artifacts.deletedSyncStoreRoot).toBe(accountDir);
+      expect(artifacts.deletedSyncStorePath).toBe(syncStorePath);
       expect(artifacts.driverEventId).toBe("$driver-trigger");
       expect(artifacts.replyEventId).toBe("$sut-decrypted-reply");
       expect(artifacts.roomKey).toBe("e2ee-sync-state-loss-crypto-intact-recovery");
 
-      await expect(
-        readMatrixSyncStoreEntry({ rootDir: accountDir, stateDir: stateRoot }),
-      ).resolves.toBeUndefined();
-      expect(registerWithToken.mock.calls[0]?.[0]?.registrationToken).toBe("registration-token");
+      await expectPathMissing(syncStorePath);
+      expect(mockObjectArg(registerWithToken, "registerWithToken").registrationToken).toBe(
+        "registration-token",
+      );
       expect(createPrivateRoom).toHaveBeenCalledWith({
         encrypted: true,
         inviteUserIds: ["@observer:matrix-qa.test", "@sync-gateway:matrix-qa.test"],
@@ -4895,7 +4775,7 @@ describe("matrix live qa scenarios", () => {
       expect(endStdin).toHaveBeenCalledTimes(1);
       expect(wait).toHaveBeenCalledTimes(1);
       expect(kill).toHaveBeenCalledTimes(1);
-      const registrationRequest = registerWithToken.mock.calls[0]?.[0];
+      const registrationRequest = mockObjectArg(registerWithToken, "registerWithToken");
       expect(registrationRequest?.deviceName).toBe(
         "OpenClaw Matrix QA CLI Self Verification Owner",
       );

@@ -1,4 +1,4 @@
-import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 
 export function buildMissingXSearchApiKeyPayload() {
@@ -11,7 +11,7 @@ export function buildMissingXSearchApiKeyPayload() {
 }
 
 export function createXSearchToolDefinition(
-  execute: (toolCallId: string, args: Record<string, unknown>) => Promise<AgentToolResult>,
+  execute: (toolCallId: string, args: Record<string, unknown>) => Promise<AgentToolResult<unknown>>,
 ) {
   return {
     label: "X Search",

@@ -124,6 +124,7 @@ describe("Feishu bot-menu lifecycle", () => {
       finalizeInboundContextMock,
       dispatchReplyFromConfigMock,
       withReplyDispatcherMock,
+      storePath: "/tmp/feishu-bot-menu-sessions.json",
     });
   });
 

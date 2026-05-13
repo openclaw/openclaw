@@ -1,8 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   readDiscordModelPickerRecentModels,
   recordDiscordModelPickerRecentModel,
@@ -13,13 +12,10 @@ const tempDirs: string[] = [];
 async function createStateEnv(): Promise<NodeJS.ProcessEnv> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-model-picker-"));
   tempDirs.push(dir);
-  vi.stubEnv("OPENCLAW_STATE_DIR", dir);
   return { ...process.env, OPENCLAW_STATE_DIR: dir };
 }
 
 afterEach(async () => {
-  vi.unstubAllEnvs();
-  resetPluginStateStoreForTests();
   await Promise.all(
     tempDirs.splice(0).map(async (dir) => {
       await fs.rm(dir, { recursive: true, force: true });
@@ -55,7 +51,7 @@ describe("discord model picker preferences", () => {
     expect(recent).toEqual(["openai/gpt-4.1"]);
   });
 
-  it("ignores legacy corrupt JSON sidecars", async () => {
+  it("falls back to an empty store when the file is corrupt", async () => {
     const env = await createStateEnv();
     const stateDir = env.OPENCLAW_STATE_DIR as string;
     const filePath = path.join(stateDir, "discord", "model-picker-preferences.json");

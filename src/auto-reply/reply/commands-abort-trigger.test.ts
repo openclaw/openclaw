@@ -34,7 +34,7 @@ vi.mock("./abort.js", () => ({
   stopSubagentsForRequester: vi.fn(() => ({ stopped: 0 })),
 }));
 
-vi.mock("./commands-session-entry.js", () => ({
+vi.mock("./commands-session-store.js", () => ({
   persistAbortTargetEntry: persistAbortTargetEntryMock,
 }));
 

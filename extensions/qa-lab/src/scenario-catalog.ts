@@ -335,8 +335,8 @@ export function readQaScenarioPack(): QaScenarioPack {
   const packMarkdown = readTextFile(QA_SCENARIO_PACK_INDEX_PATH).trim();
   if (!packMarkdown) {
     // The QA scenario pack is optional in npm distributions.  Return an empty
-    // pack so CLI completion and other consumers don't crash when the
-    // qa/scenarios/ directory is not shipped with the package.
+    // pack so completion cache updates and other consumers don't crash when
+    // the qa/scenarios/ directory is not shipped with the package.
     qaScenarioPackCache = {
       version: 1,
       agent: { identityMarkdown: DEFAULT_QA_AGENT_IDENTITY_MARKDOWN },

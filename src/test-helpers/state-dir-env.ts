@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { captureEnv } from "../test-utils/env.js";
-import { cleanupOpenClawStateForTest } from "../test-utils/openclaw-state-cleanup.js";
+import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 
 export function snapshotStateDirEnv() {
   return captureEnv(["OPENCLAW_STATE_DIR"]);
@@ -28,7 +28,7 @@ export async function withStateDirEnv<T>(
   try {
     return await fn({ tempRoot, stateDir });
   } finally {
-    await cleanupOpenClawStateForTest().catch(() => undefined);
+    await cleanupSessionStateForTest().catch(() => undefined);
     restoreStateDirEnv(snapshot);
     await fs.rm(tempRoot, { recursive: true, force: true });
   }

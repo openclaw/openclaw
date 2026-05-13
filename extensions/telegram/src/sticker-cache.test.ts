@@ -1,11 +1,31 @@
-import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as stickerCache from "./sticker-cache-store.js";
+
+const jsonStoreMocks = vi.hoisted(() => {
+  const store: { value: unknown } = { value: null };
+  return {
+    store,
+    loadJsonFile: vi.fn(() => store.value),
+    saveJsonFile: vi.fn((_file: string, value: unknown) => {
+      store.value = structuredClone(value);
+    }),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/json-store", () => ({
+  loadJsonFile: jsonStoreMocks.loadJsonFile,
+  saveJsonFile: jsonStoreMocks.saveJsonFile,
+}));
+
+vi.mock("openclaw/plugin-sdk/state-paths", () => ({
+  resolveStateDir: () => "/tmp/openclaw-test-sticker-cache",
+}));
 
 describe("sticker-cache", () => {
   beforeEach(() => {
-    stickerCache.resetTelegramStickerCacheForTests();
-    resetPluginStateStoreForTests();
+    jsonStoreMocks.store.value = null;
+    jsonStoreMocks.loadJsonFile.mockClear();
+    jsonStoreMocks.saveJsonFile.mockClear();
   });
 
   describe("getCachedSticker", () => {
@@ -45,7 +65,7 @@ describe("sticker-cache", () => {
       }
       expect(cachedSticker.fileUniqueId).toBe("unique123");
 
-      stickerCache.resetTelegramStickerCacheForTests();
+      jsonStoreMocks.store.value = null;
 
       expect(stickerCache.getCachedSticker("unique123")).toBeNull();
     });

@@ -152,7 +152,7 @@ Create a diagnostics zip from the newest persisted bundle:
 openclaw gateway stability --bundle latest --export
 ```
 
-Persisted bundles live in the shared SQLite state database when events exist.
+Persisted bundles live under `~/.openclaw/logs/stability/` when events exist.
 
 ## Useful options
 

@@ -40,7 +40,7 @@ Practical symptom:
 
 - you log in via OpenClaw _and_ via Claude Code / Codex CLI → one of them randomly gets "logged out" later
 
-To reduce that, OpenClaw treats the SQLite auth-profile row as a **token sink**:
+To reduce that, OpenClaw treats `auth-profiles.json` as a **token sink**:
 
 - the runtime reads credentials from **one place**
 - we can keep multiple profiles and route them deterministically
@@ -56,13 +56,13 @@ To reduce that, OpenClaw treats the SQLite auth-profile row as a **token sink**:
 
 Secrets are stored in agent auth stores:
 
-- Auth profiles (OAuth + API keys + optional value-level refs): `~/.openclaw/state/openclaw.sqlite#table/auth_profile_stores/<agentDir>`
+- Auth profiles (OAuth + API keys + optional value-level refs): `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
 - Legacy compatibility file: `~/.openclaw/agents/<agentId>/agent/auth.json`
   (static `api_key` entries are scrubbed when discovered)
 
 Legacy import-only file (still supported, but not the main store):
 
-- `~/.openclaw/credentials/oauth.json` (legacy doctor-import input)
+- `~/.openclaw/credentials/oauth.json` (imported into `auth-profiles.json` on first use)
 
 All of the above also respect `$OPENCLAW_STATE_DIR` (state dir override). Full reference: [/gateway/configuration](/gateway/configuration-reference#auth-storage)
 
@@ -70,7 +70,7 @@ For static secret refs and runtime snapshot activation behavior, see [Secrets Ma
 
 When a secondary agent has no local auth profile, OpenClaw uses read-through
 inheritance from the default/main agent store. It does not clone the main
-agent's SQLite auth-profile row on read. OAuth refresh tokens are especially
+agent's `auth-profiles.json` on read. OAuth refresh tokens are especially
 sensitive: normal copy flows skip them by default because some providers rotate
 or invalidate refresh tokens after use. Configure a separate OAuth login for an
 agent when it needs an independent account.
@@ -138,8 +138,7 @@ Profiles store an `expires` timestamp.
 At runtime:
 
 - if `expires` is in the future → use the stored access token
-- if expired → refresh under the SQLite auth-profile refresh lock and overwrite
-  the stored credentials
+- if expired → refresh (under a file lock) and overwrite the stored credentials
 - if a secondary agent reads an inherited main-agent OAuth profile, refresh
   writes back to the main agent store instead of copying the refresh token into
   the secondary agent store
@@ -168,7 +167,7 @@ Then configure auth per-agent (wizard) and route chats to the right agent.
 
 ### 2) Advanced: multiple profiles in one agent
 
-SQLite auth-profile rows support multiple profile IDs for the same provider.
+`auth-profiles.json` supports multiple profile IDs for the same provider.
 
 Pick which profile is used:
 

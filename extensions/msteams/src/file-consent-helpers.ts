@@ -1,6 +1,6 @@
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildFileConsentCard } from "./file-consent.js";
-import { storePendingUploadState } from "./pending-uploads-state.js";
+import { storePendingUploadFs } from "./pending-uploads-fs.js";
 import { storePendingUpload } from "./pending-uploads.js";
 
 type FileConsentMedia = {
@@ -39,8 +39,7 @@ function buildConsentActivity(params: {
  * This variant only writes to the in-memory store. Use it when the caller and
  * the `fileConsent/invoke` handler share the same process (for example the
  * messenger reply path). For proactive CLI sends where the invoke arrives in
- * a different process, use {@link prepareFileConsentActivityPersistent}
- * instead.
+ * a different process, use {@link prepareFileConsentActivityFs} instead.
  */
 export function prepareFileConsentActivity(params: {
   media: FileConsentMedia;
@@ -62,16 +61,15 @@ export function prepareFileConsentActivity(params: {
 
 /**
  * Prepare a FileConsentCard activity and persist the pending upload to the
- * SQLite-backed plugin blob state so a different process can read it when the
- * user accepts.
+ * filesystem so a different process can read it when the user accepts.
  *
  * This is used by the proactive CLI `message send --media` path: the CLI
  * process sends the card and exits, but the `fileConsent/invoke` callback is
- * delivered to the long-lived gateway monitor process. The SQLite-backed store
+ * delivered to the long-lived gateway monitor process. The FS-backed store
  * bridges those two processes. The in-memory store is also populated so
  * same-process flows keep the fast path.
  */
-export async function prepareFileConsentActivityPersistent(params: {
+export async function prepareFileConsentActivityFs(params: {
   media: FileConsentMedia;
   conversationId: string;
   description?: string;
@@ -79,8 +77,8 @@ export async function prepareFileConsentActivityPersistent(params: {
   const { media, conversationId, description } = params;
 
   // Populate the in-memory store first so the uploadId is consistent, then
-  // mirror the same entry to SQLite under the same id so an invoke handler in
-  // another process can find it.
+  // mirror the same entry to the FS store under the same id so an invoke
+  // handler in another process can find it.
   const uploadId = storePendingUpload({
     buffer: media.buffer,
     filename: media.filename,
@@ -88,7 +86,7 @@ export async function prepareFileConsentActivityPersistent(params: {
     conversationId,
   });
 
-  await storePendingUploadState({
+  await storePendingUploadFs({
     id: uploadId,
     buffer: media.buffer,
     filename: media.filename,

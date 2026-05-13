@@ -11,7 +11,7 @@ import {
 } from "../agents/model-selection.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions.js";
-import { upsertSessionEntry } from "../config/sessions/store.js";
+import { updateSessionStore } from "../config/sessions/store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listPluginDoctorSessionRouteStateOwners } from "../plugins/doctor-contract-registry.js";
 import type { DoctorSessionRouteStateOwner } from "../plugins/doctor-session-route-state-owner-types.js";
@@ -429,6 +429,7 @@ function groupRepairsByOwner(
 export async function runPluginSessionStateDoctorRepairs(params: {
   cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
+  absoluteStorePath: string;
   prompter: DoctorPrompterLike;
   env?: NodeJS.ProcessEnv;
   warnings: string[];
@@ -467,24 +468,21 @@ export async function runPluginSessionStateDoctorRepairs(params: {
         let repaired = 0;
         const repairedAt = Date.now();
         const repairsByKey = new Map(repairs.map((repair) => [repair.key, repair]));
-        for (const [key, repair] of repairsByKey) {
-          const current = params.store[key];
-          if (current) {
-            const next = structuredClone(current) as unknown as Record<string, unknown>;
-            if (applySessionRouteStateRepair({ entry: next, repair, now: repairedAt })) {
+        await updateSessionStore(params.absoluteStorePath, (currentStore) => {
+          const currentMutableStore = currentStore as unknown as Record<
+            string,
+            Record<string, unknown>
+          >;
+          for (const [key, repair] of repairsByKey) {
+            const current = currentMutableStore[key];
+            if (
+              current &&
+              applySessionRouteStateRepair({ entry: current, repair, now: repairedAt })
+            ) {
               repaired += 1;
-              const agentId =
-                parseAgentSessionKey(key)?.agentId ?? resolveDefaultAgentId(params.cfg);
-              upsertSessionEntry({
-                agentId,
-                env: params.env,
-                sessionKey: key,
-                entry: next as unknown as SessionEntry,
-              });
-              params.store[key] = next as unknown as SessionEntry;
             }
           }
-        }
+        });
         if (repaired > 0) {
           params.changes.push(
             `- Cleared stale ${ownerLabel} session routing state for ${countSessionLabel(

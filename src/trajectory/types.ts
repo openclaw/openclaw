@@ -39,19 +39,9 @@ export type TrajectoryBundleManifest = {
   eventCount: number;
   runtimeEventCount: number;
   transcriptEventCount: number;
-  sourceDatabases: {
-    session: {
-      role: "agent";
-      agentId: string;
-      table: "transcript_events";
-      sessionId: string;
-    };
-    runtime?: {
-      role: "agent";
-      agentId: string;
-      table: "trajectory_runtime_events";
-      sessionId: string;
-    };
+  sourceFiles: {
+    session: string;
+    runtime?: string;
   };
   contents?: Array<{
     path: string;

@@ -2,9 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { clearSessionStoreCacheForTest } from "openclaw/plugin-sdk/session-store-runtime";
+import { describe, expect, it } from "vitest";
 import { telegramApprovalCapability, telegramNativeApprovalAdapter } from "./approval-native.js";
 
 function buildConfig(
@@ -25,37 +24,14 @@ function buildConfig(
   } as OpenClawConfig;
 }
 
-const TELEGRAM_TOPIC_SESSION_KEY = "agent:main:telegram:group:-1003841603622:topic:928";
+const STORE_PATH = path.join(os.tmpdir(), "openclaw-telegram-approval-native-test.json");
 
-let previousStateDir: string | undefined;
-let tempStateDir = "";
-
-function seedSessionEntry(entry: Parameters<typeof upsertSessionEntry>[0]["entry"]) {
-  upsertSessionEntry({
-    agentId: "main",
-    sessionKey: TELEGRAM_TOPIC_SESSION_KEY,
-    entry,
-  });
+function writeStore(store: Record<string, unknown>) {
+  fs.writeFileSync(STORE_PATH, `${JSON.stringify(store, null, 2)}\n`, "utf8");
+  clearSessionStoreCacheForTest();
 }
 
 describe("telegram native approval adapter", () => {
-  beforeEach(() => {
-    previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-approval-native-"));
-    process.env.OPENCLAW_STATE_DIR = tempStateDir;
-  });
-
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
-    fs.rmSync(tempStateDir, { recursive: true, force: true });
-    tempStateDir = "";
-  });
-
   it("describes the correct Telegram exec-approval setup path", () => {
     const text = telegramApprovalCapability.describeExecApprovalSetup?.({
       channel: "telegram",
@@ -134,19 +110,24 @@ describe("telegram native approval adapter", () => {
   });
 
   it("falls back to the session-bound origin target for plugin approvals", async () => {
-    seedSessionEntry({
-      sessionId: "sess",
-      updatedAt: Date.now(),
-      deliveryContext: {
-        channel: "telegram",
-        to: "-1003841603622",
-        accountId: "default",
-        threadId: 928,
+    writeStore({
+      "agent:main:telegram:group:-1003841603622:topic:928": {
+        sessionId: "sess",
+        updatedAt: Date.now(),
+        deliveryContext: {
+          channel: "telegram",
+          to: "-1003841603622",
+          accountId: "default",
+          threadId: 928,
+        },
       },
     });
 
     const target = await telegramNativeApprovalAdapter.native?.resolveOriginTarget?.({
-      cfg: buildConfig(),
+      cfg: {
+        ...buildConfig(),
+        session: { store: STORE_PATH },
+      },
       accountId: "default",
       approvalKind: "plugin",
       request: {
@@ -154,7 +135,7 @@ describe("telegram native approval adapter", () => {
         request: {
           title: "Plugin approval",
           description: "Allow access",
-          sessionKey: TELEGRAM_TOPIC_SESSION_KEY,
+          sessionKey: "agent:main:telegram:group:-1003841603622:topic:928",
         },
         createdAtMs: 0,
         expiresAtMs: 1000,
@@ -167,20 +148,25 @@ describe("telegram native approval adapter", () => {
     });
   });
 
-  it("parses numeric string thread ids from SQLite session rows for plugin approvals", async () => {
-    seedSessionEntry({
-      sessionId: "sess",
-      updatedAt: Date.now(),
-      deliveryContext: {
-        channel: "telegram",
-        to: "-1003841603622",
-        accountId: "default",
-        threadId: "928",
+  it("parses numeric string thread ids from the session store for plugin approvals", async () => {
+    writeStore({
+      "agent:main:telegram:group:-1003841603622:topic:928": {
+        sessionId: "sess",
+        updatedAt: Date.now(),
+        deliveryContext: {
+          channel: "telegram",
+          to: "-1003841603622",
+          accountId: "default",
+          threadId: "928",
+        },
       },
     });
 
     const target = await telegramNativeApprovalAdapter.native?.resolveOriginTarget?.({
-      cfg: buildConfig(),
+      cfg: {
+        ...buildConfig(),
+        session: { store: STORE_PATH },
+      },
       accountId: "default",
       approvalKind: "plugin",
       request: {
@@ -188,7 +174,7 @@ describe("telegram native approval adapter", () => {
         request: {
           title: "Plugin approval",
           description: "Allow access",
-          sessionKey: TELEGRAM_TOPIC_SESSION_KEY,
+          sessionKey: "agent:main:telegram:group:-1003841603622:topic:928",
         },
         createdAtMs: 0,
         expiresAtMs: 1000,

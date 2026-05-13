@@ -249,59 +249,6 @@ describe("legacy migrate provider-shaped config", () => {
     expect(migratedConfig?.plugins?.entries?.["voice-call"]?.config?.tts?.auto).toBe("always");
   });
 
-  it("removes legacy tts prefsPath file overrides from known config locations", () => {
-    const res = migrateLegacyConfig({
-      messages: {
-        tts: {
-          prefsPath: "/tmp/openclaw-tts.json",
-          auto: "always",
-        },
-      },
-      agents: {
-        defaults: {
-          tts: {
-            prefsPath: "/tmp/agent-default-tts.json",
-          },
-        },
-      },
-      channels: {
-        discord: {
-          accounts: {
-            primary: {
-              tts: {
-                prefsPath: "/tmp/channel-account-tts.json",
-              },
-            },
-          },
-        },
-      },
-      plugins: {
-        entries: {
-          "voice-call": {
-            config: {
-              tts: {
-                prefsPath: "/tmp/voice-call-tts.json",
-              },
-            },
-          },
-        },
-      },
-    });
-
-    expect(res.changes).toEqual([
-      "Removed messages.tts.prefsPath; TTS prefs now use SQLite plugin state.",
-      "Removed agents.defaults.tts.prefsPath; TTS prefs now use SQLite plugin state.",
-      "Removed channels.discord.accounts.primary.tts.prefsPath; TTS prefs now use SQLite plugin state.",
-      "Removed plugins.entries.voice-call.config.tts.prefsPath; TTS prefs now use SQLite plugin state.",
-    ]);
-    expect(res.config?.messages?.tts).toEqual({ auto: "always" });
-    expect((res.config?.agents?.defaults as { tts?: unknown } | undefined)?.tts).toEqual({});
-    expect(
-      (res.config?.channels?.discord?.accounts?.primary as { tts?: unknown } | undefined)?.tts,
-    ).toEqual({});
-    expect(res.config?.plugins?.entries?.["voice-call"]?.config?.tts).toEqual({});
-  });
-
   it("moves plugins.entries.voice-call.config.tts.<provider> keys into providers", () => {
     const res = migrateLegacyConfig({
       plugins: {

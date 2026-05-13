@@ -28,9 +28,6 @@
       "./index.ts"
     ],
     "setupEntry": "./setup-entry.ts",
-    "setupFeatures": {
-      "doctorLegacyState": true
-    },
     "channel": {
       "id": "nostr",
       "label": "Nostr",

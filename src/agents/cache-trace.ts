@@ -1,11 +1,14 @@
 import crypto from "node:crypto";
+import path from "node:path";
+import type { AgentMessage, StreamFn } from "@earendil-works/pi-agent-core";
+import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveUserPath } from "../utils.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
-import type { AgentMessage, StreamFn } from "./agent-core-contract.js";
 import { sanitizeDiagnosticPayload } from "./payload-redaction.js";
+import { getQueuedFileWriter, type QueuedFileWriter } from "./queued-file-writer.js";
 import { stableStringify } from "./stable-stringify.js";
-import { getStateDiagnosticWriter, type StateDiagnosticWriter } from "./state-diagnostic-writer.js";
 import { buildAgentTraceBase } from "./trace-base.js";
 
 type CacheTraceStage =
@@ -47,7 +50,7 @@ type CacheTraceEvent = {
 
 type CacheTrace = {
   enabled: true;
-  destination: string;
+  filePath: string;
   recordStage: (stage: CacheTraceStage, payload?: Partial<CacheTraceEvent>) => void;
   wrapStreamFn: (streamFn: StreamFn) => StreamFn;
 };
@@ -67,23 +70,25 @@ type CacheTraceInit = {
 
 type CacheTraceConfig = {
   enabled: boolean;
-  destination: string;
+  filePath: string;
   includeMessages: boolean;
   includePrompt: boolean;
   includeSystem: boolean;
 };
 
-type CacheTraceWriter = StateDiagnosticWriter;
+type CacheTraceWriter = QueuedFileWriter;
 
-const stateWriters = new Map<string, CacheTraceWriter>();
-const CACHE_TRACE_SQLITE_LABEL = "sqlite://state/diagnostics/cache-trace";
-const CACHE_TRACE_SQLITE_SCOPE = "diagnostics.cache_trace";
+const writers = new Map<string, CacheTraceWriter>();
 
 function resolveCacheTraceConfig(params: CacheTraceInit): CacheTraceConfig {
   const env = params.env ?? process.env;
   const config = params.cfg?.diagnostics?.cacheTrace;
   const envEnabled = parseBooleanValue(env.OPENCLAW_CACHE_TRACE);
   const enabled = envEnabled ?? config?.enabled ?? false;
+  const fileOverride = config?.filePath?.trim() || env.OPENCLAW_CACHE_TRACE_FILE?.trim();
+  const filePath = fileOverride
+    ? resolveUserPath(fileOverride)
+    : path.join(resolveStateDir(env), "logs", "cache-trace.jsonl");
 
   const includeMessages =
     parseBooleanValue(env.OPENCLAW_CACHE_TRACE_MESSAGES) ?? config?.includeMessages;
@@ -92,19 +97,15 @@ function resolveCacheTraceConfig(params: CacheTraceInit): CacheTraceConfig {
 
   return {
     enabled,
-    destination: CACHE_TRACE_SQLITE_LABEL,
+    filePath,
     includeMessages: includeMessages ?? true,
     includePrompt: includePrompt ?? true,
     includeSystem: includeSystem ?? true,
   };
 }
 
-function getWriter(cfg: CacheTraceConfig, env: NodeJS.ProcessEnv): CacheTraceWriter {
-  return getStateDiagnosticWriter(stateWriters, {
-    env,
-    label: cfg.destination,
-    scope: CACHE_TRACE_SQLITE_SCOPE,
-  });
+function getWriter(filePath: string): CacheTraceWriter {
+  return getQueuedFileWriter(writers, filePath);
 }
 
 function digest(value: unknown): string {
@@ -133,7 +134,7 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
     return null;
   }
 
-  const writer = params.writer ?? getWriter(cfg, params.env ?? process.env);
+  const writer = params.writer ?? getWriter(cfg.filePath);
   let seq = 0;
 
   const base: Omit<CacheTraceEvent, "ts" | "seq" | "stage"> = buildAgentTraceBase(params);
@@ -179,10 +180,11 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
       event.error = payload.error;
     }
 
-    if (!safeJsonStringify(event)) {
+    const line = safeJsonStringify(event);
+    if (!line) {
       return;
     }
-    writer.write(event);
+    writer.write(`${line}\n`);
   };
 
   const wrapStreamFn: CacheTrace["wrapStreamFn"] = (streamFn) => {
@@ -209,7 +211,7 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
 
   return {
     enabled: true,
-    destination: cfg.destination,
+    filePath: cfg.filePath,
     recordStage,
     wrapStreamFn,
   };

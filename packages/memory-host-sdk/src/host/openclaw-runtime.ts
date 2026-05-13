@@ -49,10 +49,12 @@ export {
 export type { OpenClawConfig } from "../../../../src/config/config.js";
 export { resolveStateDir } from "../../../../src/config/paths.js";
 export {
-  listSqliteSessionTranscripts,
-  loadSqliteSessionTranscriptEvents,
-  replaceSqliteSessionTranscriptEvents,
-} from "../../../../src/config/sessions/transcript-store.sqlite.js";
+  isCompactionCheckpointTranscriptFileName,
+  isSessionArchiveArtifactName,
+  isUsageCountedSessionTranscriptFileName,
+  parseUsageCountedSessionIdFromFileName,
+} from "../../../../src/config/sessions/artifacts.js";
+export { resolveSessionTranscriptsDirForAgent } from "../../../../src/config/sessions/paths.js";
 export type { SessionSendPolicyConfig } from "../../../../src/config/types.base.js";
 export type {
   MemoryBackend,
@@ -69,7 +71,6 @@ export {
 export type { SecretInput } from "../../../../src/config/types.secrets.js";
 export type { MemorySearchConfig } from "../../../../src/config/types.tools.js";
 export { isVerbose, setVerbose } from "../../../../src/globals.js";
-export { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
 
 // IO, network, and logging helpers.
 export { isExecCompletionEvent } from "../../../../src/infra/heartbeat-events-filter.js";

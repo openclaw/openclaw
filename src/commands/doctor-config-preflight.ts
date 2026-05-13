@@ -91,7 +91,7 @@ export async function runDoctorConfigPreflight(
   } = {},
 ): Promise<DoctorConfigPreflightResult> {
   if (options.migrateState !== false) {
-    const { autoMigrateLegacyStateDir } = await import("./doctor/state-migrations.js");
+    const { autoMigrateLegacyStateDir } = await import("./doctor-state-migrations.js");
     const stateDirResult = await autoMigrateLegacyStateDir({ env: process.env });
     if (stateDirResult.changes.length > 0) {
       note(stateDirResult.changes.map((entry) => `- ${entry}`).join("\n"), "Doctor changes");

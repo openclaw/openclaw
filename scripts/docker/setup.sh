@@ -149,7 +149,16 @@ run_prestart_cli() {
   # requires the gateway container's network namespace to already exist. That
   # creates a circular dependency for config writes that are needed before the
   # gateway can start cleanly.
-  run_prestart_gateway --entrypoint node openclaw-gateway \
+  # Host OPENCLAW_* paths are Compose bind-mount sources. Setup-time CLI writes
+  # must still resolve state/config paths inside the container.
+  run_prestart_gateway \
+    -e HOME=/home/node \
+    -e OPENCLAW_HOME=/home/node \
+    -e OPENCLAW_STATE_DIR=/home/node/.openclaw \
+    -e OPENCLAW_CONFIG_PATH=/home/node/.openclaw/openclaw.json \
+    -e OPENCLAW_CONFIG_DIR=/home/node/.openclaw \
+    -e OPENCLAW_WORKSPACE_DIR=/home/node/.openclaw/workspace \
+    --entrypoint node openclaw-gateway \
     dist/index.js "$@"
 }
 
@@ -277,6 +286,7 @@ mkdir -p "$OPENCLAW_AUTH_PROFILE_SECRET_DIR"
 # where the container (even as root) cannot create new host subdirectories.
 mkdir -p "$OPENCLAW_CONFIG_DIR/identity"
 mkdir -p "$OPENCLAW_CONFIG_DIR/agents/main/agent"
+mkdir -p "$OPENCLAW_CONFIG_DIR/agents/main/sessions"
 
 export OPENCLAW_CONFIG_DIR
 export OPENCLAW_WORKSPACE_DIR

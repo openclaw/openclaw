@@ -11,8 +11,8 @@ call. It reduces context bloat from accumulated tool outputs (exec results, file
 reads, search results) without rewriting normal conversation text.
 
 <Info>
-Pruning is in-memory only -- it does not modify SQLite transcript rows. Your
-full history is always preserved.
+Pruning is in-memory only -- it does not modify the on-disk session transcript.
+Your full history is always preserved.
 </Info>
 
 ## Why it matters
@@ -48,8 +48,8 @@ persist raw image blocks or prompt-hydration media markers in history.
   `[media reference removed - already processed by model]`. Current-turn
   attachment markers stay intact so vision models can still hydrate fresh
   images.
-- The SQLite transcript is not rewritten, so history viewers can still render
-  the original message entries and their images.
+- The raw session transcript is not rewritten, so history viewers can still
+  render the original message entries and their images.
 - This is separate from normal cache-TTL pruning. It exists to stop repeated
   image payloads or stale media refs from busting prompt caches on later turns.
 

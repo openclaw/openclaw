@@ -5,7 +5,7 @@ import {
 } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
-import { listSessionEntries } from "openclaw/plugin-sdk/session-store-runtime";
+import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
@@ -238,15 +238,16 @@ export function resolveMattermostModelPickerCurrentModel(params: {
   cfg: OpenClawConfig;
   route: { agentId: string; sessionKey: string };
   data: ModelsProviderData;
+  skipCache?: boolean;
 }): string {
   const fallback = `${params.data.resolvedDefault.provider}/${params.data.resolvedDefault.model}`;
   try {
-    const sessionStore = Object.fromEntries(
-      listSessionEntries({ agentId: params.route.agentId }).map((row) => [
-        row.sessionKey,
-        row.entry,
-      ]),
-    );
+    const storePath = resolveStorePath(params.cfg.session?.store, {
+      agentId: params.route.agentId,
+    });
+    const sessionStore = params.skipCache
+      ? loadSessionStore(storePath, { skipCache: true })
+      : loadSessionStore(storePath);
     const sessionEntry = sessionStore[params.route.sessionKey];
     const override = resolveStoredModelOverride({
       sessionEntry,

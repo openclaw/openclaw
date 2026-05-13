@@ -8,7 +8,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 type SessionDisplayModelRow = {
   key: string;
-  agentId?: string;
   model?: string;
   modelProvider?: string;
   modelOverride?: string;
@@ -125,7 +124,8 @@ export function resolveSessionDisplayModelRef(
   cfg: OpenClawConfig,
   row: SessionDisplayModelRow,
 ): SessionDisplayModelRef {
-  const defaultRef = resolveDefaultModelRef(cfg, row.agentId);
+  const agentId = row.key.startsWith("agent:") ? row.key.split(":")[1] : undefined;
+  const defaultRef = resolveDefaultModelRef(cfg, agentId);
   const normalizedOverride = normalizeStoredOverrideModel({
     providerOverride: row.providerOverride,
     modelOverride: row.modelOverride,

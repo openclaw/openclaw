@@ -3,29 +3,30 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   resetReplyRunSession,
   setAgentRunnerSessionResetTestDeps,
 } from "./agent-runner-session-reset.js";
-import {
-  createTestFollowupRun,
-  readTestSessionRow,
-  writeTestSessionRow,
-} from "./agent-runner.test-fixtures.js";
+import { createTestFollowupRun, writeTestSessionStore } from "./agent-runner.test-fixtures.js";
 
 const refreshQueuedFollowupSessionMock = vi.fn();
 const errorMock = vi.fn();
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  let accessError: NodeJS.ErrnoException | undefined;
+  try {
+    await fs.access(targetPath);
+  } catch (error) {
+    accessError = error as NodeJS.ErrnoException;
+  }
+  expect(accessError?.code).toBe("ENOENT");
+}
+
 describe("resetReplyRunSession", () => {
   let rootDir = "";
-  let previousStateDir: string | undefined;
 
   beforeEach(async () => {
     rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-reset-run-"));
-    previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = rootDir;
     refreshQueuedFollowupSessionMock.mockReset();
     errorMock.mockReset();
     setAgentRunnerSessionResetTestDeps({
@@ -37,22 +38,15 @@ describe("resetReplyRunSession", () => {
 
   afterEach(async () => {
     setAgentRunnerSessionResetTestDeps();
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
-    previousStateDir = undefined;
     await fs.rm(rootDir, { recursive: true, force: true });
   });
 
   it("rotates the session and clears stale runtime and fallback fields", async () => {
-    const transcriptDir = path.join(rootDir, "transcript-fixtures", "main");
+    const storePath = path.join(rootDir, "sessions.json");
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: 1,
+      sessionFile: path.join(rootDir, "session.jsonl"),
       modelProvider: "qwencode",
       model: "qwen",
       contextTokens: 123,
@@ -70,7 +64,7 @@ describe("resetReplyRunSession", () => {
     };
     const sessionStore = { main: sessionEntry };
     const followupRun = createTestFollowupRun();
-    await writeTestSessionRow("main", sessionEntry);
+    await writeTestSessionStore(storePath, "main", sessionEntry);
 
     let activeSessionEntry: SessionEntry | undefined = sessionEntry;
     let isNewSession = false;
@@ -83,6 +77,7 @@ describe("resetReplyRunSession", () => {
       queueKey: "main",
       activeSessionEntry,
       activeSessionStore: sessionStore,
+      storePath,
       followupRun,
       onActiveSessionEntry: (entry) => {
         activeSessionEntry = entry;
@@ -107,46 +102,45 @@ describe("resetReplyRunSession", () => {
       key: "main",
       previousSessionId: "session",
       nextSessionId: activeSessionEntry?.sessionId,
+      nextSessionFile: activeSessionEntry?.sessionFile,
     });
     expect(errorMock).toHaveBeenCalledWith("reset 00000000-0000-0000-0000-000000000123");
 
-    const persisted = readTestSessionRow("main");
-    expect(persisted?.sessionId).toBe(activeSessionEntry?.sessionId);
-    expect(persisted?.fallbackNoticeReason).toBeUndefined();
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as {
+      main: SessionEntry;
+    };
+    expect(persisted.main.sessionId).toBe(activeSessionEntry?.sessionId);
+    expect(persisted.main.fallbackNoticeReason).toBeUndefined();
   });
 
-  it("rotates from the SQLite row when no in-memory store is available", async () => {
-    const transcriptDir = path.join(rootDir, "transcript-fixtures", "main");
+  it("cleans up the old transcript when requested", async () => {
+    const storePath = path.join(rootDir, "sessions.json");
+    const oldTranscriptPath = path.join(rootDir, "old-session.jsonl");
+    await fs.writeFile(oldTranscriptPath, "old", "utf8");
     const sessionEntry: SessionEntry = {
-      sessionId: "session",
+      sessionId: "old-session",
       updatedAt: 1,
-      totalTokens: 42,
-      compactionCount: 1,
+      sessionFile: oldTranscriptPath,
     };
-    await writeTestSessionRow("main", sessionEntry);
+    const sessionStore = { main: sessionEntry };
+    await writeTestSessionStore(storePath, "main", sessionEntry);
 
-    const followupRun = createTestFollowupRun();
-    let activeSessionEntry: SessionEntry | undefined;
-    const reset = await resetReplyRunSession({
+    await resetReplyRunSession({
       options: {
-        failureLabel: "role ordering",
+        failureLabel: "role ordering conflict",
+        cleanupTranscripts: true,
         buildLogMessage: (next) => `reset ${next}`,
       },
       sessionKey: "main",
       queueKey: "main",
-      followupRun,
-      onActiveSessionEntry: (entry) => {
-        activeSessionEntry = entry;
-      },
+      activeSessionEntry: sessionEntry,
+      activeSessionStore: sessionStore,
+      storePath,
+      followupRun: createTestFollowupRun(),
+      onActiveSessionEntry: () => {},
       onNewSession: () => {},
     });
 
-    expect(reset).toBe(true);
-    expect(activeSessionEntry?.sessionId).toBe("00000000-0000-0000-0000-000000000123");
-    expect(activeSessionEntry?.totalTokens).toBeUndefined();
-    expect(activeSessionEntry?.compactionCount).toBe(1);
-    expect(followupRun.run.sessionId).toBe(activeSessionEntry?.sessionId);
-    const persisted = readTestSessionRow("main");
-    expect(persisted?.sessionId).toBe(activeSessionEntry?.sessionId);
+    await expectPathMissing(oldTranscriptPath);
   });
 });

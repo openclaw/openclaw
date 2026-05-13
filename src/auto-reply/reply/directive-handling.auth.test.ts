@@ -41,8 +41,7 @@ vi.mock("../../agents/auth-profiles.js", () => ({
   },
   isProfileInCooldown: () => false,
   resolveAuthProfileDisplayLabel: ({ profileId }: { profileId: string }) => profileId,
-  resolveAuthProfileStoreLocationForDisplay: () =>
-    "/tmp/openclaw.sqlite#table/auth_profile_stores/main",
+  resolveAuthStorePathForDisplay: () => "/tmp/auth-profiles.json",
 }));
 
 vi.mock("../../agents/model-selection.js", () => ({
@@ -86,7 +85,13 @@ async function resolveRefOnlyAuthLabel(params: {
   };
   mockOrder = [params.profileId];
 
-  return resolveAuthLabel(params.provider, {} as OpenClawConfig, "", undefined, params.mode);
+  return resolveAuthLabel(
+    params.provider,
+    {} as OpenClawConfig,
+    "/tmp/models.json",
+    undefined,
+    params.mode,
+  );
 }
 
 describe("resolveAuthLabel ref-aware labels", () => {
@@ -162,7 +167,7 @@ describe("resolveAuthLabel ref-aware labels", () => {
           },
         },
       } as OpenClawConfig,
-      "",
+      "/tmp/models.json",
       undefined,
       "compact",
     );
@@ -195,7 +200,7 @@ describe("resolveAuthLabel ref-aware labels", () => {
           },
         },
       } as OpenClawConfig,
-      "",
+      "/tmp/models.json",
       undefined,
       "verbose",
     );
@@ -214,7 +219,7 @@ describe("resolveAuthLabel ref-aware labels", () => {
     const result = await resolveAuthLabel(
       "anthropic",
       cfg,
-      "",
+      "/tmp/models.json",
       "/tmp/agent",
       "verbose",
       "/tmp/workspace",

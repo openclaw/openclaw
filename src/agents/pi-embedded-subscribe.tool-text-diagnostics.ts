@@ -1,7 +1,7 @@
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { detectToolCallShapedText } from "../shared/text/tool-call-shaped-text.js";
-import type { AssistantMessage } from "./pi-ai-contract.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { normalizeToolName } from "./tool-policy.js";
 

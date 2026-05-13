@@ -584,7 +584,7 @@ describe("applyPiAutoCompactionGuard", () => {
       settingsManager,
       contextEngineInfo: {
         id: "legacy",
-        name: "Built-in Context Engine",
+        name: "Legacy Context Engine",
         version: "1.0.0",
       },
       silentOverflowProneProvider: false,

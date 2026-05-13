@@ -100,21 +100,17 @@ const mockFsPromisesModule = () => {
   return wrapped;
 };
 
+vi.mock("./openclaw-root.fs.runtime.js", () => ({
+  openClawRootFsSync: mockFsModule(),
+  openClawRootFs: mockFsPromisesModule(),
+}));
+
 describe("resolveOpenClawPackageRoot", () => {
   let resolveOpenClawPackageRoot: typeof import("./openclaw-root.js").resolveOpenClawPackageRoot;
   let resolveOpenClawPackageRootSync: typeof import("./openclaw-root.js").resolveOpenClawPackageRootSync;
   let clearOpenClawPackageRootCaches: typeof import("./openclaw-root.js").__testing.clearOpenClawPackageRootCaches;
 
   beforeAll(async () => {
-    vi.resetModules();
-    vi.doMock("./openclaw-root.fs.runtime.js", () => ({
-      openClawRootFsSync: mockFsModule(),
-      openClawRootFs: mockFsPromisesModule(),
-    }));
-    vi.doMock("../../src/infra/openclaw-root.fs.runtime.js", () => ({
-      openClawRootFsSync: mockFsModule(),
-      openClawRootFs: mockFsPromisesModule(),
-    }));
     ({
       resolveOpenClawPackageRoot,
       resolveOpenClawPackageRootSync,

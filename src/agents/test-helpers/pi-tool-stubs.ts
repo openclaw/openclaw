@@ -1,5 +1,5 @@
+import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
-import type { AgentTool, AgentToolResult } from "../agent-core-contract.js";
 
 export function createStubTool(name: string): AgentTool {
   return {
@@ -7,6 +7,6 @@ export function createStubTool(name: string): AgentTool {
     label: name,
     description: "",
     parameters: Type.Object({}),
-    execute: async () => ({}) as AgentToolResult,
+    execute: async () => ({}) as AgentToolResult<unknown>,
   };
 }

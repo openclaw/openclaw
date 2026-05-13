@@ -1,7 +1,7 @@
 export {
   createSession,
   readEffectiveTools,
-  readRawQaSessionEntries,
+  readRawQaSessionStore,
   readSkillStatus,
 } from "./suite-runtime-agent-session.js";
 export {

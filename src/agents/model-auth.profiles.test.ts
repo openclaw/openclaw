@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -19,7 +20,6 @@ import {
   resolveModelAuthMode,
 } from "./model-auth.js";
 import { hasAuthForModelProvider } from "./model-provider-auth.js";
-import type { Api, Model } from "./pi-ai-contract.js";
 
 async function expectVertexAdcEnvApiKey(params: {
   provider: string;
@@ -378,7 +378,7 @@ async function resolveDemoLocalApiKey(params: {
 }
 
 describe("getApiKeyForModel", () => {
-  it("reads oauth auth-profile entries from SQLite via explicit profile", async () => {
+  it("reads oauth auth-profiles entries from auth-profiles.json via explicit profile", async () => {
     await withOpenClawTestState(
       {
         layout: "state-only",
@@ -884,7 +884,7 @@ describe("getApiKeyForModel", () => {
       configuredApiKey: "config-demo-key",
     });
     expect(resolved.apiKey).toBe("config-demo-key");
-    expect(resolved.source).toBe("stored model catalog");
+    expect(resolved.source).toBe("models.json");
     expect(resolved.profileId).toBeUndefined();
   });
 
@@ -948,7 +948,7 @@ describe("getApiKeyForModel", () => {
       },
     });
     expect(resolved.apiKey).toBe("config-demo-key");
-    expect(resolved.source).toBe("stored model catalog");
+    expect(resolved.source).toBe("models.json");
     expect(resolved.profileId).toBeUndefined();
   });
 

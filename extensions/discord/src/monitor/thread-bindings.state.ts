@@ -1,5 +1,8 @@
-import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import fs from "node:fs";
+import path from "node:path";
+import { loadJsonFile, saveJsonFile } from "openclaw/plugin-sdk/json-store";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -9,7 +12,9 @@ import {
   DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS,
   DEFAULT_THREAD_BINDING_MAX_AGE_MS,
   RECENT_UNBOUND_WEBHOOK_ECHO_WINDOW_MS,
+  THREAD_BINDINGS_VERSION,
   type PersistedThreadBindingRecord,
+  type PersistedThreadBindingsPayload,
   type ThreadBindingManager,
   type ThreadBindingRecord,
   type ThreadBindingTargetKind,
@@ -76,13 +81,6 @@ export const REUSABLE_WEBHOOKS_BY_ACCOUNT_CHANNEL =
   THREAD_BINDINGS_STATE.reusableWebhooksByAccountChannel;
 export const PERSIST_BY_ACCOUNT_ID = THREAD_BINDINGS_STATE.persistByAccountId;
 export const THREAD_BINDING_TOUCH_PERSIST_MIN_INTERVAL_MS = 15_000;
-const THREAD_BINDING_STORE = createPluginStateSyncKeyedStore<PersistedThreadBindingRecord>(
-  "discord",
-  {
-    namespace: "thread-bindings",
-    maxEntries: 100_000,
-  },
-);
 
 export function rememberThreadBindingToken(params: { accountId?: string; token?: string }) {
   const normalizedAccountId = normalizeAccountId(params.accountId);
@@ -103,6 +101,10 @@ export function getThreadBindingToken(accountId?: string): string | undefined {
 
 export function shouldDefaultPersist(): boolean {
   return !(process.env.VITEST || process.env.NODE_ENV === "test");
+}
+
+export function resolveThreadBindingsPath(): string {
+  return path.join(resolveStateDir(process.env), "discord", "thread-bindings.json");
 }
 
 export function normalizeTargetKind(
@@ -137,10 +139,7 @@ export function resolveBindingRecordKey(params: {
   });
 }
 
-export function normalizePersistedBinding(
-  threadIdKey: string,
-  raw: unknown,
-): ThreadBindingRecord | null {
+function normalizePersistedBinding(threadIdKey: string, raw: unknown): ThreadBindingRecord | null {
   if (!raw || typeof raw !== "object") {
     return null;
   }
@@ -425,15 +424,14 @@ function shouldPersistAnyBindingState(): boolean {
   return false;
 }
 
-function toPersistedThreadBindingRecord(record: PersistedThreadBindingRecord) {
-  return JSON.parse(JSON.stringify(record)) as PersistedThreadBindingRecord;
-}
-
 export function shouldPersistBindingMutations(): boolean {
-  return shouldPersistAnyBindingState() || THREAD_BINDINGS_STATE.loadedBindings;
+  if (shouldPersistAnyBindingState()) {
+    return true;
+  }
+  return fs.existsSync(resolveThreadBindingsPath());
 }
 
-export function saveBindingsToStore(params: { force?: boolean; minIntervalMs?: number } = {}) {
+export function saveBindingsToDisk(params: { force?: boolean; minIntervalMs?: number } = {}) {
   if (!params.force && !shouldPersistAnyBindingState()) {
     return;
   }
@@ -450,14 +448,15 @@ export function saveBindingsToStore(params: { force?: boolean; minIntervalMs?: n
   ) {
     return;
   }
-  for (const entry of THREAD_BINDING_STORE.entries()) {
-    if (!BINDINGS_BY_THREAD_ID.has(entry.key)) {
-      THREAD_BINDING_STORE.delete(entry.key);
-    }
-  }
+  const bindings: Record<string, PersistedThreadBindingRecord> = {};
   for (const [bindingKey, record] of BINDINGS_BY_THREAD_ID.entries()) {
-    THREAD_BINDING_STORE.register(bindingKey, toPersistedThreadBindingRecord(record));
+    bindings[bindingKey] = { ...record };
   }
+  const payload: PersistedThreadBindingsPayload = {
+    version: THREAD_BINDINGS_VERSION,
+    bindings,
+  };
+  saveJsonFile(resolveThreadBindingsPath(), payload);
   THREAD_BINDINGS_STATE.lastPersistedAtMs = now;
 }
 
@@ -470,23 +469,22 @@ export function ensureBindingsLoaded() {
   BINDINGS_BY_SESSION_KEY.clear();
   REUSABLE_WEBHOOKS_BY_ACCOUNT_CHANNEL.clear();
 
-  for (const entry of THREAD_BINDING_STORE.entries()) {
-    const normalized = normalizePersistedBinding(entry.key, entry.value);
+  const raw = loadJsonFile(resolveThreadBindingsPath());
+  if (!raw || typeof raw !== "object") {
+    return;
+  }
+  const payload = raw as Partial<PersistedThreadBindingsPayload>;
+  if (payload.version !== 1 || !payload.bindings || typeof payload.bindings !== "object") {
+    return;
+  }
+
+  for (const [threadId, entry] of Object.entries(payload.bindings)) {
+    const normalized = normalizePersistedBinding(threadId, entry);
     if (!normalized) {
       continue;
     }
     setBindingRecord(normalized);
   }
-}
-
-export function seedThreadBindingStoreForTests(key: string, record: PersistedThreadBindingRecord) {
-  THREAD_BINDING_STORE.register(key, toPersistedThreadBindingRecord(record));
-}
-
-export function readThreadBindingStoreForTests(): Record<string, PersistedThreadBindingRecord> {
-  return Object.fromEntries(
-    THREAD_BINDING_STORE.entries().map((entry) => [entry.key, entry.value]),
-  );
 }
 
 export function resolveBindingIdsForSession(params: {
@@ -526,7 +524,7 @@ export function resolveDefaultThreadBindingDurations() {
   };
 }
 
-export function resetThreadBindingsForTests(params: { clearStore?: boolean } = {}) {
+export function resetThreadBindingsForTests() {
   for (const manager of MANAGERS_BY_ACCOUNT_ID.values()) {
     manager.stop();
   }
@@ -537,9 +535,6 @@ export function resetThreadBindingsForTests(params: { clearStore?: boolean } = {
   REUSABLE_WEBHOOKS_BY_ACCOUNT_CHANNEL.clear();
   TOKENS_BY_ACCOUNT_ID.clear();
   PERSIST_BY_ACCOUNT_ID.clear();
-  if (params.clearStore !== false) {
-    THREAD_BINDING_STORE.clear();
-  }
   THREAD_BINDINGS_STATE.loadedBindings = false;
   THREAD_BINDINGS_STATE.lastPersistedAtMs = 0;
 }

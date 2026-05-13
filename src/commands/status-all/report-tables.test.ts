@@ -18,14 +18,14 @@ describe("status-all report tables", () => {
               bootstrapPending: true,
               sessionsCount: 2,
               lastActiveAgeMs: 12_000,
-              sessionsDatabasePath: "/tmp/main.sqlite",
+              sessionsPath: "/tmp/main.json",
             },
             {
               id: "ops",
               bootstrapPending: false,
               sessionsCount: 0,
               lastActiveAgeMs: null,
-              sessionsDatabasePath: "/tmp/ops.sqlite",
+              sessionsPath: "/tmp/ops.json",
             },
           ],
         },
@@ -38,14 +38,14 @@ describe("status-all report tables", () => {
         BootstrapFile: "warn(PRESENT)",
         Sessions: "2",
         Active: "just now",
-        Database: "/tmp/main.sqlite",
+        Store: "/tmp/main.json",
       },
       {
         Agent: "ops",
         BootstrapFile: "ok(ABSENT)",
         Sessions: "0",
         Active: "unknown",
-        Database: "/tmp/ops.sqlite",
+        Store: "/tmp/ops.json",
       },
     ]);
   });
@@ -90,7 +90,7 @@ describe("status-all report tables", () => {
       { key: "BootstrapFile", header: "Bootstrap file", minWidth: 14 },
       { key: "Sessions", header: "Sessions", align: "right", minWidth: 8 },
       { key: "Active", header: "Active", minWidth: 10 },
-      { key: "Database", header: "Database", flex: true, minWidth: 34 },
+      { key: "Store", header: "Store", flex: true, minWidth: 34 },
     ]);
   });
 });

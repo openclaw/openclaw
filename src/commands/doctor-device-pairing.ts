@@ -1,8 +1,8 @@
+import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
+import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
-import { loadDeviceAuthStore } from "../infra/device-auth-store.js";
-import { loadDeviceIdentityIfPresentForEnv } from "../infra/device-identity.js";
 import {
   listApprovedPairedDeviceRoles,
   listDevicePairing,
@@ -11,6 +11,7 @@ import {
   type DevicePairingPendingRequest,
   type PairedDevice,
 } from "../infra/device-pairing.js";
+import { JsonFileReadError, tryReadJsonSync } from "../infra/json-files.js";
 import type { DeviceAuthStore } from "../shared/device-auth.js";
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
@@ -388,9 +389,22 @@ function collectPairedRecordIssues(snapshot: DoctorPairingSnapshot): string[] {
   return lines;
 }
 
+function readJsonFile(filePath: string): unknown {
+  return tryReadJsonSync(filePath);
+}
+
 function readLocalIdentity(env: NodeJS.ProcessEnv = process.env): StoredDeviceIdentity | null {
-  const identity = loadDeviceIdentityIfPresentForEnv(env);
-  if (!identity?.deviceId.trim()) {
+  const filePath = path.join(resolveStateDir(env), "identity", "device.json");
+  const identity = readJsonFile(filePath);
+  if (
+    !identity ||
+    typeof identity !== "object" ||
+    !hasNumberVersion(identity) ||
+    identity.version !== 1 ||
+    !("deviceId" in identity) ||
+    typeof identity.deviceId !== "string" ||
+    !identity.deviceId.trim()
+  ) {
     return null;
   }
   return {
@@ -400,7 +414,8 @@ function readLocalIdentity(env: NodeJS.ProcessEnv = process.env): StoredDeviceId
 }
 
 function readLocalDeviceAuthStore(env: NodeJS.ProcessEnv = process.env): DeviceAuthStore | null {
-  const store = loadDeviceAuthStore({ env });
+  const filePath = path.join(resolveStateDir(env), "identity", "device-auth.json");
+  const store = readJsonFile(filePath);
   if (
     !store ||
     typeof store !== "object" ||
@@ -488,11 +503,25 @@ function collectLocalDeviceAuthIssues(snapshot: DoctorPairingSnapshot): string[]
   return lines;
 }
 
+function formatPairingStoreReadIssue(error: JsonFileReadError): string {
+  const problem = error.reason === "parse" ? "contains invalid JSON" : "could not be read";
+  return `- Device pairing store ${error.filePath} ${problem}. OpenClaw refused to treat it as empty to avoid overwriting approved pairings. Fix the JSON or file permissions, or move it aside and re-pair devices.`;
+}
+
 export async function noteDevicePairingHealth(params: {
   cfg: OpenClawConfig;
   healthOk: boolean;
 }): Promise<void> {
-  const snapshot = await loadDoctorPairingSnapshot(params);
+  let snapshot: DoctorPairingSnapshot | null;
+  try {
+    snapshot = await loadDoctorPairingSnapshot(params);
+  } catch (error) {
+    if (error instanceof JsonFileReadError) {
+      note(formatPairingStoreReadIssue(error), "Device pairing");
+      return;
+    }
+    throw error;
+  }
   if (!snapshot) {
     return;
   }

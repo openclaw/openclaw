@@ -75,6 +75,7 @@ export function createSlackPluginBase(params: {
     id: SLACK_CHANNEL,
     meta: {
       ...getChatChannelMeta(SLACK_CHANNEL),
+      preferSessionLookupForAnnounceTarget: true,
     },
     setupWizard: params.setupWizard,
     capabilities: {

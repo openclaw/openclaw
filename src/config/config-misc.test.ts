@@ -6,6 +6,7 @@ import {
   unsetConfigValueAtPath,
 } from "./config-paths.js";
 import { readConfigFileSnapshot } from "./config.js";
+import { findLegacyConfigIssues } from "./legacy.js";
 import { buildWebSearchProviderConfig, withTempHome, writeOpenClawConfig } from "./test-helpers.js";
 import { validateConfigObject, validateConfigObjectRaw } from "./validation.js";
 import { OpenClawSchema } from "./zod-schema.js";
@@ -1028,7 +1029,7 @@ describe("config strict validation", () => {
 
       expect(snap.valid).toBe(false);
       expectSomeIssueMessageContains(snap.issues, '"memorySearch"');
-      expect(snap.legacyIssues).toHaveLength(0);
+      expect(issuePaths(snap.legacyIssues)).toContain("memorySearch");
       expect((snap.sourceConfig as { memorySearch?: unknown }).memorySearch).toEqual({
         provider: "local",
         fallback: "none",
@@ -1051,7 +1052,7 @@ describe("config strict validation", () => {
 
       expect(snap.valid).toBe(false);
       expectSomeIssueMessageContains(snap.issues, '"heartbeat"');
-      expect(snap.legacyIssues).toHaveLength(0);
+      expect(issuePaths(snap.legacyIssues)).toContain("heartbeat");
       expect((snap.sourceConfig as { heartbeat?: unknown }).heartbeat).toEqual({
         every: "30m",
         model: "anthropic/claude-3-5-haiku-20241022",
@@ -1074,7 +1075,7 @@ describe("config strict validation", () => {
 
       expect(snap.valid).toBe(false);
       expectSomeIssueMessageContains(snap.issues, '"heartbeat"');
-      expect(snap.legacyIssues).toHaveLength(0);
+      expect(issuePaths(snap.legacyIssues)).toContain("heartbeat");
       expect((snap.sourceConfig as { heartbeat?: unknown }).heartbeat).toEqual({
         showOk: true,
         showAlerts: false,
@@ -1082,6 +1083,48 @@ describe("config strict validation", () => {
       });
       expect(snap.sourceConfig.channels?.defaults?.heartbeat).toBeUndefined();
     });
+  });
+
+  it("reports legacy messages.tts provider keys without read-time auto-migration", () => {
+    const raw = {
+      messages: {
+        tts: {
+          provider: "elevenlabs",
+          elevenlabs: {
+            apiKey: "test-key",
+            voiceId: "voice-1",
+          },
+        },
+      },
+    };
+    const issues = findLegacyConfigIssues(raw);
+
+    expect(issuePaths(issues)).toContain("messages.tts");
+    expect(raw.messages.tts.elevenlabs).toEqual({
+      apiKey: "test-key",
+      voiceId: "voice-1",
+    });
+    expect(raw.messages.tts).not.toHaveProperty("providers");
+  });
+
+  it("reports retired queue steering modes without read-time auto-migration", async () => {
+    const raw = {
+      messages: {
+        queue: {
+          mode: "queue",
+          byChannel: {
+            discord: "steer-backlog",
+            telegram: "collect",
+          },
+        },
+      },
+    };
+    const issues = findLegacyConfigIssues(raw);
+
+    expect(issues.some((issue) => issue.path === "messages.queue.mode")).toBe(true);
+    expect(issues.some((issue) => issue.path === "messages.queue.byChannel")).toBe(true);
+    expect(raw.messages.queue.mode).toBe("queue");
+    expect(raw.messages.queue.byChannel.discord).toBe("steer-backlog");
   });
 
   it("rejects legacy sandbox perSession without read-time auto-migration", async () => {
@@ -1109,7 +1152,8 @@ describe("config strict validation", () => {
       expect(snap.valid).toBe(false);
       expect(issuePaths(snap.issues)).toContain("agents.defaults.sandbox");
       expect(issuePaths(snap.issues)).toContain("agents.list.0.sandbox");
-      expect(snap.legacyIssues).toHaveLength(0);
+      expect(issuePaths(snap.legacyIssues)).toContain("agents.defaults.sandbox");
+      expect(issuePaths(snap.legacyIssues)).toContain("agents.list");
       expect(snap.sourceConfig.agents?.defaults?.sandbox).toEqual({ perSession: true });
       expect(snap.sourceConfig.agents?.list?.[0]?.sandbox).toEqual({ perSession: false });
     });
@@ -1138,7 +1182,7 @@ describe("config strict validation", () => {
     });
   });
 
-  it("rejects literal gateway.bind host aliases without read-time doctor analysis", async () => {
+  it("rejects literal gateway.bind host aliases as legacy", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         gateway: { bind: "0.0.0.0" },
@@ -1147,7 +1191,7 @@ describe("config strict validation", () => {
       const snap = await readConfigFileSnapshot();
       expect(snap.valid).toBe(false);
       expect(issuePaths(snap.issues)).toContain("gateway.bind");
-      expect(snap.legacyIssues).toHaveLength(0);
+      expect(issuePaths(snap.legacyIssues)).toContain("gateway.bind");
     });
   });
 });

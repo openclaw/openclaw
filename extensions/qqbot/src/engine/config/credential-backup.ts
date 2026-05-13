@@ -1,19 +1,34 @@
 /**
- * Credential backup & recovery backed by SQLite plugin state.
+ * Credential backup & recovery.
+ * 凭证暂存与恢复。
  *
  * Solves the "hot-upgrade interrupted, appId/secret vanished from
- * openclaw.json" failure mode without writing sidecar JSON files.
- * Legacy `credential-backup*.json` files are imported by doctor only.
+ * openclaw.json" failure mode.
+ *
+ * Mechanics:
+ *   - After each successful gateway start we snapshot the currently
+ *     resolved `appId` / `clientSecret` to a per-account backup file.
+ *   - During plugin startup, if the live config has an empty appId or
+ *     secret, the gateway consults the backup and restores the values
+ *     via the config mutation API.
+ *   - Backups live under `~/.openclaw/qqbot/data/` so they survive
+ *     plugin directory replacement.
+ *
+ * Safety notes:
+ *   - Only restore when credentials are **actually empty** — never
+ *     overwrite a user's intentional config change.
+ *   - Atomic write (temp file + rename) to avoid torn files.
+ *   - Per-account file: `credential-backup-<accountId>.json`. We do
+ *     **not** also key by appId because recovery happens precisely
+ *     when appId is unknown.
+ *   - Legacy single `credential-backup.json` is migrated automatically
+ *     when the stored accountId matches the caller.
  */
 
-import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
-
-const QQBOT_PLUGIN_ID = "qqbot";
-const CREDENTIAL_BACKUP_NAMESPACE = "credential-backups";
-const credentialBackupStore = createPluginStateSyncKeyedStore<CredentialBackup>(QQBOT_PLUGIN_ID, {
-  namespace: CREDENTIAL_BACKUP_NAMESPACE,
-  maxEntries: 1000,
-});
+import fs from "node:fs";
+import { loadJsonFile } from "openclaw/plugin-sdk/json-store";
+import { replaceFileAtomicSync } from "openclaw/plugin-sdk/security-runtime";
+import { getCredentialBackupFile, getLegacyCredentialBackupFile } from "../utils/data-paths.js";
 
 interface CredentialBackup {
   accountId: string;
@@ -28,11 +43,17 @@ export function saveCredentialBackup(accountId: string, appId: string, clientSec
     return;
   }
   try {
-    credentialBackupStore.register(accountId, {
+    const backupPath = getCredentialBackupFile(accountId);
+    const data: CredentialBackup = {
       accountId,
       appId,
       clientSecret,
       savedAt: new Date().toISOString(),
+    };
+    replaceFileAtomicSync({
+      filePath: backupPath,
+      content: `${JSON.stringify(data, null, 2)}\n`,
+      tempPrefix: ".qqbot-credential-backup",
     });
   } catch {
     /* best-effort — ignore */
@@ -40,19 +61,48 @@ export function saveCredentialBackup(accountId: string, appId: string, clientSec
 }
 
 /**
- * Load a credential snapshot for `accountId` from SQLite plugin state.
+ * Load a credential snapshot for `accountId`.
+ *
+ * Consults the new per-account file first; falls back to the legacy
+ * global backup file and migrates it when the embedded `accountId`
+ * matches the request. Returns `null` when no usable backup exists.
  */
 export function loadCredentialBackup(accountId?: string): CredentialBackup | null {
-  if (!accountId) {
-    return null;
-  }
   try {
-    const data = credentialBackupStore.lookup(accountId);
-    if (data?.appId && data.clientSecret) {
+    if (accountId) {
+      const newPath = getCredentialBackupFile(accountId);
+      const data = loadJsonFile<CredentialBackup>(newPath);
+      if (data?.appId && data.clientSecret) {
+        return data;
+      }
+    }
+
+    const legacy = getLegacyCredentialBackupFile();
+    const data = loadJsonFile<CredentialBackup>(legacy);
+    if (data) {
+      if (!data?.appId || !data?.clientSecret) {
+        return null;
+      }
+      if (accountId && data.accountId !== accountId) {
+        return null;
+      }
+      if (data.accountId) {
+        try {
+          const backupPath = getCredentialBackupFile(data.accountId);
+          replaceFileAtomicSync({
+            filePath: backupPath,
+            content: `${JSON.stringify(data, null, 2)}\n`,
+            tempPrefix: ".qqbot-credential-backup",
+          });
+          fs.unlinkSync(legacy);
+        } catch {
+          /* ignore migration errors */
+        }
+      }
       return data;
     }
   } catch {
-    /* unavailable store — ignore */
+    /* corrupt file — ignore */
   }
   return null;
 }

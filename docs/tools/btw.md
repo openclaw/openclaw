@@ -38,10 +38,12 @@ The important mental model is:
 - no transcript persistence
 
 For Codex harness sessions, BTW stays inside Codex by forking the active
-app-server thread as an ephemeral side thread, matching Codex `/side`
-semantics. That keeps Codex OAuth, native transport behavior, and Codex's
-workspace/tool machinery intact while still isolating the side answer from the
-parent transcript. Non-Codex runtimes keep the older direct one-shot path.
+app-server thread as an ephemeral side thread. That keeps Codex OAuth and native
+thread behavior intact while still isolating the side answer from the parent
+transcript. Like Codex `/side`, the side thread keeps the current Codex
+permissions and native tool surface, with guardrails that tell the model not to
+treat inherited parent-thread work as active instructions. Non-Codex runtimes
+keep the older direct one-shot path.
 
 ## What it does not do
 

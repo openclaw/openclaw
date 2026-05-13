@@ -49,7 +49,11 @@ vi.mock("./doctor-security.js", () => ({
   noteSecurityWarnings: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("./doctor/legacy/session-transcript-health.js", () => ({
+vi.mock("./doctor-session-locks.js", () => ({
+  noteSessionLockHealth: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("./doctor-session-transcripts.js", () => ({
   noteSessionTranscriptHealth: vi.fn().mockResolvedValue(undefined),
 }));
 

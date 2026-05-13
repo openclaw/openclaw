@@ -1,4 +1,4 @@
-import type { AgentMessage } from "../agents/agent-core-contract.js";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type {
@@ -291,6 +291,7 @@ export type PluginHookBeforeAgentFinalizeEvent = {
   provider?: string;
   model?: string;
   cwd?: string;
+  transcriptPath?: string;
   stopHookActive: boolean;
   lastAssistantMessage?: string;
   messages?: unknown[];
@@ -316,9 +317,11 @@ export type PluginHookBeforeCompactionEvent = {
   compactingCount?: number;
   tokenCount?: number;
   messages?: unknown[];
+  sessionFile?: string;
 };
 
 export type PluginHookBeforeResetEvent = {
+  sessionFile?: string;
   messages?: unknown[];
   reason?: string;
 };
@@ -327,6 +330,7 @@ export type PluginHookAfterCompactionEvent = {
   messageCount: number;
   tokenCount?: number;
   compactedCount: number;
+  sessionFile?: string;
 };
 
 export type PluginHookInboundClaimResult = {
@@ -405,10 +409,7 @@ export type PluginHookToolContext = {
   trace?: DiagnosticTraceContext;
   toolName: string;
   toolCallId?: string;
-  // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Plugin callers type JSON reads by namespace.
-  getSessionExtension?: <T extends PluginJsonValue = PluginJsonValue>(
-    namespace: string,
-  ) => T | undefined;
+  getSessionExtension?: (namespace: string) => PluginJsonValue | undefined;
   channelId?: string;
 };
 
@@ -419,8 +420,14 @@ export type PluginHookBeforeToolCallEvent = {
   toolCallId?: string;
   /**
    * Optional best-effort destination path hints the host derived from `params`
-   * for well-known tool envelopes. Plugins must still validate exact params
-   * when correctness or policy decisions depend on the affected path set.
+   * for well-known tool envelopes (e.g. `apply_patch`).
+   *
+   * This is a convenience hint, not an authoritative parse result: the host's
+   * extractor may be intentionally lenient and can return paths for malformed
+   * or partial envelopes. Plugins may use `derivedPaths` as a fast path, but
+   * should parse and validate `params` themselves when correctness or policy
+   * decisions depend on the exact set of affected paths. Absent for tools the
+   * host does not know how to derive paths for.
    */
   derivedPaths?: readonly string[];
 };
@@ -520,6 +527,8 @@ export type PluginHookSessionEndEvent = {
   messageCount: number;
   durationMs?: number;
   reason?: PluginHookSessionEndReason;
+  sessionFile?: string;
+  transcriptArchived?: boolean;
   nextSessionId?: string;
   nextSessionKey?: string;
 };

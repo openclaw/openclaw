@@ -1,8 +1,7 @@
+export { resolveStorePath } from "../../config/sessions/paths.js";
 export {
-  getSessionEntry,
-  listSessionEntries,
-  resolveSessionRowEntry,
-  upsertSessionEntry,
+  loadSessionStore,
+  resolveSessionStoreEntry,
+  updateSessionStoreEntry,
 } from "../../config/sessions/store.js";
-export { mergeSessionEntry } from "../../config/sessions/types.js";
 export { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";

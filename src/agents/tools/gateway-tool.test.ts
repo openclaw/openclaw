@@ -6,10 +6,10 @@ import { createGatewayTool } from "./gateway-tool.js";
 type ScheduleGatewayRestartArgs = Parameters<typeof scheduleGatewaySigusr1Restart>[0];
 
 const {
-  clearRestartSentinelMock,
   extractDeliveryInfoMock,
   formatDoctorNonInteractiveHintMock,
   isRestartEnabledMock,
+  removeRestartSentinelFileMock,
   scheduleGatewaySigusr1RestartMock,
   writeRestartSentinelMock,
 } = vi.hoisted(() => ({
@@ -23,8 +23,8 @@ const {
     threadId: "thread-42",
   })),
   formatDoctorNonInteractiveHintMock: vi.fn(() => "Run: openclaw doctor --non-interactive"),
-  writeRestartSentinelMock: vi.fn(async (_payload: RestartSentinelPayload) => undefined),
-  clearRestartSentinelMock: vi.fn(async () => undefined),
+  writeRestartSentinelMock: vi.fn(async (_payload: RestartSentinelPayload) => "/tmp/restart"),
+  removeRestartSentinelFileMock: vi.fn(async (_path: string | null | undefined) => undefined),
   scheduleGatewaySigusr1RestartMock: vi.fn((_opts?: ScheduleGatewayRestartArgs) => ({
     scheduled: true,
     delayMs: 250,
@@ -46,7 +46,7 @@ vi.mock("../../infra/restart-sentinel.js", async () => {
   return {
     ...actual,
     formatDoctorNonInteractiveHint: formatDoctorNonInteractiveHintMock,
-    clearRestartSentinel: clearRestartSentinelMock,
+    removeRestartSentinelFile: removeRestartSentinelFileMock,
     writeRestartSentinel: writeRestartSentinelMock,
   };
 });
@@ -100,8 +100,8 @@ describe("gateway tool restart continuation", () => {
     formatDoctorNonInteractiveHintMock.mockReset();
     formatDoctorNonInteractiveHintMock.mockReturnValue("Run: openclaw doctor --non-interactive");
     writeRestartSentinelMock.mockReset();
-    writeRestartSentinelMock.mockResolvedValue(undefined);
-    clearRestartSentinelMock.mockClear();
+    writeRestartSentinelMock.mockResolvedValue("/tmp/restart");
+    removeRestartSentinelFileMock.mockClear();
     scheduleGatewaySigusr1RestartMock.mockReset();
     scheduleGatewaySigusr1RestartMock.mockReturnValue({ scheduled: true, delayMs: 250 });
   });
@@ -223,6 +223,6 @@ describe("gateway tool restart continuation", () => {
     await scheduledArgs.emitHooks?.beforeEmit?.();
     await scheduledArgs.emitHooks?.afterEmitRejected?.();
 
-    expect(clearRestartSentinelMock).toHaveBeenCalledOnce();
+    expect(removeRestartSentinelFileMock).toHaveBeenCalledWith("/tmp/restart");
   });
 });

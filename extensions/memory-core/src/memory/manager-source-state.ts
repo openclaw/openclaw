@@ -1,12 +1,8 @@
 import type { SQLInputValue } from "node:sqlite";
-import {
-  MEMORY_INDEX_TABLE_NAMES,
-  type MemorySource,
-} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
 export type MemorySourceFileStateRow = {
-  sourceKey: string;
-  path: string | null;
+  path: string;
   hash: string;
 };
 
@@ -17,8 +13,8 @@ type MemorySourceStateDb = {
   };
 };
 
-export const MEMORY_SOURCE_FILE_STATE_SQL = `SELECT source_key as sourceKey, path, hash FROM ${MEMORY_INDEX_TABLE_NAMES.sources} WHERE source_kind = ?`;
-export const MEMORY_SOURCE_FILE_HASH_SQL = `SELECT hash FROM ${MEMORY_INDEX_TABLE_NAMES.sources} WHERE source_key = ? AND source_kind = ?`;
+export const MEMORY_SOURCE_FILE_STATE_SQL = `SELECT path, hash FROM files WHERE source = ?`;
+export const MEMORY_SOURCE_FILE_HASH_SQL = `SELECT hash FROM files WHERE path = ? AND source = ?`;
 
 export function loadMemorySourceFileState(params: {
   db: MemorySourceStateDb;
@@ -33,21 +29,21 @@ export function loadMemorySourceFileState(params: {
   const normalizedRows = rows ?? [];
   return {
     rows: normalizedRows,
-    hashes: new Map(normalizedRows.map((row) => [row.sourceKey, row.hash])),
+    hashes: new Map(normalizedRows.map((row) => [row.path, row.hash])),
   };
 }
 
 export function resolveMemorySourceExistingHash(params: {
   db: MemorySourceStateDb;
   source: MemorySource;
-  sourceKey: string;
+  path: string;
   existingHashes?: Map<string, string> | null;
 }): string | undefined {
   if (params.existingHashes) {
-    return params.existingHashes.get(params.sourceKey);
+    return params.existingHashes.get(params.path);
   }
   return (
-    params.db.prepare(MEMORY_SOURCE_FILE_HASH_SQL).get(params.sourceKey, params.source) as
+    params.db.prepare(MEMORY_SOURCE_FILE_HASH_SQL).get(params.path, params.source) as
       | { hash: string }
       | undefined
   )?.hash;

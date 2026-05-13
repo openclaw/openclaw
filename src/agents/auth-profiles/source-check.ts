@@ -1,18 +1,30 @@
-import { resolveAuthProfileStoreKey } from "./path-resolve.js";
-import { hasPersistedAuthProfileSecretsStore } from "./persisted.js";
+import fs from "node:fs";
+import {
+  resolveAuthStatePath,
+  resolveAuthStorePath,
+  resolveLegacyAuthStorePath,
+} from "./path-resolve.js";
 import { hasAnyRuntimeAuthProfileStoreSource } from "./runtime-snapshots.js";
+
+function hasStoredAuthProfileFiles(agentDir?: string): boolean {
+  return (
+    fs.existsSync(resolveAuthStorePath(agentDir)) ||
+    fs.existsSync(resolveAuthStatePath(agentDir)) ||
+    fs.existsSync(resolveLegacyAuthStorePath(agentDir))
+  );
+}
 
 export function hasAnyAuthProfileStoreSource(agentDir?: string): boolean {
   if (hasAnyRuntimeAuthProfileStoreSource(agentDir)) {
     return true;
   }
-  if (hasPersistedAuthProfileSecretsStore(agentDir)) {
+  if (hasStoredAuthProfileFiles(agentDir)) {
     return true;
   }
 
-  const storeKey = resolveAuthProfileStoreKey(agentDir);
-  const mainStoreKey = resolveAuthProfileStoreKey();
-  if (agentDir && storeKey !== mainStoreKey && hasPersistedAuthProfileSecretsStore(undefined)) {
+  const authPath = resolveAuthStorePath(agentDir);
+  const mainAuthPath = resolveAuthStorePath();
+  if (agentDir && authPath !== mainAuthPath && hasStoredAuthProfileFiles(undefined)) {
     return true;
   }
   return false;

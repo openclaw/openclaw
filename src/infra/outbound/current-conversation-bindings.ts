@@ -1,20 +1,14 @@
-import type { DatabaseSync } from "node:sqlite";
-import type { Insertable, Selectable } from "kysely";
+import fs from "node:fs";
+import path from "node:path";
 import { normalizeConversationText } from "../../acp/conversation-id.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { resolveStateDir } from "../../config/paths.js";
+import { loadJsonFile } from "../../infra/json-file.js";
+import { saveJsonFile } from "../../plugin-sdk/json-store.js";
 import { getActivePluginChannelRegistryFromState } from "../../plugins/runtime-channel-state.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
-import {
-  type OpenClawStateDatabaseOptions,
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../../state/openclaw-state-db.js";
 import { normalizeConversationRef } from "./session-binding-normalization.js";
 import type {
-  ConversationBindingKind,
   ConversationRef,
   SessionBindingBindInput,
   SessionBindingCapabilities,
@@ -22,14 +16,12 @@ import type {
   SessionBindingUnbindInput,
 } from "./session-binding.types.js";
 
-type CurrentConversationBindingsTable =
-  OpenClawStateKyselyDatabase["current_conversation_bindings"];
-type CurrentConversationBindingRow = Selectable<CurrentConversationBindingsTable>;
-type CurrentConversationBindingsDatabase = Pick<
-  OpenClawStateKyselyDatabase,
-  "current_conversation_bindings"
->;
+type PersistedCurrentConversationBindingsFile = {
+  version: 1;
+  bindings: SessionBindingRecord[];
+};
 
+const CURRENT_BINDINGS_FILE_VERSION = 1;
 const CURRENT_BINDINGS_ID_PREFIX = "generic:";
 
 let bindingsLoaded = false;
@@ -49,165 +41,24 @@ function buildBindingId(ref: ConversationRef): string {
   return `${CURRENT_BINDINGS_ID_PREFIX}${buildConversationKey(ref)}`;
 }
 
+function resolveBindingsFilePath(env: NodeJS.ProcessEnv = process.env): string {
+  return path.join(resolveStateDir(env), "bindings", "current-conversations.json");
+}
+
 function isBindingExpired(record: SessionBindingRecord, now = Date.now()): boolean {
   return typeof record.expiresAt === "number" && Number.isFinite(record.expiresAt)
     ? record.expiresAt <= now
     : false;
 }
 
-function sqliteOptionsForEnv(env: NodeJS.ProcessEnv = process.env): OpenClawStateDatabaseOptions {
+function toPersistedFile(): PersistedCurrentConversationBindingsFile {
+  const bindings = [...bindingsByConversationKey.values()]
+    .filter((record) => !isBindingExpired(record))
+    .toSorted((a, b) => a.bindingId.localeCompare(b.bindingId));
   return {
-    env,
+    version: CURRENT_BINDINGS_FILE_VERSION,
+    bindings,
   };
-}
-
-function getCurrentConversationBindingsKysely(db: DatabaseSync) {
-  return getNodeSqliteKysely<CurrentConversationBindingsDatabase>(db);
-}
-
-function serializeJson(value: unknown): string | null {
-  return value == null ? null : JSON.stringify(value);
-}
-
-function parseJsonRecord(raw: string | null): Record<string, unknown> | undefined {
-  if (!raw?.trim()) {
-    return undefined;
-  }
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function normalizeNumber(value: number | bigint | null): number | undefined {
-  if (typeof value === "bigint") {
-    return Number(value);
-  }
-  return typeof value === "number" ? value : undefined;
-}
-
-function normalizeConversationKind(value: unknown): ConversationBindingKind {
-  return value === "channel" || value === "group" || value === "direct" ? value : "direct";
-}
-
-function resolveTargetAgentId(sessionKey: string): string {
-  return resolveAgentIdFromSessionKey(sessionKey) ?? "main";
-}
-
-function metadataString(record: Record<string, unknown> | undefined, key: string): string | null {
-  const value = record?.[key];
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function recordToRow(record: SessionBindingRecord): Insertable<CurrentConversationBindingsTable> {
-  const conversation = normalizeConversationRef(record.conversation);
-  const bindingKey = buildConversationKey(conversation);
-  const bindingId = buildBindingId(conversation);
-  const normalized: SessionBindingRecord = {
-    ...record,
-    bindingId,
-    conversation,
-    targetSessionKey: record.targetSessionKey.trim(),
-  };
-  return {
-    binding_key: bindingKey,
-    binding_id: bindingId,
-    target_agent_id: resolveTargetAgentId(normalized.targetSessionKey),
-    target_session_id: metadataString(normalized.metadata, "targetSessionId"),
-    target_session_key: normalized.targetSessionKey,
-    channel: conversation.channel,
-    account_id: conversation.accountId,
-    conversation_kind: normalizeConversationKind(conversation.conversationKind),
-    parent_conversation_id: conversation.parentConversationId ?? null,
-    conversation_id: conversation.conversationId,
-    target_kind: normalized.targetKind,
-    status: normalized.status,
-    bound_at: normalized.boundAt,
-    expires_at: normalized.expiresAt ?? null,
-    metadata_json: serializeJson(normalized.metadata),
-    record_json: JSON.stringify(normalized),
-    updated_at: Date.now(),
-  };
-}
-
-function rowToRecord(row: CurrentConversationBindingRow): SessionBindingRecord | null {
-  const parsedMetadata = parseJsonRecord(row.metadata_json);
-  const metadata =
-    row.target_session_id && parsedMetadata?.targetSessionId == null
-      ? { ...parsedMetadata, targetSessionId: row.target_session_id }
-      : parsedMetadata;
-  const conversation = normalizeConversationRef({
-    channel: row.channel,
-    accountId: row.account_id,
-    conversationId: row.conversation_id,
-    ...(row.conversation_kind !== "direct"
-      ? { conversationKind: normalizeConversationKind(row.conversation_kind) }
-      : {}),
-    ...(row.parent_conversation_id ? { parentConversationId: row.parent_conversation_id } : {}),
-  });
-  const targetSessionKey = row.target_session_key.trim();
-  if (!conversation.channel || !conversation.conversationId || !targetSessionKey) {
-    return null;
-  }
-  return {
-    bindingId: buildBindingId(conversation),
-    targetSessionKey,
-    targetKind: row.target_kind === "subagent" ? "subagent" : "session",
-    conversation,
-    status:
-      row.status === "ending" || row.status === "ended" || row.status === "active"
-        ? row.status
-        : "active",
-    boundAt: normalizeNumber(row.bound_at) ?? 0,
-    ...(row.expires_at != null ? { expiresAt: normalizeNumber(row.expires_at) } : {}),
-    metadata,
-  };
-}
-
-function upsertBindingRow(record: SessionBindingRecord, env?: NodeJS.ProcessEnv): void {
-  runOpenClawStateWriteTransaction((stateDatabase) => {
-    const db = getCurrentConversationBindingsKysely(stateDatabase.db);
-    executeSqliteQuerySync(
-      stateDatabase.db,
-      db
-        .insertInto("current_conversation_bindings")
-        .values(recordToRow(record))
-        .onConflict((conflict) =>
-          conflict.column("binding_key").doUpdateSet({
-            binding_id: (eb) => eb.ref("excluded.binding_id"),
-            target_agent_id: (eb) => eb.ref("excluded.target_agent_id"),
-            target_session_id: (eb) => eb.ref("excluded.target_session_id"),
-            target_session_key: (eb) => eb.ref("excluded.target_session_key"),
-            channel: (eb) => eb.ref("excluded.channel"),
-            account_id: (eb) => eb.ref("excluded.account_id"),
-            conversation_kind: (eb) => eb.ref("excluded.conversation_kind"),
-            parent_conversation_id: (eb) => eb.ref("excluded.parent_conversation_id"),
-            conversation_id: (eb) => eb.ref("excluded.conversation_id"),
-            target_kind: (eb) => eb.ref("excluded.target_kind"),
-            status: (eb) => eb.ref("excluded.status"),
-            bound_at: (eb) => eb.ref("excluded.bound_at"),
-            expires_at: (eb) => eb.ref("excluded.expires_at"),
-            metadata_json: (eb) => eb.ref("excluded.metadata_json"),
-            record_json: (eb) => eb.ref("excluded.record_json"),
-            updated_at: (eb) => eb.ref("excluded.updated_at"),
-          }),
-        ),
-    );
-  }, sqliteOptionsForEnv(env));
-}
-
-function deleteBindingRow(key: string, env?: NodeJS.ProcessEnv): void {
-  runOpenClawStateWriteTransaction((stateDatabase) => {
-    const db = getCurrentConversationBindingsKysely(stateDatabase.db);
-    executeSqliteQuerySync(
-      stateDatabase.db,
-      db.deleteFrom("current_conversation_bindings").where("binding_key", "=", key),
-    );
-  }, sqliteOptionsForEnv(env));
 }
 
 function loadBindingsIntoMemory(): void {
@@ -216,16 +67,12 @@ function loadBindingsIntoMemory(): void {
   }
   bindingsLoaded = true;
   bindingsByConversationKey.clear();
-  const stateDatabase = openOpenClawStateDatabase();
-  const db = getCurrentConversationBindingsKysely(stateDatabase.db);
-  const rows = executeSqliteQuerySync(
-    stateDatabase.db,
-    db.selectFrom("current_conversation_bindings").selectAll().orderBy("updated_at", "asc"),
-  ).rows;
-  for (const row of rows) {
-    const record = rowToRecord(row);
+  const parsed = loadJsonFile(resolveBindingsFilePath()) as
+    | PersistedCurrentConversationBindingsFile
+    | undefined;
+  const bindings = parsed?.version === CURRENT_BINDINGS_FILE_VERSION ? parsed.bindings : [];
+  for (const record of bindings ?? []) {
     if (!record?.bindingId || !record?.conversation?.conversationId || isBindingExpired(record)) {
-      deleteBindingRow(row.binding_key);
       continue;
     }
     const conversation = normalizeConversationRef(record.conversation);
@@ -242,12 +89,8 @@ function loadBindingsIntoMemory(): void {
   }
 }
 
-function persistBinding(record: SessionBindingRecord): void {
-  upsertBindingRow(record);
-}
-
-function deletePersistedBinding(key: string): void {
-  deleteBindingRow(key);
+function persistBindingsToDisk(): void {
+  saveJsonFile(resolveBindingsFilePath(), toPersistedFile());
 }
 
 function pruneExpiredBinding(key: string): SessionBindingRecord | null {
@@ -260,7 +103,7 @@ function pruneExpiredBinding(key: string): SessionBindingRecord | null {
     return record;
   }
   bindingsByConversationKey.delete(key);
-  deletePersistedBinding(key);
+  persistBindingsToDisk();
   return null;
 }
 
@@ -338,7 +181,7 @@ export async function bindGenericCurrentConversation(
     },
   };
   bindingsByConversationKey.set(key, record);
-  persistBinding(record);
+  persistBindingsToDisk();
   return record;
 }
 
@@ -380,7 +223,7 @@ export function touchGenericCurrentConversationBinding(bindingId: string, at = D
       lastActivityAt: at,
     },
   });
-  persistBinding(bindingsByConversationKey.get(key)!);
+  persistBindingsToDisk();
 }
 
 export async function unbindGenericCurrentConversationBindings(
@@ -396,7 +239,7 @@ export async function unbindGenericCurrentConversationBindings(
     if (record) {
       bindingsByConversationKey.delete(key);
       removed.push(record);
-      deletePersistedBinding(key);
+      persistBindingsToDisk();
     }
     return removed;
   }
@@ -409,8 +252,10 @@ export async function unbindGenericCurrentConversationBindings(
       continue;
     }
     bindingsByConversationKey.delete(key);
-    deletePersistedBinding(key);
     removed.push(record);
+  }
+  if (removed.length > 0) {
+    persistBindingsToDisk();
   }
   return removed;
 }
@@ -423,19 +268,13 @@ export const __testing = {
     bindingsLoaded = false;
     bindingsByConversationKey.clear();
     if (params?.deletePersistedFile) {
-      runOpenClawStateWriteTransaction((stateDatabase) => {
-        const db = getCurrentConversationBindingsKysely(stateDatabase.db);
-        executeSqliteQuerySync(stateDatabase.db, db.deleteFrom("current_conversation_bindings"));
-      }, sqliteOptionsForEnv(params.env));
+      const filePath = resolveBindingsFilePath(params.env);
+      try {
+        fs.rmSync(filePath, { force: true });
+      } catch {
+        // ignore test cleanup failures
+      }
     }
   },
-  persistBindingForTests(record: SessionBindingRecord, env?: NodeJS.ProcessEnv) {
-    const conversation = normalizeConversationRef(record.conversation);
-    const normalized: SessionBindingRecord = {
-      ...record,
-      bindingId: buildBindingId(conversation),
-      conversation,
-    };
-    upsertBindingRow(normalized, env);
-  },
+  resolveBindingsFilePath,
 };

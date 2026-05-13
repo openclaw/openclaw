@@ -78,11 +78,11 @@ describe("local media roots", () => {
 
   it.each([
     {
-      name: "keeps temp materialization, canvas, and workspace roots by default",
+      name: "keeps temp, media cache, canvas, and workspace roots by default",
       stateDir: path.join("/tmp", "openclaw-media-roots-state"),
       getRoots: () => getDefaultMediaLocalRoots(),
-      expectedContained: ["canvas", "workspace", "sandboxes"],
-      expectedExcluded: ["agents", "media"],
+      expectedContained: ["media", "canvas", "workspace", "sandboxes"],
+      expectedExcluded: ["agents"],
       minLength: 4,
     },
     {
@@ -185,12 +185,12 @@ describe("local media roots", () => {
     expectPicturesRootPresence({ roots, shouldContainPictures });
   });
 
-  it("does not keep legacy state/config media roots when state and config paths differ", () => {
+  it("keeps the config-dir media cache root when state and config paths differ", () => {
     const stateDir = path.join("/tmp", "openclaw-legacy-state");
     const configDir = path.join("/tmp", "openclaw-current-config");
     const roots = buildMediaLocalRoots(stateDir, configDir);
 
-    expectNormalizedRootsExclude(roots, [
+    expectNormalizedRootsContain(roots, [
       path.join(stateDir, "media"),
       path.join(configDir, "media"),
     ]);

@@ -40,6 +40,7 @@ describe("compaction hook wiring", () => {
   function createCompactionEndCtx(params: {
     runId: string;
     messages?: unknown[];
+    sessionFile?: string;
     sessionKey?: string;
     compactionCount?: number;
     withRetryHooks?: boolean;
@@ -50,6 +51,7 @@ describe("compaction hook wiring", () => {
         sessionKey: params.sessionKey,
         session: {
           messages: params.messages ?? [],
+          sessionFile: params.sessionFile,
         },
       },
       state: { compactionInFlight: true },
@@ -73,7 +75,9 @@ describe("compaction hook wiring", () => {
       [unknown, unknown]
     >;
     return {
-      event: beforeCalls[0]?.[0] as { messageCount?: number; messages?: unknown[] } | undefined,
+      event: beforeCalls[0]?.[0] as
+        | { messageCount?: number; messages?: unknown[]; sessionFile?: string }
+        | undefined,
       hookCtx: beforeCalls[0]?.[1] as { sessionKey?: string } | undefined,
     };
   }
@@ -83,7 +87,9 @@ describe("compaction hook wiring", () => {
       [unknown, unknown]
     >;
     return {
-      event: afterCalls[0]?.[0] as { messageCount?: number; compactedCount?: number } | undefined,
+      event: afterCalls[0]?.[0] as
+        | { messageCount?: number; compactedCount?: number; sessionFile?: string }
+        | undefined,
       hookCtx: afterCalls[0]?.[1] as { sessionKey?: string } | undefined,
     };
   }
@@ -126,7 +132,7 @@ describe("compaction hook wiring", () => {
       params: {
         runId: "r1",
         sessionKey: "agent:main:web-abc123",
-        session: { messages: [1, 2, 3] },
+        session: { messages: [1, 2, 3], sessionFile: "/tmp/test.jsonl" },
         onAgentEvent: vi.fn(),
       },
       state: { compactionInFlight: false },
@@ -143,6 +149,7 @@ describe("compaction hook wiring", () => {
       expectedEvent: {
         messageCount: 3,
         messages: [1, 2, 3],
+        sessionFile: "/tmp/test.jsonl",
       },
       expectedSessionKey: "agent:main:web-abc123",
     });
@@ -164,6 +171,7 @@ describe("compaction hook wiring", () => {
     const ctx = createCompactionEndCtx({
       runId: "r2",
       messages: [1, 2],
+      sessionFile: "/tmp/session.jsonl",
       sessionKey: "agent:main:web-xyz",
       compactionCount: 1,
     });
@@ -176,6 +184,7 @@ describe("compaction hook wiring", () => {
       expectedEvent: {
         messageCount: 2,
         compactedCount: 1,
+        sessionFile: "/tmp/session.jsonl",
       },
       expectedSessionKey: "agent:main:web-xyz",
     });

@@ -1,7 +1,7 @@
 ---
 summary: "Secrets management: SecretRef contract, runtime snapshot behavior, and safe one-way scrubbing"
 read_when:
-  - Configuring SecretRefs for provider credentials and SQLite auth-profile refs
+  - Configuring SecretRefs for provider credentials and `auth-profiles.json` refs
   - Operating secrets reload, audit, configure, and apply safely in production
   - Understanding startup fail-fast, inactive-surface filtering, and last-known-good behavior
 title: "Secrets management"
@@ -374,7 +374,7 @@ Runtime-minted or rotating credentials and OAuth refresh material are intentiona
 Warning and audit signals:
 
 - `SECRETS_REF_OVERRIDES_PLAINTEXT` (runtime warning)
-- `REF_SHADOWED` (audit finding when SQLite auth-profile credentials take precedence over `openclaw.json` refs)
+- `REF_SHADOWED` (audit finding when `auth-profiles.json` credentials take precedence over `openclaw.json` refs)
 
 Google Chat compatibility behavior:
 
@@ -469,10 +469,10 @@ Default operator flow:
   <Accordion title="secrets audit">
     Findings include:
 
-    - plaintext values at rest (`openclaw.json`, SQLite auth-profile rows, `.env`, and the stored model catalog)
-    - plaintext sensitive provider header residues in stored model catalog entries
+    - plaintext values at rest (`openclaw.json`, `auth-profiles.json`, `.env`, and generated `agents/*/agent/models.json`)
+    - plaintext sensitive provider header residues in generated `models.json` entries
     - unresolved refs
-    - precedence shadowing (SQLite auth-profile rows taking priority over `openclaw.json` refs)
+    - precedence shadowing (`auth-profiles.json` taking priority over `openclaw.json` refs)
     - legacy residues (`auth.json`, OAuth reminders)
 
     Exec note:
@@ -489,8 +489,8 @@ Default operator flow:
     Interactive helper that:
 
     - configures `secrets.providers` first (`env`/`file`/`exec`, add/edit/remove)
-    - lets you select supported secret-bearing fields in `openclaw.json` plus SQLite auth-profile rows for one agent scope
-    - can create a new auth-profile mapping directly in the target picker
+    - lets you select supported secret-bearing fields in `openclaw.json` plus `auth-profiles.json` for one agent scope
+    - can create a new `auth-profiles.json` mapping directly in the target picker
     - captures SecretRef details (`source`, `provider`, `id`)
     - runs preflight resolution
     - can apply immediately
@@ -508,7 +508,7 @@ Default operator flow:
 
     `configure` apply defaults:
 
-    - scrub matching static credentials from SQLite auth-profile rows for targeted providers
+    - scrub matching static credentials from `auth-profiles.json` for targeted providers
     - scrub legacy static `api_key` entries from `auth.json`
     - scrub matching known secret lines from `<config-dir>/.env`
 

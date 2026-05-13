@@ -2,10 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { resolveStateDir } from "../config/paths.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import { saveMediaBuffer } from "./store.js";
 
 let LocalMediaAccessError: typeof import("./web-media.js").LocalMediaAccessError;
 let loadWebMedia: typeof import("./web-media.js").loadWebMedia;
@@ -17,6 +17,7 @@ const CANVAS_HOST_PATH = "/__openclaw__/canvas";
 
 let fixtureRoot = "";
 let tinyPngFile = "";
+let stateDir = "";
 let canvasPngFile = "";
 let workspaceDir = "";
 let workspacePngFile = "";
@@ -45,7 +46,16 @@ beforeAll(async () => {
   workspacePngFile = path.join(workspaceDir, "chart.png");
   await fs.mkdir(workspaceDir, { recursive: true });
   await fs.writeFile(workspacePngFile, Buffer.from(TINY_PNG_BASE64, "base64"));
-  canvasPngFile = path.join(fixtureRoot, "canvas-tiny.png");
+  stateDir = resolveStateDir();
+  canvasPngFile = path.join(
+    stateDir,
+    "canvas",
+    "documents",
+    "cv_test",
+    "collection.media",
+    "tiny.png",
+  );
+  await fs.mkdir(path.dirname(canvasPngFile), { recursive: true });
   await fs.writeFile(canvasPngFile, Buffer.from(TINY_PNG_BASE64, "base64"));
   installCanvasMediaResolver();
 });
@@ -54,6 +64,12 @@ afterAll(async () => {
   resetPluginRuntimeStateForTest();
   if (fixtureRoot) {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
+  }
+  if (stateDir) {
+    await fs.rm(path.join(stateDir, "canvas", "documents", "cv_test"), {
+      recursive: true,
+      force: true,
+    });
   }
 });
 
@@ -605,43 +621,41 @@ describe("loadWebMedia", () => {
   });
 
   it("hydrates inbound media store URIs before allowed-root checks", async () => {
-    const saved = await saveMediaBuffer(
-      Buffer.from(TINY_PNG_BASE64, "base64"),
-      "image/png",
-      "inbound",
-    );
+    const id = `signal-${Date.now()}-${Math.random().toString(36).slice(2)}.png`;
+    const filePath = path.join(stateDir, "media", "inbound", id);
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, Buffer.from(TINY_PNG_BASE64, "base64"));
 
     try {
-      const result = await loadWebMedia(`media://inbound/${saved.id}`, {
+      const result = await loadWebMedia(`media://inbound/${id}`, {
         maxBytes: 1024 * 1024,
       });
 
       expect(result.kind).toBe("image");
       expect(result.buffer.length).toBeGreaterThan(0);
-      expect(result.fileName).toBe(saved.id);
+      expect(result.fileName).toBe(id);
     } finally {
-      await fs.rm(saved.path, { force: true });
+      await fs.rm(filePath, { force: true });
     }
   });
 
   it("allows managed inbound absolute paths before allowed-root checks", async () => {
-    const saved = await saveMediaBuffer(
-      Buffer.from(TINY_PNG_BASE64, "base64"),
-      "image/png",
-      "inbound",
-    );
+    const id = `signal-path-${Date.now()}-${Math.random().toString(36).slice(2)}.png`;
+    const filePath = path.join(stateDir, "media", "inbound", id);
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, Buffer.from(TINY_PNG_BASE64, "base64"));
 
     try {
-      const result = await loadWebMedia(saved.path, {
+      const result = await loadWebMedia(filePath, {
         maxBytes: 1024 * 1024,
         localRoots: [],
       });
 
       expect(result.kind).toBe("image");
       expect(result.buffer.length).toBeGreaterThan(0);
-      expect(result.fileName).toBe(saved.id);
+      expect(result.fileName).toBe(id);
     } finally {
-      await fs.rm(saved.path, { force: true });
+      await fs.rm(filePath, { force: true });
     }
   });
 

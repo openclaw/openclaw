@@ -1,6 +1,7 @@
+import fs from "node:fs";
 import { getRuntimeConfig } from "../config/config.js";
-import { listSessionEntries, upsertSessionEntry } from "../config/sessions/store.js";
-import { resolveAllAgentSessionDatabaseTargetsSync } from "../config/sessions/targets.js";
+import { updateSessionStore } from "../config/sessions/store.js";
+import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
@@ -198,7 +199,7 @@ function matchesCleanupSession(
   );
 }
 
-async function clearPluginOwnedSessionEntries(params: {
+async function clearPluginOwnedSessionStores(params: {
   cfg: OpenClawConfig;
   pluginId?: string;
   sessionKey?: string;
@@ -207,30 +208,34 @@ async function clearPluginOwnedSessionEntries(params: {
   if (!params.pluginId && !params.sessionKey) {
     return 0;
   }
+  const storePaths = new Set(
+    resolveAllAgentSessionStoreTargetsSync(params.cfg)
+      .map((target) => target.storePath)
+      .filter((storePath) => fs.existsSync(storePath)),
+  );
   let cleared = 0;
-  for (const target of resolveAllAgentSessionDatabaseTargetsSync(params.cfg)) {
-    const now = Date.now();
-    for (const { sessionKey, entry } of listSessionEntries({ agentId: target.agentId })) {
-      if (
-        !matchesCleanupSession(sessionKey, entry, params.sessionKey) ||
-        !hasPluginOwnedSessionState(entry, params.pluginId, params.sessionEntrySlotKeys)
-      ) {
-        continue;
+  for (const storePath of storePaths) {
+    cleared += await updateSessionStore(storePath, (store) => {
+      let clearedInStore = 0;
+      const now = Date.now();
+      for (const [entryKey, entry] of Object.entries(store)) {
+        if (
+          !matchesCleanupSession(entryKey, entry, params.sessionKey) ||
+          !hasPluginOwnedSessionState(entry, params.pluginId, params.sessionEntrySlotKeys)
+        ) {
+          continue;
+        }
+        clearPluginOwnedSessionState(entry, params.pluginId, params.sessionEntrySlotKeys);
+        entry.updatedAt = now;
+        clearedInStore += 1;
       }
-      clearPluginOwnedSessionState(entry, params.pluginId, params.sessionEntrySlotKeys);
-      entry.updatedAt = now;
-      upsertSessionEntry({
-        agentId: target.agentId,
-        sessionKey,
-        entry,
-      });
-      cleared += 1;
-    }
+      return clearedInStore;
+    });
   }
   return cleared;
 }
 
-async function clearPromotedSessionEntrySlotRows(params: {
+async function clearPromotedSessionEntrySlotStores(params: {
   cfg: OpenClawConfig;
   pluginId?: string;
   sessionKey?: string;
@@ -239,28 +244,32 @@ async function clearPromotedSessionEntrySlotRows(params: {
   if ((!params.pluginId && !params.sessionKey) || params.sessionEntrySlotKeys.size === 0) {
     return 0;
   }
+  const storePaths = new Set(
+    resolveAllAgentSessionStoreTargetsSync(params.cfg)
+      .map((target) => target.storePath)
+      .filter((storePath) => fs.existsSync(storePath)),
+  );
   let cleared = 0;
-  for (const target of resolveAllAgentSessionDatabaseTargetsSync(params.cfg)) {
-    const now = Date.now();
-    for (const { sessionKey, entry } of listSessionEntries({ agentId: target.agentId })) {
-      if (
-        !matchesCleanupSession(sessionKey, entry, params.sessionKey) ||
-        !hasPromotedSessionEntrySlot(entry, params.pluginId, params.sessionEntrySlotKeys)
-      ) {
-        continue;
+  for (const storePath of storePaths) {
+    cleared += await updateSessionStore(storePath, (store) => {
+      let clearedInStore = 0;
+      const now = Date.now();
+      for (const [entryKey, entry] of Object.entries(store)) {
+        if (
+          !matchesCleanupSession(entryKey, entry, params.sessionKey) ||
+          !hasPromotedSessionEntrySlot(entry, params.pluginId, params.sessionEntrySlotKeys)
+        ) {
+          continue;
+        }
+        clearPromotedSessionEntrySlots(entry, params.pluginId, params.sessionEntrySlotKeys, {
+          includeStoredSlotKeys: false,
+          pruneSlotOwnership: true,
+        });
+        entry.updatedAt = now;
+        clearedInStore += 1;
       }
-      clearPromotedSessionEntrySlots(entry, params.pluginId, params.sessionEntrySlotKeys, {
-        includeStoredSlotKeys: false,
-        pruneSlotOwnership: true,
-      });
-      entry.updatedAt = now;
-      upsertSessionEntry({
-        agentId: target.agentId,
-        sessionKey,
-        entry,
-      });
-      cleared += 1;
-    }
+      return clearedInStore;
+    });
   }
   return cleared;
 }
@@ -315,13 +324,13 @@ export async function runPluginHostCleanup(params: {
     try {
       persistentCleanupCount =
         params.reason === "restart"
-          ? await clearPromotedSessionEntrySlotRows({
+          ? await clearPromotedSessionEntrySlotStores({
               cfg: params.cfg ?? getRuntimeConfig(),
               pluginId: params.pluginId,
               sessionKey: params.sessionKey,
               sessionEntrySlotKeys: restartPromotedSessionEntrySlotKeys,
             })
-          : await clearPluginOwnedSessionEntries({
+          : await clearPluginOwnedSessionStores({
               cfg: params.cfg ?? getRuntimeConfig(),
               pluginId: params.pluginId,
               sessionKey: params.sessionKey,

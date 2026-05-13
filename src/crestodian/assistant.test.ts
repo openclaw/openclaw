@@ -145,11 +145,9 @@ describe("Crestodian assistant", () => {
 
     expect(runCliAgent).toHaveBeenCalledTimes(1);
     const firstCliCall = firstMockArg(runCliAgent);
-    expect(firstCliCall.agentId).toBe("crestodian");
     expect(firstCliCall.provider).toBe("claude-cli");
     expect(firstCliCall.model).toBe("claude-opus-4-7");
     expect(firstCliCall.cleanupCliLiveSessionOnRunEnd).toBe(true);
-    expect(firstCliCall.sessionId).toMatch(/^crestodian-planner-.*-session$/);
     const firstCliConfig = requireRecord(firstCliCall.config);
     const firstCliAgents = requireRecord(firstCliConfig.agents);
     const firstCliDefaults = requireRecord(firstCliAgents.defaults);
@@ -233,7 +231,6 @@ describe("Crestodian assistant", () => {
     expect(firstEmbeddedCall.agentHarnessId).toBe("codex");
     expect(firstEmbeddedCall.disableTools).toBe(true);
     expect(firstEmbeddedCall.toolsAllow).toEqual([]);
-    expect(firstEmbeddedCall.sessionId).toMatch(/^crestodian-planner-/);
     const embeddedConfig = requireRecord(firstEmbeddedCall.config);
     const embeddedAgents = requireRecord(embeddedConfig.agents);
     const embeddedDefaults = requireRecord(embeddedAgents.defaults);
@@ -281,10 +278,8 @@ describe("Crestodian assistant", () => {
     expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
     expect(runCliAgent).toHaveBeenCalledTimes(1);
     const firstCliCall = firstMockArg(runCliAgent);
-    expect(firstCliCall.agentId).toBe("crestodian");
     expect(firstCliCall.provider).toBe("codex-cli");
     expect(firstCliCall.model).toBe("gpt-5.5");
     expect(firstCliCall.cleanupCliLiveSessionOnRunEnd).toBe(true);
-    expect(firstCliCall.sessionId).toMatch(/^crestodian-planner-.*-session$/);
   });
 });

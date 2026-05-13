@@ -31,6 +31,7 @@ const telegramMessageContextSessionRuntimeForTest = {
   resolveInboundLastRouteSessionKey: ({ route, sessionKey }) =>
     route.lastRoutePolicy === "main" ? route.mainSessionKey : sessionKey,
   resolvePinnedMainDmOwnerFromAllowlist: () => null,
+  resolveStorePath: () => "/tmp/openclaw/session-store.json",
 } satisfies NonNullable<BuildTelegramMessageContextParams["sessionRuntime"]>;
 
 export async function buildTelegramMessageContextForTest(

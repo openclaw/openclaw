@@ -19,7 +19,6 @@ const { buildStatusReplyMock, createOpenClawToolsMock, getChannelPluginMock, han
 type HandleInlineActionsInput = Parameters<
   typeof import("./get-reply-inline-actions.js").handleInlineActions
 >[0];
-const legacyStorePathProperty = ["store", "Path"].join("");
 
 vi.mock("./commands.runtime.js", () => ({
   handleCommands: (...args: unknown[]) => handleCommandsMock(...args),
@@ -117,7 +116,7 @@ async function expectInlineActionSkipped(params: {
   expect(handleCommandsMock).not.toHaveBeenCalled();
 }
 
-async function runInlineStatusAction(legacyStore?: string) {
+async function runInlineStatusAction(storePath?: string) {
   const typing = createTypingController();
   const ctx = buildTestCtx({
     Body: "/status",
@@ -136,7 +135,7 @@ async function runInlineStatusAction(legacyStore?: string) {
       overrides: {
         allowTextCommands: true,
         inlineStatusRequested: true,
-        ...(legacyStore ? { [legacyStorePathProperty]: legacyStore } : {}),
+        ...(storePath ? { storePath } : {}),
       },
     }),
   );
@@ -283,20 +282,18 @@ describe("handleInlineActions", () => {
 
     expect(result).toEqual({ kind: "reply", reply: undefined });
     expect(buildStatusReplyMock).toHaveBeenCalledTimes(1);
-    expect(buildStatusReplyMock.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({
-        sessionKey: "s:main",
-      }),
-    );
+    expect(mockObjectArg(buildStatusReplyMock, "buildStatusReply").storePath).toBeUndefined();
     expect(handleCommandsMock).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
   });
 
-  it("does not route the legacy store path through the shared status builder", async () => {
+  it("preserves storePath when routing inline status through the shared status builder", async () => {
     const { result } = await runInlineStatusAction("/tmp/inline-status-store.json");
 
     expect(result).toEqual({ kind: "reply", reply: undefined });
-    expect(buildStatusReplyMock.mock.calls[0]?.[0]).not.toHaveProperty(legacyStorePathProperty);
+    expect(mockObjectArg(buildStatusReplyMock, "buildStatusReply").storePath).toBe(
+      "/tmp/inline-status-store.json",
+    );
     expect(handleCommandsMock).not.toHaveBeenCalled();
   });
 
@@ -420,6 +417,7 @@ describe("handleInlineActions", () => {
       kind: "continue",
       directives: clearInlineDirectives("<@123> what's next?"),
       abortedLastRun: false,
+      cleanedBody: "<@123> what's next?",
     });
     expect(buildStatusReplyMock).toHaveBeenCalledTimes(1);
     expect(handleCommandsMock).toHaveBeenCalledTimes(1);
@@ -491,6 +489,7 @@ describe("handleInlineActions", () => {
       kind: "continue",
       directives: clearInlineDirectives("new message"),
       abortedLastRun: false,
+      cleanedBody: "new message",
     });
     expect(sessionStore["s:main"]?.abortCutoffMessageSid).toBeUndefined();
     expect(sessionStore["s:main"]?.abortCutoffTimestamp).toBeUndefined();

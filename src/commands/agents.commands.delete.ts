@@ -3,7 +3,10 @@ import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope
 import { formatCliCommand } from "../cli/command-format.js";
 import { replaceConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
-import { purgeAgentSessionRows } from "../config/sessions.js";
+import {
+  purgeAgentSessionStoreEntries,
+  resolveSessionTranscriptsDirForAgent,
+} from "../config/sessions.js";
 import { callGateway, isGatewayTransportError } from "../gateway/call.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
@@ -106,6 +109,7 @@ export async function agentsDeleteCommand(
 
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   const agentDir = resolveAgentDir(cfg, agentId);
+  const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
   const result = pruneAgentConfig(cfg, agentId);
 
   const gatewayResult = await maybeDeleteAgentThroughGateway({
@@ -123,6 +127,7 @@ export async function agentsDeleteCommand(
         workspaceRetainedReason: workspaceRetained ? "shared" : undefined,
         workspaceSharedWith: workspaceRetained ? workspaceSharedWith : undefined,
         agentDir,
+        sessionsDir,
         removedBindings: gatewayResult.removedBindings,
         removedAllow: result.removedAllow,
         transport: "gateway",
@@ -142,8 +147,8 @@ export async function agentsDeleteCommand(
     logConfigUpdated(runtime);
   }
 
-  // Purge SQLite session rows for this agent so orphaned sessions cannot be targeted (#65524).
-  await purgeAgentSessionRows(cfg, agentId);
+  // Purge session store entries for this agent so orphaned sessions cannot be targeted (#65524).
+  await purgeAgentSessionStoreEntries(cfg, agentId);
 
   const quietRuntime = opts.json ? createQuietRuntime(runtime) : runtime;
   // Only trash the workspace if no other agent can depend on that path (#70890).
@@ -157,6 +162,7 @@ export async function agentsDeleteCommand(
     await moveToTrash(workspaceDir, quietRuntime);
   }
   await moveToTrash(agentDir, quietRuntime);
+  await moveToTrash(sessionsDir, quietRuntime);
 
   if (opts.json) {
     writeRuntimeJson(runtime, {
@@ -166,6 +172,7 @@ export async function agentsDeleteCommand(
       workspaceRetainedReason: workspaceRetained ? "shared" : undefined,
       workspaceSharedWith: workspaceRetained ? workspaceSharedWith : undefined,
       agentDir,
+      sessionsDir,
       removedBindings: result.removedBindings,
       removedAllow: result.removedAllow,
     });

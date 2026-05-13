@@ -39,6 +39,7 @@ function makeRun(overrides: Partial<FollowupRun["run"]> = {}): FollowupRun["run"
     model: "gpt-4.1",
     agentDir: "/tmp/agent",
     sessionKey: "agent:test:session",
+    sessionFile: "/tmp/session.json",
     workspaceDir: "/tmp/workspace",
     skillsSnapshot: [],
     ownerNumbers: ["+15550001"],
@@ -114,6 +115,7 @@ describe("agent-runner-utils", () => {
       authProfile,
     });
 
+    expect(resolved.sessionFile).toBe(run.sessionFile);
     expect(resolved.workspaceDir).toBe(run.workspaceDir);
     expect(resolved.agentDir).toBe(run.agentDir);
     expect(resolved.config).toBe(run.config);

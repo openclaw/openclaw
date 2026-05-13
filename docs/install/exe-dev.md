@@ -49,7 +49,7 @@ ssh <vm-name>.exe.xyz
 ```
 
 <Tip>
-Keep this VM **stateful**. OpenClaw stores `openclaw.json`, SQLite state databases with auth profiles and sessions, and channel/provider state under `~/.openclaw/`, plus the workspace under `~/.openclaw/workspace/`.
+Keep this VM **stateful**. OpenClaw stores `openclaw.json`, per-agent `auth-profiles.json`, sessions, and channel/provider state under `~/.openclaw/`, plus the workspace under `~/.openclaw/workspace/`.
 </Tip>
 
 ## 2) Install prerequisites (on the VM)

@@ -12,14 +12,13 @@ import {
 import chokidar from "chokidar";
 import { detectMime } from "openclaw/plugin-sdk/media-mime";
 import { isTruthyEnvValue, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import {
   lowercasePreservingWhitespace,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { ensureDir, resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import { type WebSocket, WebSocketServer } from "ws";
-import { readCanvasDocumentHttpBlob } from "../documents.js";
 import {
   CANVAS_HOST_PATH,
   CANVAS_WS_PATH,
@@ -210,7 +209,7 @@ async function prepareCanvasRoot(rootDir: string) {
 }
 
 function resolveDefaultCanvasRoot(): string {
-  const candidates = [path.join(resolvePreferredOpenClawTmpDir(), "canvas-host")];
+  const candidates = [path.join(resolveStateDir(), "canvas")];
   const existing = candidates.find((dir) => {
     try {
       return fsSync.statSync(dir).isDirectory();
@@ -367,14 +366,6 @@ export async function createCanvasHostHandler(
         res.statusCode = 405;
         res.setHeader("Content-Type", "text/plain; charset=utf-8");
         res.end("Method Not Allowed");
-        return true;
-      }
-
-      const documentBlob = await readCanvasDocumentHttpBlob(`${CANVAS_HOST_PATH}${urlPath}`);
-      if (documentBlob) {
-        res.setHeader("Cache-Control", "no-store");
-        res.setHeader("Content-Type", documentBlob.contentType ?? "application/octet-stream");
-        res.end(req.method === "HEAD" ? undefined : documentBlob.blob);
         return true;
       }
 

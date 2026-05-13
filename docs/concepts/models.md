@@ -89,7 +89,7 @@ It can set up model + auth for common providers, including **OpenAI Code (Codex)
 - `agents.defaults.imageGenerationModel.primary` and `agents.defaults.imageGenerationModel.fallbacks`
 - `agents.defaults.videoGenerationModel.primary` and `agents.defaults.videoGenerationModel.fallbacks`
 - `agents.defaults.models` (allowlist + aliases + provider params + `provider/*` dynamic provider entries)
-- `models.providers` (custom providers materialized into the stored model catalog)
+- `models.providers` (custom providers written into `models.json`)
 
 <Note>
 Model refs are normalized to lowercase. Provider aliases like `z.ai/*` normalize to `zai/*`.
@@ -273,7 +273,7 @@ Shows the resolved primary model, fallbacks, image model, and an auth overview o
     - OAuth status is always shown (and included in `--json` output). If a configured provider has no credentials, `models status` prints a **Missing auth** section.
     - JSON includes `auth.oauth` (warn window + profiles) and `auth.providers` (effective auth per provider, including env-backed credentials). `auth.oauth` is auth-store profile health only; env-only providers do not appear there.
     - Use `--check` for automation (exit `1` when missing/expired, `2` when expiring).
-    - Use `--probe` for live auth checks; probe rows can come from auth profiles, env credentials, or the stored model catalog.
+    - Use `--probe` for live auth checks; probe rows can come from auth profiles, env credentials, or `models.json`.
     - If explicit `auth.order.<provider>` omits a stored profile, probe reports `excluded_by_auth_order` instead of trying it. If auth exists but no probeable model can be resolved for that provider, probe reports `status: no_model`.
 
   </Accordion>
@@ -336,16 +336,16 @@ Input:
 
 When live probes run in a TTY, you can select fallbacks interactively. In non-interactive mode, pass `--yes` to accept defaults. Metadata-only results are informational; `--set-default` and `--set-image` require live probes so OpenClaw does not configure an unusable keyless OpenRouter model.
 
-## Models registry
+## Models registry (`models.json`)
 
-Custom providers in `models.providers` are materialized into the SQLite-backed model catalog state for the active agent. Older `models.json` files under `~/.openclaw/agents/<agentId>/agent/` are migration inputs only; run `openclaw doctor --fix` to import them. The catalog is merged by default unless `models.mode` is set to `replace`.
+Custom providers in `models.providers` are written into `models.json` under the agent directory (default `~/.openclaw/agents/<agentId>/agent/models.json`). This file is merged by default unless `models.mode` is set to `replace`.
 
 <AccordionGroup>
   <Accordion title="Merge mode precedence">
     Merge mode precedence for matching provider IDs:
 
-    - Non-empty `baseUrl` already present in the stored agent catalog wins.
-    - Non-empty `apiKey` in the stored agent catalog wins only when that provider is not SecretRef-managed in current config/auth-profile context.
+    - Non-empty `baseUrl` already present in the agent `models.json` wins.
+    - Non-empty `apiKey` in the agent `models.json` wins only when that provider is not SecretRef-managed in current config/auth-profile context.
     - SecretRef-managed provider `apiKey` values are refreshed from source markers (`ENV_VAR_NAME` for env refs, `secretref-managed` for file/exec refs) instead of persisting resolved secrets.
     - SecretRef-managed provider header values are refreshed from source markers (`secretref-env:ENV_VAR_NAME` for env refs, `secretref-managed` for file/exec refs).
     - Empty or missing agent `apiKey`/`baseUrl` fall back to config `models.providers`.
@@ -355,7 +355,7 @@ Custom providers in `models.providers` are materialized into the SQLite-backed m
 </AccordionGroup>
 
 <Note>
-Marker persistence is source-authoritative: OpenClaw writes markers from the active source config snapshot (pre-resolution), not from resolved runtime secret values. This applies whenever OpenClaw regenerates the stored model catalog, including command-driven paths like `openclaw agent`.
+Marker persistence is source-authoritative: OpenClaw writes markers from the active source config snapshot (pre-resolution), not from resolved runtime secret values. This applies whenever OpenClaw regenerates `models.json`, including command-driven paths like `openclaw agent`.
 </Note>
 
 ## Related

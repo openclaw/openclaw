@@ -7,7 +7,7 @@ read_when:
 title: "Transcript hygiene"
 ---
 
-OpenClaw applies **provider-specific fixes** to transcripts before a run (building model context). Most of these are **in-memory** adjustments used to satisfy strict provider requirements. A separate transcript-state repair pass may also normalize stored SQLite transcript rows before load, but only for malformed entries or persisted turns that are invalid durable records. Delivered assistant replies are preserved in the transcript store; provider-specific assistant-prefill stripping happens only while constructing outbound payloads.
+OpenClaw applies **provider-specific fixes** to transcripts before a run (building model context). Most of these are **in-memory** adjustments used to satisfy strict provider requirements. A separate session-file repair pass may also rewrite stored JSONL before the session is loaded, but only for malformed lines or persisted turns that are invalid durable records. Delivered assistant replies are preserved on disk; provider-specific assistant-prefill stripping happens only while constructing outbound payloads. When a repair occurs, the original file is backed up alongside the session file.
 
 Scope includes:
 
@@ -52,9 +52,9 @@ All transcript hygiene is centralized in the embedded runner:
 
 The policy uses `provider`, `modelApi`, and `modelId` to decide what to apply.
 
-Separate from transcript hygiene, SQLite transcript rows are normalized before load:
+Separate from transcript hygiene, session files are repaired (if needed) before load:
 
-- `repairTranscriptStateIfNeeded` in `src/agents/transcript-state-repair.ts`
+- `repairSessionFileIfNeeded` in `src/agents/session-file-repair.ts`
 - Called from `run/attempt.ts` and `compact.ts` (embedded runner)
 
 ---

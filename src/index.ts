@@ -26,19 +26,18 @@ export let describePortOwner: LibraryExports["describePortOwner"];
 export let ensureBinary: LibraryExports["ensureBinary"];
 export let ensurePortAvailable: LibraryExports["ensurePortAvailable"];
 export let getReplyFromConfig: LibraryExports["getReplyFromConfig"];
-export let getSessionEntry: LibraryExports["getSessionEntry"];
 export let handlePortError: LibraryExports["handlePortError"];
-export let listSessionEntries: LibraryExports["listSessionEntries"];
 export let loadConfig: LibraryExports["loadConfig"];
+export let loadSessionStore: LibraryExports["loadSessionStore"];
 export let monitorWebChannel: LibraryExports["monitorWebChannel"];
 export let normalizeE164: LibraryExports["normalizeE164"];
-export let patchSessionEntry: LibraryExports["patchSessionEntry"];
 export let PortInUseError: LibraryExports["PortInUseError"];
 export let promptYesNo: LibraryExports["promptYesNo"];
 export let resolveSessionKey: LibraryExports["resolveSessionKey"];
+export let resolveStorePath: LibraryExports["resolveStorePath"];
 export let runCommandWithTimeout: LibraryExports["runCommandWithTimeout"];
 export let runExec: LibraryExports["runExec"];
-export let upsertSessionEntry: LibraryExports["upsertSessionEntry"];
+export let saveSessionStore: LibraryExports["saveSessionStore"];
 export let waitForever: LibraryExports["waitForever"];
 
 async function loadLegacyCliDeps(): Promise<LegacyCliDeps> {
@@ -68,19 +67,18 @@ if (!isMain) {
     ensureBinary,
     ensurePortAvailable,
     getReplyFromConfig,
-    getSessionEntry,
     handlePortError,
-    listSessionEntries,
     loadConfig,
+    loadSessionStore,
     monitorWebChannel,
     normalizeE164,
-    patchSessionEntry,
     PortInUseError,
     promptYesNo,
     resolveSessionKey,
+    resolveStorePath,
     runCommandWithTimeout,
     runExec,
-    upsertSessionEntry,
+    saveSessionStore,
     waitForever,
   } = await import("./library.js"));
 }

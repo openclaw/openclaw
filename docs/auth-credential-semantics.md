@@ -48,7 +48,7 @@ Token credentials (`type: "token"`) support inline `token` and/or `tokenRef`.
 
 Agent auth inheritance is read-through. When an agent has no local profile, it
 can resolve profiles from the default/main agent store at runtime without
-copying secret material into its own SQLite auth-profile row.
+copying secret material into its own `auth-profiles.json`.
 
 Explicit copy flows, such as `openclaw agents add`, use this portability policy:
 
@@ -68,11 +68,11 @@ the target agent signs in separately and creates its own local profile.
 credentials. They are valid when the target provider uses
 `models.providers.<id>.auth: "aws-sdk"` or the built-in Amazon Bedrock default
 AWS SDK route. These profile ids may appear in `auth.order` and session
-overrides even when no matching entry exists in the SQLite auth-profile row.
+overrides even when no matching entry exists in `auth-profiles.json`.
 
-Do not write `type: "aws-sdk"` into the SQLite auth-profile row. If a legacy
-install has such a marker, `openclaw doctor --fix` moves it to `auth.profiles`
-and removes the marker from the credential store.
+Do not write `type: "aws-sdk"` into `auth-profiles.json`. If a legacy install
+has such a marker, `openclaw doctor --fix` moves it to `auth.profiles` and
+removes the marker from the credential store.
 
 ## Explicit auth order filtering
 
@@ -86,8 +86,8 @@ and removes the marker from the credential store.
 
 ## Probe target resolution
 
-- Probe targets can come from auth profiles, environment credentials, or the
-  stored model catalog.
+- Probe targets can come from auth profiles, environment credentials, or
+  `models.json`.
 - If a provider has credentials but OpenClaw cannot resolve a probeable model
   candidate for it, `models status --probe` reports `status: no_model` with
   `reasonCode: no_model`.

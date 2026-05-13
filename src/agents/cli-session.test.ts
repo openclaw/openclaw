@@ -10,7 +10,7 @@ import {
 } from "./cli-session.js";
 
 describe("cli-session helpers", () => {
-  it("persists binding metadata in the canonical CLI session binding", () => {
+  it("persists binding metadata alongside legacy session ids", () => {
     const entry: SessionEntry = {
       sessionId: "openclaw-session",
       updatedAt: Date.now(),
@@ -27,6 +27,8 @@ describe("cli-session helpers", () => {
       mcpResumeHash: "mcp-resume-hash",
     });
 
+    expect(entry.cliSessionIds?.["claude-cli"]).toBe("cli-session-1");
+    expect(entry.claudeCliSessionId).toBe("cli-session-1");
     expect(getCliSessionBinding(entry, "claude-cli")).toEqual({
       sessionId: "cli-session-1",
       forceReuse: true,
@@ -64,11 +66,12 @@ describe("cli-session helpers", () => {
     ).toEqual({ sessionId: "cli-session-1" });
   });
 
-  it("keeps bindings reusable until richer metadata is persisted", () => {
+  it("keeps legacy bindings reusable until richer metadata is persisted", () => {
     const entry: SessionEntry = {
       sessionId: "openclaw-session",
       updatedAt: Date.now(),
-      cliSessionBindings: { "claude-cli": { sessionId: "cli-session" } },
+      cliSessionIds: { "claude-cli": "legacy-session" },
+      claudeCliSessionId: "legacy-session",
     };
 
     expect(
@@ -76,14 +79,15 @@ describe("cli-session helpers", () => {
         binding: getCliSessionBinding(entry, "claude-cli"),
         authEpochVersion: 2,
       }),
-    ).toEqual({ sessionId: "cli-session" });
+    ).toEqual({ sessionId: "legacy-session" });
   });
 
-  it("invalidates bindings without matching metadata when auth, prompt, or MCP state changes", () => {
+  it("invalidates legacy bindings when auth, prompt, or MCP state changes", () => {
     const entry: SessionEntry = {
       sessionId: "openclaw-session",
       updatedAt: Date.now(),
-      cliSessionBindings: { "claude-cli": { sessionId: "cli-session" } },
+      cliSessionIds: { "claude-cli": "legacy-session" },
+      claudeCliSessionId: "legacy-session",
     };
     const binding = getCliSessionBinding(entry, "claude-cli");
 
@@ -359,6 +363,8 @@ describe("cli-session helpers", () => {
 
     clearAllCliSessions(entry);
     expect(entry.cliSessionBindings).toBeUndefined();
+    expect(entry.cliSessionIds).toBeUndefined();
+    expect(entry.claudeCliSessionId).toBeUndefined();
   });
 
   it("hashes trimmed extra system prompts consistently", () => {

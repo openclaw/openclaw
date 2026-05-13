@@ -3,7 +3,6 @@ import {
   createChannelIngressResolver,
   defineStableChannelIngressIdentity,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
-import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
@@ -347,7 +346,7 @@ export async function handleIrcInbound(params: {
   }
 
   const peerId = message.isGroup ? message.target : message.senderNick;
-  const { route } = resolveInboundRouteEnvelopeBuilderWithRuntime({
+  const { route, buildEnvelope } = resolveInboundRouteEnvelopeBuilderWithRuntime({
     cfg: config as OpenClawConfig,
     channel: CHANNEL_ID,
     accountId: account.accountId,
@@ -356,20 +355,14 @@ export async function handleIrcInbound(params: {
       id: peerId,
     },
     runtime: core.channel,
+    sessionStore: config.session?.store,
   });
 
   const fromLabel = message.isGroup ? message.target : senderDisplay;
-  const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(config as OpenClawConfig);
-  const previousTimestamp = core.channel.session.readSessionUpdatedAt({
-    agentId: route.agentId,
-    sessionKey: route.sessionKey,
-  });
-  const body = core.channel.reply.formatAgentEnvelope({
+  const { storePath, body } = buildEnvelope({
     channel: "IRC",
     from: fromLabel,
     timestamp: message.timestamp,
-    previousTimestamp,
-    envelope: envelopeOptions,
     body: rawBody,
   });
 
@@ -399,48 +392,40 @@ export async function handleIrcInbound(params: {
     CommandAuthorized: commandAuthorized,
   });
 
-  const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
+  await core.channel.turn.runAssembled({
     cfg: config as OpenClawConfig,
-    agentId: route.agentId,
-    channel: CHANNEL_ID,
-    accountId: account.accountId,
-  });
-  await core.channel.turn.runPrepared({
     channel: CHANNEL_ID,
     accountId: account.accountId,
     agentId: route.agentId,
     routeSessionKey: route.sessionKey,
+    storePath,
     ctxPayload,
     recordInboundSession: core.channel.session.recordInboundSession,
-    runDispatch: async () =>
-      await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-        ctx: ctxPayload,
-        cfg: config as OpenClawConfig,
-        dispatcherOptions: {
-          ...replyPipeline,
-          deliver: async (payload) => {
-            await deliverIrcReply({
-              payload,
-              cfg: config,
-              target: peerId,
-              accountId: account.accountId,
-              sendReply: params.sendReply,
-              statusSink,
-            });
-          },
-          onError: (err, info) => {
-            runtime.error?.(`irc ${info.kind} reply failed: ${String(err)}`);
-          },
-        },
-        replyOptions: {
-          skillFilter: groupMatch.groupConfig?.skills,
-          disableBlockStreaming:
-            typeof account.config.blockStreaming === "boolean"
-              ? !account.config.blockStreaming
-              : undefined,
-          onModelSelected,
-        },
-      }),
+    dispatchReplyWithBufferedBlockDispatcher:
+      core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+    delivery: {
+      deliver: async (payload) => {
+        await deliverIrcReply({
+          payload,
+          cfg: config,
+          target: peerId,
+          accountId: account.accountId,
+          sendReply: params.sendReply,
+          statusSink,
+        });
+      },
+      onError: (err, info) => {
+        runtime.error?.(`irc ${info.kind} reply failed: ${String(err)}`);
+      },
+    },
+    replyPipeline: {},
+    replyOptions: {
+      skillFilter: groupMatch.groupConfig?.skills,
+      disableBlockStreaming:
+        typeof account.config.blockStreaming === "boolean"
+          ? !account.config.blockStreaming
+          : undefined,
+    },
     record: {
       onRecordError: (err) => {
         runtime.error?.(`irc: failed updating session meta: ${String(err)}`);

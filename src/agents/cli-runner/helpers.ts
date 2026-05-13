@@ -2,12 +2,15 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
+import type { ImageContent } from "@earendil-works/pi-ai";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { privateFileStore } from "../../infra/private-file-store.js";
 import { tempWorkspace } from "../../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { MAX_IMAGE_BYTES } from "../../media/constants.js";
@@ -16,9 +19,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../../shared/string-coerce.js";
-import type { AgentTool } from "../agent-core-contract.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
-import type { ImageContent } from "../pi-ai-contract.js";
 import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
 import { detectImageReferences, loadImageFromRef } from "../pi-embedded-runner/run/images.js";
 import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
@@ -202,7 +203,7 @@ export function resolvePromptInput(params: { backend: CliBackendConfig; prompt: 
   return { argsPrompt: params.prompt };
 }
 
-function resolveCliImageFileName(image: ImageContent): string {
+function resolveCliImagePath(image: ImageContent): string {
   const ext = extensionForMime(image.mimeType) ?? ".bin";
   const digest = crypto
     .createHash("sha256")
@@ -210,19 +211,14 @@ function resolveCliImageFileName(image: ImageContent): string {
     .update("\0")
     .update(image.data)
     .digest("hex");
-  return `${digest}${ext}`;
+  return path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-images", `${digest}${ext}`);
 }
 
-async function createCliImageRoot(params: {
-  backend: CliBackendConfig;
-  workspaceDir: string;
-}): Promise<string> {
+function resolveCliImageRoot(params: { backend: CliBackendConfig; workspaceDir: string }): string {
   if (params.backend.imagePathScope === "workspace") {
-    const root = path.join(params.workspaceDir, ".openclaw-cli-images", crypto.randomUUID());
-    await fs.mkdir(root, { recursive: true, mode: 0o700 });
-    return root;
+    return path.join(params.workspaceDir, ".openclaw-cli-images");
   }
-  return await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-images-"));
+  return path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-images");
 }
 
 function appendImagePathsToPrompt(prompt: string, paths: string[], prefix = ""): string {
@@ -276,22 +272,23 @@ export async function writeCliImages(params: {
   workspaceDir: string;
   images: ImageContent[];
 }): Promise<{ paths: string[]; cleanup: () => Promise<void> }> {
-  const imageRoot = await createCliImageRoot({
+  const imageRoot = resolveCliImageRoot({
     backend: params.backend,
     workspaceDir: params.workspaceDir,
   });
+  await fs.mkdir(imageRoot, { recursive: true, mode: 0o700 });
+  const store = privateFileStore(imageRoot);
   const paths: string[] = [];
   for (let i = 0; i < params.images.length; i += 1) {
     const image = params.images[i];
-    const fileName = resolveCliImageFileName(image);
-    const filePath = path.join(imageRoot, fileName);
+    const fileName = path.basename(resolveCliImagePath(image));
     const buffer = Buffer.from(image.data, "base64");
-    await fs.writeFile(filePath, buffer, { mode: 0o600 });
-    paths.push(filePath);
+    await store.writeText(fileName, buffer);
+    paths.push(store.path(fileName));
   }
-  const cleanup = async () => {
-    await fs.rm(imageRoot, { recursive: true, force: true });
-  };
+  // Keep content-addressed image paths stable across Claude CLI runs so prompt
+  // text and argv don't churn on every turn with fresh temp-dir suffixes.
+  const cleanup = async () => {};
   return { paths, cleanup };
 }
 

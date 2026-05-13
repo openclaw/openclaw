@@ -1,12 +1,9 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import JSON5 from "json5";
-import {
-  loadPersistedAuthProfileStore,
-  savePersistedAuthProfileSecretsStore,
-} from "../src/agents/auth-profiles/persisted.js";
 
 type RestoreEntry = { key: string; value: string | undefined };
 
@@ -19,6 +16,13 @@ const LIVE_EXTERNAL_AUTH_FILES = [
   ".codex/auth.json",
   ".codex/config.toml",
 ] as const;
+const requireFromHere = createRequire(import.meta.url);
+
+type LegacyConfigCompatApi = typeof import("../src/commands/doctor/shared/legacy-config-compat.js");
+type ConfigValidationApi = typeof import("../src/config/validation.js");
+
+let cachedLegacyConfigCompatApi: LegacyConfigCompatApi | undefined;
+let cachedConfigValidationApi: ConfigValidationApi | undefined;
 
 function isTruthyEnvValue(value: string | undefined): boolean {
   if (!value) {
@@ -44,6 +48,20 @@ function restoreEnv(entries: RestoreEntry[]): void {
       process.env[key] = value;
     }
   }
+}
+
+function loadLegacyConfigCompatApi(): LegacyConfigCompatApi {
+  cachedLegacyConfigCompatApi ??= requireFromHere(
+    "../src/commands/doctor/shared/legacy-config-compat.js",
+  ) as LegacyConfigCompatApi;
+  return cachedLegacyConfigCompatApi;
+}
+
+function loadConfigValidationApi(): ConfigValidationApi {
+  cachedConfigValidationApi ??= requireFromHere(
+    "../src/config/validation.js",
+  ) as ConfigValidationApi;
+  return cachedConfigValidationApi;
 }
 
 function resolveHomeRelativePath(input: string, homeDir: string): string {
@@ -136,6 +154,10 @@ function resolveRestoreEntries(): RestoreEntry[] {
     {
       key: "OPENCLAW_ALLOW_SLOW_REPLY_TESTS",
       value: process.env.OPENCLAW_ALLOW_SLOW_REPLY_TESTS,
+    },
+    {
+      key: "OPENCLAW_LIVE_TEST_NORMALIZE_CONFIG",
+      value: process.env.OPENCLAW_LIVE_TEST_NORMALIZE_CONFIG,
     },
     { key: "HOME", value: process.env.HOME },
     { key: "USERPROFILE", value: process.env.USERPROFILE },
@@ -306,47 +328,36 @@ function sanitizeLiveConfig(raw: string): string {
       });
     }
 
-    return `${JSON.stringify(parsed, null, 2)}\n`;
+    if (!isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST_NORMALIZE_CONFIG)) {
+      return `${JSON.stringify(parsed, null, 2)}\n`;
+    }
+
+    const { applyLegacyDoctorMigrations } = loadLegacyConfigCompatApi();
+    const migrated = applyLegacyDoctorMigrations(parsed);
+    if (!migrated.next) {
+      return `${JSON.stringify(parsed, null, 2)}\n`;
+    }
+
+    const { validateConfigObjectWithPlugins } = loadConfigValidationApi();
+    const validated = validateConfigObjectWithPlugins(migrated.next);
+    return `${JSON.stringify(validated.ok ? validated.config : migrated.next, null, 2)}\n`;
   } catch {
     return raw;
   }
 }
 
-function stageLiveAuthProfiles(params: {
-  env: NodeJS.ProcessEnv;
-  realHome: string;
-  realStateDir: string;
-  tempHome: string;
-  tempStateDir: string;
-}): void {
-  const agentsDir = path.join(params.realStateDir, "agents");
+function copyLiveAuthProfiles(realStateDir: string, tempStateDir: string): void {
+  const agentsDir = path.join(realStateDir, "agents");
   if (!fs.existsSync(agentsDir)) {
     return;
   }
-  const sourceEnv: NodeJS.ProcessEnv = {
-    ...params.env,
-    HOME: params.realHome,
-    USERPROFILE: params.realHome,
-    OPENCLAW_STATE_DIR: params.realStateDir,
-  };
-  const targetEnv: NodeJS.ProcessEnv = {
-    ...params.env,
-    HOME: params.tempHome,
-    USERPROFILE: params.tempHome,
-    OPENCLAW_STATE_DIR: params.tempStateDir,
-  };
   for (const entry of fs.readdirSync(agentsDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) {
       continue;
     }
-    const sourceAgentDir = path.join(agentsDir, entry.name, "agent");
-    const store = loadPersistedAuthProfileStore(sourceAgentDir, { env: sourceEnv });
-    if (!store) {
-      continue;
-    }
-    const targetAgentDir = path.join(params.tempStateDir, "agents", entry.name, "agent");
-    fs.mkdirSync(targetAgentDir, { recursive: true });
-    savePersistedAuthProfileSecretsStore(store, targetAgentDir, { env: targetEnv });
+    const sourcePath = path.join(agentsDir, entry.name, "agent", "auth-profiles.json");
+    const targetPath = path.join(tempStateDir, "agents", entry.name, "agent", "auth-profiles.json");
+    copyFileIfExists(sourcePath, targetPath);
   }
 }
 
@@ -390,13 +401,7 @@ function stageLiveTestState(params: {
     path.join(realStateDir, "external-plugins"),
     path.join(tempStateDir, "external-plugins"),
   );
-  stageLiveAuthProfiles({
-    env: params.env,
-    realHome: params.realHome,
-    realStateDir,
-    tempHome: params.tempHome,
-    tempStateDir,
-  });
+  copyLiveAuthProfiles(realStateDir, tempStateDir);
 
   for (const authDir of LIVE_EXTERNAL_AUTH_DIRS) {
     copyDirIfExists(path.join(params.realHome, authDir), path.join(params.tempHome, authDir));

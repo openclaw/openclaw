@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { cleanupOpenClawStateForTest } from "../../test-utils/openclaw-state-cleanup.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 
 type EnvValue = string | undefined | ((home: string) => string | undefined);
 
@@ -105,7 +105,7 @@ export async function withTempHome<T>(
     env?: Record<string, EnvValue>;
     prefix?: string;
     skipHomeCleanup?: boolean;
-    skipStateCleanup?: boolean;
+    skipSessionCleanup?: boolean;
   } = {},
 ): Promise<T> {
   const prefix = opts.prefix ?? "openclaw-test-home-";
@@ -120,7 +120,7 @@ export async function withTempHome<T>(
   const envSnapshot = snapshotExtraEnv(envKeys);
 
   setTempHome(base);
-  await fs.mkdir(path.join(base, ".openclaw", "agents", "main", "agent"), { recursive: true });
+  await fs.mkdir(path.join(base, ".openclaw", "agents", "main", "sessions"), { recursive: true });
   if (opts.env) {
     for (const [key, raw] of Object.entries(opts.env)) {
       const value = typeof raw === "function" ? raw(base) : raw;
@@ -135,8 +135,8 @@ export async function withTempHome<T>(
   try {
     return await fn(base);
   } finally {
-    if (!opts.skipStateCleanup) {
-      await cleanupOpenClawStateForTest().catch(() => undefined);
+    if (!opts.skipSessionCleanup) {
+      await cleanupSessionStateForTest().catch(() => undefined);
     }
     restoreExtraEnv(envSnapshot);
     restoreEnv(snapshot);

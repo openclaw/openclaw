@@ -1,6 +1,4 @@
-import type { AgentMessage } from "../../agent-core-contract.js";
-import type { SessionTranscriptScope } from "../../transcript/session-transcript-types.js";
-import { removeTailEntriesFromSqliteTranscript } from "../../transcript/transcript-state.js";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { log } from "../logger.js";
 
 const SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE = "openclaw.sessions_yield_interrupt";
@@ -147,13 +145,11 @@ export async function persistSessionsYieldContextMessage(
 }
 
 // Remove the synthetic yield interrupt + aborted assistant entry from the live transcript.
-export function stripSessionsYieldArtifacts(
-  activeSession: {
-    messages: AgentMessage[];
-    agent: { state: { messages: AgentMessage[] } };
-  },
-  transcriptScope: SessionTranscriptScope,
-) {
+export function stripSessionsYieldArtifacts(activeSession: {
+  messages: AgentMessage[];
+  agent: { state: { messages: AgentMessage[] } };
+  sessionManager?: unknown;
+}) {
   const strippedMessages = activeSession.messages.slice();
   while (strippedMessages.length > 0) {
     const last = strippedMessages.at(-1) as
@@ -177,18 +173,49 @@ export function stripSessionsYieldArtifacts(
     activeSession.agent.state.messages = strippedMessages;
   }
 
-  removeTailEntriesFromSqliteTranscript({
-    agentId: transcriptScope.agentId,
-    sessionId: transcriptScope.sessionId,
-    shouldRemove: (entry) => {
-      return (
-        (entry.type === "message" &&
-          entry.message.role === "assistant" &&
-          entry.message.stopReason === "aborted") ||
-        (entry.type === "custom_message" &&
-          entry.customType === SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE)
-      );
-    },
-    options: { minEntries: 1 },
-  });
+  const sessionManager = activeSession.sessionManager as
+    | {
+        fileEntries?: Array<{
+          type?: string;
+          id?: string;
+          parentId?: string | null;
+          message?: { role?: string; stopReason?: string };
+          customType?: string;
+        }>;
+        byId?: Map<string, { id: string }>;
+        leafId?: string | null;
+        _rewriteFile?: () => void;
+      }
+    | undefined;
+  const fileEntries = sessionManager?.fileEntries;
+  const byId = sessionManager?.byId;
+  if (!fileEntries || !byId) {
+    return;
+  }
+
+  let changed = false;
+  while (fileEntries.length > 1) {
+    const last = fileEntries.at(-1);
+    if (!last || last.type === "session") {
+      break;
+    }
+    const isYieldAbortAssistant =
+      last.type === "message" &&
+      last.message?.role === "assistant" &&
+      last.message?.stopReason === "aborted";
+    const isYieldInterruptMessage =
+      last.type === "custom_message" && last.customType === SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE;
+    if (!isYieldAbortAssistant && !isYieldInterruptMessage) {
+      break;
+    }
+    fileEntries.pop();
+    if (last.id) {
+      byId.delete(last.id);
+    }
+    sessionManager.leafId = last.parentId ?? null;
+    changed = true;
+  }
+  if (changed) {
+    sessionManager._rewriteFile?.();
+  }
 }

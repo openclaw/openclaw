@@ -182,7 +182,7 @@ vi.mock("../plugins/web-provider-public-artifacts.explicit.js", () => ({
 
 type SecretRegistryEntry = {
   id: string;
-  store: "openclaw.json" | "auth-profile-store";
+  configFile: "openclaw.json" | "auth-profiles.json";
   pathPattern: string;
   refPathPattern?: string;
   secretShape: "secret_input" | "sibling_ref";
@@ -193,7 +193,7 @@ type SecretRegistryEntry = {
 type SecretRefCredentialMatrix = {
   entries: Array<{
     id: string;
-    store: "openclaw.json" | "auth-profile-store";
+    configFile: "openclaw.json" | "auth-profiles.json";
     path: string;
     refPath?: string;
     secretShape: SecretRegistryEntry["secretShape"];
@@ -213,7 +213,7 @@ function loadCoverageRegistryEntries(): SecretRegistryEntry[] {
   const matrix = JSON.parse(fs.readFileSync(matrixPath, "utf8")) as SecretRefCredentialMatrix;
   return matrix.entries.map((entry) =>
     Object.assign(
-      { id: entry.id, store: entry.store, pathPattern: entry.path },
+      { id: entry.id, configFile: entry.configFile, pathPattern: entry.path },
       entry.refPath ? { refPathPattern: entry.refPath } : {},
       { secretShape: entry.secretShape, expectedResolvedValue: "string" as const },
       entry.when?.type ? { authProfileType: entry.when.type } : {},
@@ -451,7 +451,7 @@ function collectOpenClawCoverageEntries(options: {
 }): SecretRegistryEntry[] {
   return COVERAGE_REGISTRY_ENTRIES.filter(
     (entry) =>
-      entry.store === "openclaw.json" &&
+      entry.configFile === "openclaw.json" &&
       entry.id.startsWith("plugins.entries.") === options.includePluginEntries &&
       !PLUGIN_OWNED_OPENCLAW_COVERAGE_EXCLUSIONS.has(entry.id),
   );
@@ -805,10 +805,10 @@ describe("secrets runtime target coverage", () => {
 
   it("handles every auth-profiles registry target", async () => {
     const entries = COVERAGE_REGISTRY_ENTRIES.filter(
-      (entry) => entry.store === "auth-profile-store",
+      (entry) => entry.configFile === "auth-profiles.json",
     );
     for (const batch of buildCoverageBatches(entries)) {
-      logCoverageBatch("auth-profile-store", batch);
+      logCoverageBatch("auth-profiles.json", batch);
       const env: Record<string, string> = {};
       const authStore: AuthProfileStore = {
         version: 1,

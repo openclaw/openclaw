@@ -186,11 +186,11 @@ describe("browser chrome profile decoration", () => {
     expect(prefs.download).toBeUndefined();
     expect(prefs.savefile).toBeUndefined();
 
-    await expect(
-      fsp.access(path.join(userDataDir, ".openclaw-profile-decorated")),
-    ).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    const marker = await fsp.readFile(
+      path.join(userDataDir, ".openclaw-profile-decorated"),
+      "utf-8",
+    );
+    expect(marker.trim()).toMatch(/^\d+$/);
   });
 
   it("writes managed download prefs when a download dir is provided", async () => {

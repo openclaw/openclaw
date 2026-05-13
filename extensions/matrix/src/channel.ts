@@ -69,6 +69,7 @@ import {
   singleAccountKeysToMove,
 } from "./setup-contract.js";
 import { createMatrixSetupWizardProxy, matrixSetupAdapter } from "./setup-core.js";
+import { runMatrixStartupMaintenance } from "./startup-maintenance.js";
 import { resolveMatrixInboundConversation } from "./thread-binding-api.js";
 import type { CoreConfig } from "./types.js";
 // Mutex for serializing account startup (workaround for concurrent dynamic import race condition)
@@ -599,6 +600,9 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
         },
       },
       doctor: matrixDoctor,
+      lifecycle: {
+        runStartupMaintenance: runMatrixStartupMaintenance,
+      },
       heartbeat: {
         sendTyping: async ({ cfg, to, accountId }) => {
           await (

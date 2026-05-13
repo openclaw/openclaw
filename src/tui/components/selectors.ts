@@ -1,4 +1,4 @@
-import { type SelectItem, type SettingItem, SettingsList } from "../pi-tui-contract.js";
+import { type SelectItem, type SettingItem, SettingsList } from "@earendil-works/pi-tui";
 import {
   filterableSelectListTheme,
   searchableSelectListTheme,

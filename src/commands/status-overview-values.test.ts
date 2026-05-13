@@ -51,11 +51,11 @@ describe("status-overview-values", () => {
       buildStatusSessionsOverviewValue({
         sessions: {
           count: 2,
-          databasePaths: ["main.sqlite", "other.sqlite"],
+          paths: ["store.json", "other.json"],
           defaults: { model: "gpt-5.5", contextTokens: 12_000 },
         },
         formatKTokens: (value) => `${Math.round(value / 1000)}k`,
       }),
-    ).toBe("2 active · default gpt-5.5 (12k ctx) · 2 databases");
+    ).toBe("2 active · default gpt-5.5 (12k ctx) · 2 stores");
   });
 });

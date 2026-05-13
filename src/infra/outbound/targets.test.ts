@@ -682,35 +682,6 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.threadId).toBe(1122);
   });
 
-  it("prefers typed deliveryContext over compatibility session fields", () => {
-    const cfg: OpenClawConfig = {};
-    const resolved = resolveHeartbeatDeliveryTarget({
-      cfg,
-      entry: {
-        sessionId: "sess-heartbeat-stale-entry-shadow",
-        updatedAt: 1,
-        lastChannel: "forum",
-        lastTo: "room:stale",
-        lastThreadId: 1111,
-        chatType: "group",
-      },
-      deliveryContext: {
-        channel: "forum",
-        to: "room:typed",
-        accountId: "workspace-1",
-        threadId: 2222,
-      },
-      heartbeat: {
-        target: "last",
-      },
-    });
-
-    expect(resolved.channel).toBe("forum");
-    expect(resolved.to).toBe("room:typed");
-    expect(resolved.accountId).toBe("workspace-1");
-    expect(resolved.threadId).toBe(2222);
-  });
-
   it("does not inherit stale threadId for direct-chat heartbeat routes", () => {
     const cfg: OpenClawConfig = {};
     const resolved = resolveHeartbeatDeliveryTarget({

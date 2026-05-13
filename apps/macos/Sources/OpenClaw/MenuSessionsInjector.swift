@@ -322,7 +322,7 @@ extension MenuSessionsInjector {
                     item.tag = self.tag
                     item.isEnabled = true
                     item.representedObject = row.key
-                    item.submenu = self.buildSubmenu(for: row)
+                    item.submenu = self.buildSubmenu(for: row, storePath: snapshot.storePath)
                     item.view = self.makeHostedView(
                         rootView: AnyView(SessionMenuLabelView(row: row, width: width)),
                         width: width,
@@ -815,7 +815,7 @@ extension MenuSessionsInjector {
 extension MenuSessionsInjector {
     // MARK: - Submenus
 
-    private func buildSubmenu(for row: SessionRow) -> NSMenu {
+    private func buildSubmenu(for row: SessionRow, storePath: String) -> NSMenu {
         let menu = NSMenu()
         let width = self.submenuWidth()
 
@@ -838,6 +838,24 @@ extension MenuSessionsInjector {
         let verbose = NSMenuItem(title: "Verbose", action: nil, keyEquivalent: "")
         verbose.submenu = self.buildVerboseMenu(for: row)
         menu.addItem(verbose)
+
+        if AppStateStore.shared.debugPaneEnabled,
+           AppStateStore.shared.connectionMode == .local,
+           let sessionId = row.sessionId,
+           !sessionId.isEmpty
+        {
+            menu.addItem(NSMenuItem.separator())
+            let openLog = NSMenuItem(
+                title: "Open Session Log",
+                action: #selector(self.openSessionLog(_:)),
+                keyEquivalent: "")
+            openLog.target = self
+            openLog.representedObject = [
+                "sessionId": sessionId,
+                "storePath": storePath,
+            ]
+            menu.addItem(openLog)
+        }
 
         menu.addItem(NSMenuItem.separator())
 
@@ -1045,6 +1063,15 @@ extension MenuSessionsInjector {
                 }
             }
         }
+    }
+
+    @objc
+    private func openSessionLog(_ sender: NSMenuItem) {
+        guard let dict = sender.representedObject as? [String: String],
+              let sessionId = dict["sessionId"],
+              let storePath = dict["storePath"]
+        else { return }
+        SessionActions.openSessionLogInCode(sessionId: sessionId, storePath: storePath)
     }
 
     @objc

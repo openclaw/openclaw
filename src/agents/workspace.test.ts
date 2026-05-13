@@ -1,8 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { describe, expect, it } from "vitest";
 import { makeTempWorkspace, writeWorkspaceFile } from "../test-helpers/workspace.js";
 import {
   DEFAULT_AGENTS_FILENAME,
@@ -17,26 +16,11 @@ import {
   filterBootstrapFilesForSession,
   isWorkspaceBootstrapPending,
   loadWorkspaceBootstrapFiles,
-  readWorkspaceSetupStateForTests,
   reconcileWorkspaceBootstrapCompletion,
   resolveWorkspaceBootstrapStatus,
   resolveDefaultAgentWorkspaceDir,
   type WorkspaceBootstrapFile,
 } from "./workspace.js";
-
-const stateDirs: string[] = [];
-
-beforeEach(async () => {
-  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-state-"));
-  stateDirs.push(stateDir);
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-});
-
-afterEach(async () => {
-  vi.unstubAllEnvs();
-  closeOpenClawStateDatabaseForTest();
-  await Promise.all(stateDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
-});
 
 describe("resolveDefaultAgentWorkspaceDir", () => {
   it("uses OPENCLAW_HOME for default workspace resolution", () => {
@@ -49,12 +33,19 @@ describe("resolveDefaultAgentWorkspaceDir", () => {
   });
 });
 
+const WORKSPACE_STATE_PATH_SEGMENTS = [".openclaw", "workspace-state.json"] as const;
+
 async function readWorkspaceState(dir: string): Promise<{
   version: number;
   bootstrapSeededAt?: string;
   setupCompletedAt?: string;
 }> {
-  return await readWorkspaceSetupStateForTests(dir);
+  const raw = await fs.readFile(path.join(dir, ...WORKSPACE_STATE_PATH_SEGMENTS), "utf-8");
+  return JSON.parse(raw) as {
+    version: number;
+    bootstrapSeededAt?: string;
+    setupCompletedAt?: string;
+  };
 }
 
 async function expectBootstrapSeeded(dir: string) {
@@ -76,14 +67,7 @@ async function expectCompletedWithoutBootstrap(dir: string) {
 
 function expectSubagentAllowedBootstrapNames(files: WorkspaceBootstrapFile[]) {
   const names = files.map((file) => file.name);
-  expect(names).toContain("AGENTS.md");
-  expect(names).toContain("TOOLS.md");
-  expect(names).toContain("SOUL.md");
-  expect(names).toContain("IDENTITY.md");
-  expect(names).toContain("USER.md");
-  expect(names).not.toContain("HEARTBEAT.md");
-  expect(names).not.toContain("BOOTSTRAP.md");
-  expect(names).not.toContain("MEMORY.md");
+  expect(names).toStrictEqual(["AGENTS.md", "SOUL.md", "TOOLS.md", "IDENTITY.md", "USER.md"]);
 }
 
 describe("ensureAgentWorkspace", () => {
@@ -203,6 +187,28 @@ describe("ensureAgentWorkspace", () => {
     await expectPathMissing(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME));
     const state = await readWorkspaceState(tempDir);
     expect(state.setupCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it("migrates legacy onboardingCompletedAt markers to setupCompletedAt", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await fs.mkdir(path.join(tempDir, ".openclaw"), { recursive: true });
+    await fs.writeFile(
+      path.join(tempDir, ...WORKSPACE_STATE_PATH_SEGMENTS),
+      JSON.stringify({
+        version: 1,
+        onboardingCompletedAt: "2026-03-15T02:30:00.000Z",
+      }),
+    );
+
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+    const state = await readWorkspaceState(tempDir);
+    expect(state.setupCompletedAt).toBe("2026-03-15T02:30:00.000Z");
+    const persisted = await fs.readFile(
+      path.join(tempDir, ...WORKSPACE_STATE_PATH_SEGMENTS),
+      "utf-8",
+    );
+    expect(persisted).toContain('"setupCompletedAt": "2026-03-15T02:30:00.000Z"');
   });
 
   it("reports bootstrap pending while BOOTSTRAP.md exists and setup is incomplete", async () => {
@@ -391,12 +397,12 @@ describe("filterBootstrapFilesForSession", () => {
 
   it("returns all files for main session (no sessionKey)", () => {
     const result = filterBootstrapFilesForSession(mockFiles);
-    expect(result).toHaveLength(mockFiles.length);
+    expect(result).toStrictEqual(mockFiles);
   });
 
   it("returns all files for normal (non-subagent, non-cron) session key", () => {
     const result = filterBootstrapFilesForSession(mockFiles, "agent:default:chat:main");
-    expect(result).toHaveLength(mockFiles.length);
+    expect(result).toStrictEqual(mockFiles);
   });
 
   it("filters to allowlist for subagent sessions", () => {

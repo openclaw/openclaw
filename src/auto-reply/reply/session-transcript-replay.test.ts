@@ -3,81 +3,82 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  loadSqliteSessionTranscriptEvents,
-  replaceSqliteSessionTranscriptEvents,
-} from "../../config/sessions/transcript-store.sqlite.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import {
   DEFAULT_REPLAY_MAX_MESSAGES,
   replayRecentUserAssistantMessages,
 } from "./session-transcript-replay.js";
 
+const j = (obj: unknown): string => `${JSON.stringify(obj)}\n`;
+
+type ReplayRecord = {
+  type?: string;
+  id?: string;
+  message?: {
+    role?: string;
+    content?: string;
+  };
+};
+
+async function readJsonlRecords(filePath: string): Promise<ReplayRecord[]> {
+  const records: ReplayRecord[] = [];
+  const raw = await fs.readFile(filePath, "utf8");
+  for (const line of raw.split(/\r?\n/)) {
+    if (line.trim().length === 0) {
+      continue;
+    }
+    records.push(JSON.parse(line) as ReplayRecord);
+  }
+  return records;
+}
+
+async function expectPathMissing(targetPath: string): Promise<void> {
+  let statError: unknown;
+  try {
+    await fs.stat(targetPath);
+  } catch (error) {
+    statError = error;
+  }
+  if (statError === undefined) {
+    throw new Error(`Expected ${targetPath} to be missing`);
+  }
+  if (!statError || typeof statError !== "object") {
+    throw new Error("expected stat error object");
+  }
+  expect((statError as NodeJS.ErrnoException).code).toBe("ENOENT");
+}
+
 describe("replayRecentUserAssistantMessages", () => {
   let root = "";
-  let originalStateDir: string | undefined;
-
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-replay-"));
-    originalStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = root;
   });
-
   afterEach(async () => {
-    closeOpenClawStateDatabaseForTest();
-    if (originalStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = originalStateDir;
-    }
     await fs.rm(root, { recursive: true, force: true });
   });
-
-  function seedTranscript(params: {
-    agentId?: string;
-    sessionId: string;
-    events: unknown[];
-  }): void {
-    const agentId = params.agentId ?? "main";
-    replaceSqliteSessionTranscriptEvents({
-      agentId,
-      sessionId: params.sessionId,
-      events: params.events,
-      now: () => 1_770_000_000_000,
-    });
-  }
-
-  function readEvents(agentId = "main", sessionId = "new-session"): unknown[] {
-    return loadSqliteSessionTranscriptEvents({ agentId, sessionId }).map((entry) => entry.event);
-  }
-
-  const call = (sourceSessionId: string, targetAgentId = "main"): Promise<number> =>
+  const call = (source: string, target: string): Promise<number> =>
     replayRecentUserAssistantMessages({
-      sourceAgentId: "main",
-      sourceSessionId,
-      targetAgentId,
+      sourceTranscript: source,
+      targetTranscript: target,
       newSessionId: "new-session",
     });
 
-  it("replays only the user/assistant tail and skips tool/system records", async () => {
-    seedTranscript({
-      sessionId: "prev",
-      events: [
-        { type: "session", id: "old" },
-        ...Array.from({ length: DEFAULT_REPLAY_MAX_MESSAGES + 4 }, (_, i) => ({
-          message: { role: i % 2 === 0 ? "user" : "assistant", content: `m${i}` },
-        })),
-        { message: { role: "tool" } },
-        { type: "compaction", timestamp: new Date().toISOString() },
-      ],
-    });
+  it("replays only the user/assistant tail and skips tool/system/malformed records", async () => {
+    const source = path.join(root, "prev.jsonl");
+    const target = path.join(root, "next.jsonl");
+    const lines: string[] = [j({ type: "session", id: "old" })];
+    for (let i = 0; i < DEFAULT_REPLAY_MAX_MESSAGES + 4; i += 1) {
+      lines.push(j({ message: { role: i % 2 === 0 ? "user" : "assistant", content: `m${i}` } }));
+    }
+    lines.push(j({ message: { role: "tool" } }));
+    lines.push(j({ type: "compaction", timestamp: new Date().toISOString() }));
+    lines.push("not-json-line\n");
+    await fs.writeFile(source, lines.join(""), "utf8");
 
-    expect(await call("prev")).toBe(DEFAULT_REPLAY_MAX_MESSAGES);
-    const records = readEvents();
-    expect((records[0] as { type?: unknown }).type).toBe("session");
-    expect((records[0] as { id?: unknown }).id).toBe("new-session");
+    expect(await call(source, target)).toBe(DEFAULT_REPLAY_MAX_MESSAGES);
+    const records = await readJsonlRecords(target);
+    expect(records[0]?.type).toBe("session");
+    expect(records[0]?.id).toBe("new-session");
     expect(records).toHaveLength(1 + DEFAULT_REPLAY_MAX_MESSAGES);
-    const replayed = records.slice(1) as Array<{ message?: { role?: string; content?: string } }>;
-    expect(replayed.map((record) => record.message?.role)).toEqual([
+    expect(records.slice(1).map((record) => record.message?.role)).toEqual([
       "user",
       "assistant",
       "user",
@@ -85,7 +86,7 @@ describe("replayRecentUserAssistantMessages", () => {
       "user",
       "assistant",
     ]);
-    expect(replayed.map((record) => record.message?.content)).toEqual([
+    expect(records.slice(1).map((record) => record.message?.content)).toEqual([
       "m4",
       "m5",
       "m6",
@@ -93,86 +94,64 @@ describe("replayRecentUserAssistantMessages", () => {
       "m8",
       "m9",
     ]);
-    expect(await call("missing")).toBe(0);
+    expect(await call(path.join(root, "missing.jsonl"), path.join(root, "out.jsonl"))).toBe(0);
 
-    seedTranscript({
-      sessionId: "all-assistant",
-      events: Array.from({ length: 3 }, () => ({
-        message: { role: "assistant", content: "x" },
-      })),
-    });
-    expect(await call("all-assistant")).toBe(0);
-    expect(readEvents("main", "new-session")).toHaveLength(1 + DEFAULT_REPLAY_MAX_MESSAGES);
+    const assistantSource = path.join(root, "all-assistant.jsonl");
+    const assistantTarget = path.join(root, "all-assistant-out.jsonl");
+    const onlyAssistants = Array.from({ length: 3 }, () =>
+      j({ message: { role: "assistant", content: "x" } }),
+    ).join("");
+    await fs.writeFile(assistantSource, onlyAssistants, "utf8");
+    expect(await call(assistantSource, assistantTarget)).toBe(0);
+    await expectPathMissing(assistantTarget);
   });
 
-  it("keeps a pre-existing target header and aligns the tail to a user turn", async () => {
-    seedTranscript({
-      sessionId: "new-session",
-      events: [{ type: "session", id: "existing" }],
-    });
-    seedTranscript({
-      sessionId: "prev",
-      events: Array.from({ length: DEFAULT_REPLAY_MAX_MESSAGES + 1 }, (_, i) => ({
-        message: { role: i % 2 === 0 ? "user" : "assistant", content: `m${i}` },
-      })),
-    });
+  it("skips header for pre-existing targets and aligns the tail to a user turn", async () => {
+    const source = path.join(root, "prev.jsonl");
+    const target = path.join(root, "next.jsonl");
+    await fs.writeFile(target, j({ type: "session", id: "existing" }), "utf8");
+    const lines: string[] = [];
+    for (let i = 0; i < DEFAULT_REPLAY_MAX_MESSAGES + 1; i += 1) {
+      lines.push(j({ message: { role: i % 2 === 0 ? "user" : "assistant", content: `m${i}` } }));
+    }
+    await fs.writeFile(source, lines.join(""), "utf8");
 
-    expect(await call("prev")).toBe(DEFAULT_REPLAY_MAX_MESSAGES - 1);
-    const records = readEvents();
-    expect(records.filter((r) => (r as { type?: unknown }).type === "session")).toHaveLength(1);
-    expect((records[0] as { id?: unknown }).id).toBe("existing");
-    expect((records[1] as { message?: { role?: string } }).message?.role).toBe("user");
+    expect(await call(source, target)).toBe(DEFAULT_REPLAY_MAX_MESSAGES - 1);
+    const records = await readJsonlRecords(target);
+    expect(records.reduce((count, r) => count + (r.type === "session" ? 1 : 0), 0)).toBe(1);
+    expect(records[0]?.id).toBe("existing");
+    expect(records[1].message?.role).toBe("user");
   });
 
   it("coalesces same-role runs so replayed records strictly alternate", async () => {
-    seedTranscript({
-      sessionId: "prev",
-      events: [
-        { message: { role: "user", content: "older user" } },
-        { message: { role: "user", content: "latest user" } },
-        { message: { role: "assistant", content: "older assistant" } },
-        { message: { role: "assistant", content: "latest assistant" } },
-        { message: { role: "user", content: "follow-up" } },
-        { message: { role: "assistant", content: "answer" } },
-      ],
-    });
+    const source = path.join(root, "prev.jsonl");
+    const target = path.join(root, "next.jsonl");
+    await fs.writeFile(
+      source,
+      [
+        j({ message: { role: "user", content: "older user" } }),
+        j({ message: { role: "user", content: "latest user" } }),
+        j({ message: { role: "assistant", content: "older assistant" } }),
+        j({ message: { role: "assistant", content: "latest assistant" } }),
+        j({ message: { role: "user", content: "follow-up" } }),
+        j({ message: { role: "assistant", content: "answer" } }),
+      ].join(""),
+      "utf8",
+    );
 
-    expect(await call("prev")).toBe(4);
-    const records = readEvents().slice(1) as Array<{ message: { role: string; content: string } }>;
-    expect(records.map((r) => r.message.role)).toEqual(["user", "assistant", "user", "assistant"]);
-    expect(records.map((r) => r.message.content)).toEqual([
+    expect(await call(source, target)).toBe(4);
+    const records = await readJsonlRecords(target);
+    expect(records.slice(1).map((r) => r.message?.role)).toEqual([
+      "user",
+      "assistant",
+      "user",
+      "assistant",
+    ]);
+    expect(records.slice(1).map((r) => r.message?.content)).toEqual([
       "latest user",
       "latest assistant",
       "follow-up",
       "answer",
     ]);
-  });
-
-  it("replays from explicit scoped SQLite transcript events", async () => {
-    seedTranscript({
-      agentId: "target",
-      sessionId: "old-session",
-      events: [
-        { type: "session", id: "old-session" },
-        { message: { role: "user", content: "sqlite user" } },
-        { message: { role: "tool", content: "skip me" } },
-        { message: { role: "assistant", content: "sqlite assistant" } },
-      ],
-    });
-
-    expect(
-      await replayRecentUserAssistantMessages({
-        sourceAgentId: "target",
-        sourceSessionId: "old-session",
-        targetAgentId: "target",
-        newSessionId: "new-session",
-      }),
-    ).toBe(2);
-
-    const records = readEvents("target");
-    expect(records[0]).toMatchObject({ type: "session", id: "new-session" });
-    expect(
-      (records.slice(1) as Array<{ message: { content: string } }>).map((r) => r.message.content),
-    ).toEqual(["sqlite user", "sqlite assistant"]);
   });
 });

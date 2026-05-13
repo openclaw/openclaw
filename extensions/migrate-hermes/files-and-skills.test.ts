@@ -1,14 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { loadAuthProfileStoreWithoutExternalProfiles } from "openclaw/plugin-sdk/agent-runtime";
 import { MIGRATION_REASON_TARGET_EXISTS } from "openclaw/plugin-sdk/migration";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildHermesMigrationProvider } from "./provider.js";
 import { cleanupTempRoots, makeContext, makeTempRoot, writeFile } from "./test/provider-helpers.js";
-
-function stateEnv(stateDir: string): NodeJS.ProcessEnv {
-  return { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-}
 
 describe("Hermes migration file and skill items", () => {
   afterEach(async () => {
@@ -143,15 +138,15 @@ describe("Hermes migration file and skill items", () => {
       "Imported from Hermes",
     );
     const copiedAgentsItem = result.items.find((item) => item.id === "workspace:AGENTS.md");
-    expect(copiedAgentsItem?.details?.backupPath).toEqual(expect.stringContaining("AGENTS.md"));
-    const authStore = loadAuthProfileStoreWithoutExternalProfiles(
-      path.join(stateDir, "agents", "main", "agent"),
-      { env: stateEnv(stateDir) },
-    );
-    expect(authStore.profiles?.["openai:hermes-import"]).toMatchObject({
-      provider: "openai",
-      key: "sk-hermes",
-    });
+    expect(String(copiedAgentsItem?.details?.backupPath)).toContain("AGENTS.md");
+    const authStore = JSON.parse(
+      await fs.readFile(
+        path.join(stateDir, "agents", "main", "agent", "auth-profiles.json"),
+        "utf8",
+      ),
+    ) as { profiles?: Record<string, { key?: string; provider?: string }> };
+    expect(authStore.profiles?.["openai:hermes-import"]?.provider).toBe("openai");
+    expect(authStore.profiles?.["openai:hermes-import"]?.key).toBe("sk-hermes");
   });
 
   it("archives unsupported Hermes state into the report without importing it", async () => {

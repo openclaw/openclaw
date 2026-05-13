@@ -21,6 +21,7 @@ import {
 import { formatErrorMessage } from "../utils/format.js";
 import { debugError, debugLog, debugWarn } from "../utils/log.js";
 import {
+  getQQBotDataDir,
   getQQBotMediaDir,
   isLocalPath as isLocalFilePath,
   normalizePath,
@@ -532,7 +533,7 @@ export async function sendDocument(
   options: SendDocumentOptions = {},
 ): Promise<OutboundResult> {
   const extraLocalRoots = options.allowQQBotDataDownloads
-    ? [getQQBotMediaDir("downloads")]
+    ? [getQQBotDataDir("downloads")]
     : undefined;
   const resolvedMediaPath = resolveOutboundMediaPath(filePath, "file", {
     extraLocalRoots,

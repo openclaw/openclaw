@@ -18,7 +18,7 @@ parallelism as a scarce-resource design problem, not just as "more agents".
 A specialist lane only improves throughput when it reduces contention for the
 real bottlenecks:
 
-- **Session lanes**: only one run should mutate a given session at a time.
+- **Session locks**: only one run should mutate a given session at a time.
 - **Global model capacity**: all visible chat runs still share provider limits.
 - **Tool capacity**: shell, browser, network, and repository work can be slower
   than the model turn itself.

@@ -72,7 +72,7 @@ describe("buildStatusScanResult", () => {
           id: "main",
           workspaceDir: null,
           bootstrapPending: false,
-          sessionsDatabasePath: "/tmp/main.sqlite",
+          sessionsPath: "/tmp/main.json",
           sessionsCount: 0,
           lastUpdatedAt: null,
           lastActiveAgeMs: null,

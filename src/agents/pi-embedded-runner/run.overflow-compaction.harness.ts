@@ -24,6 +24,7 @@ type MockCompactionResult =
         tokensBefore?: number;
         tokensAfter?: number;
         sessionId?: string;
+        sessionFile?: string;
       };
       reason?: string;
     }
@@ -230,6 +231,7 @@ export const mockedShouldPreferExplicitConfigApiKeyAuth = vi.fn(() => false);
 export const overflowBaseRunParams = {
   sessionId: "test-session",
   sessionKey: "test-key",
+  sessionFile: "/tmp/session.json",
   workspaceDir: "/tmp/workspace",
   prompt: "hello",
   timeoutMs: 30000,
@@ -536,7 +538,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   }));
 
   vi.doMock("../models-config.js", () => ({
-    ensureOpenClawModelCatalog: vi.fn(async () => {}),
+    ensureOpenClawModelsJson: vi.fn(async () => {}),
   }));
 
   vi.doMock("../context-window-guard.js", () => ({

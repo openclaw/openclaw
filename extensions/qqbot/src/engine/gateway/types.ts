@@ -36,6 +36,7 @@ export interface GatewayPluginRuntime {
       resolveEnvelopeFormatOptions: (cfg: unknown) => unknown;
     };
     session: {
+      resolveStorePath: (store: unknown, params: { agentId: string }) => string;
       recordInboundSession: (params: unknown) => Promise<unknown>;
     };
     turn: {
@@ -59,20 +60,6 @@ export interface GatewayPluginRuntime {
       error?: string;
     }>;
   };
-  state: {
-    openKeyedStore: <T>(options: {
-      namespace: string;
-      maxEntries: number;
-      defaultTtlMs?: number;
-    }) => import("../state/keyed-store.js").KeyedStore<T>;
-  };
-  /**
-   * Config API for reading/writing the framework configuration.
-   *
-   * Used by the interaction handler (config query/update) directly
-   * within the engine layer. Optional because not all runtime
-   * environments provide config write capability.
-   */
   config?: {
     current: () => Record<string, unknown>;
     replaceConfigFile: (params: {

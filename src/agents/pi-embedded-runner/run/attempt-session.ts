@@ -1,4 +1,4 @@
-import type { CreateAgentSessionOptions } from "../../pi-coding-agent-contract.js";
+import type { CreateAgentSessionOptions } from "@earendil-works/pi-coding-agent";
 
 export type EmbeddedAgentSessionOptions = {
   cwd: string;
@@ -8,7 +8,7 @@ export type EmbeddedAgentSessionOptions = {
   model: unknown;
   thinkingLevel: unknown;
   tools: NonNullable<CreateAgentSessionOptions["tools"]>;
-  customTools: unknown[];
+  customTools: NonNullable<CreateAgentSessionOptions["customTools"]>;
   sessionManager: unknown;
   settingsManager: unknown;
   resourceLoader: unknown;

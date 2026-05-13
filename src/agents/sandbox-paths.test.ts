@@ -28,14 +28,13 @@ function makeTmpProbePath(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}.txt`;
 }
 
-async function withManagedMediaRoot<T>(run: (ctx: { mediaRoot: string }) => Promise<T>) {
+async function withManagedMediaRoot<T>(run: (ctx: { stateDir: string }) => Promise<T>) {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-managed-media-"));
-  const mediaRoot = path.join(resolvePreferredOpenClawTmpDir(), "media");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   try {
-    await fs.mkdir(path.join(mediaRoot, "outbound"), { recursive: true });
-    await fs.mkdir(path.join(mediaRoot, "tool-image-generation"), { recursive: true });
-    return await run({ mediaRoot });
+    await fs.mkdir(path.join(stateDir, "media", "outbound"), { recursive: true });
+    await fs.mkdir(path.join(stateDir, "media", "tool-image-generation"), { recursive: true });
+    return await run({ stateDir });
   } finally {
     vi.unstubAllEnvs();
     await fs.rm(stateDir, { recursive: true, force: true });
@@ -123,9 +122,9 @@ describe("resolveSandboxedMediaSource", () => {
       relative: path.join("media", "tool-image-generation", "generated.png"),
     },
   ])("allows $name outside the sandbox root", async ({ relative }) => {
-    await withManagedMediaRoot(async ({ mediaRoot }) => {
+    await withManagedMediaRoot(async ({ stateDir }) => {
       await withSandboxRoot(async (sandboxDir) => {
-        const media = path.join(mediaRoot, path.relative("media", relative));
+        const media = path.join(stateDir, relative);
         await fs.writeFile(media, "image", "utf8");
 
         const result = await resolveSandboxedMediaSource({
@@ -139,8 +138,8 @@ describe("resolveSandboxedMediaSource", () => {
   });
 
   it("resolves checked managed media paths for non-sandbox callers", async () => {
-    await withManagedMediaRoot(async ({ mediaRoot }) => {
-      const media = path.join(mediaRoot, "outbound", "reply.png");
+    await withManagedMediaRoot(async ({ stateDir }) => {
+      const media = path.join(stateDir, "media", "outbound", "reply.png");
       await fs.writeFile(media, "image", "utf8");
 
       await expect(resolveAllowedManagedMediaPath(media)).resolves.toBe(media);
@@ -148,8 +147,8 @@ describe("resolveSandboxedMediaSource", () => {
   });
 
   it("does not allow unrelated state media directories as managed media", async () => {
-    await withManagedMediaRoot(async ({ mediaRoot }) => {
-      const media = path.join(mediaRoot, "inbound", "reply.png");
+    await withManagedMediaRoot(async ({ stateDir }) => {
+      const media = path.join(stateDir, "media", "inbound", "reply.png");
       await fs.mkdir(path.dirname(media), { recursive: true });
       await fs.writeFile(media, "image", "utf8");
 
@@ -345,11 +344,11 @@ describe("resolveSandboxedMediaSource", () => {
     if (process.platform === "win32") {
       return;
     }
-    await withManagedMediaRoot(async ({ mediaRoot }) => {
+    await withManagedMediaRoot(async ({ stateDir }) => {
       await withSandboxRoot(async (sandboxDir) => {
         const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "managed-media-outside-"));
         const outsideFile = path.join(outsideDir, "secret.png");
-        const symlinkPath = path.join(mediaRoot, "outbound", "linked-secret.png");
+        const symlinkPath = path.join(stateDir, "media", "outbound", "linked-secret.png");
         try {
           await fs.writeFile(outsideFile, "secret", "utf8");
           await fs.symlink(outsideFile, symlinkPath);
@@ -367,10 +366,10 @@ describe("resolveSandboxedMediaSource", () => {
     if (process.platform === "win32") {
       return;
     }
-    await withManagedMediaRoot(async ({ mediaRoot }) => {
+    await withManagedMediaRoot(async ({ stateDir }) => {
       const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "managed-media-outside-"));
       const outsideFile = path.join(outsideDir, "secret.png");
-      const symlinkPath = path.join(mediaRoot, "outbound", "linked-secret.png");
+      const symlinkPath = path.join(stateDir, "media", "outbound", "linked-secret.png");
       try {
         await fs.writeFile(outsideFile, "secret", "utf8");
         await fs.symlink(outsideFile, symlinkPath);

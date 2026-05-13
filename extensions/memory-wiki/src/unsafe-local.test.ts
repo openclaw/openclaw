@@ -1,8 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 import { syncMemoryWikiUnsafeLocalSources } from "./unsafe-local.js";
 
@@ -21,10 +20,6 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
       return;
     }
     await fs.rm(fixtureRoot, { recursive: true, force: true });
-  });
-
-  afterEach(() => {
-    resetPluginStateStoreForTests();
   });
 
   function nextCaseRoot(name: string): string {

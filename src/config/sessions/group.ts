@@ -11,15 +11,15 @@ import type { GroupKeyResolution } from "./types.js";
 
 const getGroupSurfaces = () => new Set<string>([...listDeliverableMessageChannels(), "webchat"]);
 
-type GroupSessionSurface = {
-  resolveGroupSessionKey?: (ctx: MsgContext) => GroupKeyResolution | null;
+type LegacyGroupSessionSurface = {
+  resolveLegacyGroupSessionKey?: (ctx: MsgContext) => GroupKeyResolution | null;
 };
 
-function resolvePluginGroupSessionKey(ctx: MsgContext): GroupKeyResolution | null {
+function resolveLegacyGroupSessionKey(ctx: MsgContext): GroupKeyResolution | null {
   for (const plugin of listChannelPlugins()) {
     const resolved = (
-      plugin.messaging as GroupSessionSurface | undefined
-    )?.resolveGroupSessionKey?.(ctx);
+      plugin.messaging as LegacyGroupSessionSurface | undefined
+    )?.resolveLegacyGroupSessionKey?.(ctx);
     if (resolved) {
       return resolved;
     }
@@ -107,13 +107,13 @@ export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | nu
   const normalizedChatType =
     chatType === "channel" ? "channel" : chatType === "group" ? "group" : undefined;
 
-  const pluginResolution = resolvePluginGroupSessionKey(ctx);
+  const legacyResolution = resolveLegacyGroupSessionKey(ctx);
   const looksLikeGroup =
     normalizedChatType === "group" ||
     normalizedChatType === "channel" ||
     from.includes(":group:") ||
     from.includes(":channel:") ||
-    pluginResolution !== null;
+    legacyResolution !== null;
   if (!looksLikeGroup) {
     return null;
   }
@@ -124,11 +124,11 @@ export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | nu
   const head = normalizeLowercaseStringOrEmpty(parts[0]);
   const headIsSurface = head ? getGroupSurfaces().has(head) : false;
 
-  if (!headIsSurface && !providerHint && pluginResolution) {
-    return pluginResolution;
+  if (!headIsSurface && !providerHint && legacyResolution) {
+    return legacyResolution;
   }
 
-  const provider = headIsSurface ? head : (providerHint ?? pluginResolution?.channel);
+  const provider = headIsSurface ? head : (providerHint ?? legacyResolution?.channel);
   if (!provider) {
     return null;
   }

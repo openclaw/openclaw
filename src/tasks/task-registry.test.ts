@@ -119,7 +119,7 @@ function configureTaskRegistryMaintenanceRuntimeForTest(params: {
 }): void {
   const emptyAcpEntry = {
     cfg: {} as never,
-    agentId: "main",
+    storePath: "",
     sessionKey: "",
     storeSessionKey: "",
     entry: undefined,
@@ -131,7 +131,8 @@ function configureTaskRegistryMaintenanceRuntimeForTest(params: {
     listSessionBindingsBySession: () => params.sessionBindings ?? [],
     closeAcpSession: params.closeAcpSession,
     unbindSessionBindings: params.unbindSessionBindings,
-    getSessionEntry: () => undefined,
+    loadSessionStore: () => ({}),
+    resolveStorePath: () => "",
     parseAgentSessionKey: () => null as ParsedAgentSessionKey | null,
     isCronJobActive: () => false,
     getAgentRunContext: () => undefined,
@@ -186,8 +187,9 @@ function configureTaskRegistryMaintenanceRuntimeForTest(params: {
       return next;
     },
     isCronRuntimeAuthoritative: () => true,
-    resolveCronStoreKey: () => "test-cron-store",
+    resolveCronStorePath: () => "/tmp/openclaw-test-cron/jobs.json",
     loadCronStoreSync: () => ({ version: 1, jobs: [] }),
+    resolveCronRunLogPath: ({ jobId }) => jobId,
     readCronRunLogEntriesSync: () => [],
   });
 }
@@ -226,7 +228,7 @@ function createAcpSessionStoreEntry(params: {
   } as const;
   return {
     cfg: {} as never,
-    agentId: "main",
+    storePath: "/tmp/openclaw-test-sessions.json",
     sessionKey: params.sessionKey,
     storeSessionKey: params.sessionKey,
     entry: {
@@ -924,101 +926,54 @@ describe("task-registry", () => {
     {
       id: "channel",
       name: "room channel",
-      chatType: "channel" as const,
       ownerKey: "agent:main:guildchat:channel:123",
       target: "guildchat:channel:123",
     },
     {
       id: "group",
       name: "group",
-      chatType: "group" as const,
       ownerKey: "agent:main:guildchat:group:123",
       target: "guildchat:group:123",
     },
     {
       id: "topic",
       name: "group topic",
-      chatType: "group" as const,
       ownerKey: "agent:main:guildchat:group:-100123:topic:42",
       target: "guildchat:group:-100123:topic:42",
     },
-  ])(
-    "routes $name ACP completion through the parent session",
-    async ({ id, chatType, ownerKey, target }) => {
-      await withTaskRegistryTempDir(async (root) => {
-        process.env.OPENCLAW_STATE_DIR = root;
-        resetTaskRegistryForTests();
-        const runId = `run-group-terminal-${id}`;
-        hoisted.sendMessageMock.mockResolvedValue({
-          channel: "guildchat",
-          to: target,
-          via: "direct",
-        });
-
-        createTaskRecord({
-          runtime: "acp",
-          ownerKey,
-          scopeKind: "session",
-          requesterOrigin: {
-            channel: "guildchat",
-            to: target,
-            chatType,
-          },
-          childSessionKey: "agent:main:acp:child",
-          runId,
-          task: "Investigate issue",
-          status: "running",
-          deliveryStatus: "pending",
-          startedAt: 100,
-        });
-
-        emitAgentEvent({
-          runId,
-          stream: "lifecycle",
-          data: {
-            phase: "end",
-            endedAt: 250,
-          },
-        });
-
-        await waitForAssertion(() => {
-          const task = findTaskByRunId(runId);
-          if (!task) {
-            throw new Error(`Expected task for run ${runId}`);
-          }
-          expect(task.status).toBe("succeeded");
-          expect(task.deliveryStatus).toBe("session_queued");
-        });
-        expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
-        expect(peekSystemEvents(ownerKey)).toEqual([
-          "Background task done: ACP background task (run run-grou).",
-        ]);
-        expect(hasPendingHeartbeatWake()).toBe(true);
-      });
+    {
+      id: "discord-legacy-channel",
+      name: "legacy Discord channel",
+      ownerKey: "agent:main:discord:guild-123:channel-456",
+      target: "guildchat:channel:456",
     },
-  );
-
-  it("routes typed group ACP completion through the parent session without parsing owner key", async () => {
+    {
+      id: "whatsapp-legacy-group",
+      name: "legacy WhatsApp group",
+      ownerKey: "agent:main:whatsapp:123@g.us",
+      target: "guildchat:group:123@g.us",
+    },
+  ])("routes $name ACP completion through the parent session", async ({ id, ownerKey, target }) => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetTaskRegistryForTests();
+      const runId = `run-group-terminal-${id}`;
       hoisted.sendMessageMock.mockResolvedValue({
         channel: "guildchat",
-        to: "guildchat:opaque",
+        to: target,
         via: "direct",
       });
 
       createTaskRecord({
         runtime: "acp",
-        ownerKey: "agent:main:opaque-session",
+        ownerKey,
         scopeKind: "session",
         requesterOrigin: {
           channel: "guildchat",
-          to: "opaque-room",
-          chatType: "group",
+          to: target,
         },
-        childSessionKey: "agent:main:acp:typed-child",
-        runId: "run-typed-group-terminal",
+        childSessionKey: "agent:main:acp:child",
+        runId,
         task: "Investigate issue",
         status: "running",
         deliveryStatus: "pending",
@@ -1026,7 +981,7 @@ describe("task-registry", () => {
       });
 
       emitAgentEvent({
-        runId: "run-typed-group-terminal",
+        runId,
         stream: "lifecycle",
         data: {
           phase: "end",
@@ -1034,16 +989,19 @@ describe("task-registry", () => {
         },
       });
 
-      await waitForAssertion(() =>
-        expect(findTaskByRunId("run-typed-group-terminal")).toMatchObject({
-          status: "succeeded",
-          deliveryStatus: "session_queued",
-        }),
-      );
+      await waitForAssertion(() => {
+        const task = findTaskByRunId(runId);
+        if (!task) {
+          throw new Error(`Expected task for run ${runId}`);
+        }
+        expect(task.status).toBe("succeeded");
+        expect(task.deliveryStatus).toBe("session_queued");
+      });
       expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
-      expect(peekSystemEvents("agent:main:opaque-session")).toEqual([
-        expect.stringContaining("Background task done: ACP background task"),
+      expect(peekSystemEvents(ownerKey)).toEqual([
+        "Background task done: ACP background task (run run-grou).",
       ]);
+      expect(hasPendingHeartbeatWake()).toBe(true);
     });
   });
 
@@ -2350,13 +2308,14 @@ describe("task-registry", () => {
         listAcpSessionEntries: async () => [],
         readAcpSessionEntry: () => ({
           cfg: {} as never,
-          agentId: "main",
+          storePath: "",
           sessionKey: "",
           storeSessionKey: "",
           entry: undefined,
           storeReadFailed: false,
         }),
-        getSessionEntry: () => undefined,
+        loadSessionStore: () => ({}),
+        resolveStorePath: () => "",
         parseAgentSessionKey: () => null,
         isCronJobActive: () => false,
         getAgentRunContext: () => undefined,
@@ -2373,8 +2332,9 @@ describe("task-registry", () => {
         resolveTaskForLookupToken: () => undefined,
         setTaskCleanupAfterById: () => null,
         isCronRuntimeAuthoritative: () => true,
-        resolveCronStoreKey: () => "test-cron-store",
+        resolveCronStorePath: () => "/tmp/openclaw-test-cron/jobs.json",
         loadCronStoreSync: () => ({ version: 1, jobs: [] }),
+        resolveCronRunLogPath: ({ jobId }) => jobId,
         readCronRunLogEntriesSync: () => [],
       });
 

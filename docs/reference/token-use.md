@@ -66,7 +66,7 @@ Use these in chat:
 - `/usage off|tokens|full` → appends a **per-response usage footer** to every reply.
   - Persists per session (stored as `responseUsage`).
   - OAuth auth **hides cost** (tokens only).
-- `/usage cost` → shows a local cost summary from OpenClaw session transcripts.
+- `/usage cost` → shows a local cost summary from OpenClaw session logs.
 
 Other surfaces:
 

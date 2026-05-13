@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resetPluginBlobStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { compileMemoryWikiVault } from "./compile.js";
@@ -12,12 +11,12 @@ import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const {
   getActiveMemorySearchManagerMock,
-  loadCombinedSessionEntriesForGatewayMock,
+  loadCombinedSessionStoreForGatewayMock,
   resolveDefaultAgentIdMock,
   resolveSessionAgentIdMock,
 } = vi.hoisted(() => ({
   getActiveMemorySearchManagerMock: vi.fn(),
-  loadCombinedSessionEntriesForGatewayMock: vi.fn(),
+  loadCombinedSessionStoreForGatewayMock: vi.fn(),
   resolveDefaultAgentIdMock: vi.fn(() => "main"),
   resolveSessionAgentIdMock: vi.fn(({ sessionKey }: { sessionKey?: string }) =>
     sessionKey === "agent:secondary:thread" ? "secondary" : "main",
@@ -38,14 +37,13 @@ vi.mock("openclaw/plugin-sdk/session-transcript-hit", async (importOriginal) => 
     await importOriginal<typeof import("openclaw/plugin-sdk/session-transcript-hit")>();
   return {
     ...actual,
-    loadCombinedSessionEntriesForGateway: loadCombinedSessionEntriesForGatewayMock,
+    loadCombinedSessionStoreForGateway: loadCombinedSessionStoreForGatewayMock,
   };
 });
 
 const { createVault } = createMemoryWikiTestHarness();
 let suiteRoot = "";
 let caseIndex = 0;
-let previousStateDir: string | undefined;
 
 function collectWikiResultPaths(results: readonly { corpus: string; path: string }[]): string[] {
   const paths: string[] = [];
@@ -71,25 +69,17 @@ function expectFields(value: unknown, expected: Record<string, unknown>): Record
 beforeEach(() => {
   getActiveMemorySearchManagerMock.mockReset();
   getActiveMemorySearchManagerMock.mockResolvedValue({ manager: null, error: "unavailable" });
-  loadCombinedSessionEntriesForGatewayMock.mockReset();
-  loadCombinedSessionEntriesForGatewayMock.mockReturnValue({ databasePath: "(test)", entries: {} });
+  loadCombinedSessionStoreForGatewayMock.mockReset();
+  loadCombinedSessionStoreForGatewayMock.mockReturnValue({ storePath: "(test)", store: {} });
   resolveDefaultAgentIdMock.mockClear();
   resolveSessionAgentIdMock.mockClear();
 });
 
 beforeAll(async () => {
   suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-query-suite-"));
-  previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  process.env.OPENCLAW_STATE_DIR = path.join(suiteRoot, "state");
 });
 
 afterAll(async () => {
-  resetPluginBlobStoreForTests();
-  if (previousStateDir === undefined) {
-    delete process.env.OPENCLAW_STATE_DIR;
-  } else {
-    process.env.OPENCLAW_STATE_DIR = previousStateDir;
-  }
   if (suiteRoot) {
     await fs.rm(suiteRoot, { recursive: true, force: true });
   }
@@ -128,16 +118,18 @@ function createSessionVisibilityAppConfig(): OpenClawConfig {
 }
 
 function mockSessionTranscriptStore() {
-  loadCombinedSessionEntriesForGatewayMock.mockReturnValue({
-    databasePath: "(test)",
-    entries: {
+  loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+    storePath: "(test)",
+    store: {
       "agent:main:child-session": {
         sessionId: "child-session",
         updatedAt: 1,
+        sessionFile: "/tmp/openclaw/child-session.jsonl",
       },
       "agent:main:sibling-session": {
         sessionId: "sibling-session",
         updatedAt: 2,
+        sessionFile: "/tmp/openclaw/sibling-session.jsonl",
       },
     },
   });
@@ -171,13 +163,20 @@ function createMemoryManager(overrides?: {
 }
 
 describe("isSessionMemoryPath", () => {
-  it("classifies opaque session transcript keys only", () => {
-    for (const relPath of ["transcript:main:child-session"]) {
+  it("classifies all current session storage layouts", () => {
+    for (const relPath of [
+      "sessions/child-session.jsonl",
+      "qmd/sessions/child-session.md",
+      "qmd/sessions-main/child-session.md",
+      "qmd\\sessions-main\\child-session.md",
+      "qmd/sessions",
+    ]) {
       expect(isSessionMemoryPath(relPath)).toBe(true);
     }
 
     for (const relPath of [
-      "transcriptx:main:child-session",
+      "sessionsx/child-session.jsonl",
+      "qmd/sessionsxxx",
       "wiki/sessions/foo.md",
       "wiki\\sessions\\foo.md",
     ]) {
@@ -725,7 +724,7 @@ describe("searchMemoryWiki", () => {
     const manager = createMemoryManager({
       searchResults: [
         {
-          path: "transcript:main:child-session",
+          path: "sessions/child-session.jsonl",
           startLine: 1,
           endLine: 2,
           score: 30,
@@ -733,7 +732,7 @@ describe("searchMemoryWiki", () => {
           source: "sessions",
         },
         {
-          path: "transcript:main:sibling-session",
+          path: "qmd/sessions-main/sibling-session.md",
           startLine: 3,
           endLine: 4,
           score: 20,
@@ -762,7 +761,7 @@ describe("searchMemoryWiki", () => {
     });
 
     expect(results.map((result) => result.path)).toEqual([
-      "transcript:main:child-session",
+      "sessions/child-session.jsonl",
       "MEMORY.md",
     ]);
   });
@@ -778,7 +777,7 @@ describe("searchMemoryWiki", () => {
     const manager = createMemoryManager({
       searchResults: [
         {
-          path: "transcript:main:child-session",
+          path: "sessions/child-session.jsonl",
           startLine: 1,
           endLine: 2,
           score: 30,
@@ -786,7 +785,7 @@ describe("searchMemoryWiki", () => {
           source: "sessions",
         },
         {
-          path: "transcript:main:sibling-session",
+          path: "qmd/sessions-main/sibling-session.md",
           startLine: 3,
           endLine: 4,
           score: 20,
@@ -815,7 +814,7 @@ describe("searchMemoryWiki", () => {
     });
 
     expect(results.map((result) => result.path)).toEqual([
-      "transcript:main:child-session",
+      "sessions/child-session.jsonl",
       "MEMORY.md",
     ]);
   });
@@ -1116,7 +1115,7 @@ describe("getMemoryWikiPage", () => {
     mockSessionTranscriptStore();
     const manager = createMemoryManager({
       readResult: {
-        path: "transcript:main:sibling-session",
+        path: "qmd/sessions-main/sibling-session.md",
         text: "sibling transcript content",
       },
     });
@@ -1127,7 +1126,7 @@ describe("getMemoryWikiPage", () => {
       appConfig: createSessionVisibilityAppConfig(),
       agentSessionKey: "agent:main:child-session",
       sandboxed: true,
-      lookup: "transcript:main:sibling-session",
+      lookup: "qmd/sessions-main/sibling-session.md",
     });
 
     expect(result).toBeNull();
@@ -1144,7 +1143,7 @@ describe("getMemoryWikiPage", () => {
     mockSessionTranscriptStore();
     const manager = createMemoryManager({
       readResult: {
-        path: "transcript:main:child-session",
+        path: "qmd/sessions-main/child-session.md",
         text: "own transcript content",
       },
     });
@@ -1155,17 +1154,17 @@ describe("getMemoryWikiPage", () => {
       appConfig: createSessionVisibilityAppConfig(),
       agentSessionKey: "agent:main:child-session",
       sandboxed: true,
-      lookup: "transcript:main:child-session",
+      lookup: "qmd/sessions-main/child-session.md",
     });
 
     expectFields(result, {
       corpus: "memory",
-      path: "transcript:main:child-session",
+      path: "qmd/sessions-main/child-session.md",
       content: "own transcript content",
     });
     expect(manager.readFile).toHaveBeenCalledTimes(1);
     expect(manager.readFile).toHaveBeenCalledWith({
-      relPath: "transcript:main:child-session",
+      relPath: "qmd/sessions-main/child-session.md",
       from: 1,
       lines: 200,
     });
@@ -1184,7 +1183,7 @@ describe("getMemoryWikiPage", () => {
         config,
         agentSessionKey: "agent:main:child-session",
         sandboxed: true,
-        lookup: "transcript:main:child-session",
+        lookup: "sessions/child-session.jsonl",
       }),
     ).rejects.toThrow(/wiki_get requires appConfig/);
   });

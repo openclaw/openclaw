@@ -1,12 +1,6 @@
 import crypto from "node:crypto";
+import path from "node:path";
 import { isRecord } from "../utils.js";
-import {
-  readConfigHealthStateFromSqlite,
-  writeConfigHealthStateToSqlite,
-  type ConfigHealthEntry,
-  type ConfigHealthFingerprint,
-  type ConfigHealthState,
-} from "./health-state.js";
 import {
   appendConfigAuditRecord,
   appendConfigAuditRecordSync,
@@ -18,6 +12,7 @@ import {
   persistBoundedClobberedConfigSnapshotSync,
 } from "./io.clobber-snapshot.js";
 import { formatConfigIssueSummary } from "./issue-format.js";
+import { resolveStateDir } from "./paths.js";
 import {
   isPluginLocalInvalidConfigSnapshot,
   shouldAttemptLastKnownGoodRecovery,
@@ -48,6 +43,11 @@ export type ObserveRecoveryDeps = {
       mkdir(path: string, options?: { recursive?: boolean; mode?: number }): Promise<unknown>;
       readdir(path: string): Promise<string[]>;
       rmdir(path: string): Promise<unknown>;
+      appendFile(
+        path: string,
+        data: string,
+        options?: { encoding?: BufferEncoding; mode?: number },
+      ): Promise<unknown>;
     };
     statSync(
       path: string,
@@ -73,11 +73,32 @@ export type ObserveRecoveryDeps = {
     mkdirSync(path: string, options?: { recursive?: boolean; mode?: number }): unknown;
     readdirSync(path: string): string[];
     rmdirSync(path: string): unknown;
+    appendFileSync(
+      path: string,
+      data: string,
+      options?: { encoding?: BufferEncoding; mode?: number },
+    ): unknown;
   };
   json5: { parse(value: string): unknown };
   env: NodeJS.ProcessEnv;
   homedir: () => string;
   logger: Pick<typeof console, "warn">;
+};
+
+type ConfigHealthFingerprint = {
+  hash: string;
+  bytes: number;
+  mtimeMs: number | null;
+  ctimeMs: number | null;
+  dev: string | null;
+  ino: string | null;
+  mode: number | null;
+  nlink: number | null;
+  uid: number | null;
+  gid: number | null;
+  hasMeta: boolean;
+  gatewayMode: string | null;
+  observedAt: string;
 };
 
 type ConfigStatMetadataSource =
@@ -92,6 +113,16 @@ type ConfigStatMetadataSource =
       gid?: number;
     } & Record<string, unknown>)
   | null;
+
+type ConfigHealthEntry = {
+  lastKnownGood?: ConfigHealthFingerprint;
+  lastPromotedGood?: ConfigHealthFingerprint;
+  lastObservedSuspiciousSignature?: string | null;
+};
+
+type ConfigHealthState = {
+  entries?: Record<string, ConfigHealthEntry>;
+};
 
 function createConfigObserveAuditRecord(params: {
   ts: string;
@@ -286,34 +317,67 @@ function parseConfigRawOrEmpty(deps: ObserveRecoveryDeps, raw: string): unknown 
   }
 }
 
+function resolveConfigHealthStatePath(env: NodeJS.ProcessEnv, homedir: () => string): string {
+  return path.join(resolveStateDir(env, homedir), "logs", "config-health.json");
+}
+
 function formatObserveRecoveryError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
 async function readConfigHealthState(deps: ObserveRecoveryDeps): Promise<ConfigHealthState> {
-  return readConfigHealthStateFromSqlite(deps.env, deps.homedir);
+  try {
+    const raw = await deps.fs.promises.readFile(
+      resolveConfigHealthStatePath(deps.env, deps.homedir),
+      "utf-8",
+    );
+    const parsed = deps.json5.parse(raw);
+    return isRecord(parsed) ? (parsed as ConfigHealthState) : {};
+  } catch {
+    return {};
+  }
 }
 
 function readConfigHealthStateSync(deps: ObserveRecoveryDeps): ConfigHealthState {
-  return readConfigHealthStateFromSqlite(deps.env, deps.homedir);
+  try {
+    const raw = deps.fs.readFileSync(resolveConfigHealthStatePath(deps.env, deps.homedir), "utf-8");
+    const parsed = deps.json5.parse(raw);
+    return isRecord(parsed) ? (parsed as ConfigHealthState) : {};
+  } catch {
+    return {};
+  }
 }
 
 async function writeConfigHealthState(
   deps: ObserveRecoveryDeps,
   state: ConfigHealthState,
 ): Promise<void> {
+  const healthPath = resolveConfigHealthStatePath(deps.env, deps.homedir);
   try {
-    writeConfigHealthStateToSqlite(deps.env, deps.homedir, state);
+    await deps.fs.promises.mkdir(path.dirname(healthPath), { recursive: true, mode: 0o700 });
+    await deps.fs.promises.writeFile(healthPath, `${JSON.stringify(state, null, 2)}\n`, {
+      encoding: "utf-8",
+      mode: 0o600,
+    });
   } catch (err) {
-    deps.logger.warn(`Config health-state write failed: ${formatObserveRecoveryError(err)}`);
+    deps.logger.warn(
+      `Config health-state write failed: ${healthPath}: ${formatObserveRecoveryError(err)}`,
+    );
   }
 }
 
 function writeConfigHealthStateSync(deps: ObserveRecoveryDeps, state: ConfigHealthState): void {
+  const healthPath = resolveConfigHealthStatePath(deps.env, deps.homedir);
   try {
-    writeConfigHealthStateToSqlite(deps.env, deps.homedir, state);
+    deps.fs.mkdirSync(path.dirname(healthPath), { recursive: true, mode: 0o700 });
+    deps.fs.writeFileSync(healthPath, `${JSON.stringify(state, null, 2)}\n`, {
+      encoding: "utf-8",
+      mode: 0o600,
+    });
   } catch (err) {
-    deps.logger.warn(`Config health-state write failed: ${formatObserveRecoveryError(err)}`);
+    deps.logger.warn(
+      `Config health-state write failed: ${healthPath}: ${formatObserveRecoveryError(err)}`,
+    );
   }
 }
 

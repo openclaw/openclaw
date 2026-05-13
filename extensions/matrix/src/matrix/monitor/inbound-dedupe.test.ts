@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMatrixInboundEventDeduper } from "./inbound-dedupe.js";
 
@@ -11,16 +10,15 @@ describe("Matrix inbound event dedupe", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
-    resetPluginStateStoreForTests();
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  function createStateRoot(): string {
+  function createStoragePath(): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-inbound-dedupe-"));
     tempDirs.push(dir);
-    return dir;
+    return path.join(dir, "inbound-dedupe.json");
   }
 
   const auth = {
@@ -32,10 +30,10 @@ describe("Matrix inbound event dedupe", () => {
   } as const;
 
   it("persists committed events across restarts", async () => {
-    const stateRootDir = createStateRoot();
+    const storagePath = createStoragePath();
     const first = await createMatrixInboundEventDeduper({
       auth: auth as never,
-      stateRootDir,
+      storagePath,
     });
 
     expect(first.claimEvent({ roomId: "!room:example.org", eventId: "$event-1" })).toBe(true);
@@ -47,16 +45,16 @@ describe("Matrix inbound event dedupe", () => {
 
     const second = await createMatrixInboundEventDeduper({
       auth: auth as never,
-      stateRootDir,
+      storagePath,
     });
     expect(second.claimEvent({ roomId: "!room:example.org", eventId: "$event-1" })).toBe(false);
   });
 
   it("does not persist released pending claims", async () => {
-    const stateRootDir = createStateRoot();
+    const storagePath = createStoragePath();
     const first = await createMatrixInboundEventDeduper({
       auth: auth as never,
-      stateRootDir,
+      storagePath,
     });
 
     expect(first.claimEvent({ roomId: "!room:example.org", eventId: "$event-2" })).toBe(true);
@@ -65,31 +63,30 @@ describe("Matrix inbound event dedupe", () => {
 
     const second = await createMatrixInboundEventDeduper({
       auth: auth as never,
-      stateRootDir,
+      storagePath,
     });
     expect(second.claimEvent({ roomId: "!room:example.org", eventId: "$event-2" })).toBe(true);
   });
 
   it("prunes expired and overflowed entries on load", async () => {
-    const stateRootDir = createStateRoot();
-    let now = 10;
-    const first = await createMatrixInboundEventDeduper({
-      auth: auth as never,
-      stateRootDir,
-      ttlMs: 1_000,
-      maxEntries: 10,
-      nowMs: () => now,
-    });
-    for (const eventId of ["$old", "$keep-1", "$keep-2", "$keep-3"]) {
-      expect(first.claimEvent({ roomId: "!room:example.org", eventId })).toBe(true);
-      await first.commitEvent({ roomId: "!room:example.org", eventId });
-      now += eventId === "$old" ? 80 : 5;
-    }
-    await first.stop();
+    const storagePath = createStoragePath();
+    fs.writeFileSync(
+      storagePath,
+      JSON.stringify({
+        version: 1,
+        entries: [
+          { key: "!room:example.org|$old", ts: 10 },
+          { key: "!room:example.org|$keep-1", ts: 90 },
+          { key: "!room:example.org|$keep-2", ts: 95 },
+          { key: "!room:example.org|$keep-3", ts: 100 },
+        ],
+      }),
+      "utf8",
+    );
 
     const deduper = await createMatrixInboundEventDeduper({
       auth: auth as never,
-      stateRootDir,
+      storagePath,
       ttlMs: 20,
       maxEntries: 2,
       nowMs: () => 100,
@@ -102,11 +99,11 @@ describe("Matrix inbound event dedupe", () => {
   });
 
   it("retains replayed backlog events based on processing time", async () => {
-    const stateRootDir = createStateRoot();
+    const storagePath = createStoragePath();
     let now = 100;
     const first = await createMatrixInboundEventDeduper({
       auth: auth as never,
-      stateRootDir,
+      storagePath,
       ttlMs: 20,
       nowMs: () => now,
     });
@@ -121,10 +118,29 @@ describe("Matrix inbound event dedupe", () => {
     now = 110;
     const second = await createMatrixInboundEventDeduper({
       auth: auth as never,
-      stateRootDir,
+      storagePath,
       ttlMs: 20,
       nowMs: () => now,
     });
     expect(second.claimEvent({ roomId: "!room:example.org", eventId: "$backlog" })).toBe(false);
+  });
+
+  it("treats stop persistence failures as best-effort cleanup", async () => {
+    const blockingPath = createStoragePath();
+    fs.writeFileSync(blockingPath, "blocking file", "utf8");
+    const deduper = await createMatrixInboundEventDeduper({
+      auth: auth as never,
+      storagePath: path.join(blockingPath, "nested", "inbound-dedupe.json"),
+    });
+
+    expect(deduper.claimEvent({ roomId: "!room:example.org", eventId: "$persist-fail" })).toBe(
+      true,
+    );
+    await deduper.commitEvent({
+      roomId: "!room:example.org",
+      eventId: "$persist-fail",
+    });
+
+    await expect(deduper.stop()).resolves.toBeUndefined();
   });
 });

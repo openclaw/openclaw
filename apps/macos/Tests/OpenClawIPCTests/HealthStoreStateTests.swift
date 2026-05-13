@@ -25,7 +25,7 @@ struct HealthStoreStateTests {
             channelOrder: ["whatsapp"],
             channelLabels: ["whatsapp": "WhatsApp"],
             heartbeatSeconds: 60,
-            sessions: .init(databasePath: "/tmp/openclaw-agent.sqlite", count: 0, recent: []))
+            sessions: .init(path: "/tmp/sessions.json", count: 0, recent: []))
 
         let store = HealthStore.shared
         store.__setSnapshotForTest(snap, lastError: nil)

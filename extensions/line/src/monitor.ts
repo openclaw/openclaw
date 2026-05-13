@@ -239,6 +239,7 @@ export async function monitorLineProvider(
               accountId: route.accountId,
               agentId: route.agentId,
               routeSessionKey: route.sessionKey,
+              storePath: ctx.turn.storePath,
               ctxPayload,
               recordInboundSession: core.channel.session.recordInboundSession,
               dispatchReplyWithBufferedBlockDispatcher:

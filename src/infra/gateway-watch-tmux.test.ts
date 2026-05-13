@@ -70,7 +70,7 @@ describe("gateway-watch tmux wrapper", () => {
 
   it("builds a login-shell command that runs the raw watcher in the repo", () => {
     const command = buildGatewayWatchTmuxCommand({
-      args: ["gateway", "--force", "--raw-stream"],
+      args: ["gateway", "--force", "--raw-stream-path", "a b.jsonl"],
       cwd: "/repo with spaces/openclaw",
       env: {
         OPENCLAW_GATEWAY_PORT: "19001",
@@ -95,7 +95,7 @@ describe("gateway-watch tmux wrapper", () => {
     expect(command).toContain("scripts/watch-node.mjs");
     expect(command).toContain("gateway");
     expect(command).toContain("--force");
-    expect(command).toContain("--raw-stream");
+    expect(command).toContain("'a b.jsonl'");
   });
 
   it("consumes benchmark flags and passes the CPU profile dir to the watched child", () => {

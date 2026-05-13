@@ -99,7 +99,10 @@ openclaw gateway run
   Alias for `--ws-log compact`.
 </ParamField>
 <ParamField path="--raw-stream" type="boolean">
-  Log raw model stream events to SQLite diagnostics.
+  Log raw model stream events to jsonl.
+</ParamField>
+<ParamField path="--raw-stream-path <path>" type="string">
+  Raw stream jsonl path.
 </ParamField>
 
 ## Restart the Gateway
@@ -122,7 +125,7 @@ Inline `--password` can be exposed in local process listings. Prefer `--password
 ### Startup profiling
 
 - Set `OPENCLAW_GATEWAY_STARTUP_TRACE=1` to log phase timings during Gateway startup, including per-phase `eventLoopMax` delay and plugin lookup-table timings for installed-index, manifest registry, startup planning, and owner-map work.
-- Set `OPENCLAW_DIAGNOSTICS=timeline` to write a best-effort startup diagnostics timeline into the shared SQLite state database for external QA harnesses. You can also enable the flag with `diagnostics.flags: ["timeline"]` in config. Add `OPENCLAW_DIAGNOSTICS_EVENT_LOOP=1` to include event-loop samples.
+- Set `OPENCLAW_DIAGNOSTICS=timeline` with `OPENCLAW_DIAGNOSTICS_TIMELINE_PATH=<path>` to write a best-effort JSONL startup diagnostics timeline for external QA harnesses. You can also enable the flag with `diagnostics.flags: ["timeline"]` in config; the path is still env-provided. Add `OPENCLAW_DIAGNOSTICS_EVENT_LOOP=1` to include event-loop samples.
 - Run `pnpm test:startup:gateway -- --runs 5 --warmup 1` to benchmark Gateway startup. The benchmark records first process output, `/healthz`, `/readyz`, startup trace timings, event-loop delay, and plugin lookup-table timing details.
 
 ## Query a running Gateway
@@ -160,7 +163,7 @@ The HTTP `/healthz` endpoint is a liveness probe: it returns once the server can
 
 ### `gateway usage-cost`
 
-Fetch usage-cost summaries from session transcripts.
+Fetch usage-cost summaries from session logs.
 
 ```bash
 openclaw gateway usage-cost
@@ -206,7 +209,7 @@ openclaw gateway stability --json
 <AccordionGroup>
   <Accordion title="Privacy and bundle behavior">
     - Records keep operational metadata: event names, counts, byte sizes, memory readings, queue/session state, channel/plugin names, and redacted session summaries. They do not keep chat text, webhook bodies, tool outputs, raw request or response bodies, tokens, cookies, secret values, hostnames, or raw session ids. Set `diagnostics.enabled: false` to disable the recorder entirely.
-    - On fatal Gateway exits, shutdown timeouts, and restart startup failures, OpenClaw writes the same diagnostic snapshot to the shared SQLite state database when the recorder has events. Inspect the newest bundle with `openclaw gateway stability --bundle latest`; `--limit`, `--type`, and `--since-seq` also apply to bundle output.
+    - On fatal Gateway exits, shutdown timeouts, and restart startup failures, OpenClaw writes the same diagnostic snapshot to `~/.openclaw/logs/stability/openclaw-stability-*.json` when the recorder has events. Inspect the newest bundle with `openclaw gateway stability --bundle latest`; `--limit`, `--type`, and `--since-seq` also apply to bundle output.
 
   </Accordion>
 </AccordionGroup>

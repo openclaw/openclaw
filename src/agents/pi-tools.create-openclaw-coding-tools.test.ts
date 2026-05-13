@@ -1,9 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { upsertSessionEntry } from "../config/sessions/store.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   findUnsupportedSchemaKeywords,
@@ -12,8 +10,6 @@ import {
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import type { VirtualAgentFs, VirtualAgentFsEntry } from "./filesystem/agent-filesystem.js";
 import * as openClawPluginTools from "./openclaw-plugin-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
@@ -60,17 +56,25 @@ function collectActionValues(schema: unknown, values: Set<string>): void {
   }
 }
 
-async function writeSessionRows(agentId: string, entries: Record<string, unknown>) {
-  for (const [sessionKey, entry] of Object.entries(entries)) {
-    upsertSessionEntry({ agentId, sessionKey, entry: entry as SessionEntry });
-  }
+async function writeSessionStore(
+  storeTemplate: string,
+  agentId: string,
+  entries: Record<string, unknown>,
+) {
+  await fs.writeFile(
+    storeTemplate.replaceAll("{agentId}", agentId),
+    JSON.stringify(entries, null, 2),
+    "utf-8",
+  );
 }
 
-function createToolsForStoredSession(sessionKey: string) {
+function createToolsForStoredSession(storeTemplate: string, sessionKey: string) {
   return createOpenClawCodingTools({
     sessionKey,
     config: {
-      session: {},
+      session: {
+        store: storeTemplate,
+      },
       agents: {
         defaults: {
           subagents: {
@@ -81,11 +85,6 @@ function createToolsForStoredSession(sessionKey: string) {
     },
   });
 }
-
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-  vi.unstubAllEnvs();
-});
 
 function expectNoSubagentControlTools(tools: ReturnType<typeof createOpenClawCodingTools>) {
   const names = new Set(tools.map((tool) => tool.name));
@@ -142,52 +141,6 @@ function expectListIncludes(
   for (const value of expected) {
     expect(list.includes(value)).toBe(true);
   }
-}
-
-function createMemoryVirtualFs(): VirtualAgentFs {
-  const files = new Map<string, Buffer>();
-  const normalize = (filePath: string) => (filePath.startsWith("/") ? filePath : `/${filePath}`);
-  const entry = (filePath: string, kind: "directory" | "file", size = 0): VirtualAgentFsEntry => ({
-    path: normalize(filePath),
-    kind,
-    size,
-    metadata: {},
-    updatedAt: 1,
-  });
-  return {
-    stat: (filePath) => {
-      const normalized = normalize(filePath);
-      const file = files.get(normalized);
-      if (file) {
-        return entry(normalized, "file", file.byteLength);
-      }
-      return null;
-    },
-    readFile: (filePath) => {
-      const file = files.get(normalize(filePath));
-      if (!file) {
-        throw new Error(`missing ${filePath}`);
-      }
-      return file;
-    },
-    writeFile: (filePath, content) => {
-      files.set(normalize(filePath), Buffer.isBuffer(content) ? content : Buffer.from(content));
-    },
-    mkdir: () => {},
-    readdir: () => [],
-    list: () => [],
-    export: () => [],
-    remove: (filePath) => {
-      files.delete(normalize(filePath));
-    },
-    rename: (fromPath, toPath) => {
-      const file = files.get(normalize(fromPath));
-      if (file) {
-        files.set(normalize(toPath), file);
-        files.delete(normalize(fromPath));
-      }
-    },
-  };
 }
 
 describe("createOpenClawCodingTools", () => {
@@ -433,152 +386,6 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("message")).toBe(false);
   });
 
-  it("uses VFS-backed read/write/edit tools when runtime filesystem has no workspace capability", async () => {
-    vi.stubEnv("OPENCLAW_UNSAFE_VFS_EXEC", "0");
-    const scratch = createMemoryVirtualFs();
-    const tools = createOpenClawCodingTools({
-      workspaceDir: "/tmp/workspace",
-      agentFilesystem: { scratch },
-      toolConstructionPlan: {
-        includeBaseCodingTools: true,
-        includeShellTools: true,
-        includeChannelTools: false,
-        includeOpenClawTools: false,
-        includePluginTools: false,
-      },
-    });
-    const names = new Set(tools.map((tool) => tool.name));
-
-    expect(names.has("read")).toBe(true);
-    expect(names.has("write")).toBe(true);
-    expect(names.has("edit")).toBe(true);
-    expect(names.has("apply_patch")).toBe(false);
-    expect(names.has("exec")).toBe(true);
-    expect(names.has("process")).toBe(false);
-
-    await tools
-      .find((tool) => tool.name === "write")
-      ?.execute("call-write", {
-        path: "notes/a.txt",
-        content: "hello vfs",
-      });
-    expect(scratch.readFile("/notes/a.txt").toString("utf8")).toBe("hello vfs");
-
-    const readResult = await tools
-      .find((tool) => tool.name === "read")
-      ?.execute("call-read", {
-        path: "notes/a.txt",
-      });
-    expect(JSON.stringify(readResult)).toContain("hello vfs");
-
-    await tools
-      .find((tool) => tool.name === "edit")
-      ?.execute("call-edit", {
-        path: "notes/a.txt",
-        edits: [{ oldText: "hello vfs", newText: "edited vfs" }],
-      });
-    expect(scratch.readFile("/notes/a.txt").toString("utf8")).toBe("edited vfs");
-  });
-
-  it("overlays SQLite scratch attachments on disk-backed workspaces without writing attachment files", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tools-overlay-"));
-    const scratch = createMemoryVirtualFs();
-    scratch.writeFile("/.openclaw/attachments/seed/file.txt", "hello attachment");
-    await fs.writeFile(path.join(workspaceDir, "host.txt"), "hello host", "utf8");
-    try {
-      const tools = createOpenClawCodingTools({
-        workspaceDir,
-        agentFilesystem: { scratch, workspace: { root: workspaceDir } },
-        toolConstructionPlan: {
-          includeBaseCodingTools: true,
-          includeShellTools: true,
-          includeChannelTools: false,
-          includeOpenClawTools: false,
-          includePluginTools: false,
-        },
-      });
-
-      const readAttachmentResult = await tools
-        .find((tool) => tool.name === "read")
-        ?.execute("call-read-attachment", {
-          path: ".openclaw/attachments/seed/file.txt",
-        });
-      expect(JSON.stringify(readAttachmentResult)).toContain("hello attachment");
-
-      const readHostResult = await tools
-        .find((tool) => tool.name === "read")
-        ?.execute("call-read-host", {
-          path: "host.txt",
-        });
-      expect(JSON.stringify(readHostResult)).toContain("hello host");
-
-      await tools
-        .find((tool) => tool.name === "edit")
-        ?.execute("call-edit-attachment", {
-          path: ".openclaw/attachments/seed/file.txt",
-          edits: [{ oldText: "hello attachment", newText: "edited attachment" }],
-        });
-      expect(scratch.readFile("/.openclaw/attachments/seed/file.txt").toString("utf8")).toBe(
-        "edited attachment",
-      );
-      await expect(
-        fs.access(path.join(workspaceDir, ".openclaw", "attachments", "seed", "file.txt")),
-      ).rejects.toMatchObject({ code: "ENOENT" });
-    } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
-    }
-  });
-
-  it("uses VFS-backed apply_patch when runtime filesystem has no workspace capability", async () => {
-    vi.stubEnv("OPENCLAW_UNSAFE_VFS_EXEC", "0");
-    const scratch = createMemoryVirtualFs();
-    scratch.writeFile("/notes/a.txt", "hello vfs\n");
-    const tools = createOpenClawCodingTools({
-      workspaceDir: "/tmp/workspace",
-      agentFilesystem: { scratch },
-      modelProvider: "openai",
-      modelId: "gpt-5.4",
-      toolConstructionPlan: {
-        includeBaseCodingTools: true,
-        includeShellTools: true,
-        includeChannelTools: false,
-        includeOpenClawTools: false,
-        includePluginTools: false,
-      },
-    });
-    const names = new Set(tools.map((tool) => tool.name));
-
-    expect(names.has("apply_patch")).toBe(true);
-    expect(names.has("exec")).toBe(true);
-    expect(names.has("process")).toBe(false);
-
-    await tools
-      .find((tool) => tool.name === "apply_patch")
-      ?.execute("call-patch", {
-        input: [
-          "*** Begin Patch",
-          "*** Update File: notes/a.txt",
-          "@@",
-          "-hello vfs",
-          "+patched vfs",
-          "*** End Patch",
-        ].join("\n"),
-      });
-    expect(scratch.readFile("/notes/a.txt").toString("utf8")).toBe("patched vfs\n");
-
-    await tools
-      .find((tool) => tool.name === "apply_patch")
-      ?.execute("call-patch-add", {
-        input: [
-          "*** Begin Patch",
-          "*** Add File: notes/b.txt",
-          "+created in vfs",
-          "*** End Patch",
-        ].join("\n"),
-      });
-    expect(scratch.readFile("/notes/b.txt").toString("utf8")).toBe("created in vfs\n");
-  });
-
   it("passes plugin suppression into OpenClaw tool construction plans", () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();
@@ -682,7 +489,11 @@ describe("createOpenClawCodingTools", () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();
     const agentId = `inherited-allow-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    await writeSessionRows(agentId, {
+    const storeTemplate = path.join(
+      os.tmpdir(),
+      `openclaw-session-store-${agentId}-{agentId}.json`,
+    );
+    await writeSessionStore(storeTemplate, agentId, {
       [`agent:${agentId}:subagent:limited`]: {
         sessionId: "limited-session",
         updatedAt: Date.now(),
@@ -695,7 +506,11 @@ describe("createOpenClawCodingTools", () => {
 
     createOpenClawCodingTools({
       sessionKey: `agent:${agentId}:subagent:limited`,
-      config: {},
+      config: {
+        session: {
+          store: storeTemplate,
+        },
+      },
     });
 
     expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
@@ -899,8 +714,8 @@ describe("createOpenClawCodingTools", () => {
   it("uses stored spawnDepth to apply leaf tool policy for flat depth-2 session keys", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-depth-policy-"));
     try {
-      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(tmpDir, ".openclaw"));
-      await writeSessionRows("main", {
+      const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
+      await writeSessionStore(storeTemplate, "main", {
         "agent:main:subagent:flat": {
           sessionId: "session-flat-depth-2",
           updatedAt: Date.now(),
@@ -908,7 +723,7 @@ describe("createOpenClawCodingTools", () => {
         },
       });
 
-      const tools = createToolsForStoredSession("agent:main:subagent:flat");
+      const tools = createToolsForStoredSession(storeTemplate, "agent:main:subagent:flat");
       expectNoSubagentControlTools(tools);
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
@@ -918,8 +733,8 @@ describe("createOpenClawCodingTools", () => {
   it("applies subagent tool policy to ACP children spawned under a subagent envelope", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acp-subagent-policy-"));
     try {
-      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(tmpDir, ".openclaw"));
-      await writeSessionRows("main", {
+      const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
+      await writeSessionStore(storeTemplate, "main", {
         "agent:main:acp:child": {
           sessionId: "session-acp-child",
           updatedAt: Date.now(),
@@ -939,7 +754,7 @@ describe("createOpenClawCodingTools", () => {
           spawnedBy: "agent:main:subagent:parent",
         },
       });
-      await writeSessionRows("writer", {
+      await writeSessionStore(storeTemplate, "writer", {
         "agent:writer:acp:child": {
           sessionId: "session-acp-cross-agent-child",
           updatedAt: Date.now(),
@@ -947,15 +762,18 @@ describe("createOpenClawCodingTools", () => {
         },
       });
 
-      const persistedEnvelopeTools = createToolsForStoredSession("agent:main:acp:child");
+      const persistedEnvelopeTools = createToolsForStoredSession(
+        storeTemplate,
+        "agent:main:acp:child",
+      );
       expectNoSubagentControlTools(persistedEnvelopeTools);
 
-      const restrictedTools = createToolsForStoredSession("agent:main:acp:plain");
+      const restrictedTools = createToolsForStoredSession(storeTemplate, "agent:main:acp:plain");
       const restrictedNames = new Set(restrictedTools.map((tool) => tool.name));
       expect(restrictedNames.has("sessions_spawn")).toBe(true);
       expect(restrictedNames.has("subagents")).toBe(true);
 
-      const ancestryTools = createToolsForStoredSession("agent:writer:acp:child");
+      const ancestryTools = createToolsForStoredSession(storeTemplate, "agent:writer:acp:child");
       expectNoSubagentControlTools(ancestryTools);
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
@@ -965,15 +783,15 @@ describe("createOpenClawCodingTools", () => {
   it("applies leaf tool policy for cross-agent subagent sessions when spawnDepth is missing", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cross-agent-subagent-"));
     try {
-      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(tmpDir, ".openclaw"));
-      await writeSessionRows("main", {
+      const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
+      await writeSessionStore(storeTemplate, "main", {
         "agent:main:subagent:parent": {
           sessionId: "session-main-parent",
           updatedAt: Date.now(),
           spawnedBy: "agent:main:main",
         },
       });
-      await writeSessionRows("writer", {
+      await writeSessionStore(storeTemplate, "writer", {
         "agent:writer:subagent:child": {
           sessionId: "session-writer-child",
           updatedAt: Date.now(),
@@ -981,7 +799,7 @@ describe("createOpenClawCodingTools", () => {
         },
       });
 
-      const tools = createToolsForStoredSession("agent:writer:subagent:child");
+      const tools = createToolsForStoredSession(storeTemplate, "agent:writer:subagent:child");
       expectNoSubagentControlTools(tools);
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
@@ -1290,13 +1108,7 @@ describe("createOpenClawCodingTools", () => {
         path: textPath,
       });
 
-      expect(textResult?.content?.some((block) => block.type === "image")).toBe(false);
-      const textBlocks = textResult?.content?.filter((block) => block.type === "text") as
-        | Array<{ text?: string }>
-        | undefined;
-      expect(textBlocks?.length ?? 0).toBeGreaterThan(0);
-      const combinedText = textBlocks?.map((block) => block.text ?? "").join("\n");
-      expect(combinedText).toContain(contents);
+      expect(textResult?.content).toEqual([{ type: "text", text: contents }]);
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }

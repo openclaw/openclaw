@@ -359,9 +359,9 @@ export async function loadCompactHooksHarness(): Promise<{
     };
   });
 
-  vi.doMock("../pi-ai-oauth-contract.js", async () => {
-    const actual = await vi.importActual<typeof import("../pi-ai-oauth-contract.js")>(
-      "../pi-ai-oauth-contract.js",
+  vi.doMock("@earendil-works/pi-ai/oauth", async () => {
+    const actual = await vi.importActual<typeof import("@earendil-works/pi-ai/oauth")>(
+      "@earendil-works/pi-ai/oauth",
     );
     return {
       ...actual,
@@ -370,7 +370,7 @@ export async function loadCompactHooksHarness(): Promise<{
     };
   });
 
-  vi.doMock("../pi-coding-agent-contract.js", () => ({
+  vi.doMock("@earendil-works/pi-coding-agent", () => ({
     AuthStorage: function AuthStorage() {},
     ModelRegistry: function ModelRegistry() {},
     createAgentSession: vi.fn(async () => {
@@ -429,7 +429,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../models-config.js", () => ({
-    ensureOpenClawModelCatalog: vi.fn(async () => {}),
+    ensureOpenClawModelsJson: vi.fn(async () => {}),
   }));
 
   vi.doMock("../model-auth.js", () => ({
@@ -444,8 +444,14 @@ export async function loadCompactHooksHarness(): Promise<{
     resolveSandboxContext: resolveSandboxContextMock,
   }));
 
-  vi.doMock("../transcript-state-repair.js", () => ({
-    repairTranscriptSessionStateIfNeeded: vi.fn(async () => {}),
+  vi.doMock("../session-file-repair.js", () => ({
+    repairSessionFileIfNeeded: vi.fn(async () => {}),
+  }));
+
+  vi.doMock("../session-write-lock.js", () => ({
+    acquireSessionWriteLock: vi.fn(async () => ({ release: vi.fn(async () => {}) })),
+    resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 0),
+    resolveSessionWriteLockAcquireTimeoutMs: vi.fn(() => 60_000),
   }));
 
   vi.doMock("../../context-engine/init.js", () => ({
@@ -616,7 +622,6 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("./history.js", () => ({
     getHistoryLimitFromSessionKey: vi.fn(() => undefined),
-    getHistoryLimitForSessionRouting: vi.fn(() => undefined),
     limitHistoryTurns: vi.fn((msgs: unknown[]) => msgs.slice(0, 2)),
   }));
 
@@ -718,6 +723,11 @@ export async function loadCompactHooksHarness(): Promise<{
       async (provider: string, modelId: string, agentDir?: string, cfg?: unknown) =>
         resolveModelMock(provider, modelId, agentDir, cfg),
     ),
+  }));
+
+  vi.doMock("./session-manager-cache.js", () => ({
+    prewarmSessionFile: vi.fn(async () => {}),
+    trackSessionManagerAccess: vi.fn(),
   }));
 
   vi.doMock("./system-prompt.js", () => ({

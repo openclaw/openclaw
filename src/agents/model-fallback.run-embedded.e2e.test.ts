@@ -1,16 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import type { AuthProfileFailureReason } from "./auth-profiles.js";
-import { savePersistedAuthProfileSecretsStore } from "./auth-profiles/persisted.js";
-import {
-  loadPersistedAuthProfileState,
-  savePersistedAuthProfileState,
-} from "./auth-profiles/state.js";
-import type { AuthProfileSecretsStore } from "./auth-profiles/types.js";
 import { runWithModelFallback } from "./model-fallback.js";
 import { classifyEmbeddedPiRunResultForModelFallback } from "./pi-embedded-runner/result-fallback-classifier.js";
 import type { EmbeddedRunAttemptResult } from "./pi-embedded-runner/run/types.js";
@@ -40,7 +33,7 @@ vi.mock("./models-config.js", async () => {
   const mod = await vi.importActual<typeof import("./models-config.js")>("./models-config.js");
   return {
     ...mod,
-    ensureOpenClawModelCatalog: vi.fn(async () => ({ wrote: false })),
+    ensureOpenClawModelsJson: vi.fn(async () => ({ wrote: false })),
   };
 });
 
@@ -73,18 +66,10 @@ beforeEach(() => {
   sleepWithAbortMock.mockClear();
 });
 
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-});
-
 const OVERLOADED_ERROR_PAYLOAD =
   '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}';
 const RATE_LIMIT_ERROR_MESSAGE = "rate limit exceeded";
 const NO_ENDPOINTS_FOUND_ERROR_MESSAGE = "404 No endpoints found for deepseek/deepseek-r1:free.";
-
-function createTestSessionId(raw: string): string {
-  return raw.replace(/[^a-z0-9._-]/gi, "-").slice(0, 128);
-}
 
 type EmbeddedAttemptParams = {
   provider: string;
@@ -147,22 +132,12 @@ async function withAgentWorkspace<T>(
 ): Promise<T> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-model-fallback-"));
   const agentDir = path.join(root, "agent");
-  const stateDir = path.join(root, "state");
   const workspaceDir = path.join(root, "workspace");
-  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
   await fs.mkdir(agentDir, { recursive: true });
-  await fs.mkdir(stateDir, { recursive: true });
   await fs.mkdir(workspaceDir, { recursive: true });
-  process.env.OPENCLAW_STATE_DIR = stateDir;
   try {
     return await fn({ agentDir, workspaceDir });
   } finally {
-    closeOpenClawStateDatabaseForTest();
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
     await fs.rm(root, { recursive: true, force: true });
   }
 }
@@ -180,34 +155,33 @@ async function writeAuthStore(
     }
   >,
 ) {
-  savePersistedAuthProfileSecretsStore(
-    {
+  await fs.writeFile(
+    path.join(agentDir, "auth-profiles.json"),
+    JSON.stringify({
       version: 1,
       profiles: {
         "openai:p1": { type: "api_key", provider: "openai", key: "sk-openai" },
         "groq:p1": { type: "api_key", provider: "groq", key: "sk-groq" },
       },
-    } as AuthProfileSecretsStore,
-    agentDir,
+    }),
   );
-  savePersistedAuthProfileState(
-    {
+  await fs.writeFile(
+    path.join(agentDir, "auth-state.json"),
+    JSON.stringify({
+      version: 1,
       usageStats:
         usageStats ??
         ({
           "openai:p1": { lastUsed: 1 },
           "groq:p1": { lastUsed: 2 },
         } as const),
-    },
-    agentDir,
+    }),
   );
 }
 
 async function readUsageStats(agentDir: string) {
-  return (loadPersistedAuthProfileState(agentDir).usageStats ?? {}) as Record<
-    string,
-    Record<string, unknown> | undefined
-  >;
+  const raw = await fs.readFile(path.join(agentDir, "auth-state.json"), "utf-8");
+  return JSON.parse(raw).usageStats as Record<string, Record<string, unknown> | undefined>;
 }
 
 function expectFailureCount(
@@ -221,8 +195,9 @@ function expectFailureCount(
 }
 
 async function writeMultiProfileAuthStore(agentDir: string) {
-  savePersistedAuthProfileSecretsStore(
-    {
+  await fs.writeFile(
+    path.join(agentDir, "auth-profiles.json"),
+    JSON.stringify({
       version: 1,
       profiles: {
         "openai:p1": { type: "api_key", provider: "openai", key: "sk-openai-1" },
@@ -230,19 +205,19 @@ async function writeMultiProfileAuthStore(agentDir: string) {
         "openai:p3": { type: "api_key", provider: "openai", key: "sk-openai-3" },
         "groq:p1": { type: "api_key", provider: "groq", key: "sk-groq" },
       },
-    } as AuthProfileSecretsStore,
-    agentDir,
+    }),
   );
-  savePersistedAuthProfileState(
-    {
+  await fs.writeFile(
+    path.join(agentDir, "auth-state.json"),
+    JSON.stringify({
+      version: 1,
       usageStats: {
         "openai:p1": { lastUsed: 1 },
         "openai:p2": { lastUsed: 2 },
         "openai:p3": { lastUsed: 3 },
         "groq:p1": { lastUsed: 4 },
       },
-    },
-    agentDir,
+    }),
   );
 }
 
@@ -255,7 +230,6 @@ async function runEmbeddedFallback(params: {
   config?: OpenClawConfig;
 }) {
   const cfg = params.config ?? makeConfig();
-  const sessionId = createTestSessionId(`session-${params.runId}`);
   return await runWithModelFallback({
     cfg,
     provider: "openai",
@@ -264,8 +238,9 @@ async function runEmbeddedFallback(params: {
     agentDir: params.agentDir,
     run: (provider, model, options) =>
       runEmbeddedPiAgent({
-        sessionId,
+        sessionId: `session:${params.runId}`,
         sessionKey: params.sessionKey,
+        sessionFile: path.join(params.workspaceDir, `${params.runId}.jsonl`),
         workspaceDir: params.workspaceDir,
         agentDir: params.agentDir,
         config: cfg,
@@ -413,8 +388,9 @@ describe("runWithModelFallback + runEmbeddedPiAgent failover behavior", () => {
       );
 
       const result = await runEmbeddedPiAgent({
-        sessionId: "tool-side-effect-terminal",
+        sessionId: "session:tool-side-effect-terminal",
         sessionKey: "agent:test:tool-side-effect-terminal",
+        sessionFile: path.join(workspaceDir, "tool-side-effect-terminal.jsonl"),
         workspaceDir,
         agentDir,
         config: makeConfig(),
@@ -514,6 +490,10 @@ describe("runWithModelFallback + runEmbeddedPiAgent failover behavior", () => {
       {
         name: "undici-terminated",
         message: "terminated",
+      },
+      {
+        name: "stream-read-error",
+        message: "stream_read_error",
       },
       {
         name: "codex-empty-transport-response",

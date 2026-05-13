@@ -3,16 +3,12 @@ import { createServer, type Server as HttpServer } from "node:http";
 import http2 from "node:http2";
 import net from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withTempDir } from "../test-utils/temp-dir.js";
 import { startProxy, stopProxy, type ProxyHandle } from "./net/proxy/proxy-lifecycle.js";
 import {
-  loadApnsRegistration,
-  registerApnsToken,
   sendApnsAlert,
   sendApnsBackgroundWake,
   sendApnsExecApprovalAlert,
   sendApnsExecApprovalResolvedWake,
-  writeApnsRegistrationStateSnapshot,
 } from "./push-apns.js";
 
 const testAuthPrivateKey = generateKeyPairSync("ec", {
@@ -278,43 +274,6 @@ async function startConnectProxy(upstreamPort: number): Promise<{
 
 afterEach(async () => {
   vi.unstubAllGlobals();
-});
-
-describe("APNs registration storage", () => {
-  it("prunes stale snapshot registrations while retaining current rows", async () => {
-    await withTempDir("openclaw-apns-registration-", async (baseDir) => {
-      const retained = await registerApnsToken({
-        nodeId: "ios-node-retained",
-        token: "ABCD1234ABCD1234ABCD1234ABCD1234",
-        topic: "ai.openclaw.ios",
-        baseDir,
-      });
-      await registerApnsToken({
-        nodeId: "ios-node-stale",
-        token: "EEEE1234EEEE1234EEEE1234EEEE1234",
-        topic: "ai.openclaw.ios",
-        baseDir,
-      });
-
-      await writeApnsRegistrationStateSnapshot(
-        {
-          registrationsByNodeId: {
-            [retained.nodeId]: {
-              ...retained,
-              token: "FFFF1234FFFF1234FFFF1234FFFF1234",
-            },
-          },
-        },
-        baseDir,
-      );
-
-      await expect(loadApnsRegistration("ios-node-stale", baseDir)).resolves.toBeNull();
-      await expect(loadApnsRegistration(retained.nodeId, baseDir)).resolves.toMatchObject({
-        nodeId: retained.nodeId,
-        token: "ffff1234ffff1234ffff1234ffff1234",
-      });
-    });
-  });
 });
 
 describe("push APNs send semantics", () => {

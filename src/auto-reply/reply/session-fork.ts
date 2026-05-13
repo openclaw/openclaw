@@ -39,12 +39,12 @@ function formatParentForkTooLargeMessage(params: {
 
 export async function resolveParentForkDecision(params: {
   parentEntry: SessionEntry;
-  agentId: string;
+  storePath: string;
 }): Promise<ParentForkDecision> {
   const maxTokens = DEFAULT_PARENT_FORK_MAX_TOKENS;
   const parentTokens = await resolveParentForkTokenCount({
     parentEntry: params.parentEntry,
-    agentId: params.agentId,
+    storePath: params.storePath,
   });
   if (typeof parentTokens === "number" && parentTokens > maxTokens) {
     return {
@@ -65,14 +65,15 @@ export async function resolveParentForkDecision(params: {
 export async function forkSessionFromParent(params: {
   parentEntry: SessionEntry;
   agentId: string;
-}): Promise<{ sessionId: string } | null> {
+  sessionsDir: string;
+}): Promise<{ sessionId: string; sessionFile: string } | null> {
   const runtime = await loadSessionForkRuntime();
   return runtime.forkSessionFromParentRuntime(params);
 }
 
 async function resolveParentForkTokenCount(params: {
   parentEntry: SessionEntry;
-  agentId: string;
+  storePath: string;
 }): Promise<number | undefined> {
   const runtime = await loadSessionForkRuntime();
   return runtime.resolveParentForkTokenCountRuntime(params);

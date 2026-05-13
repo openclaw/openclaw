@@ -46,5 +46,6 @@ let modelCatalogReloadKey = "openclaw.modelCatalogReload"
 let cliInstallPromptedVersionKey = "openclaw.cliInstallPromptedVersion"
 let heartbeatsEnabledKey = "openclaw.heartbeatsEnabled"
 let debugPaneEnabledKey = "openclaw.debugPaneEnabled"
+let debugFileLogEnabledKey = "openclaw.debug.fileLogEnabled"
 let appLogLevelKey = "openclaw.debug.appLogLevel"
 let voiceWakeSupported: Bool = ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26

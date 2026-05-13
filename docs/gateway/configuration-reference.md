@@ -238,7 +238,7 @@ conversation bindings, or any non-Codex harness.
         config: {
           codexPlugins: {
             enabled: true,
-            allow_destructive_actions: false,
+            allow_destructive_actions: true,
             plugins: {
               "google-calendar": {
                 enabled: true,
@@ -259,7 +259,7 @@ conversation bindings, or any non-Codex harness.
   plugin/app support for the Codex harness. Default: `false`.
 - `plugins.entries.codex.config.codexPlugins.allow_destructive_actions`:
   default destructive-action policy for migrated plugin app elicitations.
-  Default: `false`.
+  Default: `true`.
 - `plugins.entries.codex.config.codexPlugins.plugins.<key>.enabled`: enables a
   migrated plugin entry when global `codexPlugins.enabled` is also true.
   Default: `true` for explicit entries.
@@ -875,7 +875,7 @@ Validation:
 
 - Canonical matrix: [SecretRef Credential Surface](/reference/secretref-credential-surface)
 - `secrets apply` targets supported `openclaw.json` credential paths.
-- SQLite auth-profile refs are included in runtime resolution and audit coverage.
+- `auth-profiles.json` refs are included in runtime resolution and audit coverage.
 
 ### Secret providers config
 
@@ -936,9 +936,9 @@ Notes:
 }
 ```
 
-- Per-agent profiles are stored in `state/openclaw.sqlite#table/auth_profile_stores/<agentDir>`.
-- SQLite auth-profile rows support value-level refs (`keyRef` for `api_key`, `tokenRef` for `token`) for static credential modes.
-- Legacy flat `auth-profiles.json` maps such as `{ "provider": { "apiKey": "..." } }` are not a runtime format; `openclaw doctor --fix` imports them as canonical `provider:default` API-key profiles.
+- Per-agent profiles are stored at `<agentDir>/auth-profiles.json`.
+- `auth-profiles.json` supports value-level refs (`keyRef` for `api_key`, `tokenRef` for `token`) for static credential modes.
+- Legacy flat `auth-profiles.json` maps such as `{ "provider": { "apiKey": "..." } }` are not a runtime format; `openclaw doctor --fix` rewrites them to canonical `provider:default` API-key profiles with a `.legacy-flat.*.bak` backup.
 - OAuth-mode profiles (`auth.profiles.<id>.mode = "oauth"`) do not support SecretRef-backed auth-profile credentials.
 - Static runtime credentials come from in-memory resolved snapshots; legacy static `auth.json` entries are scrubbed when discovered.
 - Legacy OAuth imports from `~/.openclaw/credentials/oauth.json`.
@@ -1042,6 +1042,7 @@ Notes:
 
     cacheTrace: {
       enabled: false,
+      filePath: "~/.openclaw/logs/cache-trace.jsonl",
       includeMessages: true,
       includePrompt: true,
       includeSystem: true,
@@ -1067,7 +1068,8 @@ Notes:
 - `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`: environment toggle for latest experimental GenAI span provider attributes. By default spans keep the legacy `gen_ai.system` attribute for compatibility; GenAI metrics use bounded semantic attributes.
 - `OPENCLAW_OTEL_PRELOADED=1`: environment toggle for hosts that already registered a global OpenTelemetry SDK. OpenClaw then skips plugin-owned SDK startup/shutdown while keeping diagnostic listeners active.
 - `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, `OTEL_EXPORTER_OTLP_METRICS_ENDPOINT`, and `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT`: signal-specific endpoint env vars used when the matching config key is unset.
-- `cacheTrace.enabled`: store cache trace snapshots for embedded runs in the SQLite state database (default: `false`).
+- `cacheTrace.enabled`: log cache trace snapshots for embedded runs (default: `false`).
+- `cacheTrace.filePath`: output path for cache trace JSONL (default: `$OPENCLAW_STATE_DIR/logs/cache-trace.jsonl`).
 - `cacheTrace.includeMessages` / `includePrompt` / `includeSystem`: control what is included in cache trace output (all default: `true`).
 
 ---
@@ -1223,7 +1225,9 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
   cron: {
     enabled: true,
     maxConcurrentRuns: 2, // cron dispatch + isolated cron agent-turn execution
+    webhook: "https://example.invalid/legacy", // deprecated fallback for stored notify:true jobs
     webhookToken: "replace-with-dedicated-token", // optional bearer token for outbound webhook auth
+    sessionRetention: "24h", // duration string or false
     runLog: {
       maxBytes: "2mb", // default 2_000_000 bytes
       keepLines: 2000, // default 2000
@@ -1232,10 +1236,11 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
 }
 ```
 
-- `runLog.maxBytes`: approximate max serialized SQLite run-log bytes per job before pruning. Default: `2_000_000` bytes.
-- `runLog.keepLines`: newest rows retained when run-log pruning is triggered. Default: `2000`.
+- `sessionRetention`: how long to keep completed isolated cron run sessions before pruning from `sessions.json`. Also controls cleanup of archived deleted cron transcripts. Default: `24h`; set `false` to disable.
+- `runLog.maxBytes`: max size per run log file (`cron/runs/<jobId>.jsonl`) before pruning. Default: `2_000_000` bytes.
+- `runLog.keepLines`: newest lines retained when run-log pruning is triggered. Default: `2000`.
 - `webhookToken`: bearer token used for cron webhook POST delivery (`delivery.mode = "webhook"`), if omitted no auth header is sent.
-- `webhook`: deprecated legacy migration fallback URL (http/https). Runtime does not read it; doctor can use it to translate legacy `notify: true` cron jobs into per-job `delivery.mode = "webhook"` plus `delivery.to`.
+- `webhook`: deprecated legacy fallback webhook URL (http/https) used only for stored jobs that still have `notify: true`.
 
 ### `cron.retry`
 

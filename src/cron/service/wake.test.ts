@@ -55,7 +55,11 @@ describe("wake (cron timer)", () => {
     });
   });
 
-  it("threads sessionKey to enqueue only on mode=next-heartbeat", () => {
+  it("threads sessionKey to enqueue and fires a targeted immediate wake on mode=next-heartbeat", () => {
+    // next-heartbeat + sessionKey collapses to immediate-targeted behavior:
+    // the regularly-scheduled heartbeat fires for agent-main and never peeks
+    // a non-main session queue, and an "event"-intent wake is not retried by
+    // the heartbeat runner. Targeted immediate is the only reliable path.
     const { state, enqueueSystemEvent, requestHeartbeat } = createState();
     expect(
       wake(state, {
@@ -67,6 +71,18 @@ describe("wake (cron timer)", () => {
     expect(enqueueSystemEvent).toHaveBeenCalledWith("ping", {
       sessionKey: "agent:main:slack:42",
     });
+    expect(requestHeartbeat).toHaveBeenCalledWith({
+      source: "manual",
+      intent: "immediate",
+      reason: "wake",
+      sessionKey: "agent:main:slack:42",
+    });
+  });
+
+  it("does not fire a wake on mode=next-heartbeat when no sessionKey is supplied", () => {
+    const { state, enqueueSystemEvent, requestHeartbeat } = createState();
+    expect(wake(state, { mode: "next-heartbeat", text: "ping" })).toEqual({ ok: true });
+    expect(enqueueSystemEvent).toHaveBeenCalledWith("ping", undefined);
     expect(requestHeartbeat).not.toHaveBeenCalled();
   });
 

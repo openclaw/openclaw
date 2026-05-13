@@ -1,5 +1,6 @@
-import { createHash } from "node:crypto";
-import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import os from "node:os";
+import path from "node:path";
+import { createPersistentDedupe } from "./dedup-runtime-api.js";
 import {
   releaseFeishuMessageProcessing,
   tryBeginFeishuMessageProcessing,
@@ -8,72 +9,34 @@ import {
 // Persistent TTL: 24 hours — survives restarts & WebSocket reconnects.
 const DEDUP_TTL_MS = 24 * 60 * 60 * 1000;
 const MEMORY_MAX_SIZE = 1_000;
-const STORE_MAX_ENTRIES = 50_000;
-const FEISHU_DEDUP_STORE = createPluginStateSyncKeyedStore<{
-  namespace: string;
-  messageId: string;
-  seenAt: number;
-}>("feishu", {
-  namespace: "dedup",
-  maxEntries: STORE_MAX_ENTRIES,
-  defaultTtlMs: DEDUP_TTL_MS,
+const FILE_MAX_ENTRIES = 10_000;
+
+function resolveStateDirFromEnv(env: NodeJS.ProcessEnv = process.env): string {
+  const stateOverride = env.OPENCLAW_STATE_DIR?.trim();
+  if (stateOverride) {
+    return stateOverride;
+  }
+  if (env.VITEST || env.NODE_ENV === "test") {
+    return path.join(os.tmpdir(), ["openclaw-vitest", String(process.pid)].join("-"));
+  }
+  return path.join(os.homedir(), ".openclaw");
+}
+
+function resolveNamespaceFilePath(namespace: string): string {
+  const safe = namespace.replace(/[^a-zA-Z0-9_-]/g, "_");
+  return path.join(resolveStateDirFromEnv(), "feishu", "dedup", `${safe}.json`);
+}
+
+const persistentDedupe = createPersistentDedupe({
+  ttlMs: DEDUP_TTL_MS,
+  memoryMaxSize: MEMORY_MAX_SIZE,
+  fileMaxEntries: FILE_MAX_ENTRIES,
+  resolveFilePath: resolveNamespaceFilePath,
 });
-const memory = new Map<string, number>();
 
 function normalizeMessageId(messageId: string | undefined | null): string | null {
   const trimmed = messageId?.trim();
   return trimmed ? trimmed : null;
-}
-
-function normalizeNamespace(namespace?: string): string {
-  return namespace?.trim() || "global";
-}
-
-function dedupeStoreKey(namespace: string, messageId: string): string {
-  return createHash("sha256")
-    .update(`${namespace}\0${messageId}`, "utf8")
-    .digest("hex")
-    .slice(0, 32);
-}
-
-function memoryKey(namespace: string, messageId: string): string {
-  return `${namespace}\0${messageId}`;
-}
-
-function isRecent(seenAt: number | undefined, now = Date.now()): boolean {
-  return typeof seenAt === "number" && Number.isFinite(seenAt) && now - seenAt < DEDUP_TTL_MS;
-}
-
-function pruneMemory(now = Date.now()): void {
-  for (const [key, seenAt] of memory) {
-    if (!isRecent(seenAt, now)) {
-      memory.delete(key);
-    }
-  }
-  if (memory.size <= MEMORY_MAX_SIZE) {
-    return;
-  }
-  const toRemove = Array.from(memory.entries())
-    .toSorted(([, left], [, right]) => left - right)
-    .slice(0, memory.size - MEMORY_MAX_SIZE);
-  for (const [key] of toRemove) {
-    memory.delete(key);
-  }
-}
-
-function remember(namespace: string, messageId: string, seenAt = Date.now()): void {
-  memory.set(memoryKey(namespace, messageId), seenAt);
-  pruneMemory(seenAt);
-}
-
-function hasMemory(namespace: string, messageId: string, now = Date.now()): boolean {
-  const key = memoryKey(namespace, messageId);
-  const seenAt = memory.get(key);
-  if (isRecent(seenAt, now)) {
-    return true;
-  }
-  memory.delete(key);
-  return false;
 }
 
 export { releaseFeishuMessageProcessing, tryBeginFeishuMessageProcessing };
@@ -147,56 +110,12 @@ export async function tryRecordMessagePersistent(
   namespace = "global",
   log?: (...args: unknown[]) => void,
 ): Promise<boolean> {
-  const normalizedNamespace = normalizeNamespace(namespace);
-  const normalizedMessageId = normalizeMessageId(messageId);
-  if (!normalizedMessageId) {
-    return true;
-  }
-  const now = Date.now();
-  if (hasMemory(normalizedNamespace, normalizedMessageId, now)) {
-    return false;
-  }
-  const key = dedupeStoreKey(normalizedNamespace, normalizedMessageId);
-  try {
-    const existing = FEISHU_DEDUP_STORE.lookup(key);
-    const existingSeenAt = existing?.seenAt;
-    if (isRecent(existingSeenAt, now)) {
-      remember(normalizedNamespace, normalizedMessageId, existingSeenAt);
-      return false;
-    }
-    const recorded = FEISHU_DEDUP_STORE.registerIfAbsent(
-      key,
-      {
-        namespace: normalizedNamespace,
-        messageId: normalizedMessageId,
-        seenAt: now,
-      },
-      { ttlMs: DEDUP_TTL_MS },
-    );
-    if (!recorded) {
-      const current = FEISHU_DEDUP_STORE.lookup(key);
-      const currentSeenAt = current?.seenAt;
-      if (isRecent(currentSeenAt, now)) {
-        remember(normalizedNamespace, normalizedMessageId, currentSeenAt);
-        return false;
-      }
-      FEISHU_DEDUP_STORE.register(
-        key,
-        {
-          namespace: normalizedNamespace,
-          messageId: normalizedMessageId,
-          seenAt: now,
-        },
-        { ttlMs: DEDUP_TTL_MS },
-      );
-    }
-    remember(normalizedNamespace, normalizedMessageId, now);
-    return true;
-  } catch (error) {
-    log?.(`feishu-dedup: persistent state error, falling back to memory: ${String(error)}`);
-    remember(normalizedNamespace, normalizedMessageId, now);
-    return true;
-  }
+  return persistentDedupe.checkAndRecord(messageId, {
+    namespace,
+    onDiskError: (error) => {
+      log?.(`feishu-dedup: disk error, falling back to memory: ${String(error)}`);
+    },
+  });
 }
 
 async function hasRecordedMessagePersistent(
@@ -204,59 +123,19 @@ async function hasRecordedMessagePersistent(
   namespace = "global",
   log?: (...args: unknown[]) => void,
 ): Promise<boolean> {
-  const normalizedNamespace = normalizeNamespace(namespace);
-  const normalizedMessageId = normalizeMessageId(messageId);
-  if (!normalizedMessageId) {
-    return false;
-  }
-  const now = Date.now();
-  if (hasMemory(normalizedNamespace, normalizedMessageId, now)) {
-    return true;
-  }
-  try {
-    const existing = FEISHU_DEDUP_STORE.lookup(
-      dedupeStoreKey(normalizedNamespace, normalizedMessageId),
-    );
-    const existingSeenAt = existing?.seenAt;
-    if (!isRecent(existingSeenAt, now)) {
-      return false;
-    }
-    remember(normalizedNamespace, normalizedMessageId, existingSeenAt);
-    return true;
-  } catch (error) {
-    log?.(`feishu-dedup: persistent peek failed: ${String(error)}`);
-    return hasMemory(normalizedNamespace, normalizedMessageId, now);
-  }
+  return persistentDedupe.hasRecent(messageId, {
+    namespace,
+    onDiskError: (error) => {
+      log?.(`feishu-dedup: persistent peek failed: ${String(error)}`);
+    },
+  });
 }
 
 export async function warmupDedupFromDisk(
   namespace: string,
   log?: (...args: unknown[]) => void,
 ): Promise<number> {
-  const normalizedNamespace = normalizeNamespace(namespace);
-  try {
-    let loaded = 0;
-    const now = Date.now();
-    for (const entry of FEISHU_DEDUP_STORE.entries()) {
-      if (entry.value.namespace !== normalizedNamespace || !isRecent(entry.value.seenAt, now)) {
-        continue;
-      }
-      remember(normalizedNamespace, entry.value.messageId, entry.value.seenAt);
-      loaded++;
-    }
-    return loaded;
-  } catch (error) {
-    log?.(`feishu-dedup: warmup persistent state error: ${String(error)}`);
-    return 0;
-  }
+  return persistentDedupe.warmup(namespace, (error) => {
+    log?.(`feishu-dedup: warmup disk error: ${String(error)}`);
+  });
 }
-
-export const __testing = {
-  resetFeishuDedupForTests() {
-    memory.clear();
-    FEISHU_DEDUP_STORE.clear();
-  },
-  resetFeishuDedupMemoryForTests() {
-    memory.clear();
-  },
-};

@@ -1,15 +1,9 @@
 import { randomBytes } from "node:crypto";
-import type { Insertable, Selectable } from "kysely";
+import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import { sqliteNullableNumber, sqliteNullableText } from "../infra/sqlite-row-values.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabaseOptions,
-} from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { resolveStateDir } from "../config/paths.js";
+import { expandHomePrefix } from "../infra/home-dir.js";
+import { privateFileStore } from "../infra/private-file-store.js";
 import {
   DEFAULT_COMMITMENT_EXPIRE_AFTER_HOURS,
   DEFAULT_COMMITMENT_MAX_PER_HEARTBEAT,
@@ -21,28 +15,35 @@ import type {
   CommitmentRecord,
   CommitmentScope,
   CommitmentStatus,
-  CommitmentStoreSnapshot,
+  CommitmentStoreFile,
 } from "./types.js";
 
 const STORE_VERSION = 1 as const;
 const ROLLING_DAY_MS = 24 * 60 * 60 * 1000;
 
 type LoadedCommitmentStore = {
-  store: CommitmentStoreSnapshot;
+  store: CommitmentStoreFile;
   hadLegacySourceText: boolean;
 };
 
-export function resolveCommitmentDatabasePath(): string {
-  return resolveOpenClawStateSqlitePath();
+function defaultCommitmentStorePath(): string {
+  return path.join(resolveStateDir(), "commitments", "commitments.json");
 }
 
-function sqliteOptionsForEnv(env: NodeJS.ProcessEnv): OpenClawStateDatabaseOptions {
-  return { env };
+export function resolveCommitmentStorePath(storePath?: string): string {
+  const trimmed = storePath?.trim();
+  if (!trimmed) {
+    return defaultCommitmentStorePath();
+  }
+  if (trimmed.startsWith("~")) {
+    return path.resolve(expandHomePrefix(trimmed));
+  }
+  return path.resolve(trimmed);
 }
 
-type CommitmentsDatabase = Pick<OpenClawStateKyselyDatabase, "commitments">;
-type CommitmentRow = Selectable<CommitmentsDatabase["commitments"]>;
-type CommitmentRowInsert = Insertable<CommitmentsDatabase["commitments"]>;
+function emptyStore(): CommitmentStoreFile {
+  return { version: STORE_VERSION, commitments: [] };
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -87,6 +88,10 @@ function coerceCommitment(raw: unknown): CommitmentRecord | undefined {
   return stripLegacySourceText(commitment);
 }
 
+function hasLegacySourceText(raw: unknown): boolean {
+  return isRecord(raw) && ("sourceUserText" in raw || "sourceAssistantText" in raw);
+}
+
 function stripLegacySourceText(commitment: CommitmentRecord): CommitmentRecord {
   const stripped = { ...commitment };
   // The extraction prompt can read the source turn, but delivery state should
@@ -96,195 +101,59 @@ function stripLegacySourceText(commitment: CommitmentRecord): CommitmentRecord {
   return stripped;
 }
 
-function sanitizeStoreForWrite(store: CommitmentStoreSnapshot): CommitmentStoreSnapshot {
+function sanitizeStoreForWrite(store: CommitmentStoreFile): CommitmentStoreFile {
   return {
     ...store,
     commitments: store.commitments.map(stripLegacySourceText),
   };
 }
 
-function loadCommitmentStoreFromSqlite(
-  env: NodeJS.ProcessEnv = process.env,
-): LoadedCommitmentStore {
-  const database = openOpenClawStateDatabase(sqliteOptionsForEnv(env));
-  const db = getNodeSqliteKysely<CommitmentsDatabase>(database.db);
-  const rows = executeSqliteQuerySync(
-    database.db,
-    db.selectFrom("commitments").selectAll().orderBy("due_earliest_ms", "asc").orderBy("id", "asc"),
-  ).rows;
-  return {
-    store: {
-      version: STORE_VERSION,
-      commitments: rows.flatMap((row) => {
-        const commitment = commitmentFromRow(row);
-        return commitment ? [commitment] : [];
-      }),
-    },
-    hadLegacySourceText: false,
-  };
-}
-
-function optionalText(value: string | null): string | undefined {
-  return value ?? undefined;
-}
-
-function optionalNumber(value: number | null): number | undefined {
-  return value ?? undefined;
-}
-
-function commitmentFromRow(row: CommitmentRow): CommitmentRecord | undefined {
-  const accountId = optionalText(row.account_id);
-  const recipientId = optionalText(row.recipient_id);
-  const threadId = optionalText(row.thread_id);
-  const senderId = optionalText(row.sender_id);
-  const sourceMessageId = optionalText(row.source_message_id);
-  const sourceRunId = optionalText(row.source_run_id);
-  const lastAttemptAtMs = optionalNumber(row.last_attempt_at_ms);
-  const sentAtMs = optionalNumber(row.sent_at_ms);
-  const dismissedAtMs = optionalNumber(row.dismissed_at_ms);
-  const snoozedUntilMs = optionalNumber(row.snoozed_until_ms);
-  const expiredAtMs = optionalNumber(row.expired_at_ms);
-  return coerceCommitment({
-    id: row.id,
-    agentId: row.agent_id,
-    sessionKey: row.session_key,
-    channel: row.channel,
-    ...(accountId !== undefined ? { accountId } : {}),
-    ...(recipientId !== undefined ? { to: recipientId } : {}),
-    ...(threadId !== undefined ? { threadId } : {}),
-    ...(senderId !== undefined ? { senderId } : {}),
-    kind: row.kind,
-    sensitivity: row.sensitivity,
-    source: row.source,
-    status: row.status,
-    reason: row.reason,
-    suggestedText: row.suggested_text,
-    dedupeKey: row.dedupe_key,
-    confidence: row.confidence,
-    dueWindow: {
-      earliestMs: row.due_earliest_ms,
-      latestMs: row.due_latest_ms,
-      timezone: row.due_timezone,
-    },
-    ...(sourceMessageId !== undefined ? { sourceMessageId } : {}),
-    ...(sourceRunId !== undefined ? { sourceRunId } : {}),
-    createdAtMs: row.created_at_ms,
-    updatedAtMs: row.updated_at_ms,
-    attempts: row.attempts,
-    ...(lastAttemptAtMs !== undefined ? { lastAttemptAtMs } : {}),
-    ...(sentAtMs !== undefined ? { sentAtMs } : {}),
-    ...(dismissedAtMs !== undefined ? { dismissedAtMs } : {}),
-    ...(snoozedUntilMs !== undefined ? { snoozedUntilMs } : {}),
-    ...(expiredAtMs !== undefined ? { expiredAtMs } : {}),
-  });
-}
-
-function commitmentToRow(commitment: CommitmentRecord): CommitmentRowInsert {
-  return {
-    id: commitment.id,
-    agent_id: commitment.agentId,
-    session_key: commitment.sessionKey,
-    channel: commitment.channel,
-    account_id: sqliteNullableText(commitment.accountId),
-    recipient_id: sqliteNullableText(commitment.to),
-    thread_id: sqliteNullableText(commitment.threadId),
-    sender_id: sqliteNullableText(commitment.senderId),
-    kind: commitment.kind,
-    sensitivity: commitment.sensitivity,
-    source: commitment.source,
-    status: commitment.status,
-    reason: commitment.reason,
-    suggested_text: commitment.suggestedText,
-    dedupe_key: commitment.dedupeKey,
-    confidence: commitment.confidence,
-    due_earliest_ms: commitment.dueWindow.earliestMs,
-    due_latest_ms: commitment.dueWindow.latestMs,
-    due_timezone: commitment.dueWindow.timezone,
-    source_message_id: sqliteNullableText(commitment.sourceMessageId),
-    source_run_id: sqliteNullableText(commitment.sourceRunId),
-    created_at_ms: commitment.createdAtMs,
-    updated_at_ms: commitment.updatedAtMs,
-    attempts: commitment.attempts,
-    last_attempt_at_ms: sqliteNullableNumber(commitment.lastAttemptAtMs),
-    sent_at_ms: sqliteNullableNumber(commitment.sentAtMs),
-    dismissed_at_ms: sqliteNullableNumber(commitment.dismissedAtMs),
-    snoozed_until_ms: sqliteNullableNumber(commitment.snoozedUntilMs),
-    expired_at_ms: sqliteNullableNumber(commitment.expiredAtMs),
-    record_json: JSON.stringify(commitment),
-  };
-}
-
-function loadCommitmentStoreInternal(): LoadedCommitmentStore {
-  return loadCommitmentStoreFromSqlite();
-}
-
-export async function loadCommitmentStore(
-  options: { env?: NodeJS.ProcessEnv } = {},
-): Promise<CommitmentStoreSnapshot> {
-  return loadCommitmentStoreFromSqlite(options.env ?? process.env).store;
-}
-
-function replaceCommitmentRows(
-  store: CommitmentStoreSnapshot,
-  env: NodeJS.ProcessEnv = process.env,
-): void {
-  const sanitized = sanitizeStoreForWrite(store);
-  runOpenClawStateWriteTransaction((database) => {
-    const db = getNodeSqliteKysely<CommitmentsDatabase>(database.db);
-    const rows = sanitized.commitments.map((commitment) => commitmentToRow(commitment));
-    if (rows.length === 0) {
-      executeSqliteQuerySync(database.db, db.deleteFrom("commitments"));
-      return;
-    }
-    const ids = rows.map((row) => row.id);
-    executeSqliteQuerySync(database.db, db.deleteFrom("commitments").where("id", "not in", ids));
-    executeSqliteQuerySync(
-      database.db,
-      db
-        .insertInto("commitments")
-        .values(rows)
-        .onConflict((conflict) =>
-          conflict.column("id").doUpdateSet({
-            agent_id: (eb) => eb.ref("excluded.agent_id"),
-            session_key: (eb) => eb.ref("excluded.session_key"),
-            channel: (eb) => eb.ref("excluded.channel"),
-            account_id: (eb) => eb.ref("excluded.account_id"),
-            recipient_id: (eb) => eb.ref("excluded.recipient_id"),
-            thread_id: (eb) => eb.ref("excluded.thread_id"),
-            sender_id: (eb) => eb.ref("excluded.sender_id"),
-            kind: (eb) => eb.ref("excluded.kind"),
-            sensitivity: (eb) => eb.ref("excluded.sensitivity"),
-            source: (eb) => eb.ref("excluded.source"),
-            status: (eb) => eb.ref("excluded.status"),
-            reason: (eb) => eb.ref("excluded.reason"),
-            suggested_text: (eb) => eb.ref("excluded.suggested_text"),
-            dedupe_key: (eb) => eb.ref("excluded.dedupe_key"),
-            confidence: (eb) => eb.ref("excluded.confidence"),
-            due_earliest_ms: (eb) => eb.ref("excluded.due_earliest_ms"),
-            due_latest_ms: (eb) => eb.ref("excluded.due_latest_ms"),
-            due_timezone: (eb) => eb.ref("excluded.due_timezone"),
-            source_message_id: (eb) => eb.ref("excluded.source_message_id"),
-            source_run_id: (eb) => eb.ref("excluded.source_run_id"),
-            created_at_ms: (eb) => eb.ref("excluded.created_at_ms"),
-            updated_at_ms: (eb) => eb.ref("excluded.updated_at_ms"),
-            attempts: (eb) => eb.ref("excluded.attempts"),
-            last_attempt_at_ms: (eb) => eb.ref("excluded.last_attempt_at_ms"),
-            sent_at_ms: (eb) => eb.ref("excluded.sent_at_ms"),
-            dismissed_at_ms: (eb) => eb.ref("excluded.dismissed_at_ms"),
-            snoozed_until_ms: (eb) => eb.ref("excluded.snoozed_until_ms"),
-            expired_at_ms: (eb) => eb.ref("excluded.expired_at_ms"),
-            record_json: (eb) => eb.ref("excluded.record_json"),
-          }),
-        ),
+async function loadCommitmentStoreInternal(storePath?: string): Promise<LoadedCommitmentStore> {
+  const resolved = resolveCommitmentStorePath(storePath);
+  try {
+    const parsed = await privateFileStore(path.dirname(resolved)).readJsonIfExists(
+      path.basename(resolved),
     );
-  }, sqliteOptionsForEnv(env));
+    if (
+      !isRecord(parsed) ||
+      parsed.version !== STORE_VERSION ||
+      !Array.isArray(parsed.commitments)
+    ) {
+      return { store: emptyStore(), hadLegacySourceText: false };
+    }
+    let hadLegacySourceText = false;
+    return {
+      store: {
+        version: STORE_VERSION,
+        commitments: parsed.commitments.flatMap((entry) => {
+          hadLegacySourceText ||= hasLegacySourceText(entry);
+          const coerced = coerceCommitment(entry);
+          return coerced ? [coerced] : [];
+        }),
+      },
+      hadLegacySourceText,
+    };
+  } catch (err) {
+    if ((err as { code?: unknown })?.code === "ENOENT") {
+      return { store: emptyStore(), hadLegacySourceText: false };
+    }
+    throw err;
+  }
+}
+
+export async function loadCommitmentStore(storePath?: string): Promise<CommitmentStoreFile> {
+  return (await loadCommitmentStoreInternal(storePath)).store;
 }
 
 export async function saveCommitmentStore(
-  store: CommitmentStoreSnapshot,
-  options: { env?: NodeJS.ProcessEnv } = {},
+  storePath: string | undefined,
+  store: CommitmentStoreFile,
 ): Promise<void> {
-  replaceCommitmentRows(store, options.env ?? process.env);
+  const resolved = resolveCommitmentStorePath(storePath);
+  await privateFileStore(path.dirname(resolved)).writeJson(
+    path.basename(resolved),
+    sanitizeStoreForWrite(store),
+  );
 }
 
 function generateCommitmentId(nowMs: number): string {
@@ -353,7 +222,7 @@ function expireAfterMs(): number {
   return DEFAULT_COMMITMENT_EXPIRE_AFTER_HOURS * 60 * 60 * 1000;
 }
 
-function expireStaleCommitmentsInStore(store: CommitmentStoreSnapshot, nowMs: number): boolean {
+function expireStaleCommitmentsInStore(store: CommitmentStoreFile, nowMs: number): boolean {
   const staleAfterMs = expireAfterMs();
   let changed = false;
   store.commitments = store.commitments.map((commitment) => {
@@ -374,12 +243,10 @@ function expireStaleCommitmentsInStore(store: CommitmentStoreSnapshot, nowMs: nu
   return changed;
 }
 
-async function loadCommitmentStoreWithExpiredMarked(
-  nowMs: number,
-): Promise<CommitmentStoreSnapshot> {
-  const { store, hadLegacySourceText } = loadCommitmentStoreInternal();
+async function loadCommitmentStoreWithExpiredMarked(nowMs: number): Promise<CommitmentStoreFile> {
+  const { store, hadLegacySourceText } = await loadCommitmentStoreInternal();
   if (expireStaleCommitmentsInStore(store, nowMs) || hadLegacySourceText) {
-    await saveCommitmentStore(store);
+    await saveCommitmentStore(undefined, store);
   }
   return store;
 }
@@ -461,12 +328,12 @@ export async function upsertInferredCommitments(params: {
     store.commitments.push(record);
     created.push(record);
   }
-  await saveCommitmentStore(store);
+  await saveCommitmentStore(undefined, store);
   return created;
 }
 
 function countSentCommitmentsForSession(params: {
-  store: CommitmentStoreSnapshot;
+  store: CommitmentStoreFile;
   agentId: string;
   sessionKey: string;
   nowMs: number;
@@ -589,7 +456,7 @@ export async function markCommitmentsAttempted(params: {
     };
   });
   if (changed) {
-    await saveCommitmentStore(store);
+    await saveCommitmentStore(undefined, store);
   }
 }
 
@@ -621,7 +488,7 @@ export async function markCommitmentsStatus(params: {
     };
   });
   if (changed) {
-    await saveCommitmentStore(store);
+    await saveCommitmentStore(undefined, store);
   }
 }
 

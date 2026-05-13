@@ -54,15 +54,19 @@ async function loadFreshHealthModulesForTest() {
     loadConfig: () => testConfig,
   }));
   vi.doMock("../config/sessions.js", () => ({
-    listSessionEntries: () =>
-      Object.entries(testStore).map(([sessionKey, entry]) => ({ sessionKey, entry })),
+    resolveStorePath: () => "/tmp/sessions.json",
+    resolveSessionFilePath: vi.fn(() => "/tmp/sessions.json"),
+    loadSessionStore: () => testStore,
+    saveSessionStore: vi.fn().mockResolvedValue(undefined),
     readSessionUpdatedAt: vi.fn(() => undefined),
     recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
     updateLastRoute: vi.fn().mockResolvedValue(undefined),
   }));
+  vi.doMock("../config/sessions/paths.js", () => ({
+    resolveStorePath: () => "/tmp/sessions.json",
+  }));
   vi.doMock("../config/sessions/store.js", () => ({
-    listSessionEntries: () =>
-      Object.entries(testStore).map(([sessionKey, entry]) => ({ sessionKey, entry })),
+    loadSessionStore: () => testStore,
   }));
   vi.doMock("../plugins/runtime/runtime-web-channel-plugin.js", () => ({
     webAuthExists: vi.fn(async () => true),
@@ -471,7 +475,7 @@ describe("getHealthSnapshot", () => {
   });
 
   it("includes active plugin load errors in the health snapshot", async () => {
-    testConfig = { session: {} };
+    testConfig = { session: { store: "/tmp/x" } };
     testStore = {};
     setActivePluginRegistry({
       ...createTestRegistry([]),
@@ -522,7 +526,7 @@ describe("getHealthSnapshot", () => {
   });
 
   it("skips telegram probe when not configured", async () => {
-    testConfig = { session: {} };
+    testConfig = { session: { store: "/tmp/x" } };
     testStore = {
       global: { updatedAt: Date.now() },
       unknown: { updatedAt: Date.now() },

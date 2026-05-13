@@ -69,16 +69,15 @@ describe("config validation allowed-values metadata", () => {
 
   it("skips allowed-values hints for unions with open-ended branches", () => {
     const result = validateConfigObjectRaw({
-      cron: { runLog: { maxBytes: true } },
+      cron: { sessionRetention: true },
     });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      const issue = result.issues.find((entry) => entry.path === "cron.runLog.maxBytes");
-      expect(issue).toBeDefined();
-      expect(issue?.allowedValues).toBeUndefined();
-      expect(issue?.allowedValuesHiddenCount).toBeUndefined();
-      expect(issue?.message).not.toContain("(allowed:");
+      const issue = requireIssue(result.issues, "cron.sessionRetention");
+      expect(issue.allowedValues).toBeUndefined();
+      expect(issue.allowedValuesHiddenCount).toBeUndefined();
+      expect(issue.message).not.toContain("(allowed:");
     }
   });
 

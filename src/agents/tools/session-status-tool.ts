@@ -7,10 +7,11 @@ import type {
 } from "../../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
-  listSessionEntries,
+  loadSessionStore,
   mergeSessionEntry,
+  resolveStorePath,
   type SessionEntry,
-  upsertSessionEntry,
+  updateSessionStore,
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSessionModelIdentityRef } from "../../gateway/session-utils.js";
@@ -64,12 +65,6 @@ type CommandsStatusRuntimeModule = {
 const commandsStatusRuntimeLoader = createLazyImportLoader<CommandsStatusRuntimeModule>(
   () => import("./session-status.runtime.js") as Promise<CommandsStatusRuntimeModule>,
 );
-
-function loadAgentSessionRows(agentId: string): Record<string, SessionEntry> {
-  return Object.fromEntries(
-    listSessionEntries({ agentId }).map((row) => [row.sessionKey, row.entry]),
-  );
-}
 
 function loadCommandsStatusRuntime(): Promise<CommandsStatusRuntimeModule> {
   return commandsStatusRuntimeLoader.load();
@@ -464,7 +459,8 @@ export function createSessionStatusTool(opts?: {
       let agentId = isExplicitAgentKey
         ? resolveAgentIdFromSessionKey(requestedKeyRaw)
         : requesterAgentId;
-      let store = loadAgentSessionRows(agentId);
+      let storePath = resolveStorePath(cfg.session?.store, { agentId });
+      let store = loadSessionStore(storePath);
       let storeScopedRequesterKey = resolveStoreScopedRequesterKey({
         requesterKey: effectiveRequesterKey,
         agentId,
@@ -507,7 +503,8 @@ export function createSessionStatusTool(opts?: {
           resolvedViaSessionId = true;
           requestedKeyRaw = visibleSession.key;
           agentId = resolveAgentIdFromSessionKey(visibleSession.key);
-          store = loadAgentSessionRows(agentId);
+          storePath = resolveStorePath(cfg.session?.store, { agentId });
+          store = loadSessionStore(storePath);
           storeScopedRequesterKey = resolveStoreScopedRequesterKey({
             requesterKey: effectiveRequesterKey,
             agentId,
@@ -629,10 +626,8 @@ export function createSessionStatusTool(opts?: {
                 return mergeSessionEntry(existingWithValidSessionId, persistedEntryPatch);
               })();
           store[resolved.key] = persistedEntry;
-          upsertSessionEntry({
-            agentId,
-            sessionKey: resolved.key,
-            entry: persistedEntry,
+          await updateSessionStore(storePath, (nextStore) => {
+            nextStore[resolved.key] = persistedEntry;
           });
           resolved.entry = persistedEntry;
           changedModel = true;
@@ -703,7 +698,12 @@ export function createSessionStatusTool(opts?: {
         sessionKey: resolved.key,
         parentSessionKey: statusSessionEntry.parentSessionKey,
         sessionScope: cfg.session?.scope,
-        statusChannel: statusSessionEntry.channel ?? "unknown",
+        storePath,
+        statusChannel:
+          statusSessionEntry.channel ??
+          statusSessionEntry.lastChannel ??
+          statusSessionEntry.origin?.provider ??
+          "unknown",
         workspaceDir: statusSessionEntry.spawnedWorkspaceDir,
         provider: providerForCard,
         model: defaultModelForCard,

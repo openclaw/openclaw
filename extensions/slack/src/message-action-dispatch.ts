@@ -1,4 +1,4 @@
-import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import {
@@ -16,7 +16,7 @@ type SlackActionInvoke = (
   action: Record<string, unknown>,
   cfg: ChannelMessageActionContext["cfg"],
   toolContext?: ChannelMessageActionContext["toolContext"],
-) => Promise<AgentToolResult>;
+) => Promise<AgentToolResult<unknown>>;
 
 /** Translate generic channel action requests into Slack-specific tool invocations and payload shapes. */
 export async function handleSlackMessageAction(params: {
@@ -25,7 +25,7 @@ export async function handleSlackMessageAction(params: {
   invoke: SlackActionInvoke;
   normalizeChannelId?: (channelId: string) => string;
   includeReadThreadId?: boolean;
-}): Promise<AgentToolResult> {
+}): Promise<AgentToolResult<unknown>> {
   const { providerId, ctx, invoke, normalizeChannelId, includeReadThreadId = false } = params;
   const { action, cfg, params: actionParams } = ctx;
   const accountId = ctx.accountId ?? undefined;

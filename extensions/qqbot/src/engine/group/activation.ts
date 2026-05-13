@@ -1,37 +1,12 @@
-/**
- * Group activation mode — how the bot decides whether to respond in a group.
- *
- * Resolution chain:
- *   1. session row override (`/activation` command writes per-session
- *      `groupActivation` value) — highest priority
- *   2. per-group `requireMention` config
- *   3. `"mention"` default (require @-bot to respond)
- *
- * Session-row I/O is isolated in the default node-based reader so the gating
- * logic itself stays a pure function, testable without touching storage.
- *
- * Note: the implicit-mention predicate (quoting a bot message counts as
- * @-ing the bot) lives in `./mention.ts` alongside the other mention
- * helpers — see `resolveImplicitMention` there.
- */
-
-import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import fs from "node:fs";
+import path from "node:path";
 
 export type GroupActivationMode = "mention" | "always";
 
-/**
- * Pluggable reader that returns parsed session row contents.
- *
- * A return value of `null` means "no override available" (file missing,
- * parse error, or reader disabled). Implementations must **not** throw —
- * the gating pipeline treats any failure as "fall back to the config
- * default".
- */
 export interface SessionStoreReader {
   read(params: {
     cfg: Record<string, unknown>;
     agentId: string;
-    sessionKey: string;
   }): Record<string, { groupActivation?: string }> | null;
 }
 
@@ -47,7 +22,6 @@ export function resolveGroupActivation(params: {
   const store = params.sessionStoreReader?.read({
     cfg: params.cfg,
     agentId: params.agentId,
-    sessionKey: params.sessionKey,
   });
   if (!store) {
     return fallback;
@@ -65,26 +39,47 @@ export function resolveGroupActivation(params: {
   return fallback;
 }
 
-// ────────────────────────── Default node reader ──────────────────────────
+function resolveSessionStorePath(
+  cfg: Record<string, unknown>,
+  agentId: string | undefined,
+): string {
+  const resolvedAgentId = agentId || "default";
 
-/**
- * Create the default, production-ready session-store reader.
- *
- * Reads the current session row synchronously on every call. The overhead is
- * acceptable because activation mode is only resolved once per group message.
- *
- * Any SQLite or row-shape error is swallowed and returned as `null` so the
- * gating pipeline falls back to the config default.
- */
+  const session =
+    typeof cfg.session === "object" && cfg.session !== null
+      ? (cfg.session as { store?: unknown })
+      : undefined;
+  const rawStore = typeof session?.store === "string" ? session.store : undefined;
+
+  if (rawStore) {
+    let expanded = rawStore;
+    if (expanded.includes("{agentId}")) {
+      expanded = expanded.replaceAll("{agentId}", resolvedAgentId);
+    }
+    if (expanded.startsWith("~")) {
+      const home = process.env.HOME || process.env.USERPROFILE || "";
+      expanded = expanded.replace(/^~/, home);
+    }
+    return path.resolve(expanded);
+  }
+
+  const stateDir =
+    process.env.OPENCLAW_STATE_DIR?.trim() ||
+    process.env.CLAWDBOT_STATE_DIR?.trim() ||
+    path.join(process.env.HOME || process.env.USERPROFILE || "", ".openclaw");
+  return path.join(stateDir, "agents", resolvedAgentId, "sessions", "sessions.json");
+}
+
 export function createNodeSessionStoreReader(): SessionStoreReader {
   return {
-    read: ({ agentId, sessionKey }) => {
+    read: ({ cfg, agentId }) => {
       try {
-        const entry = getSessionEntry({ agentId: agentId || "default", sessionKey });
-        if (!entry?.groupActivation) {
+        const storePath = resolveSessionStorePath(cfg, agentId);
+        if (!fs.existsSync(storePath)) {
           return null;
         }
-        return { [sessionKey]: { groupActivation: entry.groupActivation } };
+        const raw = fs.readFileSync(storePath, "utf-8");
+        return JSON.parse(raw) as Record<string, { groupActivation?: string }>;
       } catch {
         return null;
       }

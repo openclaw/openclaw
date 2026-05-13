@@ -9,7 +9,7 @@ import {
   serviceIsLoaded,
   serviceRestart,
   writeConfigFile,
-} from "./doctor/e2e-harness.js";
+} from "./doctor.e2e-harness.js";
 
 const providerRuntimeMocks = vi.hoisted(() => ({
   resolvePluginProviders: vi.fn((_params?: unknown): ProviderPlugin[] => []),
@@ -39,7 +39,7 @@ describe("doctor command", () => {
   });
 
   it("runs legacy state migrations in yes mode without prompting", async () => {
-    const { doctorCommand, runtime, runLegacyStateMigrations, createPreMigrationBackup } =
+    const { doctorCommand, runtime, runLegacyStateMigrations } =
       await arrangeLegacyStateMigrationTest();
 
     await (doctorCommand as (runtime: unknown, opts: Record<string, unknown>) => Promise<void>)(
@@ -47,16 +47,12 @@ describe("doctor command", () => {
       { yes: true },
     );
 
-    expect(createPreMigrationBackup).toHaveBeenCalledTimes(1);
     expect(runLegacyStateMigrations).toHaveBeenCalledTimes(1);
-    expect(runLegacyStateMigrations).toHaveBeenCalledWith(
-      expect.objectContaining({ backupPath: "/tmp/openclaw-backup.tgz" }),
-    );
     expect(confirm).not.toHaveBeenCalled();
   }, 30_000);
 
   it("runs legacy state migrations in non-interactive mode without prompting", async () => {
-    const { doctorCommand, runtime, runLegacyStateMigrations, createPreMigrationBackup } =
+    const { doctorCommand, runtime, runLegacyStateMigrations } =
       await arrangeLegacyStateMigrationTest();
 
     await (doctorCommand as (runtime: unknown, opts: Record<string, unknown>) => Promise<void>)(
@@ -64,11 +60,7 @@ describe("doctor command", () => {
       { nonInteractive: true },
     );
 
-    expect(createPreMigrationBackup).toHaveBeenCalledTimes(1);
     expect(runLegacyStateMigrations).toHaveBeenCalledTimes(1);
-    expect(runLegacyStateMigrations).toHaveBeenCalledWith(
-      expect.objectContaining({ backupPath: "/tmp/openclaw-backup.tgz" }),
-    );
     expect(confirm).not.toHaveBeenCalled();
   }, 30_000);
 

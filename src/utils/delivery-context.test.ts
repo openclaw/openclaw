@@ -74,13 +74,11 @@ describe("delivery context helpers", () => {
         channel: " demo-channel ",
         to: " +1555 ",
         accountId: " acct-1 ",
-        chatType: "direct",
       }),
     ).toEqual({
       channel: "demo-channel",
       to: "+1555",
       accountId: "acct-1",
-      chatType: "direct",
     });
 
     expect(normalizeDeliveryContext({ channel: "  " })).toBeUndefined();
@@ -89,13 +87,7 @@ describe("delivery context helpers", () => {
   it("does not inherit route fields from fallback when channels conflict", () => {
     const merged = mergeDeliveryContext(
       { channel: "demo-primary" },
-      {
-        channel: "demo-fallback",
-        to: "channel:def",
-        accountId: "acct",
-        chatType: "channel",
-        threadId: "99",
-      },
+      { channel: "demo-fallback", to: "channel:def", accountId: "acct", threadId: "99" },
     );
 
     expect(merged).toEqual({
@@ -104,26 +96,18 @@ describe("delivery context helpers", () => {
       accountId: undefined,
     });
     expect(merged?.threadId).toBeUndefined();
-    expect(merged?.chatType).toBeUndefined();
   });
 
   it("inherits missing route fields when channels match", () => {
     const merged = mergeDeliveryContext(
       { channel: "demo-channel" },
-      {
-        channel: "demo-channel",
-        to: "123",
-        accountId: "acct",
-        chatType: "group",
-        threadId: "99",
-      },
+      { channel: "demo-channel", to: "123", accountId: "acct", threadId: "99" },
     );
 
     expect(merged).toEqual({
       channel: "demo-channel",
       to: "123",
       accountId: "acct",
-      chatType: "group",
       threadId: "99",
     });
   });
@@ -206,11 +190,10 @@ describe("delivery context helpers", () => {
   it("derives delivery context from a session entry", () => {
     expect(
       deliveryContextFromSession({
-        channel: "demo-channel",
-        deliveryContext: {
-          to: " +1777 ",
-          accountId: " acct-9 ",
-        },
+        channel: "webchat",
+        lastChannel: " demo-channel ",
+        lastTo: " +1777 ",
+        lastAccountId: " acct-9 ",
       }),
     ).toEqual({
       channel: "demo-channel",
@@ -221,10 +204,8 @@ describe("delivery context helpers", () => {
     expect(
       deliveryContextFromSession({
         channel: "demo-channel",
-        deliveryContext: {
-          to: " 123 ",
-          threadId: " 999 ",
-        },
+        lastTo: " 123 ",
+        lastThreadId: " 999 ",
       }),
     ).toEqual({
       channel: "demo-channel",
@@ -236,10 +217,8 @@ describe("delivery context helpers", () => {
     expect(
       deliveryContextFromSession({
         channel: "demo-channel",
-        deliveryContext: {
-          to: " -1001 ",
-          threadId: 42,
-        },
+        lastTo: " -1001 ",
+        origin: { threadId: 42 },
       }),
     ).toEqual({
       channel: "demo-channel",
@@ -251,7 +230,9 @@ describe("delivery context helpers", () => {
     expect(
       deliveryContextFromSession({
         channel: "demo-channel",
-        deliveryContext: { to: " -1001 ", threadId: " 777 " },
+        lastTo: " -1001 ",
+        deliveryContext: { threadId: " 777 " },
+        origin: { threadId: 42 },
       }),
     ).toEqual({
       channel: "demo-channel",
@@ -261,21 +242,26 @@ describe("delivery context helpers", () => {
     });
   });
 
-  it("normalizes delivery fields without route shadow mirrors", () => {
+  it("normalizes delivery fields, mirrors session fields, and avoids cross-channel carryover", () => {
     const normalized = normalizeSessionDeliveryFields({
       deliveryContext: {
-        channel: " demo-primary ",
+        channel: " demo-fallback ",
         to: " channel:1 ",
         accountId: " acct-2 ",
         threadId: " 444 ",
       },
+      lastChannel: " demo-primary ",
+      lastTo: " +1555 ",
     });
 
     expect(normalized.deliveryContext).toEqual({
       channel: "demo-primary",
-      to: "channel:1",
-      accountId: "acct-2",
-      threadId: "444",
+      to: "+1555",
+      accountId: undefined,
     });
+    expect(normalized.lastChannel).toBe("demo-primary");
+    expect(normalized.lastTo).toBe("+1555");
+    expect(normalized.lastAccountId).toBeUndefined();
+    expect(normalized.lastThreadId).toBeUndefined();
   });
 });

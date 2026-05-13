@@ -97,7 +97,7 @@ Relevant Codex code:
 For Codex harness turns, OpenClaw should preserve this lifecycle:
 
 1. Read the mirrored OpenClaw session transcript.
-2. Bootstrap the active context engine when previous SQLite transcript rows exist.
+2. Bootstrap the active context engine when a previous session file exists.
 3. Run bootstrap maintenance when available.
 4. Assemble context using the active context engine.
 5. Convert the assembled context into Codex-compatible inputs.
@@ -263,25 +263,26 @@ supplementing thread history, swap this projection layer to use that API.
 In `extensions/codex/src/app-server/run-attempt.ts`:
 
 - Read mirrored session history as today.
-- Determine whether SQLite already has transcript rows for `{agentId, sessionId}`
-  before mirroring writes.
-- Use the SQLite transcript scope helpers; do not open a transcript file or
-  derive a locator.
+- Determine whether the session file existed before this run. Prefer a helper
+  that checks `fs.stat(params.sessionFile)` before mirroring writes.
+- Open a `SessionManager` or use a narrow session manager adapter if the helper
+  requires it.
 - Call the neutral bootstrap helper when `params.contextEngine` exists.
 
 Pseudo-flow:
 
 ```ts
-const transcriptScope = { agentId: params.agentId, sessionId: params.sessionId };
-const historyMessages = readMirroredSessionHistoryMessages(transcriptScope);
-const hadTranscriptRows = historyMessages.length > 0;
+const hadSessionFile = await fileExists(params.sessionFile);
+const sessionManager = SessionManager.open(params.sessionFile);
+const historyMessages = sessionManager.buildSessionContext().messages;
 
 await bootstrapHarnessContextEngine({
-  hadTranscriptRows,
+  hadSessionFile,
   contextEngine: params.contextEngine,
   sessionId: params.sessionId,
   sessionKey: sandboxSessionKey,
-  transcriptScope,
+  sessionFile: params.sessionFile,
+  sessionManager,
   runtimeContext: buildHarnessContextEngineRuntimeContext(...),
   runMaintenance: runHarnessContextEngineMaintenance,
   warn,
@@ -365,15 +366,15 @@ best available message snapshot:
 
 - Prefer full mirrored session context after the write, because `afterTurn`
   expects the session snapshot, not only the current turn.
-- Fall back to `historyMessages + result.messagesSnapshot` if the SQLite read
-  fails.
+- Fall back to `historyMessages + result.messagesSnapshot` if the session file
+  cannot be reopened.
 
 Pseudo-flow:
 
 ```ts
 const prePromptMessageCount = historyMessages.length;
 await mirrorTranscriptBestEffort(...);
-const finalMessages = readMirroredSessionHistoryMessages(transcriptScope)
+const finalMessages = readMirroredSessionHistoryMessages(params.sessionFile)
   ?? [...historyMessages, ...result.messagesSnapshot];
 
 await finalizeHarnessContextEngineTurn({
@@ -383,7 +384,7 @@ await finalizeHarnessContextEngineTurn({
   yieldAborted,
   sessionIdUsed: params.sessionId,
   sessionKey: sandboxSessionKey,
-  transcriptScope,
+  sessionFile: params.sessionFile,
   messagesSnapshot: finalMessages,
   prePromptMessageCount,
   tokenBudget: params.contextTokenBudget,
@@ -462,8 +463,8 @@ This makes the split auditable.
 
 ### 9. Session reset and binding behavior
 
-The existing Codex harness `reset(...)` clears the Codex app-server binding for
-the OpenClaw session scope. Preserve that behavior.
+The existing Codex harness `reset(...)` clears the Codex app-server binding from
+the OpenClaw session file. Preserve that behavior.
 
 Also ensure context-engine state cleanup continues to happen through existing
 OpenClaw session lifecycle paths. Do not add Codex-specific cleanup unless the
@@ -494,7 +495,7 @@ Codex-specific additions:
 Add tests under `extensions/codex/src/app-server`:
 
 1. `run-attempt.context-engine.test.ts`
-   - Codex calls `bootstrap` when SQLite transcript rows exist.
+   - Codex calls `bootstrap` when a session file exists.
    - Codex calls `assemble` with mirrored messages, token budget, tool names,
      citations mode, model id, and prompt.
    - `systemPromptAddition` is included in developer instructions.

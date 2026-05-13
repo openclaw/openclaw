@@ -14,8 +14,7 @@ import { getSharedCodexAppServerClient } from "./app-server/shared-client.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
 
 type ActiveTurn = {
-  sessionKey?: string;
-  sessionId: string;
+  sessionFile: string;
   threadId: string;
   turnId: string;
 };
@@ -34,33 +33,29 @@ function getActiveTurns(): Map<string, ActiveTurn> {
 
 export function trackCodexConversationActiveTurn(active: ActiveTurn): () => void {
   const activeTurns = getActiveTurns();
-  const key = resolveCodexConversationControlKey(active);
-  activeTurns.set(key, active);
+  activeTurns.set(active.sessionFile, active);
   return () => {
-    const current = activeTurns.get(key);
+    const current = activeTurns.get(active.sessionFile);
     if (current?.turnId === active.turnId) {
-      activeTurns.delete(key);
+      activeTurns.delete(active.sessionFile);
     }
   };
 }
 
-export function readCodexConversationActiveTurn(
-  identity: string | { sessionKey?: string; sessionId?: string },
-): ActiveTurn | undefined {
-  return getActiveTurns().get(resolveCodexConversationControlKey(identity));
+export function readCodexConversationActiveTurn(sessionFile: string): ActiveTurn | undefined {
+  return getActiveTurns().get(sessionFile);
 }
 
 export async function stopCodexConversationTurn(params: {
-  sessionKey?: string;
-  sessionId: string;
+  sessionFile: string;
   pluginConfig?: unknown;
 }): Promise<{ stopped: boolean; message: string }> {
-  const active = readCodexConversationActiveTurn(params);
+  const active = readCodexConversationActiveTurn(params.sessionFile);
   if (!active) {
     return { stopped: false, message: "No active Codex run to stop." };
   }
   const runtime = resolveCodexAppServerRuntimeOptions({ pluginConfig: params.pluginConfig });
-  const binding = await readCodexAppServerBinding(params);
+  const binding = await readCodexAppServerBinding(params.sessionFile);
   const client = await getSharedCodexAppServerClient({
     startOptions: runtime.start,
     timeoutMs: runtime.requestTimeoutMs,
@@ -78,12 +73,11 @@ export async function stopCodexConversationTurn(params: {
 }
 
 export async function steerCodexConversationTurn(params: {
-  sessionKey?: string;
-  sessionId: string;
+  sessionFile: string;
   message: string;
   pluginConfig?: unknown;
 }): Promise<{ steered: boolean; message: string }> {
-  const active = readCodexConversationActiveTurn(params);
+  const active = readCodexConversationActiveTurn(params.sessionFile);
   const text = params.message.trim();
   if (!text) {
     return { steered: false, message: "Usage: /codex steer <message>" };
@@ -92,7 +86,7 @@ export async function steerCodexConversationTurn(params: {
     return { steered: false, message: "No active Codex run to steer." };
   }
   const runtime = resolveCodexAppServerRuntimeOptions({ pluginConfig: params.pluginConfig });
-  const binding = await readCodexAppServerBinding(params);
+  const binding = await readCodexAppServerBinding(params.sessionFile);
   const client = await getSharedCodexAppServerClient({
     startOptions: runtime.start,
     timeoutMs: runtime.requestTimeoutMs,
@@ -111,8 +105,7 @@ export async function steerCodexConversationTurn(params: {
 }
 
 export async function setCodexConversationModel(params: {
-  sessionKey?: string;
-  sessionId: string;
+  sessionFile: string;
   model: string;
   pluginConfig?: unknown;
 }): Promise<string> {
@@ -120,7 +113,7 @@ export async function setCodexConversationModel(params: {
   if (!model) {
     return "Usage: /codex model <model>";
   }
-  const binding = await requireThreadBinding(params);
+  const binding = await requireThreadBinding(params.sessionFile);
   const runtime = resolveCodexAppServerRuntimeOptions({ pluginConfig: params.pluginConfig });
   const response = await resumeThreadWithOverrides({
     pluginConfig: params.pluginConfig,
@@ -128,7 +121,7 @@ export async function setCodexConversationModel(params: {
     authProfileId: binding.authProfileId,
     model,
   });
-  await writeCodexAppServerBinding(params, {
+  await writeCodexAppServerBinding(params.sessionFile, {
     ...binding,
     cwd: response.thread.cwd ?? binding.cwd,
     model: response.model ?? model,
@@ -141,19 +134,18 @@ export async function setCodexConversationModel(params: {
 }
 
 export async function setCodexConversationFastMode(params: {
-  sessionKey?: string;
-  sessionId: string;
+  sessionFile: string;
   enabled?: boolean;
   pluginConfig?: unknown;
 }): Promise<string> {
-  const binding = await requireThreadBinding(params);
+  const binding = await requireThreadBinding(params.sessionFile);
   if (params.enabled == null) {
     return `Codex fast mode: ${isCodexFastServiceTier(binding.serviceTier) ? "on" : "off"}.`;
   }
   const serviceTier: CodexServiceTier = params.enabled ? "priority" : "flex";
   // Fast mode is sent on each later turn; do not require Codex to accept an
   // immediate thread/resume control request just to persist the preference.
-  await writeCodexAppServerBinding(params, {
+  await writeCodexAppServerBinding(params.sessionFile, {
     ...binding,
     serviceTier,
   });
@@ -161,19 +153,18 @@ export async function setCodexConversationFastMode(params: {
 }
 
 export async function setCodexConversationPermissions(params: {
-  sessionKey?: string;
-  sessionId: string;
+  sessionFile: string;
   mode?: PermissionsMode;
   pluginConfig?: unknown;
 }): Promise<string> {
-  const binding = await requireThreadBinding(params);
+  const binding = await requireThreadBinding(params.sessionFile);
   if (!params.mode) {
     return `Codex permissions: ${formatPermissionsMode(binding)}.`;
   }
   const policy = permissionsForMode(params.mode);
   // Native bound turns pass these settings at turn/start time, so this command
   // can update the local binding even when app-server resume overrides fail.
-  await writeCodexAppServerBinding(params, {
+  await writeCodexAppServerBinding(params.sessionFile, {
     ...binding,
     approvalPolicy: policy.approvalPolicy,
     sandbox: policy.sandbox,
@@ -218,21 +209,12 @@ export function formatPermissionsMode(binding: {
     : "default";
 }
 
-async function requireThreadBinding(identity: { sessionKey?: string; sessionId?: string }) {
-  const binding = await readCodexAppServerBinding(identity);
+async function requireThreadBinding(sessionFile: string) {
+  const binding = await readCodexAppServerBinding(sessionFile);
   if (!binding?.threadId) {
     throw new Error("No Codex thread is attached to this OpenClaw session yet.");
   }
   return binding;
-}
-
-function resolveCodexConversationControlKey(
-  identity: string | { sessionKey?: string; sessionId?: string },
-): string {
-  if (typeof identity === "string") {
-    return identity;
-  }
-  return identity.sessionKey?.trim() || identity.sessionId?.trim() || "";
 }
 
 async function resumeThreadWithOverrides(params: {

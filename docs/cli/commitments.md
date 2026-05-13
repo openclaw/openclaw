@@ -80,7 +80,7 @@ Text output includes:
 - scope
 - suggested check-in text
 
-JSON output also includes the SQLite state database path and full stored records.
+JSON output also includes the commitment store path and full stored records.
 
 ## Related
 

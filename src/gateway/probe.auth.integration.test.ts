@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { installGatewayTestHooks, testState, withGatewayServer } from "./test-helpers.js";
 
@@ -19,6 +21,14 @@ function requireGatewayToken(): string {
     throw new Error("expected gateway auth token");
   }
   return token;
+}
+
+function statePath(...parts: string[]): string {
+  const stateDir = process.env.OPENCLAW_STATE_DIR;
+  if (!stateDir) {
+    throw new Error("expected OPENCLAW_STATE_DIR");
+  }
+  return path.join(stateDir, ...parts);
 }
 
 function expectRecord(value: unknown, label: string): Record<string, unknown> {
@@ -89,6 +99,9 @@ describe("probeGateway auth integration", () => {
       expect(result.status).toBeNull();
       expect(result.configSnapshot).toBeNull();
       expect(result.auth.capability).toBe("connected_no_operator_scope");
+      expect(fs.existsSync(statePath("devices", "paired.json"))).toBe(false);
+      expect(fs.existsSync(statePath("devices", "pending.json"))).toBe(false);
+      expect(fs.existsSync(statePath("identity", "device-auth.json"))).toBe(false);
     });
   });
 

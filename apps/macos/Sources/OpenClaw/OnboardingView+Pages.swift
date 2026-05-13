@@ -679,7 +679,7 @@ extension OnboardingView {
                 } else if !self.cliInstalled, self.cliInstallLocation == nil {
                     Text(
                         """
-                        Installs a user-space Node 24+ runtime and the CLI (no Homebrew).
+                        Installs a user-space Node 22+ runtime and the CLI (no Homebrew).
                         Rerun anytime to reinstall or update.
                         """)
                         .font(.footnote)
@@ -819,8 +819,8 @@ extension OnboardingView {
                     self.featureRow(
                         title: "Remote gateway checklist",
                         subtitle: """
-                        On your gateway host: install/update the `openclaw` package and make sure credentials are present
-                        in the OpenClaw SQLite state database. Then connect again if needed.
+                        On your gateway host: install/update the `openclaw` package and make sure credentials exist
+                        (typically `~/.openclaw/credentials/oauth.json`). Then connect again if needed.
                         """,
                         systemImage: "network")
                     Divider()

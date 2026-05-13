@@ -8,5 +8,5 @@ export {
   persistAcpTurnTranscript,
   persistCliTurnTranscript,
   runAgentAttempt,
-  sessionTranscriptHasContent,
+  sessionFileHasContent,
 } from "./attempt-execution.js";

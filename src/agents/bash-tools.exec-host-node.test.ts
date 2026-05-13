@@ -86,7 +86,7 @@ vi.mock("../infra/exec-approvals.js", () => ({
   hasDurableExecApproval: vi.fn(() => false),
   requiresExecApproval: requiresExecApprovalMock,
   resolveExecApprovalAllowedDecisions: vi.fn(() => ["allow-once", "allow-always", "deny"]),
-  resolveExecApprovalsDocument: vi.fn(() => ({
+  resolveExecApprovalsFromFile: vi.fn(() => ({
     allowlist: [],
     file: { version: 1, agents: {} },
   })),

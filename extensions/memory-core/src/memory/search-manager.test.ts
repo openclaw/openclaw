@@ -643,7 +643,7 @@ describe("getMemorySearchManager caching", () => {
     const firstCfg = createQmdCfg(agentId);
     const secondCfg = {
       ...createQmdCfg(agentId),
-      session: {},
+      session: { store: "/tmp/alternate-session-store.json" },
     } as OpenClawConfig;
     const createGate = createDeferred<QmdManagerInstance>();
     createQmdManagerMock.mockImplementationOnce(async () => await createGate.promise);

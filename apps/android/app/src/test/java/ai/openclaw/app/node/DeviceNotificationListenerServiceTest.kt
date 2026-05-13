@@ -3,48 +3,74 @@ package ai.openclaw.app.node
 import ai.openclaw.app.NotificationBurstLimiter
 import ai.openclaw.app.NotificationForwardingPolicy
 import ai.openclaw.app.NotificationPackageFilterMode
-import ai.openclaw.app.gateway.OpenClawSQLiteStateStore
 import ai.openclaw.app.isWithinQuietHours
+import android.content.Context
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
-import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
-import java.io.File
 
 @RunWith(RobolectricTestRunner::class)
 class DeviceNotificationListenerServiceTest {
-  @Before
-  fun resetState() {
-    val context = RuntimeEnvironment.getApplication()
-    File(context.filesDir, "openclaw").deleteRecursively()
-  }
-
   @Test
-  fun recentPackages_readsSqliteRows() {
+  fun recentPackages_migratesLegacyPreferenceKey() {
     val context = RuntimeEnvironment.getApplication()
-    OpenClawSQLiteStateStore(context).replaceRecentNotificationPackages(
-      listOf("com.example.one", "com.example.two"),
-    )
+    val prefs = context.getSharedPreferences("openclaw.secure", Context.MODE_PRIVATE)
+    prefs
+      .edit()
+      .clear()
+      .putString("notifications.recentPackages", "com.example.one, com.example.two")
+      .commit()
 
     val packages = DeviceNotificationListenerService.recentPackages(context)
 
     assertEquals(listOf("com.example.one", "com.example.two"), packages)
+    assertEquals(
+      "com.example.one, com.example.two",
+      prefs.getString("notifications.forwarding.recentPackages", null),
+    )
+    assertFalse(prefs.contains("notifications.recentPackages"))
+  }
+
+  @Test
+  fun recentPackages_cleansUpLegacyKeyWhenNewKeyAlreadyExists() {
+    val context = RuntimeEnvironment.getApplication()
+    val prefs = context.getSharedPreferences("openclaw.secure", Context.MODE_PRIVATE)
+    prefs
+      .edit()
+      .clear()
+      .putString("notifications.forwarding.recentPackages", "com.example.new")
+      .putString("notifications.recentPackages", "com.example.legacy")
+      .commit()
+
+    val packages = DeviceNotificationListenerService.recentPackages(context)
+
+    assertEquals(listOf("com.example.new"), packages)
+    assertNull(prefs.getString("notifications.recentPackages", null))
   }
 
   @Test
   fun recentPackages_trimsDedupesAndPreservesRecencyOrder() {
     val context = RuntimeEnvironment.getApplication()
-    OpenClawSQLiteStateStore(context).replaceRecentNotificationPackages(
-      listOf(" com.example.recent ", "", "com.example.other", "com.example.recent", "com.example.third"),
-    )
+    val prefs = context.getSharedPreferences("openclaw.secure", Context.MODE_PRIVATE)
+    prefs
+      .edit()
+      .clear()
+      .putString(
+        "notifications.forwarding.recentPackages",
+        " com.example.recent , ,com.example.other,com.example.recent, com.example.third ",
+      ).commit()
 
     val packages = DeviceNotificationListenerService.recentPackages(context)
 
-    assertEquals(listOf("com.example.recent", "com.example.other", "com.example.third"), packages)
+    assertEquals(
+      listOf("com.example.recent", "com.example.other", "com.example.third"),
+      packages,
+    )
   }
 
   @Test

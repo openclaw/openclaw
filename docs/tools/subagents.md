@@ -49,10 +49,10 @@ session**:
 
 Use top-level [`/steer <message>`](/tools/steer) to steer the current requester session's active run. Use `/subagents steer <id|#> <message>` when the target is a child run.
 
-`/subagents info` shows run metadata (status, timestamps, session id, cleanup).
-Use `sessions_history` for a bounded, safety-filtered recall view; inspect the
-SQLite transcript rows or export a debug bundle when you need the raw full
-transcript.
+`/subagents info` shows run metadata (status, timestamps, session id,
+transcript path, cleanup). Use `sessions_history` for a bounded,
+safety-filtered recall view; inspect the transcript path on disk when you
+need the raw full transcript.
 
 ### Thread binding controls
 
@@ -361,8 +361,8 @@ app-server, and other configured native runtimes.
 ### Auto-archive
 
 - Sub-agent sessions are automatically archived after `agents.defaults.subagents.archiveAfterMinutes` (default `60`).
-- Archive uses `sessions.delete` to remove the SQLite session row and transcript rows.
-- `cleanup: "delete"` deletes the child SQLite session immediately after announce.
+- Archive uses `sessions.delete` and renames the transcript to `*.deleted.<timestamp>` (same folder).
+- `cleanup: "delete"` archives immediately after announce (still keeps the transcript via rename).
 - Auto-archive is best-effort; pending timers are lost if the gateway restarts.
 - `runTimeoutSeconds` does **not** auto-archive; it only stops the run. The session remains until auto-archive.
 - Auto-archive applies equally to depth-1 and depth-2 sessions.
@@ -506,7 +506,7 @@ Announce payloads include a stats line at the end (even when wrapped):
 - Runtime (e.g. `runtime 5m12s`).
 - Token usage (input/output/total).
 - Estimated cost when model pricing is configured (`models.providers.*.models[].cost`).
-- `sessionKey` and `sessionId` so the main agent can fetch history via `sessions_history` or inspect the SQLite transcript rows.
+- `sessionKey`, `sessionId`, and transcript path so the main agent can fetch history via `sessions_history` or inspect the file on disk.
 
 Internal metadata is meant for orchestration only; user-facing replies
 should be rewritten in normal assistant voice.

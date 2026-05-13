@@ -271,27 +271,14 @@ describe("security fix", () => {
     await fs.writeFile(authProfilesPath, "{}\n", "utf-8");
     await fs.chmod(authProfilesPath, 0o644);
 
-    const stateDbDir = path.join(stateDir, "state");
-    await fs.mkdir(stateDbDir, { recursive: true });
-    const stateDbPath = path.join(stateDbDir, "openclaw.sqlite");
-    await fs.writeFile(stateDbPath, "", "utf-8");
-    await fs.chmod(stateDbPath, 0o644);
-    const stateWalPath = `${stateDbPath}-wal`;
-    await fs.writeFile(stateWalPath, "", "utf-8");
-    await fs.chmod(stateWalPath, 0o644);
-    const stateShmPath = `${stateDbPath}-shm`;
-    await fs.writeFile(stateShmPath, "", "utf-8");
-    await fs.chmod(stateShmPath, 0o644);
-
-    const agentDbPath = path.join(agentDir, "openclaw-agent.sqlite");
-    await fs.writeFile(agentDbPath, "", "utf-8");
-    await fs.chmod(agentDbPath, 0o644);
-    const agentWalPath = `${agentDbPath}-wal`;
-    await fs.writeFile(agentWalPath, "", "utf-8");
-    await fs.chmod(agentWalPath, 0o644);
-    const agentShmPath = `${agentDbPath}-shm`;
-    await fs.writeFile(agentShmPath, "", "utf-8");
-    await fs.chmod(agentShmPath, 0o644);
+    const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionsStorePath = path.join(sessionsDir, "sessions.json");
+    await fs.writeFile(sessionsStorePath, "{}\n", "utf-8");
+    await fs.chmod(sessionsStorePath, 0o644);
+    const transcriptPath = path.join(sessionsDir, "sess-main.jsonl");
+    await fs.writeFile(transcriptPath, '{"type":"session"}\n', "utf-8");
+    await fs.chmod(transcriptPath, 0o644);
 
     const targets = await collectSecurityPermissionTargets({
       env: createFixEnv(stateDir, configPath),
@@ -307,19 +294,14 @@ describe("security fix", () => {
       { path: stateDir, mode: 0o700, require: "dir" },
       { path: configPath, mode: 0o600, require: "file" },
       { path: includePath, mode: 0o600, require: "file" },
-      { path: stateDbDir, mode: 0o700, require: "dir" },
-      { path: stateDbPath, mode: 0o600, require: "file" },
-      { path: stateWalPath, mode: 0o600, require: "file" },
-      { path: stateShmPath, mode: 0o600, require: "file" },
       { path: credsDir, mode: 0o700, require: "dir" },
       { path: allowFromPath, mode: 0o600, require: "file" },
       { path: path.join(stateDir, "agents", "main"), mode: 0o700, require: "dir" },
       { path: agentDir, mode: 0o700, require: "dir" },
       { path: authProfilesPath, mode: 0o600, require: "file" },
-      { path: agentDir, mode: 0o700, require: "dir" },
-      { path: agentDbPath, mode: 0o600, require: "file" },
-      { path: agentWalPath, mode: 0o600, require: "file" },
-      { path: agentShmPath, mode: 0o600, require: "file" },
+      { path: sessionsDir, mode: 0o700, require: "dir" },
+      { path: sessionsStorePath, mode: 0o600, require: "file" },
+      { path: transcriptPath, mode: 0o600, require: "file" },
     ]);
   });
 });

@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import type { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
-import type { Api, Model } from "../../pi-ai-contract.js";
-import type { AuthStorage, ModelRegistry } from "../../pi-coding-agent-contract.js";
 import type { AnyAgentTool } from "../../pi-tools.types.js";
 import { buildEmbeddedAttemptToolRunContext } from "./attempt.tool-run-context.js";
 
@@ -13,6 +13,7 @@ function createAttemptParams(workspaceDir: string) {
   return {
     sessionId: "session-memory-flush",
     sessionKey: "agent:main",
+    sessionFile: path.join(workspaceDir, "session.json"),
     workspaceDir,
     prompt: "flush durable notes",
     timeoutMs: 30_000,

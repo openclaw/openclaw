@@ -279,7 +279,7 @@ releases.
     | Already-loaded config assertions and plugin-entry config lookup | `openclaw/plugin-sdk/plugin-config-runtime` |
     | Current runtime snapshot reads | `openclaw/plugin-sdk/runtime-config-snapshot` |
     | Config writes | `openclaw/plugin-sdk/config-mutation` |
-    | SQLite session row helpers | `openclaw/plugin-sdk/session-store-runtime` |
+    | Session store helpers | `openclaw/plugin-sdk/session-store-runtime` |
     | Markdown table config | `openclaw/plugin-sdk/markdown-table-runtime` |
     | Group policy runtime helpers | `openclaw/plugin-sdk/runtime-group-policy` |
     | Secret input resolution | `openclaw/plugin-sdk/secret-input-runtime` |
@@ -421,7 +421,7 @@ releases.
     | `resolveThinkingDefault` | `api.runtime.agent.resolveThinkingDefault` |
     | `resolveAgentTimeoutMs` | `api.runtime.agent.resolveAgentTimeoutMs` |
     | `ensureAgentWorkspace` | `api.runtime.agent.ensureAgentWorkspace` |
-    | SQLite session row helpers | `api.runtime.agent.session.*` |
+    | session store helpers | `api.runtime.agent.session.*` |
 
   </Step>
 
@@ -449,6 +449,7 @@ releases.
     | Bounded async task concurrency | `openclaw/plugin-sdk/concurrency-runtime` |
     | Numeric coercion | `openclaw/plugin-sdk/number-runtime` |
     | Process-local async lock | `openclaw/plugin-sdk/async-lock-runtime` |
+    | File locks | `openclaw/plugin-sdk/file-lock` |
 
     Bundled plugins are scanner-guarded against `infra-runtime`, so repo code
     cannot regress to the broad barrel.
@@ -574,9 +575,8 @@ releases.
   | `plugin-sdk/reply-history` | Reply-history helpers | `buildHistoryContext`, `buildPendingHistoryContextFromMap`, `recordPendingHistoryEntry`, `clearHistoryEntriesIfEnabled` |
   | `plugin-sdk/reply-reference` | Reply reference planning | `createReplyReferencePlanner` |
   | `plugin-sdk/reply-chunking` | Reply chunk helpers | Text/markdown chunking helpers |
-  | `plugin-sdk/session-store-runtime` | Session row helpers | SQLite-backed session row, session-key, updated-at, and transcript row helpers |
-  | `plugin-sdk/sqlite-runtime` | SQLite helpers | Focused database open/path helpers for first-party runtime and migration tests |
-  | `plugin-sdk/state-paths` | State path helpers | Config, credentials, migration, and explicit operator-file path helpers; runtime state and caches belong in SQLite stores |
+  | `plugin-sdk/session-store-runtime` | Session store helpers | Store path + updated-at helpers |
+  | `plugin-sdk/state-paths` | State path helpers | State and OAuth dir helpers |
   | `plugin-sdk/routing` | Routing/session-key helpers | `resolveAgentRoute`, `buildAgentSessionKey`, `resolveDefaultAgentBoundAccountId`, session-key normalization helpers |
   | `plugin-sdk/status-helpers` | Channel status helpers | Channel/account status summary builders, runtime-state defaults, issue metadata helpers |
   | `plugin-sdk/target-resolver-runtime` | Target resolver helpers | Shared target resolver helpers |
@@ -642,8 +642,7 @@ releases.
   | `plugin-sdk/memory-core-engine-runtime` | Memory engine runtime facade | Memory index/search runtime facade |
   | `plugin-sdk/memory-core-host-engine-foundation` | Memory host foundation engine | Memory host foundation engine exports |
   | `plugin-sdk/memory-core-host-engine-embeddings` | Memory host embedding engine | Memory embedding contracts, registry access, local provider, and generic batch/remote helpers; concrete remote providers live in their owning plugins |
-  | `plugin-sdk/memory-core-host-engine-qmd` | Memory host QMD engine | Memory host QMD engine exports; new code should use `memory-core-host-engine-session-transcripts` for SQLite transcript indexing helpers |
-  | `plugin-sdk/memory-core-host-engine-session-transcripts` | Memory host SQLite session transcript engine | Memory host SQLite session transcript indexing exports |
+  | `plugin-sdk/memory-core-host-engine-qmd` | Memory host QMD engine | Memory host QMD engine exports |
   | `plugin-sdk/memory-core-host-engine-storage` | Memory host storage engine | Memory host storage engine exports |
   | `plugin-sdk/memory-core-host-multimodal` | Memory host multimodal helpers | Memory host multimodal helpers |
   | `plugin-sdk/memory-core-host-query` | Memory host query helpers | Memory host query helpers |

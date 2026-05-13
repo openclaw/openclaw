@@ -34,12 +34,9 @@ describe("initializeMemoryWikiVault", () => {
     await expect(fs.readFile(path.join(rootDir, "WIKI.md"), "utf8")).resolves.toContain(
       "Render mode: `obsidian`",
     );
-    await expect(fs.stat(path.join(rootDir, ".openclaw-wiki", "state.json"))).rejects.toMatchObject(
-      { code: "ENOENT" },
-    );
-    await expect(fs.stat(path.join(rootDir, ".openclaw-wiki", "locks"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expect(
+      fs.readFile(path.join(rootDir, ".openclaw-wiki", "state.json"), "utf8"),
+    ).resolves.toContain('"renderMode": "obsidian"');
   });
 
   it("is idempotent when the vault already exists", async () => {

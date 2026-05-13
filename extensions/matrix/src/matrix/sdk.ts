@@ -15,8 +15,8 @@ import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher
 import { normalizeNullableString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SsrFPolicy } from "../runtime-api.js";
 import { resolveMatrixRoomKeyBackupReadinessError } from "./backup-health.js";
+import { FileBackedMatrixSyncStore } from "./client/file-sync-store.js";
 import { createMatrixJsSdkClientLogger } from "./client/logging.js";
-import { SqliteBackedMatrixSyncStore } from "./client/sqlite-sync-store.js";
 import {
   formatMatrixErrorMessage,
   formatMatrixErrorReason,
@@ -30,10 +30,8 @@ import type { MatrixCryptoFacade } from "./sdk/crypto-facade.js";
 import type { MatrixDecryptBridge } from "./sdk/decrypt-bridge.js";
 import { matrixEventToRaw, parseMxc } from "./sdk/event-helpers.js";
 import { MatrixAuthedHttpClient } from "./sdk/http-client.js";
-import { MATRIX_IDB_PERSIST_INTERVAL_MS } from "./sdk/idb-persistence-constants.js";
-import type { MatrixIdbSnapshotRef } from "./sdk/idb-persistence.js";
+import { MATRIX_IDB_PERSIST_INTERVAL_MS } from "./sdk/idb-persistence-lock.js";
 import { ConsoleLogger, LogService, noop } from "./sdk/logger.js";
-import type { MatrixRecoveryKeyRef } from "./sdk/recovery-key-state.js";
 import {
   MatrixRecoveryKeyStore,
   isRepairableSecretStorageAccessError,
@@ -317,8 +315,8 @@ export class MatrixClient {
   private readonly syncFilter?: IFilterDefinition;
   private readonly encryptionEnabled: boolean;
   private readonly password?: string;
-  private readonly syncStore?: SqliteBackedMatrixSyncStore;
-  private readonly idbSnapshotRef?: MatrixIdbSnapshotRef;
+  private readonly syncStore?: FileBackedMatrixSyncStore;
+  private readonly idbSnapshotPath?: string;
   private readonly cryptoDatabasePrefix?: string;
   private bridgeRegistered = false;
   private started = false;
@@ -358,9 +356,9 @@ export class MatrixClient {
       encryption?: boolean;
       initialSyncLimit?: number;
       syncFilter?: IFilterDefinition;
-      storageRootDir?: string;
-      recoveryKeyRef?: MatrixRecoveryKeyRef;
-      idbSnapshotRef?: MatrixIdbSnapshotRef;
+      storagePath?: string;
+      recoveryKeyPath?: string;
+      idbSnapshotPath?: string;
       cryptoDatabasePrefix?: string;
       autoBootstrapCrypto?: boolean;
       ssrfPolicy?: SsrFPolicy;
@@ -378,14 +376,12 @@ export class MatrixClient {
     this.syncFilter = opts.syncFilter;
     this.encryptionEnabled = opts.encryption === true;
     this.password = opts.password;
-    this.syncStore = opts.storageRootDir
-      ? new SqliteBackedMatrixSyncStore(opts.storageRootDir)
-      : undefined;
-    this.idbSnapshotRef = opts.idbSnapshotRef;
+    this.syncStore = opts.storagePath ? new FileBackedMatrixSyncStore(opts.storagePath) : undefined;
+    this.idbSnapshotPath = opts.idbSnapshotPath;
     this.cryptoDatabasePrefix = opts.cryptoDatabasePrefix;
     this.selfUserId = opts.userId?.trim() || null;
     this.autoBootstrapCrypto = opts.autoBootstrapCrypto !== false;
-    this.recoveryKeyStore = new MatrixRecoveryKeyStore(opts.recoveryKeyRef);
+    this.recoveryKeyStore = new MatrixRecoveryKeyStore(opts.recoveryKeyPath);
     const cryptoCallbacks = this.encryptionEnabled
       ? this.recoveryKeyStore.buildCryptoCallbacks()
       : undefined;
@@ -673,10 +669,10 @@ export class MatrixClient {
     // Final persist on shutdown
     this.syncStore?.markCleanShutdown();
     if (loadedMatrixCryptoRuntime) {
-      const { persistIdbToState } = loadedMatrixCryptoRuntime;
+      const { persistIdbToDisk } = loadedMatrixCryptoRuntime;
       this.stopPersistPromise = Promise.all([
-        persistIdbToState({
-          ref: this.idbSnapshotRef,
+        persistIdbToDisk({
+          snapshotPath: this.idbSnapshotPath,
           databasePrefix: this.cryptoDatabasePrefix,
         }).catch(noop),
         this.syncStore?.flush().catch(noop),
@@ -684,10 +680,10 @@ export class MatrixClient {
       return;
     }
     this.stopPersistPromise = loadMatrixCryptoRuntime()
-      .then(async ({ persistIdbToState }) => {
+      .then(async ({ persistIdbToDisk }) => {
         await Promise.all([
-          persistIdbToState({
-            ref: this.idbSnapshotRef,
+          persistIdbToDisk({
+            snapshotPath: this.idbSnapshotPath,
             databasePrefix: this.cryptoDatabasePrefix,
           }).catch(noop),
           this.syncStore?.flush().catch(noop),
@@ -770,10 +766,10 @@ export class MatrixClient {
       return;
     }
     throwIfMatrixStartupAborted(abortSignal);
-    const { persistIdbToState, restoreIdbFromState } = await loadMatrixCryptoRuntime();
+    const { persistIdbToDisk, restoreIdbFromDisk } = await loadMatrixCryptoRuntime();
 
     // Restore persisted IndexedDB crypto store before initializing WASM crypto.
-    await restoreIdbFromState(this.idbSnapshotRef);
+    await restoreIdbFromDisk(this.idbSnapshotPath);
     throwIfMatrixStartupAborted(abortSignal);
 
     try {
@@ -784,16 +780,16 @@ export class MatrixClient {
       throwIfMatrixStartupAborted(abortSignal);
 
       // Persist the crypto store after successful init (captures fresh keys on first run).
-      await persistIdbToState({
-        ref: this.idbSnapshotRef,
+      await persistIdbToDisk({
+        snapshotPath: this.idbSnapshotPath,
         databasePrefix: this.cryptoDatabasePrefix,
       });
       throwIfMatrixStartupAborted(abortSignal);
 
       // Periodically persist to capture new Olm sessions and room keys.
       this.idbPersistTimer = setInterval(() => {
-        persistIdbToState({
-          ref: this.idbSnapshotRef,
+        persistIdbToDisk({
+          snapshotPath: this.idbSnapshotPath,
           databasePrefix: this.cryptoDatabasePrefix,
         }).catch(noop);
       }, MATRIX_IDB_PERSIST_INTERVAL_MS);

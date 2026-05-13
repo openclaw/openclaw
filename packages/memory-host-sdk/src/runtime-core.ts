@@ -19,6 +19,7 @@ export {
   loadConfig,
 } from "./host/openclaw-runtime-config.js";
 export { resolveStateDir } from "./host/openclaw-runtime-config.js";
+export { resolveSessionTranscriptsDirForAgent } from "./host/openclaw-runtime-config.js";
 export { emptyPluginConfigSchema } from "./host/openclaw-runtime-memory.js";
 export {
   buildActiveMemoryPromptSection,

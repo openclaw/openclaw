@@ -39,14 +39,14 @@ binary, and can index content beyond your workspace memory files.
 }
 ```
 
-OpenClaw materializes a temporary QMD home only while QMD runs. The durable QMD
-index is snapshotted into OpenClaw SQLite state, so QMD no longer owns a
-persistent per-agent sidecar directory under `~/.openclaw`. Collections,
-updates, and embedding runs are still handled for you. OpenClaw prefers current
-QMD collection and MCP query shapes, but still falls back to alternate
-collection pattern flags and older MCP tool names when needed. Boot-time
-reconciliation also recreates stale managed collections back to their canonical
-patterns when an older QMD collection with the same name is still present.
+OpenClaw creates a self-contained QMD home under
+`~/.openclaw/agents/<agentId>/qmd/` and manages the sidecar lifecycle
+automatically -- collections, updates, and embedding runs are handled for you.
+It prefers current QMD collection and MCP query shapes, but still falls back to
+alternate collection pattern flags and older MCP tool names when needed.
+Boot-time reconciliation also recreates stale managed collections back to their
+canonical patterns when an older QMD collection with the same name is still
+present.
 
 ## How the sidecar works
 
@@ -55,9 +55,6 @@ patterns when an older QMD collection with the same name is still present.
   opened and periodically afterward (default every 5 minutes). These refreshes
   run through QMD subprocesses, not an in-process filesystem crawl. Semantic
   modes also run `qmd embed`.
-- QMD's `index.sqlite` is restored from and saved back to the OpenClaw SQLite
-  blob store. The file path shown in memory status is a temp materialization,
-  not durable OpenClaw state.
 - The default workspace collection tracks `MEMORY.md` plus the `memory/`
   tree. Lowercase `memory.md` is not indexed as a root memory file.
 - QMD's own scanner ignores hidden paths and common dependency/build
@@ -100,8 +97,9 @@ qmd search "router notes" --json -n 10 -c memory-root-main -c memory-dir-main
 ```
 
 This avoids starting one QMD subprocess for every durable-memory collection.
-QMD indexes configured memory files only. Runtime session transcripts stay in
-SQLite and are never materialized into QMD markdown collections.
+Session transcript collections stay in their own source group, so mixed
+`memory` + `sessions` searches still give the result diversifier input from both
+sources.
 
 Older QMD builds only accept one collection filter. When OpenClaw detects one
 of those builds, it keeps the compatibility path and searches each collection
@@ -148,6 +146,24 @@ Point QMD at additional directories to make them searchable:
 Snippets from extra paths appear as `qmd/<collection>/<relative-path>` in
 search results. `memory_get` understands this prefix and reads from the correct
 collection root.
+
+## Indexing session transcripts
+
+Enable session indexing to recall earlier conversations:
+
+```json5
+{
+  memory: {
+    backend: "qmd",
+    qmd: {
+      sessions: { enabled: true },
+    },
+  },
+}
+```
+
+Transcripts are exported as sanitized User/Assistant turns into a dedicated QMD
+collection under `~/.openclaw/agents/<id>/qmd/sessions/`.
 
 ## Search scope
 

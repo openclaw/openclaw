@@ -44,7 +44,6 @@ import { finalizeInboundContext } from "./inbound-context.js";
 import { hasInboundMedia } from "./inbound-media.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createFastTestModelSelectionState } from "./model-selection.js";
-import { writeSessionEntryRow } from "./session-row-patch.js";
 import { initSessionState } from "./session.js";
 import {
   isStaleHeartbeatAutoFallbackOverride,
@@ -245,8 +244,7 @@ export async function getReplyFromConfig(
   );
   const resolvedOpts =
     mergedSkillFilter !== undefined ? { ...opts, skillFilter: mergedSkillFilter } : opts;
-  const agentDefaults = cfg.agents?.defaults;
-  const agentCfg = resolveAgentConfig(cfg, agentId) ?? agentDefaults;
+  const agentCfg = cfg.agents?.defaults;
   const sessionCfg = cfg.session;
   const { defaultProvider, defaultModel, aliasIndex } = resolveDefaultModel({
     cfg,
@@ -281,7 +279,7 @@ export async function getReplyFromConfig(
   const agentDir = resolveAgentDir(cfg, agentId);
   const timeoutMs = resolveAgentTimeoutMs({ cfg, overrideSeconds: opts?.timeoutOverrideSeconds });
   const configuredTypingSeconds =
-    agentDefaults?.typingIntervalSeconds ?? sessionCfg?.typingIntervalSeconds;
+    agentCfg?.typingIntervalSeconds ?? sessionCfg?.typingIntervalSeconds;
   const typingIntervalSeconds =
     typeof configuredTypingSeconds === "number" ? configuredTypingSeconds : 6;
   const typing = createTypingController({
@@ -324,8 +322,8 @@ export async function getReplyFromConfig(
       ? (await fs.mkdir(workspaceDirRaw, { recursive: true }), { dir: workspaceDirRaw })
       : await ensureAgentWorkspace({
           dir: workspaceDirRaw,
-          ensureBootstrapFiles: !agentDefaults?.skipBootstrap && !isFastTestEnv,
-          skipOptionalBootstrapFiles: agentDefaults?.skipOptionalBootstrapFiles,
+          ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
+          skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
         }),
   );
   const workspaceDir = workspace.dir;
@@ -381,6 +379,7 @@ export async function getReplyFromConfig(
     resetTriggered,
     systemSent,
     abortedLastRun,
+    storePath,
     sessionScope,
     groupResolution,
     isGroup,
@@ -410,11 +409,11 @@ export async function getReplyFromConfig(
         if (sessionKey && sessionStore) {
           sessionStore[sessionKey] = sessionEntry;
         }
-        if (sessionKey) {
-          await writeSessionEntryRow({
+        if (sessionKey && storePath) {
+          const { updateSessionStoreEntry } = await import("../../config/sessions.js");
+          await updateSessionStoreEntry({
+            storePath,
             sessionKey,
-            fallbackEntry: sessionEntry,
-            sessionStore,
             update: async () => ({
               pendingFinalDelivery: undefined,
               pendingFinalDeliveryText: undefined,
@@ -437,11 +436,11 @@ export async function getReplyFromConfig(
         if (sessionKey && sessionStore) {
           sessionStore[sessionKey] = sessionEntry;
         }
-        if (sessionKey) {
-          await writeSessionEntryRow({
+        if (sessionKey && storePath) {
+          const { updateSessionStoreEntry } = await import("../../config/sessions.js");
+          await updateSessionStoreEntry({
+            storePath,
             sessionKey,
-            fallbackEntry: sessionEntry,
-            sessionStore,
             update: async () => ({
               pendingFinalDeliveryText: heartbeatPending.replayText,
               pendingFinalDeliveryLastAttemptAt: updatedAt,
@@ -468,6 +467,7 @@ export async function getReplyFromConfig(
       sessionEntry,
       sessionStore,
       sessionKey,
+      storePath,
       defaultProvider,
       defaultModel,
       aliasIndex,
@@ -480,6 +480,7 @@ export async function getReplyFromConfig(
         channel:
           groupResolution?.channel ??
           sessionEntry.channel ??
+          sessionEntry.origin?.provider ??
           (typeof finalized.OriginatingChannel === "string"
             ? finalized.OriginatingChannel
             : undefined) ??
@@ -489,7 +490,7 @@ export async function getReplyFromConfig(
         groupChannel:
           sessionEntry.groupChannel ?? sessionCtx.GroupChannel ?? finalized.GroupChannel,
         groupSubject: sessionEntry.subject ?? sessionCtx.GroupSubject ?? finalized.GroupSubject,
-        parentConversationId: finalized.ThreadParentId ?? sessionCtx.ThreadParentId,
+        parentSessionKey: sessionCtx.ModelParentSessionKey ?? sessionCtx.ParentSessionKey,
       })
     : null;
   const resolvedChannelModelOverride =
@@ -615,6 +616,7 @@ export async function getReplyFromConfig(
         sessionStore,
         sessionKey,
         sessionId,
+        storePath,
         workspaceDir,
         abortedLastRun,
       }),
@@ -633,6 +635,7 @@ export async function getReplyFromConfig(
       sessionEntry,
       sessionStore,
       sessionKey,
+      storePath,
       sessionScope,
       groupResolution,
       isGroup,
@@ -720,6 +723,7 @@ export async function getReplyFromConfig(
       previousSessionEntry,
       sessionStore,
       sessionKey,
+      storePath,
       sessionScope,
       workspaceDir,
       isGroup,
@@ -756,6 +760,7 @@ export async function getReplyFromConfig(
   }
   await maybeEmitMissingResetHooks();
   directives = inlineActionResult.directives;
+  cleanedBody = inlineActionResult.cleanedBody;
   abortedLastRun = inlineActionResult.abortedLastRun ?? abortedLastRun;
 
   // Allow plugins to intercept and return a synthetic reply before the LLM runs.
@@ -851,6 +856,7 @@ export async function getReplyFromConfig(
       sessionStore,
       sessionKey,
       sessionId,
+      storePath,
       workspaceDir,
       abortedLastRun,
     }),

@@ -2,12 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import type { CronEvent, CronServiceDeps } from "./service.js";
 import { CronService } from "./service.js";
 import { createCronServiceState, type CronServiceState } from "./service/state.js";
-import { saveCronStore } from "./store.js";
 import type { CronJob } from "./types.js";
 
 type NoopLogger = {
@@ -29,55 +27,44 @@ export function createNoopLogger(): NoopLogger {
 export function createCronStoreHarness(options?: { prefix?: string }) {
   let fixtureRoot = "";
   let caseId = 0;
-  let originalOpenClawStateDir: string | undefined;
 
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), options?.prefix ?? "openclaw-cron-"));
-    originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = path.join(fixtureRoot, "state");
   });
 
   afterAll(async () => {
-    closeOpenClawStateDatabaseForTest();
-    if (originalOpenClawStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
-    }
     if (!fixtureRoot) {
       return;
     }
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
-  async function makeLegacyCronStorePath() {
+  async function makeStorePath() {
     const dir = path.join(fixtureRoot, `case-${caseId++}`);
     await fs.mkdir(dir, { recursive: true });
     return {
-      legacyStorePath: path.join(dir, "cron", "jobs.json"),
+      storePath: path.join(dir, "cron", "jobs.json"),
       cleanup: async () => {},
     };
   }
 
-  async function makeStoreKey() {
-    const id = `case-${caseId++}`;
-    const stateDir = path.join(fixtureRoot, id, "state");
-    await fs.mkdir(stateDir, { recursive: true });
-    return {
-      storeKey: id,
-      stateDir,
-      cleanup: async () => {},
-    };
-  }
-
-  return { makeLegacyCronStorePath, makeStoreKey };
+  return { makeStorePath };
 }
 
-export async function writeCronStoreSnapshot(params: { storeKey?: string; jobs: CronJob[] }) {
-  await saveCronStore(params.storeKey ?? "default", {
-    version: 1,
-    jobs: params.jobs,
-  });
+export async function writeCronStoreSnapshot(params: { storePath: string; jobs: CronJob[] }) {
+  await fs.mkdir(path.dirname(params.storePath), { recursive: true });
+  await fs.writeFile(
+    params.storePath,
+    JSON.stringify(
+      {
+        version: 1,
+        jobs: params.jobs,
+      },
+      null,
+      2,
+    ),
+    "utf-8",
+  );
 }
 
 export function installCronTestHooks(options: {
@@ -105,12 +92,12 @@ export function installCronTestHooks(options: {
 
 export function setupCronServiceSuite(options?: { prefix?: string; baseTimeIso?: string }) {
   const logger = createNoopLogger();
-  const { makeStoreKey } = createCronStoreHarness({ prefix: options?.prefix });
+  const { makeStorePath } = createCronStoreHarness({ prefix: options?.prefix });
   installCronTestHooks({
     logger,
     baseTimeIso: options?.baseTimeIso,
   });
-  return { logger, makeStoreKey };
+  return { logger, makeStorePath };
 }
 
 export function createFinishedBarrier() {
@@ -135,7 +122,7 @@ export function createFinishedBarrier() {
 }
 
 export function createStartedCronServiceWithFinishedBarrier(params: {
-  storeKey?: string;
+  storePath: string;
   logger: ReturnType<typeof createNoopLogger>;
 }): {
   cron: CronService;
@@ -147,7 +134,7 @@ export function createStartedCronServiceWithFinishedBarrier(params: {
   const requestHeartbeat = vi.fn();
   const finished = createFinishedBarrier();
   const cron = new CronService({
-    storeKey: params.storeKey ?? "default",
+    storePath: params.storePath,
     cronEnabled: true,
     log: params.logger,
     enqueueSystemEvent,
@@ -160,7 +147,7 @@ export function createStartedCronServiceWithFinishedBarrier(params: {
 
 export async function withCronServiceForTest(
   params: {
-    makeStoreKey: () => Promise<{ storeKey: string; cleanup: () => Promise<void> }>;
+    makeStorePath: () => Promise<{ storePath: string; cleanup: () => Promise<void> }>;
     logger: ReturnType<typeof createNoopLogger>;
     cronEnabled: boolean;
     runIsolatedAgentJob?: CronServiceDeps["runIsolatedAgentJob"];
@@ -171,12 +158,12 @@ export async function withCronServiceForTest(
     requestHeartbeat: ReturnType<typeof vi.fn>;
   }) => Promise<void>,
 ): Promise<void> {
-  const store = await params.makeStoreKey();
+  const store = await params.makeStorePath();
   const enqueueSystemEvent = vi.fn();
   const requestHeartbeat = vi.fn();
   const cron = new CronService({
     cronEnabled: params.cronEnabled,
-    storeKey: store.storeKey,
+    storePath: store.storePath,
     log: params.logger,
     enqueueSystemEvent,
     requestHeartbeat,
@@ -195,14 +182,14 @@ export async function withCronServiceForTest(
 }
 
 export function createRunningCronServiceState(params: {
-  storeKey?: string;
+  storePath: string;
   log: ReturnType<typeof createNoopLogger>;
   nowMs: () => number;
   jobs: CronJob[];
 }) {
   const state = createCronServiceState({
     cronEnabled: true,
-    storeKey: params.storeKey ?? "default",
+    storePath: params.storePath,
     log: params.log,
     nowMs: params.nowMs,
     enqueueSystemEvent: vi.fn(),
@@ -255,10 +242,12 @@ export function createMockCronStateForJobs(params: {
     running: false,
     timer: null,
     storeLoadedAtMs: nowMs,
+    storeFileMtimeMs: null,
     op: Promise.resolve(),
     warnedDisabled: false,
+    warnedMissingSessionTargetJobIds: new Set<string>(),
     deps: {
-      storeKey: "mock",
+      storePath: "/mock/path",
       cronEnabled: true,
       nowMs: () => nowMs,
       enqueueSystemEvent: () => {},

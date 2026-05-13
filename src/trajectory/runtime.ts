@@ -1,49 +1,117 @@
-import type { AgentToolArtifactStore } from "../agents/filesystem/agent-filesystem.js";
+import fs from "node:fs";
+import path from "node:path";
 import { sanitizeDiagnosticPayload } from "../agents/payload-redaction.js";
+import { getQueuedFileWriter, type QueuedFileWriter } from "../agents/queued-file-writer.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { redactSecrets } from "../logging/redact.js";
-import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
 import {
   TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES,
   TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
+  resolveTrajectoryFilePath,
+  resolveTrajectoryPointerFilePath,
+  resolveTrajectoryPointerOpenFlags,
 } from "./paths.js";
-import { recordTrajectoryRuntimeEvent } from "./runtime-store.sqlite.js";
 import type { TrajectoryEvent, TrajectoryToolDefinition } from "./types.js";
 
 export {
   TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES,
   TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
+  TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
+  resolveTrajectoryFilePath,
+  resolveTrajectoryPointerFilePath,
+  resolveTrajectoryPointerOpenFlags,
+  safeTrajectorySessionFileName,
 } from "./paths.js";
 
 type TrajectoryRuntimeInit = {
-  agentId?: string;
   cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  maxRuntimeCaptureBytes?: number;
+  maxRuntimeFileBytes?: number;
   runId?: string;
   sessionId: string;
   sessionKey?: string;
+  sessionFile?: string;
   provider?: string;
   modelId?: string;
   modelApi?: string | null;
   workspaceDir?: string;
-  artifactStore?: AgentToolArtifactStore;
+  writer?: QueuedFileWriter;
 };
 
 type TrajectoryRuntimeRecorder = {
   enabled: true;
-  runtimeScope: string;
+  filePath: string;
   recordEvent: (type: string, data?: Record<string, unknown>) => void;
   flush: () => Promise<void>;
 };
 
+const writers = new Map<string, QueuedFileWriter>();
+const MAX_TRAJECTORY_WRITERS = 100;
 const TRAJECTORY_RUNTIME_TRUNCATION_SENTINEL_RESERVE_BYTES = 2048;
 const TRAJECTORY_RUNTIME_DATA_STRING_MAX_CHARS = 32_768;
 const TRAJECTORY_RUNTIME_DATA_ARRAY_MAX_ITEMS = 64;
 const TRAJECTORY_RUNTIME_DATA_OBJECT_MAX_KEYS = 64;
 const TRAJECTORY_RUNTIME_DATA_MAX_DEPTH = 6;
+
+function writeTrajectoryPointerBestEffort(params: {
+  filePath: string;
+  sessionFile?: string;
+  sessionId: string;
+}): void {
+  if (!params.sessionFile) {
+    return;
+  }
+  const pointerPath = resolveTrajectoryPointerFilePath(params.sessionFile);
+  try {
+    const pointerDir = path.resolve(path.dirname(pointerPath));
+    if (fs.lstatSync(pointerDir).isSymbolicLink()) {
+      return;
+    }
+    try {
+      if (fs.lstatSync(pointerPath).isSymbolicLink()) {
+        return;
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        return;
+      }
+    }
+    const fd = fs.openSync(pointerPath, resolveTrajectoryPointerOpenFlags(), 0o600);
+    try {
+      fs.writeFileSync(
+        fd,
+        `${JSON.stringify(
+          {
+            traceSchema: "openclaw-trajectory-pointer",
+            schemaVersion: 1,
+            sessionId: params.sessionId,
+            runtimeFile: params.filePath,
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      fs.fchmodSync(fd, 0o600);
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    // Pointer files are best-effort; the runtime sidecar itself is authoritative.
+  }
+}
+
+function trimTrajectoryWriterCache(): void {
+  while (writers.size >= MAX_TRAJECTORY_WRITERS) {
+    const oldestKey = writers.keys().next().value;
+    if (!oldestKey) {
+      return;
+    }
+    writers.delete(oldestKey);
+  }
+}
 
 function truncateOversizedTrajectoryEvent(
   event: TrajectoryEvent,
@@ -171,83 +239,61 @@ export function createTrajectoryRuntimeRecorder(
     return null;
   }
 
-  const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
-  const runtimeScope = `sqlite:${agentId}:trajectory:${params.sessionId}`;
-  const maxRuntimeCaptureBytes = Math.max(
+  const filePath = resolveTrajectoryFilePath({
+    env,
+    sessionFile: params.sessionFile,
+    sessionId: params.sessionId,
+  });
+  if (!params.writer) {
+    trimTrajectoryWriterCache();
+  }
+  const maxRuntimeFileBytes = Math.max(
     1,
-    Math.floor(params.maxRuntimeCaptureBytes ?? TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES),
+    Math.floor(params.maxRuntimeFileBytes ?? TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES),
   );
+  const writer =
+    params.writer ??
+    getQueuedFileWriter(writers, filePath, {
+      maxFileBytes: maxRuntimeFileBytes,
+      maxQueuedBytes: maxRuntimeFileBytes,
+      yieldBeforeWrite: true,
+    });
+  writeTrajectoryPointerBestEffort({
+    filePath,
+    sessionFile: params.sessionFile,
+    sessionId: params.sessionId,
+  });
   let seq = 0;
   const traceId = params.sessionId;
   const sentinelReserveBytes = Math.min(
     TRAJECTORY_RUNTIME_TRUNCATION_SENTINEL_RESERVE_BYTES,
-    Math.floor(maxRuntimeCaptureBytes / 2),
+    Math.floor(maxRuntimeFileBytes / 2),
   );
-  const normalEventLimitBytes = Math.max(1, maxRuntimeCaptureBytes - sentinelReserveBytes);
+  const normalEventLimitBytes = Math.max(1, maxRuntimeFileBytes - sentinelReserveBytes);
   let acceptedRuntimeBytes = 0;
   let droppedEvents = 0;
   let droppedEventBytes = 0;
   let captureStopped = false;
-  const artifactPayloadLines: string[] = [];
-  let artifactEventCount = 0;
-  let artifactWriteFailed = false;
 
   const writeBoundedLine = (line: string, options: { reserveSentinel: boolean }): boolean => {
-    const payloadLine = `${line}\n`;
-    const lineBytes = Buffer.byteLength(payloadLine, "utf8");
-    const limitBytes = options.reserveSentinel ? normalEventLimitBytes : maxRuntimeCaptureBytes;
+    const jsonlLine = `${line}\n`;
+    const lineBytes = Buffer.byteLength(jsonlLine, "utf8");
+    const limitBytes = options.reserveSentinel ? normalEventLimitBytes : maxRuntimeFileBytes;
     if (acceptedRuntimeBytes + lineBytes > limitBytes) {
       captureStopped = true;
       droppedEvents += 1;
       droppedEventBytes += lineBytes;
       return false;
     }
-    const parsed = JSON.parse(line) as TrajectoryEvent;
-    try {
-      recordTrajectoryRuntimeEvent({
-        agentId,
-        event: parsed,
-      });
-    } catch {
+    const result = writer.write(jsonlLine);
+    if (result === "dropped") {
       captureStopped = true;
       droppedEvents += 1;
       droppedEventBytes += lineBytes;
       return false;
     }
     acceptedRuntimeBytes += lineBytes;
-    artifactPayloadLines.push(payloadLine);
-    artifactEventCount += 1;
     return true;
-  };
-
-  const writeArtifactMirror = (): void => {
-    if (!params.artifactStore || artifactPayloadLines.length === 0 || artifactWriteFailed) {
-      return;
-    }
-    try {
-      params.artifactStore.write({
-        artifactId: "trajectory-runtime",
-        kind: "trajectory/runtime-events",
-        metadata: {
-          traceSchema: "openclaw-trajectory-artifact",
-          schemaVersion: 1,
-          source: "runtime",
-          sessionId: params.sessionId,
-          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-          ...(params.runId ? { runId: params.runId } : {}),
-          ...(params.provider ? { provider: params.provider } : {}),
-          ...(params.modelId ? { modelId: params.modelId } : {}),
-          ...(params.modelApi ? { modelApi: params.modelApi } : {}),
-          ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-          runtimeScope,
-          eventCount: artifactEventCount,
-          bytes: Buffer.byteLength(artifactPayloadLines.join(""), "utf8"),
-        },
-        blob: artifactPayloadLines.join(""),
-      });
-    } catch {
-      artifactWriteFailed = true;
-    }
   };
 
   const buildEventLine = (type: string, data?: Record<string, unknown>): string | undefined => {
@@ -284,7 +330,7 @@ export function createTrajectoryRuntimeRecorder(
 
   return {
     enabled: true,
-    runtimeScope,
+    filePath,
     recordEvent: (type, data) => {
       if (captureStopped) {
         droppedEvents += 1;
@@ -299,10 +345,10 @@ export function createTrajectoryRuntimeRecorder(
     flush: async () => {
       if (droppedEvents > 0) {
         const line = buildEventLine("trace.truncated", {
-          reason: "trajectory-runtime-size-limit",
+          reason: "trajectory-runtime-file-size-limit",
           droppedEvents,
           droppedEventBytes,
-          limitBytes: maxRuntimeCaptureBytes,
+          limitBytes: maxRuntimeFileBytes,
         });
         if (line) {
           writeBoundedLine(line, { reserveSentinel: false });
@@ -310,7 +356,10 @@ export function createTrajectoryRuntimeRecorder(
         droppedEvents = 0;
         droppedEventBytes = 0;
       }
-      writeArtifactMirror();
+      await writer.flush();
+      if (!params.writer) {
+        writers.delete(filePath);
+      }
     },
   };
 }

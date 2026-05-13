@@ -37,15 +37,6 @@ export const AgentEventSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const AgentInitialVfsEntrySchema = Type.Object(
-  {
-    path: NonEmptyString,
-    contentBase64: Type.String(),
-    metadata: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
-  },
-  { additionalProperties: false },
-);
-
 export const MessageActionToolContextSchema = Type.Object(
   {
     currentChannelId: Type.Optional(Type.String()),
@@ -188,7 +179,6 @@ export const AgentParamsSchema = Type.Object(
     internalRuntimeHandoffId: Type.Optional(NonEmptyString),
     internalEvents: Type.Optional(Type.Array(AgentInternalEventSchema)),
     inputProvenance: Type.Optional(InputProvenanceSchema),
-    initialVfsEntries: Type.Optional(Type.Array(AgentInitialVfsEntrySchema)),
     voiceWakeTrigger: Type.Optional(Type.String()),
     idempotencyKey: NonEmptyString,
     label: Type.Optional(SessionLabelString),
@@ -229,6 +219,8 @@ export const WakeParamsSchema = Type.Object(
   {
     mode: Type.Union([Type.Literal("now"), Type.Literal("next-heartbeat")]),
     text: NonEmptyString,
+    // Typed field; misspelled variants remain opaque metadata because wake
+    // senders already rely on additionalProperties.
     sessionKey: Type.Optional(NonEmptyString),
   },
   { additionalProperties: true }, // external wake senders may attach opaque metadata

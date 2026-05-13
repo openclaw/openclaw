@@ -5,7 +5,7 @@ import { resolveDefaultAgentId, resolveSessionAgentId } from "openclaw/plugin-sd
 import { getActiveMemorySearchManager } from "openclaw/plugin-sdk/memory-host-search";
 import {
   extractTranscriptStemFromSessionsMemoryHit,
-  loadCombinedSessionEntriesForGateway,
+  loadCombinedSessionStoreForGateway,
   resolveTranscriptStemToSessionKeys,
 } from "openclaw/plugin-sdk/session-transcript-hit";
 import {
@@ -17,7 +17,6 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import type { OpenClawConfig } from "../api.js";
 import { assessClaimFreshness, isClaimContestedStatus } from "./claim-health.js";
 import type { ResolvedMemoryWikiConfig, WikiSearchBackend, WikiSearchCorpus } from "./config.js";
-import { readMemoryWikiCompiledDigestBundle } from "./digest-state.js";
 import {
   parseWikiMarkdown,
   toWikiPageSummary,
@@ -287,17 +286,10 @@ function parseClaimsDigest(raw: string): QueryDigestClaim[] {
 }
 
 async function readQueryDigestBundle(rootDir: string): Promise<QueryDigestBundle | null> {
-  const compiledDigest = await readMemoryWikiCompiledDigestBundle(rootDir);
-  const [legacyAgentDigestRaw, legacyClaimsDigestRaw] = await Promise.all([
-    compiledDigest.agentDigest
-      ? Promise.resolve(null)
-      : fs.readFile(path.join(rootDir, AGENT_DIGEST_PATH), "utf8").catch(() => null),
-    compiledDigest.claimsDigest
-      ? Promise.resolve(null)
-      : fs.readFile(path.join(rootDir, CLAIMS_DIGEST_PATH), "utf8").catch(() => null),
+  const [agentDigestRaw, claimsDigestRaw] = await Promise.all([
+    fs.readFile(path.join(rootDir, AGENT_DIGEST_PATH), "utf8").catch(() => null),
+    fs.readFile(path.join(rootDir, CLAIMS_DIGEST_PATH), "utf8").catch(() => null),
   ]);
-  const agentDigestRaw = compiledDigest.agentDigest ?? legacyAgentDigestRaw;
-  const claimsDigestRaw = compiledDigest.claimsDigest ?? legacyClaimsDigestRaw;
   if (!agentDigestRaw && !claimsDigestRaw) {
     return null;
   }
@@ -1003,11 +995,16 @@ function assertSessionVisibilityAppConfig(params: {
   }
 }
 
-const SESSION_MEMORY_PATH_PREFIXES = ["transcript:"] as const;
+const SESSION_MEMORY_PATH_PREFIXES = ["sessions/", "qmd/sessions/", "qmd/sessions-"] as const;
+const SESSION_MEMORY_ROOT_PATHS = ["qmd/sessions"] as const;
 
-// Keep these opaque keys aligned with source: "sessions" hits in session-search-visibility and session-transcript-hit.
+// Keep these path shapes aligned with source: "sessions" hits in session-search-visibility and session-transcript-hit.
 export function isSessionMemoryPath(relPath: string): boolean {
-  return SESSION_MEMORY_PATH_PREFIXES.some((prefix) => relPath.startsWith(prefix));
+  const normalized = relPath.replace(/\\/g, "/");
+  return (
+    SESSION_MEMORY_PATH_PREFIXES.some((prefix) => normalized.startsWith(prefix)) ||
+    SESSION_MEMORY_ROOT_PATHS.some((rootPath) => normalized === rootPath)
+  );
 }
 
 function shouldSearchWiki(config: ResolvedMemoryWikiConfig): boolean {
@@ -1251,14 +1248,14 @@ async function createSessionMemoryPathVisibilityChecker(params: {
     return () => false;
   }
 
-  const { entries: combinedSessionEntries } = loadCombinedSessionEntriesForGateway(params.cfg);
+  const { store: combinedSessionStore } = loadCombinedSessionStoreForGateway(params.cfg);
   return (relPath) => {
     const stem = extractTranscriptStemFromSessionsMemoryHit(relPath);
     if (!stem) {
       return false;
     }
     const keys = resolveTranscriptStemToSessionKeys({
-      entries: combinedSessionEntries,
+      store: combinedSessionStore,
       stem,
     });
     return keys.some((key) => guard.check(key).allowed);

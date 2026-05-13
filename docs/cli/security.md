@@ -71,12 +71,12 @@ openclaw security audit --fix --json | jq '{fix: .fix.ok, summary: .report.summa
 
 - flips common `groupPolicy="open"` to `groupPolicy="allowlist"` (including account variants in supported channels)
 - when WhatsApp group policy flips to `allowlist`, seeds `groupAllowFrom` from
-  the stored pairing allowlist when that list exists and config does not already
+  the stored `allowFrom` file when that list exists and config does not already
   define `allowFrom`
 - sets `logging.redactSensitive` from `"off"` to `"tools"`
 - tightens permissions for state/config and common sensitive files
-  (`state/openclaw.sqlite`, `credentials/*.json` legacy doctor inputs,
-  legacy runtime/session JSON files, session `*.jsonl`)
+  (`credentials/*.json`, `auth-profiles.json`, `sessions.json`, session
+  `*.jsonl`)
 - also tightens config include files referenced from `openclaw.json`
 - uses `chmod` on POSIX hosts and `icacls` resets on Windows
 

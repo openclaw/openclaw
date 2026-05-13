@@ -1,4 +1,4 @@
-import { DefaultResourceLoader } from "../pi-coding-agent-contract.js";
+import { DefaultResourceLoader } from "@earendil-works/pi-coding-agent";
 
 type DefaultResourceLoaderInit = ConstructorParameters<typeof DefaultResourceLoader>[0];
 

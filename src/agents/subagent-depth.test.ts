@@ -1,41 +1,14 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { upsertSessionEntry } from "../config/sessions.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
-import { getSubagentDepthFromSessionEntries } from "./subagent-depth.js";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { resolveAgentTimeoutMs, resolveAgentTimeoutSeconds } from "./timeout.js";
 
-describe("getSubagentDepthFromSessionEntries", () => {
-  const suiteRootTracker = createSuiteTempRootTracker({
-    prefix: "openclaw-subagent-depth-",
-  });
-  let previousStateDir: string | undefined;
-
-  beforeAll(async () => {
-    await suiteRootTracker.setup();
-  });
-
-  beforeEach(async () => {
-    previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = await suiteRootTracker.make("case");
-  });
-
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
-  });
-
-  afterAll(async () => {
-    await suiteRootTracker.cleanup();
-  });
-
+describe("getSubagentDepthFromSessionStore", () => {
   it("uses spawnDepth from the session store when available", () => {
     const key = "agent:main:subagent:flat";
-    const depth = getSubagentDepthFromSessionEntries(key, {
+    const depth = getSubagentDepthFromSessionStore(key, {
       store: {
         [key]: { spawnDepth: 2 },
       },
@@ -47,7 +20,7 @@ describe("getSubagentDepthFromSessionEntries", () => {
     const key1 = "agent:main:subagent:one";
     const key2 = "agent:main:subagent:two";
     const key3 = "agent:main:subagent:three";
-    const depth = getSubagentDepthFromSessionEntries(key3, {
+    const depth = getSubagentDepthFromSessionStore(key3, {
       store: {
         [key1]: { spawnedBy: "agent:main:main" },
         [key2]: { spawnedBy: key1 },
@@ -61,7 +34,7 @@ describe("getSubagentDepthFromSessionEntries", () => {
     const key1 = "agent:main:subagent:one";
     const key2 = "agent:main:subagent:two";
     const key3 = "agent:main:subagent:three";
-    const depth = getSubagentDepthFromSessionEntries("subagent-three-session", {
+    const depth = getSubagentDepthFromSessionStore("subagent-three-session", {
       store: {
         [key1]: { sessionId: "subagent-one-session", spawnedBy: "agent:main:main" },
         [key2]: { sessionId: "subagent-two-session", spawnedBy: key1 },
@@ -72,44 +45,67 @@ describe("getSubagentDepthFromSessionEntries", () => {
   });
 
   it("resolves prefixed store keys when caller key omits the agent prefix", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-depth-"));
+    const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
     const prefixedKey = "agent:main:subagent:flat";
-    upsertSessionEntry({
-      agentId: "main",
-      sessionKey: prefixedKey,
-      entry: {
-        sessionId: "subagent-flat",
-        updatedAt: Date.now(),
-        spawnDepth: 2,
-      },
-    });
+    const storePath = storeTemplate.replaceAll("{agentId}", "main");
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          [prefixedKey]: {
+            sessionId: "subagent-flat",
+            updatedAt: Date.now(),
+            spawnDepth: 2,
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
 
-    const depth = getSubagentDepthFromSessionEntries("subagent:flat", {
-      cfg: {},
+    const depth = getSubagentDepthFromSessionStore("subagent:flat", {
+      cfg: {
+        session: {
+          store: storeTemplate,
+        },
+      },
     });
 
     expect(depth).toBe(2);
   });
 
-  it("reads prefixed session metadata from sqlite", () => {
-    const prefixedKey = "agent:main:subagent:flat";
-    upsertSessionEntry({
-      agentId: "main",
-      sessionKey: prefixedKey,
-      entry: {
-        sessionId: "subagent-flat",
-        updatedAt: Date.now(),
-        spawnDepth: 2,
+  it("accepts JSON5 syntax in the on-disk depth store for backward compatibility", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-depth-json5-"));
+    const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
+    const storePath = storeTemplate.replaceAll("{agentId}", "main");
+    fs.writeFileSync(
+      storePath,
+      `{
+        // hand-edited legacy store
+        "agent:main:subagent:flat": {
+          sessionId: "subagent-flat",
+          spawnDepth: 2,
+        },
+      }`,
+      "utf-8",
+    );
+
+    const depth = getSubagentDepthFromSessionStore("subagent:flat", {
+      cfg: {
+        session: {
+          store: storeTemplate,
+        },
       },
     });
-
-    const depth = getSubagentDepthFromSessionEntries(prefixedKey);
 
     expect(depth).toBe(2);
   });
 
   it("falls back to session-key segment counting when metadata is missing", () => {
     const key = "agent:main:subagent:flat";
-    const depth = getSubagentDepthFromSessionEntries(key, {
+    const depth = getSubagentDepthFromSessionStore(key, {
       store: {
         [key]: {},
       },

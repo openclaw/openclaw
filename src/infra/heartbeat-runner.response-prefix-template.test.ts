@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { runHeartbeatOnce, type HeartbeatDeps } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
-  seedMainHeartbeatSession,
+  seedMainSessionStore,
   withTempTelegramHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
 
@@ -14,7 +14,7 @@ describe("runHeartbeatOnce responsePrefix templates", () => {
 
   function createTelegramHeartbeatConfig(params: {
     tmpDir: string;
-    agentId: string;
+    storePath: string;
     responsePrefix: string;
   }): OpenClawConfig {
     return {
@@ -32,7 +32,7 @@ describe("runHeartbeatOnce responsePrefix templates", () => {
         },
       } as never,
       messages: { responsePrefix: params.responsePrefix },
-      session: {},
+      session: { store: params.storePath },
     };
   }
 
@@ -60,14 +60,15 @@ describe("runHeartbeatOnce responsePrefix templates", () => {
   }
 
   async function runTemplatedHeartbeat(params: { responsePrefix: string; replyText: string }) {
-    return withTempTelegramHeartbeatSandbox(async ({ tmpDir, agentId, replySpy }) => {
+    return withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg = createTelegramHeartbeatConfig({
         tmpDir,
-        agentId,
+        storePath,
         responsePrefix: params.responsePrefix,
       });
-      await seedMainHeartbeatSession(agentId, cfg, {
+      await seedMainSessionStore(storePath, cfg, {
         lastChannel: "telegram",
+        lastProvider: "telegram",
         lastTo: TELEGRAM_GROUP,
       });
 

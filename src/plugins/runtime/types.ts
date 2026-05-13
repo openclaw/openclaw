@@ -48,6 +48,7 @@ export type SubagentGetSessionResult = SubagentGetSessionMessagesResult;
 
 export type SubagentDeleteSessionParams = {
   sessionKey: string;
+  deleteTranscript?: boolean;
 };
 
 export type RuntimeNodeListParams = {

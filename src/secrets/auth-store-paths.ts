@@ -1,32 +1,36 @@
 import fs from "node:fs";
 import path from "node:path";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
+import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "../utils.js";
 
-export function listAuthProfileStoreAgentDirs(config: OpenClawConfig, stateDir: string): string[] {
-  const dirs = new Set<string>();
-  const resolvedStateDir = resolveUserPath(stateDir);
-  dirs.add(path.join(resolvedStateDir, "agents", "main", "agent"));
+export function listAuthProfileStorePaths(config: OpenClawConfig, stateDir: string): string[] {
+  const paths = new Set<string>();
+  // Scope default auth store discovery to the provided stateDir instead of
+  // ambient process env, so scans do not include unrelated host-global stores.
+  paths.add(path.join(resolveUserPath(stateDir), "agents", "main", "agent", "auth-profiles.json"));
 
-  const agentsRoot = path.join(resolvedStateDir, "agents");
+  const agentsRoot = path.join(resolveUserPath(stateDir), "agents");
   if (fs.existsSync(agentsRoot)) {
     for (const entry of fs.readdirSync(agentsRoot, { withFileTypes: true })) {
       if (!entry.isDirectory()) {
         continue;
       }
-      dirs.add(path.join(agentsRoot, entry.name, "agent"));
+      paths.add(path.join(agentsRoot, entry.name, "agent", "auth-profiles.json"));
     }
   }
 
   for (const agentId of listAgentIds(config)) {
     if (agentId === "main") {
-      dirs.add(path.join(resolvedStateDir, "agents", "main", "agent"));
+      paths.add(
+        path.join(resolveUserPath(stateDir), "agents", "main", "agent", "auth-profiles.json"),
+      );
       continue;
     }
     const agentDir = resolveAgentDir(config, agentId);
-    dirs.add(resolveUserPath(agentDir));
+    paths.add(resolveUserPath(resolveAuthStorePath(agentDir)));
   }
 
-  return [...dirs];
+  return [...paths];
 }

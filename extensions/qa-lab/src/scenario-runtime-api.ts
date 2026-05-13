@@ -59,7 +59,7 @@ export type QaScenarioRuntimeDeps = {
   createSession: QaScenarioRuntimeFunction;
   readEffectiveTools: QaScenarioRuntimeFunction;
   readSkillStatus: QaScenarioRuntimeFunction;
-  readRawQaSessionEntries: QaScenarioRuntimeFunction;
+  readRawQaSessionStore: QaScenarioRuntimeFunction;
   runQaCli: QaScenarioRuntimeFunction;
   extractMediaPathFromText: QaScenarioRuntimeFunction;
   resolveGeneratedImagePath: QaScenarioRuntimeFunction;
@@ -78,6 +78,7 @@ export type QaScenarioRuntimeDeps = {
   handleQaAction: QaScenarioRuntimeFunction;
   extractQaToolPayload: QaScenarioRuntimeFunction;
   formatMemoryDreamingDay: QaScenarioRuntimeFunction;
+  resolveSessionTranscriptsDirForAgent: QaScenarioRuntimeFunction;
   buildAgentSessionKey: QaScenarioRuntimeFunction;
   normalizeLowercaseStringOrEmpty: QaScenarioRuntimeFunction;
   formatErrorMessage: QaScenarioRuntimeFunction;
@@ -143,7 +144,7 @@ type QaScenarioRuntimeApi<
   createSession: TDeps["createSession"];
   readEffectiveTools: TDeps["readEffectiveTools"];
   readSkillStatus: TDeps["readSkillStatus"];
-  readRawQaSessionEntries: TDeps["readRawQaSessionEntries"];
+  readRawQaSessionStore: TDeps["readRawQaSessionStore"];
   runQaCli: TDeps["runQaCli"];
   extractMediaPathFromText: TDeps["extractMediaPathFromText"];
   resolveGeneratedImagePath: TDeps["resolveGeneratedImagePath"];
@@ -162,6 +163,7 @@ type QaScenarioRuntimeApi<
   handleQaAction: TDeps["handleQaAction"];
   extractQaToolPayload: TDeps["extractQaToolPayload"];
   formatMemoryDreamingDay: TDeps["formatMemoryDreamingDay"];
+  resolveSessionTranscriptsDirForAgent: TDeps["resolveSessionTranscriptsDirForAgent"];
   buildAgentSessionKey: TDeps["buildAgentSessionKey"];
   normalizeLowercaseStringOrEmpty: TDeps["normalizeLowercaseStringOrEmpty"];
   formatErrorMessage: TDeps["formatErrorMessage"];
@@ -242,7 +244,7 @@ export function createQaScenarioRuntimeApi<
     createSession: params.deps.createSession,
     readEffectiveTools: params.deps.readEffectiveTools,
     readSkillStatus: params.deps.readSkillStatus,
-    readRawQaSessionEntries: params.deps.readRawQaSessionEntries,
+    readRawQaSessionStore: params.deps.readRawQaSessionStore,
     runQaCli: params.deps.runQaCli,
     extractMediaPathFromText: params.deps.extractMediaPathFromText,
     resolveGeneratedImagePath: params.deps.resolveGeneratedImagePath,
@@ -261,6 +263,7 @@ export function createQaScenarioRuntimeApi<
     handleQaAction: params.deps.handleQaAction,
     extractQaToolPayload: params.deps.extractQaToolPayload,
     formatMemoryDreamingDay: params.deps.formatMemoryDreamingDay,
+    resolveSessionTranscriptsDirForAgent: params.deps.resolveSessionTranscriptsDirForAgent,
     buildAgentSessionKey: params.deps.buildAgentSessionKey,
     normalizeLowercaseStringOrEmpty: params.deps.normalizeLowercaseStringOrEmpty,
     formatErrorMessage: params.deps.formatErrorMessage,

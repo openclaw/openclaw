@@ -9,7 +9,7 @@ const HEALTH_FALLBACK: HealthSummary = {
   heartbeatSeconds: 0,
   defaultAgentId: "",
   agents: [],
-  sessions: { databasePath: "", count: 0, recent: [] },
+  sessions: { path: "", count: 0, recent: [] },
 };
 
 /** State slice consumed by {@link loadHealthState}. Follows the agents/sessions convention. */

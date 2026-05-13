@@ -239,7 +239,7 @@ describe("cron tool", () => {
   it("allows scoped isolated cron runs to read cron scheduler status", async () => {
     callGatewayMock.mockResolvedValueOnce({
       enabled: true,
-      storeKey: "default",
+      storePath: "/home/user/.openclaw/cron/jobs.json",
       jobs: 37,
       nextWakeAtMs: 1_234,
     });
@@ -775,7 +775,7 @@ describe("cron tool", () => {
     });
   });
 
-  it("preserves telegram dm thread ids when inferring delivery", async () => {
+  it("preserves legacy telegram dm thread ids when inferring delivery", async () => {
     expect(
       await executeAddAndReadDelivery({
         callId: "call-telegram-dm-thread",

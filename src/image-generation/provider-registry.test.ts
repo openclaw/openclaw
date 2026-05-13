@@ -2,8 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import type { ImageGenerationProviderPlugin } from "../plugins/types.js";
 
-const resolvePluginCapabilityProvidersMock = vi.hoisted(() => vi.fn());
-
+const resolvePluginCapabilityProvidersMock = vi.hoisted(() =>
+  vi.fn<() => ImageGenerationProviderPlugin[]>(() => []),
+);
 vi.mock("../plugins/capability-provider-runtime.js", () => ({
   resolvePluginCapabilityProviders: resolvePluginCapabilityProvidersMock,
 }));
@@ -40,7 +41,7 @@ function requireLoadedImageProvider(
 }
 
 describe("image-generation provider registry", () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     vi.resetModules();
     resolvePluginCapabilityProvidersMock.mockReset();
     resolvePluginCapabilityProvidersMock.mockReturnValue([]);

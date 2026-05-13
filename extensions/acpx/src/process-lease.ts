@@ -1,5 +1,7 @@
 import { randomUUID, createHash } from "node:crypto";
-import { createPluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
 
 export const OPENCLAW_ACPX_LEASE_ID_ENV = "OPENCLAW_ACPX_LEASE_ID";
 export const OPENCLAW_GATEWAY_INSTANCE_ID_ENV = "OPENCLAW_GATEWAY_INSTANCE_ID";
@@ -28,18 +30,12 @@ export type AcpxProcessLeaseStore = {
   markState(leaseId: string, state: AcpxProcessLeaseState): Promise<void>;
 };
 
-type LeaseStoreEntry = {
+type LeaseFile = {
   version: 1;
-  lease: AcpxProcessLease;
+  leases: AcpxProcessLease[];
 };
 
-const ACPX_PLUGIN_ID = "acpx";
-const PROCESS_LEASES_NAMESPACE = "process-leases";
-
-const leaseStore = createPluginStateKeyedStore<LeaseStoreEntry>(ACPX_PLUGIN_ID, {
-  namespace: PROCESS_LEASES_NAMESPACE,
-  maxEntries: 10_000,
-});
+const LEASE_FILE = "process-leases.json";
 
 function normalizeLease(value: unknown): AcpxProcessLease | undefined {
   if (typeof value !== "object" || value === null) {
@@ -73,52 +69,53 @@ function normalizeLease(value: unknown): AcpxProcessLease | undefined {
   };
 }
 
-export function createAcpxProcessLeaseStore(): AcpxProcessLeaseStore {
-  let updateQueue: Promise<void> = Promise.resolve();
+async function readLeaseFile(filePath: string): Promise<LeaseFile> {
+  const { value } = await readJsonFileWithFallback<Partial<LeaseFile>>(filePath, {
+    version: 1,
+    leases: [],
+  });
+  const leases = Array.isArray(value.leases)
+    ? value.leases.map(normalizeLease).filter((lease): lease is AcpxProcessLease => !!lease)
+    : [];
+  return { version: 1, leases };
+}
 
-  async function readStoredLeases(): Promise<AcpxProcessLease[]> {
-    const entries = await leaseStore.entries();
-    return entries
-      .map((entry) => normalizeLease(entry.value.lease))
-      .filter((lease): lease is AcpxProcessLease => !!lease);
-  }
+function writeLeaseFile(filePath: string, value: LeaseFile): Promise<void> {
+  return writeJsonFileAtomically(filePath, value);
+}
+
+export function createAcpxProcessLeaseStore(params: { stateDir: string }): AcpxProcessLeaseStore {
+  const filePath = path.join(params.stateDir, LEASE_FILE);
+  let updateQueue: Promise<void> = Promise.resolve();
 
   async function update(
     mutator: (leases: AcpxProcessLease[]) => AcpxProcessLease[],
   ): Promise<void> {
     const run = updateQueue.then(async () => {
-      const current = await readStoredLeases();
-      const next = mutator(current);
-      const nextIds = new Set(next.map((lease) => lease.leaseId));
-      await Promise.all([
-        ...current
-          .filter((lease) => !nextIds.has(lease.leaseId))
-          .map((lease) => leaseStore.delete(lease.leaseId)),
-        ...next.map((lease) =>
-          leaseStore.register(lease.leaseId, {
-            version: 1,
-            lease,
-          }),
-        ),
-      ]);
+      await fs.mkdir(params.stateDir, { recursive: true });
+      const current = await readLeaseFile(filePath);
+      await writeLeaseFile(filePath, {
+        version: 1,
+        leases: mutator(current.leases),
+      });
     });
     updateQueue = run.catch(() => {});
     await run;
   }
 
-  async function readCurrent(): Promise<AcpxProcessLease[]> {
+  async function readCurrent(): Promise<LeaseFile> {
     await updateQueue;
-    return await readStoredLeases();
+    return await readLeaseFile(filePath);
   }
 
   return {
     async load(leaseId) {
       const current = await readCurrent();
-      return current.find((lease) => lease.leaseId === leaseId);
+      return current.leases.find((lease) => lease.leaseId === leaseId);
     },
     async listOpen(gatewayInstanceId) {
       const current = await readCurrent();
-      return current.filter(
+      return current.leases.filter(
         (lease) =>
           (lease.state === "open" || lease.state === "closing") &&
           (!gatewayInstanceId || lease.gatewayInstanceId === gatewayInstanceId),

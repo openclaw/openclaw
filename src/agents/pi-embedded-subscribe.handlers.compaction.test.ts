@@ -2,28 +2,21 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { drainSessionStoreWriterQueuesForTest } from "../config/sessions.js";
 import {
   readCompactionCount,
-  seedSessionEntry,
+  seedSessionStore,
   waitForCompactionCount,
 } from "./pi-embedded-subscribe.compaction-test-helpers.js";
 import {
   handleCompactionEnd,
   handleCompactionStart,
-  reconcileSessionRowCompactionCountAfterSuccess,
+  reconcileSessionStoreCompactionCountAfterSuccess,
 } from "./pi-embedded-subscribe.handlers.compaction.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 
-const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
-const TEST_AGENT_ID = "test-agent";
-
-function useStateDir(stateDir: string): void {
-  process.env.OPENCLAW_STATE_DIR = stateDir;
-}
-
 function createCompactionContext(params: {
+  storePath: string;
   sessionKey: string;
   agentId?: string;
   initialCount: number;
@@ -34,10 +27,10 @@ function createCompactionContext(params: {
     params: {
       runId: "run-test",
       session: { messages: [] } as never,
-      config: {} as never,
+      config: { session: { store: params.storePath } } as never,
       sessionKey: params.sessionKey,
       sessionId: "session-1",
-      agentId: params.agentId ?? TEST_AGENT_ID,
+      agentId: params.agentId ?? "test-agent",
       onAgentEvent: undefined,
     },
     state: {
@@ -80,71 +73,68 @@ function loggedInfoMessageAt(info: ReturnType<typeof vi.fn>, index: number): str
 }
 
 afterEach(async () => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-  if (ORIGINAL_STATE_DIR === undefined) {
-    delete process.env.OPENCLAW_STATE_DIR;
-  } else {
-    process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
-  }
+  await drainSessionStoreWriterQueuesForTest();
 });
 
-describe("reconcileSessionRowCompactionCountAfterSuccess", () => {
+describe("reconcileSessionStoreCompactionCountAfterSuccess", () => {
   it("raises the stored compaction count to the observed value", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-reconcile-"));
-    useStateDir(tmp);
+    const storePath = path.join(tmp, "sessions.json");
     const sessionKey = "main";
-    await seedSessionEntry({
-      agentId: TEST_AGENT_ID,
+    await seedSessionStore({
+      storePath,
       sessionKey,
       compactionCount: 1,
     });
 
-    const nextCount = await reconcileSessionRowCompactionCountAfterSuccess({
+    const nextCount = await reconcileSessionStoreCompactionCountAfterSuccess({
       sessionKey,
-      agentId: TEST_AGENT_ID,
+      agentId: "test-agent",
+      configStore: storePath,
       observedCompactionCount: 2,
       now: 2_000,
     });
 
     expect(nextCount).toBe(2);
-    expect(await readCompactionCount(TEST_AGENT_ID, sessionKey)).toBe(2);
+    expect(await readCompactionCount(storePath, sessionKey)).toBe(2);
   });
 
-  it("does not double count when the row is already at or above the observed value", async () => {
+  it("does not double count when the store is already at or above the observed value", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-idempotent-"));
-    useStateDir(tmp);
+    const storePath = path.join(tmp, "sessions.json");
     const sessionKey = "main";
-    await seedSessionEntry({
-      agentId: TEST_AGENT_ID,
+    await seedSessionStore({
+      storePath,
       sessionKey,
       compactionCount: 3,
     });
 
-    const nextCount = await reconcileSessionRowCompactionCountAfterSuccess({
+    const nextCount = await reconcileSessionStoreCompactionCountAfterSuccess({
       sessionKey,
-      agentId: TEST_AGENT_ID,
+      agentId: "test-agent",
+      configStore: storePath,
       observedCompactionCount: 2,
       now: 2_000,
     });
 
     expect(nextCount).toBe(3);
-    expect(await readCompactionCount(TEST_AGENT_ID, sessionKey)).toBe(3);
+    expect(await readCompactionCount(storePath, sessionKey)).toBe(3);
   });
 });
 
 describe("compaction lifecycle logging", () => {
   it("logs lifecycle events at info level for gateway watch visibility", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-log-"));
-    useStateDir(tmp);
+    const storePath = path.join(tmp, "sessions.json");
     const sessionKey = "main";
-    await seedSessionEntry({
-      agentId: TEST_AGENT_ID,
+    await seedSessionStore({
+      storePath,
       sessionKey,
       compactionCount: 0,
     });
     const info = vi.fn();
     const ctx = createCompactionContext({
+      storePath,
       sessionKey,
       initialCount: 0,
       info,
@@ -162,7 +152,7 @@ describe("compaction lifecycle logging", () => {
       aborted: false,
     });
 
-    expect(info.mock.calls[0]?.[0]).toBe("embedded run auto-compaction start");
+    expect(loggedInfoMessageAt(info, 0)).toBe("embedded run auto-compaction start");
     const startMeta = loggedInfoMetaAt(info, 0);
     expect(startMeta.event).toBe("embedded_run_compaction_start");
     expect(startMeta.reason).toBe("threshold");
@@ -171,7 +161,7 @@ describe("compaction lifecycle logging", () => {
       "embedded run auto-compaction start: runId=run-test reason=threshold",
     );
 
-    expect(info.mock.calls[1]?.[0]).toBe("embedded run auto-compaction complete");
+    expect(loggedInfoMessageAt(info, 1)).toBe("embedded run auto-compaction complete");
     const endMeta = loggedInfoMetaAt(info, 1);
     expect(endMeta.event).toBe("embedded_run_compaction_end");
     expect(endMeta.reason).toBe("threshold");
@@ -185,15 +175,16 @@ describe("compaction lifecycle logging", () => {
 
   it("logs manual compaction as incomplete when no result is produced", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-incomplete-log-"));
-    useStateDir(tmp);
+    const storePath = path.join(tmp, "sessions.json");
     const sessionKey = "main";
-    await seedSessionEntry({
-      agentId: TEST_AGENT_ID,
+    await seedSessionStore({
+      storePath,
       sessionKey,
       compactionCount: 0,
     });
     const info = vi.fn();
     const ctx = createCompactionContext({
+      storePath,
       sessionKey,
       initialCount: 0,
       info,
@@ -211,7 +202,7 @@ describe("compaction lifecycle logging", () => {
       aborted: false,
     });
 
-    expect(info.mock.calls[0]?.[0]).toBe("embedded run manual compaction start");
+    expect(loggedInfoMessageAt(info, 0)).toBe("embedded run manual compaction start");
     const startMeta = loggedInfoMetaAt(info, 0);
     expect(startMeta.event).toBe("embedded_run_compaction_start");
     expect(startMeta.reason).toBe("manual");
@@ -220,7 +211,7 @@ describe("compaction lifecycle logging", () => {
       "embedded run manual compaction start: runId=run-test reason=manual",
     );
 
-    expect(info.mock.calls[1]?.[0]).toBe("embedded run manual compaction incomplete");
+    expect(loggedInfoMessageAt(info, 1)).toBe("embedded run manual compaction incomplete");
     const endMeta = loggedInfoMetaAt(info, 1);
     expect(endMeta.event).toBe("embedded_run_compaction_end");
     expect(endMeta.reason).toBe("manual");
@@ -234,15 +225,16 @@ describe("compaction lifecycle logging", () => {
 
   it("defaults legacy synthetic compaction events to threshold logs", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-legacy-log-"));
-    useStateDir(tmp);
+    const storePath = path.join(tmp, "sessions.json");
     const sessionKey = "main";
-    await seedSessionEntry({
-      agentId: TEST_AGENT_ID,
+    await seedSessionStore({
+      storePath,
       sessionKey,
       compactionCount: 0,
     });
     const info = vi.fn();
     const ctx = createCompactionContext({
+      storePath,
       sessionKey,
       initialCount: 0,
       info,
@@ -258,7 +250,7 @@ describe("compaction lifecycle logging", () => {
       aborted: false,
     });
 
-    expect(info.mock.calls[0]?.[0]).toBe("embedded run auto-compaction start");
+    expect(loggedInfoMessageAt(info, 0)).toBe("embedded run auto-compaction start");
     const startMeta = loggedInfoMetaAt(info, 0);
     expect(startMeta.event).toBe("embedded_run_compaction_start");
     expect(startMeta.reason).toBe("threshold");
@@ -267,7 +259,7 @@ describe("compaction lifecycle logging", () => {
       "embedded run auto-compaction start: runId=run-test reason=threshold",
     );
 
-    expect(info.mock.calls[1]?.[0]).toBe("embedded run auto-compaction complete");
+    expect(loggedInfoMessageAt(info, 1)).toBe("embedded run auto-compaction complete");
     const endMeta = loggedInfoMetaAt(info, 1);
     expect(endMeta.event).toBe("embedded_run_compaction_end");
     expect(endMeta.reason).toBe("threshold");
@@ -281,17 +273,18 @@ describe("compaction lifecycle logging", () => {
 });
 
 describe("handleCompactionEnd", () => {
-  it("reconciles the session row after a successful compaction end event", async () => {
+  it("reconciles the session store after a successful compaction end event", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-handler-"));
-    useStateDir(tmp);
+    const storePath = path.join(tmp, "sessions.json");
     const sessionKey = "main";
-    await seedSessionEntry({
-      agentId: TEST_AGENT_ID,
+    await seedSessionStore({
+      storePath,
       sessionKey,
       compactionCount: 1,
     });
 
     const ctx = createCompactionContext({
+      storePath,
       sessionKey,
       initialCount: 1,
     });
@@ -305,12 +298,12 @@ describe("handleCompactionEnd", () => {
     });
 
     await waitForCompactionCount({
-      agentId: TEST_AGENT_ID,
+      storePath,
       sessionKey,
       expected: 2,
     });
 
-    expect(await readCompactionCount(TEST_AGENT_ID, sessionKey)).toBe(2);
+    expect(await readCompactionCount(storePath, sessionKey)).toBe(2);
     expect(ctx.noteCompactionTokensAfter).toHaveBeenCalledWith(undefined);
   });
 });

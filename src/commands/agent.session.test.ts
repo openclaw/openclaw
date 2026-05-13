@@ -1,29 +1,23 @@
+import fs from "node:fs";
 import path from "node:path";
 import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { resolveAgentDir, resolveSessionAgentId } from "../agents/agent-scope.js";
 import { resolveSession } from "../agents/command/session.js";
-import { upsertSessionEntry } from "../config/sessions/store.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(
-    async (home) => {
-      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(home, ".openclaw"));
-      return await fn(home);
-    },
-    {
-      prefix: "openclaw-agent-session-",
-      skipStateCleanup: true,
-    },
-  );
+  return withTempHomeBase(fn, {
+    prefix: "openclaw-agent-session-",
+    skipSessionCleanup: true,
+  });
 }
 
 function mockConfig(
   home: string,
+  storePath: string,
   agentsList?: Array<{ id: string; default?: boolean }>,
 ): OpenClawConfig {
   return {
@@ -35,46 +29,47 @@ function mockConfig(
       },
       list: agentsList,
     },
-    session: { mainKey: "main" },
+    session: { store: storePath, mainKey: "main" },
   } as OpenClawConfig;
 }
 
-async function writeSessionRows(
-  agentId: string,
+function writeSessionStoreSeed(
+  storePath: string,
   sessions: Record<string, Record<string, unknown>>,
-): Promise<void> {
-  for (const [sessionKey, entry] of Object.entries(sessions)) {
-    upsertSessionEntry({ agentId, sessionKey, entry: entry as SessionEntry });
-  }
+) {
+  fs.mkdirSync(path.dirname(storePath), { recursive: true });
+  fs.writeFileSync(storePath, JSON.stringify(sessions));
 }
 
 async function withCrossAgentResumeFixture(
   run: (params: { sessionId: string; sessionKey: string; cfg: OpenClawConfig }) => Promise<void>,
 ): Promise<void> {
   await withTempHome(async (home) => {
+    const storePattern = path.join(home, "sessions", "{agentId}", "sessions.json");
+    const execStore = path.join(home, "sessions", "exec", "sessions.json");
     const sessionId = "session-exec-hook";
     const sessionKey = "agent:exec:hook:gmail:thread-1";
-    await writeSessionRows("exec", {
+    writeSessionStoreSeed(execStore, {
       [sessionKey]: {
         sessionId,
         updatedAt: Date.now(),
         systemSent: true,
       },
     });
-    const cfg = mockConfig(home, [{ id: "dev" }, { id: "exec", default: true }]);
+    const cfg = mockConfig(home, storePattern, [{ id: "dev" }, { id: "exec", default: true }]);
     await run({ sessionId, sessionKey, cfg });
   });
 }
 
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-  vi.unstubAllEnvs();
+beforeEach(() => {
+  clearSessionStoreCacheForTest();
 });
 
 describe("agent session resolution", () => {
   it("creates a stable session key for explicit session-id-only runs", async () => {
     await withTempHome(async (home) => {
-      const cfg = mockConfig(home);
+      const store = path.join(home, "sessions.json");
+      const cfg = mockConfig(home, store);
 
       const resolution = resolveSession({ cfg, sessionId: "explicit-session-123" });
 
@@ -97,39 +92,44 @@ describe("agent session resolution", () => {
 
   it("resolves duplicate cross-agent sessionIds deterministically", async () => {
     await withTempHome(async (home) => {
-      await writeSessionRows("other", {
+      const storePattern = path.join(home, "sessions", "{agentId}", "sessions.json");
+      const otherStore = path.join(home, "sessions", "other", "sessions.json");
+      const retiredStore = path.join(home, "sessions", "retired", "sessions.json");
+      writeSessionStoreSeed(otherStore, {
         "agent:other:main": {
           sessionId: "run-dup",
           updatedAt: Date.now() + 1_000,
         },
       });
-      await writeSessionRows("retired", {
+      writeSessionStoreSeed(retiredStore, {
         "agent:retired:acp:run-dup": {
           sessionId: "run-dup",
           updatedAt: Date.now(),
         },
       });
-      const cfg = mockConfig(home, [{ id: "other" }, { id: "retired", default: true }]);
+      const cfg = mockConfig(home, storePattern, [
+        { id: "other" },
+        { id: "retired", default: true },
+      ]);
 
       const resolution = resolveSession({ cfg, sessionId: "run-dup" });
 
       expect(resolution.sessionKey).toBe("agent:retired:acp:run-dup");
-      expect(resolution.agentId).toBe("retired");
+      expect(resolution.storePath).toBe(retiredStore);
     });
   });
 
-  it("uses typed lastChannel for channel-specific session reset overrides", async () => {
+  it("uses origin.provider for channel-specific session reset overrides", async () => {
     await withTempHome(async (home) => {
-      await writeSessionRows("main", {
+      const store = path.join(home, "sessions.json");
+      writeSessionStoreSeed(store, {
         main: {
-          sessionId: "typed-channel-reset",
+          sessionId: "origin-provider-reset",
           updatedAt: Date.now() - 30 * 60_000,
-          lastChannel: "quietchat",
-          lastTo: "channel:quiet-room",
-          chatType: "channel",
+          origin: { provider: "quietchat" },
         },
       });
-      const cfg = mockConfig(home);
+      const cfg = mockConfig(home, store);
       cfg.session = {
         ...cfg.session,
         reset: { mode: "idle", idleMinutes: 10 },
@@ -140,7 +140,7 @@ describe("agent session resolution", () => {
 
       const resolution = resolveSession({ cfg, sessionKey: "main" });
 
-      expect(resolution.sessionId).toBe("typed-channel-reset");
+      expect(resolution.sessionId).toBe("origin-provider-reset");
       expect(resolution.isNewSession).toBe(false);
     });
   });

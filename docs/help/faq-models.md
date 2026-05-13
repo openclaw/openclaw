@@ -128,7 +128,7 @@ troubleshooting, see the main [FAQ](/help/faq).
     /model opus@anthropic:work
     ```
 
-    Tip: `/model status` shows which agent is active, which SQLite auth-profile row is being used, and which auth profile will be tried next.
+    Tip: `/model status` shows which agent is active, which `auth-profiles.json` file is being used, and which auth profile will be tried next.
     It also shows the configured provider endpoint (`baseUrl`) and API mode (`api`) when available.
 
     **How do I unpin a profile I set with @profile?**
@@ -354,7 +354,7 @@ troubleshooting, see the main [FAQ](/help/faq).
     stored in:
 
     ```
-    ~/.openclaw/state/openclaw.sqlite#table/auth_profile_stores/<agentDir>
+    ~/.openclaw/agents/<agentId>/agent/auth-profiles.json
     ```
 
     Fix options:
@@ -423,12 +423,12 @@ troubleshooting, see the main [FAQ](/help/faq).
     **Fix checklist:**
 
     - **Confirm where auth profiles live** (new vs legacy paths)
-      - Current: `~/.openclaw/state/openclaw.sqlite#table/auth_profile_stores/<agentDir>`
+      - Current: `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
       - Legacy: `~/.openclaw/agent/*` (migrated by `openclaw doctor`)
     - **Confirm your env var is loaded by the Gateway**
       - If you set `ANTHROPIC_API_KEY` in your shell but run the Gateway via systemd/launchd, it may not inherit it. Put it in `~/.openclaw/.env` or enable `env.shellEnv`.
     - **Make sure you're editing the correct agent**
-      - Multi-agent setups mean there can be multiple SQLite auth-profile rows.
+      - Multi-agent setups mean there can be multiple `auth-profiles.json` files.
     - **Sanity-check model/auth status**
       - Use `openclaw models status` to see configured models and whether providers are authenticated.
 
@@ -476,7 +476,7 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
     An auth profile is a named credential record (OAuth or API key) tied to a provider. Profiles live in:
 
     ```
-    ~/.openclaw/state/openclaw.sqlite#table/auth_profile_stores/<agentDir>
+    ~/.openclaw/agents/<agentId>/agent/auth-profiles.json
     ```
 
     To inspect saved profiles without dumping secrets, run `openclaw models auth list` (optionally `--provider <id>` or `--json`). See [Models CLI](/cli/models#auth-profiles) for details.
@@ -501,7 +501,7 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
     for one model can still be usable for a sibling model on the same provider,
     while billing/disabled windows still block the whole profile.
 
-    You can also set a **per-agent** order override via the CLI. The runtime order state is stored in SQLite:
+    You can also set a **per-agent** order override (stored in that agent's `auth-state.json`) via the CLI:
 
     ```bash
     # Defaults to the configured default agent (omit --agent)

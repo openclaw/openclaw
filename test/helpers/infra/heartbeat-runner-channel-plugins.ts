@@ -17,19 +17,6 @@ type HeartbeatSendFn = (
   opts?: Record<string, unknown>,
 ) => Promise<Record<string, unknown>>;
 
-function parseTelegramMessageThreadId(
-  threadId: string | number | null | undefined,
-): number | undefined {
-  if (typeof threadId === "number") {
-    return Number.isInteger(threadId) ? threadId : undefined;
-  }
-  if (typeof threadId !== "string" || !threadId.trim()) {
-    return undefined;
-  }
-  const parsed = Number(threadId);
-  return Number.isInteger(parsed) ? parsed : undefined;
-}
-
 function createHeartbeatOutboundAdapter(channelId: HeartbeatSendChannelId): ChannelOutboundAdapter {
   return {
     deliveryMode: "direct",
@@ -45,14 +32,11 @@ function createHeartbeatOutboundAdapter(channelId: HeartbeatSendChannelId): Chan
       };
       const sendOptions =
         channelId === "telegram"
-          ? (() => {
-              const messageThreadId = parseTelegramMessageThreadId(threadId);
-              return {
-                ...baseOptions,
-                ...(messageThreadId === undefined ? {} : { messageThreadId }),
-                ...(typeof replyToId === "string" ? { replyToMessageId: Number(replyToId) } : {}),
-              };
-            })()
+          ? {
+              ...baseOptions,
+              ...(typeof threadId === "number" ? { messageThreadId: threadId } : {}),
+              ...(typeof replyToId === "string" ? { replyToMessageId: Number(replyToId) } : {}),
+            }
           : {
               ...baseOptions,
               ...opts,

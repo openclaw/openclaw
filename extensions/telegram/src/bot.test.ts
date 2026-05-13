@@ -1,9 +1,11 @@
+import { rm } from "node:fs/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   clearPluginInteractiveHandlers,
   registerPluginInteractiveHandler,
 } from "openclaw/plugin-sdk/plugin-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import { loadSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramInteractiveHandlerContext } from "./interactive-dispatch.js";
@@ -16,7 +18,6 @@ const {
   getFileSpy,
   getChatSpy,
   getLoadConfigMock,
-  getSessionStoreEntriesForTest,
   getLoadWebMediaMock,
   getReadChannelAllowFromStoreMock,
   getOnHandler,
@@ -34,7 +35,6 @@ const {
 
 let createTelegramBotBase: typeof import("./bot-core.js").createTelegramBotCore;
 let setTelegramBotRuntimeForTest: typeof import("./bot-core.js").setTelegramBotRuntimeForTest;
-let resetTelegramMessageCacheForTests: typeof import("./message-cache.js").resetTelegramMessageCacheForTests;
 let createTelegramBot: (
   opts: import("./bot.types.js").TelegramBotOptions,
 ) => ReturnType<typeof import("./bot-core.js").createTelegramBotCore>;
@@ -168,7 +168,6 @@ describe("createTelegramBot", () => {
   beforeAll(async () => {
     ({ createTelegramBotCore: createTelegramBotBase, setTelegramBotRuntimeForTest } =
       await import("./bot-core.js"));
-    ({ resetTelegramMessageCacheForTests } = await import("./message-cache.js"));
   });
   beforeAll(() => {
     process.env.TZ = "UTC";
@@ -184,7 +183,6 @@ describe("createTelegramBot", () => {
   beforeEach(() => {
     setMyCommandsSpy.mockClear();
     clearPluginInteractiveHandlers();
-    resetTelegramMessageCacheForTests();
     loadConfig.mockReturnValue({
       agents: {
         defaults: {
@@ -253,58 +251,67 @@ describe("createTelegramBot", () => {
     replySpy.mockClear();
     editMessageTextSpy.mockClear();
 
-    const config = {
-      agents: {
-        defaults: {
-          model: "anthropic/claude-opus-4-6",
-          models: {
-            "anthropic/claude-opus-4-6": {},
-            "openai/gpt-5.4": {},
+    const storePath = `/tmp/openclaw-telegram-callback-authz-${process.pid}-${Date.now()}.json`;
+
+    await rm(storePath, { force: true });
+    try {
+      const config = {
+        agents: {
+          defaults: {
+            model: "anthropic/claude-opus-4-6",
+            models: {
+              "anthropic/claude-opus-4-6": {},
+              "openai/gpt-5.4": {},
+            },
           },
         },
-      },
-      channels: {
-        telegram: {
-          dmPolicy: "pairing",
-          capabilities: { inlineButtons: "dm" },
+        channels: {
+          telegram: {
+            dmPolicy: "pairing",
+            capabilities: { inlineButtons: "dm" },
+          },
         },
-      },
-      session: {},
-    } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
+        session: {
+          store: storePath,
+        },
+      } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
 
-    loadConfig.mockReturnValue(config);
-    readChannelAllowFromStore.mockResolvedValueOnce([]);
+      loadConfig.mockReturnValue(config);
+      readChannelAllowFromStore.mockResolvedValueOnce([]);
 
-    createTelegramBot({
-      token: "tok",
-      config,
-    });
-    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
-    if (!callbackHandler) {
-      throw new Error("Expected Telegram callback_query handler");
+      createTelegramBot({
+        token: "tok",
+        config,
+      });
+      const callbackHandler = onSpy.mock.calls.find(
+        (call) => call[0] === "callback_query",
+      )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
+      if (!callbackHandler) {
+        throw new Error("Expected Telegram callback_query handler");
+      }
+
+      await callbackHandler({
+        callbackQuery: {
+          id: "cbq-model-authz-bypass-1",
+          data: "mdl_sel_openai/gpt-5.4",
+          from: { id: 999, first_name: "Mallory", username: "mallory" },
+          message: {
+            chat: { id: 1234, type: "private" },
+            date: 1736380800,
+            message_id: 19,
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+
+      expect(replySpy).not.toHaveBeenCalled();
+      expect(editMessageTextSpy).not.toHaveBeenCalled();
+      expect(loadSessionStore(storePath, { skipCache: true })).toStrictEqual({});
+      expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-authz-bypass-1");
+    } finally {
+      await rm(storePath, { force: true });
     }
-
-    await callbackHandler({
-      callbackQuery: {
-        id: "cbq-model-authz-bypass-1",
-        data: "mdl_sel_openai/gpt-5.4",
-        from: { id: 999, first_name: "Mallory", username: "mallory" },
-        message: {
-          chat: { id: 1234, type: "private" },
-          date: 1736380800,
-          message_id: 19,
-        },
-      },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({ download: async () => new Uint8Array() }),
-    });
-
-    expect(replySpy).not.toHaveBeenCalled();
-    expect(editMessageTextSpy).not.toHaveBeenCalled();
-    expect(getSessionStoreEntriesForTest()).toStrictEqual({});
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-authz-bypass-1");
   });
 
   it("blocks group model-selection callbacks for senders who are not authorized for /models", async () => {
@@ -312,63 +319,72 @@ describe("createTelegramBot", () => {
     replySpy.mockClear();
     editMessageTextSpy.mockClear();
 
-    const config = {
-      agents: {
-        defaults: {
-          model: "anthropic/claude-opus-4-6",
-          models: {
-            "anthropic/claude-opus-4-6": {},
-            "openai/gpt-5.4": {},
+    const storePath = `/tmp/openclaw-telegram-group-model-authz-${process.pid}-${Date.now()}.json`;
+
+    await rm(storePath, { force: true });
+    try {
+      const config = {
+        agents: {
+          defaults: {
+            model: "anthropic/claude-opus-4-6",
+            models: {
+              "anthropic/claude-opus-4-6": {},
+              "openai/gpt-5.4": {},
+            },
           },
         },
-      },
-      commands: {
-        allowFrom: {
-          telegram: ["9"],
+        commands: {
+          allowFrom: {
+            telegram: ["9"],
+          },
         },
-      },
-      channels: {
-        telegram: {
-          dmPolicy: "open",
-          capabilities: { inlineButtons: "group" },
-          groupPolicy: "open",
-          groups: { "*": { requireMention: false } },
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            capabilities: { inlineButtons: "group" },
+            groupPolicy: "open",
+            groups: { "*": { requireMention: false } },
+          },
         },
-      },
-      session: {},
-    } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
+        session: {
+          store: storePath,
+        },
+      } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
 
-    loadConfig.mockReturnValue(config);
-    createTelegramBot({
-      token: "tok",
-      config,
-    });
-    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
-    if (!callbackHandler) {
-      throw new Error("Expected Telegram callback_query handler");
+      loadConfig.mockReturnValue(config);
+      createTelegramBot({
+        token: "tok",
+        config,
+      });
+      const callbackHandler = onSpy.mock.calls.find(
+        (call) => call[0] === "callback_query",
+      )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
+      if (!callbackHandler) {
+        throw new Error("Expected Telegram callback_query handler");
+      }
+
+      await callbackHandler({
+        callbackQuery: {
+          id: "cbq-group-model-authz-1",
+          data: "mdl_sel_openai/gpt-5.4",
+          from: { id: 999, first_name: "Mallory", username: "mallory" },
+          message: {
+            chat: { id: -100999, type: "supergroup", title: "Test Group" },
+            date: 1736380800,
+            message_id: 21,
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+
+      expect(replySpy).not.toHaveBeenCalled();
+      expect(editMessageTextSpy).not.toHaveBeenCalled();
+      expect(loadSessionStore(storePath, { skipCache: true })).toStrictEqual({});
+      expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-group-model-authz-1");
+    } finally {
+      await rm(storePath, { force: true });
     }
-
-    await callbackHandler({
-      callbackQuery: {
-        id: "cbq-group-model-authz-1",
-        data: "mdl_sel_openai/gpt-5.4",
-        from: { id: 999, first_name: "Mallory", username: "mallory" },
-        message: {
-          chat: { id: -100999, type: "supergroup", title: "Test Group" },
-          date: 1736380800,
-          message_id: 21,
-        },
-      },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({ download: async () => new Uint8Array() }),
-    });
-
-    expect(replySpy).not.toHaveBeenCalled();
-    expect(editMessageTextSpy).not.toHaveBeenCalled();
-    expect(getSessionStoreEntriesForTest()).toStrictEqual({});
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-group-model-authz-1");
   });
 
   it("recomputes group model-selection callback auth from runtime command config", async () => {
@@ -376,6 +392,9 @@ describe("createTelegramBot", () => {
     replySpy.mockClear();
     editMessageTextSpy.mockClear();
 
+    const storePath = `/tmp/openclaw-telegram-group-model-authz-runtime-${process.pid}-${Date.now()}.json`;
+
+    await rm(storePath, { force: true });
     try {
       let currentConfig = {
         agents: {
@@ -400,7 +419,9 @@ describe("createTelegramBot", () => {
             groups: { "*": { requireMention: false } },
           },
         },
-        session: {},
+        session: {
+          store: storePath,
+        },
       } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
 
       loadConfig.mockImplementation(() => currentConfig);
@@ -441,7 +462,7 @@ describe("createTelegramBot", () => {
 
       expect(replySpy).not.toHaveBeenCalled();
       expect(editMessageTextSpy).not.toHaveBeenCalled();
-      expect(getSessionStoreEntriesForTest()).toStrictEqual({});
+      expect(loadSessionStore(storePath, { skipCache: true })).toStrictEqual({});
       expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-group-model-authz-runtime-1");
     } finally {
       loadConfig.mockReset();
@@ -455,6 +476,7 @@ describe("createTelegramBot", () => {
           telegram: { dmPolicy: "open", allowFrom: ["*"] },
         },
       });
+      await rm(storePath, { force: true });
     }
   });
 
@@ -1107,6 +1129,7 @@ describe("createTelegramBot", () => {
     editMessageTextSpy.mockClear();
 
     const modelId = "us.anthropic.claude-3-5-sonnet-20240620-v1:0";
+    const storePath = `/tmp/openclaw-telegram-model-compact-${process.pid}-${Date.now()}.json`;
     const config: OpenClawConfig = {
       agents: {
         defaults: {
@@ -1119,49 +1142,56 @@ describe("createTelegramBot", () => {
           allowFrom: ["*"],
         },
       },
-      session: {},
+      session: {
+        store: storePath,
+      },
     } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
 
-    loadConfig.mockReturnValue(config);
-    createTelegramBot({
-      token: "tok",
-      config,
-    });
-    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
-    if (!callbackHandler) {
-      throw new Error("Expected Telegram callback_query handler");
-    }
+    await rm(storePath, { force: true });
+    try {
+      loadConfig.mockReturnValue(config);
+      createTelegramBot({
+        token: "tok",
+        config,
+      });
+      const callbackHandler = onSpy.mock.calls.find(
+        (call) => call[0] === "callback_query",
+      )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
+      if (!callbackHandler) {
+        throw new Error("Expected Telegram callback_query handler");
+      }
 
-    await callbackHandler({
-      callbackQuery: {
-        id: "cbq-model-compact-1",
-        data: `mdl_sel/${modelId}`,
-        from: { id: 9, first_name: "Ada", username: "ada_bot" },
-        message: {
-          chat: { id: 1234, type: "private" },
-          date: 1736380800,
-          message_id: 14,
+      await callbackHandler({
+        callbackQuery: {
+          id: "cbq-model-compact-1",
+          data: `mdl_sel/${modelId}`,
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: 1234, type: "private" },
+            date: 1736380800,
+            message_id: 14,
+          },
         },
-      },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({ download: async () => new Uint8Array() }),
-    });
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
 
-    expect(replySpy).not.toHaveBeenCalled();
-    expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
-    expect(editMessageTextSpy.mock.calls[0]?.[2]).toContain(
-      `${CHECK_MARK_EMOJI} Model reset to default`,
-    );
-    expect(editMessageTextSpy.mock.calls[0]?.[2]).toContain(
-      "Session selection cleared. Runtime unchanged. New replies use the agent's configured default.",
-    );
+      expect(replySpy).not.toHaveBeenCalled();
+      expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
+      expect(String(firstEditMessageTextArg(2))).toContain(
+        `${CHECK_MARK_EMOJI} Model reset to default`,
+      );
+      expect(String(firstEditMessageTextArg(2))).toContain(
+        "Session selection cleared. Runtime unchanged. New replies use the agent's configured default.",
+      );
 
-    const entry = Object.values(getSessionStoreEntriesForTest())[0];
-    expect(entry?.providerOverride).toBeUndefined();
-    expect(entry?.modelOverride).toBeUndefined();
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-compact-1");
+      const entry = Object.values(loadSessionStore(storePath, { skipCache: true }))[0];
+      expect(entry?.providerOverride).toBeUndefined();
+      expect(entry?.modelOverride).toBeUndefined();
+      expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-compact-1");
+    } finally {
+      await rm(storePath, { force: true });
+    }
   });
 
   it("renders model callback lists with configured display names", async () => {
@@ -1246,6 +1276,7 @@ describe("createTelegramBot", () => {
     replySpy.mockClear();
     editMessageTextSpy.mockClear();
 
+    const storePath = `/tmp/openclaw-telegram-model-default-${process.pid}-${Date.now()}.json`;
     const config: OpenClawConfig = {
       agents: {
         defaults: {
@@ -1261,49 +1292,56 @@ describe("createTelegramBot", () => {
           allowFrom: ["*"],
         },
       },
-      session: {},
+      session: {
+        store: storePath,
+      },
     };
 
-    loadConfig.mockReturnValue(config);
-    createTelegramBot({
-      token: "tok",
-      config,
-    });
-    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
-    if (!callbackHandler) {
-      throw new Error("Expected Telegram callback_query handler");
-    }
+    await rm(storePath, { force: true });
+    try {
+      loadConfig.mockReturnValue(config);
+      createTelegramBot({
+        token: "tok",
+        config,
+      });
+      const callbackHandler = onSpy.mock.calls.find(
+        (call) => call[0] === "callback_query",
+      )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
+      if (!callbackHandler) {
+        throw new Error("Expected Telegram callback_query handler");
+      }
 
-    await callbackHandler({
-      callbackQuery: {
-        id: "cbq-model-default-1",
-        data: "mdl_sel_anthropic/claude-opus-4-6",
-        from: { id: 9, first_name: "Ada", username: "ada_bot" },
-        message: {
-          chat: { id: 1234, type: "private" },
-          date: 1736380800,
-          message_id: 16,
+      await callbackHandler({
+        callbackQuery: {
+          id: "cbq-model-default-1",
+          data: "mdl_sel_anthropic/claude-opus-4-6",
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: 1234, type: "private" },
+            date: 1736380800,
+            message_id: 16,
+          },
         },
-      },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({ download: async () => new Uint8Array() }),
-    });
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
 
-    expect(replySpy).not.toHaveBeenCalled();
-    expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
-    expect(editMessageTextSpy.mock.calls[0]?.[2]).toContain(
-      `${CHECK_MARK_EMOJI} Model reset to default`,
-    );
-    expect(editMessageTextSpy.mock.calls[0]?.[2]).toContain(
-      "Session selection cleared. Runtime unchanged. New replies use the agent's configured default.",
-    );
+      expect(replySpy).not.toHaveBeenCalled();
+      expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
+      expect(String(firstEditMessageTextArg(2))).toContain(
+        `${CHECK_MARK_EMOJI} Model reset to default`,
+      );
+      expect(String(firstEditMessageTextArg(2))).toContain(
+        "Session selection cleared. Runtime unchanged. New replies use the agent's configured default.",
+      );
 
-    const entry = Object.values(getSessionStoreEntriesForTest())[0];
-    expect(entry?.providerOverride).toBeUndefined();
-    expect(entry?.modelOverride).toBeUndefined();
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-default-1");
+      const entry = Object.values(loadSessionStore(storePath, { skipCache: true }))[0];
+      expect(entry?.providerOverride).toBeUndefined();
+      expect(entry?.modelOverride).toBeUndefined();
+      expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-default-1");
+    } finally {
+      await rm(storePath, { force: true });
+    }
   });
 
   it("formats non-default model selection confirmations with Telegram HTML parse mode", async () => {
@@ -1311,145 +1349,168 @@ describe("createTelegramBot", () => {
     replySpy.mockClear();
     editMessageTextSpy.mockClear();
 
-    const config = {
-      agents: {
-        defaults: {
-          model: "anthropic/claude-opus-4-6",
-          models: {
-            "anthropic/claude-opus-4-6": {},
-            "openai/gpt-5.4": {},
+    const storePath = `/tmp/openclaw-telegram-model-html-${process.pid}-${Date.now()}.json`;
+
+    await rm(storePath, { force: true });
+    try {
+      const config = {
+        agents: {
+          defaults: {
+            model: "anthropic/claude-opus-4-6",
+            models: {
+              "anthropic/claude-opus-4-6": {},
+              "openai/gpt-5.4": {},
+            },
           },
         },
-      },
-      channels: {
-        telegram: {
-          dmPolicy: "open",
-          allowFrom: ["*"],
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+          },
         },
-      },
-      session: {},
-    } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
+        session: {
+          store: storePath,
+        },
+      } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
 
-    loadConfig.mockReturnValue(config);
-    createTelegramBot({
-      token: "tok",
-      config,
-    });
-    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
-    if (!callbackHandler) {
-      throw new Error("Expected Telegram callback_query handler");
+      loadConfig.mockReturnValue(config);
+      createTelegramBot({
+        token: "tok",
+        config,
+      });
+      const callbackHandler = onSpy.mock.calls.find(
+        (call) => call[0] === "callback_query",
+      )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
+      if (!callbackHandler) {
+        throw new Error("Expected Telegram callback_query handler");
+      }
+
+      await callbackHandler({
+        callbackQuery: {
+          id: "cbq-model-html-1",
+          data: "mdl_sel_openai/gpt-5.4",
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: 1234, type: "private" },
+            date: 1736380800,
+            message_id: 17,
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+
+      expect(replySpy).not.toHaveBeenCalled();
+      expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
+      const editCall = mockCall(
+        editMessageTextSpy as unknown as MockCallSource,
+        0,
+        "edit message text",
+      );
+      expect(editCall[0]).toBe(1234);
+      expect(editCall[1]).toBe(17);
+      expect(editCall[2]).toBe(
+        `${CHECK_MARK_EMOJI} Model changed to <b>openai/gpt-5.4</b>\n\nSession-only model selection. Runtime unchanged. Use /model openai/gpt-5.4 --runtime &lt;runtime&gt; to switch harnesses. The agent default in openclaw.json is unchanged; /reset or a new session may return to that default.`,
+      );
+      expect(requireRecord(editCall[3], "edit params").parse_mode).toBe("HTML");
+
+      const entry = Object.values(loadSessionStore(storePath, { skipCache: true }))[0];
+      expect(entry?.providerOverride).toBe("openai");
+      expect(entry?.modelOverride).toBe("gpt-5.4");
+      expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-html-1");
+    } finally {
+      await rm(storePath, { force: true });
     }
-
-    await callbackHandler({
-      callbackQuery: {
-        id: "cbq-model-html-1",
-        data: "mdl_sel_openai/gpt-5.4",
-        from: { id: 9, first_name: "Ada", username: "ada_bot" },
-        message: {
-          chat: { id: 1234, type: "private" },
-          date: 1736380800,
-          message_id: 17,
-        },
-      },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({ download: async () => new Uint8Array() }),
-    });
-
-    expect(replySpy).not.toHaveBeenCalled();
-    expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
-    expect(editMessageTextSpy).toHaveBeenCalledWith(
-      1234,
-      17,
-      `${CHECK_MARK_EMOJI} Model changed to <b>openai/gpt-5.4</b>\n\nSession-only model selection. Runtime unchanged. Use /model openai/gpt-5.4 --runtime &lt;runtime&gt; to switch harnesses. The agent default in openclaw.json is unchanged; /reset or a new session may return to that default.`,
-      expect.objectContaining({ parse_mode: "HTML" }),
-    );
-
-    const entry = Object.values(getSessionStoreEntriesForTest())[0];
-    expect(entry?.providerOverride).toBe("openai");
-    expect(entry?.modelOverride).toBe("gpt-5.4");
-    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-html-1");
   });
 
   it("persists non-default model override using fresh config, not stale startup snapshot", async () => {
     // Regression: the callback handler used the startup `cfg` snapshot for
-    // default-model resolution. If the config was reloaded (e.g. default model
-    // changed) the override could be incorrectly cleared because
-    // `isDefaultSelection` was wrong.
+    // store path and default-model resolution.  If the config was reloaded
+    // (e.g. default model changed) the override could be written to the wrong
+    // store or incorrectly cleared because `isDefaultSelection` was wrong.
     onSpy.mockClear();
     replySpy.mockClear();
     editMessageTextSpy.mockClear();
 
-    // Startup config: default is openai/gpt-5.4
-    const startupConfig = {
-      agents: {
-        defaults: {
-          model: "openai/gpt-5.4",
-          models: {
-            "openai/gpt-5.4": {},
-            "anthropic/claude-opus-4-6": {},
+    const storePath = `/tmp/openclaw-telegram-model-fresh-cfg-${process.pid}-${Date.now()}.json`;
+
+    await rm(storePath, { force: true });
+    try {
+      // Startup config: default is openai/gpt-5.4
+      const startupConfig = {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.4",
+            models: {
+              "openai/gpt-5.4": {},
+              "anthropic/claude-opus-4-6": {},
+            },
           },
         },
-      },
-      channels: {
-        telegram: {
-          dmPolicy: "open",
-          allowFrom: ["*"],
-        },
-      },
-      session: {},
-    } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
-
-    // Fresh config: default changed to anthropic/claude-opus-4-6
-    const freshConfig = {
-      ...startupConfig,
-      agents: {
-        defaults: {
-          model: "anthropic/claude-opus-4-6",
-          models: {
-            "openai/gpt-5.4": {},
-            "anthropic/claude-opus-4-6": {},
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
           },
         },
-      },
-    };
+        session: {
+          store: storePath,
+        },
+      } satisfies NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
 
-    // Bot created with startup config; loadConfig now returns fresh config
-    loadConfig.mockReturnValue(freshConfig);
-    createTelegramBot({
-      token: "tok",
-      config: startupConfig,
-    });
-    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
-    if (!callbackHandler) {
-      throw new Error("Expected Telegram callback_query handler");
+      // Fresh config: default changed to anthropic/claude-opus-4-6
+      const freshConfig = {
+        ...startupConfig,
+        agents: {
+          defaults: {
+            model: "anthropic/claude-opus-4-6",
+            models: {
+              "openai/gpt-5.4": {},
+              "anthropic/claude-opus-4-6": {},
+            },
+          },
+        },
+      };
+
+      // Bot created with startup config; loadConfig now returns fresh config
+      loadConfig.mockReturnValue(freshConfig);
+      createTelegramBot({
+        token: "tok",
+        config: startupConfig,
+      });
+      const callbackHandler = onSpy.mock.calls.find(
+        (call) => call[0] === "callback_query",
+      )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
+      if (!callbackHandler) {
+        throw new Error("Expected Telegram callback_query handler");
+      }
+
+      // User selects openai/gpt-5.4 — was default at startup but NOT default
+      // in fresh config.  The override must be persisted.
+      await callbackHandler({
+        callbackQuery: {
+          id: "cbq-model-fresh-cfg-1",
+          data: "mdl_sel_openai/gpt-5.4",
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: 1234, type: "private" },
+            date: 1736380800,
+            message_id: 20,
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+
+      // Override must be persisted (not cleared) because openai/gpt-5.4 is
+      // NOT the default in the fresh config.
+      const entry = Object.values(loadSessionStore(storePath, { skipCache: true }))[0];
+      expect(entry?.providerOverride).toBe("openai");
+      expect(entry?.modelOverride).toBe("gpt-5.4");
+    } finally {
+      await rm(storePath, { force: true });
     }
-
-    // User selects openai/gpt-5.4 — was default at startup but NOT default
-    // in fresh config.  The override must be persisted.
-    await callbackHandler({
-      callbackQuery: {
-        id: "cbq-model-fresh-cfg-1",
-        data: "mdl_sel_openai/gpt-5.4",
-        from: { id: 9, first_name: "Ada", username: "ada_bot" },
-        message: {
-          chat: { id: 1234, type: "private" },
-          date: 1736380800,
-          message_id: 20,
-        },
-      },
-      me: { username: "openclaw_bot" },
-      getFile: async () => ({ download: async () => new Uint8Array() }),
-    });
-
-    // Override must be persisted (not cleared) because openai/gpt-5.4 is
-    // NOT the default in the fresh config.
-    const entry = Object.values(getSessionStoreEntriesForTest())[0];
-    expect(entry?.providerOverride).toBe("openai");
-    expect(entry?.modelOverride).toBe("gpt-5.4");
   });
 
   it("rejects ambiguous compact model callbacks and returns provider list", async () => {

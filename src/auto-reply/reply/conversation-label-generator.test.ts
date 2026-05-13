@@ -8,10 +8,9 @@ const resolveDefaultModelForAgent = vi.hoisted(() => vi.fn());
 const resolveModelAsync = vi.hoisted(() => vi.fn());
 const prepareModelForSimpleCompletion = vi.hoisted(() => vi.fn());
 
-vi.mock("../../agents/pi-ai-contract.js", async () => {
-  const original = await vi.importActual<typeof import("../../agents/pi-ai-contract.js")>(
-    "../../agents/pi-ai-contract.js",
-  );
+vi.mock("@earendil-works/pi-ai", async () => {
+  const original =
+    await vi.importActual<typeof import("@earendil-works/pi-ai")>("@earendil-works/pi-ai");
   return {
     ...original,
     completeSimple,

@@ -155,7 +155,7 @@ async function withClearedZaiEnv<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-async function buildAnthropicPlanFromModelCatalogApiKey(apiKey: string) {
+async function buildAnthropicPlanFromModelsJsonApiKey(apiKey: string) {
   return await buildProbeTargets({
     cfg: {
       models: {
@@ -285,36 +285,36 @@ describe("buildProbeTargets reason codes", () => {
     expect(plan.results[0]?.error).toContain("env:default:MISSING_ANTHROPIC_TOKEN");
   });
 
-  it("skips marker-only model catalog credentials when building probe targets", async () => {
+  it("skips marker-only models.json credentials when building probe targets", async () => {
     mockStore = {
       version: 1,
       profiles: {},
       order: {},
     };
     await withClearedAnthropicEnv(async () => {
-      const plan = await buildAnthropicPlanFromModelCatalogApiKey("ollama-local");
+      const plan = await buildAnthropicPlanFromModelsJsonApiKey("ollama-local");
       expect(plan.targets).toStrictEqual([]);
       expect(plan.results).toStrictEqual([]);
     });
   });
 
-  it("does not treat arbitrary all-caps model catalog apiKey values as markers", async () => {
+  it("does not treat arbitrary all-caps models.json apiKey values as markers", async () => {
     mockStore = {
       version: 1,
       profiles: {},
       order: {},
     };
     await withClearedAnthropicEnv(async () => {
-      const plan = await buildAnthropicPlanFromModelCatalogApiKey("ALLCAPS_SAMPLE");
+      const plan = await buildAnthropicPlanFromModelsJsonApiKey("ALLCAPS_SAMPLE");
       expect(plan.results).toStrictEqual([]);
       expect(plan.targets).toStrictEqual([
-        expect.objectContaining({
-          label: "model catalog",
+        {
+          label: "models.json",
           mode: "api_key",
           model: { provider: "anthropic", model: "claude-sonnet-4-6" },
           provider: "anthropic",
-          source: "model_catalog",
-        }),
+          source: "models.json",
+        },
       ]);
     });
   });
@@ -354,13 +354,13 @@ describe("buildProbeTargets reason codes", () => {
 
       expect(plan.results).toStrictEqual([]);
       expect(plan.targets).toStrictEqual([
-        expect.objectContaining({
-          label: "model catalog",
+        {
+          label: "models.json",
           mode: "api_key",
-          provider: "zai",
           model: { provider: "zai", model: "glm-4.7" },
-          source: "model_catalog",
-        }),
+          provider: "zai",
+          source: "models.json",
+        },
       ]);
     });
   });
@@ -381,38 +381,36 @@ describe("buildProbeTargets reason codes", () => {
       { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
     ]);
 
-    const plan = await withClearedAnthropicEnv(() =>
-      buildProbeTargets({
-        cfg: {
-          models: {
-            providers: {
-              anthropic: {
-                baseUrl: "https://api.anthropic.com/v1",
-                api: "anthropic-messages",
-                apiKey: "sk-ant-test",
-                models: [],
-              },
+    const plan = await buildProbeTargets({
+      cfg: {
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "https://api.anthropic.com/v1",
+              api: "anthropic-messages",
+              apiKey: "sk-ant-test",
+              models: [],
             },
           },
-        } as OpenClawConfig,
-        providers: ["anthropic"],
-        modelCandidates: [],
-        options: {
-          timeoutMs: 5_000,
-          concurrency: 1,
-          maxTokens: 16,
         },
-      }),
-    );
+      } as OpenClawConfig,
+      providers: ["anthropic"],
+      modelCandidates: [],
+      options: {
+        timeoutMs: 5_000,
+        concurrency: 1,
+        maxTokens: 16,
+      },
+    });
 
     expect(plan.results).toStrictEqual([]);
     expect(plan.targets).toStrictEqual([
       {
-        label: "model catalog",
+        label: "models.json",
         mode: "api_key",
         model: { provider: "anthropic", model: "claude-haiku-4-5-20251001" },
         provider: "anthropic",
-        source: "model_catalog",
+        source: "models.json",
       },
     ]);
   });

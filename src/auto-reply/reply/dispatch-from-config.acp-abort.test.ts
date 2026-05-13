@@ -183,8 +183,9 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     internalHookMocks.createInternalHookEvent.mockImplementation(createInternalHookEventPayload);
     internalHookMocks.triggerInternalHook.mockReset();
     sessionStoreMocks.currentEntry = undefined;
-    sessionStoreMocks.entries.clear();
-    sessionStoreMocks.resolveSessionRowEntry.mockReset().mockReturnValue({ existing: undefined });
+    sessionStoreMocks.loadSessionStore.mockReset().mockReturnValue({});
+    sessionStoreMocks.resolveStorePath.mockReset().mockReturnValue("/tmp/mock-sessions.json");
+    sessionStoreMocks.resolveSessionStoreEntry.mockReset().mockReturnValue({ existing: undefined });
     acpMocks.listAcpSessionEntries.mockReset().mockResolvedValue([]);
     acpMocks.readAcpSessionEntry.mockReset().mockReturnValue(null);
     acpMocks.upsertAcpSessionMeta.mockReset().mockResolvedValue(null);
@@ -234,8 +235,9 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     } satisfies AcpRuntime;
     acpMocks.readAcpSessionEntry.mockReturnValue({
       sessionKey: "agent:codex-acp:session-1",
-      rowSessionKey: "agent:codex-acp:session-1",
+      storeSessionKey: "agent:codex-acp:session-1",
       cfg: {},
+      storePath: "/tmp/mock-sessions.json",
       entry: {},
       acp: {
         backend: "acpx",

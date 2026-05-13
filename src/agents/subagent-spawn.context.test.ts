@@ -1,3 +1,4 @@
+import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   loadSubagentSpawnModuleForTest,
@@ -8,31 +9,30 @@ type SessionStore = Record<string, Record<string, unknown>>;
 type GatewayRequest = { method?: string; params?: Record<string, unknown> };
 
 describe("sessions_spawn context modes", () => {
+  const storePath = "/tmp/subagent-context-session-store.json";
   const callGatewayMock = vi.fn();
-  const upsertSessionEntryMock = vi.fn();
+  const updateSessionStoreMock = vi.fn();
   const forkSessionFromParentMock = vi.fn();
   const ensureContextEnginesInitializedMock = vi.fn();
   const resolveContextEngineMock = vi.fn();
   let spawnSubagentDirect: Awaited<
     ReturnType<typeof loadSubagentSpawnModuleForTest>
   >["spawnSubagentDirect"];
-  let sessionStore: SessionStore = {};
 
   beforeAll(async () => {
     ({ spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
       callGatewayMock,
-      upsertSessionEntryMock,
+      updateSessionStoreMock,
       forkSessionFromParentMock,
       ensureContextEnginesInitializedMock,
       resolveContextEngineMock,
-      getSessionStore: () => sessionStore,
+      sessionStorePath: storePath,
     }));
   });
 
   beforeEach(() => {
-    sessionStore = {};
     callGatewayMock.mockReset();
-    upsertSessionEntryMock.mockReset();
+    updateSessionStoreMock.mockReset();
     forkSessionFromParentMock.mockReset();
     ensureContextEnginesInitializedMock.mockReset();
     resolveContextEngineMock.mockReset();
@@ -41,8 +41,12 @@ describe("sessions_spawn context modes", () => {
   });
 
   function usePersistentStoreMock(store: SessionStore) {
-    sessionStore = store;
-    upsertSessionEntryMock.mockImplementation(() => undefined);
+    updateSessionStoreMock.mockImplementation(async (_storePath: unknown, mutator: unknown) => {
+      if (typeof mutator !== "function") {
+        throw new Error("missing session store mutator");
+      }
+      return await mutator(store);
+    });
   }
 
   function requireAcceptedResult(result: Awaited<ReturnType<typeof spawnSubagentDirect>>) {
@@ -91,6 +95,7 @@ describe("sessions_spawn context modes", () => {
     const store: SessionStore = {
       main: {
         sessionId: "parent-session-id",
+        sessionFile: "/tmp/parent-session.jsonl",
         updatedAt: 1,
         totalTokens: 1200,
       },
@@ -98,6 +103,7 @@ describe("sessions_spawn context modes", () => {
     usePersistentStoreMock(store);
     forkSessionFromParentMock.mockImplementation(async () => ({
       sessionId: "forked-session-id",
+      sessionFile: "/tmp/forked-session.jsonl",
     }));
     const prepareSubagentSpawn = vi.fn(async () => undefined);
     resolveContextEngineMock.mockResolvedValue({ prepareSubagentSpawn });
@@ -112,10 +118,12 @@ describe("sessions_spawn context modes", () => {
     expect(forkSessionFromParentMock).toHaveBeenCalledWith({
       parentEntry: store.main,
       agentId: "main",
+      sessionsDir: path.dirname(storePath),
     });
     const childSessionKey = requireChildSessionKey(accepted);
     const childEntry = requireStoreEntry(store, childSessionKey);
     expect(childEntry.sessionId).toBe("forked-session-id");
+    expect(childEntry.sessionFile).toBe("/tmp/forked-session.jsonl");
     expect(childEntry.forkedFromParent).toBe(true);
 
     const prepareContext = requireFirstMockArg(prepareSubagentSpawn);
@@ -123,15 +131,8 @@ describe("sessions_spawn context modes", () => {
     expect(prepareContext.childSessionKey).toBe(childSessionKey);
     expect(prepareContext.contextMode).toBe("fork");
     expect(prepareContext.parentSessionId).toBe("parent-session-id");
-    expect(prepareContext.parentTranscriptScope).toStrictEqual({
-      agentId: "main",
-      sessionId: "parent-session-id",
-    });
     expect(prepareContext.childSessionId).toBe("forked-session-id");
-    expect(prepareContext.childTranscriptScope).toStrictEqual({
-      agentId: "main",
-      sessionId: "forked-session-id",
-    });
+    expect(prepareContext.childSessionFile).toBe("/tmp/forked-session.jsonl");
   });
 
   it("keeps the default spawn context isolated", async () => {
@@ -156,6 +157,7 @@ describe("sessions_spawn context modes", () => {
     const store: SessionStore = {
       main: {
         sessionId: "parent-session-id",
+        sessionFile: "/tmp/parent-session.jsonl",
         updatedAt: 1,
         totalTokens: 170_000,
       },
@@ -184,6 +186,7 @@ describe("sessions_spawn context modes", () => {
     const store: SessionStore = {
       main: {
         sessionId: "parent-session-id",
+        sessionFile: "/tmp/parent-session.jsonl",
         updatedAt: 1,
         totalTokens: 1200,
       },
@@ -191,6 +194,7 @@ describe("sessions_spawn context modes", () => {
     usePersistentStoreMock(store);
     forkSessionFromParentMock.mockImplementation(async () => ({
       sessionId: "forked-session-id",
+      sessionFile: "/tmp/forked-session.jsonl",
     }));
     const prepareSubagentSpawn = vi.fn(async () => undefined);
     resolveContextEngineMock.mockResolvedValue({ prepareSubagentSpawn });
@@ -209,9 +213,11 @@ describe("sessions_spawn context modes", () => {
     expect(forkSessionFromParentMock).toHaveBeenCalledWith({
       parentEntry: store.main,
       agentId: "main",
+      sessionsDir: path.dirname(storePath),
     });
     const cleanupRequest = requireGatewayRequest("sessions.delete");
     expect(cleanupRequest.params?.key).toBe(result.childSessionKey);
+    expect(cleanupRequest.params?.deleteTranscript).toBe(true);
     expect(cleanupRequest.params?.emitLifecycleHooks).toBe(false);
     expect(prepareSubagentSpawn).not.toHaveBeenCalled();
   });

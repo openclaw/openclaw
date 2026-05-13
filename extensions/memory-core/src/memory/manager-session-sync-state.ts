@@ -1,36 +1,29 @@
 import { type MemorySourceFileStateRow } from "./manager-source-state.js";
 
-export type MemorySessionSyncScope = {
-  agentId: string;
-  sessionId: string;
-};
-
 export function resolveMemorySessionSyncPlan(params: {
   needsFullReindex: boolean;
-  transcripts: MemorySessionSyncScope[];
-  targetSessionTranscriptKeys: Set<string> | null;
-  dirtySessionTranscripts: Set<string>;
+  files: string[];
+  targetSessionFiles: Set<string> | null;
+  sessionsDirtyFiles: Set<string>;
   existingRows?: MemorySourceFileStateRow[] | null;
-  sessionTranscriptSourceKeyForScope: (scope: MemorySessionSyncScope) => string;
+  sessionPathForFile: (file: string) => string;
 }): {
-  activeSourceKeys: Set<string> | null;
+  activePaths: Set<string> | null;
   existingRows: MemorySourceFileStateRow[] | null;
   existingHashes: Map<string, string> | null;
   indexAll: boolean;
 } {
-  const activeSourceKeys = params.targetSessionTranscriptKeys
+  const activePaths = params.targetSessionFiles
     ? null
-    : new Set(params.transcripts.map((scope) => params.sessionTranscriptSourceKeyForScope(scope)));
-  const existingRows = activeSourceKeys === null ? null : (params.existingRows ?? []);
+    : new Set(params.files.map((file) => params.sessionPathForFile(file)));
+  const existingRows = activePaths === null ? null : (params.existingRows ?? []);
   return {
-    activeSourceKeys,
+    activePaths,
     existingRows,
-    existingHashes: existingRows
-      ? new Map(existingRows.map((row) => [row.sourceKey, row.hash]))
-      : null,
+    existingHashes: existingRows ? new Map(existingRows.map((row) => [row.path, row.hash])) : null,
     indexAll:
       params.needsFullReindex ||
-      Boolean(params.targetSessionTranscriptKeys) ||
-      params.dirtySessionTranscripts.size === 0,
+      Boolean(params.targetSessionFiles) ||
+      params.sessionsDirtyFiles.size === 0,
   };
 }

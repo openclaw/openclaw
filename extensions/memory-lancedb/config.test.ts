@@ -59,19 +59,6 @@ describe("memory-lancedb config", () => {
     expect(manifestResult.ok).toBe(true);
     expect(parsed.embedding.apiKey).toBeUndefined();
     expect(parsed.embedding.provider).toBe("openai");
-    expect(parsed.dbPath).toBeUndefined();
-  });
-
-  it("does not create an implicit managed LanceDB path", () => {
-    const parsed = memoryConfigSchema.parse({
-      embedding: {
-        provider: "openai",
-        model: "text-embedding-3-small",
-      },
-      dbPath: "  ",
-    });
-
-    expect(parsed.dbPath).toBeUndefined();
   });
 
   it("rejects empty embedding config in the manifest schema and runtime parser", () => {

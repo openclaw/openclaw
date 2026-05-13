@@ -14,6 +14,7 @@ function makeRun(): FollowupRun["run"] {
     agentDir: "/tmp/agent",
     sessionId: "session-1",
     sessionKey: QUEUE_KEY,
+    sessionFile: "/tmp/session-1.jsonl",
     workspaceDir: "/tmp/workspace",
     config: {} as FollowupRun["run"]["config"],
     provider: "anthropic",
@@ -27,7 +28,7 @@ function makeRun(): FollowupRun["run"] {
 
 describe("refreshQueuedFollowupSession", () => {
   it("retargets queued runs to the persisted selection", () => {
-    const queue = getFollowupQueue(QUEUE_KEY, { mode: "queue" });
+    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
     const lastRun = makeRun();
     const queuedRun: FollowupRun = {
       prompt: "queued message",
@@ -62,7 +63,7 @@ describe("refreshQueuedFollowupSession", () => {
   });
 
   it("retargets queued runs with user model override source", () => {
-    const queue = getFollowupQueue(QUEUE_KEY, { mode: "queue" });
+    const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
     const queuedRun: FollowupRun = {
       prompt: "queued message",
       enqueuedAt: Date.now(),

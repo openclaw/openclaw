@@ -2,14 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetFileLockStateForTest } from "../../infra/file-lock.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { resolveApiKeyForProfile } from "./oauth.js";
-import { loadPersistedAuthProfileStore } from "./persisted.js";
-import {
-  clearRuntimeAuthProfileStoreSnapshots,
-  ensureAuthProfileStore,
-  saveAuthProfileStore,
-} from "./store.js";
+import { clearRuntimeAuthProfileStoreSnapshots, ensureAuthProfileStore } from "./store.js";
 import type { AuthProfileStore } from "./types.js";
 const { getOAuthApiKeyMock } = vi.hoisted(() => ({
   getOAuthApiKeyMock: vi.fn(async () => {
@@ -17,7 +13,7 @@ const { getOAuthApiKeyMock } = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("../pi-ai-oauth-contract.js", () => ({
+vi.mock("@earendil-works/pi-ai/oauth", () => ({
   getOAuthApiKey: getOAuthApiKeyMock,
   getOAuthProviders: () => [{ id: "anthropic" }, { id: "openai-codex" }],
 }));
@@ -41,7 +37,7 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
 }));
 
 afterAll(() => {
-  vi.doUnmock("../pi-ai-oauth-contract.js");
+  vi.doUnmock("@earendil-works/pi-ai/oauth");
   vi.doUnmock("../cli-credentials.js");
   vi.doUnmock("../../plugins/provider-runtime.runtime.js");
   vi.doUnmock("../../plugins/provider-runtime.js");
@@ -62,6 +58,7 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
   let secondaryAgentDir: string;
 
   beforeEach(async () => {
+    resetFileLockStateForTest();
     getOAuthApiKeyMock.mockReset();
     getOAuthApiKeyMock.mockImplementation(async () => {
       throw new Error("invalid_grant");
@@ -115,15 +112,7 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
   }
 
   async function writeAuthProfilesStore(agentDir: string, store: AuthProfileStore) {
-    saveAuthProfileStore(store, agentDir);
-  }
-
-  function readPersistedStore(agentDir: string): AuthProfileStore {
-    const store = loadPersistedAuthProfileStore(agentDir);
-    if (!store) {
-      throw new Error(`Expected persisted auth store for ${agentDir}`);
-    }
-    return store;
+    await fs.writeFile(path.join(agentDir, "auth-profiles.json"), JSON.stringify(store));
   }
 
   async function resolveFromSecondaryAgent(profileId: string) {
@@ -136,6 +125,7 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
   }
 
   afterEach(async () => {
+    resetFileLockStateForTest();
     clearRuntimeAuthProfileStoreSnapshots();
     vi.unstubAllGlobals();
 
@@ -217,7 +207,9 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
     expect(result.provider).toBe("anthropic");
 
     // The secondary store keeps its local credential; inherited OAuth is read-through.
-    const secondaryStore = readPersistedStore(secondaryAgentDir);
+    const secondaryStore = JSON.parse(
+      await fs.readFile(path.join(secondaryAgentDir, "auth-profiles.json"), "utf8"),
+    ) as AuthProfileStore;
     expectOauthCredentialFields(secondaryStore, profileId, {
       access: "expired-access-token",
       expires: expiredTime,
@@ -254,7 +246,9 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
 
     expect(result?.apiKey).toBe("main-newer-access-token");
 
-    const secondaryStore = readPersistedStore(secondaryAgentDir);
+    const secondaryStore = JSON.parse(
+      await fs.readFile(path.join(secondaryAgentDir, "auth-profiles.json"), "utf8"),
+    ) as AuthProfileStore;
     expectOauthCredentialFields(secondaryStore, profileId, {
       access: "secondary-access-token",
       expires: secondaryExpiry,

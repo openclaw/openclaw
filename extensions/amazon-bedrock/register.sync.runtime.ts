@@ -1,8 +1,8 @@
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import { streamSimple } from "@earendil-works/pi-ai";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { streamSimple } from "openclaw/plugin-sdk/provider-ai";
 import {
   ANTHROPIC_BY_MODEL_REPLAY_HOOKS,
   normalizeProviderId,

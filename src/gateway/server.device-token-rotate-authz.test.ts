@@ -12,7 +12,7 @@ import {
   loadDeviceIdentity,
   openTrackedWs,
   pairDeviceIdentity,
-  resolveDeviceIdentityKey,
+  resolveDeviceIdentityPath,
 } from "./device-authz.test-helpers.js";
 import { connectGatewayClient } from "./test-helpers.e2e.js";
 import {
@@ -27,14 +27,14 @@ installGatewayTestHooks({ scope: "suite" });
 
 async function connectPairingScopedOperator(params: {
   port: number;
-  identityKey: string;
+  identityPath: string;
   deviceToken: string;
 }): Promise<WebSocket> {
   const ws = await openTrackedWs(params.port);
   await connectOk(ws, {
     skipDefaultAuth: true,
     deviceToken: params.deviceToken,
-    deviceIdentityKey: params.identityKey,
+    deviceIdentityPath: params.identityPath,
     scopes: ["operator.pairing"],
   });
   return ws;
@@ -126,7 +126,7 @@ async function waitForMacrotasks(): Promise<void> {
 
 async function issuePairingScopedTokenForAdminApprovedDevice(name: string): Promise<{
   deviceId: string;
-  identityKey: string;
+  identityPath: string;
   pairingToken: string;
 }> {
   const issued = await issueOperatorToken({
@@ -138,7 +138,7 @@ async function issuePairingScopedTokenForAdminApprovedDevice(name: string): Prom
   });
   return {
     deviceId: issued.deviceId,
-    identityKey: issued.identityKey,
+    identityPath: issued.identityPath,
     pairingToken: issued.token,
   };
 }
@@ -148,7 +148,7 @@ async function issueMixedRolePairingScopedDevice(
   opts?: { platform?: string },
 ): Promise<{
   deviceId: string;
-  identityKey: string;
+  identityPath: string;
   identity: ReturnType<typeof loadDeviceIdentity>["identity"];
   pairingToken: string;
   publicKey: string;
@@ -178,7 +178,7 @@ async function issueMixedRolePairingScopedDevice(
   expect(approved.device.tokens?.node?.token).toBeTypeOf("string");
   return {
     deviceId: loaded.identity.deviceId,
-    identityKey: loaded.identityKey,
+    identityPath: loaded.identityPath,
     identity: loaded.identity,
     pairingToken,
     publicKey: loaded.publicKey,
@@ -195,7 +195,7 @@ describe("gateway device.token.rotate/revoke ownership guard (IDOR)", () => {
     try {
       pairingWs = await connectPairingScopedOperator({
         port: started.port,
-        identityKey: deviceA.identityKey,
+        identityPath: deviceA.identityPath,
         deviceToken: deviceA.pairingToken,
       });
 
@@ -289,7 +289,7 @@ describe("gateway device.token.rotate/revoke ownership guard (IDOR)", () => {
 
       pairingWs = await connectPairingScopedOperator({
         port: started.port,
-        identityKey: device.identityKey,
+        identityPath: device.identityPath,
         deviceToken: device.pairingToken,
       });
 
@@ -338,7 +338,7 @@ describe("gateway device.token.rotate/revoke ownership guard (IDOR)", () => {
 
       pairingWs = await connectPairingScopedOperator({
         port: started.port,
-        identityKey: device.identityKey,
+        identityPath: device.identityPath,
         deviceToken: device.pairingToken,
       });
 
@@ -468,7 +468,7 @@ describe("gateway device.token.rotate/revoke ownership guard (IDOR)", () => {
 
       pairingWs = await connectPairingScopedOperator({
         port: started.port,
-        identityKey: device.identityKey,
+        identityPath: device.identityPath,
         deviceToken: device.pairingToken,
       });
 
@@ -523,7 +523,7 @@ describe("gateway device.token.rotate/revoke caller scope guard", () => {
       await connectOk(pairingWs, {
         token: "secret",
         scopes: ["operator.pairing"],
-        deviceIdentityKey: resolveDeviceIdentityKey("shared-pairing-caller"),
+        deviceIdentityPath: resolveDeviceIdentityPath("shared-pairing-caller"),
       });
 
       const rotate = await rpcReq(pairingWs, "device.token.rotate", {
@@ -568,7 +568,7 @@ describe("gateway device.token.rotate/revoke caller scope guard", () => {
     try {
       pairingWs = await connectPairingScopedOperator({
         port: started.port,
-        identityKey: attacker.identityKey,
+        identityPath: attacker.identityPath,
         deviceToken: attacker.token,
       });
 
@@ -617,7 +617,7 @@ describe("gateway device.token.rotate/revoke caller scope guard", () => {
 
       pairingWs = await connectPairingScopedOperator({
         port: started.port,
-        identityKey: attacker.identityKey,
+        identityPath: attacker.identityPath,
         deviceToken: attacker.token,
       });
 
@@ -658,7 +658,7 @@ describe("gateway device.token.rotate/revoke caller scope guard", () => {
     try {
       pairingWs = await connectPairingScopedOperator({
         port: started.port,
-        identityKey: attacker.identityKey,
+        identityPath: attacker.identityPath,
         deviceToken: attacker.token,
       });
 
@@ -698,7 +698,7 @@ describe("gateway device.token.rotate/revoke caller scope guard", () => {
     try {
       pairingWs = await connectPairingScopedOperator({
         port: started.port,
-        identityKey: attacker.identityKey,
+        identityPath: attacker.identityPath,
         deviceToken: attacker.token,
       });
 

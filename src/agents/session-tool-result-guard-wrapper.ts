@@ -1,14 +1,14 @@
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
   applyInputProvenanceToUserMessage,
   type InputProvenance,
 } from "../sessions/input-provenance.js";
-import type { AgentMessage } from "./agent-core-contract.js";
 import { resolveLiveToolResultMaxChars } from "./pi-embedded-runner/tool-result-truncation.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 import { redactTranscriptMessage } from "./transcript-redact.js";
-import type { SessionManager } from "./transcript/session-transcript-contract.js";
 
 type GuardedSessionManager = SessionManager & {
   /** Flush any synthetic tool results for pending tool calls. Idempotent. */
@@ -25,7 +25,6 @@ export function guardSessionManager(
   sessionManager: SessionManager,
   opts?: {
     agentId?: string;
-    sessionId?: string;
     sessionKey?: string;
     config?: OpenClawConfig;
     contextWindowTokens?: number;
@@ -45,7 +44,7 @@ export function guardSessionManager(
 
   const hookRunner = getGlobalHookRunner();
   const beforeMessageWrite = (event: {
-    message: import("./agent-core-contract.js").AgentMessage;
+    message: import("@earendil-works/pi-agent-core").AgentMessage;
   }) => {
     let message = event.message;
     let changed = false;
@@ -94,8 +93,6 @@ export function guardSessionManager(
     : undefined;
 
   const guard = installSessionToolResultGuard(sessionManager, {
-    agentId: opts?.agentId,
-    sessionId: opts?.sessionId,
     sessionKey: opts?.sessionKey,
     transformMessageForPersistence: (message) =>
       applyInputProvenanceToUserMessage(message, opts?.inputProvenance),

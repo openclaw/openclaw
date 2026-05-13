@@ -176,7 +176,10 @@ export async function startQaLabServer(
 ): Promise<QaLabServerHandle> {
   const repoRoot = path.resolve(params?.repoRoot ?? process.cwd());
   const captureSettings = resolveDebugProxySettings();
-  const captureStoreLease = acquireDebugProxyCaptureStore();
+  const captureStoreLease = acquireDebugProxyCaptureStore(
+    captureSettings.dbPath,
+    captureSettings.blobDir,
+  );
   const captureStore = captureStoreLease.store;
   const state = createQaBusState();
   let latestReport: QaLabLatestReport | null = null;

@@ -11,7 +11,6 @@ import {
   GROUP_POLICY_BLOCKED_LABEL,
   resolveAllowlistProviderRuntimeGroupPolicy,
   createChannelPairingController,
-  createChannelMessageReplyPipeline,
   deliverFormattedTextWithAttachments,
   logInboundDrop,
   resolveDefaultGroupPolicy,
@@ -302,7 +301,7 @@ export async function handleNextcloudTalkInbound(params: {
     runtime.log?.(`nextcloud-talk: drop room ${roomToken} (no mention)`);
     return;
   }
-  const { route } = resolveInboundRouteEnvelopeBuilderWithRuntime({
+  const { route, buildEnvelope } = resolveInboundRouteEnvelopeBuilderWithRuntime({
     cfg: config as OpenClawConfig,
     channel: CHANNEL_ID,
     accountId: account.accountId,
@@ -311,20 +310,16 @@ export async function handleNextcloudTalkInbound(params: {
       id: isGroup ? roomToken : senderId,
     },
     runtime: core.channel,
+    sessionStore: (config.session as Record<string, unknown> | undefined)?.store as
+      | string
+      | undefined,
   });
 
   const fromLabel = isGroup ? `room:${roomName || roomToken}` : senderName || `user:${senderId}`;
-  const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(config as OpenClawConfig);
-  const previousTimestamp = core.channel.session.readSessionUpdatedAt({
-    agentId: route.agentId,
-    sessionKey: route.sessionKey,
-  });
-  const body = core.channel.reply.formatAgentEnvelope({
+  const { storePath, body } = buildEnvelope({
     channel: "Nextcloud Talk",
     from: fromLabel,
     timestamp: message.timestamp,
-    previousTimestamp,
-    envelope: envelopeOptions,
     body: rawBody,
   });
 
@@ -355,47 +350,39 @@ export async function handleNextcloudTalkInbound(params: {
     CommandAuthorized: commandAuthorized,
   });
 
-  const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
+  await core.channel.turn.runAssembled({
     cfg: config as OpenClawConfig,
-    agentId: route.agentId,
-    channel: CHANNEL_ID,
-    accountId: account.accountId,
-  });
-  await core.channel.turn.runPrepared({
     channel: CHANNEL_ID,
     accountId: account.accountId,
     agentId: route.agentId,
     routeSessionKey: route.sessionKey,
+    storePath,
     ctxPayload,
     recordInboundSession: core.channel.session.recordInboundSession,
-    runDispatch: async () =>
-      await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-        ctx: ctxPayload,
-        cfg: config as OpenClawConfig,
-        dispatcherOptions: {
-          ...replyPipeline,
-          deliver: async (payload) => {
-            await deliverNextcloudTalkReply({
-              cfg: config,
-              payload,
-              roomToken,
-              accountId: account.accountId,
-              statusSink,
-            });
-          },
-          onError: (err, info) => {
-            runtime.error?.(`nextcloud-talk ${info.kind} reply failed: ${String(err)}`);
-          },
-        },
-        replyOptions: {
-          skillFilter: roomConfig?.skills,
-          disableBlockStreaming:
-            typeof account.config.blockStreaming === "boolean"
-              ? !account.config.blockStreaming
-              : undefined,
-          onModelSelected,
-        },
-      }),
+    dispatchReplyWithBufferedBlockDispatcher:
+      core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+    delivery: {
+      deliver: async (payload) => {
+        await deliverNextcloudTalkReply({
+          cfg: config,
+          payload,
+          roomToken,
+          accountId: account.accountId,
+          statusSink,
+        });
+      },
+      onError: (err, info) => {
+        runtime.error?.(`nextcloud-talk ${info.kind} reply failed: ${String(err)}`);
+      },
+    },
+    replyPipeline: {},
+    replyOptions: {
+      skillFilter: roomConfig?.skills,
+      disableBlockStreaming:
+        typeof account.config.blockStreaming === "boolean"
+          ? !account.config.blockStreaming
+          : undefined,
+    },
     record: {
       onRecordError: (err) => {
         runtime.error?.(`nextcloud-talk: failed updating session meta: ${String(err)}`);

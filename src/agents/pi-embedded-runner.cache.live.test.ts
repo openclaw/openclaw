@@ -1,11 +1,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { AssistantMessage, Message, Tool } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { listDiagnosticEvents } from "../infra/diagnostic-events-store.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   buildAssistantHistoryTurn as buildTypedAssistantHistoryTurn,
   buildStableCachePrefix,
@@ -17,7 +16,6 @@ import {
   resolveLiveDirectModel,
   withLiveCacheHeartbeat,
 } from "./live-cache-test-support.js";
-import type { AssistantMessage, Message, Tool } from "./pi-ai-contract.js";
 import { runEmbeddedPiAgent } from "./pi-embedded-runner.js";
 import { compactEmbeddedPiSessionDirect } from "./pi-embedded-runner/compact.runtime.js";
 import { buildZeroUsage } from "./stream-message-shared.js";
@@ -66,11 +64,12 @@ const NOOP_TOOL: Tool = {
 };
 let liveTestPngBase64 = "";
 let liveRunnerRootDir: string | undefined;
+let liveCacheTraceFile: string | undefined;
 let previousCacheTraceEnv: {
   enabled?: string;
+  file?: string;
   messages?: string;
   prompt?: string;
-  stateDir?: string;
   system?: string;
 } | null = null;
 
@@ -107,6 +106,7 @@ function buildRunnerSessionPaths(sessionId: string) {
   }
   return {
     agentDir: liveRunnerRootDir,
+    sessionFile: path.join(liveRunnerRootDir, `${sessionId}.jsonl`),
     workspaceDir: path.join(liveRunnerRootDir, `${sessionId}-workspace`),
   };
 }
@@ -117,9 +117,21 @@ function resolveProviderBaseUrl(model: LiveResolvedModel["model"]): string | und
 }
 
 async function readCacheTraceEvents(sessionId: string): Promise<CacheTraceEvent[]> {
-  return listDiagnosticEvents<CacheTraceEvent>("diagnostics.cache_trace")
-    .map((entry) => entry.value)
-    .filter((event) => event.sessionId === sessionId);
+  if (!liveCacheTraceFile) {
+    throw new Error("live cache trace file not initialized");
+  }
+  const raw = await fs.readFile(liveCacheTraceFile, "utf8").catch(() => "");
+  const events: CacheTraceEvent[] = [];
+  for (const rawLine of raw.split("\n")) {
+    const line = rawLine.trim();
+    if (line.length > 0) {
+      const event = JSON.parse(line) as CacheTraceEvent;
+      if (event.sessionId === sessionId) {
+        events.push(event);
+      }
+    }
+  }
+  return events;
 }
 
 async function expectCacheTraceStages(
@@ -301,6 +313,7 @@ async function runEmbeddedCacheProbe(params: {
     runEmbeddedPiAgent({
       sessionId: params.sessionId,
       sessionKey: `live-cache:${params.providerTag}:${params.sessionId}`,
+      sessionFile: sessionPaths.sessionFile,
       workspaceDir: sessionPaths.workspaceDir,
       agentDir: sessionPaths.agentDir,
       config: buildEmbeddedRunnerConfig({
@@ -344,6 +357,7 @@ async function compactLiveCacheSession(params: {
     compactEmbeddedPiSessionDirect({
       sessionId: params.sessionId,
       sessionKey: `live-cache:${params.providerTag}:${params.sessionId}`,
+      sessionFile: sessionPaths.sessionFile,
       workspaceDir: sessionPaths.workspaceDir,
       agentDir: sessionPaths.agentDir,
       config: buildEmbeddedRunnerConfig({
@@ -741,18 +755,19 @@ async function runAnthropicImageCacheProbe(params: {
 describeCacheLive("pi embedded runner prompt caching (live)", () => {
   beforeAll(async () => {
     liveRunnerRootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-cache-"));
+    liveCacheTraceFile = path.join(liveRunnerRootDir, "cache-trace.jsonl");
     liveTestPngBase64 = (await fs.readFile(LIVE_TEST_PNG_URL)).toString("base64");
     previousCacheTraceEnv = {
       enabled: process.env.OPENCLAW_CACHE_TRACE,
+      file: process.env.OPENCLAW_CACHE_TRACE_FILE,
       messages: process.env.OPENCLAW_CACHE_TRACE_MESSAGES,
       prompt: process.env.OPENCLAW_CACHE_TRACE_PROMPT,
-      stateDir: process.env.OPENCLAW_STATE_DIR,
       system: process.env.OPENCLAW_CACHE_TRACE_SYSTEM,
     };
     process.env.OPENCLAW_CACHE_TRACE = "1";
+    process.env.OPENCLAW_CACHE_TRACE_FILE = liveCacheTraceFile;
     process.env.OPENCLAW_CACHE_TRACE_MESSAGES = "0";
     process.env.OPENCLAW_CACHE_TRACE_PROMPT = "0";
-    process.env.OPENCLAW_STATE_DIR = path.join(liveRunnerRootDir, "state");
     process.env.OPENCLAW_CACHE_TRACE_SYSTEM = "0";
   }, 120_000);
 
@@ -761,9 +776,9 @@ describeCacheLive("pi embedded runner prompt caching (live)", () => {
       const restore = (
         key:
           | "OPENCLAW_CACHE_TRACE"
+          | "OPENCLAW_CACHE_TRACE_FILE"
           | "OPENCLAW_CACHE_TRACE_MESSAGES"
           | "OPENCLAW_CACHE_TRACE_PROMPT"
-          | "OPENCLAW_STATE_DIR"
           | "OPENCLAW_CACHE_TRACE_SYSTEM",
         value: string | undefined,
       ) => {
@@ -774,13 +789,13 @@ describeCacheLive("pi embedded runner prompt caching (live)", () => {
         }
       };
       restore("OPENCLAW_CACHE_TRACE", previousCacheTraceEnv.enabled);
+      restore("OPENCLAW_CACHE_TRACE_FILE", previousCacheTraceEnv.file);
       restore("OPENCLAW_CACHE_TRACE_MESSAGES", previousCacheTraceEnv.messages);
       restore("OPENCLAW_CACHE_TRACE_PROMPT", previousCacheTraceEnv.prompt);
-      restore("OPENCLAW_STATE_DIR", previousCacheTraceEnv.stateDir);
       restore("OPENCLAW_CACHE_TRACE_SYSTEM", previousCacheTraceEnv.system);
     }
-    closeOpenClawStateDatabaseForTest();
     previousCacheTraceEnv = null;
+    liveCacheTraceFile = undefined;
     if (liveRunnerRootDir) {
       await fs.rm(liveRunnerRootDir, { recursive: true, force: true });
     }

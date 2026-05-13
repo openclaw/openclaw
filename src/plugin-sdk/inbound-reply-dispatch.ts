@@ -17,10 +17,16 @@ import {
   runPreparedChannelTurn,
   throwIfDurableInboundReplyDeliveryFailed,
 } from "../channels/turn/kernel.js";
-import type { DurableInboundReplyDeliveryOptions } from "../channels/turn/kernel.js";
+import type {
+  ChannelTurnResult,
+  DispatchedChannelTurnResult,
+  DurableInboundReplyDeliveryOptions,
+} from "../channels/turn/kernel.js";
 import type { PreparedChannelTurn, RunChannelTurnParams } from "../channels/turn/types.js";
 export type { ChannelTurnRecordOptions } from "../channels/turn/types.js";
 export type { DurableInboundReplyDeliveryParams } from "../channels/turn/kernel.js";
+export type { ChannelBotLoopProtectionFacts } from "../channels/turn/kernel.js";
+export { recordChannelBotPairLoopAndCheckSuppression } from "../channels/turn/kernel.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createChannelReplyPipeline } from "./channel-reply-core.js";
 import {
@@ -38,9 +44,30 @@ type RecordInboundSessionFn = typeof import("../channels/session.js").recordInbo
 type ReplyDispatchFromConfigOptions = Omit<GetReplyOptions, "onBlockReply">;
 
 /** Run an already assembled channel turn through shared session-record + dispatch ordering. */
+type PreparedInboundReplyTurnWithBotLoopProtection<TDispatchResult> =
+  PreparedChannelTurn<TDispatchResult> & {
+    botLoopProtection: NonNullable<PreparedChannelTurn<TDispatchResult>["botLoopProtection"]>;
+  };
+
+type PreparedInboundReplyTurnWithoutBotLoopProtection<TDispatchResult> = Omit<
+  PreparedChannelTurn<TDispatchResult>,
+  "botLoopProtection"
+> & {
+  botLoopProtection?: undefined;
+};
+
+export function runPreparedInboundReplyTurn<TDispatchResult>(
+  params: PreparedInboundReplyTurnWithBotLoopProtection<TDispatchResult>,
+): Promise<ChannelTurnResult<TDispatchResult>>;
+export function runPreparedInboundReplyTurn<TDispatchResult>(
+  params: PreparedInboundReplyTurnWithoutBotLoopProtection<TDispatchResult>,
+): Promise<DispatchedChannelTurnResult<TDispatchResult>>;
+export function runPreparedInboundReplyTurn<TDispatchResult>(
+  params: PreparedChannelTurn<TDispatchResult>,
+): Promise<ChannelTurnResult<TDispatchResult>>;
 export async function runPreparedInboundReplyTurn<TDispatchResult>(
   params: PreparedChannelTurn<TDispatchResult>,
-) {
+): Promise<ChannelTurnResult<TDispatchResult>> {
   return await runPreparedChannelTurn(params);
 }
 
@@ -91,6 +118,7 @@ export function buildInboundReplyDispatchBase(params: {
     agentId: string;
     sessionKey: string;
   };
+  storePath: string;
   ctxPayload: FinalizedMsgContext;
   core: {
     channel: {
@@ -109,6 +137,7 @@ export function buildInboundReplyDispatchBase(params: {
     accountId: params.accountId,
     agentId: params.route.agentId,
     routeSessionKey: params.route.sessionKey,
+    storePath: params.storePath,
     ctxPayload: params.ctxPayload,
     recordInboundSession: params.core.channel.session.recordInboundSession,
     dispatchReplyWithBufferedBlockDispatcher:
@@ -123,6 +152,7 @@ type RecordChannelMessageReplyDispatchParams = {
   accountId?: string;
   agentId: string;
   routeSessionKey: string;
+  storePath: string;
   ctxPayload: FinalizedMsgContext;
   recordInboundSession: RecordInboundSessionFn;
   dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcher;
@@ -217,8 +247,8 @@ export async function recordChannelMessageReplyDispatch(
   await runPreparedChannelTurn({
     channel: params.channel,
     accountId: params.accountId,
-    agentId: params.agentId,
     routeSessionKey: params.routeSessionKey,
+    storePath: params.storePath,
     ctxPayload: params.ctxPayload,
     recordInboundSession: params.recordInboundSession,
     record: {

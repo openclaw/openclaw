@@ -1,9 +1,9 @@
-import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
-import { getSessionEntry, patchSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { updateSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveWhatsAppLegacyGroupSessionKey } from "../../group-session-key.js";
 import { resolveWhatsAppInboundPolicy } from "../../inbound-policy.js";
+import { loadSessionStore, resolveStorePath } from "../config.runtime.js";
 import { normalizeGroupActivation } from "./group-activation.runtime.js";
 
 function hasNamedWhatsAppAccounts(cfg: OpenClawConfig) {
@@ -22,9 +22,8 @@ function isActivationOnlyEntry(
 ) {
   return (
     entry?.groupActivation !== undefined &&
-    Object.keys(entry).every(
-      (key) => key === "groupActivation" || key === "sessionId" || key === "updatedAt",
-    )
+    typeof entry?.sessionId !== "string" &&
+    typeof entry?.updatedAt !== "number"
   );
 }
 
@@ -35,14 +34,16 @@ export async function resolveGroupActivationFor(params: {
   sessionKey: string;
   conversationId: string;
 }) {
+  const storePath = resolveStorePath(params.cfg.session?.store, {
+    agentId: params.agentId,
+  });
+  const store = loadSessionStore(storePath);
   const legacySessionKey = resolveWhatsAppLegacyGroupSessionKey({
     sessionKey: params.sessionKey,
     accountId: params.accountId,
   });
-  const legacyEntry = legacySessionKey
-    ? getSessionEntry({ agentId: params.agentId, sessionKey: legacySessionKey })
-    : undefined;
-  const scopedEntry = getSessionEntry({ agentId: params.agentId, sessionKey: params.sessionKey });
+  const legacyEntry = legacySessionKey ? store[legacySessionKey] : undefined;
+  const scopedEntry = store[params.sessionKey];
   const normalizedAccountId = normalizeAccountId(params.accountId);
   const ignoreScopedActivation =
     normalizedAccountId === DEFAULT_ACCOUNT_ID &&
@@ -51,21 +52,16 @@ export async function resolveGroupActivationFor(params: {
   const activation =
     (ignoreScopedActivation ? undefined : scopedEntry?.groupActivation) ??
     legacyEntry?.groupActivation;
-  const normalizedActivation = normalizeGroupActivation(activation);
-  if (normalizedActivation && scopedEntry?.groupActivation === undefined) {
-    await patchSessionEntry({
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      fallbackEntry: {
-        sessionId: legacyEntry?.sessionId ?? randomUUID(),
-        updatedAt: Date.now(),
-      },
-      update: (entry) => {
-        if (entry.groupActivation !== undefined) {
-          return null;
-        }
-        return { groupActivation: normalizedActivation };
-      },
+  if (activation !== undefined && scopedEntry?.groupActivation === undefined) {
+    await updateSessionStore(storePath, (nextStore) => {
+      const nextScopedEntry = nextStore[params.sessionKey];
+      if (nextScopedEntry?.groupActivation !== undefined) {
+        return;
+      }
+      nextStore[params.sessionKey] = {
+        ...nextScopedEntry,
+        groupActivation: activation,
+      };
     });
   }
   const requireMention = resolveWhatsAppInboundPolicy({
@@ -73,5 +69,5 @@ export async function resolveGroupActivationFor(params: {
     accountId: params.accountId,
   }).resolveConversationRequireMention(params.conversationId);
   const defaultActivation = !requireMention ? "always" : "mention";
-  return normalizedActivation ?? defaultActivation;
+  return normalizeGroupActivation(activation) ?? defaultActivation;
 }

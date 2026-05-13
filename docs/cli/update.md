@@ -110,10 +110,10 @@ the packaged `dist` inventory there, then swaps that clean package tree into the
 real global prefix. If verification fails, post-update doctor, plugin sync, and
 restart work do not run from the suspect tree. Even when the installed version
 already matches the target, the command refreshes the global package install,
-then runs plugin sync, shell-completion profile checks, and restart work. This
+then runs plugin sync, a core-command completion refresh, and restart work. This
 keeps packaged sidecars and channel-owned plugin records aligned with the
-installed OpenClaw build without writing completion cache files under OpenClaw
-state.
+installed OpenClaw build while leaving full plugin-command completion rebuilds to
+explicit `openclaw completion --write-state` runs.
 
 When a local managed Gateway service is installed and restart is enabled,
 package-manager updates stop the running service before replacing the package

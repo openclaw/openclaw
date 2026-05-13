@@ -9,22 +9,20 @@ import {
 } from "./subagent-spawn.test-helpers.js";
 
 const callGatewayMock = vi.fn();
-const upsertSessionEntryMock = vi.fn();
+const updateSessionStoreMock = vi.fn();
 
 let configOverride: Record<string, unknown> = {
   ...createSubagentSpawnTestConfig(),
 };
 let workspaceDirOverride = "";
-let sessionStore: Record<string, Record<string, unknown>> = {};
 let subagentSpawnModule: Awaited<ReturnType<typeof loadSubagentSpawnModuleForTest>>;
 
 beforeAll(async () => {
   subagentSpawnModule = await loadSubagentSpawnModuleForTest({
     callGatewayMock,
     getRuntimeConfig: () => configOverride,
-    upsertSessionEntryMock,
+    updateSessionStoreMock,
     workspaceDir: workspaceDirOverride || os.tmpdir(),
-    getSessionStore: () => sessionStore,
   });
 });
 
@@ -94,9 +92,15 @@ describe("spawnSubagentDirect filename validation", () => {
     configOverride = createSubagentSpawnTestConfig(workspaceDirOverride);
     subagentSpawnModule.resetSubagentRegistryForTests();
     callGatewayMock.mockClear();
-    upsertSessionEntryMock.mockReset();
-    sessionStore = {};
-    upsertSessionEntryMock.mockImplementation(() => undefined);
+    updateSessionStoreMock.mockReset();
+    const store: Record<string, Record<string, unknown>> = {};
+    updateSessionStoreMock.mockImplementation(async (_storePath: unknown, mutator: unknown) => {
+      if (typeof mutator !== "function") {
+        throw new Error("missing session store mutator");
+      }
+      await mutator(store);
+      return store;
+    });
     setupAcceptedSubagentGatewayMock(callGatewayMock);
   });
 
@@ -175,11 +179,16 @@ describe("spawnSubagentDirect filename validation", () => {
 
   it("removes materialized attachments when lineage patching fails", async () => {
     const calls: Array<{ method?: string; params?: Record<string, unknown> }> = [];
-    sessionStore = {};
-    upsertSessionEntryMock.mockImplementation((options: { entry?: Record<string, unknown> }) => {
-      if (typeof options.entry?.spawnedBy === "string") {
+    const store: Record<string, Record<string, unknown>> = {};
+    updateSessionStoreMock.mockImplementation(async (_storePath: unknown, mutator: unknown) => {
+      if (typeof mutator !== "function") {
+        throw new Error("missing session store mutator");
+      }
+      await mutator(store);
+      if (Object.values(store).some((entry) => typeof entry.spawnedBy === "string")) {
         throw new Error("lineage patch failed");
       }
+      return store;
     });
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: Record<string, unknown> };
@@ -210,10 +219,12 @@ describe("spawnSubagentDirect filename validation", () => {
     const deleteParams = deleteCall?.params as
       | {
           key?: string;
+          deleteTranscript?: boolean;
           emitLifecycleHooks?: boolean;
         }
       | undefined;
     expect(deleteParams?.key).toMatch(/^agent:main:subagent:/);
+    expect(deleteParams?.deleteTranscript).toBe(true);
     expect(deleteParams?.emitLifecycleHooks).toBe(false);
   });
 });

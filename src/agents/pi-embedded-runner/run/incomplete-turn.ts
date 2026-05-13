@@ -1,3 +1,4 @@
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import {
   isSilentReplyPayloadText,
   isSilentReplyText,
@@ -5,7 +6,6 @@ import {
 } from "../../../auto-reply/tokens.js";
 import type { EmbeddedPiExecutionContract } from "../../../config/types.agent-defaults.js";
 import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
-import type { AgentMessage } from "../../agent-core-contract.js";
 import { collectTextContentBlocks } from "../../content-blocks.js";
 import {
   isStrictAgenticSupportedProviderModel,

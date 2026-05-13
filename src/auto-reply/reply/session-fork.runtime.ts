@@ -1,25 +1,29 @@
 import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 import {
   CURRENT_SESSION_VERSION,
+  migrateSessionEntries,
+  parseSessionEntries,
+  type FileEntry,
   type SessionEntry as PiSessionEntry,
   type SessionHeader,
-  type TranscriptEntry,
-} from "../../agents/transcript/session-transcript-contract.js";
+} from "@earendil-works/pi-coding-agent";
 import { derivePromptTokens } from "../../agents/usage.js";
 import {
-  loadSqliteSessionTranscriptEvents,
-  replaceSqliteSessionTranscriptEvents,
-  resolveSqliteSessionTranscriptScope,
-} from "../../config/sessions/transcript-store.sqlite.js";
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
+} from "../../config/sessions/paths.js";
 import {
   resolveFreshSessionTotalTokens,
   type SessionEntry as StoreSessionEntry,
 } from "../../config/sessions/types.js";
-import { readLatestRecentSessionUsageFromTranscriptAsync } from "../../gateway/session-transcript-readers.js";
+import { readLatestRecentSessionUsageFromTranscriptAsync } from "../../gateway/session-utils.fs.js";
+import { readRegularFile } from "../../infra/fs-safe.js";
 
 type ForkSourceTranscript = {
-  agentId: string;
   cwd: string;
+  sessionDir: string;
   leafId: string | null;
   branchEntries: PiSessionEntry[];
   labelsToWrite: Array<{ targetId: string; label: string; timestamp: string }>;
@@ -44,23 +48,18 @@ function maxPositiveTokenCount(...values: Array<number | undefined>): number | u
   return max;
 }
 
-async function estimateParentTranscriptTokensFromSqlite(params: {
+async function estimateParentTranscriptTokensFromBytes(params: {
   parentEntry: StoreSessionEntry;
-  agentId: string;
+  storePath: string;
 }): Promise<number | undefined> {
   try {
-    const scope = resolveSqliteSessionTranscriptScope({
-      agentId: params.agentId,
-      sessionId: params.parentEntry.sessionId,
-    });
-    if (!scope) {
-      return undefined;
-    }
-    const size = loadSqliteSessionTranscriptEvents(scope).reduce(
-      (total, entry) => total + JSON.stringify(entry.event).length + 1,
-      0,
+    const filePath = resolveSessionFilePath(
+      params.parentEntry.sessionId,
+      params.parentEntry,
+      resolveSessionFilePathOptions({ storePath: params.storePath }),
     );
-    return resolvePositiveTokenCount(Math.ceil(size / FALLBACK_TRANSCRIPT_BYTES_PER_TOKEN));
+    const stat = await fs.stat(filePath);
+    return resolvePositiveTokenCount(Math.ceil(stat.size / FALLBACK_TRANSCRIPT_BYTES_PER_TOKEN));
   } catch {
     return undefined;
   }
@@ -68,7 +67,7 @@ async function estimateParentTranscriptTokensFromSqlite(params: {
 
 export async function resolveParentForkTokenCountRuntime(params: {
   parentEntry: StoreSessionEntry;
-  agentId: string;
+  storePath: string;
 }): Promise<number | undefined> {
   const freshPersistedTokens = resolveFreshSessionTotalTokens(params.parentEntry);
   if (typeof freshPersistedTokens === "number") {
@@ -76,13 +75,13 @@ export async function resolveParentForkTokenCountRuntime(params: {
   }
 
   const cachedTokens = resolvePositiveTokenCount(params.parentEntry.totalTokens);
-  const byteEstimateTokens = await estimateParentTranscriptTokensFromSqlite(params);
+  const byteEstimateTokens = await estimateParentTranscriptTokensFromBytes(params);
   try {
     const usage = await readLatestRecentSessionUsageFromTranscriptAsync(
-      {
-        agentId: params.agentId,
-        sessionId: params.parentEntry.sessionId,
-      },
+      params.parentEntry.sessionId,
+      params.storePath,
+      params.parentEntry.sessionFile,
+      undefined,
       1024 * 1024,
     );
     const promptTokens = resolvePositiveTokenCount(
@@ -107,7 +106,7 @@ export async function resolveParentForkTokenCountRuntime(params: {
   return maxPositiveTokenCount(cachedTokens, byteEstimateTokens);
 }
 
-function isSessionEntry(entry: TranscriptEntry): entry is PiSessionEntry {
+function isSessionEntry(entry: FileEntry): entry is PiSessionEntry {
   return (
     entry.type !== "session" &&
     typeof (entry as { id?: unknown }).id === "string" &&
@@ -168,20 +167,15 @@ function collectBranchLabels(params: {
   return labelsToWrite;
 }
 
-async function readForkSourceTranscript(params: {
-  agentId: string;
-  sessionId: string;
-}): Promise<ForkSourceTranscript | null> {
-  const transcriptEntries = loadSqliteSessionTranscriptEvents({
-    agentId: params.agentId,
-    sessionId: params.sessionId,
-  }).map((entry) => entry.event as TranscriptEntry);
-  if (transcriptEntries.length === 0) {
-    return null;
-  }
+async function readForkSourceTranscript(
+  parentSessionFile: string,
+): Promise<ForkSourceTranscript | null> {
+  const raw = (await readRegularFile({ filePath: parentSessionFile })).buffer.toString("utf-8");
+  const fileEntries = parseSessionEntries(raw);
+  migrateSessionEntries(fileEntries);
   const header =
-    transcriptEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
-  const entries = transcriptEntries.filter(isSessionEntry);
+    fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
+  const entries = fileEntries.filter(isSessionEntry);
   const byId = buildEntryIndex(entries);
   const leafId = entries.at(-1)?.id ?? null;
   const branchEntries = readBranch({ byId, leafId });
@@ -189,8 +183,8 @@ async function readForkSourceTranscript(params: {
     branchEntries.filter((entry) => entry.type !== "label").map((entry) => entry.id),
   );
   return {
-    agentId: params.agentId,
     cwd: header?.cwd ?? process.cwd(),
+    sessionDir: path.dirname(parentSessionFile),
     leafId,
     branchEntries,
     labelsToWrite: collectBranchLabels({ allEntries: entries, pathEntryIds }),
@@ -221,34 +215,39 @@ function buildBranchLabelEntries(params: {
 }
 
 async function writeForkHeaderOnly(params: {
-  parentTranscriptScope: { agentId: string; sessionId: string };
-  agentId: string;
+  parentSessionFile: string;
+  sessionDir: string;
   cwd: string;
-}): Promise<{ sessionId: string }> {
+}): Promise<{ sessionId: string; sessionFile: string }> {
   const sessionId = crypto.randomUUID();
   const timestamp = new Date().toISOString();
+  const fileTimestamp = timestamp.replace(/[:.]/g, "-");
+  const sessionFile = path.join(params.sessionDir, `${fileTimestamp}_${sessionId}.jsonl`);
   const header = {
     type: "session",
     version: CURRENT_SESSION_VERSION,
     id: sessionId,
     timestamp,
     cwd: params.cwd,
-    parentTranscriptScope: { ...params.parentTranscriptScope },
+    parentSession: params.parentSessionFile,
   } satisfies SessionHeader;
-  replaceSqliteSessionTranscriptEvents({
-    agentId: params.agentId,
-    sessionId,
-    events: [header],
+  await fs.mkdir(path.dirname(sessionFile), { recursive: true });
+  await fs.writeFile(sessionFile, `${JSON.stringify(header)}\n`, {
+    encoding: "utf-8",
+    mode: 0o600,
+    flag: "wx",
   });
-  return { sessionId };
+  return { sessionId, sessionFile };
 }
 
 async function writeBranchedSession(params: {
-  parentTranscriptScope: { agentId: string; sessionId: string };
+  parentSessionFile: string;
   source: ForkSourceTranscript;
-}): Promise<{ sessionId: string }> {
+}): Promise<{ sessionId: string; sessionFile: string }> {
   const sessionId = crypto.randomUUID();
   const timestamp = new Date().toISOString();
+  const fileTimestamp = timestamp.replace(/[:.]/g, "-");
+  const sessionFile = path.join(params.source.sessionDir, `${fileTimestamp}_${sessionId}.jsonl`);
   const pathWithoutLabels = params.source.branchEntries.filter((entry) => entry.type !== "label");
   const pathEntryIds = new Set(pathWithoutLabels.map((entry) => entry.id));
   const labelEntries = buildBranchLabelEntries({
@@ -262,43 +261,50 @@ async function writeBranchedSession(params: {
     id: sessionId,
     timestamp,
     cwd: params.source.cwd,
-    parentTranscriptScope: { ...params.parentTranscriptScope },
+    parentSession: params.parentSessionFile,
   } satisfies SessionHeader;
   const entries = [header, ...pathWithoutLabels, ...labelEntries];
   const hasAssistant = entries.some(
     (entry) => entry.type === "message" && entry.message.role === "assistant",
   );
   if (hasAssistant) {
-    replaceSqliteSessionTranscriptEvents({
-      agentId: params.source.agentId,
-      sessionId,
-      events: entries,
-    });
+    await fs.mkdir(path.dirname(sessionFile), { recursive: true });
+    await fs.writeFile(
+      sessionFile,
+      `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+      {
+        encoding: "utf-8",
+        mode: 0o600,
+        flag: "wx",
+      },
+    );
   }
-  return { sessionId };
+  return { sessionId, sessionFile };
 }
 
 export async function forkSessionFromParentRuntime(params: {
   parentEntry: StoreSessionEntry;
   agentId: string;
-}): Promise<{ sessionId: string } | null> {
-  const parentTranscriptScope = {
-    agentId: params.agentId,
-    sessionId: params.parentEntry.sessionId,
-  };
+  sessionsDir: string;
+}): Promise<{ sessionId: string; sessionFile: string } | null> {
+  const parentSessionFile = resolveSessionFilePath(
+    params.parentEntry.sessionId,
+    params.parentEntry,
+    { agentId: params.agentId, sessionsDir: params.sessionsDir },
+  );
+  if (!parentSessionFile) {
+    return null;
+  }
   try {
-    const source = await readForkSourceTranscript({
-      agentId: params.agentId,
-      sessionId: params.parentEntry.sessionId,
-    });
+    const source = await readForkSourceTranscript(parentSessionFile);
     if (!source) {
       return null;
     }
     return source.leafId
-      ? await writeBranchedSession({ parentTranscriptScope, source })
+      ? await writeBranchedSession({ parentSessionFile, source })
       : await writeForkHeaderOnly({
-          parentTranscriptScope,
-          agentId: source.agentId,
+          parentSessionFile,
+          sessionDir: source.sessionDir,
           cwd: source.cwd,
         });
   } catch {

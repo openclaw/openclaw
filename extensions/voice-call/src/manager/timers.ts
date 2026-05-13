@@ -4,11 +4,11 @@ import { persistCallRecord } from "./store.js";
 
 type TimerContext = Pick<
   CallManagerContext,
-  "activeCalls" | "maxDurationTimers" | "config" | "callStore" | "transcriptWaiters"
+  "activeCalls" | "maxDurationTimers" | "config" | "storePath" | "transcriptWaiters"
 >;
 type MaxDurationTimerContext = Pick<
   TimerContext,
-  "activeCalls" | "maxDurationTimers" | "config" | "callStore"
+  "activeCalls" | "maxDurationTimers" | "config" | "storePath"
 >;
 type TranscriptWaiterContext = Pick<TimerContext, "transcriptWaiters">;
 
@@ -44,7 +44,7 @@ export function startMaxDurationTimer(params: {
         `[voice-call] Max duration reached (${Math.ceil(maxDurationMs / 1000)}s), ending call ${params.callId}`,
       );
       call.endReason = "timeout";
-      persistCallRecord(params.ctx.callStore, call);
+      persistCallRecord(params.ctx.storePath, call);
       await params.onTimeout(params.callId);
     }
   }, maxDurationMs);

@@ -57,7 +57,7 @@ const EXEC_POLICY_PRESETS: Record<ExecPolicyPresetName, Required<ExecPolicyResol
 
 type ExecPolicyShowPayload = {
   configPath: string;
-  approvalsStore: string;
+  approvalsPath: string;
   approvalsExists: boolean;
   effectivePolicy: {
     note: string;
@@ -72,7 +72,7 @@ type ExecPolicyShowScope = Omit<
   ExecPolicyScopeSnapshot,
   "security" | "ask" | "askFallback" | "allowedDecisions"
 > & {
-  runtimeApprovalsSource: "local-state" | "node-runtime";
+  runtimeApprovalsSource: "local-file" | "node-runtime";
   security: {
     requested: ExecSecurity;
     requestedSource: string;
@@ -234,12 +234,12 @@ async function buildLocalExecPolicyShowPayload(): Promise<ExecPolicyShowPayload>
   );
   return {
     configPath: configSnapshot.path,
-    approvalsStore: approvalsSnapshot.path,
+    approvalsPath: approvalsSnapshot.path,
     approvalsExists: approvalsSnapshot.exists,
     effectivePolicy: {
       note: hasNodeRuntimeScope
         ? "Scopes requesting host=node are node-managed at runtime. Local approvals are shown only for local/gateway scopes."
-        : "Effective exec policy is the host approvals state intersected with requested tools.exec policy.",
+        : "Effective exec policy is the host approvals file intersected with requested tools.exec policy.",
       scopes,
     },
   };
@@ -250,7 +250,7 @@ function buildExecPolicyShowScope(snapshot: ExecPolicyScopeSnapshot): ExecPolicy
   if (snapshot.host.requested !== "node") {
     return {
       ...baseScope,
-      runtimeApprovalsSource: "local-state",
+      runtimeApprovalsSource: "local-file",
     };
   }
   return {
@@ -293,9 +293,9 @@ function renderExecPolicyShow(payload: ExecPolicyShowPayload): void {
       ],
       rows: [
         { Field: "Config", Value: sanitizeExecPolicyTableCell(payload.configPath) },
-        { Field: "Approvals", Value: sanitizeExecPolicyTableCell(payload.approvalsStore) },
+        { Field: "Approvals", Value: sanitizeExecPolicyTableCell(payload.approvalsPath) },
         {
-          Field: "Approvals State",
+          Field: "Approvals File",
           Value: sanitizeExecPolicyTableCell(payload.approvalsExists ? "present" : "missing"),
         },
       ],

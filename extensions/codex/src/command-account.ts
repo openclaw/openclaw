@@ -11,7 +11,7 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
 import { CODEX_CONTROL_METHODS, type CodexControlMethod } from "./app-server/capabilities.js";
-import type { JsonValue } from "./app-server/protocol.js";
+import { isJsonObject, type JsonObject, type JsonValue } from "./app-server/protocol.js";
 import { rememberCodexRateLimits } from "./app-server/rate-limit-cache.js";
 import {
   summarizeCodexAccountUsage,
@@ -38,12 +38,13 @@ export type CodexAccountAuthRow = {
   status: string;
   active: boolean;
   usage?: string;
+  billingNote?: string;
 };
 
 export type CodexAccountAuthOverview = {
-  headline: string;
-  reason?: string;
-  usage?: string;
+  currentLine?: string;
+  subscriptionLabel?: string;
+  subscriptionUsage?: string;
   orderTitle: string;
   rows: CodexAccountAuthRow[];
 };
@@ -67,7 +68,14 @@ export async function readCodexAccountAuthOverview(params: {
   }
 
   const now = Date.now();
-  const activeProfileId = resolveActiveProfileId({ store, order, config });
+  const activeProfileId = resolveActiveProfileId({
+    store,
+    order,
+    config,
+    account: params.account,
+    limits: params.limits,
+    now,
+  });
   const subscriptionProfileId = order.find((profileId) =>
     isChatGptSubscriptionProfile(store.profiles[profileId]),
   );
@@ -105,27 +113,24 @@ export async function readCodexAccountAuthOverview(params: {
   const activeRow = rows.find((row) => row.active);
   if (!activeRow) {
     return {
-      headline: "OpenAI: no working credentials",
-      orderTitle: "Order",
+      currentLine: "OpenAI credentials: no working credential",
+      orderTitle: "Auth order",
       rows,
     };
   }
   const activeCredential = store.profiles[activeRow.profileId];
   const activeIsApiKey = activeCredential?.type === "api_key";
-  const reason = activeIsApiKey
-    ? buildFallbackReason(rows, activeRow, subscriptionUsage)
-    : undefined;
+  const subscriptionLabel = subscriptionProfileId
+    ? formatProfileLabel(subscriptionProfileId, store.profiles[subscriptionProfileId])
+    : activeIsSubscription
+      ? activeRow.label
+      : undefined;
+  const subscriptionUsageLine = formatSubscriptionUsageLine(subscriptionUsage);
   return {
-    headline: activeIsApiKey
-      ? `OpenAI: ${activeRow.label} - fallback active`
-      : `OpenAI: ChatGPT subscription - ${activeRow.label}`,
-    ...(reason ? { reason } : {}),
-    ...(activeIsApiKey
-      ? { usage: "not tracked for API keys; OpenAI bills per token" }
-      : activeUsage?.usageLine
-        ? { usage: activeUsage.usageLine }
-        : {}),
-    orderTitle: "Order",
+    ...(activeIsApiKey ? { currentLine: buildApiKeyActiveLine(activeRow, subscriptionUsage) } : {}),
+    ...(subscriptionLabel ? { subscriptionLabel } : {}),
+    ...(subscriptionUsageLine ? { subscriptionUsage: subscriptionUsageLine } : {}),
+    orderTitle: "Auth order",
     rows,
   };
 }
@@ -134,13 +139,11 @@ function resolveDisplayAuthOrder(params: {
   config: AuthProfileOrderConfig;
   store: AuthProfileStore;
 }): string[] {
-  const configured =
-    resolveOrder(params.store.order, OPENAI_PROVIDER_ID) ??
+  const codexOrder =
     resolveOrder(params.store.order, OPENAI_CODEX_PROVIDER_ID) ??
-    resolveOrder(params.config?.auth?.order, OPENAI_PROVIDER_ID) ??
     resolveOrder(params.config?.auth?.order, OPENAI_CODEX_PROVIDER_ID);
-  if (configured && configured.length > 0) {
-    return dedupe(configured);
+  if (codexOrder && codexOrder.length > 0) {
+    return dedupe(codexOrder);
   }
   return resolveAuthProfileOrder({
     cfg: params.config,
@@ -160,11 +163,27 @@ function resolveActiveProfileId(params: {
   store: AuthProfileStore;
   order: string[];
   config: AuthProfileOrderConfig;
+  account: SafeValue<JsonValue | undefined>;
+  limits: SafeValue<JsonValue | undefined>;
+  now: number;
 }): string | undefined {
+  const liveProfileId = resolveLiveAccountProfileId({
+    account: params.account,
+    store: params.store,
+    order: params.order,
+  });
+  if (liveProfileId) {
+    return liveProfileId;
+  }
   const lastGood = [
     params.store.lastGood?.[OPENAI_PROVIDER_ID],
     params.store.lastGood?.[OPENAI_CODEX_PROVIDER_ID],
-  ].find((profileId): profileId is string => !!profileId && params.order.includes(profileId));
+  ].find(
+    (profileId): profileId is string =>
+      !!profileId &&
+      params.order.includes(profileId) &&
+      isActiveProfileCandidate(params, profileId),
+  );
   if (lastGood) {
     return lastGood;
   }
@@ -173,16 +192,76 @@ function resolveActiveProfileId(params: {
       profileId,
       lastUsed: params.store.usageStats?.[profileId]?.lastUsed ?? 0,
     }))
-    .filter((entry) => entry.lastUsed > 0)
+    .filter((entry) => entry.lastUsed > 0 && isActiveProfileCandidate(params, entry.profileId))
     .toSorted((left, right) => right.lastUsed - left.lastUsed)[0]?.profileId;
   if (mostRecent) {
     return mostRecent;
+  }
+  if (shouldInferApiKeyActiveFromRateLimitProbe(params.limits)) {
+    const apiKeyProfile = params.order.find(
+      (profileId) => params.store.profiles[profileId]?.type === "api_key",
+    );
+    if (apiKeyProfile) {
+      return apiKeyProfile;
+    }
   }
   return resolveAuthProfileOrder({
     cfg: params.config,
     store: params.store,
     provider: OPENAI_CODEX_PROVIDER_ID,
   })[0];
+}
+
+function isActiveProfileCandidate(
+  params: { store: AuthProfileStore; now: number },
+  profileId: string,
+): boolean {
+  const unusableUntil = resolveProfileUnusableUntilForDisplay(params.store, profileId);
+  return !isActiveUntil(unusableUntil ?? undefined, params.now);
+}
+
+function resolveLiveAccountProfileId(params: {
+  account: SafeValue<JsonValue | undefined>;
+  store: AuthProfileStore;
+  order: string[];
+}): string | undefined {
+  if (!params.account.ok || !isJsonObject(params.account.value)) {
+    return undefined;
+  }
+  const account = isJsonObject(params.account.value.account)
+    ? params.account.value.account
+    : params.account.value;
+  const type = readString(account, "type")?.toLowerCase();
+  if (type === "chatgpt") {
+    const email = readString(account, "email")?.toLowerCase();
+    const firstSubscription = params.order.find((profileId) =>
+      isChatGptSubscriptionProfile(params.store.profiles[profileId]),
+    );
+    if (!email) {
+      return firstSubscription;
+    }
+    return (
+      params.order.find((profileId) => {
+        const credential = params.store.profiles[profileId];
+        if (!isChatGptSubscriptionProfile(credential)) {
+          return false;
+        }
+        const profileEmail =
+          credential.email?.trim().toLowerCase() ?? extractEmailFromProfileId(profileId);
+        return profileEmail?.toLowerCase() === email;
+      }) ?? firstSubscription
+    );
+  }
+  if (type === "apikey" || type === "api_key") {
+    return params.order.find((profileId) => params.store.profiles[profileId]?.type === "api_key");
+  }
+  return undefined;
+}
+
+function shouldInferApiKeyActiveFromRateLimitProbe(
+  limits: SafeValue<JsonValue | undefined>,
+): boolean {
+  return !limits.ok && limits.error.toLowerCase().includes("chatgpt authentication required");
 }
 
 async function readSubscriptionUsage(params: {
@@ -199,6 +278,7 @@ async function readSubscriptionUsage(params: {
     {
       config: params.config,
       authProfileId: params.subscriptionProfileId,
+      isolated: true,
     },
   );
   if (!limits.ok) {
@@ -223,23 +303,30 @@ function buildProfileRow(params: {
   const kind = formatProfileKind(credential);
   const active = params.profileId === params.activeProfileId;
   const status = active
-    ? "active"
-    : describeInactiveProfileStatus({
-        store: params.store,
-        config: params.config,
-        profileId: params.profileId,
-        credential,
-        now: params.now,
-        afterActive: params.activeIndex >= 0 && params.index > params.activeIndex,
-      });
+    ? "active now"
+    : params.usage?.blocked
+      ? formatUsageBlockedStatus(params.usage)
+      : describeInactiveProfileStatus({
+          store: params.store,
+          config: params.config,
+          profileId: params.profileId,
+          credential,
+          now: params.now,
+          afterActive: params.activeIndex >= 0 && params.index > params.activeIndex,
+        });
   return {
     profileId: params.profileId,
     label,
     kind,
     status,
     active,
+    ...(credential?.type === "api_key" && active ? { billingNote: "billed per token" } : {}),
     ...(params.usage?.usageLine ? { usage: params.usage.usageLine } : {}),
   };
+}
+
+function formatUsageBlockedStatus(usage: CodexAccountUsageSummary): string {
+  return usage.blocked ? "rate-limited" : "available if needed";
 }
 
 function describeInactiveProfileStatus(params: {
@@ -269,29 +356,42 @@ function describeInactiveProfileStatus(params: {
   if (!eligibility.eligible) {
     return describeEligibilityStatus(eligibility.reasonCode, params.credential);
   }
-  return params.afterActive ? "held in reserve" : "ready";
+  return "available if needed";
 }
 
-function buildFallbackReason(
-  rows: CodexAccountAuthRow[],
+function buildApiKeyActiveLine(
   activeRow: CodexAccountAuthRow,
   subscriptionUsage: CodexAccountUsageSummary | undefined,
+): string {
+  if (subscriptionUsage?.blocked) {
+    const switchBack = subscriptionUsage.blockedResetRelative
+      ? ` · switches back ${subscriptionUsage.blockedResetRelative}`
+      : " · switches back automatically";
+    return `Now using: ${activeRow.label} - subscription rate-limited${switchBack}`;
+  }
+  return `Now using: ${activeRow.label} - subscription unavailable · switches back automatically`;
+}
+
+function formatSubscriptionUsageLine(
+  usage: CodexAccountUsageSummary | undefined,
 ): string | undefined {
-  const activeIndex = rows.findIndex((row) => row.profileId === activeRow.profileId);
-  const firstSkipped = rows.slice(0, activeIndex).find((row) => row.status !== "ready");
-  if (!firstSkipped) {
+  if (!usage) {
     return undefined;
   }
-  if (subscriptionUsage?.blocked) {
-    const reset = subscriptionUsage.blockedResetRelative
-      ? ` - resets ${subscriptionUsage.blockedResetRelative}`
-      : "";
-    const limit = subscriptionUsage.blockingPeriod
-      ? `${subscriptionUsage.blockingPeriod} limit`
-      : "usage limit";
-    return `${firstSkipped.label} hit its ChatGPT ${limit}${reset}; OpenClaw will switch back automatically.`;
+  const parts = usage.usageLine ? [formatUsageLineForDisplay(usage.usageLine)] : [];
+  if (usage.blockedResetRelative) {
+    parts.push(`Resets ${usage.blockedResetRelative}`);
   }
-  return `${firstSkipped.label} is ${firstSkipped.status}, so OpenClaw is using the next working profile.`;
+  return parts.length > 0 ? parts.join(" · ") : undefined;
+}
+
+function formatUsageLineForDisplay(value: string): string {
+  return value.replace(/^weekly\b/u, "Weekly").replace(/\bshort-term\b/u, "Short-term");
+}
+
+function readString(record: JsonObject, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function isChatGptSubscriptionProfile(credential: AuthProfileCredential | undefined): boolean {
@@ -315,19 +415,29 @@ function formatProfileLabel(
   profileId: string,
   credential: AuthProfileCredential | undefined,
 ): string {
+  const tail = profileId.includes(":") ? profileId.slice(profileId.indexOf(":") + 1) : profileId;
   const displayName = credential?.displayName?.trim();
   if (displayName) {
-    return displayName;
+    return credential?.type === "api_key"
+      ? simplifyApiKeyDisplayName(displayName, tail)
+      : displayName;
   }
   const email = credential?.email?.trim() ?? extractEmailFromProfileId(profileId);
   if (email) {
     return email;
   }
-  const tail = profileId.includes(":") ? profileId.slice(profileId.indexOf(":") + 1) : profileId;
   if (credential?.type === "api_key") {
-    return humanizeApiKeyProfileTail(tail);
+    return tail || "API key";
   }
   return humanizeProfileTail(tail);
+}
+
+function simplifyApiKeyDisplayName(value: string, tail: string): string {
+  const stripped = value.replace(/^OpenAI\s+/iu, "").trim();
+  if (tail && stripped.toLowerCase() === humanizeApiKeyProfileTail(tail).toLowerCase()) {
+    return tail;
+  }
+  return stripped || value;
 }
 
 function humanizeApiKeyProfileTail(tail: string): string {

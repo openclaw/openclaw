@@ -39,10 +39,12 @@ export type MatrixAuth = {
 };
 
 export type MatrixStoragePaths = {
-  stateDir: string;
   rootDir: string;
-  recoveryKeyStorageKey: string;
-  idbSnapshotStorageKey: string;
+  storagePath: string;
+  cryptoPath: string;
+  metaPath: string;
+  recoveryKeyPath: string;
+  idbSnapshotPath: string;
   accountKey: string;
   tokenHash: string;
 };

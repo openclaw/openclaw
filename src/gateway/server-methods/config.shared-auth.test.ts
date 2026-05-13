@@ -17,7 +17,9 @@ const scheduleGatewaySigusr1RestartMock = vi.fn(() => ({
   coalesced: false,
 }));
 const restartSentinelMocks = vi.hoisted(() => ({
-  writeRestartSentinel: vi.fn(async (_payload: RestartSentinelPayload) => undefined),
+  writeRestartSentinel: vi.fn(async (_payload: RestartSentinelPayload) => {
+    return "/tmp/restart-sentinel.json";
+  }),
 }));
 
 vi.mock("../../config/config.js", async () => {

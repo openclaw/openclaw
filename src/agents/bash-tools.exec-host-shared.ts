@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { formatErrorMessage } from "../infra/errors.js";
 import { buildExecApprovalUnavailableReplyPayload } from "../infra/exec-approval-reply.js";
 import {
@@ -16,7 +17,6 @@ import {
 } from "../infra/exec-approvals.js";
 import { logWarn } from "../logger.js";
 import { registerExecApprovalFollowupRuntimeHandoff } from "./bash-tools.exec-approval-followup-state.js";
-import type { AgentToolResult } from "./agent-core-contract.js";
 import { sendExecApprovalFollowup } from "./bash-tools.exec-approval-followup.js";
 import {
   type ExecApprovalRegistration,
@@ -395,9 +395,9 @@ export function buildHeadlessExecApprovalDeniedMessage(params: {
   return [
     `exec denied: ${runLabel} cannot wait for interactive exec approval.`,
     `Effective host exec policy: security=${params.security} ask=${params.ask} askFallback=${params.askFallback}`,
-    "Stricter values from tools.exec and SQLite exec approvals state both apply.",
+    "Stricter values from tools.exec and ~/.openclaw/exec-approvals.json both apply.",
     "Fix one of these:",
-    '- align config and approvals state to security="full" and ask="off" for trusted local automation',
+    '- align both files to security="full" and ask="off" for trusted local automation',
     "- keep allowlist mode and add an explicit allowlist entry for this command",
     "- enable Web UI, terminal UI, or chat exec approvals and rerun interactively",
     'Tip: run "openclaw doctor" and "openclaw approvals get --gateway" to inspect the effective policy.',

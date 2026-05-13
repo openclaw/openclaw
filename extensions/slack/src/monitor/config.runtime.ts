@@ -3,6 +3,7 @@ export { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-na
 export {
   readSessionUpdatedAt,
   resolveSessionKey,
+  resolveStorePath,
   updateLastRoute,
 } from "openclaw/plugin-sdk/session-store-runtime";
 export { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";

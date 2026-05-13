@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
 import { logDebug, logWarn } from "../logger.js";
@@ -9,7 +10,6 @@ import {
 import { setPluginToolMeta } from "../plugins/tools.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import type { AgentToolResult } from "./agent-core-contract.js";
 import { loadEmbeddedPiLspConfig } from "./embedded-pi-lsp.js";
 import {
   resolveStdioMcpServerLaunchConfig,
@@ -375,7 +375,11 @@ function buildLspTools(session: LspSession): AnyAgentTool[] {
   return tools;
 }
 
-function formatLspResult(serverName: string, method: string, result: unknown): AgentToolResult {
+function formatLspResult(
+  serverName: string,
+  method: string,
+  result: unknown,
+): AgentToolResult<unknown> {
   const text =
     result !== null && result !== undefined
       ? JSON.stringify(result, null, 2)

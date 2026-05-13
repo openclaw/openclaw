@@ -2,17 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
-import {
-  seedMainHeartbeatSession,
-  withTempHeartbeatSandbox,
-} from "./heartbeat-runner.test-utils.js";
+import { seedMainSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
 
 installHeartbeatRunnerTestRuntime({ includeSlack: true });
 
 describe("runHeartbeatOnce", () => {
   it("uses the delivery target as sender when lastTo differs", async () => {
     await withTempHeartbeatSandbox(
-      async ({ tmpDir, agentId, replySpy }) => {
+      async ({ tmpDir, storePath, replySpy }) => {
         const cfg: OpenClawConfig = {
           agents: {
             defaults: {
@@ -24,11 +21,12 @@ describe("runHeartbeatOnce", () => {
               },
             },
           },
-          session: {},
+          session: { store: storePath },
         };
 
-        await seedMainHeartbeatSession(agentId, cfg, {
+        await seedMainSessionStore(storePath, cfg, {
           lastChannel: "telegram",
+          lastProvider: "telegram",
           lastTo: "1644620762",
         });
 

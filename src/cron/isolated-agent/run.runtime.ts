@@ -17,6 +17,7 @@ export {
   normalizeThinkLevel,
   resolveSupportedThinkingLevel,
 } from "../../auto-reply/thinking.js";
+export { resolveSessionTranscriptPath } from "../../config/sessions/paths.js";
 export { setSessionRuntimeModel } from "../../config/sessions/types.js";
 export { logWarn } from "../../logger.js";
 export { normalizeAgentId } from "../../routing/session-key.js";

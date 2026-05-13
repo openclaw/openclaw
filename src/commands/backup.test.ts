@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import * as backupShared from "./backup-shared.js";
@@ -22,6 +21,25 @@ import {
 } from "./backup.test-support.js";
 
 const { backupCreateCommand } = await import("./backup.js");
+
+type CapturedBackupManifest = {
+  schemaVersion: 1;
+  createdAt: string;
+  archiveRoot: string;
+  platform: NodeJS.Platform;
+  options: {
+    includeWorkspace: boolean;
+    onlyConfig: boolean;
+  };
+  paths: {
+    stateDir: string;
+    configPath: string;
+    oauthDir: string;
+    workspaceDirs: string[];
+  };
+  assets: Array<Pick<BackupAsset, "kind" | "sourcePath" | "archivePath">>;
+  skipped: Array<{ kind: string; sourcePath: string; reason: string; coveredBy?: string }>;
+};
 
 describe("backup commands", () => {
   let tempHome: TempHomeEnv;
@@ -98,17 +116,32 @@ describe("backup commands", () => {
   function expectWorkspaceCoveredByState(
     plan: Awaited<ReturnType<typeof resolveBackupPlanFromDisk>>,
   ) {
-    expect(plan.included).toStrictEqual([expect.objectContaining({ kind: "state" })]);
-    const [included] = plan.included;
+    const included = plan.included[0];
     if (!included) {
       throw new Error("Expected state asset to be included");
     }
+    const stateSourcePath = included.sourcePath;
+    expect(plan.included).toStrictEqual([
+      {
+        kind: "state",
+        sourcePath: stateSourcePath,
+        displayPath: included.displayPath,
+        archivePath: path.posix.join(
+          buildBackupArchiveRoot(123),
+          "payload",
+          encodeAbsolutePathForBackupArchive(stateSourcePath),
+        ),
+      },
+    ]);
+    const workspaceSourcePath = path.join(included.sourcePath, "workspace");
     expect(plan.skipped).toStrictEqual([
-      expect.objectContaining({
+      {
         kind: "workspace",
+        sourcePath: workspaceSourcePath,
+        displayPath: path.join(included.displayPath, "workspace"),
         reason: "covered",
         coveredBy: included.displayPath,
-      }),
+      },
     ]);
     const [skipped] = plan.skipped;
     if (!skipped) {
@@ -117,8 +150,15 @@ describe("backup commands", () => {
     expect(path.relative(included.sourcePath, skipped.sourcePath).startsWith("..")).toBe(false);
   }
 
-  function expectOnlyAssetKind(assets: Array<{ kind: string }>, kind: string) {
-    expect(assets).toStrictEqual([expect.objectContaining({ kind })]);
+  function expectOnlyAssetKind(assets: BackupAsset[], kind: BackupAsset["kind"]) {
+    expect(assets).toStrictEqual([
+      {
+        kind,
+        sourcePath: expect.any(String),
+        displayPath: expect.any(String),
+        archivePath: expect.stringContaining("/payload/"),
+      },
+    ]);
   }
 
   it("collapses default config, credentials, and workspace into the state backup root", async () => {
@@ -179,9 +219,7 @@ describe("backup commands", () => {
     const externalWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
     const configPath = path.join(tempHome.home, "custom-config.json");
     const backupDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backups-"));
-    let capturedManifest: {
-      assets: Array<{ kind: string; archivePath: string }>;
-    } | null = null;
+    let capturedManifest: CapturedBackupManifest | null = null;
     let capturedEntryPaths: string[] = [];
     let capturedOnWriteEntry: ((entry: { path: string }) => void) | null = null;
     try {
@@ -220,9 +258,9 @@ describe("backup commands", () => {
           options: { file: string; onWriteEntry?: (entry: { path: string }) => void },
           entryPaths: string[],
         ) => {
-          capturedManifest = JSON.parse(await fs.readFile(entryPaths[0], "utf8")) as {
-            assets: Array<{ kind: string; archivePath: string }>;
-          };
+          capturedManifest = JSON.parse(
+            await fs.readFile(entryPaths[0], "utf8"),
+          ) as CapturedBackupManifest;
           capturedEntryPaths = entryPaths;
           capturedOnWriteEntry = options.onWriteEntry ?? null;
           await fs.writeFile(options.file, "archive-bytes", "utf8");
@@ -237,22 +275,36 @@ describe("backup commands", () => {
       expect(result.archivePath).toBe(
         path.join(backupDir, `${buildBackupArchiveRoot(nowMs)}.tar.gz`),
       );
-      expect(capturedManifest).toEqual(expect.objectContaining({ assets: expect.any(Array) }));
-      expect(capturedOnWriteEntry).toEqual(expect.any(Function));
+      expect(typeof capturedOnWriteEntry).toBe("function");
       if (capturedManifest === null || capturedOnWriteEntry === null) {
         throw new Error("Expected backup manifest and archive entry callback");
       }
-      const manifest = capturedManifest as unknown as {
-        assets: Array<{ kind: string; archivePath: string }>;
-      };
+      const manifest = capturedManifest as CapturedBackupManifest;
       const onWriteEntry = capturedOnWriteEntry as unknown as (entry: { path: string }) => void;
+      expect(manifest.schemaVersion).toBe(1);
+      expect(manifest.createdAt).toBe(result.createdAt);
+      expect(manifest.archiveRoot).toBe(result.archiveRoot);
+      expect(manifest.platform).toBe(process.platform);
+      expect(manifest.options).toEqual({ includeWorkspace: true, onlyConfig: false });
+      expect(manifest.paths).toEqual({
+        stateDir,
+        configPath,
+        oauthDir: path.join(stateDir, "credentials"),
+        workspaceDirs: [externalWorkspace],
+      });
       expect(manifest.assets).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ kind: "state" }),
-          expect.objectContaining({ kind: "config" }),
-          expect.objectContaining({ kind: "workspace" }),
-        ]),
+        result.assets.map((asset) => ({
+          kind: asset.kind,
+          sourcePath: asset.sourcePath,
+          archivePath: asset.archivePath,
+        })),
       );
+      expect(manifest.assets.map((asset) => asset.kind).toSorted()).toEqual([
+        "config",
+        "state",
+        "workspace",
+      ]);
+      expect(manifest.skipped).toEqual([]);
 
       const stateAsset = result.assets.find((asset) => asset.kind === "state");
       const workspaceAsset = result.assets.find((asset) => asset.kind === "workspace");
@@ -294,72 +346,47 @@ describe("backup commands", () => {
     }
   });
 
-  it("snapshots SQLite databases instead of archiving live WAL sidecars", async () => {
+  it("keeps volatile-skip notices out of json output", async () => {
     const stateDir = path.join(tempHome.home, ".openclaw");
-    const sqliteDir = path.join(stateDir, "state");
-    const sqlitePath = path.join(sqliteDir, "openclaw.sqlite");
-    await fs.mkdir(sqliteDir, { recursive: true });
-    await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
-    const sqlite = requireNodeSqlite();
-    const db = new sqlite.DatabaseSync(sqlitePath);
+    const backupDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backups-json-"));
     try {
-      db.exec(`
-        CREATE TABLE sample (value TEXT NOT NULL);
-        INSERT INTO sample (value) VALUES ('snapshot-ok');
-      `);
+      const runtime = createBackupTestRuntime();
+      await mockStateOnlyBackupPlan(stateDir);
+      tarCreateMock.mockImplementationOnce(
+        async (
+          options: { file: string; filter?: (entryPath: string) => boolean },
+          entryPaths: string[],
+        ) => {
+          const manifestPath = entryPaths[0];
+          const stateRoot = entryPaths[1];
+          if (!manifestPath || !stateRoot) {
+            throw new Error("backup test expected manifest and state entries");
+          }
+          expect(options.filter?.(manifestPath)).toBe(true);
+          expect(
+            options.filter?.(path.join(stateRoot, "agents", "main", "sessions", "s.jsonl")),
+          ).toBe(false);
+          await fs.writeFile(options.file, "archive-bytes", "utf8");
+        },
+      );
+
+      const result = await backupCreateCommand(runtime, {
+        output: backupDir,
+        json: true,
+      });
+
+      expect(result.skippedVolatileCount).toBe(1);
+      expect(runtime.log).toHaveBeenCalledTimes(1);
+      const payload = requireFirstMockArg(vi.mocked(runtime.log), "runtime log");
+      if (typeof payload !== "string") {
+        throw new Error("backup test expected JSON string output");
+      }
+      expect(payload).not.toContain("Backup skipped");
+      const parsedPayload = JSON.parse(payload) as { skippedVolatileCount?: unknown };
+      expect(parsedPayload.skippedVolatileCount).toBe(1);
     } finally {
-      db.close();
+      await fs.rm(backupDir, { recursive: true, force: true });
     }
-    await fs.writeFile(`${sqlitePath}-wal`, "live wal", "utf8");
-    await fs.writeFile(`${sqlitePath}-shm`, "live shm", "utf8");
-    await mockStateOnlyBackupPlan(stateDir);
-
-    let capturedManifest: {
-      databaseSnapshots?: Array<{ sourcePath: string; archivePath: string; integrity: string }>;
-    } | null = null;
-    tarCreateMock.mockImplementationOnce(
-      async (options: { file: string }, entryPaths: string[]) => {
-        const manifestPath = entryPaths[0];
-        expect(manifestPath).toBeTruthy();
-        capturedManifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as {
-          databaseSnapshots?: Array<{ sourcePath: string; archivePath: string; integrity: string }>;
-        };
-        const stagedStatePath = entryPaths.find((entryPath) =>
-          entryPath.endsWith("state-snapshot"),
-        );
-        expect(stagedStatePath).toBeTruthy();
-        const stagedSqlitePath = path.join(stagedStatePath!, "state", "openclaw.sqlite");
-        await expect(fs.access(stagedSqlitePath)).resolves.toBeUndefined();
-        await expect(fs.access(`${stagedSqlitePath}-wal`)).rejects.toThrow();
-        await expect(fs.access(`${stagedSqlitePath}-shm`)).rejects.toThrow();
-
-        const snapshotDb = new sqlite.DatabaseSync(stagedSqlitePath, { readOnly: true });
-        try {
-          const row = snapshotDb.prepare("SELECT value FROM sample").get() as
-            | { value?: string }
-            | undefined;
-          expect(row?.value).toBe("snapshot-ok");
-        } finally {
-          snapshotDb.close();
-        }
-        await fs.writeFile(options.file, "archive-bytes", "utf8");
-      },
-    );
-
-    const runtime = createBackupTestRuntime();
-    const result = await backupCreateCommand(runtime, { includeWorkspace: false });
-    const stateAsset = result.assets.find((asset) => asset.kind === "state");
-
-    const manifest = capturedManifest as {
-      databaseSnapshots?: Array<{ sourcePath: string; archivePath: string; integrity: string }>;
-    } | null;
-    expect(manifest?.databaseSnapshots).toEqual([
-      expect.objectContaining({
-        sourcePath: path.join(stateAsset!.sourcePath, "state", "openclaw.sqlite"),
-        archivePath: path.posix.join(stateAsset!.archivePath, "state/openclaw.sqlite"),
-        integrity: "ok",
-      }),
-    ]);
   });
 
   it("rejects output paths that would be created inside a backed-up directory", async () => {

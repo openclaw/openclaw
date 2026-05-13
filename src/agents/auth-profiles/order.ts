@@ -233,19 +233,19 @@ export function resolveAuthProfileOrder(params: {
     providerAuthKey === OPENAI_CODEX_PROVIDER_ID || providerKey === OPENAI_CODEX_PROVIDER_ID
       ? OPENAI_PROVIDER_ID
       : undefined;
-  const storedOrder =
-    resolveAuthOrder(store.order, providerAuthKey) ??
-    resolveAuthOrder(store.order, providerKey) ??
-    (openAIOrderAliasProvider
-      ? resolveAuthOrder(store.order, openAIOrderAliasProvider)
-      : undefined);
-  const configuredOrder =
+  const directStoredOrder =
+    resolveAuthOrder(store.order, providerAuthKey) ?? resolveAuthOrder(store.order, providerKey);
+  const aliasStoredOrder = openAIOrderAliasProvider
+    ? resolveAuthOrder(store.order, openAIOrderAliasProvider)
+    : undefined;
+  const directConfiguredOrder =
     resolveAuthOrder(cfg?.auth?.order, providerAuthKey) ??
-    resolveAuthOrder(cfg?.auth?.order, providerKey) ??
-    (openAIOrderAliasProvider
-      ? resolveAuthOrder(cfg?.auth?.order, openAIOrderAliasProvider)
-      : undefined);
-  const explicitOrder = storedOrder ?? configuredOrder;
+    resolveAuthOrder(cfg?.auth?.order, providerKey);
+  const aliasConfiguredOrder = openAIOrderAliasProvider
+    ? resolveAuthOrder(cfg?.auth?.order, openAIOrderAliasProvider)
+    : undefined;
+  const directExplicitOrder = directStoredOrder ?? directConfiguredOrder;
+  const aliasExplicitOrder = aliasStoredOrder ?? aliasConfiguredOrder;
   const explicitProfiles = cfg?.auth?.profiles
     ? Object.entries(cfg.auth.profiles)
         .filter(([profileId, profile]) =>
@@ -265,6 +265,24 @@ export function resolveAuthProfileOrder(params: {
     provider,
     providerAuthKey,
   });
+  const nativeStoreProfiles =
+    openAIOrderAliasProvider && providerAuthKey === OPENAI_CODEX_PROVIDER_ID
+      ? storeProfiles.filter((profileId) =>
+          isNativeCredentialProviderCompatibleWithAuthProvider({
+            cfg,
+            providerAuthKey,
+            credential: store.profiles[profileId],
+          }),
+        )
+      : [];
+  const explicitOrder =
+    directExplicitOrder ??
+    (aliasExplicitOrder
+      ? mergeAliasOrderWithNativeProfiles({
+          aliasOrder: aliasExplicitOrder,
+          nativeProfiles: nativeStoreProfiles,
+        })
+      : undefined);
   const baseOrder =
     explicitOrder ?? (explicitProfiles.length > 0 ? explicitProfiles : storeProfiles);
   if (baseOrder.length === 0) {
@@ -281,9 +299,9 @@ export function resolveAuthProfileOrder(params: {
     }).eligible;
   let filtered = baseOrder.filter(isValidProfile);
 
-  // Repair config/store profile-id drift from older setup flows: if configured
-  // profile ids no longer exist in the auth profile store, scan the provider's
-  // stored credentials and use any valid entries.
+  // Repair config/store profile-id drift from older setup flows:
+  // if configured profile ids no longer exist in auth-profiles.json, scan the
+  // provider's stored credentials and use any valid entries.
   const allBaseProfilesMissing = baseOrder.every((profileId) => !store.profiles[profileId]);
   if (filtered.length === 0 && explicitProfiles.length > 0 && allBaseProfilesMissing) {
     filtered = storeProfiles.filter(isValidProfile);
@@ -340,6 +358,33 @@ function resolveAuthOrder(
   provider: string,
 ): string[] | undefined {
   return findNormalizedProviderValue(order, provider);
+}
+
+function isNativeCredentialProviderCompatibleWithAuthProvider(params: {
+  cfg?: OpenClawConfig;
+  providerAuthKey: string;
+  credential: AuthProfileCredential | undefined;
+}): boolean {
+  if (!params.credential) {
+    return false;
+  }
+  return (
+    resolveProviderIdForAuth(params.credential.provider, { config: params.cfg }) ===
+    params.providerAuthKey
+  );
+}
+
+function mergeAliasOrderWithNativeProfiles(params: {
+  aliasOrder: string[];
+  nativeProfiles: string[];
+}): string[] {
+  const nativeIds = new Set(params.nativeProfiles);
+  const aliasHasNativeProfile = params.aliasOrder.some((profileId) => nativeIds.has(profileId));
+  return dedupeProfileIds(
+    aliasHasNativeProfile
+      ? [...params.aliasOrder, ...params.nativeProfiles]
+      : [...params.nativeProfiles, ...params.aliasOrder],
+  );
 }
 
 function orderProfilesByMode(order: string[], store: AuthProfileStore): string[] {

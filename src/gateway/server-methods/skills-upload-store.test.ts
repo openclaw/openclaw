@@ -48,6 +48,16 @@ async function expectUploadError(
   throw new Error("expected upload request error");
 }
 
+async function expectMissingPath(targetPath: string): Promise<void> {
+  try {
+    await fs.stat(targetPath);
+  } catch (err) {
+    expect((err as { code?: unknown }).code).toBe("ENOENT");
+    return;
+  }
+  throw new Error(`expected missing path: ${targetPath}`);
+}
+
 describe("skill upload store", () => {
   beforeEach(() => {
     tempDirs = [];
@@ -115,9 +125,6 @@ describe("skill upload store", () => {
       }),
       "upload is already committed",
     );
-    await expect(
-      fs.access(path.join(rootDir, "state", "openclaw.sqlite")),
-    ).resolves.toBeUndefined();
   });
 
   it("rejects traversal slugs and missing uploads", async () => {
@@ -187,6 +194,60 @@ describe("skill upload store", () => {
     await expectUploadError(
       store.commit({ uploadId: second.uploadId, sha256: "0".repeat(64) }),
       "upload sha256 mismatch",
+    );
+  });
+
+  it("truncates stale archive tails before retrying a chunk at the recorded offset", async () => {
+    const rootDir = await makeTempDir();
+    const store = createSkillUploadStore({ rootDir });
+    const archive = Buffer.from("abcdef");
+    const begin = await store.begin({
+      kind: "skill-archive",
+      slug: "retry-skill",
+      sizeBytes: archive.length,
+    });
+
+    await store.chunk({
+      uploadId: begin.uploadId,
+      offset: 0,
+      dataBase64: archive.subarray(0, 3).toString("base64"),
+    });
+    const archivePath = path.join(rootDir, begin.uploadId, "archive.zip");
+    await fs.appendFile(archivePath, Buffer.from("stale-tail"));
+    await store.chunk({
+      uploadId: begin.uploadId,
+      offset: 3,
+      dataBase64: archive.subarray(3).toString("base64"),
+    });
+
+    await expect(fs.readFile(archivePath)).resolves.toEqual(archive);
+    const commit = await store.commit({ uploadId: begin.uploadId, sha256: sha256(archive) });
+    expect(commit.sha256).toBe(sha256(archive));
+  });
+
+  it("rejects idempotent commit when committed metadata is missing the actual sha", async () => {
+    const rootDir = await makeTempDir();
+    const store = createSkillUploadStore({ rootDir });
+    const archive = Buffer.from("abc");
+    const begin = await store.begin({
+      kind: "skill-archive",
+      slug: "corrupt-skill",
+      sizeBytes: archive.length,
+    });
+    await store.chunk({
+      uploadId: begin.uploadId,
+      offset: 0,
+      dataBase64: archive.toString("base64"),
+    });
+    await store.commit({ uploadId: begin.uploadId });
+    const metadataPath = path.join(rootDir, begin.uploadId, "metadata.json");
+    const metadata = JSON.parse(await fs.readFile(metadataPath, "utf8")) as Record<string, unknown>;
+    delete metadata.actualSha256;
+    await fs.writeFile(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
+
+    await expectUploadError(
+      store.commit({ uploadId: begin.uploadId }),
+      "committed upload is missing sha256",
     );
   });
 
@@ -291,20 +352,13 @@ describe("skill upload store", () => {
       slug: "sweep-trigger",
       sizeBytes: 1,
     });
-    let sweepDone = false;
-    void sweep.then(() => {
-      sweepDone = true;
-    });
     await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(sweepDone).toBe(false);
+    expect((await fs.stat(path.join(rootDir, committed.uploadId))).isDirectory()).toBe(true);
 
     release.resolve();
     await expect(pinned).resolves.toBe(true);
     await sweep;
-    await expectUploadError(
-      store.withCommittedUpload(committed.uploadId, async (record) => record),
-      /^upload not found: /,
-    );
+    await expectMissingPath(path.join(rootDir, committed.uploadId));
   });
 
   it("does not remove expired idempotent uploads while an install holds the upload lock", async () => {
@@ -345,20 +399,13 @@ describe("skill upload store", () => {
       sizeBytes: archive.length,
       idempotencyKey: "same-upload",
     });
-    let repeatedDone = false;
-    void repeated.then(() => {
-      repeatedDone = true;
-    });
     await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(repeatedDone).toBe(false);
+    expect((await fs.stat(path.join(rootDir, committed.uploadId))).isDirectory()).toBe(true);
 
     release.resolve();
     await expect(pinned).resolves.toBe(true);
     const next = await repeated;
     expect(next.uploadId).not.toBe(committed.uploadId);
-    await expectUploadError(
-      store.withCommittedUpload(committed.uploadId, async (record) => record),
-      /^upload not found: /,
-    );
+    await expectMissingPath(path.join(rootDir, committed.uploadId));
   });
 });

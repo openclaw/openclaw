@@ -137,10 +137,6 @@ export async function upsertAuthProfileWithLock(params: {
 }): Promise<AuthProfileStore | null> {
   return await updateAuthProfileStoreWithLock({
     agentDir: params.agentDir,
-    saveOptions: {
-      filterExternalAuthProfiles: false,
-      forceLocalProfileIds: [params.profileId],
-    },
     updater: (store) => {
       store.profiles[params.profileId] = params.credential;
       return true;

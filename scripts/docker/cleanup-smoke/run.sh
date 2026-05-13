@@ -14,10 +14,10 @@ fi
 
 echo "==> Seed state"
 mkdir -p "${OPENCLAW_STATE_DIR}/credentials"
-mkdir -p "${OPENCLAW_STATE_DIR}/agents/main/agent"
+mkdir -p "${OPENCLAW_STATE_DIR}/agents/main/sessions"
 echo '{}' >"${OPENCLAW_CONFIG_PATH}"
 echo 'creds' >"${OPENCLAW_STATE_DIR}/credentials/marker.txt"
-echo 'session-db' >"${OPENCLAW_STATE_DIR}/agents/main/agent/openclaw-agent.sqlite"
+echo 'session' >"${OPENCLAW_STATE_DIR}/agents/main/sessions/sessions.json"
 
 echo "==> Reset (config+creds+sessions)"
 if ! pnpm openclaw reset --scope config+creds+sessions --yes --non-interactive >/tmp/openclaw-cleanup-reset.log 2>&1; then
@@ -27,7 +27,7 @@ fi
 
 test ! -f "${OPENCLAW_CONFIG_PATH}"
 test ! -d "${OPENCLAW_STATE_DIR}/credentials"
-test ! -f "${OPENCLAW_STATE_DIR}/agents/main/agent/openclaw-agent.sqlite"
+test ! -d "${OPENCLAW_STATE_DIR}/agents/main/sessions"
 
 echo "==> Recreate minimal config"
 mkdir -p "${OPENCLAW_STATE_DIR}/credentials"

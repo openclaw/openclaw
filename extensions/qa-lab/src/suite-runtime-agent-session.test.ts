@@ -1,10 +1,17 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSession,
   readEffectiveTools,
-  readRawQaSessionEntries,
+  readRawQaSessionStore,
   readSkillStatus,
 } from "./suite-runtime-agent-session.js";
+import { createTempDirHarness } from "./temp-dir.test-helper.js";
+
+const { cleanup, makeTempDir } = createTempDirHarness();
+
+afterEach(cleanup);
 
 describe("qa suite runtime agent session helpers", () => {
   const gatewayCall = vi.fn();
@@ -19,11 +26,19 @@ describe("qa suite runtime agent session helpers", () => {
     gatewayCall.mockReset();
   });
 
+  function requireGatewayCall() {
+    const [call] = gatewayCall.mock.calls;
+    if (!call) {
+      throw new Error("expected gateway call");
+    }
+    return call;
+  }
+
   it("creates sessions and trims the returned key", async () => {
     gatewayCall.mockResolvedValueOnce({ key: "  session-1  " });
 
     await expect(createSession(env, "Test Session")).resolves.toBe("session-1");
-    const [method, params, options] = gatewayCall.mock.calls[0] ?? [];
+    const [method, params, options] = requireGatewayCall();
     expect(method).toBe("sessions.create");
     expect(params).toEqual({ label: "Test Session" });
     expect(options?.timeoutMs).toBe(60_000);
@@ -46,52 +61,38 @@ describe("qa suite runtime agent session helpers", () => {
     });
 
     await expect(readSkillStatus(env)).resolves.toEqual([{ name: "alpha", eligible: true }]);
-    const [method, params, options] = gatewayCall.mock.calls[0] ?? [];
+    const [method, params, options] = requireGatewayCall();
     expect(method).toBe("skills.status");
     expect(params).toEqual({ agentId: "qa" });
     expect(options?.timeoutMs).toBe(45_000);
   });
 
-  it("reads the raw qa session entries through the gateway", async () => {
-    gatewayCall.mockResolvedValueOnce({
-      sessions: [
-        {
-          key: "session-1",
-          sessionId: "session-1",
-          status: "running",
-          label: "QA",
-          updatedAt: 123,
-        },
-        {
-          key: "",
-          sessionId: "blank",
-        },
-      ],
-    });
-
-    await expect(readRawQaSessionEntries(env)).resolves.toEqual({
-      "session-1": {
-        sessionId: "session-1",
-        status: "running",
-        label: "QA",
-        updatedAt: 123,
-      },
-    });
-    expect(gatewayCall).toHaveBeenCalledWith(
-      "sessions.list",
-      {
-        agentId: "qa",
-        includeGlobal: true,
-        includeUnknown: true,
-        limit: 1000,
-      },
-      { timeoutMs: 45_000 },
+  it("reads the raw qa session store from disk", async () => {
+    const tempRoot = await makeTempDir("qa-session-store-");
+    const storeDir = path.join(tempRoot, "state", "agents", "qa", "sessions");
+    await fs.mkdir(storeDir, { recursive: true });
+    await fs.writeFile(
+      path.join(storeDir, "sessions.json"),
+      JSON.stringify({ "session-1": { sessionId: "session-1", status: "ready" } }),
+      "utf8",
     );
+
+    await expect(
+      readRawQaSessionStore({
+        gateway: { tempRoot },
+      } as never),
+    ).resolves.toEqual({
+      "session-1": { sessionId: "session-1", status: "ready" },
+    });
   });
 
-  it("returns an empty session entry map when the gateway returns no sessions", async () => {
-    gatewayCall.mockResolvedValueOnce({});
+  it("returns an empty session store when the file does not exist", async () => {
+    const tempRoot = await makeTempDir("qa-session-store-missing-");
 
-    await expect(readRawQaSessionEntries(env)).resolves.toEqual({});
+    await expect(
+      readRawQaSessionStore({
+        gateway: { tempRoot },
+      } as never),
+    ).resolves.toStrictEqual({});
   });
 });

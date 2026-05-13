@@ -1,11 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withBrowserFetchPreconnect } from "../../test-fetch.js";
 import "../test-support/browser-security.mock.js";
-
-vi.hoisted(() => {
-  vi.resetModules();
-});
-
 import "./server-context.chrome-test-harness.js";
 import { CDP_JSON_NEW_TIMEOUT_MS } from "./cdp-timeouts.js";
 import * as cdpHelpersModule from "./cdp.helpers.js";
@@ -46,6 +41,14 @@ async function expectOldManagedTabClose(fetchMock: ReturnType<typeof vi.fn>): Pr
 
 function fetchCallUrls(fetchMock: ReturnType<typeof vi.fn>): string[] {
   return fetchMock.mock.calls.map(([url]) => String(url));
+}
+
+function fetchJsonCall(fetchJson: ReturnType<typeof vi.fn>, index: number): unknown[] {
+  const call = fetchJson.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected fetchJson call ${index + 1}`);
+  }
+  return call;
 }
 
 function createOldTabCleanupFetchMock(
@@ -380,13 +383,13 @@ describe("browser server-context tab selection state", () => {
     const opened = await openclaw.openTab("https://example.com");
     expect(opened.targetId).toBe("NEW");
     const jsonNewEndpoint = "http://127.0.0.1:18800/json/new?https%3A%2F%2Fexample.com";
-    expect(fetchJson.mock.calls[0]).toEqual([
+    expect(fetchJsonCall(fetchJson, 0)).toEqual([
       jsonNewEndpoint,
       CDP_JSON_NEW_TIMEOUT_MS,
       { method: "PUT" },
       undefined,
     ]);
-    expect(fetchJson.mock.calls[1]).toEqual([
+    expect(fetchJsonCall(fetchJson, 1)).toEqual([
       jsonNewEndpoint,
       CDP_JSON_NEW_TIMEOUT_MS,
       undefined,

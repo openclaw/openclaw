@@ -1,5 +1,4 @@
 import Foundation
-import OpenClawKit
 import OSLog
 #if canImport(Darwin)
 import Darwin
@@ -27,9 +26,17 @@ actor PortGuardian {
     #if DEBUG
     private var testingDescriptors: [Int: Descriptor] = [:]
     #endif
+    private nonisolated static let appSupportDir: URL = {
+        let base = FileManager().urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return base.appendingPathComponent("OpenClaw", isDirectory: true)
+    }()
+
+    private nonisolated static var recordPath: URL {
+        self.appSupportDir.appendingPathComponent("port-guard.json", isDirectory: false)
+    }
 
     init() {
-        self.records = Self.loadRecords()
+        self.records = Self.loadRecords(from: Self.recordPath)
     }
 
     func sweep(mode: AppState.ConnectionMode) async {
@@ -75,6 +82,7 @@ actor PortGuardian {
     }
 
     func record(port: Int, pid: Int32, command: String, mode: AppState.ConnectionMode) async {
+        try? FileManager().createDirectory(at: Self.appSupportDir, withIntermediateDirectories: true)
         self.records.removeAll { $0.pid == pid }
         self.records.append(
             Record(
@@ -393,27 +401,16 @@ actor PortGuardian {
         return await self.probeGatewayHealth(port: port)
     }
 
-    private static func loadRecords() -> [Record] {
-        OpenClawSQLiteStateStore.readPortGuardianRecords().map { row in
-            Record(
-                port: row.port,
-                pid: row.pid,
-                command: row.command,
-                mode: row.mode,
-                timestamp: row.timestamp)
-        }
+    private static func loadRecords(from url: URL) -> [Record] {
+        guard let data = try? Data(contentsOf: url),
+              let decoded = try? JSONDecoder().decode([Record].self, from: data)
+        else { return [] }
+        return decoded
     }
 
     private func save() {
-        try? OpenClawSQLiteStateStore.replacePortGuardianRecords(
-            self.records.map { record in
-                OpenClawSQLitePortGuardianRecord(
-                    port: record.port,
-                    pid: record.pid,
-                    command: record.command,
-                    mode: record.mode,
-                    timestamp: record.timestamp)
-            })
+        guard let data = try? JSONEncoder().encode(self.records) else { return }
+        try? data.write(to: Self.recordPath, options: [.atomic])
     }
 }
 

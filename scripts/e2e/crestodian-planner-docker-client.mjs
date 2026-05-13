@@ -114,10 +114,10 @@ async function main() {
     "planned default model was not written",
   );
 
-  const { listCrestodianAuditEntriesForTests } = await import("../../dist/crestodian/audit.js");
-  const auditEntries = (await listCrestodianAuditEntriesForTests()).map((entry) => entry.value);
+  const auditPath = path.join(stateDir, "audit", "crestodian.jsonl");
+  const audit = (await fs.readFile(auditPath, "utf8")).trim();
   assert(
-    auditEntries.some((entry) => entry.operation === "config.setDefaultModel"),
+    audit.includes('"operation":"config.setDefaultModel"'),
     "planned model update audit entry missing",
   );
 

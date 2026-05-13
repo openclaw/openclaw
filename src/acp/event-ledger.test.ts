@@ -1,26 +1,10 @@
+import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import { createInMemoryAcpEventLedger, createSqliteAcpEventLedger } from "./event-ledger.js";
-
-function stateDatabasePath(dir: string): string {
-  return path.join(dir, "state", "openclaw.sqlite");
-}
-
-type AcpReplayTestDatabase = Pick<
-  OpenClawStateKyselyDatabase,
-  "acp_replay_sessions" | "acp_replay_events"
->;
+import { createFileAcpEventLedger, createInMemoryAcpEventLedger } from "./event-ledger.js";
 
 describe("ACP event ledger", () => {
-  afterEach(() => {
-    closeOpenClawStateDatabaseForTest();
-  });
-
   it("records complete in-memory session updates in sequence", async () => {
     const ledger = createInMemoryAcpEventLedger({ now: () => 123 });
     await ledger.startSession({
@@ -89,10 +73,10 @@ describe("ACP event ledger", () => {
     ).resolves.toEqual({ complete: false, events: [] });
   });
 
-  it("persists SQLite replay state across ledger instances", async () => {
+  it("persists file-backed replay state across ledger instances", async () => {
     await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
-      const dbPath = stateDatabasePath(dir);
-      const first = createSqliteAcpEventLedger({ path: dbPath, now: () => 1000 });
+      const filePath = path.join(dir, "acp", "event-ledger.json");
+      const first = createFileAcpEventLedger({ filePath, now: () => 1000 });
       await first.startSession({
         sessionId: "session-1",
         sessionKey: "agent:main:work",
@@ -109,7 +93,7 @@ describe("ACP event ledger", () => {
         },
       });
 
-      const second = createSqliteAcpEventLedger({ path: dbPath });
+      const second = createFileAcpEventLedger({ filePath });
       const replay = await second.readReplay({
         sessionId: "session-1",
         sessionKey: "agent:main:work",
@@ -121,56 +105,7 @@ describe("ACP event ledger", () => {
         sessionUpdate: "agent_thought_chunk",
         content: { type: "text", text: "Thinking" },
       });
-    });
-  });
-
-  it("stores SQLite replay state in relational tables instead of legacy kv blobs", async () => {
-    await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
-      const dbPath = stateDatabasePath(dir);
-      const ledger = createSqliteAcpEventLedger({ path: dbPath, now: () => 1000 });
-      await ledger.startSession({
-        sessionId: "session-1",
-        sessionKey: "agent:main:work",
-        cwd: "/work",
-        complete: true,
-      });
-      await ledger.recordUpdate({
-        sessionId: "session-1",
-        sessionKey: "agent:main:work",
-        runId: "run-1",
-        update: {
-          sessionUpdate: "agent_message_chunk",
-          content: { type: "text", text: "Answer" },
-        },
-      });
-      closeOpenClawStateDatabaseForTest();
-
-      const sqlite = requireNodeSqlite();
-      const sqliteDb = new sqlite.DatabaseSync(dbPath);
-      const db = getNodeSqliteKysely<AcpReplayTestDatabase>(sqliteDb);
-      try {
-        expect(
-          executeSqliteQueryTakeFirstSync(
-            sqliteDb,
-            db
-              .selectFrom("acp_replay_sessions")
-              .select((eb) => eb.fn.countAll<number>().as("count")),
-          ),
-        ).toEqual({ count: 1 });
-        expect(
-          executeSqliteQueryTakeFirstSync(
-            sqliteDb,
-            db.selectFrom("acp_replay_events").select((eb) => eb.fn.countAll<number>().as("count")),
-          ),
-        ).toEqual({ count: 1 });
-        expect(
-          sqliteDb
-            .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'kv'")
-            .get(),
-        ).toBeUndefined();
-      } finally {
-        sqliteDb.close();
-      }
+      await expect(fs.readFile(filePath, "utf8")).resolves.toContain('"version":1');
     });
   });
 
@@ -353,10 +288,10 @@ describe("ACP event ledger", () => {
     ).resolves.toEqual({ complete: false, events: [] });
   });
 
-  it("keeps SQLite replay state under the serialized byte budget", async () => {
+  it("keeps the persisted ledger file under the serialized byte budget", async () => {
     await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
-      const dbPath = stateDatabasePath(dir);
-      const ledger = createSqliteAcpEventLedger({ path: dbPath, maxSerializedBytes: 1024 });
+      const filePath = path.join(dir, "acp", "event-ledger.json");
+      const ledger = createFileAcpEventLedger({ filePath, maxSerializedBytes: 1024 });
       await ledger.startSession({
         sessionId: "session-1",
         sessionKey: "agent:main:work",
@@ -374,17 +309,31 @@ describe("ACP event ledger", () => {
         },
       });
 
+      const bytes = Buffer.byteLength(await fs.readFile(filePath, "utf8"), "utf8");
+      expect(bytes).toBeLessThanOrEqual(1024);
       await expect(
         ledger.readReplay({ sessionId: "session-1", sessionKey: "agent:main:work" }),
       ).resolves.toEqual({ complete: false, events: [] });
     });
   });
 
-  it("reloads SQLite state inside the write transaction before persisting", async () => {
+  it("ignores corrupt ledger files instead of replaying unknown state", async () => {
     await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
-      const dbPath = stateDatabasePath(dir);
-      const first = createSqliteAcpEventLedger({ path: dbPath });
-      const second = createSqliteAcpEventLedger({ path: dbPath });
+      const filePath = path.join(dir, "event-ledger.json");
+      await fs.writeFile(filePath, "{bad json", "utf8");
+      const ledger = createFileAcpEventLedger({ filePath });
+
+      await expect(
+        ledger.readReplay({ sessionId: "session-1", sessionKey: "agent:main:work" }),
+      ).resolves.toEqual({ complete: false, events: [] });
+    });
+  });
+
+  it("reloads file-backed state under lock before writing", async () => {
+    await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
+      const filePath = path.join(dir, "acp", "event-ledger.json");
+      const first = createFileAcpEventLedger({ filePath });
+      const second = createFileAcpEventLedger({ filePath });
 
       await first.startSession({
         sessionId: "session-1",
@@ -407,7 +356,7 @@ describe("ACP event ledger", () => {
         },
       });
 
-      const reader = createSqliteAcpEventLedger({ path: dbPath });
+      const reader = createFileAcpEventLedger({ filePath });
       const replay = await reader.readReplay({
         sessionId: "session-2",
         sessionKey: "acp:gateway-session-2",

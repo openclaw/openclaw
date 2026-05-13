@@ -1,12 +1,11 @@
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildAgentHookContextChannelFields } from "../plugins/hook-agent-context.js";
 import { resolveBlockMessage } from "../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { loadCliSessionHistoryMessages } from "./cli-runner/session-history.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 import { FailoverError, isFailoverError, resolveFailoverStatus } from "./failover-error.js";
@@ -21,6 +20,10 @@ import { classifyFailoverReason, isFailoverErrorMessage } from "./pi-embedded-he
 import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
 
 const log = createSubsystemLogger("agents/cli-runner");
+
+function flushSessionManagerFile(sessionManager: SessionManager): void {
+  (sessionManager as unknown as { _rewriteFile?: () => void })._rewriteFile?.();
+}
 
 function buildHandledReplyPayloads(reply?: ReplyPayload) {
   const normalized = reply ?? { text: SILENT_REPLY_TOKEN };
@@ -139,6 +142,7 @@ export async function runPreparedCliAgent(
     hasLlmInputHooks || hasAgentEndHooks || hasBeforeAgentRunHooks
       ? await loadCliSessionHistoryMessages({
           sessionId: params.sessionId,
+          sessionFile: params.sessionFile,
           sessionKey: params.sessionKey,
           agentId: params.agentId,
           config: params.config,
@@ -241,24 +245,20 @@ export async function runPreparedCliAgent(
   }): Promise<void> => {
     try {
       const nowMs = Date.now();
-      await appendSessionTranscriptMessage({
-        agentId: params.agentId ?? DEFAULT_AGENT_ID,
-        sessionId: params.sessionId,
-        cwd: params.workspaceDir,
-        now: nowMs,
-        message: {
-          role: "user",
-          content: [{ type: "text", text: block.message }],
-          timestamp: nowMs,
-          idempotencyKey: `hook-block:before_agent_run:user:${params.runId}`,
-          __openclaw: {
-            beforeAgentRunBlocked: {
-              blockedBy: block.pluginId,
-              blockedAt: nowMs,
-            },
+      const sessionManager = SessionManager.open(params.sessionFile);
+      sessionManager.appendMessage({
+        role: "user",
+        content: [{ type: "text", text: block.message }],
+        timestamp: nowMs,
+        idempotencyKey: `hook-block:before_agent_run:user:${params.runId}`,
+        __openclaw: {
+          beforeAgentRunBlocked: {
+            blockedBy: block.pluginId,
+            blockedAt: nowMs,
           },
         },
-      });
+      } as Parameters<typeof sessionManager.appendMessage>[0]);
+      flushSessionManagerFile(sessionManager);
     } catch (err) {
       log.warn(
         `before_agent_run block: failed to persist redacted CLI user message: ${formatErrorMessage(
@@ -478,7 +478,7 @@ export async function runPreparedCliAgent(
         // Check if this is a session expired error and we have a session to clear
         if (err.reason === "session_expired" && retryableSessionId && params.sessionKey) {
           // Clear the expired session ID from the session entry
-          // This requires access to the persisted session row, which we don't have here
+          // This requires access to the session store, which we don't have here
           // We'll need to modify the caller to handle this case
 
           // For now, retry without the session ID to create a new session
@@ -536,6 +536,7 @@ export function buildRunClaudeCliAgentParams(params: RunClaudeCliAgentParams): R
     sessionKey: params.sessionKey,
     agentId: params.agentId,
     trigger: params.trigger,
+    sessionFile: params.sessionFile,
     workspaceDir: params.workspaceDir,
     config: params.config,
     prompt: params.prompt,

@@ -140,14 +140,14 @@ describe("temporal decay", () => {
 
   it("uses file mtime fallback for non-memory sources", async () => {
     const dir = await createTempWorkspace("openclaw-temporal-decay-");
-    const sourcePath = path.join(dir, "sources", "thread.txt");
-    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
-    await fs.writeFile(sourcePath, "source\n");
+    const sessionPath = path.join(dir, "sessions", "thread.jsonl");
+    await fs.mkdir(path.dirname(sessionPath), { recursive: true });
+    await fs.writeFile(sessionPath, "{}\n");
     const oldMtime = new Date(NOW_MS - 30 * DAY_MS);
-    await fs.utimes(sourcePath, oldMtime, oldMtime);
+    await fs.utimes(sessionPath, oldMtime, oldMtime);
 
     const decayed = await applyTemporalDecayToHybridResults({
-      results: [{ path: "sources/thread.txt", score: 1, source: "external" }],
+      results: [{ path: "sessions/thread.jsonl", score: 1, source: "sessions" }],
       workspaceDir: dir,
       temporalDecay: { enabled: true, halfLifeDays: 30 },
       nowMs: NOW_MS,

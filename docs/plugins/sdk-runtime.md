@@ -54,6 +54,46 @@ Internal OpenClaw runtime code has the same direction: load config once at the C
 
 Provider and channel execution paths must use the active runtime config snapshot, not a file snapshot returned for config readback or editing. File snapshots preserve source values such as SecretRef markers for UI and writes; provider callbacks need the resolved runtime view. When a helper may be called with either the active source snapshot or the active runtime snapshot, route through `selectApplicableRuntimeConfig()` before reading credentials.
 
+## Reusable runtime utilities
+
+Use the channel-turn `botLoopProtection` facts for bot-authored inbound messages. Core applies the shared in-memory sliding-window guard before session record and dispatch, without tying the policy to one channel. The guard tracks `(scopeId, conversationId, participant pair)` keys, counts both directions of a pair together, applies a cooldown once the window budget is exceeded, and prunes inactive entries opportunistically.
+
+Channel plugins that expose this behavior to operators should prefer the shared `channels.defaults.botLoopProtection` shape for baseline budgets, then layer channel/provider-specific overrides on top. The shared config uses seconds because it is user-facing:
+
+```typescript
+type ChannelBotLoopProtectionConfig = {
+  enabled?: boolean;
+  maxEventsPerWindow?: number;
+  windowSeconds?: number;
+  cooldownSeconds?: number;
+};
+```
+
+Pass normalized bot-pair facts with the resolved turn. Core resolves defaults, unit conversion, and `enabled` semantics:
+
+```typescript
+return {
+  channel: "example",
+  routeSessionKey,
+  storePath,
+  ctxPayload,
+  recordInboundSession,
+  runDispatch,
+  botLoopProtection: {
+    scopeId: "account-1",
+    conversationId: "channel-1",
+    senderId: "bot-a",
+    receiverId: "bot-b",
+    config: channelConfig.botLoopProtection,
+    defaultsConfig: runtimeConfig.channels?.defaults?.botLoopProtection,
+    defaultEnabled: allowBotsMode !== "off",
+  },
+};
+```
+
+Use `openclaw/plugin-sdk/pair-loop-guard-runtime` directly only for custom
+two-party event loops that do not go through the shared channel-turn kernel.
+
 ## Runtime namespaces
 
 <AccordionGroup>
@@ -110,22 +150,19 @@ Provider and channel execution paths must use the active runtime config snapshot
 
     `normalizeThinkingLevel(...)` converts user text such as `on`, `x-high`, or `extra high` to the canonical stored level before checking it against the resolved policy.
 
-    **SQLite session row helpers** are under `api.runtime.agent.session`:
+    **Session store helpers** are under `api.runtime.agent.session`:
 
     ```typescript
-    const entry = api.runtime.agent.session.getSessionEntry({ agentId, sessionKey });
-    await api.runtime.agent.session.patchSessionEntry({
-      agentId,
-      sessionKey,
-      update: (current) => ({
-        ...current,
-        thinkingLevel: "high",
-      }),
+    const storePath = api.runtime.agent.session.resolveStorePath(cfg);
+    const store = api.runtime.agent.session.loadSessionStore(storePath);
+    await api.runtime.agent.session.updateSessionStore(storePath, (nextStore) => {
+      // Patch one entry without replacing the whole file from stale state.
+      nextStore[sessionKey] = { ...nextStore[sessionKey], thinkingLevel: "high" };
     });
     const filePath = api.runtime.agent.session.resolveSessionFilePath(cfg, sessionId);
     ```
 
-    Prefer row helpers such as `getSessionEntry(...)`, `listSessionEntries(...)`, `patchSessionEntry(...)`, and `upsertSessionEntry(...)` for runtime writes. They route through the SQLite session row store and preserve concurrent updates. Legacy `sessions.json` parsing belongs in doctor/migration code, not plugin runtime paths.
+    Prefer `updateSessionStore(...)` or `updateSessionStoreEntry(...)` for runtime writes. They route through the Gateway-owned session-store writer, preserve concurrent updates, and reuse the hot cache. `saveSessionStore(...)` remains available for compatibility and offline maintenance-style rewrites.
 
   </Accordion>
   <Accordion title="api.runtime.agent.defaults">
@@ -504,6 +541,19 @@ Provider and channel execution paths must use the active runtime config snapshot
   </Accordion>
   <Accordion title="api.runtime.channel">
     Channel-specific runtime helpers (available when a channel plugin is loaded).
+
+    `api.runtime.channel.media` is the preferred surface for channel media downloads and storage:
+
+    ```typescript
+    const saved = await api.runtime.channel.media.saveRemoteMedia({
+      url,
+      subdir: "inbound",
+      maxBytes,
+      filePathHint: fileName,
+    });
+    ```
+
+    Use `saveRemoteMedia(...)` when a remote URL should become OpenClaw media. Use `saveResponseMedia(...)` when the plugin already fetched a `Response` with plugin-owned auth, redirect, or allowlist handling. Use `readRemoteMediaBuffer(...)` only when the plugin needs raw bytes for inspection, transforms, decryption, or reupload. `fetchRemoteMedia(...)` remains a deprecated compatibility alias for `readRemoteMediaBuffer(...)`.
 
     `api.runtime.channel.mentions` is the shared inbound mention-policy surface for bundled channel plugins that use runtime injection:
 

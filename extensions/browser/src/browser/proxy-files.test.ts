@@ -29,7 +29,7 @@ describe("persistBrowserProxyFiles", () => {
     const savedPath = mapping.get(sourcePath);
     expect(typeof savedPath).toBe("string");
     expect(path.normalize(savedPath ?? "")).toContain(
-      `${path.sep}openclaw${path.sep}media${path.sep}browser${path.sep}`,
+      `${path.sep}.openclaw${path.sep}media${path.sep}browser${path.sep}`,
     );
     await expect(fs.readFile(savedPath ?? "", "utf8")).resolves.toBe("hello from browser proxy");
   });

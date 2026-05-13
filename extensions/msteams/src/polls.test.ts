@@ -1,20 +1,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createMSTeamsPollStoreMemory } from "./polls-store-memory.js";
-import {
-  buildMSTeamsPollCard,
-  createMSTeamsPollStoreState,
-  extractMSTeamsPollVote,
-} from "./polls.js";
+import { buildMSTeamsPollCard, createMSTeamsPollStoreFs, extractMSTeamsPollVote } from "./polls.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import { msteamsRuntimeStub } from "./test-runtime.js";
 
 describe("msteams polls", () => {
   beforeEach(() => {
-    resetPluginStateStoreForTests();
     setMSTeamsRuntime(msteamsRuntimeStub);
   });
 
@@ -46,7 +40,7 @@ describe("msteams polls", () => {
 
   it("stores and records poll votes", async () => {
     const home = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-polls-"));
-    const store = createMSTeamsPollStoreState({ homedir: () => home });
+    const store = createMSTeamsPollStoreFs({ homedir: () => home });
     await store.createPoll({
       id: "poll-2",
       question: "Pick one",
@@ -68,22 +62,17 @@ describe("msteams polls", () => {
   });
 });
 
-const createSqliteStore = async () => {
+const createFsStore = async () => {
   const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-polls-"));
-  return createMSTeamsPollStoreState({ stateDir });
+  return createMSTeamsPollStoreFs({ stateDir });
 };
 
 const createMemoryStore = () => createMSTeamsPollStoreMemory();
 
 describe.each([
   { name: "memory", createStore: createMemoryStore },
-  { name: "sqlite", createStore: createSqliteStore },
+  { name: "fs", createStore: createFsStore },
 ])("$name poll store", ({ createStore }) => {
-  beforeEach(() => {
-    resetPluginStateStoreForTests();
-    setMSTeamsRuntime(msteamsRuntimeStub);
-  });
-
   it("stores polls and records normalized votes", async () => {
     const store = await createStore();
     await store.createPoll({

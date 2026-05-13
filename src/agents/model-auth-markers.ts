@@ -25,7 +25,7 @@ const CORE_NON_SECRET_API_KEY_MARKERS = [
 let knownEnvApiKeyMarkersCache: Set<string> | undefined;
 let knownNonSecretApiKeyMarkersCache: string[] | undefined;
 
-// Legacy marker names kept for doctor-imported model catalog payloads.
+// Legacy marker names kept for backward compatibility with existing models.json files.
 const LEGACY_ENV_API_KEY_MARKERS = [
   "GOOGLE_API_KEY",
   "DEEPSEEK_API_KEY",

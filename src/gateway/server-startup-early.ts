@@ -1,6 +1,6 @@
 import type { GatewayTailscaleMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveCronStoreKey } from "../cron/store.js";
+import { resolveCronStorePath } from "../cron/store.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 
 type Awaitable<T> = T | Promise<T>;
@@ -115,7 +115,7 @@ export async function startGatewayEarlyRuntime(params: {
     setSkillsRemoteRegistry(params.nodeRegistry);
     void primeRemoteSkillsCache();
     taskRegistryMaintenance.configureTaskRegistryMaintenance({
-      cronStoreKey: resolveCronStoreKey(),
+      cronStorePath: resolveCronStorePath(params.cfgAtStart.cron?.store),
       cronRuntimeAuthoritative: true,
     });
     taskRegistryMaintenance.startTaskRegistryMaintenance();

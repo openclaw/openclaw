@@ -1,12 +1,12 @@
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import { streamSimple } from "@earendil-works/pi-ai";
+import { extractBalancedJsonPrefix } from "../../../shared/balanced-json.js";
+import { normalizeProviderId } from "../../model-selection.js";
+import { log } from "../logger.js";
 import {
   createHtmlEntityToolCallArgumentDecodingWrapper,
   decodeHtmlEntitiesInObject,
 } from "../tool-call-argument-decoding.js";
-import { extractBalancedJsonPrefix } from "../../../shared/balanced-json.js";
-import type { StreamFn } from "../../agent-core-contract.js";
-import { normalizeProviderId } from "../../model-selection.js";
-import { streamSimple } from "../../pi-ai-contract.js";
-import { log } from "../logger.js";
 import { wrapStreamObjectEvents } from "./stream-wrapper.js";
 
 function isToolCallBlockType(type: unknown): boolean {

@@ -11,7 +11,7 @@ Use full-runner tests only when the behavior truly requires the runner.
   cannot be proven through helpers, not for a single derived field.
 - When extracting a helper from runner logic, make production call that helper
   directly, then test the helper. Avoid test-only copies of runner behavior.
-- Preserve context-engine coverage for `sessionKey`, SQLite transcript scope, token
+- Preserve context-engine coverage for `sessionKey`, `sessionFile`, token
   budget, current token count, prompt cache, and routing fields when slimming
   tests.
 - Treat a standalone full-runner test above a few seconds as suspect. First ask

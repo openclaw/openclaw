@@ -3,6 +3,7 @@ import {
   type AuthProfileStore,
   externalCliDiscoveryForProviderAuth,
   ensureAuthProfileStore,
+  resolveAuthStatePathForDisplay,
   setAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
@@ -62,7 +63,7 @@ export async function modelsAuthOrderGetCommand(
       agentId,
       agentDir,
       provider,
-      authStateStore: "sqlite",
+      authStatePath: shortenHomePath(resolveAuthStatePathForDisplay(agentDir)),
       order: order.length > 0 ? order : null,
     });
     return;
@@ -70,7 +71,7 @@ export async function modelsAuthOrderGetCommand(
 
   runtime.log(`Agent: ${agentId}`);
   runtime.log(`Provider: ${provider}`);
-  runtime.log("Auth runtime state: SQLite");
+  runtime.log(`Auth state file: ${shortenHomePath(resolveAuthStatePathForDisplay(agentDir))}`);
   runtime.log(order.length > 0 ? `Order override: ${order.join(", ")}` : "Order override: (none)");
 }
 
@@ -86,7 +87,7 @@ export async function modelsAuthOrderClearCommand(
   });
   if (!updated) {
     throw new Error(
-      `Failed to update auth runtime state; the SQLite lock may be busy. Wait a moment and rerun ${formatCliCommand("openclaw models auth order clear --provider " + provider)}.`,
+      `Failed to update auth-state.json; the auth state lock may be busy. Wait a moment and rerun ${formatCliCommand("openclaw models auth order clear --provider " + provider)}.`,
     );
   }
 
@@ -131,7 +132,7 @@ export async function modelsAuthOrderSetCommand(
   });
   if (!updated) {
     throw new Error(
-      `Failed to update auth runtime state; the SQLite lock may be busy. Wait a moment and rerun ${formatCliCommand("openclaw models auth order set --provider " + provider + " <profileIds...>")}.`,
+      `Failed to update auth-state.json; the auth state lock may be busy. Wait a moment and rerun ${formatCliCommand("openclaw models auth order set --provider " + provider + " <profileIds...>")}.`,
     );
   }
 

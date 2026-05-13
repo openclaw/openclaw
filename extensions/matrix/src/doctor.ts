@@ -9,14 +9,14 @@ import {
   legacyConfigRules as MATRIX_LEGACY_CONFIG_RULES,
   normalizeCompatibilityConfig as normalizeMatrixCompatibilityConfig,
 } from "./doctor-contract.js";
-import { autoMigrateLegacyMatrixCredentials } from "./doctor-legacy-credentials.js";
-import { autoPrepareLegacyMatrixCrypto, detectLegacyMatrixCrypto } from "./doctor-legacy-crypto.js";
-import { detectLegacyMatrixState } from "./doctor-legacy-state-detection.js";
-import { autoMigrateLegacyMatrixState } from "./doctor-legacy-state.js";
 import {
+  autoMigrateLegacyMatrixState,
+  autoPrepareLegacyMatrixCrypto,
+  detectLegacyMatrixCrypto,
+  detectLegacyMatrixState,
   maybeCreateMatrixMigrationSnapshot,
   resolveMatrixMigrationStatus,
-} from "./doctor-migration-snapshot.js";
+} from "./matrix-migration.runtime.js";
 import { isRecord } from "./record-shared.js";
 
 function hasConfiguredMatrixChannel(cfg: OpenClawConfig): boolean {
@@ -52,7 +52,7 @@ export function formatMatrixLegacyStatePreview(
 ): string {
   return [
     "- Matrix plugin upgraded in place.",
-    `- Legacy sync store: ${detection.legacyStoragePath} -> SQLite plugin state (${detection.targetRootDir})`,
+    `- Legacy sync store: ${detection.legacyStoragePath} -> ${detection.targetStoragePath}`,
     `- Legacy crypto store: ${detection.legacyCryptoPath} -> ${detection.targetCryptoPath}`,
     ...(detection.selectionNote ? [`- ${detection.selectionNote}`] : []),
     '- Run "openclaw doctor --fix" to migrate this Matrix state now.',
@@ -71,7 +71,7 @@ export function formatMatrixLegacyCryptoPreview(
       [
         `- Matrix encrypted-state migration is pending for account "${plan.accountId}".`,
         `- Legacy crypto store: ${plan.legacyCryptoPath}`,
-        `- Recovery key target: SQLite plugin state (${plan.recoveryKeyStorageKey})`,
+        `- New recovery key file: ${plan.recoveryKeyPath}`,
         `- Migration state file: ${plan.statePath}`,
         '- Run "openclaw doctor --fix" to extract any saved backup key now. Backed-up room keys will restore automatically on next gateway start.',
       ].join("\n"),
@@ -166,22 +166,6 @@ export async function applyMatrixDoctorRepair(params: {
 
   if (!matrixSnapshotReady) {
     return { changes, warnings };
-  }
-
-  const credentialsRepair = autoMigrateLegacyMatrixCredentials({
-    cfg: params.cfg,
-    env: params.env,
-  });
-  if (credentialsRepair.changes.length > 0) {
-    changes.push(
-      [
-        "Matrix legacy credentials migrated.",
-        ...credentialsRepair.changes.map((entry) => `- ${entry}`),
-      ].join("\n"),
-    );
-  }
-  if (credentialsRepair.warnings.length > 0) {
-    warnings.push(credentialsRepair.warnings.map((entry) => `- ${entry}`).join("\n"));
   }
 
   const matrixStateRepair = await autoMigrateLegacyMatrixState({

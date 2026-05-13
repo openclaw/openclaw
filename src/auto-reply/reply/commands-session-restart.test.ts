@@ -6,7 +6,7 @@ import type { HandleCommandsParams } from "./commands-types.js";
 type ScheduleGatewayRestartArgs = Parameters<typeof scheduleGatewaySigusr1Restart>[0];
 
 const mocks = vi.hoisted(() => ({
-  clearRestartSentinel: vi.fn(async () => undefined),
+  unlink: vi.fn(async (_path: string) => undefined),
   isRestartEnabled: vi.fn(() => true),
   extractDeliveryInfo: vi.fn(() => ({
     deliveryContext: {
@@ -22,6 +22,13 @@ const mocks = vi.hoisted(() => ({
     scheduled: true,
   })),
   triggerOpenClawRestart: vi.fn(() => ({ ok: true, method: "launchctl" })),
+}));
+
+vi.mock("node:fs/promises", () => ({
+  default: {
+    unlink: mocks.unlink,
+  },
+  unlink: mocks.unlink,
 }));
 
 vi.mock("../../config/commands.flags.js", () => ({
@@ -56,7 +63,6 @@ vi.mock("../../infra/restart-sentinel.js", async () => {
   );
   return {
     ...actual,
-    clearRestartSentinel: mocks.clearRestartSentinel,
     formatDoctorNonInteractiveHint: mocks.formatDoctorNonInteractiveHint,
     writeRestartSentinel: mocks.writeRestartSentinel,
   };
@@ -109,7 +115,7 @@ describe("handleRestartCommand", () => {
   beforeEach(() => {
     mocks.isRestartEnabled.mockReset();
     mocks.isRestartEnabled.mockReturnValue(true);
-    mocks.clearRestartSentinel.mockClear();
+    mocks.unlink.mockClear();
     mocks.extractDeliveryInfo.mockClear();
     mocks.formatDoctorNonInteractiveHint.mockClear();
     mocks.writeRestartSentinel.mockClear();
@@ -204,7 +210,7 @@ describe("handleRestartCommand", () => {
     expect(mocks.triggerOpenClawRestart).not.toHaveBeenCalled();
   });
 
-  it("clears the success sentinel when fallback restart fails", async () => {
+  it("removes the success sentinel when fallback restart fails", async () => {
     mocks.triggerOpenClawRestart.mockReturnValueOnce({
       ok: false,
       method: "launchctl",
@@ -213,6 +219,6 @@ describe("handleRestartCommand", () => {
     const result = await handleRestartCommand(restartCommandParams(), true);
 
     expect(result?.reply?.text).toContain("Restart failed");
-    expect(mocks.clearRestartSentinel).toHaveBeenCalledTimes(1);
+    expect(mocks.unlink).toHaveBeenCalledWith("/tmp/sentinel.json");
   });
 });

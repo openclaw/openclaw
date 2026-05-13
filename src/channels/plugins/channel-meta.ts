@@ -53,6 +53,11 @@ export function buildManifestChannelMeta(params: {
     ...(params.channel.forceAccountBinding !== undefined
       ? { forceAccountBinding: params.channel.forceAccountBinding }
       : {}),
+    ...(params.channel.preferSessionLookupForAnnounceTarget !== undefined
+      ? {
+          preferSessionLookupForAnnounceTarget: params.channel.preferSessionLookupForAnnounceTarget,
+        }
+      : {}),
     ...(hasArrayField(params.channel.preferOver) ? { preferOver: params.channel.preferOver } : {}),
   };
 }

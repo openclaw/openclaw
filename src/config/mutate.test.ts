@@ -2,9 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
-import { ConfigMutationConflictError, mutateConfigFile, replaceConfigFile } from "./mutate.js";
+import {
+  ConfigMutationConflictError,
+  mutateConfigFile,
+  replaceConfigFile,
+  transformConfigFileWithRetry,
+} from "./mutate.js";
 import { registerRuntimeConfigWriteListener, resetConfigRuntimeState } from "./runtime-snapshot.js";
-import { sourceBundledPluginTestEnv } from "./test-helpers.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 
 const ioMocks = vi.hoisted(() => ({
@@ -12,8 +16,16 @@ const ioMocks = vi.hoisted(() => ({
   resolveConfigSnapshotHash: vi.fn(),
   writeConfigFile: vi.fn(),
 }));
+const validationMocks = vi.hoisted(() => ({
+  validateConfigObjectWithPlugins: vi.fn((config: OpenClawConfig) => ({
+    ok: true,
+    config,
+    warnings: [],
+  })),
+}));
 
 vi.mock("./io.js", () => ioMocks);
+vi.mock("./validation.js", () => validationMocks);
 
 function createSnapshot(params: {
   hash: string;
@@ -45,8 +57,6 @@ function createSnapshot(params: {
 describe("config mutate helpers", () => {
   const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-config-mutate-" });
   const originalNixMode = process.env.OPENCLAW_NIX_MODE;
-  const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-  const originalTrustBundledPluginsDir = process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
 
   beforeAll(async () => {
     await suiteRootTracker.setup();
@@ -58,27 +68,23 @@ describe("config mutate helpers", () => {
     } else {
       process.env.OPENCLAW_NIX_MODE = originalNixMode;
     }
-    if (originalBundledPluginsDir === undefined) {
-      delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-    } else {
-      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledPluginsDir;
-    }
-    if (originalTrustBundledPluginsDir === undefined) {
-      delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
-    } else {
-      process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = originalTrustBundledPluginsDir;
-    }
     await suiteRootTracker.cleanup();
   });
 
   beforeEach(() => {
     vi.clearAllMocks();
     resetConfigRuntimeState();
+    validationMocks.validateConfigObjectWithPlugins.mockImplementation(
+      (config: OpenClawConfig) => ({
+        ok: true,
+        config,
+        warnings: [],
+      }),
+    );
     ioMocks.resolveConfigSnapshotHash.mockImplementation(
       (snapshot: { hash?: string }) => snapshot.hash ?? null,
     );
     delete process.env.OPENCLAW_NIX_MODE;
-    Object.assign(process.env, sourceBundledPluginTestEnv());
   });
 
   it("mutates source config with optimistic hash protection", async () => {
@@ -117,7 +123,125 @@ describe("config mutate helpers", () => {
           auth: { mode: "token" },
         },
       },
-      { expectedConfigPath: snapshot.path, afterWrite: { mode: "auto" } },
+      { baseSnapshot: snapshot, expectedConfigPath: snapshot.path, afterWrite: { mode: "auto" } },
+    );
+  });
+
+  it("retries transform mutations on stale config conflicts", async () => {
+    const initial = createSnapshot({
+      hash: "hash-1",
+      sourceConfig: { agents: { list: [] } },
+    });
+    const fresh = createSnapshot({
+      hash: "hash-2",
+      sourceConfig: { agents: { list: [{ id: "other-agent" }] } },
+    });
+    ioMocks.readConfigFileSnapshotForWrite
+      .mockResolvedValueOnce({
+        snapshot: initial,
+        writeOptions: { expectedConfigPath: initial.path },
+      })
+      .mockResolvedValueOnce({
+        snapshot: fresh,
+        writeOptions: { expectedConfigPath: fresh.path },
+      });
+    ioMocks.writeConfigFile
+      .mockRejectedValueOnce(new ConfigMutationConflictError("stale", { currentHash: "hash-2" }))
+      .mockResolvedValueOnce(undefined);
+
+    const result = await transformConfigFileWithRetry({
+      io: ioMocks,
+      transform(config, context) {
+        return {
+          nextConfig: {
+            ...config,
+            agents: {
+              list: [...(config.agents?.list ?? []), { id: "work" }],
+            },
+          },
+          result: context.attempt,
+        };
+      },
+    });
+
+    expect(result.attempts).toBe(2);
+    expect(result.result).toBe(1);
+    expect(ioMocks.writeConfigFile).toHaveBeenCalledTimes(2);
+    expect(ioMocks.writeConfigFile).toHaveBeenNthCalledWith(
+      2,
+      {
+        agents: {
+          list: [{ id: "other-agent" }, { id: "work" }],
+        },
+      },
+      { baseSnapshot: fresh, expectedConfigPath: fresh.path, afterWrite: { mode: "auto" } },
+    );
+  });
+
+  it("serializes same-process transform mutations before reading snapshots", async () => {
+    const initial = createSnapshot({
+      hash: "hash-1",
+      sourceConfig: { agents: { list: [] } },
+    });
+    const fresh = createSnapshot({
+      hash: "hash-2",
+      sourceConfig: { agents: { list: [{ id: "first" }] } },
+    });
+    ioMocks.readConfigFileSnapshotForWrite
+      .mockResolvedValueOnce({
+        snapshot: initial,
+        writeOptions: { expectedConfigPath: initial.path },
+      })
+      .mockResolvedValueOnce({
+        snapshot: fresh,
+        writeOptions: { expectedConfigPath: fresh.path },
+      });
+    ioMocks.writeConfigFile.mockResolvedValue(undefined);
+
+    let releaseFirstTransform!: () => void;
+    let markFirstTransformStarted!: () => void;
+    const firstTransformStarted = new Promise<void>((resolve) => {
+      markFirstTransformStarted = resolve;
+    });
+    const first = transformConfigFileWithRetry({
+      transform: async (config) => {
+        markFirstTransformStarted();
+        await new Promise<void>((release) => {
+          releaseFirstTransform = release;
+        });
+        return {
+          nextConfig: {
+            ...config,
+            agents: { list: [{ id: "first" }] },
+          },
+        };
+      },
+    });
+    await firstTransformStarted;
+    const second = transformConfigFileWithRetry({
+      transform: (config) => ({
+        nextConfig: {
+          ...config,
+          agents: {
+            list: [...(config.agents?.list ?? []), { id: "second" }],
+          },
+        },
+      }),
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(ioMocks.readConfigFileSnapshotForWrite).toHaveBeenCalledTimes(1);
+
+    releaseFirstTransform();
+    await Promise.all([first, second]);
+    expect(ioMocks.writeConfigFile).toHaveBeenNthCalledWith(
+      2,
+      {
+        agents: {
+          list: [{ id: "first" }, { id: "second" }],
+        },
+      },
+      { baseSnapshot: fresh, expectedConfigPath: fresh.path, afterWrite: { mode: "auto" } },
     );
   });
 

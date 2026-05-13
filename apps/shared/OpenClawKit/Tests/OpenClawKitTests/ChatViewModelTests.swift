@@ -330,7 +330,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         }
         return self.sessionsResponses.last ?? OpenClawChatSessionsListResponse(
             ts: nil,
-            databasePath: nil,
+            path: nil,
             count: 0,
             defaults: nil,
             sessions: [])
@@ -829,7 +829,7 @@ extension TestChatTransportState {
         let history = historyPayload()
         let sessions = OpenClawChatSessionsListResponse(
             ts: now,
-            databasePath: nil,
+            path: nil,
             count: 4,
             defaults: nil,
             sessions: [
@@ -853,7 +853,7 @@ extension TestChatTransportState {
         let history = historyPayload(sessionKey: "custom", sessionId: "sess-custom")
         let sessions = OpenClawChatSessionsListResponse(
             ts: now,
-            databasePath: nil,
+            path: nil,
             count: 1,
             defaults: nil,
             sessions: [
@@ -878,7 +878,7 @@ extension TestChatTransportState {
         let history = historyPayload(sessionKey: "Luke’s MacBook Pro", sessionId: "sess-main")
         let sessions = OpenClawChatSessionsListResponse(
             ts: now,
-            databasePath: nil,
+            path: nil,
             count: 2,
             defaults: OpenClawChatSessionsDefaults(
                 model: nil,
@@ -926,7 +926,7 @@ extension TestChatTransportState {
         let history = historyPayload(sessionKey: "agent:main:main", sessionId: "sess-main")
         let sessions = OpenClawChatSessionsListResponse(
             ts: now,
-            databasePath: nil,
+            path: nil,
             count: 2,
             defaults: OpenClawChatSessionsDefaults(
                 model: nil,
@@ -1155,7 +1155,7 @@ extension TestChatTransportState {
         let history = historyPayload()
         let sessions = OpenClawChatSessionsListResponse(
             ts: now,
-            databasePath: nil,
+            path: nil,
             count: 1,
             defaults: OpenClawChatSessionsDefaults(model: "openai/gpt-4.1-mini", contextTokens: nil),
             sessions: [
@@ -1183,7 +1183,7 @@ extension TestChatTransportState {
         let history = historyPayload()
         let sessions = OpenClawChatSessionsListResponse(
             ts: now,
-            databasePath: nil,
+            path: nil,
             count: 1,
             defaults: OpenClawChatSessionsDefaults(model: "openai/gpt-4.1-mini", contextTokens: nil),
             sessions: [
@@ -1216,7 +1216,7 @@ extension TestChatTransportState {
         let history = historyPayload()
         let sessions = OpenClawChatSessionsListResponse(
             ts: now,
-            databasePath: nil,
+            path: nil,
             count: 1,
             defaults: OpenClawChatSessionsDefaults(model: "openrouter/gpt-4.1-mini", contextTokens: nil),
             sessions: [
@@ -1249,7 +1249,7 @@ extension TestChatTransportState {
         let history = historyPayload()
         let sessions = OpenClawChatSessionsListResponse(
             ts: now,
-            databasePath: nil,
+            path: nil,
             count: 1,
             defaults: nil,
             sessions: [
@@ -1282,7 +1282,7 @@ extension TestChatTransportState {
         let history = historyPayload()
         let sessions = OpenClawChatSessionsListResponse(
             ts: now,
-            databasePath: nil,
+            path: nil,
             count: 1,
             defaults: nil,
             sessions: [
@@ -1325,7 +1325,7 @@ extension TestChatTransportState {
         let history = historyPayload()
         let sessions = OpenClawChatSessionsListResponse(
             ts: now,
-            databasePath: nil,
+            path: nil,
             count: 1,
             defaults: nil,
             sessions: [
@@ -1378,7 +1378,7 @@ extension TestChatTransportState {
         let history = historyPayload()
         let sessions = OpenClawChatSessionsListResponse(
             ts: now,
-            databasePath: nil,
+            path: nil,
             count: 1,
             defaults: nil,
             sessions: [
@@ -1428,7 +1428,7 @@ extension TestChatTransportState {
         let history = historyPayload()
         let sessions = OpenClawChatSessionsListResponse(
             ts: now,
-            databasePath: nil,
+            path: nil,
             count: 1,
             defaults: nil,
             sessions: [
@@ -1476,7 +1476,7 @@ extension TestChatTransportState {
         let now = Date().timeIntervalSince1970 * 1000
         let sessions = OpenClawChatSessionsListResponse(
             ts: now,
-            databasePath: nil,
+            path: nil,
             count: 2,
             defaults: nil,
             sessions: [
@@ -1521,7 +1521,7 @@ extension TestChatTransportState {
         let now = Date().timeIntervalSince1970 * 1000
         let initialSessions = OpenClawChatSessionsListResponse(
             ts: now,
-            databasePath: nil,
+            path: nil,
             count: 2,
             defaults: nil,
             sessions: [
@@ -1530,7 +1530,7 @@ extension TestChatTransportState {
             ])
         let sessionsAfterOtherSelection = OpenClawChatSessionsListResponse(
             ts: now,
-            databasePath: nil,
+            path: nil,
             count: 2,
             defaults: nil,
             sessions: [
@@ -1688,7 +1688,7 @@ extension TestChatTransportState {
             thinkingLevel: "adaptive")
         let sessions = OpenClawChatSessionsListResponse(
             ts: 1,
-            databasePath: nil,
+            path: nil,
             count: 1,
             defaults: OpenClawChatSessionsDefaults(
                 modelProvider: "openai-codex",
@@ -1751,7 +1751,7 @@ extension TestChatTransportState {
             thinkingLevel: "xhigh")
         let sessions = OpenClawChatSessionsListResponse(
             ts: 1,
-            databasePath: nil,
+            path: nil,
             count: 1,
             defaults: nil,
             sessions: [
@@ -1799,7 +1799,7 @@ extension TestChatTransportState {
             thinkingLevel: "adaptive")
         let sessions = OpenClawChatSessionsListResponse(
             ts: 1,
-            databasePath: nil,
+            path: nil,
             count: 1,
             defaults: OpenClawChatSessionsDefaults(
                 modelProvider: "anthropic",
@@ -1855,7 +1855,7 @@ extension TestChatTransportState {
             thinkingLevel: "max")
         let sessions = OpenClawChatSessionsListResponse(
             ts: 1,
-            databasePath: nil,
+            path: nil,
             count: 1,
             defaults: OpenClawChatSessionsDefaults(
                 modelProvider: "anthropic",

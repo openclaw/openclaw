@@ -145,12 +145,10 @@ function requireMockCallArg(
 
 function requireGeneratedVideo(result: OpenRouterVideoResult, index: number) {
   const video = result.videos[index];
-  expect(video).toBeDefined();
-  expect(video?.buffer).toBeDefined();
-  if (!video?.buffer) {
+  if (!video) {
     throw new Error(`expected OpenRouter generated video at index ${index}`);
   }
-  return video as typeof video & { buffer: Buffer };
+  return video;
 }
 
 function requireGeneratedVideoBuffer(result: OpenRouterVideoResult, index: number) {

@@ -12,9 +12,7 @@ import {
   createRawInputNotifyFn,
   accountToCreds,
 } from "../messaging/sender.js";
-import { configureRefIndexStore, setRefIndex } from "../ref/store.js";
-import { configureKnownUsersStore } from "../session/known-users.js";
-import { configureSessionStore } from "../session/session-store.js";
+import { setRefIndex } from "../ref/store.js";
 import { runDiagnostics } from "../utils/diagnostics.js";
 import { runWithRequestContext } from "../utils/request-context.js";
 import { createActiveCfgProvider } from "./active-cfg.js";
@@ -38,8 +36,6 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
 
   setOutboundAudioPort(adapters.outboundAudio);
   initCommands(adapters.commands);
-  configureSessionStore(runtime);
-  await Promise.all([configureKnownUsersStore(runtime), configureRefIndexStore(runtime)]);
 
   if (!account.appId || !account.clientSecret) {
     throw new Error("QQBot not configured (missing appId or clientSecret)");
@@ -120,7 +116,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
       direction: "inbound",
     });
 
-    const activeCfg = activeCfgProvider.getActiveCfg() as CoreGatewayContext["cfg"];
+    const activeCfg = activeCfgProvider.getActiveCfg();
 
     const inbound = await buildInboundContext(event, {
       account,
@@ -186,7 +182,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
   };
 
   const handleInteraction = createInteractionHandler(account, ctx.runtime, log, {
-    getActiveCfg: () => activeCfgProvider.getActiveCfg() as CoreGatewayContext["cfg"],
+    getActiveCfg: () => activeCfgProvider.getActiveCfg(),
   });
 
   const connection = new GatewayConnection({

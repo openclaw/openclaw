@@ -1,8 +1,5 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { createProviderUsageFetch, makeResponse } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildCopilotModelDefinition, getDefaultCopilotModelIds } from "./models-defaults.js";
 import { deriveCopilotApiBaseUrlFromToken, resolveCopilotApiToken } from "./token.js";
 import { fetchCopilotUsage } from "./usage.js";
@@ -25,6 +22,16 @@ vi.mock("openclaw/plugin-sdk/provider-model-shared", () => ({
     endpointClass: "custom",
     warnings: [],
   }),
+}));
+
+const jsonStoreMocks = vi.hoisted(() => ({
+  loadJsonFile: vi.fn(),
+  saveJsonFile: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/json-store", () => ({
+  loadJsonFile: jsonStoreMocks.loadJsonFile,
+  saveJsonFile: jsonStoreMocks.saveJsonFile,
 }));
 
 vi.mock("openclaw/plugin-sdk/state-paths", () => ({
@@ -104,6 +111,17 @@ describe("github-copilot model defaults", () => {
       const def = buildCopilotModelDefinition("  gpt-4o  ");
       expect(def.id).toBe("gpt-4o");
       expect(def.api).toBe("openai-responses");
+    });
+
+    it("routes Gemini models through Chat Completions with Copilot compat flags", () => {
+      const def = buildCopilotModelDefinition("gemini-3.1-pro-preview");
+      expect(def.api).toBe("openai-completions");
+      expect(def.compat).toEqual({
+        supportsStore: false,
+        supportsDeveloperRole: false,
+        supportsUsageInStreaming: false,
+        maxTokensField: "max_tokens",
+      });
     });
 
     it("throws on empty model id", () => {
@@ -218,6 +236,17 @@ describe("resolveCopilotForwardCompatModel", () => {
     expect((result as unknown as Record<string, unknown>).input).toEqual(["text", "image"]);
   });
 
+  it("creates synthetic Gemini models with Chat Completions compatibility", () => {
+    const result = requireResolvedModel(createMockCtx("gemini-3.1-pro-preview"));
+    expect((result as unknown as Record<string, unknown>).api).toBe("openai-completions");
+    expect((result as unknown as Record<string, unknown>).compat).toEqual({
+      supportsStore: false,
+      supportsDeveloperRole: false,
+      supportsUsageInStreaming: false,
+      maxTokensField: "max_tokens",
+    });
+  });
+
   it("infers reasoning=true for o1/o3 model IDs", () => {
     for (const id of ["o1", "o3", "o3-mini", "o1-preview"]) {
       const ctx = createMockCtx(id);
@@ -321,12 +350,12 @@ describe("fetchCopilotUsage", () => {
 });
 
 describe("github-copilot token", () => {
-  function makeCopilotEnv(): NodeJS.ProcessEnv {
-    return {
-      ...process.env,
-      OPENCLAW_STATE_DIR: fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-copilot-token-")),
-    };
-  }
+  const cachePath = "/tmp/openclaw-state/credentials/github-copilot.token.json";
+
+  beforeEach(() => {
+    jsonStoreMocks.loadJsonFile.mockClear();
+    jsonStoreMocks.saveJsonFile.mockClear();
+  });
 
   it("derives baseUrl from token", () => {
     expect(deriveCopilotApiBaseUrlFromToken("token;proxy-ep=proxy.example.com;")).toBe(
@@ -338,35 +367,32 @@ describe("github-copilot token", () => {
   });
 
   it("uses cache when token is still valid", async () => {
-    const env = makeCopilotEnv();
-    const fetchImpl = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        token: "cached;proxy-ep=proxy.example.com;",
-        expires_at: Math.floor(Date.now() / 1000) + 3600,
-      }),
+    const now = Date.now();
+    jsonStoreMocks.loadJsonFile.mockReturnValue({
+      token: "cached;proxy-ep=proxy.example.com;",
+      expiresAt: now + 60 * 60 * 1000,
+      updatedAt: now,
+      integrationId: "vscode-chat",
     });
-    const first = await resolveCopilotApiToken({
+
+    const fetchImpl = vi.fn();
+    const res = await resolveCopilotApiToken({
       githubToken: "gh",
-      env,
-      fetchImpl: fetchImpl as unknown as typeof fetch,
-    });
-    const second = await resolveCopilotApiToken({
-      githubToken: "gh",
-      env,
+      cachePath,
+      loadJsonFileImpl: jsonStoreMocks.loadJsonFile,
+      saveJsonFileImpl: jsonStoreMocks.saveJsonFile,
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
 
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-    expect(first.source).toContain("fetched:");
-    expect(second.token).toBe("cached;proxy-ep=proxy.example.com;");
-    expect(second.baseUrl).toBe("https://api.example.com");
-    expect(second.source).toContain("cache:sqlite:");
+    expect(res.token).toBe("cached;proxy-ep=proxy.example.com;");
+    expect(res.baseUrl).toBe("https://api.example.com");
+    expect(res.source).toContain("cache:");
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it("fetches and stores token when cache is missing", async () => {
-    const env = makeCopilotEnv();
+    jsonStoreMocks.loadJsonFile.mockReturnValue(undefined);
+
     const fetchImpl = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -378,13 +404,15 @@ describe("github-copilot token", () => {
 
     const res = await resolveCopilotApiToken({
       githubToken: "gh",
-      env,
+      cachePath,
+      loadJsonFileImpl: jsonStoreMocks.loadJsonFile,
+      saveJsonFileImpl: jsonStoreMocks.saveJsonFile,
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
 
     expect(res.token).toBe("fresh;proxy-ep=https://proxy.contoso.test;");
     expect(res.baseUrl).toBe("https://api.contoso.test");
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(jsonStoreMocks.saveJsonFile).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -434,6 +462,24 @@ describe("fetchCopilotModelCatalog", () => {
             vision: false,
             tool_calls: true,
             reasoning_effort: ["low", "medium", "high"],
+          },
+        },
+      },
+      {
+        id: "gemini-3.1-pro-preview",
+        name: "Gemini 3.1 Pro Preview",
+        object: "model",
+        vendor: "Google",
+        capabilities: {
+          type: "chat",
+          limits: {
+            max_context_window_tokens: 1_000_000,
+            max_output_tokens: 65_536,
+          },
+          supports: {
+            vision: true,
+            tool_calls: true,
+            streaming: true,
           },
         },
       },
@@ -495,6 +541,7 @@ describe("fetchCopilotModelCatalog", () => {
     expect(out.map((m) => m.id)).toEqual([
       "gpt-5.5",
       "gpt-5.3-codex",
+      "gemini-3.1-pro-preview",
       "claude-opus-4.7-1m-internal",
     ]);
 
@@ -514,6 +561,15 @@ describe("fetchCopilotModelCatalog", () => {
     expect(codex?.input).toEqual(["text"]);
     expect(codex?.reasoning).toBe(true);
     expect(codex?.contextWindow).toBe(400000);
+
+    const gemini = out.find((m) => m.id === "gemini-3.1-pro-preview");
+    expect(gemini?.api).toBe("openai-completions");
+    expect(gemini?.compat).toEqual({
+      supportsStore: false,
+      supportsDeveloperRole: false,
+      supportsUsageInStreaming: false,
+      maxTokensField: "max_tokens",
+    });
 
     const opus1m = out.find((m) => m.id === "claude-opus-4.7-1m-internal");
     expect(opus1m?.api).toBe("anthropic-messages");

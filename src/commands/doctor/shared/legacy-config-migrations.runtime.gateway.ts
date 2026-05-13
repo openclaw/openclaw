@@ -21,16 +21,6 @@ const GATEWAY_BIND_RULE: LegacyConfigRule = {
   requireSourceLiteral: true,
 };
 
-const LEGACY_CRON_STORE_RULE: LegacyConfigRule = {
-  path: ["cron"],
-  message:
-    'cron.store is legacy; cron jobs now use the shared SQLite database. Run "openclaw doctor --fix" to remove it after legacy import.',
-  match: (value) => {
-    const cron = getRecord(value);
-    return Boolean(cron && Object.prototype.hasOwnProperty.call(cron, "store"));
-  },
-};
-
 function isLegacyGatewayBindHostAlias(value: unknown): boolean {
   const normalized = normalizeOptionalLowercaseString(value);
   if (!normalized) {
@@ -62,19 +52,6 @@ function escapeControlForLog(value: string): string {
 }
 
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec[] = [
-  defineLegacyConfigMigration({
-    id: "cron.store",
-    describe: "Remove legacy cron.store path settings",
-    legacyRules: [LEGACY_CRON_STORE_RULE],
-    apply: (raw, changes) => {
-      const cron = getRecord(raw.cron);
-      if (!cron || !Object.prototype.hasOwnProperty.call(cron, "store")) {
-        return;
-      }
-      delete cron.store;
-      changes.push("Removed cron.store; cron jobs now use the shared SQLite database.");
-    },
-  }),
   defineLegacyConfigMigration({
     id: "gateway.controlUi.allowedOrigins-seed-for-non-loopback",
     describe: "Seed gateway.controlUi.allowedOrigins for existing non-loopback gateway installs",

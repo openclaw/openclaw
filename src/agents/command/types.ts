@@ -1,5 +1,4 @@
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
-import type { PreparedAgentRunInitialVfsEntry } from "../../agents/runtime-backend.js";
 import type { SpawnedRunMetadata } from "../../agents/spawned-context.js";
 import type { PromptMode } from "../../agents/system-prompt.types.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
@@ -108,8 +107,6 @@ export type AgentCommandOpts = {
   inputProvenance?: InputProvenance;
   /** Per-call stream param overrides (best-effort). */
   streamParams?: AgentStreamParams;
-  /** Internal worker handoff: files to seed into SQLite VFS before tools start. */
-  initialVfsEntries?: PreparedAgentRunInitialVfsEntry[];
   /** Explicit workspace directory override (for subagents to inherit parent workspace). */
   workspaceDir?: SpawnedRunMetadata["workspaceDir"];
   /** Force bundled MCP teardown when a one-shot local run completes. */

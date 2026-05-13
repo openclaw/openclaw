@@ -1,7 +1,5 @@
-import {
-  embeddedAgentLog,
-  createPluginStateSyncKeyedStore,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import fs from "node:fs/promises";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   ensureAuthProfileStore,
   resolveDefaultAgentDir,
@@ -19,9 +17,6 @@ import type { CodexServiceTier } from "./protocol.js";
 
 const CODEX_APP_SERVER_NATIVE_AUTH_PROVIDER = "openai-codex";
 const PUBLIC_OPENAI_MODEL_PROVIDER = "openai";
-export const CODEX_APP_SERVER_BINDING_PLUGIN_ID = "codex";
-export const CODEX_APP_SERVER_BINDING_NAMESPACE = "app-server-thread-bindings";
-export const CODEX_APP_SERVER_BINDING_MAX_ENTRIES = 10_000;
 
 type ProviderAuthAliasLookupParams = Parameters<typeof resolveProviderIdForAuth>[1];
 type ProviderAuthAliasConfig = NonNullable<ProviderAuthAliasLookupParams>["config"];
@@ -36,8 +31,7 @@ export type CodexAppServerAuthProfileLookup = {
 export type CodexAppServerThreadBinding = {
   schemaVersion: 1;
   threadId: string;
-  sessionKey?: string;
-  sessionId: string;
+  sessionFile: string;
   cwd: string;
   authProfileId?: string;
   model?: string;
@@ -53,132 +47,81 @@ export type CodexAppServerThreadBinding = {
   updatedAt: string;
 };
 
-export type CodexAppServerBindingIdentity =
-  | string
-  | {
-      sessionKey?: string;
-      sessionId?: string;
-    };
-
-function normalizeCodexAppServerBindingIdentity(identity: CodexAppServerBindingIdentity): {
-  primaryKey: string;
-  sessionKey?: string;
-  sessionId: string;
-} {
-  if (typeof identity === "string") {
-    const sessionId = identity.trim();
-    return { primaryKey: sessionId, sessionId };
-  }
-  const sessionKey = identity.sessionKey?.trim() || undefined;
-  const sessionId = identity.sessionId?.trim() || "";
-  return {
-    primaryKey: sessionId || (sessionKey ? `session-key:${sessionKey}` : ""),
-    sessionKey,
-    sessionId,
-  };
-}
-
-function openCodexAppServerBindingStore() {
-  return createPluginStateSyncKeyedStore<CodexAppServerThreadBinding>(
-    CODEX_APP_SERVER_BINDING_PLUGIN_ID,
-    {
-      namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
-      maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
-    },
-  );
-}
-
-function codexAppServerBindingToPluginStateValue(
-  binding: CodexAppServerThreadBinding,
-): CodexAppServerThreadBinding {
-  return JSON.parse(JSON.stringify(binding)) as CodexAppServerThreadBinding;
-}
-
-function normalizeCodexAppServerBinding(
-  identity: ReturnType<typeof normalizeCodexAppServerBindingIdentity>,
-  value: unknown,
-  lookup: Omit<CodexAppServerAuthProfileLookup, "authProfileId">,
-): CodexAppServerThreadBinding | undefined {
-  const parsed = value as Partial<CodexAppServerThreadBinding>;
-  if (!parsed || parsed.schemaVersion !== 1 || typeof parsed.threadId !== "string") {
-    return undefined;
-  }
-  const authProfileId = typeof parsed.authProfileId === "string" ? parsed.authProfileId : undefined;
-  return {
-    schemaVersion: 1,
-    threadId: parsed.threadId,
-    sessionKey:
-      typeof parsed.sessionKey === "string" && parsed.sessionKey.trim()
-        ? parsed.sessionKey.trim()
-        : identity.sessionKey,
-    sessionId:
-      typeof parsed.sessionId === "string" && parsed.sessionId.trim()
-        ? parsed.sessionId.trim()
-        : identity.sessionId,
-    cwd: typeof parsed.cwd === "string" ? parsed.cwd : "",
-    authProfileId,
-    model: typeof parsed.model === "string" ? parsed.model : undefined,
-    modelProvider: normalizeCodexAppServerBindingModelProvider({
-      ...lookup,
-      authProfileId,
-      modelProvider: typeof parsed.modelProvider === "string" ? parsed.modelProvider : undefined,
-    }),
-    approvalPolicy: readApprovalPolicy(parsed.approvalPolicy),
-    sandbox: readSandboxMode(parsed.sandbox),
-    serviceTier: readServiceTier(parsed.serviceTier),
-    dynamicToolsFingerprint:
-      typeof parsed.dynamicToolsFingerprint === "string"
-        ? parsed.dynamicToolsFingerprint
-        : undefined,
-    pluginAppsFingerprint:
-      typeof parsed.pluginAppsFingerprint === "string" ? parsed.pluginAppsFingerprint : undefined,
-    pluginAppsInputFingerprint:
-      typeof parsed.pluginAppsInputFingerprint === "string"
-        ? parsed.pluginAppsInputFingerprint
-        : undefined,
-    pluginAppPolicyContext: readPluginAppPolicyContext(parsed.pluginAppPolicyContext),
-    createdAt: typeof parsed.createdAt === "string" ? parsed.createdAt : new Date().toISOString(),
-    updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : new Date().toISOString(),
-  };
+export function resolveCodexAppServerBindingPath(sessionFile: string): string {
+  return `${sessionFile}.codex-app-server.json`;
 }
 
 export async function readCodexAppServerBinding(
-  identity: CodexAppServerBindingIdentity,
+  sessionFile: string,
   lookup: Omit<CodexAppServerAuthProfileLookup, "authProfileId"> = {},
 ): Promise<CodexAppServerThreadBinding | undefined> {
-  const normalized = normalizeCodexAppServerBindingIdentity(identity);
-  if (!normalized.primaryKey) {
+  const path = resolveCodexAppServerBindingPath(sessionFile);
+  let raw: string;
+  try {
+    raw = await fs.readFile(path, "utf8");
+  } catch (error) {
+    if (isNotFound(error)) {
+      return undefined;
+    }
+    embeddedAgentLog.warn("failed to read codex app-server binding", { path, error });
     return undefined;
   }
-  const store = openCodexAppServerBindingStore();
-  let value = store.lookup(normalized.primaryKey);
-  if (value === undefined && normalized.sessionKey) {
-    value = store.lookup(`session-key:${normalized.sessionKey}`);
-  }
-  if (value === undefined) {
+  try {
+    const parsed = JSON.parse(raw) as Partial<CodexAppServerThreadBinding>;
+    if (parsed.schemaVersion !== 1 || typeof parsed.threadId !== "string") {
+      return undefined;
+    }
+    const authProfileId =
+      typeof parsed.authProfileId === "string" ? parsed.authProfileId : undefined;
+    return {
+      schemaVersion: 1,
+      threadId: parsed.threadId,
+      sessionFile,
+      cwd: typeof parsed.cwd === "string" ? parsed.cwd : "",
+      authProfileId,
+      model: typeof parsed.model === "string" ? parsed.model : undefined,
+      modelProvider: normalizeCodexAppServerBindingModelProvider({
+        ...lookup,
+        authProfileId,
+        modelProvider: typeof parsed.modelProvider === "string" ? parsed.modelProvider : undefined,
+      }),
+      approvalPolicy: readApprovalPolicy(parsed.approvalPolicy),
+      sandbox: readSandboxMode(parsed.sandbox),
+      serviceTier: readServiceTier(parsed.serviceTier),
+      dynamicToolsFingerprint:
+        typeof parsed.dynamicToolsFingerprint === "string"
+          ? parsed.dynamicToolsFingerprint
+          : undefined,
+      pluginAppsFingerprint:
+        typeof parsed.pluginAppsFingerprint === "string" ? parsed.pluginAppsFingerprint : undefined,
+      pluginAppsInputFingerprint:
+        typeof parsed.pluginAppsInputFingerprint === "string"
+          ? parsed.pluginAppsInputFingerprint
+          : undefined,
+      pluginAppPolicyContext: readPluginAppPolicyContext(parsed.pluginAppPolicyContext),
+      createdAt: typeof parsed.createdAt === "string" ? parsed.createdAt : new Date().toISOString(),
+      updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : new Date().toISOString(),
+    };
+  } catch (error) {
+    embeddedAgentLog.warn("failed to parse codex app-server binding", { path, error });
     return undefined;
   }
-  return normalizeCodexAppServerBinding(normalized, value, lookup);
 }
 
 export async function writeCodexAppServerBinding(
-  identity: CodexAppServerBindingIdentity,
+  sessionFile: string,
   binding: Omit<
     CodexAppServerThreadBinding,
-    "schemaVersion" | "sessionKey" | "sessionId" | "createdAt" | "updatedAt"
+    "schemaVersion" | "sessionFile" | "createdAt" | "updatedAt"
   > & {
-    sessionKey?: string;
-    sessionId?: string;
     createdAt?: string;
   },
   lookup: Omit<CodexAppServerAuthProfileLookup, "authProfileId"> = {},
 ): Promise<void> {
   const now = new Date().toISOString();
-  const normalized = normalizeCodexAppServerBindingIdentity(identity);
   const payload: CodexAppServerThreadBinding = {
     schemaVersion: 1,
-    sessionKey: binding.sessionKey?.trim() || normalized.sessionKey,
-    sessionId: binding.sessionId?.trim() || normalized.sessionId,
+    sessionFile,
     threadId: binding.threadId,
     cwd: binding.cwd,
     authProfileId: binding.authProfileId,
@@ -198,9 +141,9 @@ export async function writeCodexAppServerBinding(
     createdAt: binding.createdAt ?? now,
     updatedAt: now,
   };
-  openCodexAppServerBindingStore().register(
-    normalized.primaryKey,
-    codexAppServerBindingToPluginStateValue(payload),
+  await fs.writeFile(
+    resolveCodexAppServerBindingPath(sessionFile),
+    `${JSON.stringify(payload, null, 2)}\n`,
   );
 }
 
@@ -261,11 +204,18 @@ function readPluginAppPolicyContext(value: unknown): PluginAppPolicyContext | un
   };
 }
 
-export async function clearCodexAppServerBinding(
-  identity: CodexAppServerBindingIdentity,
-): Promise<void> {
-  const normalized = normalizeCodexAppServerBindingIdentity(identity);
-  openCodexAppServerBindingStore().delete(normalized.primaryKey);
+export async function clearCodexAppServerBinding(sessionFile: string): Promise<void> {
+  try {
+    await fs.unlink(resolveCodexAppServerBindingPath(sessionFile));
+  } catch (error) {
+    if (!isNotFound(error)) {
+      embeddedAgentLog.warn("failed to clear codex app-server binding", { sessionFile, error });
+    }
+  }
+}
+
+function isNotFound(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && "code" in error && error.code === "ENOENT");
 }
 
 export function isCodexAppServerNativeAuthProfile(

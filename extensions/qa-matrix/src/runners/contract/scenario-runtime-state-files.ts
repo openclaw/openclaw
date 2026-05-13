@@ -1,132 +1,123 @@
-import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { createPluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 
-const MATRIX_PLUGIN_ID = "matrix";
-const MATRIX_INBOUND_DEDUPE_NAMESPACE = "inbound-dedupe";
-const MATRIX_STORAGE_META_NAMESPACE = "storage-meta";
-const MATRIX_SYNC_STORE_NAMESPACE = "sync-store";
+const MATRIX_SYNC_STORE_FILENAME = "bot-storage.json";
+const MATRIX_INBOUND_DEDUPE_FILENAME = "inbound-dedupe.json";
 const MATRIX_STATE_POLL_INTERVAL_MS = 100;
 
-type MatrixInboundDedupeEntry = {
-  roomId: string;
-  eventId: string;
-  ts: number;
-};
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
 
-type MatrixStorageMetaEntry = {
-  accountId?: string;
-  rootDir?: string;
-  userId?: string;
-};
+async function readJsonFile(pathname: string): Promise<unknown> {
+  return JSON.parse(await fs.readFile(pathname, "utf8")) as unknown;
+}
 
-type PersistedMatrixSyncStore = {
-  version?: number;
-  savedSync?: {
-    nextBatch?: string;
-  } | null;
-  cleanShutdown?: boolean;
-  clientOptions?: unknown;
-};
+async function writeJsonFile(pathname: string, value: unknown) {
+  await fs.writeFile(pathname, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
 
-const matrixInboundDedupeStore = createPluginStateKeyedStore<MatrixInboundDedupeEntry>(
-  MATRIX_PLUGIN_ID,
-  {
-    namespace: MATRIX_INBOUND_DEDUPE_NAMESPACE,
-    maxEntries: 20_000,
-  },
-);
-
-const matrixStorageMetaStore = createPluginStateKeyedStore<MatrixStorageMetaEntry>(
-  MATRIX_PLUGIN_ID,
-  {
-    namespace: MATRIX_STORAGE_META_NAMESPACE,
-    maxEntries: 10_000,
-  },
-);
-
-const matrixSyncStore = createPluginStateKeyedStore<PersistedMatrixSyncStore>(MATRIX_PLUGIN_ID, {
-  namespace: MATRIX_SYNC_STORE_NAMESPACE,
-  maxEntries: 1000,
-});
-
-function withOpenClawStateDir<T>(stateDir: string, fn: () => Promise<T>): Promise<T> {
-  const previous = process.env.OPENCLAW_STATE_DIR;
-  process.env.OPENCLAW_STATE_DIR = stateDir;
-  return fn().finally(() => {
-    if (previous == null) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previous;
+async function findFilesByName(params: {
+  filename: string;
+  rootDir: string;
+  maxDepth?: number;
+}): Promise<string[]> {
+  const maxDepth = params.maxDepth ?? 8;
+  const matches: string[] = [];
+  async function visit(dir: string, depth: number): Promise<void> {
+    if (depth > maxDepth) {
+      return;
     }
-  });
+    let entries: Array<{ isDirectory(): boolean; isFile(): boolean; name: string }>;
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const entryPath = path.join(dir, entry.name);
+      if (entry.isFile() && entry.name === params.filename) {
+        matches.push(entryPath);
+        continue;
+      }
+      if (entry.isDirectory()) {
+        await visit(entryPath, depth + 1);
+      }
+    }
+  }
+  await visit(params.rootDir, 0);
+  return matches.toSorted();
 }
 
-function resolveMatrixSyncStoreKey(rootDir: string): string {
-  return createHash("sha256").update(path.resolve(rootDir), "utf8").digest("hex").slice(0, 32);
-}
-
-function inferStateDirFromMatrixStorageRoot(rootDir: string): string | null {
-  const parts = path.resolve(rootDir).split(path.sep);
-  const matrixIndex = parts.lastIndexOf("matrix");
-  if (matrixIndex <= 0) {
+function readPersistedMatrixSyncCursor(parsed: unknown): string | null {
+  if (!isRecord(parsed)) {
     return null;
   }
-  return parts.slice(0, matrixIndex).join(path.sep) || path.sep;
-}
-
-function readPersistedMatrixSyncCursor(
-  persisted: PersistedMatrixSyncStore | undefined,
-): string | null {
-  const nextBatch = persisted?.savedSync?.nextBatch;
-  return typeof nextBatch === "string" && nextBatch.trim() ? nextBatch : null;
-}
-
-export async function rewriteMatrixSyncStoreCursor(params: { cursor: string; rootDir: string }) {
-  const rewrite = async () => {
-    const key = resolveMatrixSyncStoreKey(params.rootDir);
-    const persisted = await matrixSyncStore.lookup(key);
-    if (!persisted?.savedSync) {
-      throw new Error("Matrix sync store did not contain a persisted sync cursor");
-    }
-    await matrixSyncStore.register(key, {
-      ...persisted,
-      savedSync: {
-        ...persisted.savedSync,
-        nextBatch: params.cursor,
-      },
-    });
-  };
-  const stateDir = inferStateDirFromMatrixStorageRoot(params.rootDir);
-  if (stateDir) {
-    await withOpenClawStateDir(stateDir, rewrite);
-    return;
+  const savedSync = parsed.savedSync;
+  if (isRecord(savedSync) && typeof savedSync.nextBatch === "string") {
+    return savedSync.nextBatch;
   }
-  await rewrite();
+  if (typeof parsed.next_batch === "string") {
+    return parsed.next_batch;
+  }
+  return null;
 }
 
-export async function deleteMatrixSyncStore(params: { rootDir: string; stateDir: string }) {
-  await withOpenClawStateDir(params.stateDir, () =>
-    matrixSyncStore.delete(resolveMatrixSyncStoreKey(params.rootDir)),
-  );
+function writePersistedMatrixSyncCursor(parsed: unknown, cursor: string): unknown {
+  if (!isRecord(parsed)) {
+    throw new Error("Matrix sync store was not a JSON object");
+  }
+  const savedSync = parsed.savedSync;
+  if (isRecord(savedSync) && typeof savedSync.nextBatch === "string") {
+    return {
+      ...parsed,
+      savedSync: {
+        ...savedSync,
+        nextBatch: cursor,
+      },
+    };
+  }
+  if (typeof parsed.next_batch === "string") {
+    return {
+      ...parsed,
+      next_batch: cursor,
+    };
+  }
+  throw new Error("Matrix sync store did not contain a persisted sync cursor");
+}
+
+async function readMatrixSyncStoreCursor(pathname: string): Promise<string | null> {
+  return readPersistedMatrixSyncCursor(await readJsonFile(pathname));
+}
+
+export async function rewriteMatrixSyncStoreCursor(params: { cursor: string; pathname: string }) {
+  const parsed = await readJsonFile(params.pathname);
+  await writeJsonFile(params.pathname, writePersistedMatrixSyncCursor(parsed, params.cursor));
 }
 
 async function scoreMatrixStateFile(params: {
   accountId?: string;
   context: MatrixQaScenarioContext;
-  metadata: MatrixStorageMetaEntry;
+  pathname: string;
   userId?: string;
 }) {
-  let score = 4;
+  let score = params.pathname.includes(`${path.sep}matrix${path.sep}`) ? 4 : 0;
   const expectedUserId = params.userId ?? params.context.sutUserId;
   const expectedAccountId = params.accountId ?? params.context.sutAccountId;
-  if (params.metadata.userId === expectedUserId) {
-    score += 16;
-  }
-  if (params.metadata.accountId === expectedAccountId) {
-    score += 8;
+  try {
+    const metadata = await readJsonFile(
+      path.join(path.dirname(params.pathname), "storage-meta.json"),
+    );
+    if (isRecord(metadata) && metadata.userId === expectedUserId) {
+      score += 16;
+    }
+    if (isRecord(metadata) && metadata.accountId === expectedAccountId) {
+      score += 8;
+    }
+  } catch {
+    // Missing metadata is allowed; the Matrix client may not have flushed it yet.
   }
   return score;
 }
@@ -134,40 +125,30 @@ async function scoreMatrixStateFile(params: {
 async function resolveBestMatrixStateFile(params: {
   accountId?: string;
   context: MatrixQaScenarioContext;
+  filename: string;
   stateDir: string;
   userId?: string;
 }) {
-  const stateRoot = path.resolve(params.stateDir);
-  const metadataEntries = await matrixStorageMetaStore.entries();
-  const candidates = metadataEntries.flatMap((entry) => {
-    const rootDir = entry.value.rootDir;
-    if (!rootDir) {
-      return [];
-    }
-    const resolvedRoot = path.resolve(rootDir);
-    if (!resolvedRoot.startsWith(stateRoot)) {
-      return [];
-    }
-    return [{ metadata: entry.value, rootDir: resolvedRoot }];
+  const candidates = await findFilesByName({
+    filename: params.filename,
+    rootDir: params.stateDir,
   });
   if (candidates.length === 0) {
     return null;
   }
   const scored = await Promise.all(
-    candidates.map(async (candidate) => ({
-      rootDir: candidate.rootDir,
-      persisted: await matrixSyncStore.lookup(resolveMatrixSyncStoreKey(candidate.rootDir)),
+    candidates.map(async (pathname) => ({
+      pathname,
       score: await scoreMatrixStateFile({
         context: params.context,
-        metadata: candidate.metadata,
+        pathname,
         ...(params.accountId ? { accountId: params.accountId } : {}),
         ...(params.userId ? { userId: params.userId } : {}),
       }),
     })),
   );
-  const withCursor = scored.filter((entry) => readPersistedMatrixSyncCursor(entry.persisted));
-  withCursor.sort((a, b) => b.score - a.score || a.rootDir.localeCompare(b.rootDir));
-  return withCursor[0] ?? null;
+  scored.sort((a, b) => b.score - a.score || a.pathname.localeCompare(b.pathname));
+  return scored[0]?.pathname ?? null;
 }
 
 export async function waitForMatrixSyncStoreWithCursor(params: {
@@ -180,18 +161,19 @@ export async function waitForMatrixSyncStoreWithCursor(params: {
   const startedAt = Date.now();
   let lastPath: string | null = null;
   while (Date.now() - startedAt < params.timeoutMs) {
-    const candidate = await withOpenClawStateDir(params.stateDir, () =>
-      resolveBestMatrixStateFile({
-        context: params.context,
-        stateDir: params.stateDir,
-        ...(params.accountId ? { accountId: params.accountId } : {}),
-        ...(params.userId ? { userId: params.userId } : {}),
-      }),
-    );
-    lastPath = candidate?.rootDir ?? null;
-    const cursor = readPersistedMatrixSyncCursor(candidate?.persisted);
-    if (candidate && cursor) {
-      return { cursor, rootDir: candidate.rootDir };
+    const pathname = await resolveBestMatrixStateFile({
+      context: params.context,
+      filename: MATRIX_SYNC_STORE_FILENAME,
+      stateDir: params.stateDir,
+      ...(params.accountId ? { accountId: params.accountId } : {}),
+      ...(params.userId ? { userId: params.userId } : {}),
+    });
+    lastPath = pathname;
+    if (pathname) {
+      const cursor = await readMatrixSyncStoreCursor(pathname);
+      if (cursor) {
+        return { cursor, pathname };
+      }
     }
     await sleep(MATRIX_STATE_POLL_INTERVAL_MS);
   }
@@ -200,38 +182,16 @@ export async function waitForMatrixSyncStoreWithCursor(params: {
   );
 }
 
-function buildMatrixInboundDedupeKey(params: {
-  accountId: string;
+function hasPersistedMatrixDedupeEntry(params: {
+  parsed: unknown;
   roomId: string;
   eventId: string;
-}): string {
-  const accountId = params.accountId.trim() || "default";
-  const digest = createHash("sha256")
-    .update(accountId)
-    .update("\0")
-    .update(params.roomId.trim())
-    .update("\0")
-    .update(params.eventId.trim())
-    .digest("hex");
-  return `${accountId}:${digest}`;
-}
-
-async function hasPersistedMatrixDedupeEntry(params: {
-  accountId?: string;
-  eventId: string;
-  roomId: string;
-  stateDir: string;
 }) {
-  return withOpenClawStateDir(params.stateDir, async () => {
-    const entry = await matrixInboundDedupeStore.lookup(
-      buildMatrixInboundDedupeKey({
-        accountId: params.accountId ?? "default",
-        roomId: params.roomId,
-        eventId: params.eventId,
-      }),
-    );
-    return entry?.roomId === params.roomId && entry.eventId === params.eventId;
-  });
+  if (!isRecord(params.parsed) || !Array.isArray(params.parsed.entries)) {
+    return false;
+  }
+  const expectedKey = `${params.roomId}|${params.eventId}`;
+  return params.parsed.entries.some((entry) => isRecord(entry) && entry.key === expectedKey);
 }
 
 export async function waitForMatrixInboundDedupeEntry(params: {
@@ -243,15 +203,22 @@ export async function waitForMatrixInboundDedupeEntry(params: {
 }) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < params.timeoutMs) {
-    if (
-      await hasPersistedMatrixDedupeEntry({
-        accountId: params.context.sutAccountId,
-        roomId: params.roomId,
-        eventId: params.eventId,
-        stateDir: params.stateDir,
-      })
-    ) {
-      return "plugin_state_entries:matrix/inbound-dedupe";
+    const pathname = await resolveBestMatrixStateFile({
+      context: params.context,
+      filename: MATRIX_INBOUND_DEDUPE_FILENAME,
+      stateDir: params.stateDir,
+    });
+    if (pathname) {
+      const parsed = await readJsonFile(pathname);
+      if (
+        hasPersistedMatrixDedupeEntry({
+          parsed,
+          roomId: params.roomId,
+          eventId: params.eventId,
+        })
+      ) {
+        return pathname;
+      }
     }
     await sleep(MATRIX_STATE_POLL_INTERVAL_MS);
   }

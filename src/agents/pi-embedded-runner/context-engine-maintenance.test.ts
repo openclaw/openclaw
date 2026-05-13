@@ -19,7 +19,12 @@ import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import { resolveSessionLane } from "./lanes.js";
 
-const rewriteTranscriptEntriesInSqliteTranscriptMock = vi.fn(async (_params?: unknown) => ({
+const rewriteTranscriptEntriesInSessionManagerMock = vi.fn((_params?: unknown) => ({
+  changed: true,
+  bytesFreed: 77,
+  rewrittenEntries: 1,
+}));
+const rewriteTranscriptEntriesInSessionFileMock = vi.fn(async (_params?: unknown) => ({
   changed: true,
   bytesFreed: 123,
   rewrittenEntries: 2,
@@ -31,10 +36,6 @@ let runContextEngineMaintenance: typeof import("./context-engine-maintenance.js"
 // Keep this literal aligned with the production module; tests use dynamic
 // import reloading, so they cannot safely import the constant directly.
 const TURN_MAINTENANCE_TASK_KIND = "context_engine_turn_maintenance";
-
-function sqliteTranscriptScope(sessionId: string) {
-  return { agentId: "main", sessionId };
-}
 
 async function flushAsyncWork(times = 4): Promise<void> {
   for (let index = 0; index < times; index += 1) {
@@ -75,7 +76,7 @@ function firstMaintainParams(maintain: { mock: { calls: unknown[][] } }): Record
 
 function expectRecordFields(record: Record<string, unknown>, expected: Record<string, unknown>) {
   for (const [key, value] of Object.entries(expected)) {
-    expect(record[key]).toStrictEqual(value);
+    expect(record[key]).toBe(value);
   }
 }
 
@@ -88,8 +89,10 @@ vi.mock("./context-engine-capabilities.js", () => ({
 }));
 
 vi.mock("./transcript-rewrite.js", () => ({
-  rewriteTranscriptEntriesInSqliteTranscript: (params: unknown) =>
-    rewriteTranscriptEntriesInSqliteTranscriptMock(params),
+  rewriteTranscriptEntriesInSessionManager: (params: unknown) =>
+    rewriteTranscriptEntriesInSessionManagerMock(params),
+  rewriteTranscriptEntriesInSessionFile: (params: unknown) =>
+    rewriteTranscriptEntriesInSessionFileMock(params),
 }));
 
 async function loadFreshContextEngineMaintenanceModuleForTest() {
@@ -104,17 +107,18 @@ async function loadFreshContextEngineMaintenanceModuleForTest() {
 
 describe("buildContextEngineMaintenanceRuntimeContext", () => {
   beforeEach(async () => {
-    rewriteTranscriptEntriesInSqliteTranscriptMock.mockClear();
+    rewriteTranscriptEntriesInSessionManagerMock.mockClear();
+    rewriteTranscriptEntriesInSessionFileMock.mockClear();
     resetSystemEventsForTest();
     resetTaskRegistryDeliveryRuntimeForTests();
     await loadFreshContextEngineMaintenanceModuleForTest();
   });
 
-  it("adds a transcript rewrite helper that targets the current SQLite transcript", async () => {
+  it("adds a transcript rewrite helper that targets the current session file", async () => {
     const runtimeContext = buildContextEngineMaintenanceRuntimeContext({
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
-      transcriptScope: sqliteTranscriptScope("session-1"),
+      sessionFile: "/tmp/session.jsonl",
       runtimeContext: { workspaceDir: "/tmp/workspace" },
     });
 
@@ -134,8 +138,8 @@ describe("buildContextEngineMaintenanceRuntimeContext", () => {
       bytesFreed: 123,
       rewrittenEntries: 2,
     });
-    expect(rewriteTranscriptEntriesInSqliteTranscriptMock).toHaveBeenCalledWith({
-      agentId: "main",
+    expect(rewriteTranscriptEntriesInSessionFileMock).toHaveBeenCalledWith({
+      sessionFile: "/tmp/session.jsonl",
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
       config: undefined,
@@ -147,7 +151,38 @@ describe("buildContextEngineMaintenanceRuntimeContext", () => {
     });
   });
 
-  it("defers SQLite transcript rewrites onto the session lane when requested", async () => {
+  it("reuses the active session manager when one is provided", async () => {
+    const sessionManager = { appendMessage: vi.fn() } as unknown as Parameters<
+      typeof buildContextEngineMaintenanceRuntimeContext
+    >[0]["sessionManager"];
+    const runtimeContext = buildContextEngineMaintenanceRuntimeContext({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      sessionManager,
+    });
+
+    const result = await runtimeContext.rewriteTranscriptEntries?.({
+      replacements: [
+        { entryId: "entry-1", message: { role: "user", content: "hi", timestamp: 1 } },
+      ],
+    });
+
+    expect(result).toEqual({
+      changed: true,
+      bytesFreed: 77,
+      rewrittenEntries: 1,
+    });
+    expect(rewriteTranscriptEntriesInSessionManagerMock).toHaveBeenCalledWith({
+      sessionManager,
+      replacements: [
+        { entryId: "entry-1", message: { role: "user", content: "hi", timestamp: 1 } },
+      ],
+    });
+    expect(rewriteTranscriptEntriesInSessionFileMock).not.toHaveBeenCalled();
+  });
+
+  it("defers file rewrites onto the session lane when requested", async () => {
     vi.useFakeTimers();
     try {
       resetCommandQueueStateForTest();
@@ -164,7 +199,7 @@ describe("buildContextEngineMaintenanceRuntimeContext", () => {
       });
       await Promise.resolve();
 
-      rewriteTranscriptEntriesInSqliteTranscriptMock.mockImplementationOnce(
+      rewriteTranscriptEntriesInSessionFileMock.mockImplementationOnce(
         async (_params?: unknown) => {
           events.push("rewrite");
           return {
@@ -178,7 +213,7 @@ describe("buildContextEngineMaintenanceRuntimeContext", () => {
       const runtimeContext = buildContextEngineMaintenanceRuntimeContext({
         sessionId: "session-rewrite-handoff",
         sessionKey,
-        transcriptScope: sqliteTranscriptScope("session-rewrite-handoff"),
+        sessionFile: "/tmp/session-rewrite-handoff.jsonl",
         deferTranscriptRewriteToSessionLane: true,
       });
 
@@ -190,7 +225,7 @@ describe("buildContextEngineMaintenanceRuntimeContext", () => {
       expect(rewritePromise?.then).toBeTypeOf("function");
 
       await flushAsyncWork();
-      expect(rewriteTranscriptEntriesInSqliteTranscriptMock).not.toHaveBeenCalled();
+      expect(rewriteTranscriptEntriesInSessionFileMock).not.toHaveBeenCalled();
 
       if (!releaseForeground) {
         throw new Error("Expected foreground turn release callback to be initialized");
@@ -261,7 +296,8 @@ describe("createDeferredTurnMaintenanceAbortSignal", () => {
 
 describe("runContextEngineMaintenance", () => {
   beforeEach(async () => {
-    rewriteTranscriptEntriesInSqliteTranscriptMock.mockClear();
+    rewriteTranscriptEntriesInSessionManagerMock.mockClear();
+    rewriteTranscriptEntriesInSessionFileMock.mockClear();
     await loadFreshContextEngineMaintenanceModuleForTest();
   });
 
@@ -282,7 +318,7 @@ describe("runContextEngineMaintenance", () => {
       },
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
-      transcriptScope: { agentId: "main", sessionId: "session-1" },
+      sessionFile: "/tmp/session.jsonl",
       reason: "turn",
       runtimeContext: { workspaceDir: "/tmp/workspace" },
     });
@@ -296,7 +332,7 @@ describe("runContextEngineMaintenance", () => {
     expectRecordFields(maintainParams, {
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
-      transcriptScope: { agentId: "main", sessionId: "session-1" },
+      sessionFile: "/tmp/session.jsonl",
     });
     expect(
       requireRecord(maintainParams.runtimeContext, "maintain runtime context").workspaceDir,
@@ -319,7 +355,7 @@ describe("runContextEngineMaintenance", () => {
     });
   });
 
-  it("forces background maintenance rewrites through SQLite even when a session manager exists", async () => {
+  it("forces background maintenance rewrites through the session file even when a session manager exists", async () => {
     const maintain = vi.fn(async (params?: unknown) => {
       await (
         params as { runtimeContext?: ContextEngineRuntimeContext } | undefined
@@ -341,6 +377,10 @@ describe("runContextEngineMaintenance", () => {
         rewrittenEntries: 0,
       };
     });
+    const sessionManager = { appendMessage: vi.fn() } as unknown as Parameters<
+      typeof buildContextEngineMaintenanceRuntimeContext
+    >[0]["sessionManager"];
+
     await runContextEngineMaintenance({
       contextEngine: {
         info: { id: "test", name: "Test Engine", turnMaintenanceMode: "background" },
@@ -351,16 +391,19 @@ describe("runContextEngineMaintenance", () => {
       },
       sessionId: "session-background-file-rewrite",
       sessionKey: "agent:main:session-background-file-rewrite",
-      transcriptScope: sqliteTranscriptScope("session-background-file-rewrite"),
+      sessionFile: "/tmp/session-background-file-rewrite.jsonl",
       reason: "turn",
       executionMode: "background",
+      sessionManager,
+      config: { session: { writeLock: { acquireTimeoutMs: 75_000 } } },
     });
 
-    expect(rewriteTranscriptEntriesInSqliteTranscriptMock).toHaveBeenCalledWith({
-      agentId: "main",
+    expect(rewriteTranscriptEntriesInSessionManagerMock).not.toHaveBeenCalled();
+    expect(rewriteTranscriptEntriesInSessionFileMock).toHaveBeenCalledWith({
+      sessionFile: "/tmp/session-background-file-rewrite.jsonl",
       sessionId: "session-background-file-rewrite",
       sessionKey: "agent:main:session-background-file-rewrite",
-      config: undefined,
+      config: { session: { writeLock: { acquireTimeoutMs: 75_000 } } },
       request: {
         replacements: [
           {
@@ -435,13 +478,14 @@ describe("runContextEngineMaintenance", () => {
           contextEngine: backgroundEngine,
           sessionId: "session-1",
           sessionKey,
-          transcriptScope: sqliteTranscriptScope("session-1"),
+          sessionFile: "/tmp/session.jsonl",
           reason: "turn",
           runtimeContext: {
             workspaceDir: "/tmp/workspace",
             tokenBudget: 2048,
             currentTokenCount: 1536,
           },
+          config: { session: { writeLock: { acquireTimeoutMs: 91_000 } } },
         });
 
         expect(result).toBeUndefined();
@@ -471,7 +515,7 @@ describe("runContextEngineMaintenance", () => {
         expectRecordFields(maintainParams, {
           sessionId: "session-1",
           sessionKey,
-          transcriptScope: { agentId: "main", sessionId: "session-1" },
+          sessionFile: "/tmp/session.jsonl",
         });
         expectRecordFields(requireRecord(maintainParams.runtimeContext, "runtime context"), {
           workspaceDir: "/tmp/workspace",
@@ -479,11 +523,11 @@ describe("runContextEngineMaintenance", () => {
           tokenBudget: 2048,
           currentTokenCount: 1536,
         });
-        expect(rewriteTranscriptEntriesInSqliteTranscriptMock).toHaveBeenCalledWith({
-          agentId: "main",
+        expect(rewriteTranscriptEntriesInSessionFileMock).toHaveBeenCalledWith({
+          sessionFile: "/tmp/session.jsonl",
           sessionId: "session-1",
           sessionKey,
-          config: undefined,
+          config: { session: { writeLock: { acquireTimeoutMs: 91_000 } } },
           request: {
             replacements: [
               {
@@ -556,14 +600,14 @@ describe("runContextEngineMaintenance", () => {
             contextEngine: backgroundEngine,
             sessionId: "session-2",
             sessionKey,
-            transcriptScope: sqliteTranscriptScope("session-2"),
+            sessionFile: "/tmp/session-2.jsonl",
             reason: "turn",
           }),
           runContextEngineMaintenance({
             contextEngine: backgroundEngine,
             sessionId: "session-2",
             sessionKey,
-            transcriptScope: sqliteTranscriptScope("session-2"),
+            sessionFile: "/tmp/session-2.jsonl",
             reason: "turn",
           }),
         ]);
@@ -635,7 +679,7 @@ describe("runContextEngineMaintenance", () => {
           contextEngine: backgroundEngine,
           sessionId: "session-rerun",
           sessionKey,
-          transcriptScope: sqliteTranscriptScope("session-rerun"),
+          sessionFile: "/tmp/session-rerun.jsonl",
           reason: "turn",
         });
 
@@ -645,7 +689,7 @@ describe("runContextEngineMaintenance", () => {
           contextEngine: backgroundEngine,
           sessionId: "session-rerun",
           sessionKey,
-          transcriptScope: sqliteTranscriptScope("session-rerun"),
+          sessionFile: "/tmp/session-rerun.jsonl",
           reason: "turn",
         });
 
@@ -713,7 +757,7 @@ describe("runContextEngineMaintenance", () => {
           contextEngine: backgroundEngine,
           sessionId: "session-legacy",
           sessionKey,
-          transcriptScope: sqliteTranscriptScope("session-legacy"),
+          sessionFile: "/tmp/session-legacy.jsonl",
           reason: "turn",
         });
 
@@ -776,7 +820,7 @@ describe("runContextEngineMaintenance", () => {
           contextEngine: backgroundEngine,
           sessionId: "session-enqueue-reject",
           sessionKey,
-          transcriptScope: sqliteTranscriptScope("session-enqueue-reject"),
+          sessionFile: "/tmp/session-enqueue-reject.jsonl",
           reason: "turn",
         });
         await flushAsyncWork();
@@ -845,7 +889,7 @@ describe("runContextEngineMaintenance", () => {
           contextEngine: backgroundEngine,
           sessionId: "session-3",
           sessionKey,
-          transcriptScope: sqliteTranscriptScope("session-3"),
+          sessionFile: "/tmp/session-3.jsonl",
           reason: "turn",
         });
 
@@ -916,7 +960,7 @@ describe("runContextEngineMaintenance", () => {
           };
         });
 
-        rewriteTranscriptEntriesInSqliteTranscriptMock.mockImplementationOnce(
+        rewriteTranscriptEntriesInSessionFileMock.mockImplementationOnce(
           async (_params?: unknown) => {
             events.push("rewrite");
             return {
@@ -946,7 +990,7 @@ describe("runContextEngineMaintenance", () => {
           contextEngine: backgroundEngine,
           sessionId: "session-rewrite-priority",
           sessionKey,
-          transcriptScope: sqliteTranscriptScope("session-rewrite-priority"),
+          sessionFile: "/tmp/session-rewrite-priority.jsonl",
           reason: "turn",
         });
 
@@ -1019,7 +1063,7 @@ describe("runContextEngineMaintenance", () => {
           contextEngine: backgroundEngine,
           sessionId: "session-fast",
           sessionKey,
-          transcriptScope: sqliteTranscriptScope("session-fast"),
+          sessionFile: "/tmp/session-fast.jsonl",
           reason: "turn",
         });
         await waitForAssertion(() => expect(maintain).toHaveBeenCalledTimes(1));
@@ -1074,7 +1118,7 @@ describe("runContextEngineMaintenance", () => {
           contextEngine: backgroundEngine,
           sessionId: "session-long",
           sessionKey,
-          transcriptScope: sqliteTranscriptScope("session-long"),
+          sessionFile: "/tmp/session-long.jsonl",
           reason: "turn",
         });
 
@@ -1146,7 +1190,7 @@ describe("runContextEngineMaintenance", () => {
           contextEngine: backgroundEngine,
           sessionId: "session-throttle",
           sessionKey,
-          transcriptScope: sqliteTranscriptScope("session-throttle"),
+          sessionFile: "/tmp/session-throttle.jsonl",
           reason: "turn",
         });
 
@@ -1215,7 +1259,7 @@ describe("runContextEngineMaintenance", () => {
           contextEngine: backgroundEngine,
           sessionId: "session-fail",
           sessionKey,
-          transcriptScope: sqliteTranscriptScope("session-fail"),
+          sessionFile: "/tmp/session-fail.jsonl",
           reason: "turn",
         });
         await waitForAssertion(() =>

@@ -1,4 +1,4 @@
-import type { AgentMessage } from "../agents/agent-core-contract.js";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 
 const GOOGLE_TURN_ORDER_BOOTSTRAP_TEXT = "(session bootstrap)";
 

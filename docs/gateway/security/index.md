@@ -241,8 +241,10 @@ Use this when auditing access or deciding what to back up:
 - **Telegram bot token**: config/env or `channels.telegram.tokenFile` (regular file only; symlinks rejected)
 - **Discord bot token**: config/env or SecretRef (env/file/exec providers)
 - **Slack tokens**: config/env (`channels.slack.*`)
-- **Pairing allowlists**: `~/.openclaw/state/openclaw.sqlite#table/channel_pairing_allow_entries`
-- **Model auth profiles**: `~/.openclaw/state/openclaw.sqlite#table/auth_profile_stores/<agentDir>`
+- **Pairing allowlists**:
+  - `~/.openclaw/credentials/<channel>-allowFrom.json` (default account)
+  - `~/.openclaw/credentials/<channel>-<accountId>-allowFrom.json` (non-default accounts)
+- **Model auth profiles**: `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
 - **Codex runtime state**: `~/.openclaw/agents/<agentId>/agent/codex-home/`
 - **File-backed secrets payload (optional)**: `~/.openclaw/secrets.json`
 - **Legacy OAuth import**: `~/.openclaw/credentials/oauth.json`
@@ -406,16 +408,13 @@ proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 - `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true` enables Host-header origin fallback mode; treat it as a dangerous operator-selected policy.
 - Treat DNS rebinding and proxy-host header behavior as deployment hardening concerns; keep `trustedProxies` tight and avoid exposing the gateway directly to the public internet.
 
-## Local session transcripts live in SQLite
+## Local session logs live on disk
 
-OpenClaw stores session rows and transcript events in SQLite under
-`~/.openclaw/state/openclaw.sqlite` and
-`~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`. This is required for
-session continuity and optional session memory indexing, but it also means
-**any process/user with filesystem access can read those databases**. Treat disk
-access as the trust boundary and lock down permissions on `~/.openclaw` (see the
-audit section below). If you need stronger isolation between agents, run them
-under separate OS users or separate hosts.
+OpenClaw stores session transcripts on disk under `~/.openclaw/agents/<agentId>/sessions/*.jsonl`.
+This is required for session continuity and (optionally) session memory indexing, but it also means
+**any process/user with filesystem access can read those logs**. Treat disk access as the trust
+boundary and lock down permissions on `~/.openclaw` (see the audit section below). If you need
+stronger isolation between agents, run them under separate OS users or separate hosts.
 
 ## Node execution (system.run)
 
@@ -425,7 +424,7 @@ If a macOS node is paired, the Gateway can invoke `system.run` on that node. Thi
 - Gateway node pairing is not a per-command approval surface. It establishes node identity/trust and token issuance.
 - The Gateway applies a coarse global node command policy via `gateway.nodes.allowCommands` / `denyCommands`.
 - Controlled on the Mac via **Settings → Exec approvals** (security + ask + allowlist).
-- The per-node `system.run` policy is the node's own SQLite exec approvals state (`exec.approvals.node.*`), which can be stricter or looser than the gateway's global command-ID policy.
+- The per-node `system.run` policy is the node's own exec approvals file (`exec.approvals.node.*`), which can be stricter or looser than the gateway's global command-ID policy.
 - A node running with `security="full"` and `ask="off"` is following the default trusted-operator model. Treat that as expected behavior unless your deployment explicitly requires a tighter approval or allowlist stance.
 - Approval mode binds exact request context and, when possible, one concrete local script/file operand. If OpenClaw cannot identify exactly one direct local file for an interpreter/runtime command, approval-backed execution is denied rather than promising full semantic coverage.
 - For `host=node`, approval-backed runs also store a canonical prepared
@@ -576,7 +575,7 @@ If you run multiple accounts on the same channel, use `per-account-channel-peer`
 OpenClaw has two separate "who can trigger me?" layers:
 
 - **DM allowlist** (`allowFrom` / `channels.discord.allowFrom` / `channels.slack.allowFrom`; legacy: `channels.discord.dm.allowFrom`, `channels.slack.dm.allowFrom`): who is allowed to talk to the bot in direct messages.
-  - When `dmPolicy="pairing"`, approvals are written to the account-scoped pairing allowlist store in `~/.openclaw/state/openclaw.sqlite`, merged with config allowlists. Older `~/.openclaw/credentials/*-pairing.json` and `*-allowFrom.json` files are imported only by `openclaw doctor --fix`.
+  - When `dmPolicy="pairing"`, approvals are written to the account-scoped pairing allowlist store under `~/.openclaw/credentials/` (`<channel>-allowFrom.json` for default account, `<channel>-<accountId>-allowFrom.json` for non-default accounts), merged with config allowlists.
 - **Group allowlist** (channel-specific): which groups/channels/guilds the bot will accept messages from at all.
   - Common patterns:
     - `channels.whatsapp.groups`, `channels.telegram.groups`, `channels.imessage.groups`: per-group defaults like `requireMention`; when set, it also acts as a group allowlist (include `"*"` to keep allow-all behavior).
@@ -977,13 +976,11 @@ Assume anything under `~/.openclaw/` (or `$OPENCLAW_STATE_DIR/`) may contain sec
 
 - `openclaw.json`: config may include tokens (gateway, remote gateway), provider settings, and allowlists.
 - `credentials/**`: channel credentials (example: WhatsApp creds), pairing allowlists, legacy OAuth imports.
-- `state/openclaw.sqlite#table/auth_profile_stores/<agentDir>`: API keys, token profiles, OAuth tokens, and optional `keyRef`/`tokenRef`.
+- `agents/<agentId>/agent/auth-profiles.json`: API keys, token profiles, OAuth tokens, and optional `keyRef`/`tokenRef`.
 - `agents/<agentId>/agent/codex-home/**`: per-agent Codex app-server account, config, skills, plugins, native thread state, and diagnostics.
 - `secrets.json` (optional): file-backed secret payload used by `file` SecretRef providers (`secrets.providers`).
 - `agents/<agentId>/agent/auth.json`: legacy compatibility file. Static `api_key` entries are scrubbed when discovered.
-- `state/openclaw.sqlite`: shared gateway state, plugin state, device/pairing tokens, push registration state, and the registry of per-agent databases.
-- `agents/<agentId>/agent/openclaw-agent.sqlite`: canonical session metadata, transcript events, VFS scratch state, tool artifacts, and agent-local runtime/cache data.
-- `agents/<agentId>/sessions/**`: legacy JSON/JSONL session imports or explicit debug/export artifacts only; old files can contain private messages and tool output until doctor migrates them.
+- `agents/<agentId>/sessions/**`: session transcripts (`*.jsonl`) + routing metadata (`sessions.json`) that can contain private messages and tool output.
 - bundled plugin packages: installed plugins (plus their `node_modules/`).
 - `sandboxes/**`: tool sandbox workspaces; can accumulate copies of files you read/write inside the sandbox.
 
@@ -1016,8 +1013,7 @@ Recommendations:
 - Keep log and transcript redaction on (`logging.redactSensitive: "tools"`; default).
 - Add custom patterns for your environment via `logging.redactPatterns` (tokens, hostnames, internal URLs).
 - When sharing diagnostics, prefer `openclaw status --all` (pasteable, secrets redacted) over raw logs.
-- Delete old session history through OpenClaw tooling and rotate log files if
-  you do not need long retention.
+- Prune old session transcripts and log files if you don't need long retention.
 
 Details: [Logging](/gateway/logging)
 
@@ -1292,21 +1288,19 @@ If your AI does something bad:
 
 1. Rotate Gateway auth (`gateway.auth.token` / `OPENCLAW_GATEWAY_PASSWORD`) and restart.
 2. Rotate remote client secrets (`gateway.remote.token` / `.password`) on any machine that can call the Gateway.
-3. Rotate provider/API credentials (WhatsApp creds, Slack/Discord tokens, model/API keys in SQLite auth-profile rows, and encrypted secrets payload values when used).
+3. Rotate provider/API credentials (WhatsApp creds, Slack/Discord tokens, model/API keys in `auth-profiles.json`, and encrypted secrets payload values when used).
 
 ### Audit
 
 1. Check Gateway logs: `/tmp/openclaw/openclaw-YYYY-MM-DD.log` (or `logging.file`).
-2. Review the relevant transcript rows in
-   `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`.
+2. Review the relevant transcript(s): `~/.openclaw/agents/<agentId>/sessions/*.jsonl`.
 3. Review recent config changes (anything that could have widened access: `gateway.bind`, `gateway.auth`, dm/group policies, `tools.elevated`, plugin changes).
 4. Re-run `openclaw security audit --deep` and confirm critical findings are resolved.
 
 ### Collect for a report
 
 - Timestamp, gateway host OS + OpenClaw version
-- The relevant SQLite-backed session transcript rows plus a short log tail
-  (after redacting)
+- The session transcript(s) + a short log tail (after redacting)
 - What the attacker sent + what the agent did
 - Whether the Gateway was exposed beyond loopback (LAN/Tailscale Funnel/Serve)
 

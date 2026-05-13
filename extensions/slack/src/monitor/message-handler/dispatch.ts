@@ -30,11 +30,13 @@ import {
 } from "openclaw/plugin-sdk/channel-streaming";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
+  type ChannelBotLoopProtectionFacts,
   type ChannelTurnRecordOptions,
   hasVisibleInboundReplyDispatch,
   runInboundReplyTurn,
 } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { resolveAgentOutboundIdentity } from "openclaw/plugin-sdk/outbound-runtime";
+import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
 import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-history";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
@@ -63,8 +65,9 @@ import {
   stopSlackStream,
 } from "../../streaming.js";
 import { resolveSlackThreadTargets } from "../../threading.js";
+import type { SlackMessageEvent } from "../../types.js";
 import { normalizeSlackAllowOwnerEntry } from "../allow-list.js";
-import { updateLastRoute } from "../config.runtime.js";
+import { resolveStorePath, updateLastRoute } from "../config.runtime.js";
 import { recordInboundSession } from "../conversation.runtime.js";
 import { escapeSlackMrkdwn } from "../mrkdwn.js";
 import {
@@ -105,6 +108,45 @@ const UNICODE_TO_SLACK: Record<string, string> = {
   "🛠️": "hammer_and_wrench",
   "💻": "computer",
 };
+
+function resolveSlackMessageTimestampMs(message: SlackMessageEvent): number | undefined {
+  const ts = message.event_ts ?? message.ts;
+  if (!ts) {
+    return undefined;
+  }
+  const parsed = Number(ts);
+  return Number.isFinite(parsed) ? Math.trunc(parsed * 1000) : undefined;
+}
+
+function resolveSlackBotLoopProtection(
+  prepared: PreparedSlackMessage,
+): ChannelBotLoopProtectionFacts | undefined {
+  const senderBotId = prepared.message.bot_id;
+  if (!senderBotId) {
+    return undefined;
+  }
+  const receiverBotId = prepared.ctx.botId || prepared.ctx.botUserId;
+  if (
+    !receiverBotId ||
+    senderBotId === prepared.ctx.botId ||
+    prepared.message.user === prepared.ctx.botUserId
+  ) {
+    return undefined;
+  }
+  return {
+    scopeId: prepared.route.accountId,
+    conversationId: prepared.message.channel,
+    senderId: senderBotId,
+    receiverId: receiverBotId,
+    config: mergePairLoopGuardConfig(
+      prepared.account.config.botLoopProtection,
+      prepared.channelConfig?.botLoopProtection,
+    ),
+    defaultsConfig: prepared.ctx.cfg.channels?.defaults?.botLoopProtection,
+    defaultEnabled: true,
+    nowMs: resolveSlackMessageTimestampMs(prepared.message),
+  };
+}
 
 function toSlackEmojiName(emoji: string): string {
   let trimmed = emoji.trim();
@@ -312,6 +354,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     : undefined;
 
   if (prepared.isDirectMessage) {
+    const sessionCfg = cfg.session;
+    const storePath = resolveStorePath(sessionCfg?.store, {
+      agentId: route.agentId,
+    });
     const pinnedMainDmOwner = resolvePinnedMainDmOwnerFromAllowlist({
       dmScope: cfg.session?.dmScope,
       allowFrom: ctx.allowFrom,
@@ -328,11 +374,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       );
     } else {
       await updateLastRoute({
+        storePath,
         sessionKey: resolveInboundLastRouteSessionKey({
           route,
           sessionKey: prepared.ctxPayload.SessionKey ?? route.sessionKey,
         }),
-        agentId: route.agentId,
         deliveryContext: {
           channel: "slack",
           to: `user:${message.user}`,
@@ -1122,11 +1168,12 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         resolveTurn: () => ({
           channel: "slack",
           accountId: route.accountId,
-          agentId: route.agentId,
           routeSessionKey: route.sessionKey,
+          storePath: prepared.turn.storePath,
           ctxPayload: prepared.ctxPayload,
           recordInboundSession,
           record: prepared.turn.record as ChannelTurnRecordOptions,
+          botLoopProtection: resolveSlackBotLoopProtection(prepared),
           onPreDispatchFailure: async () => {
             dispatchSettledBeforeStart = true;
             await settleReplyDispatcher({
@@ -1262,12 +1309,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         }),
       },
     });
-    if (!turnResult.dispatched) {
-      return;
+    if (turnResult.dispatched) {
+      const result = turnResult.dispatchResult;
+      queuedFinal = result.queuedFinal;
+      counts = result.counts;
     }
-    const result = turnResult.dispatchResult;
-    queuedFinal = result.queuedFinal;
-    counts = result.counts;
   } catch (err) {
     dispatchError = err;
   } finally {

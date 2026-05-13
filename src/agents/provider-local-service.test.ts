@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import type { Model } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
-import type { Model } from "./pi-ai-contract.js";
 import {
   attachModelProviderLocalService,
   ensureModelProviderLocalService,

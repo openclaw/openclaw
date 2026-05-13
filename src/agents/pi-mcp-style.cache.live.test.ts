@@ -1,3 +1,4 @@
+import type { AssistantMessage, Tool } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import {
@@ -10,7 +11,6 @@ import {
   logLiveCache,
   resolveLiveDirectModel,
 } from "./live-cache-test-support.js";
-import type { AssistantMessage, Tool } from "./pi-ai-contract.js";
 
 const describeCacheLive = LIVE_CACHE_TEST_ENABLED ? describe : describe.skip;
 const OPENAI_TIMEOUT_MS = 120_000;

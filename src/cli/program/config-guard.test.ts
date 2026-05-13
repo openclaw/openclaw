@@ -2,12 +2,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { formatCliCommand } from "../command-format.js";
 import { ensureConfigReady, __test__ } from "./config-guard.js";
 
-const runDoctorConfigPreflightMock = vi.hoisted(() => vi.fn());
+const loadAndMaybeMigrateDoctorConfigMock = vi.hoisted(() => vi.fn());
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const setRuntimeConfigSnapshotMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../commands/doctor-config-preflight.js", () => ({
-  runDoctorConfigPreflight: runDoctorConfigPreflightMock,
+  runDoctorConfigPreflight: loadAndMaybeMigrateDoctorConfigMock,
 }));
 
 vi.mock("../../config/config.js", () => ({
@@ -69,7 +69,7 @@ describe("ensureConfigReady", () => {
       ...overrides,
     };
     readConfigFileSnapshotMock.mockResolvedValue(snapshot);
-    runDoctorConfigPreflightMock.mockResolvedValue({
+    loadAndMaybeMigrateDoctorConfigMock.mockResolvedValue({
       snapshot,
       baseConfig: {},
     });
@@ -79,7 +79,7 @@ describe("ensureConfigReady", () => {
     vi.clearAllMocks();
     resetConfigGuardStateForTests();
     readConfigFileSnapshotMock.mockResolvedValue(makeSnapshot());
-    runDoctorConfigPreflightMock.mockImplementation(async () => ({
+    loadAndMaybeMigrateDoctorConfigMock.mockImplementation(async () => ({
       snapshot: makeSnapshot(),
       baseConfig: {},
     }));
@@ -87,25 +87,25 @@ describe("ensureConfigReady", () => {
 
   it.each([
     {
-      name: "skips config preflight for read-only fast path commands",
+      name: "skips doctor flow for read-only fast path commands",
       commandPath: ["status"],
-      expectedPreflightCalls: 0,
+      expectedDoctorCalls: 0,
     },
     {
-      name: "skips config preflight for update status",
+      name: "skips doctor flow for update status",
       commandPath: ["update", "status"],
-      expectedPreflightCalls: 0,
+      expectedDoctorCalls: 0,
     },
     {
-      name: "runs config preflight for commands that may mutate state",
+      name: "runs doctor flow for commands that may mutate state",
       commandPath: ["message"],
-      expectedPreflightCalls: 1,
+      expectedDoctorCalls: 1,
     },
-  ])("$name", async ({ commandPath, expectedPreflightCalls }) => {
+  ])("$name", async ({ commandPath, expectedDoctorCalls }) => {
     await runEnsureConfigReady(commandPath);
-    expect(runDoctorConfigPreflightMock).toHaveBeenCalledTimes(expectedPreflightCalls);
-    if (expectedPreflightCalls > 0) {
-      expect(runDoctorConfigPreflightMock).toHaveBeenCalledWith({
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledTimes(expectedDoctorCalls);
+    if (expectedDoctorCalls > 0) {
+      expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledWith({
         migrateState: false,
         migrateLegacyConfig: false,
         invalidConfigNote: false,
@@ -173,22 +173,22 @@ describe("ensureConfigReady", () => {
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
-  it("runs config preflight only once per module instance", async () => {
+  it("runs doctor migration flow only once per module instance", async () => {
     const runtimeA = makeRuntime();
     const runtimeB = makeRuntime();
 
     await ensureConfigReady({ runtime: runtimeA as never, commandPath: ["message"] });
     await ensureConfigReady({ runtime: runtimeB as never, commandPath: ["message"] });
-    expect(runDoctorConfigPreflightMock).toHaveBeenCalledTimes(1);
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledTimes(1);
   });
 
-  it("still runs config preflight when stdout suppression is enabled", async () => {
+  it("still runs doctor flow when stdout suppression is enabled", async () => {
     await runEnsureConfigReady(["message"], true);
-    expect(runDoctorConfigPreflightMock).toHaveBeenCalledTimes(1);
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledTimes(1);
   });
 
   it("prevents preflight stdout noise when suppression is enabled", async () => {
-    runDoctorConfigPreflightMock.mockImplementation(async () => {
+    loadAndMaybeMigrateDoctorConfigMock.mockImplementation(async () => {
       process.stdout.write("Doctor warnings\n");
       return {
         snapshot: makeSnapshot(),
@@ -202,7 +202,7 @@ describe("ensureConfigReady", () => {
   });
 
   it("allows preflight stdout noise when suppression is not enabled", async () => {
-    runDoctorConfigPreflightMock.mockImplementation(async () => {
+    loadAndMaybeMigrateDoctorConfigMock.mockImplementation(async () => {
       process.stdout.write("Doctor warnings\n");
       return {
         snapshot: makeSnapshot(),

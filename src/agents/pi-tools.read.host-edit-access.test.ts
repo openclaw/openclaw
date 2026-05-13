@@ -12,9 +12,9 @@ const mocks = vi.hoisted(() => ({
   operations: undefined as CapturedEditOperations | undefined,
 }));
 
-vi.mock("./pi-coding-agent-contract.js", async () => {
-  const actual = await vi.importActual<typeof import("./pi-coding-agent-contract.js")>(
-    "./pi-coding-agent-contract.js",
+vi.mock("@earendil-works/pi-coding-agent", async () => {
+  const actual = await vi.importActual<typeof import("@earendil-works/pi-coding-agent")>(
+    "@earendil-works/pi-coding-agent",
   );
   return {
     ...actual,

@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtim
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
   extractTranscriptIdentityFromSessionsMemoryHit,
-  loadCombinedSessionEntriesForGateway,
+  loadCombinedSessionStoreForGateway,
   resolveTranscriptStemToSessionKeys,
 } from "openclaw/plugin-sdk/session-transcript-hit";
 import {
@@ -31,7 +31,7 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
       })
     : null;
 
-  const { entries: combinedSessionEntries } = loadCombinedSessionEntriesForGateway(params.cfg);
+  const { store: combinedSessionStore } = loadCombinedSessionStoreForGateway(params.cfg);
 
   const next: MemorySearchResult[] = [];
   for (const hit of params.hits) {
@@ -47,8 +47,11 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
       continue;
     }
     const keys = resolveTranscriptStemToSessionKeys({
-      entries: combinedSessionEntries,
+      store: combinedSessionStore,
       stem: identity.stem,
+      ...(identity.archived && identity.ownerAgentId
+        ? { archivedOwnerAgentId: identity.ownerAgentId }
+        : {}),
     });
     if (keys.length === 0) {
       continue;

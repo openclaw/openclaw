@@ -1,3 +1,4 @@
+import { type Api, type Model } from "@earendil-works/pi-ai";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
@@ -11,7 +12,6 @@ import {
 } from "../../shared/string-coerce.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { normalizeModelRef } from "../model-selection.js";
-import { type Api, type Model } from "../pi-ai-contract.js";
 import { normalizeProviderId } from "../provider-id.js";
 import {
   ToolInputError,

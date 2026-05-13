@@ -1,5 +1,5 @@
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
-import type { AssistantMessage } from "./pi-ai-contract.js";
 import { createSubscribedSessionHarness } from "./pi-embedded-subscribe.e2e-harness.js";
 
 type AssistantMessageWithPhase = AssistantMessage & {

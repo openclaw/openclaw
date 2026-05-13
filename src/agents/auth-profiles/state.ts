@@ -1,21 +1,9 @@
+import fs from "node:fs";
+import { loadJsonFile, saveJsonFile } from "../../infra/json-file.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import type { OpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
-import { resolveAuthProfileStoreKey } from "./paths.js";
-import {
-  deleteAuthProfileStatePayload,
-  deleteAuthProfileStatePayloadInTransaction,
-  readAuthProfileStatePayloadResult,
-  readAuthProfileStatePayloadResultFromDatabase,
-  writeAuthProfileStatePayload as writeAuthProfileStatePayloadToSqlite,
-  writeAuthProfileStatePayloadInTransaction,
-  type AuthProfilePayloadValue,
-} from "./sqlite-storage.js";
+import { resolveAuthStatePath } from "./paths.js";
 import type { AuthProfileState, AuthProfileStateStore, ProfileUsageStats } from "./types.js";
-
-export function authProfileStateKey(agentDir?: string): string {
-  return resolveAuthProfileStoreKey(agentDir);
-}
 
 function normalizeAuthProfileOrder(raw: unknown): AuthProfileState["order"] {
   if (!raw || typeof raw !== "object") {
@@ -78,40 +66,11 @@ export function mergeAuthProfileState(
   };
 }
 
-function authProfileStateToPayloadValue(state: AuthProfileStateStore): AuthProfilePayloadValue {
-  return state as AuthProfilePayloadValue;
-}
-
-function writeAuthProfileStatePayload(key: string, payload: AuthProfileStateStore): void {
-  writeAuthProfileStatePayloadToSqlite(key, authProfileStateToPayloadValue(payload));
-}
-
 export function loadPersistedAuthProfileState(agentDir?: string): AuthProfileState {
-  const key = authProfileStateKey(agentDir);
-  const sqliteState = readAuthProfileStatePayloadResult(key);
-  if (sqliteState.exists && sqliteState.value !== undefined) {
-    return coerceAuthProfileState(sqliteState.value);
-  }
-
-  return {};
+  return coerceAuthProfileState(loadJsonFile(resolveAuthStatePath(agentDir)));
 }
 
-export function loadPersistedAuthProfileStateFromDatabase(
-  database: OpenClawStateDatabase,
-  agentDir?: string,
-): AuthProfileState {
-  const key = authProfileStateKey(agentDir);
-  const sqliteState = readAuthProfileStatePayloadResultFromDatabase(database, key);
-  if (sqliteState.exists && sqliteState.value !== undefined) {
-    return coerceAuthProfileState(sqliteState.value);
-  }
-
-  return {};
-}
-
-export function buildPersistedAuthProfileState(
-  store: AuthProfileState,
-): AuthProfileStateStore | null {
+function buildPersistedAuthProfileState(store: AuthProfileState): AuthProfileStateStore | null {
   const state = coerceAuthProfileState(store);
   if (!state.order && !state.lastGood && !state.usageStats) {
     return null;
@@ -128,45 +87,18 @@ export function savePersistedAuthProfileState(
   store: AuthProfileState,
   agentDir?: string,
 ): AuthProfileStateStore | null {
-  return savePersistedAuthProfileStatePayload({
-    store,
-    key: authProfileStateKey(agentDir),
-    write: (key, payload) => writeAuthProfileStatePayload(key, payload),
-    delete: (key) => deleteAuthProfileStatePayload(key),
-  });
-}
-
-export function savePersistedAuthProfileStateInTransaction(
-  database: OpenClawStateDatabase,
-  store: AuthProfileState,
-  agentDir?: string,
-  updatedAt: number = Date.now(),
-): AuthProfileStateStore | null {
-  return savePersistedAuthProfileStatePayload({
-    store,
-    key: authProfileStateKey(agentDir),
-    write: (key, payload) =>
-      writeAuthProfileStatePayloadInTransaction(
-        database,
-        key,
-        authProfileStateToPayloadValue(payload),
-        updatedAt,
-      ),
-    delete: (key) => deleteAuthProfileStatePayloadInTransaction(database, key),
-  });
-}
-
-function savePersistedAuthProfileStatePayload(params: {
-  store: AuthProfileState;
-  key: string;
-  write: (key: string, payload: AuthProfileStateStore) => void;
-  delete: (key: string) => void;
-}): AuthProfileStateStore | null {
-  const payload = buildPersistedAuthProfileState(params.store);
+  const payload = buildPersistedAuthProfileState(store);
+  const statePath = resolveAuthStatePath(agentDir);
   if (!payload) {
-    params.delete(params.key);
+    try {
+      fs.unlinkSync(statePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+        throw error;
+      }
+    }
     return null;
   }
-  params.write(params.key, payload);
+  saveJsonFile(statePath, payload);
   return payload;
 }

@@ -1,8 +1,7 @@
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export type SessionTranscriptUpdate = {
-  agentId?: string;
-  sessionId?: string;
+  sessionFile: string;
   sessionKey?: string;
   message?: unknown;
   messageId?: string;
@@ -19,24 +18,25 @@ export function onSessionTranscriptUpdate(listener: SessionTranscriptListener): 
   };
 }
 
-export function emitSessionTranscriptUpdate(update: SessionTranscriptUpdate): void {
-  const normalized = {
-    agentId: update.agentId,
-    sessionId: update.sessionId,
-    sessionKey: update.sessionKey,
-    message: update.message,
-    messageId: update.messageId,
-  };
-  const agentId = normalizeOptionalString(normalized.agentId);
-  const sessionId = normalizeOptionalString(normalized.sessionId);
-  const sessionKey = normalizeOptionalString(normalized.sessionKey);
-  if (!sessionId && !sessionKey) {
+export function emitSessionTranscriptUpdate(update: string | SessionTranscriptUpdate): void {
+  const normalized =
+    typeof update === "string"
+      ? { sessionFile: update }
+      : {
+          sessionFile: update.sessionFile,
+          sessionKey: update.sessionKey,
+          message: update.message,
+          messageId: update.messageId,
+        };
+  const trimmed = normalizeOptionalString(normalized.sessionFile);
+  if (!trimmed) {
     return;
   }
   const nextUpdate: SessionTranscriptUpdate = {
-    ...(agentId ? { agentId } : {}),
-    ...(sessionId ? { sessionId } : {}),
-    ...(sessionKey ? { sessionKey } : {}),
+    sessionFile: trimmed,
+    ...(normalizeOptionalString(normalized.sessionKey)
+      ? { sessionKey: normalizeOptionalString(normalized.sessionKey) }
+      : {}),
     ...(normalized.message !== undefined ? { message: normalized.message } : {}),
     ...(normalizeOptionalString(normalized.messageId)
       ? { messageId: normalizeOptionalString(normalized.messageId) }

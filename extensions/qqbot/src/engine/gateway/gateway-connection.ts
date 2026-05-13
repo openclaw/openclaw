@@ -63,7 +63,7 @@ export class GatewayConnection {
   }
 
   async start(): Promise<void> {
-    await this.restoreSession();
+    this.restoreSession();
     this.registerAbortHandler();
     await this.connect();
     return new Promise<void>((resolve) => {
@@ -71,11 +71,9 @@ export class GatewayConnection {
     });
   }
 
-  // ============ Session persistence ============
-
-  private async restoreSession(): Promise<void> {
+  private restoreSession(): void {
     const { account, log } = this.ctx;
-    const saved = await loadSession(account.accountId, account.appId);
+    const saved = loadSession(account.accountId, account.appId);
     if (saved) {
       this.sessionId = saved.sessionId;
       this.lastSeq = saved.lastSeq;
@@ -109,7 +107,7 @@ export class GatewayConnection {
       }
       this.cleanup();
       stopBackgroundTokenRefresh(account.appId);
-      void flushKnownUsers();
+      flushKnownUsers();
       flushRefIndex();
     });
   }

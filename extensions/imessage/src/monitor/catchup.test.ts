@@ -1,10 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import {
-  createPluginStateSyncKeyedStore,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   capFailureRetriesMap,
@@ -20,13 +16,6 @@ import {
 let tempStateDir: string;
 let priorStateDir: string | undefined;
 
-function clearCatchupCursorStore(): void {
-  createPluginStateSyncKeyedStore("imessage", {
-    namespace: "catchup-cursors",
-    maxEntries: 256,
-  }).clear();
-}
-
 beforeAll(() => {
   tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-catchup-"));
   priorStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -34,7 +23,6 @@ beforeAll(() => {
 });
 
 afterAll(() => {
-  resetPluginStateStoreForTests();
   if (priorStateDir === undefined) {
     delete process.env.OPENCLAW_STATE_DIR;
   } else {
@@ -44,8 +32,8 @@ afterAll(() => {
 });
 
 beforeEach(() => {
-  resetPluginStateStoreForTests();
-  clearCatchupCursorStore();
+  // Wipe per-account cursor state between tests so each test starts clean.
+  fs.rmSync(path.join(tempStateDir, "imessage", "catchup"), { recursive: true, force: true });
 });
 
 describe("resolveCatchupConfig", () => {
@@ -103,7 +91,6 @@ describe("loadIMessageCatchupCursor / saveIMessageCatchupCursor", () => {
     expect(cursor.lastSeenMs).toBe(1_700_000_000_000);
     expect(cursor.lastSeenRowid).toBe(42);
     expect(cursor.failureRetries).toBeUndefined();
-    expect(fs.existsSync(path.join(tempStateDir, "imessage", "catchup"))).toBe(false);
   });
 
   it("round-trips a cursor with failureRetries", async () => {

@@ -33,9 +33,9 @@ describe("matrix qa e2ee client storage", () => {
       ),
     );
     expect(first.cryptoDatabasePrefix).toBe(second.cryptoDatabasePrefix);
-    expect(first.recoveryKeyStorageKey).toBe(first.accountDir);
-    expect(first.syncStoreRootDir).toBe(first.accountDir);
-    expect(second.syncStoreRootDir).toBe(first.syncStoreRootDir);
+    expect(first.recoveryKeyPath).toBe(path.join(first.accountDir, "recovery-key.json"));
+    expect(first.storagePath).toBe(path.join(first.accountDir, "sync-store.json"));
+    expect(second.storagePath).toBe(first.storagePath);
   });
 
   it("records late-decrypted payload updates for an existing event id", () => {

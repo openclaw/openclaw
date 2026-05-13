@@ -335,12 +335,14 @@ describe("handleCommands reset hooks", () => {
     params.sessionEntry = {
       sessionId: "session-1",
       updatedAt: Date.now(),
+      cliSessionIds: { "claude-cli": "cli-session-1" },
       cliSessionBindings: {
         "claude-cli": {
           sessionId: "cli-session-1",
           extraSystemPromptHash: "prompt-hash",
         },
       },
+      claudeCliSessionId: "cli-session-1",
     } as HandleCommandsParams["sessionEntry"];
 
     const result = await maybeHandleResetCommand(params);
@@ -353,7 +355,9 @@ describe("handleCommands reset hooks", () => {
     expect(params.command.resetHookTriggered).toBe(true);
     expect(params.command.softResetTriggered).toBe(true);
     expect(params.command.softResetTail).toBe("");
+    expect(params.sessionEntry?.cliSessionIds).toBeUndefined();
     expect(params.sessionEntry?.cliSessionBindings).toBeUndefined();
+    expect(params.sessionEntry?.claudeCliSessionId).toBeUndefined();
     expect(clearBootstrapSnapshotSpy).toHaveBeenCalledWith("agent:main:main");
   });
 
@@ -392,31 +396,39 @@ describe("handleCommands reset hooks", () => {
     params.sessionEntry = {
       sessionId: "session-direct",
       updatedAt: 1,
+      cliSessionIds: { "claude-cli": "cli-session-direct" },
       cliSessionBindings: {
         "claude-cli": {
           sessionId: "cli-session-direct",
           extraSystemPromptHash: "prompt-hash-direct",
         },
       },
+      claudeCliSessionId: "cli-session-direct",
     } as HandleCommandsParams["sessionEntry"];
     params.sessionStore = {
       [params.sessionKey]: {
         sessionId: "session-store",
         updatedAt: 2,
+        cliSessionIds: { "claude-cli": "cli-session-store" },
         cliSessionBindings: {
           "claude-cli": {
             sessionId: "cli-session-store",
             extraSystemPromptHash: "prompt-hash-store",
           },
         },
+        claudeCliSessionId: "cli-session-store",
       },
     } as Record<string, NonNullable<HandleCommandsParams["sessionEntry"]>>;
 
     const result = await maybeHandleResetCommand(params);
 
     expect(result).toBeNull();
+    expect(params.sessionEntry?.cliSessionIds).toBeUndefined();
     expect(params.sessionEntry?.cliSessionBindings).toBeUndefined();
+    expect(params.sessionEntry?.claudeCliSessionId).toBeUndefined();
+    expect(params.sessionStore?.[params.sessionKey]?.cliSessionIds).toBeUndefined();
     expect(params.sessionStore?.[params.sessionKey]?.cliSessionBindings).toBeUndefined();
+    expect(params.sessionStore?.[params.sessionKey]?.claudeCliSessionId).toBeUndefined();
   });
 
   it("rejects soft reset for bound ACP sessions", async () => {

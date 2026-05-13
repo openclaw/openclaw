@@ -487,12 +487,14 @@ export function createTelegramBotCore(
     const sessionKey =
       params.sessionKey ??
       `agent:${agentId}:telegram:group:${buildTelegramGroupPeerId(params.chatId, params.messageThreadId)}`;
+    const storePath = telegramDeps.resolveStorePath(cfg.session?.store, { agentId });
     try {
-      const getSessionEntry = telegramDeps.getSessionEntry;
-      if (!getSessionEntry) {
+      const loadSessionStore = telegramDeps.loadSessionStore;
+      if (!loadSessionStore) {
         return undefined;
       }
-      const entry = getSessionEntry({ agentId, sessionKey });
+      const store = loadSessionStore(storePath);
+      const entry = store[sessionKey];
       if (entry?.groupActivation === "always") {
         return false;
       }

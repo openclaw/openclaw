@@ -2,13 +2,19 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { listCrestodianAuditEntriesForTests } from "./audit.js";
 import { createCrestodianTestRuntime } from "./crestodian.test-helpers.js";
 import { executeCrestodianOperation, parseCrestodianOperation } from "./operations.js";
 
 type TestConfig = Record<string, unknown>;
+
+function parseLastJsonLine(raw: string): unknown {
+  const lastLine = raw.trim().split("\n").at(-1);
+  if (!lastLine) {
+    throw new Error("Expected audit log to contain at least one JSON line");
+  }
+  return JSON.parse(lastLine) as unknown;
+}
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null) {
@@ -183,12 +189,6 @@ vi.mock("../config/model-input.js", () => ({
     typeof model === "string" ? model : model?.primary,
 }));
 
-async function readLatestCrestodianAuditEntryForTests() {
-  const entries = await listCrestodianAuditEntriesForTests();
-  expect(entries.length).toBeGreaterThan(0);
-  return entries.at(-1)!.value;
-}
-
 describe("parseCrestodianOperation", () => {
   beforeEach(() => {
     mockConfig.reset();
@@ -197,7 +197,6 @@ describe("parseCrestodianOperation", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
-    resetPluginStateStoreForTests();
   });
 
   it("parses typed model writes", () => {
@@ -341,7 +340,8 @@ describe("parseCrestodianOperation", () => {
       cliOptions: {},
     });
     expect(lines.join("\n")).toContain("[crestodian] done: config.set");
-    const audit = await readLatestCrestodianAuditEntryForTests();
+    const auditPath = path.join(tempDir, "audit", "crestodian.jsonl");
+    const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim());
     expectAuditRecord(
       audit,
       { operation: "config.set", summary: "Set config gateway.port" },
@@ -384,7 +384,8 @@ describe("parseCrestodianOperation", () => {
       },
     });
     expect(lines.join("\n")).toContain("[crestodian] done: config.setRef");
-    const audit = await readLatestCrestodianAuditEntryForTests();
+    const auditPath = path.join(tempDir, "audit", "crestodian.jsonl");
+    const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim());
     expectAuditRecord(
       audit,
       {
@@ -464,7 +465,8 @@ describe("parseCrestodianOperation", () => {
     expect(installCall[0]).toBe("clawhub:openclaw-demo");
     expectRuntimeArg(installCall[1]);
     expect(lines.join("\n")).toContain("[crestodian] done: plugin.install");
-    const audit = await readLatestCrestodianAuditEntryForTests();
+    const auditPath = path.join(tempDir, "audit", "crestodian.jsonl");
+    const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim());
     expectAuditRecord(
       audit,
       {
@@ -509,7 +511,8 @@ describe("parseCrestodianOperation", () => {
     expect(uninstallCall[0]).toBe("openclaw-demo");
     expectRuntimeArg(uninstallCall[1]);
     expect(lines.join("\n")).toContain("[crestodian] done: plugin.uninstall");
-    const audit = await readLatestCrestodianAuditEntryForTests();
+    const auditPath = path.join(tempDir, "audit", "crestodian.jsonl");
+    const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim());
     expectAuditRecord(
       audit,
       {
@@ -552,7 +555,8 @@ describe("parseCrestodianOperation", () => {
       workspace: "/tmp/work",
       model: { primary: "openai/gpt-5.5" },
     });
-    const audit = await readLatestCrestodianAuditEntryForTests();
+    const auditPath = path.join(tempDir, "audit", "crestodian.jsonl");
+    const audit = JSON.parse((await fs.readFile(auditPath, "utf8")).trim());
     expectAuditRecord(
       audit,
       {
@@ -596,7 +600,8 @@ describe("parseCrestodianOperation", () => {
       yes: true,
     });
     expect(lines.join("\n")).toContain("[crestodian] done: doctor.fix");
-    const audit = await readLatestCrestodianAuditEntryForTests();
+    const auditPath = path.join(tempDir, "audit", "crestodian.jsonl");
+    const audit = parseLastJsonLine(await fs.readFile(auditPath, "utf8"));
     expectAuditRecord(
       audit,
       { operation: "doctor.fix", summary: "Ran doctor repairs" },

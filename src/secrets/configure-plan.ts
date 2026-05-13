@@ -18,7 +18,7 @@ export type ConfigureCandidate = {
   path: string;
   pathSegments: string[];
   label: string;
-  store: "openclaw.json" | "auth-profile-store";
+  configFile: "openclaw.json" | "auth-profiles.json";
   expectedResolvedValue: "string" | "string-or-object";
   existingRef?: SecretRef;
   isDerived?: boolean;
@@ -49,7 +49,7 @@ export function buildConfigureCandidates(config: OpenClawConfig): ConfigureCandi
 }
 
 function configureCandidateSortKey(candidate: ConfigureCandidate): string {
-  if (candidate.store === "auth-profile-store") {
+  if (candidate.configFile === "auth-profiles.json") {
     const agentId = candidate.agentId ?? "";
     return `auth-profiles:${agentId}:${candidate.path}`;
   }
@@ -103,7 +103,7 @@ export function buildConfigureCandidatesForScope(params: {
           path: entry.path,
           pathSegments: [...entry.pathSegments],
           label: entry.path,
-          store: `openclaw.json` as const,
+          configFile: `openclaw.json` as const,
           expectedResolvedValue: entry.entry.expectedResolvedValue,
         },
         resolved.ref ? { existingRef: resolved.ref } : {},
@@ -138,7 +138,7 @@ export function buildConfigureCandidatesForScope(params: {
                 path: entry.path,
                 pathSegments: [...entry.pathSegments],
                 label: `${entry.path} (auth profile, agent ${authProfiles.agentId})`,
-                store: `auth-profile-store` as const,
+                configFile: `auth-profiles.json` as const,
                 expectedResolvedValue: entry.entry.expectedResolvedValue,
               },
               resolved.ref ? { existingRef: resolved.ref } : {},
@@ -261,6 +261,7 @@ export function buildSecretsConfigurePlan(params: {
     options: {
       scrubEnv: true,
       scrubAuthProfilesForProviderTargets: true,
+      scrubLegacyAuthJson: true,
     },
   };
 }

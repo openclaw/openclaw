@@ -1,4 +1,4 @@
-import { patchSessionEntry, type SessionEntry } from "../config/sessions.js";
+import { updateSessionStoreEntry, type SessionEntry } from "../config/sessions.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { loadSessionEntry } from "./session-utils.js";
 import type { GatewaySessionRow, SessionRunStatus } from "./session-utils.types.js";
@@ -157,10 +157,9 @@ export async function persistGatewaySessionLifecycleEvent(params: {
     return;
   }
 
-  await patchSessionEntry({
-    agentId: sessionEntry.agentId,
+  await updateSessionStoreEntry({
+    storePath: sessionEntry.storePath,
     sessionKey: sessionEntry.canonicalKey,
-    fallbackEntry: sessionEntry.entry,
     update: async (entry) =>
       derivePersistedSessionLifecyclePatch({
         entry,

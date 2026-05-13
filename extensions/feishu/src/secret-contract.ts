@@ -13,7 +13,7 @@ export const secretTargetRegistryEntries: SecretTargetRegistryEntry[] = [
   {
     id: "channels.feishu.accounts.*.appSecret",
     targetType: "channels.feishu.accounts.*.appSecret",
-    store: "openclaw.json",
+    configFile: "openclaw.json",
     pathPattern: "channels.feishu.accounts.*.appSecret",
     secretShape: "secret_input",
     expectedResolvedValue: "string",
@@ -24,7 +24,7 @@ export const secretTargetRegistryEntries: SecretTargetRegistryEntry[] = [
   {
     id: "channels.feishu.accounts.*.encryptKey",
     targetType: "channels.feishu.accounts.*.encryptKey",
-    store: "openclaw.json",
+    configFile: "openclaw.json",
     pathPattern: "channels.feishu.accounts.*.encryptKey",
     secretShape: "secret_input",
     expectedResolvedValue: "string",
@@ -35,7 +35,7 @@ export const secretTargetRegistryEntries: SecretTargetRegistryEntry[] = [
   {
     id: "channels.feishu.accounts.*.verificationToken",
     targetType: "channels.feishu.accounts.*.verificationToken",
-    store: "openclaw.json",
+    configFile: "openclaw.json",
     pathPattern: "channels.feishu.accounts.*.verificationToken",
     secretShape: "secret_input",
     expectedResolvedValue: "string",
@@ -46,7 +46,7 @@ export const secretTargetRegistryEntries: SecretTargetRegistryEntry[] = [
   {
     id: "channels.feishu.appSecret",
     targetType: "channels.feishu.appSecret",
-    store: "openclaw.json",
+    configFile: "openclaw.json",
     pathPattern: "channels.feishu.appSecret",
     secretShape: "secret_input",
     expectedResolvedValue: "string",
@@ -57,7 +57,7 @@ export const secretTargetRegistryEntries: SecretTargetRegistryEntry[] = [
   {
     id: "channels.feishu.encryptKey",
     targetType: "channels.feishu.encryptKey",
-    store: "openclaw.json",
+    configFile: "openclaw.json",
     pathPattern: "channels.feishu.encryptKey",
     secretShape: "secret_input",
     expectedResolvedValue: "string",
@@ -68,7 +68,7 @@ export const secretTargetRegistryEntries: SecretTargetRegistryEntry[] = [
   {
     id: "channels.feishu.verificationToken",
     targetType: "channels.feishu.verificationToken",
-    store: "openclaw.json",
+    configFile: "openclaw.json",
     pathPattern: "channels.feishu.verificationToken",
     secretShape: "secret_input",
     expectedResolvedValue: "string",

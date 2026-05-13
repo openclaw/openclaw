@@ -1,18 +1,25 @@
-import type { DatabaseSync } from "node:sqlite";
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { ContentBlock, SessionUpdate } from "@agentclientprotocol/sdk";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabaseOptions,
-} from "../state/openclaw-state-db.js";
+import { resolveStateDir } from "../config/paths.js";
+import { withFileLock } from "../infra/file-lock.js";
+import { readJsonFile, writeTextAtomic } from "../infra/json-files.js";
 import { isRecord } from "../utils.js";
 
-export const ACP_EVENT_LEDGER_VERSION = 1;
+const LEDGER_VERSION = 1;
 const DEFAULT_MAX_SESSIONS = 200;
 const DEFAULT_MAX_EVENTS_PER_SESSION = 5_000;
 const DEFAULT_MAX_SERIALIZED_BYTES = 16 * 1024 * 1024;
+const FILE_LEDGER_LOCK_OPTIONS = {
+  retries: {
+    retries: 8,
+    factor: 2,
+    minTimeout: 50,
+    maxTimeout: 5_000,
+    randomize: true,
+  },
+  stale: 15_000,
+} as const;
 
 export type AcpEventLedgerEntry = {
   seq: number;
@@ -72,19 +79,12 @@ type LedgerStore = {
   sessions: Record<string, LedgerSession>;
 };
 
-export type AcpEventLedgerSnapshot = LedgerStore;
-
 type LedgerOptions = {
   maxSessions?: number;
   maxEventsPerSession?: number;
   maxSerializedBytes?: number;
   now?: () => number;
 };
-
-type AcpEventLedgerDatabase = Pick<
-  OpenClawStateKyselyDatabase,
-  "acp_replay_events" | "acp_replay_sessions"
->;
 
 type MutableLedgerState = {
   store: LedgerStore;
@@ -96,7 +96,7 @@ type MutableLedgerState = {
 
 function createEmptyStore(): LedgerStore {
   return {
-    version: ACP_EVENT_LEDGER_VERSION,
+    version: LEDGER_VERSION,
     sessions: {},
   };
 }
@@ -207,7 +207,7 @@ function normalizeSession(raw: unknown): LedgerSession | undefined {
 }
 
 function normalizeStore(raw: unknown): LedgerStore {
-  if (!isRecord(raw) || raw.version !== ACP_EVENT_LEDGER_VERSION || !isRecord(raw.sessions)) {
+  if (!isRecord(raw) || raw.version !== LEDGER_VERSION || !isRecord(raw.sessions)) {
     return createEmptyStore();
   }
   const sessions: Record<string, LedgerSession> = {};
@@ -218,7 +218,7 @@ function normalizeStore(raw: unknown): LedgerStore {
     }
     sessions[sessionId] = session;
   }
-  return { version: ACP_EVENT_LEDGER_VERSION, sessions };
+  return { version: LEDGER_VERSION, sessions };
 }
 
 function getOrCreateSession(
@@ -429,215 +429,57 @@ export function createInMemoryAcpEventLedger(options: LedgerOptions = {}): AcpEv
   });
 }
 
-function dbOptionsFromParams(
-  params: OpenClawStateDatabaseOptions & LedgerOptions,
-): OpenClawStateDatabaseOptions {
-  return {
-    ...(params.env ? { env: params.env } : {}),
-    ...(params.path ? { path: params.path } : {}),
-  };
+export function resolveDefaultAcpEventLedgerPath(env: NodeJS.ProcessEnv = process.env): string {
+  return path.join(resolveStateDir(env), "acp", "event-ledger.json");
 }
 
-function loadStoreFromSqliteDb(database: DatabaseSync): LedgerStore {
-  const db = getNodeSqliteKysely<AcpEventLedgerDatabase>(database);
-  const sessionRows = executeSqliteQuerySync(
-    database,
-    db
-      .selectFrom("acp_replay_sessions")
-      .select([
-        "session_id",
-        "session_key",
-        "cwd",
-        "complete",
-        "created_at",
-        "updated_at",
-        "next_seq",
-      ])
-      .orderBy("updated_at", "desc")
-      .orderBy("session_id", "asc"),
-  ).rows;
-  if (sessionRows.length === 0) {
-    return createEmptyStore();
-  }
-
-  const sessions: Record<string, LedgerSession> = {};
-  for (const row of sessionRows) {
-    sessions[row.session_id] = {
-      sessionId: row.session_id,
-      sessionKey: row.session_key,
-      cwd: row.cwd,
-      complete: row.complete === 1,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-      nextSeq: row.next_seq,
-      events: [],
-    };
-  }
-
-  const eventRows = executeSqliteQuerySync(
-    database,
-    db
-      .selectFrom("acp_replay_events")
-      .select(["session_id", "seq", "at", "session_key", "run_id", "update_json"])
-      .orderBy("session_id", "asc")
-      .orderBy("seq", "asc"),
-  ).rows;
-  for (const row of eventRows) {
-    const session = sessions[row.session_id];
-    if (!session) {
-      continue;
-    }
-    try {
-      session.events.push({
-        seq: row.seq,
-        at: row.at,
-        sessionId: row.session_id,
-        sessionKey: row.session_key,
-        ...(row.run_id ? { runId: row.run_id } : {}),
-        update: JSON.parse(row.update_json) as SessionUpdate,
-      });
-    } catch {
-      session.complete = false;
-    }
-  }
-
-  return { version: ACP_EVENT_LEDGER_VERSION, sessions };
-}
-
-function writeStoreToSqliteDb(
-  database: DatabaseSync,
-  store: LedgerStore,
-  updatedAt: number,
-  options: { pruneMissing?: boolean } = {},
-): void {
-  const db = getNodeSqliteKysely<AcpEventLedgerDatabase>(database);
-  if (options.pruneMissing !== false) {
-    const existing = executeSqliteQuerySync(
-      database,
-      db.selectFrom("acp_replay_sessions").select("session_id"),
-    ).rows;
-    const retained = new Set(Object.keys(store.sessions));
-    for (const row of existing) {
-      if (!retained.has(row.session_id)) {
-        executeSqliteQuerySync(
-          database,
-          db.deleteFrom("acp_replay_sessions").where("session_id", "=", row.session_id),
-        );
-      }
-    }
-  }
-  for (const session of Object.values(store.sessions)) {
-    executeSqliteQuerySync(
-      database,
-      db
-        .insertInto("acp_replay_sessions")
-        .values({
-          session_id: session.sessionId,
-          session_key: session.sessionKey,
-          cwd: session.cwd,
-          complete: session.complete ? 1 : 0,
-          created_at: session.createdAt,
-          updated_at: session.updatedAt || updatedAt,
-          next_seq: session.nextSeq,
-        })
-        .onConflict((conflict) =>
-          conflict.column("session_id").doUpdateSet({
-            session_key: session.sessionKey,
-            cwd: session.cwd,
-            complete: session.complete ? 1 : 0,
-            created_at: session.createdAt,
-            updated_at: session.updatedAt || updatedAt,
-            next_seq: session.nextSeq,
-          }),
-        ),
-    );
-    executeSqliteQuerySync(
-      database,
-      db.deleteFrom("acp_replay_events").where("session_id", "=", session.sessionId),
-    );
-    if (session.events.length > 0) {
-      executeSqliteQuerySync(
-        database,
-        db.insertInto("acp_replay_events").values(
-          session.events.map((event) => ({
-            session_id: event.sessionId,
-            seq: event.seq,
-            at: event.at,
-            session_key: event.sessionKey,
-            run_id: event.runId ?? null,
-            update_json: JSON.stringify(event.update),
-          })),
-        ),
-      );
-    }
-  }
-  executeSqliteQuerySync(
-    database,
-    db
-      .deleteFrom("acp_replay_events")
-      .where((eb) =>
-        eb.not(
-          eb.exists(
-            eb
-              .selectFrom("acp_replay_sessions")
-              .select("session_id")
-              .whereRef(
-                "acp_replay_sessions.session_id",
-                "=",
-                eb.ref("acp_replay_events.session_id"),
-              ),
-          ),
-        ),
-      ),
-  );
-}
-
-function writeStoreToSqlite(
-  store: LedgerStore,
-  options: OpenClawStateDatabaseOptions & { now?: () => number } = {},
-): void {
-  runOpenClawStateWriteTransaction((database) => {
-    writeStoreToSqliteDb(database.db, store, options.now?.() ?? Date.now(), {
-      pruneMissing: false,
-    });
-  }, options);
-}
-
-export function normalizeAcpEventLedgerSnapshot(raw: unknown): AcpEventLedgerSnapshot {
-  return normalizeStore(raw);
-}
-
-export function writeAcpEventLedgerSnapshotToSqlite(
-  store: AcpEventLedgerSnapshot,
-  options: OpenClawStateDatabaseOptions & { now?: () => number } = {},
-): void {
-  writeStoreToSqlite(store, {
-    ...dbOptionsFromParams(options),
-    ...(options.now ? { now: options.now } : {}),
-  });
-}
-
-export function createSqliteAcpEventLedger(
-  params: OpenClawStateDatabaseOptions & LedgerOptions = {},
+export function createFileAcpEventLedger(
+  params: { filePath: string } & LedgerOptions,
 ): AcpEventLedger {
   const normalized = normalizeLedgerOptions(params);
   const state: MutableLedgerState = {
     store: createEmptyStore(),
     ...normalized,
   };
-  const dbOptions = dbOptionsFromParams(params);
+  let operation = Promise.resolve();
+
+  const load = async () => {
+    state.store = normalizeStore(await readJsonFile(params.filePath));
+  };
+  const ensureParentDir = async () => {
+    await fs.mkdir(path.dirname(params.filePath), { recursive: true, mode: 0o700 });
+  };
+
+  const enqueue = async <T>(fn: () => Promise<T>): Promise<T> => {
+    const task = operation.then(fn, fn);
+    operation = task.then(
+      () => {},
+      () => {},
+    );
+    return task;
+  };
 
   return createLedgerApi({
     state,
     mutate: async (fn) =>
-      runOpenClawStateWriteTransaction((database) => {
-        state.store = loadStoreFromSqliteDb(database.db);
-        fn();
-        writeStoreToSqliteDb(database.db, state.store, normalized.now());
-      }, dbOptions),
-    read: async (fn) => {
-      state.store = loadStoreFromSqliteDb(openOpenClawStateDatabase(dbOptions).db);
-      return fn();
-    },
+      enqueue(async () => {
+        await ensureParentDir();
+        await withFileLock(params.filePath, FILE_LEDGER_LOCK_OPTIONS, async () => {
+          await load();
+          fn();
+          await writeTextAtomic(params.filePath, serializeLedgerStore(state.store), {
+            mode: 0o600,
+            dirMode: 0o700,
+          });
+        });
+      }),
+    read: async (fn) =>
+      enqueue(async () => {
+        await ensureParentDir();
+        return await withFileLock(params.filePath, FILE_LEDGER_LOCK_OPTIONS, async () => {
+          await load();
+          return fn();
+        });
+      }),
   });
 }

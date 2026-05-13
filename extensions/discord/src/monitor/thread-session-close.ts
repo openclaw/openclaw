@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { listSessionEntries, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { resolveStorePath, updateSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 /**
@@ -16,7 +16,7 @@ export async function closeDiscordThreadSessions(params: {
   accountId: string;
   threadId: string;
 }): Promise<number> {
-  const { accountId, threadId } = params;
+  const { cfg, accountId, threadId } = params;
 
   const normalizedThreadId = normalizeOptionalLowercaseString(threadId) ?? "";
   if (!normalizedThreadId) {
@@ -37,24 +37,27 @@ export async function closeDiscordThreadSessions(params: {
     return segmentRe.test(key);
   }
 
+  // Resolve the store file. We pass `accountId` as `agentId` here to mirror
+  // how other Discord subsystems resolve their per-account sessions stores.
+  const storePath = resolveStorePath(cfg.session?.store, { agentId: accountId });
+
   let resetCount = 0;
 
-  for (const { sessionKey: key, entry } of listSessionEntries({ agentId: accountId })) {
-    if (!entry || !sessionKeyContainsThreadId(key)) {
-      continue;
+  await updateSessionStore(storePath, (store) => {
+    for (const [key, entry] of Object.entries(store)) {
+      if (!entry || !sessionKeyContainsThreadId(key)) {
+        continue;
+      }
+      if (entry.updatedAt === 0) {
+        continue;
+      }
+      // Setting updatedAt to 0 signals that this session is stale.
+      // evaluateSessionFreshness will create a new session on the next message.
+      entry.updatedAt = 0;
+      resetCount += 1;
     }
-    if (entry.updatedAt === 0) {
-      continue;
-    }
-    // Setting updatedAt to 0 signals that this session is stale.
-    // evaluateSessionFreshness will create a new session on the next message.
-    upsertSessionEntry({
-      agentId: accountId,
-      sessionKey: key,
-      entry: { ...entry, updatedAt: 0 },
-    });
-    resetCount += 1;
-  }
+    return resetCount;
+  });
 
   return resetCount;
 }

@@ -89,67 +89,24 @@ const pluginConversationBindingMocks = vi.hoisted(() => ({
 }));
 const sessionStoreMocks = vi.hoisted(() => ({
   currentEntry: undefined as Record<string, unknown> | undefined,
-  entries: new Map<string, Record<string, unknown>>(),
-  getSessionEntry: vi.fn((params?: { sessionKey?: string }) => {
-    const sessionKey = params?.sessionKey;
-    if (sessionKey && sessionStoreMocks.entries.has(sessionKey)) {
-      return sessionStoreMocks.entries.get(sessionKey);
-    }
-    if (
-      sessionStoreMocks.currentEntry &&
-      (!sessionKey ||
-        typeof sessionStoreMocks.currentEntry.sessionKey !== "string" ||
-        sessionStoreMocks.currentEntry.sessionKey === sessionKey)
-    ) {
+  loadSessionStore: vi.fn(() => ({})),
+  resolveStorePath: vi.fn(() => "/tmp/mock-sessions.json"),
+  resolveSessionStoreEntry: vi.fn(() => ({ existing: sessionStoreMocks.currentEntry })),
+  updateSessionStoreEntry: vi.fn(
+    async (params: {
+      update: (entry: Record<string, unknown>) => Promise<Record<string, unknown> | null>;
+    }) => {
+      if (!sessionStoreMocks.currentEntry) {
+        return null;
+      }
+      const patch = await params.update(sessionStoreMocks.currentEntry);
+      if (!patch) {
+        return sessionStoreMocks.currentEntry;
+      }
+      sessionStoreMocks.currentEntry = { ...sessionStoreMocks.currentEntry, ...patch };
       return sessionStoreMocks.currentEntry;
-    }
-    return undefined;
-  }),
-  listSessionEntries: vi.fn(() => {
-    const entries = [...sessionStoreMocks.entries.entries()].map(([sessionKey, entry]) => ({
-      sessionKey,
-      entry,
-    }));
-    if (
-      entries.length === 0 &&
-      sessionStoreMocks.currentEntry &&
-      typeof sessionStoreMocks.currentEntry.sessionKey === "string"
-    ) {
-      return [
-        {
-          sessionKey: sessionStoreMocks.currentEntry.sessionKey,
-          entry: sessionStoreMocks.currentEntry,
-        },
-      ];
-    }
-    return entries;
-  }),
-  mergeSessionEntry: vi.fn(
-    (
-      existing: Record<string, unknown> | undefined,
-      patch: Record<string, unknown>,
-    ): Record<string, unknown> => ({
-      ...existing,
-      ...patch,
-    }),
-  ),
-  resolveSessionRowEntry: vi.fn(
-    (params?: { store?: Record<string, Record<string, unknown>>; sessionKey?: string }) => {
-      const existing =
-        params?.sessionKey && params.store ? params.store[params.sessionKey] : undefined;
-      return { existing: existing ?? sessionStoreMocks.currentEntry };
     },
   ),
-  upsertSessionEntry: vi.fn((params: { sessionKey?: string; entry: Record<string, unknown> }) => {
-    sessionStoreMocks.currentEntry = {
-      sessionKey: params.sessionKey,
-      ...params.entry,
-    };
-    if (params.sessionKey) {
-      sessionStoreMocks.entries.set(params.sessionKey, sessionStoreMocks.currentEntry);
-    }
-    return sessionStoreMocks.currentEntry;
-  }),
 }));
 const acpManagerRuntimeMocks = vi.hoisted(() => ({
   getAcpSessionManager: vi.fn(),
@@ -174,6 +131,14 @@ const replyMediaPathMocks = vi.hoisted(() => ({
 const runtimePluginMocks = vi.hoisted(() => ({
   ensureRuntimePluginsLoaded: vi.fn(),
 }));
+const threadInfoMocks = vi.hoisted(() => ({
+  parseSessionThreadInfo: vi.fn<
+    (sessionKey: string | undefined) => {
+      baseSessionKey: string | undefined;
+      threadId: string | undefined;
+    }
+  >(),
+}));
 
 export {
   acpManagerRuntimeMocks,
@@ -187,6 +152,30 @@ export {
   sessionStoreMocks,
   runtimePluginMocks,
 };
+
+function parseGenericThreadSessionInfo(sessionKey: string | undefined) {
+  const trimmed = sessionKey?.trim();
+  if (!trimmed) {
+    return { baseSessionKey: undefined, threadId: undefined };
+  }
+  const threadMarker = ":thread:";
+  const topicMarker = ":topic:";
+  const marker = trimmed.includes(threadMarker)
+    ? threadMarker
+    : trimmed.includes(topicMarker)
+      ? topicMarker
+      : undefined;
+  if (!marker) {
+    return { baseSessionKey: trimmed, threadId: undefined };
+  }
+  const index = trimmed.lastIndexOf(marker);
+  if (index < 0) {
+    return { baseSessionKey: trimmed, threadId: undefined };
+  }
+  const baseSessionKey = trimmed.slice(0, index).trim() || undefined;
+  const threadId = trimmed.slice(index + marker.length).trim() || undefined;
+  return { baseSessionKey, threadId };
+}
 
 vi.mock("./route-reply.runtime.js", () => ({
   isRoutableChannel: () => true,
@@ -206,14 +195,19 @@ vi.mock("../../logging/diagnostic.js", () => ({
   logSessionStateChange: diagnosticMocks.logSessionStateChange,
   markDiagnosticSessionProgress: diagnosticMocks.markDiagnosticSessionProgress,
 }));
+vi.mock("../../config/sessions/thread-info.js", () => ({
+  parseSessionThreadInfo: (sessionKey: string | undefined) =>
+    threadInfoMocks.parseSessionThreadInfo(sessionKey),
+  parseSessionThreadInfoFast: (sessionKey: string | undefined) =>
+    threadInfoMocks.parseSessionThreadInfo(sessionKey),
+}));
 vi.mock("./dispatch-from-config.runtime.js", () => ({
   createInternalHookEvent: internalHookMocks.createInternalHookEvent,
-  getSessionEntry: sessionStoreMocks.getSessionEntry,
-  listSessionEntries: sessionStoreMocks.listSessionEntries,
-  mergeSessionEntry: sessionStoreMocks.mergeSessionEntry,
-  resolveSessionRowEntry: sessionStoreMocks.resolveSessionRowEntry,
+  loadSessionStore: sessionStoreMocks.loadSessionStore,
+  resolveSessionStoreEntry: sessionStoreMocks.resolveSessionStoreEntry,
+  resolveStorePath: sessionStoreMocks.resolveStorePath,
   triggerInternalHook: internalHookMocks.triggerInternalHook,
-  upsertSessionEntry: sessionStoreMocks.upsertSessionEntry,
+  updateSessionStoreEntry: sessionStoreMocks.updateSessionStoreEntry,
 }));
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   initializeGlobalHookRunner: vi.fn(),
@@ -386,6 +380,9 @@ export function resetPluginTtsAndThreadMocks() {
   replyMediaPathMocks.createReplyMediaPathNormalizer
     .mockReset()
     .mockReturnValue(async (payload: ReplyPayload) => payload);
+  threadInfoMocks.parseSessionThreadInfo
+    .mockReset()
+    .mockImplementation(parseGenericThreadSessionInfo);
 }
 
 export function setDiscordTestRegistry() {

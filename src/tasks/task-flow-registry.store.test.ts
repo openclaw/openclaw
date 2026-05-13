@@ -1,10 +1,5 @@
 import { statSync } from "node:fs";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createManagedTaskFlow,
@@ -13,16 +8,12 @@ import {
   resetTaskFlowRegistryForTests,
   setFlowWaiting,
 } from "./task-flow-registry.js";
-import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.js";
-import { loadTaskFlowRegistryStateFromSqlite } from "./task-flow-registry.store.sqlite.js";
 import {
-  parseOptionalTaskFlowSyncMode,
-  parseTaskFlowStatus,
-  type TaskFlowRecord,
-} from "./task-flow-registry.types.js";
-import { parseTaskNotifyPolicy } from "./task-registry.types.js";
-
-type TaskFlowRegistryTestDatabase = Pick<OpenClawStateKyselyDatabase, "flow_runs">;
+  resolveTaskFlowRegistryDir,
+  resolveTaskFlowRegistrySqlitePath,
+} from "./task-flow-registry.paths.js";
+import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.js";
+import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 
 function createStoredFlow(): TaskFlowRecord {
   return {
@@ -133,44 +124,6 @@ describe("task-flow-registry store runtime", () => {
     expect(restoredFlow.goal).toBe("Restored flow");
   });
 
-  it("rejects invalid persisted flow enum values", () => {
-    expect(parseOptionalTaskFlowSyncMode("managed")).toBe("managed");
-    expect(parseOptionalTaskFlowSyncMode(null)).toBeUndefined();
-    expect(parseTaskFlowStatus("waiting")).toBe("waiting");
-    expect(parseTaskNotifyPolicy("state_changes")).toBe("state_changes");
-
-    expect(() => parseOptionalTaskFlowSyncMode("legacy")).toThrow(
-      "Invalid persisted task flow sync mode",
-    );
-    expect(() => parseTaskFlowStatus("done")).toThrow("Invalid persisted task flow status");
-    expect(() => parseTaskNotifyPolicy("verbose")).toThrow("Invalid persisted task notify policy");
-  });
-
-  it("rejects corrupt persisted flow rows during sqlite restore", async () => {
-    await withFlowRegistryTempDir(async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskFlowRegistryForTests();
-
-      const created = createManagedTaskFlow({
-        ownerKey: "agent:main:main",
-        controllerId: "tests/corrupt-flow",
-        goal: "Corrupt flow",
-        status: "running",
-      });
-
-      const database = openOpenClawStateDatabase();
-      const db = getNodeSqliteKysely<TaskFlowRegistryTestDatabase>(database.db);
-      executeSqliteQuerySync(
-        database.db,
-        db.updateTable("flow_runs").set({ status: "done" }).where("flow_id", "=", created.flowId),
-      );
-
-      expect(() => loadTaskFlowRegistryStateFromSqlite()).toThrow(
-        "Invalid persisted task flow status",
-      );
-    });
-  });
-
   it("restores persisted wait-state, revision, and cancel intent from sqlite", async () => {
     await withFlowRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
@@ -257,11 +210,10 @@ describe("task-flow-registry store runtime", () => {
         waitJson: { kind: "task", taskId: "task-secured" },
       });
 
-      const databasePath = resolveOpenClawStateSqlitePath(process.env);
-      const registryDir = path.dirname(databasePath);
-      expect(databasePath.endsWith(path.join("state", "openclaw.sqlite"))).toBe(true);
+      const registryDir = resolveTaskFlowRegistryDir(process.env);
+      const sqlitePath = resolveTaskFlowRegistrySqlitePath(process.env);
       expect(statSync(registryDir).mode & 0o777).toBe(0o700);
-      expect(statSync(databasePath).mode & 0o777).toBe(0o600);
+      expect(statSync(sqlitePath).mode & 0o777).toBe(0o600);
     });
   });
 });

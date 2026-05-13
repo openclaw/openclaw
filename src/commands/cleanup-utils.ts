@@ -140,20 +140,14 @@ export async function removeWorkspaceDirs(
   }
 }
 
-export async function listAgentSessionStatePaths(stateDir: string): Promise<string[]> {
+export async function listAgentSessionDirs(stateDir: string): Promise<string[]> {
   const root = path.join(stateDir, "agents");
   try {
     const entries = await fs.readdir(root, { withFileTypes: true });
     return entries
       .filter((entry) => entry.isDirectory())
-      .flatMap((entry) => {
-        const agentRoot = path.join(root, entry.name);
-        const dbPath = path.join(agentRoot, "agent", "openclaw-agent.sqlite");
-        return [path.join(agentRoot, "sessions"), dbPath, `${dbPath}-wal`, `${dbPath}-shm`];
-      });
+      .map((entry) => path.join(root, entry.name, "sessions"));
   } catch {
     return [];
   }
 }
-
-export const listAgentRuntimeStatePaths = listAgentSessionStatePaths;

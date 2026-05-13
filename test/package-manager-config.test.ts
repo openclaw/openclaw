@@ -6,8 +6,6 @@ type PnpmBuildConfig = {
   allowBuilds?: Record<string, boolean>;
   blockExoticSubdeps?: boolean;
   ignoredBuiltDependencies?: string[];
-  minimumReleaseAgeIgnoreMissingTime?: boolean;
-  minimumReleaseAgeStrict?: boolean;
   onlyBuiltDependencies?: string[];
 };
 
@@ -30,20 +28,5 @@ describe("package manager build policy", () => {
     expect(workspace.allowBuilds?.["@discordjs/opus"]).toBe(false);
     expect(workspace.blockExoticSubdeps).toBe(true);
     expect(workspace.onlyBuiltDependencies).toBeUndefined();
-  });
-
-  it("keeps exotic subdependency builds blocked by default", () => {
-    const workspace = parse(fs.readFileSync("pnpm-workspace.yaml", "utf8")) as WorkspaceConfig;
-
-    expect(workspace.allowBuilds?.["baileys"]).toBe(true);
-    expect(workspace.allowBuilds?.["@whiskeysockets/libsignal-node"]).toBeUndefined();
-    expect(workspace.blockExoticSubdeps).toBe(true);
-  });
-
-  it("does not relax release-age installs for missing registry publish metadata", () => {
-    const workspace = parse(fs.readFileSync("pnpm-workspace.yaml", "utf8")) as WorkspaceConfig;
-
-    expect(workspace.minimumReleaseAgeIgnoreMissingTime).toBeUndefined();
-    expect(workspace.minimumReleaseAgeStrict).toBeUndefined();
   });
 });

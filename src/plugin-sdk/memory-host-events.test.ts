@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { appendMemoryHostEvent, readMemoryHostEvents } from "./memory-host-events.js";
+import {
+  appendMemoryHostEvent,
+  readMemoryHostEvents,
+  resolveMemoryHostEventLogPath,
+} from "./memory-host-events.js";
 import { createClaimableDedupe, createPersistentDedupe } from "./persistent-dedupe.js";
 import { createPluginSdkTestHarness } from "./test-helpers.js";
 
@@ -11,8 +15,8 @@ function createDedupe(root: string, overrides?: { ttlMs?: number }) {
   return createPersistentDedupe({
     ttlMs: overrides?.ttlMs ?? 24 * 60 * 60 * 1000,
     memoryMaxSize: 100,
-    maxEntries: 1000,
-    resolveScopeKey: (namespace) => `${root}:${namespace}`,
+    fileMaxEntries: 1000,
+    resolveFilePath: (namespace) => path.join(root, `${namespace}.json`),
   });
 }
 
@@ -44,10 +48,13 @@ describe("memory host event journal helpers", () => {
       reportPath: path.join(workspaceDir, "memory", "dreaming", "light", "2026-04-05.md"),
     });
 
+    const eventLogPath = resolveMemoryHostEventLogPath(workspaceDir);
+    await expect(fs.readFile(eventLogPath, "utf8")).resolves.toContain(
+      '"type":"memory.recall.recorded"',
+    );
+
     const events = await readMemoryHostEvents({ workspaceDir });
     const tail = await readMemoryHostEvents({ workspaceDir, limit: 1 });
-    const oldJsonlPath = path.join(workspaceDir, "memory", ".dreams", "events.jsonl");
-    await expect(fs.stat(oldJsonlPath)).rejects.toMatchObject({ code: "ENOENT" });
 
     expect(events).toHaveLength(2);
     expect(events[0]?.type).toBe("memory.recall.recorded");
@@ -79,27 +86,28 @@ describe("createPersistentDedupe", () => {
     expect(raceSecond).toBe(false);
   });
 
-  it("deduplicates through SQLite-backed storage", async () => {
+  it("falls back to memory-only behavior on disk errors", async () => {
     const dedupe = createPersistentDedupe({
       ttlMs: 10_000,
       memoryMaxSize: 100,
-      maxEntries: 1000,
-      resolveScopeKey: () => "memory-host-events:test",
+      fileMaxEntries: 1000,
+      resolveFilePath: () => path.join("/dev/null", "dedupe.json"),
     });
 
-    expect(await dedupe.checkAndRecord("sqlite-backed", { namespace: "x" })).toBe(true);
-    expect(await dedupe.checkAndRecord("sqlite-backed", { namespace: "x" })).toBe(false);
+    expect(await dedupe.checkAndRecord("memory-only", { namespace: "x" })).toBe(true);
+    expect(await dedupe.checkAndRecord("memory-only", { namespace: "x" })).toBe(false);
   });
 
-  it("warms empty namespaces and skips expired SQLite entries", async () => {
+  it("warms empty namespaces and skips expired disk entries", async () => {
     const root = await createTempDir("openclaw-dedupe-");
     const emptyReader = createDedupe(root, { ttlMs: 10_000 });
     expect(await emptyReader.warmup("nonexistent")).toBe(0);
 
     const oldNow = Date.now() - 2000;
-    const writer = createDedupe(root, { ttlMs: 1000 });
-    expect(await writer.checkAndRecord("old-msg", { namespace: "acct", now: oldNow })).toBe(true);
-    expect(await writer.checkAndRecord("new-msg", { namespace: "acct" })).toBe(true);
+    await fs.writeFile(
+      path.join(root, "acct.json"),
+      JSON.stringify({ "old-msg": oldNow, "new-msg": Date.now() }),
+    );
 
     const reader = createDedupe(root, { ttlMs: 1000 });
     expect(await reader.warmup("acct")).toBe(1);
@@ -163,8 +171,8 @@ describe("createClaimableDedupe", () => {
     const writer = createClaimableDedupe({
       ttlMs: 10_000,
       memoryMaxSize: 100,
-      maxEntries: 1000,
-      resolveScopeKey: (namespace) => `${root}:${namespace}`,
+      fileMaxEntries: 1000,
+      resolveFilePath: (namespace) => path.join(root, `${namespace}.json`),
     });
 
     await expect(writer.claim("m1", { namespace: "acct" })).resolves.toEqual({ kind: "claimed" });
@@ -173,8 +181,8 @@ describe("createClaimableDedupe", () => {
     const reader = createClaimableDedupe({
       ttlMs: 10_000,
       memoryMaxSize: 100,
-      maxEntries: 1000,
-      resolveScopeKey: (namespace) => `${root}:${namespace}`,
+      fileMaxEntries: 1000,
+      resolveFilePath: (namespace) => path.join(root, `${namespace}.json`),
     });
 
     expect(await reader.hasRecent("m1", { namespace: "acct" })).toBe(true);

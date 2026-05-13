@@ -39,6 +39,7 @@
       "blurb": "self-hosted chat via first-class ClickClack bot tokens.",
       "systemImage": "bubble.left.and.bubble.right",
       "markdownCapable": true,
+      "preferSessionLookupForAnnounceTarget": true,
       "order": 85,
       "commands": {
         "nativeCommandsAutoEnabled": false,

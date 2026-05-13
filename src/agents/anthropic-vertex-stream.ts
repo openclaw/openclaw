@@ -1,5 +1,5 @@
+import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { loadBundledPluginPublicSurfaceModuleSync } from "../plugin-sdk/facade-loader.js";
-import type { StreamFn } from "./agent-core-contract.js";
 
 type AnthropicVertexStreamFacade = {
   createAnthropicVertexStreamFn: (

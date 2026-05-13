@@ -17,6 +17,7 @@ import type {
 import type { CreateChannelReplyPipelineParams } from "../message/reply-pipeline.js";
 import type { MessageReceipt } from "../message/types.js";
 import type { InboundLastRouteUpdate, RecordInboundSession } from "../session.types.js";
+import type { ChannelBotLoopProtectionFacts } from "./bot-loop-protection.js";
 
 export type ChannelTurnAdmission =
   | { kind: "dispatch"; reason?: string }
@@ -314,6 +315,7 @@ export type AssembledChannelTurn = {
   accountId?: string;
   agentId: string;
   routeSessionKey: string;
+  storePath: string;
   ctxPayload: FinalizedMsgContext;
   recordInboundSession: RecordInboundSession;
   dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcher;
@@ -325,6 +327,7 @@ export type AssembledChannelTurn = {
   record?: ChannelTurnRecordOptions;
   history?: ChannelTurnHistoryFinalizeOptions;
   admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
+  botLoopProtection?: ChannelBotLoopProtectionFacts;
   log?: (event: ChannelTurnLogEvent) => void;
   messageId?: string;
 };
@@ -332,8 +335,8 @@ export type AssembledChannelTurn = {
 export type PreparedChannelTurn<TDispatchResult = DispatchFromConfigResult> = {
   channel: string;
   accountId?: string;
-  agentId?: string;
   routeSessionKey: string;
+  storePath: string;
   ctxPayload: FinalizedMsgContext;
   recordInboundSession: RecordInboundSession;
   record?: ChannelTurnRecordOptions;
@@ -342,6 +345,7 @@ export type PreparedChannelTurn<TDispatchResult = DispatchFromConfigResult> = {
   runDispatch: () => Promise<TDispatchResult>;
   observeOnlyDispatchResult?: TDispatchResult;
   admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
+  botLoopProtection?: ChannelBotLoopProtectionFacts;
   log?: (event: ChannelTurnLogEvent) => void;
   messageId?: string;
 };

@@ -202,7 +202,6 @@ describe("telegram text fragments", () => {
   });
 
   const TEXT_FRAGMENT_TEST_TIMEOUT_MS = process.platform === "win32" ? 45_000 : 20_000;
-  const TEXT_FRAGMENT_FLUSH_MS = TELEGRAM_TEST_TIMINGS.textFragmentGapMs + 80;
 
   it(
     "buffers near-limit text and processes sequential parts as one message",
@@ -237,13 +236,8 @@ describe("telegram text fragments", () => {
           getFile: async () => ({}),
         });
 
-      expect(replySpy).not.toHaveBeenCalled();
-      await vi.waitFor(
-        () => {
-          expect(replySpy).toHaveBeenCalledTimes(1);
-        },
-        { timeout: Math.max(TEXT_FRAGMENT_FLUSH_MS * 6, 10_000), interval: 5 },
-      );
+        expect(replySpy).not.toHaveBeenCalled();
+        await flushScheduledTimerForDelay(setTimeoutSpy, TELEGRAM_TEST_TIMINGS.textFragmentGapMs);
 
         expect(replySpy).toHaveBeenCalledTimes(1);
         const payload = replySpy.mock.calls.at(0)?.[0] as { RawBody?: string };

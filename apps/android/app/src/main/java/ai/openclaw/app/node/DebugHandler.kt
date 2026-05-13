@@ -3,11 +3,13 @@ package ai.openclaw.app.node
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewaySession
+import android.content.Context
 import kotlinx.serialization.json.JsonPrimitive
 
 private const val LOGCAT_PATH = "/system/bin/logcat"
 
 class DebugHandler(
+  private val appContext: Context,
   private val identityStore: DeviceIdentityStore,
 ) {
   fun handleEd25519(): GatewaySession.InvokeResult {
@@ -79,16 +81,24 @@ class DebugHandler(
     val pid = android.os.Process.myPid()
     val rt = Runtime.getRuntime()
     val info = "v6 pid=$pid thread=${Thread.currentThread().name} free=${rt.freeMemory() / 1024}K total=${rt.totalMemory() / 1024}K max=${rt.maxMemory() / 1024}K uptime=${android.os.SystemClock.elapsedRealtime() / 1000}s sdk=${android.os.Build.VERSION.SDK_INT} device=${android.os.Build.MODEL}\n"
-    // Run logcat on current dispatcher thread; output is bounded by -t and never staged to disk.
+    // Run logcat on current dispatcher thread (no withContext) with file redirect
     val logResult =
       try {
+        val tmpFile = java.io.File(appContext.cacheDir, "debug_logs.txt")
+        if (tmpFile.exists()) tmpFile.delete()
         val pb = ProcessBuilder(LOGCAT_PATH, "-d", "-t", "200", "--pid=$pid")
+        pb.redirectOutput(tmpFile)
         pb.redirectErrorStream(true)
         val proc = pb.start()
         val finished = proc.waitFor(4, java.util.concurrent.TimeUnit.SECONDS)
         if (!finished) proc.destroyForcibly()
-        val raw = proc.inputStream.bufferedReader().use { it.readText().take(128000) }
-        val normalizedRaw = raw.ifBlank { "(no output, finished=$finished)" }
+        val raw =
+          if (tmpFile.exists() && tmpFile.length() > 0) {
+            tmpFile.readText().take(128000)
+          } else {
+            "(no output, finished=$finished, exists=${tmpFile.exists()})"
+          }
+        tmpFile.delete()
         val spamPatterns =
           listOf(
             "setRequestedFrameRate",
@@ -109,7 +119,7 @@ class DebugHandler(
             "IncorrectContextUseViolation",
           )
         val sb = StringBuilder()
-        for (line in normalizedRaw.lineSequence()) {
+        for (line in raw.lineSequence()) {
           if (line.isBlank()) continue
           if (spamPatterns.any { line.contains(it) }) continue
           if (sb.length + line.length > 16000) {
@@ -119,10 +129,18 @@ class DebugHandler(
           if (sb.isNotEmpty()) sb.append('\n')
           sb.append(line)
         }
-        sb.toString().ifEmpty { "(all ${normalizedRaw.lines().size} lines filtered as spam)" }
+        sb.toString().ifEmpty { "(all ${raw.lines().size} lines filtered as spam)" }
       } catch (e: Throwable) {
         "(logcat error: ${e::class.java.simpleName}: ${e.message})"
       }
-    return GatewaySession.InvokeResult.ok("""{"logs":${JsonPrimitive(info + logResult)}}""")
+    // Also include camera debug log if it exists
+    val camLogFile = java.io.File(appContext.cacheDir, "camera_debug.log")
+    val camLog =
+      if (camLogFile.exists() && camLogFile.length() > 0) {
+        "\n--- camera_debug.log ---\n" + camLogFile.readText().take(4000)
+      } else {
+        ""
+      }
+    return GatewaySession.InvokeResult.ok("""{"logs":${JsonPrimitive(info + logResult + camLog)}}""")
   }
 }

@@ -53,8 +53,10 @@ const hoisted = vi.hoisted(() => {
   const initializeSessionMock = vi.fn();
   const getAcpSessionManagerMock = vi.fn();
   const startAcpSpawnParentStreamRelayMock = vi.fn();
-  const sessionRowsMock = vi.fn();
-  const upsertSessionEntryMock = vi.fn();
+  const resolveAcpSpawnStreamLogPathMock = vi.fn();
+  const loadSessionStoreMock = vi.fn();
+  const resolveStorePathMock = vi.fn();
+  const resolveSessionTranscriptFileMock = vi.fn();
   const areHeartbeatsEnabledMock = vi.fn();
   const getChannelPluginMock = vi.fn();
   const getLoadedChannelPluginMock = vi.fn();
@@ -80,8 +82,10 @@ const hoisted = vi.hoisted(() => {
     initializeSessionMock,
     getAcpSessionManagerMock,
     startAcpSpawnParentStreamRelayMock,
-    sessionRowsMock,
-    upsertSessionEntryMock,
+    resolveAcpSpawnStreamLogPathMock,
+    loadSessionStoreMock,
+    resolveStorePathMock,
+    resolveSessionTranscriptFileMock,
     areHeartbeatsEnabledMock,
     getChannelPluginMock,
     getLoadedChannelPluginMock,
@@ -109,28 +113,25 @@ vi.mock("../channels/plugins/index.js", () => ({
   normalizeChannelId: hoisted.normalizeChannelIdMock,
 }));
 
+vi.mock("../config/sessions/paths.js", () => ({
+  resolveStorePath: hoisted.resolveStorePathMock,
+}));
+
 vi.mock("../config/sessions/store.js", () => ({
-  getSessionEntry: (params: { sessionKey: string }) => hoisted.sessionRowsMock()[params.sessionKey],
-  listSessionEntries: () =>
-    Object.entries(hoisted.sessionRowsMock()).map(([sessionKey, entry]) => ({
-      sessionKey,
-      entry,
-    })),
-  upsertSessionEntry: hoisted.upsertSessionEntryMock,
+  loadSessionStore: hoisted.loadSessionStoreMock,
 }));
 
 vi.mock("../config/sessions.js", () => ({
-  getSessionEntry: (params: { sessionKey: string }) => hoisted.sessionRowsMock()[params.sessionKey],
-  listSessionEntries: () =>
-    Object.entries(hoisted.sessionRowsMock()).map(([sessionKey, entry]) => ({
-      sessionKey,
-      entry,
-    })),
-  upsertSessionEntry: hoisted.upsertSessionEntryMock,
+  loadSessionStore: hoisted.loadSessionStoreMock,
+  resolveStorePath: hoisted.resolveStorePathMock,
 }));
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => hoisted.state.cfg,
+}));
+
+vi.mock("../config/sessions/transcript.js", () => ({
+  resolveSessionTranscriptFile: hoisted.resolveSessionTranscriptFileMock,
 }));
 
 vi.mock("../gateway/call.js", () => ({
@@ -146,6 +147,7 @@ vi.mock("../tasks/detached-task-runtime.js", () => ({
 }));
 
 vi.mock("./acp-spawn-parent-stream.js", () => ({
+  resolveAcpSpawnStreamLogPath: hoisted.resolveAcpSpawnStreamLogPathMock,
   startAcpSpawnParentStreamRelay: hoisted.startAcpSpawnParentStreamRelayMock,
 }));
 
@@ -717,7 +719,11 @@ describe("spawnAcpDirect", () => {
     hoisted.startAcpSpawnParentStreamRelayMock
       .mockReset()
       .mockImplementation(() => createRelayHandle());
-    hoisted.sessionRowsMock.mockReset().mockImplementation(() => {
+    hoisted.resolveAcpSpawnStreamLogPathMock
+      .mockReset()
+      .mockReturnValue("/tmp/sess-main.acp-stream.jsonl");
+    hoisted.resolveStorePathMock.mockReset().mockReturnValue("/tmp/codex-sessions.json");
+    hoisted.loadSessionStoreMock.mockReset().mockImplementation(() => {
       const store: Record<string, { sessionId: string; updatedAt: number }> = {};
       return new Proxy(store, {
         get(_target, prop) {
@@ -728,7 +734,22 @@ describe("spawnAcpDirect", () => {
         },
       });
     });
-    hoisted.upsertSessionEntryMock.mockReset();
+    hoisted.resolveSessionTranscriptFileMock
+      .mockReset()
+      .mockImplementation(async (params: unknown) => {
+        const typed = params as { threadId?: string };
+        const sessionFile = typed.threadId
+          ? `/tmp/agents/codex/sessions/sess-123-topic-${typed.threadId}.jsonl`
+          : "/tmp/agents/codex/sessions/sess-123.jsonl";
+        return {
+          sessionFile,
+          sessionEntry: {
+            sessionId: "sess-123",
+            updatedAt: Date.now(),
+            sessionFile,
+          },
+        };
+      });
   });
 
   afterEach(() => {
@@ -779,21 +800,17 @@ describe("spawnAcpDirect", () => {
       mode: "persistent",
     });
     expect(initInput.sessionKey).toMatch(/^agent:codex:acp:/);
-    expect(hoisted.upsertSessionEntryMock).toHaveBeenCalledTimes(2);
-    expect(hoisted.upsertSessionEntryMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "codex",
-        sessionKey: accepted.childSessionKey,
-        entry: expect.objectContaining({
-          sessionId: "sess-123",
-        }),
-      }),
+    const transcriptCalls = hoisted.resolveSessionTranscriptFileMock.mock.calls.map(
+      (call: unknown[]) => call[0] as { threadId?: string },
     );
+    expect(transcriptCalls).toHaveLength(2);
+    expect(transcriptCalls[0]?.threadId).toBeUndefined();
+    expect(transcriptCalls[1]?.threadId).toBe("child-thread");
   });
 
   it("allows ACP resume IDs recorded for the requester session", async () => {
     const resumeSessionId = "codex-inner-resume";
-    hoisted.sessionRowsMock.mockReturnValue({
+    hoisted.loadSessionStoreMock.mockReturnValue({
       "agent:codex:acp:owned": {
         sessionId: "sess-owned",
         updatedAt: Date.now(),
@@ -832,7 +849,7 @@ describe("spawnAcpDirect", () => {
   });
 
   it("rejects ACP resume IDs not recorded for the requester session", async () => {
-    hoisted.sessionRowsMock.mockReturnValue({
+    hoisted.loadSessionStoreMock.mockReturnValue({
       "agent:codex:acp:other": {
         sessionId: "sess-other",
         updatedAt: Date.now(),
@@ -1587,15 +1604,11 @@ describe("spawnAcpDirect", () => {
       to: "U1234567890abcdef1234567890abcdef",
       threadId: undefined,
     });
-    expect(hoisted.upsertSessionEntryMock).toHaveBeenCalledTimes(1);
-    expect(hoisted.upsertSessionEntryMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "codex",
-        entry: expect.objectContaining({
-          sessionId: "sess-123",
-        }),
-      }),
+    const transcriptCalls = hoisted.resolveSessionTranscriptFileMock.mock.calls.map(
+      (call: unknown[]) => call[0] as { threadId?: string },
     );
+    expect(transcriptCalls).toHaveLength(1);
+    expect(transcriptCalls[0]?.threadId).toBeUndefined();
   });
 
   it("binds ACP sessions through the configured default account when accountId is omitted", async () => {
@@ -1949,24 +1962,23 @@ describe("spawnAcpDirect", () => {
 
     const accepted = expectAcceptedSpawn(result);
     expect(accepted.mode).toBe("run");
+    expect(accepted.streamLogPath).toBeUndefined();
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
     if (expectTranscriptPersistence) {
-      expect(hoisted.upsertSessionEntryMock).toHaveBeenCalledWith(
-        expect.objectContaining({
+      expectRecordFields(
+        firstMockCall(hoisted.resolveSessionTranscriptFileMock, "transcript file resolution")[0],
+        {
+          sessionId: "sess-123",
+          storePath: "/tmp/codex-sessions.json",
           agentId: "codex",
-          entry: expect.objectContaining({
-            sessionId: "sess-123",
-          }),
-        }),
+        },
       );
     }
     expectAgentGatewayCall(expectedAgentCall);
   });
 
-  it("keeps ACP spawn running when session row persistence fails", async () => {
-    hoisted.upsertSessionEntryMock.mockImplementationOnce(() => {
-      throw new Error("sqlite busy");
-    });
+  it("keeps ACP spawn running when session-file persistence fails", async () => {
+    hoisted.resolveSessionTranscriptFileMock.mockRejectedValueOnce(new Error("disk full"));
 
     const result = await spawnAcpDirect(
       {
@@ -2151,6 +2163,7 @@ describe("spawnAcpDirect", () => {
     );
 
     const accepted = expectAcceptedSpawn(result);
+    expect(accepted.streamLogPath).toBe("/tmp/sess-main.acp-stream.jsonl");
     const agentCall = hoisted.callGatewayMock.mock.calls
       .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
       .find((request) => request.method === "agent");
@@ -2163,18 +2176,22 @@ describe("spawnAcpDirect", () => {
     expect(typeof relayCallOrder).toBe("number");
     expect(typeof agentCallOrder).toBe("number");
     expect(relayCallOrder < agentCallOrder).toBe(true);
-    expect(hoisted.startAcpSpawnParentStreamRelayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        parentSessionKey: "agent:main:main",
-        agentId: "codex",
-        emitStartNotice: false,
-      }),
-    );
+    expectRelayCallFields({
+      parentSessionKey: "agent:main:main",
+      agentId: "codex",
+      logPath: "/tmp/sess-main.acp-stream.jsonl",
+      emitStartNotice: false,
+    });
     const relayRuns = hoisted.startAcpSpawnParentStreamRelayMock.mock.calls.map(
       (call: unknown[]) => (call[0] as { runId?: string }).runId,
     );
     expect(relayRuns).toContain(agentCall?.params?.idempotencyKey);
     expect(relayRuns).toContain(accepted.runId);
+    const streamPathInput = expectRecordFields(
+      firstMockCall(hoisted.resolveAcpSpawnStreamLogPathMock, "stream log path resolution")[0],
+      {},
+    );
+    expect(streamPathInput.childSessionKey).toMatch(/^agent:codex:acp:/);
     expect(firstHandle.dispose).toHaveBeenCalledTimes(1);
     expect(firstHandle.notifyStarted).not.toHaveBeenCalled();
     expect(secondHandle.notifyStarted).toHaveBeenCalledTimes(1);
@@ -2199,7 +2216,7 @@ describe("spawnAcpDirect", () => {
       .mockReset()
       .mockReturnValueOnce(firstHandle)
       .mockReturnValueOnce(secondHandle);
-    hoisted.sessionRowsMock.mockReset().mockImplementation(() => {
+    hoisted.loadSessionStoreMock.mockReset().mockImplementation(() => {
       const store: Record<
         string,
         { sessionId: string; updatedAt: number; deliveryContext?: unknown }
@@ -2239,6 +2256,7 @@ describe("spawnAcpDirect", () => {
 
     const accepted = expectAcceptedSpawn(result);
     expect(accepted.mode).toBe("run");
+    expect(accepted.streamLogPath).toBe("/tmp/sess-main.acp-stream.jsonl");
     const agentCall = hoisted.callGatewayMock.mock.calls
       .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
       .find((request) => request.method === "agent");
@@ -2246,18 +2264,17 @@ describe("spawnAcpDirect", () => {
     expect(agentCall?.params?.channel).toBeUndefined();
     expect(agentCall?.params?.to).toBeUndefined();
     expect(agentCall?.params?.threadId).toBeUndefined();
-    expect(hoisted.startAcpSpawnParentStreamRelayMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        parentSessionKey: "agent:main:subagent:parent",
-        agentId: "codex",
-        deliveryContext: {
-          channel: "discord",
-          to: "channel:parent-channel",
-          accountId: "default",
-        },
-        emitStartNotice: false,
-      }),
-    );
+    expectRelayCallFields({
+      parentSessionKey: "agent:main:subagent:parent",
+      agentId: "codex",
+      logPath: "/tmp/sess-main.acp-stream.jsonl",
+      deliveryContext: {
+        channel: "discord",
+        to: "channel:parent-channel",
+        accountId: "default",
+      },
+      emitStartNotice: false,
+    });
     expect(firstHandle.dispose).toHaveBeenCalledTimes(1);
     expect(secondHandle.notifyStarted).toHaveBeenCalledTimes(1);
   });
@@ -2275,7 +2292,7 @@ describe("spawnAcpDirect", () => {
         },
       },
     });
-    hoisted.sessionRowsMock.mockReset().mockImplementation(() => {
+    hoisted.loadSessionStoreMock.mockReset().mockImplementation(() => {
       const store: Record<
         string,
         {
@@ -2297,9 +2314,9 @@ describe("spawnAcpDirect", () => {
             accountId: "default",
           },
           spawnedBy: "agent:main:subagent:parent",
-          spawnDepth: 1,
-          subagentRole: "orchestrator",
-          subagentControlScope: "children",
+          spawnDepth: 2,
+          subagentRole: "leaf",
+          subagentControlScope: "none",
         },
       };
       return new Proxy(store, {
@@ -2327,6 +2344,7 @@ describe("spawnAcpDirect", () => {
 
     const accepted = expectAcceptedSpawn(result);
     expect(accepted.mode).toBe("run");
+    expect(accepted.streamLogPath).toBeUndefined();
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
   });
 
@@ -2357,6 +2375,7 @@ describe("spawnAcpDirect", () => {
 
     const accepted = expectAcceptedSpawn(result);
     expect(accepted.mode).toBe("run");
+    expect(accepted.streamLogPath).toBeUndefined();
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
   });
 
@@ -2390,6 +2409,7 @@ describe("spawnAcpDirect", () => {
 
     const accepted = expectAcceptedSpawn(result);
     expect(accepted.mode).toBe("run");
+    expect(accepted.streamLogPath).toBeUndefined();
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
   });
 
@@ -2414,6 +2434,7 @@ describe("spawnAcpDirect", () => {
 
     const accepted = expectAcceptedSpawn(result);
     expect(accepted.mode).toBe("run");
+    expect(accepted.streamLogPath).toBeUndefined();
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
   });
 
@@ -2443,6 +2464,7 @@ describe("spawnAcpDirect", () => {
 
     const accepted = expectAcceptedSpawn(result);
     expect(accepted.mode).toBe("run");
+    expect(accepted.streamLogPath).toBeUndefined();
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
   });
 
@@ -2461,6 +2483,7 @@ describe("spawnAcpDirect", () => {
 
     const accepted = expectAcceptedSpawn(result);
     expect(accepted.mode).toBe("run");
+    expect(accepted.streamLogPath).toBeUndefined();
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
   });
 
@@ -2477,6 +2500,7 @@ describe("spawnAcpDirect", () => {
 
     const accepted = expectAcceptedSpawn(result);
     expect(accepted.mode).toBe("run");
+    expect(accepted.streamLogPath).toBeUndefined();
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
   });
 
@@ -2497,6 +2521,7 @@ describe("spawnAcpDirect", () => {
 
     const accepted = expectAcceptedSpawn(result);
     expect(accepted.mode).toBe("run");
+    expect(accepted.streamLogPath).toBeUndefined();
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
   });
 
@@ -2529,6 +2554,7 @@ describe("spawnAcpDirect", () => {
 
     const accepted = expectAcceptedSpawn(result);
     expect(accepted.mode).toBe("run");
+    expect(accepted.streamLogPath).toBeUndefined();
     expect(hoisted.startAcpSpawnParentStreamRelayMock).not.toHaveBeenCalled();
   });
 

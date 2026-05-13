@@ -1,6 +1,7 @@
-import { createHash } from "node:crypto";
-import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import fs from "node:fs";
+import path from "node:path";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const REPLY_CACHE_MAX = 2000;
@@ -8,6 +9,7 @@ const REPLY_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 /** Recency window for the "react to the latest message" fallback. */
 const LATEST_FALLBACK_MS = 10 * 60 * 1000;
 let persistenceFailureLogged = false;
+let parseFailureLogged = false;
 function reportPersistenceFailure(scope: string, err: unknown): void {
   if (persistenceFailureLogged) {
     return;
@@ -15,12 +17,6 @@ function reportPersistenceFailure(scope: string, err: unknown): void {
   persistenceFailureLogged = true;
   logVerbose(`imessage reply-cache: ${scope} disabled after first failure: ${String(err)}`);
 }
-
-const REPLY_CACHE_STORE = createPluginStateSyncKeyedStore<IMessageReplyCacheEntry>("imessage", {
-  namespace: "reply-cache",
-  maxEntries: REPLY_CACHE_MAX,
-  defaultTtlMs: REPLY_CACHE_TTL_MS,
-});
 
 export type IMessageChatContext = {
   chatGuid?: string;
@@ -56,64 +52,136 @@ const imessageShortIdToUuid = new Map<string, string>();
 const imessageUuidToShortId = new Map<string, string>();
 let imessageShortIdCounter = 0;
 
-// SQLite persistence: short-id ↔ UUID mappings need to survive gateway
+// On-disk persistence: short-id ↔ UUID mappings need to survive gateway
 // restarts so an agent that received "[message_id:5]" before a restart can
-// still react to that message after the restart. The store is best-effort;
-// corruption or write failure falls back to the in-memory cache, so the worst
-// case is the same as before persistence existed.
+// still react to that message after the restart. The on-disk store is
+// best-effort — corruption or write failure falls back to the in-memory
+// cache, so the worst case is the same as before persistence existed.
 
-function replyCacheEntryKey(messageId: string): string {
-  return createHash("sha256").update(messageId, "utf8").digest("hex").slice(0, 40);
+function resolveReplyCachePath(): string {
+  return path.join(resolveStateDir(), "imessage", "reply-cache.jsonl");
 }
 
-function toPersistedEntry(entry: IMessageReplyCacheEntry): IMessageReplyCacheEntry {
-  return {
-    accountId: entry.accountId,
-    messageId: entry.messageId,
-    shortId: entry.shortId,
-    timestamp: entry.timestamp,
-    ...(typeof entry.chatGuid === "string" ? { chatGuid: entry.chatGuid } : {}),
-    ...(typeof entry.chatIdentifier === "string" ? { chatIdentifier: entry.chatIdentifier } : {}),
-    ...(typeof entry.chatId === "number" ? { chatId: entry.chatId } : {}),
-    ...(typeof entry.isFromMe === "boolean" ? { isFromMe: entry.isFromMe } : {}),
-  };
-}
-
-function readPersistedEntries(): IMessageReplyCacheEntry[] {
+function readPersistedEntries(): {
+  entries: IMessageReplyCacheEntry[];
+  maxObservedShortId: number;
+} {
+  let raw: string;
   try {
-    const cutoff = Date.now() - REPLY_CACHE_TTL_MS;
-    return REPLY_CACHE_STORE.entries()
-      .map((entry) => entry.value)
-      .filter(
-        (entry) =>
-          typeof entry.accountId === "string" &&
-          typeof entry.messageId === "string" &&
-          typeof entry.shortId === "string" &&
-          typeof entry.timestamp === "number" &&
-          entry.timestamp >= cutoff,
-      )
-      .slice(-REPLY_CACHE_MAX);
+    raw = fs.readFileSync(resolveReplyCachePath(), "utf8");
   } catch (err) {
-    reportPersistenceFailure("read", err);
-    return [];
+    if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      reportPersistenceFailure("read", err);
+    }
+    return { entries: [], maxObservedShortId: 0 };
   }
+  const cutoff = Date.now() - REPLY_CACHE_TTL_MS;
+  const out: IMessageReplyCacheEntry[] = [];
+  // The counter must advance past every shortId we have ever observed in
+  // the file — including lines we skip because they are stale or malformed.
+  // Otherwise a future allocation can collide with a still-live mapping
+  // that came earlier in the file.
+  let maxObservedShortId = 0;
+  for (const line of raw.split(/\n+/)) {
+    if (!line) {
+      continue;
+    }
+    let parsed: Partial<IMessageReplyCacheEntry> | null = null;
+    try {
+      parsed = JSON.parse(line) as Partial<IMessageReplyCacheEntry>;
+    } catch {
+      if (!parseFailureLogged) {
+        parseFailureLogged = true;
+        logVerbose(
+          `imessage reply-cache: dropping unparseable line (further parse errors suppressed)`,
+        );
+      }
+      continue;
+    }
+    if (parsed && typeof parsed.shortId === "string") {
+      const numeric = Number.parseInt(parsed.shortId, 10);
+      if (Number.isFinite(numeric) && numeric > maxObservedShortId) {
+        maxObservedShortId = numeric;
+      }
+    }
+    if (
+      typeof parsed?.accountId !== "string" ||
+      typeof parsed.messageId !== "string" ||
+      typeof parsed.shortId !== "string" ||
+      typeof parsed.timestamp !== "number"
+    ) {
+      continue;
+    }
+    if (parsed.timestamp < cutoff) {
+      continue;
+    }
+    out.push({
+      accountId: parsed.accountId,
+      messageId: parsed.messageId,
+      shortId: parsed.shortId,
+      timestamp: parsed.timestamp,
+      chatGuid: typeof parsed.chatGuid === "string" ? parsed.chatGuid : undefined,
+      chatIdentifier: typeof parsed.chatIdentifier === "string" ? parsed.chatIdentifier : undefined,
+      chatId: typeof parsed.chatId === "number" ? parsed.chatId : undefined,
+      isFromMe: typeof parsed.isFromMe === "boolean" ? parsed.isFromMe : undefined,
+    });
+  }
+  return { entries: out.slice(-REPLY_CACHE_MAX), maxObservedShortId };
 }
 
-function persistEntry(entry: IMessageReplyCacheEntry): void {
+// reply-cache.jsonl maps gateway-allocated short-ids to message guids. A
+// hostile same-UID process could otherwise (a) read the file to learn
+// active conversation guids, or (b) inject lines so a future shortId
+// resolution returns an attacker-chosen guid (allowing the agent to
+// react/edit/unsend a message it never saw). Owner-only mode on both the
+// directory and file closes that vector — defaults are 0755/0644 which
+// are world-readable on a multi-user Mac.
+const REPLY_CACHE_DIR_MODE = 0o700;
+const REPLY_CACHE_FILE_MODE = 0o600;
+
+function writePersistedEntries(entries: IMessageReplyCacheEntry[]): void {
+  const filePath = resolveReplyCachePath();
   try {
-    REPLY_CACHE_STORE.register(replyCacheEntryKey(entry.messageId), toPersistedEntry(entry), {
-      ttlMs: REPLY_CACHE_TTL_MS,
-    });
+    fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: REPLY_CACHE_DIR_MODE });
+    fs.writeFileSync(
+      filePath,
+      entries.map((entry) => JSON.stringify(entry)).join("\n") + (entries.length ? "\n" : ""),
+      { encoding: "utf8", mode: REPLY_CACHE_FILE_MODE },
+    );
+    // mkdirSync's mode is masked by umask and only applies on creation. If
+    // the dir already existed from an older gateway version, clamp it now.
+    try {
+      fs.chmodSync(path.dirname(filePath), REPLY_CACHE_DIR_MODE);
+      fs.chmodSync(filePath, REPLY_CACHE_FILE_MODE);
+    } catch {
+      // best-effort — fs may not support chmod on every platform
+    }
   } catch (err) {
     reportPersistenceFailure("write", err);
   }
 }
 
-function deletePersistedEntry(entry: IMessageReplyCacheEntry): void {
+function appendPersistedEntry(entry: IMessageReplyCacheEntry): void {
+  const filePath = resolveReplyCachePath();
   try {
-    REPLY_CACHE_STORE.delete(replyCacheEntryKey(entry.messageId));
+    fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: REPLY_CACHE_DIR_MODE });
+    fs.appendFileSync(filePath, `${JSON.stringify(entry)}\n`, {
+      encoding: "utf8",
+      mode: REPLY_CACHE_FILE_MODE,
+    });
+    // Always clamp — appendFileSync's `mode` only applies on creation, so
+    // an existing 0644 file from an older gateway version would otherwise
+    // never get tightened. chmod is microseconds; doing it every append
+    // keeps the security guarantee monotonic instead of conditional on
+    // creation order.
+    try {
+      fs.chmodSync(path.dirname(filePath), REPLY_CACHE_DIR_MODE);
+      fs.chmodSync(filePath, REPLY_CACHE_FILE_MODE);
+    } catch {
+      // best-effort
+    }
   } catch (err) {
-    reportPersistenceFailure("delete", err);
+    reportPersistenceFailure("append", err);
   }
 }
 
@@ -123,15 +191,19 @@ function hydrateFromDiskOnce(): void {
     return;
   }
   hydrated = true;
-  const entries = readPersistedEntries();
+  const { entries, maxObservedShortId } = readPersistedEntries();
+  // Bump the counter past every observed shortId, even from dropped lines —
+  // see comment in readPersistedEntries.
+  if (maxObservedShortId > imessageShortIdCounter) {
+    imessageShortIdCounter = maxObservedShortId;
+  }
   if (entries.length === 0) {
     return;
   }
+  // Entries are appended chronologically, so iterate forward to keep the
+  // newest entry as the "live" mapping when the same messageId appears
+  // multiple times (e.g. after a write-rewrite cycle).
   for (const entry of entries) {
-    const numeric = Number.parseInt(entry.shortId, 10);
-    if (Number.isFinite(numeric) && numeric > imessageShortIdCounter) {
-      imessageShortIdCounter = numeric;
-    }
     imessageReplyCacheByMessageId.set(entry.messageId, entry);
     imessageShortIdToUuid.set(entry.shortId, entry.messageId);
     imessageUuidToShortId.set(entry.messageId, entry.shortId);
@@ -153,10 +225,12 @@ export function rememberIMessageReplyCache(
   }
 
   let shortId = imessageUuidToShortId.get(messageId);
+  let allocatedNew = false;
   if (!shortId) {
     shortId = generateShortId();
     imessageShortIdToUuid.set(shortId, messageId);
     imessageUuidToShortId.set(messageId, shortId);
+    allocatedNew = true;
   }
 
   const fullEntry: IMessageReplyCacheEntry = { ...entry, messageId, shortId };
@@ -174,7 +248,6 @@ export function rememberIMessageReplyCache(
       imessageShortIdToUuid.delete(value.shortId);
       imessageUuidToShortId.delete(key);
     }
-    deletePersistedEntry(value);
     evicted = true;
   }
   while (imessageReplyCacheByMessageId.size > REPLY_CACHE_MAX) {
@@ -187,34 +260,20 @@ export function rememberIMessageReplyCache(
     if (oldEntry?.shortId) {
       imessageShortIdToUuid.delete(oldEntry.shortId);
       imessageUuidToShortId.delete(oldest);
-      deletePersistedEntry(oldEntry);
     }
     evicted = true;
   }
 
-  persistEntry(fullEntry);
+  // Append-only is hot-path cheap; periodic rewrite happens when we evict
+  // stale entries so the file does not grow unbounded across restarts.
+  if (allocatedNew) {
+    appendPersistedEntry(fullEntry);
+  }
   if (evicted) {
-    for (const persisted of imessageReplyCacheByMessageId.values()) {
-      persistEntry(persisted);
-    }
+    writePersistedEntries([...imessageReplyCacheByMessageId.values()]);
   }
 
   return fullEntry;
-}
-
-export function isKnownFromMeIMessageMessageId(
-  messageId: string,
-  ctx?: IMessageChatContext & { accountId?: string },
-): boolean {
-  hydrateFromDiskOnce();
-  const cached = imessageReplyCacheByMessageId.get(messageId.trim());
-  if (!cached || cached.isFromMe !== true) {
-    return false;
-  }
-  if (ctx?.accountId && cached.accountId !== ctx.accountId) {
-    return false;
-  }
-  return !ctx || !hasChatScope(ctx) || !isCrossChatMismatch(cached, ctx);
 }
 
 function hasChatScope(ctx?: IMessageChatContext): boolean {
@@ -354,7 +413,7 @@ export function resolveIMessageMessageId(
   if (!trimmed) {
     return trimmed;
   }
-  // Hydrate the SQLite reply cache into the in-memory maps before reading them.
+  // Hydrate the on-disk JSONL into the in-memory maps before reading them.
   // Without this, the first post-restart action that arrives with a short
   // MessageSid would miss `imessageShortIdToUuid` and fall through to the
   // "no longer available" path, breaking the persistence contract — the
@@ -407,6 +466,22 @@ export function resolveIMessageMessageId(
     throw buildFromMeError(trimmed, "uuid");
   }
   return trimmed;
+}
+
+export function isKnownFromMeIMessageMessageId(
+  messageId: string | undefined,
+  ctx: IMessageChatContext & { accountId?: string },
+): boolean {
+  const trimmed = normalizeOptionalString(messageId);
+  if (!trimmed || !ctx.accountId || !hasChatScope(ctx)) {
+    return false;
+  }
+  hydrateFromDiskOnce();
+  const cached = imessageReplyCacheByMessageId.get(trimmed);
+  if (!cached || cached.isFromMe !== true || cached.accountId !== ctx.accountId) {
+    return false;
+  }
+  return isPositiveChatMatch(cached, ctx);
 }
 
 function buildFromMeError(inputId: string, inputKind: "short" | "uuid"): Error {
@@ -505,25 +580,24 @@ function isPositiveChatMatch(entry: IMessageReplyCacheEntry, ctx: IMessageChatCo
 }
 
 export function _resetIMessageShortIdState(): void {
-  _resetIMessageShortIdMemoryForTest();
-  // Only clear persisted state when the test harness has explicitly pointed
-  // us at an isolated state directory. Otherwise we could nuke live gateway
-  // short-id mappings under the user's normal OpenClaw state database.
-  if (!process.env.OPENCLAW_STATE_DIR) {
-    return;
-  }
-  try {
-    REPLY_CACHE_STORE.clear();
-  } catch {
-    // best-effort
-  }
-}
-
-export function _resetIMessageShortIdMemoryForTest(): void {
   imessageReplyCacheByMessageId.clear();
   imessageShortIdToUuid.clear();
   imessageUuidToShortId.clear();
   imessageShortIdCounter = 0;
   hydrated = false;
   persistenceFailureLogged = false;
+  parseFailureLogged = false;
+  // Only delete the persisted file when the test harness has explicitly
+  // pointed us at an isolated state directory. Otherwise we would nuke
+  // whatever live gateway happens to share `~/.openclaw` — and in vitest
+  // file-level parallelism, two test files calling this at once could
+  // race a peer's appendFileSync mid-write.
+  if (!process.env.OPENCLAW_STATE_DIR) {
+    return;
+  }
+  try {
+    fs.rmSync(resolveReplyCachePath(), { force: true });
+  } catch {
+    // best-effort
+  }
 }

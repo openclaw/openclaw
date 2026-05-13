@@ -888,7 +888,7 @@ rules:
       source-run: 2026-04-17T07-37-10Z
       source-rule-id: trusted-proxy-accept-without-origin-guard
   - id: ghsa-5xfq-5mr7-426q.openclaw-session-transcript-path-traversal
-    message: Legacy transcript path helper uses unvalidated sessionId without containment enforcement.
+    message: Transcript path helper uses unvalidated sessionId or returns raw sessionFile without containment enforcement.
     severity: WARNING
     languages:
       - typescript

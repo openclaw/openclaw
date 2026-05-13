@@ -87,13 +87,13 @@ This is a two-step setup:
 If `claude` is not on `PATH`, either install Claude Code first or set
 `agents.defaults.cliBackends.claude-cli.command` to the real binary path.
 
-Manual token entry (any provider; writes SQLite auth-profile rows + updates config):
+Manual token entry (any provider; writes `auth-profiles.json` + updates config):
 
 ```bash
 openclaw models auth paste-token --provider openrouter
 ```
 
-SQLite auth-profile rows store credentials only. The canonical shape is:
+`auth-profiles.json` stores credentials only. The canonical shape is:
 
 ```json
 {
@@ -108,9 +108,9 @@ SQLite auth-profile rows store credentials only. The canonical shape is:
 }
 ```
 
-OpenClaw expects the canonical `version` + `profiles` shape at runtime. If an older install still has a flat file such as `{ "openrouter": { "apiKey": "..." } }`, run `openclaw doctor --fix` to import it as an `openrouter:default` API-key profile. Endpoint details such as `baseUrl`, `api`, model ids, headers, and timeouts belong under `models.providers.<id>` in `openclaw.json` or the stored model catalog, not in the auth-profile credential store.
+OpenClaw expects the canonical `version` + `profiles` shape at runtime. If an older install still has a flat file such as `{ "openrouter": { "apiKey": "..." } }`, run `openclaw doctor --fix` to rewrite it as an `openrouter:default` API-key profile; doctor keeps a `.legacy-flat.*.bak` copy beside the original. Endpoint details such as `baseUrl`, `api`, model ids, headers, and timeouts belong under `models.providers.<id>` in `openclaw.json` or `models.json`, not in `auth-profiles.json`.
 
-External auth routes such as Bedrock `auth: "aws-sdk"` are also not credentials. If you want a named Bedrock route, put `auth.profiles.<id>.mode: "aws-sdk"` in `openclaw.json`; do not write `type: "aws-sdk"` into the SQLite auth-profile row. `openclaw doctor --fix` moves legacy AWS SDK markers from the credential store into config metadata.
+External auth routes such as Bedrock `auth: "aws-sdk"` are also not credentials. If you want a named Bedrock route, put `auth.profiles.<id>.mode: "aws-sdk"` in `openclaw.json`; do not write `type: "aws-sdk"` into `auth-profiles.json`. `openclaw doctor --fix` moves legacy AWS SDK markers from the credential store into config metadata.
 
 Auth profile refs are also supported for static credentials:
 
@@ -132,7 +132,7 @@ openclaw models status --probe
 
 Notes:
 
-- Probe rows can come from auth profiles, env credentials, or the stored model catalog.
+- Probe rows can come from auth profiles, env credentials, or `models.json`.
 - If explicit `auth.order.<provider>` omits a stored profile, probe reports
   `excluded_by_auth_order` for that profile instead of trying it.
 - If auth exists but OpenClaw cannot resolve a probeable model candidate for
@@ -189,7 +189,7 @@ Use `/model` (or `/model list`) for a compact picker; use `/model status` for th
 
 ### Per-agent (CLI override)
 
-Set an explicit auth profile order override for an agent (stored in SQLite):
+Set an explicit auth profile order override for an agent (stored in that agent's `auth-state.json`):
 
 ```bash
 openclaw models auth order get --provider anthropic

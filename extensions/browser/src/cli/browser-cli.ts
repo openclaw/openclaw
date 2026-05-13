@@ -1,25 +1,22 @@
 import type { Command } from "commander";
 import {
-  formatCliCommand,
-  formatHelpExamples,
-  addGatewayClientOptions,
-  formatDocsLink,
   registerCommandGroups,
   resolveCliArgvInvocation,
   shouldEagerRegisterSubcommands,
-  theme,
   type CommandGroupEntry,
   type CommandGroupPlaceholder,
 } from "openclaw/plugin-sdk/cli-runtime";
 import { browserActionExamples, browserCoreExamples } from "./browser-cli-examples.js";
 import type { BrowserParentOpts } from "./browser-cli-shared.js";
-
-const browserCliRuntime = {
-  error: (...args: unknown[]) => console.error(...args),
-  exit: (code: number) => {
-    process.exit(code);
-  },
-};
+import {
+  addGatewayClientOptions,
+  danger,
+  defaultRuntime,
+  formatCliCommand,
+  formatDocsLink,
+  formatHelpExamples,
+  theme,
+} from "./core-api.js";
 
 type BrowserCommandRegistrar = (args: {
   browser: Command;
@@ -179,10 +176,10 @@ export function registerBrowserCli(program: Command, argv: string[] = process.ar
     )
     .action(() => {
       browser.outputHelp();
-      browserCliRuntime.error(
-        theme.error(`Missing subcommand. Try: "${formatCliCommand("openclaw browser status")}"`),
+      defaultRuntime.error(
+        danger(`Missing subcommand. Try: "${formatCliCommand("openclaw browser status")}"`),
       );
-      browserCliRuntime.exit(1);
+      defaultRuntime.exit(1);
     });
 
   addGatewayClientOptions(browser);

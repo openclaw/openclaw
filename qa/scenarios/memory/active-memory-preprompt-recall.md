@@ -85,12 +85,30 @@ steps:
       - set: activeSessionKey
         value:
           expr: "'agent:qa:qa-channel:direct:active-memory-on'"
-      - call: setQaActiveMemorySessionDisabled
+      - set: transcriptRoot
+        value:
+          expr: "path.join(env.gateway.tempRoot, 'state', 'plugins', 'active-memory', 'transcripts', 'agents', 'qa', config.transcriptDir)"
+      - set: toggleStorePath
+        value:
+          expr: "path.join(env.gateway.tempRoot, 'state', 'plugins', 'active-memory', 'session-toggles.json')"
+      - call: fs.rm
         args:
-          - ref: env
-          - sessionKey:
-              ref: baselineSessionKey
-            disabled: true
+          - ref: transcriptRoot
+          - recursive: true
+            force: true
+      - call: fs.rm
+        args:
+          - ref: toggleStorePath
+          - force: true
+      - call: fs.mkdir
+        args:
+          - expr: "path.dirname(toggleStorePath)"
+          - recursive: true
+      - call: fs.writeFile
+        args:
+          - ref: toggleStorePath
+          - expr: "`${JSON.stringify({ sessions: { [baselineSessionKey]: { disabled: true, updatedAt: Date.now() } } }, null, 2)}\\n`"
+          - utf8
       - set: requestCountBeforeBaseline
         value:
           expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length : 0"
@@ -134,12 +152,11 @@ steps:
       - set: requestCountBeforeActive
         value:
           expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length : 0"
-      - call: setQaActiveMemorySessionDisabled
+      - call: fs.writeFile
         args:
-          - ref: env
-          - sessionKey:
-              ref: activeSessionKey
-            disabled: false
+          - ref: toggleStorePath
+          - expr: "'{}\\n'"
+          - utf8
       - set: activeStartIndex
         value:
           expr: "state.getSnapshot().messages.length"
@@ -173,6 +190,24 @@ steps:
                 message:
                   expr: "`active memory reply missed the hidden preference: ${activeOutbound.text}`"
       - call: waitForCondition
+        saveAs: transcriptPath
+        args:
+          - lambda:
+              async: true
+              expr: "await (async () => { const entries = (await fs.readdir(transcriptRoot).catch(() => [])).filter((entry) => entry.endsWith('.jsonl')).toSorted(); return entries.length > 0 ? path.join(transcriptRoot, entries.at(-1)) : undefined; })()"
+          - 10000
+      - call: fs.readFile
+        saveAs: transcriptText
+        args:
+          - ref: transcriptPath
+          - utf8
+      - assert:
+          expr: "transcriptText.includes('memory_search')"
+          message: active memory transcript missing memory_search
+      - assert:
+          expr: "transcriptText.includes('memory_get')"
+          message: active memory transcript missing memory_get
+      - call: waitForCondition
         saveAs: activeSessionEntry
         args:
           - lambda:
@@ -191,5 +226,5 @@ steps:
             - assert:
                 expr: "mockRequests.some((request) => request.allInputText.includes('You are a memory search agent.') && request.plannedToolName === 'memory_get')"
                 message: expected mock Active Memory memory_get request
-    detailsExpr: "`${activeOutbound.text}\\n\\nactiveSession=${JSON.stringify(activeSessionEntry)}`"
+    detailsExpr: "`${activeOutbound.text}\\n\\ntranscript=${transcriptPath}`"
 ```

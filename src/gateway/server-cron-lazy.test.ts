@@ -133,7 +133,7 @@ function createParams(overrides: Partial<OpenClawConfig> = {}) {
 function createCronState(cron: CronServiceContract): GatewayCronState {
   return {
     cron,
-    storeKey: "cron-test",
+    storePath: "/tmp/openclaw-cron.json",
     cronEnabled: true,
   } as GatewayCronState;
 }

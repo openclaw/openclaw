@@ -1225,10 +1225,11 @@ describe("chrome.ts internal", () => {
         .mockImplementation(() => {
           throw new Error("decoration blew up");
         });
-      // The real decoration throws via preference writes; fake that path.
+      // The real decoration throws via our writes — fake by spying on
+      // fs.writeFileSync to throw for the marker file.
       const writeSpy = vi.spyOn(fs, "writeFileSync").mockImplementation((p) => {
         const s = String(p);
-        if (s.endsWith("Preferences")) {
+        if (s.endsWith(".openclaw-profile-decorated") || s.endsWith("Preferences")) {
           throw new Error("write blew up");
         }
       });

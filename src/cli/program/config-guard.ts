@@ -1,6 +1,6 @@
 import { readConfigFileSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { shouldRunConfigPreflightFromPath } from "../argv.js";
+import { shouldMigrateStateFromPath } from "../argv.js";
 
 const ALLOWED_INVALID_COMMANDS = new Set(["doctor", "logs", "health", "help", "status"]);
 const ALLOWED_INVALID_GATEWAY_SUBCOMMANDS = new Set([
@@ -42,7 +42,7 @@ export async function ensureConfigReady(params: {
 }): Promise<void> {
   const commandPath = params.commandPath ?? [];
   let preflightSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>> | null = null;
-  if (!didRunDoctorConfigFlow && shouldRunConfigPreflightFromPath(commandPath)) {
+  if (!didRunDoctorConfigFlow && shouldMigrateStateFromPath(commandPath)) {
     didRunDoctorConfigFlow = true;
     const runDoctorConfigPreflight = async () =>
       (await import("../../commands/doctor-config-preflight.js")).runDoctorConfigPreflight({

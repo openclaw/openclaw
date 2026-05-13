@@ -373,7 +373,18 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
     return isFiniteTimestamp(next) ? next : undefined;
   }
   if (job.schedule.kind === "at") {
-    const atMs = parseAbsoluteTimeMs(job.schedule.at);
+    // Handle both canonical `at` (string) and legacy `atMs` (number) fields.
+    // The store migration should convert atMs→at, but be defensive in case
+    // the migration hasn't run yet or was bypassed.
+    const schedule = job.schedule as { at?: string; atMs?: number | string };
+    const atMs =
+      typeof schedule.atMs === "number" && Number.isFinite(schedule.atMs) && schedule.atMs > 0
+        ? schedule.atMs
+        : typeof schedule.atMs === "string"
+          ? parseAbsoluteTimeMs(schedule.atMs)
+          : typeof schedule.at === "string"
+            ? parseAbsoluteTimeMs(schedule.at)
+            : null;
     // One-shot jobs stay due until they successfully finish, but if the
     // schedule was updated to a time after the last run, re-arm the job.
     if (job.state.lastStatus === "ok" && job.state.lastRunAtMs) {

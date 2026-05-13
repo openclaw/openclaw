@@ -444,8 +444,11 @@ describe("createWebSendApi LID resolution (issue #67378)", () => {
       authDir,
     });
     await api.sendPoll("+15555550000", { question: "Q?", options: ["a", "b"] });
-    expect(sendMessage.mock.calls[0]?.[0]).toBe("987654@lid");
-    const payload = requireRecord(sendMessage.mock.calls[0]?.[1], "send poll payload");
+    expect(requireMockArg(sendMessage, 0, 0, "send poll")).toBe("987654@lid");
+    const payload = requireRecord(
+      requireMockArg(sendMessage, 0, 1, "send poll"),
+      "send poll payload",
+    );
     expect("poll" in payload).toBe(true);
   });
 

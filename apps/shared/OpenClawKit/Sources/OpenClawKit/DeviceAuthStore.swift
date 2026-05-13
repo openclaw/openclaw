@@ -14,12 +14,19 @@ public struct DeviceAuthEntry: Codable, Sendable {
     }
 }
 
+private struct DeviceAuthStoreFile: Codable {
+    var version: Int
+    var deviceId: String
+    var tokens: [String: DeviceAuthEntry]
+}
+
 public enum DeviceAuthStore {
+    private static let fileName = "device-auth.json"
+
     public static func loadToken(deviceId: String, role: String) -> DeviceAuthEntry? {
+        guard let store = readStore(), store.deviceId == deviceId else { return nil }
         let role = self.normalizeRole(role)
-        guard let row = OpenClawSQLiteStateStore.readDeviceAuthToken(deviceId: deviceId, role: role)
-        else { return nil }
-        return self.entry(from: row)
+        return store.tokens[role]
     }
 
     public static func storeToken(
@@ -29,27 +36,31 @@ public enum DeviceAuthStore {
         scopes: [String] = []) -> DeviceAuthEntry
     {
         let normalizedRole = self.normalizeRole(role)
+        var next = self.readStore()
+        if next?.deviceId != deviceId {
+            next = DeviceAuthStoreFile(version: 1, deviceId: deviceId, tokens: [:])
+        }
         let entry = DeviceAuthEntry(
             token: token,
             role: normalizedRole,
             scopes: normalizeScopes(scopes),
             updatedAtMs: Int(Date().timeIntervalSince1970 * 1000))
-        do {
-            if let currentDeviceId = OpenClawSQLiteStateStore.readLatestDeviceAuthDeviceId(),
-               currentDeviceId != deviceId
-            {
-                try OpenClawSQLiteStateStore.deleteAllDeviceAuthTokens()
-            }
-            try OpenClawSQLiteStateStore.upsertDeviceAuthToken(self.row(deviceId: deviceId, entry: entry))
-        } catch {
-            // best-effort only
+        if next == nil {
+            next = DeviceAuthStoreFile(version: 1, deviceId: deviceId, tokens: [:])
+        }
+        next?.tokens[normalizedRole] = entry
+        if let store = next {
+            self.writeStore(store)
         }
         return entry
     }
 
     public static func clearToken(deviceId: String, role: String) {
+        guard var store = readStore(), store.deviceId == deviceId else { return }
         let normalizedRole = self.normalizeRole(role)
-        try? OpenClawSQLiteStateStore.deleteDeviceAuthToken(deviceId: deviceId, role: normalizedRole)
+        guard store.tokens[normalizedRole] != nil else { return }
+        store.tokens.removeValue(forKey: normalizedRole)
+        self.writeStore(store)
     }
 
     private static func normalizeRole(_ role: String) -> String {
@@ -63,34 +74,33 @@ public enum DeviceAuthStore {
         return Array(Set(trimmed)).sorted()
     }
 
-    private static func entry(from row: OpenClawSQLiteDeviceAuthTokenRow) -> DeviceAuthEntry {
-        DeviceAuthEntry(
-            token: row.token,
-            role: row.role,
-            scopes: self.decodeScopes(row.scopesJSON),
-            updatedAtMs: row.updatedAtMs)
+    private static func fileURL() -> URL {
+        DeviceIdentityPaths.stateDirURL()
+            .appendingPathComponent("identity", isDirectory: true)
+            .appendingPathComponent(self.fileName, isDirectory: false)
     }
 
-    private static func row(deviceId: String, entry: DeviceAuthEntry) -> OpenClawSQLiteDeviceAuthTokenRow {
-        OpenClawSQLiteDeviceAuthTokenRow(
-            deviceId: deviceId,
-            role: entry.role,
-            token: entry.token,
-            scopesJSON: self.encodeScopes(entry.scopes),
-            updatedAtMs: entry.updatedAtMs)
-    }
-
-    private static func encodeScopes(_ scopes: [String]) -> String {
-        guard let data = try? JSONEncoder().encode(scopes),
-              let raw = String(data: data, encoding: .utf8)
-        else { return "[]" }
-        return raw
-    }
-
-    private static func decodeScopes(_ raw: String) -> [String] {
-        guard let data = raw.data(using: .utf8),
-              let decoded = try? JSONDecoder().decode([String].self, from: data)
-        else { return [] }
+    private static func readStore() -> DeviceAuthStoreFile? {
+        let url = self.fileURL()
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        guard let decoded = try? JSONDecoder().decode(DeviceAuthStoreFile.self, from: data) else {
+            return nil
+        }
+        guard decoded.version == 1 else { return nil }
         return decoded
+    }
+
+    private static func writeStore(_ store: DeviceAuthStoreFile) {
+        let url = self.fileURL()
+        do {
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+            let data = try JSONEncoder().encode(store)
+            try data.write(to: url, options: [.atomic])
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        } catch {
+            // best-effort only
+        }
     }
 }

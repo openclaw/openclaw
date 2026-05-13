@@ -4,8 +4,8 @@ import { createConfigRuntimeEnv } from "../config/env-vars.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { unsetEnv, withTempEnv } from "./models-config.e2e-harness.js";
 import {
-  planOpenClawModelCatalogWithDeps,
-  resolveProvidersForModelCatalogWithDeps,
+  planOpenClawModelsJsonWithDeps,
+  resolveProvidersForModelsJsonWithDeps,
 } from "./models-config.plan.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
@@ -35,7 +35,7 @@ async function resolveProvidersForConfigEnvTest(params: {
   onResolveImplicitProviders: (env: NodeJS.ProcessEnv) => void;
 }) {
   const env = createConfigRuntimeEnv(params.cfg);
-  return await resolveProvidersForModelCatalogWithDeps(
+  return await resolveProvidersForModelsJsonWithDeps(
     {
       cfg: params.cfg,
       agentDir: "/tmp/openclaw-models-config-env-vars-test",
@@ -86,7 +86,7 @@ describe("models-config", () => {
       | Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">
       | undefined;
 
-    await resolveProvidersForModelCatalogWithDeps(
+    await resolveProvidersForModelsJsonWithDeps(
       {
         cfg: { models: { providers: {} } },
         agentDir: "/tmp/openclaw-models-config-env-vars-test",
@@ -107,7 +107,7 @@ describe("models-config", () => {
   it("threads workspace scope into implicit provider discovery", async () => {
     let observedWorkspaceDir: string | undefined;
 
-    await resolveProvidersForModelCatalogWithDeps(
+    await resolveProvidersForModelsJsonWithDeps(
       {
         cfg: { models: { providers: {} } },
         agentDir: "/tmp/openclaw-models-config-env-vars-test",
@@ -130,7 +130,7 @@ describe("models-config", () => {
     let observedEntriesOnly: boolean | undefined;
     let observedTimeoutMs: number | undefined;
 
-    await resolveProvidersForModelCatalogWithDeps(
+    await resolveProvidersForModelsJsonWithDeps(
       {
         cfg: { models: { providers: {} } },
         agentDir: "/tmp/openclaw-models-config-env-vars-test",
@@ -158,7 +158,7 @@ describe("models-config", () => {
     expect(observedTimeoutMs).toBe(5000);
   });
 
-  it("threads plugin metadata snapshots through model catalog planning", async () => {
+  it("threads plugin metadata snapshots through models.json planning", async () => {
     const pluginMetadataSnapshot = {
       index: { plugins: [] },
       manifestRegistry: { plugins: [], diagnostics: [] },
@@ -168,7 +168,7 @@ describe("models-config", () => {
       | Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">
       | undefined;
 
-    await planOpenClawModelCatalogWithDeps(
+    await planOpenClawModelsJsonWithDeps(
       {
         cfg: { models: { providers: {} } },
         agentDir: "/tmp/openclaw-models-config-env-vars-test",
@@ -188,8 +188,8 @@ describe("models-config", () => {
     expect(observedSnapshot).toBe(pluginMetadataSnapshot);
   });
 
-  it("normalizes retired Gemini ids preserved from stored catalog rows", async () => {
-    const plan = await planOpenClawModelCatalogWithDeps(
+  it("normalizes retired Gemini ids preserved from existing models.json rows", async () => {
+    const plan = await planOpenClawModelsJsonWithDeps(
       {
         cfg: { models: { mode: "merge", providers: {} } },
         agentDir: "/tmp/openclaw-models-config-env-vars-test",
@@ -236,7 +236,7 @@ describe("models-config", () => {
 
     expect(plan.action).toBe("write");
     if (plan.action !== "write") {
-      throw new Error("Expected stored model catalog write plan");
+      throw new Error("Expected models.json write plan");
     }
     const parsed = JSON.parse(plan.contents) as {
       providers?: Record<string, { models?: Array<{ id?: string }> }>;
@@ -261,7 +261,7 @@ describe("models-config", () => {
     });
   });
 
-  it("does not overwrite already-set host env vars while ensuring the model catalog", async () => {
+  it("does not overwrite already-set host env vars while ensuring models.json", async () => {
     await withTempEnv(["OPENROUTER_API_KEY", TEST_ENV_VAR], async () => {
       process.env.OPENROUTER_API_KEY = "from-host"; // pragma: allowlist secret
       process.env[TEST_ENV_VAR] = "from-host";

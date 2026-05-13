@@ -1836,7 +1836,7 @@ async function buildResponsesPayload(
       : [];
     const first = results[0];
     const firstPath = typeof first?.path === "string" ? first.path : undefined;
-    if (first?.source === "sessions" || firstPath?.startsWith("transcript:")) {
+    if (first?.source === "sessions" || firstPath?.startsWith("sessions/")) {
       return buildAssistantEvents(
         "Protocol note: I checked memory and the current Project Nebula codename is ORBIT-10.",
       );

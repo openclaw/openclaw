@@ -68,24 +68,15 @@ describe("handleReset", () => {
     const defaultStateDir = path.join(homeDir, ".openclaw");
     const profileConfigPath = path.join(profileStateDir, "openclaw.json");
     const profileCredentialsDir = path.join(profileStateDir, "credentials");
-    const profileAgentDb = path.join(
-      profileStateDir,
-      "agents",
-      "main",
-      "agent",
-      "openclaw-agent.sqlite",
-    );
+    const profileSessionsDir = path.join(profileStateDir, "agents", "main", "sessions");
     const workspaceDir = path.join(profileStateDir, "workspace");
     const defaultCredentialsDir = path.join(defaultStateDir, "credentials");
 
     fs.mkdirSync(profileCredentialsDir, { recursive: true });
-    fs.mkdirSync(path.dirname(profileAgentDb), { recursive: true });
+    fs.mkdirSync(profileSessionsDir, { recursive: true });
     fs.mkdirSync(workspaceDir, { recursive: true });
     fs.mkdirSync(defaultCredentialsDir, { recursive: true });
     fs.writeFileSync(profileConfigPath, "{}\n");
-    fs.writeFileSync(profileAgentDb, "");
-    fs.writeFileSync(`${profileAgentDb}-wal`, "");
-    fs.writeFileSync(`${profileAgentDb}-shm`, "");
 
     vi.stubEnv("HOME", homeDir);
     vi.stubEnv("OPENCLAW_HOME", homeDir);
@@ -101,9 +92,7 @@ describe("handleReset", () => {
     expect(trashedPaths).toEqual([
       profileConfigPath,
       profileCredentialsDir,
-      profileAgentDb,
-      `${profileAgentDb}-wal`,
-      `${profileAgentDb}-shm`,
+      profileSessionsDir,
       workspaceDir,
     ]);
     expect(trashedPaths).not.toContain(defaultCredentialsDir);

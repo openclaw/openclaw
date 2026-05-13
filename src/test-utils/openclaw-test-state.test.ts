@@ -1,8 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveAuthProfileStoreLocationForDisplay } from "../agents/auth-profiles/paths.js";
-import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { createOpenClawTestState, withOpenClawTestState } from "./openclaw-test-state.js";
 
 async function expectPathMissing(targetPath: string): Promise<void> {
@@ -149,7 +147,7 @@ describe("openclaw test state", () => {
           plugins: {},
         });
 
-        const profileStoreLocation = await state.writeAuthProfiles({
+        const profilePath = await state.writeAuthProfiles({
           version: 1,
           profiles: {
             "openai:test": {
@@ -160,12 +158,13 @@ describe("openclaw test state", () => {
           },
         });
 
-        expect(profileStoreLocation).toBe(
-          resolveAuthProfileStoreLocationForDisplay(state.agentDir(), state.env),
-        );
-        const profiles = loadPersistedAuthProfileStore(state.agentDir(), { env: state.env });
-        expect(profiles?.version).toBe(1);
-        expect(profiles?.profiles?.["openai:test"]?.provider).toBe("openai");
+        expect(profilePath).toBe(path.join(state.agentDir(), "auth-profiles.json"));
+        const profiles = JSON.parse(await fs.readFile(profilePath, "utf8")) as {
+          version?: unknown;
+          profiles?: Record<string, { provider?: unknown }>;
+        };
+        expect(profiles.version).toBe(1);
+        expect(profiles.profiles?.["openai:test"]?.provider).toBe("openai");
       },
     );
   });

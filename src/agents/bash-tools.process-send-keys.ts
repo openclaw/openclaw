@@ -1,4 +1,4 @@
-import type { AgentToolResult } from "./agent-core-contract.js";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ProcessSession } from "./bash-process-registry.js";
 import { deriveSessionName } from "./bash-tools.shared.js";
 import { encodeKeySequence, hasCursorModeSensitiveKeys } from "./pty-keys.js";
@@ -12,7 +12,7 @@ export type WritableStdin = {
   writableFinished?: boolean;
 };
 
-function failText(text: string): AgentToolResult {
+function failText(text: string): AgentToolResult<unknown> {
   return {
     content: [
       {
@@ -43,7 +43,7 @@ export async function handleProcessSendKeys(params: {
   keys?: string[];
   hex?: string[];
   literal?: string;
-}): Promise<AgentToolResult> {
+}): Promise<AgentToolResult<unknown>> {
   const request = {
     keys: params.keys,
     hex: params.hex,

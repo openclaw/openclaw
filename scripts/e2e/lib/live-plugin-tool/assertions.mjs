@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 
 const command = process.argv[2];
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
@@ -23,36 +22,6 @@ function stateDir() {
 
 function configPath() {
   return process.env.OPENCLAW_CONFIG_PATH || path.join(stateDir(), "openclaw.json");
-}
-
-function agentDatabasePath(agentId = "main") {
-  return path.join(stateDir(), "agents", agentId, "agent", "openclaw-agent.sqlite");
-}
-
-function stateDatabasePath() {
-  return path.join(stateDir(), "state", "openclaw.sqlite");
-}
-
-function withSqliteDatabase(dbPath, callback) {
-  if (!fs.existsSync(dbPath)) {
-    throw new Error(`missing SQLite database: ${dbPath}`);
-  }
-  const db = new DatabaseSync(dbPath, { readOnly: true });
-  try {
-    return callback(db);
-  } finally {
-    db.close();
-  }
-}
-
-function readMainAgentTranscriptText() {
-  return withSqliteDatabase(agentDatabasePath("main"), (db) =>
-    db
-      .prepare("SELECT event_json FROM transcript_events ORDER BY session_id, seq")
-      .all()
-      .map((row) => String(row.event_json ?? ""))
-      .join("\n"),
-  );
 }
 
 function realPathMaybe(filePath) {
@@ -78,17 +47,10 @@ function writeJson(file, value) {
 }
 
 function installRecords() {
-  return withSqliteDatabase(stateDatabasePath(), (db) => {
-    const row = db
-      .prepare(
-        "SELECT install_records_json FROM installed_plugin_index WHERE index_key = 'current'",
-      )
-      .get();
-    if (!row?.install_records_json) {
-      return {};
-    }
-    return JSON.parse(String(row.install_records_json));
-  });
+  const indexPath = path.join(stateDir(), "plugins", "installs.json");
+  const index = fs.existsSync(indexPath) ? readJson(indexPath) : {};
+  const cfg = fs.existsSync(configPath()) ? readJson(configPath()) : {};
+  return index.installRecords || index.records || cfg.plugins?.installs || {};
 }
 
 function pluginInstallPath() {
@@ -284,9 +246,16 @@ function assertAgentTurn() {
       `live agent reply did not contain tool slug ${expected}:\nstdout=${stdout}\nstderr=${stderr}`,
     );
   }
-  const transcript = readMainAgentTranscriptText();
+  const sessionsDir = path.join(stateDir(), "agents", "main", "sessions");
+  const sessionFiles = fs
+    .readdirSync(sessionsDir, { recursive: true })
+    .map((entry) => path.join(sessionsDir, String(entry)))
+    .filter((entry) => entry.endsWith(".jsonl") && fs.existsSync(entry));
+  const transcript = sessionFiles.map((file) => fs.readFileSync(file, "utf8")).join("\n");
   if (!transcript.includes(toolName) || !transcript.includes(expected)) {
-    throw new Error(`SQLite session transcript did not show ${toolName} returning ${expected}`);
+    throw new Error(
+      `session transcript did not show ${toolName} returning ${expected}; checked ${sessionFiles.join(", ")}`,
+    );
   }
 }
 

@@ -1,36 +1,18 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome as withTempHomeBase } from "openclaw/plugin-sdk/test-env";
-import { upsertSessionEntry } from "../config/sessions/store.js";
-import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import type { CronJob } from "./types.js";
 
 export async function withTempCronHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeBase(
-    async (home) => {
-      try {
-        return await fn(home);
-      } finally {
-        closeOpenClawStateDatabaseForTest();
-      }
-    },
-    { prefix: "openclaw-cron-" },
-  );
+  return withTempHomeBase(fn, { prefix: "openclaw-cron-" });
 }
 
-function cronTestEnv(home: string): NodeJS.ProcessEnv {
-  return {
-    ...process.env,
-    OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
-  };
-}
-
-export async function seedMainRouteSession(
+export async function writeSessionStore(
   home: string,
-  session: { lastChannel: string; lastTo: string },
-): Promise<void> {
-  await seedCronSessionRows(home, {
+  session: { lastProvider: string; lastTo: string; lastChannel?: string },
+): Promise<string> {
+  return writeSessionStoreEntries(home, {
     "agent:main:main": {
       sessionId: "main-session",
       updatedAt: Date.now(),
@@ -39,23 +21,22 @@ export async function seedMainRouteSession(
   });
 }
 
-export async function seedCronSessionRows(
+export async function writeSessionStoreEntries(
   home: string,
   entries: Record<string, Record<string, unknown>>,
-  agentId = "main",
-): Promise<void> {
-  const env = cronTestEnv(home);
-  for (const [sessionKey, entry] of Object.entries(entries)) {
-    upsertSessionEntry({
-      agentId,
-      env,
-      sessionKey,
-      entry: entry as SessionEntry,
-    });
-  }
+): Promise<string> {
+  const dir = path.join(home, ".openclaw", "sessions");
+  await fs.mkdir(dir, { recursive: true });
+  const storePath = path.join(dir, "sessions.json");
+  await fs.writeFile(storePath, JSON.stringify(entries, null, 2), "utf-8");
+  return storePath;
 }
 
-export function makeCfg(home: string, overrides: Partial<OpenClawConfig> = {}): OpenClawConfig {
+export function makeCfg(
+  home: string,
+  storePath: string,
+  overrides: Partial<OpenClawConfig> = {},
+): OpenClawConfig {
   const base: OpenClawConfig = {
     agents: {
       defaults: {
@@ -63,9 +44,7 @@ export function makeCfg(home: string, overrides: Partial<OpenClawConfig> = {}): 
         workspace: path.join(home, "openclaw"),
       },
     },
-    session: {
-      mainKey: "main",
-    },
+    session: { store: storePath, mainKey: "main" },
   } as OpenClawConfig;
   return { ...base, ...overrides };
 }

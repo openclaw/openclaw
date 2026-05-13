@@ -27,6 +27,7 @@ export function createStoreForContext(params: {
 }): SkillWorkshopStore {
   const workspaceDir = resolveWorkspaceDir(params);
   return new SkillWorkshopStore({
+    stateDir: params.api.runtime.state.resolveStateDir(),
     workspaceDir,
   });
 }

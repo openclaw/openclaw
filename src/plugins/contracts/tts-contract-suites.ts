@@ -1,3 +1,4 @@
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createEmptyPluginRegistry,
@@ -7,7 +8,6 @@ import {
 import type { ResolvedTtsConfig, SpeechProviderPlugin } from "openclaw/plugin-sdk/speech-core";
 import { withEnv, withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AssistantMessage } from "../../agents/pi-ai-contract.js";
 import { resolveWorkspacePackagePublicModuleUrl } from "../../plugin-sdk/test-helpers/public-surface-loader.js";
 
 type TtsRuntimeModule = typeof import("openclaw/plugin-sdk/tts-runtime");
@@ -23,7 +23,7 @@ let ttsRuntime: TtsRuntimeModule;
 let ttsRuntimePromise: Promise<TtsRuntimeModule> | null = null;
 let ttsRuntimeInitialized = false;
 let ttsCorePromise: Promise<TtsCoreModule> | null = null;
-let completeSimple: typeof import("../../agents/pi-ai-contract.js").completeSimple;
+let completeSimple: typeof import("@earendil-works/pi-ai").completeSimple;
 let getApiKeyForModelMock: SummarizeTextDeps["getApiKeyForModel"];
 let requireApiKeyMock: SummarizeTextDeps["requireApiKey"];
 let resolveModelAsyncMock: SummarizeTextDeps["resolveModelAsync"];
@@ -70,7 +70,7 @@ async function withIsolatedSpeechProviderEnvAsync<T>(
   return await withEnvAsync(isolatedSpeechProviderEnv(overrides), fn);
 }
 
-vi.mock("../../agents/pi-ai-contract.js", () => {
+vi.mock("@earendil-works/pi-ai", () => {
   const getApiProvider = vi.fn(() => undefined);
   return {
     completeSimple: vi.fn(),
@@ -84,7 +84,7 @@ vi.mock("../../agents/pi-ai-contract.js", () => {
   };
 });
 
-vi.mock("../../agents/pi-ai-oauth-contract.js", () => {
+vi.mock("@earendil-works/pi-ai/oauth", () => {
   return {
     getOAuthProviders: () => [],
     getOAuthApiKey: vi.fn(async () => null),
@@ -494,6 +494,7 @@ function createResolvedSummarizationConfig(cfg: OpenClawConfig): ResolvedTtsConf
     },
     providerConfigs: {},
     personas: {},
+    prefsPath: typeof rawConfig.prefsPath === "string" ? rawConfig.prefsPath : undefined,
     maxTextLength: typeof rawConfig.maxTextLength === "number" ? rawConfig.maxTextLength : 4096,
     timeoutMs: typeof rawConfig.timeoutMs === "number" ? rawConfig.timeoutMs : 30_000,
     rawConfig,
@@ -503,7 +504,7 @@ function createResolvedSummarizationConfig(cfg: OpenClawConfig): ResolvedTtsConf
 
 async function setupSummarizationMocks() {
   ({ summarizeText: summarizeTextCore } = await loadTtsCore());
-  ({ completeSimple } = await import("../../agents/pi-ai-contract.js"));
+  ({ completeSimple } = await import("@earendil-works/pi-ai"));
   getApiKeyForModelMock = vi.fn() as SummarizeTextDeps["getApiKeyForModel"];
   requireApiKeyMock = vi.fn() as SummarizeTextDeps["requireApiKey"];
   resolveModelAsyncMock = vi.fn() as SummarizeTextDeps["resolveModelAsync"];
@@ -1251,7 +1252,13 @@ export function describeTtsAutoApplyContract() {
     const withMockedAutoTtsFetch = async (
       run: (fetchMock: ReturnType<typeof vi.fn>) => Promise<void>,
     ) => {
-      await withMockedSpeechFetch(run, 1);
+      const prevPrefs = process.env.OPENCLAW_TTS_PREFS;
+      process.env.OPENCLAW_TTS_PREFS = `/tmp/tts-test-${Date.now()}.json`;
+      try {
+        await withMockedSpeechFetch(run, 1);
+      } finally {
+        process.env.OPENCLAW_TTS_PREFS = prevPrefs;
+      }
     };
 
     const taggedCfg: OpenClawConfig = {

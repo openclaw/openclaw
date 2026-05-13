@@ -57,7 +57,7 @@ module.exports = {
     {
       id: "channels.${channelId}.token",
       targetType: "channels.${channelId}.token",
-      store: "openclaw.json",
+      configFile: "openclaw.json",
       pathPattern: "channels.${channelId}.token",
       secretShape: "secret_input",
       expectedResolvedValue: "string",

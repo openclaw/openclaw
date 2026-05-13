@@ -11,7 +11,7 @@ const runtime = {
 };
 
 const defaultSessions: HealthSummary["sessions"] = {
-  databasePath: "/tmp/openclaw-agent.sqlite",
+  path: "/tmp/sessions.json",
   count: 0,
   recent: [],
 };
@@ -87,7 +87,7 @@ describe("healthCommand", () => {
 
   it("outputs JSON from gateway", async () => {
     const agentSessions = {
-      databasePath: "/tmp/openclaw-agent.sqlite",
+      path: "/tmp/sessions.json",
       count: 1,
       recent: [{ key: "+1555", updatedAt: Date.now(), age: 0 }],
     };

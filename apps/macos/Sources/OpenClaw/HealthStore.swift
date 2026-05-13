@@ -36,7 +36,7 @@ struct HealthSnapshot: Codable {
     }
 
     struct Sessions: Codable {
-        let databasePath: String
+        let path: String
         let count: Int
         let recent: [SessionInfo]
     }

@@ -1,10 +1,10 @@
+import type { Api, Model } from "@earendil-works/pi-ai";
+import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { resolveDefaultAgentDir } from "../../agents/agent-scope.js";
-import type { ModelRegistry } from "../../agents/model-registry-contract.js";
 import {
   shouldSuppressBuiltInModel,
   shouldSuppressBuiltInModelFromManifest,
 } from "../../agents/model-suppression.js";
-import type { Api, Model } from "../../agents/pi-ai-contract.js";
 import { discoverAuthStorage, discoverModels } from "../../agents/pi-model-discovery.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {

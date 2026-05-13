@@ -34,7 +34,7 @@ export function buildColdStartStatusSummary() {
     tasks: createEmptyTaskRegistrySummary(),
     taskAudit: createEmptyTaskAuditSummary(),
     sessions: {
-      databasePaths: [],
+      paths: [],
       count: 0,
       defaults: { model: null, contextTokens: null },
       recent: [],

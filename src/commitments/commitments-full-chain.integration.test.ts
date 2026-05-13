@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "../infra/heartbeat-runner.test-harness.js";
 import {
-  seedHeartbeatSession,
+  seedSessionStore,
   withTempHeartbeatSandbox,
 } from "../infra/heartbeat-runner.test-utils.js";
 import {
@@ -31,7 +31,7 @@ describe("commitments full-chain integration", () => {
     vi.useFakeTimers();
     vi.setSystemTime(writeMs);
 
-    await withTempHeartbeatSandbox(async ({ tmpDir, replySpy }) => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
       const sessionKey = "agent:main:telegram:user-155462274";
       const cfg: OpenClawConfig = {
@@ -45,11 +45,12 @@ describe("commitments full-chain integration", () => {
           },
         },
         channels: { telegram: { allowFrom: ["*"] } },
-        session: {},
+        session: { store: storePath },
         commitments: { enabled: true },
       };
-      await seedHeartbeatSession("main", sessionKey, {
+      await seedSessionStore(storePath, sessionKey, {
         lastChannel: "telegram",
+        lastProvider: "telegram",
         lastTo: "stale-target",
       });
       configureCommitmentExtractionRuntime({

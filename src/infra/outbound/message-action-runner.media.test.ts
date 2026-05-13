@@ -78,14 +78,6 @@ function firstMockArg(
   return requireRecord(arg);
 }
 
-function requireLoadWebMediaCall(callIndex = 0): readonly unknown[] {
-  const call = vi.mocked(loadWebMedia).mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`expected loadWebMedia call ${callIndex}`);
-  }
-  return call;
-}
-
 async function withSandbox(test: (sandboxDir: string) => Promise<void>) {
   const sandboxDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-sandbox-"));
   try {
@@ -128,6 +120,14 @@ function requireActionPayload(
 function requireLoadWebMediaOptions(): Record<string, unknown> {
   const call = requireLoadWebMediaCall();
   return requireRecord(call[1]);
+}
+
+function requireLoadWebMediaCall(): readonly unknown[] {
+  const call = vi.mocked(loadWebMedia).mock.calls[0];
+  if (!call) {
+    throw new Error("Expected loadWebMedia to be called");
+  }
+  return call;
 }
 
 async function expectSandboxMediaRewrite(params: {

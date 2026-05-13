@@ -17,7 +17,9 @@ type CheckQmdBinaryAvailability = typeof checkQmdBinaryAvailabilityFn;
 const checkQmdBinaryAvailability = vi.hoisted(() =>
   vi.fn<CheckQmdBinaryAvailability>(async () => ({ available: true })),
 );
+const auditDreamingArtifacts = vi.hoisted(() => vi.fn());
 const auditShortTermPromotionArtifacts = vi.hoisted(() => vi.fn());
+const repairDreamingArtifacts = vi.hoisted(() => vi.fn());
 const repairShortTermPromotionArtifacts = vi.hoisted(() => vi.fn());
 const noteWorkspaceMemoryHealth = vi.hoisted(() => vi.fn(async () => undefined));
 const maybeRepairWorkspaceMemoryHealth = vi.hoisted(() => vi.fn(async () => undefined));
@@ -56,7 +58,9 @@ vi.mock("../memory-host-sdk/engine-qmd.js", () => ({
 }));
 
 vi.mock("../plugin-sdk/memory-core-engine-runtime.js", () => ({
+  auditDreamingArtifacts,
   auditShortTermPromotionArtifacts,
+  repairDreamingArtifacts,
   repairShortTermPromotionArtifacts,
   getBuiltinMemoryEmbeddingProviderDoctorMetadata: vi.fn((provider: string) => {
     if (provider === "gemini") {
@@ -97,7 +101,8 @@ import { detectLegacyWorkspaceDirs, formatRootMemoryFilesWarning } from "./docto
 function resetMemoryRecallMocks() {
   auditShortTermPromotionArtifacts.mockReset();
   auditShortTermPromotionArtifacts.mockResolvedValue({
-    storeLabel: "sqlite:plugin_state_entries/memory-core/dreaming.short-term-recall",
+    storePath: "/tmp/agent-default/workspace/memory/.dreams/short-term-recall.json",
+    lockPath: "/tmp/agent-default/workspace/memory/.dreams/short-term-promotion.lock",
     exists: true,
     entryCount: 1,
     promotedCount: 0,
@@ -106,11 +111,31 @@ function resetMemoryRecallMocks() {
     invalidEntryCount: 0,
     issues: [],
   });
+  auditDreamingArtifacts.mockReset();
+  auditDreamingArtifacts.mockResolvedValue({
+    sessionCorpusDir: "/tmp/agent-default/workspace/memory/.dreams/session-corpus",
+    sessionCorpusFileCount: 0,
+    suspiciousSessionCorpusFileCount: 0,
+    suspiciousSessionCorpusLineCount: 0,
+    sessionIngestionPath: "/tmp/agent-default/workspace/memory/.dreams/session-ingestion.json",
+    sessionIngestionExists: false,
+    issues: [],
+  });
+  repairDreamingArtifacts.mockReset();
+  repairDreamingArtifacts.mockResolvedValue({
+    changed: false,
+    archivedDreamsDiary: false,
+    archivedSessionCorpus: false,
+    archivedSessionIngestion: false,
+    archivedPaths: [],
+    warnings: [],
+  });
   repairShortTermPromotionArtifacts.mockReset();
   repairShortTermPromotionArtifacts.mockResolvedValue({
     changed: false,
     removedInvalidEntries: 0,
     rewroteStore: false,
+    removedStaleLock: false,
   });
   noteWorkspaceMemoryHealth.mockClear();
   maybeRepairWorkspaceMemoryHealth.mockClear();
@@ -713,7 +738,8 @@ describe("memory recall doctor integration", () => {
 
   it("notes recall-store audit problems with doctor guidance", async () => {
     auditShortTermPromotionArtifacts.mockResolvedValueOnce({
-      storeLabel: "sqlite:plugin_state_entries/memory-core/dreaming.short-term-recall",
+      storePath: "/tmp/agent-default/workspace/memory/.dreams/short-term-recall.json",
+      lockPath: "/tmp/agent-default/workspace/memory/.dreams/short-term-promotion.lock",
       exists: true,
       entryCount: 12,
       promotedCount: 4,
@@ -725,6 +751,12 @@ describe("memory recall doctor integration", () => {
           severity: "warn",
           code: "recall-store-invalid",
           message: "Short-term recall store contains 1 invalid entry.",
+          fixable: true,
+        },
+        {
+          severity: "warn",
+          code: "recall-lock-stale",
+          message: "Short-term promotion lock appears stale.",
           fixable: true,
         },
       ],
@@ -745,7 +777,8 @@ describe("memory recall doctor integration", () => {
 
   it("runs memory recall repair during doctor --fix", async () => {
     auditShortTermPromotionArtifacts.mockResolvedValueOnce({
-      storeLabel: "sqlite:plugin_state_entries/memory-core/dreaming.short-term-recall",
+      storePath: "/tmp/agent-default/workspace/memory/.dreams/short-term-recall.json",
+      lockPath: "/tmp/agent-default/workspace/memory/.dreams/short-term-promotion.lock",
       exists: true,
       entryCount: 12,
       promotedCount: 4,
@@ -765,6 +798,7 @@ describe("memory recall doctor integration", () => {
       changed: true,
       removedInvalidEntries: 1,
       rewroteStore: true,
+      removedStaleLock: true,
     });
     const prompter = createPrompter();
 
@@ -779,6 +813,49 @@ describe("memory recall doctor integration", () => {
     const message = firstNoteMessage();
     expect(message).toContain("Memory recall artifacts repaired:");
     expect(message).toContain("rewrote recall store");
+    expect(message).toContain("removed stale promotion lock");
+  });
+
+  it("runs dreaming artifact repair during doctor --fix", async () => {
+    auditDreamingArtifacts.mockResolvedValueOnce({
+      sessionCorpusDir: "/tmp/agent-default/workspace/memory/.dreams/session-corpus",
+      sessionCorpusFileCount: 2,
+      suspiciousSessionCorpusFileCount: 1,
+      suspiciousSessionCorpusLineCount: 3,
+      sessionIngestionPath: "/tmp/agent-default/workspace/memory/.dreams/session-ingestion.json",
+      sessionIngestionExists: true,
+      issues: [
+        {
+          severity: "warn",
+          code: "dreaming-session-corpus-self-ingested",
+          message:
+            "Dreaming session corpus appears to contain self-ingested narrative content (3 suspicious lines).",
+          fixable: true,
+        },
+      ],
+    });
+    repairDreamingArtifacts.mockResolvedValueOnce({
+      changed: true,
+      archiveDir: "/tmp/agent-default/workspace/.openclaw-repair/dreaming/2026-04-11T21-35-00-000Z",
+      archivedDreamsDiary: false,
+      archivedSessionCorpus: true,
+      archivedSessionIngestion: true,
+      archivedPaths: [],
+      warnings: [],
+    });
+    const prompter = createPrompter();
+
+    await maybeRepairMemoryRecallHealth({ cfg, prompter });
+
+    expect(maybeRepairWorkspaceMemoryHealth).toHaveBeenCalledWith({ cfg, prompter });
+    expect(prompter.confirmRuntimeRepair).toHaveBeenCalled();
+    expect(repairDreamingArtifacts).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/agent-default/workspace",
+    });
+    const message = String(note.mock.calls[note.mock.calls.length - 1]?.[0] ?? "");
+    expect(message).toContain("Dreaming artifacts repaired:");
+    expect(message).toContain("archived session corpus");
+    expect(message).toContain("archived session-ingestion state");
   });
 });
 

@@ -58,7 +58,7 @@ function expectMalformedAgentAskUsesDefaults(agentAsk: unknown): void {
   expectFields(summary.ask, {
     requested: "off",
     host: "always",
-    hostSource: "SQLite exec approvals state defaults.ask",
+    hostSource: "~/.openclaw/exec-approvals.json defaults.ask",
     effective: "always",
     note: "more aggressive ask wins",
   });
@@ -285,19 +285,19 @@ describe("exec approvals policy helpers", () => {
       requested: "full",
       host: "allowlist",
       effective: "allowlist",
-      hostSource: "SQLite exec approvals state defaults.security",
+      hostSource: "~/.openclaw/exec-approvals.json defaults.security",
       note: "stricter host security wins",
     });
     expectFields(summary.ask, {
       requested: "off",
       host: "always",
       effective: "always",
-      hostSource: "SQLite exec approvals state defaults.ask",
+      hostSource: "~/.openclaw/exec-approvals.json defaults.ask",
       note: "more aggressive ask wins",
     });
     expect(summary.askFallback).toEqual({
       effective: "deny",
-      source: "SQLite exec approvals state defaults.askFallback",
+      source: "~/.openclaw/exec-approvals.json defaults.askFallback",
     });
   });
 
@@ -317,18 +317,14 @@ describe("exec approvals policy helpers", () => {
       },
       configPath: "tools.exec",
       scopeLabel: "tools.exec",
-      hostPath: "/tmp/node-openclaw.sqlite#table/exec_approvals_config/current",
+      hostPath: "/tmp/node-exec-approvals.json",
     });
 
-    expect(summary.security.hostSource).toBe(
-      "/tmp/node-openclaw.sqlite#table/exec_approvals_config/current defaults.security",
-    );
-    expect(summary.ask.hostSource).toBe(
-      "/tmp/node-openclaw.sqlite#table/exec_approvals_config/current defaults.ask",
-    );
+    expect(summary.security.hostSource).toBe("/tmp/node-exec-approvals.json defaults.security");
+    expect(summary.ask.hostSource).toBe("/tmp/node-exec-approvals.json defaults.ask");
     expect(summary.askFallback).toEqual({
       effective: "deny",
-      source: "/tmp/node-openclaw.sqlite#table/exec_approvals_config/current defaults.askFallback",
+      source: "/tmp/node-exec-approvals.json defaults.askFallback",
     });
   });
 
@@ -375,7 +371,7 @@ describe("exec approvals policy helpers", () => {
 
     expect(summary.askFallback).toEqual({
       effective: "allowlist",
-      source: "SQLite exec approvals state defaults.askFallback",
+      source: "~/.openclaw/exec-approvals.json defaults.askFallback",
     });
   });
 
@@ -419,15 +415,15 @@ describe("exec approvals policy helpers", () => {
 
     expectFields(summary.security, {
       host: "allowlist",
-      hostSource: "SQLite exec approvals state agents.*.security",
+      hostSource: "~/.openclaw/exec-approvals.json agents.*.security",
     });
     expectFields(summary.ask, {
       host: "always",
-      hostSource: "SQLite exec approvals state agents.*.ask",
+      hostSource: "~/.openclaw/exec-approvals.json agents.*.ask",
     });
     expect(summary.askFallback).toEqual({
       effective: "deny",
-      source: "SQLite exec approvals state agents.*.askFallback",
+      source: "~/.openclaw/exec-approvals.json agents.*.askFallback",
     });
   });
 
@@ -550,11 +546,11 @@ describe("exec approvals policy helpers", () => {
     expect(snapshots.map((snapshot) => snapshot.scopeLabel)).toEqual(["tools.exec"]);
     expectFields(snapshots[0]?.security, {
       host: "allowlist",
-      hostSource: "SQLite exec approvals state agents.main.security",
+      hostSource: "~/.openclaw/exec-approvals.json agents.main.security",
     });
     expectFields(snapshots[0]?.ask, {
       host: "always",
-      hostSource: "SQLite exec approvals state agents.main.ask",
+      hostSource: "~/.openclaw/exec-approvals.json agents.main.ask",
     });
   });
 

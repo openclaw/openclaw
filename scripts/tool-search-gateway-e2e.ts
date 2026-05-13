@@ -8,10 +8,6 @@ import { startQaMockOpenAiServer } from "../extensions/qa-lab/src/providers/mock
 import { stageQaMockAuthProfiles } from "../extensions/qa-lab/src/providers/shared/mock-auth.js";
 import { buildQaGatewayConfig } from "../extensions/qa-lab/src/qa-gateway-config.js";
 import { resetConfigRuntimeState } from "../src/config/config.js";
-import {
-  listSqliteSessionTranscripts,
-  loadSqliteSessionTranscriptEvents,
-} from "../src/config/sessions/transcript-store.sqlite.js";
 import { startGatewayServer } from "../src/gateway/server.js";
 
 type Lane = "normal" | "code";
@@ -26,7 +22,7 @@ type LaneResult = {
   providerPlannedTools: string[];
   gatewayOutputToolNames: string[];
   gatewayOutputText: string;
-  transcriptToolMentions: Record<string, number>;
+  sessionLogToolMentions: Record<string, number>;
 };
 
 const FAKE_PLUGIN_ID = "tool-search-e2e-fixture";
@@ -92,33 +88,25 @@ function countOccurrences(haystack: string, needle: string): number {
   }
 }
 
-function stringifyTranscriptEvent(event: unknown): string {
-  try {
-    return JSON.stringify(event);
-  } catch {
-    return "";
-  }
-}
-
-async function readSqliteTranscriptMentions(params: {
+async function readSessionLogMentions(params: {
   stateDir: string;
   targetTool: string;
 }): Promise<Record<string, number>> {
+  const sessionsDir = path.join(params.stateDir, "agents", "qa", "sessions");
   const mentions: Record<string, number> = {
     tool_search_code: 0,
     [params.targetTool]: 0,
   };
-  const env = { ...process.env, OPENCLAW_STATE_DIR: params.stateDir };
-  for (const transcript of listSqliteSessionTranscripts({ env, agentId: "qa" })) {
-    for (const entry of loadSqliteSessionTranscriptEvents({
-      env,
-      agentId: transcript.agentId,
-      sessionId: transcript.sessionId,
-    })) {
-      const raw = stringifyTranscriptEvent(entry.event);
-      mentions.tool_search_code += countOccurrences(raw, "tool_search_code");
-      mentions[params.targetTool] += countOccurrences(raw, params.targetTool);
-    }
+  let files: string[] = [];
+  try {
+    files = await fs.readdir(sessionsDir);
+  } catch {
+    return mentions;
+  }
+  for (const file of files.filter((candidate) => candidate.endsWith(".jsonl"))) {
+    const raw = await fs.readFile(path.join(sessionsDir, file), "utf8").catch(() => "");
+    mentions.tool_search_code += countOccurrences(raw, "tool_search_code");
+    mentions[params.targetTool] += countOccurrences(raw, params.targetTool);
   }
   return mentions;
 }
@@ -473,7 +461,7 @@ async function runLane(params: {
         .filter((name): name is string => typeof name === "string"),
       gatewayOutputToolNames: outputToolNames(response),
       gatewayOutputText: outputText(response),
-      transcriptToolMentions: await readSqliteTranscriptMentions({
+      sessionLogToolMentions: await readSessionLogMentions({
         stateDir,
         targetTool: params.targetTool,
       }),
@@ -521,7 +509,7 @@ async function main() {
     assert(
       code.providerPlannedTools.includes("tool_search_code") &&
         code.gatewayOutputText.includes(targetTool) &&
-        code.transcriptToolMentions[targetTool] > 0,
+        code.sessionLogToolMentions[targetTool] > 0,
       `code lane did not bridge-call ${targetTool}`,
     );
     assert(
@@ -533,9 +521,9 @@ async function main() {
       `expected Tool Search request to be smaller: normal=${normal.providerRawBytes} code=${code.providerRawBytes}`,
     );
     assert(
-      code.transcriptToolMentions.tool_search_code > 0 &&
-        code.transcriptToolMentions[targetTool] > 0,
-      "code lane SQLite transcript did not record bridge and target tool mentions",
+      code.sessionLogToolMentions.tool_search_code > 0 &&
+        code.sessionLogToolMentions[targetTool] > 0,
+      "code lane session log did not record bridge and target tool mentions",
     );
 
     const summary = {

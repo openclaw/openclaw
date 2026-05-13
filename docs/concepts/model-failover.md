@@ -69,11 +69,10 @@ OpenClaw separates the selected provider/model from why it was selected. That so
 
 OpenClaw uses **auth profiles** for both API keys and OAuth tokens.
 
-- Secrets live in `~/.openclaw/state/openclaw.sqlite#table/auth_profile_stores/<agentDir>`.
-- Runtime auth-routing state is SQLite-primary. Legacy per-agent
-  `auth-state.json` files are doctor-import inputs only.
+- Secrets live in `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` (legacy: `~/.openclaw/agent/auth-profiles.json`).
+- Runtime auth-routing state lives in `~/.openclaw/agents/<agentId>/agent/auth-state.json`.
 - Config `auth.profiles` / `auth.order` are **metadata + routing only** (no secrets).
-- Legacy import-only OAuth file: `~/.openclaw/credentials/oauth.json` (imported by doctor into SQLite).
+- Legacy import-only OAuth file: `~/.openclaw/credentials/oauth.json` (imported into `auth-profiles.json` on first use).
 
 More detail: [OAuth](/concepts/oauth)
 
@@ -89,7 +88,7 @@ OAuth logins create distinct profiles so multiple accounts can coexist.
 - Default: `provider:default` when no email is available.
 - OAuth with email: `provider:<email>` (for example `google-antigravity:user@gmail.com`).
 
-Profiles live in `~/.openclaw/state/openclaw.sqlite#table/auth_profile_stores/<agentDir>` under `profiles`.
+Profiles live in `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` under `profiles`.
 
 ## Rotation order
 
@@ -103,7 +102,7 @@ When a provider has multiple profiles, OpenClaw chooses an order like this:
     `auth.profiles` filtered by provider.
   </Step>
   <Step title="Stored profiles">
-    Entries in the SQLite auth-profile row for the provider.
+    Entries in `auth-profiles.json` for the provider.
   </Step>
 </Steps>
 
@@ -192,7 +191,7 @@ Cooldowns use exponential backoff:
 - 25 minutes
 - 1 hour (cap)
 
-State is stored in SQLite under `usageStats`:
+State is stored in `auth-state.json` under `usageStats`:
 
 ```json
 {
@@ -216,7 +215,7 @@ Not every billing-shaped response is `402`, and not every HTTP `402` lands here.
 Meanwhile temporary `402` usage-window and organization/workspace spend-limit errors are classified as `rate_limit` when the message looks retryable (for example `weekly usage limit exhausted`, `daily limit reached, resets tomorrow`, or `organization spending limit exceeded`). Those stay on the short cooldown/failover path instead of the long billing-disable path.
 </Note>
 
-State is stored in SQLite:
+State is stored in `auth-state.json`:
 
 ```json
 {

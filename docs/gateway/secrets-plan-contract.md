@@ -1,5 +1,5 @@
 ---
-summary: "Contract for `secrets apply` plans: target validation, path matching, and SQLite auth-profile target scope"
+summary: "Contract for `secrets apply` plans: target validation, path matching, and `auth-profiles.json` target scope"
 read_when:
   - Generating or reviewing `openclaw secrets apply` plans
   - Debugging `Invalid plan target path` errors
@@ -66,8 +66,8 @@ Each target is validated with all of the following:
 - Forbidden segments are rejected: `__proto__`, `prototype`, `constructor`.
 - The normalized path must match the registered path shape for the target type.
 - If `providerId` or `accountId` is set, it must match the id encoded in the path.
-- SQLite auth-profile targets require `agentId`.
-- When creating a new auth-profile mapping, include `authProfileProvider`.
+- `auth-profiles.json` targets require `agentId`.
+- When creating a new `auth-profiles.json` mapping, include `authProfileProvider`.
 
 ## Failure behavior
 
@@ -87,8 +87,8 @@ No writes are committed for an invalid plan.
 
 ## Runtime and audit scope notes
 
-- Ref-only SQLite auth-profile entries (`keyRef`/`tokenRef`) are included in runtime resolution and audit coverage.
-- `secrets apply` writes supported `openclaw.json` targets, supported SQLite auth-profile targets, and optional scrub targets.
+- Ref-only `auth-profiles.json` entries (`keyRef`/`tokenRef`) are included in runtime resolution and audit coverage.
+- `secrets apply` writes supported `openclaw.json` targets, supported `auth-profiles.json` targets, and optional scrub targets.
 
 ## Operator checks
 

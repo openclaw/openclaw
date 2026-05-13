@@ -51,31 +51,15 @@ describe("install.sh", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-nvm-"));
     const home = join(tmp, "home");
     const systemBin = join(tmp, "system-bin");
-    const nvmBin = join(home, ".nvm/versions/node/v24.13.0/bin");
+    const nvmBin = join(home, ".nvm/versions/node/v22.22.1/bin");
     mkdirSync(systemBin, { recursive: true });
     mkdirSync(nvmBin, { recursive: true });
     mkdirSync(join(home, ".nvm"), { recursive: true });
 
     const systemNode = join(systemBin, "node");
     const nvmNode = join(nvmBin, "node");
-    writeFileSync(
-      systemNode,
-      [
-        "#!/bin/sh",
-        'if [ "${1:-}" = "-p" ]; then echo "8 11"; exit 0; fi',
-        "echo v8.11.3",
-        "",
-      ].join("\n"),
-    );
-    writeFileSync(
-      nvmNode,
-      [
-        "#!/bin/sh",
-        'if [ "${1:-}" = "-p" ]; then echo "24 13"; exit 0; fi',
-        "echo v24.13.0",
-        "",
-      ].join("\n"),
-    );
+    writeFileSync(systemNode, "#!/bin/sh\necho v8.11.3\n");
+    writeFileSync(nvmNode, "#!/bin/sh\necho v22.22.1\n");
     chmodSync(systemNode, 0o755);
     chmodSync(nvmNode, 0o755);
     writeFileSync(
@@ -85,7 +69,7 @@ describe("install.sh", () => {
         "export NVM_DIR",
         "nvm() {",
         '  if [ "$1" = "use" ]; then',
-        '    export PATH="$NVM_DIR/versions/node/v24.13.0/bin:$PATH"',
+        '    export PATH="$NVM_DIR/versions/node/v22.22.1/bin:$PATH"',
         "    return 0",
         "  fi",
         "  return 0",
@@ -122,7 +106,7 @@ describe("install.sh", () => {
     const output = result?.stdout ?? "";
     expect(output).toContain("status=0");
     expect(output).toContain(`path=${nvmNode}`);
-    expect(output).toContain("version=v24.13.0");
+    expect(output).toContain("version=v22.22.1");
   });
 
   it("promotes a supported Linux Node binary over stale PATH entries", () => {
@@ -134,24 +118,8 @@ describe("install.sh", () => {
 
     const staleNode = join(staleBin, "node");
     const supportedNode = join(supportedBin, "node");
-    writeFileSync(
-      staleNode,
-      [
-        "#!/bin/sh",
-        'if [ "${1:-}" = "-p" ]; then echo "20 20"; exit 0; fi',
-        "echo v20.20.0",
-        "",
-      ].join("\n"),
-    );
-    writeFileSync(
-      supportedNode,
-      [
-        "#!/bin/sh",
-        'if [ "${1:-}" = "-p" ]; then echo "24 13"; exit 0; fi',
-        "echo v24.13.0",
-        "",
-      ].join("\n"),
-    );
+    writeFileSync(staleNode, "#!/bin/sh\necho v20.20.0\n");
+    writeFileSync(supportedNode, "#!/bin/sh\necho v22.22.0\n");
     chmodSync(staleNode, 0o755);
     chmodSync(supportedNode, 0o755);
 
@@ -184,7 +152,7 @@ describe("install.sh", () => {
     expect(output).toContain("promote=0");
     expect(output).toContain("active=0");
     expect(output).toContain(`path=${supportedNode}`);
-    expect(output).toContain("version=v24.13.0");
+    expect(output).toContain("version=v22.22.0");
   });
 
   it("persists a supported Linux Node path before noninteractive shell guards", () => {

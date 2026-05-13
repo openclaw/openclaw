@@ -1,5 +1,6 @@
-import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { streamSimple, type Api, type Context, type Model } from "openclaw/plugin-sdk/provider-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { Api, Context, Model } from "@earendil-works/pi-ai";
+import { streamSimpleOpenAIResponses } from "@earendil-works/pi-ai/openai-responses";
 import { describe, expect, it } from "vitest";
 import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
 import {
@@ -85,7 +86,7 @@ async function captureXaiResponsesPayloadWithThinking(): Promise<Record<string, 
       () => reject(new Error("provider payload callback was not invoked")),
       1_000,
     );
-    const stream = streamSimple(
+    const stream = streamSimpleOpenAIResponses(
       model,
       { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
       {

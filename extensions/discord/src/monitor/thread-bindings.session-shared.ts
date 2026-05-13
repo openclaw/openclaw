@@ -3,7 +3,7 @@ import {
   BINDINGS_BY_THREAD_ID,
   ensureBindingsLoaded,
   resolveBindingIdsForSession,
-  saveBindingsToStore,
+  saveBindingsToDisk,
   setBindingRecord,
   shouldPersistBindingMutations,
 } from "./thread-bindings.state.js";
@@ -53,7 +53,7 @@ export function updateBindingsForTargetSession(
     updated.push(nextRecord);
   }
   if (updated.length > 0 && shouldPersistBindingMutations()) {
-    saveBindingsToStore({ force: true });
+    saveBindingsToDisk({ force: true });
   }
   return updated;
 }

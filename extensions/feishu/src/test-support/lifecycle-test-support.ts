@@ -97,6 +97,7 @@ function installFeishuLifecycleRuntime(params: {
   finalizeInboundContext: PluginRuntime["channel"]["reply"]["finalizeInboundContext"];
   dispatchReplyFromConfig: PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"];
   withReplyDispatcher: PluginRuntime["channel"]["reply"]["withReplyDispatcher"];
+  resolveStorePath: PluginRuntime["channel"]["session"]["resolveStorePath"];
   hasControlCommand?: PluginRuntime["channel"]["text"]["hasControlCommand"];
   shouldComputeCommandAuthorized?: PluginRuntime["channel"]["commands"]["shouldComputeCommandAuthorized"];
   resolveCommandAuthorizedFromAuthorizers?: PluginRuntime["channel"]["commands"]["resolveCommandAuthorizedFromAuthorizers"];
@@ -128,6 +129,7 @@ function installFeishuLifecycleRuntime(params: {
       },
       session: {
         readSessionUpdatedAt: vi.fn(),
+        resolveStorePath: params.resolveStorePath,
       },
       pairing: {
         readAllowFromStore: params.readAllowFromStore ?? vi.fn().mockResolvedValue([]),
@@ -148,6 +150,7 @@ export function installFeishuLifecycleReplyRuntime(params: {
   finalizeInboundContextMock: unknown;
   dispatchReplyFromConfigMock: unknown;
   withReplyDispatcherMock: unknown;
+  storePath: string;
 }): PluginRuntime {
   return installFeishuLifecycleRuntime({
     resolveAgentRoute:
@@ -158,6 +161,7 @@ export function installFeishuLifecycleReplyRuntime(params: {
       params.dispatchReplyFromConfigMock as PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"],
     withReplyDispatcher:
       params.withReplyDispatcherMock as PluginRuntime["channel"]["reply"]["withReplyDispatcher"],
+    resolveStorePath: vi.fn(() => params.storePath),
   });
 }
 

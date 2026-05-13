@@ -55,9 +55,7 @@ describe("trajectory metadata", () => {
           OPENCLAW_STATE_DIR: "/Users/tester/.openclaw",
         },
         workspaceDir: "/Users/tester/project",
-        sessionId: "session-1",
-        agentId: "main",
-        sessionKey: "agent:main:session-1",
+        sessionFile: "/Users/tester/project/session.jsonl",
         timeoutMs: 30_000,
       });
 
@@ -65,7 +63,7 @@ describe("trajectory metadata", () => {
         invocation?: unknown[];
         entrypoint?: string;
         workspaceDir?: string;
-        session?: { agentId?: string; sessionId?: string; sessionKey?: string };
+        sessionFile?: string;
       };
       expect(harness.invocation).toEqual([
         "node",
@@ -76,11 +74,7 @@ describe("trajectory metadata", () => {
       ]);
       expect(harness.entrypoint).toBe("~/project/openclaw.js");
       expect(harness.workspaceDir).toBe("~/project");
-      expect(harness.session).toEqual({
-        agentId: "main",
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-      });
+      expect(harness.sessionFile).toBe("~/project/session.jsonl");
     } finally {
       process.argv = originalArgv;
     }
@@ -135,7 +129,7 @@ describe("trajectory metadata", () => {
         },
       } as never,
       workspaceDir: "/tmp/workspace",
-      sessionId: "test",
+      sessionFile: "/tmp/workspace/session.jsonl",
       sessionKey: "agent:main:test",
       agentId: "main",
       trigger: "user",

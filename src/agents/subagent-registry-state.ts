@@ -1,22 +1,22 @@
 import {
-  loadSubagentRegistryFromState,
-  saveSubagentRegistryToState,
+  loadSubagentRegistryFromDisk,
+  saveSubagentRegistryToDisk,
 } from "./subagent-registry.store.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-export function persistSubagentRunsToState(runs: Map<string, SubagentRunRecord>) {
+export function persistSubagentRunsToDisk(runs: Map<string, SubagentRunRecord>) {
   try {
-    saveSubagentRegistryToState(runs);
+    saveSubagentRegistryToDisk(runs);
   } catch {
     // ignore persistence failures
   }
 }
 
-export function restoreSubagentRunsFromState(params: {
+export function restoreSubagentRunsFromDisk(params: {
   runs: Map<string, SubagentRunRecord>;
   mergeOnly?: boolean;
 }) {
-  const restored = loadSubagentRegistryFromState();
+  const restored = loadSubagentRegistryFromDisk();
   if (restored.size === 0) {
     return 0;
   }
@@ -39,12 +39,12 @@ export function getSubagentRunsSnapshotForRead(
 ): Map<string, SubagentRunRecord> {
   const merged = new Map<string, SubagentRunRecord>();
   const shouldReadDisk =
-    process.env.OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_STATE === "1" ||
+    process.env.OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_DISK === "1" ||
     !(process.env.VITEST || process.env.NODE_ENV === "test");
   if (shouldReadDisk) {
     try {
       // Persisted state lets other worker processes observe active runs.
-      for (const [runId, entry] of loadSubagentRegistryFromState().entries()) {
+      for (const [runId, entry] of loadSubagentRegistryFromDisk().entries()) {
         merged.set(runId, entry);
       }
     } catch {

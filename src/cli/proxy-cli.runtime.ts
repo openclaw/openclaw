@@ -9,7 +9,6 @@ import {
 import { ensureDebugProxyCa } from "../proxy-capture/ca.js";
 import { buildDebugProxyCoverageReport } from "../proxy-capture/coverage.js";
 import { resolveDebugProxySettings, applyDebugProxyEnv } from "../proxy-capture/env.js";
-import { resolveDebugProxyDbPath } from "../proxy-capture/paths.js";
 import { startDebugProxyServer } from "../proxy-capture/proxy-server.js";
 import {
   finalizeDebugProxyCapture,
@@ -24,7 +23,7 @@ import { colorize, isRich, theme } from "../terminal/theme.js";
 
 export async function runDebugProxyStartCommand(opts: { host?: string; port?: number }) {
   const settings = resolveDebugProxySettings();
-  const store = getDebugProxyCaptureStore();
+  const store = getDebugProxyCaptureStore(settings.dbPath, settings.blobDir);
   store.upsertSession({
     id: settings.sessionId,
     startedAt: Date.now(),
@@ -32,6 +31,8 @@ export async function runDebugProxyStartCommand(opts: { host?: string; port?: nu
     sourceScope: "openclaw",
     sourceProcess: "openclaw",
     proxyUrl: settings.proxyUrl,
+    dbPath: settings.dbPath,
+    blobDir: settings.blobDir,
   });
   initializeDebugProxyCapture("proxy-start", settings);
   const ca = await ensureDebugProxyCa(settings.certDir);
@@ -42,7 +43,7 @@ export async function runDebugProxyStartCommand(opts: { host?: string; port?: nu
   });
   process.stdout.write(`Debug proxy: ${server.proxyUrl}\n`);
   process.stdout.write(`CA cert: ${ca.certPath}\n`);
-  process.stdout.write(`Capture DB: ${resolveDebugProxyDbPath()}\n`);
+  process.stdout.write(`Capture DB: ${settings.dbPath}\n`);
   process.stdout.write("Press Ctrl+C to stop.\n");
   const shutdown = async () => {
     process.off("SIGINT", onSignal);
@@ -78,13 +79,15 @@ export async function runDebugProxyRunCommand(opts: {
     ...baseSettings,
     sessionId,
   };
-  getDebugProxyCaptureStore().upsertSession({
+  getDebugProxyCaptureStore(settings.dbPath, settings.blobDir).upsertSession({
     id: sessionId,
     startedAt: Date.now(),
     mode: "proxy-run",
     sourceScope: "openclaw",
     sourceProcess: "openclaw",
     proxyUrl: undefined,
+    dbPath: settings.dbPath,
+    blobDir: settings.blobDir,
   });
   const server = await startDebugProxyServer({
     host: opts.host,
@@ -95,6 +98,8 @@ export async function runDebugProxyRunCommand(opts: {
   const childEnv = applyDebugProxyEnv(process.env, {
     proxyUrl: server.proxyUrl,
     sessionId,
+    dbPath: settings.dbPath,
+    blobDir: settings.blobDir,
     certDir: settings.certDir,
   });
   try {
@@ -112,7 +117,7 @@ export async function runDebugProxyRunCommand(opts: {
     });
   } finally {
     await server.stop();
-    getDebugProxyCaptureStore().endSession(sessionId);
+    getDebugProxyCaptureStore(settings.dbPath, settings.blobDir).endSession(sessionId);
   }
 }
 
@@ -278,7 +283,10 @@ export async function runProxyValidateCommand(opts: {
 }
 
 export async function runDebugProxySessionsCommand(opts: { limit?: number }) {
-  const sessions = getDebugProxyCaptureStore().listSessions(opts.limit ?? 20);
+  const settings = resolveDebugProxySettings();
+  const sessions = getDebugProxyCaptureStore(settings.dbPath, settings.blobDir).listSessions(
+    opts.limit ?? 20,
+  );
   process.stdout.write(`${JSON.stringify(sessions, null, 2)}\n`);
   closeDebugProxyCaptureStore();
 }
@@ -287,7 +295,11 @@ export async function runDebugProxyQueryCommand(opts: {
   preset: CaptureQueryPreset;
   sessionId?: string;
 }) {
-  const rows = getDebugProxyCaptureStore().queryPreset(opts.preset, opts.sessionId);
+  const settings = resolveDebugProxySettings();
+  const rows = getDebugProxyCaptureStore(settings.dbPath, settings.blobDir).queryPreset(
+    opts.preset,
+    opts.sessionId,
+  );
   process.stdout.write(`${JSON.stringify(rows, null, 2)}\n`);
   closeDebugProxyCaptureStore();
 }
@@ -298,13 +310,17 @@ export async function runDebugProxyCoverageCommand() {
 }
 
 export async function runDebugProxyPurgeCommand() {
-  const result = getDebugProxyCaptureStore().purgeAll();
+  const settings = resolveDebugProxySettings();
+  const result = getDebugProxyCaptureStore(settings.dbPath, settings.blobDir).purgeAll();
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   closeDebugProxyCaptureStore();
 }
 
 export async function readDebugProxyBlobCommand(opts: { blobId: string }) {
-  const content = getDebugProxyCaptureStore().readBlob(opts.blobId);
+  const settings = resolveDebugProxySettings();
+  const content = getDebugProxyCaptureStore(settings.dbPath, settings.blobDir).readBlob(
+    opts.blobId,
+  );
   if (content == null) {
     closeDebugProxyCaptureStore();
     throw new Error(`Unknown blob: ${opts.blobId}`);

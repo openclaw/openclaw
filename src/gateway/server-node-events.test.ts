@@ -11,12 +11,10 @@ const buildSessionLookup = (
     sessionId?: string;
     model?: string;
     modelProvider?: string;
-    deliveryContext?: {
-      channel?: string;
-      to?: string;
-      accountId?: string;
-      threadId?: string | number;
-    };
+    lastChannel?: string;
+    lastTo?: string;
+    lastAccountId?: string;
+    lastThreadId?: string | number;
     updatedAt?: number;
     label?: string;
     spawnedBy?: string;
@@ -24,19 +22,23 @@ const buildSessionLookup = (
   } = {},
 ): ReturnType<typeof loadSessionEntryType> => ({
   cfg: { session: { mainKey: "agent:main:main" } } as OpenClawConfig,
-  agentId: "main",
+  storePath: "/tmp/sessions.json",
   store: {} as ReturnType<typeof loadSessionEntryType>["store"],
   entry: {
     sessionId: entry.sessionId ?? `sid-${sessionKey}`,
     updatedAt: entry.updatedAt ?? Date.now(),
     model: entry.model,
     modelProvider: entry.modelProvider,
-    deliveryContext: entry.deliveryContext,
+    lastChannel: entry.lastChannel,
+    lastTo: entry.lastTo,
+    lastAccountId: entry.lastAccountId,
+    lastThreadId: entry.lastThreadId,
     label: entry.label,
     spawnedBy: entry.spawnedBy,
     parentSessionKey: entry.parentSessionKey,
   },
   canonicalKey: sessionKey,
+  legacyKey: undefined,
 });
 
 const ingressAgentCommandMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
@@ -80,6 +82,13 @@ const runtimeMocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({ session: { mainKey: "agent:main:main" } })),
   loadOrCreateDeviceIdentity: loadOrCreateDeviceIdentityMock,
   loadSessionEntry: vi.fn((sessionKey: string) => buildSessionLookup(sessionKey)),
+  migrateAndPruneGatewaySessionStoreKey: vi.fn(
+    ({ key, store }: { key: string; store: Record<string, unknown> }) => ({
+      target: { canonicalKey: key, storeKeys: [key] },
+      primaryKey: key,
+      entry: store[key],
+    }),
+  ),
   normalizeChannelId: normalizeChannelIdMock,
   normalizeMainKey: vi.fn((key?: string | null) => key?.trim() || "agent:main:main"),
   normalizeRpcAttachmentsToChatAttachments: vi.fn((attachments?: unknown[]) => attachments ?? []),
@@ -124,7 +133,7 @@ const runtimeMocks = vi.hoisted(() => ({
       ? { ...wakeOptions, sessionKey: sessionKey as string }
       : wakeOptions;
   }),
-  patchSessionEntry: vi.fn(),
+  updateSessionStore: vi.fn(),
 }));
 
 vi.mock("./server-node-events.runtime.js", () => runtimeMocks);
@@ -148,7 +157,7 @@ const enqueueSystemEventMock = runtimeMocks.enqueueSystemEvent;
 const requestHeartbeatMock = runtimeMocks.requestHeartbeat;
 const loadConfigMock = runtimeMocks.getRuntimeConfig;
 const agentCommandMock = runtimeMocks.agentCommandFromIngress;
-const patchSessionEntryMock = runtimeMocks.patchSessionEntry;
+const updateSessionStoreMock = runtimeMocks.updateSessionStore;
 const loadSessionEntryMock = runtimeMocks.loadSessionEntry;
 const registerApnsRegistrationVi = runtimeMocks.registerApnsRegistration;
 const normalizeChannelIdVi = runtimeMocks.normalizeChannelId;
@@ -719,11 +728,10 @@ describe("node exec events", () => {
 describe("voice transcript events", () => {
   beforeEach(() => {
     agentCommandMock.mockClear();
-    patchSessionEntryMock.mockClear();
+    updateSessionStoreMock.mockClear();
     agentCommandMock.mockResolvedValue({ status: "ok" } as never);
-    patchSessionEntryMock.mockImplementation(async ({ fallbackEntry, update }) => {
-      const patch = await update(fallbackEntry ?? { sessionId: "sid", updatedAt: 0 });
-      return patch ? { ...fallbackEntry, ...patch } : (fallbackEntry ?? null);
+    updateSessionStoreMock.mockImplementation(async (_storePath, update) => {
+      update({});
     });
   });
 
@@ -748,7 +756,7 @@ describe("voice transcript events", () => {
 
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
     expect(addChatRun).toHaveBeenCalledTimes(1);
-    expect(patchSessionEntryMock).toHaveBeenCalledTimes(1);
+    expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not dedupe identical text when source event IDs differ", async () => {
@@ -772,7 +780,7 @@ describe("voice transcript events", () => {
     });
 
     expect(agentCommandMock).toHaveBeenCalledTimes(2);
-    expect(patchSessionEntryMock).toHaveBeenCalledTimes(2);
+    expect(updateSessionStoreMock).toHaveBeenCalledTimes(2);
   });
 
   it("forwards transcript with voice provenance", async () => {
@@ -811,11 +819,11 @@ describe("voice transcript events", () => {
     expect(clientRunId).toMatch(/^voice-/);
   });
 
-  it("does not block agent dispatch when session row touch fails", async () => {
+  it("does not block agent dispatch when session-store touch fails", async () => {
     const warn = vi.fn();
     const ctx = buildCtx();
     ctx.logGateway = { warn };
-    patchSessionEntryMock.mockRejectedValueOnce(new Error("disk down"));
+    updateSessionStoreMock.mockRejectedValueOnce(new Error("disk down"));
 
     await handleNodeEvent(ctx, "node-v3", {
       event: "voice.transcript",
@@ -827,7 +835,8 @@ describe("voice transcript events", () => {
     await Promise.resolve();
 
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("voice session row update failed"));
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(mockCallArg(warn))).toContain("voice session-store update failed");
   });
 
   it("preserves existing session metadata when touching the store for voice transcripts", async () => {
@@ -839,37 +848,30 @@ describe("voice transcript events", () => {
         label: "existing label",
         spawnedBy: "agent:main:parent",
         parentSessionKey: "agent:main:parent",
-        deliveryContext: {
-          channel: "discord",
-          to: "thread-1",
-          accountId: "acct-1",
-          threadId: 42,
-        },
+        lastChannel: "discord",
+        lastTo: "thread-1",
+        lastAccountId: "acct-1",
+        lastThreadId: 42,
       }),
     );
 
     let updatedStore: Record<string, unknown> | undefined;
-    patchSessionEntryMock.mockImplementationOnce(async ({ fallbackEntry, update }) => {
-      const existing = fallbackEntry ?? {
-        sessionId: "sess-preserve",
-        updatedAt: 10,
-        label: "existing label",
-        spawnedBy: "agent:main:parent",
-        parentSessionKey: "agent:main:parent",
-        deliveryContext: {
-          channel: "discord",
-          to: "thread-1",
-          accountId: "acct-1",
-          threadId: 42,
-        },
-      };
-      const patch = await update(existing);
-      updatedStore = {
+    updateSessionStoreMock.mockImplementationOnce(async (_storePath, update) => {
+      const store = {
         "voice-preserve-session": {
-          ...existing,
-          ...patch,
+          sessionId: "sess-preserve",
+          updatedAt: 10,
+          label: "existing label",
+          spawnedBy: "agent:main:parent",
+          parentSessionKey: "agent:main:parent",
+          lastChannel: "discord",
+          lastTo: "thread-1",
+          lastAccountId: "acct-1",
+          lastThreadId: 42,
         },
       };
+      update(store);
+      updatedStore = structuredClone(store);
     });
 
     await handleNodeEvent(ctx, "node-v4", {
@@ -886,12 +888,10 @@ describe("voice transcript events", () => {
       label: "existing label",
       spawnedBy: "agent:main:parent",
       parentSessionKey: "agent:main:parent",
-      deliveryContext: {
-        channel: "discord",
-        to: "thread-1",
-        accountId: "acct-1",
-        threadId: 42,
-      },
+      lastChannel: "discord",
+      lastTo: "thread-1",
+      lastAccountId: "acct-1",
+      lastThreadId: 42,
     });
   });
 });
@@ -1083,7 +1083,7 @@ describe("agent request events", () => {
   beforeEach(() => {
     agentCommandMock.mockClear();
     parseMessageWithAttachmentsMock.mockReset();
-    patchSessionEntryMock.mockClear();
+    updateSessionStoreMock.mockClear();
     loadSessionEntryMock.mockClear();
     normalizeChannelIdVi.mockClear();
     normalizeChannelIdVi.mockImplementation((channel?: string | null) => channel ?? null);
@@ -1094,9 +1094,8 @@ describe("agent request events", () => {
       offloadedRefs: [],
     });
     agentCommandMock.mockResolvedValue({ status: "ok" } as never);
-    patchSessionEntryMock.mockImplementation(async ({ fallbackEntry, update }) => {
-      const patch = await update(fallbackEntry ?? { sessionId: "sid", updatedAt: 0 });
-      return patch ? { ...fallbackEntry, ...patch } : (fallbackEntry ?? null);
+    updateSessionStoreMock.mockImplementation(async (_storePath, update) => {
+      update({});
     });
     loadSessionEntryMock.mockImplementation((sessionKey: string) => buildSessionLookup(sessionKey));
   });
@@ -1133,10 +1132,8 @@ describe("agent request events", () => {
     loadSessionEntryMock.mockReturnValueOnce({
       ...buildSessionLookup("agent:main:main", {
         sessionId: "sid-current",
-        deliveryContext: {
-          channel: "telegram",
-          to: "123",
-        },
+        lastChannel: "telegram",
+        lastTo: "123",
       }),
       canonicalKey: "agent:main:main",
     });

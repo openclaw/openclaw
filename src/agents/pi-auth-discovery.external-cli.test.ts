@@ -15,6 +15,7 @@ const credentialMocks = vi.hoisted(() => ({
 
 const discoveryCoreMocks = vi.hoisted(() => ({
   addEnvBackedPiCredentials: vi.fn((credentials: unknown) => credentials),
+  scrubLegacyStaticAuthJsonEntriesForDiscovery: vi.fn(),
 }));
 
 const syntheticAuthMocks = vi.hoisted(() => ({

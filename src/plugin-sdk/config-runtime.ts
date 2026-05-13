@@ -72,12 +72,7 @@ export {
 } from "./telegram-command-config.js";
 export { resolveActiveTalkProviderConfig } from "../config/talk.js";
 export { resolveAgentMaxConcurrent } from "../config/agent-limits.js";
-export {
-  loadCronStore,
-  resolveCronStoreKey,
-  saveCronStore,
-  updateCronStoreJobs,
-} from "../cron/store.js";
+export { loadCronStore, resolveCronStorePath, saveCronStore } from "../cron/store.js";
 export { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 export { coerceSecretRef } from "../config/types.secrets.js";
 export {
@@ -136,16 +131,18 @@ export type {
   TtsProvider,
 } from "../config/types.js";
 export {
-  getSessionEntry,
-  listSessionEntries,
-  patchSessionEntry,
+  clearSessionStoreCacheForTest,
+  loadSessionStore,
   readSessionUpdatedAt,
   recordSessionMetaFromInbound,
-  resolveSessionRowEntry,
+  saveSessionStore,
   updateLastRoute,
-  upsertSessionEntry,
+  updateSessionStore,
+  updateSessionStoreEntry,
+  resolveSessionStoreEntry,
 } from "../config/sessions/store.js";
 export { resolveSessionKey } from "../config/sessions/session-key.js";
+export { resolveStorePath } from "../config/sessions/paths.js";
 export type { SessionResetMode } from "../config/sessions/reset.js";
 export type { SessionScope } from "../config/sessions/types.js";
 export { resolveGroupSessionKey } from "../config/sessions/group.js";

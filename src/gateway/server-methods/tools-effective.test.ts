@@ -3,17 +3,11 @@ import { ErrorCodes } from "../protocol/index.js";
 import { __testing, toolsEffectiveHandlers } from "./tools-effective.js";
 
 const runtimeMocks = vi.hoisted(() => ({
-  readSqliteSessionDeliveryContext: vi.fn(() => ({
+  deliveryContextFromSession: vi.fn(() => ({
     channel: "telegram",
     to: "channel-1",
     accountId: "acct-1",
     threadId: "thread-2",
-  })),
-  readSqliteSessionRoutingInfo: vi.fn(() => ({
-    chatType: "group",
-    channel: "telegram",
-    accountId: "acct-1",
-    conversationThreadId: "thread-2",
   })),
   listAgentIds: vi.fn(() => ["main"]),
   getRuntimeConfig: vi.fn(() => ({})),
@@ -157,6 +151,7 @@ describe("tools.effective handler", () => {
       canonicalKey: "missing-session",
       entry: undefined,
       legacyKey: undefined,
+      storePath: "/tmp/sessions.json",
     } as never);
     const { respond, invoke } = createInvokeParams({ sessionKey: "missing-session" });
     await invoke();
@@ -291,7 +286,7 @@ describe("tools.effective handler", () => {
     expect(firstRespondCall(fresh.respond)?.[1]).toBe(refreshedPayload);
   });
 
-  it("uses typed SQLite routing when delivery context omits thread metadata", async () => {
+  it("falls back to origin.threadId when delivery context omits thread metadata", async () => {
     runtimeMocks.loadSessionEntry.mockReturnValueOnce({
       cfg: {},
       canonicalKey: "main:abc",
@@ -301,6 +296,11 @@ describe("tools.effective handler", () => {
         lastChannel: "telegram",
         lastAccountId: "acct-1",
         lastTo: "channel-1",
+        origin: {
+          provider: "telegram",
+          accountId: "acct-1",
+          threadId: 42,
+        },
         groupId: "group-4",
         groupChannel: "#ops",
         space: "workspace-5",
@@ -309,17 +309,11 @@ describe("tools.effective handler", () => {
         model: "gpt-4.1",
       },
     } as never);
-    runtimeMocks.readSqliteSessionDeliveryContext.mockReturnValueOnce({
+    runtimeMocks.deliveryContextFromSession.mockReturnValueOnce({
       channel: "telegram",
       to: "channel-1",
       accountId: "acct-1",
       threadId: "42",
-    });
-    runtimeMocks.readSqliteSessionRoutingInfo.mockReturnValueOnce({
-      chatType: "group",
-      channel: "telegram",
-      accountId: "acct-1",
-      conversationThreadId: "42",
     });
 
     const { respond, invoke } = createInvokeParams({ sessionKey: "main:abc" });

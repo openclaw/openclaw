@@ -197,14 +197,14 @@ describe("exec SecretRef id parity", () => {
         className,
         id: selected.id,
         type: selected.targetType,
-        store: selected.store,
+        configFile: selected.configFile,
         pathSegments,
       };
     });
 
   function planAcceptsExecRefForSample(params: {
     type: string;
-    store: "openclaw.json" | "auth-profile-store";
+    configFile: "openclaw.json" | "auth-profiles.json";
     pathSegments: string[];
     id: string;
   }): boolean {
@@ -219,7 +219,7 @@ describe("exec SecretRef id parity", () => {
           path: params.pathSegments.join("."),
           pathSegments: params.pathSegments,
           ref: { source: "exec", provider: "vault", id: params.id },
-          ...(params.store === "auth-profile-store" ? { agentId: "main" } : {}),
+          ...(params.configFile === "auth-profiles.json" ? { agentId: "main" } : {}),
         },
       ],
     });
@@ -235,7 +235,7 @@ describe("exec SecretRef id parity", () => {
       expect(
         planAcceptsExecRefForSample({
           type: sample.type,
-          store: sample.store,
+          configFile: sample.configFile,
           pathSegments: sample.pathSegments,
           id: "vault/openai/apiKey",
         }),
@@ -243,7 +243,7 @@ describe("exec SecretRef id parity", () => {
       expect(
         planAcceptsExecRefForSample({
           type: sample.type,
-          store: sample.store,
+          configFile: sample.configFile,
           pathSegments: sample.pathSegments,
           id: "vault/../apiKey",
         }),

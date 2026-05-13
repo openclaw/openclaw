@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
-import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { Model } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
-import type { Model } from "../pi-ai-contract.js";
 import { prepareGooglePromptCacheStreamFn } from "./google-prompt-cache.js";
 
 type SessionCustomEntry = {

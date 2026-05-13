@@ -12,7 +12,6 @@
     "./engine-foundation": "./src/engine-foundation.ts",
     "./engine-storage": "./src/engine-storage.ts",
     "./engine-embeddings": "./src/engine-embeddings.ts",
-    "./engine-session-transcripts": "./src/engine-session-transcripts.ts",
     "./engine-qmd": "./src/engine-qmd.ts",
     "./multimodal": "./src/multimodal.ts",
     "./query": "./src/query.ts",

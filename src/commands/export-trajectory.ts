@@ -1,7 +1,14 @@
+import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
-import { getSessionEntry } from "../config/sessions/store.js";
-import { hasSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
+import {
+  resolveDefaultSessionStorePath,
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
+} from "../config/sessions/paths.js";
+import { loadSessionStore } from "../config/sessions/store.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { pathExists } from "../infra/fs-safe.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import {
@@ -13,6 +20,7 @@ import {
 type ExportTrajectoryCommandOptions = {
   sessionKey?: string;
   output?: string;
+  store?: string;
   agent?: string;
   workspace?: string;
   json?: boolean;
@@ -22,6 +30,7 @@ type ExportTrajectoryCommandOptions = {
 type EncodedExportTrajectoryRequest = {
   sessionKey?: unknown;
   output?: unknown;
+  store?: unknown;
   agent?: unknown;
   workspace?: unknown;
 };
@@ -45,6 +54,7 @@ function decodeExportTrajectoryRequest(encoded: string): Partial<ExportTrajector
   return {
     sessionKey: readOptionalString(request.sessionKey) ?? "",
     output: readOptionalString(request.output),
+    store: readOptionalString(request.store),
     agent: readOptionalString(request.agent),
     workspace: readOptionalString(request.workspace),
   };
@@ -84,7 +94,11 @@ export async function exportTrajectoryCommand(
     return;
   }
   const targetAgentId = resolvedOpts.agent ?? resolveAgentIdFromSessionKey(sessionKey);
-  const entry = getSessionEntry({ agentId: targetAgentId, sessionKey });
+  const storePath = resolvedOpts.store
+    ? path.resolve(resolvedOpts.store)
+    : resolveDefaultSessionStorePath(targetAgentId);
+  const store = loadSessionStore(storePath, { skipCache: true });
+  const entry = store[sessionKey] as SessionEntry | undefined;
   if (!entry?.sessionId) {
     runtime.error(
       `Session not found: ${sessionKey}. Run ${formatCliCommand("openclaw sessions")} to see available sessions.`,
@@ -93,9 +107,21 @@ export async function exportTrajectoryCommand(
     return;
   }
 
-  if (!hasSqliteSessionTranscriptEvents({ agentId: targetAgentId, sessionId: entry.sessionId })) {
+  let sessionFile: string;
+  try {
+    sessionFile = resolveSessionFilePath(
+      entry.sessionId,
+      entry,
+      resolveSessionFilePathOptions({ agentId: targetAgentId, storePath }),
+    );
+  } catch (error) {
+    runtime.error(`Failed to resolve session file: ${formatErrorMessage(error)}`);
+    runtime.exit(1);
+    return;
+  }
+  if (!(await pathExists(sessionFile))) {
     runtime.error(
-      `Session transcript has not been migrated into SQLite. Run ${formatCliCommand("openclaw doctor --fix")} and try again.`,
+      `Session file not found for ${sessionKey}. Run ${formatCliCommand("openclaw doctor")} to inspect session storage.`,
     );
     runtime.exit(1);
     return;
@@ -104,11 +130,11 @@ export async function exportTrajectoryCommand(
   let summary: TrajectoryCommandExportSummary;
   try {
     summary = await exportTrajectoryForCommand({
-      agentId: targetAgentId,
       outputPath: resolvedOpts.output,
+      sessionFile,
       sessionId: entry.sessionId,
       sessionKey,
-      workspaceDir: resolvedOpts.workspace ?? process.cwd(),
+      workspaceDir: path.resolve(resolvedOpts.workspace ?? process.cwd()),
     });
   } catch (error) {
     runtime.error(`Failed to export trajectory: ${formatErrorMessage(error)}`);

@@ -378,21 +378,21 @@ enum CommandResolver {
             CLI="node $PRJ/dist/index.js"
             node "$PRJ/dist/index.js" \(quotedArgs);
           else
-            echo "Node >=24 required on remote host"; exit 127;
+            echo "Node >=22 required on remote host"; exit 127;
           fi
         elif [ -n "${PRJ:-}" ] && [ -f "$PRJ/openclaw.mjs" ]; then
           if command -v node >/dev/null 2>&1; then
             CLI="node $PRJ/openclaw.mjs"
             node "$PRJ/openclaw.mjs" \(quotedArgs);
           else
-            echo "Node >=24 required on remote host"; exit 127;
+            echo "Node >=22 required on remote host"; exit 127;
           fi
         elif [ -n "${PRJ:-}" ] && [ -f "$PRJ/bin/openclaw.js" ]; then
           if command -v node >/dev/null 2>&1; then
             CLI="node $PRJ/bin/openclaw.js"
             node "$PRJ/bin/openclaw.js" \(quotedArgs);
           else
-            echo "Node >=24 required on remote host"; exit 127;
+            echo "Node >=22 required on remote host"; exit 127;
           fi
         elif command -v pnpm >/dev/null 2>&1; then
           CLI="pnpm --silent openclaw"

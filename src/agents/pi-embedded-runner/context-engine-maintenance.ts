@@ -5,12 +5,10 @@ import type {
   ContextEngine,
   ContextEngineMaintenanceResult,
   ContextEngineRuntimeContext,
-  ContextEngineTranscriptScope,
 } from "../../context-engine/types.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { enqueueCommandInLane, getQueueSize } from "../../process/command-queue.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   completeTaskRunByRunId,
@@ -29,7 +27,10 @@ import { findActiveSessionTask } from "../session-async-task-status.js";
 import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
 import { resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
-import { rewriteTranscriptEntriesInSqliteTranscript } from "./transcript-rewrite.js";
+import {
+  rewriteTranscriptEntriesInSessionFile,
+  rewriteTranscriptEntriesInSessionManager,
+} from "./transcript-rewrite.js";
 
 const TURN_MAINTENANCE_TASK_KIND = "context_engine_turn_maintenance";
 const TURN_MAINTENANCE_TASK_LABEL = "Context engine turn maintenance";
@@ -42,10 +43,10 @@ const DEFERRED_TURN_MAINTENANCE_ABORT_STATE_KEY = Symbol.for(
 );
 type DeferredTurnMaintenanceScheduleParams = {
   contextEngine: ContextEngine;
-  sessionAgentId?: string;
   sessionId: string;
   sessionKey: string;
-  transcriptScope?: ContextEngineTranscriptScope;
+  sessionFile: string;
+  sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
   agentId?: string;
   config?: OpenClawConfig;
@@ -272,10 +273,10 @@ function promoteTurnMaintenanceTaskVisibility(params: {
  * context-engine runtime context payload.
  */
 export function buildContextEngineMaintenanceRuntimeContext(params: {
-  sessionAgentId?: string;
   sessionId: string;
   sessionKey?: string;
-  transcriptScope?: ContextEngineTranscriptScope;
+  sessionFile: string;
+  sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
   agentId?: string;
   allowDeferredCompactionExecution?: boolean;
@@ -286,7 +287,6 @@ export function buildContextEngineMaintenanceRuntimeContext(params: {
 }): ContextEngineRuntimeContext {
   return {
     ...params.runtimeContext,
-    ...(params.transcriptScope ? { transcriptScope: params.transcriptScope } : {}),
     ...resolveContextEngineCapabilities({
       config: params.config,
       sessionKey: params.sessionKey,
@@ -296,42 +296,39 @@ export function buildContextEngineMaintenanceRuntimeContext(params: {
     }),
     ...(params.allowDeferredCompactionExecution ? { allowDeferredCompactionExecution: true } : {}),
     rewriteTranscriptEntries: async (request) => {
-      const rewriteAgentId =
-        params.sessionAgentId ?? params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
-      const rewriteTranscriptEntriesInDatabase = async () =>
-        rewriteAgentId
-          ? await rewriteTranscriptEntriesInSqliteTranscript({
-              agentId: rewriteAgentId,
-              sessionId: params.sessionId,
-              sessionKey: params.sessionKey,
-              config: params.config,
-              request,
-            })
-          : {
-              changed: false,
-              bytesFreed: 0,
-              rewrittenEntries: 0,
-              reason: "missing agent id",
-            };
+      if (params.sessionManager) {
+        return rewriteTranscriptEntriesInSessionManager({
+          sessionManager: params.sessionManager,
+          replacements: request.replacements,
+        });
+      }
+      const rewriteTranscriptEntriesInFile = async () =>
+        await rewriteTranscriptEntriesInSessionFile({
+          sessionFile: params.sessionFile,
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          config: params.config,
+          request,
+        });
       const rewriteSessionKey = normalizeSessionKey(params.sessionKey ?? params.sessionId);
       if (params.deferTranscriptRewriteToSessionLane && rewriteSessionKey) {
         return await enqueueCommandInLane(
           resolveSessionLane(rewriteSessionKey),
-          async () => await rewriteTranscriptEntriesInDatabase(),
+          async () => await rewriteTranscriptEntriesInFile(),
         );
       }
-      return await rewriteTranscriptEntriesInDatabase();
+      return await rewriteTranscriptEntriesInFile();
     },
   };
 }
 
 async function executeContextEngineMaintenance(params: {
   contextEngine: ContextEngine;
-  sessionAgentId?: string;
   sessionId: string;
   sessionKey?: string;
-  transcriptScope?: ContextEngineTranscriptScope;
+  sessionFile: string;
   reason: "bootstrap" | "compaction" | "turn";
+  sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
   agentId?: string;
   executionMode: "foreground" | "background";
@@ -343,12 +340,12 @@ async function executeContextEngineMaintenance(params: {
   const result = await params.contextEngine.maintain({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
-    transcriptScope: params.transcriptScope,
+    sessionFile: params.sessionFile,
     runtimeContext: buildContextEngineMaintenanceRuntimeContext({
-      sessionAgentId: params.sessionAgentId,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
-      transcriptScope: params.transcriptScope,
+      sessionFile: params.sessionFile,
+      sessionManager: params.executionMode === "background" ? undefined : params.sessionManager,
       runtimeContext: params.runtimeContext,
       agentId: params.agentId,
       allowDeferredCompactionExecution: params.executionMode === "background",
@@ -370,10 +367,10 @@ async function executeContextEngineMaintenance(params: {
 
 async function runDeferredTurnMaintenanceWorker(params: {
   contextEngine: ContextEngine;
-  sessionAgentId?: string;
   sessionId: string;
   sessionKey: string;
-  transcriptScope?: ContextEngineTranscriptScope;
+  sessionFile: string;
+  sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
   agentId?: string;
   runId: string;
@@ -450,11 +447,11 @@ async function runDeferredTurnMaintenanceWorker(params: {
 
     const result = await executeContextEngineMaintenance({
       contextEngine: params.contextEngine,
-      sessionAgentId: params.sessionAgentId,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
-      transcriptScope: params.transcriptScope,
+      sessionFile: params.sessionFile,
       reason: "turn",
+      sessionManager: params.sessionManager,
       runtimeContext: params.runtimeContext,
       agentId: params.agentId,
       config: params.config,
@@ -575,10 +572,10 @@ function scheduleDeferredTurnMaintenance(params: DeferredTurnMaintenanceSchedule
     runPromise = enqueueCommandInLane(resolveDeferredTurnMaintenanceLane(sessionKey), async () =>
       runDeferredTurnMaintenanceWorker({
         contextEngine: params.contextEngine,
-        sessionAgentId: params.sessionAgentId,
         sessionId: params.sessionId,
         sessionKey,
-        transcriptScope: params.transcriptScope,
+        sessionFile: params.sessionFile,
+        sessionManager: params.sessionManager,
         runtimeContext: params.runtimeContext,
         agentId: params.agentId,
         config: params.config,
@@ -631,11 +628,11 @@ function scheduleDeferredTurnMaintenance(params: DeferredTurnMaintenanceSchedule
  */
 export async function runContextEngineMaintenance(params: {
   contextEngine?: ContextEngine;
-  sessionAgentId?: string;
   sessionId: string;
   sessionKey?: string;
-  transcriptScope?: ContextEngineTranscriptScope;
+  sessionFile: string;
   reason: "bootstrap" | "compaction" | "turn";
+  sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
   agentId?: string;
   executionMode?: "foreground" | "background";
@@ -655,10 +652,10 @@ export async function runContextEngineMaintenance(params: {
     try {
       scheduleDeferredTurnMaintenance({
         contextEngine: params.contextEngine,
-        sessionAgentId: params.sessionAgentId,
         sessionId: params.sessionId,
         sessionKey: params.sessionKey ?? params.sessionId,
-        transcriptScope: params.transcriptScope,
+        sessionFile: params.sessionFile,
+        sessionManager: params.sessionManager,
         runtimeContext: params.runtimeContext,
         agentId: params.agentId,
         config: params.config,
@@ -672,11 +669,11 @@ export async function runContextEngineMaintenance(params: {
   try {
     return await executeContextEngineMaintenance({
       contextEngine: params.contextEngine,
-      sessionAgentId: params.sessionAgentId,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
-      transcriptScope: params.transcriptScope,
+      sessionFile: params.sessionFile,
       reason: params.reason,
+      sessionManager: params.sessionManager,
       runtimeContext: params.runtimeContext,
       agentId: params.agentId,
       executionMode,

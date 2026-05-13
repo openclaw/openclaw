@@ -165,7 +165,7 @@ export function normalizeProviders(params: {
     // Reverse-lookup: if apiKey looks like a resolved secret value (not an env
     // var name), check whether it matches the canonical env var for this provider.
     // This prevents resolveConfigEnvVars()-resolved secrets from being persisted
-    // to the model catalog as plaintext. (Fixes #38757)
+    // to models.json as plaintext. (Fixes #38757)
     const providerWithResolvedEnvApiKey = normalizeResolvedEnvApiKey({
       providerKey: normalizedKey,
       provider: normalizedProvider,

@@ -1,6 +1,6 @@
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import * as agentEvents from "../infra/agent-events.js";
-import type { AssistantMessage } from "./pi-ai-contract.js";
 import {
   THINKING_TAG_CASES,
   createSubscribedSessionHarness,

@@ -1,4 +1,4 @@
-import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMatrixAccountConfig } from "./matrix/accounts.js";
 import {
@@ -151,7 +151,7 @@ export async function handleMatrixAction(
   params: Record<string, unknown>,
   cfg: CoreConfig,
   opts: { mediaLocalRoots?: readonly string[] } = {},
-): Promise<AgentToolResult> {
+): Promise<AgentToolResult<unknown>> {
   const action = readStringParam(params, "action", { required: true });
   const accountId = readStringParam(params, "accountId") ?? undefined;
   const isActionEnabled = createActionGate(resolveMatrixAccountConfig({ cfg, accountId }).actions);

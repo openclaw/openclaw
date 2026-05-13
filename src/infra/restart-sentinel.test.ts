@@ -1,12 +1,8 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { captureEnv } from "../test-utils/env.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import {
   DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE,
   buildRestartSuccessContinuation,
@@ -16,6 +12,7 @@ import {
   formatRestartSentinelMessage,
   markUpdateRestartSentinelFailure,
   readRestartSentinel,
+  resolveRestartSentinelPath,
   summarizeRestartSentinel,
   trimLogTail,
   writeRestartSentinel,
@@ -26,56 +23,31 @@ async function withRestartSentinelStateDir(run: () => Promise<void>): Promise<vo
   try {
     await withTempDir({ prefix: "openclaw-sentinel-" }, async (tempDir) => {
       process.env.OPENCLAW_STATE_DIR = tempDir;
-      try {
-        await run();
-      } finally {
-        closeOpenClawStateDatabaseForTest();
-      }
+      await run();
     });
   } finally {
     envSnapshot.restore();
   }
 }
 
-type RestartSentinelTestDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_sentinel">;
-
-function writeInvalidRestartSentinelRow(): void {
-  runOpenClawStateWriteTransaction(
-    (database) => {
-      const db = getNodeSqliteKysely<RestartSentinelTestDatabase>(database.db);
-      executeSqliteQuerySync(
-        database.db,
-        db.insertInto("gateway_restart_sentinel").values({
-          sentinel_key: "current",
-          version: 2,
-          kind: "restart",
-          status: "ok",
-          ts: Date.now(),
-          session_key: null,
-          thread_id: null,
-          payload_json: JSON.stringify({ version: 2, payload: null }),
-          updated_at_ms: Date.now(),
-        }),
-      );
-    },
-    { env: process.env },
-  );
-}
-
-function corruptRestartSentinelPayloadJson(): void {
-  runOpenClawStateWriteTransaction(
-    (database) => {
-      const db = getNodeSqliteKysely<RestartSentinelTestDatabase>(database.db);
-      executeSqliteQuerySync(
-        database.db,
-        db
-          .updateTable("gateway_restart_sentinel")
-          .set({ payload_json: '{"kind":"restart","status":"error","ts":0}' })
-          .where("sentinel_key", "=", "current"),
-      );
-    },
-    { env: process.env },
-  );
+async function expectPathMissing(targetPath: string): Promise<void> {
+  try {
+    await fs.stat(targetPath);
+  } catch (error) {
+    expect(error).toBeInstanceOf(Error);
+    const statError = error as NodeJS.ErrnoException;
+    expect({
+      code: statError.code,
+      path: statError.path,
+      syscall: statError.syscall,
+    }).toEqual({
+      code: "ENOENT",
+      path: targetPath,
+      syscall: "stat",
+    });
+    return;
+  }
+  throw new Error(`Expected path to be missing: ${targetPath}`);
 }
 
 describe("restart sentinel", () => {
@@ -92,7 +64,8 @@ describe("restart sentinel", () => {
         },
         stats: { mode: "git" },
       };
-      await writeRestartSentinel(payload);
+      const filePath = await writeRestartSentinel(payload);
+      expect(filePath).toBe(resolveRestartSentinelPath());
 
       const read = await readRestartSentinel();
       expect(read?.payload.kind).toBe("update");
@@ -107,41 +80,27 @@ describe("restart sentinel", () => {
     });
   });
 
-  it("drops structurally invalid SQLite sentinel payloads", async () => {
+  it("drops invalid sentinel payloads", async () => {
     await withRestartSentinelStateDir(async () => {
-      writeInvalidRestartSentinelRow();
+      const filePath = resolveRestartSentinelPath();
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.writeFile(filePath, "not-json", "utf-8");
 
-      await expect(readRestartSentinel()).resolves.toBeNull();
+      const read = await readRestartSentinel();
+      expect(read).toBeNull();
+
+      await expectPathMissing(filePath);
     });
   });
 
-  it("reads sentinel payloads from typed SQLite columns, not the debug JSON copy", async () => {
+  it("drops structurally invalid sentinel payloads", async () => {
     await withRestartSentinelStateDir(async () => {
-      const payload = {
-        kind: "restart" as const,
-        status: "ok" as const,
-        ts: Date.now(),
-        sessionKey: "agent:main:telegram:dm",
-        deliveryContext: {
-          channel: "telegram",
-          to: "-100123",
-          accountId: "bot-main",
-        },
-        threadId: "77",
-        message: "Restarted",
-        continuation: {
-          kind: "systemEvent" as const,
-          text: "Continue after restart",
-        },
-        doctorHint: "Run doctor",
-        stats: { mode: "manual", durationMs: 123 },
-      };
-      await writeRestartSentinel(payload);
-      corruptRestartSentinelPayloadJson();
+      const filePath = resolveRestartSentinelPath();
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.writeFile(filePath, JSON.stringify({ version: 2, payload: null }), "utf-8");
 
-      const read = await readRestartSentinel();
-
-      expect(read?.payload).toMatchObject(payload);
+      await expect(readRestartSentinel()).resolves.toBeNull();
+      await expectPathMissing(filePath);
     });
   });
 

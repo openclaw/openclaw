@@ -56,13 +56,13 @@ export type StatusSummary = {
   tasks: TaskRegistrySummary;
   taskAudit: TaskAuditSummary;
   sessions: {
-    databasePaths: string[];
+    paths: string[];
     count: number;
     defaults: { model: string | null; contextTokens: number | null };
     recent: SessionStatus[];
     byAgent: Array<{
       agentId: string;
-      databasePath: string;
+      path: string;
       count: number;
       recent: SessionStatus[];
     }>;

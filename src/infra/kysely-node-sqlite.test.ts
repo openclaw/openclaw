@@ -2,27 +2,13 @@ import { DatabaseSync } from "node:sqlite";
 import { CompiledQuery, Kysely, sql, type Generated } from "kysely";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NodeSqliteKyselyDialect } from "./kysely-node-sqlite.js";
-import {
-  clearNodeSqliteKyselyCacheForDatabase,
-  executeCompiledSqliteQuerySync,
-  executeSqliteQuerySync,
-  getNodeSqliteKysely,
-} from "./kysely-sync.js";
 
 type TestDatabase = {
-  blob_entry: {
-    id: Generated<number>;
-    data: Uint8Array;
-  };
   person: {
     id: Generated<number>;
     name: string;
   };
 };
-
-function readSqliteUserVersion<Database>(db: Kysely<Database>) {
-  return sql<{ user_version: number }>`pragma user_version`.execute(db);
-}
 
 describe("NodeSqliteKyselyDialect", () => {
   let db: Kysely<TestDatabase> | undefined;
@@ -61,10 +47,6 @@ describe("NodeSqliteKyselyDialect", () => {
     );
     expect(update.insertId).toBeUndefined();
     expect(update.numAffectedRows).toBe(1n);
-
-    const rawInsert = await sql`insert into person (name) values (${"Raw"})`.execute(db);
-    expect(rawInsert.insertId).toBeUndefined();
-    expect(rawInsert.numAffectedRows).toBe(1n);
   });
 
   it("creates the database lazily and runs the connection hook once", async () => {
@@ -81,7 +63,7 @@ describe("NodeSqliteKyselyDialect", () => {
       }),
     });
 
-    await expect(readSqliteUserVersion(db)).resolves.toEqual({
+    await expect(sql<{ user_version: number }>`pragma user_version`.execute(db)).resolves.toEqual({
       rows: [{ user_version: 7 }],
     });
     expect(createDatabase).toHaveBeenCalledTimes(1);
@@ -115,52 +97,6 @@ describe("NodeSqliteKyselyDialect", () => {
     `.execute(db);
     expect(ignoredInsert.insertId).toBeUndefined();
     expect(ignoredInsert.numAffectedRows).toBe(0n);
-  });
-
-  it("keeps sync query insert metadata tied to Kysely insert nodes", () => {
-    const sqlite = new DatabaseSync(":memory:");
-    try {
-      sqlite.exec("create table person (id integer primary key autoincrement, name text)");
-      const syncDb = getNodeSqliteKysely<TestDatabase>(sqlite);
-
-      const insertResult = executeSqliteQuerySync(
-        sqlite,
-        syncDb.insertInto("person").values({ name: "Ada" }),
-      );
-      expect(insertResult.insertId).toBe(1n);
-      expect(insertResult.numAffectedRows).toBe(1n);
-
-      const rawInsertResult = executeCompiledSqliteQuerySync(
-        sqlite,
-        sql`insert into person (name) values (${"Raw"})`.compile(syncDb),
-      );
-      expect(rawInsertResult.insertId).toBeUndefined();
-      expect(rawInsertResult.numAffectedRows).toBe(1n);
-    } finally {
-      clearNodeSqliteKyselyCacheForDatabase(sqlite);
-      sqlite.close();
-    }
-  });
-
-  it("returns SQLite blobs as Uint8Array values", async () => {
-    db = new Kysely<TestDatabase>({
-      dialect: new NodeSqliteKyselyDialect({
-        database: new DatabaseSync(":memory:"),
-      }),
-    });
-    await db.schema
-      .createTable("blob_entry")
-      .addColumn("id", "integer", (col) => col.primaryKey().autoIncrement())
-      .addColumn("data", "blob", (col) => col.notNull())
-      .execute();
-
-    const input = Buffer.from([1, 2, 3, 4]);
-    await db.insertInto("blob_entry").values({ data: input }).execute();
-
-    const row = await db.selectFrom("blob_entry").select("data").executeTakeFirstOrThrow();
-    expect(row.data).toBeInstanceOf(Uint8Array);
-    expect(Buffer.isBuffer(row.data)).toBe(false);
-    expect(Buffer.from(row.data)).toEqual(input);
   });
 
   it("rolls back transactions and controlled savepoints", async () => {

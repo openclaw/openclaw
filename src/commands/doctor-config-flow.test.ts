@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { addChannelAllowFromStoreEntry } from "../pairing/pairing-store.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
 import {
   getDoctorConfigInputForTest,
@@ -168,14 +167,10 @@ const legacyConfigMigrationForTest = vi.hoisted(() => {
     }
 
     migrateThreadBinding(next.session, changes, "session");
-    const sessionConfig = asRecord(next.session);
-    if (sessionConfig && "maintenance" in sessionConfig) {
-      delete sessionConfig.maintenance;
-      changes.push("Removed ignored session.maintenance; SQLite sessions do not prune rows.");
-    }
-    if (sessionConfig && "writeLock" in sessionConfig) {
-      delete sessionConfig.writeLock;
-      changes.push("Removed ignored session.writeLock; SQLite serializes session writes.");
+    const sessionMaintenance = asRecord(asRecord(next.session)?.maintenance);
+    if (sessionMaintenance && "rotateBytes" in sessionMaintenance) {
+      delete sessionMaintenance.rotateBytes;
+      changes.push("Removed deprecated session.maintenance.rotateBytes.");
     }
     const channels = asRecord(next.channels);
     for (const [channelId, channelRaw] of Object.entries(channels ?? {})) {
@@ -274,7 +269,7 @@ vi.mock("../config/validation.js", () => ({
   validateConfigObjectWithPlugins: vi.fn((config: unknown) => ({ ok: true, config })),
 }));
 
-vi.mock("./doctor/shared/legacy-config-find.js", () => {
+vi.mock("../config/legacy.js", () => {
   type LegacyRule = {
     path: string[];
     message: string;
@@ -361,18 +356,11 @@ vi.mock("./doctor/shared/legacy-config-find.js", () => {
         );
       }
       const sessionMaintenance = asRecord(asRecord(root.session)?.maintenance);
-      if (sessionMaintenance) {
+      if (sessionMaintenance && "rotateBytes" in sessionMaintenance) {
         addIssue(
           issues,
           ["session", "maintenance"],
-          'session.maintenance is ignored with SQLite-backed sessions; run "openclaw doctor --fix" to remove it.',
-        );
-      }
-      if (asRecord(root.session)?.writeLock) {
-        addIssue(
-          issues,
-          ["session", "writeLock"],
-          'session.writeLock is ignored because SQLite serializes session writes; run "openclaw doctor --fix" to remove it.',
+          'session.maintenance.rotateBytes is deprecated and ignored; run "openclaw doctor --fix" to remove it.',
         );
       }
       const xSearch = asRecord(asRecord(asRecord(root.tools)?.web)?.x_search);
@@ -861,8 +849,8 @@ vi.mock("./doctor/shared/legacy-config-issues.js", async () => {
     listPluginDoctorLegacyConfigRules,
   }: typeof import("../plugins/doctor-contract-registry.js") =
     await import("../plugins/doctor-contract-registry.js");
-  const { findLegacyConfigIssues }: typeof import("./doctor/shared/legacy-config-find.js") =
-    await import("./doctor/shared/legacy-config-find.js");
+  const { findLegacyConfigIssues }: typeof import("../config/legacy.js") =
+    await import("../config/legacy.js");
   return {
     findDoctorLegacyConfigIssues: (raw: unknown, sourceRaw?: unknown) =>
       findLegacyConfigIssues(
@@ -1173,8 +1161,8 @@ vi.mock("./doctor-config-preflight.js", async () => {
     listPluginDoctorLegacyConfigRules,
   }: typeof import("../plugins/doctor-contract-registry.js") =
     await import("../plugins/doctor-contract-registry.js");
-  const { findLegacyConfigIssues }: typeof import("./doctor/shared/legacy-config-find.js") =
-    await import("./doctor/shared/legacy-config-find.js");
+  const { findLegacyConfigIssues }: typeof import("../config/legacy.js") =
+    await import("../config/legacy.js");
 
   function resolveConfigPath() {
     const stateDir =
@@ -1362,7 +1350,7 @@ vi.mock("./doctor-config-analysis.js", () => {
   };
 });
 
-vi.mock("./doctor/state-migrations.js", () => ({
+vi.mock("./doctor-state-migrations.js", () => ({
   autoMigrateLegacyStateDir: vi.fn(async () => ({ changes: [], warnings: [] })),
 }));
 
@@ -1467,11 +1455,9 @@ describe("doctor config flow", () => {
     });
 
     expect(noteImplicitFallbackClobberWarningsMock).toHaveBeenCalledTimes(1);
-    expect(noteImplicitFallbackClobberWarningsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agents: config.agents,
-      }),
-    );
+    const [[warningParams]] = noteImplicitFallbackClobberWarningsMock.mock
+      .calls as unknown as Array<[{ agents?: unknown }]>;
+    expect(warningParams.agents).toStrictEqual(config.agents);
     const doctorWarnings = terminalNoteMock.mock.calls
       .filter(([, title]) => title === "Doctor warnings")
       .map(([message]) => message);
@@ -1897,7 +1883,7 @@ describe("doctor config flow", () => {
           blockStreaming: true,
         });
       },
-      { skipStateCleanup: true },
+      { skipSessionCleanup: true },
     );
   });
 
@@ -2246,7 +2232,7 @@ describe("doctor config flow", () => {
           "1212",
         ]);
       },
-      { skipStateCleanup: true },
+      { skipSessionCleanup: true },
     );
   });
 
@@ -2329,7 +2315,8 @@ describe("doctor config flow", () => {
     const result = await withTempHome(
       async (home) => {
         const configDir = path.join(home, ".openclaw");
-        await fs.mkdir(configDir, { recursive: true });
+        const credentialsDir = path.join(configDir, "credentials");
+        await fs.mkdir(credentialsDir, { recursive: true });
         await fs.writeFile(
           path.join(configDir, "openclaw.json"),
           JSON.stringify(
@@ -2346,17 +2333,17 @@ describe("doctor config flow", () => {
           ),
           "utf-8",
         );
-        await addChannelAllowFromStoreEntry({
-          channel: "telegram",
-          entry: "12345",
-          accountId: "default",
-        });
+        await fs.writeFile(
+          path.join(credentialsDir, "telegram-allowFrom.json"),
+          JSON.stringify({ version: 1, allowFrom: ["12345"] }, null, 2),
+          "utf-8",
+        );
         return await loadAndMaybeMigrateDoctorConfig({
           options: { nonInteractive: true, repair: true },
           confirm: async () => false,
         });
       },
-      { skipStateCleanup: true },
+      { skipSessionCleanup: true },
     );
 
     const cfg = result.cfg as {
@@ -2563,9 +2550,6 @@ describe("doctor config flow", () => {
             maintenance: {
               rotateBytes: "10mb",
             },
-            writeLock: {
-              acquireTimeoutMs: 1_000,
-            },
             threadBindings: {
               ttlHours: 24,
             },
@@ -2606,9 +2590,8 @@ describe("doctor config flow", () => {
       expect(legacyMessages).toContain("does not rewrite this shape automatically");
       expect(legacyMessages).toContain("session.threadBindings.ttlHours");
       expect(legacyMessages).toContain("session.threadBindings.idleHours");
-      expect(legacyMessages).toContain("session.maintenance");
-      expect(legacyMessages).toContain("session.writeLock");
-      expect(legacyMessages).toContain("ignored");
+      expect(legacyMessages).toContain("session.maintenance.rotateBytes");
+      expect(legacyMessages).toContain("deprecated and ignored");
       expect(legacyMessages).toContain("channels.<id>.threadBindings.ttlHours");
       expect(legacyMessages).toContain("channels.<id>.threadBindings.idleHours");
       expect(legacyMessages).toContain("talk:");
@@ -2751,7 +2734,7 @@ describe("doctor config flow", () => {
           noteSpy.mockClear();
         }
       },
-      { skipStateCleanup: true },
+      { skipSessionCleanup: true },
     );
   });
 

@@ -1,28 +1,17 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resetPluginBlobStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { resolveMemoryWikiConfig } from "./config.js";
-import { writeMemoryWikiCompiledDigests } from "./digest-state.js";
 import { buildWikiPromptSection, createWikiPromptSectionBuilder } from "./prompt-section.js";
 
 let suiteRoot = "";
-let previousStateDir: string | undefined;
 
 beforeAll(async () => {
   suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-prompt-suite-"));
-  previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  process.env.OPENCLAW_STATE_DIR = path.join(suiteRoot, "state");
 });
 
 afterAll(async () => {
-  resetPluginBlobStoreForTests();
-  if (previousStateDir === undefined) {
-    delete process.env.OPENCLAW_STATE_DIR;
-  } else {
-    process.env.OPENCLAW_STATE_DIR = previousStateDir;
-  }
   if (suiteRoot) {
     await fs.rm(suiteRoot, { recursive: true, force: true });
   }
@@ -45,9 +34,10 @@ describe("buildWikiPromptSection", () => {
 
   it("can append a compact compiled digest snapshot when enabled", async () => {
     const rootDir = path.join(suiteRoot, "digest-enabled");
-    await writeMemoryWikiCompiledDigests({
-      vaultRoot: rootDir,
-      agentDigest: `${JSON.stringify(
+    await fs.mkdir(path.join(rootDir, ".openclaw-wiki", "cache"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootDir, ".openclaw-wiki", "cache", "agent-digest.json"),
+      JSON.stringify(
         {
           claimCount: 8,
           contradictionClusters: [{ key: "claim.alpha.db" }],
@@ -71,9 +61,9 @@ describe("buildWikiPromptSection", () => {
         },
         null,
         2,
-      )}\n`,
-      claimsDigest: "",
-    });
+      ),
+      "utf8",
+    );
     const builder = createWikiPromptSectionBuilder(
       resolveMemoryWikiConfig({
         vault: { path: rootDir },
@@ -92,14 +82,15 @@ describe("buildWikiPromptSection", () => {
 
   it("keeps the digest snapshot disabled by default", async () => {
     const rootDir = path.join(suiteRoot, "digest-disabled");
-    await writeMemoryWikiCompiledDigests({
-      vaultRoot: rootDir,
-      agentDigest: `${JSON.stringify({
+    await fs.mkdir(path.join(rootDir, ".openclaw-wiki", "cache"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootDir, ".openclaw-wiki", "cache", "agent-digest.json"),
+      JSON.stringify({
         claimCount: 1,
         pages: [{ title: "Alpha", kind: "entity", claimCount: 1, topClaims: [] }],
-      })}\n`,
-      claimsDigest: "",
-    });
+      }),
+      "utf8",
+    );
     const builder = createWikiPromptSectionBuilder(
       resolveMemoryWikiConfig({
         vault: { path: rootDir },
@@ -111,6 +102,8 @@ describe("buildWikiPromptSection", () => {
 
   it("stabilizes digest prompt ordering for prompt-cache-friendly output", async () => {
     const rootDir = path.join(suiteRoot, "digest-stable");
+    const digestPath = path.join(rootDir, ".openclaw-wiki", "cache", "agent-digest.json");
+    await fs.mkdir(path.dirname(digestPath), { recursive: true });
 
     const builder = createWikiPromptSectionBuilder(
       resolveMemoryWikiConfig({
@@ -169,18 +162,10 @@ describe("buildWikiPromptSection", () => {
       ],
     };
 
-    await writeMemoryWikiCompiledDigests({
-      vaultRoot: rootDir,
-      agentDigest: `${JSON.stringify(firstDigest, null, 2)}\n`,
-      claimsDigest: "",
-    });
+    await fs.writeFile(digestPath, JSON.stringify(firstDigest, null, 2), "utf8");
     const firstLines = builder({ availableTools: new Set(["web_search"]) });
 
-    await writeMemoryWikiCompiledDigests({
-      vaultRoot: rootDir,
-      agentDigest: `${JSON.stringify(secondDigest, null, 2)}\n`,
-      claimsDigest: "",
-    });
+    await fs.writeFile(digestPath, JSON.stringify(secondDigest, null, 2), "utf8");
     const secondLines = builder({ availableTools: new Set(["web_search"]) });
 
     expect(firstLines).toEqual(secondLines);

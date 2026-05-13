@@ -15,7 +15,7 @@ export const secretTargetRegistryEntries: import("openclaw/plugin-sdk/channel-se
     {
       id: "channels.matrix.accounts.*.accessToken",
       targetType: "channels.matrix.accounts.*.accessToken",
-      store: "openclaw.json",
+      configFile: "openclaw.json",
       pathPattern: "channels.matrix.accounts.*.accessToken",
       secretShape: "secret_input",
       expectedResolvedValue: "string",
@@ -26,7 +26,7 @@ export const secretTargetRegistryEntries: import("openclaw/plugin-sdk/channel-se
     {
       id: "channels.matrix.accounts.*.password",
       targetType: "channels.matrix.accounts.*.password",
-      store: "openclaw.json",
+      configFile: "openclaw.json",
       pathPattern: "channels.matrix.accounts.*.password",
       secretShape: "secret_input",
       expectedResolvedValue: "string",
@@ -37,7 +37,7 @@ export const secretTargetRegistryEntries: import("openclaw/plugin-sdk/channel-se
     {
       id: "channels.matrix.accessToken",
       targetType: "channels.matrix.accessToken",
-      store: "openclaw.json",
+      configFile: "openclaw.json",
       pathPattern: "channels.matrix.accessToken",
       secretShape: "secret_input",
       expectedResolvedValue: "string",
@@ -48,7 +48,7 @@ export const secretTargetRegistryEntries: import("openclaw/plugin-sdk/channel-se
     {
       id: "channels.matrix.password",
       targetType: "channels.matrix.password",
-      store: "openclaw.json",
+      configFile: "openclaw.json",
       pathPattern: "channels.matrix.password",
       secretShape: "secret_input",
       expectedResolvedValue: "string",

@@ -243,6 +243,7 @@ export async function generateVoiceResponse(
   const toolsAllow = resolveVoiceAgentToolsAllow(cfg, agentId);
 
   // Resolve paths
+  const storePath = agentRuntime.session.resolveStorePath(cfg.session?.store, { agentId });
   const agentDir = agentRuntime.resolveAgentDir(cfg, agentId);
   const workspaceDir = agentRuntime.resolveAgentWorkspaceDir(cfg, agentId);
 
@@ -250,39 +251,40 @@ export async function generateVoiceResponse(
   await agentRuntime.ensureAgentWorkspace({ dir: workspaceDir });
 
   // Load or create session entry
+  const sessionStore = agentRuntime.session.loadSessionStore(storePath);
   const now = Date.now();
-  const existingSessionEntry = agentRuntime.session.getSessionEntry({
-    agentId,
-    sessionKey: resolvedSessionKey,
-  });
+  const existingSessionEntry = sessionStore[resolvedSessionKey] as SessionEntry | undefined;
 
   // Resolve model from config
   const { provider, model } = resolveVoiceResponseModel({ voiceConfig, agentRuntime });
 
   let sessionEntry = existingSessionEntry;
   if (!sessionEntry?.sessionId || voiceConfig.responseModel) {
-    const entry: SessionEntry = sessionEntry?.sessionId
-      ? { ...sessionEntry }
-      : {
-          ...sessionEntry,
+    sessionEntry = await agentRuntime.session.updateSessionStore(storePath, (store) => {
+      let entry = store[resolvedSessionKey] as SessionEntry | undefined;
+      if (!entry?.sessionId) {
+        entry = {
+          ...entry,
           sessionId: crypto.randomUUID(),
           updatedAt: now,
         };
-    if (voiceConfig.responseModel) {
-      applyModelOverrideToSessionEntry({
-        entry,
-        selection: { provider, model },
-        selectionSource: "auto",
-      });
-    }
-    agentRuntime.session.upsertSessionEntry({
-      agentId,
-      sessionKey: resolvedSessionKey,
-      entry,
+        store[resolvedSessionKey] = entry;
+      }
+      if (voiceConfig.responseModel) {
+        applyModelOverrideToSessionEntry({
+          entry,
+          selection: { provider, model },
+          selectionSource: "auto",
+        });
+      }
+      return entry;
     });
-    sessionEntry = entry;
   }
   const sessionId = sessionEntry.sessionId;
+
+  const sessionFile = agentRuntime.session.resolveSessionFilePath(sessionId, sessionEntry, {
+    agentId,
+  });
 
   // Resolve thinking level
   const thinkLevel = agentRuntime.resolveThinkingDefault({ cfg, provider, model });
@@ -316,6 +318,7 @@ export async function generateVoiceResponse(
       sandboxSessionKey: resolveVoiceSandboxSessionKey(agentId, resolvedSessionKey),
       agentId,
       messageProvider: "voice",
+      sessionFile,
       workspaceDir,
       config: cfg,
       prompt: userMessage,

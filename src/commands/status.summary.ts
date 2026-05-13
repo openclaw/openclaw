@@ -1,10 +1,11 @@
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
-import { listSessionEntries } from "../config/sessions/store.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
+import { readSessionStoreReadOnly } from "../config/sessions/store-read.js";
 import { resolveSessionTotalTokens, type SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { resolveCronStoreKey } from "../cron/store.js";
+import { resolveCronStorePath } from "../cron/store.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { peekSystemEvents } from "../infra/system-events.js";
@@ -12,7 +13,6 @@ import { hasConfiguredChannelsForReadOnlyScope } from "../plugins/channel-plugin
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
-import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./status.types.js";
 
@@ -83,7 +83,7 @@ export function redactSensitiveStatusSummary(summary: StatusSummary): StatusSumm
     ...summary,
     sessions: {
       ...summary.sessions,
-      databasePaths: [],
+      paths: [],
       defaults: {
         model: null,
         contextTokens: null,
@@ -91,7 +91,7 @@ export function redactSensitiveStatusSummary(summary: StatusSummary): StatusSumm
       recent: [],
       byAgent: summary.sessions.byAgent.map((entry) => ({
         ...entry,
-        databasePath: "[redacted]",
+        path: "[redacted]",
         recent: [],
       })),
     },
@@ -149,7 +149,7 @@ export async function getStatusSummary(
   const queuedSystemEvents = peekSystemEvents(mainSessionKey);
   const taskMaintenanceModule = await loadTaskRegistryMaintenanceModule();
   taskMaintenanceModule.configureTaskRegistryMaintenance({
-    cronStoreKey: resolveCronStoreKey(),
+    cronStorePath: resolveCronStorePath(cfg.cron?.store),
   });
   const tasks = taskMaintenanceModule.getInspectableTaskRegistrySummary();
   const taskAudit = taskMaintenanceModule.getInspectableTaskAuditSummary();
@@ -173,23 +173,23 @@ export async function getStatusSummary(
     }) ?? DEFAULT_CONTEXT_TOKENS;
 
   const now = Date.now();
-  const sessionCache = new Map<string, Array<{ sessionKey: string; entry: SessionEntry }>>();
-  const loadSessionRows = (agentId: string) => {
-    const cached = sessionCache.get(agentId);
+  const storeCache = new Map<string, Record<string, SessionEntry | undefined>>();
+  const loadStore = (storePath: string) => {
+    const cached = storeCache.get(storePath);
     if (cached) {
       return cached;
     }
-    const rows = listSessionEntries({ agentId });
-    sessionCache.set(agentId, rows);
-    return rows;
+    const store = readSessionStoreReadOnly(storePath);
+    storeCache.set(storePath, store);
+    return store;
   };
   const buildSessionRows = (
-    rows: Array<{ sessionKey: string; entry: SessionEntry }>,
+    store: Record<string, SessionEntry | undefined>,
     opts: { agentIdOverride?: string } = {},
   ) =>
-    rows
-      .filter((row) => row.sessionKey !== "global" && row.sessionKey !== "unknown")
-      .map(({ sessionKey: key, entry }) => {
+    Object.entries(store)
+      .filter(([key]) => key !== "global" && key !== "unknown")
+      .map(([key, entry]) => {
         const updatedAt = entry?.updatedAt ?? null;
         const age = updatedAt ? now - updatedAt : null;
         const parsedAgentId = parseAgentSessionKey(key)?.agentId;
@@ -254,24 +254,23 @@ export async function getStatusSummary(
       })
       .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
 
-  const databasePaths = new Set<string>();
-  const allSessionsByAgent: SessionStatus[] = [];
+  const paths = new Set<string>();
   const byAgent = agentList.agents.map((agent) => {
-    const databasePath = resolveOpenClawAgentSqlitePath({ agentId: agent.id });
-    databasePaths.add(databasePath);
-    const sessions = buildSessionRows(loadSessionRows(agent.id), { agentIdOverride: agent.id });
-    allSessionsByAgent.push(...sessions);
+    const storePath = resolveStorePath(cfg.session?.store, { agentId: agent.id });
+    paths.add(storePath);
+    const store = loadStore(storePath);
+    const sessions = buildSessionRows(store, { agentIdOverride: agent.id });
     return {
       agentId: agent.id,
-      databasePath,
+      path: storePath,
       count: sessions.length,
       recent: sessions.slice(0, 10),
     };
   });
 
-  const allSessions = allSessionsByAgent.toSorted(
-    (a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0),
-  );
+  const allSessions = Array.from(paths)
+    .flatMap((storePath) => buildSessionRows(loadStore(storePath)))
+    .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
   const recent = allSessions.slice(0, 10);
   const totalSessions = allSessions.length;
 
@@ -294,7 +293,7 @@ export async function getStatusSummary(
     tasks,
     taskAudit,
     sessions: {
-      databasePaths: Array.from(databasePaths),
+      paths: Array.from(paths),
       count: totalSessions,
       defaults: {
         model: configModel ?? null,

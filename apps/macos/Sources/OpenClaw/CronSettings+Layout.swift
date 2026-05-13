@@ -71,8 +71,8 @@ extension CronSettings {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                    if let storeKey = self.store.schedulerStoreKey, !storeKey.isEmpty {
-                        Text(storeKey)
+                    if let storePath = self.store.schedulerStorePath, !storePath.isEmpty {
+                        Text(storePath)
                             .font(.caption.monospaced())
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)

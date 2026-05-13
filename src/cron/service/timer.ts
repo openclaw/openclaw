@@ -5,7 +5,7 @@ import {
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   isRetryableHeartbeatBusySkipReason,
 } from "../../infra/heartbeat-wake.js";
-import { isSubagentSessionKey } from "../../routing/session-key.js";
+import { DEFAULT_AGENT_ID, isSubagentSessionKey } from "../../routing/session-key.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import {
   completeTaskRunByRunId,
@@ -20,6 +20,7 @@ import {
   summarizeCronRunDiagnostics,
 } from "../run-diagnostics.js";
 import { createCronExecutionId } from "../run-id.js";
+import { sweepCronRunSessions } from "../session-reaper.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
@@ -1110,6 +1111,42 @@ export async function onTimer(state: CronServiceState) {
       });
     }
   } finally {
+    // Piggyback session reaper on timer tick (self-throttled to every 5 min).
+    // Placed in `finally` so the reaper runs even when a long-running job keeps
+    // `state.running` true across multiple timer ticks — the early return at the
+    // top of onTimer would otherwise skip the reaper indefinitely.
+    const storePaths = new Set<string>();
+    if (state.deps.resolveSessionStorePath) {
+      const defaultAgentId = state.deps.defaultAgentId ?? DEFAULT_AGENT_ID;
+      if (state.store?.jobs?.length) {
+        for (const job of state.store.jobs) {
+          const agentId =
+            typeof job.agentId === "string" && job.agentId.trim() ? job.agentId : defaultAgentId;
+          storePaths.add(state.deps.resolveSessionStorePath(agentId));
+        }
+      } else {
+        storePaths.add(state.deps.resolveSessionStorePath(defaultAgentId));
+      }
+    } else if (state.deps.sessionStorePath) {
+      storePaths.add(state.deps.sessionStorePath);
+    }
+
+    if (storePaths.size > 0) {
+      const nowMs = state.deps.nowMs();
+      for (const storePath of storePaths) {
+        try {
+          await sweepCronRunSessions({
+            cronConfig: state.deps.cronConfig,
+            sessionStorePath: storePath,
+            nowMs,
+            log: state.deps.log,
+          });
+        } catch (err) {
+          state.deps.log.warn({ err: String(err), storePath }, "cron: session reaper sweep failed");
+        }
+      }
+    }
+
     state.running = false;
     armTimer(state);
   }
@@ -1761,6 +1798,25 @@ export function wake(
       intent: "immediate",
       reason: "wake",
       ...(sessionKey ? { sessionKey } : {}),
+    });
+  } else if (sessionKey) {
+    // next-heartbeat + sessionKey still needs a targeted immediate wake.
+    // Reasons:
+    //   1. The regularly-scheduled heartbeat fires for the agent's main
+    //      session, not the supplied sessionKey, so it never peeks the queue
+    //      we just enqueued — the event would sit stranded indefinitely.
+    //   2. An `intent: "event"` wake gets deferred by heartbeat-runner as
+    //      not-due and is not retried (only busy-skips are), so it cannot
+    //      stand in for the regular cadence either.
+    // Effectively, --session-key collapses --mode now and --mode next-heartbeat
+    // into the same targeted-immediate behavior — this matches the documented
+    // user intent (target a specific session for relay) better than silently
+    // dropping the event.
+    state.deps.requestHeartbeat({
+      source: "manual",
+      intent: "immediate",
+      reason: "wake",
+      sessionKey,
     });
   }
   return { ok: true } as const;

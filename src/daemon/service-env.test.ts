@@ -571,13 +571,13 @@ describe("buildMinimalServicePath", () => {
   it("prepends explicit runtime bin directories before guessed user paths", () => {
     const result = buildMinimalServicePath({
       platform: "linux",
-      extraDirs: ["/home/alice/.nvm/versions/node/v24.12.0/bin"],
+      extraDirs: ["/home/alice/.nvm/versions/node/v22.22.0/bin"],
       env: { HOME: "/home/alice" },
       existsSync: () => true,
     });
     const parts = splitPath(result, "linux");
 
-    expect(parts[0]).toBe("/home/alice/.nvm/versions/node/v24.12.0/bin");
+    expect(parts[0]).toBe("/home/alice/.nvm/versions/node/v22.22.0/bin");
     expect(parts).toContain("/home/alice/.nvm/current/bin");
   });
 });
@@ -726,11 +726,11 @@ describe("buildServiceEnvironment", () => {
       env: { HOME: "/home/user" },
       port: 18789,
       platform: "linux",
-      extraPathDirs: ["/home/user/.nvm/versions/node/v24.12.0/bin"],
+      extraPathDirs: ["/home/user/.nvm/versions/node/v22.22.0/bin"],
     });
 
     expect(env.PATH?.split(path.posix.delimiter)[0]).toBe(
-      "/home/user/.nvm/versions/node/v24.12.0/bin",
+      "/home/user/.nvm/versions/node/v22.22.0/bin",
     );
   });
 
@@ -739,11 +739,11 @@ describe("buildServiceEnvironment", () => {
       env: { HOME: "/Users/user", VOLTA_HOME: "/Users/user/.volta" },
       port: 18789,
       platform: "darwin",
-      extraPathDirs: ["/opt/homebrew/Cellar/node/24.0.0/bin"],
+      extraPathDirs: ["/opt/homebrew/Cellar/node/22.16.0/bin"],
     });
 
     expect(env.PATH).toBe(
-      "/opt/homebrew/Cellar/node/24.0.0/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+      "/opt/homebrew/Cellar/node/22.16.0/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
     );
   });
 });
@@ -832,11 +832,11 @@ describe("buildNodeServiceEnvironment", () => {
     const env = buildNodeServiceEnvironment({
       env: { HOME: "/home/user" },
       platform: "linux",
-      extraPathDirs: ["/home/user/.nvm/versions/node/v24.12.0/bin"],
+      extraPathDirs: ["/home/user/.nvm/versions/node/v22.22.0/bin"],
     });
 
     expect(env.PATH?.split(path.posix.delimiter)[0]).toBe(
-      "/home/user/.nvm/versions/node/v24.12.0/bin",
+      "/home/user/.nvm/versions/node/v22.22.0/bin",
     );
   });
 });
@@ -924,7 +924,7 @@ describe("isNodeVersionManagerRuntime", () => {
   });
 
   it("returns true when execPath contains /.nvm/", () => {
-    expect(isNodeVersionManagerRuntime({}, "/home/user/.nvm/versions/node/v24.12.0/bin/node")).toBe(
+    expect(isNodeVersionManagerRuntime({}, "/home/user/.nvm/versions/node/v22.22.0/bin/node")).toBe(
       true,
     );
   });
@@ -979,7 +979,7 @@ describe("shared Node TLS env defaults focused", () => {
     const env = buildNodeServiceEnvironment({
       env: { HOME: "/home/user" },
       platform: "linux",
-      execPath: "/home/user/.nvm/versions/node/v24.12.0/bin/node",
+      execPath: "/home/user/.nvm/versions/node/v22.22.0/bin/node",
     });
     expect(env.NODE_EXTRA_CA_CERTS).toBe(expected);
   });
@@ -1002,7 +1002,7 @@ describe("shared Node TLS env defaults focused", () => {
         NODE_EXTRA_CA_CERTS: "/custom/ca-bundle.crt",
       },
       platform: "linux",
-      execPath: "/home/user/.nvm/versions/node/v24.12.0/bin/node",
+      execPath: "/home/user/.nvm/versions/node/v22.22.0/bin/node",
     });
     expect(env.NODE_EXTRA_CA_CERTS).toBe("/custom/ca-bundle.crt");
   });

@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
 import { respondToMSTeamsFileConsentInvoke } from "./file-consent-invoke.js";
-import { getPendingUploadState, storePendingUploadState } from "./pending-uploads-state.js";
+import { getPendingUploadFs, storePendingUploadFs } from "./pending-uploads-fs.js";
 import { clearPendingUploads, getPendingUpload, storePendingUpload } from "./pending-uploads.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
@@ -354,12 +354,12 @@ describe("msteams file consent invoke FS fallback", () => {
     }
   });
 
-  it("reads pending upload from SQLite when in-memory store is empty (cross-process CLI path)", async () => {
-    // Simulate the CLI process writing to SQLite before exiting; the
+  it("reads pending upload from FS store when in-memory store is empty (cross-process CLI path)", async () => {
+    // Simulate the CLI process writing to the FS store before exiting; the
     // in-memory store in this (monitor) process is empty.
     const uploadId = "cli-upload-id-123";
     const conversationId = "19:victim@thread.v2";
-    await storePendingUploadState({
+    await storePendingUploadFs({
       id: uploadId,
       buffer: Buffer.from("CLI PAYLOAD"),
       filename: "cli.bin",
@@ -401,13 +401,13 @@ describe("msteams file consent invoke FS fallback", () => {
     expectUploadUrlCall("https://upload.example.com/put");
 
     // FS entry should have been cleaned up after successful upload
-    expect(await getPendingUploadState(uploadId)).toBeUndefined();
+    expect(await getPendingUploadFs(uploadId)).toBeUndefined();
   });
 
   it("cleans up FS entry on decline even when in-memory store is empty", async () => {
     const uploadId = "cli-decline-id";
     const conversationId = "19:victim@thread.v2";
-    await storePendingUploadState({
+    await storePendingUploadFs({
       id: uploadId,
       buffer: Buffer.from("DECLINED"),
       filename: "decline.txt",
@@ -436,6 +436,6 @@ describe("msteams file consent invoke FS fallback", () => {
     await respondToMSTeamsFileConsentInvoke(context, log);
 
     expect(fileConsentMockState.uploadToConsentUrl).not.toHaveBeenCalled();
-    expect(await getPendingUploadState(uploadId)).toBeUndefined();
+    expect(await getPendingUploadFs(uploadId)).toBeUndefined();
   });
 });

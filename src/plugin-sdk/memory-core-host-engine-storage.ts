@@ -15,7 +15,6 @@ export {
   isFileMissingError,
   listMemoryFiles,
   loadSqliteVecExtension,
-  MEMORY_INDEX_TABLE_NAMES,
   normalizeExtraMemoryPaths,
   parseEmbedding,
   readMemoryFile,
@@ -23,7 +22,6 @@ export {
   requireNodeSqlite,
   resolveMemoryBackendConfig,
   runWithConcurrency,
-  serializeEmbedding,
   statRegularFile,
 } from "../../packages/memory-host-sdk/src/engine-storage.js";
 
@@ -57,7 +55,6 @@ export type {
   MemoryReadResult,
   MemorySearchManager,
   MemorySearchRuntimeDebug,
-  MemorySessionTranscriptScope,
   MemorySyncProgressUpdate,
   ResolvedMemoryBackendConfig,
   ResolvedQmdConfig,

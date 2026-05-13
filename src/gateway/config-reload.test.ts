@@ -22,8 +22,8 @@ import {
   buildGatewayReloadPlan,
   diffConfigPaths,
   type GatewayReloadPlan,
-  listInstalledPluginIndexTimestampMetadataPaths,
-  listInstalledPluginIndexWholeRecordPaths,
+  listPluginInstallTimestampMetadataPaths,
+  listPluginInstallWholeRecordPaths,
   resolveGatewayReloadSettings,
   shouldInvalidateSkillsSnapshotForPaths,
   startGatewayConfigReloader,
@@ -103,15 +103,15 @@ describe("diffConfigPaths", () => {
 
   it("can emit duplicate path strings for install timestamp and dotted install id add", () => {
     const prev = {
-      installedPluginIndex: {
-        installRecords: {
+      plugins: {
+        installs: {
           lossless: { source: "npm", resolvedAt: "2026-04-22T00:00:00.000Z" },
         },
       },
     };
     const next = {
-      installedPluginIndex: {
-        installRecords: {
+      plugins: {
+        installs: {
           lossless: { source: "npm", resolvedAt: "2026-04-22T00:01:00.000Z" },
           "lossless.resolvedAt": { source: "npm" },
         },
@@ -119,8 +119,8 @@ describe("diffConfigPaths", () => {
     };
 
     expect(diffConfigPaths(prev, next)).toEqual([
-      "installedPluginIndex.installRecords.lossless.resolvedAt",
-      "installedPluginIndex.installRecords.lossless.resolvedAt",
+      "plugins.installs.lossless.resolvedAt",
+      "plugins.installs.lossless.resolvedAt",
     ]);
   });
 });
@@ -245,17 +245,13 @@ describe("buildGatewayReloadPlan", () => {
   });
 
   it("keeps installed channel plugin source changes restart-backed", () => {
-    const plan = buildGatewayReloadPlan([
-      "installedPluginIndex.installRecords.telegram.installPath",
-    ]);
+    const plan = buildGatewayReloadPlan(["plugins.installs.telegram.installPath"]);
 
     expect(plan.restartGateway).toBe(true);
     expect(plan.reloadPlugins).toBe(false);
     expect(plan.disposeMcpRuntimes).toBe(false);
     expect(plan.restartChannels).toEqual(new Set());
-    expect(plan.restartReasons).toEqual([
-      "installedPluginIndex.installRecords.telegram.installPath",
-    ]);
+    expect(plan.restartReasons).toEqual(["plugins.installs.telegram.installPath"]);
   });
 
   it("restarts heartbeat when model-related config changes", () => {
@@ -294,25 +290,22 @@ describe("buildGatewayReloadPlan", () => {
 
   it("treats plugin install timestamp-only changes as no-op", () => {
     const plan = buildGatewayReloadPlan([
-      "installedPluginIndex.installRecords.lossless-claw.resolvedAt",
-      "installedPluginIndex.installRecords.lossless-claw.installedAt",
+      "plugins.installs.lossless-claw.resolvedAt",
+      "plugins.installs.lossless-claw.installedAt",
     ]);
     expect(plan.restartGateway).toBe(false);
     expect(plan.noopPaths).toEqual([
-      "installedPluginIndex.installRecords.lossless-claw.resolvedAt",
-      "installedPluginIndex.installRecords.lossless-claw.installedAt",
+      "plugins.installs.lossless-claw.resolvedAt",
+      "plugins.installs.lossless-claw.installedAt",
     ]);
   });
 
   it("restarts for whole-record plugin install changes", () => {
     const plan = buildGatewayReloadPlan(
-      [
-        "installedPluginIndex.installRecords.lossless.resolvedAt",
-        "installedPluginIndex.installRecords.lossless.resolvedAt",
-      ],
+      ["plugins.installs.lossless.resolvedAt", "plugins.installs.lossless.resolvedAt"],
       {
-        noopPaths: ["installedPluginIndex.installRecords.lossless.resolvedAt"],
-        forceChangedPaths: ["installedPluginIndex.installRecords.lossless.resolvedAt"],
+        noopPaths: ["plugins.installs.lossless.resolvedAt"],
+        forceChangedPaths: ["plugins.installs.lossless.resolvedAt"],
       },
     );
 
@@ -320,8 +313,8 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.reloadPlugins).toBe(false);
     expect(plan.disposeMcpRuntimes).toBe(false);
     expect(plan.restartReasons).toEqual([
-      "installedPluginIndex.installRecords.lossless.resolvedAt",
-      "installedPluginIndex.installRecords.lossless.resolvedAt",
+      "plugins.installs.lossless.resolvedAt",
+      "plugins.installs.lossless.resolvedAt",
     ]);
     expect(plan.noopPaths).toStrictEqual([]);
   });
@@ -345,26 +338,26 @@ describe("buildGatewayReloadPlan", () => {
 
   it("lists plugin install metadata and whole-record paths structurally", () => {
     const prev = {
-      installedPluginIndex: {
-        installRecords: {
+      plugins: {
+        installs: {
           lossless: { source: "npm", resolvedAt: "2026-04-22T00:00:00.000Z" },
         },
       },
     };
     const next = {
-      installedPluginIndex: {
-        installRecords: {
+      plugins: {
+        installs: {
           lossless: { source: "npm", resolvedAt: "2026-04-22T00:01:00.000Z" },
           "lossless.resolvedAt": { source: "npm" },
         },
       },
     };
 
-    expect(listInstalledPluginIndexTimestampMetadataPaths(prev, next)).toEqual([
-      "installedPluginIndex.installRecords.lossless.resolvedAt",
+    expect(listPluginInstallTimestampMetadataPaths(prev, next)).toEqual([
+      "plugins.installs.lossless.resolvedAt",
     ]);
-    expect(listInstalledPluginIndexWholeRecordPaths(prev, next)).toEqual([
-      "installedPluginIndex.installRecords.lossless.resolvedAt",
+    expect(listPluginInstallWholeRecordPaths(prev, next)).toEqual([
+      "plugins.installs.lossless.resolvedAt",
     ]);
   });
 
@@ -1046,7 +1039,7 @@ describe("startGatewayConfigReloader", () => {
     await harness.reloader.stop();
   });
 
-  it("ignores plugin index timestamp-only changes and runtime materialized paths", async () => {
+  it("plans in-process reloads from source config and ignores runtime materialized paths", async () => {
     const baseInstall = {
       source: "npm" as const,
       spec: "@martian-engineering/lossless-claw",
@@ -1056,39 +1049,62 @@ describe("startGatewayConfigReloader", () => {
     };
     const sourceConfig: OpenClawConfig = {
       gateway: { reload: { debounceMs: 0 }, auth: { mode: "token" } },
-    };
-    const nextInstallRecords = {
-      "lossless-claw": {
-        ...baseInstall,
-        installedAt: "2026-04-22T00:01:00.000Z",
-        resolvedAt: "2026-04-22T00:01:00.000Z",
+      plugins: {
+        installs: {
+          "lossless-claw": baseInstall,
+        },
       },
     };
     const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
       makeSnapshot({
-        sourceConfig,
+        sourceConfig: {
+          ...sourceConfig,
+          plugins: {
+            installs: {
+              "lossless-claw": {
+                ...baseInstall,
+                installedAt: "2026-04-22T00:01:00.000Z",
+                resolvedAt: "2026-04-22T00:01:00.000Z",
+              },
+            },
+          },
+        },
         hash: "plugin-timestamps-1",
       }),
     );
-    const readPluginInstallRecords = vi.fn().mockResolvedValueOnce(nextInstallRecords);
-    const harness = createReloaderHarness(readSnapshot, {
-      initialCompareConfig: sourceConfig,
-      initialPluginInstallRecords: { "lossless-claw": baseInstall },
-      readPluginInstallRecords,
-    });
+    const harness = createReloaderHarness(readSnapshot, { initialCompareConfig: sourceConfig });
 
     harness.emitWrite({
       configPath: "/tmp/openclaw.json",
-      sourceConfig,
+      sourceConfig: {
+        ...sourceConfig,
+        plugins: {
+          installs: {
+            "lossless-claw": {
+              ...baseInstall,
+              installedAt: "2026-04-22T00:01:00.000Z",
+              resolvedAt: "2026-04-22T00:01:00.000Z",
+            },
+          },
+        },
+      },
       runtimeConfig: {
         ...sourceConfig,
         gateway: { reload: { debounceMs: 0 }, auth: { mode: "token", token: "runtime" } },
         plugins: {
+          ...sourceConfig.plugins,
           entries: {
             firecrawl: {
               config: {
                 webFetch: { provider: "firecrawl" },
               },
+            },
+          },
+          installs: {
+            "lossless-claw": {
+              ...baseInstall,
+              installedAt: "2026-04-22T00:01:00.000Z",
+              resolvedAt: "2026-04-22T00:01:00.000Z",
             },
           },
         },
@@ -1111,43 +1127,45 @@ describe("startGatewayConfigReloader", () => {
   });
 
   it("does not suppress functional install changes that collide with timestamp paths", async () => {
-    const activeConfig: OpenClawConfig = {
+    const sourceConfig: OpenClawConfig = {
       gateway: { reload: { debounceMs: 0 } },
+      plugins: {
+        installs: {
+          lossless: {
+            source: "npm",
+            resolvedAt: "2026-04-22T00:00:00.000Z",
+          },
+        },
+      },
     };
-    const initialPluginInstallRecords = {
-      lossless: {
-        source: "npm",
-        resolvedAt: "2026-04-22T00:00:00.000Z",
+    const nextSourceConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      plugins: {
+        installs: {
+          lossless: {
+            source: "npm",
+            resolvedAt: "2026-04-22T00:01:00.000Z",
+          },
+          "lossless.resolvedAt": {
+            source: "npm",
+          },
+        },
       },
-    } satisfies Record<string, PluginInstallRecord>;
-    const nextPluginInstallRecords = {
-      lossless: {
-        source: "npm",
-        resolvedAt: "2026-04-22T00:01:00.000Z",
-      },
-      "lossless.resolvedAt": {
-        source: "npm",
-      },
-    } satisfies Record<string, PluginInstallRecord>;
+    };
     const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
       makeSnapshot({
-        sourceConfig: activeConfig,
-        runtimeConfig: activeConfig,
-        config: activeConfig,
+        sourceConfig: nextSourceConfig,
+        runtimeConfig: nextSourceConfig,
+        config: nextSourceConfig,
         hash: "plugin-collision-1",
       }),
     );
-    const readPluginInstallRecords = vi.fn().mockResolvedValueOnce(nextPluginInstallRecords);
-    const harness = createReloaderHarness(readSnapshot, {
-      initialCompareConfig: activeConfig,
-      initialPluginInstallRecords,
-      readPluginInstallRecords,
-    });
+    const harness = createReloaderHarness(readSnapshot, { initialCompareConfig: sourceConfig });
 
     harness.emitWrite({
       configPath: "/tmp/openclaw.json",
-      sourceConfig: activeConfig,
-      runtimeConfig: activeConfig,
+      sourceConfig: nextSourceConfig,
+      runtimeConfig: nextSourceConfig,
       persistedHash: "plugin-collision-1",
       revision: 1,
       fingerprint: "runtime-plugin-collision-1",
@@ -1159,15 +1177,15 @@ describe("startGatewayConfigReloader", () => {
     expect(harness.onHotReload).not.toHaveBeenCalled();
     const [plan, nextConfig] = getOnlyRestartCall(harness);
     expect(plan.changedPaths).toEqual([
-      "installedPluginIndex.installRecords.lossless.resolvedAt",
-      "installedPluginIndex.installRecords.lossless.resolvedAt",
+      "plugins.installs.lossless.resolvedAt",
+      "plugins.installs.lossless.resolvedAt",
     ]);
     expect(plan.restartGateway).toBe(true);
     expect(plan.restartReasons).toEqual([
-      "installedPluginIndex.installRecords.lossless.resolvedAt",
-      "installedPluginIndex.installRecords.lossless.resolvedAt",
+      "plugins.installs.lossless.resolvedAt",
+      "plugins.installs.lossless.resolvedAt",
     ]);
-    expect(nextConfig).toBe(activeConfig);
+    expect(nextConfig.plugins?.installs?.["lossless.resolvedAt"]?.source).toBe("npm");
 
     await harness.reloader.stop();
   });
@@ -1209,9 +1227,9 @@ describe("startGatewayConfigReloader", () => {
 
     expect(harness.onHotReload).not.toHaveBeenCalled();
     const [plan, nextConfig] = getOnlyRestartCall(harness);
-    expect(plan.changedPaths).toEqual(["installedPluginIndex.installRecords.lossless-claw"]);
+    expect(plan.changedPaths).toEqual(["plugins.installs.lossless-claw"]);
     expect(plan.restartGateway).toBe(true);
-    expect(plan.restartReasons).toEqual(["installedPluginIndex.installRecords.lossless-claw"]);
+    expect(plan.restartReasons).toEqual(["plugins.installs.lossless-claw"]);
     expect(nextConfig).toBe(activeConfig);
 
     await harness.reloader.stop();
@@ -1313,12 +1331,9 @@ describe("startGatewayConfigReloader", () => {
 
     expect(harness.onHotReload).not.toHaveBeenCalled();
     const [plan, restartedConfig] = getOnlyRestartCall(harness);
-    expect(plan.changedPaths).toEqual([
-      "plugins.entries",
-      "installedPluginIndex.installRecords.lossless-claw",
-    ]);
+    expect(plan.changedPaths).toEqual(["plugins.entries", "plugins.installs.lossless-claw"]);
     expect(plan.restartGateway).toBe(true);
-    expect(plan.restartReasons).toEqual(["installedPluginIndex.installRecords.lossless-claw"]);
+    expect(plan.restartReasons).toEqual(["plugins.installs.lossless-claw"]);
     expect(restartedConfig).toBe(nextConfig);
 
     await harness.reloader.stop();

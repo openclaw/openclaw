@@ -57,7 +57,7 @@ See [Token use & costs](/reference/token-use) for details and examples.
 
 OpenClaw can pick up credentials from:
 
-- **Auth profiles** (per-agent, stored in SQLite auth-profile rows).
+- **Auth profiles** (per-agent, stored in `auth-profiles.json`).
 - **Environment variables** (e.g. `OPENAI_API_KEY`, `BRAVE_API_KEY`, `FIRECRAWL_API_KEY`).
 - **Config** (`models.providers.*.apiKey`, `plugins.entries.*.config.webSearch.apiKey`,
   `plugins.entries.firecrawl.config.webFetch.apiKey`, `memorySearch.*`,

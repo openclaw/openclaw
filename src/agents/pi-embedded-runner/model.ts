@@ -1,3 +1,10 @@
+import type { Api, Model } from "@earendil-works/pi-ai";
+import {
+  AuthStorage as PiAuthStorageClass,
+  ModelRegistry as PiModelRegistryClass,
+  type AuthStorage,
+  type ModelRegistry,
+} from "@earendil-works/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
@@ -20,13 +27,6 @@ import {
   shouldSuppressBuiltInModel,
   shouldUnconditionallySuppress,
 } from "../model-suppression.js";
-import type { Api, Model } from "../pi-ai-contract.js";
-import {
-  AuthStorage as PiAuthStorageClass,
-  ModelRegistry as PiModelRegistryClass,
-  type AuthStorage,
-  type ModelRegistry,
-} from "../pi-coding-agent-contract.js";
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
 import { attachModelProviderLocalService } from "../provider-local-service.js";
 import {
@@ -98,7 +98,7 @@ const STATIC_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
 };
 
 const SKIP_PI_DISCOVERY_PROVIDER_RUNTIME_HOOKS: ProviderRuntimeHooks = {
-  // skipPiDiscovery is the lean path used before PI model catalog discovery has run.
+  // skipPiDiscovery is the lean path used before PI discovery/models.json has run.
   ...TARGET_PROVIDER_RUNTIME_HOOKS,
 };
 
@@ -532,7 +532,7 @@ function applyConfiguredProviderOverrides(params: {
     return {
       ...discoveredModel,
       ...(resolvedParams ? { params: resolvedParams } : {}),
-      // Discovered models originate from the model catalog and may contain persistence markers.
+      // Discovered models originate from models.json and may contain persistence markers.
       headers: sanitizeModelHeaders(discoveredModel.headers, { stripSecretRefMarkers: true }),
     };
   }

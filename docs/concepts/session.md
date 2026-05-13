@@ -92,37 +92,56 @@ sessions should expire on a timer.
 All session state is owned by the **gateway**. UI clients query the gateway for
 session data.
 
-- **Store:** `~/.openclaw/state/openclaw.sqlite` for global state plus `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` for agent-owned rows. Legacy `sessions.json` indexes are imported by `openclaw doctor --fix`.
-- **Transcripts:** SQLite `transcript_events` rows in the per-agent database.
-  JSONL transcript files are legacy doctor-import input only; runtime code must
-  not create, select, or bridge through transcript files or locators.
+- **Store:** `~/.openclaw/agents/<agentId>/sessions/sessions.json`
+- **Transcripts:** `~/.openclaw/agents/<agentId>/sessions/<sessionId>.jsonl`
 
-The session store keeps separate lifecycle timestamps:
+`sessions.json` keeps separate lifecycle timestamps:
 
 - `sessionStartedAt`: when the current `sessionId` began; daily reset uses this.
 - `lastInteractionAt`: last user/channel interaction that extends idle lifetime.
-- `updatedAt`: last store-row mutation; useful for listing, but not
+- `updatedAt`: last store-row mutation; useful for listing and pruning, but not
   authoritative for daily/idle reset freshness.
 
-Older rows without `sessionStartedAt` are resolved from the SQLite transcript
+Older rows without `sessionStartedAt` are resolved from the transcript JSONL
 session header when available. If an older row also lacks `lastInteractionAt`,
 idle freshness falls back to that session start time, not to later bookkeeping
 writes.
 
-## Session Repair
+## Session maintenance
 
-SQLite is the durable session store. Gateway runtime writes do not prune, cap,
-or import session rows, and session store reads do not run cleanup during
-startup. Legacy `session.maintenance` settings are handled only by
-`openclaw doctor --fix`, which removes them from older config files.
+OpenClaw automatically bounds session storage over time. By default, it runs
+in `warn` mode (reports what would be cleaned). Set `session.maintenance.mode`
+to `"enforce"` for automatic cleanup:
 
-Use `openclaw doctor --fix` to import remaining legacy session files into
-SQLite. If a migrated row still lacks corresponding SQLite transcript rows after
-doctor runs, reset or delete that session explicitly.
+```json5
+{
+  session: {
+    maintenance: {
+      mode: "enforce",
+      pruneAfter: "30d",
+      maxEntries: 500,
+    },
+  },
+}
+```
+
+For production-sized `maxEntries` limits, Gateway runtime writes use a small high-water buffer and clean back down to the configured cap in batches. Session store reads do not prune or cap entries during Gateway startup. This avoids running full store cleanup on every startup or isolated cron session. `openclaw sessions cleanup --enforce` applies the cap immediately.
+
+Maintenance preserves durable external conversation pointers, including group
+sessions and thread-scoped chat sessions, while still allowing synthetic cron,
+hook, heartbeat, ACP, and sub-agent entries to age out.
+
+If you previously used direct-message isolation and later returned
+`session.dmScope` to `main`, preview stale peer-keyed DM rows with
+`openclaw sessions cleanup --dry-run --fix-dm-scope`. Applying the same flag
+retires those old direct-DM rows and keeps their transcripts as deleted
+archives.
+
+Preview with `openclaw sessions cleanup --dry-run`.
 
 ## Inspecting sessions
 
-- `openclaw status` -- agent database path and recent activity.
+- `openclaw status` -- session store path and recent activity.
 - `openclaw sessions --json` -- all sessions (filter with `--active <minutes>`).
 - `/status` in chat -- context usage, model, and toggles.
 - `/context list` -- what is in the system prompt.

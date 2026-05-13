@@ -1,7 +1,7 @@
 import os from "node:os";
+import { formatSkillsForPrompt as upstreamFormatSkillsForPrompt } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { formatSkillsForPrompt as upstreamFormatSkillsForPrompt } from "../pi-coding-agent-contract.js";
 import { createCanonicalFixtureSkill } from "../skills.test-helpers.js";
 import {
   restoreMockSkillsHomeEnv,

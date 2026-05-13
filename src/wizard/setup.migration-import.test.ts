@@ -41,7 +41,7 @@ describe("setup migration import freshness", () => {
     const stateDir = path.join(root, "state");
     const workspaceDir = path.join(root, "workspace");
     await writeFile(path.join(workspaceDir, "MEMORY.md"), "existing memory\n");
-    await writeFile(path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"), "");
+    await writeFile(path.join(stateDir, "agents", "main", "agent", "auth-profiles.json"), "{}\n");
 
     const result = await inspectSetupMigrationFreshness({
       baseConfig: { gateway: { port: 3131 } },

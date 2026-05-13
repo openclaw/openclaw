@@ -6,7 +6,7 @@ import { clearMaxDurationTimer, rejectTranscriptWaiter } from "./timers.js";
 
 type CallLifecycleContext = Pick<
   CallManagerContext,
-  "activeCalls" | "providerCallIdMap" | "callStore"
+  "activeCalls" | "providerCallIdMap" | "storePath"
 > &
   Partial<Pick<CallManagerContext, "transcriptWaiters" | "maxDurationTimers">>;
 
@@ -35,7 +35,7 @@ export function finalizeCall(params: {
   call.endedAt = params.endedAt ?? Date.now();
   call.endReason = endReason;
   transitionState(call, endReason);
-  persistCallRecord(ctx.callStore, call);
+  persistCallRecord(ctx.storePath, call);
 
   if (ctx.maxDurationTimers) {
     clearMaxDurationTimer({ maxDurationTimers: ctx.maxDurationTimers }, call.callId);

@@ -436,11 +436,14 @@ export const PLUGIN_COMPAT_RECORDS = [
     deprecated: "2026-04-26",
     warningStarts: "2026-04-26",
     removeAfter: "2026-07-26",
-    replacement: "SQLite-managed installed plugin index",
+    replacement: "state-managed `plugins/installs.json` install ledger",
     docsPath: "/cli/plugins#registry",
-    surfaces: ["plugins.installs authored config", "doctor plugin registry migration"],
-    diagnostics: ["doctor registry migration"],
-    tests: ["src/commands/doctor/shared/plugin-registry-migration.test.ts"],
+    surfaces: ["plugins.installs authored config", "plugin install/update migration"],
+    diagnostics: ["config write migration warning", "doctor registry migration"],
+    tests: [
+      "src/config/io.write-config.test.ts",
+      "src/commands/doctor/shared/plugin-registry-migration.test.ts",
+    ],
   },
   {
     code: "bundled-plugin-load-path-aliases",

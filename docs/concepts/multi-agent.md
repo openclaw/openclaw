@@ -8,20 +8,20 @@ status: active
 
 Run multiple _isolated_ agents — each with its own workspace, state directory (`agentDir`), and session history — plus multiple channel accounts (e.g. two WhatsApps) in one running Gateway. Inbound messages are routed to the right agent through bindings.
 
-An **agent** here is the full per-persona scope: workspace files, auth profiles, model registry, and per-agent database state. `agentDir` is the on-disk state directory that holds this per-agent config and database at `~/.openclaw/agents/<agentId>/agent/`. A **binding** maps a channel account (e.g. a Slack workspace or a WhatsApp number) to one of those agents.
+An **agent** here is the full per-persona scope: workspace files, auth profiles, model registry, and session store. `agentDir` is the on-disk state directory that holds this per-agent config at `~/.openclaw/agents/<agentId>/`. A **binding** maps a channel account (e.g. a Slack workspace or a WhatsApp number) to one of those agents.
 
 ## What is "one agent"?
 
 An **agent** is a fully scoped brain with its own:
 
 - **Workspace** (files, AGENTS.md/SOUL.md/USER.md, local notes, persona rules).
-- **State directory** (`agentDir`) for auth profiles, model registry, per-agent config, and the per-agent SQLite database.
-- **Session and transcript state** (chat history + routing state) in `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`.
+- **State directory** (`agentDir`) for auth profiles, model registry, and per-agent config.
+- **Session store** (chat history + routing state) under `~/.openclaw/agents/<agentId>/sessions`.
 
 Auth profiles are **per-agent**. Each agent reads from its own:
 
 ```text
-~/.openclaw/state/openclaw.sqlite#table/auth_profile_stores/<agentDir>
+~/.openclaw/agents/<agentId>/agent/auth-profiles.json
 ```
 
 <Note>
@@ -51,7 +51,7 @@ The Gateway can host **one agent** (default) or **many agents** side-by-side.
 - State dir: `~/.openclaw` (or `OPENCLAW_STATE_DIR`)
 - Workspace: `~/.openclaw/workspace` (or `~/.openclaw/workspace-<agentId>`)
 - Agent dir: `~/.openclaw/agents/<agentId>/agent` (or `agents.list[].agentDir`)
-- Agent database: `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
+- Sessions: `~/.openclaw/agents/<agentId>/sessions`
 
 ### Single-agent mode (default)
 
@@ -89,7 +89,7 @@ openclaw agents list --bindings
     openclaw agents add social
     ```
 
-    Each agent gets its own workspace with `SOUL.md`, `AGENTS.md`, and optional `USER.md`, plus a dedicated `agentDir` and per-agent SQLite database under `~/.openclaw/agents/<agentId>`.
+    Each agent gets its own workspace with `SOUL.md`, `AGENTS.md`, and optional `USER.md`, plus a dedicated `agentDir` and session store under `~/.openclaw/agents/<agentId>`.
 
   </Step>
   <Step title="Create channel accounts">
@@ -130,7 +130,7 @@ This lets **multiple people** share one Gateway server while keeping their AI "b
 
 ## Cross-agent QMD memory search
 
-If one agent should search another agent's QMD-indexed memory notes, add extra collections under `agents.list[].memorySearch.qmd.extraCollections`. Use `agents.defaults.memorySearch.qmd.extraCollections` only when every agent should inherit the same shared memory collections. Runtime session transcripts stay in SQLite and are not exported into QMD collections.
+If one agent should search another agent's QMD session transcripts, add extra collections under `agents.list[].memorySearch.qmd.extraCollections`. Use `agents.defaults.memorySearch.qmd.extraCollections` only when every agent should inherit the same shared transcript collections.
 
 ```json5
 {
@@ -139,7 +139,7 @@ If one agent should search another agent's QMD-indexed memory notes, add extra c
       workspace: "~/workspaces/main",
       memorySearch: {
         qmd: {
-          extraCollections: [{ path: "~/agents/family/memory", name: "family-memory" }],
+          extraCollections: [{ path: "~/agents/family/sessions", name: "family-sessions" }],
         },
       },
     },
@@ -163,7 +163,7 @@ If one agent should search another agent's QMD-indexed memory notes, add extra c
 }
 ```
 
-The extra collection path can be shared across agents, but the collection name stays explicit when the path is outside the agent workspace. Paths inside the workspace remain agent-scoped so each agent keeps its own memory search set.
+The extra collection path can be shared across agents, but the collection name stays explicit when the path is outside the agent workspace. Paths inside the workspace remain agent-scoped so each agent keeps its own transcript search set.
 
 ## One WhatsApp number, multiple people (DM split)
 
@@ -266,7 +266,7 @@ Common channels supporting this pattern include:
 
 ## Concepts
 
-- `agentId`: one "brain" (workspace, per-agent auth, per-agent database).
+- `agentId`: one "brain" (workspace, per-agent auth, per-agent session store).
 - `accountId`: one channel account instance (e.g. WhatsApp account `"personal"` vs `"biz"`).
 - `binding`: routes inbound messages to an `agentId` by `(channel, accountId, peer)` and optionally guild/team ids.
 - Direct chats collapse to `agent:<agentId>:<mainKey>` (per-agent "main"; `session.mainKey`).

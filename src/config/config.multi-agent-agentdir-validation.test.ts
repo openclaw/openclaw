@@ -28,7 +28,7 @@ Conflicts:
 - ${shared}: "a", "b"
 
 Fix: remove the shared agents.list[].agentDir override (or give each agent its own directory).
-If you want to share credentials, use the auth-profile copy flow instead of sharing the entire agentDir.`,
+If you want to share credentials, copy auth-profiles.json instead of sharing the entire agentDir.`,
         },
       ]);
     }

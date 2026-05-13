@@ -1,20 +1,19 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import {
   resolveConfiguredTtsMode,
   resolveEffectiveTtsConfig,
   shouldAttemptTtsPayload,
 } from "./tts-config.js";
-import { writeTtsUserPrefsSnapshot } from "./tts-prefs-store.js";
 
 describe("shouldAttemptTtsPayload", () => {
-  let originalStateDir: string | undefined;
+  let originalPrefsPath: string | undefined;
   let root = "";
   let dir: string;
+  let prefsPath: string;
   let caseId = 0;
 
   beforeAll(() => {
@@ -28,18 +27,18 @@ describe("shouldAttemptTtsPayload", () => {
   });
 
   beforeEach(() => {
-    originalStateDir = process.env.OPENCLAW_STATE_DIR;
+    originalPrefsPath = process.env.OPENCLAW_TTS_PREFS;
     dir = path.join(root, `case-${caseId++}`);
     mkdirSync(dir, { recursive: true });
-    process.env.OPENCLAW_STATE_DIR = dir;
+    prefsPath = path.join(dir, "tts.json");
+    process.env.OPENCLAW_TTS_PREFS = prefsPath;
   });
 
   afterEach(() => {
-    resetPluginStateStoreForTests();
-    if (originalStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
+    if (originalPrefsPath === undefined) {
+      delete process.env.OPENCLAW_TTS_PREFS;
     } else {
-      process.env.OPENCLAW_STATE_DIR = originalStateDir;
+      process.env.OPENCLAW_TTS_PREFS = originalPrefsPath;
     }
   });
 
@@ -59,7 +58,7 @@ describe("shouldAttemptTtsPayload", () => {
   });
 
   it("honors session auto state before prefs and config", () => {
-    writeTtsUserPrefsSnapshot({ tts: { auto: "off" } });
+    writeFileSync(prefsPath, JSON.stringify({ tts: { auto: "off" } }));
     const cfg = { messages: { tts: { auto: "off" } } } as OpenClawConfig;
 
     expect(shouldAttemptTtsPayload({ cfg, ttsAuto: "always" })).toBe(true);
@@ -69,10 +68,10 @@ describe("shouldAttemptTtsPayload", () => {
   it("uses local prefs before config auto mode", () => {
     const cfg = { messages: { tts: { auto: "off" } } } as OpenClawConfig;
 
-    writeTtsUserPrefsSnapshot({ tts: { enabled: true } });
+    writeFileSync(prefsPath, JSON.stringify({ tts: { enabled: true } }));
     expect(shouldAttemptTtsPayload({ cfg })).toBe(true);
 
-    writeTtsUserPrefsSnapshot({ tts: { auto: "off" } });
+    writeFileSync(prefsPath, JSON.stringify({ tts: { auto: "off" } }));
     expect(
       shouldAttemptTtsPayload({ cfg: { messages: { tts: { enabled: true } } } as OpenClawConfig }),
     ).toBe(false);

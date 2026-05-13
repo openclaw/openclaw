@@ -21,79 +21,14 @@ const OPTIONAL_UNDECLARED_RUNTIME_IMPORTS = new Map<string, Set<string>>([
 ]);
 const INDIRECT_RUNTIME_DEPENDENCIES = new Map<string, Set<string>>([
   [
-    "extensions/amazon-bedrock",
-    // PI provider packages are kept as runtime package contracts even when the SQLite runtime path does not import them directly.
-    new Set(["@earendil-works/pi-ai"]),
-  ],
-  [
-    "extensions/amazon-bedrock-mantle",
-    // PI provider packages are kept as runtime package contracts even when the SQLite runtime path does not import them directly.
-    new Set(["@earendil-works/pi-ai"]),
-  ],
-  [
-    "extensions/anthropic",
-    // PI provider packages are kept as runtime package contracts even when the SQLite runtime path does not import them directly.
-    new Set(["@earendil-works/pi-ai"]),
-  ],
-  [
-    "extensions/anthropic-vertex",
-    // PI provider packages are kept as runtime package contracts even when the SQLite runtime path does not import them directly.
-    new Set(["@earendil-works/pi-agent-core", "@earendil-works/pi-ai"]),
-  ],
-  [
     "extensions/browser",
     // The MCP SDK loads zod through its server/zod-compat runtime path.
     new Set(["zod"]),
   ],
   [
-    "extensions/codex",
-    // The Codex harness still owns the PI coding-agent package contract for app-server auth/runtime compatibility.
-    new Set(["@earendil-works/pi-coding-agent"]),
-  ],
-  [
-    "extensions/fireworks",
-    // PI provider packages are kept as runtime package contracts even when the SQLite runtime path does not import them directly.
-    new Set(["@earendil-works/pi-ai"]),
-  ],
-  [
-    "extensions/github-copilot",
-    // PI provider packages are kept as runtime package contracts even when the SQLite runtime path does not import them directly.
-    new Set(["@earendil-works/pi-ai"]),
-  ],
-  [
-    "extensions/google",
-    // PI provider packages are kept as runtime package contracts even when the SQLite runtime path does not import them directly.
-    new Set(["@earendil-works/pi-ai"]),
-  ],
-  [
-    "extensions/kimi-coding",
-    // PI provider packages are kept as runtime package contracts even when the SQLite runtime path does not import them directly.
-    new Set(["@earendil-works/pi-ai"]),
-  ],
-  [
-    "extensions/lmstudio",
-    // PI provider packages are kept as runtime package contracts even when the SQLite runtime path does not import them directly.
-    new Set(["@earendil-works/pi-ai"]),
-  ],
-  [
     "extensions/whatsapp",
     // Baileys loads these optional peers for media decoding and thumbnails.
     new Set(["audio-decode", "jimp"]),
-  ],
-  [
-    "extensions/ollama",
-    // PI provider packages are kept as runtime package contracts even when the SQLite runtime path does not import them directly.
-    new Set(["@earendil-works/pi-ai"]),
-  ],
-  [
-    "extensions/openai",
-    // PI provider packages are kept as runtime package contracts even when the SQLite runtime path does not import them directly.
-    new Set(["@earendil-works/pi-ai"]),
-  ],
-  [
-    "extensions/xai",
-    // PI provider packages are kept as runtime package contracts even when the SQLite runtime path does not import them directly.
-    new Set(["@earendil-works/pi-ai"]),
   ],
   [
     "extensions/memory-lancedb",

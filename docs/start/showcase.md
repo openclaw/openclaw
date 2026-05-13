@@ -268,7 +268,7 @@ Adds vector search to Karakeep bookmarks using Qdrant plus OpenAI or Ollama embe
 <Card title="Inside-Out-2 memory" icon="brain">
   **Community** • `memory` `beliefs` `self-model`
 
-Separate memory manager that turns SQLite-backed transcript history into memories, then beliefs, then an evolving self model.
+Separate memory manager that turns session files into memories, then beliefs, then an evolving self model.
 </Card>
 
 </CardGroup>

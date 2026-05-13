@@ -723,14 +723,27 @@ describe("cron method validation", () => {
       expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
     });
 
-    it("omits sessionKey when explicitly empty string", async () => {
-      const { context } = await invokeWake({
+    it("rejects empty-string sessionKey at schema", async () => {
+      const { context, respond } = await invokeWake({
         mode: "now",
         text: "ping",
         sessionKey: "",
       });
-      // empty-string sessionKey is rejected at schema (NonEmptyString)
       expect(context.cron.wake).not.toHaveBeenCalled();
+      expectResponseError(respond, { code: "INVALID_REQUEST", messageIncludes: "sessionKey" });
+    });
+
+    it("treats whitespace-only sessionKey as omitted at the handler boundary", async () => {
+      const { context, respond } = await invokeWake({
+        mode: "now",
+        text: "ping",
+        sessionKey: "   ",
+      });
+      expect(context.cron.wake).toHaveBeenCalledWith({
+        mode: "now",
+        text: "ping",
+      });
+      expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
     });
 
     it("rejects non-string sessionKey at schema", async () => {
@@ -740,7 +753,7 @@ describe("cron method validation", () => {
         sessionKey: 42,
       });
       expect(context.cron.wake).not.toHaveBeenCalled();
-      expect(respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
+      expectResponseError(respond, { code: "INVALID_REQUEST", messageIncludes: "sessionKey" });
     });
 
     it("rejects subagent sessionKey targets before enqueueing", async () => {
@@ -750,17 +763,7 @@ describe("cron method validation", () => {
         sessionKey: "agent:main:subagent:worker",
       });
       expect(context.cron.wake).not.toHaveBeenCalled();
-      expect(respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
-    });
-
-    it("rejects subagent sessionKey targets before enqueueing", async () => {
-      const { context, respond } = await invokeWake({
-        mode: "now",
-        text: "ping",
-        sessionKey: "agent:main:subagent:worker",
-      });
-      expect(context.cron.wake).not.toHaveBeenCalled();
-      expect(respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
+      expectResponseError(respond, { code: "INVALID_REQUEST", messageIncludes: "sessionKey" });
     });
   });
 });

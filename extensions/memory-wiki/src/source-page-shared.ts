@@ -14,7 +14,6 @@ export async function writeImportedSourcePage(params: {
   sourcePath: string;
   sourceUpdatedAtMs: number;
   sourceSize: number;
-  sourceContent?: string;
   renderFingerprint: string;
   pagePath: string;
   group: MemoryWikiImportedSourceGroup;
@@ -47,7 +46,7 @@ export async function writeImportedSourcePage(params: {
     return { pagePath: params.pagePath, changed: false, created };
   }
 
-  const raw = params.sourceContent ?? (await fs.readFile(params.sourcePath, "utf8"));
+  const raw = await fs.readFile(params.sourcePath, "utf8");
   const rendered = params.buildRendered(raw, updatedAt);
   const existing = pageStat ? await vault.readText(params.pagePath).catch(() => "") : "";
   if (existing !== rendered) {

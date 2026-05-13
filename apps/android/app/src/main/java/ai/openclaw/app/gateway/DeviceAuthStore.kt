@@ -1,7 +1,7 @@
 package ai.openclaw.app.gateway
 
-import android.content.Context
-import kotlinx.serialization.decodeFromString
+import ai.openclaw.app.SecurePrefs
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
@@ -10,6 +10,12 @@ data class DeviceAuthEntry(
   val role: String,
   val scopes: List<String>,
   val updatedAtMs: Long,
+)
+
+@Serializable
+private data class PersistedDeviceAuthMetadata(
+  val scopes: List<String> = emptyList(),
+  val updatedAtMs: Long = 0L,
 )
 
 interface DeviceAuthTokenStore {
@@ -37,24 +43,28 @@ interface DeviceAuthTokenStore {
 }
 
 class DeviceAuthStore(
-  context: Context,
+  private val prefs: SecurePrefs,
 ) : DeviceAuthTokenStore {
-  private val json = Json
-  private val stateStore = OpenClawSQLiteStateStore(context)
+  private val json = Json { ignoreUnknownKeys = true }
 
   override fun loadEntry(
     deviceId: String,
     role: String,
   ): DeviceAuthEntry? {
-    val normalizedDevice = normalizeDeviceId(deviceId)
+    val key = tokenKey(deviceId, role)
+    val token = prefs.getString(key)?.trim()?.takeIf { it.isNotEmpty() } ?: return null
     val normalizedRole = normalizeRole(role)
-    val row = stateStore.readDeviceAuthToken(normalizedDevice, normalizedRole) ?: return null
-    val token = row.token.trim().takeIf { it.isNotEmpty() } ?: return null
+    val metadata =
+      prefs
+        .getString(metadataKey(deviceId, role))
+        ?.let { raw ->
+          runCatching { json.decodeFromString<PersistedDeviceAuthMetadata>(raw) }.getOrNull()
+        }
     return DeviceAuthEntry(
       token = token,
       role = normalizedRole,
-      scopes = decodeScopes(row.scopesJson),
-      updatedAtMs = row.updatedAtMs,
+      scopes = metadata?.scopes ?: emptyList(),
+      updatedAtMs = metadata?.updatedAtMs ?: 0L,
     )
   }
 
@@ -64,20 +74,16 @@ class DeviceAuthStore(
     token: String,
     scopes: List<String>,
   ) {
-    val normalizedDevice = normalizeDeviceId(deviceId)
-    val normalizedRole = normalizeRole(role)
     val normalizedScopes = normalizeScopes(scopes)
-    val latestDeviceId = stateStore.readLatestDeviceAuthDeviceId()
-    if (latestDeviceId != null && latestDeviceId != normalizedDevice) {
-      stateStore.deleteAllDeviceAuthTokens()
-    }
-    stateStore.upsertDeviceAuthToken(
-      OpenClawSQLiteDeviceAuthTokenRow(
-        deviceId = normalizedDevice,
-        role = normalizedRole,
-        token = token.trim(),
-        scopesJson = json.encodeToString(normalizedScopes),
-        updatedAtMs = System.currentTimeMillis(),
+    val key = tokenKey(deviceId, role)
+    prefs.putString(key, token.trim())
+    prefs.putString(
+      metadataKey(deviceId, role),
+      json.encodeToString(
+        PersistedDeviceAuthMetadata(
+          scopes = normalizedScopes,
+          updatedAtMs = System.currentTimeMillis(),
+        ),
       ),
     )
   }
@@ -86,16 +92,28 @@ class DeviceAuthStore(
     deviceId: String,
     role: String,
   ) {
-    stateStore.deleteDeviceAuthToken(
-      deviceId = normalizeDeviceId(deviceId),
-      role = normalizeRole(role),
-    )
+    val key = tokenKey(deviceId, role)
+    prefs.remove(key)
+    prefs.remove(metadataKey(deviceId, role))
   }
 
-  private fun decodeScopes(raw: String): List<String> =
-    runCatching { json.decodeFromString<List<String>>(raw) }
-      .getOrDefault(emptyList())
-      .let(::normalizeScopes)
+  private fun tokenKey(
+    deviceId: String,
+    role: String,
+  ): String {
+    val normalizedDevice = normalizeDeviceId(deviceId)
+    val normalizedRole = normalizeRole(role)
+    return "gateway.deviceToken.$normalizedDevice.$normalizedRole"
+  }
+
+  private fun metadataKey(
+    deviceId: String,
+    role: String,
+  ): String {
+    val normalizedDevice = normalizeDeviceId(deviceId)
+    val normalizedRole = normalizeRole(role)
+    return "gateway.deviceTokenMeta.$normalizedDevice.$normalizedRole"
+  }
 
   private fun normalizeDeviceId(deviceId: String): String = deviceId.trim().lowercase()
 

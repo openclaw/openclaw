@@ -26,6 +26,8 @@ async function makeSettings() {
   return {
     enabled: true,
     required: false,
+    dbPath: ":memory:",
+    blobDir: join(testRoot, "blobs"),
     certDir,
     sessionId: "debug-proxy-managed-proxy-test",
     sourceProcess: "test",

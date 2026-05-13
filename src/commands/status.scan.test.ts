@@ -269,7 +269,7 @@ describe("scanStatus", () => {
     expect(mocks.probeGateway).not.toHaveBeenCalled();
   });
 
-  it("skips memory backend inspection for default memory-core with no existing database", async () => {
+  it("skips memory backend inspection for default memory-core with no existing store", async () => {
     configureScanStatus();
 
     await scanStatus({ json: true }, {} as never);

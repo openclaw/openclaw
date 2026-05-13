@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect } from "vitest";
-import { saveAuthProfileStore, type AuthProfileStore } from "../agents/auth-profiles.js";
+import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
@@ -42,6 +42,7 @@ export async function createOpenAIFileRuntimeFixture(home: string) {
   const configDir = path.join(home, ".openclaw");
   const secretFile = path.join(configDir, "secrets.json");
   const agentDir = path.join(configDir, "agents", "main", "agent");
+  const authStorePath = path.join(agentDir, "auth-profiles.json");
 
   await fs.mkdir(agentDir, { recursive: true });
   await fs.chmod(configDir, 0o700).catch(() => {});
@@ -50,19 +51,23 @@ export async function createOpenAIFileRuntimeFixture(home: string) {
     `${JSON.stringify({ providers: { openai: { apiKey: "sk-file-runtime" } } }, null, 2)}\n`,
     { encoding: "utf8", mode: 0o600 },
   );
-  saveAuthProfileStore(
-    {
-      version: 1,
-      profiles: {
-        "openai:default": {
-          type: "api_key",
-          provider: "openai",
-          keyRef: OPENAI_FILE_KEY_REF,
+  await fs.writeFile(
+    authStorePath,
+    `${JSON.stringify(
+      {
+        version: 1,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            keyRef: OPENAI_FILE_KEY_REF,
+          },
         },
       },
-    },
-    agentDir,
-    { env: { ...process.env, OPENCLAW_STATE_DIR: configDir } },
+      null,
+      2,
+    )}\n`,
+    { encoding: "utf8", mode: 0o600 },
   );
 
   return {

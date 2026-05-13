@@ -64,7 +64,7 @@ export class DiscordInteractionListener extends InteractionCreateListener {
 
   async handle(data: DiscordInteractionEvent, client: Client) {
     this.onEvent?.();
-    // Hand off immediately so slash/component handling can wait on session queues
+    // Hand off immediately so slash/component handling can wait on session locks
     // or compaction without blocking later gateway events.
     void Promise.resolve()
       .then(() => client.handleInteraction(data as Parameters<Client["handleInteraction"]>[0], {}))
