@@ -40,6 +40,11 @@ type CronEmbeddedRuntime = typeof import("./run-embedded.runtime.js");
 type CronSubagentRegistryRuntime = typeof import("./run-subagent-registry.runtime.js");
 type CronPromptRunOptions = {
   disableTools?: boolean;
+  disableBundleMcpForCli?: boolean;
+  cliSession?: {
+    provider: string;
+    sessionId: string;
+  };
 };
 
 const cronEmbeddedRuntimeLoader = createLazyImportLoader<CronEmbeddedRuntime>(
@@ -206,9 +211,15 @@ export function createCronPromptExecutor(params: {
         const bootstrapPromptWarningSignature =
           bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
         if (isCliProvider(executionProvider, params.cfgWithAgentDefaults)) {
-          const cliSessionId = params.cronSession.isNewSession
-            ? undefined
-            : await getCliSessionId(params.cronSession.sessionEntry, executionProvider);
+          const optionCliSessionId =
+            options?.cliSession?.provider === executionProvider
+              ? options.cliSession.sessionId.trim() || undefined
+              : undefined;
+          const cliSessionId =
+            optionCliSessionId ??
+            (params.cronSession.isNewSession
+              ? undefined
+              : await getCliSessionId(params.cronSession.sessionEntry, executionProvider));
           const result = await runCliAgent({
             sessionId: params.cronSession.sessionEntry.sessionId,
             sessionKey: params.runSessionKey,
@@ -226,7 +237,8 @@ export function createCronPromptExecutor(params: {
             runId: params.cronSession.sessionEntry.sessionId,
             lane: resolveCronAgentLane(params.lane),
             cliSessionId,
-            disableBundleMcp: options?.disableTools,
+            disableTools: options?.disableTools,
+            disableBundleMcp: options?.disableBundleMcpForCli,
             skillsSnapshot: params.skillsSnapshot,
             messageChannel: params.messageChannel,
             abortSignal: params.abortSignal,
@@ -549,11 +561,24 @@ export async function executeCronRun(params: {
 
     if (shouldRetryEmptyOutput && !hasFreshDescendants && !hasActiveDescendants) {
       emptyOutputRepairAttempted = true;
+      const repairProvider = runResult.meta?.agentMeta?.provider ?? fallbackProvider;
+      const repairUsesCliProvider = isCliProvider(repairProvider, params.cfgWithAgentDefaults);
+      const repairCliSessionId =
+        runResult.meta?.agentMeta?.cliSessionBinding?.sessionId?.trim() ||
+        runResult.meta?.agentMeta?.sessionId?.trim() ||
+        undefined;
       logWarn(
-        `[cron:${params.job.id}] empty deliverable output after sanitization; attempting no-tools repair pass`,
+        repairUsesCliProvider
+          ? `[cron:${params.job.id}] empty deliverable output after sanitization; attempting CLI repair pass with bundled MCP disabled`
+          : `[cron:${params.job.id}] empty deliverable output after sanitization; attempting no-tools repair pass`,
       );
       await executor.runPrompt(buildEmptyOutputRepairPrompt(params.commandBody), {
-        disableTools: true,
+        disableTools: repairUsesCliProvider ? undefined : true,
+        disableBundleMcpForCli: repairUsesCliProvider ? true : undefined,
+        cliSession:
+          repairUsesCliProvider && repairCliSessionId
+            ? { provider: repairProvider, sessionId: repairCliSessionId }
+            : undefined,
       });
       ({ runResult, fallbackProvider, fallbackModel, runEndedAt } = executor.getState());
 
