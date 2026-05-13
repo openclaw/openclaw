@@ -494,9 +494,9 @@ describe("installSessionToolResultGuard", () => {
     expect(serializedToolResult).not.toContain("plainsecretvalue123");
     expect(serializedToolResult).not.toContain("hunter2");
     expect(serializedToolResult).not.toContain("nestedplainsecret123");
-    expect(toolResult.details.apiKey).toBe("plains…e123");
+    expect(toolResult.details.apiKey).toBe("***");
     expect(toolResult.details.password).toBe("***");
-    expect(toolResult.details.nested.accessToken[0]).toBe("nested…t123");
+    expect(toolResult.details.nested.accessToken[0]).toBe("***");
     expect(serializedToolResult).toContain("visible");
   });
 

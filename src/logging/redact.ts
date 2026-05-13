@@ -274,17 +274,12 @@ function redactSensitiveFieldValueWithOptions(
   return value;
 }
 
-<<<<<<< HEAD
 export function redactSensitiveFieldValue(
   key: string,
   value: string,
   options?: RedactOptions,
 ): string {
-  return redactSensitiveFieldValueWithOptions(
-    key,
-    value,
-    options ?? resolveToolPayloadRedaction(),
-  );
+  return redactSensitiveFieldValueWithOptions(key, value, options ?? resolveToolPayloadRedaction());
 }
 
 export function redactSensitiveFieldValueWithConfig(
