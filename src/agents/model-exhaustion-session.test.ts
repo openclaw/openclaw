@@ -39,6 +39,7 @@ describe("model exhaustion session persistence", () => {
     const sessionKey = "test-session-key";
     const storePath = "/tmp/test-sessions.json";
     const now = Date.now();
+    const sessionAgentId = "agent-a";
 
     const exhaustedModels = {
       "openai/gpt-4o": now + 600000,
@@ -63,8 +64,17 @@ describe("model exhaustion session persistence", () => {
       provider: "openai",
       model: "gpt-4o",
       sessionId,
+      sessionAgentId,
       run,
     });
+
+    expect(resolveStoredSessionKeyForSessionId).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg,
+        sessionId,
+        agentId: sessionAgentId,
+      }),
+    );
 
     expect(result.result).toBe("ok");
     expect(result.provider).toBe("google");

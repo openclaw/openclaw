@@ -17,16 +17,17 @@ vi.mock("../config/sessions.js", () => sessionStoreMocks);
 vi.mock("../process/command-queue.js", () => commandQueueMocks);
 
 vi.mock("./command/session.js", () => ({
-  resolveStoredSessionKeyForSessionId: () => ({
+  resolveStoredSessionKeyForSessionId: vi.fn(() => ({
     sessionKey: "session-key",
     storePath: "/tmp/openclaw-session-suspension-test/sessions.json",
-  }),
+  })),
 }));
 
 async function suspendMainLane(ttlMs: number, cfg: OpenClawConfig) {
   const { suspendSession } = await import("./session-suspension.js");
   await suspendSession({
     cfg,
+    sessionAgentId: "agent-a",
     sessionId: "session-1",
     laneId: CommandLane.Main,
     reason: "quota_exhausted",
@@ -52,6 +53,13 @@ describe("session suspension", () => {
     } as OpenClawConfig;
 
     await suspendMainLane(100, cfg);
+
+    const { resolveStoredSessionKeyForSessionId } = await import("./command/session.js");
+    expect(resolveStoredSessionKeyForSessionId).toHaveBeenCalledWith({
+      cfg,
+      sessionId: "session-1",
+      agentId: "agent-a",
+    });
 
     expect(commandQueueMocks.setCommandLaneConcurrency).toHaveBeenCalledWith(CommandLane.Main, 0);
 
