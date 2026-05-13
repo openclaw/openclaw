@@ -153,6 +153,10 @@ function firstEmbeddedAgentArg(callIndex = 0) {
   return requireMockArg(runEmbeddedAgentMock, callIndex, "embedded OpenClaw agent argument");
 }
 
+function encodeWorkspaceDirName(workspaceDir: string): string {
+  return workspaceDir.replace(/[^a-zA-Z0-9]/g, "-");
+}
+
 describe("CLI attempt execution", () => {
   let tmpDir: string;
   let storePath: string;
@@ -247,7 +251,10 @@ describe("CLI attempt execution", () => {
   it("clears stale Claude CLI session IDs before retrying after session expiration", async () => {
     const sessionKey = "agent:main:subagent:cli-expired";
     const homeDir = path.join(tmpDir, "home");
-    const projectsDir = path.join(homeDir, ".claude", "projects", "demo-workspace");
+    // v4 computes the JSONL path from workspaceDir; runClaudeCliAttempt below
+    // passes workspaceDir: tmpDir, so the probe walks
+    //   $HOME/.claude/projects/<encoded(tmpDir)>/<sessionId>.jsonl
+    const projectsDir = path.join(homeDir, ".claude", "projects", encodeWorkspaceDirName(tmpDir));
     process.env.HOME = homeDir;
     await fs.mkdir(projectsDir, { recursive: true });
     await fs.writeFile(
@@ -437,7 +444,8 @@ describe("CLI attempt execution", () => {
     const sessionKey = "agent:main:direct:claude-transcript-present";
     const cliSessionId = "existing-claude-session";
     const homeDir = path.join(tmpDir, "home");
-    const projectsDir = path.join(homeDir, ".claude", "projects", "demo-workspace");
+    // v4 deterministic path lives under encoded(tmpDir), not a fixed name.
+    const projectsDir = path.join(homeDir, ".claude", "projects", encodeWorkspaceDirName(tmpDir));
     process.env.HOME = homeDir;
     await fs.mkdir(projectsDir, { recursive: true });
     await fs.writeFile(

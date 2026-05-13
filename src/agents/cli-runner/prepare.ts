@@ -375,6 +375,7 @@ export async function prepareCliRunContext(
     isClaudeCliProvider(params.provider) &&
     !(await prepareDeps.claudeCliSessionTranscriptHasContent({
       sessionId: candidateClaudeCliSessionId,
+      workspaceDir,
     }));
   const reusableCliSession: CliReusableSession = claudeCliTranscriptMissing
     ? { invalidatedReason: "missing-transcript" }

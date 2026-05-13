@@ -84,110 +84,89 @@ export async function sessionFileHasContent(sessionFile: string | undefined): Pr
   return await jsonlFileHasAssistantMessage(sessionFile);
 }
 
-type TranscriptProjectScan = { project: string; fileExists: boolean; hasAssistant: boolean };
-
-type TranscriptScanResult = {
-  hasAssistant: boolean;
-  fileExists: boolean;
-  sessionId: string | null;
-  homeDir: string | null;
-  projects: TranscriptProjectScan[];
-};
-
 /**
- * Back-off ladder between negative scans of the claude-cli transcript. Element
- * 0 is the first scan (no wait); subsequent entries are the delay before each
- * retry. Two windows races together set the budget:
- *  1. The within-file flush race: claude-cli writes the user-message header
- *     before the assistant turn lands, so a fresh JSONL can briefly hold a
- *     header with no assistant block.
- *  2. The file-creation race: after a session-id rotation the JSONL itself
- *     has not yet been created when the runtime probes; field observation
- *     puts that window well past one second on busy hosts.
+ * Compute the on-disk JSONL path claude-cli uses for a given session. The CLI
+ * is now invoked with an orchestrator-minted `--session-id <uuid>` and `cwd
+ * <workspaceDir>`, which together determine the path:
  *
- * The ladder covers both branches uniformly — the loop retries whether the
- * file is missing or present-but-empty — and totals 3250ms of wait so a
- * genuinely-no-session call still bounds out quickly while a slow flush has
- * room to land.
+ *   `<homeDir>/.claude/projects/<encoded(workspaceDir)>/<sessionId>.jsonl`
+ *
+ * The encoding rule was verified live: claude-cli replaces every non-
+ * alphanumeric character in the absolute cwd with a hyphen (so
+ * `/home/faris/.openclaw/workspace` becomes `-home-faris--openclaw-workspace`
+ * and `/tmp/foo_bar.baz` becomes `-tmp-foo-bar-baz`). The rule is documented
+ * by behavior alone, so we keep the encoding regexp localized to this helper
+ * — if upstream Claude Code ever changes it, the probe stops finding the file
+ * and v4 fails loud (see `claudeCliSessionTranscriptHasContent` below).
+ *
+ * Returns `null` when the session id is malformed or the workspace is empty.
  */
-const CLAUDE_CLI_TRANSCRIPT_FLUSH_DELAYS_MS: readonly number[] = [0, 250, 500, 1000, 1500];
-const CLAUDE_CLI_TRANSCRIPT_FLUSH_TOTAL_MS = CLAUDE_CLI_TRANSCRIPT_FLUSH_DELAYS_MS.reduce(
-  (acc, n) => acc + n,
-  0,
-);
-
-async function claudeCliSessionTranscriptScan(params: {
+export function claudeCliSessionTranscriptPath(params: {
   sessionId: string | undefined;
+  workspaceDir: string | undefined;
   homeDir?: string;
-}): Promise<TranscriptScanResult> {
+}): string | null {
   const sessionId = normalizeClaudeCliSessionId(params.sessionId);
   if (!sessionId) {
-    return { hasAssistant: false, fileExists: false, sessionId: null, homeDir: null, projects: [] };
+    return null;
+  }
+  const workspaceDir = params.workspaceDir?.trim();
+  if (!workspaceDir) {
+    return null;
   }
   const homeDir = params.homeDir?.trim() || process.env.HOME || os.homedir();
-  const projectsDir = path.join(homeDir, CLAUDE_PROJECTS_RELATIVE_DIR);
-  let projectEntries: import("node:fs").Dirent[];
-  try {
-    projectEntries = await fs.readdir(projectsDir, { withFileTypes: true });
-  } catch {
-    return { hasAssistant: false, fileExists: false, sessionId, homeDir, projects: [] };
-  }
-  const projects: TranscriptProjectScan[] = [];
-  let anyFileExists = false;
-  for (const entry of projectEntries) {
-    if (!entry.isDirectory()) {
-      continue;
-    }
-    const candidate = path.join(projectsDir, entry.name, `${sessionId}.jsonl`);
-    const scan = await scanJsonlFile(candidate);
-    projects.push({
-      project: entry.name,
-      fileExists: scan.fileExists,
-      hasAssistant: scan.hasAssistant,
-    });
-    if (scan.fileExists) {
-      anyFileExists = true;
-    }
-    if (scan.hasAssistant) {
-      return { hasAssistant: true, fileExists: true, sessionId, homeDir, projects };
-    }
-  }
-  return { hasAssistant: false, fileExists: anyFileExists, sessionId, homeDir, projects };
+  const encodedWorkspace = workspaceDir.replace(/[^a-zA-Z0-9]/g, "-");
+  return path.join(homeDir, CLAUDE_PROJECTS_RELATIVE_DIR, encodedWorkspace, `${sessionId}.jsonl`);
 }
+
+/**
+ * Single grace window between the first and second probe of the on-disk
+ * claude-cli transcript. v3 used a 0/250/500/1000/1500ms back-off ladder
+ * (3250ms total) and still raced the JSONL flush — at 12:37:58 EDT 2026-05-13
+ * a live user turn hit `transcript probe negative after 3250ms (no matching
+ * jsonl)`, immediately followed by `cli session reset reason=missing-
+ * transcript`. v4 abandons the ladder-widening dead-end: the orchestrator now
+ * mints the session id (`--session-id <uuid>`), so the JSONL path is fully
+ * determined by data we own. A miss past one short grace window is no longer
+ * "we lost the race for picking the path" but "the file genuinely isn't
+ * there", and we want that to fail loud instead of silently widening forever.
+ */
+const CLAUDE_CLI_TRANSCRIPT_FLUSH_GRACE_MS = 250;
 
 export async function claudeCliSessionTranscriptHasContent(params: {
   sessionId: string | undefined;
+  workspaceDir: string | undefined;
   homeDir?: string;
 }): Promise<boolean> {
-  let lastScan: TranscriptScanResult | null = null;
-  for (const wait of CLAUDE_CLI_TRANSCRIPT_FLUSH_DELAYS_MS) {
-    if (wait > 0) {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, wait);
-      });
-    }
-    const scan = await claudeCliSessionTranscriptScan(params);
-    if (scan.hasAssistant) {
-      return true;
-    }
-    lastScan = scan;
+  const expectedPath = claudeCliSessionTranscriptPath({
+    sessionId: params.sessionId,
+    workspaceDir: params.workspaceDir,
+    homeDir: params.homeDir,
+  });
+  if (!expectedPath) {
+    return false;
   }
-  // The probe is the last gate before transcript-missing recovery, so emit a
-  // diagnostic for both negative branches: the file landed but stayed empty
-  // (within-file flush race lost) vs no JSONL ever appeared (file-creation
-  // race lost). The branch tells us which window we need to widen if the
-  // back-off is still too short in the field.
-  if (lastScan?.sessionId) {
-    if (lastScan.fileExists) {
-      cliBackendLog.warn(
-        `claude-cli transcript probe negative after ${CLAUDE_CLI_TRANSCRIPT_FLUSH_TOTAL_MS}ms (file exists, no asst): sessionId=${lastScan.sessionId} homeDir=${lastScan.homeDir ?? ""} projects=${JSON.stringify(lastScan.projects)}`,
-      );
-    } else {
-      cliBackendLog.warn(
-        `claude-cli transcript probe negative after ${CLAUDE_CLI_TRANSCRIPT_FLUSH_TOTAL_MS}ms (no matching jsonl): sessionId=${lastScan.sessionId} homeDir=${lastScan.homeDir ?? ""} projectCount=${lastScan.projects.length}`,
-      );
-    }
+  const first = await scanJsonlFile(expectedPath);
+  if (first.hasAssistant) {
+    return true;
   }
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, CLAUDE_CLI_TRANSCRIPT_FLUSH_GRACE_MS);
+  });
+  const second = await scanJsonlFile(expectedPath);
+  if (second.hasAssistant) {
+    return true;
+  }
+  // Loud, structured warn — distinct prefix from v1/v2/v3 so log readers can
+  // tell which strategy is live. Missing the orchestrator-owned path after a
+  // grace window means either the prior turn's claude-cli never flushed (real
+  // crash/FS-failure) or the cwd-encoding rule shifted upstream; both are
+  // worth investigating individually instead of being papered over by a wider
+  // back-off ladder.
+  const sessionId = normalizeClaudeCliSessionId(params.sessionId);
+  cliBackendLog.warn(
+    `claude-cli transcript probe v4 miss (sessionId-deterministic path, grace ${CLAUDE_CLI_TRANSCRIPT_FLUSH_GRACE_MS}ms): sessionId=${sessionId ?? ""} expectedPath=${expectedPath} fileExists=${second.fileExists}`,
+  );
   return false;
 }
 
