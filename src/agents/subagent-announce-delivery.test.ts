@@ -18,10 +18,8 @@ import {
   sendMessage as runtimeSendMessage,
 } from "./subagent-announce-delivery.runtime.js";
 import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
-import { resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
 
 afterEach(() => {
-  resetAnnounceQueuesForTests();
   sessionBindingServiceTesting.resetSessionBindingAdaptersForTests();
   __testing.setDepsForTest();
 });
@@ -424,7 +422,7 @@ describe("resolveSubagentCompletionOrigin", () => {
 });
 
 describe("deliverSubagentAnnouncement active requester steering", () => {
-  async function deliverQueuedAnnouncement(params: {
+  async function deliverSteeredAnnouncement(params: {
     mode?: "followup" | "collect" | "interrupt";
     queueEmbeddedPiMessageWithOutcome?: QueueEmbeddedPiMessageWithOutcome;
     requesterOrigin?: {
@@ -474,13 +472,13 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
   }
 
   it("steers active announces with no external route", async () => {
-    const callGateway = await deliverQueuedAnnouncement({});
+    const callGateway = await deliverSteeredAnnouncement({});
 
     expect(callGateway).not.toHaveBeenCalled();
   });
 
   it("steers active announces with channel-only origins", async () => {
-    const callGateway = await deliverQueuedAnnouncement({
+    const callGateway = await deliverSteeredAnnouncement({
       requesterOrigin: {
         channel: "slack",
       },
@@ -490,7 +488,7 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
   });
 
   it("steers active announces with internal origins", async () => {
-    const callGateway = await deliverQueuedAnnouncement({
+    const callGateway = await deliverSteeredAnnouncement({
       requesterOrigin: {
         channel: "webchat",
         to: "internal:room",
@@ -503,7 +501,7 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
   });
 
   it("steers active announces with external route fields", async () => {
-    const callGateway = await deliverQueuedAnnouncement({
+    const callGateway = await deliverSteeredAnnouncement({
       requesterOrigin: {
         channel: "slack",
         to: "channel:C123",
@@ -519,7 +517,7 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
     "steers active requester announces even in %s mode",
     async (mode) => {
       const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeMock(true);
-      await deliverQueuedAnnouncement({
+      await deliverSteeredAnnouncement({
         mode,
         queueEmbeddedPiMessageWithOutcome,
         requesterOrigin: {
@@ -1011,7 +1009,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
             "active requester session could not be woken: queue_message_failed reason=not_streaming sessionId=requester-session-telegram gatewayHealth=live",
         },
         {
-          phase: "queue-fallback",
+          phase: "steer-fallback",
           delivered: false,
           path: "none",
           error: undefined,
