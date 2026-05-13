@@ -97,19 +97,27 @@ describe("resolveQueueSettings", () => {
     expect(
       resolveQueueSettings({
         cfg: {} as OpenClawConfig,
-        sessionEntry: { queueMode: "queue" as never },
+        sessionEntry: { sessionId: "test-session", updatedAt: 0, queueMode: "queue" as never },
       }).mode,
     ).toBe("steer");
     expect(
       resolveQueueSettings({
         cfg: {} as OpenClawConfig,
-        sessionEntry: { queueMode: "steer-backlog" as never },
+        sessionEntry: {
+          sessionId: "test-session",
+          updatedAt: 0,
+          queueMode: "steer-backlog" as never,
+        },
       }).mode,
     ).toBe("followup");
     expect(
       resolveQueueSettings({
         cfg: {} as OpenClawConfig,
-        sessionEntry: { queueMode: "steer+backlog" as never },
+        sessionEntry: {
+          sessionId: "test-session",
+          updatedAt: 0,
+          queueMode: "steer+backlog" as never,
+        },
       }).mode,
     ).toBe("followup");
   });
