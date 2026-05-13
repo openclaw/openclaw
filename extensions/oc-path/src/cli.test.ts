@@ -190,6 +190,25 @@ describe("openclaw path CLI", () => {
       expect(out.diff).toContain('+{ "version": "2.0" }');
     });
 
+    it("CLI-S07 rejects --diff without --dry-run", async () => {
+      const filePath = join(workspaceDir, "gateway.jsonc");
+      const before = '{ "version": "1.0" }';
+      writeFileSync(filePath, before, "utf-8");
+      const rt = createTestRuntime();
+      await pathSetCommand(
+        "oc://gateway.jsonc/version",
+        "2.0",
+        { cwd: workspaceDir, json: true, diff: true },
+        rt,
+      );
+      expect(rt.exitCode).toBe(1);
+      expect(JSON.parse(stdoutText(rt))).toMatchObject({
+        ok: false,
+        reason: "--diff requires --dry-run",
+      });
+      expect(readFileSync(filePath, "utf-8")).toBe(before);
+    });
+
     it("CLI-S03 sentinel-bearing value is refused at emit", async () => {
       const filePath = join(workspaceDir, "gateway.jsonc");
       writeFileSync(filePath, '{ "token": "x" }', "utf-8");
