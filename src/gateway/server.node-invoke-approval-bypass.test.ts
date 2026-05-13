@@ -7,6 +7,7 @@ import {
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
+import { approveNodePairing, requestNodePairing } from "../infra/node-pairing.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
@@ -174,7 +175,9 @@ describe("node.invoke approval bypass", () => {
   let port: number;
 
   beforeAll(async () => {
-    const started = await startServerWithClient("secret", { controlUiEnabled: true });
+    const started = await startServerWithClient("secret", {
+      controlUiEnabled: true,
+    });
     server = started.server;
     port = started.port;
     started.ws.close();
@@ -294,7 +297,7 @@ describe("node.invoke approval bypass", () => {
     });
   };
 
-  const connectLinuxNode = async (
+  const connectTestNode = async (
     onInvoke: (payload: unknown) => void,
     deviceIdentity?: DeviceIdentity,
     commands: string[] = ["system.run"],
@@ -305,6 +308,15 @@ describe("node.invoke approval bypass", () => {
     });
 
     const resolvedDeviceIdentity = deviceIdentity ?? createDeviceIdentity();
+    const pairing = await requestNodePairing({
+      nodeId: resolvedDeviceIdentity.deviceId,
+      displayName: "test node",
+      platform: "Windows_NT",
+      commands,
+    });
+    await approveNodePairing(pairing.request.requestId, {
+      callerScopes: ["operator.pairing", "operator.admin", "operator.write"],
+    });
     const client = new GatewayClient({
       url: `ws://127.0.0.1:${port}`,
       // Keep challenge timeout realistic in tests; 0 maps to a 250ms timeout and can
@@ -314,7 +326,7 @@ describe("node.invoke approval bypass", () => {
       role: "node",
       clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
       clientVersion: "1.0.0",
-      platform: "linux",
+      platform: "Windows_NT",
       mode: GATEWAY_CLIENT_MODES.NODE,
       scopes: [],
       commands,
@@ -364,7 +376,7 @@ describe("node.invoke approval bypass", () => {
 
   test("rejects malformed/forbidden node.invoke payloads before forwarding", async () => {
     let sawInvoke = false;
-    const node = await connectLinuxNode(() => {
+    const node = await connectTestNode(() => {
       sawInvoke = true;
     });
     const ws = await connectOperator(["operator.write"]);
@@ -425,7 +437,7 @@ describe("node.invoke approval bypass", () => {
 
   test("rejects browser.proxy persistent profile mutations before forwarding", async () => {
     let sawInvoke = false;
-    const node = await connectLinuxNode(
+    const node = await connectTestNode(
       () => {
         sawInvoke = true;
       },
@@ -459,7 +471,7 @@ describe("node.invoke approval bypass", () => {
   test("binds approvals to decision/device and blocks cross-device replay", async () => {
     let invokeCount = 0;
     let lastInvokeParams: Record<string, unknown> | null = null;
-    const node = await connectLinuxNode((payload) => {
+    const node = await connectTestNode((payload) => {
       invokeCount += 1;
       const obj = payload as { paramsJSON?: unknown };
       const raw = typeof obj?.paramsJSON === "string" ? obj.paramsJSON : "";
@@ -537,7 +549,7 @@ describe("node.invoke approval bypass", () => {
   test("bridges no-device chat approvals across backend reconnects only for the same turn source", async () => {
     let invokeCount = 0;
     let lastInvokeParams: Record<string, unknown> | null = null;
-    const node = await connectLinuxNode((payload) => {
+    const node = await connectTestNode((payload) => {
       invokeCount += 1;
       const obj = payload as { paramsJSON?: unknown };
       const raw = typeof obj?.paramsJSON === "string" ? obj.paramsJSON : "";
@@ -644,8 +656,8 @@ describe("node.invoke approval bypass", () => {
       }
       invokeCounts.set(nodeId, (invokeCounts.get(nodeId) ?? 0) + 1);
     };
-    const nodeA = await connectLinuxNode(onInvoke, createDeviceIdentity());
-    const nodeB = await connectLinuxNode(onInvoke, createDeviceIdentity());
+    const nodeA = await connectTestNode(onInvoke, createDeviceIdentity());
+    const nodeB = await connectTestNode(onInvoke, createDeviceIdentity());
 
     const wsApprover = await connectOperator(["operator.write", "operator.approvals"]);
     const wsCaller = await connectOperator(["operator.write"]);
