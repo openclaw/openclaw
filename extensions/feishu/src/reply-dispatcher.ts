@@ -552,7 +552,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           useCard;
         const shouldDeliverText =
           hasText &&
-          !hasVoiceMedia &&
+          (!hasVoiceMedia || account.config?.tts?.preserveText === true) &&
           !skipTextForDuplicateFinal &&
           !skipTextForClosedStreamingFinal;
 
