@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +8,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
 import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { VERSION } from "../version.js";
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import {
   LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
@@ -46,6 +48,28 @@ import {
 } from "./systemd-unit.js";
 
 const SYSTEMD_GATEWAY_DOTENV_FILENAME = "gateway.systemd.env";
+const SYSTEMD_GATEWAY_UNIT_PROVENANCE_FILENAME = "gateway-systemd-units.json";
+const SYSTEMD_GATEWAY_UNIT_PROVENANCE_SCHEMA_VERSION = 1;
+
+type SystemdGatewayUnitProvenanceEntry = {
+  schemaVersion: typeof SYSTEMD_GATEWAY_UNIT_PROVENANCE_SCHEMA_VERSION;
+  unitPath: string;
+  unitName: string;
+  sha256: string;
+  openClawVersion: string;
+  generatedAt: string;
+};
+
+type SystemdGatewayUnitProvenanceStore = {
+  schemaVersion: typeof SYSTEMD_GATEWAY_UNIT_PROVENANCE_SCHEMA_VERSION;
+  units: Record<string, SystemdGatewayUnitProvenanceEntry>;
+};
+
+export type SystemdGatewayUnitUpdateStatus =
+  | { status: "unchanged"; provenance: SystemdGatewayUnitProvenanceEntry }
+  | { status: "modified"; provenance: SystemdGatewayUnitProvenanceEntry; liveSha256: string }
+  | { status: "missing-provenance" }
+  | { status: "missing-live-unit"; provenance: SystemdGatewayUnitProvenanceEntry };
 
 function resolveSystemdUnitPathForName(env: GatewayServiceEnv, name: string): string {
   const home = toPosixPath(resolveHomeDir(env));
@@ -66,6 +90,136 @@ function resolveSystemdUnitPath(env: GatewayServiceEnv): string {
 
 export function resolveSystemdUserUnitPath(env: GatewayServiceEnv): string {
   return resolveSystemdUnitPath(env);
+}
+
+function resolveSystemdUnitProvenancePath(env: GatewayServiceEnv): string {
+  return path.join(
+    resolveStateDir(env as NodeJS.ProcessEnv),
+    SYSTEMD_GATEWAY_UNIT_PROVENANCE_FILENAME,
+  );
+}
+
+function sha256Hex(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function createEmptySystemdUnitProvenanceStore(): SystemdGatewayUnitProvenanceStore {
+  return {
+    schemaVersion: SYSTEMD_GATEWAY_UNIT_PROVENANCE_SCHEMA_VERSION,
+    units: {},
+  };
+}
+
+function normalizeSystemdUnitProvenanceEntry(
+  value: unknown,
+): SystemdGatewayUnitProvenanceEntry | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const entry = value as Record<string, unknown>;
+  if (
+    entry.schemaVersion !== SYSTEMD_GATEWAY_UNIT_PROVENANCE_SCHEMA_VERSION ||
+    typeof entry.unitPath !== "string" ||
+    typeof entry.unitName !== "string" ||
+    typeof entry.sha256 !== "string" ||
+    typeof entry.openClawVersion !== "string" ||
+    typeof entry.generatedAt !== "string"
+  ) {
+    return null;
+  }
+  return {
+    schemaVersion: SYSTEMD_GATEWAY_UNIT_PROVENANCE_SCHEMA_VERSION,
+    unitPath: entry.unitPath,
+    unitName: entry.unitName,
+    sha256: entry.sha256,
+    openClawVersion: entry.openClawVersion,
+    generatedAt: entry.generatedAt,
+  };
+}
+
+async function readSystemdUnitProvenanceStore(
+  env: GatewayServiceEnv,
+): Promise<SystemdGatewayUnitProvenanceStore> {
+  try {
+    const raw = await fs.readFile(resolveSystemdUnitProvenancePath(env), "utf8");
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") {
+      return createEmptySystemdUnitProvenanceStore();
+    }
+    const store = parsed as Record<string, unknown>;
+    if (
+      store.schemaVersion !== SYSTEMD_GATEWAY_UNIT_PROVENANCE_SCHEMA_VERSION ||
+      !store.units ||
+      typeof store.units !== "object"
+    ) {
+      return createEmptySystemdUnitProvenanceStore();
+    }
+    const units: Record<string, SystemdGatewayUnitProvenanceEntry> = {};
+    for (const [unitPath, value] of Object.entries(store.units)) {
+      const entry = normalizeSystemdUnitProvenanceEntry(value);
+      if (entry) {
+        units[unitPath] = entry;
+      }
+    }
+    return {
+      schemaVersion: SYSTEMD_GATEWAY_UNIT_PROVENANCE_SCHEMA_VERSION,
+      units,
+    };
+  } catch {
+    return createEmptySystemdUnitProvenanceStore();
+  }
+}
+
+async function writeSystemdUnitProvenanceStore(
+  env: GatewayServiceEnv,
+  store: SystemdGatewayUnitProvenanceStore,
+): Promise<void> {
+  const provenancePath = resolveSystemdUnitProvenancePath(env);
+  await fs.mkdir(path.dirname(provenancePath), { recursive: true });
+  await fs.writeFile(provenancePath, `${JSON.stringify(store, null, 2)}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
+  await fs.chmod(provenancePath, 0o600);
+}
+
+async function recordSystemdUnitProvenance(params: {
+  env: GatewayServiceEnv;
+  unitPath: string;
+  unit: string;
+}): Promise<void> {
+  const store = await readSystemdUnitProvenanceStore(params.env);
+  store.units[params.unitPath] = {
+    schemaVersion: SYSTEMD_GATEWAY_UNIT_PROVENANCE_SCHEMA_VERSION,
+    unitPath: params.unitPath,
+    unitName: path.basename(params.unitPath),
+    sha256: sha256Hex(params.unit),
+    openClawVersion: VERSION,
+    generatedAt: new Date().toISOString(),
+  };
+  await writeSystemdUnitProvenanceStore(params.env, store);
+}
+
+export async function readSystemdUnitUpdateStatus(params: {
+  env: GatewayServiceEnv;
+  unitPath: string;
+}): Promise<SystemdGatewayUnitUpdateStatus> {
+  const store = await readSystemdUnitProvenanceStore(params.env);
+  const provenance = store.units[params.unitPath];
+  if (!provenance) {
+    return { status: "missing-provenance" };
+  }
+  let liveUnit: string;
+  try {
+    liveUnit = await fs.readFile(params.unitPath, "utf8");
+  } catch {
+    return { status: "missing-live-unit", provenance };
+  }
+  const liveSha256 = sha256Hex(liveUnit);
+  if (liveSha256 === provenance.sha256) {
+    return { status: "unchanged", provenance };
+  }
+  return { status: "modified", provenance, liveSha256 };
 }
 
 export { enableSystemdUserLinger, readSystemdUserLingerStatus };
@@ -547,30 +701,25 @@ async function assertSystemdAvailable(env: GatewayServiceEnv = process.env as Ga
   throw new Error(`systemctl --user unavailable: ${detail || "unknown error"}`.trim());
 }
 
-async function writeSystemdUnit({
+type SystemdEnvironmentFileWriteMode = "live" | "suggested";
+
+async function buildSystemdUnitForInstall({
   env,
   programArguments,
   workingDirectory,
   environment,
   environmentValueSources,
   description,
-}: Omit<GatewayServiceInstallArgs, "stdout">): Promise<{ unitPath: string; backedUp: boolean }> {
-  await assertSystemdAvailable(env);
-
+  environmentFileWriteMode,
+}: Omit<GatewayServiceInstallArgs, "stdout"> & {
+  environmentFileWriteMode: SystemdEnvironmentFileWriteMode;
+}): Promise<{
+  unitPath: string;
+  unit: string;
+  environmentFilePath?: string;
+  suggestedEnvironmentFilePath?: string;
+}> {
   const unitPath = resolveSystemdUnitPath(env);
-  await fs.mkdir(path.dirname(unitPath), { recursive: true });
-
-  // Preserve user customizations: back up existing unit file before overwriting.
-  let backedUp = false;
-  try {
-    await fs.access(unitPath);
-    const backupPath = `${unitPath}.bak`;
-    await fs.copyFile(unitPath, backupPath);
-    backedUp = true;
-  } catch {
-    // File does not exist yet — nothing to back up.
-  }
-
   const serviceDescription = resolveGatewayServiceDescription({ env, environment, description });
   const stateDir = resolveStateDir(env as NodeJS.ProcessEnv);
   const stateDirDotEnvVars = Object.fromEntries(
@@ -590,6 +739,7 @@ async function writeSystemdUnit({
     stateDir,
     dotenvVars: stateDirDotEnvVars,
     inlineManagedKeys,
+    writeMode: environmentFileWriteMode,
   });
   const environmentSansDotEnvEntries = Object.fromEntries(
     Object.entries(environment ?? {}).filter(([key, value]) => {
@@ -618,8 +768,67 @@ async function writeSystemdUnit({
     environment: environmentSansDotEnvEntries,
     environmentFiles: environmentFileResult.environmentFiles,
   });
+  return {
+    unitPath,
+    unit,
+    ...(environmentFileResult.environmentFilePath
+      ? { environmentFilePath: environmentFileResult.environmentFilePath }
+      : {}),
+    ...(environmentFileResult.suggestedEnvironmentFilePath
+      ? { suggestedEnvironmentFilePath: environmentFileResult.suggestedEnvironmentFilePath }
+      : {}),
+  };
+}
+
+async function writeSystemdUnit(
+  args: Omit<GatewayServiceInstallArgs, "stdout">,
+): Promise<{ unitPath: string; backedUp: boolean }> {
+  await assertSystemdAvailable(args.env);
+
+  const { unitPath, unit } = await buildSystemdUnitForInstall({
+    ...args,
+    environmentFileWriteMode: "live",
+  });
+  await fs.mkdir(path.dirname(unitPath), { recursive: true });
+
+  // Preserve user customizations: back up existing unit file before overwriting.
+  let backedUp = false;
+  try {
+    await fs.access(unitPath);
+    const backupPath = `${unitPath}.bak`;
+    await fs.copyFile(unitPath, backupPath);
+    backedUp = true;
+  } catch {
+    // File does not exist yet — nothing to back up.
+  }
+
   await fs.writeFile(unitPath, unit, "utf8");
+  await recordSystemdUnitProvenance({ env: args.env, unitPath, unit });
   return { unitPath, backedUp };
+}
+
+export async function writeSuggestedSystemdUnit(
+  args: Omit<GatewayServiceInstallArgs, "stdout">,
+): Promise<{
+  unitPath: string;
+  suggestedPath: string;
+  environmentFilePath?: string;
+  suggestedEnvironmentFilePath?: string;
+}> {
+  const { unitPath, unit, environmentFilePath, suggestedEnvironmentFilePath } =
+    await buildSystemdUnitForInstall({
+      ...args,
+      environmentFileWriteMode: "suggested",
+    });
+  const suggestedPath = `${unitPath}.suggested`;
+  await fs.mkdir(path.dirname(suggestedPath), { recursive: true });
+  await fs.writeFile(suggestedPath, unit, "utf8");
+  return {
+    unitPath,
+    suggestedPath,
+    ...(environmentFilePath ? { environmentFilePath } : {}),
+    ...(suggestedEnvironmentFilePath ? { suggestedEnvironmentFilePath } : {}),
+  };
 }
 
 async function writeSystemdGatewayEnvironmentFile(params: {
@@ -628,7 +837,13 @@ async function writeSystemdGatewayEnvironmentFile(params: {
   /** OpenClaw-managed keys that must not be preserved from an old env file; stale file values
    *  would override fresh inline Environment= entries because EnvironmentFile takes precedence. */
   inlineManagedKeys?: ReadonlySet<string>;
-}): Promise<{ environmentFiles: string[]; environmentKeys: Set<string> }> {
+  writeMode: SystemdEnvironmentFileWriteMode;
+}): Promise<{
+  environmentFiles: string[];
+  environmentKeys: Set<string>;
+  environmentFilePath?: string;
+  suggestedEnvironmentFilePath?: string;
+}> {
   const incoming = params.dotenvVars;
   for (const [key, value] of Object.entries(incoming)) {
     if (/[\r\n]/.test(value)) {
@@ -638,6 +853,7 @@ async function writeSystemdGatewayEnvironmentFile(params: {
     }
   }
   const envFilePath = path.join(params.stateDir, SYSTEMD_GATEWAY_DOTENV_FILENAME);
+  const writePath = params.writeMode === "suggested" ? `${envFilePath}.suggested` : envFilePath;
 
   // Read the existing env file first so we can preserve operator-added secrets
   // (e.g. provider API keys) across upgrades and re-stages.
@@ -674,9 +890,14 @@ async function writeSystemdGatewayEnvironmentFile(params: {
   const content = Object.entries(merged)
     .map(([key, value]) => `${key}=${value}`)
     .join("\n");
-  await fs.writeFile(envFilePath, `${content}\n`, { encoding: "utf8", mode: 0o600 });
-  await fs.chmod(envFilePath, 0o600);
-  return { environmentFiles: [envFilePath], environmentKeys };
+  await fs.writeFile(writePath, `${content}\n`, { encoding: "utf8", mode: 0o600 });
+  await fs.chmod(writePath, 0o600);
+  return {
+    environmentFiles: [envFilePath],
+    environmentKeys,
+    environmentFilePath: envFilePath,
+    ...(params.writeMode === "suggested" ? { suggestedEnvironmentFilePath: writePath } : {}),
+  };
 }
 
 export async function stageSystemdService({

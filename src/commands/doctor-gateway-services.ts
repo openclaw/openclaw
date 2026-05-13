@@ -24,7 +24,9 @@ import { readManagedServiceEnvKeysFromEnvironment } from "../daemon/service-mana
 import { resolveGatewayService, type GatewayServiceCommandConfig } from "../daemon/service.js";
 import {
   isSystemdUnitActive,
+  readSystemdUnitUpdateStatus,
   uninstallLegacySystemdUnits,
+  writeSuggestedSystemdUnit,
   type SystemdUnitScope,
 } from "../daemon/systemd.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -170,15 +172,47 @@ function resolveSystemdUnitNameFromServicePath(sourcePath: string | undefined): 
   return base.endsWith(".service") ? base : "openclaw-gateway.service";
 }
 
-function shouldDeferUpdateModeSystemdServiceRepair(params: {
-  repairMode: DoctorPrompter["repairMode"];
-  shouldForce: boolean;
-}): boolean {
-  return (
-    process.platform === "linux" &&
-    isDoctorUpdateRepairMode(params.repairMode) &&
-    !params.shouldForce
-  );
+function resolveSystemdUnitPathFromServicePath(sourcePath: string | undefined): string | null {
+  const normalized = sourcePath?.replaceAll("\\", "/") ?? "";
+  return normalized.endsWith(".service") ? normalized : null;
+}
+
+function shouldUseSystemdUnitProvenance(command: GatewayServiceCommandConfig): boolean {
+  if (process.platform !== "linux") {
+    return false;
+  }
+  return resolveSystemdUnitPathFromServicePath(command.sourcePath) !== null;
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function renderSuggestedSystemdUnitMessage(params: {
+  reason: string;
+  unitPath: string;
+  suggestedPath: string;
+  environmentFilePath?: string;
+  suggestedEnvironmentFilePath?: string;
+  unitName: string;
+}): string {
+  const lines = [
+    `${params.reason}; left the live systemd unit unchanged.`,
+    `Suggested unit written to ${params.suggestedPath}.`,
+    `Review: diff -u ${shellQuote(params.unitPath)} ${shellQuote(params.suggestedPath)}`,
+  ];
+  if (params.suggestedEnvironmentFilePath && params.environmentFilePath) {
+    lines.push(
+      `Suggested env file written to ${params.suggestedEnvironmentFilePath}.`,
+      `Review env: diff -u ${shellQuote(params.environmentFilePath)} ${shellQuote(params.suggestedEnvironmentFilePath)}`,
+      `Apply: cp ${shellQuote(params.suggestedEnvironmentFilePath)} ${shellQuote(params.environmentFilePath)} && cp ${shellQuote(params.suggestedPath)} ${shellQuote(params.unitPath)} && systemctl --user daemon-reload && systemctl --user restart ${shellQuote(params.unitName)}`,
+    );
+  } else {
+    lines.push(
+      `Apply: cp ${shellQuote(params.suggestedPath)} ${shellQuote(params.unitPath)} && systemctl --user daemon-reload && systemctl --user restart ${shellQuote(params.unitName)}`,
+    );
+  }
+  return lines.join("\n");
 }
 
 async function suppressRunningSystemdExecStartRepairs(params: {
@@ -533,19 +567,6 @@ export async function maybeRepairGatewayServiceConfig(
   }
 
   const updateRepairMode = isDoctorUpdateRepairMode(prompter.repairMode);
-  if (
-    shouldDeferUpdateModeSystemdServiceRepair({
-      repairMode: prompter.repairMode,
-      shouldForce: prompter.shouldForce,
-    })
-  ) {
-    note(
-      "Update-mode doctor detected gateway service drift but left the live systemd unit unchanged. Review the service file and run `openclaw gateway install --force` when you want OpenClaw to replace operator-owned systemd directives.",
-      "Gateway service config",
-    );
-    return;
-  }
-
   const repairMessage = needsAggressive
     ? "Overwrite gateway service config with current defaults now?"
     : "Update gateway service config to the recommended defaults now?";
@@ -624,6 +645,46 @@ export async function maybeRepairGatewayServiceConfig(
     runtime: needsNodeRuntime && systemNodePath ? "node" : runtimeChoice,
     nodePath: systemNodePath ?? undefined,
   });
+  if (updateRepairMode && shouldUseSystemdUnitProvenance(command)) {
+    const unitPath = resolveSystemdUnitPathFromServicePath(command.sourcePath);
+    if (unitPath) {
+      const updateStatus = await readSystemdUnitUpdateStatus({
+        env: serviceInstallEnv,
+        unitPath,
+      });
+      if (updateStatus.status !== "unchanged") {
+        try {
+          const suggested = await writeSuggestedSystemdUnit({
+            env: serviceInstallEnv,
+            programArguments: updatedPlan.programArguments,
+            workingDirectory: updatedPlan.workingDirectory,
+            environment: updatedPlan.environment,
+            environmentValueSources: updatedPlan.environmentValueSources,
+          });
+          const reason =
+            updateStatus.status === "modified"
+              ? "Gateway systemd unit has operator edits"
+              : updateStatus.status === "missing-live-unit"
+                ? "Gateway systemd unit is missing from disk"
+                : "Gateway systemd unit has no OpenClaw generated-unit provenance";
+          note(
+            renderSuggestedSystemdUnitMessage({
+              reason,
+              unitPath: suggested.unitPath,
+              suggestedPath: suggested.suggestedPath,
+              environmentFilePath: suggested.environmentFilePath,
+              suggestedEnvironmentFilePath: suggested.suggestedEnvironmentFilePath,
+              unitName: resolveSystemdUnitNameFromServicePath(command.sourcePath),
+            }),
+            "Gateway service config",
+          );
+        } catch (err) {
+          runtime.error(`Gateway suggested systemd unit write failed: ${String(err)}`);
+        }
+        return;
+      }
+    }
+  }
   try {
     await (updateRepairMode ? service.stage : service.install)({
       env: serviceInstallEnv,

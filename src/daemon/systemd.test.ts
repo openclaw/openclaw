@@ -24,11 +24,13 @@ import {
   isSystemdUserServiceAvailable,
   parseSystemdShow,
   readSystemdServiceExecStart,
+  readSystemdUnitUpdateStatus,
   restartSystemdService,
   resolveSystemdUserUnitPath,
   stageSystemdService,
   stopSystemdService,
   uninstallSystemdService,
+  writeSuggestedSystemdUnit,
 } from "./systemd.js";
 
 type ExecFileError = Error & {
@@ -936,6 +938,116 @@ describe("stageSystemdService", () => {
       expect(envFile).toContain("ANTHROPIC_API_KEY=sk-ant-operator-secret");
       expect(envFile).toContain("OPENROUTER_API_KEY=or-operator-key");
       expect(envFile).toContain("LLM_API_KEY=new-value");
+    });
+  });
+
+  it("records generated unit provenance and detects later operator edits", async () => {
+    await withStageFixture(async ({ env, unitPath, stateDir }) => {
+      mockSystemctlStatusOk();
+
+      await stageSystemdService({
+        env,
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        workingDirectory: "/tmp",
+        environment: { OPENCLAW_GATEWAY_PORT: "18789" },
+      });
+
+      await expect(readSystemdUnitUpdateStatus({ env, unitPath })).resolves.toMatchObject({
+        status: "unchanged",
+      });
+
+      const provenance = JSON.parse(
+        await fs.readFile(path.join(stateDir, "gateway-systemd-units.json"), "utf8"),
+      ) as {
+        schemaVersion: number;
+        units: Record<string, { sha256: string; unitName: string; openClawVersion: string }>;
+      };
+      expect(provenance.schemaVersion).toBe(1);
+      expect(provenance.units[unitPath]).toMatchObject({
+        unitName: path.basename(unitPath),
+        openClawVersion: expect.any(String),
+        sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+      });
+
+      await fs.appendFile(unitPath, "\n# operator customization\n", "utf8");
+      await expect(readSystemdUnitUpdateStatus({ env, unitPath })).resolves.toMatchObject({
+        status: "modified",
+        provenance: { unitName: path.basename(unitPath) },
+        liveSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+      });
+    });
+  });
+
+  it("writes suggested units without updating provenance or the live unit", async () => {
+    await withStageFixture(async ({ env, unitPath, stateDir }) => {
+      mockSystemctlStatusOk();
+
+      await stageSystemdService({
+        env,
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        workingDirectory: "/tmp",
+        environment: { OPENCLAW_GATEWAY_PORT: "18789" },
+      });
+
+      const liveBefore = await fs.readFile(unitPath, "utf8");
+      const provenanceBefore = await fs.readFile(
+        path.join(stateDir, "gateway-systemd-units.json"),
+        "utf8",
+      );
+
+      const suggested = await writeSuggestedSystemdUnit({
+        env,
+        programArguments: ["/usr/bin/openclaw", "gateway", "run", "--new-default"],
+        workingDirectory: "/tmp",
+        environment: { OPENCLAW_GATEWAY_PORT: "18789" },
+      });
+
+      expect(suggested).toEqual({
+        unitPath,
+        suggestedPath: `${unitPath}.suggested`,
+      });
+      await expect(fs.readFile(unitPath, "utf8")).resolves.toBe(liveBefore);
+      await expect(
+        fs.readFile(path.join(stateDir, "gateway-systemd-units.json"), "utf8"),
+      ).resolves.toBe(provenanceBefore);
+      await expect(fs.readFile(suggested.suggestedPath, "utf8")).resolves.toContain(
+        "--new-default",
+      );
+    });
+  });
+
+  it("writes paired suggested env files for dotenv-backed suggested units", async () => {
+    await withStageFixture(async ({ env, unitPath, stateDir, envFilePath }) => {
+      await fs.writeFile(path.join(stateDir, ".env"), "LLM_API_KEY=dotenv-key\n", "utf8");
+
+      const suggested = await writeSuggestedSystemdUnit({
+        env,
+        programArguments: ["/usr/bin/openclaw", "gateway", "run"],
+        workingDirectory: "/tmp",
+        environment: {
+          LLM_API_KEY: "dotenv-key",
+          OPENCLAW_GATEWAY_PORT: "18789",
+        },
+      });
+
+      expect(suggested).toEqual({
+        unitPath,
+        suggestedPath: `${unitPath}.suggested`,
+        environmentFilePath: envFilePath,
+        suggestedEnvironmentFilePath: `${envFilePath}.suggested`,
+      });
+      expect(suggested.suggestedEnvironmentFilePath).toBeDefined();
+      const [unit, suggestedEnv] = await Promise.all([
+        fs.readFile(suggested.suggestedPath, "utf8"),
+        fs.readFile(suggested.suggestedEnvironmentFilePath!, "utf8"),
+      ]);
+      expect(unit).toContain(`EnvironmentFile=-${envFilePath}`);
+      expect(unit).toContain("Environment=OPENCLAW_GATEWAY_PORT=18789");
+      expect(unit).not.toContain("Environment=LLM_API_KEY=dotenv-key");
+      expect(suggestedEnv).toBe("LLM_API_KEY=dotenv-key\n");
+      await expect(fs.access(envFilePath)).rejects.toThrow();
     });
   });
 });
