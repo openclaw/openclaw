@@ -323,6 +323,23 @@ describe("buildChatItems", () => {
     expect(requireGroup(items[1]).role).toBe("assistant");
   });
 
+  it("orders timestamped chat items before history messages without timestamps", () => {
+    const items = buildChatItems(
+      createProps({
+        messages: [{ role: "assistant", content: "Missing timestamp." }],
+        streamSegments: [{ text: "Timestamped stream.", ts: Number.MAX_SAFE_INTEGER }],
+      }),
+    );
+
+    expect(items).toHaveLength(2);
+    expect(items[0]).toMatchObject({
+      kind: "stream",
+      text: "Timestamped stream.",
+      startedAt: Number.MAX_SAFE_INTEGER,
+    });
+    expect(messageRecord(requireGroup(items[1])).content).toBe("Missing timestamp.");
+  });
+
   it("attaches lifted canvas previews to the nearest assistant turn", () => {
     const groups = messageGroups({
       messages: [

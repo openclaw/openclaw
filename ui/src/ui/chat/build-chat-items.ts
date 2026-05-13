@@ -259,12 +259,17 @@ function sanitizeStreamText(text: string): string {
   return stripped.trim().length > 0 ? stripped : "";
 }
 
+function rawMessageTimestamp(message: unknown): number | null {
+  const timestamp = (message as { timestamp?: unknown }).timestamp;
+  return typeof timestamp === "number" && Number.isFinite(timestamp) ? timestamp : null;
+}
+
 function chatItemTimestamp(item: ChatItem): number | null {
   switch (item.kind) {
     case "message":
       return item.key === "chat:history:notice"
         ? Number.NEGATIVE_INFINITY
-        : normalizeMessage(item.message).timestamp;
+        : rawMessageTimestamp(item.message);
     case "divider":
       return item.timestamp;
     case "stream":
