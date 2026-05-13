@@ -491,7 +491,7 @@ export async function mutateConfigFile<T = void>(params: {
     writeOptions: params.writeOptions,
     io: params.io,
     transform: async (currentConfig, context) => {
-      const draft = structuredClone(currentConfig) as OpenClawConfig;
+      const draft = structuredClone(currentConfig);
       const result = (await params.mutate(draft, context)) as T | undefined;
       return { nextConfig: draft, result };
     },
@@ -515,7 +515,7 @@ export async function mutateConfigFileWithRetry<T = void>(params: {
     writeOptions: params.writeOptions,
     io: params.io,
     transform: async (currentConfig, context) => {
-      const draft = structuredClone(currentConfig) as OpenClawConfig;
+      const draft = structuredClone(currentConfig);
       const result = (await params.mutate(draft, context)) as T | undefined;
       return { nextConfig: draft, result };
     },

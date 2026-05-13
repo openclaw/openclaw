@@ -207,7 +207,7 @@ export async function mutateConfigWithPendingPluginInstalls<T = void>(
   return await transformConfigWithPendingPluginInstalls<T>({
     ...params,
     transform: async (currentConfig, context): Promise<ConfigTransformResult<T>> => {
-      const draft = structuredClone(currentConfig) as OpenClawConfig;
+      const draft = structuredClone(currentConfig);
       const result = (await params.mutate(draft, context)) as T | undefined;
       return { nextConfig: draft, result };
     },
