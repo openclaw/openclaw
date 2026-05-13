@@ -3,6 +3,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
+  toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
 import { getTaskSessionLookupByIdForStatus } from "../../tasks/task-status-access.js";
 import {
@@ -65,6 +66,21 @@ function resolveRequesterSessionAgentId(sessionKey: string | undefined): string 
     return undefined;
   }
   return resolveAgentIdFromSessionKey(key);
+}
+
+function resolveScopedArtifactSessionKey(
+  sessionKey: string | undefined,
+  agentId: string | undefined,
+): string | undefined {
+  const key = asNonEmptyString(sessionKey);
+  if (!key) {
+    return undefined;
+  }
+  const scopedAgentId = asNonEmptyString(agentId);
+  if (!scopedAgentId) {
+    return key;
+  }
+  return toAgentStoreSessionKey({ agentId: scopedAgentId, requestKey: key });
 }
 
 function normalizeArtifactType(value: string): string {
@@ -307,7 +323,11 @@ function resolveQuerySessionKey(query: ArtifactQuery): string | undefined {
     return query.sessionKey;
   }
   if (query.runId) {
-    return resolveSessionKeyForRun(query.runId, query.agentId ? { agentId: query.agentId } : {});
+    const sessionKey = resolveSessionKeyForRun(
+      query.runId,
+      query.agentId ? { agentId: query.agentId } : {},
+    );
+    return resolveScopedArtifactSessionKey(sessionKey, query.agentId);
   }
   if (query.taskId) {
     const task = getTaskSessionLookupByIdForStatus(query.taskId);
@@ -321,12 +341,15 @@ function resolveQuerySessionKey(query: ArtifactQuery): string | undefined {
     ) {
       return undefined;
     }
+    const agentId = query.agentId ?? taskAgentId;
     if (requesterSessionKey) {
-      return requesterSessionKey;
+      return resolveScopedArtifactSessionKey(requesterSessionKey, agentId);
     }
     const runId = asNonEmptyString(task?.runId);
-    const agentId = query.agentId ?? taskAgentId;
-    return runId ? resolveSessionKeyForRun(runId, agentId ? { agentId } : {}) : undefined;
+    const sessionKey = runId
+      ? resolveSessionKeyForRun(runId, agentId ? { agentId } : {})
+      : undefined;
+    return resolveScopedArtifactSessionKey(sessionKey, agentId);
   }
   return undefined;
 }

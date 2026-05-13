@@ -206,7 +206,7 @@ describe("artifacts RPC handlers", () => {
   });
 
   it("passes agentId to runId artifact queries", async () => {
-    hoisted.resolveSessionKeyForRun.mockReturnValue("agent:work:main");
+    hoisted.resolveSessionKeyForRun.mockReturnValue("main");
     mockedMessages([
       {
         role: "assistant",
@@ -228,6 +228,38 @@ describe("artifacts RPC handlers", () => {
     expect(hoisted.resolveSessionKeyForRun).toHaveBeenCalledWith("run-1", {
       agentId: "work",
     });
+    expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("agent:work:main");
+  });
+
+  it("preserves task agent scope when taskId resolves through runId", async () => {
+    hoisted.getTaskSessionLookupByIdForStatus.mockReturnValue({
+      runId: "run-for-task-1",
+      agentId: "work",
+    });
+    hoisted.resolveSessionKeyForRun.mockReturnValue("acp:run-for-task-1");
+    mockedMessages([
+      {
+        role: "assistant",
+        content: [{ type: "image", data: "dGFyZ2V0", alt: "task-result.png" }],
+        __openclaw: { seq: 2, messageTaskId: "task-1" },
+      },
+    ]);
+    const { calls, respond } = createResponder();
+
+    await artifactsHandlers["artifacts.list"]?.({
+      req: { type: "req", id: "task-run-agent-scope", method: "artifacts.list", params: {} },
+      params: { taskId: "task-1" },
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+      context: {} as never,
+    });
+
+    expect(calls[0]?.ok).toBe(true);
+    expect(hoisted.resolveSessionKeyForRun).toHaveBeenCalledWith("run-for-task-1", {
+      agentId: "work",
+    });
+    expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("agent:work:acp:run-for-task-1");
   });
 
   it("resolves taskId queries through task status access and filters artifacts by messageTaskId", async () => {
