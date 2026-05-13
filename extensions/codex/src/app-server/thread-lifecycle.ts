@@ -517,10 +517,28 @@ export function buildTurnCollaborationMode(
     settings: {
       model: params.modelId,
       reasoning_effort: resolveReasoningEffort(params.thinkLevel, params.modelId),
-      developer_instructions:
-        params.trigger === "heartbeat" ? buildHeartbeatCollaborationInstructions() : null,
+      developer_instructions: buildTurnScopedCollaborationInstructions(params),
     },
   };
+}
+
+function buildTurnScopedCollaborationInstructions(params: EmbeddedRunAttemptParams): string | null {
+  if (params.trigger === "cron") {
+    return buildCronCollaborationInstructions();
+  }
+  if (params.trigger === "heartbeat") {
+    return buildHeartbeatCollaborationInstructions();
+  }
+  return null;
+}
+
+function buildCronCollaborationInstructions(): string {
+  return [
+    "This is an OpenClaw cron automation turn. Apply these instructions only to this scheduled job; ordinary chat turns should stay in Codex Default mode.",
+    "Execute the cron payload directly. If it asks you to run an exact command, run that command before doing any investigation, planning, memory review, or workspace bootstrap.",
+    "Do not read AGENTS.md, SOUL.md, USER.md, PROJECTS.md, MEMORY.md, day logs, entity summaries, or other workspace memory/bootstrap files unless the cron payload explicitly asks you to inspect them or the requested command fails and the file is needed to diagnose that failure.",
+    "Keep output concise and automation-oriented. Prefer the final command result or a short failure summary over status narration.",
+  ].join("\n\n");
 }
 
 function buildHeartbeatCollaborationInstructions(): string {

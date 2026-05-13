@@ -2268,6 +2268,50 @@ describe("runCodexAppServerAttempt", () => {
     expect(config?.instructions).toBeUndefined();
   });
 
+  it("keeps lightweight cron Codex turns out of OpenClaw bootstrap context", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const exactCommand =
+      "cd /Users/phaedrus/Projects/openclaw && /Users/phaedrus/clawd/scripts/clawsweeper-related-scan.py";
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "Follow AGENTS guidance.");
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "Soul voice goes here.");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.trigger = "cron";
+    params.prompt = exactCommand;
+    params.bootstrapContextMode = "lightweight";
+    params.bootstrapContextRunKind = "cron";
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const threadStart = harness.requests.find((request) => request.method === "thread/start");
+    const threadStartParams = threadStart?.params as {
+      developerInstructions?: string;
+    };
+    expect(threadStartParams.developerInstructions).not.toContain("Soul voice goes here.");
+    expect(threadStartParams.developerInstructions).not.toContain("Follow AGENTS guidance.");
+
+    const turnStart = harness.requests.find((request) => request.method === "turn/start");
+    const turnStartParams = turnStart?.params as {
+      collaborationMode?: {
+        settings?: { developer_instructions?: string | null };
+      };
+      input?: Array<{ text?: string }>;
+    };
+    expect(turnStartParams.input?.[0]?.text).toBe(exactCommand);
+    expect(turnStartParams.collaborationMode?.settings?.developer_instructions).toContain(
+      "This is an OpenClaw cron automation turn",
+    );
+    expect(turnStartParams.collaborationMode?.settings?.developer_instructions).toContain(
+      "run that command before doing any investigation",
+    );
+  });
+
   it("fires llm_input, llm_output, and agent_end hooks for codex turns", async () => {
     const llmInput = vi.fn();
     const llmOutput = vi.fn();
@@ -5614,6 +5658,25 @@ describe("runCodexAppServerAttempt", () => {
 
     params.trigger = "user";
     expect(buildTurnCollaborationMode(params).settings.developer_instructions).toBeNull();
+  });
+
+  it("uses turn-scoped collaboration instructions for cron Codex turns", () => {
+    const params = createParams("/tmp/session.jsonl", "/tmp/workspace");
+    params.trigger = "cron";
+
+    const cronCollaborationMode = buildTurnCollaborationMode(params);
+    expect(cronCollaborationMode.mode).toBe("default");
+    expect(cronCollaborationMode.settings.model).toBe("gpt-5.4-codex");
+    expect(cronCollaborationMode.settings.reasoning_effort).toBe("medium");
+    expect(cronCollaborationMode.settings.developer_instructions).toContain(
+      "This is an OpenClaw cron automation turn",
+    );
+    expect(cronCollaborationMode.settings.developer_instructions).toContain(
+      "If it asks you to run an exact command, run that command before doing any investigation",
+    );
+    expect(cronCollaborationMode.settings.developer_instructions).toContain(
+      "Do not read AGENTS.md, SOUL.md, USER.md, PROJECTS.md, MEMORY.md",
+    );
   });
 
   it("preserves the bound auth profile when resume params omit authProfileId", async () => {
