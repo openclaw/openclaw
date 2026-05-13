@@ -1,4 +1,3 @@
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -62,14 +61,23 @@ function sessionKeyMatchesAgent(sessionKey: string, agentId: string, cfg: OpenCl
 
 export function resolveSessionKeyForRun(runId: string, opts: { agentId?: string } = {}) {
   const cfg = getRuntimeConfig();
-  const agentId = normalizeAgentId(opts.agentId ?? resolveDefaultAgentId(cfg));
+  const requestedAgentId =
+    typeof opts.agentId === "string" && opts.agentId.trim()
+      ? normalizeAgentId(opts.agentId)
+      : undefined;
+  const cacheAgentId = requestedAgentId ?? "*";
   const cached = getAgentRunContext(runId)?.sessionKey;
-  if (cached && sessionKeyMatchesAgent(cached, agentId, cfg)) {
+  if (!requestedAgentId && cached) {
     const sessionKey = toAgentRequestSessionKey(cached) ?? cached;
-    setResolvedSessionKeyCache(runId, agentId, sessionKey);
+    setResolvedSessionKeyCache(runId, cacheAgentId, sessionKey);
     return sessionKey;
   }
-  const cacheKey = runLookupCacheKey(runId, agentId);
+  if (cached && requestedAgentId && sessionKeyMatchesAgent(cached, requestedAgentId, cfg)) {
+    const sessionKey = toAgentRequestSessionKey(cached) ?? cached;
+    setResolvedSessionKeyCache(runId, cacheAgentId, sessionKey);
+    return sessionKey;
+  }
+  const cacheKey = runLookupCacheKey(runId, cacheAgentId);
   const cachedLookup = resolvedSessionKeyByRunId.get(cacheKey);
   if (cachedLookup !== undefined) {
     if (cachedLookup.sessionKey !== null) {
@@ -80,19 +88,23 @@ export function resolveSessionKeyForRun(runId: string, opts: { agentId?: string 
     }
     resolvedSessionKeyByRunId.delete(cacheKey);
   }
-  const { store } = loadCombinedSessionStoreForGateway(cfg, { agentId });
+  const { store } = loadCombinedSessionStoreForGateway(
+    cfg,
+    requestedAgentId ? { agentId: requestedAgentId } : {},
+  );
   const matches = Object.entries(store).filter(
     (entry): entry is [string, SessionEntry] =>
-      entry[1]?.sessionId === runId && sessionKeyMatchesAgent(entry[0], agentId, cfg),
+      entry[1]?.sessionId === runId &&
+      (!requestedAgentId || sessionKeyMatchesAgent(entry[0], requestedAgentId, cfg)),
   );
   const storeKey = resolvePreferredSessionKeyForSessionIdMatches(matches, runId);
   if (storeKey) {
     const sessionKey = toAgentRequestSessionKey(storeKey) ?? storeKey;
     registerAgentRunContext(runId, { sessionKey: storeKey });
-    setResolvedSessionKeyCache(runId, agentId, sessionKey);
+    setResolvedSessionKeyCache(runId, cacheAgentId, sessionKey);
     return sessionKey;
   }
-  setResolvedSessionKeyCache(runId, agentId, null);
+  setResolvedSessionKeyCache(runId, cacheAgentId, null);
   return undefined;
 }
 

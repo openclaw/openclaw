@@ -55,9 +55,7 @@ describe("resolveSessionKeyForRun", () => {
     expect(resolveSessionKeyForRun("run-1")).toBe("acp:run-1");
     expect(resolveSessionKeyForRun("run-1")).toBe("acp:run-1");
     expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledTimes(1);
-    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(cfg, {
-      agentId: "main",
-    });
+    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(cfg, {});
   });
 
   it("uses the requested agent scope for run lookups", () => {
@@ -78,6 +76,24 @@ describe("resolveSessionKeyForRun", () => {
     expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(cfg, {
       agentId: "retired",
     });
+  });
+
+  it("resolves run ids without an explicit agent scope from non-default store entries", () => {
+    const cfg: OpenClawConfig = {
+      session: {
+        store: "/custom/root/agents/{agentId}/sessions/sessions.json",
+      },
+    };
+    hoisted.loadConfigMock.mockReturnValue(cfg);
+    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+      storePath: "(multiple)",
+      store: {
+        "agent:retired:acp:run-1": { sessionId: "run-1", updatedAt: 123 },
+      },
+    });
+
+    expect(resolveSessionKeyForRun("run-1")).toBe("acp:run-1");
+    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(cfg, {});
   });
 
   it("filters same-run matches by requested agent for shared stores", () => {
@@ -115,7 +131,8 @@ describe("resolveSessionKeyForRun", () => {
     );
 
     expect(resolveSessionKeyForRun("run-1", { agentId: "retired" })).toBe("acp:run-1");
-    expect(resolveSessionKeyForRun("run-1")).toBeUndefined();
+    expect(resolveSessionKeyForRun("run-1", { agentId: "main" })).toBeUndefined();
+    expect(resolveSessionKeyForRun("run-1")).toBe("acp:run-1");
     expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledTimes(2);
     expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenNthCalledWith(
       2,
@@ -157,9 +174,7 @@ describe("resolveSessionKeyForRun", () => {
     });
 
     expect(resolveSessionKeyForRun("run-legacy-default")).toBe("main");
-    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(cfg, {
-      agentId: "work",
-    });
+    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(cfg, {});
   });
 
   it("lets active run context override a cached miss", () => {

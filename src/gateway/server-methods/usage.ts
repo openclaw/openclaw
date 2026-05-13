@@ -47,7 +47,11 @@ import {
   resolveSessionStoreAgentId,
   resolveStoredSessionKeyForAgentStore,
 } from "../session-store-key.js";
-import { loadCombinedSessionStoreForGateway, loadSessionEntry } from "../session-utils.js";
+import {
+  listAgentsForGateway,
+  loadCombinedSessionStoreForGateway,
+  loadSessionEntry,
+} from "../session-utils.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 const COST_USAGE_CACHE_TTL_MS = 30_000;
@@ -365,20 +369,27 @@ function filterSessionStoreByAgent(params: {
 
 async function discoverAllSessionsForUsage(params: {
   config: OpenClawConfig;
-  agentId: string;
+  agentId?: string;
   startMs: number;
   endMs: number;
 }): Promise<DiscoveredSessionWithAgent[]> {
-  const scopedAgentId = normalizeAgentId(params.agentId);
-  const sessions = await discoverAllSessions({
-    agentId: scopedAgentId,
-    startMs: params.startMs,
-    endMs: params.endMs,
-    includeFirstUserMessage: false,
-  });
-  return sessions
-    .map((session) => Object.assign({}, session, { agentId: scopedAgentId }))
-    .toSorted((a, b) => b.mtime - a.mtime);
+  const requestedAgentId = normalizeOptionalString(params.agentId);
+  const agents = requestedAgentId
+    ? [{ id: normalizeAgentId(requestedAgentId) }]
+    : listAgentsForGateway(params.config).agents;
+  const discovered = await Promise.all(
+    agents.map(async (agent) => {
+      const agentId = normalizeAgentId(agent.id);
+      const sessions = await discoverAllSessions({
+        agentId,
+        startMs: params.startMs,
+        endMs: params.endMs,
+        includeFirstUserMessage: false,
+      });
+      return sessions.map((session) => Object.assign({}, session, { agentId }));
+    }),
+  );
+  return discovered.flat().toSorted((a, b) => b.mtime - a.mtime);
 }
 
 function addUniqueSessionIds(target: string[], ids: Array<string | undefined>): string[] {
@@ -855,34 +866,39 @@ export const usageHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const effectiveAgentId = normalizeAgentId(
-      requestedAgentId ?? specificKeyAgentId ?? resolveDefaultAgentId(config),
-    );
+    const effectiveAgentId =
+      requestedAgentId || specificKeyAgentId || specificKey
+        ? normalizeAgentId(requestedAgentId ?? specificKeyAgentId ?? resolveDefaultAgentId(config))
+        : undefined;
     const groupingMode: UsageGroupingMode =
       p.groupBy === "family" || p.includeHistorical === true ? "family" : "instance";
 
     // Load session store for named sessions
-    const { storePath, store } = loadCombinedSessionStoreForGateway(config, {
-      agentId: effectiveAgentId,
-    });
-    const scopedStore = filterSessionStoreByAgent({
+    const { storePath, store } = loadCombinedSessionStoreForGateway(
       config,
-      store,
-      agentId: effectiveAgentId,
-    });
+      effectiveAgentId ? { agentId: effectiveAgentId } : {},
+    );
+    const scopedStore = effectiveAgentId
+      ? filterSessionStoreByAgent({
+          config,
+          store,
+          agentId: effectiveAgentId,
+        })
+      : store;
     const now = Date.now();
 
     const mergedEntries: MergedEntry[] = [];
 
     // Optimization: If a specific key is requested, skip full directory scan
     if (specificKey) {
+      const specificAgentId = effectiveAgentId ?? normalizeAgentId(resolveDefaultAgentId(config));
       const scopedSpecificKey = resolveStoredSessionKeyForAgentStore({
         cfg: config,
-        agentId: effectiveAgentId,
+        agentId: specificAgentId,
         sessionKey: specificKey,
       });
       const scopedParsed = parseAgentSessionKey(scopedSpecificKey);
-      const agentIdFromKey = scopedParsed?.agentId ?? effectiveAgentId;
+      const agentIdFromKey = scopedParsed?.agentId ?? specificAgentId;
       const keyRest = scopedParsed?.rest ?? specificKey;
 
       // Prefer the store entry when available, even if the caller provides a discovered key
@@ -949,7 +965,7 @@ export const usageHandlers: GatewayRequestHandlers = {
       // Full discovery for list view
       const discoveredSessions = await discoverAllSessionsForUsage({
         config,
-        agentId: effectiveAgentId,
+        ...(effectiveAgentId ? { agentId: effectiveAgentId } : {}),
         startMs,
         endMs,
       });
