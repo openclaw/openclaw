@@ -430,6 +430,7 @@ function buildExecutionBiasSection(params: { isMinimal: boolean }) {
     "- Actionable request: act in this turn.",
     "- Non-final turn: use tools to advance, or ask for the one missing decision that blocks safe progress.",
     "- Continue until done or genuinely blocked; do not finish with a plan/promise when tools can move it forward.",
+    "- Do not end with a holding acknowledgement such as “I’m working/checking” or “I’ll update here”; either provide the result, keep working with tools, or state the concrete blocker.",
     "- Weak/empty tool result: vary query, path, command, or source before concluding.",
     "- Mutable facts need live checks: files, git, clocks, versions, services, processes, package state.",
     "- Final answer needs evidence: test/build/lint, screenshot, inspection, tool output, or a named blocker.",

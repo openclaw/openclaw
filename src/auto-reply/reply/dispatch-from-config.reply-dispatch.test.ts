@@ -197,7 +197,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     });
 
     expect(result.queuedFinal).toBe(true);
-    expect(sessionStoreMocks.updateSessionStoreEntry).toHaveBeenCalledOnce();
+    expect(sessionStoreMocks.updateSessionStoreEntry).toHaveBeenCalled();
     expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBeUndefined();
     expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBeUndefined();
     expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryCreatedAt).toBeUndefined();
@@ -229,7 +229,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     });
 
     expect(result.queuedFinal).toBe(false);
-    expect(sessionStoreMocks.updateSessionStoreEntry).not.toHaveBeenCalled();
+    expect(sessionStoreMocks.currentEntry?.replyTurnState).toBe("completed");
     expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBe(true);
     expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryText).toBe("durable reply");
     expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryCreatedAt).toBe(1);

@@ -10,7 +10,6 @@ import {
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
-import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
@@ -153,7 +152,7 @@ async function resolveStatusHarnessId(params: {
   }
 }
 
-function resolveStatusRuntimeProvider(params: {
+function resolveStatusAuthProvider(params: {
   provider: string;
   effectiveHarness?: string;
 }): string {
@@ -174,6 +173,26 @@ function formatAgentTaskCountsLine(agentId: string): string | undefined {
     return undefined;
   }
   return `📌 Tasks: ${snapshot.activeCount} active · ${snapshot.totalCount} total · agent-local`;
+}
+
+function formatReplyTurnStatusLine(sessionEntry?: SessionEntry): string | undefined {
+  if (!sessionEntry?.replyTurnState || sessionEntry.replyTurnState === "completed") {
+    return undefined;
+  }
+  const updatedAt = sessionEntry.replyTurnUpdatedAt ?? sessionEntry.replyTurnStartedAt;
+  const age = typeof updatedAt === "number" ? formatDurationCompact(Date.now() - updatedAt) : null;
+  const stale =
+    sessionEntry.replyTurnState === "running" && typeof updatedAt === "number"
+      ? Date.now() - updatedAt > 2 * 60 * 1000
+      : false;
+  const parts = [`🧵 Turn: ${sessionEntry.replyTurnState}${stale ? " (stale)" : ""}`];
+  if (age) {
+    parts.push(`updated ${age} ago`);
+  }
+  if (sessionEntry.replyTurnLastError) {
+    parts.push(sessionEntry.replyTurnLastError);
+  }
+  return parts.join(" · ");
 }
 
 function formatStatusUptimeDuration(ms: number): string {
@@ -230,19 +249,13 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
       sessionKey,
       sessionEntry,
     }));
-  const selectedStatusProvider = resolveStatusRuntimeProvider({
-    provider,
-    effectiveHarness,
-  });
-  const activeProvider = modelRefs.active.provider || provider;
-  const activeStatusProvider = resolveStatusRuntimeProvider({
-    provider: activeProvider,
-    effectiveHarness,
-  });
-  let selectedModelAuth = Object.hasOwn(params, "modelAuthOverride")
+  const selectedModelAuth = Object.hasOwn(params, "modelAuthOverride")
     ? params.modelAuthOverride
     : resolveModelAuthLabel({
-        provider: selectedStatusProvider,
+        provider: resolveStatusAuthProvider({
+          provider,
+          effectiveHarness,
+        }),
         cfg,
         sessionEntry,
         agentDir: statusAgentDir,
@@ -253,7 +266,10 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     ? params.activeModelAuthOverride
     : modelRefs.activeDiffers
       ? resolveModelAuthLabel({
-          provider: activeStatusProvider,
+          provider: resolveStatusAuthProvider({
+            provider: modelRefs.active.provider,
+            effectiveHarness,
+          }),
           cfg,
           sessionEntry,
           agentDir: statusAgentDir,
@@ -261,27 +277,19 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
           includeExternalProfiles: false,
         })
       : selectedModelAuth;
-  const runtimeAliasModelEquivalent = areRuntimeModelRefsEquivalent(
-    modelRefs.selected.label,
-    modelRefs.active.label,
-  );
-  if (
-    runtimeAliasModelEquivalent &&
-    normalizeOptionalLowercaseString(selectedModelAuth) === "unknown" &&
-    activeModelAuth &&
-    normalizeOptionalLowercaseString(activeModelAuth) !== "unknown"
-  ) {
-    selectedModelAuth = activeModelAuth;
-  }
-  const usageAuthLabel = modelRefs.activeDiffers ? activeModelAuth : selectedModelAuth;
-  const currentUsageProvider =
-    resolveUsageProviderId(activeStatusProvider) ?? resolveUsageProviderId(activeProvider);
+  const currentUsageProvider = (() => {
+    try {
+      return resolveUsageProviderId(provider);
+    } catch {
+      return undefined;
+    }
+  })();
   let usageLine: string | null = null;
   if (
     currentUsageProvider &&
     shouldLoadUsageSummary({
       provider: currentUsageProvider,
-      selectedModelAuth: usageAuthLabel,
+      selectedModelAuth,
     })
   ) {
     try {
@@ -352,6 +360,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
       pendingDescendantsForRun: (entry) => countPendingDescendantRuns(entry.childSessionKey),
     });
   }
+  const replyTurnLine = formatReplyTurnStatusLine(sessionEntry);
   const groupActivation = isGroup
     ? (normalizeGroupActivation(sessionEntry?.groupActivation) ?? defaultGroupActivation())
     : undefined;
@@ -371,9 +380,13 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
   const explicitThinkingDefault =
     (agentConfig?.thinkingDefault as ThinkLevel | undefined) ??
     (agentDefaults.thinkingDefault as ThinkLevel | undefined);
+  const runtimeContextProvider = resolveStatusAuthProvider({
+    provider: modelRefs.active.provider || provider,
+    effectiveHarness,
+  });
   const runtimeContextTokens = resolveStatusRuntimeContextTokens({
     cfg,
-    provider: activeStatusProvider,
+    provider: runtimeContextProvider,
     model: modelRefs.active.model || model,
   });
   return buildStatusMessage({
@@ -423,7 +436,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
       showDetails: queueOverrides,
     },
     subagentsLine,
-    taskLine,
+    taskLine: [taskLine, replyTurnLine].filter(Boolean).join("\n") || undefined,
     mediaDecisions: params.mediaDecisions,
     includeTranscriptUsage: params.includeTranscriptUsage ?? true,
   });
