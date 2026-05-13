@@ -1,4 +1,6 @@
+import path from "node:path";
 import { defineConfig } from "vitest/config";
+import { loadPatternListFromArgv } from "./vitest.pattern-file.ts";
 import {
   resolveDefaultVitestPool,
   resolveLocalVitestMaxWorkers,
@@ -55,6 +57,7 @@ export const rootVitestProjects = [
   "test/vitest/vitest.wizard.config.ts",
   "test/vitest/vitest.channels.config.ts",
   "test/vitest/vitest.extension-acpx.config.ts",
+  "test/vitest/vitest.extension-browser.config.ts",
   "test/vitest/vitest.extension-diffs.config.ts",
   "test/vitest/vitest.extension-discord.config.ts",
   "test/vitest/vitest.extension-feishu.config.ts",
@@ -77,11 +80,92 @@ export const rootVitestProjects = [
   "test/vitest/vitest.extensions.config.ts",
 ] as const;
 
+const rootVitestProjectCliScopes: Array<{
+  project: (typeof rootVitestProjects)[number];
+  include: string[];
+}> = [
+  {
+    project: "test/vitest/vitest.agents-core.config.ts",
+    include: ["src/agents/*.test.ts"],
+  },
+  {
+    project: "test/vitest/vitest.agents-pi-embedded.config.ts",
+    include: ["src/agents/pi-embedded-runner/**/*.test.ts"],
+  },
+  {
+    project: "test/vitest/vitest.agents-tools.config.ts",
+    include: ["src/agents/tools/**/*.test.ts"],
+  },
+  {
+    project: "test/vitest/vitest.agents-support.config.ts",
+    include: ["src/agents/*/**/*.test.ts"],
+  },
+  {
+    project: "test/vitest/vitest.unit-fast.config.ts",
+    include: ["test/vitest-projects-config.test.ts"],
+  },
+  {
+    project: "test/vitest/vitest.commands-light.config.ts",
+    include: ["src/commands/**/*.test.ts"],
+  },
+  {
+    project: "test/vitest/vitest.commands.config.ts",
+    include: ["src/commands/**/*.test.ts"],
+  },
+  {
+    project: "test/vitest/vitest.gateway-methods.config.ts",
+    include: ["src/gateway/server-methods/**/*.test.ts"],
+  },
+  {
+    project: "test/vitest/vitest.tasks.config.ts",
+    include: ["src/tasks/**/*.test.ts"],
+  },
+  {
+    project: "test/vitest/vitest.extension-browser.config.ts",
+    include: ["extensions/browser/**/*.test.ts"],
+  },
+  {
+    project: "test/vitest/vitest.tooling.config.ts",
+    include: ["test/scripts/**/*.test.ts", "src/scripts/**/*.test.ts"],
+  },
+];
+
+function cliPatternOverlapsInclude(cliPattern: string, includePattern: string): boolean {
+  return (
+    path.matchesGlob(cliPattern, includePattern) || path.matchesGlob(includePattern, cliPattern)
+  );
+}
+
+export function resolveRootVitestProjects(argv: string[] = process.argv): string[] {
+  const cliPatterns = loadPatternListFromArgv(argv);
+  if (!cliPatterns) {
+    return [...rootVitestProjects];
+  }
+
+  const matchedProjects = new Set<(typeof rootVitestProjects)[number]>();
+  for (const scope of rootVitestProjectCliScopes) {
+    if (
+      cliPatterns.some((cliPattern) =>
+        scope.include.some((includePattern) =>
+          cliPatternOverlapsInclude(cliPattern, includePattern),
+        ),
+      )
+    ) {
+      matchedProjects.add(scope.project);
+    }
+  }
+
+  if (matchedProjects.size === 0) {
+    return [...rootVitestProjects];
+  }
+  return rootVitestProjects.filter((project) => matchedProjects.has(project));
+}
+
 export default defineConfig({
   ...sharedVitestConfig,
   test: {
     ...sharedVitestConfig.test,
     runner: nonIsolatedRunnerPath,
-    projects: [...rootVitestProjects],
+    projects: resolveRootVitestProjects(),
   },
 });

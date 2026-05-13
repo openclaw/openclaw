@@ -9,7 +9,10 @@ import { createAgentsVitestConfig } from "./vitest/vitest.agents.config.ts";
 import bundledConfig from "./vitest/vitest.bundled.config.ts";
 import { createCommandsLightVitestConfig } from "./vitest/vitest.commands-light.config.ts";
 import { createCommandsVitestConfig } from "./vitest/vitest.commands.config.ts";
-import baseConfig, { rootVitestProjects } from "./vitest/vitest.config.ts";
+import baseConfig, {
+  resolveRootVitestProjects,
+  rootVitestProjects,
+} from "./vitest/vitest.config.ts";
 import contractChannelConfigConfig from "./vitest/vitest.contracts-channel-config.config.ts";
 import contractChannelRegistryConfig from "./vitest/vitest.contracts-channel-registry.config.ts";
 import contractChannelSessionConfig from "./vitest/vitest.contracts-channel-session.config.ts";
@@ -56,6 +59,39 @@ afterEach(() => {
 describe("projects vitest config", () => {
   it("defines the native root project list for all non-live Vitest lanes", () => {
     expect(requireTestConfig(baseConfig).projects).toEqual([...rootVitestProjects]);
+  });
+
+  it("narrows root projects for targeted agent file filters", () => {
+    expect(
+      resolveRootVitestProjects(["node", "vitest", "run", "src/agents/subagent-registry.test.ts"]),
+    ).toEqual(["test/vitest/vitest.agents-core.config.ts"]);
+  });
+
+  it("narrows root projects for targeted browser extension file filters", () => {
+    expect(
+      resolveRootVitestProjects([
+        "node",
+        "vitest",
+        "run",
+        "extensions/browser/src/browser-tool.test.ts",
+      ]),
+    ).toEqual(["test/vitest/vitest.extension-browser.config.ts"]);
+  });
+
+  it("narrows root projects for targeted command and gateway file filters", () => {
+    expect(
+      resolveRootVitestProjects([
+        "node",
+        "vitest",
+        "run",
+        "src/commands/health.snapshot.test.ts",
+        "src/gateway/server-methods/server-methods.test.ts",
+      ]),
+    ).toEqual([
+      "test/vitest/vitest.gateway-methods.config.ts",
+      "test/vitest/vitest.commands-light.config.ts",
+      "test/vitest/vitest.commands.config.ts",
+    ]);
   });
 
   it("disables vite env-file loading for vitest lanes", () => {
