@@ -1503,14 +1503,25 @@ describe("dispatchTelegramMessage draft streaming", () => {
     const groupHistories = new Map([
       [historyKey, [{ sender: "Alice", body: "side chatter", timestamp: 1 }]],
     ]);
-    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
-      queuedFinal: false,
-      counts: { block: 0, final: 0, tool: 0 },
-      sourceReplyDeliveryMode: "message_tool_only",
+    const statusReactionController = createStatusReactionController();
+    loadSessionStore.mockReturnValue({
+      "agent:main:telegram:group:-100123": { reasoningLevel: "stream" },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onReasoningStream?.({ text: "<think>ambient reasoning</think>" });
+      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await replyOptions?.onCompactionStart?.();
+      await replyOptions?.onCompactionEnd?.();
+      return {
+        queuedFinal: false,
+        counts: { block: 0, final: 0, tool: 0 },
+        sourceReplyDeliveryMode: "message_tool_only",
+      };
     });
 
     await dispatchWithContext({
       context: createContext({
+        statusReactionController: statusReactionController as never,
         ctxPayload: {
           InboundTurnKind: "room_event",
           SessionKey: "agent:main:telegram:group:-100123",
@@ -1539,6 +1550,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
         sourceReplyDeliveryMode?: string;
         suppressTyping?: boolean;
         allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
+        onReasoningStream?: unknown;
+        onCompactionStart?: unknown;
+        onCompactionEnd?: unknown;
       };
     };
     expect(dispatchParams.replyOptions?.sourceReplyDeliveryMode).toBe("message_tool_only");
@@ -1546,7 +1560,13 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(dispatchParams.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed).toBe(
       false,
     );
+    expect(dispatchParams.replyOptions?.onReasoningStream).toBeUndefined();
+    expect(dispatchParams.replyOptions?.onCompactionStart).toBeUndefined();
+    expect(dispatchParams.replyOptions?.onCompactionEnd).toBeUndefined();
     expect(createTelegramDraftStream).not.toHaveBeenCalled();
+    expect(statusReactionController.setTool).not.toHaveBeenCalled();
+    expect(statusReactionController.setCompacting).not.toHaveBeenCalled();
+    expect(statusReactionController.setThinking).not.toHaveBeenCalled();
     expect(deliverReplies).not.toHaveBeenCalled();
     expect(groupHistories.get(historyKey)).toHaveLength(1);
   });

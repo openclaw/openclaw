@@ -403,8 +403,10 @@ export const dispatchTelegramMessage = async ({
     ackReactionPromise,
     reactionApi,
     removeAckAfterReply,
-    statusReactionController,
+    statusReactionController: rawStatusReactionController,
   } = context;
+  const isRoomEvent = ctxPayload.InboundTurnKind === "room_event";
+  const statusReactionController = isRoomEvent ? null : rawStatusReactionController;
   const statusReactionTiming = {
     ...DEFAULT_TIMING,
     ...cfg.messages?.statusReactions?.timing,
@@ -480,7 +482,6 @@ export const dispatchTelegramMessage = async ({
   const accountBlockStreamingEnabled =
     resolveChannelStreamingBlockEnabled(telegramCfg) ??
     cfg.agents?.defaults?.blockStreamingDefault === "on";
-  const isRoomEvent = ctxPayload.InboundTurnKind === "room_event";
   const resolvedReasoningLevel = resolveTelegramReasoningLevel({
     cfg,
     sessionKey: ctxPayload.SessionKey,
@@ -542,7 +543,7 @@ export const dispatchTelegramMessage = async ({
     !hasTelegramQuoteReply &&
     !accountBlockStreamingEnabled &&
     !forceBlockStreamingForReasoning;
-  const canStreamReasoningDraft = streamReasoningDraft;
+  const canStreamReasoningDraft = !isRoomEvent && streamReasoningDraft;
   const draftReplyToMessageId =
     replyToMode !== "off" && typeof msg.message_id === "number"
       ? (replyQuoteMessageId ?? msg.message_id)
