@@ -625,6 +625,7 @@ async function installPluginFromNpmSpecWithProgress(params: {
     const result = await withTimeout(
       installPluginFromNpmSpec({
         spec: params.npmSpec,
+        mode: "update",
         timeoutMs: ONBOARDING_PLUGIN_INSTALL_TIMEOUT_MS,
         expectedPluginId: params.entry.pluginId,
         expectedIntegrity: params.entry.install.expectedIntegrity,

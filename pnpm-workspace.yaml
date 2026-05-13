@@ -23,6 +23,7 @@ minimumReleaseAgeExclude:
   - "@mariozechner/*"
   - "@openai/codex"
   - "@openai/codex-*"
+  - "@smithy/shared-ini-file-loader@4.5.1"
   - "@typescript/native-preview*"
   - "@types/node"
   - "@rolldown/*"

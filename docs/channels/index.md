@@ -18,6 +18,9 @@ Text is supported everywhere; media and reactions vary by channel.
 - WhatsApp setup is install-on-demand: onboarding can show the setup flow before
   the plugin package is installed, and the Gateway loads the external
   ClawHub/npm plugin only when the channel is actually active.
+- Channels that accept bot-authored inbound messages can use shared
+  [bot loop protection](/channels/bot-loop-protection) to prevent bot pairs from
+  replying to each other indefinitely.
 
 ## Supported channels
 

@@ -1,1 +1,1 @@
-export * from "../plugins/types.js";
+export type * from "../plugins/hook-types.js";

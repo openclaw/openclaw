@@ -307,6 +307,10 @@
       "types": "./dist/plugin-sdk/outbound-runtime.d.ts",
       "default": "./dist/plugin-sdk/outbound-runtime.js"
     },
+    "./plugin-sdk/pair-loop-guard-runtime": {
+      "types": "./dist/plugin-sdk/pair-loop-guard-runtime.d.ts",
+      "default": "./dist/plugin-sdk/pair-loop-guard-runtime.js"
+    },
     "./plugin-sdk/poll-runtime": {
       "types": "./dist/plugin-sdk/poll-runtime.d.ts",
       "default": "./dist/plugin-sdk/poll-runtime.js"
@@ -1353,6 +1357,7 @@
     "check:import-cycles": "node --import tsx scripts/check-import-cycles.ts",
     "check:loc": "node --import tsx scripts/check-ts-max-loc.ts --max 500",
     "check:madge-import-cycles": "node --import tsx scripts/check-madge-import-cycles.ts",
+    "check:media-download-helpers": "node scripts/check-media-download-helper-roundtrip.mjs",
     "check:no-conflict-markers": "node scripts/check-no-conflict-markers.mjs",
     "check:no-runtime-action-load-config": "node scripts/check-no-runtime-action-load-config.mjs",
     "check:opengrep-rule-metadata": "node security/opengrep/check-rule-metadata.mjs",
@@ -1594,6 +1599,7 @@
     "test:docker:live-codex-harness": "bash scripts/test-live-codex-harness-docker.sh",
     "test:docker:live-codex-npm-plugin": "bash scripts/e2e/codex-npm-plugin-live-docker.sh",
     "test:docker:live-plugin-tool": "bash scripts/e2e/live-plugin-tool-docker.sh",
+    "test:docker:live-subagent-announce": "bash scripts/test-live-subagent-announce-docker.sh",
     "test:docker:live-gateway": "bash scripts/test-live-gateway-models-docker.sh",
     "test:docker:live-gateway:claude": "OPENCLAW_LIVE_GATEWAY_PROVIDERS=claude-cli OPENCLAW_LIVE_GATEWAY_MODELS=claude-cli/claude-sonnet-4-6 bash scripts/test-live-gateway-models-docker.sh",
     "test:docker:live-gateway:codex": "OPENCLAW_LIVE_GATEWAY_PROVIDERS=codex-cli OPENCLAW_LIVE_GATEWAY_MODELS=codex-cli/gpt-5.5 bash scripts/test-live-gateway-models-docker.sh",

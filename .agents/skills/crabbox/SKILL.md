@@ -31,13 +31,12 @@ pnpm crabbox:run -- --help | sed -n '1,120p'
 - Check `.crabbox.yaml` for repo defaults, but override provider explicitly.
   Even if config still says AWS, maintainer validation should normally pass
   `--provider blacksmith-testbox`.
-- For live/provider bugs, check keys on the local Mac before downgrading to
-  mocks: source local `~/.profile` and test only presence/length. If Crabbox
-  does not already have the key, copy only the exact needed key into the remote
-  process environment for that one command. Do not print it, do not sync it as a
-  repo file, and do not leave it in remote shell history or logs. If no
-  secret-safe injection path is available, say true live provider auth is
-  blocked instead of silently using a fake key.
+- For live/provider bugs, use the configured secret workflow before downgrading
+  to mocks. Copy only the exact needed key into the remote process environment
+  for that one command. Do not print it, do not sync it as a repo file, and do
+  not leave it in remote shell history or logs. If no secret-safe injection path
+  is available, say true live provider auth is blocked instead of silently using
+  a fake key.
 - Prefer local targeted tests for tight edit loops. Broad gates belong remote.
 - Do not treat inherited shell env as operator intent. In particular,
   `OPENCLAW_LOCAL_CHECK_MODE=throttled` from the local shell is not permission
@@ -191,7 +190,6 @@ Live-provider debug template for direct AWS/Hetzner leases:
 mkdir -p .crabbox/logs
 pnpm crabbox:run -- --provider aws \
   --preflight \
-  --env-from-profile ~/.profile \
   --allow-env OPENAI_API_KEY,OPENAI_BASE_URL \
   --timing-json \
   --capture-stdout .crabbox/logs/live-provider.stdout.log \
@@ -217,8 +215,8 @@ Pick the lane by symptom:
 - Docker/setup/install bug: build a package tarball and run the matching
   `scripts/e2e/*-docker.sh` or package script. This proves npm packaging,
   install paths, runtime deps, config writes, and container behavior.
-- Provider/model/auth bug: prefer true live E2E. First source local Mac
-  `~/.profile`, then inject the single needed key into Crabbox if needed. Scrub
+- Provider/model/auth bug: prefer true live E2E. Use the configured secret
+  workflow, then inject the single needed key into Crabbox if needed. Scrub
   unrelated provider env vars in the child command so interactive defaults do
   not drift to another provider. If only a dummy key is used, label the proof
   narrowly, e.g. "UI/install path only; live provider auth not exercised."
