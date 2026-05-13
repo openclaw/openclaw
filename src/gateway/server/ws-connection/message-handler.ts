@@ -1096,9 +1096,22 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                     ? existingPairedDevice.scopes
                     : []
                 : [];
+              const retryAfterBootstrapPairingApproval =
+                authMethod === "bootstrap-token" &&
+                reason === "not-paired" &&
+                role === "node" &&
+                scopes.length === 0 &&
+                !existingPairedDevice;
               const pairingErrorDetails = buildPairingConnectErrorDetails({
                 reason,
                 requestId: recoveryRequestId,
+                ...(retryAfterBootstrapPairingApproval
+                  ? {
+                      recommendedNextStep: "wait_then_retry",
+                      retryable: true,
+                      pauseReconnect: false,
+                    }
+                  : {}),
                 deviceId: device.id,
                 requestedRole: role,
                 requestedScopes: scopes,

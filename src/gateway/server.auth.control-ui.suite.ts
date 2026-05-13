@@ -1004,9 +1004,18 @@ export function registerControlUiAndPairingSuite(): void {
       });
       expect(initial.ok).toBe(false);
       expect(initial.error?.message ?? "").toContain("pairing required");
-      expect((initial.error?.details as { code?: string } | undefined)?.code).toBe(
-        ConnectErrorDetailCodes.PAIRING_REQUIRED,
-      );
+      const initialDetails = initial.error?.details as
+        | {
+            code?: string;
+            pauseReconnect?: boolean;
+            recommendedNextStep?: string;
+            retryable?: boolean;
+          }
+        | undefined;
+      expect(initialDetails?.code).toBe(ConnectErrorDetailCodes.PAIRING_REQUIRED);
+      expect(initialDetails?.recommendedNextStep).toBe("wait_then_retry");
+      expect(initialDetails?.retryable).toBe(true);
+      expect(initialDetails?.pauseReconnect).toBe(false);
 
       const pendingAfterInitial = await listDevicePairing();
       const pendingForDevice = pendingAfterInitial.pending.filter(

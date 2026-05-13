@@ -724,15 +724,18 @@ export async function approveBootstrapDevicePairing(
     const existing = state.pairedByDeviceId[pending.deviceId];
     const grantedRoles = requestedRoles;
     const grantedScopes = resolveBootstrapProfileScopesForRoles(grantedRoles, pending.scopes ?? []);
+    const grantedRoleSet = new Set(grantedRoles);
+    const preservedExistingScopes = (mergeRoles(existing?.roles, existing?.role) ?? []).flatMap(
+      (existingRole) =>
+        grantedRoleSet.has(existingRole)
+          ? []
+          : resolveRoleScopedDeviceTokenScopes(
+              existingRole,
+              existing?.approvedScopes ?? existing?.scopes,
+            ),
+    );
     const roles = mergeRoles(existing?.roles, existing?.role, pending.roles, pending.role);
-    const nextApprovedScopes = mergeScopes(
-      existing?.approvedScopes ?? existing?.scopes,
-      grantedScopes,
-    );
-    const sanitizedApprovedScopes = resolveBootstrapProfileScopesForRoles(
-      grantedRoles,
-      nextApprovedScopes ?? [],
-    );
+    const nextApprovedScopes = mergeScopes(preservedExistingScopes, grantedScopes);
     const tokens = existing?.tokens ? { ...existing.tokens } : {};
     for (const roleForToken of grantedRoles) {
       const existingToken = tokens[roleForToken];
@@ -759,8 +762,8 @@ export async function approveBootstrapDevicePairing(
       clientMode: pending.clientMode,
       role: pending.role,
       roles,
-      scopes: sanitizedApprovedScopes,
-      approvedScopes: sanitizedApprovedScopes,
+      scopes: nextApprovedScopes,
+      approvedScopes: nextApprovedScopes,
       remoteIp: pending.remoteIp,
       tokens,
       createdAtMs: existing?.createdAtMs ?? now,

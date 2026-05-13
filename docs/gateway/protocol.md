@@ -689,6 +689,10 @@ rather than the pre-handshake defaults.
 - Built-in setup-code bootstrap returns only the primary node
   `hello-ok.auth.deviceToken`; clients must not expect an additional operator
   token in `hello-ok.auth.deviceTokens`.
+- While built-in setup-code bootstrap is waiting for approval, `PAIRING_REQUIRED`
+  details include `recommendedNextStep: "wait_then_retry"`, `retryable: true`,
+  and `pauseReconnect: false`. Clients should keep reconnecting with the same
+  bootstrap token until the request is approved or the token becomes invalid.
 - If an older or custom trusted bootstrap flow includes optional
   `hello-ok.auth.deviceTokens` entries, persist them only when the connect used
   bootstrap auth on a trusted transport such as `wss://` or loopback/local

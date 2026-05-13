@@ -1040,20 +1040,17 @@ class GatewaySession(
       detailCode == "AUTH_TOKEN_MISMATCH"
   }
 
-  private fun shouldPauseReconnectAfterAuthFailure(error: ErrorShape): Boolean =
-    when (error.details?.code) {
-      "AUTH_TOKEN_MISSING",
-      "AUTH_BOOTSTRAP_TOKEN_INVALID",
-      "AUTH_PASSWORD_MISSING",
-      "AUTH_PASSWORD_MISMATCH",
-      "AUTH_RATE_LIMITED",
-      "PAIRING_REQUIRED",
-      "CONTROL_UI_DEVICE_IDENTITY_REQUIRED",
-      "DEVICE_IDENTITY_REQUIRED",
-      -> true
-      "AUTH_TOKEN_MISMATCH" -> deviceTokenRetryBudgetUsed && !pendingDeviceTokenRetry
-      else -> false
-    }
+  private fun shouldPauseReconnectAfterAuthFailure(error: ErrorShape): Boolean {
+    val target = desired
+    return shouldPauseGatewayReconnectAfterAuthFailure(
+      error = error,
+      hasBootstrapToken = target?.bootstrapToken?.trim()?.isNotEmpty() == true,
+      role = target?.options?.role,
+      scopes = target?.options?.scopes ?: emptyList(),
+      deviceTokenRetryBudgetUsed = deviceTokenRetryBudgetUsed,
+      pendingDeviceTokenRetry = pendingDeviceTokenRetry,
+    )
+  }
 
   private fun shouldClearStoredDeviceTokenAfterRetry(error: ErrorShape): Boolean = error.details?.code == "AUTH_DEVICE_TOKEN_MISMATCH"
 
@@ -1067,6 +1064,34 @@ class GatewaySession(
     return tls?.expectedFingerprint?.trim()?.isNotEmpty() == true
   }
 }
+
+internal fun shouldPauseGatewayReconnectAfterAuthFailure(
+  error: GatewaySession.ErrorShape,
+  hasBootstrapToken: Boolean,
+  role: String?,
+  scopes: List<String>,
+  deviceTokenRetryBudgetUsed: Boolean,
+  pendingDeviceTokenRetry: Boolean,
+): Boolean =
+  when (error.details?.code) {
+    "AUTH_TOKEN_MISSING",
+    "AUTH_BOOTSTRAP_TOKEN_INVALID",
+    "AUTH_PASSWORD_MISSING",
+    "AUTH_PASSWORD_MISMATCH",
+    "AUTH_RATE_LIMITED",
+    "CONTROL_UI_DEVICE_IDENTITY_REQUIRED",
+    "DEVICE_IDENTITY_REQUIRED",
+    -> true
+    "PAIRING_REQUIRED" ->
+      !(
+        hasBootstrapToken &&
+          role?.trim() == "node" &&
+          scopes.isEmpty() &&
+          error.details?.reason == "not-paired"
+      )
+    "AUTH_TOKEN_MISMATCH" -> deviceTokenRetryBudgetUsed && !pendingDeviceTokenRetry
+    else -> false
+  }
 
 internal fun buildGatewayWebSocketUrl(
   host: String,
