@@ -20,14 +20,17 @@ describe("resolveCommandConfigWithSecrets", () => {
     vi.clearAllMocks();
   });
 
-  it("logs diagnostics and preserves resolved config when auto-enable is off", async () => {
+  it("routes diagnostics to stderr (not stdout) so --json consumers can parse stdout cleanly (#81055)", async () => {
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as const;
     const config = { channels: {} };
     const resolvedConfig = { channels: { telegram: {} } };
     const targetIds = new Set(["channels.telegram.token"]);
     mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
       resolvedConfig,
-      diagnostics: ["resolved channels.telegram.token"],
+      diagnostics: [
+        "status --json: failed to resolve channels.discord.token locally (env unset).",
+        "status --json: gateway secrets.resolve unavailable (protocol mismatch).",
+      ],
     });
 
     const result = await resolveCommandConfigWithSecrets({
@@ -44,12 +47,22 @@ describe("resolveCommandConfigWithSecrets", () => {
       targetIds,
       mode: "read_only_status",
     });
-    expect(runtime.log).toHaveBeenCalledWith("[secrets] resolved channels.telegram.token");
+    expect(runtime.error).toHaveBeenCalledWith(
+      "[secrets] status --json: failed to resolve channels.discord.token locally (env unset).",
+    );
+    expect(runtime.error).toHaveBeenCalledWith(
+      "[secrets] status --json: gateway secrets.resolve unavailable (protocol mismatch).",
+    );
+    expect(runtime.error).toHaveBeenCalledTimes(2);
+    expect(runtime.log).not.toHaveBeenCalled();
     expect(mocks.applyPluginAutoEnable).not.toHaveBeenCalled();
     expect(result).toEqual({
       resolvedConfig,
       effectiveConfig: resolvedConfig,
-      diagnostics: ["resolved channels.telegram.token"],
+      diagnostics: [
+        "status --json: failed to resolve channels.discord.token locally (env unset).",
+        "status --json: gateway secrets.resolve unavailable (protocol mismatch).",
+      ],
     });
   });
 

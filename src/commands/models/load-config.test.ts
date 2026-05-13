@@ -69,8 +69,11 @@ describe("models load-config", () => {
       targetIds,
     });
     expect(mocks.setRuntimeConfigSnapshot).toHaveBeenCalledWith(resolvedConfig, sourceConfig);
-    expect(runtime.log).toHaveBeenNthCalledWith(1, "[secrets] diag-one");
-    expect(runtime.log).toHaveBeenNthCalledWith(2, "[secrets] diag-two");
+    // Routed to stderr (not stdout) so `models … --json` consumers can parse
+    // stdout cleanly; see #81055.
+    expect(runtime.error).toHaveBeenNthCalledWith(1, "[secrets] diag-one");
+    expect(runtime.error).toHaveBeenNthCalledWith(2, "[secrets] diag-two");
+    expect(runtime.log).not.toHaveBeenCalled();
     expect(result).toEqual({
       sourceConfig,
       resolvedConfig,

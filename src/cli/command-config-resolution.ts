@@ -28,8 +28,12 @@ export async function resolveCommandConfigWithSecrets<TConfig extends OpenClawCo
     ...(params.allowedPaths ? { allowedPaths: params.allowedPaths } : {}),
   });
   if (params.runtime) {
+    // Route diagnostics to stderr (not stdout) so `--json` consumers can pipe
+    // stdout through `jq` / `JSON.parse` without these informational lines
+    // corrupting the JSON document on the wire. Same defect class as the
+    // already-closed `models status --json` leak (#72962); fixes #81055.
     for (const entry of diagnostics) {
-      params.runtime.log(`[secrets] ${entry}`);
+      params.runtime.error(`[secrets] ${entry}`);
     }
   }
   const effectiveConfig = params.autoEnable
