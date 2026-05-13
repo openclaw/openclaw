@@ -75,6 +75,9 @@ local while `web_search` and `x_search` can use xAI Responses under the hood.
   <Card title="Grok" icon="zap" href="/tools/grok-search">
     AI-synthesized answers with citations via xAI web grounding.
   </Card>
+  <Card title="iFlow Search" icon="globe" href="/tools/iflow-search">
+    Chinese-first structured results plus image search and clean-content web fetch via the iFlow Open Platform.
+  </Card>
   <Card title="Kimi" icon="moon" href="/tools/kimi-search">
     AI-synthesized answers with citations via Moonshot web search; ungrounded chat fallbacks fail explicitly.
   </Card>
@@ -105,6 +108,7 @@ local while `web_search` and `x_search` can use xAI Responses under the hood.
 | [Firecrawl](/tools/firecrawl)             | Structured snippets                                            | Via `firecrawl_search` tool                      | `FIRECRAWL_API_KEY`                                                                     |
 | [Gemini](/tools/gemini-search)            | AI-synthesized + citations                                     | --                                               | `GEMINI_API_KEY`                                                                        |
 | [Grok](/tools/grok-search)                | AI-synthesized + citations                                     | --                                               | `XAI_API_KEY`                                                                           |
+| [iFlow Search](/tools/iflow-search)       | Structured snippets (Chinese-first)                            | Via `iflow_image_search` and `iflow_web_fetch`   | `IFLOW_API_KEY`                                                                         |
 | [Kimi](/tools/kimi-search)                | AI-synthesized + citations; fails on ungrounded chat fallbacks | --                                               | `KIMI_API_KEY` / `MOONSHOT_API_KEY`                                                     |
 | [MiniMax Search](/tools/minimax-search)   | Structured snippets                                            | Region (`global` / `cn`)                         | `MINIMAX_CODE_PLAN_KEY` / `MINIMAX_CODING_API_KEY` / `MINIMAX_OAUTH_TOKEN`              |
 | [Ollama Web Search](/tools/ollama-search) | Structured snippets                                            | --                                               | None for signed-in local hosts; `OLLAMA_API_KEY` for direct `https://ollama.com` search |

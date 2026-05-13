@@ -62,6 +62,22 @@ file messages via any DingTalk client.
 openclaw plugins install @largezhou/ddingtalk
 ```
 
+### iFlow Search
+
+Chinese-first web search, image search, and clean-content web fetch via the
+[iFlow Open Platform](https://platform.iflow.cn/). Exposes
+`iflow_web_search`, `iflow_image_search`, and `iflow_web_fetch` as agent
+tools, and registers as a `web_search` provider (best-effort) so the managed
+`web_search` tool can be routed through iFlow with one config line.
+
+- **npm:** `@iflow-ai/iflow-plugin`
+- **repo:** [github.com/zhengyanglsun/openclaw-iflow-plugin](https://github.com/zhengyanglsun/openclaw-iflow-plugin)
+- **provider id:** `iflow`
+
+```bash
+openclaw plugins install @iflow-ai/iflow-plugin
+```
+
 ### Lossless Claw (LCM)
 
 Lossless Context Management plugin for OpenClaw. DAG-based conversation
