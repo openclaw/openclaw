@@ -3244,8 +3244,8 @@ public struct TalkSessionCreateParams: Codable, Sendable {
 
     public init(
         sessionkey: String?,
-        agentid: String?,
-        spawnedby: String?,
+        agentid: String? = nil,
+        spawnedby: String? = nil,
         provider: String?,
         model: String?,
         voice: String?,
