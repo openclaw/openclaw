@@ -576,8 +576,9 @@ describe("command gating", () => {
     expect(setResult?.shouldContinue).toBe(false);
     expect(setResult?.reply?.text).toContain("Config updated");
     expect(replaceConfigFileMock).toHaveBeenCalledTimes(1);
-    expect(replaceConfigFileMock).toHaveBeenCalledWith(
-      expect.objectContaining({ afterWrite: { mode: "auto" } }),
-    );
+    expect(replaceConfigFileMock).toHaveBeenCalledWith({
+      nextConfig: {},
+      afterWrite: { mode: "auto" },
+    });
   });
 });

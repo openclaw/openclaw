@@ -166,6 +166,7 @@ export function guardSessionManager(
     missingToolResultText: opts?.missingToolResultText,
     allowedToolNames: opts?.allowedToolNames,
     beforeMessageWriteHook: beforeMessageWrite,
+    redactLoggingConfig: opts?.config?.logging,
     maxToolResultChars:
       typeof opts?.contextWindowTokens === "number"
         ? resolveLiveToolResultMaxChars({
