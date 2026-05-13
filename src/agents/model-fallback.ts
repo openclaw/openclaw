@@ -359,6 +359,7 @@ function isPersistedModelHealthActive(params: {
 async function persistModelHealthCooldown(params: {
   cfg: OpenClawConfig | undefined;
   sessionId?: string;
+  sessionAgentId?: string;
   agentDir?: string;
   provider: string;
   model: string;
@@ -371,7 +372,8 @@ async function persistModelHealthCooldown(params: {
   const { sessionKey, storePath } = resolveStoredSessionKeyForSessionId({
     cfg: params.cfg,
     sessionId: params.sessionId,
-    agentId: params.agentDir ? path.basename(params.agentDir) : undefined,
+    agentId:
+      params.sessionAgentId ?? (params.agentDir ? path.basename(params.agentDir) : undefined),
   });
   if (!sessionKey) {
     return;
@@ -431,6 +433,7 @@ async function persistModelHealthCooldown(params: {
 async function clearPersistedModelHealth(params: {
   cfg: OpenClawConfig | undefined;
   sessionId?: string;
+  sessionAgentId?: string;
   agentDir?: string;
   provider: string;
   model: string;
@@ -441,7 +444,8 @@ async function clearPersistedModelHealth(params: {
   const { sessionKey, storePath } = resolveStoredSessionKeyForSessionId({
     cfg: params.cfg,
     sessionId: params.sessionId,
-    agentId: params.agentDir ? path.basename(params.agentDir) : undefined,
+    agentId:
+      params.sessionAgentId ?? (params.agentDir ? path.basename(params.agentDir) : undefined),
   });
   if (!sessionKey) {
     return;
@@ -1001,6 +1005,7 @@ export async function runWithModelFallback<T>(params: {
   model: string;
   runId?: string;
   sessionId?: string;
+  sessionAgentId?: string;
   lane?: string;
   agentDir?: string;
   /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
@@ -1033,11 +1038,13 @@ export async function runWithModelFallback<T>(params: {
       ? resolveStoredSessionKeyForSessionId({
           cfg: params.cfg,
           sessionId: params.sessionId,
-          agentId: params.agentDir
-            ? path.basename(params.agentDir) === "agent"
-              ? path.basename(path.dirname(params.agentDir))
-              : path.basename(params.agentDir)
-            : undefined,
+          agentId:
+            params.sessionAgentId ??
+            (params.agentDir
+              ? path.basename(params.agentDir) === "agent"
+                ? path.basename(path.dirname(params.agentDir))
+                : path.basename(params.agentDir)
+              : undefined),
         })
       : null;
   const sessionHealthEntry = sessionResolution?.sessionKey
@@ -1322,6 +1329,7 @@ export async function runWithModelFallback<T>(params: {
       await clearPersistedModelHealth({
         cfg: params.cfg,
         sessionId: params.sessionId,
+        sessionAgentId: params.sessionAgentId,
         agentDir: params.agentDir,
         provider: candidate.provider,
         model: candidate.model,
@@ -1426,6 +1434,7 @@ export async function runWithModelFallback<T>(params: {
         await persistModelHealthCooldown({
           cfg: params.cfg,
           sessionId: params.sessionId,
+          sessionAgentId: params.sessionAgentId,
           agentDir: params.agentDir,
           provider: candidate.provider,
           model: candidate.model,

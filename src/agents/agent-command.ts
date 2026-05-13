@@ -1039,6 +1039,8 @@ async function agentCommandInternal(
           model,
           runId,
           agentDir,
+          sessionId,
+          sessionAgentId,
           fallbacksOverride: effectiveFallbacksOverride,
           onFallbackStep: (step) => {
             fallbackTrajectoryRecorder?.recordEvent("model.fallback_step", step);
