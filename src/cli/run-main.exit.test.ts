@@ -36,6 +36,7 @@ const commanderParseAsyncMock = vi.hoisted(() => vi.fn(async () => {}));
 const addGatewayRunCommandMock = vi.hoisted(() => vi.fn((command: unknown) => command));
 const emitCliBannerMock = vi.hoisted(() => vi.fn());
 const enableConsoleCaptureMock = vi.hoisted(() => vi.fn());
+const routeLogsToStderrMock = vi.hoisted(() => vi.fn());
 const progressDoneMock = vi.hoisted(() => vi.fn());
 const createCliProgressMock = vi.hoisted(() =>
   vi.fn(() => ({
@@ -112,6 +113,7 @@ vi.mock("./banner.js", () => ({
 vi.mock("../logging.js", async () => ({
   ...(await vi.importActual<typeof import("../logging.js")>("../logging.js")),
   enableConsoleCapture: enableConsoleCaptureMock,
+  routeLogsToStderr: routeLogsToStderrMock,
 }));
 
 vi.mock("./container-target.js", () => ({
@@ -355,6 +357,26 @@ describe("runCli exit behavior", () => {
     const parseOrder = commanderParseAsyncMock.mock.invocationCallOrder[0] ?? 0;
     expect(captureOrder).toBeGreaterThan(0);
     expect(parseOrder).toBeGreaterThan(captureOrder);
+  });
+
+  it("routes full CLI startup logs to stderr before plugin registration for json output", async () => {
+    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    buildProgramMock.mockReturnValueOnce({
+      commands: [],
+      parseAsync,
+    });
+
+    await runCli(["node", "openclaw", "googlemeet", "--json"]);
+
+    expect(enableConsoleCaptureMock).toHaveBeenCalledTimes(1);
+    expect(routeLogsToStderrMock).toHaveBeenCalledTimes(1);
+    expect(registerPluginCliCommandsFromValidatedConfigMock).toHaveBeenCalledTimes(1);
+    const captureOrder = enableConsoleCaptureMock.mock.invocationCallOrder[0] ?? 0;
+    const routeOrder = routeLogsToStderrMock.mock.invocationCallOrder[0] ?? 0;
+    const pluginOrder =
+      registerPluginCliCommandsFromValidatedConfigMock.mock.invocationCallOrder[0] ?? 0;
+    expect(routeOrder).toBeGreaterThan(captureOrder);
+    expect(pluginOrder).toBeGreaterThan(routeOrder);
   });
 
   it("honors banner suppression on the gateway foreground fast path", async () => {

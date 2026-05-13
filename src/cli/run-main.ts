@@ -638,8 +638,11 @@ export async function runCli(argv: string[] = process.argv) {
 
     try {
       // Capture all console output into structured logs while keeping stdout/stderr behavior.
-      const { enableConsoleCapture } = await import("../logging.js");
+      const { enableConsoleCapture, routeLogsToStderr } = await import("../logging.js");
       enableConsoleCapture();
+      if (hasJsonOutputFlag(normalizedArgv)) {
+        routeLogsToStderr();
+      }
 
       const [
         { buildProgram },
