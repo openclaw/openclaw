@@ -362,6 +362,7 @@ export function createFollowupRunner(params: {
     const queuedImages = queued.images ?? opts?.images;
     const queuedImageOrder = queued.imageOrder ?? opts?.imageOrder;
     let replyOperation: ReturnType<typeof createReplyOperation> | undefined;
+
     try {
       queued.run.config = await resolveQueuedReplyExecutionConfig(queued.run.config, {
         originatingChannel: queued.originatingChannel,
@@ -387,6 +388,13 @@ export function createFollowupRunner(params: {
       if (run !== effectiveQueued.run) {
         effectiveQueued = { ...effectiveQueued, run };
       }
+      const shouldEmitVerboseProgress = () => run.verboseLevel !== "off";
+      const shouldSuppressDefaultToolProgressMessages = () =>
+        opts?.suppressDefaultToolProgressMessages === true && !shouldEmitVerboseProgress();
+      const shouldEmitToolResultProgress = () =>
+        shouldEmitVerboseProgress() && !shouldSuppressDefaultToolProgressMessages();
+      const shouldEmitToolOutputProgress = () =>
+        run.verboseLevel === "full" && !shouldSuppressDefaultToolProgressMessages();
       replyOperation = createReplyOperation({
         sessionId: run.sessionId,
         sessionKey: replySessionKey ?? "",
@@ -695,10 +703,8 @@ export function createFollowupRunner(params: {
                     bootstrapPromptWarningSignaturesSeen.length - 1
                   ],
                 toolProgressDetail,
-                shouldEmitToolResult: () =>
-                  opts?.suppressDefaultToolProgressMessages !== true && run.verboseLevel !== "off",
-                shouldEmitToolOutput: () =>
-                  opts?.suppressDefaultToolProgressMessages !== true && run.verboseLevel === "full",
+                shouldEmitToolResult: shouldEmitToolResultProgress,
+                shouldEmitToolOutput: shouldEmitToolOutputProgress,
                 onToolResult: async (payload) => {
                   if (
                     run.sourceReplyDeliveryMode === "message_tool_only" &&
@@ -716,9 +722,7 @@ export function createFollowupRunner(params: {
                     evt,
                     opts,
                     detailMode: toolProgressDetail,
-                    emitChannelProgress:
-                      opts?.suppressDefaultToolProgressMessages !== true &&
-                      run.verboseLevel !== "off",
+                    emitChannelProgress: shouldEmitToolResultProgress(),
                     onCompactionComplete: () => {
                       attemptCompactionCount += 1;
                     },

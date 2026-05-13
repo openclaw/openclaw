@@ -1160,6 +1160,78 @@ describe("createFollowupRunner progress forwarding", () => {
     );
   });
 
+  it("preserves queued verbose progress when default tool progress is suppressed", async () => {
+    const onToolStart = vi.fn(async () => {});
+    const onCommandOutput = vi.fn(async () => {});
+    const queued = createQueuedRun({
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+      originatingAccountId: "acct-1",
+      originatingThreadId: "thread-1",
+      run: {
+        messageProvider: "discord",
+        sourceReplyDeliveryMode: "message_tool_only",
+        verboseLevel: "on",
+      },
+    });
+
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (args: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+        onToolResult?: (payload: { text: string }) => Promise<void>;
+        shouldEmitToolResult?: () => boolean;
+        shouldEmitToolOutput?: () => boolean;
+      }) => {
+        expect(args.shouldEmitToolResult?.()).toBe(true);
+        expect(args.shouldEmitToolOutput?.()).toBe(false);
+        await args.onAgentEvent?.({
+          stream: "tool",
+          data: {
+            phase: "start",
+            name: "exec",
+            args: { command: "echo queued-suppressed-preview" },
+          },
+        });
+        await args.onAgentEvent?.({
+          stream: "command_output",
+          data: { phase: "chunk", output: "queued output" },
+        });
+        await args.onToolResult?.({ text: "🛠️ Exec: echo queued-suppressed-preview" });
+        return { payloads: [], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      opts: { suppressDefaultToolProgressMessages: true, onToolStart, onCommandOutput },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+      toolProgressDetail: "raw",
+    });
+
+    await runner(queued);
+
+    expect(onToolStart).toHaveBeenCalledWith({
+      name: "exec",
+      phase: "start",
+      args: { command: "echo queued-suppressed-preview" },
+      detailMode: "raw",
+    });
+    expect(onCommandOutput).toHaveBeenCalledWith(
+      expect.objectContaining({ phase: "chunk", output: "queued output" }),
+    );
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        to: "channel:C1",
+        accountId: "acct-1",
+        threadId: "thread-1",
+        payload: expect.objectContaining({ text: "🛠️ Exec: echo queued-suppressed-preview" }),
+      }),
+    );
+  });
+
   it("suppresses queued follow-up progress when verbose progress is disabled", async () => {
     const storePath = path.join(
       await fs.mkdtemp(path.join(tmpdir(), "openclaw-followup-progress-off-")),
