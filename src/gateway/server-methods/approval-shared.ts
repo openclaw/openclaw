@@ -103,6 +103,24 @@ export function isApprovalRecordVisibleToClient<TPayload>(params: {
   return true;
 }
 
+export function resolveApprovalRequestRecipientConnIds<TPayload>(params: {
+  context: GatewayRequestContext;
+  record: ExecApprovalRecord<TPayload>;
+  excludeConnId?: string;
+}): ReadonlySet<string> | null {
+  return (
+    params.context.getApprovalClientConnIds?.({
+      excludeConnId: params.excludeConnId,
+      record: params.record,
+      filter: (client) =>
+        isApprovalRecordVisibleToClient({
+          record: params.record,
+          client,
+        }),
+    }) ?? null
+  );
+}
+
 export function resolvePendingApprovalRecord<TPayload>(params: {
   manager: ExecApprovalManager<TPayload>;
   inputId: string;
@@ -243,9 +261,28 @@ export async function handlePendingApprovalRequest<
   ) => Promise<void> | void;
   afterDecisionErrorLabel?: string;
 }): Promise<void> {
-  params.context.broadcast(params.requestEventName, params.requestEvent, { dropIfSlow: true });
+  const approvalClientConnIds = resolveApprovalRequestRecipientConnIds({
+    context: params.context,
+    record: params.record,
+    excludeConnId: params.clientConnId,
+  });
+  if (approvalClientConnIds) {
+    params.context.broadcastToConnIds(
+      params.requestEventName,
+      params.requestEvent,
+      approvalClientConnIds,
+      {
+        dropIfSlow: true,
+      },
+    );
+  } else {
+    params.context.broadcast(params.requestEventName, params.requestEvent, { dropIfSlow: true });
+  }
 
-  const hasApprovalClients = params.context.hasExecApprovalClients?.(params.clientConnId) ?? false;
+  const hasApprovalClients =
+    approvalClientConnIds !== null
+      ? approvalClientConnIds.size > 0
+      : (params.context.hasExecApprovalClients?.(params.clientConnId) ?? false);
   const deliveredResult = params.deliverRequest();
   const delivered = isPromiseLike(deliveredResult) ? await deliveredResult : deliveredResult;
   const hasTurnSourceRoute =
