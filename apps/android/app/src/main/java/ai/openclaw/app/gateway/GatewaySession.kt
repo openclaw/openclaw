@@ -1089,9 +1089,9 @@ internal fun shouldPauseGatewayReconnectAfterAuthFailure(
         hasBootstrapToken &&
           role?.trim() == "node" &&
           scopes.isEmpty() &&
-          error.details?.reason == "not-paired" &&
-          (error.details?.pauseReconnect == false ||
-            error.details?.recommendedNextStep == "wait_then_retry")
+          error.details.reason == "not-paired" &&
+          (error.details.pauseReconnect == false ||
+            error.details.recommendedNextStep == "wait_then_retry")
       )
     "AUTH_TOKEN_MISMATCH" -> deviceTokenRetryBudgetUsed && !pendingDeviceTokenRetry
     else -> false
