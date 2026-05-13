@@ -74,4 +74,28 @@ describe("captureSubagentCompletionReply", () => {
 
     expect(result).toBe("Mapped the modules.");
   });
+
+  it("passes the completion outcome through immediate and retry reads", async () => {
+    vi.useFakeTimers();
+    const outcome = { status: "ok" };
+    const readSubagentOutput = vi
+      .fn<(sessionKey: string, outcome?: { status: string }) => Promise<string | undefined>>()
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce("Assistant completion");
+
+    const pending = captureSubagentCompletionReplyUsing({
+      sessionKey: "agent:main:subagent:child",
+      maxWaitMs: 50,
+      retryIntervalMs: 8,
+      outcome,
+      readSubagentOutput,
+    });
+    await vi.runAllTimersAsync();
+    const result = await pending;
+
+    expect(result).toBe("Assistant completion");
+    expect(readSubagentOutput).toHaveBeenNthCalledWith(1, "agent:main:subagent:child", outcome);
+    expect(readSubagentOutput).toHaveBeenNthCalledWith(2, "agent:main:subagent:child", outcome);
+    vi.useRealTimers();
+  });
 });

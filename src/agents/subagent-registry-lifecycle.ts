@@ -263,21 +263,22 @@ export function createSubagentRegistryLifecycleController(params: {
       return false;
     }
 
-    let captured: string | undefined;
-    try {
-      captured = await params.captureSubagentCompletionReply(sessionKey);
-    } catch {
-      return false;
-    }
-    const trimmed = captured?.trim();
-    if (!trimmed || isSilentReplyText(trimmed, SILENT_REPLY_TOKEN)) {
-      return false;
-    }
-
-    const nextFrozen = capFrozenResultText(trimmed);
     const capturedAt = Date.now();
     let changed = false;
     for (const entry of candidates) {
+      let captured: string | undefined;
+      try {
+        captured = await params.captureSubagentCompletionReply(sessionKey, {
+          outcome: entry.outcome,
+        });
+      } catch {
+        continue;
+      }
+      const trimmed = captured?.trim();
+      if (!trimmed || isSilentReplyText(trimmed, SILENT_REPLY_TOKEN)) {
+        continue;
+      }
+      const nextFrozen = capFrozenResultText(trimmed);
       if (entry.frozenResultText === nextFrozen) {
         continue;
       }

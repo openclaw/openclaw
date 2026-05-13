@@ -395,6 +395,59 @@ describe("subagent registry lifecycle hardening", () => {
     });
   });
 
+  it("passes stored successful outcome when refreshing frozen completion text", async () => {
+    const persist = vi.fn();
+    const outcome = { status: "ok" as const };
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      expectsCompletionMessage: true,
+      outcome,
+    });
+    const captureSubagentCompletionReply = vi.fn(async () => "fresh assistant reply");
+
+    const controller = createLifecycleController({
+      entry,
+      persist,
+      captureSubagentCompletionReply,
+    });
+
+    await expect(controller.refreshFrozenResultFromSession(entry.childSessionKey)).resolves.toBe(
+      true,
+    );
+
+    expect(captureSubagentCompletionReply).toHaveBeenCalledWith(entry.childSessionKey, {
+      outcome,
+    });
+    expect(entry.frozenResultText).toBe("fresh assistant reply");
+    expect(persist).toHaveBeenCalled();
+  });
+
+  it("does not freeze output when refresh capture returns no successful completion reply", async () => {
+    const persist = vi.fn();
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      expectsCompletionMessage: true,
+      outcome: { status: "ok" },
+    });
+    const captureSubagentCompletionReply = vi.fn(async () => undefined);
+
+    const controller = createLifecycleController({
+      entry,
+      persist,
+      captureSubagentCompletionReply,
+    });
+
+    await expect(controller.refreshFrozenResultFromSession(entry.childSessionKey)).resolves.toBe(
+      false,
+    );
+
+    expect(captureSubagentCompletionReply).toHaveBeenCalledWith(entry.childSessionKey, {
+      outcome: entry.outcome,
+    });
+    expect(entry.frozenResultText).toBeUndefined();
+    expect(persist).not.toHaveBeenCalled();
+  });
+
   it("does not freeze stale reply text for terminal error outcomes", async () => {
     const persist = vi.fn();
     const captureSubagentCompletionReply = vi.fn(async () => "stale assistant text");

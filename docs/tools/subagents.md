@@ -88,7 +88,7 @@ requester chat when the run finishes.
     The completion handoff to the requester session is runtime-generated
     internal context (not user-authored text) and includes:
 
-    - `Result` — latest visible `assistant` reply text, otherwise sanitized latest tool/toolResult text. Terminal failed runs do not reuse captured reply text.
+    - `Result` — latest visible `assistant` reply text. Successful runs that only produced tool/toolResult output are reported as no-output instead of forwarding raw internal command output. Timed-out runs may include bounded partial assistant progress; terminal failed runs do not reuse captured reply text.
     - `Status` — `completed successfully` / `failed` / `timed out` / `unknown`.
     - Compact runtime/token stats.
     - A delivery instruction telling the requester agent to rewrite in normal assistant voice (not forward raw internal metadata).

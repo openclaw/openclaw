@@ -401,8 +401,8 @@ export async function captureSubagentCompletionReply(
     waitForReply: options?.waitForReply,
     maxWaitMs: isFastTestMode() ? 50 : 1_500,
     retryIntervalMs: isFastTestMode() ? FAST_TEST_RETRY_INTERVAL_MS : 100,
-    readSubagentOutput: async (nextSessionKey) =>
-      await readSubagentOutput(nextSessionKey, options?.outcome),
+    outcome: options?.outcome,
+    readSubagentOutput,
   });
 }
 

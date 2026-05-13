@@ -24,14 +24,15 @@ export async function readLatestSubagentOutputWithRetryUsing<Outcome = unknown>(
   return result;
 }
 
-export async function captureSubagentCompletionReplyUsing(params: {
+export async function captureSubagentCompletionReplyUsing<Outcome = unknown>(params: {
   sessionKey: string;
   waitForReply?: boolean;
   maxWaitMs: number;
   retryIntervalMs: number;
-  readSubagentOutput: (sessionKey: string) => Promise<string | undefined>;
+  outcome?: Outcome;
+  readSubagentOutput: (sessionKey: string, outcome?: Outcome) => Promise<string | undefined>;
 }): Promise<string | undefined> {
-  const immediate = await params.readSubagentOutput(params.sessionKey);
+  const immediate = await params.readSubagentOutput(params.sessionKey, params.outcome);
   if (immediate?.trim()) {
     return immediate;
   }
@@ -42,6 +43,7 @@ export async function captureSubagentCompletionReplyUsing(params: {
     sessionKey: params.sessionKey,
     maxWaitMs: params.maxWaitMs,
     retryIntervalMs: params.retryIntervalMs,
+    outcome: params.outcome,
     readSubagentOutput: params.readSubagentOutput,
   });
 }
