@@ -46,8 +46,27 @@ const CLI_RUNTIME_ALIASES = new Set(
   ),
 );
 
+const CLI_RUNTIME_PROVIDER_IDS = new Set(
+  LEGACY_RUNTIME_MODEL_PROVIDER_ALIASES.filter((entry) => entry.cli).map((entry) =>
+    normalizeProviderId(entry.legacyProvider),
+  ),
+);
+
 export function listLegacyRuntimeModelProviderAliases(): readonly LegacyRuntimeModelProviderAlias[] {
   return LEGACY_RUNTIME_MODEL_PROVIDER_ALIASES;
+}
+
+/**
+ * True for CLI runtime provider ids (`claude-cli`, `codex-cli`, `google-gemini-cli`).
+ *
+ * These providers are externally maintained — the CLI binary defines which
+ * models it supports — so callers building model lists for them should source
+ * entries from the unfiltered model catalog rather than from user
+ * `agents.defaults.models` config, which would otherwise gate discovery to
+ * whatever the user happened to declare.
+ */
+export function isCliRuntimeProvider(provider: string): boolean {
+  return CLI_RUNTIME_PROVIDER_IDS.has(normalizeProviderId(provider));
 }
 
 function resolveLegacyRuntimeModelProviderAlias(

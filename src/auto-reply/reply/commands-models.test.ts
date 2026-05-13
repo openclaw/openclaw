@@ -279,6 +279,76 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).not.toMatch(/^- codex \(/m);
   });
 
+  it("sources CLI runtime provider model lists from the catalog, not user agents.defaults.models", async () => {
+    // claude-cli's full allowlist (matches CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS in
+    // extensions/anthropic/cli-constants.ts) lives in the catalog. The CLI
+    // binary — not the user's config — owns which models it supports.
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      { provider: "claude-cli", id: "claude-opus-4-7", name: "Claude Opus 4.7" },
+      { provider: "claude-cli", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+      { provider: "claude-cli", id: "claude-opus-4-6", name: "Claude Opus 4.6" },
+      { provider: "claude-cli", id: "claude-opus-4-5", name: "Claude Opus 4.5" },
+      { provider: "claude-cli", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" },
+      { provider: "claude-cli", id: "claude-haiku-4-5", name: "Claude Haiku 4.5" },
+      { provider: "anthropic", id: "claude-opus-4-7", name: "Claude Opus 4.7" },
+      // A non-CLI configured provider — its narrowing IS respected.
+      { provider: "minimax", id: "abab-7", name: "Abab 7" },
+      { provider: "minimax", id: "abab-6.5", name: "Abab 6.5" },
+    ]);
+    modelProviderAuthMocks.authenticatedProviders = new Set([
+      "anthropic",
+      "claude-cli",
+      "minimax",
+    ]);
+
+    const result = await handleModelsCommand(
+      buildParams("/models claude-cli", {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-7" },
+            // User only declared 2 of claude-cli's 6 supported models, plus 1
+            // of minimax's 2. For claude-cli this narrowing must be ignored;
+            // for minimax it must still gate.
+            models: {
+              "claude-cli/claude-opus-4-6": {},
+              "claude-cli/claude-sonnet-4-6": {},
+              "minimax/abab-7": {},
+            },
+          },
+        },
+      }),
+      true,
+    );
+
+    // Full claude-cli allowlist surfaces despite the narrow user config.
+    expect(result?.reply?.text).toContain("- claude-cli/claude-opus-4-7");
+    expect(result?.reply?.text).toContain("- claude-cli/claude-sonnet-4-6");
+    expect(result?.reply?.text).toContain("- claude-cli/claude-opus-4-6");
+    expect(result?.reply?.text).toContain("- claude-cli/claude-opus-4-5");
+    expect(result?.reply?.text).toContain("- claude-cli/claude-sonnet-4-5");
+    expect(result?.reply?.text).toContain("- claude-cli/claude-haiku-4-5");
+    expect(result?.reply?.text).toContain("of 6");
+
+    // For non-CLI configured providers (e.g. Minimax / LM Studio / custom
+    // OpenAI-compatible endpoints), user config is still the source of truth.
+    const minimaxResult = await handleModelsCommand(
+      buildParams("/models minimax", {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-7" },
+            models: {
+              "claude-cli/claude-opus-4-6": {},
+              "minimax/abab-7": {},
+            },
+          },
+        },
+      }),
+      true,
+    );
+    expect(minimaxResult?.reply?.text).toContain("- minimax/abab-7");
+    expect(minimaxResult?.reply?.text).not.toContain("- minimax/abab-6.5");
+  });
+
   it("labels the default runtime choice as OpenClaw Pi", async () => {
     const data = await buildModelsProviderData({
       agents: {

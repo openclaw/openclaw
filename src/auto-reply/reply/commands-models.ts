@@ -7,7 +7,10 @@ import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
 import { resolveVisibleModelCatalog } from "../../agents/model-catalog-visibility.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import { isModelPickerVisibleProvider } from "../../agents/model-picker-visibility.js";
-import { listLegacyRuntimeModelProviderAliases } from "../../agents/model-runtime-aliases.js";
+import {
+  isCliRuntimeProvider,
+  listLegacyRuntimeModelProviderAliases,
+} from "../../agents/model-runtime-aliases.js";
 import {
   buildModelAliasIndex,
   // Preserve Plugin SDK API baseline source lines after unused import cleanup.
@@ -111,7 +114,17 @@ export async function buildModelsProviderData(
     if (!isModelPickerVisibleProvider(key)) {
       return;
     }
-    if (restrictToProviderWildcards && !visibilityPolicy.allows({ provider: key, model: m })) {
+    // CLI runtime providers (`claude-cli`, `codex-cli`, `google-gemini-cli`) are
+    // externally maintained — the CLI binary owns what it supports — so user
+    // `agents.defaults.models` narrowing must NOT gate which entries surface.
+    // We still apply `isModelPickerVisibleProvider` (which already keeps CLI
+    // runtimes visible) and rely on the unfiltered `catalog` loop below to
+    // contribute the full per-provider model set.
+    if (
+      restrictToProviderWildcards &&
+      !isCliRuntimeProvider(key) &&
+      !visibilityPolicy.allows({ provider: key, model: m })
+    ) {
       return;
     }
     const set = byProvider.get(key) ?? new Set<string>();
@@ -167,6 +180,16 @@ export async function buildModelsProviderData(
 
   for (const entry of visibleCatalog) {
     add(entry.provider, entry.id);
+  }
+
+  // For CLI runtime providers, surface every model in the unfiltered catalog —
+  // user `agents.defaults.models` only declares per-ref metadata (alias,
+  // runtime params, etc.) and must not gate picker discovery for runtimes
+  // whose model set is owned by an external CLI binary.
+  for (const entry of catalog) {
+    if (isCliRuntimeProvider(entry.provider)) {
+      add(entry.provider, entry.id);
+    }
   }
 
   for (const raw of visibilityPolicy.exactModelRefs) {
