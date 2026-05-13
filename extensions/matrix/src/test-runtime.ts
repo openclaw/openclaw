@@ -3,8 +3,8 @@ import {
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-mention-gating";
 import { vi } from "vitest";
-import type { PluginRuntime } from "../runtime-api.js";
-import { setMatrixRuntime } from "../runtime.js";
+import type { PluginRuntime } from "./runtime-api.js";
+import { setMatrixRuntime } from "./runtime.js";
 
 type MatrixTestRuntimeOptions = {
   cfg?: Record<string, unknown>;
@@ -28,9 +28,7 @@ function createMatrixRuntimeMediaMock(
   >["media"]["readRemoteMediaBuffer"];
   return {
     readRemoteMediaBuffer,
-    fetchRemoteMedia: readRemoteMediaBuffer as NonNullable<
-      PluginRuntime["channel"]
-    >["media"]["fetchRemoteMedia"],
+    fetchRemoteMedia: readRemoteMediaBuffer,
     saveRemoteMedia: vi.fn().mockResolvedValue({
       path: "/tmp/test-media.jpg",
       contentType: "image/jpeg",
