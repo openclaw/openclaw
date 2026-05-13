@@ -88,6 +88,32 @@ export function resolveRuntimeContextPromptParts(params: {
   return runtimeContext ? { prompt, runtimeContext } : { prompt };
 }
 
+// Routes channel-supplied current-turn metadata (e.g. inbound Telegram `Conversation info` and
+// `Sender` blocks) into the hidden runtime-context stream instead of the visible user prompt, so
+// the user message text submitted to the provider stays equal to the user-authored body. The
+// metadata still reaches the model as a hidden next-turn custom message via
+// `queueRuntimeContextForNextTurn`. Mirrors the trust-boundary split introduced for legacy
+// `<<<OPENCLAW_INTERNAL_CONTEXT>>>` prompts (see 11e6928b3edc).
+export function resolveCurrentTurnPromptSubmission(params: {
+  effectivePrompt: string;
+  transcriptPrompt?: string;
+  currentTurnContext: CurrentTurnPromptContext | undefined;
+}): RuntimeContextPromptParts {
+  const base = resolveRuntimeContextPromptParts({
+    effectivePrompt: params.effectivePrompt,
+    transcriptPrompt: params.transcriptPrompt,
+  });
+  const channelText = params.currentTurnContext?.text.trim() ?? "";
+  if (!channelText || base.runtimeOnly) {
+    // Skip the merge for runtime-event turns: their hidden context flows via the system prompt,
+    // not via queueRuntimeContextForNextTurn, so a merge here would silently drop the channel
+    // metadata. Leaving channel context untouched preserves the pre-fix behavior for that path.
+    return base;
+  }
+  const combined = base.runtimeContext ? `${channelText}\n\n${base.runtimeContext}` : channelText;
+  return { ...base, runtimeContext: combined };
+}
+
 function buildRuntimeContextMessageContent(params: {
   runtimeContext: string;
   kind: "next-turn" | "runtime-event";

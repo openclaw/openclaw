@@ -548,8 +548,21 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(systemPrompt).toContain("Ask who I am before continuing.");
   });
 
-  it("adds current-turn context to the current model input without exposing internal runtime context", async () => {
-    let seenPrompt: string | undefined;
+  it("routes channel current-turn context out-of-band alongside internal runtime context", async () => {
+    const seen: { prompt?: string; messages?: unknown[]; systemPrompt?: string } = {};
+    const channelMetadata = [
+      "Reply target of current user message (untrusted, for context):",
+      "```json",
+      JSON.stringify(
+        {
+          sender_label: "Mike",
+          body: "WT daily plan - Sat May 2\nSee ./quoted-secret.png and [media attached: media://inbound/quoted.png]",
+        },
+        null,
+        2,
+      ),
+      "```",
+    ].join("\n");
 
     const result = await createContextEngineAttemptRunner({
       contextEngine: createContextEngineBootstrapAndAssemble(),
@@ -565,24 +578,12 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
           "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
         ].join("\n"),
         transcriptPrompt: "what does this mean?",
-        currentTurnContext: {
-          text: [
-            "Reply target of current user message (untrusted, for context):",
-            "```json",
-            JSON.stringify(
-              {
-                sender_label: "Mike",
-                body: "WT daily plan - Sat May 2\nSee ./quoted-secret.png and [media attached: media://inbound/quoted.png]",
-              },
-              null,
-              2,
-            ),
-            "```",
-          ].join("\n"),
-        },
+        currentTurnContext: { text: channelMetadata },
       },
       sessionPrompt: async (session, prompt) => {
-        seenPrompt = prompt;
+        seen.prompt = prompt;
+        seen.messages = [...session.messages];
+        seen.systemPrompt = session.agent.state.systemPrompt;
         session.messages = [
           ...session.messages,
           { role: "assistant", content: "done", timestamp: 2 },
@@ -590,20 +591,41 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       },
     });
 
-    expect(seenPrompt).toContain("what does this mean?");
-    expect(seenPrompt).toContain("Reply target of current user message (untrusted, for context):");
-    expect(seenPrompt).toContain('"sender_label": "Mike"');
-    expect(seenPrompt).toContain("WT daily plan - Sat May 2");
-    expect(seenPrompt).toContain("./quoted-secret.png");
-    expect(seenPrompt).toContain("media://inbound/quoted.png");
-    expect(seenPrompt).not.toContain("OPENCLAW_INTERNAL_CONTEXT");
-    expect(seenPrompt).not.toContain("secret runtime context");
-    expect(seenPrompt?.trim().startsWith("Reply target of current user message")).toBe(true);
-    expect(result.finalPromptText).toBe(seenPrompt);
+    expect(seen.prompt).toBe("what does this mean?");
+    expect(result.finalPromptText).toBe("what does this mean?");
+    expect(seen.prompt).not.toContain("Reply target of current user message");
+    expect(seen.prompt).not.toContain('"sender_label"');
+    expect(seen.prompt).not.toContain("OPENCLAW_INTERNAL_CONTEXT");
+    expect(seen.prompt).not.toContain("secret runtime context");
+
+    const runtimeContextMessage = findRecord(
+      requireRecords(seen.messages, "seen messages"),
+      (message) => message.customType === "openclaw.runtime-context",
+      "runtime context message",
+    );
+    expectFields(runtimeContextMessage, {
+      role: "custom",
+      customType: "openclaw.runtime-context",
+      display: false,
+    });
+    const customContentValue = (runtimeContextMessage as { content?: unknown }).content;
+    const customContent = typeof customContentValue === "string" ? customContentValue : "";
+    expect(customContent).toContain("Reply target of current user message");
+    expect(customContent).toContain('"sender_label": "Mike"');
+    expect(customContent).toContain("WT daily plan - Sat May 2");
+    expect(customContent).toContain("./quoted-secret.png");
+    expect(customContent).toContain("media://inbound/quoted.png");
+    expect(customContent).toContain("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>");
+    expect(customContent).toContain("secret runtime context");
+
+    expect(seen.systemPrompt).not.toContain("Reply target of current user message");
+    expect(seen.systemPrompt).not.toContain("secret runtime context");
+
     expect(hoisted.detectAndLoadPromptImagesMock).toHaveBeenCalledTimes(1);
     expect(mockParams(hoisted.detectAndLoadPromptImagesMock, 0, "prompt image params").prompt).toBe(
       "what does this mean?",
     );
+
     const trajectoryEvents = (
       await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
     )
@@ -611,9 +633,64 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       .split("\n")
       .map((line) => JSON.parse(line) as TrajectoryEvent);
     const promptSubmitted = trajectoryEvents.find((event) => event.type === "prompt.submitted");
-    expect(promptSubmitted?.data?.prompt).toBe(seenPrompt);
-    expect(promptSubmitted?.data?.prompt).toContain("WT daily plan - Sat May 2");
-    expect(promptSubmitted?.data?.prompt).not.toContain("secret runtime context");
+    const trajectoryPrompt = promptSubmitted?.data?.prompt;
+    const trajectoryPromptText = typeof trajectoryPrompt === "string" ? trajectoryPrompt : "";
+    expect(trajectoryPromptText).toBe("what does this mean?");
+    expect(trajectoryPromptText).not.toContain("Reply target");
+    expect(trajectoryPromptText).not.toContain("secret runtime context");
+  });
+
+  it("queues current-turn channel metadata as the sole runtime-context custom message", async () => {
+    const seen: { prompt?: string; messages?: unknown[] } = {};
+    const channelMetadata = [
+      "Conversation info (untrusted metadata):",
+      "```json",
+      JSON.stringify(
+        {
+          chat_id: "telegram:8719706209",
+          sender_id: "8719706209",
+          sender: "Ben Jensen",
+        },
+        null,
+        2,
+      ),
+      "```",
+    ].join("\n");
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        prompt: "sure please do.",
+        transcriptPrompt: "sure please do.",
+        currentTurnContext: { text: channelMetadata },
+      },
+      sessionPrompt: async (session, prompt) => {
+        seen.prompt = prompt;
+        seen.messages = [...session.messages];
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "done", timestamp: 2 },
+        ];
+      },
+    });
+
+    expect(seen.prompt).toBe("sure please do.");
+
+    const runtimeContextMessages = requireRecords(seen.messages, "seen messages").filter(
+      (message) => message.customType === "openclaw.runtime-context",
+    );
+    expect(runtimeContextMessages).toHaveLength(1);
+    expectFields(runtimeContextMessages[0] ?? {}, {
+      role: "custom",
+      customType: "openclaw.runtime-context",
+      display: false,
+    });
+    const onlyContentValue = (runtimeContextMessages[0] as { content?: unknown } | undefined)
+      ?.content;
+    const onlyContent = typeof onlyContentValue === "string" ? onlyContentValue : "";
+    expect(onlyContent).toBe(channelMetadata);
   });
 
   it("marks inter-session transcriptPrompt before submitting the visible prompt", async () => {

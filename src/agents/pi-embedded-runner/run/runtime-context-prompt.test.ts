@@ -4,6 +4,7 @@ import {
   buildCurrentTurnPromptContextPrefix,
   buildRuntimeContextSystemContext,
   queueRuntimeContextForNextTurn,
+  resolveCurrentTurnPromptSubmission,
   resolveRuntimeContextPromptParts,
 } from "./runtime-context-prompt.js";
 
@@ -139,5 +140,91 @@ describe("runtime context prompt submission", () => {
 
     expect(buildRuntimeEventSystemContext("internal event")).toContain("OpenClaw runtime event.");
     expect(buildRuntimeEventSystemContext("internal event")).toContain("not user-authored");
+  });
+
+  describe("resolveCurrentTurnPromptSubmission", () => {
+    it("passes through when no channel current-turn context is set", () => {
+      expect(
+        resolveCurrentTurnPromptSubmission({
+          effectivePrompt: "visible ask",
+          transcriptPrompt: "visible ask",
+          currentTurnContext: undefined,
+        }),
+      ).toEqual({ prompt: "visible ask" });
+    });
+
+    it("routes channel metadata into hidden runtime context, not the visible prompt", () => {
+      expect(
+        resolveCurrentTurnPromptSubmission({
+          effectivePrompt: "visible ask",
+          transcriptPrompt: "visible ask",
+          currentTurnContext: {
+            text: "Conversation info (untrusted metadata):\n```json\n{}\n```",
+          },
+        }),
+      ).toEqual({
+        prompt: "visible ask",
+        runtimeContext: "Conversation info (untrusted metadata):\n```json\n{}\n```",
+      });
+    });
+
+    it("combines channel metadata with existing hidden runtime context", () => {
+      const effectivePrompt = [
+        "visible ask",
+        "",
+        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+        "secret runtime context",
+        "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+      ].join("\n");
+
+      const parts = resolveCurrentTurnPromptSubmission({
+        effectivePrompt,
+        transcriptPrompt: "visible ask",
+        currentTurnContext: { text: "Conversation info: chat 8719706209" },
+      });
+
+      expect(parts.prompt).toBe("visible ask");
+      expect(parts.runtimeContext).toBe(
+        "Conversation info: chat 8719706209\n\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nsecret runtime context\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+      );
+      expect(parts.runtimeOnly).toBeUndefined();
+    });
+
+    it("ignores whitespace-only channel context", () => {
+      expect(
+        resolveCurrentTurnPromptSubmission({
+          effectivePrompt: "visible ask",
+          transcriptPrompt: "visible ask",
+          currentTurnContext: { text: "   " },
+        }),
+      ).toEqual({ prompt: "visible ask" });
+    });
+
+    it("preserves runtime-only event semantics without disturbing the system-prompt route", () => {
+      const parts = resolveCurrentTurnPromptSubmission({
+        effectivePrompt: "internal event",
+        transcriptPrompt: "",
+        currentTurnContext: { text: "Conversation info: chat 8719706209" },
+      });
+
+      // Runtime-event turns deliver hidden context via the system prompt (not next-turn custom
+      // messages), so the helper leaves them unchanged. Channel metadata on a runtime-only turn
+      // is an out-of-scope edge case that pre-dates this fix.
+      expect(parts.prompt).toBe("Continue the OpenClaw runtime event.");
+      expect(parts.runtimeOnly).toBe(true);
+      expect(parts.runtimeContext).toBe("internal event");
+      expect(parts.runtimeSystemContext).toContain("OpenClaw runtime event.");
+      expect(parts.runtimeSystemContext).toContain("internal event");
+    });
+
+    it("does not promote channel metadata to system context for normal user turns", () => {
+      const parts = resolveCurrentTurnPromptSubmission({
+        effectivePrompt: "visible ask",
+        transcriptPrompt: "visible ask",
+        currentTurnContext: { text: "Conversation info: chat 8719706209" },
+      });
+
+      expect(parts.runtimeSystemContext).toBeUndefined();
+    });
   });
 });

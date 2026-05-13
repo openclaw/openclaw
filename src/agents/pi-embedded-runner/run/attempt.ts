@@ -360,10 +360,9 @@ import {
   shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
 import {
-  buildCurrentTurnPrompt,
   buildRuntimeContextSystemContext,
   queueRuntimeContextForNextTurn,
-  resolveRuntimeContextPromptParts,
+  resolveCurrentTurnPromptSubmission,
 } from "./runtime-context-prompt.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
@@ -3117,14 +3116,12 @@ export async function runEmbeddedAttempt(
           }
           prePromptMessageCount = activeSession.messages.length;
 
-          const promptSubmission = resolveRuntimeContextPromptParts({
+          const promptSubmission = resolveCurrentTurnPromptSubmission({
             effectivePrompt,
             transcriptPrompt: effectiveTranscriptPrompt,
+            currentTurnContext: params.currentTurnContext,
           });
-          const promptForModel = buildCurrentTurnPrompt({
-            context: promptSubmission.runtimeOnly ? undefined : params.currentTurnContext,
-            prompt: promptSubmission.prompt,
-          });
+          const promptForModel = promptSubmission.prompt;
           const runtimeSystemContext = promptSubmission.runtimeSystemContext?.trim();
           if (promptSubmission.runtimeOnly && runtimeSystemContext) {
             const runtimeSystemPrompt = composeSystemPromptWithHookContext({
