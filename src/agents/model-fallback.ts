@@ -232,7 +232,7 @@ function resolveSessionModelExhaustionState(params: {
   const { sessionKey, sessionStore, storePath } = resolveStoredSessionKeyForSessionId({
     cfg: params.cfg,
     sessionId: params.sessionId,
-    agentId: params.agentDir ? path.basename(params.agentDir) : undefined,
+    agentId: params.agentDir ? path.basename(path.dirname(params.agentDir)) : undefined,
   });
 
   if (!sessionKey) {
