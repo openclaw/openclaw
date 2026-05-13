@@ -82,6 +82,7 @@ export function insertYamlOcPath(
     if (typeof marker !== "object" || marker.kind !== "keyed") {
       return { ok: false, reason: "unresolved" };
     }
+    guardSentinel(marker.key, `${formatOcPath(parentPath)}/${formatInsertionMarker(marker)}`);
     if (cloned.hasIn([...segments, marker.key])) {
       return { ok: false, reason: "unresolved" };
     }

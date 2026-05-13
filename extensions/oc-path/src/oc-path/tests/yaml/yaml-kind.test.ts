@@ -260,4 +260,11 @@ describe("universal verbs — yaml insertion", () => {
       setOcPath(ast, parseOcPath("oc://x.yaml/items/+"), `{"token":"${REDACTED_SENTINEL}"}`),
     ).toThrow(OcEmitSentinelError);
   });
+
+  it("rejects sentinel-bearing yaml insertion keys before raw emit", () => {
+    const { ast } = parseYaml("config:\n  safe: 1\n");
+    expect(() =>
+      setOcPath(ast, parseOcPath(`oc://x.yaml/config/+${REDACTED_SENTINEL}`), "2"),
+    ).toThrow(OcEmitSentinelError);
+  });
 });
