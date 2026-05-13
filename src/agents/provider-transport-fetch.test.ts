@@ -50,7 +50,8 @@ vi.mock("./provider-request-config.js", () => ({
 }));
 
 function latestGuardedFetchParams(): Record<string, unknown> {
-  const params = fetchWithSsrFGuardMock.mock.calls.at(-1)?.[0];
+  const calls = fetchWithSsrFGuardMock.mock.calls;
+  const params = calls[calls.length - 1]?.[0];
   if (!params || typeof params !== "object") {
     throw new Error("Expected guarded fetch call");
   }
@@ -58,7 +59,8 @@ function latestGuardedFetchParams(): Record<string, unknown> {
 }
 
 function latestTrustedEnvProxyParams(): Record<string, unknown> {
-  const params = withTrustedEnvProxyGuardedFetchModeMock.mock.calls.at(-1)?.[0];
+  const calls = withTrustedEnvProxyGuardedFetchModeMock.mock.calls;
+  const params = calls[calls.length - 1]?.[0];
   if (!params || typeof params !== "object") {
     throw new Error("Expected trusted env proxy call");
   }

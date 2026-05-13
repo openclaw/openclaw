@@ -54,7 +54,7 @@ const maybeRunCliInContainerMock = vi.hoisted(() =>
 );
 
 function requireRunCrestodianOptions(index = 0): { onReady?: unknown } {
-  const call = runCrestodianMock.mock.calls.at(index);
+  const call = runCrestodianMock.mock.calls[index];
   if (!call) {
     throw new Error(`expected runCrestodian call ${index}`);
   }

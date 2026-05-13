@@ -44,7 +44,7 @@ describe("buildEmbeddedRunPayloads", () => {
     payloads: ReturnType<typeof buildPayloads>,
     needle: string,
   ) => {
-    expect(payloads.some((payload) => (payload.text ?? "").includes(needle))).toBe(false);
+    expect(payloads.map((payload) => payload.text ?? "").join("\n")).not.toContain(needle);
   };
 
   function expectSinglePayloadSummary(

@@ -200,6 +200,14 @@ function createMockNarrativeSubagent(response = "The archive hummed softly.") {
   };
 }
 
+function firstNarrativeRun(subagent: ReturnType<typeof createMockNarrativeSubagent>) {
+  const firstRun = subagent.run.mock.calls[0]?.[0];
+  if (!firstRun) {
+    throw new Error("expected narrative subagent run");
+  }
+  return firstRun;
+}
+
 function setDreamingTestTime(offsetMinutes = 0) {
   vi.setSystemTime(new Date(DREAMING_TEST_BASE_TIME.getTime() + offsetMinutes * 60_000));
 }
@@ -2494,10 +2502,10 @@ describe("memory-core dreaming phases", () => {
     });
 
     expect(subagent.run).toHaveBeenCalledTimes(1);
-    const firstRun = subagent.run.mock.calls.at(0)?.[0];
-    expect(firstRun?.message).toContain("Move backups to S3 Glacier.");
-    expect(firstRun?.message).toContain("Keep retention at 365 days.");
-    expect(firstRun?.model).toBe("anthropic/claude-sonnet-4-6");
+    const firstRun = firstNarrativeRun(subagent);
+    expect(firstRun.message).toContain("Move backups to S3 Glacier.");
+    expect(firstRun.message).toContain("Keep retention at 365 days.");
+    expect(firstRun.model).toBe("anthropic/claude-sonnet-4-6");
     await expect(fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8")).resolves.toContain(
       "The backup plan glowed like cold storage.",
     );
@@ -2557,10 +2565,10 @@ describe("memory-core dreaming phases", () => {
     });
 
     expect(subagent.run).toHaveBeenCalledTimes(1);
-    const firstRun = subagent.run.mock.calls.at(0)?.[0];
-    expect(firstRun?.message).toContain("Move backups to S3 Glacier.");
-    expect(firstRun?.message).toContain("Keep retention at 365 days.");
-    expect(firstRun?.model).toBe("xai/grok-4.1-fast");
+    const firstRun = firstNarrativeRun(subagent);
+    expect(firstRun.message).toContain("Move backups to S3 Glacier.");
+    expect(firstRun.message).toContain("Keep retention at 365 days.");
+    expect(firstRun.model).toBe("xai/grok-4.1-fast");
     await expect(fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8")).resolves.toContain(
       "The traces braided themselves into a map.",
     );

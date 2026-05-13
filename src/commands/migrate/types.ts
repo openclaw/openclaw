@@ -9,6 +9,11 @@ export type MigrateCommonOptions = {
   plugins?: string[];
   verifyPluginApps?: boolean;
   json?: boolean;
+  // Suppress the formatted plan dump that `migrate plan` normally prints
+  // before any interactive selection. Used by onboarding flows that have
+  // already secured user consent and do not want to re-render the plan.
+  // The interactive selection picker and apply confirmation still run.
+  suppressPlanLog?: boolean;
 };
 
 export type MigrateApplyOptions = MigrateCommonOptions & {

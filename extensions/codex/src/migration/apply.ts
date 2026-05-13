@@ -126,6 +126,7 @@ async function applyCodexPluginInstallItem(
           startOptions: appServer.start,
           agentDir: resolveCodexMigrationTargets(ctx).agentDir,
           config: ctx.config,
+          isolated: true,
         }),
       appCache: defaultCodexAppInventoryCache,
       appCacheKey,

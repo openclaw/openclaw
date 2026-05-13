@@ -1,0 +1,47 @@
+diff --git a/dist/permissions.js b/dist/permissions.js
+index 67df110..445b04d 100644
+--- a/dist/permissions.js
++++ b/dist/permissions.js
+@@ -12,6 +12,15 @@ const WORLD_PRINCIPALS = new Set([
+     "builtin\\users",
+     "authenticated users",
+     "nt authority\\authenticated users",
++    "anonymous logon",
++    "nt authority\\anonymous logon",
++    "guests",
++    "builtin\\guests",
++    "interactive",
++    "nt authority\\interactive",
++    "network",
++    "nt authority\\network",
++    "local",
+ ]);
+ const TRUSTED_BASE = new Set([
+     "nt authority\\system",
+@@ -31,7 +40,16 @@ const TRUSTED_SIDS = new Set([
+     "s-1-5-32-544",
+     "s-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464",
+ ]);
+-const WORLD_SIDS = new Set(["s-1-1-0", "s-1-5-11", "s-1-5-32-545"]);
++const WORLD_SIDS = new Set([
++    "s-1-1-0",
++    "s-1-5-11",
++    "s-1-5-32-545",
++    "s-1-5-7",
++    "s-1-5-32-546",
++    "s-1-5-4",
++    "s-1-2-0",
++    "s-1-5-2",
++]);
+ const STATUS_PREFIXES = [
+     "successfully processed",
+     "processed",
+@@ -202,6 +220,8 @@ function buildTrustedPrincipals(env) {
+         }
+     }
+     const userSid = normalizeSid(env?.USERSID ?? "");
++    // Guard: never add any world-equivalent SID to the trusted set, even if
++    // USERSID is set to one by a malicious process.
+     if (userSid && SID_RE.test(userSid) && !WORLD_SIDS.has(userSid)) {
+         trusted.add(userSid);
+     }

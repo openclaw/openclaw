@@ -41,11 +41,11 @@ function requireMockCallArg(
 }
 
 function expectLogIncludes(mock: { mock: { calls: unknown[][] } }, fragment: string) {
-  expect(mock.mock.calls.some((call) => String(call[0]).includes(fragment))).toBe(true);
+  expect(mock.mock.calls.map((call) => String(call[0])).join("\n")).toContain(fragment);
 }
 
 function expectLogExcludes(mock: { mock: { calls: unknown[][] } }, fragment: string) {
-  expect(mock.mock.calls.some((call) => String(call[0]).includes(fragment))).toBe(false);
+  expect(mock.mock.calls.map((call) => String(call[0])).join("\n")).not.toContain(fragment);
 }
 
 function expectRetryContinuesFromTranscript() {

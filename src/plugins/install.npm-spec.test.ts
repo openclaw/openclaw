@@ -304,6 +304,16 @@ function mockNpmViewAndInstallMany(packages: MockNpmPackage[]) {
         const installedPackages: MockNpmPackage[] = [];
         prunePluginLocalOpenClawPeerLinks(npmRoot);
         for (const packageName of Object.keys(manifest.dependencies ?? {})) {
+          if (packageName === "openclaw") {
+            const openclawRoot = path.join(npmRoot, "node_modules", "openclaw");
+            fs.mkdirSync(openclawRoot, { recursive: true });
+            fs.writeFileSync(
+              path.join(openclawRoot, "package.json"),
+              JSON.stringify({ name: "openclaw", version: "0.0.0-test" }),
+              "utf8",
+            );
+            continue;
+          }
           const pkg = packagesByName.get(packageName);
           if (!pkg) {
             throw new Error(`unexpected managed npm dependency: ${packageName}`);
@@ -660,7 +670,7 @@ describe("installPluginFromNpmSpec", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toContain("plain-crypto-js");
-      expect(result.error).toContain("node_modules/plain-crypto-js");
+      expect(result.error).toContain(path.join("node_modules", "plain-crypto-js"));
     }
   });
 
@@ -1041,6 +1051,89 @@ describe("installPluginFromNpmSpec", () => {
     await expect(
       fs.promises.access(path.join(npmRoot, "node_modules", "openclaw")),
     ).rejects.toHaveProperty("code", "ENOENT");
+  });
+
+  it("retries without npm alias overrides when npm rejects alias comparators", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    const hostRoot = suiteTempRootTracker.makeTempDir();
+    fs.writeFileSync(
+      path.join(hostRoot, "package.json"),
+      `${JSON.stringify(
+        {
+          name: "openclaw",
+          overrides: {
+            axios: "1.16.0",
+            "node-domexception": "npm:@nolyfill/domexception@1.0.28",
+            nested: {
+              alias: "npm:@scope/alias@1.0.0",
+              semver: "1.2.3",
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    resolveOpenClawPackageRootSyncMock.mockReturnValue(hostRoot);
+    mockNpmViewAndInstall({
+      spec: "@openclaw/voice-call@0.0.1",
+      packageName: "@openclaw/voice-call",
+      version: "0.0.1",
+      pluginId: "voice-call",
+      npmRoot,
+    });
+    const baseImplementation = runCommandWithTimeoutMock.getMockImplementation();
+    let installAttempts = 0;
+    runCommandWithTimeoutMock.mockImplementation(
+      async (argv: string[], options?: { cwd?: string }) => {
+        if (argv[0] === "npm" && argv[1] === "install") {
+          installAttempts += 1;
+          const manifest = JSON.parse(
+            fs.readFileSync(path.join(npmRoot, "package.json"), "utf8"),
+          ) as { overrides?: Record<string, unknown>; openclaw?: { managedOverrides?: string[] } };
+          if (installAttempts === 1) {
+            expect(manifest.overrides?.["node-domexception"]).toBe(
+              "npm:@nolyfill/domexception@1.0.28",
+            );
+            expect(manifest.openclaw?.managedOverrides).toEqual([
+              "axios",
+              "nested",
+              "node-domexception",
+            ]);
+            return {
+              code: 1,
+              stdout: "",
+              stderr: "npm ERR! Invalid comparator: npm:@nolyfill/domexception@1.0.28",
+              signal: null,
+              killed: false,
+              termination: "exit" as const,
+            };
+          }
+          expect(manifest.overrides).toEqual({
+            axios: "1.16.0",
+            nested: {
+              semver: "1.2.3",
+            },
+          });
+          expect(manifest.openclaw?.managedOverrides).toEqual(["axios", "nested"]);
+        }
+        return await baseImplementation?.(argv, options);
+      },
+    );
+
+    const warnings: string[] = [];
+    const result = await installPluginFromNpmSpec({
+      spec: "@openclaw/voice-call@0.0.1",
+      npmDir: npmRoot,
+      logger: { info: () => {}, warn: (message) => warnings.push(message) },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(installAttempts).toBe(2);
+    expect(warnings).toContain(
+      "npm rejected managed npm alias overrides; retrying plugin install without alias overrides for this npm version.",
+    );
   });
 
   it("rolls back installed npm package debris when security scan blocks the plugin", async () => {

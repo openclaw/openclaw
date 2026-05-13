@@ -823,9 +823,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       debug: (message) => logger.debug?.(String(message)),
     },
     mediaMaxBytes,
-    fetchRemoteMedia: (params) => core.channel.media.fetchRemoteMedia(params),
-    saveMediaBuffer: (buffer, contentType, direction, maxBytes) =>
-      core.channel.media.saveMediaBuffer(Buffer.from(buffer), contentType, direction, maxBytes),
+    saveRemoteMedia: (params) => core.channel.media.saveRemoteMedia(params),
     mediaKindFromMime: (contentType) => core.media.mediaKindFromMime(contentType) as MediaKind,
   });
 
