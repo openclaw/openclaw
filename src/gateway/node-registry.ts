@@ -302,6 +302,9 @@ export class NodeRegistry {
         });
       }
     } else {
+      if (!this.allowsLegacyMacRunIdFallback(params)) {
+        return false;
+      }
       match = this.matchSingleAuthorizedSystemRunEvent({
         nodeId: params.nodeId,
         connId: params.connId,
@@ -326,6 +329,12 @@ export class NodeRegistry {
       expiresAtMs: this.authorizedSystemRunEventExpiresAt(event.timeoutMs),
     };
     this.authorizedSystemRunEvents.set(this.authorizedSystemRunEventKey(authorized), authorized);
+  }
+
+  private forgetAuthorizedSystemRunEvent(
+    event: Omit<AuthorizedSystemRunEvent, "expiresAtMs">,
+  ): void {
+    this.authorizedSystemRunEvents.delete(this.authorizedSystemRunEventKey(event));
   }
 
   private authorizedSystemRunEventExpiresAt(timeoutMs: number | null | undefined): number | null {
@@ -427,6 +436,13 @@ export class NodeRegistry {
     }
     clearTimeout(pending.timer);
     this.pendingInvokes.delete(params.id);
+    if (!params.ok && pending.systemRunEvent) {
+      this.forgetAuthorizedSystemRunEvent({
+        nodeId: pending.nodeId,
+        connId: pending.connId,
+        ...pending.systemRunEvent,
+      });
+    }
     pending.resolve({
       ok: params.ok,
       payload: params.payload,

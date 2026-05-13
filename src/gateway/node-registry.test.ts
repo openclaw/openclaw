@@ -200,6 +200,35 @@ describe("gateway/node-registry", () => {
     void invoke.catch(() => {});
   });
 
+  it("rejects runId-less system.run events for non-legacy nodes", () => {
+    const registry = new NodeRegistry();
+    const frames: string[] = [];
+    registry.register(
+      makeClient("conn-1", "node-1", frames, {
+        clientId: "openclaw-node-host",
+        platform: "linux",
+      }),
+      {},
+    );
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "system.run",
+      params: { runId: "run-required", sessionKey: "agent:main:main" },
+      timeoutMs: 1_000,
+    });
+
+    expect(
+      registry.authorizeSystemRunEvent({
+        nodeId: "node-1",
+        connId: "conn-1",
+        sessionKey: "agent:main:main",
+        terminal: true,
+      }),
+    ).toBe(false);
+    registry.unregister("conn-1");
+    void invoke.catch(() => {});
+  });
+
   it("generates and forwards a runId when system.run params omit it", () => {
     const registry = new NodeRegistry();
     const frames: string[] = [];
@@ -227,6 +256,44 @@ describe("gateway/node-registry", () => {
     ).toBe(true);
     registry.unregister("conn-1");
     void invoke.catch(() => {});
+  });
+
+  it("clears system.run event authorization when invoke result fails", async () => {
+    const registry = new NodeRegistry();
+    const frames: string[] = [];
+    registry.register(makeClient("conn-1", "node-1", frames), {});
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "system.run",
+      params: { runId: "run-failed", sessionKey: "agent:main:main", timeoutMs: 0 },
+      timeoutMs: 1_000,
+    });
+    const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
+
+    expect(
+      registry.handleInvokeResult({
+        id: request.payload?.id ?? "",
+        nodeId: "node-1",
+        connId: "conn-1",
+        ok: false,
+        error: { code: "INVALID_REQUEST", message: "invalid params" },
+      }),
+    ).toBe(true);
+    await expect(invoke).resolves.toEqual({
+      ok: false,
+      payload: undefined,
+      payloadJSON: null,
+      error: { code: "INVALID_REQUEST", message: "invalid params" },
+    });
+    expect(
+      registry.authorizeSystemRunEvent({
+        nodeId: "node-1",
+        connId: "conn-1",
+        runId: "run-failed",
+        sessionKey: "agent:main:main",
+        terminal: true,
+      }),
+    ).toBe(false);
   });
 
   it("matches legacy macOS exec events with runtime-generated runId when single pending run matches", () => {
