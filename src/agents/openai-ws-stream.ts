@@ -30,8 +30,6 @@ import * as piAi from "@mariozechner/pi-ai";
  * @see src/agents/openai-ws-connection.ts for the connection manager
  */
 import { formatErrorMessage } from "../infra/errors.js";
-import { extractCommandTag, recordLLMUsage } from "../logging/llm-metrics.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import {
   resolveProviderTransportTurnStateWithPlugin,
@@ -72,44 +70,6 @@ import {
 } from "./stream-message-shared.js";
 import { stripSystemPromptCacheBoundary } from "./system-prompt-cache-boundary.js";
 import { mergeTransportMetadata } from "./transport-stream-shared.js";
-
-const wsMetricsLog = createSubsystemLogger("openai-ws-transport");
-
-// Mirror of emitCodexUsageObservability in openai-transport-stream.ts —
-// labs-openclaw uses the ChatGPT Plus WebSocket protocol (this file),
-// not the Responses HTTP transport, so the openai-transport emit hook
-// never fires here. Records into the same openclaw_llm_*{provider="codex"}
-// counter family so dashboards see the actual traffic.
-function emitWsCodexUsageObservability(
-  modelInfo: { provider: string; id: string },
-  context: unknown,
-  usage: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number } | undefined,
-): void {
-  if (modelInfo.provider !== "openai-codex") return;
-  const cached = usage?.cacheRead ?? 0;
-  // Codex prompt-side cost is input + cacheRead. Unlike anthropic there's
-  // no separate cache_creation channel here — cache writes are folded
-  // into input_tokens by the Responses API.
-  const prompt = (usage?.input ?? 0) + cached;
-  const completion = usage?.output ?? 0;
-  recordLLMUsage("codex", { prompt, completion, cached });
-  const messages = (context as { messages?: ReadonlyArray<{ role: string; content: unknown }> })
-    .messages;
-  const lastUser = messages?.findLast?.((m) => m.role === "user");
-  const commandTag = extractCommandTag(lastUser?.content);
-  wsMetricsLog.info(
-    `llm_usage provider=codex model=${modelInfo.id} prompt=${prompt} completion=${completion} cached=${cached}`,
-    {
-      event: "llm_usage",
-      provider: "codex",
-      model: modelInfo.id,
-      prompt_tokens: prompt,
-      completion_tokens: completion,
-      cached_tokens: cached,
-      command: commandTag,
-    },
-  );
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Per-session state
@@ -1236,11 +1196,6 @@ export function createOpenAIWebSocketStreamFn(
                   provider: model.provider,
                   id: model.id,
                 });
-                emitWsCodexUsageObservability(
-                  { provider: model.provider, id: model.id },
-                  context,
-                  assistantMsg.usage,
-                );
                 const reason: Extract<StopReason, "stop" | "length" | "toolUse"> =
                   assistantMsg.stopReason === "toolUse" ? "toolUse" : "stop";
                 eventStream.push({ type: "done", reason, message: assistantMsg });
