@@ -301,6 +301,15 @@ function selectSubagentOutputText(
   if (partialProgress) {
     return partialProgress;
   }
+  // A successful subagent completion must come from an assistant reply, not a raw
+  // tool result. Falling back to the latest tool result made workers look "done"
+  // when they had only dumped intermediate read/config/plugin output and never
+  // answered the requested task. Keep raw fallback for timeout/error/unknown
+  // cases where it is useful diagnostic evidence, but do not promote it to a
+  // successful child result.
+  if (outcome?.status === "ok") {
+    return undefined;
+  }
   return snapshot.latestRawText;
 }
 

@@ -86,6 +86,45 @@ describe("readSubagentOutput", () => {
     );
   });
 
+
+  it("does not promote raw tool output to a successful subagent completion", async () => {
+    const deps = installOutputDeps({
+      messages: [
+        {
+          role: "assistant",
+          stopReason: "toolUse",
+          content: [{ type: "toolCall", id: "call-read", name: "read", arguments: {} }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-read",
+          toolName: "read",
+          content: "{\n  \"plugins\": [\"telegram\"],\n  \"config\": true\n}",
+        },
+      ],
+    });
+
+    await expect(
+      readSubagentOutput("agent:main:subagent:child", { status: "ok" }),
+    ).resolves.toBeUndefined();
+    expect(deps.readLatestAssistantReply).toHaveBeenCalled();
+  });
+
+  it("keeps raw tool output as diagnostic evidence for failed subagent runs", async () => {
+    installOutputDeps({
+      messages: [
+        {
+          role: "toolResult",
+          content: "tool failed after reading config",
+        },
+      ],
+    });
+
+    await expect(
+      readSubagentOutput("agent:main:subagent:child", { status: "error", error: "boom" }),
+    ).resolves.toBe("tool failed after reading config");
+  });
+
   it("keeps normal tool-use assistant output when the tool is not sessions_yield", async () => {
     installOutputDeps({
       messages: [
