@@ -327,6 +327,13 @@ function resolveModelHealthKey(provider: string, model: string): string {
   return modelKey(provider, model);
 }
 
+function resolveSessionLookupAgentId(params: {
+  sessionAgentId?: string;
+  agentDir?: string;
+}): string | undefined {
+  return params.sessionAgentId ?? (params.agentDir ? path.basename(params.agentDir) : undefined);
+}
+
 function isPersistedModelHealthActive(params: {
   entry?: import("../config/sessions.js").SessionEntry;
   provider: string;
@@ -372,8 +379,7 @@ async function persistModelHealthCooldown(params: {
   const { sessionKey, storePath } = resolveStoredSessionKeyForSessionId({
     cfg: params.cfg,
     sessionId: params.sessionId,
-    agentId:
-      params.sessionAgentId ?? (params.agentDir ? path.basename(params.agentDir) : undefined),
+    agentId: resolveSessionLookupAgentId(params),
   });
   if (!sessionKey) {
     return;
@@ -444,8 +450,7 @@ async function clearPersistedModelHealth(params: {
   const { sessionKey, storePath } = resolveStoredSessionKeyForSessionId({
     cfg: params.cfg,
     sessionId: params.sessionId,
-    agentId:
-      params.sessionAgentId ?? (params.agentDir ? path.basename(params.agentDir) : undefined),
+    agentId: resolveSessionLookupAgentId(params),
   });
   if (!sessionKey) {
     return;

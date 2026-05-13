@@ -14,6 +14,13 @@ export const DEFAULT_QUOTA_SUSPENSION_RESUME_MS = 30 * 60 * 1000; // 30 min
 
 const laneResumeTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
+function resolveSessionLookupAgentId(params: {
+  sessionAgentId?: string;
+  agentDir?: string;
+}): string | undefined {
+  return params.sessionAgentId ?? (params.agentDir ? path.basename(params.agentDir) : undefined);
+}
+
 export type SessionSuspensionReason = "quota_exhausted" | "manual" | "circuit_open";
 
 function resolveLaneResumeConcurrency(cfg: OpenClawConfig | undefined, laneId: string): number {
@@ -73,6 +80,7 @@ export function cancelLaneAutoResume(laneId: string) {
 export async function suspendSession(params: {
   cfg: OpenClawConfig | undefined;
   agentDir?: string;
+  sessionAgentId?: string;
   sessionId: string;
   laneId?: string;
   reason: SessionSuspensionReason;
@@ -88,7 +96,7 @@ export async function suspendSession(params: {
   const { sessionKey, storePath } = resolveStoredSessionKeyForSessionId({
     cfg: params.cfg,
     sessionId: params.sessionId,
-    agentId: params.agentDir ? path.basename(params.agentDir) : undefined,
+    agentId: resolveSessionLookupAgentId(params),
   });
 
   if (!sessionKey) {
