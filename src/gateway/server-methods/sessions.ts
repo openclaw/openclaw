@@ -447,16 +447,17 @@ function resolveAbortSessionKey(params: {
   requestedKey: string;
   canonicalKey: string;
   activeRunSessionKey?: string;
+  aliasKeys?: string[];
 }): string {
   if (params.activeRunSessionKey) {
     return params.activeRunSessionKey;
   }
+  const candidates = [params.canonicalKey, params.requestedKey, ...(params.aliasKeys ?? [])];
   for (const active of params.context.chatAbortControllers.values()) {
-    if (active.sessionKey === params.canonicalKey) {
-      return params.canonicalKey;
-    }
-    if (active.sessionKey === params.requestedKey) {
-      return params.requestedKey;
+    for (const candidate of candidates) {
+      if (active.sessionKey === candidate) {
+        return candidate;
+      }
     }
   }
   return params.requestedKey;
@@ -1673,6 +1674,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       requestedKey: key,
       canonicalKey,
       activeRunSessionKey: scopedActiveRunSessionKey,
+      aliasKeys: requestedKey && requestedKey !== key ? [requestedKey] : undefined,
     });
     // Capture run kinds before the abort because abortChatRunById deletes entries
     // from chatAbortControllers synchronously. We use this snapshot to choose the

@@ -183,4 +183,31 @@ describe("sessions.abort agent scope", () => {
       }),
     );
   });
+
+  it("keeps the raw legacy key alias when an active scoped abort uses agentId", async () => {
+    const activeRun = createActiveRun("main");
+    const context = {
+      chatAbortControllers: new Map([["run-work", activeRun]]),
+      getRuntimeConfig: () => ({
+        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      }),
+    } as unknown as GatewayRequestContext;
+    const respond = vi.fn() as unknown as RespondFn;
+
+    await sessionsHandlers["sessions.abort"]({
+      req: { id: "req-6" } as never,
+      params: { key: "main", agentId: "work" },
+      respond,
+      context,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(chatAbortMock).toHaveBeenCalledTimes(1);
+    expect(chatAbortMock.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        params: { sessionKey: "main", runId: undefined },
+      }),
+    );
+  });
 });
