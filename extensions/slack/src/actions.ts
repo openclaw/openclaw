@@ -2,6 +2,7 @@ import type { Block, KnownBlock, WebClient } from "@slack/web-api";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { z } from "zod";
 import { resolveSlackAccount } from "./accounts.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
 import { createSlackWebClient, getSlackWriteClient } from "./client.js";
@@ -78,29 +79,7 @@ function normalizeEmoji(raw: string) {
 }
 
 const SLACK_TIMESTAMP_RE = /^\d+(?:\.\d+)?$/;
-const ISO_8601_TIMESTAMP_RE =
-  /^(\d{4})-(\d{2})-(\d{2})T([01]\d|2[0-3]):([0-5]\d):([0-5]\d)(?:\.(\d{1,3}))?(Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/;
-
-function isValidIso8601Timestamp(match: RegExpExecArray): boolean {
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  const hour = Number(match[4]);
-  const minute = Number(match[5]);
-  const second = Number(match[6]);
-  const millisecond = Number((match[7] ?? "").padEnd(3, "0"));
-  const date = new Date(Date.UTC(year, month - 1, day, hour, minute, second, millisecond));
-
-  return (
-    date.getUTCFullYear() === year &&
-    date.getUTCMonth() === month - 1 &&
-    date.getUTCDate() === day &&
-    date.getUTCHours() === hour &&
-    date.getUTCMinutes() === minute &&
-    date.getUTCSeconds() === second &&
-    date.getUTCMilliseconds() === millisecond
-  );
-}
+const ISO_8601_TIMESTAMP_SCHEMA = z.iso.datetime({ offset: true });
 
 function formatEpochSeconds(milliseconds: number): string {
   const seconds = milliseconds / 1000;
@@ -121,8 +100,7 @@ function normalizeSlackReadTimestamp(
   if (SLACK_TIMESTAMP_RE.test(trimmed)) {
     return trimmed;
   }
-  const isoMatch = ISO_8601_TIMESTAMP_RE.exec(trimmed);
-  if (!isoMatch || !isValidIso8601Timestamp(isoMatch)) {
+  if (!ISO_8601_TIMESTAMP_SCHEMA.safeParse(trimmed).success) {
     throw new Error(
       `Invalid Slack read ${field} timestamp "${trimmed}": expected a Slack timestamp or ISO-8601 date string`,
     );

@@ -1427,6 +1427,9 @@ importers:
       typebox:
         specifier: 1.1.38
         version: 1.1.38
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
