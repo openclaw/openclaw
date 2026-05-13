@@ -6,8 +6,12 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Restrict chat sender allowlist matching [AI]. (#80898) Thanks @pgondhi987.
+- Sessions: redact persisted tool result detail metadata before writing transcripts so diagnostic secrets do not survive tool output redaction. (#80444) Thanks @nimbleenigma.
+- Codex migration: make Enter activate the highlighted checkbox row before continuing, so `Skip for now` and bulk-selection rows work even when planned items start preselected.
 - fix: harden safe-bin argument validation [AI]. (#80999) Thanks @pgondhi987.
 - fix: scan plugin runtime entries during install [AI]. (#80998) Thanks @pgondhi987.
+- Codex harness: keep auth-profile-backed media tools such as `image_generate` available when OpenAI auth lives in the agent's auth-profile store instead of environment variables.
 - Require auth for sandbox browser CDP relay [AI]. (#81002) Thanks @pgondhi987.
 - fix: detect carried exec command forms [AI]. (#81000) Thanks @pgondhi987.
 - Reject truncated exec approval commands [AI]. (#81001) Thanks @pgondhi987.
@@ -33,9 +37,13 @@ Docs: https://docs.openclaw.ai
 - Build: skip copied metadata for bundled plugins that are excluded from build entries, preventing update/status rebuilds from advertising missing QQ Bot runtime files. (#80925)
 - Control UI/sessions: nest subagent sessions under their parent session in the session picker dropdown using a visual `└─ ` prefix, making the parent-child relationship clear. Fixes #77628. (#78623) Thanks @chinar-amrutkar.
 - Auto-reply: surface a visible error when the configured model backend fails and fallback produces no visible reply, while preserving intentional silent turns and side-effect-only deliveries. (#80917) Thanks @dutifulbob.
+- Agents/exec: skip redundant heartbeat wake-ups for subagent session exec completions, preventing spurious LLM invocations on parent sessions. Fixes #66748. (#66749) Thanks @ggzeng.
+- Provider streams: keep OpenAI-compatible SSE and JSON fallback streams draining across split chunks and fail Azure Responses streams with a bounded first-event diagnostic instead of stalling. Refs #80926. (#80927) Thanks @galiniliev and @CaptainTimon.
+- Agents: rewrite generic provider internal errors with support request IDs into user-friendly transient error copy. (#49401) Thanks @y471823206.
 
 ### Changes
 
+- Voice Call/Telnyx: add realtime media-streaming call support for conversational voice calls. (#81024) Thanks @dynamite-bud.
 - Gateway/OpenAI HTTP: honor `max_completion_tokens` and `max_tokens` on inbound `/v1/chat/completions` requests so client-provided token caps reach the upstream provider via `streamParams.maxTokens`, with `max_completion_tokens` taking precedence when both are sent. Thanks @Lellansin.
 - Models/OpenAI CLI auth: make `openclaw models auth login --provider openai` start the ChatGPT/Codex account login by default, while `--method api-key` remains the explicit OpenAI API-key setup path.
 - Google/Gemini: normalize retired Gemini 3 Pro Preview ids inside explicit SDK OAuth auth-result config patches, so provider helpers emit `google/gemini-3.1-pro-preview` for Gemini 3.1 testing.
@@ -43,6 +51,8 @@ Docs: https://docs.openclaw.ai
 - Google/Gemini: normalize retired Gemini 3 Pro Preview ids returned by direct `openclaw models auth login --set-default` provider auth flows before writing config, so Gemini testing targets `google/gemini-3.1-pro-preview`.
 - Google/Gemini: normalize retired Gemini 3 Pro Preview ids in provider catalog rows when API-key onboarding only reapplies the agent default, so emitted config keeps testing `google/gemini-3.1-pro-preview`.
 - Google/Gemini: canonicalize provider-qualified retired Gemini 3 Pro Preview refs during Google forward-compatible model resolution, so emitted config uses `google/gemini-3.1-pro-preview` for Gemini 3.1 testing.
+- Google/Gemini: normalize proxy-prefixed retired Gemini 3 Pro Preview catalog rows, so emitted configs use `google/gemini-3.1-pro-preview` for Gemini 3.1 testing.
+- Google/Gemini: normalize retired Gemini 3 Pro Preview ids inside per-agent model overrides before writing config, so agent-specific config emits `google/gemini-3.1-pro-preview` for Gemini 3.1 testing.
 - Docs/subagents: document `agents.defaults.subagents.announceTimeoutMs` in the sub-agent and configuration references. (#75509) Thanks @akrimm702.
 - Cron: add direct `cron.get`, `openclaw cron get <id>`, and agent-tool `get` support for inspecting one stored cron job by id. (#75117) Thanks @samzong.
 - Agents/tools: add per-sender tool policies with canonical channel-scoped sender keys, so operators can restrict dangerous tools by requester identity across global, agent, group, core, bundled, and plugin tool surfaces. (#66933) Thanks @JerranC.
@@ -109,6 +119,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/heartbeat: fix seven layered issues that broke multi-agent heartbeat cadence — (1) fan out the scheduler broadcast wake across agents in parallel via `Promise.all` instead of awaiting each `runOnce` sequentially, so one agent doing real work no longer starves every later agent in iteration order; (2) scope `skipWhenBusy` to lanes attributable to the firing agent via session-key parsing of `session:agent:<id>:…` / `nested:agent:<id>:…` lane names, instead of consulting the global `subagent` lane, so a single stuck subagent on one agent no longer silently disables every other agent's heartbeat; (3) always append workspace `HEARTBEAT.md` directives (everything outside an optional `tasks:` block) to the dispatch prompt, so prose-runbook `HEARTBEAT.md` files reach the model directly instead of being silently dropped unless periodic tasks are declared; (4) race the initial stream-establishment promise inside `streamWithIdleTimeout` against the same watchdog timer that previously only guarded inter-token gaps, so SDK requests stuck at TCP/TLS handshake or before the first response byte no longer hang indefinitely (the stalled-session diagnostic's `recovery=none` case); (5) emit an `openclaw doctor` warning when `heartbeat.session` pins a session key that has no entry in the agent's session store, so silently-dropped heartbeat deliveries surface at config-validation time; (6) also route the commitment-only task dispatch path (tasks configured, none due) through `appendHeartbeatFileDirectives` so prose directives outside the `tasks:` block reach the model on this path as well; (7) wrap the synchronous `baseFn(...)` invocation inside `streamWithIdleTimeout` in a try/catch that clears the connect watchdog timer before rethrowing, so a provider stream function that throws during setup no longer leaves a live timer that can fire `onIdleTimeout` later with a stale error and keep the process open past the real failure. Thanks @zeroaltitude.
 - Matrix: stop running `npm install`/`pnpm install` at runtime from a parent-derived plugin path; missing Matrix runtime dependencies now fail with repair guidance instead of mutating the wrong `node_modules` tree. Fixes #80758. (#80876) Thanks @kinjitakabe.
 - CLI/media: render terminal QR codes with full-block characters by default so the bundled `qrcode` terminal renderer does not emit a pathologically dense ANSI final row in compact half-block mode that breaks scanning in some terminals. Fixes #77820. Thanks @KrasimirKralev.
 - Agents/compaction: read post-compaction AGENTS.md refresh context from the queued run workspace instead of the runner process cwd, so CLI-backed follow-up turns re-inject the correct workspace startup rules after compaction. Fixes #70541. (#75532) Thanks @vyctorbrzezowski.
@@ -405,6 +416,7 @@ Docs: https://docs.openclaw.ai
 - Telegram/streaming: continue over-limit draft previews in a new message instead of stopping when rendered preview text crosses Telegram's message limit. (#74508) Thanks @anagnorisis2peripeteia.
 - Slack: route handled top-level channel turns in implicit-conversation channels to thread-scoped sessions when Slack reply threading is enabled, keeping the root turn and later thread replies on one OpenClaw session. (#78522) Thanks @zeroth-blip.
 - Telegram: re-probe the primary fetch transport after repeated sticky fallback success so transient IPv4 or pinned-IP fallback promotion can recover without a gateway restart. Fixes #77088. (#77157) Thanks @MkDev11.
+- Agents/harness: skip tool-result middleware validation when no handler is registered, and sanitize incoming tool result `details` (functions, symbols, bigints, cycles, oversized payloads) before middleware sees them. Tool emitters legitimately produce raw dependency payloads on `details`, and the harness owes any registered middleware a JSON-safe view of that payload; otherwise a no-op middleware (e.g. bundled `tokenjuice` on the `pi` runtime) causes the validator to reject every tool result and silently substitute a failure sentinel, dropping outbound Discord messages, exec output, cron results, and any other tool whose payload carries non-serializable values. Thanks @solomonneas.
 - Runtime/install: raise the supported Node 22 floor to `22.16+` so native SQLite query handling can rely on the `node:sqlite` statement metadata API while continuing to recommend Node 24. (#78921)
 - Discord/voice: make duplicate same-guild auto-join entries resolve to the last configured channel so moving an agent between voice channels does not keep joining the stale channel.
 - Discord/voice: add realtime `/vc` modes so Discord voice channels can run as STT/TTS, a realtime talk buffer with the OpenClaw agent brain, or a bidi realtime session with `openclaw_agent_consult`.

@@ -77,7 +77,7 @@ function expectRecordFields(record: Record<string, unknown>, expected: Record<st
 }
 
 function expectSystemEventContaining(sessionKey: string, text: string) {
-  expect(peekSystemEvents(sessionKey).some((event) => event.includes(text))).toBe(true);
+  expect(peekSystemEvents(sessionKey).join("\n")).toContain(text);
 }
 
 vi.mock("./context-engine-capabilities.js", () => ({

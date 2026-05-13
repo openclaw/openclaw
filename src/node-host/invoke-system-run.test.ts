@@ -1696,12 +1696,8 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
               },
             });
 
-            expect(seenArgv, testCase.name).toContainEqual([
-              "cmd.exe",
-              "/d",
-              "/s",
-              "/c",
-              `${scriptPath} --limit 5`,
+            expect(seenArgv, testCase.name).toEqual([
+              ["cmd.exe", "/d", "/s", "/c", `${scriptPath} --limit 5`],
             ]);
             expect(invoke.runCommand, testCase.name).not.toHaveBeenCalled();
             expectApprovalRequiredDenied({
