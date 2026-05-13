@@ -9,6 +9,9 @@ import type { IMessageAttachment } from "./types.js";
 
 const execFileAsync = promisify(execFile);
 
+const HEIC_CONVERSION_TIMEOUT_MS = 15_000;
+const HEIC_CONVERSION_MAX_BUFFER_BYTES = 64 * 1024;
+
 export type StagedIMessageAttachment = {
   path: string;
   contentType?: string;
@@ -76,19 +79,27 @@ async function convertHeicToJpegWithSips(sourcePath: string, maxBytes: number): 
     extension: "jpg",
   });
   try {
-    await execFileAsync("sips", [
-      "-s",
-      "format",
-      "jpeg",
-      "-s",
-      "formatOptions",
-      "90",
-      "-Z",
-      "4096",
-      sourcePath,
-      "--out",
-      tempPath,
-    ]);
+    await execFileAsync(
+      "sips",
+      [
+        "-s",
+        "format",
+        "jpeg",
+        "-s",
+        "formatOptions",
+        "90",
+        "-Z",
+        "4096",
+        sourcePath,
+        "--out",
+        tempPath,
+      ],
+      {
+        timeout: HEIC_CONVERSION_TIMEOUT_MS,
+        maxBuffer: HEIC_CONVERSION_MAX_BUFFER_BYTES,
+        killSignal: "SIGKILL",
+      },
+    );
     const stat = await fs.stat(tempPath);
     if (stat.size > maxBytes) {
       throw new Error(`converted media exceeds ${Math.round(maxBytes / (1024 * 1024))}MB limit`);
