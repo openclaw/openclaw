@@ -59,6 +59,33 @@ When using `--data`, the script reuses the existing JSON. It can rebuild
 destination lines, or `changedSinceSource`. Use `--report` when the checkout or
 source ref changed and the viewer needs fresh line or diff metadata.
 
+## Incremental Validation
+
+Use changed-only validation after small destination-doc edits:
+
+```bash
+node .agents/skills/openclaw-docs-audit/scripts/audit-report-viewer.mjs validate \
+  --data .mem/main/specs/<spec-id>/report/<short-audit-name>-audit-data.json \
+  --changed-only \
+  --diff-base HEAD
+```
+
+`--changed-only` avoids a full audit pass:
+
+1. It runs `git diff --unified=0 <diff-base> -- docs`.
+2. It records the first changed line for each changed Markdown destination file.
+3. It skips audit units whose destination refs and line-level targets are in
+   unchanged files or above the first changed line.
+4. It runs overlap checks only for affected line-level targets.
+5. For same-file `retained` or `paraphrase` mappings with `same-scope`, it
+   searches the destination file for a better matching line. If the best match is
+   outside the current target, it emits a `stale-destination-range` error with
+   the current target and suggested target.
+
+This catches line-number drift from insertions or deletions above a mapped
+section without revalidating unrelated pages. Treat `stale-destination-range` as
+blocking: patch the draft JSON target refs, then run `hydrate` and `render`.
+
 ## Report Parsing
 
 The detailed report must use one table per source page. Each audit unit row must
@@ -191,6 +218,9 @@ Block mode:
 - Arrow Up and Arrow Down are captured at the sidebar level in block mode, so
   navigation works even when focus is in the sidebar search input or a row text
   node.
+- Selecting or keyboard-navigating a block writes a URL fragment containing the
+  selected `unit` and `view`. Reloading the viewer reapplies that fragment and
+  scrolls the active block back into view.
 
 Doc mode:
 
@@ -205,6 +235,11 @@ The left detail pane is `Mapped source ranges`.
 
 - It shows only the selected audit unit's source block.
 - It does not merge other units that happen to share a destination range.
+- When source-line status metadata is present, lines whose status is not
+  `covered` render with a red subtraction-style highlight. Hovering the line
+  shows the line status, action, and reason.
+- The red source-line highlight is scoped to mapped source snippets. Reference,
+  generator, and destination snippets continue to use neutral code styling.
 - It resets scroll when the selected unit or page view changes.
 
 The right detail pane is `Diff view`.

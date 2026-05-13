@@ -249,6 +249,29 @@ node .agents/skills/openclaw-docs-audit/scripts/audit-report-viewer.mjs \
   --detailed-out .mem/main/specs/<spec-id>/reports/<detailed-report>.md
 ```
 
+### Incremental stale-range validation
+
+Destination line refs are volatile while docs are still being edited. Do not
+rerun the full audit after every small edit. After docs edits that may shift
+destination lines, run the changed-only validator:
+
+```bash
+node .agents/skills/openclaw-docs-audit/scripts/audit-report-viewer.mjs validate \
+  --data .mem/main/specs/<spec-id>/report/<short-audit-name>-audit-data.json \
+  --changed-only \
+  --diff-base HEAD
+```
+
+`--changed-only` reads the git diff hunks, checks only audit units whose
+destination files and ranges are at or after changed hunks, and escalates stale
+same-file retained/paraphrased mappings to `stale-destination-range` errors when
+it can suggest a better line. Fix those target refs in the draft JSON, then
+rerun `hydrate` and `render`.
+
+Use full `validate`/`hydrate`/`render` before final handoff, after larger
+rewrites, or when changed-only reports broad low-overlap warnings that need
+human review.
+
 ## Durable Reports
 
 When the user asks to write the audit into OpenClaw memory/specs, prefer the

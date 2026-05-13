@@ -151,9 +151,9 @@ JavaScript peer; that file is required when declared.
 
 If a managed package warning says it `requires compiled runtime output for
 TypeScript entry ...`, the package was published without the JavaScript files
-OpenClaw needs at runtime. Update or reinstall the plugin after the publisher
-republishes compiled JavaScript, or disable/uninstall that plugin until a fixed
-package is available.
+OpenClaw needs at runtime. That is a plugin packaging issue, not a local config
+problem. Update or reinstall the plugin after the publisher republishes compiled
+JavaScript, or disable/uninstall that plugin until a fixed package is available.
 
 ## Install records and registry state
 

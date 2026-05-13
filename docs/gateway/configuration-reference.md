@@ -217,6 +217,9 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 - `plugins.entries.<id>.llm.allowAgentIdOverride`: explicitly trust this plugin to run `api.runtime.llm.complete` against a non-default agent id.
 - `plugins.entries.<id>.config`: plugin-defined config object (validated by native OpenClaw plugin schema when available).
 - Channel plugin account/runtime settings live under `channels.<id>` and should be described by the owning plugin's manifest `channelConfigs` metadata, not by a central OpenClaw option registry.
+- Workspace-origin plugins are disabled by default. Explicitly enable them with
+  `plugins.entries.<id>.enabled: true` or include them in `plugins.allow` before
+  using local workspace code.
 
 ### Plugin scan order
 

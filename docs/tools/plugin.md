@@ -152,6 +152,8 @@ Key policy rules:
 - `plugins.entries.<id>.enabled: false` disables one plugin while preserving its
   config.
 - `plugins.load.paths` adds explicit local plugin files or directories.
+- Workspace-origin plugins are disabled by default; explicitly enable or
+  allowlist them before using local workspace code.
 - `plugins.slots` chooses one plugin for exclusive categories such as memory.
 
 Run `openclaw doctor` or `openclaw doctor --fix` when config validation reports
@@ -191,14 +193,15 @@ supervisor.
 
 ## Troubleshooting
 
-| Symptom                                                        | Check                                                                                                                          | Fix                                                                                                     |
-| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
-| Plugin appears in `plugins list` but runtime hooks do not run  | Use `openclaw plugins inspect <id> --runtime --json` and confirm the active Gateway with `gateway status --deep --require-rpc` | Restart the live Gateway after install, update, config, or source changes                               |
-| Config says a plugin is missing                                | Check [Plugin inventory](/plugins/plugin-inventory) for whether it is bundled, official external, or source-only               | Install the external package, enable the bundled plugin, or remove stale config                         |
-| Config is invalid during install                               | Read the validation message and run `openclaw doctor --fix` when it points to stale plugin state                               | Doctor can quarantine invalid plugin config by disabling the entry and removing the invalid payload     |
-| Plugin path is blocked for suspicious ownership or permissions | Inspect the diagnostic before the config error                                                                                 | Fix filesystem ownership/permissions, then run `openclaw plugins registry --refresh`                    |
-| `OPENCLAW_NIX_MODE=1` blocks lifecycle commands                | Confirm the install is managed by Nix                                                                                          | Change plugin selection in the Nix source instead of using plugin mutator commands                      |
-| Dependency import fails at runtime                             | Check whether the plugin was installed through npm/git/ClawHub or loaded from a local path                                     | Run `openclaw plugins update <id>`, reinstall the source, or install local plugin dependencies yourself |
+| Symptom                                                        | Check                                                                                                                                      | Fix                                                                                                     |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| Plugin appears in `plugins list` but runtime hooks do not run  | Use `openclaw plugins inspect <id> --runtime --json` and confirm the active Gateway with `gateway status --deep --require-rpc`             | Restart the live Gateway after install, update, config, or source changes                               |
+| Duplicate channel or tool ownership diagnostics appear         | Run `openclaw plugins list --enabled --verbose`, inspect each suspected plugin with `--runtime --json`, and compare channel/tool ownership | Disable one owner, remove stale installs, or use manifest `preferOver` for intentional replacement      |
+| Config says a plugin is missing                                | Check [Plugin inventory](/plugins/plugin-inventory) for whether it is bundled, official external, or source-only                           | Install the external package, enable the bundled plugin, or remove stale config                         |
+| Config is invalid during install                               | Read the validation message and run `openclaw doctor --fix` when it points to stale plugin state                                           | Doctor can quarantine invalid plugin config by disabling the entry and removing the invalid payload     |
+| Plugin path is blocked for suspicious ownership or permissions | Inspect the diagnostic before the config error                                                                                             | Fix filesystem ownership/permissions, then run `openclaw plugins registry --refresh`                    |
+| `OPENCLAW_NIX_MODE=1` blocks lifecycle commands                | Confirm the install is managed by Nix                                                                                                      | Change plugin selection in the Nix source instead of using plugin mutator commands                      |
+| Dependency import fails at runtime                             | Check whether the plugin was installed through npm/git/ClawHub or loaded from a local path                                                 | Run `openclaw plugins update <id>`, reinstall the source, or install local plugin dependencies yourself |
 
 ### Blocked plugin path ownership
 
@@ -250,8 +253,12 @@ optional. Slow lines are promoted to warnings when a single factory takes at
 least 1s or total plugin tool factory prep takes at least 5s.
 
 OpenClaw caches successful plugin tool factory results for repeated resolutions
-in the same process. If timings stay high, the plugin may be doing expensive
-work before returning its tool definitions.
+with the same effective request context. The cache key includes the effective
+runtime config, workspace, agent/session ids, sandbox policy, browser settings,
+delivery context, requester identity, and ownership state, so factories that
+depend on those trusted fields are re-run when the context changes. If timings
+stay high, the plugin may be doing expensive work before returning its tool
+definitions.
 
 If one plugin dominates the timing, inspect its runtime registrations:
 
@@ -276,4 +283,5 @@ reload behavior, and legacy cleanup, see
 - [Community plugins](/plugins/community) - ClawHub discovery and docs PR policy
 - [Plugin dependency resolution](/plugins/dependency-resolution) - install roots, registry records, and runtime boundaries
 - [Building plugins](/plugins/building-plugins) - native plugin authoring guide
+- [Plugin SDK overview](/plugins/sdk-overview) - runtime registration, hooks, and API fields
 - [Plugin manifest](/plugins/manifest) - manifest and package metadata

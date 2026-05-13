@@ -543,6 +543,13 @@
         min-width: max-content;
         padding: 0 14px 0 0;
       }
+      .code-line.source-not-covered {
+        background: rgba(161, 54, 63, 0.28);
+        color: #ffc0c0;
+      }
+      .code-line.source-not-covered .line-no {
+        color: #b77780;
+      }
       .line-no {
         color: #586274;
         padding-right: 12px;
@@ -954,6 +961,77 @@
           }
         }
 
+        function fragmentState() {
+          const hash = window.location.hash.replace(/^#/, "");
+          if (!hash) return {};
+          if (!hash.includes("=")) return { unitId: decodeURIComponent(hash) };
+          const params = new URLSearchParams(hash);
+          return {
+            unitId: params.get("unit") || "",
+            viewId: params.get("view") || "",
+          };
+        }
+
+        function viewById(viewId) {
+          return pageViews.find(function (view) {
+            return view.id === viewId;
+          });
+        }
+
+        function viewContainingUnit(unitId) {
+          return pageViews.find(function (view) {
+            return unitsForView(view).some(function (unit) {
+              return unit.id === unitId;
+            });
+          });
+        }
+
+        function applyFragmentState() {
+          const fragment = fragmentState();
+          if (!fragment.unitId && !fragment.viewId) return false;
+          let changed = false;
+          const fragmentView = viewById(fragment.viewId);
+          if (fragmentView && state.selectedViewId !== fragmentView.id) {
+            state.selectedViewId = fragmentView.id;
+            changed = true;
+          }
+          if (fragment.unitId) {
+            const viewUnits = unitsForView(currentView());
+            let unit = viewUnits.find(function (candidate) {
+              return candidate.id === fragment.unitId;
+            });
+            if (!unit && !fragmentView) {
+              const containingView = viewContainingUnit(fragment.unitId);
+              if (containingView) {
+                state.selectedViewId = containingView.id;
+                changed = true;
+                unit = unitsForView(containingView).find(function (candidate) {
+                  return candidate.id === fragment.unitId;
+                });
+              }
+            }
+            if (unit && state.selectedId !== unit.id) {
+              state.selectedId = unit.id;
+              changed = true;
+            }
+          }
+          return changed;
+        }
+
+        function updateFragment() {
+          if (!state.selectedId || !state.selectedViewId) return;
+          const params = new URLSearchParams();
+          params.set("unit", state.selectedId);
+          params.set("view", state.selectedViewId);
+          const nextHash = "#" + params.toString();
+          if (window.location.hash === nextHash) return;
+          try {
+            window.history.replaceState(null, "", nextHash);
+          } catch {
+            window.location.hash = nextHash;
+          }
+        }
+
         function sourcePagesForView() {
           const byPage = new Map();
           unitsForView(currentView()).forEach(function (unit) {
@@ -1000,7 +1078,21 @@
             .toLowerCase();
         }
 
-        function renderCode(lines) {
+        function sourceLineStatusClass(line, options) {
+          if (!options?.showSourceStatus) return "";
+          if (!line.status || line.status === "covered") return "";
+          return " source-not-covered";
+        }
+
+        function lineTitle(line, options) {
+          if (!options?.showSourceStatus || !line.status || line.status === "covered") return "";
+          const pieces = ["status: " + line.status];
+          if (line.action) pieces.push("action: " + line.action);
+          if (line.reason) pieces.push("reason: " + line.reason);
+          return ' title="' + escapeHtml(pieces.join(" · ")) + '"';
+        }
+
+        function renderCode(lines, options) {
           if (!lines || lines.length === 0) {
             return '<div class="empty"><strong>No repo lines available</strong><span>This unit has no preserved line range in the viewer data.</span></div>';
           }
@@ -1009,7 +1101,11 @@
             lines
               .map(function (line) {
                 return (
-                  '<span class="code-line"><span class="line-no">' +
+                  '<span class="code-line' +
+                  sourceLineStatusClass(line, options) +
+                  '"' +
+                  lineTitle(line, options) +
+                  '><span class="line-no">' +
                   line.number +
                   '</span><span class="line-text">' +
                   highlightText(line.text) +
@@ -1138,7 +1234,7 @@
                 '</span><span class="snippet-ref">' +
                 escapeHtml(refLabel(sourceUnit.source?.ref)) +
                 "</span></div>" +
-                renderCode(sourceUnit.source?.lines || []) +
+                renderCode(sourceUnit.source?.lines || [], { showSourceStatus: true }) +
                 "</section>"
               );
             })
@@ -1621,6 +1717,7 @@
           renderLegend();
           renderList();
           renderDetails();
+          updateFragment();
         }
 
         function scrollUnitList(deltaY) {
@@ -1705,7 +1802,15 @@
           render();
         });
 
+        window.addEventListener("hashchange", function () {
+          if (!applyFragmentState()) return;
+          render();
+          requestAnimationFrame(focusSelectedBlock);
+        });
+
+        applyFragmentState();
         render();
+        requestAnimationFrame(focusSelectedBlock);
       })();
     </script>
   </body>

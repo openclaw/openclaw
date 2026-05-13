@@ -196,7 +196,7 @@ type BeforeToolCallResult = {
 };
 ```
 
-Rules:
+Hook guard behavior for typed lifecycle hooks:
 
 - `block: true` is terminal and skips lower-priority handlers.
 - `block: false` is treated as no decision.
