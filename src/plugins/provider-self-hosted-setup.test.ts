@@ -265,18 +265,24 @@ describe("discoverOpenAICompatibleLocalModels", () => {
         maxTokens: 8192,
       },
     ]);
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        url: "http://127.0.0.1:8080/props?model=qwen%2Frouter-a&autoload=false",
-      }),
-    );
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
-      3,
-      expect.objectContaining({
-        url: "http://127.0.0.1:8080/props?model=qwen%2Frouter-b&autoload=false",
-      }),
-    );
+    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(2, {
+      url: "http://127.0.0.1:8080/props?model=qwen%2Frouter-a&autoload=false",
+      init: { headers: undefined },
+      policy: {
+        hostnameAllowlist: ["127.0.0.1"],
+        allowPrivateNetwork: true,
+      },
+      timeoutMs: 2500,
+    });
+    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(3, {
+      url: "http://127.0.0.1:8080/props?model=qwen%2Frouter-b&autoload=false",
+      init: { headers: undefined },
+      policy: {
+        hostnameAllowlist: ["127.0.0.1"],
+        allowPrivateNetwork: true,
+      },
+      timeoutMs: 2500,
+    });
     expect(modelsRelease).toHaveBeenCalledOnce();
     expect(firstPropsRelease).toHaveBeenCalledOnce();
     expect(secondPropsRelease).toHaveBeenCalledOnce();

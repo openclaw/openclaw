@@ -37,6 +37,20 @@ const BROAD_CONFIG_RUNTIME_COMPAT_FILES = new Set([
   "src/plugins/contracts/config-boundary-guard.test.ts",
 ]);
 
+const SEMANTIC_CONFIG_MUTATION_HELPER_FILES = new Set([
+  "extensions/browser/src/browser/config-mutations.ts",
+  "src/auto-reply/reply/config-mutations.ts",
+  "src/gateway/server-methods/agents-config-mutations.ts",
+  "src/gateway/server-methods/config-write-flow.ts",
+  "src/gateway/server-methods/skills-config-mutations.ts",
+]);
+
+const SEMANTIC_CONFIG_MUTATION_SCOPE_PREFIXES = [
+  "extensions/browser/src/browser/",
+  "src/auto-reply/reply/",
+  "src/gateway/server-methods/",
+];
+
 function collectTypeScriptFiles(dir) {
   if (!existsSync(dir)) {
     return [];
@@ -113,6 +127,13 @@ function isCompatConfigApiFile(relPath) {
 
 function isAmbientRuntimeConfigCompatFile(relPath) {
   return AMBIENT_RUNTIME_LOAD_CONFIG_COMPAT_FILES.has(relPath);
+}
+
+function isSemanticConfigMutationFile(relPath) {
+  return (
+    SEMANTIC_CONFIG_MUTATION_SCOPE_PREFIXES.some((prefix) => relPath.startsWith(prefix)) &&
+    !SEMANTIC_CONFIG_MUTATION_HELPER_FILES.has(relPath)
+  );
 }
 
 function findLineNumbers(source, pattern) {
@@ -328,6 +349,22 @@ export function collectDeprecatedInternalConfigApiViolations({
     for (const line of findNonCommentLineNumbers(source, directMethodPattern)) {
       violations.push(
         `${relPath}:${line} use replaceConfigFile(...) or mutateConfigFile(...) with afterWrite`,
+      );
+    }
+  }
+
+  for (const { filePath, relPath } of repoFiles.filter(
+    ({ relPath }) =>
+      !isTestOrHarnessFile(relPath) &&
+      !isCompatConfigApiFile(relPath) &&
+      isSemanticConfigMutationFile(relPath),
+  )) {
+    const source = readTypeScriptSource(filePath);
+    const importPattern =
+      /\bimport\s+\{[\s\S]*?\b(?:mutateConfigFile|mutateConfigFileWithRetry|transformConfigFile|transformConfigFileWithRetry|replaceConfigFile)\b[\s\S]*?\}\s+from\s+["'][^"']*(?:config\/config|config\/mutate)\.js["']/;
+    for (const line of findMatchLineNumbers(source, importPattern)) {
+      violations.push(
+        `${relPath}:${line} use the local domain config mutation helper instead of direct config writes`,
       );
     }
   }

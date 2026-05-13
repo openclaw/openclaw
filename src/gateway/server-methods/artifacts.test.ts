@@ -63,9 +63,8 @@ describe("artifacts RPC handlers", () => {
     vi.clearAllMocks();
     hoisted.getTaskSessionLookupByIdForStatus.mockReturnValue(undefined);
     hoisted.loadSessionEntry.mockReturnValue({
-      entry: {
-        sessionId: "sess-main",
-      },
+      storePath: "/tmp/sessions.json",
+      entry: { sessionId: "sess-main", sessionFile: "/tmp/sess-main.jsonl" },
     });
     mockedMessages([
       {
@@ -85,10 +84,12 @@ describe("artifacts RPC handlers", () => {
   });
 
   function mockedMessages(messages: unknown[]) {
-    hoisted.visitSessionMessagesAsync.mockImplementation(async (_scope, visit) => {
-      messages.forEach((message, index) => visit(message, index + 1));
-      return messages.length;
-    });
+    hoisted.visitSessionMessagesAsync.mockImplementation(
+      async (_sessionId, _storePath, _sessionFile, visit) => {
+        messages.forEach((message, index) => visit(message, index + 1));
+        return messages.length;
+      },
+    );
   }
 
   it("lists stable transcript artifact summaries by sessionKey", async () => {

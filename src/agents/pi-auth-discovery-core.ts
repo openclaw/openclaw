@@ -1,4 +1,8 @@
+import fs from "node:fs";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { tryReadJsonSync } from "../infra/json-files.js";
+import { replaceFileAtomicSync } from "../infra/replace-file.js";
+import { isRecord } from "../utils.js";
 import {
   listProviderEnvAuthLookupKeys,
   resolveProviderEnvApiKeyCandidates,
@@ -51,4 +55,47 @@ export function addEnvBackedPiCredentials(
     };
   }
   return next;
+}
+
+export function scrubLegacyStaticAuthJsonEntriesForDiscovery(pathname: string): void {
+  if (process.env.OPENCLAW_AUTH_STORE_READONLY === "1") {
+    return;
+  }
+  if (!fs.existsSync(pathname)) {
+    return;
+  }
+
+  const parsed = tryReadJsonSync(pathname);
+  if (!isRecord(parsed)) {
+    return;
+  }
+
+  let changed = false;
+  for (const [provider, value] of Object.entries(parsed)) {
+    if (!isRecord(value)) {
+      continue;
+    }
+    if (value.type !== "api_key") {
+      continue;
+    }
+    delete parsed[provider];
+    changed = true;
+  }
+
+  if (!changed) {
+    return;
+  }
+
+  if (Object.keys(parsed).length === 0) {
+    fs.rmSync(pathname, { force: true });
+    return;
+  }
+
+  replaceFileAtomicSync({
+    filePath: pathname,
+    content: `${JSON.stringify(parsed, null, 2)}\n`,
+    dirMode: 0o700,
+    mode: 0o600,
+    tempPrefix: ".pi-auth",
+  });
 }

@@ -40,9 +40,8 @@
     },
     "dbPath": {
       "label": "Database Path",
-      "placeholder": "s3://memory-bucket/openclaw or ~/memory/lancedb",
-      "advanced": true,
-      "help": "Required external LanceDB path or cloud storage URI. OpenClaw no longer creates a managed LanceDB directory by default."
+      "placeholder": "~/.openclaw/memory/lancedb",
+      "advanced": true
     },
     "autoCapture": {
       "label": "Auto-Capture",

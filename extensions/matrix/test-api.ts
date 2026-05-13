@@ -19,7 +19,3 @@ export type {
   MatrixVerificationSummary,
 } from "./src/matrix/sdk/verification-manager.js";
 export { setMatrixRuntime } from "./src/runtime.js";
-export {
-  MATRIX_IDB_SNAPSHOT_NAMESPACE,
-  resolveMatrixIdbSnapshotKey,
-} from "./src/matrix/sdk/idb-persistence.js";

@@ -1,12 +1,26 @@
 import type { App } from "@slack/bolt";
 import { resolveEnvelopeFormatOptions } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { SlackMessageEvent } from "../../types.js";
 import { resolveSlackThreadContextData } from "./prepare-thread-context.js";
-import { createInboundSlackTestContext, createSlackTestAccount } from "./prepare.test-helpers.js";
+import {
+  createInboundSlackTestContext,
+  createSlackSessionStoreFixture,
+  createSlackTestAccount,
+} from "./prepare.test-helpers.js";
 
 describe("resolveSlackThreadContextData", () => {
+  const storeFixture = createSlackSessionStoreFixture("openclaw-slack-thread-context-");
+
+  beforeAll(() => {
+    storeFixture.setup();
+  });
+
+  afterAll(() => {
+    storeFixture.cleanup();
+  });
+
   function createThreadContext(params: { replies: unknown }) {
     return createInboundSlackTestContext({
       cfg: {
@@ -36,6 +50,7 @@ describe("resolveSlackThreadContextData", () => {
     allowFromLower: string[];
     allowNameMatching: boolean;
   }) {
+    const { storePath } = storeFixture.makeTmpStorePath();
     const replies = vi.fn().mockResolvedValue({
       messages: params.repliesMessages,
       response_metadata: { next_cursor: "" },
@@ -55,7 +70,7 @@ describe("resolveSlackThreadContextData", () => {
       threadTs: "100.000",
       threadStarter: params.threadStarter,
       roomLabel: "#general",
-      agentId: "main",
+      storePath,
       sessionKey: "thread-session",
       allowFromLower: params.allowFromLower,
       allowNameMatching: params.allowNameMatching,
@@ -165,6 +180,7 @@ describe("resolveSlackThreadContextData", () => {
   });
 
   it("injects bot-authored starter when fetched history omits the root", async () => {
+    const { storePath } = storeFixture.makeTmpStorePath();
     const replies = vi.fn().mockResolvedValue({
       messages: [
         { text: "assistant reply", bot_id: "B1", ts: "100.500" },
@@ -192,7 +208,7 @@ describe("resolveSlackThreadContextData", () => {
         ts: "100.000",
       },
       roomLabel: "#general",
-      agentId: "main",
+      storePath,
       sessionKey: "thread-session",
       allowFromLower: ["u1"],
       allowNameMatching: false,
@@ -211,6 +227,7 @@ describe("resolveSlackThreadContextData", () => {
   });
 
   it("injects bot-authored starter when initial history trimming drops the root", async () => {
+    const { storePath } = storeFixture.makeTmpStorePath();
     const replies = vi.fn().mockResolvedValue({
       messages: [
         { text: "bot starter", bot_id: "B1", ts: "100.000" },
@@ -237,7 +254,7 @@ describe("resolveSlackThreadContextData", () => {
         ts: "100.000",
       },
       roomLabel: "#general",
-      agentId: "main",
+      storePath,
       sessionKey: "thread-session",
       allowFromLower: ["u1"],
       allowNameMatching: false,
@@ -300,6 +317,7 @@ describe("resolveSlackThreadContextData", () => {
   });
 
   it("issue #79338: bot DM confirmation root is included so reply has parent context", async () => {
+    const { storePath } = storeFixture.makeTmpStorePath();
     const replies = vi.fn().mockResolvedValue({
       messages: [
         {
@@ -337,7 +355,7 @@ describe("resolveSlackThreadContextData", () => {
         ts: "100.000",
       },
       roomLabel: "DM",
-      agentId: "main",
+      storePath,
       sessionKey: "thread-session",
       allowFromLower: [],
       allowNameMatching: false,

@@ -1,11 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadChannelSecretContractApi } from "./channel-contract-api.js";
 import { getPath } from "./path-utils.js";
-import {
-  getCoreSecretTargetRegistry,
-  getSecretTargetRegistry,
-  resetSecretTargetRegistryCacheForTest,
-} from "./target-registry-data.js";
+import { getCoreSecretTargetRegistry, getSecretTargetRegistry } from "./target-registry-data.js";
 import {
   compileTargetRegistryEntry,
   expandPathTokens,
@@ -37,13 +33,6 @@ let compiledCoreOpenClawTargetState: {
 } | null = null;
 
 const compiledChannelOpenClawTargets = new Map<string, CompiledTargetRegistryEntry[] | null>();
-
-export function resetSecretTargetRegistryQueryCacheForTest(): void {
-  compiledSecretTargetRegistryState = null;
-  compiledCoreOpenClawTargetState = null;
-  compiledChannelOpenClawTargets.clear();
-  resetSecretTargetRegistryCacheForTest();
-}
 
 function buildTargetTypeIndex(
   compiledSecretTargetRegistry: CompiledTargetRegistryEntry[],
@@ -87,10 +76,10 @@ function getCompiledSecretTargetRegistryState() {
   }
   const compiledSecretTargetRegistry = getSecretTargetRegistry().map(compileTargetRegistryEntry);
   const openClawCompiledSecretTargets = compiledSecretTargetRegistry.filter(
-    (entry) => entry.store === "openclaw.json",
+    (entry) => entry.configFile === "openclaw.json",
   );
   const authProfilesCompiledSecretTargets = compiledSecretTargetRegistry.filter(
-    (entry) => entry.store === "auth-profile-store",
+    (entry) => entry.configFile === "auth-profiles.json",
   );
   compiledSecretTargetRegistryState = {
     authProfilesCompiledSecretTargets,
@@ -109,7 +98,7 @@ function getCompiledCoreOpenClawTargetState() {
     return compiledCoreOpenClawTargetState;
   }
   const openClawCompiledSecretTargets = getCoreSecretTargetRegistry()
-    .filter((entry) => entry.store === "openclaw.json")
+    .filter((entry) => entry.configFile === "openclaw.json")
     .map(compileTargetRegistryEntry);
   compiledCoreOpenClawTargetState = {
     knownTargetIds: new Set(openClawCompiledSecretTargets.map((entry) => entry.id)),
@@ -136,7 +125,7 @@ function getCompiledChannelOpenClawTargets(
       config: {} as OpenClawConfig,
       env: process.env,
     })
-      ?.secretTargetRegistryEntries?.filter((entry) => entry.store === "openclaw.json")
+      ?.secretTargetRegistryEntries?.filter((entry) => entry.configFile === "openclaw.json")
       .map(compileTargetRegistryEntry) ?? null;
   compiledChannelOpenClawTargets.set(normalizedChannelId, compiledEntries);
   return compiledEntries;
@@ -242,7 +231,7 @@ export function listSecretTargetRegistryEntries(): SecretTargetRegistryEntry[] {
     Object.assign(
       { id: entry.id, targetType: entry.targetType },
       entry.targetTypeAliases ? { targetTypeAliases: [...entry.targetTypeAliases] } : {},
-      { store: entry.store, pathPattern: entry.pathPattern },
+      { configFile: entry.configFile, pathPattern: entry.pathPattern },
       entry.refPathPattern ? { refPathPattern: entry.refPathPattern } : {},
       {
         secretShape: entry.secretShape,
@@ -417,7 +406,7 @@ export function discoverAuthProfileSecretTargets(
 
 export function listAuthProfileSecretTargetEntries(): SecretTargetRegistryEntry[] {
   return getCompiledSecretTargetRegistryState().compiledSecretTargetRegistry.filter(
-    (entry) => entry.store === "auth-profile-store" && entry.includeInAudit,
+    (entry) => entry.configFile === "auth-profiles.json" && entry.includeInAudit,
   );
 }
 
@@ -425,7 +414,7 @@ export type {
   AuthProfileType,
   DiscoveredConfigSecretTarget,
   ResolvedPlanTarget,
-  SecretTargetStore,
+  SecretTargetConfigFile,
   SecretTargetExpected,
   SecretTargetRegistryEntry,
   SecretTargetShape,

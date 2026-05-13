@@ -93,15 +93,8 @@ export async function startDebugProxyServer(params: {
   settings: DebugProxySettings;
 }): Promise<DebugProxyServerHandle> {
   await ensureDebugProxyCa(params.settings.certDir);
-  const store = getDebugProxyCaptureStore();
+  const store = getDebugProxyCaptureStore(params.settings.dbPath, params.settings.blobDir);
   const host = params.host?.trim() || "127.0.0.1";
-  store.upsertSession({
-    id: params.settings.sessionId,
-    startedAt: Date.now(),
-    mode: "proxy-server",
-    sourceScope: "openclaw",
-    sourceProcess: params.settings.sourceProcess,
-  });
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const flowId = randomUUID();
@@ -307,17 +300,8 @@ export async function startDebugProxyServer(params: {
   if (!address || typeof address === "string") {
     throw new Error("Failed to resolve debug proxy server address");
   }
-  const proxyUrl = `http://${host}:${address.port}`;
-  store.upsertSession({
-    id: params.settings.sessionId,
-    startedAt: Date.now(),
-    mode: "proxy-server",
-    sourceScope: "openclaw",
-    sourceProcess: params.settings.sourceProcess,
-    proxyUrl,
-  });
   return {
-    proxyUrl,
+    proxyUrl: `http://${host}:${address.port}`,
     stop: async () =>
       await new Promise<void>((resolve, reject) => {
         server.close((error) => {

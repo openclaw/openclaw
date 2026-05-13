@@ -1,5 +1,8 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const listDevicePairingMock = vi.hoisted(() => vi.fn(async () => ({ pending: [] })));
 
@@ -9,49 +12,54 @@ vi.mock("./api.js", () => ({
 
 import { handleNotifyCommand } from "./notify.js";
 
+afterAll(() => {
+  vi.doUnmock("./api.js");
+  vi.resetModules();
+});
+
 describe("device-pair notify persistence", () => {
-  beforeEach(() => {
+  let stateDir: string;
+
+  beforeEach(async () => {
     vi.clearAllMocks();
     listDevicePairingMock.mockResolvedValue({ pending: [] });
+    stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "device-pair-notify-"));
   });
 
-  function createNotifyApi(initialState: unknown) {
-    let state = initialState;
-    const store = {
-      register: vi.fn(async (_key: string, value: unknown) => {
-        state = value;
-      }),
-      registerIfAbsent: vi.fn(async () => false),
-      lookup: vi.fn(async () => state),
-      consume: vi.fn(),
-      delete: vi.fn(),
-      entries: vi.fn(async () => []),
-      clear: vi.fn(),
-    };
+  afterEach(async () => {
+    await fs.rm(stateDir, { recursive: true, force: true });
+  });
+
+  it("matches persisted telegram thread ids across number and string roundtrips", async () => {
+    await fs.writeFile(
+      path.join(stateDir, "device-pair-notify.json"),
+      JSON.stringify(
+        {
+          subscribers: [
+            {
+              to: "chat-123",
+              accountId: "telegram-default",
+              messageThreadId: 271,
+              mode: "persistent",
+              addedAtMs: 1,
+            },
+          ],
+          notifiedRequestIds: {},
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
     const api = createTestPluginApi({
       runtime: {
         state: {
-          resolveStateDir: () => "/tmp/openclaw-test-state",
-          openKeyedStore: () => store,
+          resolveStateDir: () => stateDir,
         },
       } as never,
     });
-    return { api, readState: () => state };
-  }
 
-  it("matches persisted telegram thread ids across number and string roundtrips", async () => {
-    const { api, readState } = createNotifyApi({
-      subscribers: [
-        {
-          to: "chat-123",
-          accountId: "telegram-default",
-          messageThreadId: 271,
-          mode: "persistent",
-          addedAtMs: 1,
-        },
-      ],
-      notifiedRequestIds: {},
-    });
     const status = await handleNotifyCommand({
       api,
       ctx: {
@@ -77,27 +85,45 @@ describe("device-pair notify persistence", () => {
       action: "off",
     });
 
-    const persisted = readState() as { subscribers: unknown[] };
-    expect(persisted.subscribers).toEqual([]);
+    const persisted = JSON.parse(
+      await fs.readFile(path.join(stateDir, "device-pair-notify.json"), "utf8"),
+    ) as { subscribers: unknown[] };
+    expect(persisted.subscribers).toStrictEqual([]);
   });
 
   it("does not remove a different persisted subscriber when notify fields contain pipes", async () => {
-    const { api, readState } = createNotifyApi({
-      subscribers: [
+    await fs.writeFile(
+      path.join(stateDir, "device-pair-notify.json"),
+      JSON.stringify(
         {
-          to: "chat|123",
-          accountId: "acct",
-          mode: "persistent",
-          addedAtMs: 1,
+          subscribers: [
+            {
+              to: "chat|123",
+              accountId: "acct",
+              mode: "persistent",
+              addedAtMs: 1,
+            },
+            {
+              to: "chat",
+              accountId: "123|acct",
+              mode: "persistent",
+              addedAtMs: 2,
+            },
+          ],
+          notifiedRequestIds: {},
         },
-        {
-          to: "chat",
-          accountId: "123|acct",
-          mode: "persistent",
-          addedAtMs: 2,
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const api = createTestPluginApi({
+      runtime: {
+        state: {
+          resolveStateDir: () => stateDir,
         },
-      ],
-      notifiedRequestIds: {},
+      } as never,
     });
 
     await handleNotifyCommand({
@@ -121,7 +147,9 @@ describe("device-pair notify persistence", () => {
     });
     expect(status.text).toContain("Pair request notifications: disabled for this chat.");
 
-    const persisted = readState();
+    const persisted = JSON.parse(
+      await fs.readFile(path.join(stateDir, "device-pair-notify.json"), "utf8"),
+    ) as unknown;
     expect(persisted).toStrictEqual({
       subscribers: [
         {

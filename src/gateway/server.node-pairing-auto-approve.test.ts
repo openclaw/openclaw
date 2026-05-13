@@ -101,7 +101,7 @@ describe("gateway trusted CIDR node pairing auto-approve", () => {
         role: "node",
         scopes: [],
         client: NODE_CLIENT,
-        deviceIdentityKey: loaded.identityKey,
+        deviceIdentityPath: loaded.identityPath,
       });
 
       expect(res.ok).toBe(false);
@@ -143,7 +143,7 @@ describe("gateway trusted CIDR node pairing auto-approve", () => {
         role: "node",
         scopes: [],
         client: NODE_CLIENT,
-        deviceIdentityKey: loaded.identityKey,
+        deviceIdentityPath: loaded.identityPath,
       });
 
       expect(res.ok).toBe(true);

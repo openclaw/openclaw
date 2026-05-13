@@ -138,6 +138,7 @@ vi.mock("./runtime.js", () => ({
         dispatchReplyWithBufferedBlockDispatcher,
       },
       session: {
+        resolveStorePath: vi.fn(() => "/tmp/openclaw/synology-chat-sessions.json"),
         recordInboundSession: vi.fn(async () => undefined),
       },
       turn: {

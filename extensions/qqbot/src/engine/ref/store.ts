@@ -1,9 +1,16 @@
-/** Ref-index store backed by the plugin SQLite state table. */
+/**
+ * Ref-index store — JSONL file-based store for message reference index.
+ *
+ * Migrated from src/ref-index-store.ts. Dependencies are only Node.js
+ * built-ins + log + platform (both zero plugin-sdk).
+ */
 
-import type { GatewayPluginRuntime } from "../gateway/types.js";
-import { createMemoryKeyedStore, type KeyedStore } from "../state/keyed-store.js";
+import fs from "node:fs";
+import path from "node:path";
+import { appendRegularFileSync, replaceFileAtomicSync } from "openclaw/plugin-sdk/security-runtime";
 import { formatErrorMessage } from "../utils/format.js";
 import { debugLog, debugError } from "../utils/log.js";
+import { getQQBotDataDir, getQQBotDataPath } from "../utils/platform.js";
 import type { RefIndexEntry } from "./types.js";
 
 // Re-export types and format function for convenience.
@@ -12,43 +19,62 @@ export { formatRefEntryForAgent } from "./format-ref-entry.js";
 
 const MAX_ENTRIES = 50000;
 const TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const REF_INDEX_NAMESPACE = "ref-index";
+const COMPACT_THRESHOLD_RATIO = 2;
 
-type StoredRefIndexEntry = RefIndexEntry & { createdAt: number };
-
-let cache: Map<string, RefIndexEntry & { _createdAt: number }> | null = null;
-let refIndexStore: KeyedStore<StoredRefIndexEntry> = createMemoryKeyedStore();
-
-export async function configureRefIndexStore(runtime: GatewayPluginRuntime): Promise<void> {
-  refIndexStore = runtime.state.openKeyedStore<StoredRefIndexEntry>({
-    namespace: REF_INDEX_NAMESPACE,
-    maxEntries: MAX_ENTRIES,
-    defaultTtlMs: TTL_MS,
-  });
-  cache = null;
-  await loadFromStore();
+interface RefIndexLine {
+  k: string;
+  v: RefIndexEntry;
+  t: number;
 }
 
-async function loadFromStore(): Promise<Map<string, RefIndexEntry & { _createdAt: number }>> {
+let cache: Map<string, RefIndexEntry & { _createdAt: number }> | null = null;
+let totalLinesOnDisk = 0;
+
+function getRefIndexFile(): string {
+  return path.join(getQQBotDataPath("data"), "ref-index.jsonl");
+}
+
+function loadFromFile(): Map<string, RefIndexEntry & { _createdAt: number }> {
   if (cache !== null) {
     return cache;
   }
   cache = new Map();
+  totalLinesOnDisk = 0;
 
   try {
-    const entries = await refIndexStore.entries();
+    const refIndexFile = getRefIndexFile();
+    if (!fs.existsSync(refIndexFile)) {
+      return cache;
+    }
+    const raw = fs.readFileSync(refIndexFile, "utf-8");
+    const lines = raw.split("\n");
     const now = Date.now();
     let expired = 0;
 
-    for (const entry of entries) {
-      const createdAt = entry.value.createdAt || entry.createdAt;
-      if (now - createdAt > TTL_MS) {
-        expired++;
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) {
         continue;
       }
-      cache.set(entry.key, { ...entry.value, _createdAt: createdAt });
+      totalLinesOnDisk++;
+      try {
+        const entry = JSON.parse(trimmed) as RefIndexLine;
+        if (!entry.k || !entry.v || !entry.t) {
+          continue;
+        }
+        if (now - entry.t > TTL_MS) {
+          expired++;
+          continue;
+        }
+        cache.set(entry.k, { ...entry.v, _createdAt: entry.t });
+      } catch {}
     }
-    debugLog(`[ref-index-store] Loaded ${cache.size} entries (${expired} expired)`);
+    debugLog(
+      `[ref-index-store] Loaded ${cache.size} entries from ${totalLinesOnDisk} lines (${expired} expired)`,
+    );
+    if (shouldCompact()) {
+      compactFile();
+    }
   } catch (err) {
     debugError(`[ref-index-store] Failed to load: ${formatErrorMessage(err)}`);
     cache = new Map();
@@ -56,11 +82,61 @@ async function loadFromStore(): Promise<Map<string, RefIndexEntry & { _createdAt
   return cache;
 }
 
-function loadFromStoreSync(): Map<string, RefIndexEntry & { _createdAt: number }> {
-  if (cache === null) {
-    cache = new Map();
+function ensureDir(): void {
+  getQQBotDataDir("data");
+}
+
+function appendLine(line: RefIndexLine): void {
+  try {
+    ensureDir();
+    appendRegularFileSync({ filePath: getRefIndexFile(), content: JSON.stringify(line) + "\n" });
+    totalLinesOnDisk++;
+  } catch (err) {
+    debugError(`[ref-index-store] Failed to append: ${formatErrorMessage(err)}`);
   }
-  return cache;
+}
+
+function shouldCompact(): boolean {
+  return (
+    !!cache && totalLinesOnDisk > cache.size * COMPACT_THRESHOLD_RATIO && totalLinesOnDisk > 1000
+  );
+}
+
+function compactFile(): void {
+  if (!cache) {
+    return;
+  }
+  const before = totalLinesOnDisk;
+  try {
+    ensureDir();
+    const refIndexFile = getRefIndexFile();
+    const lines: string[] = [];
+    for (const [key, entry] of cache) {
+      lines.push(
+        JSON.stringify({
+          k: key,
+          v: {
+            content: entry.content,
+            senderId: entry.senderId,
+            senderName: entry.senderName,
+            timestamp: entry.timestamp,
+            isBot: entry.isBot,
+            attachments: entry.attachments,
+          },
+          t: entry._createdAt,
+        }),
+      );
+    }
+    replaceFileAtomicSync({
+      filePath: refIndexFile,
+      content: `${lines.join("\n")}\n`,
+      tempPrefix: ".qqbot-ref-index",
+    });
+    totalLinesOnDisk = cache.size;
+    debugLog(`[ref-index-store] Compacted: ${before} lines → ${totalLinesOnDisk} lines`);
+  } catch (err) {
+    debugError(`[ref-index-store] Compact failed: ${formatErrorMessage(err)}`);
+  }
 }
 
 function evictIfNeeded(): void {
@@ -78,7 +154,6 @@ function evictIfNeeded(): void {
     const toRemove = sorted.slice(0, cache.size - MAX_ENTRIES + 1000);
     for (const [key] of toRemove) {
       cache.delete(key);
-      void refIndexStore.delete(key);
     }
     debugLog(`[ref-index-store] Evicted ${toRemove.length} oldest entries`);
   }
@@ -86,39 +161,36 @@ function evictIfNeeded(): void {
 
 /** Persist a refIdx mapping for one message. */
 export function setRefIndex(refIdx: string, entry: RefIndexEntry): void {
-  const store = loadFromStoreSync();
+  const store = loadFromFile();
   evictIfNeeded();
   const now = Date.now();
   store.set(refIdx, { ...entry, _createdAt: now });
-  void refIndexStore
-    .register(
-      refIdx,
-      {
-        content: entry.content,
-        senderId: entry.senderId,
-        senderName: entry.senderName,
-        timestamp: entry.timestamp,
-        isBot: entry.isBot,
-        attachments: entry.attachments,
-        createdAt: now,
-      },
-      { ttlMs: TTL_MS },
-    )
-    .catch((err: unknown) => {
-      debugError(`[ref-index-store] Failed to save: ${formatErrorMessage(err)}`);
-    });
+  appendLine({
+    k: refIdx,
+    v: {
+      content: entry.content,
+      senderId: entry.senderId,
+      senderName: entry.senderName,
+      timestamp: entry.timestamp,
+      isBot: entry.isBot,
+      attachments: entry.attachments,
+    },
+    t: now,
+  });
+  if (shouldCompact()) {
+    compactFile();
+  }
 }
 
 /** Look up one quoted message by refIdx. */
 export function getRefIndex(refIdx: string): RefIndexEntry | null {
-  const store = loadFromStoreSync();
+  const store = loadFromFile();
   const entry = store.get(refIdx);
   if (!entry) {
     return null;
   }
   if (Date.now() - entry._createdAt > TTL_MS) {
     store.delete(refIdx);
-    void refIndexStore.delete(refIdx);
     return null;
   }
   return {
@@ -131,5 +203,9 @@ export function getRefIndex(refIdx: string): RefIndexEntry | null {
   };
 }
 
-/** Flush pending writes before process exit. Writes are registered eagerly. */
-export function flushRefIndex(): void {}
+/** Compact the store before process exit when needed. */
+export function flushRefIndex(): void {
+  if (cache && shouldCompact()) {
+    compactFile();
+  }
+}

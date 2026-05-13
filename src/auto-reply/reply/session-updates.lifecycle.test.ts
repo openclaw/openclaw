@@ -4,47 +4,35 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { upsertSessionEntry } from "../../config/sessions/store.js";
-import { replaceSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
 import type { HookRunner } from "../../plugins/hooks.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 
 const hookRunnerMocks = vi.hoisted(() => ({
   hasHooks: vi.fn<HookRunner["hasHooks"]>(),
   runSessionEnd: vi.fn<HookRunner["runSessionEnd"]>(),
   runSessionStart: vi.fn<HookRunner["runSessionStart"]>(),
 }));
-const legacySessionFileProperty = ["session", "File"].join("");
 
 let incrementCompactionCount: typeof import("./session-updates.js").incrementCompactionCount;
 const tempDirs: string[] = [];
-let previousStateDir: string | undefined;
-let previousStateDirCaptured = false;
 
 async function createFixture() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-updates-"));
   tempDirs.push(root);
-  if (!previousStateDirCaptured) {
-    previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    previousStateDirCaptured = true;
-  }
-  process.env.OPENCLAW_STATE_DIR = root;
+  const storePath = path.join(root, "sessions.json");
   const sessionKey = "agent:main:forum:direct:compaction";
-  replaceSqliteSessionTranscriptEvents({
-    agentId: "main",
-    sessionId: "s1",
-    events: [{ type: "message" }],
-  });
+  const transcriptPath = path.join(root, "s1.jsonl");
+  await fs.writeFile(transcriptPath, '{"type":"message"}\n', "utf-8");
   const entry = {
     sessionId: "s1",
+    sessionFile: transcriptPath,
     updatedAt: Date.now(),
     compactionCount: 0,
   } as SessionEntry;
   const sessionStore: Record<string, SessionEntry> = {
     [sessionKey]: entry,
   };
-  upsertSessionEntry({ agentId: "main", sessionKey, entry });
-  return { sessionKey, sessionStore, entry };
+  await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+  return { storePath, sessionKey, sessionStore, entry, transcriptPath };
 }
 
 function firstSessionEndCall() {
@@ -79,28 +67,21 @@ describe("session-updates lifecycle hooks", () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
-    closeOpenClawAgentDatabasesForTest();
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
-    previousStateDir = undefined;
-    previousStateDirCaptured = false;
     await Promise.all(
       tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
     );
   });
 
   it("emits compaction lifecycle hooks when newSessionId replaces the session", async () => {
-    const { sessionKey, sessionStore, entry } = await createFixture();
-    const cfg = { session: {} } as OpenClawConfig;
+    const { storePath, sessionKey, sessionStore, entry, transcriptPath } = await createFixture();
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
 
     await incrementCompactionCount({
       cfg,
       sessionEntry: entry,
       sessionStore,
       sessionKey,
+      storePath,
       newSessionId: "s2",
     });
 
@@ -113,8 +94,8 @@ describe("session-updates lifecycle hooks", () => {
     expect(endEvent?.sessionId).toBe("s1");
     expect(endEvent?.sessionKey).toBe(sessionKey);
     expect(endEvent?.reason).toBe("compaction");
-    expect(endEvent).not.toHaveProperty(legacySessionFileProperty);
-    expect(endEvent).not.toHaveProperty("transcriptArchived");
+    expect(endEvent?.transcriptArchived).toBe(false);
+    expect(endEvent?.sessionFile).toBe(await fs.realpath(transcriptPath));
     expect(endContext?.sessionId).toBe("s1");
     expect(endContext?.sessionKey).toBe(sessionKey);
     expect(endContext?.agentId).toBe("main");
@@ -125,42 +106,5 @@ describe("session-updates lifecycle hooks", () => {
     expect(startContext?.sessionId).toBe("s2");
     expect(startContext?.sessionKey).toBe(sessionKey);
     expect(startContext?.agentId).toBe("main");
-  });
-
-  it("keeps topic compaction identity out of active session rows", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-updates-sqlite-"));
-    tempDirs.push(root);
-    if (!previousStateDirCaptured) {
-      previousStateDir = process.env.OPENCLAW_STATE_DIR;
-      previousStateDirCaptured = true;
-    }
-    process.env.OPENCLAW_STATE_DIR = root;
-    const sessionKey = "agent:main:forum:direct:compaction:topic:456";
-    replaceSqliteSessionTranscriptEvents({
-      agentId: "main",
-      sessionId: "s1",
-      events: [{ type: "message" }],
-    });
-    const entry = {
-      sessionId: "s1",
-      updatedAt: Date.now(),
-      compactionCount: 0,
-    } as SessionEntry;
-    const sessionStore: Record<string, SessionEntry> = {
-      [sessionKey]: entry,
-    };
-    upsertSessionEntry({ agentId: "main", sessionKey, entry });
-    const cfg = { session: {} } as OpenClawConfig;
-
-    await incrementCompactionCount({
-      cfg,
-      sessionEntry: entry,
-      sessionStore,
-      sessionKey,
-      newSessionId: "s2",
-    });
-
-    expect(sessionStore[sessionKey]?.sessionId).toBe("s2");
-    const [endEvent] = hookRunnerMocks.runSessionEnd.mock.calls[0] ?? [];
   });
 });

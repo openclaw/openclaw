@@ -372,7 +372,7 @@ export async function runStaleSyncReplayDedupeScenario(context: MatrixQaScenario
   await context.restartGatewayAfterStateMutation(async () => {
     await rewriteMatrixSyncStoreCursor({
       cursor: staleCursor,
-      rootDir: syncStore.rootDir,
+      pathname: syncStore.pathname,
     });
   });
 

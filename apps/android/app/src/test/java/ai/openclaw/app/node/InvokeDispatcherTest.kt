@@ -275,7 +275,7 @@ class InvokeDispatcherTest {
           getNodeCanvasHostUrl = { null },
           getOperatorCanvasHostUrl = { null },
         ),
-      debugHandler = DebugHandler(DeviceIdentityStore(appContext)),
+      debugHandler = DebugHandler(appContext, DeviceIdentityStore(appContext)),
       callLogHandler = CallLogHandler.forTesting(appContext, InvokeDispatcherFakeCallLogDataSource()),
       isForeground = { true },
       cameraEnabled = { cameraEnabled },
@@ -296,6 +296,7 @@ class InvokeDispatcherTest {
 
   private fun newCameraHandler(appContext: Context): CameraHandler =
     CameraHandler(
+      appContext = appContext,
       camera = CameraCaptureManager(appContext),
       externalAudioCaptureActive = MutableStateFlow(false),
       showCameraHud = { _, _, _ -> },

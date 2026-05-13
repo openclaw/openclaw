@@ -10,7 +10,6 @@
 
 import { describe, expect, it, vi } from "vitest";
 import type { QQBotInboundAccess } from "../../adapter/index.js";
-import { createMemoryKeyedStore } from "../../state/keyed-store.js";
 import type { InboundPipelineDeps } from "../inbound-context.js";
 import type { QueuedMessage } from "../message-queue.js";
 import type { GatewayAccount, GatewayPluginRuntime } from "../types.js";
@@ -64,16 +63,20 @@ function buildRuntime(
         resolveEnvelopeFormatOptions: vi.fn(() => ({})),
       },
       session: {
+        resolveStorePath: vi.fn(() => ""),
         recordInboundSession: vi.fn(async () => undefined),
       },
       turn: { run: vi.fn(async () => undefined) },
       text: { chunkMarkdownText: vi.fn(() => []) },
     },
     tts: { textToSpeech: vi.fn() },
-    state: {
-      openKeyedStore: <T>() => createMemoryKeyedStore<T>(),
-    },
   };
+}
+
+function buildAllowAccess(): QQBotInboundAccess {
+  return {
+    senderAccess: { decision: "allow" },
+  } as unknown as QQBotInboundAccess;
 }
 
 function buildDeps(
@@ -88,14 +91,8 @@ function buildDeps(
     startTyping: vi.fn(),
     adapters: {
       access: {
-        resolveInboundAccess: vi.fn(
-          async (): Promise<QQBotInboundAccess> =>
-            ({
-              senderAccess: {
-                decision: "allow",
-              },
-            }) as QQBotInboundAccess,
-        ),
+        resolveInboundAccess: vi.fn(() => buildAllowAccess()),
+        resolveSlashCommandAuthorization: vi.fn(() => true),
       },
     } as unknown as InboundPipelineDeps["adapters"],
   };

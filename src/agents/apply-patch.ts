@@ -1,18 +1,13 @@
 import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import { openRootFile, type RootFileOpenResult } from "../infra/boundary-file-read.js";
 import { root as fsRoot } from "../infra/fs-safe.js";
 import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "../infra/path-alias-guards.js";
-import type { AgentTool } from "./agent-core-contract.js";
 import { applyUpdateHunk } from "./apply-patch-update.js";
-import type { VirtualAgentFs } from "./filesystem/agent-filesystem.js";
-import {
-  resolvePathFromInput,
-  toRelativeSandboxPath,
-  toRelativeWorkspacePath,
-} from "./path-policy.js";
+import { toRelativeSandboxPath, resolvePathFromInput } from "./path-policy.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 
@@ -73,15 +68,9 @@ type SandboxApplyPatchConfig = {
   bridge: SandboxFsBridge;
 };
 
-type VirtualApplyPatchConfig = {
-  root: string;
-  fs: VirtualAgentFs;
-};
-
 type ApplyPatchOptions = {
   cwd: string;
   sandbox?: SandboxApplyPatchConfig;
-  virtual?: VirtualApplyPatchConfig;
   /** Restrict patch paths to the workspace root (cwd). Default: true. Set false to opt out. */
   workspaceOnly?: boolean;
   signal?: AbortSignal;
@@ -94,16 +83,10 @@ const applyPatchSchema = Type.Object({
 });
 
 export function createApplyPatchTool(
-  options: {
-    cwd?: string;
-    sandbox?: SandboxApplyPatchConfig;
-    virtual?: VirtualApplyPatchConfig;
-    workspaceOnly?: boolean;
-  } = {},
+  options: { cwd?: string; sandbox?: SandboxApplyPatchConfig; workspaceOnly?: boolean } = {},
 ): AgentTool<typeof applyPatchSchema, ApplyPatchToolDetails> {
   const cwd = options.cwd ?? process.cwd();
   const sandbox = options.sandbox;
-  const virtual = options.virtual;
   const workspaceOnly = options.workspaceOnly !== false;
 
   return {
@@ -127,7 +110,6 @@ export function createApplyPatchTool(
       const result = await applyPatch(input, {
         cwd,
         sandbox,
-        virtual,
         workspaceOnly,
         signal,
       });
@@ -247,25 +229,6 @@ type PatchFileOps = {
 };
 
 function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
-  if (options.virtual) {
-    const { root, fs } = options.virtual;
-    return {
-      readFile: async (filePath) => fs.readFile(toVirtualFsPath(root, filePath)).toString("utf8"),
-      writeFile: async (filePath, content) => {
-        fs.writeFile(toVirtualFsPath(root, filePath), content);
-      },
-      remove: async (filePath) => {
-        fs.remove(toVirtualFsPath(root, filePath));
-      },
-      mkdirp: async (dir) => {
-        const virtualPath = toVirtualFsPath(root, dir, { allowRoot: true });
-        if (virtualPath !== "/") {
-          fs.mkdir(virtualPath);
-        }
-      },
-    };
-  }
-
   if (options.sandbox) {
     const { root, bridge } = options.sandbox;
     return {
@@ -341,7 +304,7 @@ async function ensureDir(filePath: string, ops: PatchFileOps) {
 }
 
 async function assertPatchParentPath(filePath: string, options: ApplyPatchOptions) {
-  if (options.workspaceOnly === false || options.sandbox || options.virtual) {
+  if (options.workspaceOnly === false || options.sandbox) {
     return;
   }
   const parent = path.dirname(filePath);
@@ -393,15 +356,6 @@ async function resolvePatchPath(
   options: ApplyPatchOptions,
   aliasPolicy: PathAliasPolicy = PATH_ALIAS_POLICIES.strict,
 ): Promise<{ resolved: string; display: string }> {
-  if (options.virtual) {
-    const relative = toRelativeWorkspacePath(options.virtual.root, filePath);
-    const resolved = path.resolve(options.virtual.root, relative);
-    return {
-      resolved,
-      display: relative,
-    };
-  }
-
   if (options.sandbox) {
     const resolved = options.sandbox.bridge.resolvePath({
       filePath,
@@ -460,15 +414,6 @@ function toDisplayPath(resolved: string, cwd: string): string {
     return resolved;
   }
   return relative;
-}
-
-function toVirtualFsPath(
-  root: string,
-  candidate: string,
-  options?: { allowRoot?: boolean },
-): string {
-  const relative = toRelativeWorkspacePath(root, candidate, options);
-  return relative ? `/${relative.split(path.sep).join("/")}` : "/";
 }
 
 function parsePatchText(input: string): { hunks: Hunk[]; patch: string } {

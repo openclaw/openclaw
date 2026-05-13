@@ -48,7 +48,7 @@ function createGatewayCallModuleMock() {
 
 function createSubagentDepthModuleMock() {
   return {
-    getSubagentDepthFromSessionEntries: (sessionKey?: string) => requesterDepthResolver(sessionKey),
+    getSubagentDepthFromSessionStore: (sessionKey?: string) => requesterDepthResolver(sessionKey),
   };
 }
 
@@ -83,9 +83,10 @@ vi.mock("./subagent-announce-delivery.runtime.js", () =>
       return await callGatewayImpl(typed);
     },
     getRuntimeConfig: () => configOverride,
-    getSessionEntry: (params: { sessionKey: string }) => sessionStore[params.sessionKey],
+    loadSessionStore: () => sessionStore,
     resolveAgentIdFromSessionKey: () => "main",
     resolveMainSessionKey: () => "agent:main:main",
+    resolveStorePath: () => "/tmp/sessions-main.json",
     isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActiveMock(sessionId),
     queueEmbeddedPiMessageWithOutcome: (sessionId: string) => ({
       queued: false,
@@ -174,9 +175,24 @@ vi.mock("./subagent-announce-delivery.js", () => ({
 }));
 vi.mock("./subagent-announce.runtime.js", () => ({
   callGateway: createGatewayCallModuleMock().callGateway,
+  dispatchGatewayMethodInProcess: async (
+    method: string,
+    params: Record<string, unknown>,
+    options?: { expectFinal?: boolean; timeoutMs?: number },
+  ) => {
+    const request = {
+      method,
+      params,
+      expectFinal: options?.expectFinal,
+      timeoutMs: options?.timeoutMs,
+    };
+    gatewayCalls.push(request);
+    return await callGatewayImpl(request);
+  },
   getRuntimeConfig: () => configOverride,
-  getSessionEntry: (params: { sessionKey: string }) => sessionStore[params.sessionKey],
+  loadSessionStore: vi.fn(() => sessionStore),
   resolveAgentIdFromSessionKey: () => "main",
+  resolveStorePath: () => "/tmp/sessions-main.json",
   resolveMainSessionKey: () => "agent:main:main",
   isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActiveMock(sessionId),
   waitForEmbeddedPiRunEnd: (sessionId: string, timeoutMs?: number) =>

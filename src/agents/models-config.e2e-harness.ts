@@ -3,14 +3,14 @@ import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.j
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withTempHome as withTempHomeBase } from "../plugin-sdk/test-helpers/temp-home.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
-import { resetModelCatalogReadyCacheForTest } from "./models-config-state.js";
+import { resetModelsJsonReadyCacheForTest } from "./models-config-state.js";
 
 export function withModelsTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   // Models-config tests do not exercise session persistence; skip draining
-  // unrelated session database state during temp-home teardown.
+  // unrelated session lock state during temp-home teardown.
   return withTempHomeBase(fn, {
     prefix: "openclaw-models-",
-    skipStateCleanup: true,
+    skipSessionCleanup: true,
   });
 }
 
@@ -35,7 +35,7 @@ export function installModelsConfigTestHooks(opts?: {
     if (shouldResetPluginLoaderState) {
       resetPluginLoaderTestStateForTest();
     }
-    resetModelCatalogReadyCacheForTest();
+    resetModelsJsonReadyCacheForTest();
   });
 
   afterEach(() => {
@@ -55,7 +55,7 @@ export function installModelsConfigTestHooks(opts?: {
     if (shouldResetPluginLoaderState) {
       resetPluginLoaderTestStateForTest();
     }
-    resetModelCatalogReadyCacheForTest();
+    resetModelsJsonReadyCacheForTest();
     if (opts?.restoreFetch && originalFetch) {
       globalThis.fetch = originalFetch;
     }

@@ -1,7 +1,7 @@
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import {
+  OPENAI_ACCOUNT_WIZARD_GROUP,
   OPENAI_API_KEY_LABEL,
-  OPENAI_API_KEY_WIZARD_GROUP,
   OPENAI_CODEX_DEVICE_PAIRING_HINT,
   OPENAI_CODEX_DEVICE_PAIRING_LABEL,
   OPENAI_CODEX_LOGIN_HINT,
@@ -74,7 +74,7 @@ export function createOpenAIProvider(): ProviderPlugin {
           choiceLabel: OPENAI_API_KEY_LABEL,
           choiceHint: "Use your OpenAI API key directly",
           assistantPriority: 5,
-          ...OPENAI_API_KEY_WIZARD_GROUP,
+          ...OPENAI_ACCOUNT_WIZARD_GROUP,
         },
       },
     ],

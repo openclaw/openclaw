@@ -256,10 +256,10 @@ exec output, and patch summaries):
 - `logging.redactSensitive`: `off` | `tools` (default: `tools`)
 - `logging.redactPatterns`: list of regex strings to override the default set. Custom patterns apply on top of the built-in defaults for Control UI tool payloads, so adding a pattern never weakens redaction of values already caught by the defaults.
 
-File logs stay JSONL; OpenClaw-owned session transcripts are SQLite rows.
-Matching secret values are masked before the log line or transcript message is
-written. Redaction is best-effort: it applies to text-bearing message content
-and log strings, not every identifier or binary payload field.
+File logs and session transcripts stay JSONL, but matching secret values are
+masked before the line or message is written to disk. Redaction is best-effort:
+it applies to text-bearing message content and log strings, not every
+identifier or binary payload field.
 
 The built-in defaults cover common API credentials and payment-credential field
 names such as card number, CVC/CVV, shared payment token, and payment credential

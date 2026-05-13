@@ -6,6 +6,9 @@ import {
   SUBAGENT_RUNTIME_REQUEST_SCOPE_ERROR_CODE,
 } from "openclaw/plugin-sdk/error-runtime";
 import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
+import * as memoryCoreHostRuntimeCoreModule from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import * as runtimeConfigSnapshotModule from "openclaw/plugin-sdk/runtime-config-snapshot";
+import * as sessionStoreRuntimeModule from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   appendNarrativeEntry,
@@ -25,7 +28,7 @@ import {
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
 const { createTempWorkspace } = createMemoryCoreTestHarness();
-const DREAMS_UPDATE_LOCKS_KEY = Symbol.for("openclaw.memoryCore.dreamingNarrative.updateLocks");
+const DREAMS_FILE_LOCKS_KEY = Symbol.for("openclaw.memoryCore.dreamingNarrative.fileLocks");
 const EXPECTS_POSIX_PRIVATE_FILE_MODE = process.platform !== "win32";
 
 type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
@@ -76,7 +79,7 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 
 afterEach(() => {
   vi.restoreAllMocks();
-  resolveGlobalMap<string, unknown>(DREAMS_UPDATE_LOCKS_KEY).clear();
+  resolveGlobalMap<string, unknown>(DREAMS_FILE_LOCKS_KEY).clear();
 });
 
 describe("buildNarrativePrompt", () => {
@@ -577,9 +580,9 @@ describe("appendNarrativeEntry", () => {
     expect(after.mtimeMs).toBe(before.mtimeMs);
   });
 
-  it("cleans up the diary update lock entry after writes finish", async () => {
+  it("cleans up the per-file lock entry after diary updates finish", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-dedupe-");
-    const dreamsLocks = resolveGlobalMap<string, unknown>(DREAMS_UPDATE_LOCKS_KEY);
+    const dreamsLocks = resolveGlobalMap<string, unknown>(DREAMS_FILE_LOCKS_KEY);
 
     expect(dreamsLocks.size).toBe(0);
 
@@ -951,6 +954,70 @@ describe("generateAndAppendDreamNarrative", () => {
     });
 
     expect(subagent.deleteSession).toHaveBeenCalled();
+  });
+
+  it("scrubs stale dreaming entries and orphan transcripts after cleanup", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    const stateDir = await createTempWorkspace("openclaw-dreaming-state-");
+    const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const orphanPath = path.join(sessionsDir, "orphan.jsonl");
+    const livePath = path.join(sessionsDir, "still-live.jsonl");
+    await fs.writeFile(
+      storePath,
+      `${JSON.stringify({
+        "agent:main:dreaming-narrative-light-1": {
+          sessionId: "missing",
+        },
+        "agent:main:kept-session": {
+          sessionId: "still-live",
+        },
+        "agent:main:telegram:group:dreaming-narrative-room": {
+          sessionId: "still-missing-non-dreaming",
+        },
+      })}\n`,
+      "utf-8",
+    );
+    await fs.writeFile(orphanPath, '{"runId":"dreaming-narrative-light-123"}\n', "utf-8");
+    await fs.writeFile(livePath, '{"runId":"dreaming-narrative-light-keep"}\n', "utf-8");
+    const oldDate = new Date(Date.now() - 600_000);
+    await fs.utimes(orphanPath, oldDate, oldDate);
+    await fs.utimes(livePath, oldDate, oldDate);
+
+    vi.spyOn(runtimeConfigSnapshotModule, "getRuntimeConfig").mockReturnValue({
+      session: {},
+    } as never);
+    vi.spyOn(sessionStoreRuntimeModule, "resolveStorePath").mockImplementation(((
+      _store: string | undefined,
+      { agentId }: { agentId: string },
+    ) => {
+      expect(agentId).toBe("main");
+      return storePath;
+    }) as typeof sessionStoreRuntimeModule.resolveStorePath);
+    vi.spyOn(memoryCoreHostRuntimeCoreModule, "resolveStateDir").mockReturnValue(stateDir);
+
+    const subagent = createMockSubagent("The repository whispered of forgotten endpoints.");
+    const logger = createMockLogger();
+
+    await generateAndAppendDreamNarrative({
+      subagent,
+      workspaceDir,
+      data: { phase: "light", snippets: ["memory fragment"] },
+      logger,
+    });
+
+    const updatedStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      unknown
+    >;
+    expect(updatedStore).not.toHaveProperty("agent:main:dreaming-narrative-light-1");
+    expect(updatedStore).toHaveProperty("agent:main:kept-session");
+    expect(updatedStore).toHaveProperty("agent:main:telegram:group:dreaming-narrative-room");
+    const sessionFiles = await fs.readdir(sessionsDir);
+    expect(sessionFiles.filter((file) => file.startsWith("orphan.jsonl.deleted."))).not.toEqual([]);
+    expect(sessionFiles).toContain("still-live.jsonl");
+    expectLogIncludes(logger.info, "dreaming cleanup scrubbed");
   });
 
   it("isolates narrative sessions across workspaces even at the same timestamp", async () => {

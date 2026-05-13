@@ -4,14 +4,12 @@ import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
-import { upsertAuthProfile } from "../../agents/auth-profiles/profiles.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
 } from "../../agents/subagent-registry.js";
-import { replaceSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import {
   completeTaskRunByRunId,
@@ -79,6 +77,7 @@ async function buildStatusReplyForTest(params: { sessionKey?: string; verbose?: 
     sessionKey,
     parentSessionKey: sessionKey,
     sessionScope: commandParams.sessionScope,
+    storePath: commandParams.storePath,
     provider: "anthropic",
     model: "claude-opus-4-6",
     contextTokens: 0,
@@ -129,7 +128,7 @@ function writeTranscriptUsageLog(params: {
     totalTokens: number;
   };
 }) {
-  const transcriptPath = path.join(
+  const logPath = path.join(
     params.dir,
     ".openclaw",
     "agents",
@@ -137,20 +136,19 @@ function writeTranscriptUsageLog(params: {
     "sessions",
     `${params.sessionId}.jsonl`,
   );
-  replaceSqliteSessionTranscriptEvents({
-    agentId: params.agentId,
-    sessionId: params.sessionId,
-    events: [
-      {
-        type: "message",
-        message: {
-          role: "assistant",
-          model: "claude-opus-4-5",
-          usage: params.usage,
-        },
+  fs.mkdirSync(path.dirname(logPath), { recursive: true });
+  fs.writeFileSync(
+    logPath,
+    JSON.stringify({
+      type: "message",
+      message: {
+        role: "assistant",
+        model: "claude-opus-4-5",
+        usage: params.usage,
       },
-    ],
-  });
+    }),
+    "utf-8",
+  );
 }
 
 describe("buildStatusReply subagent summary", () => {
@@ -606,17 +604,31 @@ describe("buildStatusReply subagent summary", () => {
 
     await withTempHome(
       async (dir) => {
-        upsertAuthProfile({
-          profileId: "openai-codex:status",
-          credential: {
-            type: "oauth",
-            provider: "openai-codex",
-            access: "access-token",
-            refresh: "refresh-token",
-            expires: Date.now() + 60 * 60_000,
-          },
-          agentDir: path.join(dir, ".openclaw", "agents", "main", "agent"),
-        });
+        const authPath = path.join(
+          dir,
+          ".openclaw",
+          "agents",
+          "main",
+          "agent",
+          "auth-profiles.json",
+        );
+        fs.mkdirSync(path.dirname(authPath), { recursive: true });
+        fs.writeFileSync(
+          authPath,
+          JSON.stringify({
+            version: 1,
+            profiles: {
+              "openai-codex:status": {
+                type: "oauth",
+                provider: "openai-codex",
+                access: "access-token",
+                refresh: "refresh-token",
+                expires: Date.now() + 60 * 60_000,
+              },
+            },
+          }),
+          "utf8",
+        );
         const usageResetBase = Math.floor(Date.now() / 1000);
         providerUsageMock.loadProviderUsageSummary.mockResolvedValue({
           updatedAt: Date.now(),

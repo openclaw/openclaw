@@ -1,17 +1,30 @@
+import path from "node:path";
 import type { OpenClawConfig } from "../config/types.js";
 import type { TtsAutoMode, TtsConfig, TtsProvider } from "../config/types.tts.js";
+import { tryReadJsonSync } from "../infra/json-files.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { normalizeTtsAutoMode } from "./tts-auto-mode.js";
 import { resolveEffectiveTtsConfig, type TtsConfigResolutionContext } from "./tts-config.js";
-import { readTtsUserPrefs, resolveTtsPrefsRef, type TtsUserPrefs } from "./tts-prefs-store.js";
 
 const DEFAULT_TTS_MAX_LENGTH = 1500;
 const DEFAULT_TTS_SUMMARIZE = true;
 const DEFAULT_OPENAI_TTS_BASE_URL = "https://api.openai.com/v1";
 const MAX_STATUS_DETAIL_LENGTH = 96;
+
+type TtsUserPrefs = {
+  tts?: {
+    auto?: TtsAutoMode;
+    enabled?: boolean;
+    provider?: TtsProvider;
+    persona?: string | null;
+    maxLength?: number;
+    summarize?: boolean;
+  };
+};
 
 type TtsStatusSnapshot = {
   autoMode: TtsAutoMode;
@@ -59,6 +72,22 @@ function resolvePersonaPreferredProvider(
     return normalizeOptionalString(provider);
   }
   return undefined;
+}
+
+function resolveTtsPrefsPathValue(prefsPath: string | undefined): string {
+  const configuredPath = normalizeOptionalString(prefsPath);
+  if (configuredPath) {
+    return resolveUserPath(configuredPath);
+  }
+  const envPath = normalizeOptionalString(process.env.OPENCLAW_TTS_PREFS);
+  if (envPath) {
+    return resolveUserPath(envPath);
+  }
+  return path.join(resolveConfigDir(process.env), "settings", "tts.json");
+}
+
+function readPrefs(prefsPath: string): TtsUserPrefs {
+  return tryReadJsonSync<TtsUserPrefs>(prefsPath) ?? {};
 }
 
 function resolveTtsAutoModeFromPrefs(prefs: TtsUserPrefs): TtsAutoMode | undefined {
@@ -195,8 +224,8 @@ export function resolveStatusTtsSnapshot(params: {
     accountId: params.accountId,
   };
   const raw: TtsConfig = resolveEffectiveTtsConfig(params.cfg, context);
-  const prefsRef = resolveTtsPrefsRef();
-  const prefs = readTtsUserPrefs(prefsRef);
+  const prefsPath = resolveTtsPrefsPathValue(raw.prefsPath);
+  const prefs = readPrefs(prefsPath);
   const autoMode =
     normalizeTtsAutoMode(params.sessionAuto) ??
     resolveTtsAutoModeFromPrefs(prefs) ??

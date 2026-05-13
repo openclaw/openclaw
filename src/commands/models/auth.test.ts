@@ -1093,7 +1093,7 @@ describe("modelsAuthLoginCommand", () => {
   it("survives lockout clearing failure without blocking login", async () => {
     const runtime = createRuntime();
     mocks.loadAuthProfileStoreForRuntime.mockImplementation(() => {
-      throw new Error("corrupt SQLite auth profile store");
+      throw new Error("corrupt auth-profiles.json");
     });
 
     await modelsAuthLoginCommand({ provider: "openai-codex" }, runtime);

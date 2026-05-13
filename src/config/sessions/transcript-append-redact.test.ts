@@ -1,12 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { upsertSessionEntry } from "./store.js";
+import { resolveSessionTranscriptPathInDir } from "./paths.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 import { appendSessionTranscriptMessage } from "./transcript-append.js";
-import { loadSqliteSessionTranscriptEvents } from "./transcript-store.sqlite.js";
 import {
   appendAssistantMessageToSessionTranscript,
   appendExactAssistantMessageToSessionTranscript,
@@ -24,80 +23,31 @@ vi.mock("../../logging/config.js", async (importOriginal) => {
 
 const EMAIL_PATTERN = String.raw`([\w]|[-.])+@([\w]|[-.])+\.\w+`;
 
-type TranscriptMessageEvent = {
-  type?: string;
-  message?: unknown;
-};
-
-function readEvents(sessionId: string, agentId = "main") {
-  return loadSqliteSessionTranscriptEvents({ agentId, sessionId }).map(
-    (record) => record.event as TranscriptMessageEvent,
-  );
+function readMessages(sessionFile: string) {
+  return fs
+    .readFileSync(sessionFile, "utf-8")
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as { type?: string; message?: unknown })
+    .filter((r) => r.type === "message")
+    .map((r) => r.message);
 }
-
-function readMessages(sessionId: string, agentId = "main") {
-  return readEvents(sessionId, agentId)
-    .filter((event) => event.type === "message")
-    .map((event) => event.message);
-}
-
-function readRawTranscript(sessionId: string, agentId = "main") {
-  return JSON.stringify(readEvents(sessionId, agentId));
-}
-
-function writeSessionEntry(params: { agentId?: string; sessionKey: string; sessionId: string }) {
-  upsertSessionEntry({
-    agentId: params.agentId ?? "main",
-    sessionKey: params.sessionKey,
-    entry: {
-      sessionId: params.sessionId,
-      chatType: "direct",
-      channel: "test",
-      updatedAt: Date.now(),
-    },
-  });
-}
-
-function createAssistantMessage(text: string) {
-  return {
-    role: "assistant" as const,
-    content: [{ type: "text" as const, text }],
-    api: "openai-responses" as const,
-    provider: "openclaw",
-    model: "test-model",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-    stopReason: "stop" as const,
-    timestamp: Date.now(),
-  };
-}
-
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-});
 
 describe("appendSessionTranscriptMessage - redaction", () => {
-  useTempSessionsFixture("transcript-redact-test-");
+  const fixture = useTempSessionsFixture("transcript-redact-test-");
 
   beforeEach(() => {
     readLoggingConfig.mockReset();
     readLoggingConfig.mockReturnValue(undefined);
   });
 
-  it("masks secrets in message content before SQLite persistence", async () => {
-    const sessionId = "redact-on";
+  it("masks secrets in message content before writing to disk", async () => {
+    const sessionFile = resolveSessionTranscriptPathInDir("redact-on", fixture.sessionsDir());
     const config: OpenClawConfig = { logging: { redactSensitive: "tools" } };
 
     await appendSessionTranscriptMessage({
-      agentId: "main",
-      sessionId,
+      transcriptPath: sessionFile,
       message: {
         role: "user",
         content: [{ type: "text", text: "my key is sk-abcdef1234567890xyz ok" }],
@@ -105,23 +55,22 @@ describe("appendSessionTranscriptMessage - redaction", () => {
       config,
     });
 
-    const raw = readRawTranscript(sessionId);
+    const raw = fs.readFileSync(sessionFile, "utf-8");
     expect(raw).not.toContain("sk-abcdef1234567890xyz");
-    expect(raw).toContain("ok");
+    expect(raw).toContain("ok"); // safe text preserved
 
-    const [msg] = readMessages(sessionId) as Array<{
+    const [msg] = readMessages(sessionFile) as Array<{
       content: Array<{ text: string }>;
     }>;
     expect(msg.content[0].text).not.toContain("sk-abcdef1234567890xyz");
   });
 
   it("writes content unchanged when redactSensitive is off", async () => {
-    const sessionId = "redact-off";
+    const sessionFile = resolveSessionTranscriptPathInDir("redact-off", fixture.sessionsDir());
     const config: OpenClawConfig = { logging: { redactSensitive: "off" } };
 
     await appendSessionTranscriptMessage({
-      agentId: "main",
-      sessionId,
+      transcriptPath: sessionFile,
       message: {
         role: "user",
         content: [{ type: "text", text: "my key is sk-abcdef1234567890xyz" }],
@@ -129,51 +78,57 @@ describe("appendSessionTranscriptMessage - redaction", () => {
       config,
     });
 
-    expect(readRawTranscript(sessionId)).toContain("sk-abcdef1234567890xyz");
+    const raw = fs.readFileSync(sessionFile, "utf-8");
+    expect(raw).toContain("sk-abcdef1234567890xyz");
   });
 
-  it("masks secrets when config is undefined", async () => {
-    const sessionId = "redact-undef";
+  it("masks secrets when config is undefined (default patterns)", async () => {
+    const sessionFile = resolveSessionTranscriptPathInDir("redact-undef", fixture.sessionsDir());
 
     await appendSessionTranscriptMessage({
-      agentId: "main",
-      sessionId,
+      transcriptPath: sessionFile,
       message: {
         role: "user",
         content: [{ type: "text", text: "my key is sk-abcdef1234567890xyz" }],
       },
+      // config intentionally omitted
     });
 
-    expect(readRawTranscript(sessionId)).not.toContain("sk-abcdef1234567890xyz");
+    const raw = fs.readFileSync(sessionFile, "utf-8");
+    expect(raw).not.toContain("sk-abcdef1234567890xyz");
   });
 
-  it("masks secrets in string payloads without role before SQLite persistence", async () => {
-    const sessionId = "redact-string-payload";
+  it("masks secrets in string payloads without role before writing to disk", async () => {
+    const sessionFile = resolveSessionTranscriptPathInDir(
+      "redact-string-payload",
+      fixture.sessionsDir(),
+    );
     const config: OpenClawConfig = { logging: { redactSensitive: "tools" } };
 
     await appendSessionTranscriptMessage({
-      agentId: "main",
-      sessionId,
+      transcriptPath: sessionFile,
       message: "my key is sk-abcdef1234567890xyz ok",
       config,
     });
 
-    const raw = readRawTranscript(sessionId);
+    const raw = fs.readFileSync(sessionFile, "utf-8");
     expect(raw).not.toContain("sk-abcdef1234567890xyz");
     expect(raw).toContain("ok");
 
-    const [msg] = readMessages(sessionId) as string[];
+    const [msg] = readMessages(sessionFile) as string[];
     expect(msg).not.toContain("sk-abcdef1234567890xyz");
     expect(msg).toContain("ok");
   });
 
-  it("masks secrets in structured payloads without role before SQLite persistence", async () => {
-    const sessionId = "redact-structured-no-role";
+  it("masks secrets in structured payloads without role before writing to disk", async () => {
+    const sessionFile = resolveSessionTranscriptPathInDir(
+      "redact-structured-no-role",
+      fixture.sessionsDir(),
+    );
     const config: OpenClawConfig = { logging: { redactSensitive: "tools" } };
 
     await appendSessionTranscriptMessage({
-      agentId: "main",
-      sessionId,
+      transcriptPath: sessionFile,
       message: {
         apiKey: "plainsecretvalue123",
         password: "hunter2",
@@ -184,14 +139,14 @@ describe("appendSessionTranscriptMessage - redaction", () => {
       config,
     });
 
-    const raw = readRawTranscript(sessionId);
+    const raw = fs.readFileSync(sessionFile, "utf-8");
     expect(raw).not.toContain("plainsecretvalue123");
     expect(raw).not.toContain("hunter2");
     expect(raw).not.toContain("nestedplainsecret123");
     expect(raw).not.toContain("sk-abcdef1234567890xyz");
     expect(raw).toContain("visible");
 
-    const [msg] = readMessages(sessionId) as Array<{
+    const [msg] = readMessages(sessionFile) as Array<{
       apiKey: string;
       password: string;
       nested: { accessToken: string[] };
@@ -206,35 +161,45 @@ describe("appendSessionTranscriptMessage - redaction", () => {
   });
 
   it("uses configured custom patterns when cfg omits logging", async () => {
-    const sessionId = "redact-config-pattern-fallback";
+    const sessionFile = resolveSessionTranscriptPathInDir(
+      "redact-config-pattern-fallback",
+      fixture.sessionsDir(),
+    );
     readLoggingConfig.mockReturnValue({
       redactSensitive: "tools",
       redactPatterns: [EMAIL_PATTERN],
     });
 
     await appendSessionTranscriptMessage({
-      agentId: "main",
-      sessionId,
+      transcriptPath: sessionFile,
       message: {
         role: "user",
         content: [{ type: "text", text: "email peter@dc.io and key sk-abcdef1234567890xyz ok" }],
       },
-      config: {},
+      config: {
+        session: {
+          writeLock: {
+            acquireTimeoutMs: 25_000,
+          },
+        },
+      },
     });
 
-    const raw = readRawTranscript(sessionId);
+    const raw = fs.readFileSync(sessionFile, "utf-8");
     expect(raw).not.toContain("peter@dc.io");
     expect(raw).not.toContain("sk-abcdef1234567890xyz");
     expect(raw).toContain("ok");
   });
 
-  it("masks secrets in assistant tool-call arguments before SQLite persistence", async () => {
-    const sessionId = "redact-tool-call-args";
+  it("masks secrets in assistant tool-call arguments before writing to disk", async () => {
+    const sessionFile = resolveSessionTranscriptPathInDir(
+      "redact-tool-call-args",
+      fixture.sessionsDir(),
+    );
     const config: OpenClawConfig = { logging: { redactSensitive: "tools" } };
 
     await appendSessionTranscriptMessage({
-      agentId: "main",
-      sessionId,
+      transcriptPath: sessionFile,
       message: {
         role: "assistant",
         content: [
@@ -254,14 +219,14 @@ describe("appendSessionTranscriptMessage - redaction", () => {
       config,
     });
 
-    const raw = readRawTranscript(sessionId);
+    const raw = fs.readFileSync(sessionFile, "utf-8");
     expect(raw).not.toContain("sk-abcdef1234567890xyz");
     expect(raw).not.toContain("plainsecretvalue123");
     expect(raw).not.toContain("hunter2");
     expect(raw).toContain("OPENAI_API_KEY=sk-abc…0xyz openclaw health");
     expect(raw).toContain("openclaw health");
 
-    const [msg] = readMessages(sessionId) as Array<{
+    const [msg] = readMessages(sessionFile) as Array<{
       content: Array<{
         arguments: {
           command: string;
@@ -278,13 +243,15 @@ describe("appendSessionTranscriptMessage - redaction", () => {
     expect(msg.content[0].arguments.password).toBe("***");
   });
 
-  it("masks secrets in tool-result details before SQLite persistence", async () => {
-    const sessionId = "redact-tool-result-details";
+  it("masks secrets in tool-result details before writing to disk", async () => {
+    const sessionFile = resolveSessionTranscriptPathInDir(
+      "redact-tool-result-details",
+      fixture.sessionsDir(),
+    );
     const config: OpenClawConfig = { logging: { redactSensitive: "tools" } };
 
     await appendSessionTranscriptMessage({
-      agentId: "main",
-      sessionId,
+      transcriptPath: sessionFile,
       message: {
         role: "toolResult",
         toolCallId: "call_1",
@@ -302,19 +269,20 @@ describe("appendSessionTranscriptMessage - redaction", () => {
       config,
     });
 
-    const raw = readRawTranscript(sessionId);
+    const raw = fs.readFileSync(sessionFile, "utf-8");
     expect(raw).not.toContain("sk-abcdef1234567890xyz");
     expect(raw).not.toContain("plainsecretvalue123");
     expect(raw).not.toContain("hunter2");
     expect(raw).not.toContain("nestedplainsecret123");
     expect(raw).toContain("visible");
 
-    const [msg] = readMessages(sessionId) as Array<{
+    const [msg] = readMessages(sessionFile) as Array<{
       content: Array<{ text: string }>;
       details: {
         apiKey: string;
         password: string;
         nested: { accessToken: string[] };
+        safe: string;
       };
     }>;
     expect(msg.content[0].text).not.toContain("sk-abcdef1234567890xyz");
@@ -326,35 +294,64 @@ describe("appendSessionTranscriptMessage - redaction", () => {
 });
 
 describe("appendExactAssistantMessageToSessionTranscript - redaction", () => {
-  useTempSessionsFixture("exact-assistant-redact-test-");
-
-  beforeEach(() => {
-    readLoggingConfig.mockReset();
-    readLoggingConfig.mockReturnValue(undefined);
-  });
+  const fixture = useTempSessionsFixture("exact-assistant-redact-test-");
 
   it("does not redact when config.logging.redactSensitive is off", async () => {
+    // Set up a minimal session store so the function can resolve the session file.
+    const sessionsDir = fixture.sessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
     const sessionId = "test-session-redact-off";
     const sessionKey = "test-channel:test-user";
-    writeSessionEntry({ sessionKey, sessionId });
+    const store = {
+      [sessionKey]: { sessionId, updatedAt: Date.now() },
+    };
+    fs.writeFileSync(storePath, JSON.stringify(store, null, 2), { encoding: "utf-8", mode: 0o600 });
 
     const fakeApiKey = "sk-proj-FAKEKEYFORTESTINGONLY1234567890";
     const config: OpenClawConfig = { logging: { redactSensitive: "off" } };
 
     const result = await appendExactAssistantMessageToSessionTranscript({
       sessionKey,
+      storePath,
       config,
-      message: createAssistantMessage(`Here is your key: ${fakeApiKey}`),
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: `Here is your key: ${fakeApiKey}` }],
+        api: "openai-responses",
+        provider: "openclaw",
+        model: "test-model",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: Date.now(),
+      },
     });
 
     expect(result.ok).toBe(true);
-    expect(readRawTranscript(sessionId)).toContain(fakeApiKey);
+    if (!result.ok) {
+      return;
+    }
+
+    const raw = fs.readFileSync(result.sessionFile, "utf-8");
+    expect(raw).toContain(fakeApiKey);
   });
 
   it("emits the redacted assistant message for inline transcript updates", async () => {
+    const sessionsDir = fixture.sessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
     const sessionId = "test-session-redact-event";
     const sessionKey = "test-channel:test-redact-event";
-    writeSessionEntry({ sessionKey, sessionId });
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({ [sessionKey]: { sessionId, updatedAt: Date.now() } }, null, 2),
+      { encoding: "utf-8", mode: 0o600 },
+    );
 
     const fakeApiKey = "sk-proj-FAKEKEYFORTESTINGONLY1234567890";
     const config: OpenClawConfig = { logging: { redactSensitive: "tools" } };
@@ -364,16 +361,36 @@ describe("appendExactAssistantMessageToSessionTranscript - redaction", () => {
     try {
       const result = await appendExactAssistantMessageToSessionTranscript({
         sessionKey,
+        storePath,
         config,
-        message: createAssistantMessage(`Here is your key: ${fakeApiKey}`),
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: `Here is your key: ${fakeApiKey}` }],
+          api: "openai-responses",
+          provider: "openclaw",
+          model: "test-model",
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "stop",
+          timestamp: Date.now(),
+        },
       });
 
       expect(result.ok).toBe(true);
+      if (!result.ok) {
+        return;
+      }
 
-      const [storedMessage] = readMessages(sessionId);
-      expect(JSON.stringify(storedMessage)).not.toContain(fakeApiKey);
+      const [diskMessage] = readMessages(result.sessionFile);
+      expect(JSON.stringify(diskMessage)).not.toContain(fakeApiKey);
       expect(updates).toHaveLength(1);
-      expect(updates[0]?.message).toEqual(storedMessage);
+      expect(updates[0]?.message).toEqual(diskMessage);
       expect(JSON.stringify(updates[0]?.message)).not.toContain(fakeApiKey);
     } finally {
       unsubscribe();
@@ -381,20 +398,28 @@ describe("appendExactAssistantMessageToSessionTranscript - redaction", () => {
   });
 
   it("dedupes delivery mirrors against the redacted persisted text", async () => {
+    const sessionsDir = fixture.sessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
     const sessionId = "test-session-redact-dedupe";
     const sessionKey = "test-channel:test-redact-dedupe";
-    writeSessionEntry({ sessionKey, sessionId });
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({ [sessionKey]: { sessionId, updatedAt: Date.now() } }, null, 2),
+      { encoding: "utf-8", mode: 0o600 },
+    );
 
     const fakeApiKey = "sk-proj-FAKEKEYFORTESTINGONLY1234567890";
     const config: OpenClawConfig = { logging: { redactSensitive: "tools" } };
 
     const first = await appendAssistantMessageToSessionTranscript({
       sessionKey,
+      storePath,
       config,
       text: `Here is your key: ${fakeApiKey}`,
     });
     const second = await appendAssistantMessageToSessionTranscript({
       sessionKey,
+      storePath,
       config,
       text: `Here is your key: ${fakeApiKey}`,
     });
@@ -406,23 +431,48 @@ describe("appendExactAssistantMessageToSessionTranscript - redaction", () => {
     }
     expect(second.messageId).toBe(first.messageId);
 
-    expect(readRawTranscript(sessionId)).not.toContain(fakeApiKey);
-    expect(readMessages(sessionId)).toHaveLength(1);
+    const raw = fs.readFileSync(second.sessionFile, "utf-8");
+    expect(raw).not.toContain(fakeApiKey);
+    expect(readMessages(second.sessionFile)).toHaveLength(1);
   });
 
-  it("redacts new delivery mirrors after older unredacted assistant entries", async () => {
+  it("dedupes delivery mirrors against older unredacted assistant entries", async () => {
+    const sessionsDir = fixture.sessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
     const sessionId = "test-session-redact-upgrade-dedupe";
     const sessionKey = "test-channel:test-redact-upgrade-dedupe";
-    writeSessionEntry({ sessionKey, sessionId });
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({ [sessionKey]: { sessionId, updatedAt: Date.now() } }, null, 2),
+      { encoding: "utf-8", mode: 0o600 },
+    );
 
     const fakeApiKey = "sk-proj-OLDERUNREDACTEDTRANSCRIPT1234567890";
     const unredacted = await appendExactAssistantMessageToSessionTranscript({
       sessionKey,
+      storePath,
       config: { logging: { redactSensitive: "off" } },
-      message: createAssistantMessage(`Here is your key: ${fakeApiKey}`),
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: `Here is your key: ${fakeApiKey}` }],
+        api: "openai-responses",
+        provider: "openclaw",
+        model: "legacy-assistant",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: Date.now(),
+      },
     });
     const deduped = await appendAssistantMessageToSessionTranscript({
       sessionKey,
+      storePath,
       config: { logging: { redactSensitive: "tools" } },
       text: `Here is your key: ${fakeApiKey}`,
     });
@@ -432,11 +482,10 @@ describe("appendExactAssistantMessageToSessionTranscript - redaction", () => {
     if (!unredacted.ok || !deduped.ok) {
       return;
     }
-    expect(deduped.messageId).not.toBe(unredacted.messageId);
+    expect(deduped.messageId).toBe(unredacted.messageId);
 
-    const messages = readMessages(sessionId);
-    expect(messages).toHaveLength(2);
-    expect(JSON.stringify(messages[0])).toContain(fakeApiKey);
-    expect(JSON.stringify(messages[1])).not.toContain(fakeApiKey);
+    const raw = fs.readFileSync(deduped.sessionFile, "utf-8");
+    expect(raw).toContain(fakeApiKey);
+    expect(readMessages(deduped.sessionFile)).toHaveLength(1);
   });
 });

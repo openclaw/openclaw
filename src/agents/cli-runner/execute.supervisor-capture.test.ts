@@ -24,6 +24,7 @@ function buildPreparedCliRunContext(params: {
   return {
     params: {
       sessionId: "session-1",
+      sessionFile: "/tmp/session.jsonl",
       workspaceDir: "/tmp",
       prompt: "hi",
       provider,

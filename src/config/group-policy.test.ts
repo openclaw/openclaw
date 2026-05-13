@@ -345,8 +345,8 @@ describe("resolveToolsBySender", () => {
     });
 
     expect(warningSpy).toHaveBeenCalledTimes(1);
-    expect(String(warningSpy.mock.calls[0]?.[0])).toContain(`toolsBySender key "${legacyKey}"`);
-    const warningMeta = warningSpy.mock.calls[0]?.[1] as { code?: unknown } | undefined;
+    const [warningMessage, warningMeta] = firstWarningCall(warningSpy);
+    expect(String(warningMessage)).toContain(`toolsBySender key "${legacyKey}"`);
     expect(warningMeta?.code).toBe("OPENCLAW_TOOLS_BY_SENDER_UNTYPED_KEY");
   });
 });

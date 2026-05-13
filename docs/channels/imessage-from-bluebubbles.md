@@ -248,7 +248,7 @@ iMessage catchup is now available as an opt-in feature on the bundled plugin. On
 
 There is no supported BlueBubbles runtime to switch back to. If iMessage verification fails, set `channels.imessage.enabled: false`, restart the Gateway, fix the `imsg` blocker, and retry the cutover.
 
-The reply cache lives in SQLite plugin state under `~/.openclaw/state/openclaw.sqlite`. Run `openclaw doctor --fix` after updating if an older `imessage/reply-cache.jsonl` file is still present.
+The reply cache lives at `~/.openclaw/state/imessage/reply-cache.jsonl` (mode `0600`, parent dir `0700`). It is safe to delete if you want a clean slate.
 
 ## Related
 

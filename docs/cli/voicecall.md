@@ -24,8 +24,8 @@ openclaw voicecall speak    --call-id <id> --message <text>
 openclaw voicecall dtmf     --call-id <id> --digits <digits>
 openclaw voicecall end      --call-id <id>
 openclaw voicecall status   [--call-id <id>] [--json]
-openclaw voicecall tail     [--since <n>] [--poll <ms>]
-openclaw voicecall latency  [--last <n>]
+openclaw voicecall tail     [--file <path>] [--since <n>] [--poll <ms>]
+openclaw voicecall latency  [--file <path>] [--last <n>]
 openclaw voicecall expose   [--mode <m>] [--path <p>] [--port <port>] [--serve-path <p>]
 ```
 
@@ -40,8 +40,8 @@ openclaw voicecall expose   [--mode <m>] [--path <p>] [--port <port>] [--serve-p
 | `dtmf`     | Send DTMF digits to an active call.                             |
 | `end`      | Hang up an active call.                                         |
 | `status`   | Inspect active calls (or one by `--call-id`).                   |
-| `tail`     | Tail SQLite-backed call records (useful during provider tests). |
-| `latency`  | Summarize turn-latency metrics from SQLite-backed call records. |
+| `tail`     | Tail `calls.jsonl` (useful during provider tests).              |
+| `latency`  | Summarize turn-latency metrics from `calls.jsonl`.              |
 | `expose`   | Toggle Tailscale serve/funnel for the webhook endpoint.         |
 
 ## Setup and smoke
@@ -158,20 +158,22 @@ openclaw voicecall status --call-id <id>
 
 ### `tail`
 
-Tail SQLite-backed voice-call records. Prints the last `--since` records on start, then streams newly written records.
+Tail the voice-call JSONL log. Prints the last `--since` lines on start, then streams new lines as they are written.
 
-| Flag          | Default            | Description                    |
-| ------------- | ------------------ | ------------------------------ |
-| `--since <n>` | `25`               | Lines to print before tailing. |
-| `--poll <ms>` | `250` (minimum 50) | Poll interval in milliseconds. |
+| Flag            | Default                    | Description                    |
+| --------------- | -------------------------- | ------------------------------ |
+| `--file <path>` | resolved from plugin store | Path to `calls.jsonl`.         |
+| `--since <n>`   | `25`                       | Lines to print before tailing. |
+| `--poll <ms>`   | `250` (minimum 50)         | Poll interval in milliseconds. |
 
 ### `latency`
 
-Summarize turn-latency and listen-wait metrics from SQLite-backed call records. Output is JSON with `recordsScanned`, `turnLatency`, and `listenWait` summaries.
+Summarize turn-latency and listen-wait metrics from `calls.jsonl`. Output is JSON with `recordsScanned`, `turnLatency`, and `listenWait` summaries.
 
-| Flag         | Default           | Description                          |
-| ------------ | ----------------- | ------------------------------------ |
-| `--last <n>` | `200` (minimum 1) | Number of recent records to analyze. |
+| Flag            | Default                    | Description                          |
+| --------------- | -------------------------- | ------------------------------------ |
+| `--file <path>` | resolved from plugin store | Path to `calls.jsonl`.               |
+| `--last <n>`    | `200` (minimum 1)          | Number of recent records to analyze. |
 
 ## Exposing webhooks
 

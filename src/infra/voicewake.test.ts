@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
@@ -33,6 +35,21 @@ describe("voicewake config", () => {
     await withTempDir("openclaw-voicewake-", async (baseDir) => {
       const emptySaved = await setVoiceWakeTriggers(["", "   "], baseDir);
       expect(emptySaved.triggers).toEqual(defaultVoiceWakeTriggers());
+
+      await fs.mkdir(path.join(baseDir, "settings"), { recursive: true });
+      await fs.writeFile(
+        path.join(baseDir, "settings", "voicewake.json"),
+        JSON.stringify({
+          triggers: ["  wake ", "", 42, null],
+          updatedAtMs: -1,
+        }),
+        "utf8",
+      );
+
+      await expect(loadVoiceWakeConfig(baseDir)).resolves.toEqual({
+        triggers: ["wake"],
+        updatedAtMs: 0,
+      });
     });
   });
 });

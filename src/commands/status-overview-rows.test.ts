@@ -23,7 +23,7 @@ describe("status-overview-rows", () => {
     );
     expect(findRowValue(rows, "Plugin compatibility")).toBe("warn(1 notice · 1 plugin)");
     expect(findRowValue(rows, "Sessions")).toBe(
-      "2 active · default gpt-5.5 (12k ctx) · openclaw-agent.sqlite",
+      "2 active · default gpt-5.5 (12k ctx) · store.json",
     );
   });
 

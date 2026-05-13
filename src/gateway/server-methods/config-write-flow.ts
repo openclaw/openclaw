@@ -200,8 +200,7 @@ async function tryWriteRestartSentinelPayload(
   payload: RestartSentinelPayload,
 ): Promise<string | null> {
   try {
-    await writeRestartSentinel(payload);
-    return null;
+    return await writeRestartSentinel(payload);
   } catch {
     return null;
   }

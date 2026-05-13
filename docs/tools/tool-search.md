@@ -238,7 +238,7 @@ node --import tsx scripts/tool-search-gateway-e2e.ts
 
 It creates a temporary fake plugin with a large tool catalog, starts the mock
 OpenAI provider, starts a Gateway once in direct mode and once with Tool Search
-enabled, then compares provider request payloads and SQLite transcript rows.
+enabled, then compares provider request payloads and session logs.
 
 The regression proves:
 

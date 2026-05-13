@@ -179,8 +179,7 @@ export async function loadStatusScanModuleForTest(
   vi.resetModules();
   const getStatusCommandSecretTargetIds = mocks.getStatusCommandSecretTargetIds ?? vi.fn(() => []);
   const resolveMemorySearchConfig =
-    mocks.resolveMemorySearchConfig ??
-    vi.fn(() => ({ store: { databasePath: "/tmp/main.sqlite" } }));
+    mocks.resolveMemorySearchConfig ?? vi.fn(() => ({ store: { path: "/tmp/main.sqlite" } }));
 
   vi.doMock("../channels/config-presence.js", () => ({
     hasPotentialConfiguredChannels: mocks.hasPotentialConfiguredChannels,

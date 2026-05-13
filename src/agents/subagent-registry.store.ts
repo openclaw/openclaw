@@ -1,27 +1,33 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
-import type { Insertable, Selectable } from "kysely";
 import { resolveStateDir } from "../config/paths.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import { sqliteBooleanInteger, sqliteIntegerBoolean } from "../infra/sqlite-row-values.js";
+import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
 import { readStringValue } from "../shared/string-coerce.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  type OpenClawStateDatabaseOptions,
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
-import type { DeliveryContext } from "../utils/delivery-context.types.js";
-import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-type SubagentRunsTable = OpenClawStateKyselyDatabase["subagent_runs"];
-type SubagentRunRow = Selectable<SubagentRunsTable>;
-type SubagentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "subagent_runs">;
+type PersistedSubagentRegistryV1 = {
+  version: 1;
+  runs: Record<string, LegacySubagentRunRecord>;
+};
+
+type PersistedSubagentRegistryV2 = {
+  version: 2;
+  runs: Record<string, PersistedSubagentRunRecord>;
+};
+
+type PersistedSubagentRegistry = PersistedSubagentRegistryV1 | PersistedSubagentRegistryV2;
+
+const REGISTRY_VERSION = 2 as const;
+const MAX_SUBAGENT_REGISTRY_READ_CACHE_ENTRIES = 32;
 
 type PersistedSubagentRunRecord = SubagentRunRecord;
+
+type RegistryCacheEntry = {
+  signature: string;
+  runs: Map<string, SubagentRunRecord>;
+};
 
 type LegacySubagentRunRecord = PersistedSubagentRunRecord & {
   announceCompletedAt?: unknown;
@@ -30,7 +36,33 @@ type LegacySubagentRunRecord = PersistedSubagentRunRecord & {
   requesterAccountId?: unknown;
 };
 
-export function resolveSubagentStateDir(env: NodeJS.ProcessEnv = process.env): string {
+const registryReadCache = new Map<string, RegistryCacheEntry>();
+
+function cloneSubagentRunRecord(entry: SubagentRunRecord): SubagentRunRecord {
+  return structuredClone(entry);
+}
+
+function cloneSubagentRunMap(runs: Map<string, SubagentRunRecord>): Map<string, SubagentRunRecord> {
+  return new Map([...runs].map(([runId, entry]) => [runId, cloneSubagentRunRecord(entry)]));
+}
+
+function setCachedRegistryRead(
+  pathname: string,
+  signature: string,
+  runs: Map<string, SubagentRunRecord>,
+): void {
+  registryReadCache.delete(pathname);
+  registryReadCache.set(pathname, { signature, runs: cloneSubagentRunMap(runs) });
+  if (registryReadCache.size <= MAX_SUBAGENT_REGISTRY_READ_CACHE_ENTRIES) {
+    return;
+  }
+  const oldestKey = registryReadCache.keys().next().value;
+  if (typeof oldestKey === "string") {
+    registryReadCache.delete(oldestKey);
+  }
+}
+
+function resolveSubagentStateDir(env: NodeJS.ProcessEnv = process.env): string {
   const explicit = env.OPENCLAW_STATE_DIR?.trim();
   if (explicit) {
     return resolveStateDir(env);
@@ -41,23 +73,42 @@ export function resolveSubagentStateDir(env: NodeJS.ProcessEnv = process.env): s
   return resolveStateDir(env);
 }
 
-function subagentRegistryDbOptions(
-  env: NodeJS.ProcessEnv = process.env,
-): OpenClawStateDatabaseOptions {
-  return {
-    env: {
-      ...env,
-      OPENCLAW_STATE_DIR: resolveSubagentStateDir(env),
-    },
-  };
+export function resolveSubagentRegistryPath(): string {
+  return path.join(resolveSubagentStateDir(process.env), "subagents", "runs.json");
 }
 
-function normalizePersistedRunRecords(params: {
-  runsRaw: Record<string, unknown>;
-  isLegacy: boolean;
-}): Map<string, SubagentRunRecord> {
+export function loadSubagentRegistryFromDisk(): Map<string, SubagentRunRecord> {
+  const pathname = resolveSubagentRegistryPath();
+  const signature = statRegistryFileSignature(pathname);
+  if (signature === null) {
+    registryReadCache.delete(pathname);
+    return new Map();
+  }
+  const cached = registryReadCache.get(pathname);
+  if (cached?.signature === signature) {
+    registryReadCache.delete(pathname);
+    registryReadCache.set(pathname, cached);
+    return cloneSubagentRunMap(cached.runs);
+  }
+  const raw = loadJsonFile(pathname);
+  if (!raw || typeof raw !== "object") {
+    setCachedRegistryRead(pathname, signature, new Map());
+    return new Map();
+  }
+  const record = raw as Partial<PersistedSubagentRegistry>;
+  if (record.version !== 1 && record.version !== 2) {
+    setCachedRegistryRead(pathname, signature, new Map());
+    return new Map();
+  }
+  const runsRaw = record.runs;
+  if (!runsRaw || typeof runsRaw !== "object") {
+    setCachedRegistryRead(pathname, signature, new Map());
+    return new Map();
+  }
   const out = new Map<string, SubagentRunRecord>();
-  for (const [runId, entry] of Object.entries(params.runsRaw)) {
+  const isLegacy = record.version === 1;
+  let migrated = false;
+  for (const [runId, entry] of Object.entries(runsRaw)) {
     if (!entry || typeof entry !== "object") {
       continue;
     }
@@ -66,7 +117,7 @@ function normalizePersistedRunRecords(params: {
       continue;
     }
     const legacyCompletedAt =
-      params.isLegacy && typeof typed.announceCompletedAt === "number"
+      isLegacy && typeof typed.announceCompletedAt === "number"
         ? typed.announceCompletedAt
         : undefined;
     const cleanupCompletedAt =
@@ -74,7 +125,7 @@ function normalizePersistedRunRecords(params: {
     const cleanupHandled =
       typeof typed.cleanupHandled === "boolean"
         ? typed.cleanupHandled
-        : params.isLegacy
+        : isLegacy
           ? Boolean(typed.announceHandled ?? cleanupCompletedAt)
           : undefined;
     const requesterOrigin = normalizeDeliveryContext(
@@ -107,277 +158,52 @@ function normalizePersistedRunRecords(params: {
       cleanupHandled,
       spawnMode: typed.spawnMode === "session" ? "session" : "run",
     });
+    if (isLegacy) {
+      migrated = true;
+    }
+  }
+  if (migrated) {
+    try {
+      saveSubagentRegistryToDisk(out);
+    } catch {
+      // ignore migration write failures
+    }
+  } else {
+    setCachedRegistryRead(pathname, signature, out);
   }
   return out;
 }
 
-export function normalizeSubagentRunRecordsSnapshot(params: {
-  runsRaw: Record<string, unknown>;
-  isLegacy: boolean;
-}): Map<string, SubagentRunRecord> {
-  return normalizePersistedRunRecords(params);
-}
-
-function getSubagentRegistryKysely(db: DatabaseSync) {
-  return getNodeSqliteKysely<SubagentRegistryDatabase>(db);
-}
-
-function serializeJson(value: unknown): string | null {
-  return value == null ? null : JSON.stringify(value);
-}
-
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- JSON columns are parsed at module boundaries.
-function parseJsonValue<T>(raw: string | null): T | undefined {
-  if (!raw?.trim()) {
-    return undefined;
+export function saveSubagentRegistryToDisk(runs: Map<string, SubagentRunRecord>) {
+  const pathname = resolveSubagentRegistryPath();
+  const serialized: Record<string, PersistedSubagentRunRecord> = {};
+  for (const [runId, entry] of runs.entries()) {
+    serialized[runId] = entry;
   }
+  const out: PersistedSubagentRegistry = {
+    version: REGISTRY_VERSION,
+    runs: serialized,
+  };
+  saveJsonFile(pathname, out);
+  const signature = statRegistryFileSignature(pathname);
+  if (signature === null) {
+    registryReadCache.delete(pathname);
+  } else {
+    setCachedRegistryRead(pathname, signature, runs);
+  }
+}
+
+function statRegistryFileSignature(pathname: string): string | null {
   try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return undefined;
-  }
-}
-
-function normalizeNumber(value: number | bigint | null): number | undefined {
-  if (typeof value === "bigint") {
-    return Number(value);
-  }
-  return typeof value === "number" ? value : undefined;
-}
-
-function rowToRunRecord(row: SubagentRunRow): SubagentRunRecord | null {
-  const raw: PersistedSubagentRunRecord = {
-    runId: row.run_id,
-    childSessionKey: row.child_session_key,
-    controllerSessionKey: row.controller_session_key ?? undefined,
-    requesterSessionKey: row.requester_session_key,
-    requesterDisplayKey: row.requester_display_key,
-    requesterOrigin: parseJsonValue<DeliveryContext>(row.requester_origin_json),
-    task: row.task,
-    taskName: row.task_name ?? undefined,
-    cleanup: row.cleanup === "delete" ? "delete" : "keep",
-    label: row.label ?? undefined,
-    model: row.model ?? undefined,
-    agentDir: row.agent_dir ?? undefined,
-    workspaceDir: row.workspace_dir ?? undefined,
-    runTimeoutSeconds: normalizeNumber(row.run_timeout_seconds),
-    spawnMode: row.spawn_mode === "session" ? "session" : "run",
-    createdAt: normalizeNumber(row.created_at) ?? 0,
-    startedAt: normalizeNumber(row.started_at),
-    sessionStartedAt: normalizeNumber(row.session_started_at),
-    accumulatedRuntimeMs: normalizeNumber(row.accumulated_runtime_ms),
-    endedAt: normalizeNumber(row.ended_at),
-    outcome: parseJsonValue<SubagentRunOutcome>(row.outcome_json),
-    archiveAtMs: normalizeNumber(row.archive_at_ms),
-    cleanupCompletedAt: normalizeNumber(row.cleanup_completed_at),
-    cleanupHandled: sqliteIntegerBoolean(row.cleanup_handled),
-    suppressAnnounceReason:
-      row.suppress_announce_reason === "steer-restart" || row.suppress_announce_reason === "killed"
-        ? row.suppress_announce_reason
-        : undefined,
-    expectsCompletionMessage: sqliteIntegerBoolean(row.expects_completion_message),
-    announceRetryCount: normalizeNumber(row.announce_retry_count),
-    lastAnnounceRetryAt: normalizeNumber(row.last_announce_retry_at),
-    lastAnnounceDeliveryError: row.last_announce_delivery_error ?? undefined,
-    endedReason: row.ended_reason as SubagentRunRecord["endedReason"],
-    pauseReason: row.pause_reason === "sessions_yield" ? "sessions_yield" : undefined,
-    wakeOnDescendantSettle: sqliteIntegerBoolean(row.wake_on_descendant_settle),
-    frozenResultText: row.frozen_result_text ?? undefined,
-    frozenResultCapturedAt: normalizeNumber(row.frozen_result_captured_at),
-    fallbackFrozenResultText: row.fallback_frozen_result_text ?? undefined,
-    fallbackFrozenResultCapturedAt: normalizeNumber(row.fallback_frozen_result_captured_at),
-    endedHookEmittedAt: normalizeNumber(row.ended_hook_emitted_at),
-    pendingFinalDelivery: sqliteIntegerBoolean(row.pending_final_delivery),
-    pendingFinalDeliveryCreatedAt: normalizeNumber(row.pending_final_delivery_created_at),
-    pendingFinalDeliveryLastAttemptAt: normalizeNumber(row.pending_final_delivery_last_attempt_at),
-    pendingFinalDeliveryAttemptCount: normalizeNumber(row.pending_final_delivery_attempt_count),
-    pendingFinalDeliveryLastError: row.pending_final_delivery_last_error,
-    pendingFinalDeliveryPayload: parseJsonValue(row.pending_final_delivery_payload_json),
-    completionAnnouncedAt: normalizeNumber(row.completion_announced_at),
-  };
-  return (
-    normalizePersistedRunRecords({
-      runsRaw: { [raw.runId]: raw },
-      isLegacy: false,
-    }).get(raw.runId) ?? null
-  );
-}
-
-function runRecordToRow(record: SubagentRunRecord): Insertable<SubagentRunsTable> {
-  return {
-    run_id: record.runId,
-    child_session_key: record.childSessionKey,
-    controller_session_key: record.controllerSessionKey ?? null,
-    requester_session_key: record.requesterSessionKey,
-    requester_display_key: record.requesterDisplayKey,
-    requester_origin_json: serializeJson(record.requesterOrigin),
-    task: record.task,
-    task_name: record.taskName ?? null,
-    cleanup: record.cleanup,
-    label: record.label ?? null,
-    model: record.model ?? null,
-    agent_dir: record.agentDir ?? null,
-    workspace_dir: record.workspaceDir ?? null,
-    run_timeout_seconds: record.runTimeoutSeconds ?? null,
-    spawn_mode: record.spawnMode ?? "run",
-    created_at: record.createdAt,
-    started_at: record.startedAt ?? null,
-    session_started_at: record.sessionStartedAt ?? null,
-    accumulated_runtime_ms: record.accumulatedRuntimeMs ?? null,
-    ended_at: record.endedAt ?? null,
-    outcome_json: serializeJson(record.outcome),
-    archive_at_ms: record.archiveAtMs ?? null,
-    cleanup_completed_at: record.cleanupCompletedAt ?? null,
-    cleanup_handled: sqliteBooleanInteger(record.cleanupHandled),
-    suppress_announce_reason: record.suppressAnnounceReason ?? null,
-    expects_completion_message: sqliteBooleanInteger(record.expectsCompletionMessage),
-    announce_retry_count: record.announceRetryCount ?? null,
-    last_announce_retry_at: record.lastAnnounceRetryAt ?? null,
-    last_announce_delivery_error: record.lastAnnounceDeliveryError ?? null,
-    ended_reason: record.endedReason ?? null,
-    pause_reason: record.pauseReason ?? null,
-    wake_on_descendant_settle: sqliteBooleanInteger(record.wakeOnDescendantSettle),
-    frozen_result_text: record.frozenResultText ?? null,
-    frozen_result_captured_at: record.frozenResultCapturedAt ?? null,
-    fallback_frozen_result_text: record.fallbackFrozenResultText ?? null,
-    fallback_frozen_result_captured_at: record.fallbackFrozenResultCapturedAt ?? null,
-    ended_hook_emitted_at: record.endedHookEmittedAt ?? null,
-    pending_final_delivery: sqliteBooleanInteger(record.pendingFinalDelivery),
-    pending_final_delivery_created_at: record.pendingFinalDeliveryCreatedAt ?? null,
-    pending_final_delivery_last_attempt_at: record.pendingFinalDeliveryLastAttemptAt ?? null,
-    pending_final_delivery_attempt_count: record.pendingFinalDeliveryAttemptCount ?? null,
-    pending_final_delivery_last_error: record.pendingFinalDeliveryLastError ?? null,
-    pending_final_delivery_payload_json: serializeJson(record.pendingFinalDeliveryPayload),
-    completion_announced_at: record.completionAnnouncedAt ?? null,
-    payload_json: JSON.stringify(record),
-  };
-}
-
-function upsertSubagentRunRow(db: DatabaseSync, row: Insertable<SubagentRunsTable>): void {
-  executeSqliteQuerySync(
-    db,
-    getSubagentRegistryKysely(db)
-      .insertInto("subagent_runs")
-      .values(row)
-      .onConflict((conflict) =>
-        conflict.column("run_id").doUpdateSet({
-          child_session_key: (eb) => eb.ref("excluded.child_session_key"),
-          controller_session_key: (eb) => eb.ref("excluded.controller_session_key"),
-          requester_session_key: (eb) => eb.ref("excluded.requester_session_key"),
-          requester_display_key: (eb) => eb.ref("excluded.requester_display_key"),
-          requester_origin_json: (eb) => eb.ref("excluded.requester_origin_json"),
-          task: (eb) => eb.ref("excluded.task"),
-          task_name: (eb) => eb.ref("excluded.task_name"),
-          cleanup: (eb) => eb.ref("excluded.cleanup"),
-          label: (eb) => eb.ref("excluded.label"),
-          model: (eb) => eb.ref("excluded.model"),
-          agent_dir: (eb) => eb.ref("excluded.agent_dir"),
-          workspace_dir: (eb) => eb.ref("excluded.workspace_dir"),
-          run_timeout_seconds: (eb) => eb.ref("excluded.run_timeout_seconds"),
-          spawn_mode: (eb) => eb.ref("excluded.spawn_mode"),
-          created_at: (eb) => eb.ref("excluded.created_at"),
-          started_at: (eb) => eb.ref("excluded.started_at"),
-          session_started_at: (eb) => eb.ref("excluded.session_started_at"),
-          accumulated_runtime_ms: (eb) => eb.ref("excluded.accumulated_runtime_ms"),
-          ended_at: (eb) => eb.ref("excluded.ended_at"),
-          outcome_json: (eb) => eb.ref("excluded.outcome_json"),
-          archive_at_ms: (eb) => eb.ref("excluded.archive_at_ms"),
-          cleanup_completed_at: (eb) => eb.ref("excluded.cleanup_completed_at"),
-          cleanup_handled: (eb) => eb.ref("excluded.cleanup_handled"),
-          suppress_announce_reason: (eb) => eb.ref("excluded.suppress_announce_reason"),
-          expects_completion_message: (eb) => eb.ref("excluded.expects_completion_message"),
-          announce_retry_count: (eb) => eb.ref("excluded.announce_retry_count"),
-          last_announce_retry_at: (eb) => eb.ref("excluded.last_announce_retry_at"),
-          last_announce_delivery_error: (eb) => eb.ref("excluded.last_announce_delivery_error"),
-          ended_reason: (eb) => eb.ref("excluded.ended_reason"),
-          pause_reason: (eb) => eb.ref("excluded.pause_reason"),
-          wake_on_descendant_settle: (eb) => eb.ref("excluded.wake_on_descendant_settle"),
-          frozen_result_text: (eb) => eb.ref("excluded.frozen_result_text"),
-          frozen_result_captured_at: (eb) => eb.ref("excluded.frozen_result_captured_at"),
-          fallback_frozen_result_text: (eb) => eb.ref("excluded.fallback_frozen_result_text"),
-          fallback_frozen_result_captured_at: (eb) =>
-            eb.ref("excluded.fallback_frozen_result_captured_at"),
-          ended_hook_emitted_at: (eb) => eb.ref("excluded.ended_hook_emitted_at"),
-          pending_final_delivery: (eb) => eb.ref("excluded.pending_final_delivery"),
-          pending_final_delivery_created_at: (eb) =>
-            eb.ref("excluded.pending_final_delivery_created_at"),
-          pending_final_delivery_last_attempt_at: (eb) =>
-            eb.ref("excluded.pending_final_delivery_last_attempt_at"),
-          pending_final_delivery_attempt_count: (eb) =>
-            eb.ref("excluded.pending_final_delivery_attempt_count"),
-          pending_final_delivery_last_error: (eb) =>
-            eb.ref("excluded.pending_final_delivery_last_error"),
-          pending_final_delivery_payload_json: (eb) =>
-            eb.ref("excluded.pending_final_delivery_payload_json"),
-          completion_announced_at: (eb) => eb.ref("excluded.completion_announced_at"),
-          payload_json: (eb) => eb.ref("excluded.payload_json"),
-        }),
-      ),
-  );
-}
-
-export function loadSubagentRegistryFromSqlite(
-  env: NodeJS.ProcessEnv = process.env,
-): Map<string, SubagentRunRecord> | null {
-  const database = openOpenClawStateDatabase(subagentRegistryDbOptions(env));
-  const query = getSubagentRegistryKysely(database.db)
-    .selectFrom("subagent_runs")
-    .selectAll()
-    .orderBy("created_at", "asc")
-    .orderBy("run_id", "asc");
-  const rows = executeSqliteQuerySync(database.db, query).rows;
-  if (rows.length === 0) {
-    return null;
-  }
-  const runs = new Map<string, SubagentRunRecord>();
-  for (const row of rows) {
-    const run = rowToRunRecord(row);
-    if (run) {
-      runs.set(run.runId, run);
+    const stat = fs.statSync(pathname, { bigint: true });
+    if (!stat.isFile()) {
+      return null;
     }
+    return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return null;
+    }
+    throw error;
   }
-  return runs;
-}
-
-export function loadSubagentRegistryFromState(): Map<string, SubagentRunRecord> {
-  return loadSubagentRegistryFromSqlite() ?? new Map();
-}
-
-function writeSubagentRegistryRunsToSqlite(
-  runs: Map<string, SubagentRunRecord>,
-  env: NodeJS.ProcessEnv = process.env,
-): void {
-  runOpenClawStateWriteTransaction((database) => {
-    for (const entry of runs.values()) {
-      upsertSubagentRunRow(database.db, runRecordToRow(entry));
-    }
-  }, subagentRegistryDbOptions(env));
-}
-
-export function writeSubagentRegistryRunsSnapshot(
-  runs: Map<string, SubagentRunRecord>,
-  env: NodeJS.ProcessEnv = process.env,
-): void {
-  writeSubagentRegistryRunsToSqlite(runs, env);
-}
-
-export function saveSubagentRegistryToState(runs: Map<string, SubagentRunRecord>) {
-  runOpenClawStateWriteTransaction((database) => {
-    const kysely = getSubagentRegistryKysely(database.db);
-    const existing = executeSqliteQuerySync(
-      database.db,
-      kysely.selectFrom("subagent_runs").select("run_id"),
-    ).rows;
-    for (const entry of existing) {
-      if (!runs.has(entry.run_id)) {
-        executeSqliteQuerySync(
-          database.db,
-          kysely.deleteFrom("subagent_runs").where("run_id", "=", entry.run_id),
-        );
-      }
-    }
-    for (const entry of runs.values()) {
-      upsertSubagentRunRow(database.db, runRecordToRow(entry));
-    }
-  }, subagentRegistryDbOptions());
 }

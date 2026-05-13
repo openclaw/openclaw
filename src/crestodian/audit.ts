@@ -1,12 +1,9 @@
-import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
-import {
-  createCorePluginStateKeyedStore,
-  type PluginStateEntry,
-} from "../plugin-state/plugin-state-store.js";
+import { appendRegularFile } from "../infra/fs-safe.js";
 
-export type CrestodianAuditEntry = {
+type CrestodianAuditEntry = {
   timestamp: string;
   operation: string;
   summary: string;
@@ -16,16 +13,6 @@ export type CrestodianAuditEntry = {
   details?: Record<string, unknown>;
 };
 
-export const CRESTODIAN_AUDIT_OWNER_ID = "core:crestodian";
-export const CRESTODIAN_AUDIT_NAMESPACE = "audit";
-export const CRESTODIAN_AUDIT_MAX_ENTRIES = 50_000;
-
-const crestodianAuditStore = createCorePluginStateKeyedStore<CrestodianAuditEntry>({
-  ownerId: CRESTODIAN_AUDIT_OWNER_ID,
-  namespace: CRESTODIAN_AUDIT_NAMESPACE,
-  maxEntries: CRESTODIAN_AUDIT_MAX_ENTRIES,
-});
-
 export function resolveCrestodianAuditPath(
   env: NodeJS.ProcessEnv = process.env,
   stateDir = resolveStateDir(env),
@@ -33,25 +20,20 @@ export function resolveCrestodianAuditPath(
   return path.join(stateDir, "audit", "crestodian.jsonl");
 }
 
-function resolveCrestodianAuditKey(entry: CrestodianAuditEntry): string {
-  const suffix = randomUUID();
-  return `${entry.timestamp}:${suffix}`;
-}
-
 export async function appendCrestodianAuditEntry(
   entry: Omit<CrestodianAuditEntry, "timestamp">,
-  _opts: { env?: NodeJS.ProcessEnv; auditPath?: string } = {},
+  opts: { env?: NodeJS.ProcessEnv; auditPath?: string } = {},
 ): Promise<string> {
-  const record = {
+  const auditPath = opts.auditPath ?? resolveCrestodianAuditPath(opts.env);
+  await fs.mkdir(path.dirname(auditPath), { recursive: true });
+  const line = JSON.stringify({
     timestamp: new Date().toISOString(),
     ...entry,
-  } satisfies CrestodianAuditEntry;
-  await crestodianAuditStore.register(resolveCrestodianAuditKey(record), record);
-  return `${CRESTODIAN_AUDIT_OWNER_ID}/${CRESTODIAN_AUDIT_NAMESPACE}`;
-}
-
-export async function listCrestodianAuditEntriesForTests(): Promise<
-  PluginStateEntry<CrestodianAuditEntry>[]
-> {
-  return await crestodianAuditStore.entries();
+  } satisfies CrestodianAuditEntry);
+  await appendRegularFile({
+    filePath: auditPath,
+    content: `${line}\n`,
+    rejectSymlinkParents: true,
+  });
+  return auditPath;
 }

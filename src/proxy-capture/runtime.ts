@@ -54,7 +54,7 @@ type DebugProxyCaptureStoreLike = Pick<
 >;
 
 export type DebugProxyCaptureRuntimeDeps = {
-  getStore?: () => DebugProxyCaptureStoreLike;
+  getStore?: (dbPath: string, blobDir: string) => DebugProxyCaptureStoreLike;
   closeStore?: typeof closeDebugProxyCaptureStore;
   persistEventPayload?: (
     store: DebugProxyCaptureStoreLike,
@@ -159,21 +159,6 @@ function createHttpCaptureEventBase(params: {
   };
 }
 
-function ensureDebugProxyCaptureSession(params: {
-  store: DebugProxyCaptureStoreLike;
-  settings: DebugProxySettings;
-  mode: string;
-}): void {
-  params.store.upsertSession({
-    id: params.settings.sessionId,
-    startedAt: Date.now(),
-    mode: params.mode,
-    sourceScope: "openclaw",
-    sourceProcess: params.settings.sourceProcess,
-    proxyUrl: params.settings.proxyUrl,
-  });
-}
-
 function installDebugProxyGlobalFetchPatch(
   settings: DebugProxySettings,
   deps: DebugProxyCaptureRuntimeDeps = {},
@@ -228,9 +213,8 @@ function installDebugProxyGlobalFetchPatch(
       return response;
     } catch (error) {
       if (url && /^https?:/i.test(url)) {
-        const store = runtime.getStore();
+        const store = runtime.getStore(settings.dbPath, settings.blobDir);
         const parsed = new URL(url);
-        ensureDebugProxyCaptureSession({ store, settings, mode: "global-fetch" });
         store.recordEvent({
           sessionId: settings.sessionId,
           ts: Date.now(),
@@ -280,10 +264,15 @@ export function initializeDebugProxyCapture(
   if (!settings.enabled) {
     return;
   }
-  ensureDebugProxyCaptureSession({
-    store: resolveRuntimeDeps(deps).getStore(),
-    settings,
+  resolveRuntimeDeps(deps).getStore(settings.dbPath, settings.blobDir).upsertSession({
+    id: settings.sessionId,
+    startedAt: Date.now(),
     mode,
+    sourceScope: "openclaw",
+    sourceProcess: settings.sourceProcess,
+    proxyUrl: settings.proxyUrl,
+    dbPath: settings.dbPath,
+    blobDir: settings.blobDir,
   });
   installDebugProxyGlobalFetchPatch(settings, deps);
 }
@@ -297,7 +286,7 @@ export function finalizeDebugProxyCapture(
     return;
   }
   const runtime = resolveRuntimeDeps(deps);
-  runtime.getStore().endSession(settings.sessionId);
+  runtime.getStore(settings.dbPath, settings.blobDir).endSession(settings.sessionId);
   uninstallDebugProxyGlobalFetchPatch(deps);
   runtime.closeStore();
 }
@@ -321,8 +310,7 @@ export function captureHttpExchange(
     return;
   }
   const runtime = resolveRuntimeDeps(deps);
-  const store = runtime.getStore();
-  ensureDebugProxyCaptureSession({ store, settings, mode: "http-capture" });
+  const store = runtime.getStore(settings.dbPath, settings.blobDir);
   const flowId = params.flowId ?? randomUUID();
   const url = new URL(params.url);
   const requestBody =
@@ -441,8 +429,7 @@ export function captureWsEvent(params: {
   if (!settings.enabled) {
     return;
   }
-  const store = getDebugProxyCaptureStore();
-  ensureDebugProxyCaptureSession({ store, settings, mode: "ws-capture" });
+  const store = getDebugProxyCaptureStore(settings.dbPath, settings.blobDir);
   const url = new URL(params.url);
   const payload = persistEventPayload(store, {
     data: params.payload,

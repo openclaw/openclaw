@@ -7,7 +7,7 @@ describe("memory manager session reindex gating", () => {
       shouldSyncSessionsForReindex({
         hasSessionSource: true,
         sessionsDirty: false,
-        dirtySessionTranscriptCount: 0,
+        dirtySessionFileCount: 0,
         sync: { reason: "session-start" },
         needsFullReindex: true,
       }),
@@ -16,7 +16,7 @@ describe("memory manager session reindex gating", () => {
       shouldSyncSessionsForReindex({
         hasSessionSource: true,
         sessionsDirty: false,
-        dirtySessionTranscriptCount: 0,
+        dirtySessionFileCount: 0,
         sync: { reason: "watch" },
         needsFullReindex: true,
       }),
@@ -25,7 +25,7 @@ describe("memory manager session reindex gating", () => {
       shouldSyncSessionsForReindex({
         hasSessionSource: true,
         sessionsDirty: false,
-        dirtySessionTranscriptCount: 0,
+        dirtySessionFileCount: 0,
         sync: { reason: "session-start" },
         needsFullReindex: false,
       }),
@@ -34,7 +34,7 @@ describe("memory manager session reindex gating", () => {
       shouldSyncSessionsForReindex({
         hasSessionSource: true,
         sessionsDirty: false,
-        dirtySessionTranscriptCount: 0,
+        dirtySessionFileCount: 0,
         sync: { reason: "watch" },
         needsFullReindex: false,
       }),

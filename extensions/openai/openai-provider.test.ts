@@ -1,5 +1,5 @@
-import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/provider-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { Context, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAICodexProviderPlugin } from "./openai-codex-provider.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
@@ -132,7 +132,7 @@ describe("buildOpenAIProvider", () => {
       choiceHint: "Use your OpenAI API key directly",
       groupId: "openai",
       groupLabel: "OpenAI",
-      groupHint: "Direct API key",
+      groupHint: "ChatGPT subscription or API key",
     });
   });
 
@@ -435,7 +435,7 @@ describe("buildOpenAIProvider", () => {
     expectNoCatalogEntry(entries, "chat-latest");
   });
 
-  it("keeps modern live selection on OpenAI 5.2+ and Codex 5.4+", () => {
+  it("keeps modern live selection on OpenAI 5.2+ and current Codex models", () => {
     const provider = buildOpenAIProvider();
     const codexProvider = buildOpenAICodexProviderPlugin();
 

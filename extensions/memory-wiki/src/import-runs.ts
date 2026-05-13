@@ -1,8 +1,8 @@
-import { createHash } from "node:crypto";
-import { createPluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 
-export type MemoryWikiImportRunSummary = {
+type MemoryWikiImportRunSummary = {
   runId: string;
   importType: string;
   appliedAt: string;
@@ -24,32 +24,6 @@ type MemoryWikiImportRunsStatus = {
   activeRuns: number;
   rolledBackRuns: number;
 };
-
-type PersistedMemoryWikiImportRunRecord = {
-  vaultHash: string;
-  runId: string;
-  record: Record<string, unknown>;
-};
-
-const importRunStore = createPluginStateKeyedStore<PersistedMemoryWikiImportRunRecord>(
-  "memory-wiki",
-  {
-    namespace: "import-runs",
-    maxEntries: 10_000,
-  },
-);
-
-function hashSegment(value: string): string {
-  return createHash("sha256").update(value).digest("hex").slice(0, 32);
-}
-
-function resolveVaultHash(vaultRoot: string): string {
-  return hashSegment(vaultRoot);
-}
-
-function resolveImportRunStoreKey(vaultRoot: string, runId: string): string {
-  return `${resolveVaultHash(vaultRoot)}:${hashSegment(runId)}`;
-}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -127,35 +101,8 @@ function normalizeImportRunSummary(raw: unknown): MemoryWikiImportRunSummary | n
   };
 }
 
-export async function writeMemoryWikiImportRunRecord(
-  vaultRoot: string,
-  record: Record<string, unknown> & { runId: string },
-): Promise<void> {
-  await importRunStore.register(resolveImportRunStoreKey(vaultRoot, record.runId), {
-    vaultHash: resolveVaultHash(vaultRoot),
-    runId: record.runId,
-    record,
-  });
-}
-
-export async function readMemoryWikiImportRunRecord<T extends { runId: string }>(
-  vaultRoot: string,
-  runId: string,
-): Promise<T> {
-  const entry = await importRunStore.lookup(resolveImportRunStoreKey(vaultRoot, runId));
-  if (!entry) {
-    throw new Error(`Memory Wiki import run not found: ${runId}`);
-  }
-  return entry.record as T;
-}
-
-export async function listMemoryWikiImportRunRecords(
-  vaultRoot: string,
-): Promise<Record<string, unknown>[]> {
-  const vaultHash = resolveVaultHash(vaultRoot);
-  return (await importRunStore.entries())
-    .filter((entry) => entry.value.vaultHash === vaultHash)
-    .map((entry) => entry.value.record);
+function resolveImportRunsDir(vaultRoot: string): string {
+  return path.join(vaultRoot, ".openclaw-wiki", "import-runs");
 }
 
 export async function listMemoryWikiImportRuns(
@@ -163,8 +110,25 @@ export async function listMemoryWikiImportRuns(
   options?: { limit?: number },
 ): Promise<MemoryWikiImportRunsStatus> {
   const limit = Math.max(1, Math.floor(options?.limit ?? 10));
-  const runs = (await listMemoryWikiImportRunRecords(config.vault.path))
-    .map((record) => normalizeImportRunSummary(record))
+  const importRunsDir = resolveImportRunsDir(config.vault.path);
+  const entries = await fs
+    .readdir(importRunsDir, { withFileTypes: true })
+    .catch((error: NodeJS.ErrnoException) => {
+      if (error?.code === "ENOENT") {
+        return [];
+      }
+      throw error;
+    });
+  const runs = (
+    await Promise.all(
+      entries
+        .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+        .map(async (entry) => {
+          const raw = await fs.readFile(path.join(importRunsDir, entry.name), "utf8");
+          return normalizeImportRunSummary(JSON.parse(raw) as unknown);
+        }),
+    )
+  )
     .filter((entry): entry is MemoryWikiImportRunSummary => entry !== null)
     .toSorted((left, right) => right.appliedAt.localeCompare(left.appliedAt));
 

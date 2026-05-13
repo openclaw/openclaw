@@ -62,7 +62,7 @@ describe("registerChannelsCli", () => {
         cliAddOptions: [{ flags: "--homeserver <url>", description: "Matrix homeserver URL" }],
       },
     ]);
-    process.argv = ["node", "openclaw", "completion"];
+    process.argv = ["node", "openclaw", "completion", "--write-state"];
     const program = new Command().name("openclaw");
 
     await registerChannelsCli(program, process.argv, { includeSetupOptions: true });

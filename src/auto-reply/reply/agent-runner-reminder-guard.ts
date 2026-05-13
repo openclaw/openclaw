@@ -1,4 +1,4 @@
-import { loadCronStore, resolveCronStoreKey } from "../../cron/store.js";
+import { loadCronStore, resolveCronStorePath } from "../../cron/store.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import type { ReplyPayload } from "../types.js";
 
@@ -26,10 +26,13 @@ export function hasUnbackedReminderCommitment(text: string): boolean {
  * current session key. Used to suppress the "no reminder scheduled" guard note
  * when an existing cron (created in a prior turn) already covers the commitment.
  */
-export async function hasSessionRelatedCronJobs(params: { sessionKey?: string }): Promise<boolean> {
+export async function hasSessionRelatedCronJobs(params: {
+  cronStorePath?: string;
+  sessionKey?: string;
+}): Promise<boolean> {
   try {
-    const cronStorePath = resolveCronStoreKey();
-    const store = await loadCronStore(cronStorePath);
+    const storePath = resolveCronStorePath(params.cronStorePath);
+    const store = await loadCronStore(storePath);
     if (store.jobs.length === 0) {
       return false;
     }

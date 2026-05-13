@@ -1,3 +1,9 @@
+import {
+  getChannelPlugin,
+  normalizeChannelId as normalizeAnyChannelId,
+} from "../../channels/plugins/index.js";
+import { resolveSessionConversationRef } from "../../channels/plugins/session-conversation.js";
+import { normalizeChannelId as normalizeChatChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ANNOUNCE_SKIP_TOKEN, REPLY_SKIP_TOKEN } from "./sessions-send-tokens.js";
 export {
@@ -15,6 +21,29 @@ export type AnnounceTarget = {
   accountId?: string;
   threadId?: string; // Forum topic/thread ID
 };
+
+export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget | null {
+  const parsed = resolveSessionConversationRef(sessionKey);
+  if (!parsed) {
+    return null;
+  }
+  const normalizedChannel =
+    normalizeAnyChannelId(parsed.channel) ?? normalizeChatChannelId(parsed.channel);
+  const channel = normalizedChannel ?? parsed.channel;
+  const plugin = normalizedChannel ? getChannelPlugin(normalizedChannel) : null;
+  const genericTarget = parsed.kind === "channel" ? `channel:${parsed.id}` : `group:${parsed.id}`;
+  const normalized =
+    plugin?.messaging?.resolveSessionTarget?.({
+      kind: parsed.kind,
+      id: parsed.id,
+      threadId: parsed.threadId,
+    }) ?? plugin?.messaging?.normalizeTarget?.(genericTarget);
+  return {
+    channel,
+    to: normalized ?? (normalizedChannel ? genericTarget : parsed.id),
+    threadId: parsed.threadId,
+  };
+}
 
 function buildAgentSessionLines(params: {
   requesterSessionKey?: string;

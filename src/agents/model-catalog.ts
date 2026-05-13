@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -16,8 +18,7 @@ import { modelSupportsInput as modelCatalogEntrySupportsInput } from "./model-ca
 import type { ModelCatalogEntry, ModelInputType } from "./model-catalog.types.js";
 import { normalizeConfiguredProviderCatalogModelId } from "./model-ref-shared.js";
 import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
-import { readStoredModelsConfigRaw } from "./models-config-store.js";
-import { ensureOpenClawModelCatalog } from "./models-config.js";
+import { ensureOpenClawModelsJson } from "./models-config.js";
 import { normalizeProviderId } from "./provider-id.js";
 
 const log = createSubsystemLogger("model-catalog");
@@ -246,11 +247,7 @@ async function loadReadOnlyPersistedModelCatalog(params?: {
 }): Promise<ModelCatalogEntry[]> {
   const cfg = params?.config ?? getRuntimeConfig();
   const agentDir = resolveDefaultAgentDir(cfg);
-  const stored = readStoredModelsConfigRaw(agentDir);
-  if (!stored) {
-    throw new Error("persisted model catalog missing");
-  }
-  const raw = stored.raw;
+  const raw = await readFile(join(agentDir, "models.json"), "utf8");
   const parsed = JSON.parse(raw) as Record<string, unknown>;
   const models: ModelCatalogEntry[] = [];
   const { buildShouldSuppressBuiltInModel } = await loadModelSuppression();
@@ -354,8 +351,8 @@ export async function loadModelCatalog(params?: {
     try {
       const cfg = params?.config ?? getRuntimeConfig();
       if (!readOnly) {
-        await ensureOpenClawModelCatalog(cfg);
-        logStage("model-catalog-ready");
+        await ensureOpenClawModelsJson(cfg);
+        logStage("models-json-ready");
       }
       // IMPORTANT: keep the dynamic import *inside* the try/catch.
       // If this fails once (e.g. during a pnpm install that temporarily swaps node_modules),
@@ -371,19 +368,11 @@ export async function loadModelCatalog(params?: {
         readOnly ? { readOnly: true } : undefined,
       );
       logStage("auth-storage-ready");
-      const registry =
-        typeof (piSdk.ModelRegistry as { inMemory?: (authStorage: unknown) => PiRegistryInstance })
-          .inMemory === "function"
-          ? (
-              piSdk.ModelRegistry as { inMemory: (authStorage: unknown) => PiRegistryInstance }
-            ).inMemory(authStorage)
-          : instantiatePiModelRegistry(piSdk, authStorage, undefined as unknown as string);
-      if (typeof piSdk.applyStoredModelsConfigToRegistry === "function") {
-        (piSdk.applyStoredModelsConfigToRegistry as (registry: unknown, agentDir: string) => void)(
-          registry,
-          agentDir,
-        );
-      }
+      const registry = instantiatePiModelRegistry(
+        piSdk,
+        authStorage,
+        join(agentDir, "models.json"),
+      );
       logStage("registry-ready");
       const entries = Array.isArray(registry) ? registry : registry.getAll();
       logStage("registry-read", `entries=${entries.length}`);

@@ -3,12 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
 
 async function withOpenRouterStateDir(run: (stateDir: string) => Promise<void>) {
   const stateDir = mkdtempSync(join(tmpdir(), "openclaw-openrouter-capabilities-"));
@@ -26,7 +20,6 @@ async function withOpenRouterStateDir(run: (stateDir: string) => Promise<void>) 
   try {
     await run(stateDir);
   } finally {
-    closeOpenClawStateDatabaseForTest();
     rmSync(stateDir, { recursive: true, force: true });
   }
 }
@@ -40,52 +33,8 @@ async function importOpenRouterModelCapabilities(scope: string) {
 
 describe("openrouter-model-capabilities", () => {
   afterEach(() => {
-    closeOpenClawStateDatabaseForTest();
     vi.unstubAllGlobals();
     delete process.env.OPENCLAW_STATE_DIR;
-  });
-
-  it("loads persisted model capabilities from SQLite without the JSON cache file", async () => {
-    await withOpenRouterStateDir(async (stateDir) => {
-      const stateDatabase = openOpenClawStateDatabase({
-        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-      });
-      const stateDb = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(stateDatabase.db);
-      executeSqliteQuerySync(
-        stateDatabase.db,
-        stateDb.insertInto("model_capability_cache").values({
-          provider_id: "openrouter",
-          model_id: "acme/sqlite-cached",
-          name: "SQLite Cached",
-          input_text: 1,
-          input_image: 1,
-          reasoning: 1,
-          supports_tools: null,
-          context_window: 222_000,
-          max_tokens: 33_000,
-          cost_input: 1,
-          cost_output: 2,
-          cost_cache_read: 3,
-          cost_cache_write: 4,
-          updated_at_ms: 1,
-        }),
-      );
-      const fetchSpy = vi.fn(async () => {
-        throw new Error("unexpected OpenRouter fetch");
-      });
-      vi.stubGlobal("fetch", fetchSpy);
-
-      const module = await importOpenRouterModelCapabilities("sqlite-cache");
-      await module.loadOpenRouterModelCapabilities("acme/sqlite-cached");
-
-      expect(module.getOpenRouterModelCapabilities("acme/sqlite-cached")).toMatchObject({
-        input: ["text", "image"],
-        reasoning: true,
-        contextWindow: 222_000,
-        maxTokens: 33_000,
-      });
-      expect(fetchSpy).not.toHaveBeenCalled();
-    });
   });
 
   it("uses top-level OpenRouter max token fields when top_provider is absent", async () => {

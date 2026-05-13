@@ -300,7 +300,7 @@ openclaw hooks enable bootstrap-extra-files
 
 ### command-logger
 
-Logs all command events to the shared SQLite state database.
+Logs all command events to a centralized audit file.
 
 **Enable:**
 
@@ -308,19 +308,19 @@ Logs all command events to the shared SQLite state database.
 openclaw hooks enable command-logger
 ```
 
-**Output:** `~/.openclaw/state/openclaw.sqlite`, table `command_log_entries`
+**Output:** `~/.openclaw/logs/commands.log`
 
 **View logs:**
 
 ```bash
 # Recent commands
-sqlite3 ~/.openclaw/state/openclaw.sqlite 'select datetime(timestamp_ms / 1000, "unixepoch"), action, session_key, sender_id, source from command_log_entries order by timestamp_ms desc limit 20;'
+tail -n 20 ~/.openclaw/logs/commands.log
 
 # Pretty-print
-sqlite3 -json ~/.openclaw/state/openclaw.sqlite 'select entry_json from command_log_entries order by timestamp_ms desc limit 20;' | jq .
+cat ~/.openclaw/logs/commands.log | jq .
 
 # Filter by action
-sqlite3 ~/.openclaw/state/openclaw.sqlite 'select entry_json from command_log_entries where action = "new" order by timestamp_ms desc;'
+grep '"action":"new"' ~/.openclaw/logs/commands.log | jq .
 ```
 
 **See:** [command-logger documentation](/automation/hooks#command-logger)

@@ -369,14 +369,14 @@ describe("maybeRepairGatewayServiceConfig", () => {
   });
 
   it("does not duplicate gateway runtime warnings already emitted by the node install plan", async () => {
-    const nvmNode = "/home/orin/.nvm/versions/node/v24.12.0/bin/node";
+    const nvmNode = "/home/orin/.nvm/versions/node/v22.22.2/bin/node";
     mocks.readCommand.mockResolvedValue({
       programArguments: [nvmNode, "/usr/local/bin/openclaw", "gateway", "--port", "18789"],
       environment: {},
     });
     mocks.buildGatewayInstallPlan.mockImplementation(async ({ warn }) => {
       warn?.(
-        "System Node 20.20.2 at /usr/bin/node is below the required Node 24+. Using /home/orin/.nvm/versions/node/v24.12.0/bin/node for the daemon.",
+        "System Node 20.20.2 at /usr/bin/node is below the required Node 22.16+. Using /home/orin/.nvm/versions/node/v22.22.2/bin/node for the daemon.",
         "Gateway runtime",
       );
       return {
@@ -402,12 +402,10 @@ describe("maybeRepairGatewayServiceConfig", () => {
     const runtimeNotes = mocks.note.mock.calls.filter(([, title]) => title === "Gateway runtime");
     const runtimeMessages = runtimeNotes.map(([message]) => message);
     expect(runtimeMessages).not.toContain("duplicate doctor runtime warning");
-    expect(runtimeMessages.some((message) => String(message).includes("not found"))).toBe(false);
-    expect(
-      runtimeMessages.some((message) =>
-        String(message).includes("Using /home/orin/.nvm/versions/node/v24.12.0/bin/node"),
-      ),
-    ).toBe(true);
+    expect(runtimeMessages.map((message) => String(message)).join("\n")).not.toContain("not found");
+    expect(runtimeMessages.map((message) => String(message)).join("\n")).toContain(
+      "Using /home/orin/.nvm/versions/node/v22.22.2/bin/node",
+    );
   });
 
   it("passes planned managed env keys into service audit for legacy inline secret detection", async () => {

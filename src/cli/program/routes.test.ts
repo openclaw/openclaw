@@ -258,6 +258,10 @@ describe("program routes", () => {
     );
   });
 
+  it("returns false for sessions route when --store value is missing", async () => {
+    await expectRunFalse(["sessions"], ["node", "openclaw", "sessions", "--store"]);
+  });
+
   it("returns false for sessions route when --active value is missing", async () => {
     await expectRunFalse(["sessions"], ["node", "openclaw", "sessions", "--active"]);
   });

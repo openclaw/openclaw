@@ -8,12 +8,11 @@ export type DeliveryIntentRef = {
 
 export type DeliveryContext = Pick<
   ChannelRouteTargetInput,
-  "accountId" | "channel" | "chatType" | "threadId" | "to"
+  "accountId" | "channel" | "threadId" | "to"
 > & {
   channel?: string;
   to?: string;
   accountId?: string;
-  chatType?: ChannelRouteTargetInput["chatType"];
   threadId?: string | number;
   deliveryIntent?: DeliveryIntentRef;
 };
@@ -24,5 +23,10 @@ export type DeliveryContextSessionSource = {
   lastTo?: string;
   lastAccountId?: string;
   lastThreadId?: string | number;
+  origin?: {
+    provider?: string;
+    accountId?: string;
+    threadId?: string | number;
+  };
   deliveryContext?: DeliveryContext;
 };

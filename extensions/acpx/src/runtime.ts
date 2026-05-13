@@ -5,6 +5,7 @@ import {
   AcpxRuntime as BaseAcpxRuntime,
   createAcpRuntime,
   createAgentRegistry,
+  createFileSessionStore,
   decodeAcpxRuntimeHandleState,
   encodeAcpxRuntimeHandleState,
   type AcpAgentRegistry,
@@ -14,7 +15,6 @@ import {
   type AcpRuntimeOptions,
   type AcpRuntimeStatus,
 } from "acpx/runtime";
-import { createPluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { AcpRuntimeError, type AcpRuntime } from "../runtime-api.js";
 import {
   createAcpxProcessLeaseId,
@@ -46,20 +46,6 @@ type ResetAwareSessionStore = AcpSessionStore & {
   markFresh: (sessionKey: string) => void;
 };
 
-const ACPX_SESSION_STORE_PLUGIN_ID = "acpx";
-const ACPX_SESSION_STORE_NAMESPACE = "runtime-sessions";
-const ACPX_SESSION_STORE_MAX_ENTRIES = 10_000;
-
-type StoredAcpSessionRecord = Record<string, unknown>;
-
-const acpxSessionStore = createPluginStateKeyedStore<StoredAcpSessionRecord>(
-  ACPX_SESSION_STORE_PLUGIN_ID,
-  {
-    namespace: ACPX_SESSION_STORE_NAMESPACE,
-    maxEntries: ACPX_SESSION_STORE_MAX_ENTRIES,
-  },
-);
-
 type AcpxLaunchLeaseContext = {
   leaseId: string;
   gatewayInstanceId: string;
@@ -74,44 +60,6 @@ function readSessionRecordName(record: unknown): string {
   }
   const { name } = record as { name?: unknown };
   return typeof name === "string" ? name.trim() : "";
-}
-
-function resolveAcpSessionRecordKey(record: unknown): string {
-  if (typeof record !== "object" || record === null) {
-    return "";
-  }
-  const fields = record as {
-    name?: unknown;
-    sessionKey?: unknown;
-    id?: unknown;
-    sessionId?: unknown;
-  };
-  for (const value of [fields.name, fields.sessionKey, fields.id, fields.sessionId]) {
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-  return "";
-}
-
-function normalizeAcpSessionStoreKey(sessionId: string): string {
-  return sessionId.trim();
-}
-
-export function createSqliteSessionStore(): AcpSessionStore {
-  return {
-    async load(sessionId: string): Promise<AcpLoadedSessionRecord> {
-      const key = normalizeAcpSessionStoreKey(sessionId);
-      return key ? await acpxSessionStore.lookup(key) : undefined;
-    },
-    async save(record: AcpSessionRecord): Promise<void> {
-      const key = resolveAcpSessionRecordKey(record);
-      if (!key) {
-        throw new Error("Cannot save ACPX session without a stable session key.");
-      }
-      await acpxSessionStore.register(key, record as StoredAcpSessionRecord);
-    },
-  };
 }
 
 function readRecordAgentCommand(record: unknown): string | undefined {
@@ -1046,6 +994,7 @@ export {
   ACPX_BACKEND_ID,
   createAcpRuntime,
   createAgentRegistry,
+  createFileSessionStore,
   decodeAcpxRuntimeHandleState,
   encodeAcpxRuntimeHandleState,
 };

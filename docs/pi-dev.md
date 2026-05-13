@@ -1,25 +1,22 @@
 ---
-summary: "Developer workflow for OpenClaw embedded agent runtime changes"
-title: "Embedded agent runtime development workflow"
+summary: "Developer workflow for Pi integration: build, test, and live validation"
+title: "Pi development workflow"
 read_when:
-  - Working on embedded agent runtime code or tests
-  - Running agent runtime lint, typecheck, and live test flows
+  - Working on Pi integration code or tests
+  - Running Pi-specific lint, typecheck, and live test flows
 ---
 
-A sane workflow for working on OpenClaw's embedded agent runtime. Some files and
-tests still use historical `pi-*` names because the runtime imports selected
-upstream Pi packages, but session state, transcripts, tools, prompts, and
-persistence are OpenClaw-owned.
+A sane workflow for working on the Pi integration in OpenClaw.
 
 ## Type checking and linting
 
 - Default local gate: `pnpm check`
 - Build gate: `pnpm build` when the change can affect build output, packaging, or lazy-loading/module boundaries
-- Full landing gate for broad agent-runtime changes: `pnpm check && pnpm test`
+- Full landing gate for Pi-heavy changes: `pnpm check && pnpm test`
 
-## Running embedded runtime tests
+## Running Pi tests
 
-Run the focused runtime test set through the repo test wrapper:
+Run the Pi-focused test set directly with Vitest:
 
 ```bash
 pnpm test \
@@ -37,7 +34,7 @@ To include the live provider exercise:
 OPENCLAW_LIVE_TEST=1 pnpm test src/agents/pi-embedded-runner-extraparams.live.test.ts
 ```
 
-This covers the main embedded runtime unit suites:
+This covers the main Pi unit suites:
 
 - `src/agents/pi-*.test.ts`
 - `src/agents/pi-embedded-*.test.ts`
@@ -66,17 +63,14 @@ State lives under the OpenClaw state directory. Default is `~/.openclaw`. If `OP
 To reset everything:
 
 - `openclaw.json` for config
-- `state/openclaw.sqlite#table/auth_profile_stores/<agentDir>` for model auth profiles (API keys + OAuth)
+- `agents/<agentId>/agent/auth-profiles.json` for model auth profiles (API keys + OAuth)
 - `credentials/` for provider/channel state that still lives outside the auth profile store
-- `state/openclaw.sqlite` for shared gateway state, device/pairing state, and push registration state
-- `agents/<agentId>/agent/openclaw-agent.sqlite` for agent session history, transcript events, VFS scratch state, and artifacts
-- `agents/<agentId>/sessions/` or `sessions/` only if you are clearing legacy imports/debug exports
+- `agents/<agentId>/sessions/` for agent session history
+- `agents/<agentId>/sessions/sessions.json` for the session index
+- `sessions/` if legacy paths exist
 - `workspace/` if you want a blank workspace
 
-If you only want to reset sessions, delete
-`agents/<agentId>/agent/openclaw-agent.sqlite` for that agent after stopping the
-gateway. If you want to keep auth, leave `state/openclaw.sqlite` and any
-provider state under `credentials/` in place.
+If you only want to reset sessions, delete `agents/<agentId>/sessions/` for that agent. If you want to keep auth, leave `agents/<agentId>/agent/auth-profiles.json` and any provider state under `credentials/` in place.
 
 ## References
 
@@ -85,4 +79,4 @@ provider state under `credentials/` in place.
 
 ## Related
 
-- [Embedded agent runtime architecture](/pi)
+- [Pi integration architecture](/pi)

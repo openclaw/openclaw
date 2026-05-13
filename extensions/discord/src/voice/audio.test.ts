@@ -28,7 +28,7 @@ describe("discord voice opus decoder selection", () => {
   });
 
   it("requires an explicit preference for native opus", () => {
-    expect(resolveOpusDecoderPreference("")).toBe("opusscript");
+    expect(resolveOpusDecoderPreference()).toBe("opusscript");
     expect(resolveOpusDecoderPreference("opusscript")).toBe("opusscript");
     expect(resolveOpusDecoderPreference("native")).toBe("native");
     expect(resolveOpusDecoderPreference("@discordjs/opus")).toBe("native");

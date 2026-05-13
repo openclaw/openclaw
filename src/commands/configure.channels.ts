@@ -126,10 +126,9 @@ export async function removeChannelConfigWizard(
     }
 
     note(
-      [
-        `${label} removed from config.`,
-        "Note: credentials and SQLite session state are unchanged.",
-      ].join("\n"),
+      [`${label} removed from config.`, "Note: credentials/sessions on disk are unchanged."].join(
+        "\n",
+      ),
       "Channel removed",
     );
   }

@@ -231,7 +231,7 @@ describe("gateway server models + voicewake", () => {
     "voicewake.get returns defaults and voicewake.set broadcasts",
     { timeout: 20_000 },
     async () => {
-      await withTempHome(async () => {
+      await withTempHome(async (homeDir) => {
         const initial = await rpcReq<{ triggers: string[] }>(ws, "voicewake.get");
         expect(initial.ok).toBe(true);
         expect(initial.payload?.triggers).toEqual(["openclaw", "claude", "computer"]);
@@ -257,6 +257,12 @@ describe("gateway server models + voicewake", () => {
         const after = await rpcReq<{ triggers: string[] }>(ws, "voicewake.get");
         expect(after.ok).toBe(true);
         expect(after.payload?.triggers).toEqual(["hi", "there"]);
+
+        const onDisk = JSON.parse(
+          await fs.readFile(path.join(homeDir, ".openclaw", "settings", "voicewake.json"), "utf8"),
+        ) as { triggers?: unknown; updatedAtMs?: unknown };
+        expect(onDisk.triggers).toEqual(["hi", "there"]);
+        expect(typeof onDisk.updatedAtMs).toBe("number");
       });
     },
   );
@@ -309,7 +315,7 @@ describe("gateway server models + voicewake", () => {
   });
 
   test("voicewake.routing.get/set persists and broadcasts", { timeout: 60_000 }, async () => {
-    await withTempHome(async () => {
+    await withTempHome(async (homeDir) => {
       const initial = await rpcReq<{
         config?: { version?: number; defaultTarget?: unknown; routes?: unknown[] };
       }>(ws, "voicewake.routing.get");
@@ -351,6 +357,15 @@ describe("gateway server models + voicewake", () => {
       expect(after.payload?.config?.routes).toEqual([
         { trigger: "robot wake", target: { agentId: "main" } },
       ]);
+
+      const onDisk = JSON.parse(
+        await fs.readFile(
+          path.join(homeDir, ".openclaw", "settings", "voicewake-routing.json"),
+          "utf8",
+        ),
+      ) as { routes?: unknown };
+      expect(onDisk.routes).toEqual([{ trigger: "robot wake", target: { agentId: "main" } }]);
+
       const invalid = await rpcReq(ws, "voicewake.routing.set", { config: null });
       expect(invalid.ok).toBe(false);
       expect(invalid.error?.message ?? "").toMatch(

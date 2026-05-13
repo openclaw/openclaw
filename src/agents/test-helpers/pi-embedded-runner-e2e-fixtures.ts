@@ -1,15 +1,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { AssistantMessage } from "../pi-ai-contract.js";
 import { buildAttemptReplayMetadata } from "../pi-embedded-runner/run/incomplete-turn.js";
 import type { EmbeddedRunAttemptResult } from "../pi-embedded-runner/run/types.js";
 
 export type EmbeddedPiRunnerTestWorkspace = {
   tempRoot: string;
   agentDir: string;
-  stateDir: string;
   workspaceDir: string;
 };
 
@@ -18,12 +17,10 @@ export async function createEmbeddedPiRunnerTestWorkspace(
 ): Promise<EmbeddedPiRunnerTestWorkspace> {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
   const agentDir = path.join(tempRoot, "agent");
-  const stateDir = path.join(tempRoot, "state");
   const workspaceDir = path.join(tempRoot, "workspace");
   await fs.mkdir(agentDir, { recursive: true });
-  await fs.mkdir(stateDir, { recursive: true });
   await fs.mkdir(workspaceDir, { recursive: true });
-  return { tempRoot, agentDir, stateDir, workspaceDir };
+  return { tempRoot, agentDir, workspaceDir };
 }
 
 export async function cleanupEmbeddedPiRunnerTestWorkspace(
@@ -115,7 +112,7 @@ export function makeEmbeddedRunnerAttempt(
     timedOutDuringToolExecution: false,
     promptError: null,
     promptErrorSource: null,
-    sessionIdUsed: "session-test",
+    sessionIdUsed: "session:test",
     systemPromptReport: undefined,
     messagesSnapshot: [],
     assistantTexts: [],

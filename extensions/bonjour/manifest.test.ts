@@ -16,7 +16,7 @@ describe("bonjour package manifest", () => {
     ) as PackageManifest;
 
     expect(pluginPackageJson.dependencies?.["@homebridge/ciao"]).toBe("1.3.8");
-    expect(rootPackageJson.dependencies?.["@homebridge/ciao"]).toBe("^1.3.8");
+    expect(rootPackageJson.dependencies?.["@homebridge/ciao"]).toBe("1.3.8");
     expect(pluginPackageJson.devDependencies?.["@homebridge/ciao"]).toBeUndefined();
   });
 });

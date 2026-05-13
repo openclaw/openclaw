@@ -6,10 +6,8 @@ import { WebSocket } from "ws";
 import "./test-helpers.mocks.js";
 import { parseConfigJson5, resetConfigRuntimeState } from "../config/config.js";
 import {
-  deleteSessionEntry,
-  listSessionEntries,
+  clearSessionStoreCacheForTest,
   resolveMainSessionKeyFromConfig,
-  upsertSessionEntry,
   type SessionEntry,
 } from "../config/sessions.js";
 import { resetAgentRunContextForTest } from "../infra/agent-events.js";
@@ -35,7 +33,6 @@ import {
 } from "../routing/session-key.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resetTaskRegistryForTests } from "../tasks/runtime-internal.js";
 import { resetTaskFlowRegistryForTests } from "../tasks/task-flow-runtime-internal.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -93,6 +90,7 @@ let tempHome: string | undefined;
 let tempConfigRoot: string | undefined;
 let tempControlUiRoot: string | undefined;
 let suiteConfigRootSeq = 0;
+let lastSyncedSessionStorePath: string | undefined;
 let lastSyncedSessionConfigJson: string | undefined;
 let activeSuiteGatewayServerCount = 0;
 let activeSuiteHookScopeCount = 0;
@@ -123,7 +121,10 @@ function serializeGatewayTestSessionConfig(): string | undefined {
 }
 
 function hasUnsyncedGatewayTestSessionConfig(): boolean {
-  return serializeGatewayTestSessionConfig() !== lastSyncedSessionConfigJson;
+  return (
+    testState.sessionStorePath !== lastSyncedSessionStorePath ||
+    serializeGatewayTestSessionConfig() !== lastSyncedSessionConfigJson
+  );
 }
 
 async function persistTestSessionConfig(): Promise<void> {
@@ -135,6 +136,7 @@ async function persistTestSessionConfig(): Promise<void> {
     configPaths.add(path.join(process.env.OPENCLAW_STATE_DIR, "openclaw.json"));
   }
   const parsedConfigs = new Map<string, Record<string, unknown>>();
+  let preservedTemplateStore: string | undefined;
   for (const configPath of configPaths) {
     let config: Record<string, unknown> = {};
     try {
@@ -152,7 +154,19 @@ async function persistTestSessionConfig(): Promise<void> {
       config = {};
     }
     parsedConfigs.set(configPath, config);
+    const session =
+      config.session && typeof config.session === "object" && !Array.isArray(config.session)
+        ? (config.session as Record<string, unknown>)
+        : undefined;
+    const existingStore = typeof session?.store === "string" ? session.store.trim() : "";
+    if (!preservedTemplateStore && existingStore.includes("{agentId}")) {
+      preservedTemplateStore = existingStore;
+    }
   }
+  const nextStoreValue =
+    typeof testState.sessionStorePath === "string"
+      ? preservedTemplateStore || testState.sessionStorePath
+      : preservedTemplateStore;
   for (const configPath of configPaths) {
     const config = { ...parsedConfigs.get(configPath) };
     const session =
@@ -160,6 +174,10 @@ async function persistTestSessionConfig(): Promise<void> {
         ? { ...(config.session as Record<string, unknown>) }
         : {};
     delete session.mainKey;
+    delete session.store;
+    if (typeof nextStoreValue === "string" && nextStoreValue.trim().length > 0) {
+      session.store = nextStoreValue;
+    }
     if (testState.sessionConfig) {
       Object.assign(session, testState.sessionConfig);
     }
@@ -172,19 +190,25 @@ async function persistTestSessionConfig(): Promise<void> {
     await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
   }
   resetConfigRuntimeState();
+  lastSyncedSessionStorePath = testState.sessionStorePath;
   lastSyncedSessionConfigJson = serializeGatewayTestSessionConfig();
 }
 
-export async function seedGatewaySessionEntries(params: {
+export async function writeSessionStore(params: {
   entries: Record<string, Partial<SessionEntry>>;
+  storePath?: string;
   agentId?: string;
   mainKey?: string;
 }): Promise<void> {
+  const storePath = params.storePath ?? testState.sessionStorePath;
+  if (!storePath) {
+    throw new Error("writeSessionStore requires testState.sessionStorePath");
+  }
   const agentId = params.agentId ?? DEFAULT_AGENT_ID;
-  const entriesBySessionKey: Record<string, Partial<SessionEntry>> = {};
+  const store: Record<string, Partial<SessionEntry>> = {};
   for (const [requestKey, entry] of Object.entries(params.entries)) {
     const rawKey = requestKey.trim();
-    const sessionKey =
+    const storeKey =
       rawKey === "global" || rawKey === "unknown"
         ? rawKey
         : toAgentStoreSessionKey({
@@ -192,17 +216,15 @@ export async function seedGatewaySessionEntries(params: {
             requestKey,
             mainKey: params.mainKey,
           });
-    entriesBySessionKey[sessionKey] = entry;
+    store[storeKey] = entry;
   }
-  // Gateway suites often reuse the same config path across tests; clear the
-  // in-process cache so handlers reload the seeded SQLite state.
+  // Gateway suites often reuse the same store path across tests while writing the
+  // file directly; clear the in-process cache so handlers reload the seeded state.
+  clearSessionStoreCacheForTest();
   await persistTestSessionConfig();
-  for (const { sessionKey } of listSessionEntries({ agentId })) {
-    deleteSessionEntry({ agentId, sessionKey });
-  }
-  for (const [sessionKey, entry] of Object.entries(entriesBySessionKey)) {
-    upsertSessionEntry({ agentId, sessionKey, entry: entry as SessionEntry });
-  }
+  await fs.mkdir(path.dirname(storePath), { recursive: true });
+  await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+  clearSessionStoreCacheForTest();
 }
 
 async function setupGatewayTestHome() {
@@ -241,7 +263,6 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   delete process.env.OPENCLAW_GATEWAY_TOKEN;
   resetTaskRegistryForTests({ persist: false });
   resetTaskFlowRegistryForTests({ persist: false });
-  closeOpenClawStateDatabaseForTest();
   const stateDir = process.env.OPENCLAW_STATE_DIR;
   if (stateDir) {
     await fs.rm(stateDir, {
@@ -303,13 +324,15 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   testState.migrationConfig = null;
   testState.migrationChanges = [];
   testState.cronEnabled = false;
-  testState.cronStoreKey = undefined;
+  testState.cronStorePath = undefined;
   testState.sessionConfig = undefined;
+  testState.sessionStorePath = undefined;
   testState.agentConfig = undefined;
   testState.agentsConfig = undefined;
   testState.bindingsConfig = undefined;
   testState.channelsConfig = undefined;
   testState.allowFrom = undefined;
+  lastSyncedSessionStorePath = testState.sessionStorePath;
   lastSyncedSessionConfigJson = serializeGatewayTestSessionConfig();
   testIsNixMode.value = false;
   cronIsolatedRun.mockReset();
@@ -392,13 +415,15 @@ async function resetGatewayTestRuntimeOnly() {
   testState.migrationConfig = null;
   testState.migrationChanges = [];
   testState.cronEnabled = false;
-  testState.cronStoreKey = undefined;
+  testState.cronStorePath = undefined;
   testState.sessionConfig = undefined;
+  testState.sessionStorePath = undefined;
   testState.agentConfig = undefined;
   testState.agentsConfig = undefined;
   testState.bindingsConfig = undefined;
   testState.channelsConfig = undefined;
   testState.allowFrom = undefined;
+  lastSyncedSessionStorePath = testState.sessionStorePath;
   lastSyncedSessionConfigJson = serializeGatewayTestSessionConfig();
   testIsNixMode.value = false;
   cronIsolatedRun.mockReset();
@@ -424,6 +449,7 @@ async function resetGatewayTestRuntimeOnly() {
       tokensAfter: 80,
     },
   });
+  clearSessionStoreCacheForTest();
   await persistTestSessionConfig();
   for (const sessionKey of resolveGatewayTestMainSessionKeys()) {
     drainSystemEvents(sessionKey);
@@ -560,6 +586,7 @@ export async function startGatewayServer(port: number, opts?: GatewayServerOptio
   // Tests mutate testState-backed config before server startup; discard earlier
   // helper reads so startup observes the current fixture state.
   resetConfigRuntimeState();
+  clearSessionStoreCacheForTest();
   const mod = await getServerModule();
   const resolvedOpts =
     opts?.controlUiEnabled === undefined ? { ...opts, controlUiEnabled: false } : opts;
@@ -757,7 +784,7 @@ type ConnectResponse = {
   error?: { message?: string; code?: string; details?: unknown };
 };
 
-function resolveDefaultTestDeviceIdentityKey(params: {
+function resolveDefaultTestDeviceIdentityPath(params: {
   clientId: string;
   clientMode: string;
   platform: string;
@@ -770,7 +797,8 @@ function resolveDefaultTestDeviceIdentityKey(params: {
       "_",
     ),
   );
-  return `test:${safe}`;
+  const suiteRoot = process.env.OPENCLAW_STATE_DIR ?? process.env.HOME ?? os.tmpdir();
+  return path.join(suiteRoot, "test-device-identities", `${safe}.json`);
 }
 
 export async function readConnectChallengeNonce(
@@ -849,7 +877,7 @@ type ConnectReqOptions = {
   commands?: string[];
   permissions?: Record<string, boolean>;
   device?: ConnectReqDevice | null;
-  deviceIdentityKey?: string;
+  deviceIdentityPath?: string;
   skipConnectChallengeNonce?: boolean;
   prePairDevice?: boolean;
   timeoutMs?: number;
@@ -981,16 +1009,16 @@ export async function connectReq(
     if (!connectChallengeNonce) {
       throw new Error("missing connect.challenge nonce");
     }
-    const identityKey =
-      opts?.deviceIdentityKey ??
-      resolveDefaultTestDeviceIdentityKey({
+    const identityPath =
+      opts?.deviceIdentityPath ??
+      resolveDefaultTestDeviceIdentityPath({
         clientId: client.id,
         clientMode: client.mode,
         platform: client.platform,
         deviceFamily: client.deviceFamily,
         role,
       });
-    const identity = loadOrCreateDeviceIdentity({ key: identityKey });
+    const identity = loadOrCreateDeviceIdentity(identityPath);
     const signedAtMs = Date.now();
     const payload = buildDeviceAuthPayloadV3({
       deviceId: identity.deviceId,
@@ -1123,6 +1151,7 @@ export async function rpcReq<T extends Record<string, unknown>>(
   // RPCs while reusing one server instance; flush caches so the next request
   // observes the updated test fixture state.
   resetConfigRuntimeState();
+  clearSessionStoreCacheForTest();
   const { randomUUID } = await import("node:crypto");
   const id = randomUUID();
   const responsePromise = onceMessage<{

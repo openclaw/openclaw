@@ -1,8 +1,16 @@
 import { randomUUID } from "node:crypto";
-import { listSessionEntries, patchSessionEntry, type SessionEntry } from "../config/sessions.js";
+import { loadSessionStore, updateSessionStore, type SessionEntry } from "../config/sessions.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
+import {
+  resolveAllAgentSessionStoreTargetsSync,
+  type SessionStoreTarget,
+} from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveSessionRowAgentId, resolveSessionRowKey } from "../gateway/session-row-key.js";
+import {
+  resolveSessionStoreAgentId,
+  resolveSessionStoreKey,
+} from "../gateway/session-store-key.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -28,6 +36,10 @@ const PROJECTION_FAILED = Symbol("plugin-session-extension-projection-failed");
 const MAX_PLUGIN_NEXT_TURN_INJECTION_TEXT_LENGTH = 32 * 1024;
 const MAX_PLUGIN_NEXT_TURN_INJECTION_IDEMPOTENCY_KEY_LENGTH = 512;
 const MAX_PLUGIN_NEXT_TURN_INJECTIONS_PER_SESSION = 32;
+
+function isStorePathTemplate(store?: string): boolean {
+  return typeof store === "string" && store.includes("{agentId}");
+}
 
 function normalizeNamespace(value: string): string {
   return value.trim();
@@ -105,7 +117,29 @@ function findFreshestStoreMatch(
   return freshest;
 }
 
-function buildSessionRowScanTargets(params: {
+function resolveSessionStoreCandidates(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+}): SessionStoreTarget[] {
+  const storeConfig = params.cfg.session?.store;
+  const defaultTarget = {
+    agentId: params.agentId,
+    storePath: resolveStorePath(storeConfig, { agentId: params.agentId }),
+  };
+  if (!isStorePathTemplate(storeConfig)) {
+    return [defaultTarget];
+  }
+  const targets = new Map<string, SessionStoreTarget>();
+  targets.set(defaultTarget.storePath, defaultTarget);
+  for (const target of resolveAllAgentSessionStoreTargetsSync(params.cfg)) {
+    if (target.agentId === params.agentId) {
+      targets.set(target.storePath, target);
+    }
+  }
+  return [...targets.values()];
+}
+
+function buildSessionStoreScanTargets(params: {
   cfg: OpenClawConfig;
   key: string;
   canonicalKey: string;
@@ -132,22 +166,39 @@ function buildSessionRowScanTargets(params: {
 }
 
 function loadPluginHostHookSessionEntry(params: { cfg: OpenClawConfig; sessionKey: string }): {
-  agentId: string;
+  storePath: string;
   entry?: SessionEntry;
   canonicalKey: string;
   storeKey: string;
 } {
   const key = normalizeOptionalString(params.sessionKey) ?? "";
   const cfg = params.cfg;
-  const canonicalKey = resolveSessionRowKey({ cfg, sessionKey: key });
-  const agentId = resolveSessionRowAgentId(cfg, canonicalKey);
-  const scanTargets = buildSessionRowScanTargets({ cfg, key, canonicalKey, agentId });
-  const store = Object.fromEntries(
-    listSessionEntries({ agentId }).map(({ sessionKey, entry }) => [sessionKey, entry]),
-  );
-  const selectedMatch = findFreshestStoreMatch(store, ...scanTargets);
-  return {
+  const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey: key });
+  const agentId = resolveSessionStoreAgentId(cfg, canonicalKey);
+  const scanTargets = buildSessionStoreScanTargets({ cfg, key, canonicalKey, agentId });
+  const candidates = resolveSessionStoreCandidates({ cfg, agentId });
+  const fallback = candidates[0] ?? {
     agentId,
+    storePath: resolveStorePath(cfg.session?.store, { agentId }),
+  };
+  let selectedStorePath = fallback.storePath;
+  let selectedMatch = findFreshestStoreMatch(loadSessionStore(fallback.storePath), ...scanTargets);
+  for (let index = 1; index < candidates.length; index += 1) {
+    const candidate = candidates[index];
+    if (!candidate) {
+      continue;
+    }
+    const match = findFreshestStoreMatch(loadSessionStore(candidate.storePath), ...scanTargets);
+    if (
+      match &&
+      (!selectedMatch || (match.entry.updatedAt ?? 0) >= (selectedMatch.entry.updatedAt ?? 0))
+    ) {
+      selectedStorePath = candidate.storePath;
+      selectedMatch = match;
+    }
+  }
+  return {
+    storePath: selectedStorePath,
     entry: selectedMatch?.entry,
     canonicalKey,
     storeKey: selectedMatch?.key ?? canonicalKey,
@@ -240,38 +291,36 @@ export async function enqueuePluginNextTurnInjection(params: {
   });
   let enqueued = false;
   let resultId = record.id;
-  await patchSessionEntry({
-    agentId: loaded.agentId,
-    sessionKey: loaded.storeKey,
-    fallbackEntry: loaded.entry,
-    update: (entry) => {
-      const injections = { ...entry.pluginNextTurnInjections };
-      // Guard against malformed/hand-edited persisted state — a non-array value
-      // here would crash the spread/filter and break the whole session's enqueue.
-      const rawExisting = injections[params.pluginId];
-      const existing = (Array.isArray(rawExisting) ? [...rawExisting] : []).filter(
-        (candidate): candidate is PluginNextTurnInjectionRecord => !isExpired(candidate, now),
-      );
-      const duplicate = record.idempotencyKey
-        ? existing.find((candidate) => candidate.idempotencyKey === record.idempotencyKey)
-        : undefined;
-      if (duplicate) {
-        resultId = duplicate.id;
-        injections[params.pluginId] = existing;
-        entry.pluginNextTurnInjections = injections;
-        return entry;
-      }
-      if (existing.length >= MAX_PLUGIN_NEXT_TURN_INJECTIONS_PER_SESSION) {
-        injections[params.pluginId] = existing;
-        entry.pluginNextTurnInjections = injections;
-        return entry;
-      }
-      injections[params.pluginId] = [...existing, record];
+  await updateSessionStore(loaded.storePath, (store) => {
+    const entry = store[loaded.storeKey];
+    if (!entry) {
+      return;
+    }
+    const injections = { ...entry.pluginNextTurnInjections };
+    // Guard against malformed/hand-edited persisted state — a non-array value
+    // here would crash the spread/filter and break the whole session's enqueue.
+    const rawExisting = injections[params.pluginId];
+    const existing = (Array.isArray(rawExisting) ? [...rawExisting] : []).filter(
+      (candidate): candidate is PluginNextTurnInjectionRecord => !isExpired(candidate, now),
+    );
+    const duplicate = record.idempotencyKey
+      ? existing.find((candidate) => candidate.idempotencyKey === record.idempotencyKey)
+      : undefined;
+    if (duplicate) {
+      resultId = duplicate.id;
+      injections[params.pluginId] = existing;
       entry.pluginNextTurnInjections = injections;
-      entry.updatedAt = now;
-      enqueued = true;
-      return entry;
-    },
+      return;
+    }
+    if (existing.length >= MAX_PLUGIN_NEXT_TURN_INJECTIONS_PER_SESSION) {
+      injections[params.pluginId] = existing;
+      entry.pluginNextTurnInjections = injections;
+      return;
+    }
+    injections[params.pluginId] = [...existing, record];
+    entry.pluginNextTurnInjections = injections;
+    entry.updatedAt = now;
+    enqueued = true;
   });
   return { enqueued, id: resultId, sessionKey: canonicalKey };
 }
@@ -289,9 +338,9 @@ export async function drainPluginNextTurnInjections(params: {
   if (!loaded.entry) {
     return [];
   }
-  // Avoid a write transaction when there is nothing queued.
+  // Avoid the locked re-save in updateSessionStore when there is nothing queued.
   // Drain runs once per prompt build; the common case is no injections, so a
-  // pre-flight read keeps prompt-build off the session-row write path.
+  // pre-flight read keeps prompt-build off the session-store write path.
   // (Concurrently-enqueued injections during this gap land on the next turn.)
   if (
     !loaded.entry.pluginNextTurnInjections ||
@@ -300,48 +349,40 @@ export async function drainPluginNextTurnInjections(params: {
     return [];
   }
   const now = params.now ?? Date.now();
-  let drained: PluginNextTurnInjectionRecord[] = [];
-  await patchSessionEntry({
-    agentId: loaded.agentId,
-    sessionKey: loaded.storeKey,
-    fallbackEntry: loaded.entry,
-    update: (entry) => {
-      if (!entry.pluginNextTurnInjections) {
-        return null;
+  return await updateSessionStore(loaded.storePath, (store) => {
+    const entry = store[loaded.storeKey];
+    if (!entry?.pluginNextTurnInjections) {
+      return [];
+    }
+    const activePluginIds = new Set(
+      (getActivePluginRegistry()?.plugins ?? [])
+        .filter((plugin) => plugin.status === "loaded")
+        .map((plugin) => plugin.id),
+    );
+    const drained: PluginNextTurnInjectionRecord[] = [];
+    for (const [pluginId, entries] of Object.entries(entry.pluginNextTurnInjections)) {
+      if (!activePluginIds.has(pluginId) || !isPluginPromptInjectionEnabled(params.cfg, pluginId)) {
+        continue;
       }
-      const activePluginIds = new Set(
-        (getActivePluginRegistry()?.plugins ?? [])
-          .filter((plugin) => plugin.status === "loaded")
-          .map((plugin) => plugin.id),
+      // Guard against malformed/hand-edited persisted state — a non-array value
+      // here would crash .filter and break prompt-building for the session.
+      if (!Array.isArray(entries)) {
+        continue;
+      }
+      const liveEntries = entries.filter(
+        (candidate): candidate is PluginNextTurnInjectionRecord => !isExpired(candidate, now),
       );
-      for (const [pluginId, entries] of Object.entries(entry.pluginNextTurnInjections)) {
-        if (
-          !activePluginIds.has(pluginId) ||
-          !isPluginPromptInjectionEnabled(params.cfg, pluginId)
-        ) {
-          continue;
-        }
-        // Guard against malformed/hand-edited persisted state — a non-array value
-        // here would crash .filter and break prompt-building for the session.
-        if (!Array.isArray(entries)) {
-          continue;
-        }
-        const liveEntries = entries.filter(
-          (candidate): candidate is PluginNextTurnInjectionRecord => !isExpired(candidate, now),
-        );
-        drained.push(...liveEntries);
-      }
-      drained.sort((left, right) => left.createdAt - right.createdAt);
-      // A drain is the consume boundary for this session queue. Inactive plugin
-      // records are stale owner state and are discarded with expired records.
-      delete entry.pluginNextTurnInjections;
-      if (drained.length > 0) {
-        entry.updatedAt = now;
-      }
-      return entry;
-    },
+      drained.push(...liveEntries);
+    }
+    drained.sort((left, right) => left.createdAt - right.createdAt);
+    // A drain is the consume boundary for this session queue. Inactive plugin
+    // records are stale owner state and are discarded with expired records.
+    delete entry.pluginNextTurnInjections;
+    if (drained.length > 0) {
+      entry.updatedAt = now;
+    }
+    return drained;
   });
-  return drained;
 }
 
 export async function drainPluginNextTurnInjectionContext(params: {
@@ -440,68 +481,65 @@ export async function patchPluginSessionExtension(params: {
     );
   }
   const slotKey = normalizedSlotKey?.ok === true ? normalizedSlotKey.key : undefined;
-  let nextValue: PluginJsonValue | undefined;
-  await patchSessionEntry({
-    agentId: loaded.agentId,
-    sessionKey: loaded.storeKey,
-    fallbackEntry: loaded.entry,
-    update: (entry) => {
-      const entryRecord = entry as Record<string, unknown>;
-      const pluginExtensions = { ...entry.pluginExtensions };
-      const pluginState = { ...pluginExtensions[pluginId] };
-      if (params.unset === true) {
-        delete pluginState[namespace];
+  const nextValue = await updateSessionStore(loaded.storePath, (store) => {
+    const entry = store[loaded.storeKey];
+    if (!entry) {
+      return undefined;
+    }
+    const entryRecord = entry as Record<string, unknown>;
+    const pluginExtensions = { ...entry.pluginExtensions };
+    const pluginState = { ...pluginExtensions[pluginId] };
+    if (params.unset === true) {
+      delete pluginState[namespace];
+    } else {
+      pluginState[namespace] = copyJsonValue(nextPluginValue);
+    }
+    if (Object.keys(pluginState).length > 0) {
+      pluginExtensions[pluginId] = pluginState;
+    } else {
+      delete pluginExtensions[pluginId];
+    }
+    if (Object.keys(pluginExtensions).length > 0) {
+      entry.pluginExtensions = pluginExtensions;
+    } else {
+      delete entry.pluginExtensions;
+    }
+    const storedSlotKeys = { ...entry.pluginExtensionSlotKeys };
+    const pluginSlotKeys = { ...storedSlotKeys[pluginId] };
+    const previousSlotKey = normalizeSessionEntrySlotKey(pluginSlotKeys[namespace]);
+    if (previousSlotKey.ok && previousSlotKey.key !== slotKey) {
+      delete entryRecord[previousSlotKey.key];
+    }
+    if (slotKey && params.unset !== true) {
+      pluginSlotKeys[namespace] = slotKey;
+    } else {
+      delete pluginSlotKeys[namespace];
+    }
+    if (Object.keys(pluginSlotKeys).length > 0) {
+      storedSlotKeys[pluginId] = pluginSlotKeys;
+    } else {
+      delete storedSlotKeys[pluginId];
+    }
+    if (Object.keys(storedSlotKeys).length > 0) {
+      entry.pluginExtensionSlotKeys = storedSlotKeys;
+    } else {
+      delete entry.pluginExtensionSlotKeys;
+    }
+    if (slotKey) {
+      const projected = projectSessionExtensionValueForSlot({
+        registration,
+        sessionKey: canonicalKey,
+        sessionId: entry.sessionId,
+        nextValue: params.unset === true ? undefined : nextPluginValue,
+      });
+      if (projected === undefined) {
+        delete entryRecord[slotKey];
       } else {
-        pluginState[namespace] = copyJsonValue(nextPluginValue);
+        entryRecord[slotKey] = projected;
       }
-      if (Object.keys(pluginState).length > 0) {
-        pluginExtensions[pluginId] = pluginState;
-      } else {
-        delete pluginExtensions[pluginId];
-      }
-      if (Object.keys(pluginExtensions).length > 0) {
-        entry.pluginExtensions = pluginExtensions;
-      } else {
-        delete entry.pluginExtensions;
-      }
-      const storedSlotKeys = { ...entry.pluginExtensionSlotKeys };
-      const pluginSlotKeys = { ...storedSlotKeys[pluginId] };
-      const previousSlotKey = normalizeSessionEntrySlotKey(pluginSlotKeys[namespace]);
-      if (previousSlotKey.ok && previousSlotKey.key !== slotKey) {
-        delete entryRecord[previousSlotKey.key];
-      }
-      if (slotKey && params.unset !== true) {
-        pluginSlotKeys[namespace] = slotKey;
-      } else {
-        delete pluginSlotKeys[namespace];
-      }
-      if (Object.keys(pluginSlotKeys).length > 0) {
-        storedSlotKeys[pluginId] = pluginSlotKeys;
-      } else {
-        delete storedSlotKeys[pluginId];
-      }
-      if (Object.keys(storedSlotKeys).length > 0) {
-        entry.pluginExtensionSlotKeys = storedSlotKeys;
-      } else {
-        delete entry.pluginExtensionSlotKeys;
-      }
-      if (slotKey) {
-        const projected = projectSessionExtensionValueForSlot({
-          registration,
-          sessionKey: canonicalKey,
-          sessionId: entry.sessionId,
-          nextValue: params.unset === true ? undefined : nextPluginValue,
-        });
-        if (projected === undefined) {
-          delete entryRecord[slotKey];
-        } else {
-          entryRecord[slotKey] = projected;
-        }
-      }
-      entry.updatedAt = Date.now();
-      nextValue = pluginState[namespace] as PluginJsonValue | undefined;
-      return entry;
-    },
+    }
+    entry.updatedAt = Date.now();
+    return pluginState[namespace] as PluginJsonValue | undefined;
   });
   return { ok: true, key: canonicalKey, value: nextValue };
 }

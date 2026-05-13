@@ -10,6 +10,7 @@ const EVENT = {
   provider: "codex",
   model: "gpt-5.4",
   cwd: "/repo",
+  transcriptPath: "/tmp/session.jsonl",
   stopHookActive: false,
   lastAssistantMessage: "done",
 };

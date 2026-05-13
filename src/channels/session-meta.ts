@@ -18,9 +18,12 @@ export async function recordInboundSessionMetaSafe(params: {
   onError?: (error: unknown) => void;
 }): Promise<void> {
   const runtime = await loadInboundSessionRuntime();
+  const storePath = runtime.resolveStorePath(params.cfg.session?.store, {
+    agentId: params.agentId,
+  });
   try {
     await runtime.recordSessionMetaFromInbound({
-      agentId: params.agentId,
+      storePath,
       sessionKey: params.sessionKey,
       ctx: params.ctx,
     });

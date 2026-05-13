@@ -1,8 +1,8 @@
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { getDiagnosticSessionState } from "../logging/diagnostic-session-state.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
-import type { AgentToolResult } from "./agent-core-contract.js";
 import {
   type ProcessSession,
   deleteSession,
@@ -105,7 +105,7 @@ function resolvePollWaitMs(value: unknown) {
   return 0;
 }
 
-function failText(text: string): AgentToolResult {
+function failText(text: string): AgentToolResult<unknown> {
   return {
     content: [
       {
@@ -235,7 +235,7 @@ export function createProcessTool(
     displaySummary: PROCESS_TOOL_DISPLAY_SUMMARY,
     description: describeProcessTool({ hasCronTool: defaults?.hasCronTool === true }),
     parameters: processSchema,
-    execute: async (_toolCallId, args, signal, _onUpdate): Promise<AgentToolResult> => {
+    execute: async (_toolCallId, args, signal, _onUpdate): Promise<AgentToolResult<unknown>> => {
       const params = args as {
         action:
           | "list"
@@ -331,7 +331,7 @@ export function createProcessTool(
       const scopedSession = isInScope(session) ? session : undefined;
       const scopedFinished = isInScope(finished) ? finished : undefined;
 
-      const failedResult = (text: string): AgentToolResult => ({
+      const failedResult = (text: string): AgentToolResult<unknown> => ({
         content: [{ type: "text", text }],
         details: { status: "failed" },
       });
@@ -371,7 +371,10 @@ export function createProcessTool(
         });
       };
 
-      const runningSessionResult = (session: ProcessSession, text: string): AgentToolResult => ({
+      const runningSessionResult = (
+        session: ProcessSession,
+        text: string,
+      ): AgentToolResult<unknown> => ({
         content: [{ type: "text", text }],
         details: {
           status: "running",

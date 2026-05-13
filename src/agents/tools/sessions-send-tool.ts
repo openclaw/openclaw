@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { Type } from "typebox";
 import { isRequesterParentOfBackgroundAcpSession } from "../../acp/session-interaction-mode.js";
-import { readSqliteSessionRoutingInfo } from "../../config/sessions/session-entries.sqlite.js";
+import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
@@ -74,18 +74,6 @@ function isRequesterParentOfNativeSubagentSession(params: {
 
 function isTerminalAgentWaitTimeout(result: AgentWaitResult): boolean {
   return result.endedAt !== undefined || Boolean(result.stopReason || result.livenessState);
-}
-
-function isTypedThreadSessionTarget(sessionKey: string): boolean {
-  try {
-    const routingInfo = readSqliteSessionRoutingInfo({
-      agentId: resolveAgentIdFromSessionKey(sessionKey),
-      sessionKey,
-    });
-    return Boolean(routingInfo?.conversationThreadId);
-  } catch {
-    return false;
-  }
 }
 
 async function startAgentRun(params: {
@@ -281,7 +269,7 @@ export function createSessionsSendTool(opts?: {
       const announceTimeoutMs = timeoutSeconds === 0 ? 30_000 : timeoutMs;
       const idempotencyKey = crypto.randomUUID();
       let runId: string = idempotencyKey;
-      if (isTypedThreadSessionTarget(resolvedKey)) {
+      if (parseSessionThreadInfoFast(resolvedKey).threadId) {
         return jsonResult({
           runId: crypto.randomUUID(),
           status: "error",

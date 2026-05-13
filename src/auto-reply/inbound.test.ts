@@ -6,7 +6,6 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { GroupKeyResolution } from "../config/sessions.js";
 import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { createInboundDebouncer } from "./inbound-debounce.js";
 import { installGroupRequireMentionTestPlugins } from "./inbound.group-require-mention-test-plugins.js";
 import { resolveGroupRequireMention } from "./reply/groups.js";
@@ -25,21 +24,6 @@ import {
 } from "./reply/mentions.js";
 import { initSessionState } from "./reply/session.js";
 import { applyTemplate, type MsgContext, type TemplateContext } from "./templating.js";
-
-async function withTempSessionConfig<T>(
-  prefix: string,
-  fn: (cfg: OpenClawConfig) => Promise<T>,
-): Promise<T> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  vi.stubEnv("OPENCLAW_STATE_DIR", root);
-  try {
-    return await fn({ session: {} } as OpenClawConfig);
-  } finally {
-    closeOpenClawAgentDatabasesForTest();
-    vi.unstubAllEnvs();
-    await fs.rm(root, { recursive: true, force: true });
-  }
-}
 
 describe("applyTemplate", () => {
   it("renders primitive values", () => {
@@ -749,42 +733,46 @@ describe("createInboundDebouncer", () => {
 
 describe("initSessionState BodyStripped", () => {
   it("prefers BodyForAgent over Body for group chats", async () => {
-    await withTempSessionConfig("openclaw-sender-meta-", async (cfg) => {
-      const result = await initSessionState({
-        ctx: {
-          Body: "[WhatsApp 123@g.us] ping",
-          BodyForAgent: "ping",
-          ChatType: "group",
-          SenderName: "Bob",
-          SenderE164: "+222",
-          SenderId: "222@s.whatsapp.net",
-          SessionKey: "agent:main:whatsapp:group:123@g.us",
-        },
-        cfg,
-        commandAuthorized: true,
-      });
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sender-meta-"));
+    const storePath = path.join(root, "sessions.json");
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
 
-      expect(result.sessionCtx.BodyStripped).toBe("ping");
+    const result = await initSessionState({
+      ctx: {
+        Body: "[WhatsApp 123@g.us] ping",
+        BodyForAgent: "ping",
+        ChatType: "group",
+        SenderName: "Bob",
+        SenderE164: "+222",
+        SenderId: "222@s.whatsapp.net",
+        SessionKey: "agent:main:whatsapp:group:123@g.us",
+      },
+      cfg,
+      commandAuthorized: true,
     });
+
+    expect(result.sessionCtx.BodyStripped).toBe("ping");
   });
 
   it("prefers BodyForAgent over Body for direct chats", async () => {
-    await withTempSessionConfig("openclaw-sender-meta-direct-", async (cfg) => {
-      const result = await initSessionState({
-        ctx: {
-          Body: "[WhatsApp +1] ping",
-          BodyForAgent: "ping",
-          ChatType: "direct",
-          SenderName: "Bob",
-          SenderE164: "+222",
-          SessionKey: "agent:main:whatsapp:dm:+222",
-        },
-        cfg,
-        commandAuthorized: true,
-      });
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sender-meta-direct-"));
+    const storePath = path.join(root, "sessions.json");
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
 
-      expect(result.sessionCtx.BodyStripped).toBe("ping");
+    const result = await initSessionState({
+      ctx: {
+        Body: "[WhatsApp +1] ping",
+        BodyForAgent: "ping",
+        ChatType: "direct",
+        SenderName: "Bob",
+        SenderE164: "+222",
+        SessionKey: "agent:main:whatsapp:dm:+222",
+      },
+      cfg,
+      commandAuthorized: true,
     });
+
+    expect(result.sessionCtx.BodyStripped).toBe("ping");
   });
 });
 

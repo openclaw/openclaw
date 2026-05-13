@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   finalizeInboundContextMock: vi.fn(),
   resolveConversationLabelMock: vi.fn(),
   recordSessionMetaFromInboundMock: vi.fn(),
+  resolveStorePathMock: vi.fn(),
 }));
 
 vi.mock("./slash-dispatch.runtime.js", () => {
@@ -32,6 +33,7 @@ type SlashHarnessMocks = {
   finalizeInboundContextMock: ReturnType<typeof vi.fn>;
   resolveConversationLabelMock: ReturnType<typeof vi.fn>;
   recordSessionMetaFromInboundMock: ReturnType<typeof vi.fn>;
+  resolveStorePathMock: ReturnType<typeof vi.fn>;
 };
 
 export function getSlackSlashMocks(): SlashHarnessMocks {
@@ -50,4 +52,5 @@ export function resetSlackSlashMocks() {
   mocks.finalizeInboundContextMock.mockReset().mockImplementation((ctx: unknown) => ctx);
   mocks.resolveConversationLabelMock.mockReset().mockReturnValue(undefined);
   mocks.recordSessionMetaFromInboundMock.mockReset().mockResolvedValue(undefined);
+  mocks.resolveStorePathMock.mockReset().mockReturnValue("/tmp/openclaw-sessions.json");
 }

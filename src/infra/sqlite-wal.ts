@@ -1,5 +1,4 @@
 import type { DatabaseSync } from "node:sqlite";
-import { emitDiagnosticEvent } from "./diagnostic-events.js";
 
 export const DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const DEFAULT_SQLITE_WAL_TRUNCATE_INTERVAL_MS = 30 * 60 * 1000;
@@ -19,8 +18,6 @@ export type SqliteWalMaintenanceOptions = {
   autoCheckpointPages?: number;
   checkpointIntervalMs?: number;
   checkpointMode?: SqliteWalCheckpointMode;
-  databaseLabel?: string;
-  databasePath?: string;
   onCheckpointError?: (error: unknown) => void;
 };
 
@@ -44,7 +41,6 @@ export function configureSqliteWalMaintenance(
     "checkpointIntervalMs",
   );
   const checkpointMode = options.checkpointMode ?? "TRUNCATE";
-  const databaseLabel = options.databaseLabel?.trim() || "sqlite";
 
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec(`PRAGMA wal_autocheckpoint = ${autoCheckpointPages};`);
@@ -54,12 +50,6 @@ export function configureSqliteWalMaintenance(
       db.exec(`PRAGMA wal_checkpoint(${checkpointMode});`);
       return true;
     } catch (error) {
-      emitDiagnosticEvent({
-        type: "sqlite.wal.checkpoint.error",
-        databaseLabel,
-        checkpointMode,
-        error: error instanceof Error ? error.message : String(error),
-      });
       options.onCheckpointError?.(error);
       return false;
     }

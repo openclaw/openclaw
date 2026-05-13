@@ -34,22 +34,24 @@ function restoreEnv(name: keyof typeof previousEnv): void {
   }
 }
 
-function generatedCodexPaths(wrapperRoot: string): {
+function generatedCodexPaths(stateDir: string): {
   configPath: string;
   wrapperPath: string;
 } {
-  const codexHome = path.join(wrapperRoot, "codex-home");
+  const baseDir = path.join(stateDir, "acpx");
+  const codexHome = path.join(baseDir, "codex-home");
   return {
     configPath: path.join(codexHome, "config.toml"),
-    wrapperPath: path.join(wrapperRoot, "codex-acp-wrapper.mjs"),
+    wrapperPath: path.join(baseDir, "codex-acp-wrapper.mjs"),
   };
 }
 
-function generatedClaudePaths(wrapperRoot: string): {
+function generatedClaudePaths(stateDir: string): {
   wrapperPath: string;
 } {
+  const baseDir = path.join(stateDir, "acpx");
   return {
-    wrapperPath: path.join(wrapperRoot, "claude-agent-acp-wrapper.mjs"),
+    wrapperPath: path.join(baseDir, "claude-agent-acp-wrapper.mjs"),
   };
 }
 
@@ -99,9 +101,9 @@ describe("prepareAcpxCodexAuthConfig", () => {
   it("installs an isolated Codex ACP wrapper without synthesizing auth from canonical OpenClaw OAuth", async () => {
     const root = await makeTempDir();
     const agentDir = path.join(root, "agent");
-    const wrapperRoot = path.join(root, "wrapper");
-    const generated = generatedCodexPaths(wrapperRoot);
-    const generatedClaude = generatedClaudePaths(wrapperRoot);
+    const stateDir = path.join(root, "state");
+    const generated = generatedCodexPaths(stateDir);
+    const generatedClaude = generatedClaudePaths(stateDir);
     const installedBinPath = path.join(
       root,
       "node_modules",
@@ -119,7 +121,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
     });
     const resolved = await prepareAcpxCodexAuthConfig({
       pluginConfig,
-      wrapperRoot,
+      stateDir,
       resolveInstalledCodexAcpBinPath: async () => installedBinPath,
     });
 
@@ -133,11 +135,11 @@ describe("prepareAcpxCodexAuthConfig", () => {
     await expectPathMissing(path.join(agentDir, "acp-auth", "codex", "auth.json"));
   });
 
-  it("keeps generated wrappers usable when chmod is rejected by the wrapper filesystem", async () => {
+  it("keeps generated wrappers usable when chmod is rejected by the state filesystem", async () => {
     const root = await makeTempDir();
-    const wrapperRoot = path.join(root, "wrapper");
-    const generatedCodex = generatedCodexPaths(wrapperRoot);
-    const generatedClaude = generatedClaudePaths(wrapperRoot);
+    const stateDir = path.join(root, "state");
+    const generatedCodex = generatedCodexPaths(stateDir);
+    const generatedClaude = generatedClaudePaths(stateDir);
     const chmodError = Object.assign(new Error("operation not permitted"), { code: "EPERM" });
     const chmodSpy = vi.spyOn(fs, "chmod").mockRejectedValue(chmodError);
     const pluginConfig = resolveAcpxPluginConfig({
@@ -147,7 +149,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
 
     const resolved = await prepareAcpxCodexAuthConfig({
       pluginConfig,
-      wrapperRoot,
+      stateDir,
     });
 
     expect(chmodSpy).toHaveBeenCalledWith(generatedCodex.wrapperPath, 0o755);
@@ -160,8 +162,8 @@ describe("prepareAcpxCodexAuthConfig", () => {
 
   it("falls back to the current Codex ACP package range when the local adapter is unavailable", async () => {
     const root = await makeTempDir();
-    const wrapperRoot = path.join(root, "wrapper");
-    const generated = generatedCodexPaths(wrapperRoot);
+    const stateDir = path.join(root, "state");
+    const generated = generatedCodexPaths(stateDir);
     const pluginConfig = resolveAcpxPluginConfig({
       rawConfig: {},
       workspaceDir: root,
@@ -169,7 +171,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
 
     await prepareAcpxCodexAuthConfig({
       pluginConfig,
-      wrapperRoot,
+      stateDir,
       resolveInstalledCodexAcpBinPath: async () => undefined,
     });
 
@@ -181,8 +183,8 @@ describe("prepareAcpxCodexAuthConfig", () => {
 
   it("falls back to the patched Claude ACP package when the local adapter is unavailable", async () => {
     const root = await makeTempDir();
-    const wrapperRoot = path.join(root, "wrapper");
-    const generated = generatedClaudePaths(wrapperRoot);
+    const stateDir = path.join(root, "state");
+    const generated = generatedClaudePaths(stateDir);
     const pluginConfig = resolveAcpxPluginConfig({
       rawConfig: {},
       workspaceDir: root,
@@ -190,7 +192,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
 
     await prepareAcpxCodexAuthConfig({
       pluginConfig,
-      wrapperRoot,
+      stateDir,
       resolveInstalledClaudeAcpBinPath: async () => undefined,
     });
 
@@ -203,8 +205,8 @@ describe("prepareAcpxCodexAuthConfig", () => {
 
   it("uses the bundled Codex ACP dependency by default when it is installed", async () => {
     const root = await makeTempDir();
-    const wrapperRoot = path.join(root, "wrapper");
-    const generated = generatedCodexPaths(wrapperRoot);
+    const stateDir = path.join(root, "state");
+    const generated = generatedCodexPaths(stateDir);
     const pluginConfig = resolveAcpxPluginConfig({
       rawConfig: {},
       workspaceDir: root,
@@ -212,7 +214,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
 
     await prepareAcpxCodexAuthConfig({
       pluginConfig,
-      wrapperRoot,
+      stateDir,
     });
 
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
@@ -223,8 +225,8 @@ describe("prepareAcpxCodexAuthConfig", () => {
 
   it("keeps the orphaned wrapper alive long enough to force-kill the child process group", async () => {
     const root = await makeTempDir();
-    const wrapperRoot = path.join(root, "wrapper");
-    const generated = generatedCodexPaths(wrapperRoot);
+    const stateDir = path.join(root, "state");
+    const generated = generatedCodexPaths(stateDir);
     const pluginConfig = resolveAcpxPluginConfig({
       rawConfig: {},
       workspaceDir: root,
@@ -232,7 +234,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
 
     await prepareAcpxCodexAuthConfig({
       pluginConfig,
-      wrapperRoot,
+      stateDir,
     });
 
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
@@ -251,8 +253,8 @@ describe("prepareAcpxCodexAuthConfig", () => {
 
   it("uses the bundled Claude ACP dependency by default when it is installed", async () => {
     const root = await makeTempDir();
-    const wrapperRoot = path.join(root, "wrapper");
-    const generated = generatedClaudePaths(wrapperRoot);
+    const stateDir = path.join(root, "state");
+    const generated = generatedClaudePaths(stateDir);
     const pluginConfig = resolveAcpxPluginConfig({
       rawConfig: {},
       workspaceDir: root,
@@ -260,7 +262,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
 
     await prepareAcpxCodexAuthConfig({
       pluginConfig,
-      wrapperRoot,
+      stateDir,
     });
 
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
@@ -271,8 +273,8 @@ describe("prepareAcpxCodexAuthConfig", () => {
 
   it("launches the locally installed Codex ACP bin with isolated CODEX_HOME", async () => {
     const root = await makeTempDir();
-    const wrapperRoot = path.join(root, "wrapper");
-    const generated = generatedCodexPaths(wrapperRoot);
+    const stateDir = path.join(root, "state");
+    const generated = generatedCodexPaths(stateDir);
     const installedBinPath = path.join(root, "codex-acp-bin.js");
     await fs.writeFile(
       installedBinPath,
@@ -286,7 +288,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
 
     await prepareAcpxCodexAuthConfig({
       pluginConfig,
-      wrapperRoot,
+      stateDir,
       resolveInstalledCodexAcpBinPath: async () => installedBinPath,
     });
 
@@ -305,14 +307,14 @@ describe("prepareAcpxCodexAuthConfig", () => {
     );
     const launched = JSON.parse(stdout.trim()) as { argv?: unknown; codexHome?: unknown };
     expect(launched.argv).toStrictEqual([]);
-    const expectedCodexHome = await fs.realpath(path.join(wrapperRoot, "codex-home"));
+    const expectedCodexHome = await fs.realpath(path.join(stateDir, "acpx", "codex-home"));
     expect(path.resolve(String(launched.codexHome))).toBe(expectedCodexHome);
   });
 
   it("launches the locally installed Claude ACP bin without going through npm", async () => {
     const root = await makeTempDir();
-    const wrapperRoot = path.join(root, "wrapper");
-    const generated = generatedClaudePaths(wrapperRoot);
+    const stateDir = path.join(root, "state");
+    const generated = generatedClaudePaths(stateDir);
     const installedBinPath = path.join(root, "claude-agent-acp-bin.js");
     await fs.writeFile(
       installedBinPath,
@@ -326,7 +328,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
 
     await prepareAcpxCodexAuthConfig({
       pluginConfig,
-      wrapperRoot,
+      stateDir,
       resolveInstalledClaudeAcpBinPath: async () => installedBinPath,
     });
 
@@ -346,8 +348,8 @@ describe("prepareAcpxCodexAuthConfig", () => {
     const root = await makeTempDir();
     const sourceCodexHome = path.join(root, "source-codex");
     const agentDir = path.join(root, "agent");
-    const wrapperRoot = path.join(root, "wrapper");
-    const generated = generatedCodexPaths(wrapperRoot);
+    const stateDir = path.join(root, "state");
+    const generated = generatedCodexPaths(stateDir);
     await fs.mkdir(sourceCodexHome, { recursive: true });
     await fs.writeFile(
       path.join(sourceCodexHome, "auth.json"),
@@ -367,7 +369,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
     });
     const resolved = await prepareAcpxCodexAuthConfig({
       pluginConfig,
-      wrapperRoot,
+      stateDir,
       resolveInstalledCodexAcpBinPath: async () => undefined,
     });
 
@@ -387,12 +389,12 @@ describe("prepareAcpxCodexAuthConfig", () => {
   it("copies only trusted Codex project declarations into the isolated Codex home", async () => {
     const root = await makeTempDir();
     const sourceCodexHome = path.join(root, "source-codex");
-    const wrapperRoot = path.join(root, "wrapper");
+    const stateDir = path.join(root, "state");
     const explicitProject = path.join(root, "explicit project");
     const inlineProject = path.join(root, "inline-project");
     const mapProject = path.join(root, "map-project");
     const untrustedProject = path.join(root, "untrusted-project");
-    const generated = generatedCodexPaths(wrapperRoot);
+    const generated = generatedCodexPaths(stateDir);
     await fs.mkdir(sourceCodexHome, { recursive: true });
     await fs.writeFile(
       path.join(sourceCodexHome, "config.toml"),
@@ -414,7 +416,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
 
     await prepareAcpxCodexAuthConfig({
       pluginConfig,
-      wrapperRoot,
+      stateDir,
       resolveInstalledCodexAcpBinPath: async () => undefined,
     });
 
@@ -431,8 +433,8 @@ describe("prepareAcpxCodexAuthConfig", () => {
   it("normalizes an explicitly configured Codex ACP command to the local wrapper", async () => {
     const root = await makeTempDir();
     const sourceCodexHome = path.join(root, "source-codex");
-    const wrapperRoot = path.join(root, "wrapper");
-    const generated = generatedCodexPaths(wrapperRoot);
+    const stateDir = path.join(root, "state");
+    const generated = generatedCodexPaths(stateDir);
     await fs.mkdir(sourceCodexHome, { recursive: true });
     await fs.writeFile(
       path.join(sourceCodexHome, "config.toml"),
@@ -452,7 +454,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
 
     const resolved = await prepareAcpxCodexAuthConfig({
       pluginConfig,
-      wrapperRoot,
+      stateDir,
       resolveInstalledCodexAcpBinPath: async () => path.join(root, "codex-acp.js"),
     });
 
@@ -471,8 +473,8 @@ describe("prepareAcpxCodexAuthConfig", () => {
 
   it("normalizes an explicitly configured Claude ACP npx command to the local wrapper", async () => {
     const root = await makeTempDir();
-    const wrapperRoot = path.join(root, "wrapper");
-    const generated = generatedClaudePaths(wrapperRoot);
+    const stateDir = path.join(root, "state");
+    const generated = generatedClaudePaths(stateDir);
     const pluginConfig = resolveAcpxPluginConfig({
       rawConfig: {
         agents: {
@@ -486,7 +488,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
 
     const resolved = await prepareAcpxCodexAuthConfig({
       pluginConfig,
-      wrapperRoot,
+      stateDir,
       resolveInstalledClaudeAcpBinPath: async () => path.join(root, "claude-agent-acp.js"),
     });
 
@@ -498,7 +500,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
 
   it("leaves a custom Claude agent command alone", async () => {
     const root = await makeTempDir();
-    const wrapperRoot = path.join(root, "wrapper");
+    const stateDir = path.join(root, "state");
     const pluginConfig = resolveAcpxPluginConfig({
       rawConfig: {
         agents: {
@@ -512,7 +514,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
 
     const resolved = await prepareAcpxCodexAuthConfig({
       pluginConfig,
-      wrapperRoot,
+      stateDir,
       resolveInstalledClaudeAcpBinPath: async () => path.join(root, "claude-agent-acp.js"),
     });
 
@@ -521,7 +523,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
 
   it("does not normalize custom Claude commands that only mention the package name", async () => {
     const root = await makeTempDir();
-    const wrapperRoot = path.join(root, "wrapper");
+    const stateDir = path.join(root, "state");
     const command =
       "node ./custom-claude-wrapper.mjs @agentclientprotocol/claude-agent-acp@0.31.4 --flag";
     const pluginConfig = resolveAcpxPluginConfig({
@@ -537,7 +539,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
 
     const resolved = await prepareAcpxCodexAuthConfig({
       pluginConfig,
-      wrapperRoot,
+      stateDir,
       resolveInstalledClaudeAcpBinPath: async () => path.join(root, "claude-agent-acp.js"),
     });
 

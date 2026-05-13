@@ -1,131 +1,58 @@
 import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "./error-utils.js";
 
-export const MEMORY_INDEX_TABLE_NAMES = {
-  meta: "memory_index_meta",
-  sources: "memory_index_sources",
-  chunks: "memory_index_chunks",
-  vector: "memory_index_chunks_vec",
-  fts: "memory_index_chunks_fts",
-  embeddingCache: "memory_embedding_cache",
-} as const;
-
-const MEMORY_INDEX_SCHEMA_VERSION = 1;
-
 export function ensureMemoryIndexSchema(params: {
   db: DatabaseSync;
-  metaTable?: string;
-  sourcesTable?: string;
-  chunksTable?: string;
-  embeddingCacheTable?: string;
-  skipCoreTables?: boolean;
+  embeddingCacheTable: string;
   cacheEnabled: boolean;
-  ftsTable?: string;
+  ftsTable: string;
   ftsEnabled: boolean;
   ftsTokenizer?: "unicode61" | "trigram";
 }): { ftsAvailable: boolean; ftsError?: string } {
-  const metaTable = params.metaTable ?? MEMORY_INDEX_TABLE_NAMES.meta;
-  const sourcesTable = params.sourcesTable ?? MEMORY_INDEX_TABLE_NAMES.sources;
-  const chunksTable = params.chunksTable ?? MEMORY_INDEX_TABLE_NAMES.chunks;
-  const embeddingCacheTable = params.embeddingCacheTable ?? MEMORY_INDEX_TABLE_NAMES.embeddingCache;
-  const ftsTable = params.ftsTable ?? MEMORY_INDEX_TABLE_NAMES.fts;
-
-  if (!params.skipCoreTables) {
+  params.db.exec(`
+    CREATE TABLE IF NOT EXISTS meta (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+  `);
+  params.db.exec(`
+    CREATE TABLE IF NOT EXISTS files (
+      path TEXT PRIMARY KEY,
+      source TEXT NOT NULL DEFAULT 'memory',
+      hash TEXT NOT NULL,
+      mtime INTEGER NOT NULL,
+      size INTEGER NOT NULL
+    );
+  `);
+  params.db.exec(`
+    CREATE TABLE IF NOT EXISTS chunks (
+      id TEXT PRIMARY KEY,
+      path TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT 'memory',
+      start_line INTEGER NOT NULL,
+      end_line INTEGER NOT NULL,
+      hash TEXT NOT NULL,
+      model TEXT NOT NULL,
+      text TEXT NOT NULL,
+      embedding TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+  `);
+  if (params.cacheEnabled) {
     params.db.exec(`
-      CREATE TABLE IF NOT EXISTS sessions (
-        session_id TEXT NOT NULL PRIMARY KEY
-      );
-    `);
-    params.db.exec(`
-      CREATE TABLE IF NOT EXISTS ${metaTable} (
-        meta_key TEXT NOT NULL PRIMARY KEY,
-        schema_version INTEGER NOT NULL,
+      CREATE TABLE IF NOT EXISTS ${params.embeddingCacheTable} (
         provider TEXT NOT NULL,
         model TEXT NOT NULL,
-        provider_key TEXT,
-        sources_json TEXT NOT NULL,
-        scope_hash TEXT NOT NULL,
-        chunk_tokens INTEGER NOT NULL,
-        chunk_overlap INTEGER NOT NULL,
-        vector_dims INTEGER,
-        fts_tokenizer TEXT NOT NULL,
-        config_hash TEXT,
-        updated_at INTEGER NOT NULL
-      );
-    `);
-    params.db.exec(`
-      CREATE TABLE IF NOT EXISTS ${sourcesTable} (
-        source_kind TEXT NOT NULL DEFAULT 'memory',
-        source_key TEXT NOT NULL,
-        path TEXT,
-        session_id TEXT,
+        provider_key TEXT NOT NULL,
         hash TEXT NOT NULL,
-        mtime INTEGER NOT NULL,
-        size INTEGER NOT NULL,
-        PRIMARY KEY (source_kind, source_key),
-        FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
-      );
-    `);
-    params.db.exec(`
-      CREATE INDEX IF NOT EXISTS idx_memory_index_sources_session
-        ON ${sourcesTable}(session_id)
-        WHERE session_id IS NOT NULL;
-    `);
-    params.db.exec(`
-      CREATE TABLE IF NOT EXISTS ${chunksTable} (
-        id TEXT PRIMARY KEY,
-        source_kind TEXT NOT NULL DEFAULT 'memory',
-        source_key TEXT NOT NULL,
-        path TEXT NOT NULL,
-        session_id TEXT,
-        start_line INTEGER NOT NULL,
-        end_line INTEGER NOT NULL,
-        hash TEXT NOT NULL,
-        model TEXT NOT NULL,
-        text TEXT NOT NULL,
-        embedding BLOB NOT NULL,
-        embedding_dims INTEGER,
+        embedding TEXT NOT NULL,
+        dims INTEGER,
         updated_at INTEGER NOT NULL,
-        FOREIGN KEY (source_kind, source_key)
-          REFERENCES ${sourcesTable}(source_kind, source_key) ON DELETE CASCADE,
-        FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+        PRIMARY KEY (provider, model, provider_key, hash)
       );
     `);
     params.db.exec(
-      `CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_source ON ${chunksTable}(source_kind, source_key);`,
-    );
-    params.db.exec(
-      `CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_path ON ${chunksTable}(path);`,
-    );
-    params.db.exec(`
-      CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_session
-        ON ${chunksTable}(session_id)
-        WHERE session_id IS NOT NULL;
-    `);
-    if (params.cacheEnabled) {
-      params.db.exec(`
-        CREATE TABLE IF NOT EXISTS ${embeddingCacheTable} (
-          provider TEXT NOT NULL,
-          model TEXT NOT NULL,
-          provider_key TEXT NOT NULL,
-          hash TEXT NOT NULL,
-          embedding BLOB NOT NULL,
-          dims INTEGER,
-          updated_at INTEGER NOT NULL,
-          PRIMARY KEY (provider, model, provider_key, hash)
-        );
-      `);
-      params.db.exec(
-        `CREATE INDEX IF NOT EXISTS idx_memory_embedding_cache_updated_at ON ${embeddingCacheTable}(updated_at);`,
-      );
-    }
-    params.db.exec(
-      `INSERT OR IGNORE INTO ${metaTable} (meta_key, schema_version, provider, model, provider_key, sources_json, scope_hash, chunk_tokens, chunk_overlap, vector_dims, fts_tokenizer, config_hash, updated_at)
-       VALUES ('schema', ${MEMORY_INDEX_SCHEMA_VERSION}, 'none', 'fts-only', NULL, '[]', '', 0, 0, NULL, 'unicode61', NULL, 0);`,
-    );
-  } else if (params.cacheEnabled) {
-    params.db.exec(
-      `CREATE INDEX IF NOT EXISTS idx_memory_embedding_cache_updated_at ON ${embeddingCacheTable}(updated_at);`,
+      `CREATE INDEX IF NOT EXISTS idx_embedding_cache_updated_at ON ${params.embeddingCacheTable}(updated_at);`,
     );
   }
 
@@ -136,10 +63,9 @@ export function ensureMemoryIndexSchema(params: {
       const tokenizer = params.ftsTokenizer ?? "unicode61";
       const tokenizeClause = tokenizer === "trigram" ? `, tokenize='trigram case_sensitive 0'` : "";
       params.db.exec(
-        `CREATE VIRTUAL TABLE IF NOT EXISTS ${ftsTable} USING fts5(\n` +
+        `CREATE VIRTUAL TABLE IF NOT EXISTS ${params.ftsTable} USING fts5(\n` +
           `  text,\n` +
           `  id UNINDEXED,\n` +
-          `  source_key UNINDEXED,\n` +
           `  path UNINDEXED,\n` +
           `  source UNINDEXED,\n` +
           `  model UNINDEXED,\n` +
@@ -155,5 +81,23 @@ export function ensureMemoryIndexSchema(params: {
     }
   }
 
+  ensureColumn(params.db, "files", "source", "TEXT NOT NULL DEFAULT 'memory'");
+  ensureColumn(params.db, "chunks", "source", "TEXT NOT NULL DEFAULT 'memory'");
+  params.db.exec(`CREATE INDEX IF NOT EXISTS idx_chunks_path ON chunks(path);`);
+  params.db.exec(`CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(source);`);
+
   return { ftsAvailable, ...(ftsError ? { ftsError } : {}) };
+}
+
+function ensureColumn(
+  db: DatabaseSync,
+  table: "files" | "chunks",
+  column: string,
+  definition: string,
+): void {
+  const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (rows.some((row) => row.name === column)) {
+    return;
+  }
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }

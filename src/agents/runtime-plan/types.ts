@@ -1,5 +1,5 @@
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { TSchema } from "typebox";
-import type { AgentTool } from "../agent-core-contract.js";
 
 export type AgentRuntimeTransport = "sse" | "websocket" | "auto";
 

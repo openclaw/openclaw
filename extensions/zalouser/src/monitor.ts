@@ -177,6 +177,7 @@ function resolveZalouserInboundSessionKey(params: {
   core: ZalouserCoreRuntime;
   config: OpenClawConfig;
   route: { agentId: string; accountId: string; sessionKey: string };
+  storePath: string;
   isGroup: boolean;
   senderId: string;
 }): string {
@@ -204,12 +205,12 @@ function resolveZalouserInboundSessionKey(params: {
   );
   const hasDirectSession =
     params.core.channel.session.readSessionUpdatedAt({
-      agentId: params.route.agentId,
+      storePath: params.storePath,
       sessionKey: directSessionKey,
     }) !== undefined;
   const hasLegacySession =
     params.core.channel.session.readSessionUpdatedAt({
-      agentId: params.route.agentId,
+      storePath: params.storePath,
       sessionKey: legacySessionKey,
     }) !== undefined;
 
@@ -559,16 +560,20 @@ async function processMessage(
   }
 
   const fromLabel = isGroup ? groupName || `group:${chatId}` : senderName || `user:${senderId}`;
+  const storePath = core.channel.session.resolveStorePath(config.session?.store, {
+    agentId: route.agentId,
+  });
   const inboundSessionKey = resolveZalouserInboundSessionKey({
     core,
     config,
     route,
+    storePath,
     isGroup,
     senderId,
   });
   const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(config);
   const previousTimestamp = core.channel.session.readSessionUpdatedAt({
-    agentId: route.agentId,
+    storePath,
     sessionKey: inboundSessionKey,
   });
   const body = core.channel.reply.formatAgentEnvelope({
@@ -684,12 +689,12 @@ async function processMessage(
   };
 
   await core.channel.turn.runAssembled({
-    cfg: config,
     channel: "zalouser",
     accountId: account.accountId,
+    cfg: config,
     agentId: route.agentId,
     routeSessionKey: route.sessionKey,
-    messageId: messageSid ?? `${message.timestampMs}`,
+    storePath,
     ctxPayload,
     recordInboundSession: core.channel.session.recordInboundSession,
     dispatchReplyWithBufferedBlockDispatcher:

@@ -1,8 +1,8 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ModelProviderLocalServiceConfig } from "../config/types.models.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { Api, Model } from "./pi-ai-contract.js";
 
 const log = createSubsystemLogger("provider-local-service");
 const DEFAULT_READY_TIMEOUT_MS = 120_000;

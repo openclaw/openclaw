@@ -1,5 +1,4 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { createMemoryKeyedStore } from "../state/keyed-store.js";
 import type { InboundContext } from "./inbound-context.js";
 import { dispatchOutbound } from "./outbound-dispatch.js";
 import type { GatewayAccount, GatewayPluginRuntime } from "./types.js";
@@ -121,6 +120,7 @@ function makeRuntime(params: {
         resolveEnvelopeFormatOptions: vi.fn(() => ({})),
       },
       session: {
+        resolveStorePath: vi.fn(() => "/tmp/openclaw/qqbot-sessions.json"),
         recordInboundSession: vi.fn(async () => undefined),
       },
       turn: {
@@ -158,9 +158,6 @@ function makeRuntime(params: {
         provider: "test-tts",
         outputFormat: "wav",
       })),
-    },
-    state: {
-      openKeyedStore: <T>() => createMemoryKeyedStore<T>(),
     },
   };
 }

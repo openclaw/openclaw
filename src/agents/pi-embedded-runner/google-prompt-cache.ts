@@ -1,9 +1,9 @@
 import crypto from "node:crypto";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { parseGeminiAuth } from "../../infra/gemini-auth.js";
 import { normalizeGoogleApiBaseUrl } from "../../infra/google-api-base-url.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import type { StreamFn } from "../agent-core-contract.js";
-import type { Api, Model } from "../pi-ai-contract.js";
 import { buildGuardedModelFetch } from "../provider-transport-fetch.js";
 import { stableStringify } from "../stable-stringify.js";
 import { stripSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.js";

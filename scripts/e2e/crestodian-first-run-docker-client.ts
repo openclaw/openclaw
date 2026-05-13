@@ -7,7 +7,6 @@ import path from "node:path";
 import { runCli, shouldStartCrestodianForBareRoot } from "../../dist/cli/run-main.js";
 import { clearConfigCache } from "../../dist/config/config.js";
 import type { OpenClawConfig } from "../../dist/config/types.openclaw.js";
-import { listCrestodianAuditEntriesForTests } from "../../dist/crestodian/audit.js";
 import { runCrestodian } from "../../dist/crestodian/crestodian.js";
 import type { RuntimeEnv } from "../../dist/runtime.js";
 
@@ -161,10 +160,10 @@ async function main() {
     "Crestodian persisted the raw Discord token",
   );
 
-  const auditEntries = (await listCrestodianAuditEntriesForTests()).map((entry) => entry.value);
-  const auditOperations = new Set(auditEntries.map((entry) => entry.operation));
+  const auditPath = path.join(stateDir, "audit", "crestodian.jsonl");
+  const audit = (await fs.readFile(auditPath, "utf8")).trim();
   for (const operation of spec.auditOperations) {
-    assert(auditOperations.has(operation), `${operation} audit entry missing`);
+    assert(audit.includes(`"operation":"${operation}"`), `${operation} audit entry missing`);
   }
 
   console.log("Crestodian first-run Docker E2E passed");

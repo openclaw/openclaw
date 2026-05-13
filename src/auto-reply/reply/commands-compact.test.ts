@@ -15,10 +15,12 @@ vi.mock("./commands-compact.runtime.js", () => ({
   incrementCompactionCount: vi.fn(),
   isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
   resolveFreshSessionTotalTokens: vi.fn(() => 12_345),
+  resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
+  resolveSessionFilePathOptions: vi.fn(() => ({})),
   waitForEmbeddedPiRunEnd: vi.fn().mockResolvedValue(undefined),
 }));
 
-const { compactEmbeddedPiSession, incrementCompactionCount } =
+const { compactEmbeddedPiSession, incrementCompactionCount, resolveSessionFilePathOptions } =
   await import("./commands-compact.runtime.js");
 const { handleCompactCommand } = await import("./commands-compact.js");
 
@@ -137,7 +139,7 @@ describe("handleCompactCommand", () => {
         ...buildCompactParams("/compact", {
           commands: { text: true },
           channels: { whatsapp: { allowFrom: ["*"] } },
-          session: {},
+          session: { store: "/tmp/openclaw-session-store.json" },
         } as OpenClawConfig),
         ctx: {
           Provider: "whatsapp",
@@ -184,17 +186,21 @@ describe("handleCompactCommand", () => {
     expect(call.agentDir).toBe("/tmp/openclaw-agent-compact");
   });
 
-  it("uses the canonical session agent when compacting the SQLite session", async () => {
+  it("uses the canonical session agent when resolving the compaction session file", async () => {
     vi.mocked(compactEmbeddedPiSession).mockResolvedValueOnce({
       ok: true,
       compacted: false,
     });
     resolveSessionAgentIdMock.mockReturnValue("target");
-    const cfg = { commands: { text: true }, channels: { whatsapp: { allowFrom: ["*"] } } };
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { store: "/tmp/openclaw-session-store.json" },
+    } as OpenClawConfig;
 
     await handleCompactCommand(
       {
-        ...buildCompactParams("/compact", cfg as OpenClawConfig),
+        ...buildCompactParams("/compact", cfg),
         agentId: "main",
         sessionKey: "agent:target:whatsapp:direct:12345",
         sessionEntry: {
@@ -209,9 +215,10 @@ describe("handleCompactCommand", () => {
     const resolveCall = requireResolveSessionAgentIdCall();
     expect(resolveCall.sessionKey).toBe("agent:target:whatsapp:direct:12345");
     expect(resolveCall.config).toBe(cfg);
-    const call = requireCompactEmbeddedPiSessionCall();
-    expect(call.agentId).toBe("target");
-    expect(call.sessionId).toBe("session-1");
+    expect(vi.mocked(resolveSessionFilePathOptions)).toHaveBeenCalledWith({
+      agentId: "target",
+      storePath: undefined,
+    });
   });
 
   it("uses the canonical session agent directory for compaction runtime inputs", async () => {

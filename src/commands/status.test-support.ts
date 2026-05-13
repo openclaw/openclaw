@@ -107,7 +107,7 @@ const baseStatusSummary = {
   queuedSystemEvents: ["one", "two"],
   sessions: {
     count: 2,
-    databasePaths: ["openclaw-agent.sqlite"],
+    paths: ["store.json"],
     defaults: { model: "gpt-5.5", contextTokens: 12_000 },
     recent: [
       {
@@ -175,7 +175,7 @@ function createStatusHealth() {
     defaultAgentId: "main",
     agents: [],
     sessions: {
-      databasePath: "openclaw-agent.sqlite",
+      path: "store.json",
       count: 2,
       recent: [{ key: "session-key", updatedAt: 1, age: 5_000 }],
     },

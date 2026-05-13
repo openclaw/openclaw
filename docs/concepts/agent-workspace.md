@@ -9,8 +9,7 @@ sidebarTitle: "Agent workspace"
 
 The workspace is the agent's home. It is the only working directory used for file tools and for workspace context. Keep it private and treat it as memory.
 
-This is separate from `~/.openclaw/`, which stores config, credentials, and
-SQLite state databases.
+This is separate from `~/.openclaw/`, which stores config, credentials, and sessions.
 
 <Warning>
 The workspace is the **default cwd**, not a hard sandbox. Tools resolve relative paths against the workspace, but absolute paths can still reach elsewhere on the host unless sandboxing is enabled. If you need isolation, use [`agents.defaults.sandbox`](/gateway/sandboxing) (and/or per-agent sandbox config).
@@ -108,12 +107,10 @@ If any bootstrap file is missing, OpenClaw injects a "missing file" marker into 
 These live under `~/.openclaw/` and should NOT be committed to the workspace repo:
 
 - `~/.openclaw/openclaw.json` (config)
-- `~/.openclaw/state/openclaw.sqlite#table/auth_profile_stores/<agentDir>` (model auth profiles: OAuth + API keys)
+- `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` (model auth profiles: OAuth + API keys)
 - `~/.openclaw/agents/<agentId>/agent/codex-home/` (per-agent Codex runtime account, config, skills, plugins, and native thread state)
 - `~/.openclaw/credentials/` (channel/provider state plus legacy OAuth import data)
-- `~/.openclaw/state/openclaw.sqlite` (shared gateway state and database registry)
-- `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` (agent sessions,
-  transcript events, VFS scratch state, artifacts, and agent-local caches)
+- `~/.openclaw/agents/<agentId>/sessions/` (session transcripts + metadata)
 - `~/.openclaw/skills/` (managed skills)
 
 If you need to migrate sessions or config, copy them separately and keep them out of version control.
@@ -215,10 +212,8 @@ Suggested `.gitignore` starter:
   <Step title="Seed missing files">
     Run `openclaw setup --workspace <path>` to seed any missing files.
   </Step>
-  <Step title="Copy state databases (optional)">
-    If you need sessions, copy `~/.openclaw/state/openclaw.sqlite` plus
-    `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` from the old
-    machine separately, or use `openclaw backup`.
+  <Step title="Copy sessions (optional)">
+    If you need sessions, copy `~/.openclaw/agents/<agentId>/sessions/` from the old machine separately.
   </Step>
 </Steps>
 

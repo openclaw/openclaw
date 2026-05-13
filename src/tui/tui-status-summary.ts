@@ -44,11 +44,11 @@ export function formatStatusSummary(summary: GatewayStatusSummary) {
     lines.push(`Heartbeat: ${heartbeatParts.join(", ")}`);
   }
 
-  const sessionPaths = summary.sessions?.databasePaths ?? [];
+  const sessionPaths = summary.sessions?.paths ?? [];
   if (sessionPaths.length === 1) {
-    lines.push(`Session database: ${sessionPaths[0]}`);
+    lines.push(`Session store: ${sessionPaths[0]}`);
   } else if (sessionPaths.length > 1) {
-    lines.push(`Session databases: ${sessionPaths.length}`);
+    lines.push(`Session stores: ${sessionPaths.length}`);
   }
 
   const defaults = summary.sessions?.defaults;

@@ -6,8 +6,8 @@
  *
  * Cache layers (checked in order):
  * 1. In-memory Map (instant, cleared on process restart)
- * 2. Typed SQLite cache (<stateDir>/state/openclaw.sqlite#model_capability_cache)
- * 3. OpenRouter API fetch (populates SQLite)
+ * 2. On-disk JSON file (<stateDir>/cache/openrouter-models.json)
+ * 3. OpenRouter API fetch (populates both layers)
  *
  * Model capabilities are assumed stable — the cache has no TTL expiry.
  * A background refresh is triggered only when a model is not found in
@@ -18,32 +18,20 @@
  * capabilities instead of the text-only fallback.
  */
 
-import type { Insertable, Selectable } from "kysely";
+import { existsSync, readFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
+import { resolveStateDir } from "../../config/paths.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { resolveProxyFetchFromEnv } from "../../infra/net/proxy-fetch.js";
-import { sqliteBooleanInteger, sqliteIntegerBoolean } from "../../infra/sqlite-row-values.js";
+import { privateFileStoreSync } from "../../infra/private-file-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabaseOptions,
-} from "../../state/openclaw-state-db.js";
 
 const log = createSubsystemLogger("openrouter-model-capabilities");
 
-const OPENROUTER_PROVIDER_ID = "openrouter";
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const FETCH_TIMEOUT_MS = 10_000;
-
-type OpenRouterCapabilitiesDatabase = Pick<OpenClawStateKyselyDatabase, "model_capability_cache">;
-type OpenRouterCapabilitiesRow = Selectable<
-  OpenRouterCapabilitiesDatabase["model_capability_cache"]
->;
-type OpenRouterCapabilitiesInsert = Insertable<
-  OpenRouterCapabilitiesDatabase["model_capability_cache"]
->;
+const DISK_CACHE_FILENAME = "openrouter-models.json";
+const DISK_CACHE_VERSION = 2;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -86,89 +74,35 @@ export interface OpenRouterModelCapabilities {
   };
 }
 
-interface OpenRouterModelCachePayload {
+interface DiskCachePayload {
+  version?: number;
   models: Record<string, OpenRouterModelCapabilities>;
 }
 
 // ---------------------------------------------------------------------------
-// Persistent cache
+// Disk cache
 // ---------------------------------------------------------------------------
 
-function sqliteOptionsForEnv(env?: NodeJS.ProcessEnv): OpenClawStateDatabaseOptions {
-  return env ? { env } : {};
+function resolveDiskCacheDir(): string {
+  return join(resolveStateDir(), "cache");
 }
 
-function rowToModelCapabilities(row: OpenRouterCapabilitiesRow): OpenRouterModelCapabilities {
-  return {
-    name: row.name,
-    input: [row.input_text ? "text" : null, row.input_image ? "image" : null].filter(
-      (value): value is "text" | "image" => value !== null,
-    ),
-    reasoning: sqliteIntegerBoolean(row.reasoning) ?? false,
-    ...(row.supports_tools == null
-      ? {}
-      : { supportsTools: sqliteIntegerBoolean(row.supports_tools) ?? false }),
-    contextWindow: row.context_window,
-    maxTokens: row.max_tokens,
-    cost: {
-      input: row.cost_input,
-      output: row.cost_output,
-      cacheRead: row.cost_cache_read,
-      cacheWrite: row.cost_cache_write,
-    },
-  };
+function resolveDiskCachePath(): string {
+  return join(resolveDiskCacheDir(), DISK_CACHE_FILENAME);
 }
 
-function modelCapabilitiesToRow(
-  modelId: string,
-  caps: OpenRouterModelCapabilities,
-  updatedAtMs: number,
-): OpenRouterCapabilitiesInsert {
-  return {
-    provider_id: OPENROUTER_PROVIDER_ID,
-    model_id: modelId,
-    name: caps.name,
-    input_text: sqliteBooleanInteger(caps.input.includes("text")) ?? 0,
-    input_image: sqliteBooleanInteger(caps.input.includes("image")) ?? 0,
-    reasoning: sqliteBooleanInteger(caps.reasoning) ?? 0,
-    supports_tools: sqliteBooleanInteger(caps.supportsTools),
-    context_window: caps.contextWindow,
-    max_tokens: caps.maxTokens,
-    cost_input: caps.cost.input,
-    cost_output: caps.cost.output,
-    cost_cache_read: caps.cost.cacheRead,
-    cost_cache_write: caps.cost.cacheWrite,
-    updated_at_ms: updatedAtMs,
-  };
-}
-
-function writeSqliteCache(
-  map: Map<string, OpenRouterModelCapabilities>,
-  env?: NodeJS.ProcessEnv,
-): void {
+function writeDiskCache(map: Map<string, OpenRouterModelCapabilities>): void {
   try {
-    const updatedAtMs = Date.now();
-    const rows = [...map.entries()].map(([modelId, caps]) =>
-      modelCapabilitiesToRow(modelId, caps, updatedAtMs),
-    );
-    runOpenClawStateWriteTransaction((database) => {
-      const db = getNodeSqliteKysely<OpenRouterCapabilitiesDatabase>(database.db);
-      executeSqliteQuerySync(
-        database.db,
-        db.deleteFrom("model_capability_cache").where("provider_id", "=", OPENROUTER_PROVIDER_ID),
-      );
-      for (const row of rows) {
-        executeSqliteQuerySync(database.db, db.insertInto("model_capability_cache").values(row));
-      }
-    }, sqliteOptionsForEnv(env));
+    const cachePath = resolveDiskCachePath();
+    const payload: DiskCachePayload = {
+      version: DISK_CACHE_VERSION,
+      models: Object.fromEntries(map),
+    };
+    privateFileStoreSync(dirname(cachePath)).writeJson(basename(cachePath), payload);
   } catch (err: unknown) {
     const message = formatErrorMessage(err);
-    log.debug(`Failed to write OpenRouter SQLite cache: ${message}`);
+    log.debug(`Failed to write OpenRouter disk cache: ${message}`);
   }
-}
-
-function writePersistentCache(map: Map<string, OpenRouterModelCapabilities>): void {
-  writeSqliteCache(map);
 }
 
 function isValidCapabilities(value: unknown): value is OpenRouterModelCapabilities {
@@ -185,57 +119,35 @@ function isValidCapabilities(value: unknown): value is OpenRouterModelCapabiliti
   );
 }
 
-export function parseOpenRouterModelCapabilitiesCachePayload(
-  payload: unknown,
-): Map<string, OpenRouterModelCapabilities> | undefined {
-  if (!payload || typeof payload !== "object") {
-    return undefined;
-  }
-  const models = (payload as OpenRouterModelCachePayload).models;
-  if (!models || typeof models !== "object") {
-    return undefined;
-  }
-  const map = new Map<string, OpenRouterModelCapabilities>();
-  for (const [id, caps] of Object.entries(models)) {
-    if (isValidCapabilities(caps)) {
-      map.set(id, caps);
-    }
-  }
-  return map.size > 0 ? map : undefined;
-}
-
-function readSqliteCache(
-  env?: NodeJS.ProcessEnv,
-): Map<string, OpenRouterModelCapabilities> | undefined {
+function readDiskCache(): Map<string, OpenRouterModelCapabilities> | undefined {
   try {
-    const database = openOpenClawStateDatabase(sqliteOptionsForEnv(env));
-    const db = getNodeSqliteKysely<OpenRouterCapabilitiesDatabase>(database.db);
-    const rows = executeSqliteQuerySync(
-      database.db,
-      db
-        .selectFrom("model_capability_cache")
-        .selectAll()
-        .where("provider_id", "=", OPENROUTER_PROVIDER_ID)
-        .orderBy("model_id", "asc"),
-    ).rows;
-    if (rows.length === 0) {
+    const cachePath = resolveDiskCachePath();
+    if (!existsSync(cachePath)) {
       return undefined;
     }
-    return new Map(rows.map((row) => [row.model_id, rowToModelCapabilities(row)]));
+    const raw = readFileSync(cachePath, "utf-8");
+    const payload = JSON.parse(raw) as unknown;
+    if (!payload || typeof payload !== "object") {
+      return undefined;
+    }
+    const cachePayload = payload as DiskCachePayload;
+    if (cachePayload.version !== DISK_CACHE_VERSION) {
+      return undefined;
+    }
+    const models = cachePayload.models;
+    if (!models || typeof models !== "object") {
+      return undefined;
+    }
+    const map = new Map<string, OpenRouterModelCapabilities>();
+    for (const [id, caps] of Object.entries(models)) {
+      if (isValidCapabilities(caps)) {
+        map.set(id, caps);
+      }
+    }
+    return map.size > 0 ? map : undefined;
   } catch {
     return undefined;
   }
-}
-
-function readPersistentCache(): Map<string, OpenRouterModelCapabilities> | undefined {
-  return readSqliteCache();
-}
-
-export function writeOpenRouterModelCapabilitiesCacheSnapshot(
-  map: Map<string, OpenRouterModelCapabilities>,
-  env?: NodeJS.ProcessEnv,
-): void {
-  writeSqliteCache(map, env);
 }
 
 // ---------------------------------------------------------------------------
@@ -308,7 +220,7 @@ async function doFetch(): Promise<void> {
     }
 
     cache = map;
-    writePersistentCache(map);
+    writeDiskCache(map);
     log.debug(`Cached ${map.size} OpenRouter models from API`);
   } catch (err: unknown) {
     const message = formatErrorMessage(err);
@@ -332,8 +244,8 @@ function triggerFetch(): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Ensure the cache is populated. Checks in-memory first, then persisted cache,
- * then triggers a background API fetch as a last resort.
+ * Ensure the cache is populated. Checks in-memory first, then disk, then
+ * triggers a background API fetch as a last resort.
  * Does not block — returns immediately.
  */
 function ensureOpenRouterModelCache(): void {
@@ -341,11 +253,11 @@ function ensureOpenRouterModelCache(): void {
     return;
   }
 
-  // Try loading from persisted cache before hitting the network.
-  const persisted = readPersistentCache();
-  if (persisted) {
-    cache = persisted;
-    log.debug(`Loaded ${persisted.size} OpenRouter models from persisted cache`);
+  // Try loading from disk before hitting the network.
+  const disk = readDiskCache();
+  if (disk) {
+    cache = disk;
+    log.debug(`Loaded ${disk.size} OpenRouter models from disk cache`);
     return;
   }
 

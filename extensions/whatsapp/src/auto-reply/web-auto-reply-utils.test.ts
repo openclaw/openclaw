@@ -2,22 +2,19 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeMainKey } from "openclaw/plugin-sdk/routing";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  closeOpenClawStateDatabaseForTest,
-} from "openclaw/plugin-sdk/sqlite-runtime";
+import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import type { WhatsAppSendResult } from "../inbound/send-result.js";
 import {
   evaluateSessionFreshness,
-  getSessionEntry,
+  loadSessionStore,
   resolveChannelResetConfig,
   resolveSessionKey,
   resolveSessionResetPolicy,
   resolveSessionResetType,
+  resolveStorePath,
   resolveThreadFlag,
-  upsertSessionEntry,
 } from "./config.runtime.js";
 import {
   debugMention,
@@ -74,7 +71,8 @@ function getSessionSnapshotForTest(
       { From: from, To: "", Body: "" },
       normalizeMainKey(sessionCfg?.mainKey),
     );
-  const entry = getSessionEntry({ agentId: "main", sessionKey: key });
+  const store = loadSessionStore(resolveStorePath(sessionCfg?.store));
+  const entry = store[key];
   const isThread = resolveThreadFlag({
     sessionKey: key,
     messageThreadId: ctx?.messageThreadId ?? null,
@@ -265,49 +263,35 @@ describe("getSessionSnapshot", () => {
     vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
     try {
       await withTempDir("openclaw-snapshot-", async (root) => {
-        const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-        closeOpenClawAgentDatabasesForTest();
-        closeOpenClawStateDatabaseForTest();
-        process.env.OPENCLAW_STATE_DIR = root;
+        const storePath = path.join(root, "sessions.json");
         const sessionKey = "agent:main:whatsapp:dm:s1";
 
-        try {
-          upsertSessionEntry({
-            agentId: "main",
-            sessionKey,
-            entry: {
-              sessionId: "snapshot-session",
-              updatedAt: new Date(2026, 0, 18, 3, 30, 0).getTime(),
-              channel: "whatsapp",
+        await saveSessionStore(storePath, {
+          [sessionKey]: {
+            sessionId: "snapshot-session",
+            updatedAt: new Date(2026, 0, 18, 3, 30, 0).getTime(),
+            lastChannel: "whatsapp",
+          },
+        });
+
+        const cfg = {
+          session: {
+            store: storePath,
+            reset: { mode: "daily", atHour: 4, idleMinutes: 240 },
+            resetByChannel: {
+              whatsapp: { mode: "idle", idleMinutes: 360 },
             },
-          });
+          },
+        } as OpenClawConfig;
 
-          const cfg = {
-            session: {
-              reset: { mode: "daily", atHour: 4, idleMinutes: 240 },
-              resetByChannel: {
-                whatsapp: { mode: "idle", idleMinutes: 360 },
-              },
-            },
-          } as OpenClawConfig;
+        const snapshot = getSessionSnapshotForTest(cfg, "whatsapp:+15550001111", {
+          sessionKey,
+        });
 
-          const snapshot = getSessionSnapshotForTest(cfg, "whatsapp:+15550001111", {
-            sessionKey,
-          });
-
-          expect(snapshot.resetPolicy.mode).toBe("idle");
-          expect(snapshot.resetPolicy.idleMinutes).toBe(360);
-          expect(snapshot.fresh).toBe(true);
-          expect(snapshot.dailyResetAt).toBeUndefined();
-        } finally {
-          closeOpenClawAgentDatabasesForTest();
-          closeOpenClawStateDatabaseForTest();
-          if (previousStateDir === undefined) {
-            delete process.env.OPENCLAW_STATE_DIR;
-          } else {
-            process.env.OPENCLAW_STATE_DIR = previousStateDir;
-          }
-        }
+        expect(snapshot.resetPolicy.mode).toBe("idle");
+        expect(snapshot.resetPolicy.idleMinutes).toBe(360);
+        expect(snapshot.fresh).toBe(true);
+        expect(snapshot.dailyResetAt).toBeUndefined();
       });
     } finally {
       vi.useRealTimers();

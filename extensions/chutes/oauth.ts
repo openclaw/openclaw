@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import type { OAuthCredentials } from "@earendil-works/pi-ai";
 import { generatePkceVerifierChallenge, toFormUrlEncoded } from "openclaw/plugin-sdk/provider-auth";
 import {
   parseOAuthCallbackInput,
@@ -25,13 +26,6 @@ type ChutesOAuthAppConfig = {
 type ChutesUserInfo = {
   sub?: string;
   username?: string;
-};
-
-type OAuthCredentials = {
-  access: string;
-  refresh: string;
-  expires: number;
-  email?: string;
 };
 
 type ChutesStoredOAuth = OAuthCredentials & {

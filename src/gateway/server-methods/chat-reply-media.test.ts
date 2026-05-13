@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { createManagedOutgoingImageBlocks } from "../managed-image-attachments.js";
 import { normalizeWebchatReplyMediaPathsForDisplay } from "./chat-reply-media.js";
@@ -85,9 +84,7 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
 
     const normalizedPath = requireString(payload?.mediaUrls?.[0], "normalized media path");
     expect(normalizedPath).not.toBe(sourcePath);
-    expect(normalizedPath?.startsWith(path.join(resolvePreferredOpenClawTmpDir(), "media"))).toBe(
-      true,
-    );
+    expect(normalizedPath.startsWith(path.join(stateDir, "media"))).toBe(true);
     const blocks = await createManagedOutgoingImageBlocks({
       sessionKey: "agent:main:webchat:direct:user",
       mediaUrls: payload?.mediaUrls ?? [],
@@ -199,9 +196,7 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     );
     expect(payload?.mediaUrls?.[0]).toBe(dataUrl);
     expect(normalizedLocalPath).not.toBe(sourcePath);
-    expect(
-      normalizedLocalPath?.startsWith(path.join(resolvePreferredOpenClawTmpDir(), "media")),
-    ).toBe(true);
+    expect(normalizedLocalPath.startsWith(path.join(stateDir, "media"))).toBe(true);
     const blocks = await createManagedOutgoingImageBlocks({
       sessionKey: "agent:main:webchat:direct:user",
       mediaUrls: payload?.mediaUrls ?? [],

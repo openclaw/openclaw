@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { safeFileURLToPath } from "../infra/local-file-access.js";
 import { resolveUserPath } from "../utils.js";
-import { getMediaMaterializationDir, resolveMediaBufferPath } from "./store.js";
+import { getMediaDir, resolveMediaBufferPath } from "./store.js";
 
 type MediaReferenceErrorCode = "invalid-path" | "path-not-allowed";
 
@@ -157,24 +157,17 @@ export async function resolveInboundMediaReference(
     return null;
   }
 
-  const inboundDirs = [path.resolve(getMediaMaterializationDir(), "inbound")];
+  const rawInboundDir = path.resolve(getMediaDir(), "inbound");
   const rawResolvedPath = path.resolve(localPath);
-  let rel: string | null = null;
-  for (const inboundDir of inboundDirs) {
-    const rawRel = path.relative(inboundDir, rawResolvedPath);
-    const candidate =
-      rawRel && !rawRel.startsWith("..") && !path.isAbsolute(rawRel)
-        ? rawRel
-        : path.relative(
-            await resolvePathForContainment(inboundDir),
-            await resolvePathForContainment(localPath),
-          );
-    if (candidate && !candidate.startsWith("..") && !path.isAbsolute(candidate)) {
-      rel = candidate;
-      break;
-    }
-  }
-  if (!rel || rel.includes(path.sep)) {
+  const rawRel = path.relative(rawInboundDir, rawResolvedPath);
+  const rel =
+    rawRel && !rawRel.startsWith("..") && !path.isAbsolute(rawRel)
+      ? rawRel
+      : path.relative(
+          await resolvePathForContainment(rawInboundDir),
+          await resolvePathForContainment(localPath),
+        );
+  if (!rel || rel.startsWith("..") || path.isAbsolute(rel) || rel.includes(path.sep)) {
     return null;
   }
 

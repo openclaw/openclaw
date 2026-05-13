@@ -43,6 +43,7 @@ export type OutboundChannelRuntime = {
   id: string;
   label: string;
   chatTypes: NonNullable<ChannelCapabilities["chatTypes"]>;
+  preferSessionLookupForAnnounceTarget?: ChannelPlugin["meta"]["preferSessionLookupForAnnounceTarget"];
   actions?: ChannelMessageActionAdapter;
   approvalCapability?: ChannelPlugin["approvalCapability"];
   conversationBindings?: ChannelConversationBindingSupport;
@@ -123,6 +124,7 @@ function toOutboundChannelRuntime(plugin: ChannelPlugin): OutboundChannelRuntime
     id: plugin.id,
     label: plugin.meta.label,
     chatTypes: plugin.capabilities.chatTypes,
+    preferSessionLookupForAnnounceTarget: plugin.meta.preferSessionLookupForAnnounceTarget,
     actions: plugin.actions,
     approvalCapability: plugin.approvalCapability,
     conversationBindings: plugin.conversationBindings,

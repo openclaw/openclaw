@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import type { Bot, Context } from "grammy";
 import {
   loadModelCatalog,
@@ -36,10 +37,11 @@ import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
-  getSessionEntry,
-  listSessionEntries,
-  resolveAndPersistSessionTranscriptScope,
-  resolveSessionRowEntry,
+  loadSessionStore,
+  resolveAndPersistSessionFile,
+  resolveSessionStoreEntry,
+  resolveSessionTranscriptPathInDir,
+  resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -166,30 +168,38 @@ function resolveTelegramProgressPlaceholder(command: {
   return text ? text : null;
 }
 
-async function resolveTelegramCommandTranscriptScope(params: {
+async function resolveTelegramCommandSessionFile(params: {
   cfg: OpenClawConfig;
   agentId: string;
   sessionKey: string;
   threadId?: string | number;
-}): Promise<{ sessionId?: string }> {
+}): Promise<{ sessionId?: string; sessionFile?: string }> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
     return {};
   }
   try {
-    const existing = getSessionEntry({ agentId: params.agentId, sessionKey });
-    const resolved = resolveSessionRowEntry({
-      entries: existing ? { [sessionKey]: existing } : {},
-      sessionKey,
-    });
+    const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
+    const store = loadSessionStore(storePath);
+    const resolved = resolveSessionStoreEntry({ store, sessionKey });
     const sessionId = resolved.existing?.sessionId?.trim() || randomUUID();
-    const scope = await resolveAndPersistSessionTranscriptScope({
+    const sessionsDir = path.dirname(storePath);
+    const fallbackSessionFile = resolveSessionTranscriptPathInDir(
+      sessionId,
+      sessionsDir,
+      params.threadId,
+    );
+    const persisted = await resolveAndPersistSessionFile({
       sessionId,
       sessionKey: resolved.normalizedKey,
+      sessionStore: store,
+      storePath,
       sessionEntry: resolved.existing,
       agentId: params.agentId,
+      sessionsDir,
+      fallbackSessionFile,
     });
-    return { sessionId: scope.sessionId };
+    return { sessionId, sessionFile: persisted.sessionFile };
   } catch {
     return {};
   }
@@ -204,17 +214,13 @@ function resolveTelegramCommandMenuModelContext(params: {
     return {};
   }
   try {
+    const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
     const defaultModel = resolveDefaultModelForAgent({
       cfg: params.cfg,
       agentId: params.agentId,
     });
-    const store = Object.fromEntries(
-      listSessionEntries({ agentId: params.agentId }).map(({ sessionKey, entry }) => [
-        sessionKey,
-        entry,
-      ]),
-    );
-    const entry = getSessionEntry({ agentId: params.agentId, sessionKey: params.sessionKey });
+    const store = loadSessionStore(storePath);
+    const entry = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey }).existing;
     const thinkingLevel = normalizeOptionalString(entry?.thinkingLevel);
     if (entry?.modelOverrideSource === "auto" && normalizeOptionalString(entry.modelOverride)) {
       return {
@@ -1341,7 +1347,7 @@ export const registerTelegramNativeCommands = ({
           }
         }
 
-        const transcriptScopeContext = await resolveTelegramCommandTranscriptScope({
+        const sessionFileContext = await resolveTelegramCommandSessionFile({
           cfg: runtimeCfg,
           agentId: route.agentId,
           sessionKey: route.sessionKey,
@@ -1357,7 +1363,8 @@ export const registerTelegramNativeCommands = ({
             isAuthorizedSender: commandAuthorized,
             senderIsOwner,
             sessionKey: route.sessionKey,
-            sessionId: transcriptScopeContext.sessionId,
+            sessionId: sessionFileContext.sessionId,
+            sessionFile: sessionFileContext.sessionFile,
             commandBody,
             config: runtimeCfg,
             from,
@@ -1405,7 +1412,7 @@ export const registerTelegramNativeCommands = ({
               linkPreview: runtimeTelegramCfg.linkPreview,
               buttons: telegramResultData?.buttons,
             });
-            recordSentMessage(chatId, progressMessageId, { accountId });
+            recordSentMessage(chatId, progressMessageId, runtimeCfg);
             emitTelegramMessageSentHooks({
               sessionKeyForInternalHooks: route.sessionKey,
               chatId: String(chatId),

@@ -112,7 +112,6 @@ describe("memory watcher config", () => {
       workspaceDir = "";
       extraDir = "";
     }
-    vi.unstubAllEnvs();
   });
 
   async function setupWatcherWorkspace(seedFile: { name: string; contents: string }) {
@@ -121,7 +120,6 @@ describe("memory watcher config", () => {
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await fs.mkdir(extraDir, { recursive: true });
     await fs.writeFile(path.join(extraDir, seedFile.name), seedFile.contents);
-    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
   }
 
   function createWatcherConfig(overrides?: Partial<MemorySearchConfig>): OpenClawConfig {
@@ -130,7 +128,7 @@ describe("memory watcher config", () => {
       memorySearch: {
         provider: "openai",
         model: "mock-embed",
-        store: { vector: { enabled: false } },
+        store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
         sync: { watch: true, watchDebounceMs: 25, onSessionStart: false, onSearch: false },
         query: { minScore: 0, hybrid: { enabled: false } },
         extraPaths: [extraDir],

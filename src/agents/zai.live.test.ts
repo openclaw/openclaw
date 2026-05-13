@@ -1,10 +1,10 @@
+import { completeSimple, getModel } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
   createSingleUserPromptMessage,
   extractNonEmptyAssistantText,
   isLiveTestEnabled,
 } from "./live-test-helpers.js";
-import { completeSimple, getModel } from "./pi-ai-contract.js";
 
 const ZAI_KEY = process.env.ZAI_API_KEY ?? process.env.Z_AI_API_KEY ?? "";
 const LIVE = isLiveTestEnabled(["ZAI_LIVE_TEST"]);

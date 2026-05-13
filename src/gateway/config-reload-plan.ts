@@ -101,7 +101,7 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
   { prefix: "cron", kind: "hot", actions: ["restart-cron"] },
   { prefix: "mcp", kind: "hot", actions: ["dispose-mcp-runtimes"] },
   { prefix: "plugins.load", kind: "restart" },
-  { prefix: "installedPluginIndex.installRecords", kind: "restart" },
+  { prefix: "plugins.installs", kind: "restart" },
 ];
 
 const BASE_RELOAD_RULES_TAIL: ReloadRule[] = [
@@ -221,28 +221,32 @@ function matchRule(path: string): ReloadRule | null {
   return null;
 }
 
-function isInstalledPluginIndexTimestampPath(path: string): boolean {
-  return /^installedPluginIndex\.installRecords\..+\.(installedAt|resolvedAt)$/.test(path);
+function isPluginInstallTimestampPath(path: string): boolean {
+  // Legacy compatibility only: new plugin install metadata lives in the
+  // managed plugin index, but old config writes may still touch this path.
+  return /^plugins\.installs\..+\.(installedAt|resolvedAt)$/.test(path);
 }
 
-function getInstalledPluginIndexRecords(state: unknown): Record<string, unknown> {
-  if (!isPlainObject(state)) {
+function getPluginInstallRecords(config: unknown): Record<string, unknown> {
+  if (!isPlainObject(config)) {
     return {};
   }
-  const pluginIndex = state.installedPluginIndex;
-  if (!isPlainObject(pluginIndex)) {
+  const plugins = config.plugins;
+  if (!isPlainObject(plugins)) {
     return {};
   }
-  const records = pluginIndex.installRecords;
-  return isPlainObject(records) ? records : {};
+  // Keep legacy config install records out of gateway restart decisions while
+  // migration/doctor moves them into the managed plugin index install records.
+  const installs = plugins.installs;
+  return isPlainObject(installs) ? installs : {};
 }
 
-export function listInstalledPluginIndexTimestampMetadataPaths(
-  prevState: unknown,
-  nextState: unknown,
+export function listPluginInstallTimestampMetadataPaths(
+  prevConfig: unknown,
+  nextConfig: unknown,
 ): string[] {
-  const prevInstalls = getInstalledPluginIndexRecords(prevState);
-  const nextInstalls = getInstalledPluginIndexRecords(nextState);
+  const prevInstalls = getPluginInstallRecords(prevConfig);
+  const nextInstalls = getPluginInstallRecords(nextConfig);
   const ids = new Set([...Object.keys(prevInstalls), ...Object.keys(nextInstalls)]);
   const paths: string[] = [];
 
@@ -254,7 +258,7 @@ export function listInstalledPluginIndexTimestampMetadataPaths(
     }
     for (const key of ["installedAt", "resolvedAt"] as const) {
       if (prevRecord[key] !== nextRecord[key]) {
-        paths.push(`installedPluginIndex.installRecords.${id}.${key}`);
+        paths.push(`plugins.installs.${id}.${key}`);
       }
     }
   }
@@ -262,12 +266,12 @@ export function listInstalledPluginIndexTimestampMetadataPaths(
   return paths;
 }
 
-export function listInstalledPluginIndexWholeRecordPaths(
-  prevState: unknown,
-  nextState: unknown,
+export function listPluginInstallWholeRecordPaths(
+  prevConfig: unknown,
+  nextConfig: unknown,
 ): string[] {
-  const prevInstalls = getInstalledPluginIndexRecords(prevState);
-  const nextInstalls = getInstalledPluginIndexRecords(nextState);
+  const prevInstalls = getPluginInstallRecords(prevConfig);
+  const nextInstalls = getPluginInstallRecords(nextConfig);
   const ids = new Set([...Object.keys(prevInstalls), ...Object.keys(nextInstalls)]);
   const paths: string[] = [];
 
@@ -275,7 +279,7 @@ export function listInstalledPluginIndexWholeRecordPaths(
     const prevRecord = prevInstalls[id];
     const nextRecord = nextInstalls[id];
     if (!isPlainObject(prevRecord) || !isPlainObject(nextRecord)) {
-      paths.push(`installedPluginIndex.installRecords.${id}`);
+      paths.push(`plugins.installs.${id}`);
     }
   }
 
@@ -340,7 +344,7 @@ export function buildGatewayReloadPlan(
   for (const path of changedPaths) {
     const isTimestampNoop =
       !forceChangedPaths.has(path) &&
-      (noopPaths.size > 0 ? noopPaths.has(path) : isInstalledPluginIndexTimestampPath(path));
+      (noopPaths.size > 0 ? noopPaths.has(path) : isPluginInstallTimestampPath(path));
     if (isTimestampNoop) {
       plan.noopPaths.push(path);
       continue;

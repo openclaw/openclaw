@@ -49,6 +49,7 @@ vi.mock("./cli.host.runtime.js", async () => {
     normalizeExtraMemoryPaths: runtimeFiles.normalizeExtraMemoryPaths,
     resolveCommandSecretRefsViaGateway,
     resolveDefaultAgentId,
+    resolveSessionTranscriptsDirForAgent: runtimeCore.resolveSessionTranscriptsDirForAgent,
     resolveStateDir: runtimeCore.resolveStateDir,
     setVerbose: runtimeCli.setVerbose,
     shortenHomeInString: runtimeCli.shortenHomeInString,
@@ -116,9 +117,14 @@ describe("memory cli", () => {
   }
 
   function expectCliSync(sync: ReturnType<typeof vi.fn>) {
-    expect(sync).toHaveBeenCalledWith(
-      expect.objectContaining({ reason: "cli", force: false, progress: expect.any(Function) }),
-    );
+    const syncCall = firstMockCallArg(sync, "sync") as {
+      reason?: unknown;
+      force?: unknown;
+      progress?: unknown;
+    };
+    expect(syncCall.reason).toBe("cli");
+    expect(syncCall.force).toBe(false);
+    expect(typeof syncCall.progress).toBe("function");
   }
 
   function makeMemoryStatus(overrides: Record<string, unknown> = {}) {
@@ -238,17 +244,7 @@ describe("memory cli", () => {
   async function withTempWorkspace(run: (workspaceDir: string) => Promise<void>) {
     const workspaceDir = path.join(workspaceFixtureRoot, `case-${workspaceCaseId++}`);
     await fs.mkdir(path.join(workspaceDir, "memory", ".dreams"), { recursive: true });
-    const previous = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = path.join(workspaceDir, ".state");
-    try {
-      await run(workspaceDir);
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previous;
-      }
-    }
+    await run(workspaceDir);
   }
 
   async function writeDailyMemoryNote(
@@ -395,7 +391,7 @@ describe("memory cli", () => {
     const helpText = getMemoryHelpText();
 
     expect(helpText).toContain("openclaw memory status --fix");
-    expect(helpText).toContain("Normalize short-term promotion metadata.");
+    expect(helpText).toContain("Repair stale recall locks and normalize promotion metadata.");
     expect(helpText).toContain("openclaw memory status --deep");
     expect(helpText).toContain("Probe embedding provider readiness.");
     expect(helpText).toContain('openclaw memory search "meeting notes"');
@@ -569,22 +565,44 @@ describe("memory cli", () => {
     });
   });
 
-  it("normalizes recall metadata with status --fix", async () => {
+  it("repairs invalid recall metadata and stale locks with status --fix", async () => {
     await withTempWorkspace(async (workspaceDir) => {
-      await recordShortTermRecalls({
-        workspaceDir,
-        query: "router cache",
-        results: [
+      const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
+      await fs.writeFile(
+        storePath,
+        JSON.stringify(
           {
-            path: "memory/2026-04-03.md",
-            startLine: 1,
-            endLine: 2,
-            score: 0.8,
-            snippet: "QMD router cache note",
-            source: "memory",
+            version: 1,
+            updatedAt: "2026-04-04T00:00:00.000Z",
+            entries: {
+              good: {
+                key: "good",
+                path: "memory/2026-04-03.md",
+                startLine: 1,
+                endLine: 2,
+                source: "memory",
+                snippet: "QMD router cache note",
+                recallCount: 1,
+                totalScore: 0.8,
+                maxScore: 0.8,
+                firstRecalledAt: "2026-04-04T00:00:00.000Z",
+                lastRecalledAt: "2026-04-04T00:00:00.000Z",
+                queryHashes: ["a"],
+              },
+              bad: {
+                path: "",
+              },
+            },
           },
-        ],
-      });
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+      const lockPath = path.join(workspaceDir, "memory", ".dreams", "short-term-promotion.lock");
+      await fs.writeFile(lockPath, "999999:0\n", "utf-8");
+      const staleMtime = new Date(Date.now() - 120_000);
+      await fs.utimes(lockPath, staleMtime, staleMtime);
 
       const close = vi.fn(async () => {});
       mockManager({
@@ -596,15 +614,21 @@ describe("memory cli", () => {
       const log = spyRuntimeLogs(defaultRuntime);
       await runMemoryCli(["status", "--fix"]);
 
-      expectLogged(log, "Repair: no changes");
-      const entries = await readShortTermRecallEntries({ workspaceDir });
-      expect(entries[0]?.conceptTags).toContain("router");
+      expectLogged(log, "Repair: rewrote store");
+      await expectPathMissing(lockPath);
+      const repaired = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
+        entries: Record<string, { conceptTags?: string[] }>;
+      };
+      expect(repaired.entries.good?.conceptTags).toContain("router");
       expect(close).toHaveBeenCalled();
     });
   });
 
-  it("does not show file-repair hints for the SQLite recall store", async () => {
+  it("shows the fix hint only before --fix has been run", async () => {
     await withTempWorkspace(async (workspaceDir) => {
+      const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
+      await fs.writeFile(storePath, " \n", "utf-8");
+
       const close = vi.fn(async () => {});
       mockManager({
         probeVectorAvailability: vi.fn(async () => true),
@@ -614,7 +638,7 @@ describe("memory cli", () => {
 
       const log = spyRuntimeLogs(defaultRuntime);
       await runMemoryCli(["status"]);
-      expectNotLogged(log, "Fix: openclaw memory status --fix --agent main");
+      expectLogged(log, "Fix: openclaw memory status --fix --agent main");
 
       log.mockClear();
       mockManager({
@@ -761,7 +785,7 @@ describe("memory cli", () => {
 
     expectCliSync(sync);
     expect(error).toHaveBeenCalledWith(
-      "Memory index WARNING (main): memory_index_chunks_vec not updated — sqlite-vec unavailable: load failed. Vector recall degraded.",
+      "Memory index WARNING (main): chunks_vec not updated — sqlite-vec unavailable: load failed. Vector recall degraded.",
     );
     expect(close).toHaveBeenCalled();
     expect(process.exitCode).toBeUndefined();
@@ -1765,11 +1789,32 @@ describe("memory cli", () => {
 
       await runMemoryCli(["search", "glacier", "--json"]);
 
-      const entries = await waitFor(async () => {
-        const found = await readShortTermRecallEntries({ workspaceDir });
-        expect(found).toHaveLength(1);
-        return found;
-      });
+      const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
+      const storeRaw = await waitFor(async () => await fs.readFile(storePath, "utf-8"));
+      const store = JSON.parse(storeRaw) as {
+        entries?: Record<
+          string,
+          {
+            key: string;
+            path: string;
+            startLine: number;
+            endLine: number;
+            source: string;
+            snippet: string;
+            recallCount: number;
+            dailyCount: number;
+            groundedCount: number;
+            totalScore: number;
+            maxScore: number;
+            firstRecalledAt: string;
+            lastRecalledAt: string;
+            queryHashes: string[];
+            recallDays: string[];
+            conceptTags: string[];
+          }
+        >;
+      };
+      const entries = Object.values(store.entries ?? {});
       expect(entries).toHaveLength(1);
       const entry = entries[0];
       if (!entry) {

@@ -1,27 +1,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { afterEach, describe, expect, it } from "vitest";
-import { createMSTeamsSsoTokenStore } from "./sso-token-store.js";
+import { describe, expect, it } from "vitest";
+import { createMSTeamsSsoTokenStoreFs } from "./sso-token-store.js";
 
-const tempDirs: string[] = [];
-
-afterEach(async () => {
-  resetPluginStateStoreForTests();
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
-});
-
-async function makeTempDir(prefix: string): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  tempDirs.push(dir);
-  return dir;
-}
-
-describe("msteams sso token store", () => {
+describe("msteams sso token store (fs)", () => {
   it("keeps distinct tokens when connectionName and userId contain the legacy delimiter", async () => {
-    const stateDir = await makeTempDir("openclaw-msteams-sso-");
-    const store = createMSTeamsSsoTokenStore({ stateDir });
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-sso-"));
+    const storePath = path.join(stateDir, "msteams-sso-tokens.json");
+    const store = createMSTeamsSsoTokenStoreFs({ storePath });
 
     const first = {
       connectionName: "conn::alpha",
@@ -41,29 +28,47 @@ describe("msteams sso token store", () => {
 
     expect(await store.get(first)).toEqual(first);
     expect(await store.get(second)).toEqual(second);
+
+    const raw = JSON.parse(await fs.readFile(storePath, "utf8")) as {
+      tokens: Record<string, unknown>;
+    };
+    expect(Object.keys(raw.tokens)).toHaveLength(2);
   });
 
-  it("removes tokens from SQLite storage", async () => {
-    const stateDir = await makeTempDir("openclaw-msteams-sso-remove-");
-    const store = createMSTeamsSsoTokenStore({ stateDir });
-    await store.save({
+  it("loads legacy flat-key files by rebuilding keys from stored token payloads", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-sso-legacy-"));
+    const storePath = path.join(stateDir, "msteams-sso-tokens.json");
+    await fs.writeFile(
+      storePath,
+      `${JSON.stringify(
+        {
+          version: 1,
+          tokens: {
+            "legacy::wrong-key": {
+              connectionName: "conn",
+              userId: "user-1",
+              token: "token-1",
+              updatedAt: "2026-04-10T00:00:00.000Z",
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const store = createMSTeamsSsoTokenStoreFs({ storePath });
+    expect(
+      await store.get({
+        connectionName: "conn",
+        userId: "user-1",
+      }),
+    ).toEqual({
       connectionName: "conn",
       userId: "user-1",
       token: "token-1",
       updatedAt: "2026-04-10T00:00:00.000Z",
     });
-
-    await expect(
-      store.remove({
-        connectionName: "conn",
-        userId: "user-1",
-      }),
-    ).resolves.toBe(true);
-    await expect(
-      store.get({
-        connectionName: "conn",
-        userId: "user-1",
-      }),
-    ).resolves.toBeNull();
   });
 });

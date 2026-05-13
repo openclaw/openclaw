@@ -2,7 +2,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { replaceSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 
 vi.mock("../../config/config.js", () => {
@@ -20,10 +19,7 @@ vi.mock("../session-utils.js", async () => {
   const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
   return {
     ...actual,
-    loadCombinedSessionEntriesForGateway: vi.fn(() => ({
-      databasePath: "(multiple)",
-      entries: {},
-    })),
+    loadCombinedSessionStoreForGateway: vi.fn(() => ({ storePath: "(multiple)", store: {} })),
   };
 });
 
@@ -37,8 +33,8 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
       if (params?.agentId === "main") {
         return [
           {
-            agentId: "main",
             sessionId: "s-main",
+            sessionFile: "/tmp/agents/main/sessions/s-main.jsonl",
             mtime: 100,
             firstUserMessage: "hello",
           },
@@ -47,8 +43,8 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
       if (params?.agentId === "opus") {
         return [
           {
-            agentId: "opus",
             sessionId: "s-opus",
+            sessionFile: "/tmp/agents/opus/sessions/s-opus.jsonl",
             mtime: 200,
             firstUserMessage: "hi",
           },
@@ -91,7 +87,7 @@ import {
   loadSessionLogs,
   loadSessionUsageTimeSeries,
 } from "../../infra/session-cost-usage.js";
-import { loadCombinedSessionEntriesForGateway } from "../session-utils.js";
+import { loadCombinedSessionStoreForGateway } from "../session-utils.js";
 import { usageHandlers } from "./usage.js";
 
 const TEST_RUNTIME_CONFIG = {
@@ -193,18 +189,19 @@ describe("sessions.usage", () => {
 
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        replaceSqliteSessionTranscriptEvents({
-          agentId: "opus",
-          sessionId: "s-opus",
-          events: [{ type: "session", id: "s-opus" }],
-        });
+        const agentSessionsDir = path.join(stateDir, "agents", "opus", "sessions");
+        fs.mkdirSync(agentSessionsDir, { recursive: true });
+        const sessionFile = path.join(agentSessionsDir, "s-opus.jsonl");
+        fs.writeFileSync(sessionFile, "", "utf-8");
+
         // Swap the store mock for this test: the canonical key differs from the discovered key
         // but points at the same sessionId.
-        vi.mocked(loadCombinedSessionEntriesForGateway).mockReturnValue({
-          databasePath: "(multiple)",
-          entries: {
+        vi.mocked(loadCombinedSessionStoreForGateway).mockReturnValue({
+          storePath: "(multiple)",
+          store: {
             [storeKey]: {
               sessionId: "s-opus",
+              sessionFile: "s-opus.jsonl",
               label: "Named session",
               updatedAt: 999,
             },
@@ -239,22 +236,21 @@ describe("sessions.usage", () => {
 
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        replaceSqliteSessionTranscriptEvents({
-          agentId: "opus",
-          sessionId: "current",
-          events: [{ type: "session", id: "current" }],
-        });
-        replaceSqliteSessionTranscriptEvents({
-          agentId: "opus",
-          sessionId: "old",
-          events: [{ type: "session", id: "old" }],
-        });
+        const agentSessionsDir = path.join(stateDir, "agents", "opus", "sessions");
+        fs.mkdirSync(agentSessionsDir, { recursive: true });
+        fs.writeFileSync(path.join(agentSessionsDir, "current.jsonl"), "", "utf-8");
+        fs.writeFileSync(
+          path.join(agentSessionsDir, "old.jsonl.reset.2026-02-01T00-00-00.000Z"),
+          "",
+          "utf-8",
+        );
 
-        vi.mocked(loadCombinedSessionEntriesForGateway).mockReturnValue({
-          databasePath: "(multiple)",
-          entries: {
+        vi.mocked(loadCombinedSessionStoreForGateway).mockReturnValue({
+          storePath: "(multiple)",
+          store: {
             [storeKey]: {
               sessionId: "current",
+              sessionFile: "current.jsonl",
               updatedAt: 1_000,
               usageFamilyKey: storeKey,
               usageFamilySessionIds: ["old", "current"],
@@ -330,20 +326,22 @@ describe("sessions.usage", () => {
 
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        replaceSqliteSessionTranscriptEvents({
-          agentId: "opus",
-          sessionId: "run-dup",
-          events: [{ type: "session", id: "run-dup" }],
-        });
-        vi.mocked(loadCombinedSessionEntriesForGateway).mockReturnValue({
-          databasePath: "(multiple)",
-          entries: {
+        const agentSessionsDir = path.join(stateDir, "agents", "opus", "sessions");
+        fs.mkdirSync(agentSessionsDir, { recursive: true });
+        const sessionFile = path.join(agentSessionsDir, "run-dup.jsonl");
+        fs.writeFileSync(sessionFile, "", "utf-8");
+
+        vi.mocked(loadCombinedSessionStoreForGateway).mockReturnValue({
+          storePath: "(multiple)",
+          store: {
             [preferredKey]: {
               sessionId: "run-dup",
+              sessionFile: "run-dup.jsonl",
               updatedAt: 1_000,
             },
             "agent:other:main": {
               sessionId: "run-dup",
+              sessionFile: "run-dup.jsonl",
               updatedAt: 2_000,
             },
           },

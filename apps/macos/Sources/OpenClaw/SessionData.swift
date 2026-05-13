@@ -28,7 +28,7 @@ struct GatewaySessionEntryRecord: Codable {
 
 struct GatewaySessionsListResponse: Codable {
     let ts: Double?
-    let databasePath: String
+    let path: String
     let count: Int
     let defaults: GatewaySessionDefaultsRecord?
     let sessions: [GatewaySessionEntryRecord]
@@ -245,7 +245,7 @@ enum SessionLoadError: LocalizedError {
 }
 
 struct SessionStoreSnapshot {
-    let databasePath: String
+    let storePath: String
     let defaults: SessionDefaults
     let rows: [SessionRow]
 }
@@ -255,9 +255,9 @@ enum SessionLoader {
     static let fallbackModel = "claude-opus-4-6"
     static let fallbackContextTokens = 200_000
 
-    static let defaultDatabasePath = standardize(
+    static let defaultStorePath = standardize(
         OpenClawPaths.stateDirURL
-            .appendingPathComponent("agents/main/agent/openclaw-agent.sqlite").path)
+            .appendingPathComponent("sessions/sessions.json").path)
 
     static func loadSnapshot(
         activeMinutes: Int? = nil,
@@ -326,7 +326,7 @@ enum SessionLoader {
                 model: model)
         }.sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
 
-        return SessionStoreSnapshot(databasePath: decoded.databasePath, defaults: defaults, rows: rows)
+        return SessionStoreSnapshot(storePath: decoded.path, defaults: defaults, rows: rows)
     }
 
     static func loadRows() async throws -> [SessionRow] {

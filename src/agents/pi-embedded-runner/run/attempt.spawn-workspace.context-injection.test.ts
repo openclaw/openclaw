@@ -1,4 +1,4 @@
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../../../auto-reply/heartbeat.js";
@@ -11,8 +11,6 @@ import {
 } from "./attempt.context-engine-helpers.js";
 import { resetEmbeddedAttemptHarness } from "./attempt.spawn-workspace.test-support.js";
 
-const TEST_BOOTSTRAP_SCOPE = { agentId: "main", sessionId: "session-context-injection" };
-
 async function resolveBootstrapContext(params: {
   contextInjectionMode?: "always" | "continuation-skip" | "never";
   bootstrapContextMode?: string;
@@ -21,7 +19,7 @@ async function resolveBootstrapContext(params: {
   completed?: boolean;
   resolver?: () => Promise<{ bootstrapFiles: unknown[]; contextFiles: unknown[] }>;
 }) {
-  const hasCompletedBootstrapSessionTurn = vi.fn(async () => params.completed ?? false);
+  const hasCompletedBootstrapTurn = vi.fn(async () => params.completed ?? false);
   const resolveBootstrapContextForRun =
     params.resolver ??
     vi.fn(async () => ({
@@ -34,12 +32,12 @@ async function resolveBootstrapContext(params: {
     bootstrapContextMode: params.bootstrapContextMode ?? "full",
     bootstrapContextRunKind: params.bootstrapContextRunKind ?? "default",
     bootstrapMode: params.bootstrapMode ?? "none",
-    ...TEST_BOOTSTRAP_SCOPE,
-    hasCompletedBootstrapSessionTurn,
+    sessionFile: "/tmp/session.jsonl",
+    hasCompletedBootstrapTurn,
     resolveBootstrapContextForRun,
   });
 
-  return { result, hasCompletedBootstrapSessionTurn, resolveBootstrapContextForRun };
+  return { result, hasCompletedBootstrapTurn, resolveBootstrapContextForRun };
 }
 
 describe("embedded attempt context injection", () => {
@@ -48,16 +46,16 @@ describe("embedded attempt context injection", () => {
   });
 
   it("skips bootstrap reinjection on safe continuation turns when configured", async () => {
-    const { result, hasCompletedBootstrapSessionTurn, resolveBootstrapContextForRun } =
+    const { result, hasCompletedBootstrapTurn, resolveBootstrapContextForRun } =
       await resolveBootstrapContext({
         contextInjectionMode: "continuation-skip",
         completed: true,
       });
 
     expect(result.isContinuationTurn).toBe(true);
-    expect(result.bootstrapFiles).toEqual([]);
-    expect(result.contextFiles).toEqual([]);
-    expect(hasCompletedBootstrapSessionTurn).toHaveBeenCalledWith(TEST_BOOTSTRAP_SCOPE);
+    expect(result.bootstrapFiles).toStrictEqual([]);
+    expect(result.contextFiles).toStrictEqual([]);
+    expect(hasCompletedBootstrapTurn).toHaveBeenCalledWith("/tmp/session.jsonl");
     expect(resolveBootstrapContextForRun).not.toHaveBeenCalled();
   });
 
@@ -80,7 +78,7 @@ describe("embedded attempt context injection", () => {
   });
 
   it("disables bootstrap injection without marking the turn as a continuation", async () => {
-    const { result, hasCompletedBootstrapSessionTurn, resolveBootstrapContextForRun } =
+    const { result, hasCompletedBootstrapTurn, resolveBootstrapContextForRun } =
       await resolveBootstrapContext({
         contextInjectionMode: "never",
         bootstrapMode: "full",
@@ -89,9 +87,9 @@ describe("embedded attempt context injection", () => {
 
     expect(result.isContinuationTurn).toBe(false);
     expect(result.shouldRecordCompletedBootstrapTurn).toBe(false);
-    expect(result.bootstrapFiles).toEqual([]);
-    expect(result.contextFiles).toEqual([]);
-    expect(hasCompletedBootstrapSessionTurn).not.toHaveBeenCalled();
+    expect(result.bootstrapFiles).toStrictEqual([]);
+    expect(result.contextFiles).toStrictEqual([]);
+    expect(hasCompletedBootstrapTurn).not.toHaveBeenCalled();
     expect(resolveBootstrapContextForRun).not.toHaveBeenCalled();
   });
 
@@ -101,7 +99,7 @@ describe("embedded attempt context injection", () => {
       contextFiles: [{ path: "BOOTSTRAP.md" }],
     }));
 
-    const { result, hasCompletedBootstrapSessionTurn } = await resolveBootstrapContext({
+    const { result, hasCompletedBootstrapTurn } = await resolveBootstrapContext({
       contextInjectionMode: "continuation-skip",
       bootstrapMode: "full",
       completed: true,
@@ -111,7 +109,7 @@ describe("embedded attempt context injection", () => {
     expect(result.isContinuationTurn).toBe(false);
     expect(result.bootstrapFiles).toEqual([{ name: "BOOTSTRAP.md" }]);
     expect(result.contextFiles).toEqual([{ path: "BOOTSTRAP.md" }]);
-    expect(hasCompletedBootstrapSessionTurn).not.toHaveBeenCalled();
+    expect(hasCompletedBootstrapTurn).not.toHaveBeenCalled();
     expect(resolver).toHaveBeenCalledTimes(1);
   });
 
@@ -143,7 +141,7 @@ describe("embedded attempt context injection", () => {
   });
 
   it("never skips heartbeat bootstrap filtering", async () => {
-    const { result, hasCompletedBootstrapSessionTurn, resolveBootstrapContextForRun } =
+    const { result, hasCompletedBootstrapTurn, resolveBootstrapContextForRun } =
       await resolveBootstrapContext({
         contextInjectionMode: "continuation-skip",
         bootstrapContextMode: "lightweight",
@@ -153,7 +151,7 @@ describe("embedded attempt context injection", () => {
 
     expect(result.isContinuationTurn).toBe(false);
     expect(result.shouldRecordCompletedBootstrapTurn).toBe(false);
-    expect(hasCompletedBootstrapSessionTurn).not.toHaveBeenCalled();
+    expect(hasCompletedBootstrapTurn).not.toHaveBeenCalled();
     expect(resolveBootstrapContextForRun).toHaveBeenCalledTimes(1);
   });
 
@@ -185,7 +183,7 @@ describe("embedded attempt context injection", () => {
   });
 
   it("allows continuation skip again for limited bootstrap mode", async () => {
-    const { result, hasCompletedBootstrapSessionTurn, resolveBootstrapContextForRun } =
+    const { result, hasCompletedBootstrapTurn, resolveBootstrapContextForRun } =
       await resolveBootstrapContext({
         contextInjectionMode: "continuation-skip",
         bootstrapMode: "limited",
@@ -193,7 +191,7 @@ describe("embedded attempt context injection", () => {
       });
 
     expect(result.isContinuationTurn).toBe(true);
-    expect(hasCompletedBootstrapSessionTurn).toHaveBeenCalledWith(TEST_BOOTSTRAP_SCOPE);
+    expect(hasCompletedBootstrapTurn).toHaveBeenCalledWith("/tmp/session.jsonl");
     expect(resolveBootstrapContextForRun).not.toHaveBeenCalled();
     expect(result.shouldRecordCompletedBootstrapTurn).toBe(false);
   });

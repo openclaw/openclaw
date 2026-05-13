@@ -238,9 +238,9 @@ describe("nextcloud talk core", () => {
   });
 
   it("persists replay decisions across guard instances and scopes account namespaces", async () => {
-    const scopeKey = await makeTempDir();
+    const stateDir = await makeTempDir();
 
-    const firstGuard = createNextcloudTalkReplayGuard({ scopeKey });
+    const firstGuard = createNextcloudTalkReplayGuard({ stateDir });
     const firstAttempt = await firstGuard.shouldProcessMessage({
       accountId: "account-a",
       roomToken: "room-1",
@@ -252,7 +252,7 @@ describe("nextcloud talk core", () => {
       messageId: "msg-1",
     });
 
-    const secondGuard = createNextcloudTalkReplayGuard({ scopeKey });
+    const secondGuard = createNextcloudTalkReplayGuard({ stateDir });
     const restartReplayAttempt = await secondGuard.shouldProcessMessage({
       accountId: "account-a",
       roomToken: "room-1",

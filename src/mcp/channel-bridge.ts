@@ -474,7 +474,10 @@ export class OpenClawChannelBridge {
     const conversation =
       toConversation({
         key: sessionKey,
-        deliveryContext: payload.deliveryContext,
+        lastChannel: toText(payload.lastChannel),
+        lastTo: toText(payload.lastTo),
+        lastAccountId: toText(payload.lastAccountId),
+        lastThreadId: payload.lastThreadId,
       }) ?? undefined;
     const role = toText(payload.message?.role);
     const text = extractFirstTextBlock(payload.message);

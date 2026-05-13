@@ -78,7 +78,7 @@ function createPromptRequest(sessionId: string): PromptRequest {
 function createGatewaySessions(rows: GatewaySessionRow[]) {
   return {
     ts: Date.now(),
-    databasePath: "/tmp/openclaw/state/openclaw.sqlite",
+    path: "/tmp/sessions.json",
     count: rows.length,
     totalCount: rows.length,
     limitApplied: rows.length,

@@ -1,15 +1,19 @@
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
 } from "../agents/subagent-registry.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { getSessionEntry, upsertSessionEntry, type SessionEntry } from "../config/sessions.js";
+import { loadSessionStore, type SessionEntry } from "../config/sessions.js";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
+import { withEnv } from "../test-utils/env.js";
 import {
   listSessionsFromStore,
-  loadCombinedSessionEntriesForGateway,
+  loadCombinedSessionStoreForGateway,
   resolveGatewayModelSupportsImages,
 } from "./session-utils.js";
 
@@ -31,6 +35,7 @@ describe("listSessionsFromStore subagent metadata", () => {
   test("searches channel-derived display names before row enrichment", () => {
     const result = listSessionsFromStore({
       cfg,
+      storePath: "/tmp/sessions.json",
       store: {
         "agent:main:slack:group:general": {
           sessionId: "slack-general-session",
@@ -56,27 +61,37 @@ describe("listSessionsFromStore subagent metadata", () => {
     const store: Record<string, SessionEntry> = {
       "agent:main:newest": {
         sessionId: "newest-session",
+        sessionFile: "/tmp/newest-session.jsonl",
         updatedAt: 300,
       } as SessionEntry,
       "agent:main:middle": {
         sessionId: "middle-session",
+        sessionFile: "/tmp/middle-session.jsonl",
         updatedAt: 200,
       } as SessionEntry,
       "agent:main:oldest": {
         sessionId: "old-session",
+        sessionFile: "/tmp/old-session.jsonl",
         updatedAt: 100,
       } as SessionEntry,
     };
-    const result = listSessionsFromStore({
-      cfg,
-      store,
-      opts: { limit: 2 },
-    });
+    const existsSpy = vi.spyOn(fs, "existsSync").mockReturnValue(false);
+    try {
+      const result = listSessionsFromStore({
+        cfg,
+        storePath: "/tmp/sessions.json",
+        store,
+        opts: { limit: 2 },
+      });
 
-    expect(result.sessions.map((session) => session.sessionId)).toEqual([
-      "newest-session",
-      "middle-session",
-    ]);
+      expect(result.sessions.map((session) => session.sessionId)).toEqual([
+        "newest-session",
+        "middle-session",
+      ]);
+      expect(existsSpy.mock.calls.flat().join("\n")).not.toContain("old-session");
+    } finally {
+      existsSpy.mockRestore();
+    }
   });
 
   test("includes subagent status timing and direct child session keys", () => {
@@ -154,6 +169,7 @@ describe("listSessionsFromStore subagent metadata", () => {
 
     const result = listSessionsFromStore({
       cfg,
+      storePath: "/tmp/sessions.json",
       store,
       opts: {},
     });
@@ -219,6 +235,7 @@ describe("listSessionsFromStore subagent metadata", () => {
 
     const result = listSessionsFromStore({
       cfg,
+      storePath: "/tmp/sessions.json",
       store,
       opts: {},
     });
@@ -304,6 +321,7 @@ describe("listSessionsFromStore subagent metadata", () => {
 
     const result = listSessionsFromStore({
       cfg,
+      storePath: "/tmp/sessions.json",
       store,
       opts: {},
     });
@@ -392,6 +410,7 @@ describe("listSessionsFromStore subagent metadata", () => {
 
     const result = listSessionsFromStore({
       cfg,
+      storePath: "/tmp/sessions.json",
       store,
       opts: {},
     });
@@ -480,6 +499,7 @@ describe("listSessionsFromStore subagent metadata", () => {
 
     const result = listSessionsFromStore({
       cfg,
+      storePath: "/tmp/sessions.json",
       store,
       opts: {
         spawnedBy: "agent:main:subagent:old-parent-filter",
@@ -527,6 +547,7 @@ describe("listSessionsFromStore subagent metadata", () => {
 
     const result = listSessionsFromStore({
       cfg,
+      storePath: "/tmp/sessions.json",
       store,
       opts: {},
     });
@@ -574,6 +595,7 @@ describe("listSessionsFromStore subagent metadata", () => {
 
     const result = listSessionsFromStore({
       cfg,
+      storePath: "/tmp/sessions.json",
       store,
       opts: {},
     });
@@ -613,6 +635,7 @@ describe("listSessionsFromStore subagent metadata", () => {
 
     const result = listSessionsFromStore({
       cfg,
+      storePath: "/tmp/sessions.json",
       store,
       opts: {},
     });
@@ -665,6 +688,7 @@ describe("listSessionsFromStore subagent metadata", () => {
 
     const result = listSessionsFromStore({
       cfg,
+      storePath: "/tmp/sessions.json",
       store,
       opts: {},
     });
@@ -677,56 +701,93 @@ describe("listSessionsFromStore subagent metadata", () => {
   });
 
   test("prefers persisted terminal session state when only stale active subagent snapshots remain", () => {
-    const now = Date.now();
-    const childSessionKey = "agent:main:subagent:disk-live";
-    addSubagentRunForTests({
-      runId: "run-complete",
-      childSessionKey,
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "finished too early",
-      cleanup: "keep",
-      createdAt: now - 2_000,
-      startedAt: now - 1_900,
-      endedAt: now - 1_800,
-      outcome: { status: "ok" },
-    });
-    addSubagentRunForTests({
-      runId: "run-live",
-      childSessionKey,
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "still running",
-      cleanup: "keep",
-      createdAt: now - 10_000,
-      startedAt: now - 9_000,
-    });
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-utils-subagent-"));
+    const stateDir = path.join(tempRoot, "state");
+    fs.mkdirSync(stateDir, { recursive: true });
+    try {
+      const now = Date.now();
+      const childSessionKey = "agent:main:subagent:disk-live";
+      const registryPath = path.join(stateDir, "subagents", "runs.json");
+      fs.mkdirSync(path.dirname(registryPath), { recursive: true });
+      fs.writeFileSync(
+        registryPath,
+        JSON.stringify(
+          {
+            version: 2,
+            runs: {
+              "run-complete": {
+                runId: "run-complete",
+                childSessionKey,
+                requesterSessionKey: "agent:main:main",
+                requesterDisplayKey: "main",
+                task: "finished too early",
+                cleanup: "keep",
+                createdAt: now - 2_000,
+                startedAt: now - 1_900,
+                endedAt: now - 1_800,
+                outcome: { status: "ok" },
+              },
+              "run-live": {
+                runId: "run-live",
+                childSessionKey,
+                requesterSessionKey: "agent:main:main",
+                requesterDisplayKey: "main",
+                task: "still running",
+                cleanup: "keep",
+                createdAt: now - 10_000,
+                startedAt: now - 9_000,
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
 
-    const result = listSessionsFromStore({
-      cfg,
-      store: {
-        [childSessionKey]: {
-          sessionId: "sess-disk-live",
-          updatedAt: now,
-          spawnedBy: "agent:main:main",
-          status: "done",
-          endedAt: now - 1_800,
-          runtimeMs: 100,
-        } as SessionEntry,
-      },
-      opts: {},
-    });
-    const row = result.sessions.find((session) => session.key === childSessionKey);
+      const row = withEnv(
+        {
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_DISK: "1",
+        },
+        () => {
+          const result = listSessionsFromStore({
+            cfg,
+            storePath: "/tmp/sessions.json",
+            store: {
+              [childSessionKey]: {
+                sessionId: "sess-disk-live",
+                updatedAt: now,
+                spawnedBy: "agent:main:main",
+                status: "done",
+                endedAt: now - 1_800,
+                runtimeMs: 100,
+              } as SessionEntry,
+            },
+            opts: {},
+          });
+          return result.sessions.find((session) => session.key === childSessionKey);
+        },
+      );
 
-    expect(row?.status).toBe("done");
-    expect(row?.subagentRunState).toBe("historical");
-    expect(row?.hasActiveSubagentRun).toBe(false);
-    expect(row?.startedAt).toBe(now - 1_900);
-    expect(row?.endedAt).toBe(now - 1_800);
-    expect(row?.runtimeMs).toBe(100);
+      expect(row?.status).toBe("done");
+      expect(row?.subagentRunState).toBe("historical");
+      expect(row?.hasActiveSubagentRun).toBe(false);
+      expect(row?.startedAt).toBe(now - 9_000);
+      expect(row?.endedAt).toBe(now - 1_800);
+      expect(row?.runtimeMs).toBe(100);
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 
-  test("reuses one subagent registry snapshot across sessions.list filtering and row enrichment", () => {
+  test("reuses one subagent registry disk snapshot across sessions.list filtering and row enrichment", () => {
+    const tempRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-session-utils-subagent-cache-"),
+    );
+    const stateDir = path.join(tempRoot, "state");
+    const registryPath = path.join(stateDir, "subagents", "runs.json");
+    fs.mkdirSync(path.dirname(registryPath), { recursive: true });
     const now = Date.now();
     const controllerSessionKey = "agent:main:main";
     const childKeys = [
@@ -734,19 +795,33 @@ describe("listSessionsFromStore subagent metadata", () => {
       "agent:main:subagent:cache-child-b",
       "agent:main:subagent:cache-child-c",
     ];
-    for (const [index, childSessionKey] of childKeys.entries()) {
-      addSubagentRunForTests({
-        runId: `run-cache-child-${index}`,
-        childSessionKey,
-        controllerSessionKey,
-        requesterSessionKey: controllerSessionKey,
-        requesterDisplayKey: "main",
-        task: "cache test child",
-        cleanup: "keep",
-        createdAt: now - 5_000 + index,
-        startedAt: now - 4_000 + index,
-      });
-    }
+    fs.writeFileSync(
+      registryPath,
+      JSON.stringify(
+        {
+          version: 2,
+          runs: Object.fromEntries(
+            childKeys.map((childSessionKey, index) => [
+              `run-cache-child-${index}`,
+              {
+                runId: `run-cache-child-${index}`,
+                childSessionKey,
+                controllerSessionKey,
+                requesterSessionKey: controllerSessionKey,
+                requesterDisplayKey: "main",
+                task: "cache test child",
+                cleanup: "keep",
+                createdAt: now - 5_000 + index,
+                startedAt: now - 4_000 + index,
+              },
+            ]),
+          ),
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
 
     const store: Record<string, SessionEntry> = {
       [controllerSessionKey]: {
@@ -766,13 +841,72 @@ describe("listSessionsFromStore subagent metadata", () => {
       } as SessionEntry,
     };
 
-    const result = listSessionsFromStore({
-      cfg,
-      store,
-      opts: { spawnedBy: controllerSessionKey },
-    });
+    const statSpy = vi.spyOn(fs, "statSync");
+    try {
+      const result = withEnv(
+        {
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_DISK: "1",
+        },
+        () =>
+          listSessionsFromStore({
+            cfg,
+            storePath: "/tmp/sessions.json",
+            store,
+            opts: { spawnedBy: controllerSessionKey },
+          }),
+      );
 
-    expect(result.sessions.map((session) => session.key)).toEqual(childKeys);
+      expect(result.sessions.map((session) => session.key)).toEqual(childKeys);
+      const registryStatCount = statSpy.mock.calls.filter(
+        ([pathname]) => path.normalize(String(pathname)) === path.normalize(registryPath),
+      ).length;
+      expect(registryStatCount).toBe(1);
+    } finally {
+      statSpy.mockRestore();
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("does not read the subagent registry when raw filters drop every session", () => {
+    const tempRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-session-utils-subagent-cache-empty-"),
+    );
+    const stateDir = path.join(tempRoot, "state");
+    const registryPath = path.join(stateDir, "subagents", "runs.json");
+    fs.mkdirSync(path.dirname(registryPath), { recursive: true });
+    fs.writeFileSync(registryPath, JSON.stringify({ version: 2, runs: {} }, null, 2), "utf-8");
+
+    const statSpy = vi.spyOn(fs, "statSync");
+    try {
+      const result = withEnv(
+        {
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_DISK: "1",
+        },
+        () =>
+          listSessionsFromStore({
+            cfg,
+            storePath: "/tmp/sessions.json",
+            store: {
+              "agent:main:filtered-out": {
+                label: "keep-me-out",
+                updatedAt: Date.now(),
+              } as SessionEntry,
+            },
+            opts: { label: "wanted-label" },
+          }),
+      );
+
+      expect(result.sessions).toStrictEqual([]);
+      const registryStatCount = statSpy.mock.calls.filter(
+        ([pathname]) => path.normalize(String(pathname)) === path.normalize(registryPath),
+      ).length;
+      expect(registryStatCount).toBe(0);
+    } finally {
+      statSpy.mockRestore();
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 
   test("includes explicit parentSessionKey relationships for dashboard child sessions", () => {
@@ -792,6 +926,7 @@ describe("listSessionsFromStore subagent metadata", () => {
 
     const result = listSessionsFromStore({
       cfg,
+      storePath: "/tmp/sessions.json",
       store,
       opts: {},
     });
@@ -819,6 +954,7 @@ describe("listSessionsFromStore subagent metadata", () => {
 
     const result = listSessionsFromStore({
       cfg,
+      storePath: "/tmp/sessions.json",
       store,
       opts: {
         spawnedBy: "agent:main:main",
@@ -848,6 +984,7 @@ describe("listSessionsFromStore subagent metadata", () => {
 
     const all = listSessionsFromStore({
       cfg,
+      storePath: "/tmp/sessions.json",
       store,
       opts: {},
     });
@@ -856,6 +993,7 @@ describe("listSessionsFromStore subagent metadata", () => {
 
     const filtered = listSessionsFromStore({
       cfg,
+      storePath: "/tmp/sessions.json",
       store,
       opts: {
         spawnedBy: "agent:main:main",
@@ -882,6 +1020,7 @@ describe("listSessionsFromStore subagent metadata", () => {
 
     const all = listSessionsFromStore({
       cfg,
+      storePath: "/tmp/sessions.json",
       store,
       opts: {},
     });
@@ -890,6 +1029,7 @@ describe("listSessionsFromStore subagent metadata", () => {
 
     const filtered = listSessionsFromStore({
       cfg,
+      storePath: "/tmp/sessions.json",
       store,
       opts: {
         spawnedBy: "agent:main:main",
@@ -928,6 +1068,7 @@ describe("listSessionsFromStore subagent metadata", () => {
 
     const all = listSessionsFromStore({
       cfg,
+      storePath: "/tmp/sessions.json",
       store,
       opts: {},
     });
@@ -936,6 +1077,7 @@ describe("listSessionsFromStore subagent metadata", () => {
 
     const filtered = listSessionsFromStore({
       cfg,
+      storePath: "/tmp/sessions.json",
       store,
       opts: {
         spawnedBy: "agent:main:main",
@@ -992,6 +1134,7 @@ describe("listSessionsFromStore subagent metadata", () => {
 
     const result = listSessionsFromStore({
       cfg,
+      storePath: "/tmp/sessions.json",
       store,
       opts: {},
     });
@@ -1015,6 +1158,7 @@ describe("listSessionsFromStore subagent metadata", () => {
 
     const result = listSessionsFromStore({
       cfg,
+      storePath: "/tmp/sessions.json",
       store,
       opts: {},
     });
@@ -1055,6 +1199,7 @@ describe("listSessionsFromStore subagent metadata", () => {
 
     const result = listSessionsFromStore({
       cfg,
+      storePath: "/tmp/sessions.json",
       store,
       opts: {},
     });
@@ -1091,92 +1236,136 @@ describe("listSessionsFromStore subagent metadata", () => {
   });
 });
 
-describe("loadCombinedSessionEntriesForGateway includes SQLite-registered agents (#32804)", () => {
+describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)", () => {
   test("ACP agent sessions are visible even when agents.list is configured", async () => {
-    await withStateDirEnv("openclaw-acp-vis-", async () => {
-      upsertSessionEntry({
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        entry: { sessionId: "s-main", updatedAt: 100 },
-      });
-      upsertSessionEntry({
-        agentId: "codex",
-        sessionKey: "agent:codex:acp-task",
-        entry: { sessionId: "s-codex", updatedAt: 200 },
-      });
+    await withStateDirEnv("openclaw-acp-vis-", async ({ stateDir }) => {
+      const customRoot = path.join(stateDir, "custom-state");
+      const agentsDir = path.join(customRoot, "agents");
+      const mainDir = path.join(agentsDir, "main", "sessions");
+      const codexDir = path.join(agentsDir, "codex", "sessions");
+      fs.mkdirSync(mainDir, { recursive: true });
+      fs.mkdirSync(codexDir, { recursive: true });
+
+      fs.writeFileSync(
+        path.join(mainDir, "sessions.json"),
+        JSON.stringify({
+          "agent:main:main": { sessionId: "s-main", updatedAt: 100 },
+        }),
+        "utf8",
+      );
+
+      fs.writeFileSync(
+        path.join(codexDir, "sessions.json"),
+        JSON.stringify({
+          "agent:codex:acp-task": { sessionId: "s-codex", updatedAt: 200 },
+        }),
+        "utf8",
+      );
 
       const cfg = {
         session: {
           mainKey: "main",
+          store: path.join(customRoot, "agents", "{agentId}", "sessions", "sessions.json"),
         },
         agents: {
           list: [{ id: "main", default: true }],
         },
       } as OpenClawConfig;
 
-      const { entries } = loadCombinedSessionEntriesForGateway(cfg);
-      expect(entries["agent:main:main"]?.sessionId).toBe("s-main");
-      expect(entries["agent:codex:acp-task"]?.sessionId).toBe("s-codex");
+      const { store } = loadCombinedSessionStoreForGateway(cfg);
+      expect(store["agent:main:main"]?.sessionId).toBe("s-main");
+      expect(store["agent:codex:acp-task"]?.sessionId).toBe("s-codex");
     });
   });
 
   test("agent-scoped loads read only matching agent stores", async () => {
-    await withStateDirEnv("openclaw-acp-scoped-", async () => {
-      upsertSessionEntry({
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        entry: { sessionId: "s-main", updatedAt: 100 },
-      });
-      upsertSessionEntry({
-        agentId: "codex",
-        sessionKey: "agent:codex:acp-task",
-        entry: { sessionId: "s-codex", updatedAt: 200 },
-      });
+    await withStateDirEnv("openclaw-acp-scoped-", async ({ stateDir }) => {
+      const customRoot = path.join(stateDir, "custom-state");
+      const agentsDir = path.join(customRoot, "agents");
+      const mainDir = path.join(agentsDir, "main", "sessions");
+      const codexDir = path.join(agentsDir, "codex", "sessions");
+      fs.mkdirSync(mainDir, { recursive: true });
+      fs.mkdirSync(codexDir, { recursive: true });
+
+      const mainStorePath = path.join(mainDir, "sessions.json");
+      const codexStorePath = path.join(codexDir, "sessions.json");
+      fs.writeFileSync(
+        mainStorePath,
+        JSON.stringify({
+          "agent:main:main": { sessionId: "s-main", updatedAt: 100 },
+        }),
+        "utf8",
+      );
+      fs.writeFileSync(
+        codexStorePath,
+        JSON.stringify({
+          "agent:codex:acp-task": { sessionId: "s-codex", updatedAt: 200 },
+        }),
+        "utf8",
+      );
 
       const cfg = {
         session: {
           mainKey: "main",
+          store: path.join(customRoot, "agents", "{agentId}", "sessions", "sessions.json"),
         },
         agents: {
           list: [{ id: "main", default: true }],
         },
       } as OpenClawConfig;
 
-      const { entries } = loadCombinedSessionEntriesForGateway(cfg, { agentId: "codex" });
+      const readSpy = vi.spyOn(fs, "readFileSync");
 
-      expect(entries["agent:codex:acp-task"]?.sessionId).toBe("s-codex");
-      expect(entries["agent:main:main"]).toBeUndefined();
+      const { store, storePath } = loadCombinedSessionStoreForGateway(cfg, { agentId: "codex" });
+
+      expect(storePath).toBe(fs.realpathSync.native(codexStorePath));
+      expect(store["agent:codex:acp-task"]?.sessionId).toBe("s-codex");
+      expect(store["agent:main:main"]).toBeUndefined();
+      const readPaths = readSpy.mock.calls
+        .map((call) => call[0])
+        .filter((arg): arg is string => typeof arg === "string");
+      expect(readPaths).toContain(fs.realpathSync.native(codexStorePath));
+      expect(readPaths).not.toContain(fs.realpathSync.native(mainStorePath));
+
+      readSpy.mockRestore();
     });
   });
 
-  test("keeps canonical single-target entries intact", async () => {
-    await withStateDirEnv("openclaw-acp-canonical-", async () => {
-      upsertSessionEntry({
-        agentId: "codex",
-        sessionKey: "agent:codex:acp-task",
-        entry: {
-          sessionId: "s-codex",
-          updatedAt: 200,
-          spawnedBy: "agent:codex:main",
-        },
-      });
+  test("keeps canonical single-target entries by reference", async () => {
+    await withStateDirEnv("openclaw-acp-canonical-", async ({ stateDir }) => {
+      const customRoot = path.join(stateDir, "custom-state");
+      const codexDir = path.join(customRoot, "agents", "codex", "sessions");
+      fs.mkdirSync(codexDir, { recursive: true });
+
+      const codexStorePath = path.join(codexDir, "sessions.json");
+      fs.writeFileSync(
+        codexStorePath,
+        JSON.stringify({
+          "agent:codex:acp-task": {
+            sessionId: "s-codex",
+            updatedAt: 200,
+            spawnedBy: "agent:codex:main",
+          },
+        }),
+        "utf8",
+      );
 
       const cfg = {
         session: {
           mainKey: "main",
+          store: path.join(customRoot, "agents", "{agentId}", "sessions", "sessions.json"),
         },
         agents: {
           list: [{ id: "codex", default: true }],
         },
       } as OpenClawConfig;
 
-      const savedEntry = getSessionEntry({
-        agentId: "codex",
-        sessionKey: "agent:codex:acp-task",
+      const cachedStore = loadSessionStore(fs.realpathSync.native(codexStorePath), {
+        clone: false,
       });
-      const { entries } = loadCombinedSessionEntriesForGateway(cfg, { agentId: "codex" });
+      const { store } = loadCombinedSessionStoreForGateway(cfg, { agentId: "codex" });
 
-      expect(entries["agent:codex:acp-task"]).toEqual(savedEntry);
+      expect(store["agent:codex:acp-task"]).toBe(cachedStore["agent:codex:acp-task"]);
     });
   });
 });

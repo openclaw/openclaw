@@ -15,6 +15,10 @@
         "type": "string",
         "minLength": 1
       },
+      "stateDir": {
+        "type": "string",
+        "minLength": 1
+      },
       "probeAgent": {
         "type": "string",
         "minLength": 1
@@ -44,6 +48,10 @@
       "queueOwnerTtlSeconds": {
         "type": "number",
         "minimum": 0
+      },
+      "probeAgent": {
+        "type": "string",
+        "minLength": 1
       },
       "mcpServers": {
         "type": "object",
@@ -92,6 +100,10 @@
     "cwd": {
       "label": "Default Working Directory",
       "help": "Default working directory for embedded ACP session operations when not set per session."
+    },
+    "stateDir": {
+      "label": "State Directory",
+      "help": "Directory used for embedded ACP session state and persistence."
     },
     "permissionMode": {
       "label": "Permission Mode",

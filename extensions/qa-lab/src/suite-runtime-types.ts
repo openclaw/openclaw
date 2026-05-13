@@ -69,7 +69,7 @@ export type QaDreamingStatus = {
   };
 };
 
-export type QaRawSessionEntry = {
+export type QaRawSessionStoreEntry = {
   sessionId?: string;
   status?: string;
   spawnedBy?: string;

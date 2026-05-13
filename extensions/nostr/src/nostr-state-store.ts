@@ -1,12 +1,12 @@
+import os from "node:os";
+import path from "node:path";
 import { safeParseJsonWithSchema } from "openclaw/plugin-sdk/extension-shared";
-import { createPluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
 import { z } from "zod";
+import { getNostrRuntime } from "./runtime.js";
 
 const STORE_VERSION = 2;
 const PROFILE_STATE_VERSION = 1;
-const NOSTR_PLUGIN_ID = "nostr";
-export const NOSTR_BUS_STATE_NAMESPACE = "bus-state";
-export const NOSTR_PROFILE_STATE_NAMESPACE = "profile-state";
 
 type NostrBusState = {
   version: 2;
@@ -56,17 +56,7 @@ const NostrProfileStateSchema = z.object({
     .catch(null),
 });
 
-const nostrBusStateStore = createPluginStateKeyedStore<NostrBusState>(NOSTR_PLUGIN_ID, {
-  namespace: NOSTR_BUS_STATE_NAMESPACE,
-  maxEntries: 1_000,
-});
-
-const nostrProfileStateStore = createPluginStateKeyedStore<NostrProfileState>(NOSTR_PLUGIN_ID, {
-  namespace: NOSTR_PROFILE_STATE_NAMESPACE,
-  maxEntries: 1_000,
-});
-
-export function normalizeNostrStateAccountId(accountId?: string): string {
+function normalizeAccountId(accountId?: string): string {
   const trimmed = accountId?.trim();
   if (!trimmed) {
     return "default";
@@ -74,7 +64,22 @@ export function normalizeNostrStateAccountId(accountId?: string): string {
   return trimmed.replace(/[^a-z0-9._-]+/gi, "_");
 }
 
-export function parseNostrBusStateJson(raw: string): NostrBusState | null {
+function resolveNostrStatePath(accountId?: string, env: NodeJS.ProcessEnv = process.env): string {
+  const stateDir = getNostrRuntime().state.resolveStateDir(env, os.homedir);
+  const normalized = normalizeAccountId(accountId);
+  return path.join(stateDir, "nostr", `bus-state-${normalized}.json`);
+}
+
+function resolveNostrProfileStatePath(
+  accountId?: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  const stateDir = getNostrRuntime().state.resolveStateDir(env, os.homedir);
+  const normalized = normalizeAccountId(accountId);
+  return path.join(stateDir, "nostr", `profile-state-${normalized}.json`);
+}
+
+function safeParseState(raw: string): NostrBusState | null {
   const parsedV2 = safeParseJsonWithSchema(NostrBusStateSchema, raw);
   if (parsedV2) {
     return parsedV2;
@@ -94,31 +99,19 @@ export function parseNostrBusStateJson(raw: string): NostrBusState | null {
   };
 }
 
-function normalizeNostrBusStateValue(value: unknown): NostrBusState | null {
-  const parsedV2 = NostrBusStateSchema.safeParse(value);
-  if (parsedV2.success) {
-    return parsedV2.data;
-  }
-  const parsedV1 = NostrBusStateV1Schema.safeParse(value);
-  if (!parsedV1.success) {
-    return null;
-  }
-  return {
-    version: STORE_VERSION,
-    lastProcessedAt: parsedV1.data.lastProcessedAt,
-    gatewayStartedAt: parsedV1.data.gatewayStartedAt,
-    recentEventIds: [],
-  };
-}
-
 export async function readNostrBusState(params: {
   accountId?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<NostrBusState | null> {
+  const filePath = resolveNostrStatePath(params.accountId, params.env);
   try {
-    return normalizeNostrBusStateValue(
-      await nostrBusStateStore.lookup(normalizeNostrStateAccountId(params.accountId)),
+    const raw = await privateFileStore(path.dirname(filePath)).readTextIfExists(
+      path.basename(filePath),
     );
+    if (raw === null) {
+      return null;
+    }
+    return safeParseState(raw);
   } catch {
     return null;
   }
@@ -131,13 +124,16 @@ export async function writeNostrBusState(params: {
   recentEventIds?: string[];
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
+  const filePath = resolveNostrStatePath(params.accountId, params.env);
   const payload: NostrBusState = {
     version: STORE_VERSION,
     lastProcessedAt: params.lastProcessedAt,
     gatewayStartedAt: params.gatewayStartedAt,
     recentEventIds: (params.recentEventIds ?? []).filter((x): x is string => typeof x === "string"),
   };
-  await nostrBusStateStore.register(normalizeNostrStateAccountId(params.accountId), payload);
+  await privateFileStore(path.dirname(filePath)).writeJson(path.basename(filePath), payload, {
+    trailingNewline: true,
+  });
 }
 
 /**
@@ -168,23 +164,23 @@ export function computeSinceTimestamp(
 // Profile State Management
 // ============================================================================
 
-export function parseNostrProfileStateJson(raw: string): NostrProfileState | null {
+function safeParseProfileState(raw: string): NostrProfileState | null {
   return safeParseJsonWithSchema(NostrProfileStateSchema, raw);
-}
-
-function normalizeNostrProfileStateValue(value: unknown): NostrProfileState | null {
-  const parsed = NostrProfileStateSchema.safeParse(value);
-  return parsed.success ? parsed.data : null;
 }
 
 export async function readNostrProfileState(params: {
   accountId?: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<NostrProfileState | null> {
+  const filePath = resolveNostrProfileStatePath(params.accountId, params.env);
   try {
-    return normalizeNostrProfileStateValue(
-      await nostrProfileStateStore.lookup(normalizeNostrStateAccountId(params.accountId)),
+    const raw = await privateFileStore(path.dirname(filePath)).readTextIfExists(
+      path.basename(filePath),
     );
+    if (raw === null) {
+      return null;
+    }
+    return safeParseProfileState(raw);
   } catch {
     return null;
   }
@@ -197,11 +193,14 @@ export async function writeNostrProfileState(params: {
   lastPublishResults: Record<string, "ok" | "failed" | "timeout">;
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
+  const filePath = resolveNostrProfileStatePath(params.accountId, params.env);
   const payload: NostrProfileState = {
     version: PROFILE_STATE_VERSION,
     lastPublishedAt: params.lastPublishedAt,
     lastPublishedEventId: params.lastPublishedEventId,
     lastPublishResults: params.lastPublishResults,
   };
-  await nostrProfileStateStore.register(normalizeNostrStateAccountId(params.accountId), payload);
+  await privateFileStore(path.dirname(filePath)).writeJson(path.basename(filePath), payload, {
+    trailingNewline: true,
+  });
 }

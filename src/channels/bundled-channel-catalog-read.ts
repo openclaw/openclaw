@@ -19,14 +19,8 @@ type BundledChannelCatalogEntry = {
   order: number;
 };
 
-function getOfficialCatalogFileCache(): Map<string, ChannelCatalogEntryLike[] | null> {
-  const globalKey = "__openclawOfficialChannelCatalogFileCache";
-  const globals = globalThis as typeof globalThis & {
-    [globalKey]?: Map<string, ChannelCatalogEntryLike[] | null>;
-  };
-  globals[globalKey] ??= new Map<string, ChannelCatalogEntryLike[] | null>();
-  return globals[globalKey];
-}
+const OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH = path.join("dist", "channel-catalog.json");
+const officialCatalogFileCache = new Map<string, ChannelCatalogEntryLike[] | null>();
 
 function listPackageRoots(): string[] {
   return [
@@ -44,10 +38,8 @@ function readBundledExtensionCatalogEntriesSync(): PluginPackageChannel[] {
 }
 
 function readOfficialCatalogFileSync(): ChannelCatalogEntryLike[] {
-  const officialCatalogRelativePath = path.join("dist", "channel-catalog.json");
-  const officialCatalogFileCache = getOfficialCatalogFileCache();
   for (const packageRoot of listPackageRoots()) {
-    const candidate = path.join(packageRoot, officialCatalogRelativePath);
+    const candidate = path.join(packageRoot, OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH);
     const cached = officialCatalogFileCache.get(candidate);
     if (cached !== undefined) {
       if (cached) {

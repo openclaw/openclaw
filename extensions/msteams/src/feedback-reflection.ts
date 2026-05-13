@@ -171,6 +171,10 @@ export async function runFeedbackReflection(params: RunFeedbackReflectionParams)
     thumbedDownResponse: params.thumbedDownResponse,
     userComment: params.userComment,
   });
+  const runtime = getMSTeamsRuntime();
+  const storePath = runtime.channel.session.resolveStorePath(cfg.session?.store, {
+    agentId: params.agentId,
+  });
   const { ctxPayload } = buildReflectionContext({
     cfg,
     conversationId: params.conversationId,
@@ -218,6 +222,7 @@ export async function runFeedbackReflection(params: RunFeedbackReflectionParams)
 
   try {
     await storeSessionLearning({
+      storePath,
       sessionKey: params.sessionKey,
       learning: parsedReflection.learning,
     });

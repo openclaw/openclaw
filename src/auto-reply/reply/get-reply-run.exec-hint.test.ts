@@ -111,7 +111,7 @@ describe("resolvePromptSilentReplyConversationType", () => {
 });
 
 describe("resolvePromptSessionContextForSystemEvent", () => {
-  it("rebuilds missing system-event chat metadata from typed delivery fields", () => {
+  it("rebuilds missing system-event chat metadata from the persisted session entry", () => {
     const sessionCtx = {
       Body: "wake up",
       Provider: "cron-event",
@@ -125,12 +125,18 @@ describe("resolvePromptSessionContextForSystemEvent", () => {
       groupId: "guild-1",
       groupChannel: "#ops",
       space: "Ops Guild",
-      deliveryContext: {
-        channel: "discord",
+      origin: {
+        provider: "discord",
+        surface: "discord",
+        chatType: "channel",
         to: "channel-1",
         accountId: "acct-1",
         threadId: "thread-1",
       },
+      lastChannel: "discord",
+      lastTo: "channel-1",
+      lastAccountId: "acct-1",
+      lastThreadId: "thread-1",
     } satisfies SessionEntry;
 
     const result = resolvePromptSessionContextForSystemEvent({

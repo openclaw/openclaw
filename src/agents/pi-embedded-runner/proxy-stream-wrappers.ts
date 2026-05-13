@@ -1,7 +1,7 @@
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import { streamSimple } from "@earendil-works/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { normalizeOptionalLowercaseString, readStringValue } from "../../shared/string-coerce.js";
-import type { StreamFn } from "../agent-core-contract.js";
-import { streamSimple } from "../pi-ai-contract.js";
 import { resolveProviderRequestPolicy } from "../provider-attribution.js";
 import { resolveProviderRequestPolicyConfig } from "../provider-request-config.js";
 import { applyAnthropicEphemeralCacheControlMarkers } from "./anthropic-cache-control-payload.js";

@@ -28,7 +28,12 @@ type RuntimeFacadeModule = {
   }) => void;
   removeGroundedShortTermCandidates: (params: {
     workspaceDir: string;
-  }) => Promise<{ removed: number; storeLabel: string }>;
+  }) => Promise<{ removed: number; storePath: string }>;
+  repairDreamingArtifacts: (params: {
+    workspaceDir: string;
+    archiveDiary?: boolean;
+    now?: Date;
+  }) => Promise<RepairDreamingArtifactsResult>;
 };
 
 type GroundedRemPreviewItem = {
@@ -151,6 +156,16 @@ type ApiFacadeModule = {
   }) => Promise<RemHarnessPreviewResult>;
 };
 
+type RepairDreamingArtifactsResult = {
+  changed: boolean;
+  archiveDir?: string;
+  archivedDreamsDiary: boolean;
+  archivedSessionCorpus: boolean;
+  archivedSessionIngestion: boolean;
+  archivedPaths: string[];
+  warnings: string[];
+};
+
 function loadApiFacadeModule(): ApiFacadeModule {
   return loadBundledPluginPublicSurfaceModuleSync<ApiFacadeModule>({
     dirName: "memory-core",
@@ -181,6 +196,10 @@ export const removeGroundedShortTermCandidates: RuntimeFacadeModule["removeGroun
     loadRuntimeFacadeModule().removeGroundedShortTermCandidates(
       ...args,
     )) as RuntimeFacadeModule["removeGroundedShortTermCandidates"];
+export const repairDreamingArtifacts: RuntimeFacadeModule["repairDreamingArtifacts"] = ((...args) =>
+  loadRuntimeFacadeModule().repairDreamingArtifacts(
+    ...args,
+  )) as RuntimeFacadeModule["repairDreamingArtifacts"];
 
 export const previewGroundedRemMarkdown: ApiFacadeModule["previewGroundedRemMarkdown"] = ((
   ...args

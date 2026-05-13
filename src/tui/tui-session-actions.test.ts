@@ -43,7 +43,7 @@ describe("tui session actions", () => {
         clearAll: vi.fn(),
       } as unknown as import("./components/chat-log.js").ChatLog,
       btw: createBtwPresenter(),
-      tui: { requestRender: vi.fn() } as unknown as import("./pi-tui-contract.js").TUI,
+      tui: { requestRender: vi.fn() } as unknown as import("@earendil-works/pi-tui").TUI,
       opts: {},
       state: createBaseState(),
       agentNames: new Map(),
@@ -86,7 +86,7 @@ describe("tui session actions", () => {
       client: { listSessions } as unknown as TuiBackend,
       chatLog: { addSystem: vi.fn() } as unknown as import("./components/chat-log.js").ChatLog,
       btw: createBtwPresenter(),
-      tui: { requestRender } as unknown as import("./pi-tui-contract.js").TUI,
+      tui: { requestRender } as unknown as import("@earendil-works/pi-tui").TUI,
       state,
       updateFooter,
       updateAutocompleteProvider,
@@ -107,7 +107,7 @@ describe("tui session actions", () => {
 
     resolveFirst?.({
       ts: Date.now(),
-      databasePath: "/tmp/openclaw-agent.sqlite",
+      path: "/tmp/sessions.json",
       count: 1,
       defaults: {},
       sessions: [
@@ -126,7 +126,7 @@ describe("tui session actions", () => {
 
     resolveSecond?.({
       ts: Date.now(),
-      databasePath: "/tmp/openclaw-agent.sqlite",
+      path: "/tmp/sessions.json",
       count: 1,
       defaults: {},
       sessions: [
@@ -149,7 +149,7 @@ describe("tui session actions", () => {
   it("keeps patched model selection when a refresh returns an older snapshot", async () => {
     const listSessions = vi.fn().mockResolvedValue({
       ts: Date.now(),
-      databasePath: "/tmp/openclaw-agent.sqlite",
+      path: "/tmp/sessions.json",
       count: 1,
       defaults: {},
       sessions: [
@@ -177,7 +177,7 @@ describe("tui session actions", () => {
 
     applySessionInfoFromPatch({
       ok: true,
-      databasePath: "/tmp/openclaw-agent.sqlite",
+      path: "/tmp/sessions.json",
       key: "agent:main:main",
       entry: {
         sessionId: "session-1",
@@ -200,7 +200,7 @@ describe("tui session actions", () => {
   it("accepts older session snapshots after switching session keys", async () => {
     const listSessions = vi.fn().mockResolvedValue({
       ts: Date.now(),
-      databasePath: "/tmp/openclaw-agent.sqlite",
+      path: "/tmp/sessions.json",
       count: 1,
       defaults: {},
       sessions: [
@@ -255,7 +255,7 @@ describe("tui session actions", () => {
   it("applies default model info when the current session has no persisted entry yet", async () => {
     const listSessions = vi.fn().mockResolvedValue({
       ts: Date.now(),
-      databasePath: "/tmp/openclaw-agent.sqlite",
+      path: "/tmp/sessions.json",
       count: 0,
       defaults: {
         model: "gpt-5.4",
@@ -291,7 +291,7 @@ describe("tui session actions", () => {
       client: { listSessions } as unknown as TuiBackend,
       chatLog: { addSystem: vi.fn() } as unknown as import("./components/chat-log.js").ChatLog,
       btw: createBtwPresenter(),
-      tui: { requestRender: vi.fn() } as unknown as import("./pi-tui-contract.js").TUI,
+      tui: { requestRender: vi.fn() } as unknown as import("@earendil-works/pi-tui").TUI,
       opts: {},
       state,
       agentNames: new Map(),
@@ -314,7 +314,7 @@ describe("tui session actions", () => {
   it("resets activity status to idle when switching sessions after streaming", async () => {
     const listSessions = vi.fn().mockResolvedValue({
       ts: Date.now(),
-      databasePath: "/tmp/openclaw-agent.sqlite",
+      path: "/tmp/sessions.json",
       count: 0,
       defaults: {},
       sessions: [],
@@ -362,7 +362,7 @@ describe("tui session actions", () => {
         clearAll: vi.fn(),
       } as unknown as import("./components/chat-log.js").ChatLog,
       btw: createBtwPresenter(),
-      tui: { requestRender: vi.fn() } as unknown as import("./pi-tui-contract.js").TUI,
+      tui: { requestRender: vi.fn() } as unknown as import("@earendil-works/pi-tui").TUI,
       opts: {},
       state,
       agentNames: new Map(),
@@ -389,7 +389,7 @@ describe("tui session actions", () => {
   it("remembers the selected session after history loads", async () => {
     const listSessions = vi.fn().mockResolvedValue({
       ts: Date.now(),
-      databasePath: "/tmp/openclaw-agent.sqlite",
+      path: "/tmp/sessions.json",
       count: 1,
       defaults: {},
       sessions: [{ key: "agent:main:main", sessionId: "session-main" }],

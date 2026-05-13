@@ -8,7 +8,7 @@ import {
 import type { CronJob } from "./types.js";
 
 const noopLogger = createNoopLogger();
-const { makeStoreKey } = createCronStoreHarness();
+const { makeStorePath } = createCronStoreHarness();
 
 async function waitForFirstJob(
   cron: CronService,
@@ -36,7 +36,7 @@ async function withCronService(
 ) {
   await withCronServiceForTest(
     {
-      makeStoreKey,
+      makeStorePath,
       logger: noopLogger,
       cronEnabled,
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),

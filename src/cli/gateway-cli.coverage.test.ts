@@ -5,10 +5,6 @@ import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvOverride } from "../config/test-helpers.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
-import {
-  type DiagnosticStabilityBundle,
-  writeDiagnosticStabilityBundleSnapshotSync,
-} from "../logging/diagnostic-stability-bundle.js";
 import { registerGatewayCli } from "./gateway-cli.js";
 
 type DiscoveredBeacon = Awaited<
@@ -192,8 +188,13 @@ describe("gateway-cli coverage", () => {
     callGateway.mockClear();
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-cli-bundle-"));
     try {
-      const bundle: DiagnosticStabilityBundle = {
-        version: 1 as const,
+      const bundleDir = path.join(tempDir, "logs", "stability");
+      const bundlePath = path.join(
+        bundleDir,
+        "openclaw-stability-2026-04-22T12-00-00-000Z-123-test.json",
+      );
+      const bundle = {
+        version: 1,
         generatedAt: "2026-04-22T12:00:00.000Z",
         reason: "gateway.restart_startup_failed",
         process: {
@@ -234,12 +235,8 @@ describe("gateway-cli coverage", () => {
           },
         },
       };
-      writeDiagnosticStabilityBundleSnapshotSync({
-        key: "bundle:2026-04-22T12-00-00-000Z:123:test",
-        bundle,
-        env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
-        now: () => Date.parse("2026-04-22T12:00:00.000Z"),
-      });
+      fs.mkdirSync(bundleDir, { recursive: true });
+      fs.writeFileSync(bundlePath, `${JSON.stringify(bundle, null, 2)}\n`, "utf8");
 
       await withEnvOverride({ OPENCLAW_STATE_DIR: tempDir }, async () => {
         await runGatewayCommand(["gateway", "stability", "--bundle", "latest"]);
@@ -420,7 +417,7 @@ describe("gateway-cli coverage", () => {
     runtimeErrors.length = 0;
     serviceIsLoaded.mockResolvedValue(true);
     startGatewayServer.mockRejectedValueOnce(
-      new GatewayLockError("failed to acquire gateway lock at sqlite:gateway_locks/test"),
+      new GatewayLockError("failed to acquire gateway lock at /tmp/openclaw/gateway.lock"),
     );
 
     await expectGatewayExit(["gateway", "--token", "test-token", "--allow-unconfigured"]);

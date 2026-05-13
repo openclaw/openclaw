@@ -4,7 +4,6 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessagingAdapter } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 
 const callGatewayMock = vi.fn();
@@ -111,6 +110,7 @@ function installMessagingTestRegistry() {
             selectionLabel: "WhatsApp",
             docsPath: "/channels/whatsapp",
             blurb: "WhatsApp test stub.",
+            preferSessionLookupForAnnounceTarget: true,
           },
           capabilities: { chatTypes: ["direct", "group"] },
           messaging: {
@@ -287,17 +287,14 @@ describe("sessions tools", () => {
       const request = opts as { method?: string };
       if (request.method === "sessions.list") {
         return {
-          databasePath: "/tmp/openclaw-agent.sqlite",
+          path: "/tmp/sessions.json",
           sessions: [
             {
               key: "main",
               kind: "direct",
               sessionId: "s-main",
               updatedAt: 10,
-              deliveryContext: {
-                channel: "whatsapp",
-                to: "+1555",
-              },
+              lastChannel: "whatsapp",
               derivedTitle: "Main mailbox",
               lastMessagePreview: "Latest assistant update",
             },
@@ -434,26 +431,26 @@ describe("sessions tools", () => {
 
   it("derives mailbox previews only after agent visibility filtering", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-list-preview-"));
+    const storePath = path.join(tmpDir, "sessions.json");
     try {
-      vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
-      replaceSqliteSessionTranscriptEvents({
-        agentId: "main",
-        sessionId: "visible",
-        events: [
-          { type: "session", id: "visible" },
-          { message: { role: "user", content: "Visible project kickoff" } },
-          { message: { role: "assistant", content: "Visible latest reply" } },
-        ],
-      });
-      replaceSqliteSessionTranscriptEvents({
-        agentId: "other",
-        sessionId: "hidden",
-        events: [
-          { type: "session", id: "hidden" },
-          { message: { role: "user", content: "Hidden cross-agent topic" } },
-          { message: { role: "assistant", content: "Hidden latest reply" } },
-        ],
-      });
+      fs.writeFileSync(
+        path.join(tmpDir, "visible.jsonl"),
+        [
+          JSON.stringify({ type: "session", id: "visible" }),
+          JSON.stringify({ message: { role: "user", content: "Visible project kickoff" } }),
+          JSON.stringify({ message: { role: "assistant", content: "Visible latest reply" } }),
+        ].join("\n"),
+        "utf-8",
+      );
+      fs.writeFileSync(
+        path.join(tmpDir, "hidden.jsonl"),
+        [
+          JSON.stringify({ type: "session", id: "hidden" }),
+          JSON.stringify({ message: { role: "user", content: "Hidden cross-agent topic" } }),
+          JSON.stringify({ message: { role: "assistant", content: "Hidden latest reply" } }),
+        ].join("\n"),
+        "utf-8",
+      );
 
       callGatewayMock.mockImplementation(async (opts: unknown) => {
         const request = opts as { method?: string; params?: Record<string, unknown> };
@@ -461,7 +458,7 @@ describe("sessions tools", () => {
           expect(request.params?.includeDerivedTitles).toBe(false);
           expect(request.params?.includeLastMessage).toBe(false);
           return {
-            databasePath: path.join(tmpDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
+            path: storePath,
             sessions: [
               {
                 key: "agent:main:main",
@@ -499,19 +496,14 @@ describe("sessions tools", () => {
         includeDerivedTitles: true,
         includeLastMessage: true,
       });
-      const details = result.details as {
-        sessions?: Array<{
-          key?: string;
-          derivedTitle?: string;
-          lastMessagePreview?: string;
-        }>;
-      };
+      const details = result.details as { sessions?: Array<Record<string, unknown>> };
       expect(details.sessions).toStrictEqual([
         {
           key: "agent:main:main",
           agentId: "main",
           kind: "other",
           channel: "unknown",
+          origin: undefined,
           spawnedBy: undefined,
           label: undefined,
           displayName: undefined,
@@ -539,13 +531,55 @@ describe("sessions tools", () => {
           systemSent: undefined,
           abortedLastRun: undefined,
           sendPolicy: undefined,
+          lastChannel: undefined,
+          lastTo: undefined,
+          lastAccountId: undefined,
+          transcriptPath: path.join(fs.realpathSync(tmpDir), "visible.jsonl"),
         },
       ]);
       expect(JSON.stringify(details.sessions)).not.toContain("Hidden");
     } finally {
-      vi.unstubAllEnvs();
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
+  });
+
+  it("sessions_list resolves transcriptPath from agent state dir for multi-store listings", async () => {
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.list") {
+        return {
+          path: "(multiple)",
+          sessions: [
+            {
+              key: "main",
+              kind: "direct",
+              sessionId: "sess-main",
+              updatedAt: 12,
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_list");
+    if (!tool) {
+      throw new Error("missing sessions_list tool");
+    }
+
+    const result = await tool.execute("call2b", {});
+    const details = result.details as {
+      sessions?: Array<{
+        key?: string;
+        transcriptPath?: string;
+      }>;
+    };
+    const main = details.sessions?.find((session) => session.key === "main");
+    expect(typeof main?.transcriptPath).toBe("string");
+    expect(main?.transcriptPath).not.toContain("(multiple)");
+    expect(main?.transcriptPath).toContain(
+      path.join("agents", "main", "sessions", "sess-main.jsonl"),
+    );
   });
 
   it("sessions_history filters tool messages by default", async () => {
@@ -1063,19 +1097,6 @@ describe("sessions tools", () => {
               role: "assistant",
               content: [{ type: "text", text }],
               timestamp: 20,
-            },
-          ],
-        };
-      }
-      if (request.method === "sessions.list") {
-        return {
-          sessions: [
-            {
-              key: targetKey,
-              deliveryContext: {
-                channel: "discord",
-                to: "group:target",
-              },
             },
           ],
         };

@@ -1,12 +1,25 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 
-export function createSqliteTranscriptFixtureSync(params: {
+export function createTranscriptFixtureSync(params: {
   prefix: string;
   sessionId: string;
-  agentId?: string;
+  fileName?: string;
 }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), params.prefix));
-  return { dir, agentId: params.agentId ?? "main", sessionId: params.sessionId };
+  const transcriptPath = path.join(dir, params.fileName ?? "sess.jsonl");
+  fs.writeFileSync(
+    transcriptPath,
+    `${JSON.stringify({
+      type: "session",
+      version: CURRENT_SESSION_VERSION,
+      id: params.sessionId,
+      timestamp: new Date(0).toISOString(),
+      cwd: "/tmp",
+    })}\n`,
+    "utf-8",
+  );
+  return { dir, transcriptPath };
 }

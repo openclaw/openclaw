@@ -4,9 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
-import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 const agentScopeState = vi.hoisted(() => ({
@@ -21,7 +18,6 @@ const replaceFileState = vi.hoisted(() => ({
   publishFailureTarget: "",
   publishFailures: 0,
 }));
-type SkillUploadTestDatabase = Pick<OpenClawStateKyselyDatabase, "skill_uploads">;
 
 vi.mock("../../agents/agent-scope.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../agents/agent-scope.js")>();
@@ -145,12 +141,13 @@ function expectError(result: CallResult, code: string, message: string): void {
 }
 
 function firstCallArg<T>(mock: { mock: { calls: unknown[][] } }, _type?: (value: T) => T): T {
-  const call = mock.mock.calls[0];
+  const call = mock.mock.calls.at(0);
   if (!call) {
     throw new Error("Expected first mock call");
   }
   return call[0] as T;
 }
+
 async function makeSkillArchive(params: {
   name?: string;
   description?: string;
@@ -216,33 +213,6 @@ async function uploadArchive(
   return { uploadId, sha256: digest };
 }
 
-async function expireUploadedSkill(uploadId: string): Promise<void> {
-  runOpenClawStateWriteTransaction((database) => {
-    const db = getNodeSqliteKysely<SkillUploadTestDatabase>(database.db);
-    executeSqliteQuerySync(
-      database.db,
-      db
-        .updateTable("skill_uploads")
-        .set({ expires_at: Date.now() - 1 })
-        .where("upload_id", "=", uploadId),
-    );
-  });
-}
-
-async function expectUploadGone(
-  handlers: GatewayRequestHandlers,
-  params: { uploadId: string; slug: string; force?: boolean },
-): Promise<void> {
-  const install = await call(handlers, "skills.install", {
-    source: "upload",
-    uploadId: params.uploadId,
-    slug: params.slug,
-    force: params.force,
-  });
-  expect(install.ok).toBe(false);
-  expect(install.error?.message).toContain("upload not found");
-}
-
 describe("skill upload gateway handlers", () => {
   beforeEach(() => {
     tempDirs = [];
@@ -279,9 +249,7 @@ describe("skill upload gateway handlers", () => {
     expect(begin.ok).toBe(false);
     expect(begin.error?.code).toBe("UNAVAILABLE");
     expect(begin.error?.message).toContain("skills.install.allowUploadedArchives");
-    await expect(fs.stat(path.join(stateDir, "tmp", "skill-uploads"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectPathMissing(path.join(stateDir, "tmp", "skill-uploads"));
 
     const install = await call(
       handlers,
@@ -299,7 +267,7 @@ describe("skill upload gateway handlers", () => {
   });
 
   it("uploads, installs, cleans up, and reports the skill from status", async () => {
-    const { handlers, workspaceDir } = await makeHarness();
+    const { handlers, stateDir, workspaceDir } = await makeHarness();
     const archive = await makeSkillArchive({
       name: "Uploaded Demo",
       rootDir: "archive-internal-name",
@@ -317,18 +285,14 @@ describe("skill upload gateway handlers", () => {
     });
 
     expect(install.ok).toBe(true);
-    expect(install.payload).toMatchObject({
-      ok: true,
-      slug: "uploaded-demo",
-      sha256: digest,
-    });
+    expect((install.payload as { ok?: unknown }).ok).toBe(true);
+    expect((install.payload as { slug?: unknown }).slug).toBe("uploaded-demo");
+    expect((install.payload as { sha256?: unknown }).sha256).toBe(digest);
     await expect(
       fs.readFile(path.join(workspaceDir, "skills", "uploaded-demo", "SKILL.md"), "utf8"),
     ).resolves.toContain("Uploaded Demo");
-    await expect(
-      fs.stat(path.join(workspaceDir, "skills", "archive-internal-name")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
-    await expectUploadGone(handlers, { uploadId, slug: "uploaded-demo" });
+    await expectPathMissing(path.join(workspaceDir, "skills", "archive-internal-name"));
+    await expectPathMissing(path.join(stateDir, "tmp", "skill-uploads", uploadId));
 
     const status = await call(handlers, "skills.status", {});
     expect(status.ok).toBe(true);
@@ -393,7 +357,7 @@ describe("skill upload gateway handlers", () => {
   });
 
   it("rejects install sha mismatch and removes the terminal upload", async () => {
-    const { handlers } = await makeHarness();
+    const { handlers, stateDir } = await makeHarness();
     const upload = await uploadArchive(handlers, {
       archive: await makeSkillArchive({}),
       slug: "sha-bound-skill",
@@ -407,20 +371,26 @@ describe("skill upload gateway handlers", () => {
     });
 
     expect(install.ok).toBe(false);
-    expect(install.error).toMatchObject({
-      code: "INVALID_REQUEST",
-      message: "install sha256 does not match uploaded archive",
-    });
-    await expectUploadGone(handlers, { uploadId: upload.uploadId, slug: "sha-bound-skill" });
+    expectError(install, "INVALID_REQUEST", "install sha256 does not match uploaded archive");
+    await expectPathMissing(path.join(stateDir, "tmp", "skill-uploads", upload.uploadId));
   });
 
   it("rejects expired committed uploads through skills.install", async () => {
-    const { handlers } = await makeHarness();
+    const { handlers, stateDir } = await makeHarness();
     const upload = await uploadArchive(handlers, {
       archive: await makeSkillArchive({}),
       slug: "expired-skill",
     });
-    await expireUploadedSkill(upload.uploadId);
+    const metadataPath = path.join(
+      stateDir,
+      "tmp",
+      "skill-uploads",
+      upload.uploadId,
+      "metadata.json",
+    );
+    const metadata = JSON.parse(await fs.readFile(metadataPath, "utf8")) as { expiresAt: number };
+    metadata.expiresAt = Date.now() - 1;
+    await fs.writeFile(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
 
     const install = await call(handlers, "skills.install", {
       source: "upload",
@@ -429,15 +399,12 @@ describe("skill upload gateway handlers", () => {
     });
 
     expect(install.ok).toBe(false);
-    expect(install.error).toMatchObject({
-      code: "INVALID_REQUEST",
-      message: "upload has expired",
-    });
-    await expectUploadGone(handlers, { uploadId: upload.uploadId, slug: "expired-skill" });
+    expectError(install, "INVALID_REQUEST", "upload has expired");
+    await expectPathMissing(path.join(stateDir, "tmp", "skill-uploads", upload.uploadId));
   });
 
   it("rejects invalid slugs, missing SKILL.md, and archive traversal", async () => {
-    const { handlers, workspaceDir } = await makeHarness();
+    const { handlers, stateDir, workspaceDir } = await makeHarness();
     const invalidSlug = await call(handlers, "skills.upload.begin", {
       kind: "skill-archive",
       slug: "../escape",
@@ -458,7 +425,7 @@ describe("skill upload gateway handlers", () => {
     expect(missingInstall.ok).toBe(false);
     expect(missingInstall.error?.code).toBe("INVALID_REQUEST");
     expect(missingInstall.error?.message).toContain("SKILL.md");
-    await expectUploadGone(handlers, { uploadId: missingSkill.uploadId, slug: "missing-skill-md" });
+    await expectPathMissing(path.join(stateDir, "tmp", "skill-uploads", missingSkill.uploadId));
 
     const legacyMarker = await uploadArchive(handlers, {
       archive: await makeSkillArchive({
@@ -475,7 +442,7 @@ describe("skill upload gateway handlers", () => {
     expect(legacyMarkerInstall.ok).toBe(false);
     expect(legacyMarkerInstall.error?.code).toBe("INVALID_REQUEST");
     expect(legacyMarkerInstall.error?.message).toContain("SKILL.md");
-    await expectUploadGone(handlers, { uploadId: legacyMarker.uploadId, slug: "legacy-marker" });
+    await expectPathMissing(path.join(stateDir, "tmp", "skill-uploads", legacyMarker.uploadId));
 
     const traversal = await uploadArchive(handlers, {
       archive: await makeSkillArchive({ traversal: true }),
@@ -491,13 +458,11 @@ describe("skill upload gateway handlers", () => {
     expect(traversalInstall.error?.message).toMatch(
       /escapes destination|absolute|extract archive/i,
     );
-    await expect(
-      fs.stat(path.join(workspaceDir, "skills", "traversal-skill")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expectPathMissing(path.join(workspaceDir, "skills", "traversal-skill"));
   });
 
   it("treats security scan blocks as terminal invalid uploads", async () => {
-    const { handlers } = await makeHarness();
+    const { handlers, stateDir } = await makeHarness();
     installSecurityScanState.scanSkillInstallSource.mockResolvedValueOnce({
       blocked: {
         code: "security_scan_blocked",
@@ -517,21 +482,18 @@ describe("skill upload gateway handlers", () => {
     });
 
     expect(install.ok).toBe(false);
-    expect(install.error).toMatchObject({
-      code: "INVALID_REQUEST",
-      message: expect.stringContaining("blocked dependencies"),
-    });
-    expect(installSecurityScanState.scanSkillInstallSource).toHaveBeenCalledWith(
-      expect.objectContaining({
-        origin: "skill-upload",
-        skillName: "scan-blocked",
-      }),
+    expect(install.error?.code).toBe("INVALID_REQUEST");
+    expect(install.error?.message).toContain("blocked dependencies");
+    const scanInput = firstCallArg<{ origin?: string; skillName?: string }>(
+      installSecurityScanState.scanSkillInstallSource,
     );
-    await expectUploadGone(handlers, { uploadId: upload.uploadId, slug: "scan-blocked" });
+    expect(scanInput.origin).toBe("skill-upload");
+    expect(scanInput.skillName).toBe("scan-blocked");
+    await expectPathMissing(path.join(stateDir, "tmp", "skill-uploads", upload.uploadId));
   });
 
   it("preserves existing installs unless force was bound at begin", async () => {
-    const { handlers, workspaceDir } = await makeHarness();
+    const { handlers, stateDir, workspaceDir } = await makeHarness();
     const first = await uploadArchive(handlers, {
       archive: await makeSkillArchive({
         name: "Replace Demo",
@@ -564,7 +526,7 @@ describe("skill upload gateway handlers", () => {
     expect(blockedInstall.ok).toBe(false);
     expect(blockedInstall.error?.code).toBe("INVALID_REQUEST");
     expect(blockedInstall.error?.message).toContain("already exists");
-    await expectUploadGone(handlers, { uploadId: blocked.uploadId, slug: "replace-demo" });
+    await expectPathMissing(path.join(stateDir, "tmp", "skill-uploads", blocked.uploadId));
 
     const forced = await uploadArchive(handlers, {
       archive: await makeSkillArchive({
@@ -587,7 +549,7 @@ describe("skill upload gateway handlers", () => {
   });
 
   it("keeps the previous skill when force replacement publish fails", async () => {
-    const { handlers, workspaceDir } = await makeHarness();
+    const { handlers, stateDir, workspaceDir } = await makeHarness();
     const first = await uploadArchive(handlers, {
       archive: await makeSkillArchive({
         name: "Rollback Demo",
@@ -631,15 +593,7 @@ describe("skill upload gateway handlers", () => {
     await expect(
       fs.readFile(path.join(workspaceDir, "skills", "rollback-demo", "SKILL.md"), "utf8"),
     ).resolves.toContain("first version");
-    const retry = await call(handlers, "skills.install", {
-      source: "upload",
-      uploadId: forced.uploadId,
-      slug: "rollback-demo",
-      force: true,
-    });
-    expect(retry.ok).toBe(true);
-    await expect(
-      fs.readFile(path.join(workspaceDir, "skills", "rollback-demo", "SKILL.md"), "utf8"),
-    ).resolves.toContain("second version");
+    const uploadStat = await fs.stat(path.join(stateDir, "tmp", "skill-uploads", forced.uploadId));
+    expect(uploadStat.isDirectory()).toBe(true);
   });
 });

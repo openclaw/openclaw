@@ -443,9 +443,7 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
     };
     const resolveMemoryConfig = vi.fn(() => null);
     const getMemorySearchManager = vi.fn(async () => ({ manager }));
-    const requireDefaultDatabasePath = vi.fn(
-      () => `/tmp/openclaw-missing-memory-${process.pid}.sqlite`,
-    );
+    const requireDefaultStore = vi.fn(() => `/tmp/openclaw-missing-memory-${process.pid}.sqlite`);
 
     const result = await resolveSharedMemoryStatusSnapshot({
       cfg: {
@@ -462,11 +460,11 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
       memoryPlugin: { enabled: true, slot: "memory-lancedb-pro" },
       resolveMemoryConfig,
       getMemorySearchManager,
-      requireDefaultDatabasePath,
+      requireDefaultStore,
     });
 
     expect(resolveMemoryConfig).not.toHaveBeenCalled();
-    expect(requireDefaultDatabasePath).not.toHaveBeenCalled();
+    expect(requireDefaultStore).not.toHaveBeenCalled();
     expect(getMemorySearchManager).toHaveBeenCalledOnce();
     const managerCalls = getMemorySearchManager.mock.calls as unknown as Array<
       [MemorySearchManagerCall]
@@ -511,7 +509,7 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
       memoryPlugin: { enabled: true, slot: "qmd" },
       resolveMemoryConfig: vi.fn(() => null),
       getMemorySearchManager,
-      requireDefaultDatabasePath: vi.fn(),
+      requireDefaultStore: vi.fn(),
     });
 
     expect(manager.probeVectorStoreAvailability).not.toHaveBeenCalled();
@@ -526,7 +524,7 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
     });
   });
 
-  it("keeps default memory-core on the cold-start database shortcut", async () => {
+  it("keeps default memory-core on the cold-start store shortcut", async () => {
     const resolveMemoryConfig = vi.fn(() => null);
     const getMemorySearchManager = vi.fn(async () => ({ manager: null }));
 
@@ -536,7 +534,7 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
       memoryPlugin: { enabled: true, slot: "memory-core" },
       resolveMemoryConfig,
       getMemorySearchManager,
-      requireDefaultDatabasePath: () => `/tmp/openclaw-missing-memory-${process.pid}.sqlite`,
+      requireDefaultStore: () => `/tmp/openclaw-missing-memory-${process.pid}.sqlite`,
     });
 
     expect(result).toBeNull();

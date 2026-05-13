@@ -1,13 +1,14 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 import { performance } from "node:perf_hooks";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { writeDiagnosticEvent } from "./diagnostic-events-store.js";
 import { isDiagnosticFlagEnabled } from "./diagnostic-flags.js";
 import { isTruthyEnvValue } from "./env.js";
+import { appendRegularFileSync } from "./regular-file.js";
 
 const OPENCLAW_DIAGNOSTICS_TIMELINE_SCHEMA_VERSION = "openclaw.diagnostics.v1";
-const OPENCLAW_DIAGNOSTICS_TIMELINE_SCOPE = "diagnostics.timeline";
 
 type DiagnosticsTimelineEventType =
   | "span.start"
@@ -68,8 +69,8 @@ export type ActiveDiagnosticsTimelineSpan = {
   attributes?: DiagnosticsTimelineAttributes;
 };
 
-let timelineSeq = 0;
 let warnedAboutTimelineWrite = false;
+const createdTimelineDirs = new Set<string>();
 const activeDiagnosticsTimelineSpan = new AsyncLocalStorage<ActiveDiagnosticsTimelineSpan>();
 
 function resolveDiagnosticsTimelineOptions(
@@ -84,9 +85,11 @@ function resolveDiagnosticsTimelineOptions(
 export function isDiagnosticsTimelineEnabled(options: DiagnosticsTimelineOptions = {}): boolean {
   const { config, env } = resolveDiagnosticsTimelineOptions(options);
   return (
-    isDiagnosticFlagEnabled("timeline", config, env) ||
-    isDiagnosticFlagEnabled("diagnostics.timeline", config, env) ||
-    isTruthyEnvValue(env.OPENCLAW_DIAGNOSTICS)
+    (isDiagnosticFlagEnabled("timeline", config, env) ||
+      isDiagnosticFlagEnabled("diagnostics.timeline", config, env) ||
+      isTruthyEnvValue(env.OPENCLAW_DIAGNOSTICS)) &&
+    typeof env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH === "string" &&
+    env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH.trim().length > 0
   );
 }
 
@@ -118,10 +121,7 @@ function normalizeAttributes(
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
-function buildTimelineEventPayload(
-  event: DiagnosticsTimelineEvent,
-  env: NodeJS.ProcessEnv,
-): Record<string, unknown> {
+function serializeTimelineEvent(event: DiagnosticsTimelineEvent, env: NodeJS.ProcessEnv): string {
   const normalized = {
     schemaVersion: OPENCLAW_DIAGNOSTICS_TIMELINE_SCHEMA_VERSION,
     type: event.type,
@@ -156,13 +156,7 @@ function buildTimelineEventPayload(
       ? { attributes: normalizeAttributes(event.attributes) }
       : {}),
   };
-  return normalized;
-}
-
-function createTimelineEventKey(payload: Record<string, unknown>): string {
-  const serialized = JSON.stringify(payload);
-  const digest = createHash("sha256").update(serialized).digest("hex").slice(0, 16);
-  return `${Date.now().toString(36)}-${(timelineSeq += 1).toString(36)}-${digest}`;
+  return `${JSON.stringify(normalized)}\n`;
 }
 
 export function emitDiagnosticsTimelineEvent(
@@ -173,16 +167,18 @@ export function emitDiagnosticsTimelineEvent(
   if (!isDiagnosticsTimelineEnabled(options)) {
     return;
   }
-  const payload = buildTimelineEventPayload(event, env);
+  const path = env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH?.trim();
+  if (!path) {
+    return;
+  }
+  const line = serializeTimelineEvent(event, env);
   try {
-    writeDiagnosticEvent(
-      OPENCLAW_DIAGNOSTICS_TIMELINE_SCOPE,
-      createTimelineEventKey(payload),
-      payload,
-      {
-        env,
-      },
-    );
+    const dir = dirname(path);
+    if (!createdTimelineDirs.has(dir)) {
+      mkdirSync(dir, { recursive: true });
+      createdTimelineDirs.add(dir);
+    }
+    appendRegularFileSync({ filePath: path, content: line });
   } catch (error) {
     if (!warnedAboutTimelineWrite) {
       warnedAboutTimelineWrite = true;

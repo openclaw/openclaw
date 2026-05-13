@@ -228,7 +228,7 @@ export function createAgentEventHandler({
 
   // Only subagent/acp keys can carry spawnedBy (mirrors supportsSpawnLineage in
   // sessions-patch.ts). Short-circuit everyone else so high-volume chat streams
-  // do not touch SQLite session rows. Results are cached per sessionKey because
+  // do not touch the session store. Results are cached per sessionKey because
   // spawnedBy is immutable once set and resolveSpawnedBy sits on the hot event
   // path (delta, flush, final, agent, seq-gap).
   const spawnedByCache = new Map<string, string | null>();
@@ -280,6 +280,7 @@ export function createAgentEventHandler({
       groupChannel: row?.groupChannel,
       space: row?.space,
       chatType: row?.chatType,
+      origin: row?.origin,
       spawnedBy: row?.spawnedBy,
       spawnedWorkspaceDir: row?.spawnedWorkspaceDir,
       forkedFromParent: row?.forkedFromParent,
@@ -291,10 +292,6 @@ export function createAgentEventHandler({
       deliveryContext: row?.deliveryContext,
       parentSessionKey: row?.parentSessionKey,
       childSessions: row?.childSessions,
-      lastChannel: row?.lastChannel,
-      lastTo: row?.lastTo,
-      lastAccountId: row?.lastAccountId,
-      lastThreadId: row?.lastThreadId,
       thinkingLevel: row?.thinkingLevel,
       fastMode: row?.fastMode,
       verboseLevel: row?.verboseLevel,
@@ -305,6 +302,10 @@ export function createAgentEventHandler({
       systemSent: row?.systemSent,
       inputTokens: row?.inputTokens,
       outputTokens: row?.outputTokens,
+      lastChannel: row?.lastChannel,
+      lastTo: row?.lastTo,
+      lastAccountId: row?.lastAccountId,
+      lastThreadId: row?.lastThreadId,
       totalTokens: row?.totalTokens,
       totalTokensFresh: row?.totalTokensFresh,
       contextTokens: row?.contextTokens,

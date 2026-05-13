@@ -85,10 +85,10 @@ describe("handleQaInbound", () => {
       }),
     );
 
-    expect(runtime.channel.session.recordInboundSession).toHaveBeenCalledTimes(1);
-    expect(
-      vi.mocked(runtime.channel.session.recordInboundSession).mock.calls[0]?.[0].ctx.WasMentioned,
-    ).toBe(true);
+    expect(runtime.channel.turn.runAssembled).toHaveBeenCalledTimes(1);
+    const assembled = firstRunAssembledParams(runtime);
+    expect(assembled.replyPipeline).toEqual({});
+    expect(assembled.ctxPayload.WasMentioned).toBe(true);
   });
 
   it("drops direct messages outside the configured sender allowlist", async () => {
@@ -103,7 +103,7 @@ describe("handleQaInbound", () => {
       }),
     );
 
-    expect(runtime.channel.session.recordInboundSession).not.toHaveBeenCalled();
+    expect(runtime.channel.turn.runAssembled).not.toHaveBeenCalled();
   });
 
   it("allows direct messages from configured senders", async () => {
@@ -118,9 +118,8 @@ describe("handleQaInbound", () => {
       }),
     );
 
-    expect(runtime.channel.session.recordInboundSession).toHaveBeenCalledTimes(1);
-    const ctxPayload = vi.mocked(runtime.channel.session.recordInboundSession).mock.calls[0]?.[0]
-      .ctx;
+    expect(runtime.channel.turn.runAssembled).toHaveBeenCalledTimes(1);
+    const ctxPayload = firstRunAssembledParams(runtime).ctxPayload;
     expect(ctxPayload?.CommandAuthorized).toBe(true);
     expect(ctxPayload?.SenderId).toBe("alice");
   });
@@ -145,7 +144,7 @@ describe("handleQaInbound", () => {
       }),
     );
 
-    expect(runtime.channel.session.recordInboundSession).toHaveBeenCalledTimes(1);
+    expect(runtime.channel.turn.runAssembled).toHaveBeenCalledTimes(1);
   });
 
   it("skips configured group messages that miss mention activation", async () => {
@@ -173,6 +172,6 @@ describe("handleQaInbound", () => {
       }),
     );
 
-    expect(runtime.channel.session.recordInboundSession).not.toHaveBeenCalled();
+    expect(runtime.channel.turn.runAssembled).not.toHaveBeenCalled();
   });
 });

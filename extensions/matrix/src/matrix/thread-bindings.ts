@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
 import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -9,10 +9,10 @@ import {
   type SessionBindingAdapter,
   unregisterSessionBindingAdapter,
 } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
+import { claimCurrentTokenStorageState, resolveMatrixStateFilePath } from "./client/storage.js";
 import type { MatrixAuth } from "./client/types.js";
 import type { MatrixClient } from "./sdk.js";
 import { sendMessageMatrix } from "./send.js";
-import { resolveMatrixSqliteStateKey, withMatrixSqliteStateEnv } from "./sqlite-state.js";
 import {
   deleteMatrixThreadBindingManagerEntry,
   getMatrixThreadBindingManager,
@@ -32,142 +32,95 @@ import {
   type MatrixThreadBindingRecord,
 } from "./thread-bindings-shared.js";
 
-const MATRIX_PLUGIN_ID = "matrix";
-const THREAD_BINDINGS_NAMESPACE = "thread-bindings";
-const THREAD_BINDINGS_MAX_ENTRIES = 10_000;
+const STORE_VERSION = 1;
 const THREAD_BINDINGS_SWEEP_INTERVAL_MS = 60_000;
-const threadBindingStore = createPluginStateSyncKeyedStore<MatrixThreadBindingRecord>(
-  MATRIX_PLUGIN_ID,
-  {
-    namespace: THREAD_BINDINGS_NAMESPACE,
-    maxEntries: THREAD_BINDINGS_MAX_ENTRIES,
-  },
-);
+const TOUCH_PERSIST_DELAY_MS = 30_000;
 
-function buildThreadBindingStoreKey(record: {
-  accountId: string;
-  conversationId: string;
-  parentConversationId?: string;
-}): string {
-  const digest = createHash("sha256")
-    .update(record.accountId)
-    .update("\0")
-    .update(record.parentConversationId ?? "")
-    .update("\0")
-    .update(record.conversationId)
-    .digest("hex");
-  return `${record.accountId}:${digest}`;
-}
+type StoredMatrixThreadBindingState = {
+  version: number;
+  bindings: MatrixThreadBindingRecord[];
+};
 
-function normalizeBindingRecord(
-  entry: unknown,
-  accountId: string,
-): MatrixThreadBindingRecord | null {
-  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-    return null;
-  }
-  const record = entry as Partial<MatrixThreadBindingRecord>;
-  if (record.accountId !== accountId) {
-    return null;
-  }
-  const conversationId = normalizeOptionalString(record.conversationId);
-  const parentConversationId = normalizeOptionalString(record.parentConversationId);
-  const targetSessionKey = normalizeOptionalString(record.targetSessionKey) ?? "";
-  if (!conversationId || !targetSessionKey) {
-    return null;
-  }
-  const boundAt =
-    typeof record.boundAt === "number" && Number.isFinite(record.boundAt)
-      ? Math.floor(record.boundAt)
-      : Date.now();
-  const lastActivityAt =
-    typeof record.lastActivityAt === "number" && Number.isFinite(record.lastActivityAt)
-      ? Math.floor(record.lastActivityAt)
-      : boundAt;
-  return {
-    accountId,
-    conversationId,
-    ...(parentConversationId ? { parentConversationId } : {}),
-    targetKind: record.targetKind === "subagent" ? "subagent" : "acp",
-    targetSessionKey,
-    agentId: normalizeOptionalString(record.agentId) || undefined,
-    label: normalizeOptionalString(record.label) || undefined,
-    boundBy: normalizeOptionalString(record.boundBy) || undefined,
-    boundAt,
-    lastActivityAt: Math.max(lastActivityAt, boundAt),
-    idleTimeoutMs:
-      typeof record.idleTimeoutMs === "number" && Number.isFinite(record.idleTimeoutMs)
-        ? Math.max(0, Math.floor(record.idleTimeoutMs))
-        : undefined,
-    maxAgeMs:
-      typeof record.maxAgeMs === "number" && Number.isFinite(record.maxAgeMs)
-        ? Math.max(0, Math.floor(record.maxAgeMs))
-        : undefined,
-  };
-}
-
-function loadBindingsFromSqlite(params: {
+function resolveBindingsPath(params: {
   auth: MatrixAuth;
   accountId: string;
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
-}): MatrixThreadBindingRecord[] {
+}): string {
+  return resolveMatrixStateFilePath({
+    auth: params.auth,
+    accountId: params.accountId,
+    env: params.env,
+    stateDir: params.stateDir,
+    filename: "thread-bindings.json",
+  });
+}
+
+async function loadBindingsFromDisk(filePath: string, accountId: string) {
+  const { value } = await readJsonFileWithFallback<StoredMatrixThreadBindingState | null>(
+    filePath,
+    null,
+  );
+  if (value?.version !== STORE_VERSION || !Array.isArray(value.bindings)) {
+    return [];
+  }
   const loaded: MatrixThreadBindingRecord[] = [];
-  const entries = withMatrixSqliteStateEnv(params, () => threadBindingStore.entries());
-  for (const entry of entries) {
-    const record = normalizeBindingRecord(entry.value, params.accountId);
-    if (record) {
-      loaded.push(record);
+  for (const entry of value.bindings) {
+    const conversationId = normalizeOptionalString(entry?.conversationId);
+    const parentConversationId = normalizeOptionalString(entry?.parentConversationId);
+    const targetSessionKey = normalizeOptionalString(entry?.targetSessionKey) ?? "";
+    if (!conversationId || !targetSessionKey) {
+      continue;
     }
+    const boundAt =
+      typeof entry?.boundAt === "number" && Number.isFinite(entry.boundAt)
+        ? Math.floor(entry.boundAt)
+        : Date.now();
+    const lastActivityAt =
+      typeof entry?.lastActivityAt === "number" && Number.isFinite(entry.lastActivityAt)
+        ? Math.floor(entry.lastActivityAt)
+        : boundAt;
+    loaded.push({
+      accountId,
+      conversationId,
+      ...(parentConversationId ? { parentConversationId } : {}),
+      targetKind: entry?.targetKind === "subagent" ? "subagent" : "acp",
+      targetSessionKey,
+      agentId: normalizeOptionalString(entry?.agentId) || undefined,
+      label: normalizeOptionalString(entry?.label) || undefined,
+      boundBy: normalizeOptionalString(entry?.boundBy) || undefined,
+      boundAt,
+      lastActivityAt: Math.max(lastActivityAt, boundAt),
+      idleTimeoutMs:
+        typeof entry?.idleTimeoutMs === "number" && Number.isFinite(entry.idleTimeoutMs)
+          ? Math.max(0, Math.floor(entry.idleTimeoutMs))
+          : undefined,
+      maxAgeMs:
+        typeof entry?.maxAgeMs === "number" && Number.isFinite(entry.maxAgeMs)
+          ? Math.max(0, Math.floor(entry.maxAgeMs))
+          : undefined,
+    });
   }
   return loaded;
 }
 
-function persistBindingRecord(params: {
-  record: MatrixThreadBindingRecord;
-  env?: NodeJS.ProcessEnv;
-  stateDir?: string;
-}): void {
-  withMatrixSqliteStateEnv(params, () => {
-    threadBindingStore.register(
-      buildThreadBindingStoreKey(params.record),
-      toPluginJsonValue(params.record),
-    );
-  });
+function toStoredBindingsState(
+  bindings: MatrixThreadBindingRecord[],
+): StoredMatrixThreadBindingState {
+  return {
+    version: STORE_VERSION,
+    bindings: [...bindings].toSorted((a, b) => a.boundAt - b.boundAt),
+  };
 }
 
-function persistBindingsSnapshot(params: {
-  accountId: string;
-  bindings: MatrixThreadBindingRecord[];
-  env?: NodeJS.ProcessEnv;
-  stateDir?: string;
-}): void {
-  const liveKeys = new Set(params.bindings.map((record) => buildThreadBindingStoreKey(record)));
-  withMatrixSqliteStateEnv(params, () => {
-    for (const entry of threadBindingStore.entries()) {
-      const record = normalizeBindingRecord(entry.value, params.accountId);
-      if (record && !liveKeys.has(entry.key)) {
-        threadBindingStore.delete(entry.key);
-      }
-    }
-    for (const record of params.bindings) {
-      threadBindingStore.register(buildThreadBindingStoreKey(record), toPluginJsonValue(record));
-    }
+async function persistBindingsSnapshot(
+  filePath: string,
+  bindings: MatrixThreadBindingRecord[],
+): Promise<void> {
+  await writeJsonFileAtomically(filePath, toStoredBindingsState(bindings));
+  claimCurrentTokenStorageState({
+    rootDir: path.dirname(filePath),
   });
-}
-
-function deleteBindingRecordFromSqlite(params: {
-  record: MatrixThreadBindingRecord;
-  env?: NodeJS.ProcessEnv;
-  stateDir?: string;
-}): void {
-  withMatrixSqliteStateEnv(params, () => {
-    threadBindingStore.delete(buildThreadBindingStoreKey(params.record));
-  });
-}
-
-function toPluginJsonValue<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T;
 }
 
 function buildMatrixBindingIntroText(params: {
@@ -259,35 +212,57 @@ export async function createMatrixThreadBindingManager(params: {
       `Matrix thread binding account mismatch: requested ${params.accountId}, auth resolved ${params.auth.accountId}`,
     );
   }
-  const storageKey = resolveMatrixSqliteStateKey(params);
-  const existingEntry = getMatrixThreadBindingManagerEntry(params.accountId);
-  if (existingEntry) {
-    if (existingEntry.storageKey === storageKey) {
-      return existingEntry.manager;
-    }
-    existingEntry.manager.stop();
-  }
-  const loaded = loadBindingsFromSqlite({
+  const filePath = resolveBindingsPath({
     auth: params.auth,
     accountId: params.accountId,
     env: params.env,
     stateDir: params.stateDir,
   });
+  const existingEntry = getMatrixThreadBindingManagerEntry(params.accountId);
+  if (existingEntry) {
+    if (existingEntry.filePath === filePath) {
+      return existingEntry.manager;
+    }
+    existingEntry.manager.stop();
+  }
+  const loaded = await loadBindingsFromDisk(filePath, params.accountId);
   for (const record of loaded) {
     setBindingRecord(record);
   }
 
-  const persist = async () => {
-    persistBindingsSnapshot({
-      accountId: params.accountId,
-      bindings: listBindingsForAccount(params.accountId),
-      env: params.env,
-      stateDir: params.stateDir,
+  let persistQueue: Promise<void> = Promise.resolve();
+  const enqueuePersist = (bindings?: MatrixThreadBindingRecord[]) => {
+    const snapshot = bindings ?? listBindingsForAccount(params.accountId);
+    const next = persistQueue
+      .catch(() => {})
+      .then(async () => {
+        await persistBindingsSnapshot(filePath, snapshot);
+      });
+    persistQueue = next;
+    return next;
+  };
+  const persist = async () => await enqueuePersist();
+  const persistSafely = (reason: string, bindings?: MatrixThreadBindingRecord[]) => {
+    void enqueuePersist(bindings).catch((err) => {
+      params.logVerboseMessage?.(
+        `matrix: failed persisting thread bindings account=${params.accountId} action=${reason}: ${String(err)}`,
+      );
     });
   };
   const defaults = {
     idleTimeoutMs: params.idleTimeoutMs,
     maxAgeMs: params.maxAgeMs,
+  };
+  let persistTimer: NodeJS.Timeout | null = null;
+  const schedulePersist = (delayMs: number) => {
+    if (persistTimer) {
+      return;
+    }
+    persistTimer = setTimeout(() => {
+      persistTimer = null;
+      persistSafely("delayed-touch");
+    }, delayMs);
+    persistTimer.unref?.();
   };
   const updateBindingsBySessionKey = (input: {
     targetSessionKey: string;
@@ -307,8 +282,8 @@ export async function createMatrixThreadBindingManager(params: {
     }
     for (const entry of nextBindings) {
       setBindingRecord(entry);
-      persistBindingRecord({ record: entry, env: params.env, stateDir: params.stateDir });
     }
+    persistSafely(input.persistReason);
     return nextBindings;
   };
 
@@ -347,7 +322,7 @@ export async function createMatrixThreadBindingManager(params: {
             : Date.now(),
       };
       setBindingRecord(nextRecord);
-      persistBindingRecord({ record: nextRecord, env: params.env, stateDir: params.stateDir });
+      schedulePersist(TOUCH_PERSIST_DELAY_MS);
       return nextRecord;
     },
     setIdleTimeoutBySessionKey: ({ targetSessionKey, idleTimeoutMs }) => {
@@ -376,6 +351,11 @@ export async function createMatrixThreadBindingManager(params: {
       if (sweepTimer) {
         clearInterval(sweepTimer);
       }
+      if (persistTimer) {
+        clearTimeout(persistTimer);
+        persistTimer = null;
+        persistSafely("shutdown-flush");
+      }
       unregisterSessionBindingAdapter({
         channel: "matrix",
         accountId: params.accountId,
@@ -395,13 +375,9 @@ export async function createMatrixThreadBindingManager(params: {
     if (records.length === 0) {
       return [];
     }
-    const removed = records
+    return records
       .map((record) => removeBindingRecord(record))
       .filter((record): record is MatrixThreadBindingRecord => Boolean(record));
-    for (const record of removed) {
-      deleteBindingRecordFromSqlite({ record, env: params.env, stateDir: params.stateDir });
-    }
-    return removed;
   };
   const sendFarewellMessages = async (
     removed: MatrixThreadBindingRecord[],
@@ -591,7 +567,7 @@ export async function createMatrixThreadBindingManager(params: {
   }
 
   setMatrixThreadBindingManagerEntry(params.accountId, {
-    storageKey,
+    filePath,
     manager,
   });
   return manager;

@@ -1,6 +1,5 @@
 import path from "node:path";
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
-import { createPluginBlobStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   resolvePreferredOpenClawTmpDir,
   type OpenClawConfig,
@@ -13,19 +12,13 @@ import {
 } from "./config.js";
 import { createDiffsHttpHandler } from "./http.js";
 import { DIFFS_AGENT_GUIDANCE } from "./prompt-guidance.js";
-import { DiffArtifactStore, type DiffBlobMetadata } from "./store.js";
+import { DiffArtifactStore } from "./store.js";
 import { createDiffsTool } from "./tool.js";
-
-const MAX_DIFF_ARTIFACT_BLOBS = 512;
 
 export function registerDiffsPlugin(api: OpenClawPluginApi): void {
   const store = new DiffArtifactStore({
     rootDir: path.join(resolvePreferredOpenClawTmpDir(), "openclaw-diffs"),
     logger: api.logger,
-    blobStore: createPluginBlobStore<DiffBlobMetadata>("diffs", {
-      namespace: "artifacts",
-      maxEntries: MAX_DIFF_ARTIFACT_BLOBS,
-    }),
   });
   const resolveCurrentPluginConfig = () =>
     resolveLivePluginConfigObject(

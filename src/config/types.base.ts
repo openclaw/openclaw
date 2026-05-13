@@ -150,6 +150,8 @@ export type SessionResetConfig = {
 };
 export type SessionResetByTypeConfig = {
   direct?: SessionResetConfig;
+  /** @deprecated Use `direct` instead. Kept for backward compatibility. */
+  dm?: SessionResetConfig;
   group?: SessionResetConfig;
   thread?: SessionResetConfig;
 };
@@ -190,20 +192,61 @@ export type SessionConfig = {
   /** Map platform-prefixed identities (e.g. "telegram:123") to canonical DM peers. */
   identityLinks?: Record<string, string[]>;
   resetTriggers?: string[];
+  idleMinutes?: number;
   reset?: SessionResetConfig;
   resetByType?: SessionResetByTypeConfig;
   /** Channel-specific reset overrides (e.g. { discord: { mode: "idle", idleMinutes: 10080 } }). */
   resetByChannel?: Record<string, SessionResetConfig>;
+  store?: string;
   typingIntervalSeconds?: number;
   typingMode?: TypingMode;
   mainKey?: string;
   sendPolicy?: SessionSendPolicyConfig;
+  /** Session transcript write-lock acquisition policy. */
+  writeLock?: SessionWriteLockConfig;
   agentToAgent?: {
     /** Max ping-pong turns between requester/target (0-20). Default: 5. */
     maxPingPongTurns?: number;
   };
   /** Shared defaults for thread-bound session routing across channels/providers. */
   threadBindings?: SessionThreadBindingsConfig;
+  /** Automatic session store maintenance (pruning, capping, archive retention, disk budget). */
+  maintenance?: SessionMaintenanceConfig;
+};
+
+export type SessionWriteLockConfig = {
+  /** How long to wait while acquiring a session transcript write lock. Default: 60000. */
+  acquireTimeoutMs?: number;
+};
+
+export type SessionMaintenanceMode = "enforce" | "warn";
+
+export type SessionMaintenanceConfig = {
+  /** Whether to enforce maintenance or warn only. Default: "warn". */
+  mode?: SessionMaintenanceMode;
+  /** Remove session entries older than this duration (e.g. "30d", "12h"). Default: "30d". */
+  pruneAfter?: string | number;
+  /** @deprecated Use pruneAfter instead. */
+  pruneDays?: number;
+  /** Maximum number of session entries to keep. Default: 500. */
+  maxEntries?: number;
+  /** @deprecated Ignored. Run `openclaw doctor --fix` to remove. */
+  rotateBytes?: number | string;
+  /**
+   * Retention for archived reset transcripts (`*.reset.<timestamp>`).
+   * Set `false` to disable reset-archive cleanup. Default: same as `pruneAfter` (30d).
+   */
+  resetArchiveRetention?: string | number | false;
+  /**
+   * Optional per-agent sessions-directory disk budget (e.g. "500mb").
+   * When exceeded, warn (mode=warn) or enforce oldest-first cleanup (mode=enforce).
+   */
+  maxDiskBytes?: number | string;
+  /**
+   * Target size after disk-budget cleanup (high-water mark), e.g. "400mb".
+   * Default: 80% of maxDiskBytes.
+   */
+  highWaterBytes?: number | string;
 };
 
 export type LoggingConfig = {
@@ -254,6 +297,7 @@ export type DiagnosticsOtelConfig = {
 
 export type DiagnosticsCacheTraceConfig = {
   enabled?: boolean;
+  filePath?: string;
   includeMessages?: boolean;
   includePrompt?: boolean;
   includeSystem?: boolean;

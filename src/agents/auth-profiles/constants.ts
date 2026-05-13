@@ -1,4 +1,9 @@
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+export {
+  AUTH_PROFILE_FILENAME,
+  AUTH_STATE_FILENAME,
+  LEGACY_AUTH_FILENAME,
+} from "./path-constants.js";
 
 export const AUTH_STORE_VERSION = 1;
 
@@ -10,8 +15,22 @@ export const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai-codex:default";
 /** @deprecated MiniMax provider-owned CLI profile id; do not use from third-party plugins. */
 export const MINIMAX_CLI_PROFILE_ID = "minimax-portal:minimax-cli";
 
-// This lock serializes the cross-agent OAuth refresh (see issue #26322).
-// Auth profile persistence itself is SQLite-backed and does not use file locks.
+export const AUTH_STORE_LOCK_OPTIONS = {
+  retries: {
+    retries: 10,
+    factor: 2,
+    minTimeout: 100,
+    maxTimeout: 10_000,
+    randomize: true,
+  },
+  stale: 30_000,
+} as const;
+
+// Separate from AUTH_STORE_LOCK_OPTIONS for independent tuning: this lock
+// serializes the cross-agent OAuth refresh (see issue #26322), whereas
+// AUTH_STORE_LOCK_OPTIONS guards per-store file writes. Keeping them
+// distinct lets us widen the refresh lock's timeout/retry budget without
+// affecting the hot-path auth-store writers.
 //
 // Invariant: OAUTH_REFRESH_CALL_TIMEOUT_MS < OAUTH_REFRESH_LOCK_OPTIONS.stale
 // so a legitimate refresh's critical section always finishes well before

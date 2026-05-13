@@ -80,13 +80,12 @@ describe("task boundaries", () => {
     expect(importers.toSorted()).toEqual([...TASK_REGISTRY_ALLOWED_IMPORTERS].toSorted());
   });
 
-  it("keeps task registry maintenance free of session-key chat-type parsing", () => {
+  it("keeps task registry maintenance chat-type checks on the lightweight parser", () => {
     const maintenance = sources.find(
       ({ relative }) => relative === "tasks/task-registry.maintenance.ts",
     );
 
-    expect(maintenance?.source).not.toContain("deriveSessionChatType");
-    expect(maintenance?.source).not.toContain("session-chat-type-shared.js");
+    expect(maintenance?.source).toContain("session-chat-type-shared.js");
     expect(maintenance?.source).not.toContain("session-chat-type.js");
   });
 });

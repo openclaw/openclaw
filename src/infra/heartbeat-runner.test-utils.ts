@@ -4,8 +4,6 @@ import path from "node:path";
 import { vi } from "vitest";
 import { heartbeatRunnerTelegramPlugin } from "../../test/helpers/infra/heartbeat-runner-channel-plugins.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
-import { listSessionEntries, upsertSessionEntry } from "../config/sessions/store.js";
-import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -15,6 +13,7 @@ type HeartbeatSessionSeed = {
   sessionId?: string;
   updatedAt?: number;
   lastChannel: string;
+  lastProvider: string;
   lastTo: string;
   pendingFinalDelivery?: boolean;
   pendingFinalDeliveryText?: string;
@@ -33,55 +32,42 @@ function createHeartbeatReplySpy(): HeartbeatReplySpy {
   return replySpy;
 }
 
-export async function seedHeartbeatSession(
-  agentId: string,
+export async function seedSessionStore(
+  storePath: string,
   sessionKey: string,
   session: HeartbeatSessionSeed,
 ): Promise<void> {
-  await seedHeartbeatSessionRows(agentId, {
-    [sessionKey]: {
-      sessionId: session.sessionId ?? "sid",
-      updatedAt: session.updatedAt ?? Date.now(),
-      ...session,
-    },
-  });
-}
-
-export async function seedHeartbeatSessionRows(
-  agentId: string,
-  entries: Record<string, Partial<SessionEntry>>,
-): Promise<void> {
-  for (const [sessionKey, entry] of Object.entries(entries)) {
-    upsertSessionEntry({
-      agentId,
-      sessionKey,
-      entry: {
-        sessionId: entry.sessionId ?? sessionKey.replace(/:/g, "_"),
-        updatedAt: entry.updatedAt ?? Date.now(),
-        ...entry,
-      },
-    });
+  let existingStore: Record<string, unknown> = {};
+  try {
+    existingStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, unknown>;
+  } catch {
+    existingStore = {};
   }
-}
-
-export function readHeartbeatSessionRows(agentId: string): Record<string, SessionEntry> {
-  return Object.fromEntries(
-    listSessionEntries({ agentId }).map((row) => [row.sessionKey, row.entry]),
+  await fs.writeFile(
+    storePath,
+    JSON.stringify({
+      ...existingStore,
+      [sessionKey]: {
+        sessionId: session.sessionId ?? "sid",
+        updatedAt: session.updatedAt ?? Date.now(),
+        ...session,
+      },
+    }),
   );
 }
 
-export async function seedMainHeartbeatSession(
-  agentId: string,
+export async function seedMainSessionStore(
+  storePath: string,
   cfg: OpenClawConfig,
   session: HeartbeatSessionSeed,
 ): Promise<string> {
   const sessionKey = resolveMainSessionKey(cfg);
-  await seedHeartbeatSession(agentId, sessionKey, session);
+  await seedSessionStore(storePath, sessionKey, session);
   return sessionKey;
 }
 
 export async function withTempHeartbeatSandbox<T>(
-  fn: (ctx: { tmpDir: string; agentId: string; replySpy: HeartbeatReplySpy }) => Promise<T>,
+  fn: (ctx: { tmpDir: string; storePath: string; replySpy: HeartbeatReplySpy }) => Promise<T>,
   options?: {
     prefix?: string;
     unsetEnvVars?: string[];
@@ -89,15 +75,15 @@ export async function withTempHeartbeatSandbox<T>(
 ): Promise<T> {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), options?.prefix ?? "openclaw-hb-"));
   await fs.writeFile(path.join(tmpDir, "HEARTBEAT.md"), "- Check status\n", "utf-8");
-  const agentId = "main";
+  const storePath = path.join(tmpDir, "sessions.json");
   const replySpy = createHeartbeatReplySpy();
   const previousEnv = new Map<string, string | undefined>();
-  for (const envName of ["OPENCLAW_STATE_DIR", ...(options?.unsetEnvVars ?? [])]) {
+  for (const envName of options?.unsetEnvVars ?? []) {
     previousEnv.set(envName, process.env[envName]);
-    process.env[envName] = envName === "OPENCLAW_STATE_DIR" ? tmpDir : "";
+    process.env[envName] = "";
   }
   try {
-    return await fn({ tmpDir, agentId, replySpy });
+    return await fn({ tmpDir, storePath, replySpy });
   } finally {
     replySpy.mockReset();
     for (const [envName, previousValue] of previousEnv.entries()) {
@@ -112,7 +98,7 @@ export async function withTempHeartbeatSandbox<T>(
 }
 
 export async function withTempTelegramHeartbeatSandbox<T>(
-  fn: (ctx: { tmpDir: string; agentId: string; replySpy: HeartbeatReplySpy }) => Promise<T>,
+  fn: (ctx: { tmpDir: string; storePath: string; replySpy: HeartbeatReplySpy }) => Promise<T>,
   options?: {
     prefix?: string;
   },

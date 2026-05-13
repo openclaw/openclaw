@@ -1,12 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { upsertSessionEntry, type SessionEntry } from "../config/sessions.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   filterToolsByPolicy,
   isToolAllowedByPolicyName,
@@ -20,56 +17,14 @@ import {
 import { createStubTool } from "./test-helpers/pi-tool-stubs.js";
 import { providerAliasCases } from "./test-helpers/provider-alias-cases.js";
 
-const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
-
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-  vi.unstubAllEnvs();
-  if (ORIGINAL_STATE_DIR === undefined) {
-    delete process.env.OPENCLAW_STATE_DIR;
-  } else {
-    process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
-  }
-});
-
-function useTempStateDir(): string {
-  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pi-tools-policy-"));
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-  return stateDir;
-}
-
-function seedGroupSession(params: {
-  sessionKey: string;
-  groupId: string;
-  channel?: string;
-  agentId?: string;
-  sessionId?: string;
-}) {
-  upsertSessionEntry({
-    agentId: params.agentId ?? "main",
-    sessionKey: params.sessionKey,
-    entry: {
-      sessionId: params.sessionId ?? params.sessionKey.replace(/:/g, "_"),
-      updatedAt: Date.now(),
-      chatType: "group",
-      deliveryContext: {
-        channel: params.channel ?? "whatsapp",
-        to: params.groupId,
-        accountId: "default",
-      },
-      groupId: params.groupId,
-    },
-  });
-}
-
-function seedSessionEntry(sessionKey: string, entry: SessionEntry, agentId = "main") {
-  upsertSessionEntry({
-    agentId,
-    sessionKey,
-    entry,
-  });
-}
+vi.mock("../channels/plugins/session-conversation.js", () => ({
+  resolveSessionConversation: ({ rawId }: { rawId: string }) => ({
+    id: rawId,
+    threadId: undefined,
+    baseConversationId: rawId,
+    parentConversationCandidates: [],
+  }),
+}));
 
 describe("pi-tools.policy", () => {
   it("treats * in allow as allow-all", () => {
@@ -128,12 +83,6 @@ describe("resolveGroupToolPolicy group context validation", () => {
   });
 
   it("uses session-derived group policy when caller groupId disagrees", () => {
-    useTempStateDir();
-    seedGroupSession({
-      sessionKey: "agent:main:whatsapp:group:safe-room",
-      groupId: "safe-room",
-    });
-
     expect(
       resolveGroupToolPolicy({
         config: cfg,
@@ -146,12 +95,6 @@ describe("resolveGroupToolPolicy group context validation", () => {
   });
 
   it("accepts caller groupId when it matches session-derived group context", () => {
-    useTempStateDir();
-    seedGroupSession({
-      sessionKey: "agent:main:whatsapp:group:trusted-group",
-      groupId: "trusted-group",
-    });
-
     expect(
       resolveTrustedGroupId({
         sessionKey: "agent:main:whatsapp:group:trusted-group",
@@ -170,12 +113,6 @@ describe("resolveGroupToolPolicy group context validation", () => {
   });
 
   it("accepts caller groupId when spawnedBy provides the trusted group context", () => {
-    useTempStateDir();
-    seedGroupSession({
-      sessionKey: "agent:main:whatsapp:group:trusted-group",
-      groupId: "trusted-group",
-    });
-
     expect(
       resolveTrustedGroupId({
         sessionKey: "agent:main:main",
@@ -195,11 +132,6 @@ describe("resolveGroupToolPolicy group context validation", () => {
   });
 
   it("keeps specific session group policy ahead of trusted parent caller groupId", () => {
-    useTempStateDir();
-    seedGroupSession({
-      sessionKey: "agent:main:whatsapp:group:room:sender:alice",
-      groupId: "room:sender:alice",
-    });
     const scopedCfg: OpenClawConfig = {
       channels: {
         whatsapp: {
@@ -226,12 +158,6 @@ describe("resolveGroupToolPolicy group context validation", () => {
   });
 
   it("prefers the session-derived channel over caller-supplied messageProvider", () => {
-    useTempStateDir();
-    seedGroupSession({
-      sessionKey: "agent:main:slack:group:C123",
-      groupId: "C123",
-      channel: "slack",
-    });
     const channelCfg = {
       channels: {
         discord: {
@@ -409,49 +335,71 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
   });
 
   it("uses stored leaf role for flat depth-1 session keys", () => {
-    const stateDir = path.join(
+    const storePath = path.join(
       os.tmpdir(),
-      `openclaw-subagent-policy-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      `openclaw-subagent-policy-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
     );
-    try {
-      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-      upsertSessionEntry({
-        agentId: "main",
-        sessionKey: "agent:main:subagent:flat-leaf",
-        entry: {
-          sessionId: "flat-leaf",
-          updatedAt: Date.now(),
-          spawnDepth: 1,
-          subagentRole: "leaf",
-          subagentControlScope: "none",
+    fs.mkdirSync(path.dirname(storePath), { recursive: true });
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:subagent:flat-leaf": {
+            sessionId: "flat-leaf",
+            updatedAt: Date.now(),
+            spawnDepth: 1,
+            subagentRole: "leaf",
+            subagentControlScope: "none",
+          },
         },
-      });
-      const cfg = {
-        ...baseCfg,
-      } as unknown as OpenClawConfig;
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    const cfg = {
+      ...baseCfg,
+      session: {
+        store: storePath,
+      },
+    } as unknown as OpenClawConfig;
 
-      const policy = resolveSubagentToolPolicyForSession(cfg, "agent:main:subagent:flat-leaf");
-      expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(false);
-      expect(isToolAllowedByPolicyName("subagents", policy)).toBe(false);
-      expect(isToolAllowedByPolicyName("memory_search", policy)).toBe(true);
-      expect(isToolAllowedByPolicyName("memory_get", policy)).toBe(true);
-    } finally {
-      vi.unstubAllEnvs();
-      fs.rmSync(stateDir, { recursive: true, force: true });
-    }
+    const policy = resolveSubagentToolPolicyForSession(cfg, "agent:main:subagent:flat-leaf");
+    expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("subagents", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("memory_search", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("memory_get", policy)).toBe(true);
   });
 
   it("resolves inherited tool denies from stored subagent sessions", () => {
-    seedSessionEntry("agent:main:subagent:limited", {
-      sessionId: "limited-session",
-      updatedAt: Date.now(),
-      spawnDepth: 1,
-      subagentRole: "orchestrator",
-      subagentControlScope: "children",
-      inheritedToolDeny: ["bash", "memory_get"],
-    });
+    const storePath = path.join(
+      os.tmpdir(),
+      `openclaw-subagent-inherited-deny-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
+    );
+    fs.mkdirSync(path.dirname(storePath), { recursive: true });
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:subagent:limited": {
+            sessionId: "limited-session",
+            updatedAt: Date.now(),
+            spawnDepth: 1,
+            subagentRole: "orchestrator",
+            subagentControlScope: "children",
+            inheritedToolDeny: ["bash", "memory_get"],
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
     const cfg = {
       ...baseCfg,
+      session: {
+        store: storePath,
+      },
     } as unknown as OpenClawConfig;
 
     const policy = resolveInheritedToolPolicyForSession(cfg, "agent:main:subagent:limited");
@@ -461,16 +409,34 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
   });
 
   it("resolves inherited tool allows from stored subagent sessions", () => {
-    seedSessionEntry("agent:main:subagent:limited", {
-      sessionId: "limited-session",
-      updatedAt: Date.now(),
-      spawnDepth: 1,
-      subagentRole: "orchestrator",
-      subagentControlScope: "children",
-      inheritedToolAllow: ["sessions_spawn", "memory_search"],
-    });
+    const storePath = path.join(
+      os.tmpdir(),
+      `openclaw-subagent-inherited-allow-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
+    );
+    fs.mkdirSync(path.dirname(storePath), { recursive: true });
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:subagent:limited": {
+            sessionId: "limited-session",
+            updatedAt: Date.now(),
+            spawnDepth: 1,
+            subagentRole: "orchestrator",
+            subagentControlScope: "children",
+            inheritedToolAllow: ["sessions_spawn", "memory_search"],
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
     const cfg = {
       ...baseCfg,
+      session: {
+        store: storePath,
+      },
     } as unknown as OpenClawConfig;
 
     const policy = resolveInheritedToolPolicyForSession(cfg, "agent:main:subagent:limited");
@@ -481,14 +447,31 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
   });
 
   it("keeps configured plugin allows separate from inherited tool allows", () => {
-    seedSessionEntry("agent:main:subagent:limited", {
-      sessionId: "limited-session",
-      updatedAt: Date.now(),
-      spawnDepth: 1,
-      subagentRole: "orchestrator",
-      subagentControlScope: "children",
-      inheritedToolAllow: ["plugin_tool"],
-    });
+    const storePath = path.join(
+      os.tmpdir(),
+      `openclaw-subagent-inherited-allow-separate-${Date.now()}-${Math.random()
+        .toString(16)
+        .slice(2)}.json`,
+    );
+    fs.mkdirSync(path.dirname(storePath), { recursive: true });
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:subagent:limited": {
+            sessionId: "limited-session",
+            updatedAt: Date.now(),
+            spawnDepth: 1,
+            subagentRole: "orchestrator",
+            subagentControlScope: "children",
+            inheritedToolAllow: ["plugin_tool"],
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
     const cfg = {
       ...baseCfg,
       tools: {
@@ -497,6 +480,9 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
             allow: ["plugin-id"],
           },
         },
+      },
+      session: {
+        store: storePath,
       },
     } as unknown as OpenClawConfig;
 
@@ -510,14 +496,32 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
   });
 
   it("applies inherited tool policy from stored ACP sessions without subagent metadata", () => {
-    seedSessionEntry("agent:main:acp:limited", {
-      sessionId: "limited-acp-session",
-      updatedAt: Date.now(),
-      inheritedToolAllow: ["custom_plugin_tool"],
-      inheritedToolDeny: ["custom_denied_tool"],
-    });
+    const storePath = path.join(
+      os.tmpdir(),
+      `openclaw-acp-inherited-deny-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
+    );
+    fs.mkdirSync(path.dirname(storePath), { recursive: true });
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:acp:limited": {
+            sessionId: "limited-acp-session",
+            updatedAt: Date.now(),
+            inheritedToolAllow: ["custom_plugin_tool"],
+            inheritedToolDeny: ["custom_denied_tool"],
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
     const cfg = {
       ...baseCfg,
+      session: {
+        store: storePath,
+      },
     } as unknown as OpenClawConfig;
 
     const policy = resolveInheritedToolPolicyForSession(cfg, "agent:main:acp:limited");

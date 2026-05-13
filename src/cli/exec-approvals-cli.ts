@@ -221,7 +221,7 @@ function buildEffectivePolicyReport(params: {
         approvals: params.approvals,
         hostPath: params.hostPath,
       }),
-      note: "Effective exec policy is the node host approvals state intersected with gateway tools.exec policy.",
+      note: "Effective exec policy is the node host approvals file intersected with gateway tools.exec policy.",
     };
   }
   if (!cfg) {
@@ -236,7 +236,7 @@ function buildEffectivePolicyReport(params: {
       approvals: params.approvals,
       hostPath: params.hostPath,
     }),
-    note: "Effective exec policy is the host approvals state intersected with requested tools.exec policy.",
+    note: "Effective exec policy is the host approvals file intersected with requested tools.exec policy.",
   };
 }
 

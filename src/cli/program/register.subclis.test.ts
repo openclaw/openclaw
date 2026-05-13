@@ -224,7 +224,7 @@ describe("registerSubCliCommands", () => {
   });
 
   it("passes completion context to channel registration", async () => {
-    const argv = ["node", "openclaw", "completion"];
+    const argv = ["node", "openclaw", "completion", "--write-state"];
     const program = new Command().name("openclaw");
 
     await registerSubCliByName(program, "channels", argv, { purpose: "completion" });

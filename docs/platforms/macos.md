@@ -75,10 +75,10 @@ Gateway -> Node Service (WS)
 ## Exec approvals (system.run)
 
 `system.run` is controlled by **Exec approvals** in the macOS app (Settings → Exec approvals).
-Security + ask + allowlist are stored locally on the Mac in SQLite:
+Security + ask + allowlist are stored locally on the Mac in:
 
 ```
-~/.openclaw/state/openclaw.sqlite
+~/.openclaw/exec-approvals.json
 ```
 
 Example:

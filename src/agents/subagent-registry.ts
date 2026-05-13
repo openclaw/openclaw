@@ -1,9 +1,9 @@
 import type { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import { getRuntimeConfig } from "../config/config.js";
 import {
-  getSessionEntry,
-  listSessionEntries,
+  loadSessionStore,
   resolveAgentIdFromSessionKey,
+  resolveStorePath,
   type SessionEntry,
 } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -19,7 +19,6 @@ import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { ensureRuntimePluginsLoaded as ensureRuntimePluginsLoadedFn } from "./runtime-plugins.js";
 import type { SubagentRunOutcome } from "./subagent-announce-output.js";
-import { resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
@@ -37,6 +36,7 @@ import {
   reconcileOrphanedRun,
   resolveAnnounceRetryDelayMs,
   resolveSubagentRunOrphanReason,
+  safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
 import { createSubagentRegistryLifecycleController } from "./subagent-registry-lifecycle.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -60,8 +60,8 @@ import {
 } from "./subagent-registry-run-manager.js";
 import {
   getSubagentRunsSnapshotForRead,
-  persistSubagentRunsToState,
-  restoreSubagentRunsFromState,
+  persistSubagentRunsToDisk,
+  restoreSubagentRunsFromDisk,
 } from "./subagent-registry-state.js";
 import { configureSubagentRegistrySteerRuntime } from "./subagent-registry-steer-runtime.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -91,9 +91,9 @@ type SubagentRegistryDeps = {
   getSubagentRunsSnapshotForRead: typeof getSubagentRunsSnapshotForRead;
   getRuntimeConfig: typeof getRuntimeConfig;
   onAgentEvent: typeof onAgentEvent;
-  persistSubagentRunsToState: typeof persistSubagentRunsToState;
+  persistSubagentRunsToDisk: typeof persistSubagentRunsToDisk;
   resolveAgentTimeoutMs: typeof resolveAgentTimeoutMs;
-  restoreSubagentRunsFromState: typeof restoreSubagentRunsFromState;
+  restoreSubagentRunsFromDisk: typeof restoreSubagentRunsFromDisk;
   runSubagentAnnounceFlow: SubagentAnnounceModule["runSubagentAnnounceFlow"];
   ensureContextEnginesInitialized?: () => void;
   ensureRuntimePluginsLoaded?: typeof ensureRuntimePluginsLoadedFn;
@@ -129,9 +129,9 @@ const defaultSubagentRegistryDeps: SubagentRegistryDeps = {
   getSubagentRunsSnapshotForRead,
   getRuntimeConfig,
   onAgentEvent,
-  persistSubagentRunsToState,
+  persistSubagentRunsToDisk,
   resolveAgentTimeoutMs,
-  restoreSubagentRunsFromState,
+  restoreSubagentRunsFromDisk,
   runSubagentAnnounceFlow: async (params) =>
     (await loadSubagentAnnounceModule()).runSubagentAnnounceFlow(params),
 };
@@ -201,47 +201,36 @@ const PENDING_LIFECYCLE_TERMINAL_TTL_MS = 5 * 60_000; // 5 minutes
 /** Grace period before treating a "running" subagent without a live run context as stale. */
 const STALE_ACTIVE_SUBAGENT_GRACE_MS = process.env.OPENCLAW_TEST_FAST === "1" ? 1_000 : 60_000;
 
-type SessionEntryCache = Map<string, SessionEntry | undefined>;
-
-function findSessionEntryByKey(params: {
-  agentId: string;
-  sessionKey: string;
-  cache: SessionEntryCache;
-}) {
-  const normalized = params.sessionKey.trim().toLowerCase();
-  const cacheKey = `${params.agentId}\0${normalized}`;
-  if (params.cache.has(cacheKey)) {
-    return params.cache.get(cacheKey);
-  }
-  const direct = getSessionEntry({
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-  });
+function findSessionEntryByKey(store: Record<string, SessionEntry>, sessionKey: string) {
+  const direct = store[sessionKey];
   if (direct) {
-    params.cache.set(cacheKey, direct);
     return direct;
   }
-  for (const { sessionKey, entry } of listSessionEntries({ agentId: params.agentId })) {
-    const key = sessionKey;
+  const normalized = sessionKey.trim().toLowerCase();
+  for (const [key, entry] of Object.entries(store)) {
     if (key.trim().toLowerCase() === normalized) {
-      params.cache.set(cacheKey, entry);
       return entry;
     }
   }
-  params.cache.set(cacheKey, undefined);
   return undefined;
 }
 
 function loadSubagentSessionEntry(
   childSessionKey: string,
-  storeCache: SessionEntryCache,
+  storeCache: Map<string, Record<string, SessionEntry>>,
 ): SessionEntry | undefined {
   const key = childSessionKey.trim();
   if (!key) {
     return undefined;
   }
   const agentId = resolveAgentIdFromSessionKey(key);
-  return findSessionEntryByKey({ agentId, sessionKey: key, cache: storeCache });
+  const storePath = resolveStorePath(getRuntimeConfig().session?.store, { agentId });
+  let store = storeCache.get(storePath);
+  if (!store) {
+    store = loadSessionStore(storePath);
+    storeCache.set(storePath, store);
+  }
+  return findSessionEntryByKey(store, key);
 }
 
 function resolveCompletionFromSessionEntry(
@@ -337,7 +326,7 @@ async function resolveSubagentRegistryContextEngine(
 }
 
 function persistSubagentRuns() {
-  subagentRegistryDeps.persistSubagentRunsToState(subagentRuns);
+  subagentRegistryDeps.persistSubagentRunsToDisk(subagentRuns);
 }
 
 export function scheduleSubagentOrphanRecovery(params?: { delayMs?: number; maxRetries?: number }) {
@@ -690,7 +679,7 @@ function restoreSubagentRunsOnce() {
   }
   restoreAttempted = true;
   try {
-    const restoredCount = subagentRegistryDeps.restoreSubagentRunsFromState({
+    const restoredCount = subagentRegistryDeps.restoreSubagentRunsFromDisk({
       runs: subagentRuns,
       mergeOnly: true,
     });
@@ -759,7 +748,7 @@ async function sweepSubagentRuns() {
   sweepInProgress = true;
   try {
     const now = Date.now();
-    const storeCache: SessionEntryCache = new Map();
+    const storeCache = new Map<string, Record<string, SessionEntry>>();
     let mutated = false;
     for (const [runId, entry] of subagentRuns.entries()) {
       if (typeof entry.endedAt !== "number") {
@@ -838,6 +827,9 @@ async function sweepSubagentRuns() {
           });
           subagentRuns.delete(runId);
           mutated = true;
+          if (!entry.retainAttachmentsOnKeep) {
+            await safeRemoveAttachmentsDir(entry);
+          }
         }
         continue;
       }
@@ -850,6 +842,7 @@ async function sweepSubagentRuns() {
           method: "sessions.delete",
           params: {
             key: entry.childSessionKey,
+            deleteTranscript: true,
             emitLifecycleHooks: false,
           },
           timeoutMs: 10_000,
@@ -864,6 +857,8 @@ async function sweepSubagentRuns() {
       }
       subagentRuns.delete(runId);
       mutated = true;
+      // Archive/purge is terminal for the run record; remove any retained attachments too.
+      await safeRemoveAttachmentsDir(entry);
       void notifyContextEngineSubagentEnded({
         childSessionKey: entry.childSessionKey,
         reason: "swept",
@@ -1040,7 +1035,6 @@ export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   runtimePluginsLoader.clear();
   subagentAnnounceLoader.clear();
   browserCleanupLoader.clear();
-  resetAnnounceQueuesForTests();
   stopSweeper();
   sweepInProgress = false;
   restoreAttempted = false;

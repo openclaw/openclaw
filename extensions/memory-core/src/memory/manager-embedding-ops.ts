@@ -7,16 +7,12 @@ import {
   type MemoryEmbeddingProviderRuntime,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import type { SessionTranscriptEntry } from "openclaw/plugin-sdk/memory-core-host-engine-session-transcripts";
 import {
   buildMultimodalChunkForIndexing,
   chunkMarkdown,
   hashText,
-  MEMORY_INDEX_TABLE_NAMES,
   remapChunkLines,
-  serializeEmbedding,
   type MemoryChunk,
-  type MemoryFileEntry,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
@@ -42,11 +38,9 @@ import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
 import { logMemoryVectorDegradedWrite } from "./manager-vector-warning.js";
 import { replaceMemoryVectorRow } from "./manager-vector-write.js";
 
-const SOURCES_TABLE = MEMORY_INDEX_TABLE_NAMES.sources;
-const CHUNKS_TABLE = MEMORY_INDEX_TABLE_NAMES.chunks;
-const VECTOR_TABLE = MEMORY_INDEX_TABLE_NAMES.vector;
-const FTS_TABLE = MEMORY_INDEX_TABLE_NAMES.fts;
-const EMBEDDING_CACHE_TABLE = MEMORY_INDEX_TABLE_NAMES.embeddingCache;
+const VECTOR_TABLE = "chunks_vec";
+const FTS_TABLE = "chunks_fts";
+const EMBEDDING_CACHE_TABLE = "embedding_cache";
 const EMBEDDING_BATCH_MAX_TOKENS = 8000;
 const EMBEDDING_INDEX_CONCURRENCY = 4;
 const EMBEDDING_RETRY_MAX_ATTEMPTS = 3;
@@ -59,18 +53,16 @@ const EMBEDDING_BATCH_TIMEOUT_LOCAL_MS = 10 * 60_000;
 
 const log = createSubsystemLogger("memory");
 
-type MemoryIndexEntry = MemoryFileEntry | SessionTranscriptEntry;
-
-function memoryEntrySourceKey(entry: MemoryIndexEntry, source: MemorySource): string {
-  if (source === "sessions" && "scope" in entry) {
-    return `session:${entry.scope.sessionId}`;
-  }
-  return entry.path;
-}
-
-function memoryEntrySessionId(entry: MemoryIndexEntry, source: MemorySource): string | null {
-  return source === "sessions" && "scope" in entry ? entry.scope.sessionId : null;
-}
+type MemoryIndexEntry = {
+  path: string;
+  absPath: string;
+  mtimeMs: number;
+  size: number;
+  hash: string;
+  kind?: "markdown" | "multimodal";
+  contentText?: string;
+  lineMap?: number[];
+};
 
 export function resolveEmbeddingTimeoutMs(params: {
   kind: "query" | "batch";
@@ -537,15 +529,14 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     });
   }
 
-  private clearIndexedFileData(entry: MemoryIndexEntry, source: MemorySource): void {
-    const sourceKey = memoryEntrySourceKey(entry, source);
+  private clearIndexedFileData(pathname: string, source: MemorySource): void {
     if (this.vector.enabled) {
       try {
         this.db
           .prepare(
-            `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM ${CHUNKS_TABLE} WHERE source_key = ? AND source_kind = ?)`,
+            `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM chunks WHERE path = ? AND source = ?)`,
           )
-          .run(sourceKey, source);
+          .run(pathname, source);
       } catch {}
     }
     if (this.fts.enabled && this.fts.available) {
@@ -553,54 +544,30 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         deleteMemoryFtsRows({
           db: this.db,
           tableName: FTS_TABLE,
-          sourceKey,
+          path: pathname,
           source,
           currentModel: this.provider?.model,
         });
       } catch {}
     }
-    this.db
-      .prepare(`DELETE FROM ${CHUNKS_TABLE} WHERE source_key = ? AND source_kind = ?`)
-      .run(sourceKey, source);
+    this.db.prepare(`DELETE FROM chunks WHERE path = ? AND source = ?`).run(pathname, source);
   }
 
   private upsertFileRecord(entry: MemoryIndexEntry, source: MemorySource): void {
-    const sourceKey = memoryEntrySourceKey(entry, source);
-    const sessionId = memoryEntrySessionId(entry, source);
     this.db
       .prepare(
-        `INSERT INTO ${SOURCES_TABLE} (source_kind, source_key, path, session_id, hash, mtime, size)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(source_kind, source_key) DO UPDATE SET
-           path=excluded.path,
-           session_id=excluded.session_id,
+        `INSERT INTO files (path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(path) DO UPDATE SET
+           source=excluded.source,
            hash=excluded.hash,
            mtime=excluded.mtime,
            size=excluded.size`,
       )
-      .run(source, sourceKey, entry.path, sessionId, entry.hash, entry.mtimeMs, entry.size);
+      .run(entry.path, source, entry.hash, entry.mtimeMs, entry.size);
   }
 
-  private deleteFileRecord(entry: MemoryIndexEntry, source: MemorySource): void {
-    const sourceKey = memoryEntrySourceKey(entry, source);
-    this.db
-      .prepare(`DELETE FROM ${SOURCES_TABLE} WHERE source_key = ? AND source_kind = ?`)
-      .run(sourceKey, source);
-  }
-
-  private async readIndexEntryContent(
-    entry: MemoryIndexEntry,
-    options: { content?: string },
-  ): Promise<string> {
-    if (options.content !== undefined) {
-      return options.content;
-    }
-    if (!("absPath" in entry)) {
-      throw new Error(
-        `Cannot read virtual memory index entry without inline content: ${entry.path}`,
-      );
-    }
-    return await fs.readFile(entry.absPath, "utf-8");
+  private deleteFileRecord(pathname: string, source: MemorySource): void {
+    this.db.prepare(`DELETE FROM files WHERE path = ? AND source = ?`).run(pathname, source);
   }
 
   /**
@@ -617,45 +584,34 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     vectorReady: boolean,
   ): void {
     const now = Date.now();
-    const sourceKey = memoryEntrySourceKey(entry, source);
-    const sessionId = memoryEntrySessionId(entry, source);
-    this.clearIndexedFileData(entry, source);
-    this.upsertFileRecord(entry, source);
+    this.clearIndexedFileData(entry.path, source);
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
       const embedding = embeddings[i] ?? [];
       const id = hashText(
-        `${source}:${sourceKey}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${model}`,
+        `${source}:${entry.path}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${model}`,
       );
       this.db
         .prepare(
-          `INSERT INTO ${CHUNKS_TABLE} (id, source_kind, source_key, path, session_id, start_line, end_line, hash, model, text, embedding, embedding_dims, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
-             source_kind=excluded.source_kind,
-             source_key=excluded.source_key,
-             path=excluded.path,
-             session_id=excluded.session_id,
              hash=excluded.hash,
              model=excluded.model,
              text=excluded.text,
              embedding=excluded.embedding,
-             embedding_dims=excluded.embedding_dims,
              updated_at=excluded.updated_at`,
         )
         .run(
           id,
-          source,
-          sourceKey,
           entry.path,
-          sessionId,
+          source,
           chunk.startLine,
           chunk.endLine,
           chunk.hash,
           model,
           chunk.text,
-          serializeEmbedding(embedding),
-          embedding.length || null,
+          JSON.stringify(embedding),
           now,
         );
       if (vectorReady && embedding.length > 0) {
@@ -669,19 +625,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       if (this.fts.enabled && this.fts.available) {
         this.db
           .prepare(
-            `INSERT INTO ${FTS_TABLE} (text, id, source_key, path, source, model, start_line, end_line)\n` +
-              ` VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO ${FTS_TABLE} (text, id, path, source, model, start_line, end_line)\n` +
+              ` VALUES (?, ?, ?, ?, ?, ?, ?)`,
           )
-          .run(
-            chunk.text,
-            id,
-            sourceKey,
-            entry.path,
-            source,
-            model,
-            chunk.startLine,
-            chunk.endLine,
-          );
+          .run(chunk.text, id, entry.path, source, model, chunk.startLine, chunk.endLine);
       }
     }
     this.vectorDegradedWriteWarningShown = logMemoryVectorDegradedWrite({
@@ -692,6 +639,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       loadError: this.vector.loadError,
       warn: (message) => log.warn(message),
     });
+    this.upsertFileRecord(entry, source);
   }
 
   protected async indexFile(
@@ -704,7 +652,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       if ("kind" in entry && entry.kind === "multimodal") {
         return;
       }
-      const content = await this.readIndexEntryContent(entry, options);
+      const content = options.content ?? (await fs.readFile(entry.absPath, "utf-8"));
       const chunks = filterNonEmptyMemoryChunks(chunkMarkdown(content, this.settings.chunking));
       if (options.source === "sessions" && "lineMap" in entry) {
         remapChunkLines(chunks, entry.lineMap);
@@ -721,20 +669,20 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           path: entry.path,
           source: options.source,
         });
-        this.clearIndexedFileData(entry, options.source);
+        this.clearIndexedFileData(entry.path, options.source);
         this.upsertFileRecord(entry, options.source);
         return;
       }
       const multimodalChunk = await buildMultimodalChunkForIndexing(entry);
       if (!multimodalChunk) {
-        this.clearIndexedFileData(entry, options.source);
-        this.deleteFileRecord(entry, options.source);
+        this.clearIndexedFileData(entry.path, options.source);
+        this.deleteFileRecord(entry.path, options.source);
         return;
       }
       structuredInputBytes = multimodalChunk.structuredInputBytes;
       chunks = [multimodalChunk.chunk];
     } else {
-      const content = await this.readIndexEntryContent(entry, options);
+      const content = options.content ?? (await fs.readFile(entry.absPath, "utf-8"));
       const baseChunks = filterNonEmptyMemoryChunks(chunkMarkdown(content, this.settings.chunking));
       chunks = this.provider
         ? enforceEmbeddingMaxInputTokens(this.provider, baseChunks, EMBEDDING_BATCH_MAX_TOKENS)
@@ -769,7 +717,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           model: this.provider.model,
           error: message,
         });
-        this.clearIndexedFileData(entry, options.source);
+        this.clearIndexedFileData(entry.path, options.source);
         this.upsertFileRecord(entry, options.source);
         return;
       }

@@ -1,27 +1,14 @@
 import { createHash, createPrivateKey, sign as signJwt } from "node:crypto";
 import fs from "node:fs/promises";
-import type { Insertable } from "kysely";
+import path from "node:path";
+import { resolveStateDir } from "../config/paths.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import type {
-  OpenClawStateDatabase,
-  OpenClawStateDatabaseOptions,
-} from "../state/openclaw-state-db.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
-import { createAsyncLock } from "./async-lock.js";
 import type { DeviceIdentity } from "./device-identity.js";
 import { formatErrorMessage } from "./errors.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "./kysely-sync.js";
+import { createAsyncLock, tryReadJson, writeJson } from "./json-files.js";
 import { APNS_HTTP2_CANCEL_CODE, connectApnsHttp2Session } from "./push-apns-http2.js";
 import {
   type ApnsRelayConfig,
@@ -100,7 +87,7 @@ type ApnsRequestResponse = { status: number; apnsId?: string; body: string };
 
 type ApnsRequestSender = (params: ApnsRequestParams) => Promise<ApnsRequestResponse>;
 
-export type ApnsRegistrationState = {
+type ApnsRegistrationState = {
   registrationsByNodeId: Record<string, ApnsRegistration>;
 };
 
@@ -128,6 +115,7 @@ type RegisterRelayApnsParams = {
 
 type RegisterApnsParams = RegisterDirectApnsParams | RegisterRelayApnsParams;
 
+const APNS_STATE_FILENAME = "push/apns-registrations.json";
 const APNS_JWT_TTL_MS = 50 * 60 * 1000;
 const DEFAULT_APNS_TIMEOUT_MS = 10_000;
 const MAX_NODE_ID_LENGTH = 256;
@@ -139,34 +127,9 @@ const withLock = createAsyncLock();
 
 let cachedJwt: { cacheKey: string; token: string; expiresAtMs: number } | null = null;
 
-type ApnsRegistrationDatabase = Pick<OpenClawStateKyselyDatabase, "apns_registrations">;
-type ApnsRegistrationInsert = Insertable<ApnsRegistrationDatabase["apns_registrations"]>;
-
-type ApnsRegistrationRow = {
-  node_id: string;
-  transport: string;
-  token: string | null;
-  relay_handle: string | null;
-  send_grant: string | null;
-  installation_id: string | null;
-  topic: string;
-  environment: string;
-  distribution: string | null;
-  token_debug_suffix: string | null;
-  updated_at_ms: number | bigint;
-};
-
-function sqliteOptionsForBaseDir(baseDir: string | undefined): OpenClawStateDatabaseOptions {
-  return baseDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: baseDir } } : {};
-}
-
-function openApnsRegistrationDatabase(baseDir?: string) {
-  const database = openOpenClawStateDatabase(sqliteOptionsForBaseDir(baseDir));
-  return { database, db: getNodeSqliteKysely<ApnsRegistrationDatabase>(database.db) };
-}
-
-function sqliteIntegerToNumber(value: number | bigint): number {
-  return typeof value === "bigint" ? Number(value) : value;
+function resolveApnsRegistrationPath(baseDir?: string): string {
+  const root = baseDir ?? resolveStateDir();
+  return path.join(root, APNS_STATE_FILENAME);
 }
 
 function normalizeNodeId(value: string): string {
@@ -390,148 +353,40 @@ function normalizeStoredRegistration(record: unknown): ApnsRegistration | null {
   return normalizeDirectRegistration(candidate as Partial<DirectApnsRegistration>);
 }
 
-function rowToApnsRegistration(row: ApnsRegistrationRow): ApnsRegistration | null {
-  const updatedAtMs = sqliteIntegerToNumber(row.updated_at_ms);
-  switch (row.transport) {
-    case "relay": {
-      const environment = normalizeApnsEnvironment(row.environment);
-      const distribution = normalizeDistribution(row.distribution);
-      if (environment !== "production" || distribution !== "official") {
-        return null;
-      }
-      return normalizeRelayRegistration({
-        nodeId: row.node_id,
-        transport: "relay",
-        relayHandle: row.relay_handle ?? undefined,
-        sendGrant: row.send_grant ?? undefined,
-        installationId: row.installation_id ?? undefined,
-        topic: row.topic,
-        environment,
-        distribution,
-        tokenDebugSuffix: row.token_debug_suffix ?? undefined,
-        updatedAtMs,
-      });
-    }
-    case "direct":
-      return normalizeDirectRegistration({
-        nodeId: row.node_id,
-        transport: "direct",
-        token: row.token ?? undefined,
-        topic: row.topic,
-        environment: normalizeApnsEnvironment(row.environment) ?? undefined,
-        updatedAtMs,
-      });
-    default:
-      return null;
+async function loadRegistrationsState(baseDir?: string): Promise<ApnsRegistrationState> {
+  const filePath = resolveApnsRegistrationPath(baseDir);
+  const existing = await tryReadJson<ApnsRegistrationState>(filePath);
+  if (!existing || typeof existing !== "object") {
+    return { registrationsByNodeId: {} };
   }
-}
-
-function apnsRegistrationToRow(registration: ApnsRegistration): ApnsRegistrationInsert {
-  const base = {
-    node_id: registration.nodeId,
-    transport: registration.transport,
-    topic: registration.topic,
-    environment: registration.environment,
-    updated_at_ms: registration.updatedAtMs,
-  };
-
-  switch (registration.transport) {
-    case "direct":
-      return {
-        ...base,
-        token: registration.token,
-        relay_handle: null,
-        send_grant: null,
-        installation_id: null,
-        distribution: null,
-        token_debug_suffix: null,
-      };
-    case "relay":
-      return {
-        ...base,
-        token: null,
-        relay_handle: registration.relayHandle,
-        send_grant: registration.sendGrant,
-        installation_id: registration.installationId,
-        distribution: registration.distribution,
-        token_debug_suffix: registration.tokenDebugSuffix ?? null,
-      };
-    default: {
-      const exhaustive: never = registration;
-      return exhaustive;
+  const registrations =
+    existing.registrationsByNodeId &&
+    typeof existing.registrationsByNodeId === "object" &&
+    !Array.isArray(existing.registrationsByNodeId)
+      ? existing.registrationsByNodeId
+      : {};
+  const normalized: Record<string, ApnsRegistration> = {};
+  for (const [nodeId, record] of Object.entries(registrations)) {
+    const registration = normalizeStoredRegistration(record);
+    if (registration) {
+      const normalizedNodeId = normalizeNodeId(nodeId);
+      normalized[isValidNodeId(normalizedNodeId) ? normalizedNodeId : registration.nodeId] =
+        registration;
     }
   }
+  return { registrationsByNodeId: normalized };
 }
 
 async function persistRegistrationsState(
   state: ApnsRegistrationState,
   baseDir?: string,
 ): Promise<void> {
-  const registrations = Object.values(state.registrationsByNodeId ?? {});
-  runOpenClawStateWriteTransaction((database) => {
-    const db = getNodeSqliteKysely<ApnsRegistrationDatabase>(database.db);
-    if (registrations.length === 0) {
-      executeSqliteQuerySync(database.db, db.deleteFrom("apns_registrations"));
-      return;
-    }
-    executeSqliteQuerySync(
-      database.db,
-      db.deleteFrom("apns_registrations").where(
-        "node_id",
-        "not in",
-        registrations.map((registration) => registration.nodeId),
-      ),
-    );
-    for (const registration of registrations) {
-      writeApnsRegistrationInTransaction(database, registration);
-    }
-  }, sqliteOptionsForBaseDir(baseDir));
-}
-
-export function normalizeApnsRegistrationStateSnapshot(
-  parsed: unknown,
-): ApnsRegistrationState | null {
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return null;
-  }
-  const registrations =
-    "registrationsByNodeId" in parsed &&
-    typeof parsed.registrationsByNodeId === "object" &&
-    parsed.registrationsByNodeId !== null &&
-    !Array.isArray(parsed.registrationsByNodeId)
-      ? (parsed.registrationsByNodeId as Record<string, unknown>)
-      : {};
-  const normalized: Record<string, ApnsRegistration> = {};
-  for (const [nodeId, record] of Object.entries(registrations)) {
-    const registration = normalizeStoredRegistration(record);
-    if (registration) {
-      normalized[nodeId] = registration;
-    }
-  }
-  return { registrationsByNodeId: normalized };
-}
-
-export async function writeApnsRegistrationStateSnapshot(
-  state: ApnsRegistrationState,
-  baseDir?: string,
-): Promise<void> {
-  await persistRegistrationsState(state, baseDir);
-}
-
-function writeApnsRegistrationInTransaction(
-  database: OpenClawStateDatabase,
-  registration: ApnsRegistration,
-): void {
-  const db = getNodeSqliteKysely<ApnsRegistrationDatabase>(database.db);
-  const row = apnsRegistrationToRow(registration);
-  const { node_id: _nodeId, ...updates } = row;
-  executeSqliteQuerySync(
-    database.db,
-    db
-      .insertInto("apns_registrations")
-      .values(row)
-      .onConflict((conflict) => conflict.column("node_id").doUpdateSet(updates)),
-  );
+  const filePath = resolveApnsRegistrationPath(baseDir);
+  await writeJson(filePath, state, {
+    mode: 0o600,
+    dirMode: 0o700,
+    trailingNewline: true,
+  });
 }
 
 export function normalizeApnsEnvironment(value: unknown): ApnsEnvironment | null {
@@ -558,6 +413,7 @@ export async function registerApnsRegistration(
   }
 
   return await withLock(async () => {
+    const state = await loadRegistrationsState(params.baseDir);
     const updatedAtMs = Date.now();
 
     let next: ApnsRegistration;
@@ -611,9 +467,8 @@ export async function registerApnsRegistration(
       };
     }
 
-    runOpenClawStateWriteTransaction((database) => {
-      writeApnsRegistrationInTransaction(database, next);
-    }, sqliteOptionsForBaseDir(params.baseDir));
+    state.registrationsByNodeId[nodeId] = next;
+    await persistRegistrationsState(state, params.baseDir);
     return next;
   });
 }
@@ -639,27 +494,8 @@ export async function loadApnsRegistration(
   if (!normalizedNodeId) {
     return null;
   }
-  const { database, db } = openApnsRegistrationDatabase(baseDir);
-  const row = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db
-      .selectFrom("apns_registrations")
-      .select([
-        "node_id",
-        "transport",
-        "token",
-        "relay_handle",
-        "send_grant",
-        "installation_id",
-        "topic",
-        "environment",
-        "distribution",
-        "token_debug_suffix",
-        "updated_at_ms",
-      ])
-      .where("node_id", "=", normalizedNodeId),
-  );
-  return row ? rowToApnsRegistration(row) : null;
+  const state = await loadRegistrationsState(baseDir);
+  return state.registrationsByNodeId[normalizedNodeId] ?? null;
 }
 
 export async function clearApnsRegistration(nodeId: string, baseDir?: string): Promise<boolean> {
@@ -668,14 +504,13 @@ export async function clearApnsRegistration(nodeId: string, baseDir?: string): P
     return false;
   }
   return await withLock(async () => {
-    return runOpenClawStateWriteTransaction((database) => {
-      const db = getNodeSqliteKysely<ApnsRegistrationDatabase>(database.db);
-      const result = executeSqliteQuerySync(
-        database.db,
-        db.deleteFrom("apns_registrations").where("node_id", "=", normalizedNodeId),
-      );
-      return Number(result.numAffectedRows ?? 0) > 0;
-    }, sqliteOptionsForBaseDir(baseDir));
+    const state = await loadRegistrationsState(baseDir);
+    if (!(normalizedNodeId in state.registrationsByNodeId)) {
+      return false;
+    }
+    delete state.registrationsByNodeId[normalizedNodeId];
+    await persistRegistrationsState(state, baseDir);
+    return true;
   });
 }
 
@@ -714,37 +549,14 @@ export async function clearApnsRegistrationIfCurrent(params: {
     return false;
   }
   return await withLock(async () => {
-    return runOpenClawStateWriteTransaction((database) => {
-      const db = getNodeSqliteKysely<ApnsRegistrationDatabase>(database.db);
-      const row = executeSqliteQueryTakeFirstSync(
-        database.db,
-        db
-          .selectFrom("apns_registrations")
-          .select([
-            "node_id",
-            "transport",
-            "token",
-            "relay_handle",
-            "send_grant",
-            "installation_id",
-            "topic",
-            "environment",
-            "distribution",
-            "token_debug_suffix",
-            "updated_at_ms",
-          ])
-          .where("node_id", "=", normalizedNodeId),
-      );
-      const current = row ? rowToApnsRegistration(row) : null;
-      if (!current || !isSameApnsRegistration(current, params.registration)) {
-        return false;
-      }
-      const result = executeSqliteQuerySync(
-        database.db,
-        db.deleteFrom("apns_registrations").where("node_id", "=", normalizedNodeId),
-      );
-      return Number(result.numAffectedRows ?? 0) > 0;
-    }, sqliteOptionsForBaseDir(params.baseDir));
+    const state = await loadRegistrationsState(params.baseDir);
+    const current = state.registrationsByNodeId[normalizedNodeId];
+    if (!current || !isSameApnsRegistration(current, params.registration)) {
+      return false;
+    }
+    delete state.registrationsByNodeId[normalizedNodeId];
+    await persistRegistrationsState(state, params.baseDir);
+    return true;
   });
 }
 

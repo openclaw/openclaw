@@ -45,6 +45,8 @@ describe("session hook runner methods", () => {
         sessionKey: "agent:main:abc",
         messageCount: 42,
         reason: "daily" as const,
+        sessionFile: "/tmp/abc-123.jsonl.reset.2026-04-02T10-00-00.000Z",
+        transcriptArchived: true,
         nextSessionId: "def-456",
       },
     },

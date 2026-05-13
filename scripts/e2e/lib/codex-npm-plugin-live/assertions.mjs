@@ -1,7 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import { readInstalledPluginRecords } from "../installed-plugin-index.mjs";
 
 const command = process.argv[2];
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
@@ -12,61 +10,8 @@ function stateDir() {
   return process.env.OPENCLAW_STATE_DIR || path.join(process.env.HOME, ".openclaw");
 }
 
-function stateDatabasePath() {
-  return path.join(stateDir(), "state", "openclaw.sqlite");
-}
-
-function agentDatabasePath(agentId = "main") {
-  return path.join(stateDir(), "agents", agentId, "agent", "openclaw-agent.sqlite");
-}
-
 function configPath() {
   return process.env.OPENCLAW_CONFIG_PATH || path.join(stateDir(), "openclaw.json");
-}
-
-function withSqliteDatabase(dbPath, callback) {
-  if (!fs.existsSync(dbPath)) {
-    throw new Error(`missing SQLite database: ${dbPath}`);
-  }
-  const db = new DatabaseSync(dbPath, { readOnly: true });
-  try {
-    return callback(db);
-  } finally {
-    db.close();
-  }
-}
-
-function readAgentSessionEntryBySessionId(sessionId) {
-  return withSqliteDatabase(agentDatabasePath("main"), (db) => {
-    const rows = db.prepare("SELECT session_key, entry_json FROM session_entries").all();
-    for (const row of rows) {
-      const entry = JSON.parse(row.entry_json);
-      if (entry?.sessionId === sessionId) {
-        return { sessionKey: row.session_key, ...entry };
-      }
-    }
-    return undefined;
-  });
-}
-
-function countAgentTranscriptEvents(sessionId) {
-  return withSqliteDatabase(agentDatabasePath("main"), (db) => {
-    const row = db
-      .prepare("SELECT count(*) AS count FROM transcript_events WHERE session_id = ?")
-      .get(sessionId);
-    return Number(row?.count ?? 0);
-  });
-}
-
-function readPluginStateJson(pluginId, namespace, key) {
-  return withSqliteDatabase(stateDatabasePath(), (db) => {
-    const row = db
-      .prepare(
-        "SELECT value_json FROM plugin_state_entries WHERE plugin_id = ? AND namespace = ? AND entry_key = ?",
-      )
-      .get(pluginId, namespace, key);
-    return typeof row?.value_json === "string" ? JSON.parse(row.value_json) : undefined;
-  });
 }
 
 function realPathMaybe(filePath) {
@@ -132,7 +77,9 @@ function configure() {
 }
 
 function readInstallRecord() {
-  const record = readInstalledPluginRecords().codex;
+  const indexPath = path.join(stateDir(), "plugins", "installs.json");
+  const index = readJson(indexPath);
+  const record = (index.installRecords || index.records || {}).codex;
   if (!record) {
     throw new Error("missing codex install record");
   }
@@ -140,7 +87,12 @@ function readInstallRecord() {
 }
 
 function readInstallRecords() {
-  return readInstalledPluginRecords();
+  const indexPath = path.join(stateDir(), "plugins", "installs.json");
+  if (!fs.existsSync(indexPath)) {
+    return {};
+  }
+  const index = readJson(indexPath);
+  return index.installRecords || index.records || {};
 }
 
 function assertPlugin() {
@@ -356,9 +308,12 @@ function assertAgentTurn() {
     );
   }
 
-  const entry = readAgentSessionEntryBySessionId(sessionId);
+  const sessionsDir = path.join(stateDir(), "agents", "main", "sessions");
+  const storePath = path.join(sessionsDir, "sessions.json");
+  const store = readJson(storePath);
+  const entry = Object.values(store).find((candidate) => candidate?.sessionId === sessionId);
   if (!entry) {
-    throw new Error(`missing SQLite session entry for ${sessionId}`);
+    throw new Error(`missing session store entry for ${sessionId}: ${JSON.stringify(store)}`);
   }
   if (entry.agentHarnessId !== "codex") {
     throw new Error(`expected codex harness in session entry, got ${entry.agentHarnessId}`);
@@ -366,12 +321,12 @@ function assertAgentTurn() {
   if (entry.modelOverride && entry.modelOverride !== modelRef) {
     throw new Error(`unexpected session model override: ${entry.modelOverride}`);
   }
-  const transcriptEvents = countAgentTranscriptEvents(sessionId);
-  if (transcriptEvents <= 0) {
-    throw new Error(`missing SQLite transcript events for ${sessionId}`);
+  if (typeof entry.sessionFile !== "string" || !fs.existsSync(entry.sessionFile)) {
+    throw new Error(`missing OpenClaw session file: ${entry.sessionFile}`);
   }
 
-  const binding = readPluginStateJson("codex", "app-server-thread-bindings", sessionId);
+  const bindingPath = `${entry.sessionFile}.codex-app-server.json`;
+  const binding = readJson(bindingPath);
   if (binding.schemaVersion !== 1 || typeof binding.threadId !== "string") {
     throw new Error(`invalid Codex app-server binding: ${JSON.stringify(binding)}`);
   }

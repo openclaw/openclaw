@@ -1,46 +1,47 @@
+import { readFile, rm, writeFile } from "node:fs/promises";
 import type { Message } from "@grammyjs/types";
-import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   buildTelegramConversationContext,
   buildTelegramReplyChain,
   createTelegramMessageCache,
   resetTelegramMessageCacheBucketsForTest,
-  resolveTelegramMessageCacheScopeKey,
+  resolveTelegramMessageCachePath,
 } from "./message-cache.js";
 
-describe("telegram message cache", () => {
-  afterEach(() => {
-    resetTelegramMessageCacheBucketsForTest();
-    resetPluginStateStoreForTests();
-  });
+type PersistedCacheEntry = {
+  key: string;
+  node: {
+    sourceMessage: Message;
+  };
+};
 
-  it("hydrates reply chains from persisted cached messages", () => {
-    const persistedScopeKey = resolveTelegramMessageCacheScopeKey(
-      `message-cache-test:${process.pid}:${Date.now()}`,
-    );
-    const firstCache = createTelegramMessageCache({ persistedScopeKey });
-    firstCache.record({
-      accountId: "default",
-      chatId: 7,
-      msg: {
-        chat: { id: 7, type: "private", first_name: "Kesava" },
-        message_id: 9000,
-        date: 1736380700,
-        from: { id: 1, is_bot: false, first_name: "Kesava" },
-        photo: [{ file_id: "photo-1", file_unique_id: "photo-unique-1", width: 640, height: 480 }],
+function persistedCacheEntry(messageId: number, text: string): PersistedCacheEntry {
+  return {
+    key: `default:7:${messageId}`,
+    node: {
+      sourceMessage: {
+        chat: { id: 7, type: "group", title: "Ops" },
+        message_id: messageId,
+        date: 1736380000 + messageId,
+        text,
+        from: { id: messageId, is_bot: false, first_name: `User ${messageId}` },
       } as Message,
-    });
-    firstCache.record({
-      accountId: "default",
-      chatId: 7,
-      msg: {
-        chat: { id: 7, type: "private", first_name: "Ada" },
-        message_id: 9001,
-        date: 1736380750,
-        text: "The cache warmer is the piece I meant",
-        from: { id: 2, is_bot: false, first_name: "Ada" },
-        reply_to_message: {
+    },
+  };
+}
+
+describe("telegram message cache", () => {
+  it("hydrates reply chains from persisted cached messages", async () => {
+    const storePath = `/tmp/openclaw-telegram-message-cache-${process.pid}-${Date.now()}.json`;
+    const persistedPath = resolveTelegramMessageCachePath(storePath);
+    await rm(persistedPath, { force: true });
+    try {
+      const firstCache = createTelegramMessageCache({ persistedPath });
+      firstCache.record({
+        accountId: "default",
+        chatId: 7,
+        msg: {
           chat: { id: 7, type: "private", first_name: "Kesava" },
           message_id: 9000,
           date: 1736380700,
@@ -48,40 +49,12 @@ describe("telegram message cache", () => {
           photo: [
             { file_id: "photo-1", file_unique_id: "photo-unique-1", width: 640, height: 480 },
           ],
-        } as Message["reply_to_message"],
-      } as Message,
-    });
-
-    resetTelegramMessageCacheBucketsForTest();
-    const secondCache = createTelegramMessageCache({ persistedScopeKey });
-    const chain = buildTelegramReplyChain({
-      cache: secondCache,
-      accountId: "default",
-      chatId: 7,
-      msg: {
-        chat: { id: 7, type: "private", first_name: "Grace" },
-        message_id: 9002,
-        text: "Please explain what this reply was about",
-        from: { id: 3, is_bot: false, first_name: "Grace" },
-        reply_to_message: {
-          chat: { id: 7, type: "private", first_name: "Ada" },
-          message_id: 9001,
-          date: 1736380750,
-          text: "The cache warmer is the piece I meant",
-          from: { id: 2, is_bot: false, first_name: "Ada" },
-        } as Message["reply_to_message"],
-      } as Message,
-    });
-
-    expect(chain).toEqual([
-      {
-        messageId: "9001",
-        sender: "Ada",
-        senderId: "2",
-        timestamp: 1736380750000,
-        body: "The cache warmer is the piece I meant",
-        replyToId: "9000",
-        sourceMessage: {
+        } as Message,
+      });
+      firstCache.record({
+        accountId: "default",
+        chatId: 7,
+        msg: {
           chat: { id: 7, type: "private", first_name: "Ada" },
           message_id: 9001,
           date: 1736380750,
@@ -95,87 +68,258 @@ describe("telegram message cache", () => {
             photo: [
               { file_id: "photo-1", file_unique_id: "photo-unique-1", width: 640, height: 480 },
             ],
+          } as Message["reply_to_message"],
+        } as Message,
+      });
+
+      resetTelegramMessageCacheBucketsForTest();
+      const secondCache = createTelegramMessageCache({ persistedPath });
+      const chain = buildTelegramReplyChain({
+        cache: secondCache,
+        accountId: "default",
+        chatId: 7,
+        msg: {
+          chat: { id: 7, type: "private", first_name: "Grace" },
+          message_id: 9002,
+          text: "Please explain what this reply was about",
+          from: { id: 3, is_bot: false, first_name: "Grace" },
+          reply_to_message: {
+            chat: { id: 7, type: "private", first_name: "Ada" },
+            message_id: 9001,
+            date: 1736380750,
+            text: "The cache warmer is the piece I meant",
+            from: { id: 2, is_bot: false, first_name: "Ada" },
+          } as Message["reply_to_message"],
+        } as Message,
+      });
+
+      expect(chain).toEqual([
+        {
+          messageId: "9001",
+          sender: "Ada",
+          senderId: "2",
+          timestamp: 1736380750000,
+          body: "The cache warmer is the piece I meant",
+          replyToId: "9000",
+          sourceMessage: {
+            chat: { id: 7, type: "private", first_name: "Ada" },
+            message_id: 9001,
+            date: 1736380750,
+            text: "The cache warmer is the piece I meant",
+            from: { id: 2, is_bot: false, first_name: "Ada" },
+            reply_to_message: {
+              chat: { id: 7, type: "private", first_name: "Kesava" },
+              message_id: 9000,
+              date: 1736380700,
+              from: { id: 1, is_bot: false, first_name: "Kesava" },
+              photo: [
+                { file_id: "photo-1", file_unique_id: "photo-unique-1", width: 640, height: 480 },
+              ],
+            },
           },
         },
-      },
-      {
-        messageId: "9000",
-        sender: "Kesava",
-        senderId: "1",
-        timestamp: 1736380700000,
-        mediaRef: "telegram:file/photo-1",
-        mediaType: "image",
-        body: "<media:image>",
-        sourceMessage: {
-          chat: { id: 7, type: "private", first_name: "Kesava" },
-          message_id: 9000,
-          date: 1736380700,
-          from: { id: 1, is_bot: false, first_name: "Kesava" },
-          photo: [
-            { file_id: "photo-1", file_unique_id: "photo-unique-1", width: 640, height: 480 },
-          ],
+        {
+          messageId: "9000",
+          sender: "Kesava",
+          senderId: "1",
+          timestamp: 1736380700000,
+          mediaRef: "telegram:file/photo-1",
+          mediaType: "image",
+          body: "<media:image>",
+          sourceMessage: {
+            chat: { id: 7, type: "private", first_name: "Kesava" },
+            message_id: 9000,
+            date: 1736380700,
+            from: { id: 1, is_bot: false, first_name: "Kesava" },
+            photo: [
+              { file_id: "photo-1", file_unique_id: "photo-unique-1", width: 640, height: 480 },
+            ],
+          },
         },
-      },
-    ]);
+      ]);
+    } finally {
+      await rm(persistedPath, { force: true });
+    }
   });
 
-  it("shares one persisted bucket across live cache instances", () => {
-    const persistedScopeKey = resolveTelegramMessageCacheScopeKey(
-      `message-cache-shared-test:${process.pid}:${Date.now()}`,
-    );
-    const firstCache = createTelegramMessageCache({ persistedScopeKey });
-    const secondCache = createTelegramMessageCache({ persistedScopeKey });
-    firstCache.record({
-      accountId: "default",
-      chatId: 7,
-      msg: {
-        chat: { id: 7, type: "private", first_name: "Nora" },
-        message_id: 9100,
-        date: 1736380700,
-        text: "Architecture sketch for the cache warmer",
-        from: { id: 1, is_bot: false, first_name: "Nora" },
-      } as Message,
-    });
-    secondCache.record({
-      accountId: "default",
-      chatId: 7,
-      msg: {
-        chat: { id: 7, type: "private", first_name: "Ira" },
-        message_id: 9101,
-        date: 1736380750,
-        text: "The cache warmer is the piece I meant",
-        from: { id: 2, is_bot: false, first_name: "Ira" },
-        reply_to_message: {
+  it("shares one persisted bucket across live cache instances", async () => {
+    const storePath = `/tmp/openclaw-telegram-message-cache-shared-${process.pid}-${Date.now()}.json`;
+    const persistedPath = resolveTelegramMessageCachePath(storePath);
+    await rm(persistedPath, { force: true });
+    try {
+      const firstCache = createTelegramMessageCache({ persistedPath });
+      const secondCache = createTelegramMessageCache({ persistedPath });
+      firstCache.record({
+        accountId: "default",
+        chatId: 7,
+        msg: {
           chat: { id: 7, type: "private", first_name: "Nora" },
           message_id: 9100,
           date: 1736380700,
           text: "Architecture sketch for the cache warmer",
           from: { id: 1, is_bot: false, first_name: "Nora" },
-        } as Message["reply_to_message"],
-      } as Message,
-    });
-
-    const reloadedCache = createTelegramMessageCache({ persistedScopeKey });
-    const chain = buildTelegramReplyChain({
-      cache: reloadedCache,
-      accountId: "default",
-      chatId: 7,
-      msg: {
-        chat: { id: 7, type: "private", first_name: "Mina" },
-        message_id: 9102,
-        text: "Please explain what this reply was about",
-        from: { id: 3, is_bot: false, first_name: "Mina" },
-        reply_to_message: {
+        } as Message,
+      });
+      secondCache.record({
+        accountId: "default",
+        chatId: 7,
+        msg: {
           chat: { id: 7, type: "private", first_name: "Ira" },
           message_id: 9101,
           date: 1736380750,
           text: "The cache warmer is the piece I meant",
           from: { id: 2, is_bot: false, first_name: "Ira" },
-        } as Message["reply_to_message"],
-      } as Message,
-    });
+          reply_to_message: {
+            chat: { id: 7, type: "private", first_name: "Nora" },
+            message_id: 9100,
+            date: 1736380700,
+            text: "Architecture sketch for the cache warmer",
+            from: { id: 1, is_bot: false, first_name: "Nora" },
+          } as Message["reply_to_message"],
+        } as Message,
+      });
 
-    expect(chain.map((entry) => entry.messageId)).toEqual(["9101", "9100"]);
+      const reloadedCache = createTelegramMessageCache({ persistedPath });
+      const chain = buildTelegramReplyChain({
+        cache: reloadedCache,
+        accountId: "default",
+        chatId: 7,
+        msg: {
+          chat: { id: 7, type: "private", first_name: "Mina" },
+          message_id: 9102,
+          text: "Please explain what this reply was about",
+          from: { id: 3, is_bot: false, first_name: "Mina" },
+          reply_to_message: {
+            chat: { id: 7, type: "private", first_name: "Ira" },
+            message_id: 9101,
+            date: 1736380750,
+            text: "The cache warmer is the piece I meant",
+            from: { id: 2, is_bot: false, first_name: "Ira" },
+          } as Message["reply_to_message"],
+        } as Message,
+      });
+
+      expect(chain.map((entry) => entry.messageId)).toEqual(["9101", "9100"]);
+    } finally {
+      await rm(persistedPath, { force: true });
+    }
+  });
+
+  it("appends cached records between compactions and reloads the bounded cache window", async () => {
+    const storePath = `/tmp/openclaw-telegram-message-cache-append-${process.pid}-${Date.now()}.json`;
+    const persistedPath = resolveTelegramMessageCachePath(storePath);
+    await rm(persistedPath, { force: true });
+    try {
+      const cache = createTelegramMessageCache({ persistedPath, maxMessages: 4 });
+      for (let index = 0; index < 5; index++) {
+        cache.record({
+          accountId: "default",
+          chatId: 7,
+          msg: {
+            chat: { id: 7, type: "private", first_name: "Nora" },
+            message_id: 9150 + index,
+            date: 1736380700 + index,
+            text: `Message ${index}`,
+            from: { id: 1, is_bot: false, first_name: "Nora" },
+          } as Message,
+        });
+      }
+
+      const lines = (await readFile(persistedPath, "utf-8")).trim().split("\n");
+      expect(lines).toHaveLength(5);
+
+      resetTelegramMessageCacheBucketsForTest();
+      const reloadedCache = createTelegramMessageCache({ persistedPath, maxMessages: 4 });
+      expect(reloadedCache.get({ accountId: "default", chatId: 7, messageId: "9150" })).toBeNull();
+      expect(
+        reloadedCache.get({ accountId: "default", chatId: 7, messageId: "9151" })?.messageId,
+      ).toBe("9151");
+    } finally {
+      await rm(persistedPath, { force: true });
+    }
+  });
+
+  it("keeps the persisted log bounded by compacting cached records", async () => {
+    const storePath = `/tmp/openclaw-telegram-message-cache-compact-${process.pid}-${Date.now()}.json`;
+    const persistedPath = resolveTelegramMessageCachePath(storePath);
+    await rm(persistedPath, { force: true });
+    try {
+      const cache = createTelegramMessageCache({ persistedPath, maxMessages: 3 });
+      for (let index = 0; index < 7; index++) {
+        cache.record({
+          accountId: "default",
+          chatId: 7,
+          msg: {
+            chat: { id: 7, type: "private", first_name: "Nora" },
+            message_id: 9200 + index,
+            date: 1736380700 + index,
+            text: `Message ${index}`,
+            from: { id: 1, is_bot: false, first_name: "Nora" },
+          } as Message,
+        });
+      }
+
+      const lines = (await readFile(persistedPath, "utf-8")).trim().split("\n");
+      expect(lines).toHaveLength(3);
+      expect(
+        lines.map((line) => {
+          const entry = JSON.parse(line) as {
+            node: { sourceMessage: { message_id: number } };
+          };
+          return entry.node.sourceMessage.message_id;
+        }),
+      ).toEqual([9204, 9205, 9206]);
+    } finally {
+      await rm(persistedPath, { force: true });
+    }
+  });
+
+  it("loads mixed legacy array caches and rewrites them as line-delimited entries", async () => {
+    const storePath = `/tmp/openclaw-telegram-message-cache-legacy-${process.pid}-${Date.now()}.json`;
+    const persistedPath = resolveTelegramMessageCachePath(storePath);
+    await rm(persistedPath, { force: true });
+    try {
+      const legacyEntries = [
+        persistedCacheEntry(35033, "ocdbg-5818 one"),
+        persistedCacheEntry(35034, "ocdbg-5818 two"),
+        persistedCacheEntry(35035, "ocdbg-5818 three"),
+      ];
+      const appendedEntries = [
+        persistedCacheEntry(35036, "ocdbg-5818 four"),
+        persistedCacheEntry(35037, "ocdbg-5818 five"),
+      ];
+      await writeFile(
+        persistedPath,
+        `${JSON.stringify(legacyEntries)}${appendedEntries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+      );
+
+      const cache = createTelegramMessageCache({ persistedPath });
+
+      expect(
+        cache
+          .around({
+            accountId: "default",
+            chatId: 7,
+            messageId: "35035",
+            before: 2,
+            after: 2,
+          })
+          .map((entry) => entry.messageId),
+      ).toEqual(["35033", "35034", "35035", "35036", "35037"]);
+
+      const canonical = await readFile(persistedPath, "utf-8");
+      expect(canonical.startsWith("[")).toBe(false);
+      const lines = canonical.trim().split("\n");
+      expect(lines).toHaveLength(5);
+      expect(
+        lines.map((line) => {
+          const entry = JSON.parse(line) as PersistedCacheEntry;
+          return entry.node.sourceMessage.message_id;
+        }),
+      ).toEqual([35033, 35034, 35035, 35036, 35037]);
+    } finally {
+      await rm(persistedPath, { force: true });
+    }
   });
 
   it("returns recent chat messages before the current message", () => {

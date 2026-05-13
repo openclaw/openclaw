@@ -127,9 +127,8 @@ See [Sandboxing](/gateway/sandboxing) and [Multi-Agent Sandbox & Tools](/tools/m
 
 Configure logging before the delegate handles any real data:
 
-- Cron run history: `~/.openclaw/state/openclaw.sqlite`
-- Session rows and transcripts:
-  `~/.openclaw/agents/delegate/agent/openclaw-agent.sqlite`
+- Cron run history: `~/.openclaw/cron/runs/<jobId>.jsonl`
+- Session transcripts: `~/.openclaw/agents/delegate/sessions`
 - Identity provider audit logs (Exchange, Google Workspace)
 
 All delegate actions flow through OpenClaw's session store. For compliance, ensure these logs are retained and reviewed.
@@ -150,7 +149,7 @@ This creates:
 
 - Workspace: `~/.openclaw/workspace-delegate`
 - State: `~/.openclaw/agents/delegate/agent`
-- Sessions: `~/.openclaw/agents/delegate/agent/openclaw-agent.sqlite`
+- Sessions: `~/.openclaw/agents/delegate/sessions`
 
 Configure the delegate's personality in its workspace files:
 
@@ -248,7 +247,7 @@ Copy or create auth profiles for the delegate's `agentDir`:
 
 ```bash
 # Delegate reads from its own auth store
-~/.openclaw/state/openclaw.sqlite#table/auth_profile_stores/<delegateAgentDir>
+~/.openclaw/agents/delegate/agent/auth-profiles.json
 ```
 
 Never share the main agent's `agentDir` with the delegate. See [Multi-Agent Routing](/concepts/multi-agent) for auth isolation details.

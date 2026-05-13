@@ -49,3 +49,21 @@ vi.mock("../../channels/plugins/index.js", () => ({
   normalizeChannelId: (channel?: string) => normalizeOptionalLowercaseString(channel),
   listChannelPlugins: () => [],
 }));
+
+vi.mock("../../channels/plugins/session-conversation.js", () => ({
+  resolveSessionConversationRef: (sessionKey: string) => {
+    const match =
+      /^(?:agent:[^:]+:)?(?<channel>[^:]+):(?<kind>group|channel):(?<id>[^:]+)(?::topic:(?<threadId>[^:]+))?$/u.exec(
+        sessionKey.trim(),
+      );
+    if (!match?.groups?.channel || !match.groups.kind || !match.groups.id) {
+      return null;
+    }
+    return {
+      channel: match.groups.channel,
+      kind: match.groups.kind,
+      id: match.groups.id,
+      threadId: match.groups.threadId,
+    };
+  },
+}));

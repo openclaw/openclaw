@@ -113,53 +113,48 @@ Events are written as JSON Lines with this schema marker:
 
 An exported bundle can contain:
 
-| File                  | Contents                                                                                                                      |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `manifest.json`       | Bundle schema, source files, event counts, and generated file list                                                            |
-| `events.jsonl`        | Exported ordered runtime and transcript timeline                                                                              |
-| `session-branch.json` | Redacted active transcript branch and session header                                                                          |
-| `metadata.json`       | OpenClaw version, OS/runtime, model, config snapshot, plugins, skills, and prompt metadata                                    |
-| `artifacts.json`      | Final status, errors, usage, prompt cache, compaction count, assistant text, tool metadata, and SQLite tool-artifact metadata |
-| `prompts.json`        | Submitted prompts and selected prompt-building details                                                                        |
-| `system-prompt.txt`   | Latest compiled system prompt, when captured                                                                                  |
-| `tools.json`          | Tool definitions sent to the model, when captured                                                                             |
+| File                  | Contents                                                                                       |
+| --------------------- | ---------------------------------------------------------------------------------------------- |
+| `manifest.json`       | Bundle schema, source files, event counts, and generated file list                             |
+| `events.jsonl`        | Ordered runtime and transcript timeline                                                        |
+| `session-branch.json` | Redacted active transcript branch and session header                                           |
+| `metadata.json`       | OpenClaw version, OS/runtime, model, config snapshot, plugins, skills, and prompt metadata     |
+| `artifacts.json`      | Final status, errors, usage, prompt cache, compaction count, assistant text, and tool metadata |
+| `prompts.json`        | Submitted prompts and selected prompt-building details                                         |
+| `system-prompt.txt`   | Latest compiled system prompt, when captured                                                   |
+| `tools.json`          | Tool definitions sent to the model, when captured                                              |
 
 `manifest.json` lists the files present in that bundle. Some files are omitted
 when the session did not capture the corresponding runtime data.
 
-`artifacts.json` may include `toolArtifacts` entries for run-scoped SQLite
-artifacts such as runtime trajectory mirrors or tool media manifests. These
-entries are metadata-only: the export omits artifact blobs and `blobBase64`
-payloads so large generated media is not duplicated into the support bundle.
-
 ## Capture location
 
-By default, runtime trajectory events are written to the owning agent database:
+By default, runtime trajectory events are written beside the session file:
 
 ```text
-~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite
-trajectory_runtime_events
+<session>.trajectory.jsonl
 ```
 
-The export manifest reports this source as structured database provenance, for
-example:
+OpenClaw also writes a best-effort pointer file beside the session:
 
-```json
-{
-  "sourceDatabases": {
-    "runtime": {
-      "role": "agent",
-      "agentId": "<agentId>",
-      "table": "trajectory_runtime_events",
-      "sessionId": "<sessionId>"
-    }
-  }
-}
+```text
+<session>.trajectory-path.json
 ```
 
-`/export-trajectory` reads runtime events from SQLite and materializes
-`events.jsonl` only inside the explicit support bundle. New runtime captures do
-not create legacy `<session>.trajectory.jsonl` sidecars or pointer files.
+Set `OPENCLAW_TRAJECTORY_DIR` to store runtime trajectory sidecars in a
+dedicated directory:
+
+```bash
+export OPENCLAW_TRAJECTORY_DIR=/var/lib/openclaw/trajectories
+```
+
+When this variable is set, OpenClaw writes one JSONL file per session id in that
+directory.
+
+Session maintenance removes trajectory sidecars when their owning session entry
+is pruned, capped, or evicted by the sessions disk budget. Runtime files outside
+the sessions directory are removed only when the pointer target still proves it
+belongs to that session.
 
 ## Disable capture
 
@@ -186,8 +181,8 @@ OpenClaw redacts sensitive values before writing export files:
 
 The exporter also bounds input size:
 
-- runtime capture: live capture stops at 10 MiB and records a truncation event when space remains
-- transcript branch export: 50 MiB
+- runtime sidecar files: live capture stops at 10 MiB and records a truncation event when space remains; export accepts existing runtime sidecars up to 50 MiB
+- session files: 50 MiB
 - runtime events: 200,000
 - total exported events: 250,000
 - individual runtime event lines are truncated above 256 KiB
@@ -200,6 +195,7 @@ and cannot know every application-specific secret.
 If the export has no runtime events:
 
 - confirm OpenClaw was started without `OPENCLAW_TRAJECTORY=0`
+- check whether `OPENCLAW_TRAJECTORY_DIR` points to a writable directory
 - run another message in the session, then export again
 - inspect `manifest.json` for `runtimeEventCount`
 
@@ -209,9 +205,8 @@ If the command rejects the output path:
 - do not pass `/tmp/...` or `~/...`
 - keep the export inside `.openclaw/trajectory-exports/`
 
-If the export fails with a size error, the transcript branch or runtime capture
-exceeded the export safety limits. Start a new session or export a smaller
-reproduction.
+If the export fails with a size error, the session or sidecar exceeded the
+export safety limits. Start a new session or export a smaller reproduction.
 
 ## Related
 

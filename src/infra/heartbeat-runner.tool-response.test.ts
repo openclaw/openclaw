@@ -10,7 +10,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { runHeartbeatOnce, type HeartbeatDeps } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
-  seedMainHeartbeatSession,
+  seedMainSessionStore,
   withTempTelegramHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
 
@@ -25,7 +25,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
 
   function createConfig(params: {
     tmpDir: string;
-    agentId: string;
+    storePath: string;
     visibleReplies?: "automatic" | "message_tool";
     agentRuntimeId?: string;
     model?: string;
@@ -47,7 +47,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
           heartbeat: { showOk: false },
         },
       },
-      session: {},
+      session: { store: params.storePath },
     } as OpenClawConfig;
   }
 
@@ -75,7 +75,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
         {
           verbose: false,
           cfg: params.cfg,
-          accountId: "default",
+          accountId: undefined,
         },
       ],
     ]);
@@ -114,10 +114,11 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
   }
 
   async function runWithToolResponse(response: HeartbeatToolResponse) {
-    return await withTempTelegramHeartbeatSandbox(async ({ tmpDir, agentId, replySpy }) => {
-      const cfg = createConfig({ tmpDir, agentId });
-      await seedMainHeartbeatSession(agentId, cfg, {
+    return await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath });
+      await seedMainSessionStore(storePath, cfg, {
         lastChannel: "telegram",
+        lastProvider: "telegram",
         lastTo: TELEGRAM_GROUP,
       });
       replySpy.mockResolvedValue(createHeartbeatToolResponsePayload(response));
@@ -135,19 +136,20 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
   async function runPromptScenario(
     params: {
       config?: Partial<Parameters<typeof createConfig>[0]>;
-      session?: Partial<Parameters<typeof seedMainHeartbeatSession>[2]>;
+      session?: Partial<Parameters<typeof seedMainSessionStore>[2]>;
       beforeSeed?: (params: {
         tmpDir: string;
-        agentId: string;
+        storePath: string;
         cfg: OpenClawConfig;
       }) => Promise<void>;
     } = {},
   ) {
-    return await withTempTelegramHeartbeatSandbox(async ({ tmpDir, agentId, replySpy }) => {
-      const cfg = createConfig({ tmpDir, agentId, ...params.config });
-      await params.beforeSeed?.({ tmpDir, agentId, cfg });
-      await seedMainHeartbeatSession(agentId, cfg, {
+    return await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath, ...params.config });
+      await params.beforeSeed?.({ tmpDir, storePath, cfg });
+      await seedMainSessionStore(storePath, cfg, {
         lastChannel: "telegram",
+        lastProvider: "telegram",
         lastTo: TELEGRAM_GROUP,
         ...params.session,
       });
@@ -229,10 +231,11 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
   });
 
   it("delivers Codex runtime failure notices during Codex heartbeat message-tool mode", async () => {
-    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, agentId, replySpy }) => {
-      const cfg = createConfig({ tmpDir, agentId });
-      await seedMainHeartbeatSession(agentId, cfg, {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath });
+      await seedMainSessionStore(storePath, cfg, {
         lastChannel: "telegram",
+        lastProvider: "telegram",
         lastTo: TELEGRAM_GROUP,
         agentHarnessId: "codex",
       });
@@ -304,10 +307,11 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
   });
 
   it("keeps the legacy heartbeat ok prompt outside heartbeat response tool mode", async () => {
-    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, agentId, replySpy }) => {
-      const cfg = createConfig({ tmpDir, agentId, visibleReplies: "automatic" });
-      await seedMainHeartbeatSession(agentId, cfg, {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath, visibleReplies: "automatic" });
+      await seedMainSessionStore(storePath, cfg, {
         lastChannel: "telegram",
+        lastProvider: "telegram",
         lastTo: TELEGRAM_GROUP,
       });
       replySpy.mockResolvedValue(

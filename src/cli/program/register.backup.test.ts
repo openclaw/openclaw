@@ -4,7 +4,6 @@ import { registerBackupCommand } from "./register.backup.js";
 
 const mocks = vi.hoisted(() => ({
   backupCreateCommand: vi.fn(),
-  backupRestoreCommand: vi.fn(),
   backupVerifyCommand: vi.fn(),
   runtime: {
     log: vi.fn(),
@@ -14,16 +13,11 @@ const mocks = vi.hoisted(() => ({
 }));
 
 const backupCreateCommand = mocks.backupCreateCommand;
-const backupRestoreCommand = mocks.backupRestoreCommand;
 const backupVerifyCommand = mocks.backupVerifyCommand;
 const runtime = mocks.runtime;
 
 vi.mock("../../commands/backup.js", () => ({
   backupCreateCommand: mocks.backupCreateCommand,
-}));
-
-vi.mock("../../commands/backup-restore.js", () => ({
-  backupRestoreCommand: mocks.backupRestoreCommand,
 }));
 
 vi.mock("../../commands/backup-verify.js", () => ({
@@ -44,16 +38,16 @@ describe("registerBackupCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     backupCreateCommand.mockResolvedValue(undefined);
-    backupRestoreCommand.mockResolvedValue(undefined);
     backupVerifyCommand.mockResolvedValue(undefined);
   });
 
   function expectForwardedOptions(command: typeof backupCreateCommand): Record<string, unknown> {
     expect(command).toHaveBeenCalledTimes(1);
-    const [runtimeArg, options] = command.mock.calls[0] as unknown as [
-      typeof runtime,
-      Record<string, unknown>,
-    ];
+    const call = command.mock.calls[0];
+    if (!call) {
+      throw new Error("expected backup command call");
+    }
+    const [runtimeArg, options] = call as unknown as [typeof runtime, Record<string, unknown>];
     expect(runtimeArg).toBe(runtime);
     return options;
   }
@@ -65,7 +59,7 @@ describe("registerBackupCommand", () => {
     expect(options.output).toBe("/tmp/backups");
     expect(options.json).toBe(true);
     expect(options.dryRun).toBe(true);
-    expect(options.verify).toBe(true);
+    expect(options.verify).toBe(false);
     expect(options.onlyConfig).toBe(false);
     expect(options.includeWorkspace).toBe(true);
   });
@@ -77,11 +71,11 @@ describe("registerBackupCommand", () => {
     expect(options.includeWorkspace).toBe(false);
   });
 
-  it("honors --no-verify", async () => {
-    await runCli(["backup", "create", "--no-verify"]);
+  it("forwards --verify to backup create", async () => {
+    await runCli(["backup", "create", "--verify"]);
 
     const options = expectForwardedOptions(backupCreateCommand);
-    expect(options.verify).toBe(false);
+    expect(options.verify).toBe(true);
   });
 
   it("forwards --only-config to backup create", async () => {
@@ -97,19 +91,5 @@ describe("registerBackupCommand", () => {
     const options = expectForwardedOptions(backupVerifyCommand);
     expect(options.archive).toBe("/tmp/openclaw-backup.tar.gz");
     expect(options.json).toBe(true);
-  });
-
-  it("runs backup restore with forwarded options", async () => {
-    await runCli(["backup", "restore", "/tmp/openclaw-backup.tar.gz", "--dry-run", "--json"]);
-
-    expect(backupRestoreCommand).toHaveBeenCalledWith(
-      runtime,
-      expect.objectContaining({
-        archive: "/tmp/openclaw-backup.tar.gz",
-        dryRun: true,
-        yes: false,
-        json: true,
-      }),
-    );
   });
 });

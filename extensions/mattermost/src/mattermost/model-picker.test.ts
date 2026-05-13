@@ -140,7 +140,9 @@ describe("Mattermost model picker", () => {
     const testDir = fs.mkdtempSync(path.join(os.tmpdir(), "mm-model-picker-"));
     try {
       const cfg: OpenClawConfig = {
-        session: {},
+        session: {
+          store: path.join(testDir, "{agentId}.json"),
+        },
         agents: {
           defaults: {
             model: "anthropic/claude-opus-4-5",

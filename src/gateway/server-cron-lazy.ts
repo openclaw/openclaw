@@ -1,7 +1,7 @@
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CronServiceContract } from "../cron/service-contract.js";
-import { resolveCronStoreKey } from "../cron/store.js";
+import { resolveCronStorePath } from "../cron/store.js";
 import type { GatewayCronState } from "./server-cron.js";
 
 type LazyGatewayCronParams = {
@@ -16,7 +16,7 @@ type LoadedGatewayCronState = {
 };
 
 export function createLazyGatewayCronState(params: LazyGatewayCronParams): GatewayCronState {
-  const storeKey = resolveCronStoreKey();
+  const storePath = resolveCronStorePath(params.cfg.cron?.store);
   const cronEnabled = process.env.OPENCLAW_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
   let loaded: LoadedGatewayCronState | null = null;
   let loading: Promise<LoadedGatewayCronState> | null = null;
@@ -122,7 +122,7 @@ export function createLazyGatewayCronState(params: LazyGatewayCronParams): Gatew
 
   return {
     cron,
-    storeKey,
+    storePath,
     cronEnabled,
   };
 }

@@ -12,7 +12,7 @@ export const secretTargetRegistryEntries: import("openclaw/plugin-sdk/channel-se
     {
       id: "channels.nextcloud-talk.accounts.*.apiPassword",
       targetType: "channels.nextcloud-talk.accounts.*.apiPassword",
-      store: "openclaw.json",
+      configFile: "openclaw.json",
       pathPattern: "channels.nextcloud-talk.accounts.*.apiPassword",
       secretShape: "secret_input",
       expectedResolvedValue: "string",
@@ -23,7 +23,7 @@ export const secretTargetRegistryEntries: import("openclaw/plugin-sdk/channel-se
     {
       id: "channels.nextcloud-talk.accounts.*.botSecret",
       targetType: "channels.nextcloud-talk.accounts.*.botSecret",
-      store: "openclaw.json",
+      configFile: "openclaw.json",
       pathPattern: "channels.nextcloud-talk.accounts.*.botSecret",
       secretShape: "secret_input",
       expectedResolvedValue: "string",
@@ -34,7 +34,7 @@ export const secretTargetRegistryEntries: import("openclaw/plugin-sdk/channel-se
     {
       id: "channels.nextcloud-talk.apiPassword",
       targetType: "channels.nextcloud-talk.apiPassword",
-      store: "openclaw.json",
+      configFile: "openclaw.json",
       pathPattern: "channels.nextcloud-talk.apiPassword",
       secretShape: "secret_input",
       expectedResolvedValue: "string",
@@ -45,7 +45,7 @@ export const secretTargetRegistryEntries: import("openclaw/plugin-sdk/channel-se
     {
       id: "channels.nextcloud-talk.botSecret",
       targetType: "channels.nextcloud-talk.botSecret",
-      store: "openclaw.json",
+      configFile: "openclaw.json",
       pathPattern: "channels.nextcloud-talk.botSecret",
       secretShape: "secret_input",
       expectedResolvedValue: "string",

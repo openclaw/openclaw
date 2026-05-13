@@ -1,6 +1,6 @@
-import type { AgentToolResult } from "../agents/agent-core-contract.js";
+import type { AgentToolResult as PiAgentToolResult } from "@earendil-works/pi-agent-core";
 
-export type OpenClawAgentToolResult<TResult = unknown> = AgentToolResult<TResult>;
+export type OpenClawAgentToolResult<TResult = unknown> = PiAgentToolResult<TResult>;
 
 export type AgentToolResultMiddlewareRuntime = "pi" | "codex";
 /** @deprecated Use AgentToolResultMiddlewareRuntime. */

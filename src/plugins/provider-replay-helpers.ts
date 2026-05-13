@@ -1,4 +1,4 @@
-import type { AgentMessage } from "../agents/agent-core-contract.js";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { isGemma4ModelId } from "../shared/google-models.js";
 import { sanitizeGoogleAssistantFirstOrdering } from "../shared/google-turn-ordering.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";

@@ -572,7 +572,7 @@ Minimum VM requirements:
 - Linux with a desktop-capable Chrome or Chromium install
 - CDP access for browser automation
 - VNC or noVNC for rescue
-- Node 24 and pnpm
+- Node 22 and pnpm
 - OpenClaw checkout and dependency cache
 - Playwright Chromium browser cache when Playwright is used
 - enough CPU and memory for one OpenClaw Gateway, one browser, and one model run

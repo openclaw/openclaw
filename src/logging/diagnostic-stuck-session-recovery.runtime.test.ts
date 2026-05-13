@@ -2,11 +2,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { appendSqliteSessionTranscriptEvent } from "../config/sessions/transcript-store.sqlite.js";
-import { resolveCronStoreKey, saveCronStore } from "../cron/store.js";
-import type { CronStoreSnapshot } from "../cron/types.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 
 const mocks = vi.hoisted(() => ({
   abortEmbeddedPiRun: vi.fn(),
@@ -101,28 +96,6 @@ function warnLogMessages(): string[] {
   });
 }
 
-async function writeCronJob(_stateDir: string, id: string, name: string) {
-  const now = Date.now();
-  const store: CronStoreSnapshot = {
-    version: 1,
-    jobs: [
-      {
-        id,
-        name,
-        enabled: true,
-        createdAtMs: now,
-        updatedAtMs: now,
-        schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "run" },
-        state: {},
-      },
-    ],
-  };
-  await saveCronStore(resolveCronStoreKey(), store);
-}
-
 describe("stuck session recovery", () => {
   beforeEach(() => {
     resetMocks();
@@ -171,16 +144,22 @@ describe("stuck session recovery", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-recovery-context-"));
     try {
       process.env.OPENCLAW_STATE_DIR = tempDir;
-      await writeCronJob(tempDir, "job-123", "Twitter Mention Moderation Agent");
-      appendSqliteSessionTranscriptEvent({
-        agentId: "clawblocker",
-        sessionId: "run-456",
-        event: {
-          type: "message",
-          id: "message-1",
-          message: { role: "assistant", content: "There are 40 cached mentions." },
-        },
+      fs.mkdirSync(path.join(tempDir, "cron"), { recursive: true });
+      fs.writeFileSync(
+        path.join(tempDir, "cron", "jobs.json"),
+        JSON.stringify({
+          jobs: [{ id: "job-123", name: "Twitter Mention Moderation Agent" }],
+        }),
+      );
+      fs.mkdirSync(path.join(tempDir, "agents", "clawblocker", "sessions"), {
+        recursive: true,
       });
+      fs.writeFileSync(
+        path.join(tempDir, "agents", "clawblocker", "sessions", "run-456.jsonl"),
+        JSON.stringify({
+          message: { role: "assistant", content: "There are 40 cached mentions." },
+        }) + "\n",
+      );
       mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue("run-456");
       mocks.abortEmbeddedPiRun.mockReturnValue(true);
       mocks.waitForEmbeddedPiRunEnd.mockResolvedValue(true);
@@ -192,8 +171,6 @@ describe("stuck session recovery", () => {
         allowActiveAbort: true,
       });
     } finally {
-      closeOpenClawAgentDatabasesForTest();
-      closeOpenClawStateDatabaseForTest();
       if (previousStateDir === undefined) {
         delete process.env.OPENCLAW_STATE_DIR;
       } else {

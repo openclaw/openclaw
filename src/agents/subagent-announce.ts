@@ -39,23 +39,26 @@ import {
 } from "./subagent-announce-output.js";
 import {
   callGateway,
+  dispatchGatewayMethodInProcess,
   isEmbeddedPiRunActive,
   getRuntimeConfig,
   waitForEmbeddedPiRunEnd,
 } from "./subagent-announce.runtime.js";
-import { getSubagentDepthFromSessionEntries } from "./subagent-depth.js";
+import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 import { isAnnounceSkip } from "./tools/sessions-send-tokens.js";
 
 type SubagentAnnounceDeps = {
   callGateway: typeof callGateway;
+  dispatchGatewayMethodInProcess: typeof dispatchGatewayMethodInProcess;
   getRuntimeConfig: typeof getRuntimeConfig;
   loadSubagentRegistryRuntime: typeof loadSubagentRegistryRuntime;
 };
 
 const defaultSubagentAnnounceDeps: SubagentAnnounceDeps = {
   callGateway,
+  dispatchGatewayMethodInProcess,
   getRuntimeConfig,
   loadSubagentRegistryRuntime,
 };
@@ -186,9 +189,9 @@ async function wakeSubagentRunAfterDescendants(params: {
       operation: "descendant wake agent call",
       signal: params.signal,
       run: async () =>
-        await subagentAnnounceDeps.callGateway({
-          method: "agent",
-          params: {
+        await subagentAnnounceDeps.dispatchGatewayMethodInProcess(
+          "agent",
+          {
             sessionKey: params.childSessionKey,
             message: wakeMessage,
             deliver: false,
@@ -200,8 +203,10 @@ async function wakeSubagentRunAfterDescendants(params: {
             },
             idempotencyKey: buildAnnounceIdempotencyKey(`${params.announceId}:wake`),
           },
-          timeoutMs: announceTimeoutMs,
-        }),
+          {
+            timeoutMs: announceTimeoutMs,
+          },
+        ),
     });
     wakeRunId = normalizeOptionalString(wakeResponse?.runId) ?? "";
   } catch {
@@ -294,7 +299,7 @@ export async function runSubagentAnnounceFlow(params: {
     if (failedTerminalOutcome) {
       reply = undefined;
     }
-    let requesterDepth = getSubagentDepthFromSessionEntries(targetRequesterSessionKey);
+    let requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
     const requesterIsInternalSession = () =>
       requesterDepth >= 1 || isCronSessionKey(targetRequesterSessionKey);
 
@@ -489,7 +494,7 @@ export async function runSubagentAnnounceFlow(params: {
           targetRequesterSessionKey = fallback.requesterSessionKey;
           targetRequesterOrigin =
             normalizeDeliveryContext(fallback.requesterOrigin) ?? targetRequesterOrigin;
-          requesterDepth = getSubagentDepthFromSessionEntries(targetRequesterSessionKey);
+          requesterDepth = getSubagentDepthFromSessionStore(targetRequesterSessionKey);
           requesterIsSubagent = requesterIsInternalSession();
         }
       }
@@ -526,8 +531,8 @@ export async function runSubagentAnnounceFlow(params: {
     // follow-up injection (deliver=false) so the orchestrator receives it.
     let directOrigin = targetRequesterOrigin;
     if (!requesterIsSubagent) {
-      const { entry, deliveryContext } = loadRequesterSessionEntry(targetRequesterSessionKey);
-      directOrigin = resolveAnnounceOrigin(entry, targetRequesterOrigin, deliveryContext);
+      const { entry } = loadRequesterSessionEntry(targetRequesterSessionKey);
+      directOrigin = resolveAnnounceOrigin(entry, targetRequesterOrigin);
     }
     const completionDirectOrigin =
       expectsCompletionMessage && !requesterIsSubagent
@@ -600,11 +605,30 @@ export async function runSubagentAnnounceFlow(params: {
 }
 
 export const __testing = {
-  setDepsForTest(overrides?: Partial<SubagentAnnounceDeps>) {
+  setDepsForTest(
+    overrides?: Partial<SubagentAnnounceDeps> & {
+      callGateway?: typeof callGateway;
+    },
+  ) {
+    const callGatewayOverride = overrides?.callGateway;
+    const dispatchGatewayMethodInProcessOverride =
+      overrides?.dispatchGatewayMethodInProcess ??
+      (callGatewayOverride
+        ? ((async (method, agentParams, options) =>
+            await callGatewayOverride({
+              method,
+              params: agentParams,
+              expectFinal: options?.expectFinal,
+              timeoutMs: options?.timeoutMs,
+            })) satisfies typeof dispatchGatewayMethodInProcess)
+        : undefined);
     subagentAnnounceDeps = overrides
       ? {
           ...defaultSubagentAnnounceDeps,
           ...overrides,
+          ...(dispatchGatewayMethodInProcessOverride
+            ? { dispatchGatewayMethodInProcess: dispatchGatewayMethodInProcessOverride }
+            : {}),
         }
       : defaultSubagentAnnounceDeps;
   },

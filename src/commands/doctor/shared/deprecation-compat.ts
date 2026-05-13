@@ -154,6 +154,16 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
   }),
   deprecatedCompatRecord({
+    code: "doctor-message-queue-steering-modes",
+    owner: "config",
+    introduced: "2026-05-04",
+    source: "messages.queue.mode and messages.queue.byChannel retired queue modes",
+    migration: "src/commands/doctor/shared/legacy-config-migrations.queue.ts",
+    replacement: "steer, followup, collect, or interrupt queue modes",
+    docsPath: "/concepts/queue",
+    tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
+  }),
+  deprecatedCompatRecord({
     code: "doctor-channel-dm-aliases",
     owner: "channel",
     introduced: "2026-04-26",
@@ -200,8 +210,8 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     owner: "plugin",
     introduced: "2026-04-25",
     source: "plugins.installs in authored config",
-    migration: "src/commands/doctor/shared/plugin-install-config-migration.ts",
-    replacement: "SQLite-managed installed plugin index",
+    migration: "src/config/plugin-install-config-migration.ts",
+    replacement: "state-managed plugins/installs.json install ledger",
     docsPath: "/cli/plugins#registry",
     tests: [
       "src/config/io.write-config.test.ts",

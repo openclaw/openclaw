@@ -1,5 +1,6 @@
 // Public auth/onboarding helpers for provider plugins.
 
+import path from "node:path";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { resolveApiKeyForProfile } from "../agents/auth-profiles/oauth.js";
 import { resolveAuthProfileOrder } from "../agents/auth-profiles/order.js";
@@ -7,11 +8,9 @@ import { listProfilesForProvider } from "../agents/auth-profiles/profiles.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { resolveEnvApiKey } from "../agents/model-auth-env.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { createPluginStateSyncKeyedStore } from "../plugin-state/plugin-state-store.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
+import { resolveStateDir } from "../config/paths.js";
+import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveProviderEndpoint } from "./provider-model-shared.js";
 
 export type { OpenClawConfig } from "../config/config.js";
@@ -94,9 +93,6 @@ export {
 } from "../agents/auth-profiles/credential-state.js";
 
 const COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/token";
-const COPILOT_TOKEN_CACHE_PLUGIN_ID = "github-copilot";
-const COPILOT_TOKEN_CACHE_NAMESPACE = "token-cache";
-const COPILOT_TOKEN_CACHE_KEY = "default";
 
 /** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
 export const COPILOT_EDITOR_VERSION = "vscode/1.96.2";
@@ -133,39 +129,12 @@ export function buildCopilotIdeHeaders(
   };
 }
 
+function resolveCopilotTokenCachePath(env: NodeJS.ProcessEnv = process.env) {
+  return path.join(resolveStateDir(env), "credentials", "github-copilot.token.json");
+}
+
 function isCopilotTokenUsable(cache: CachedCopilotToken, now = Date.now()): boolean {
   return cache.integrationId === COPILOT_INTEGRATION_ID && cache.expiresAt - now > 5 * 60 * 1000;
-}
-
-function openCopilotTokenCache(env: NodeJS.ProcessEnv) {
-  return createPluginStateSyncKeyedStore<CachedCopilotToken>(COPILOT_TOKEN_CACHE_PLUGIN_ID, {
-    namespace: COPILOT_TOKEN_CACHE_NAMESPACE,
-    maxEntries: 4,
-    env,
-  });
-}
-
-function readCachedCopilotToken(env: NodeJS.ProcessEnv): CachedCopilotToken | undefined {
-  const cached = openCopilotTokenCache(env).lookup(COPILOT_TOKEN_CACHE_KEY);
-  if (!cached || typeof cached.token !== "string" || typeof cached.expiresAt !== "number") {
-    return undefined;
-  }
-  return {
-    token: cached.token,
-    expiresAt: Math.floor(cached.expiresAt),
-    updatedAt: typeof cached.updatedAt === "number" ? Math.floor(cached.updatedAt) : 0,
-    integrationId: normalizeOptionalString(cached.integrationId),
-  };
-}
-
-function writeCachedCopilotToken(env: NodeJS.ProcessEnv, value: CachedCopilotToken): void {
-  const integrationId = normalizeOptionalString(value.integrationId);
-  openCopilotTokenCache(env).register(COPILOT_TOKEN_CACHE_KEY, {
-    token: value.token,
-    expiresAt: Math.floor(value.expiresAt),
-    updatedAt: Math.floor(value.updatedAt),
-    ...(integrationId ? { integrationId } : {}),
-  });
 }
 
 function parseCopilotTokenResponse(value: unknown): {
@@ -244,6 +213,9 @@ export async function resolveCopilotApiToken(params: {
   githubToken: string;
   env?: NodeJS.ProcessEnv;
   fetchImpl?: typeof fetch;
+  cachePath?: string;
+  loadJsonFileImpl?: (path: string) => unknown;
+  saveJsonFileImpl?: (path: string, value: CachedCopilotToken) => void;
 }): Promise<{
   token: string;
   expiresAt: number;
@@ -251,14 +223,19 @@ export async function resolveCopilotApiToken(params: {
   baseUrl: string;
 }> {
   const env = params.env ?? process.env;
-  const cached = readCachedCopilotToken(env);
-  if (cached && isCopilotTokenUsable(cached)) {
-    return {
-      token: cached.token,
-      expiresAt: cached.expiresAt,
-      source: `cache:sqlite:plugin_state_entries/${COPILOT_TOKEN_CACHE_PLUGIN_ID}/${COPILOT_TOKEN_CACHE_NAMESPACE}/${COPILOT_TOKEN_CACHE_KEY}`,
-      baseUrl: deriveCopilotApiBaseUrlFromToken(cached.token) ?? DEFAULT_COPILOT_API_BASE_URL,
-    };
+  const cachePath = params.cachePath?.trim() || resolveCopilotTokenCachePath(env);
+  const loadJsonFileFn = params.loadJsonFileImpl ?? loadJsonFile;
+  const saveJsonFileFn = params.saveJsonFileImpl ?? saveJsonFile;
+  const cached = loadJsonFileFn(cachePath) as CachedCopilotToken | undefined;
+  if (cached && typeof cached.token === "string" && typeof cached.expiresAt === "number") {
+    if (isCopilotTokenUsable(cached)) {
+      return {
+        token: cached.token,
+        expiresAt: cached.expiresAt,
+        source: `cache:${cachePath}`,
+        baseUrl: deriveCopilotApiBaseUrlFromToken(cached.token) ?? DEFAULT_COPILOT_API_BASE_URL,
+      };
+    }
   }
 
   const fetchImpl = params.fetchImpl ?? fetch;
@@ -283,7 +260,7 @@ export async function resolveCopilotApiToken(params: {
     updatedAt: Date.now(),
     integrationId: COPILOT_INTEGRATION_ID,
   };
-  writeCachedCopilotToken(env, payload);
+  saveJsonFileFn(cachePath, payload);
 
   return {
     token: payload.token,

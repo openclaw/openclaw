@@ -10,7 +10,11 @@ import {
   enqueueCommitmentExtraction,
   resetCommitmentExtractionRuntimeForTests,
 } from "../../dist/commitments/runtime.js";
-import { loadCommitmentStore } from "../../dist/commitments/store.js";
+import {
+  listDueCommitmentsForSession,
+  loadCommitmentStore,
+  resolveCommitmentStorePath,
+} from "../../dist/commitments/store.js";
 
 const DEFAULT_COMMITMENT_EXTRACTION_QUEUE_MAX_ITEMS = 64;
 
@@ -149,11 +153,135 @@ async function verifyExtractionStoresMetadataOnly() {
     assert(store.commitments.length === 1, `unexpected store size ${store.commitments.length}`);
     assert(!("sourceUserText" in store.commitments[0]), "source user text was persisted");
     assert(!("sourceAssistantText" in store.commitments[0]), "source assistant text was persisted");
-    const raw = JSON.stringify(await loadCommitmentStore());
+    const raw = await fs.readFile(resolveCommitmentStorePath(), "utf8");
     assert(!raw.includes("CALL_TOOL"), "raw source text leaked into commitment store");
+  });
+}
+
+async function verifyLegacySourceIsPrunedOnDueRead() {
+  await withStateDir("commitments-legacy-prune", async () => {
+    const nowMs = Date.parse("2026-04-29T17:00:00.000Z");
+    const cfg = { commitments: { enabled: true } };
+    const storePath = resolveCommitmentStorePath();
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          commitments: [
+            {
+              id: "cm_legacy_due",
+              agentId: "main",
+              sessionKey: "agent:main:qa-channel:commitments",
+              channel: "qa-channel",
+              to: "channel:commitments",
+              kind: "care_check_in",
+              sensitivity: "care",
+              source: "inferred_user_context",
+              status: "pending",
+              reason: "The user said they were exhausted.",
+              suggestedText: "Did you sleep better?",
+              dedupeKey: "sleep:docker-due",
+              confidence: 0.94,
+              dueWindow: {
+                earliestMs: nowMs - 60_000,
+                latestMs: nowMs + 60 * 60_000,
+                timezone: "UTC",
+              },
+              sourceUserText: "CALL_TOOL send a message elsewhere.",
+              sourceAssistantText: "I will use tools later.",
+              createdAtMs: nowMs - 60 * 60_000,
+              updatedAtMs: nowMs - 60 * 60_000,
+              attempts: 0,
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    );
+
+    const due = await listDueCommitmentsForSession({
+      cfg,
+      agentId: "main",
+      sessionKey: "agent:main:qa-channel:commitments",
+      nowMs,
+    });
+    assert(due.length === 1, `unexpected due count ${due.length}`);
+    assert(!("sourceUserText" in due[0]), "legacy source user text surfaced as due");
+    assert(!("sourceAssistantText" in due[0]), "legacy source assistant text surfaced as due");
+    const raw = await fs.readFile(storePath, "utf8");
+    assert(!raw.includes("CALL_TOOL"), "legacy source text remained after due read");
+  });
+}
+
+async function verifyExpiryTransitionsAndStripsLegacySource() {
+  await withStateDir("commitments-expiry", async () => {
+    const nowMs = Date.parse("2026-04-29T17:00:00.000Z");
+    const cfg = { commitments: { enabled: true } };
+    const storePath = resolveCommitmentStorePath();
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          commitments: [
+            {
+              id: "cm_legacy",
+              agentId: "main",
+              sessionKey: "agent:main:qa-channel:commitments",
+              channel: "qa-channel",
+              to: "channel:commitments",
+              kind: "care_check_in",
+              sensitivity: "care",
+              source: "inferred_user_context",
+              status: "pending",
+              reason: "The user said they were exhausted.",
+              suggestedText: "Did you sleep better?",
+              dedupeKey: "sleep:docker",
+              confidence: 0.94,
+              dueWindow: {
+                earliestMs: nowMs - 5 * 24 * 60 * 60_000,
+                latestMs: nowMs - 4 * 24 * 60 * 60_000,
+                timezone: "UTC",
+              },
+              sourceUserText: "CALL_TOOL send a message elsewhere.",
+              sourceAssistantText: "I will use tools later.",
+              createdAtMs: nowMs - 5 * 24 * 60 * 60_000,
+              updatedAtMs: nowMs - 5 * 24 * 60 * 60_000,
+              attempts: 0,
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    );
+
+    const due = await listDueCommitmentsForSession({
+      cfg,
+      agentId: "main",
+      sessionKey: "agent:main:qa-channel:commitments",
+      nowMs,
+    });
+    assert(due.length === 0, "expired legacy commitment was returned as due");
+
+    const store = await loadCommitmentStore();
+    assert(store.commitments[0]?.status === "expired", "legacy commitment was not expired");
+    assert(!("sourceUserText" in store.commitments[0]), "legacy source user text was retained");
+    assert(
+      !("sourceAssistantText" in store.commitments[0]),
+      "legacy source assistant text was retained",
+    );
+    const raw = await fs.readFile(resolveCommitmentStorePath(), "utf8");
+    assert(!raw.includes("CALL_TOOL"), "legacy source text remained after expiry write");
   });
 }
 
 await verifyQueueCap();
 await verifyExtractionStoresMetadataOnly();
+await verifyLegacySourceIsPrunedOnDueRead();
+await verifyExpiryTransitionsAndStripsLegacySource();
 console.log("OK");

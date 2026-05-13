@@ -2,35 +2,27 @@ import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "../auto-reply/reply/get-reply-run-queue.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
-import { normalizeChatType, type ChatType } from "../channels/chat-type.js";
-import { createChannelReplyPipeline } from "../channels/message/reply-pipeline.js";
+import type { ChatType } from "../channels/chat-type.js";
 import { sendDurableMessageBatch } from "../channels/message/runtime.js";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import { recordInboundSession } from "../channels/session.js";
-import {
-  deliverInboundReplyWithMessageSendContext,
-  isDurableInboundReplyDeliveryHandled,
-  runPreparedChannelTurn,
-  throwIfDurableInboundReplyDeliveryFailed,
-} from "../channels/turn/kernel.js";
+import { dispatchAssembledChannelTurn } from "../channels/turn/kernel.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
-import {
-  readSqliteSessionDeliveryContext,
-  readSqliteSessionRoutingInfo,
-} from "../config/sessions/session-entries.sqlite.js";
+import { parseSessionThreadInfo } from "../config/sessions/thread-info.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { ackDelivery, enqueueDelivery, failDelivery } from "../infra/outbound/delivery-queue.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import {
-  clearRestartSentinel,
   finalizeUpdateRestartSentinelRunningVersion,
   formatRestartSentinelMessage,
   readRestartSentinel,
+  removeRestartSentinelFile,
   type RestartSentinelContinuation,
   type RestartSentinelPayload,
+  resolveRestartSentinelPath,
   summarizeRestartSentinel,
 } from "../infra/restart-sentinel.js";
 import {
@@ -46,12 +38,11 @@ import {
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
+import type { OutboundReplyPayload } from "../plugin-sdk/reply-payload.js";
 import {
-  normalizeOutboundReplyPayload,
-  type OutboundReplyPayload,
-} from "../plugin-sdk/reply-payload.js";
-import { mergeDeliveryContext } from "../utils/delivery-context.shared.js";
-import type { DeliveryContext } from "../utils/delivery-context.types.js";
+  deliveryContextFromSession,
+  mergeDeliveryContext,
+} from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./server-methods/agent-timestamp.js";
 import { loadSessionEntry } from "./session-utils.js";
@@ -75,6 +66,13 @@ function cloneRestartSentinelPayload(
     return null;
   }
   return JSON.parse(JSON.stringify(payload)) as RestartSentinelPayload;
+}
+
+function hasRoutableDeliveryContext(context?: {
+  channel?: string;
+  to?: string;
+}): context is { channel: string; to: string } {
+  return Boolean(context?.channel && context?.to);
 }
 
 function enqueueRestartSentinelWake(
@@ -126,7 +124,7 @@ async function deliverRestartSentinelNotice(params: {
   }).catch(() => null);
   for (let attempt = 1; attempt <= OUTBOUND_MAX_ATTEMPTS; attempt += 1) {
     try {
-      const result = await sendDurableMessageBatch({
+      const send = await sendDurableMessageBatch({
         cfg: params.cfg,
         channel: params.channel,
         to: params.to,
@@ -138,12 +136,12 @@ async function deliverRestartSentinelNotice(params: {
         deps: params.deps,
         bestEffort: false,
         skipQueue: true,
-        durability: "required",
       });
-      if (result.status === "failed" || result.status === "partial_failed") {
-        throw result.error;
+      if (send.status === "failed" || send.status === "partial_failed") {
+        throw send.error;
       }
-      if (result.status === "sent" && result.results.length > 0) {
+      const results = send.status === "sent" ? send.results : [];
+      if (results.length > 0) {
         if (queueId) {
           await ackDelivery(queueId).catch(() => {});
         }
@@ -253,7 +251,7 @@ async function deliverQueuedSessionDelivery(params: {
   deps: CliDeps;
   entry: QueuedSessionDelivery;
 }) {
-  const { cfg, canonicalKey } = loadSessionEntry(params.entry.sessionKey);
+  const { cfg, storePath, canonicalKey } = loadSessionEntry(params.entry.sessionKey);
   const queuedDeliveryContext = resolveQueuedSessionDeliveryContext(params.entry);
 
   if (params.entry.kind === "systemEvent") {
@@ -304,12 +302,6 @@ async function deliverQueuedSessionDelivery(params: {
     config: cfg,
   });
   let dispatchError: unknown;
-  const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
-    cfg,
-    agentId,
-    channel: route.channel,
-    accountId: route.accountId,
-  });
   const ctxPayload = finalizeInboundContext(
     {
       Body: userMessage,
@@ -342,80 +334,67 @@ async function deliverQueuedSessionDelivery(params: {
       forceChatType: true,
     },
   );
-  await runPreparedChannelTurn({
+  await dispatchAssembledChannelTurn({
+    cfg,
     channel: route.channel,
     accountId: route.accountId,
     agentId,
     routeSessionKey: canonicalKey,
+    storePath,
     ctxPayload,
     recordInboundSession,
-    runDispatch: async () =>
-      await dispatchReplyWithBufferedBlockDispatcher({
-        ctx: ctxPayload,
-        cfg,
-        dispatcherOptions: {
-          ...replyPipeline,
-          deliver: async (payload, info) => {
-            const normalized =
-              payload && typeof payload === "object"
-                ? normalizeOutboundReplyPayload(payload as Record<string, unknown>)
-                : {};
-            if (isRestartContinuationBusyPayload(normalized)) {
-              throw new Error(RESTART_CONTINUATION_BUSY_RETRY_ERROR);
-            }
-            const outboundPayload = resolveRestartContinuationOutboundPayload({
-              payload: normalized,
-              messageId,
-              replyToId: route.replyToId,
-            });
-            const durable = await deliverInboundReplyWithMessageSendContext({
-              cfg,
-              channel: route.channel,
-              accountId: route.accountId,
-              agentId,
-              ctxPayload,
-              payload: outboundPayload,
-              info,
+    dispatchReplyWithBufferedBlockDispatcher,
+    delivery: {
+      preparePayload: (payload) => {
+        if (isRestartContinuationBusyPayload(payload)) {
+          throw new Error(RESTART_CONTINUATION_BUSY_RETRY_ERROR);
+        }
+        return resolveRestartContinuationOutboundPayload({
+          payload,
+          messageId,
+          replyToId: route.replyToId,
+        });
+      },
+      durable: (_payload, info) =>
+        info.kind === "final"
+          ? {
               to: route.to,
               replyToId: route.replyToId,
               threadId: route.threadId,
               deps: params.deps,
-            });
-            throwIfDurableInboundReplyDeliveryFailed(durable);
-            if (isDurableInboundReplyDeliveryHandled(durable)) {
-              return;
             }
-            const result = await sendDurableMessageBatch({
-              cfg,
-              channel: route.channel,
-              to: route.to,
-              accountId: route.accountId,
-              replyToId: route.replyToId,
-              threadId: route.threadId,
-              payloads: [outboundPayload],
-              session: buildOutboundSessionContext({
-                cfg,
-                sessionKey: canonicalKey,
-              }),
-              deps: params.deps,
-              bestEffort: false,
-              durability: "required",
-            });
-            if (result.status === "failed" || result.status === "partial_failed") {
-              throw result.error;
-            }
-            if (result.status !== "sent" || result.results.length === 0) {
-              throw new Error("restart continuation delivery returned no results");
-            }
-          },
-          onError: (err) => {
-            dispatchError ??= err;
-          },
-        },
-        replyOptions: {
-          onModelSelected,
-        },
-      }),
+          : false,
+      deliver: async (payload) => {
+        const send = await sendDurableMessageBatch({
+          cfg,
+          channel: route.channel,
+          to: route.to,
+          accountId: route.accountId,
+          replyToId: route.replyToId,
+          threadId: route.threadId,
+          payloads: [payload],
+          session: buildOutboundSessionContext({
+            cfg,
+            sessionKey: canonicalKey,
+          }),
+          deps: params.deps,
+          bestEffort: false,
+        });
+        if (send.status === "failed" || send.status === "partial_failed") {
+          throw send.error;
+        }
+        const results = send.status === "sent" ? send.results : [];
+        if (results.length === 0) {
+          throw new Error("restart continuation delivery returned no results");
+        }
+      },
+      onError: (err, info) => {
+        dispatchError ??= err;
+        log.warn(`restart continuation dispatch failed during ${info.kind}: ${String(err)}`, {
+          sessionKey: canonicalKey,
+        });
+      },
+    },
     record: {
       onRecordError: (err) => {
         log.warn(`restart continuation failed to record inbound session metadata: ${String(err)}`, {
@@ -518,6 +497,7 @@ async function loadRestartSentinelStartupTask(params: {
   if (!sentinel) {
     return null;
   }
+  const sentinelPath = resolveRestartSentinelPath();
   const payload = sentinel.payload;
   const sessionKey = payload.sessionKey?.trim();
   const message = formatRestartSentinelMessage(payload);
@@ -539,22 +519,30 @@ async function loadRestartSentinelStartupTask(params: {
           continuationKind: payload.continuation.kind,
         });
       }
-      await clearRestartSentinel();
+      await removeRestartSentinelFile(sentinelPath);
       return { status: "ran" as const };
     }
 
-    const { cfg, agentId, entry, canonicalKey } = loadSessionEntry(sessionKey);
+    const { baseSessionKey, threadId: sessionThreadId } = parseSessionThreadInfo(sessionKey);
+
+    const { cfg, entry, canonicalKey } = loadSessionEntry(sessionKey);
 
     const sentinelContext = payload.deliveryContext;
-    let sessionDeliveryContext: DeliveryContext | undefined = readSqliteSessionDeliveryContext({
-      agentId,
-      sessionKey: canonicalKey,
-    });
-    const routingInfo = readSqliteSessionRoutingInfo({
-      agentId,
-      sessionKey: canonicalKey,
-    });
-    let chatType = normalizeChatType(routingInfo?.chatType ?? entry?.chatType) ?? "direct";
+    let sessionDeliveryContext = deliveryContextFromSession(entry);
+    let chatType = entry?.origin?.chatType ?? "direct";
+    if (
+      !hasRoutableDeliveryContext(sessionDeliveryContext) &&
+      baseSessionKey &&
+      baseSessionKey !== sessionKey
+    ) {
+      const { entry: baseEntry } = loadSessionEntry(baseSessionKey);
+      chatType = entry?.origin?.chatType ?? baseEntry?.origin?.chatType ?? "direct";
+      sessionDeliveryContext = mergeDeliveryContext(
+        sessionDeliveryContext,
+        deliveryContextFromSession(baseEntry),
+      );
+    }
+
     const origin = mergeDeliveryContext(sentinelContext, sessionDeliveryContext);
 
     const channelRaw = origin?.channel;
@@ -562,6 +550,7 @@ async function loadRestartSentinelStartupTask(params: {
     const to = origin?.to;
     const threadId =
       payload.threadId ??
+      sessionThreadId ??
       (origin?.threadId != null ? stringifyRouteThreadId(origin.threadId) : undefined);
     let resolvedTo: string | undefined;
     let replyToId: string | undefined;
@@ -623,7 +612,7 @@ async function loadRestartSentinelStartupTask(params: {
       );
     }
 
-    await clearRestartSentinel();
+    await removeRestartSentinelFile(sentinelPath);
     const routedAgentTurnContinuation =
       payload.continuation?.kind === "agentTurn" && continuationRoute !== undefined;
     if (!routedAgentTurnContinuation) {

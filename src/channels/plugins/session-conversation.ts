@@ -1,6 +1,11 @@
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { tryLoadActivatedBundledPluginPublicSurfaceModuleSync } from "../../plugin-sdk/facade-runtime.js";
-import { parseThreadSessionSuffix } from "../../sessions/session-key-utils.js";
+import {
+  parseRawSessionConversationRef,
+  parseThreadSessionSuffix,
+  type ParsedThreadSessionSuffix,
+  type RawSessionConversationRef,
+} from "../../sessions/session-key-utils.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -11,6 +16,17 @@ import { getLoadedChannelPlugin, normalizeChannelId as normalizeAnyChannelId } f
 export type ResolvedSessionConversation = {
   id: string;
   threadId: string | undefined;
+  baseConversationId: string;
+  parentConversationCandidates: string[];
+};
+
+export type ResolvedSessionConversationRef = {
+  channel: string;
+  kind: "group" | "channel";
+  rawId: string;
+  id: string;
+  threadId: string | undefined;
+  baseSessionKey: string;
   baseConversationId: string;
   parentConversationCandidates: string[];
 };
@@ -34,6 +50,9 @@ type BundledSessionKeyModule = {
 };
 
 const SESSION_KEY_API_ARTIFACT_BASENAME = "session-key-api.js";
+type SessionConversationResolutionOptions = {
+  bundledFallback?: boolean;
+};
 
 type NormalizedSessionConversationResolution = ResolvedSessionConversation & {
   hasExplicitParentConversationCandidates: boolean;
@@ -215,8 +234,7 @@ function resolveSessionConversationResolution(params: {
     parentConversationCandidates.at(-1) ?? resolved.baseConversationId ?? resolved.id;
 
   return {
-    id: resolved.id,
-    threadId: resolved.threadId,
+    ...resolved,
     baseConversationId,
     parentConversationCandidates,
   };
@@ -229,4 +247,64 @@ export function resolveSessionConversation(params: {
   bundledFallback?: boolean;
 }): ResolvedSessionConversation | null {
   return resolveSessionConversationResolution(params);
+}
+
+function buildBaseSessionKey(raw: RawSessionConversationRef, id: string): string {
+  return `${raw.prefix}:${id}`;
+}
+
+export function resolveSessionConversationRef(
+  sessionKey: string | undefined | null,
+  opts: SessionConversationResolutionOptions = {},
+): ResolvedSessionConversationRef | null {
+  const raw = parseRawSessionConversationRef(sessionKey);
+  if (!raw) {
+    return null;
+  }
+
+  const resolved = resolveSessionConversation({
+    ...raw,
+    bundledFallback: opts.bundledFallback,
+  });
+  if (!resolved) {
+    return null;
+  }
+
+  return {
+    channel: normalizeResolvedChannel(raw.channel),
+    kind: raw.kind,
+    rawId: raw.rawId,
+    id: resolved.id,
+    threadId: resolved.threadId,
+    baseSessionKey: buildBaseSessionKey(raw, resolved.id),
+    baseConversationId: resolved.baseConversationId,
+    parentConversationCandidates: resolved.parentConversationCandidates,
+  };
+}
+
+export function resolveSessionThreadInfo(
+  sessionKey: string | undefined | null,
+  opts: SessionConversationResolutionOptions = {},
+): ParsedThreadSessionSuffix {
+  const resolved = resolveSessionConversationRef(sessionKey, opts);
+  if (!resolved) {
+    return parseThreadSessionSuffix(sessionKey);
+  }
+
+  return {
+    baseSessionKey: resolved.threadId
+      ? resolved.baseSessionKey
+      : normalizeOptionalString(sessionKey),
+    threadId: resolved.threadId,
+  };
+}
+
+export function resolveSessionParentSessionKey(
+  sessionKey: string | undefined | null,
+): string | null {
+  const { baseSessionKey, threadId } = resolveSessionThreadInfo(sessionKey);
+  if (!threadId) {
+    return null;
+  }
+  return baseSessionKey ?? null;
 }

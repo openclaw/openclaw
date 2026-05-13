@@ -1,5 +1,5 @@
 import {
-  closeTaskRegistryDatabase,
+  closeTaskRegistrySqliteStore,
   deleteTaskAndDeliveryStateFromSqlite,
   deleteTaskDeliveryStateFromSqlite,
   deleteTaskRegistryRecordFromSqlite,
@@ -59,7 +59,7 @@ const defaultTaskRegistryStore: TaskRegistryStore = {
   deleteTask: deleteTaskRegistryRecordFromSqlite,
   upsertDeliveryState: upsertTaskDeliveryStateToSqlite,
   deleteDeliveryState: deleteTaskDeliveryStateFromSqlite,
-  close: closeTaskRegistryDatabase,
+  close: closeTaskRegistrySqliteStore,
 };
 
 let configuredTaskRegistryStore: TaskRegistryStore = defaultTaskRegistryStore;

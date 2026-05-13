@@ -34,9 +34,6 @@
       "./index.ts"
     ],
     "setupEntry": "./setup-entry.ts",
-    "setupFeatures": {
-      "doctorLegacyState": true
-    },
     "channel": {
       "id": "msteams",
       "label": "Microsoft Teams",

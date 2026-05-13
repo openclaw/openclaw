@@ -68,6 +68,9 @@ function createMockQaRuntime(params?: {
         },
       },
       session: {
+        resolveStorePath(_store: string | undefined, { agentId }: { agentId: string }) {
+          return agentId;
+        },
         readSessionUpdatedAt({ sessionKey }: { sessionKey: string }) {
           return sessionUpdatedAt.get(sessionKey);
         },
@@ -101,6 +104,7 @@ function createMockQaRuntime(params?: {
       turn: {
         async runPrepared(turn: QaRunPreparedTurn) {
           await turn.recordInboundSession({
+            storePath: turn.storePath,
             sessionKey:
               typeof turn.ctxPayload.SessionKey === "string"
                 ? turn.ctxPayload.SessionKey

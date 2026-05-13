@@ -12,7 +12,7 @@ import {
   resetRunCronIsolatedAgentTurnHarness,
   restoreFastTestEnv,
   runWithModelFallbackMock,
-  upsertSessionEntryMock,
+  updateSessionStoreMock,
 } from "./run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
@@ -99,7 +99,7 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     });
 
     resolveAgentConfigMock.mockReturnValue(undefined);
-    upsertSessionEntryMock.mockResolvedValue(undefined);
+    updateSessionStoreMock.mockResolvedValue(undefined);
 
     cronSession = makeCronSession({
       sessionEntry: makeFreshSessionEntry(),
@@ -139,12 +139,15 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
       modelProvider?: string;
       systemSent?: boolean;
     }> = [];
-    upsertSessionEntryMock.mockImplementation(
-      async (params: {
-        entry?: { model?: string; modelProvider?: string; systemSent?: boolean };
-      }) => {
-        if (params.entry) {
-          persistedSnapshots.push(structuredClone(params.entry));
+    updateSessionStoreMock.mockImplementation(
+      async (_path: string, cb: (s: Record<string, unknown>) => void) => {
+        const store: Record<string, unknown> = {};
+        cb(store);
+        const entry = Object.values(store)[0] as
+          | { model?: string; modelProvider?: string; systemSent?: boolean }
+          | undefined;
+        if (entry) {
+          persistedSnapshots.push(structuredClone(entry));
         }
       },
     );
@@ -222,9 +225,10 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
 
   it("logs warning and continues when pre-run persist fails", async () => {
     // Persist ordering: [1] skills snapshot, [2] pre-run, [3] post-run.
-    // Only the guarded pre-run SQLite row persist should fail.
+    // Only the pre-run persist (call 2) should fail — the skills snapshot
+    // persist is pre-existing code without a try-catch guard.
     let callCount = 0;
-    upsertSessionEntryMock.mockImplementation(() => {
+    updateSessionStoreMock.mockImplementation(async () => {
       callCount++;
       if (callCount === 2) {
         throw new Error("ENOSPC: no space left on device");

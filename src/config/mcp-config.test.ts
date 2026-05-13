@@ -67,7 +67,7 @@ async function withMcpConfigHome<T>(
     },
     {
       prefix: "openclaw-mcp-config-",
-      skipStateCleanup: true,
+      skipSessionCleanup: true,
       env: {
         OPENCLAW_CONFIG_PATH: undefined,
         OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,

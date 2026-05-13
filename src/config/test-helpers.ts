@@ -5,13 +5,6 @@ import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtur
 import { clearPluginSetupRegistryCache } from "../plugins/setup-registry.js";
 import { resetConfigRuntimeState, type OpenClawConfig } from "./config.js";
 
-export function sourceBundledPluginTestEnv(): NodeJS.ProcessEnv {
-  return {
-    OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
-    OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-  } as NodeJS.ProcessEnv;
-}
-
 function resetConfigTestRuntimeState(): void {
   resetConfigRuntimeState();
   resetPluginLoaderTestStateForTest();
@@ -25,7 +18,7 @@ export async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise
       prefix: "openclaw-config-",
       env: {
         OPENCLAW_CONFIG_PATH: undefined,
-        ...sourceBundledPluginTestEnv(),
+        OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
         OPENCLAW_PLUGIN_CATALOG_PATHS: undefined,
         OPENCLAW_MPM_CATALOG_PATHS: undefined,

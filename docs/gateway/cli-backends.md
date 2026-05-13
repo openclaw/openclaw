@@ -270,7 +270,7 @@ for `claude-cli` runs.
   labeled `(truncated)` if it overflows.
 - Same-provider `claude-cli` to `claude-cli` fallbacks rely on Claude's own
   `--resume` and skip the prelude.
-- The seed reuses the existing Claude CLI history path validation, so
+- The seed reuses the existing Claude session-file path validation, so
   arbitrary paths cannot be read.
 
 ## Images (pass-through)

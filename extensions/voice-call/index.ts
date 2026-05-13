@@ -9,11 +9,14 @@ import {
 } from "./api.js";
 import { createVoiceCallRuntime, type VoiceCallRuntime } from "./runtime-entry.js";
 import { registerVoiceCallCli } from "./src/cli.js";
-import { formatVoiceCallLegacyConfigWarnings } from "./src/config-compat.js";
+import {
+  formatVoiceCallLegacyConfigWarnings,
+  normalizeVoiceCallLegacyConfigInput,
+  parseVoiceCallPluginConfig,
+} from "./src/config-compat.js";
 import {
   resolveVoiceCallConfig,
   validateProviderConfig,
-  VoiceCallConfigSchema,
   type VoiceCallConfig,
 } from "./src/config.js";
 import type { CoreConfig } from "./src/core-bridge.js";
@@ -24,15 +27,12 @@ const VOICE_CALL_READ_METHOD_SCOPE = { scope: "operator.read" as const };
 
 const voiceCallConfigSchema = {
   parse(value: unknown): VoiceCallConfig {
-    const raw = value && typeof value === "object" && !Array.isArray(value) ? value : {};
-    const enabled =
-      typeof (raw as { enabled?: unknown }).enabled === "boolean"
-        ? (raw as { enabled: boolean }).enabled
-        : true;
-    return VoiceCallConfigSchema.parse({
-      ...(raw as Record<string, unknown>),
+    const normalized = normalizeVoiceCallLegacyConfigInput(value);
+    const enabled = typeof normalized.enabled === "boolean" ? normalized.enabled : true;
+    return parseVoiceCallPluginConfig({
+      ...normalized,
       enabled,
-      provider: (raw as { provider?: unknown }).provider ?? (enabled ? "mock" : undefined),
+      provider: normalized.provider ?? (enabled ? "mock" : undefined),
     });
   },
   uiHints: {
@@ -160,6 +160,7 @@ const voiceCallConfigSchema = {
       label: "Skip Signature Verification",
       advanced: true,
     },
+    store: { label: "Call Log Store Path", advanced: true },
     agentId: {
       label: "Response Agent ID",
       help: 'Agent workspace used for voice response generation. Defaults to "main".',
@@ -257,6 +258,9 @@ export default definePluginEntry({
   description: "Voice-call plugin with Telnyx/Twilio/Plivo providers",
   configSchema: voiceCallConfigSchema,
   register(api: OpenClawPluginApi) {
+    const config = resolveVoiceCallConfig(voiceCallConfigSchema.parse(api.pluginConfig));
+    const validation = validateProviderConfig(config);
+
     if (api.pluginConfig && typeof api.pluginConfig === "object") {
       for (const warning of formatVoiceCallLegacyConfigWarnings({
         value: api.pluginConfig,
@@ -266,9 +270,6 @@ export default definePluginEntry({
         api.logger.warn(warning);
       }
     }
-
-    const config = resolveVoiceCallConfig(voiceCallConfigSchema.parse(api.pluginConfig));
-    const validation = validateProviderConfig(config);
 
     const runtimeState = getVoiceCallRuntimeGlobalState();
     const continueOperationStore = createVoiceCallContinueOperationStore({
@@ -303,7 +304,6 @@ export default definePluginEntry({
             fullConfig: api.config,
             agentRuntime: api.runtime.agent,
             ttsRuntime: api.runtime.tts,
-            openKeyedStore: api.runtime.state.openKeyedStore,
             logger: api.logger,
           });
           runtimeState[VOICE_CALL_RUNTIME_PROMISE_KEY] = runtimePromise;

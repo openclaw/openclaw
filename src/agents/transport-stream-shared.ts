@@ -1,4 +1,4 @@
-import { createAssistantMessageEventStream } from "./pi-ai-contract.js";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 
 type TransportUsage = {
   input: number;

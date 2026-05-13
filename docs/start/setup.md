@@ -21,7 +21,7 @@ Pick a setup workflow based on how often you want updates and whether you want t
 
 ## Prereqs (from source)
 
-- Node 24 or newer
+- Node 24 recommended (Node 22 LTS, currently `22.16+`, still supported)
 - `pnpm` required for source checkouts. OpenClaw loads bundled plugins from the
   `extensions/*` pnpm workspace packages in dev mode, so root `npm install` does
   not prepare the full source tree.
@@ -131,8 +131,8 @@ openclaw health
 - **Wrong port:** Gateway WS defaults to `ws://127.0.0.1:18789`; keep app + CLI on the same port.
 - **Where state lives:**
   - Channel/provider state: `~/.openclaw/credentials/`
-  - Model auth profiles: `~/.openclaw/state/openclaw.sqlite#table/auth_profile_stores/<agentDir>`
-  - Sessions: `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
+  - Model auth profiles: `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
+  - Sessions: `~/.openclaw/agents/<agentId>/sessions/`
   - Logs: `/tmp/openclaw/`
 
 ## Credential storage map
@@ -143,8 +143,10 @@ Use this when debugging auth or deciding what to back up:
 - **Telegram bot token**: config/env or `channels.telegram.tokenFile` (regular file only; symlinks rejected)
 - **Discord bot token**: config/env or SecretRef (env/file/exec providers)
 - **Slack tokens**: config/env (`channels.slack.*`)
-- **Pairing allowlists**: `~/.openclaw/state/openclaw.sqlite#table/channel_pairing_allow_entries`
-- **Model auth profiles**: `~/.openclaw/state/openclaw.sqlite#table/auth_profile_stores/<agentDir>`
+- **Pairing allowlists**:
+  - `~/.openclaw/credentials/<channel>-allowFrom.json` (default account)
+  - `~/.openclaw/credentials/<channel>-<accountId>-allowFrom.json` (non-default accounts)
+- **Model auth profiles**: `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
 - **File-backed secrets payload (optional)**: `~/.openclaw/secrets.json`
 - **Legacy OAuth import**: `~/.openclaw/credentials/oauth.json`
   More detail: [Security](/gateway/security#credential-storage-map).

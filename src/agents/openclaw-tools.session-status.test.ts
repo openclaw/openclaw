@@ -4,10 +4,10 @@ import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/sessi
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { buildTaskStatusSnapshot } from "../tasks/task-status.js";
 
-const sessionRowsMock = vi.fn();
-const upsertSessionEntryMock = vi.fn();
+const loadSessionStoreMock = vi.fn();
+const updateSessionStoreMock = vi.fn();
 const callGatewayMock = vi.fn();
-const loadCombinedSessionEntriesForGatewayMock = vi.fn();
+const loadCombinedSessionStoreForGatewayMock = vi.fn();
 const buildStatusMessageMock = vi.hoisted(() =>
   vi.fn((_params?: unknown) => "OpenClaw\n🧠 Model: GPT-5.4"),
 );
@@ -30,6 +30,7 @@ const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
   configFingerprint: "session-status-test-empty-plugin-metadata",
   plugins: [],
 }));
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 const createMockConfig = () => ({
   session: { mainKey: "main", scope: "per-sender" },
@@ -50,13 +51,13 @@ const TASK_STATUS_SNAPSHOT_NOW = 1_000_000_000_000;
 function createScopedSessionStores() {
   return new Map<string, Record<string, unknown>>([
     [
-      "main",
+      "/tmp/main/sessions.json",
       {
         "agent:main:main": { sessionId: "s-main", updatedAt: 10 },
       },
     ],
     [
-      "support",
+      "/tmp/support/sessions.json",
       {
         main: { sessionId: "s-support", updatedAt: 20 },
       },
@@ -66,22 +67,21 @@ function createScopedSessionStores() {
 
 function installScopedSessionStores(syncUpdates = false) {
   const stores = createScopedSessionStores();
-  sessionRowsMock.mockClear();
-  upsertSessionEntryMock.mockClear();
+  loadSessionStoreMock.mockClear();
+  updateSessionStoreMock.mockClear();
   callGatewayMock.mockClear();
-  loadCombinedSessionEntriesForGatewayMock.mockClear();
-  sessionRowsMock.mockImplementation((agentId = "main") => stores.get(agentId) ?? {});
-  loadCombinedSessionEntriesForGatewayMock.mockReturnValue({
-    databasePath: "(multiple)",
-    entries: Object.fromEntries([...stores.values()].flatMap((store) => Object.entries(store))),
+  loadCombinedSessionStoreForGatewayMock.mockClear();
+  loadSessionStoreMock.mockImplementation((storePath: string) => stores.get(storePath) ?? {});
+  loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+    storePath: "(multiple)",
+    store: Object.fromEntries([...stores.values()].flatMap((store) => Object.entries(store))),
   });
   if (syncUpdates) {
-    upsertSessionEntryMock.mockImplementation(
-      (opts: { agentId?: string; sessionKey: string; entry: Record<string, unknown> }) => {
-        const agentId = opts.agentId ?? "main";
-        const store = stores.get(agentId) ?? {};
-        store[opts.sessionKey] = opts.entry;
-        stores.set(agentId, store);
+    updateSessionStoreMock.mockImplementation(
+      (storePath: string, store: Record<string, unknown>) => {
+        if (storePath) {
+          stores.set(storePath, store);
+        }
       },
     );
   }
@@ -93,23 +93,18 @@ async function createSessionsModuleMock() {
     await vi.importActual<typeof import("../config/sessions.js")>("../config/sessions.js");
   return {
     ...actual,
-    getSessionEntry: (opts: { agentId?: string; sessionKey: string }) =>
-      (sessionRowsMock(opts.agentId ?? "main") as Record<string, unknown>)[opts.sessionKey],
-    listSessionEntries: (opts?: { agentId?: string }) =>
-      Object.entries(sessionRowsMock(opts?.agentId ?? "main")).map(([sessionKey, entry]) => ({
-        sessionKey,
-        entry,
-      })),
-    upsertSessionEntry: (opts: {
-      agentId?: string;
-      sessionKey: string;
-      entry: Record<string, unknown>;
-    }) => {
-      const agentId = opts.agentId ?? "main";
-      const store = sessionRowsMock(agentId) as Record<string, unknown>;
-      store[opts.sessionKey] = opts.entry;
-      upsertSessionEntryMock(opts);
+    loadSessionStore: (storePath: string) => loadSessionStoreMock(storePath),
+    updateSessionStore: async (
+      storePath: string,
+      mutator: (store: Record<string, unknown>) => Promise<void> | void,
+    ) => {
+      const store = loadSessionStoreMock(storePath) as Record<string, unknown>;
+      await mutator(store);
+      updateSessionStoreMock(storePath, store);
+      return store;
     },
+    resolveStorePath: (_store: string | undefined, opts?: { agentId?: string }) =>
+      opts?.agentId === "support" ? "/tmp/support/sessions.json" : "/tmp/main/sessions.json",
   };
 }
 
@@ -125,8 +120,8 @@ async function createGatewaySessionUtilsModuleMock() {
   );
   return {
     ...actual,
-    loadCombinedSessionEntriesForGateway: (cfg: unknown) =>
-      loadCombinedSessionEntriesForGatewayMock(cfg),
+    loadCombinedSessionStoreForGateway: (cfg: unknown) =>
+      loadCombinedSessionStoreForGatewayMock(cfg),
   };
 }
 
@@ -310,21 +305,16 @@ function resetSessionStore(store: Record<string, SessionEntry>) {
   resolveEnvApiKeyMock.mockReturnValue(null);
   resolveUsableCustomProviderApiKeyMock.mockReset();
   resolveUsableCustomProviderApiKeyMock.mockReturnValue(null);
-  sessionRowsMock.mockClear();
-  upsertSessionEntryMock.mockClear();
+  loadSessionStoreMock.mockClear();
+  updateSessionStoreMock.mockClear();
   callGatewayMock.mockClear();
-  loadCombinedSessionEntriesForGatewayMock.mockClear();
+  loadCombinedSessionStoreForGatewayMock.mockClear();
   listTasksForRelatedSessionKeyForOwnerMock.mockClear();
   listTasksForRelatedSessionKeyForOwnerMock.mockReturnValue([]);
-  sessionRowsMock.mockReturnValue(store);
-  upsertSessionEntryMock.mockImplementation(
-    (opts: { sessionKey: string; entry: Record<string, unknown> }) => {
-      store[opts.sessionKey] = opts.entry as SessionEntry;
-    },
-  );
-  loadCombinedSessionEntriesForGatewayMock.mockReturnValue({
-    databasePath: "(multiple)",
-    entries: store,
+  loadSessionStoreMock.mockReturnValue(store);
+  loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+    storePath: "(multiple)",
+    store,
   });
   callGatewayMock.mockImplementation(async (opts: unknown) => {
     const request = opts as { method?: string; params?: Record<string, unknown> };
@@ -507,7 +497,7 @@ describe("session_status tool", () => {
     await expect(tool.execute("call2", { sessionKey: "nope" })).rejects.toThrow(
       "Unknown sessionId",
     );
-    expect(upsertSessionEntryMock).not.toHaveBeenCalled();
+    expect(updateSessionStoreMock).not.toHaveBeenCalled();
   });
 
   it("resolves sessionKey=current to the requester session", async () => {
@@ -896,19 +886,15 @@ describe("session_status tool", () => {
     expect(details.model).toBe("claude-sonnet-4-6");
     expect(details.modelProvider).toBe("anthropic");
     expect(details.modelOverride).toBe("anthropic/claude-sonnet-4-6");
-    expect(upsertSessionEntryMock).toHaveBeenCalled();
-    const [{ entry: saved }] = upsertSessionEntryMock.mock.calls.at(-1) as [
-      { entry: SessionEntry },
-    ];
-    expect(saved).toEqual(
-      expect.objectContaining({
-        providerOverride: "anthropic",
-        modelOverride: "claude-sonnet-4-6",
-        liveModelSwitchPending: true,
-      }),
-    );
-    expect(saved.sessionId).toBeTypeOf("string");
-    expect(saved.sessionId.trim().length).toBeGreaterThan(0);
+    expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
+    const savedStore = latestMockCallArg(updateSessionStoreMock, 1) as Record<string, SessionEntry>;
+    const saved = savedStore["agent:main:scope:scopy:direct:scopy"];
+    expectRecordFields(saved, {
+      providerOverride: "anthropic",
+      modelOverride: "claude-sonnet-4-6",
+      liveModelSwitchPending: true,
+    });
+    expect(saved.sessionId).toMatch(UUID_RE);
   });
 
   it("materializes a valid persisted session entry when the default implicit current fallback mutates model state", async () => {
@@ -922,19 +908,15 @@ describe("session_status tool", () => {
     const details = result.details as { ok?: boolean; sessionKey?: string };
     expect(details.ok).toBe(true);
     expect(details.sessionKey).toBe("agent:main:scope:scopy:direct:scopy");
-    expect(upsertSessionEntryMock).toHaveBeenCalled();
-    const [{ entry: saved }] = upsertSessionEntryMock.mock.calls.at(-1) as [
-      { entry: SessionEntry },
-    ];
-    expect(saved).toEqual(
-      expect.objectContaining({
-        providerOverride: "anthropic",
-        modelOverride: "claude-sonnet-4-6",
-        liveModelSwitchPending: true,
-      }),
-    );
-    expect(saved.sessionId).toBeTypeOf("string");
-    expect(saved.sessionId.trim().length).toBeGreaterThan(0);
+    expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
+    const savedStore = latestMockCallArg(updateSessionStoreMock, 1) as Record<string, SessionEntry>;
+    const saved = savedStore["agent:main:scope:scopy:direct:scopy"];
+    expectRecordFields(saved, {
+      providerOverride: "anthropic",
+      modelOverride: "claude-sonnet-4-6",
+      liveModelSwitchPending: true,
+    });
+    expect(saved.sessionId).toMatch(UUID_RE);
   });
 
   it("does not synthesize a current fallback for unknown non-literal session keys", async () => {
@@ -1192,15 +1174,12 @@ describe("session_status tool", () => {
     const details = result.details as { ok?: boolean; sessionKey?: string };
     expect(details.ok).toBe(true);
     expect(details.sessionKey).toBe("agent:main:subagent:child");
-    expect(upsertSessionEntryMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:subagent:child",
-        entry: expect.objectContaining({
-          liveModelSwitchPending: true,
-          modelOverride: "claude-sonnet-4-6",
-        }),
-      }),
-    );
+    expect(mockCallArg(updateSessionStoreMock)).toBe("/tmp/main/sessions.json");
+    const savedStore = mockCallArg(updateSessionStoreMock, 0, 1) as Record<string, unknown>;
+    expectRecordFields(savedStore["agent:main:subagent:child"], {
+      liveModelSwitchPending: true,
+      modelOverride: "claude-sonnet-4-6",
+    });
   });
 
   it("uses the runtime session model as the selected card model when no override is set", async () => {
@@ -1251,9 +1230,7 @@ describe("session_status tool", () => {
       },
     };
     resolveUsableCustomProviderApiKeyMock.mockImplementation((params) =>
-      params?.provider === "qwen-dashscope"
-        ? { apiKey: "sk-test", source: "stored model catalog" }
-        : null,
+      params?.provider === "qwen-dashscope" ? { apiKey: "sk-test", source: "models.json" } : null,
     );
 
     const tool = getSessionStatusTool();
@@ -1263,7 +1240,7 @@ describe("session_status tool", () => {
     const statusArg = mockCallArg(buildStatusMessageMock) as Record<string, unknown>;
     const agent = statusArg.agent as Record<string, unknown>;
     expectRecordFields(agent.model, { primary: "qwen-dashscope/qwen-max" });
-    expect(statusArg.modelAuth).toBe("api-key (stored model catalog)");
+    expect(statusArg.modelAuth).toBe("api-key (models.json)");
   });
 
   it("preserves an unknown runtime provider in the selected status card model", async () => {
@@ -1418,28 +1395,22 @@ describe("session_status tool", () => {
     }
   });
 
-  it("uses typed session channel when resolving queue settings", async () => {
+  it("falls back to origin.provider when resolving queue settings", async () => {
     resetSessionStore({
       main: {
-        sessionId: "status-last-channel",
+        sessionId: "status-origin-provider",
         updatedAt: 10,
-        channel: "quietchat",
-        deliveryContext: {
-          channel: "quietchat",
-        },
+        origin: { provider: "quietchat" },
       },
     });
 
     const tool = getSessionStatusTool();
 
-    await tool.execute("call-last-channel", {});
+    await tool.execute("call-origin-provider", {});
 
     const queueArg = mockCallArg(resolveQueueSettingsMock) as Record<string, unknown>;
     expect(queueArg.channel).toBe("quietchat");
-    expectRecordFields(queueArg.sessionEntry, {
-      channel: "quietchat",
-      deliveryContext: { channel: "quietchat" },
-    });
+    expectRecordFields(queueArg.sessionEntry, { origin: { provider: "quietchat" } });
   });
 
   it("resolves sessionId inputs", async () => {
@@ -1565,8 +1536,8 @@ describe("session_status tool", () => {
       "Session status visibility is restricted to the current session (tools.sessions.visibility=self).",
     );
 
-    expect(sessionRowsMock).not.toHaveBeenCalled();
-    expect(upsertSessionEntryMock).not.toHaveBeenCalled();
+    expect(loadSessionStoreMock).not.toHaveBeenCalled();
+    expect(updateSessionStoreMock).not.toHaveBeenCalled();
   });
 
   it("blocks unsandboxed same-agent bare main session_status outside self visibility", async () => {
@@ -1607,7 +1578,7 @@ describe("session_status tool", () => {
       "Session status visibility is restricted to the current session (tools.sessions.visibility=self).",
     );
 
-    expect(upsertSessionEntryMock).not.toHaveBeenCalled();
+    expect(updateSessionStoreMock).not.toHaveBeenCalled();
   });
 
   it("blocks unsandboxed same-agent session_status outside tree visibility before mutation", async () => {
@@ -1649,8 +1620,8 @@ describe("session_status tool", () => {
       "Session status visibility is restricted to the current session tree (tools.sessions.visibility=tree).",
     );
 
-    expect(sessionRowsMock).not.toHaveBeenCalled();
-    expect(upsertSessionEntryMock).not.toHaveBeenCalled();
+    expect(loadSessionStoreMock).not.toHaveBeenCalled();
+    expect(updateSessionStoreMock).not.toHaveBeenCalled();
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
     expect(callGatewayMock).toHaveBeenCalledWith({
       method: "sessions.list",
@@ -1698,7 +1669,7 @@ describe("session_status tool", () => {
     const details = result.details as { ok?: boolean; sessionKey?: string };
     expect(details.ok).toBe(true);
     expect(details.sessionKey).toBe("agent:main:main");
-    expect(upsertSessionEntryMock).toHaveBeenCalled();
+    expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
   });
 
   it("blocks unsandboxed sessionId session_status outside tree visibility before mutation", async () => {
@@ -1752,7 +1723,7 @@ describe("session_status tool", () => {
       "Session status visibility is restricted to the current session tree (tools.sessions.visibility=tree).",
     );
 
-    expect(upsertSessionEntryMock).not.toHaveBeenCalled();
+    expect(updateSessionStoreMock).not.toHaveBeenCalled();
   });
 
   it("blocks sandboxed child session_status access outside its tree before store lookup", async () => {
@@ -1787,8 +1758,8 @@ describe("session_status tool", () => {
       }),
     ).rejects.toThrow(expectedError);
 
-    expect(sessionRowsMock).not.toHaveBeenCalled();
-    expect(upsertSessionEntryMock).not.toHaveBeenCalled();
+    expect(loadSessionStoreMock).not.toHaveBeenCalled();
+    expect(updateSessionStoreMock).not.toHaveBeenCalled();
     expectSpawnedSessionLookupCalls("agent:main:subagent:child");
   });
 
@@ -1820,7 +1791,7 @@ describe("session_status tool", () => {
       }),
     ).rejects.toThrow(expectedError);
 
-    expect(upsertSessionEntryMock).not.toHaveBeenCalled();
+    expect(updateSessionStoreMock).not.toHaveBeenCalled();
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
     expect(callGatewayMock).toHaveBeenCalledWith({
       method: "sessions.list",
@@ -1861,9 +1832,9 @@ describe("session_status tool", () => {
       }),
     ).rejects.toThrow(expectedError);
 
-    expect(sessionRowsMock).toHaveBeenCalledTimes(1);
-    expect(sessionRowsMock).toHaveBeenCalledWith("main");
-    expect(upsertSessionEntryMock).not.toHaveBeenCalled();
+    expect(loadSessionStoreMock).toHaveBeenCalledTimes(1);
+    expect(loadSessionStoreMock).toHaveBeenCalledWith("/tmp/main/sessions.json");
+    expect(updateSessionStoreMock).not.toHaveBeenCalled();
     expect(callGatewayMock).toHaveBeenCalledTimes(3);
     expect(callGatewayMock).toHaveBeenNthCalledWith(1, {
       method: "sessions.list",
@@ -1915,9 +1886,9 @@ describe("session_status tool", () => {
       }),
     ).rejects.toThrow("Session status visibility is restricted to the current session tree");
 
-    expect(sessionRowsMock).toHaveBeenCalledTimes(1);
-    expect(sessionRowsMock).toHaveBeenCalledWith("main");
-    expect(upsertSessionEntryMock).not.toHaveBeenCalled();
+    expect(loadSessionStoreMock).toHaveBeenCalledTimes(1);
+    expect(loadSessionStoreMock).toHaveBeenCalledWith("/tmp/main/sessions.json");
+    expect(updateSessionStoreMock).not.toHaveBeenCalled();
     expect(callGatewayMock).toHaveBeenCalledTimes(3);
     expect(callGatewayMock).toHaveBeenNthCalledWith(1, {
       method: "sessions.list",
@@ -2007,10 +1978,9 @@ describe("session_status tool", () => {
     const result = await tool.execute("call3", { model: "default" });
     const details = result.details as { modelOverride?: string | null };
     expect(details.modelOverride).toBeNull();
-    expect(upsertSessionEntryMock).toHaveBeenCalled();
-    const [{ entry: saved }] = upsertSessionEntryMock.mock.calls.at(-1) as [
-      { entry: Record<string, unknown> },
-    ];
+    expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
+    const savedStore = latestMockCallArg(updateSessionStoreMock, 1) as Record<string, unknown>;
+    const saved = savedStore.main as Record<string, unknown>;
     expect(saved.providerOverride).toBeUndefined();
     expect(saved.modelOverride).toBeUndefined();
     expect(saved.authProfileOverride).toBeUndefined();

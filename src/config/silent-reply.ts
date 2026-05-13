@@ -1,4 +1,3 @@
-import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import {
   classifySilentReplyConversationType,
   resolveSilentReplyPolicyFromPolicies,
@@ -18,23 +17,6 @@ type ResolveSilentReplyParams = {
   conversationType?: SilentReplyConversationType;
 };
 
-function deriveSilentReplyConversationTypeFromSessionKey(
-  sessionKey: string | undefined,
-): SilentReplyConversationType | undefined {
-  const parsed = parseAgentSessionKey(sessionKey);
-  const rest = parsed?.rest ?? sessionKey;
-  const parts = normalizeLowercaseStringOrEmpty(rest).split(":");
-  for (const part of parts) {
-    if (part === "direct" || part === "dm") {
-      return "direct";
-    }
-    if (part === "group" || part === "channel") {
-      return "group";
-    }
-  }
-  return undefined;
-}
-
 function resolveSilentReplyConversationContext(params: ResolveSilentReplyParams): {
   conversationType: SilentReplyConversationType;
   defaultPolicy?: SilentReplyPolicyShape;
@@ -43,9 +25,9 @@ function resolveSilentReplyConversationContext(params: ResolveSilentReplyParams)
   surfaceRewrite?: SilentReplyRewriteShape;
 } {
   const conversationType = classifySilentReplyConversationType({
+    sessionKey: params.sessionKey,
     surface: params.surface,
-    conversationType:
-      params.conversationType ?? deriveSilentReplyConversationTypeFromSessionKey(params.sessionKey),
+    conversationType: params.conversationType,
   });
   const normalizedSurface = normalizeLowercaseStringOrEmpty(params.surface);
   const surface = normalizedSurface ? params.cfg?.surfaces?.[normalizedSurface] : undefined;

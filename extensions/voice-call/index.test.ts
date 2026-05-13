@@ -1,4 +1,6 @@
+import fs from "node:fs";
 import os from "node:os";
+import path from "node:path";
 import { Command } from "commander";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -110,13 +112,6 @@ function createCallRecord(overrides: Partial<CallRecord> = {}): CallRecord {
   };
 }
 
-function createOpenKeyedStoreStub() {
-  return vi.fn(() => ({
-    register: vi.fn(async () => {}),
-    entries: vi.fn(async () => []),
-  }));
-}
-
 function createServiceContext(): Parameters<NonNullable<Registered["service"]>["start"]>[0] {
   return {
     config: {},
@@ -130,7 +125,6 @@ function setup(config: Record<string, unknown>): Registered {
   const methodScopes = new Map<string, string | undefined>();
   const tools: unknown[] = [];
   let service: Registered["service"];
-  const openKeyedStore = createOpenKeyedStoreStub();
   const api = createTestPluginApi({
     id: "voice-call",
     name: "Voice Call",
@@ -139,10 +133,7 @@ function setup(config: Record<string, unknown>): Registered {
     source: "test",
     config: {},
     pluginConfig: config,
-    runtime: {
-      state: { openKeyedStore },
-      tts: { textToSpeechTelephony: vi.fn() },
-    } as unknown as OpenClawPluginApi["runtime"],
+    runtime: { tts: { textToSpeechTelephony: vi.fn() } } as unknown as OpenClawPluginApi["runtime"],
     logger: noopLogger,
     registerGatewayMethod: (method: string, handler: unknown, opts?: { scope?: string }) => {
       methods.set(method, handler);
@@ -201,10 +192,7 @@ async function registerVoiceCallCli(
     source: "test",
     config: {},
     pluginConfig,
-    runtime: {
-      state: { openKeyedStore: createOpenKeyedStoreStub() },
-      tts: { textToSpeechTelephony: vi.fn() },
-    },
+    runtime: { tts: { textToSpeechTelephony: vi.fn() } },
     logger: noopLogger,
     registerGatewayMethod: () => {},
     registerTool: () => {},
@@ -595,22 +583,37 @@ describe("voice-call plugin", () => {
     expect(runtimeStub.manager.speak).not.toHaveBeenCalled();
   });
 
-  it("rejects legacy runtime config and warns to run doctor", async () => {
-    expect(() =>
-      setup({
+  it("normalizes legacy config through runtime creation and warns to run doctor", async () => {
+    const { methods } = setup({
+      enabled: true,
+      provider: "log",
+      twilio: {
+        from: "+15550001234",
+      },
+      streaming: {
         enabled: true,
-        provider: "log",
-        twilio: {
-          from: "+15550001234",
-        },
-        streaming: {
-          enabled: true,
-          sttProvider: "openai",
-          openaiApiKey: "sk-test", // pragma: allowlist secret
-        },
-      }),
-    ).toThrow();
-    expect(vi.mocked(createVoiceCallRuntime)).not.toHaveBeenCalled();
+        sttProvider: "openai",
+        openaiApiKey: "sk-test", // pragma: allowlist secret
+      },
+    });
+    const handler = methods.get("voicecall.status") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const respond = vi.fn();
+
+    await handler?.({ params: { callId: "call-1" }, respond });
+
+    expect(vi.mocked(createVoiceCallRuntime)).toHaveBeenCalledTimes(1);
+    const runtimeConfig = firstRuntimeConfig();
+    expect(runtimeConfig?.enabled).toBe(true);
+    expect(runtimeConfig?.provider).toBe("mock");
+    expect(runtimeConfig?.fromNumber).toBe("+15550001234");
+    expect(runtimeConfig?.streaming?.enabled).toBe(true);
+    expect(runtimeConfig?.streaming?.provider).toBe("openai");
+    expect(runtimeConfig?.streaming?.providers?.openai?.apiKey).toBe("sk-test");
     expectWarningIncludes('Run "openclaw doctor --fix"');
   });
 
@@ -651,25 +654,24 @@ describe("voice-call plugin", () => {
     expect(String(result.details.error)).toContain("sid required");
   });
 
-  it("CLI latency summarizes turn metrics from SQLite-backed call records", async () => {
+  it("CLI latency summarizes turn metrics from JSONL", async () => {
     const program = new Command();
-    vi.mocked(runtimeStub.manager.getCallHistory).mockResolvedValueOnce([
-      createCallRecord({
-        callId: "call-latency-1",
-        metadata: { lastTurnLatencyMs: 100, lastTurnListenWaitMs: 70 },
-      }),
-      createCallRecord({
-        callId: "call-latency-2",
-        metadata: { lastTurnLatencyMs: 200, lastTurnListenWaitMs: 110 },
-      }),
-    ]);
+    const tmpFile = path.join(os.tmpdir(), `voicecall-latency-${Date.now()}.jsonl`);
+    fs.writeFileSync(
+      tmpFile,
+      [
+        JSON.stringify({ metadata: { lastTurnLatencyMs: 100, lastTurnListenWaitMs: 70 } }),
+        JSON.stringify({ metadata: { lastTurnLatencyMs: 200, lastTurnListenWaitMs: 110 } }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
 
     const stdout = captureStdout();
 
     try {
       await registerVoiceCallCli(program);
 
-      await program.parseAsync(["voicecall", "latency", "--last", "10"], {
+      await program.parseAsync(["voicecall", "latency", "--file", tmpFile, "--last", "10"], {
         from: "user",
       });
 
@@ -679,6 +681,7 @@ describe("voice-call plugin", () => {
       expect(printed).toContain('"p95Ms": 200');
     } finally {
       stdout.restore();
+      fs.unlinkSync(tmpFile);
     }
   });
 

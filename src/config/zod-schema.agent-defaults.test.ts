@@ -167,14 +167,46 @@ describe("agent defaults schema", () => {
     expect(result.embeddedPi?.executionContract).toBe("strict-agentic");
   });
 
-  it("accepts compaction.rotateAfterCompaction", () => {
+  it("accepts runRetries configuration on defaults and agent entries", () => {
+    const result = AgentDefaultsSchema.parse({
+      runRetries: {
+        base: 24,
+        max: 160,
+      },
+    });
+    expect(result?.runRetries?.base).toBe(24);
+    expect(result?.runRetries?.max).toBe(160);
+
+    const agentResult = AgentEntrySchema.parse({
+      id: "test",
+      runRetries: {
+        min: 10,
+        max: 50,
+      },
+    });
+    expect(agentResult?.runRetries?.min).toBe(10);
+    expect(agentResult?.runRetries?.max).toBe(50);
+  });
+
+  it("rejects runRetries with max < min", () => {
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({ runRetries: { min: 100, max: 50 } }),
+      "runRetries.max",
+    );
+    expectSchemaFailurePath(
+      AgentEntrySchema.safeParse({ id: "test", runRetries: { min: 100, max: 50 } }),
+      "runRetries.max",
+    );
+  });
+
+  it("accepts compaction.truncateAfterCompaction", () => {
     const result = AgentDefaultsSchema.parse({
       compaction: {
-        rotateAfterCompaction: true,
+        truncateAfterCompaction: true,
         maxActiveTranscriptBytes: "20mb",
       },
     })!;
-    expect(result.compaction?.rotateAfterCompaction).toBe(true);
+    expect(result.compaction?.truncateAfterCompaction).toBe(true);
     expect(result.compaction?.maxActiveTranscriptBytes).toBe("20mb");
   });
 

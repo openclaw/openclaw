@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, vi } from "vitest";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles.js";
 import { resetSkillsRefreshForTest } from "../agents/skills/refresh.js";
+import { clearSessionStoreCacheForTest } from "../config/sessions.js";
 import { resetSystemEventsForTest } from "../infra/system-events.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginProviderRegistration } from "../plugins/registry.js";
@@ -92,6 +93,7 @@ export function installDirectiveBehaviorE2EHooks() {
   beforeEach(async () => {
     await resetSkillsRefreshForTest();
     clearRuntimeAuthProfileStoreSnapshots();
+    clearSessionStoreCacheForTest();
     resetSystemEventsForTest();
     resetPluginRuntimeStateForTest();
     setActivePluginRegistry(createDirectiveBehaviorProviderRegistry());
@@ -120,6 +122,7 @@ export function installDirectiveBehaviorE2EHooks() {
   afterEach(async () => {
     await resetSkillsRefreshForTest();
     clearRuntimeAuthProfileStoreSnapshots();
+    clearSessionStoreCacheForTest();
     resetSystemEventsForTest();
     resetPluginRuntimeStateForTest();
     vi.restoreAllMocks();

@@ -2,11 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  loadPersistedAuthProfileStore,
-  savePersistedAuthProfileSecretsStore,
-} from "../src/agents/auth-profiles/persisted.js";
-import { closeOpenClawStateDatabaseForTest } from "../src/state/openclaw-state-db.js";
 import { cleanupTempDirs, makeTempDir } from "./helpers/temp-dir.js";
 import { installTestEnv } from "./test-env.js";
 
@@ -66,7 +61,6 @@ function requireTelegramStreaming(
 }
 
 afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
   while (cleanupFns.length > 0) {
     cleanupFns.pop()?.();
   }
@@ -124,29 +118,9 @@ describe("installTestEnv", () => {
       path.join(realHome, ".openclaw", "external-plugins", "glueclaw", "openclaw.plugin.json"),
       '{"id":"glueclaw"}\n',
     );
-    const realStateDir = path.join(realHome, ".openclaw");
-    const realAgentDir = path.join(realStateDir, "agents", "main", "agent");
-    fs.mkdirSync(realAgentDir, { recursive: true });
-    savePersistedAuthProfileSecretsStore(
-      {
-        version: 1,
-        profiles: {
-          "openai:default": {
-            type: "api_key",
-            provider: "openai",
-            key: "sk-test",
-          },
-        },
-      },
-      realAgentDir,
-      {
-        env: {
-          ...process.env,
-          HOME: realHome,
-          USERPROFILE: realHome,
-          OPENCLAW_STATE_DIR: realStateDir,
-        },
-      },
+    writeFile(
+      path.join(realHome, ".openclaw", "agents", "main", "agent", "auth-profiles.json"),
+      JSON.stringify({ version: 1, profiles: { default: { provider: "openai" } } }, null, 2),
     );
     writeFile(path.join(realHome, ".claude", ".credentials.json"), '{"accessToken":"token"}\n');
     writeFile(path.join(realHome, ".claude", "projects", "old-session.jsonl"), "session\n");
@@ -225,12 +199,11 @@ describe("installTestEnv", () => {
         ),
       ),
     ).toBe(true);
-    const tempAgentDir = path.join(testEnv.tempHome, ".openclaw", "agents", "main", "agent");
-    expect(loadPersistedAuthProfileStore(tempAgentDir)?.profiles["openai:default"]).toEqual({
-      type: "api_key",
-      provider: "openai",
-      key: "sk-test",
-    });
+    expect(
+      fs.existsSync(
+        path.join(testEnv.tempHome, ".openclaw", "agents", "main", "agent", "auth-profiles.json"),
+      ),
+    ).toBe(true);
     expect(fs.existsSync(path.join(testEnv.tempHome, ".claude", ".credentials.json"))).toBe(true);
     expect(fs.existsSync(path.join(testEnv.tempHome, ".claude", "projects"))).toBe(false);
     expect(fs.existsSync(path.join(testEnv.tempHome, ".claude", "settings.local.json"))).toBe(

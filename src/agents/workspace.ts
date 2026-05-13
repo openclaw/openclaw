@@ -1,16 +1,9 @@
-import crypto from "node:crypto";
 import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { Insertable, Selectable } from "kysely";
 import { openRootFile } from "../infra/boundary-file-read.js";
 import { pathExists } from "../infra/fs-safe.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../infra/kysely-sync.js";
-import { sqliteNullableText } from "../infra/sqlite-row-values.js";
+import { replaceFileAtomic } from "../infra/replace-file.js";
 import {
   CANONICAL_ROOT_MEMORY_FILENAME,
   exactWorkspaceEntryExists,
@@ -18,11 +11,6 @@ import {
 import { runCommandWithTimeout } from "../process/exec.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { readStringValue } from "../shared/string-coerce.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
 import { resolveUserPath } from "../utils.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "./workspace-default.js";
 import { resolveWorkspaceTemplateDir } from "./workspace-templates.js";
@@ -38,10 +26,9 @@ export const DEFAULT_USER_FILENAME = "USER.md";
 export const DEFAULT_HEARTBEAT_FILENAME = "HEARTBEAT.md";
 export const DEFAULT_BOOTSTRAP_FILENAME = "BOOTSTRAP.md";
 export const DEFAULT_MEMORY_FILENAME = CANONICAL_ROOT_MEMORY_FILENAME;
+const WORKSPACE_STATE_DIRNAME = ".openclaw";
+const WORKSPACE_STATE_FILENAME = "workspace-state.json";
 const WORKSPACE_STATE_VERSION = 1;
-type WorkspaceSetupDatabase = Pick<OpenClawStateKyselyDatabase, "workspace_setup_state">;
-type WorkspaceSetupRow = Selectable<WorkspaceSetupDatabase["workspace_setup_state"]>;
-type WorkspaceSetupInsert = Insertable<WorkspaceSetupDatabase["workspace_setup_state"]>;
 const WORKSPACE_ONBOARDING_PROFILE_FILENAMES = [
   DEFAULT_SOUL_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
@@ -276,6 +263,7 @@ type WorkspaceBootstrapCompletionReconcileResult = {
 async function reconcileWorkspaceBootstrapCompletionState(params: {
   dir: string;
   bootstrapPath: string;
+  statePath: string;
   state: WorkspaceSetupState;
   bootstrapExists?: boolean;
 }): Promise<WorkspaceBootstrapCompletionReconcileResult> {
@@ -292,7 +280,7 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
       ...params.state,
       setupCompletedAt: new Date().toISOString(),
     };
-    await writeWorkspaceSetupStateForDir(params.dir, completedState);
+    await writeWorkspaceSetupState(params.statePath, completedState);
     return { repaired: true, bootstrapExists: false, state: completedState };
   }
 
@@ -312,64 +300,66 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
     setupCompletedAt: now,
   };
   await fs.rm(params.bootstrapPath, { force: true });
-  await writeWorkspaceSetupStateForDir(params.dir, repairedState);
+  await writeWorkspaceSetupState(params.statePath, repairedState);
   return { repaired: true, bootstrapExists: false, state: repairedState };
 }
 
-function resolveWorkspaceStateKey(dir: string): string {
-  return crypto.createHash("sha256").update(resolveUserPath(dir)).digest("hex");
+function resolveWorkspaceStatePath(dir: string): string {
+  return path.join(dir, WORKSPACE_STATE_DIRNAME, WORKSPACE_STATE_FILENAME);
 }
 
-function rowToWorkspaceSetupState(row: WorkspaceSetupRow): WorkspaceSetupState {
-  return {
-    version: WORKSPACE_STATE_VERSION,
-    bootstrapSeededAt: readStringValue(row.bootstrap_seeded_at),
-    setupCompletedAt: readStringValue(row.setup_completed_at),
-  };
-}
-
-function workspaceSetupStateToRow(params: {
-  dir: string;
-  state: WorkspaceSetupState;
-}): WorkspaceSetupInsert {
-  const resolvedDir = resolveUserPath(params.dir);
-  return {
-    workspace_key: resolveWorkspaceStateKey(resolvedDir),
-    workspace_path: resolvedDir,
-    version: WORKSPACE_STATE_VERSION,
-    bootstrap_seeded_at: sqliteNullableText(params.state.bootstrapSeededAt),
-    setup_completed_at: sqliteNullableText(params.state.setupCompletedAt),
-    updated_at: Date.now(),
-  };
-}
-
-async function readWorkspaceSetupStateForResolvedDir(dir: string): Promise<WorkspaceSetupState> {
-  const database = openOpenClawStateDatabase();
-  const db = getNodeSqliteKysely<WorkspaceSetupDatabase>(database.db);
-  const row = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db
-      .selectFrom("workspace_setup_state")
-      .select([
-        "workspace_key",
-        "workspace_path",
-        "version",
-        "bootstrap_seeded_at",
-        "setup_completed_at",
-        "updated_at",
-      ])
-      .where("workspace_key", "=", resolveWorkspaceStateKey(dir)),
-  );
-  if (row) {
-    return rowToWorkspaceSetupState(row);
+function parseWorkspaceSetupState(raw: string): WorkspaceSetupState | null {
+  try {
+    const parsed = JSON.parse(raw) as {
+      bootstrapSeededAt?: unknown;
+      setupCompletedAt?: unknown;
+      onboardingCompletedAt?: unknown;
+    };
+    if (!parsed || typeof parsed !== "object") {
+      return null;
+    }
+    const legacyCompletedAt = readStringValue(parsed.onboardingCompletedAt);
+    return {
+      version: WORKSPACE_STATE_VERSION,
+      bootstrapSeededAt: readStringValue(parsed.bootstrapSeededAt),
+      setupCompletedAt: readStringValue(parsed.setupCompletedAt) ?? legacyCompletedAt,
+    };
+  } catch {
+    return null;
   }
-  return {
-    version: WORKSPACE_STATE_VERSION,
-  };
+}
+
+async function readWorkspaceSetupState(
+  statePath: string,
+  opts?: { persistLegacyMigration?: boolean },
+): Promise<WorkspaceSetupState> {
+  try {
+    const raw = await fs.readFile(statePath, "utf-8");
+    const parsed = parseWorkspaceSetupState(raw);
+    if (
+      opts?.persistLegacyMigration &&
+      parsed &&
+      raw.includes('"onboardingCompletedAt"') &&
+      !raw.includes('"setupCompletedAt"') &&
+      parsed.setupCompletedAt
+    ) {
+      await writeWorkspaceSetupState(statePath, parsed);
+    }
+    return parsed ?? { version: WORKSPACE_STATE_VERSION };
+  } catch (err) {
+    const anyErr = err as { code?: string };
+    if (anyErr.code !== "ENOENT") {
+      throw err;
+    }
+    return {
+      version: WORKSPACE_STATE_VERSION,
+    };
+  }
 }
 
 async function readWorkspaceSetupStateForDir(dir: string): Promise<WorkspaceSetupState> {
-  return await readWorkspaceSetupStateForResolvedDir(resolveUserPath(dir));
+  const statePath = resolveWorkspaceStatePath(resolveUserPath(dir));
+  return await readWorkspaceSetupState(statePath);
 }
 
 export async function isWorkspaceSetupCompleted(dir: string): Promise<boolean> {
@@ -381,7 +371,8 @@ export async function resolveWorkspaceBootstrapStatus(
   dir: string,
 ): Promise<"pending" | "complete"> {
   const resolvedDir = resolveUserPath(dir);
-  const state = await readWorkspaceSetupStateForResolvedDir(resolvedDir);
+  const statePath = resolveWorkspaceStatePath(resolvedDir);
+  const state = await readWorkspaceSetupState(statePath);
   if (typeof state.setupCompletedAt === "string" && state.setupCompletedAt.trim().length > 0) {
     return "complete";
   }
@@ -401,35 +392,28 @@ export async function reconcileWorkspaceBootstrapCompletion(
   dir: string,
 ): Promise<WorkspaceBootstrapCompletionReconcileResult> {
   const resolvedDir = resolveUserPath(dir);
+  const statePath = resolveWorkspaceStatePath(resolvedDir);
   const bootstrapPath = path.join(resolvedDir, DEFAULT_BOOTSTRAP_FILENAME);
-  const state = await readWorkspaceSetupStateForResolvedDir(resolvedDir);
+  const state = await readWorkspaceSetupState(statePath, {
+    persistLegacyMigration: true,
+  });
   return await reconcileWorkspaceBootstrapCompletionState({
     dir: resolvedDir,
     bootstrapPath,
+    statePath,
     state,
   });
 }
 
-async function writeWorkspaceSetupStateForDir(
-  dir: string,
+async function writeWorkspaceSetupState(
+  statePath: string,
   state: WorkspaceSetupState,
 ): Promise<void> {
-  const row = workspaceSetupStateToRow({ dir, state });
-  runOpenClawStateWriteTransaction((database) => {
-    const db = getNodeSqliteKysely<WorkspaceSetupDatabase>(database.db);
-    const { workspace_key: _workspaceKey, ...updates } = row;
-    executeSqliteQuerySync(
-      database.db,
-      db
-        .insertInto("workspace_setup_state")
-        .values(row)
-        .onConflict((conflict) => conflict.column("workspace_key").doUpdateSet(updates)),
-    );
+  await replaceFileAtomic({
+    filePath: statePath,
+    content: `${JSON.stringify(state, null, 2)}\n`,
+    tempPrefix: ".workspace-state",
   });
-}
-
-export async function readWorkspaceSetupStateForTests(dir: string): Promise<WorkspaceSetupState> {
-  return await readWorkspaceSetupStateForResolvedDir(resolveUserPath(dir));
 }
 
 async function hasGitRepo(dir: string): Promise<boolean> {
@@ -510,6 +494,7 @@ export async function ensureAgentWorkspace(params?: {
   const userPath = path.join(dir, DEFAULT_USER_FILENAME);
   const heartbeatPath = path.join(dir, DEFAULT_HEARTBEAT_FILENAME);
   const bootstrapPath = path.join(dir, DEFAULT_BOOTSTRAP_FILENAME);
+  const statePath = resolveWorkspaceStatePath(dir);
 
   const isBrandNewWorkspace = await (async () => {
     const templatePaths = [agentsPath, soulPath, toolsPath, identityPath, userPath, heartbeatPath];
@@ -554,7 +539,9 @@ export async function ensureAgentWorkspace(params?: {
     await writeFileIfMissing(heartbeatPath, heartbeatTemplate);
   }
 
-  let state = await readWorkspaceSetupStateForResolvedDir(dir);
+  let state = await readWorkspaceSetupState(statePath, {
+    persistLegacyMigration: true,
+  });
   let stateDirty = false;
   const markState = (next: Partial<WorkspaceSetupState>) => {
     state = { ...state, ...next };
@@ -571,6 +558,7 @@ export async function ensureAgentWorkspace(params?: {
     const repair = await reconcileWorkspaceBootstrapCompletionState({
       dir,
       bootstrapPath,
+      statePath,
       state,
       bootstrapExists,
     });
@@ -607,7 +595,7 @@ export async function ensureAgentWorkspace(params?: {
   }
 
   if (stateDirty) {
-    await writeWorkspaceSetupStateForDir(dir, state);
+    await writeWorkspaceSetupState(statePath, state);
   }
   await ensureGitRepo(dir, isBrandNewWorkspace);
 

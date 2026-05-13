@@ -5,6 +5,7 @@ export {
   normalizeResolvedSecretInputString,
   parseDurationMs,
   parseNonNegativeByteSize,
+  resolveSessionTranscriptsDirForAgent,
   resolveStateDir,
 } from "./openclaw-runtime.js";
 export type {

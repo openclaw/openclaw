@@ -21,6 +21,19 @@ type GatewayStartupTrace = {
   detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
 };
 
+export function resolveGatewayStartupMaintenanceConfig(params: {
+  cfgAtStart: OpenClawConfig;
+  startupRuntimeConfig: OpenClawConfig;
+}): OpenClawConfig {
+  return params.cfgAtStart.channels === undefined &&
+    params.startupRuntimeConfig.channels !== undefined
+    ? {
+        ...params.cfgAtStart,
+        channels: params.startupRuntimeConfig.channels,
+      }
+    : params.cfgAtStart;
+}
+
 export async function prepareGatewayPluginBootstrap(params: {
   cfgAtStart: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
@@ -31,6 +44,35 @@ export async function prepareGatewayPluginBootstrap(params: {
   loadRuntimePlugins?: boolean;
 }) {
   const activationSourceConfig = params.activationSourceConfig ?? params.cfgAtStart;
+  const startupMaintenanceConfig = resolveGatewayStartupMaintenanceConfig({
+    cfgAtStart: params.cfgAtStart,
+    startupRuntimeConfig: params.startupRuntimeConfig,
+  });
+
+  const shouldRunStartupMaintenance =
+    !params.minimalTestGateway || startupMaintenanceConfig.channels !== undefined;
+  if (shouldRunStartupMaintenance) {
+    const { runChannelPluginStartupMaintenance } =
+      await import("../channels/plugins/lifecycle-startup.js");
+    const startupTasks = [
+      runChannelPluginStartupMaintenance({
+        cfg: startupMaintenanceConfig,
+        env: process.env,
+        log: params.log,
+      }),
+    ];
+    if (!params.minimalTestGateway) {
+      const { runStartupSessionMigration } = await import("./server-startup-session-migration.js");
+      startupTasks.push(
+        runStartupSessionMigration({
+          cfg: params.cfgAtStart,
+          env: process.env,
+          log: params.log,
+        }),
+      );
+    }
+    await Promise.all(startupTasks);
+  }
 
   initSubagentRegistry();
 

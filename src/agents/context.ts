@@ -1,5 +1,5 @@
 // Lazy-load pi-coding-agent model metadata so we can infer context windows when
-// the agent reports a model id. This includes custom stored model catalog entries.
+// the agent reports a model id. This includes custom models.json entries.
 
 import path from "node:path";
 import { isHelpOrVersionInvocation } from "../cli/argv.js";
@@ -172,7 +172,7 @@ export function shouldEagerWarmContextWindowCache(argv: string[] = process.argv)
   // This module can also land inside shared dist chunks that are imported from
   // plugin-sdk/library surfaces during smoke tests and plugin loading. If we do
   // eager warmup for those generic Node script imports, merely importing the
-  // built plugin-sdk can call ensureOpenClawModelCatalog(), which cascades into
+  // built plugin-sdk can call ensureOpenClawModelsJson(), which cascades into
   // plugin discovery and breaks dist/source singleton assumptions.
   if (!isLikelyOpenClawCliProcess(argv)) {
     return false;
@@ -231,7 +231,7 @@ function ensureContextWindowCacheLoaded(): Promise<void> {
 
   CONTEXT_WINDOW_RUNTIME_STATE.loadPromise = (async () => {
     try {
-      await (await loadModelsConfigRuntime()).ensureOpenClawModelCatalog(cfg);
+      await (await loadModelsConfigRuntime()).ensureOpenClawModelsJson(cfg);
     } catch {
       // Continue with best-effort discovery/overrides.
     }
@@ -278,7 +278,7 @@ export function lookupContextTokens(
   }
   if (options?.allowAsyncLoad === false) {
     // Read-only callers still need synchronous config-backed overrides, but they
-    // should not start background model discovery or model catalog writes.
+    // should not start background model discovery or models.json writes.
     primeConfiguredContextWindows();
   } else {
     // Best-effort: kick off loading on demand, but don't block lookups.

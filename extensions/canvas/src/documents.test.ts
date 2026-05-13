@@ -1,22 +1,18 @@
-import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { resetPluginBlobStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildCanvasDocumentEntryUrl,
   createCanvasDocument,
-  readCanvasDocumentHttpBlob,
   resolveCanvasDocumentAssets,
   resolveCanvasDocumentDir,
   resolveCanvasHttpPathToLocalPath,
-  resolveCanvasHttpPathToMaterializedLocalPath,
 } from "./documents.js";
 
 const tempDirs: string[] = [];
 
 afterEach(async () => {
-  resetPluginBlobStoreForTests();
   await Promise.all(
     tempDirs.splice(0).map(async (dir) => {
       await import("node:fs/promises").then((fs) => fs.rm(dir, { recursive: true, force: true }));
@@ -25,7 +21,7 @@ afterEach(async () => {
 });
 
 describe("canvas documents", () => {
-  it("builds entry urls for SQLite-backed managed documents", async () => {
+  it("builds entry urls for materialized path documents under managed storage", async () => {
     const stateDir = await mkdtemp(path.join(tmpdir(), "openclaw-canvas-documents-"));
     tempDirs.push(stateDir);
     const workspaceDir = await mkdtemp(path.join(tmpdir(), "openclaw-canvas-documents-workspace-"));
@@ -46,17 +42,7 @@ describe("canvas documents", () => {
 
     expect(document.entryUrl).toContain("/__openclaw__/canvas/documents/");
     expect(document.localEntrypoint).toBe("index.html");
-    expect(resolveCanvasDocumentDir(document.id, { stateDir })).toBe(
-      `sqlite:canvas/documents/${document.id}`,
-    );
-    await expect(
-      readCanvasDocumentHttpBlob(document.entryUrl, { stateDir }),
-    ).resolves.toMatchObject({
-      documentId: document.id,
-      logicalPath: "index.html",
-      contentType: "text/html; charset=utf-8",
-    });
-    expect(resolveCanvasHttpPathToLocalPath(document.entryUrl, { stateDir })).toBeNull();
+    expect(resolveCanvasDocumentDir(document.id, { stateDir })).toContain(stateDir);
   });
 
   it("normalizes nested local entrypoint urls", () => {
@@ -88,9 +74,12 @@ describe("canvas documents", () => {
       { stateDir },
     );
 
-    const indexHtml = (
-      await readCanvasDocumentHttpBlob(document.entryUrl, { stateDir })
-    )?.blob.toString("utf8");
+    const indexHtml = await import("node:fs/promises").then((fs) =>
+      fs.readFile(
+        path.join(resolveCanvasDocumentDir(document.id, { stateDir }), "index.html"),
+        "utf8",
+      ),
+    );
 
     expect(indexHtml).toContain("<div class='demo'>Front</div>");
     expect(indexHtml).toContain("<style>.demo{color:red}</style>");
@@ -122,9 +111,12 @@ describe("canvas documents", () => {
     expect(first.id).toBe("status-card");
     expect(second.id).toBe("status-card");
 
-    const indexHtml = (
-      await readCanvasDocumentHttpBlob(second.entryUrl, { stateDir })
-    )?.blob.toString("utf8");
+    const indexHtml = await import("node:fs/promises").then((fs) =>
+      fs.readFile(
+        path.join(resolveCanvasDocumentDir(second.id, { stateDir }), "index.html"),
+        "utf8",
+      ),
+    );
     expect(indexHtml).toContain("second");
     expect(indexHtml).not.toContain("first");
   });
@@ -160,7 +152,10 @@ describe("canvas documents", () => {
       {
         logicalPath: "collection.media/audio.mp3",
         contentType: "audio/mpeg",
-        localPath: `sqlite:canvas/documents/${document.id}/collection.media/audio.mp3`,
+        localPath: path.join(
+          resolveCanvasDocumentDir(document.id, { stateDir }),
+          "collection.media/audio.mp3",
+        ),
         url: `/__openclaw__/canvas/documents/${document.id}/collection.media/audio.mp3`,
       },
     ]);
@@ -173,15 +168,13 @@ describe("canvas documents", () => {
       {
         logicalPath: "collection.media/audio.mp3",
         contentType: "audio/mpeg",
-        localPath: `sqlite:canvas/documents/${document.id}/collection.media/audio.mp3`,
+        localPath: path.join(
+          resolveCanvasDocumentDir(document.id, { stateDir }),
+          "collection.media/audio.mp3",
+        ),
         url: `http://127.0.0.1:19003/__openclaw__/canvas/documents/${document.id}/collection.media/audio.mp3`,
       },
     ]);
-    const audioBlob = await readCanvasDocumentHttpBlob(
-      `/__openclaw__/canvas/documents/${document.id}/collection.media/audio.mp3`,
-      { stateDir },
-    );
-    expect(audioBlob?.blob.toString("utf8")).toBe("audio");
   });
 
   it("wraps local pdf documents in an index viewer page", async () => {
@@ -203,9 +196,10 @@ describe("canvas documents", () => {
     );
 
     expect(document.entryUrl).toBe(`/__openclaw__/canvas/documents/${document.id}/index.html`);
-    const indexHtml = (
-      await readCanvasDocumentHttpBlob(document.entryUrl, { stateDir })
-    )?.blob.toString("utf8");
+    const indexHtml = await readFile(
+      path.join(resolveCanvasDocumentDir(document.id, { stateDir }), "index.html"),
+      "utf8",
+    );
     expect(indexHtml).toContain('type="application/pdf"');
     expect(indexHtml).toContain('data="demo.pdf"');
   });
@@ -226,9 +220,10 @@ describe("canvas documents", () => {
     );
 
     expect(document.entryUrl).toBe(`/__openclaw__/canvas/documents/${document.id}/index.html`);
-    const indexHtml = (
-      await readCanvasDocumentHttpBlob(document.entryUrl, { stateDir })
-    )?.blob.toString("utf8");
+    const indexHtml = await readFile(
+      path.join(resolveCanvasDocumentDir(document.id, { stateDir }), "index.html"),
+      "utf8",
+    );
     expect(indexHtml).toContain('type="application/pdf"');
     expect(indexHtml).toContain('data="https://example.com/demo.pdf"');
   });
@@ -243,49 +238,5 @@ describe("canvas documents", () => {
         { stateDir },
       ),
     ).toBeNull();
-  });
-
-  it("materializes SQLite-backed canvas documents only when a local media path is needed", async () => {
-    const stateDir = await mkdtemp(path.join(tmpdir(), "openclaw-canvas-documents-"));
-    tempDirs.push(stateDir);
-
-    const document = await createCanvasDocument(
-      {
-        kind: "html_bundle",
-        entrypoint: { type: "html", value: "<div>media</div>" },
-      },
-      { stateDir },
-    );
-
-    const localPath = await resolveCanvasHttpPathToMaterializedLocalPath(document.entryUrl, {
-      stateDir,
-    });
-
-    expect(localPath).toMatch(/canvas-documents/);
-    expect(await readFile(localPath ?? "", "utf8")).toContain("<div>media</div>");
-  });
-
-  it("keeps explicit canvas roots file-backed", async () => {
-    const stateDir = await mkdtemp(path.join(tmpdir(), "openclaw-canvas-documents-"));
-    tempDirs.push(stateDir);
-    const canvasRootDir = await mkdtemp(path.join(tmpdir(), "openclaw-canvas-root-"));
-    tempDirs.push(canvasRootDir);
-
-    const document = await createCanvasDocument(
-      {
-        kind: "html_bundle",
-        entrypoint: { type: "html", value: "<div>file</div>" },
-      },
-      { stateDir, canvasRootDir },
-    );
-
-    const documentDir = resolveCanvasDocumentDir(document.id, { stateDir, rootDir: canvasRootDir });
-    expect(documentDir).toContain(canvasRootDir);
-    expect(await readFile(path.join(documentDir, "index.html"), "utf8")).toContain(
-      "<div>file</div>",
-    );
-    expect(resolveCanvasHttpPathToLocalPath(document.entryUrl, { rootDir: canvasRootDir })).toBe(
-      path.join(documentDir, "index.html"),
-    );
   });
 });

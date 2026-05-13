@@ -78,20 +78,17 @@ Access groups are documented in detail here: [Access groups](/channels/access-gr
 
 ### Where the state lives
 
-Stored in `~/.openclaw/state/openclaw.sqlite`:
+Stored under `~/.openclaw/credentials/`:
 
-- Pending requests: `channel_pairing_requests`
-- Approved allowlist entries: `channel_pairing_allow_entries`, account-scoped by channel account ID
+- Pending requests: `<channel>-pairing.json`
+- Approved allowlist store:
+  - Default account: `<channel>-allowFrom.json`
+  - Non-default account: `<channel>-<accountId>-allowFrom.json`
 
 Account scoping behavior:
 
-- Non-default accounts read/write only their scoped allowlist entry.
-- Default account uses the `default` account entry.
-
-Older `~/.openclaw/credentials/<channel>-pairing.json`,
-`<channel>-allowFrom.json`, and `<channel>-<accountId>-allowFrom.json` files
-are legacy import sources only. Run `openclaw doctor --fix` to import them into
-SQLite and remove the JSON files.
+- Non-default accounts read/write only their scoped allowlist file.
+- Default account uses the channel-scoped unscoped allowlist file.
 
 Treat these as sensitive (they gate access to your assistant).
 
@@ -126,12 +123,10 @@ The setup code is a base64-encoded JSON payload that contains:
 
 That bootstrap token carries the built-in pairing bootstrap profile:
 
-- primary handed-off `node` token stays `scopes: []`
-- any handed-off `operator` token stays bounded to the bootstrap allowlist:
-  `operator.approvals`, `operator.read`, `operator.talk.secrets`, `operator.write`
-- bootstrap scope checks are role-prefixed, not one flat scope pool:
-  operator scope entries only satisfy operator requests, and non-operator roles
-  must still request scopes under their own role prefix
+- the built-in setup profile allows only the `node` role
+- after approval, the handed-off `node` token stays `scopes: []`
+- the built-in setup-code flow does not hand off an `operator` token
+- operator access requires a separate approved operator pairing or token flow
 - later token rotation/revocation remains bounded by both the device's approved
   role contract and the caller session's operator scopes
 

@@ -1,5 +1,3 @@
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
-import { stripAnsi, visibleWidth } from "../../terminal/ansi.js";
 import {
   type Component,
   Input,
@@ -8,7 +6,9 @@ import {
   type SelectItem,
   type SelectListTheme,
   truncateToWidth,
-} from "../pi-tui-contract.js";
+} from "@earendil-works/pi-tui";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { stripAnsi, visibleWidth } from "../../terminal/ansi.js";
 import { findWordBoundaryIndex, fuzzyFilterLower } from "./fuzzy-filter.js";
 
 const ANSI_ESCAPE = String.fromCharCode(27);

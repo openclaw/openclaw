@@ -48,7 +48,7 @@ describe("resolveChannelModelOverride", () => {
       expected: { model: "demo-provider/demo-topic-model", matchKey: "-100123:topic:99" },
     },
     {
-      name: "falls back to explicit parent conversation id when thread id does not match",
+      name: "falls back to parent session key when thread id does not match",
       input: {
         cfg: {
           channels: {
@@ -61,7 +61,7 @@ describe("resolveChannelModelOverride", () => {
         } as unknown as OpenClawConfig,
         channel: "demo-thread",
         groupId: "999",
-        parentConversationId: "123",
+        parentSessionKey: "agent:main:demo-thread:channel:123:thread:456",
       },
       expected: { model: "demo-provider/demo-parent-model", matchKey: "123" },
     },
@@ -174,7 +174,7 @@ describe("resolveChannelModelOverride", () => {
       } as unknown as OpenClawConfig,
       channel: "scoped-chat",
       groupId: "unrelated",
-      parentConversationId: "room:topic:thread:sender:user",
+      parentSessionKey: "agent:main:scoped-chat:group:room:topic:thread:sender:user",
     });
 
     expect(resolved?.model).toBe("demo-provider/demo-scoped-model");

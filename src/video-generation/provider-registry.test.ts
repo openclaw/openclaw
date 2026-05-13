@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { VideoGenerationProviderPlugin } from "../plugins/types.js";
 
-const resolvePluginCapabilityProvidersMock = vi.hoisted(() => vi.fn());
-
+const resolvePluginCapabilityProvidersMock = vi.hoisted(() =>
+  vi.fn<() => VideoGenerationProviderPlugin[]>(() => []),
+);
 vi.mock("../plugins/capability-provider-runtime.js", () => ({
   resolvePluginCapabilityProviders: resolvePluginCapabilityProvidersMock,
 }));

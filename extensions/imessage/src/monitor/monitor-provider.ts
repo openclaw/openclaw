@@ -31,7 +31,7 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
-import { readSessionUpdatedAt } from "openclaw/plugin-sdk/session-store-runtime";
+import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveIMessageAccount } from "../accounts.js";
@@ -66,6 +66,7 @@ import {
 } from "./inbound-processing.js";
 import { createLoopRateLimiter } from "./loop-rate-limiter.js";
 import { parseIMessageNotification } from "./parse-notification.js";
+import { enqueueIMessageReactionSystemEvent } from "./reaction-system-event.js";
 import { normalizeAllowList, resolveRuntime } from "./runtime.js";
 import { createSelfChatCache } from "./self-chat-cache.js";
 import type { IMessagePayload, MonitorIMessageOpts } from "./types.js";
@@ -492,35 +493,21 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       return;
     }
 
-    const dispatchDecision =
-      decision.kind === "reaction"
-        ? ({
-            kind: "dispatch" as const,
-            isGroup: decision.isGroup,
-            chatId: decision.chatId,
-            chatGuid: decision.chatGuid,
-            chatIdentifier: decision.chatIdentifier,
-            sender: decision.sender,
-            senderNormalized: decision.senderNormalized,
-            route: decision.route,
-            bodyText: decision.text,
-            createdAt: message.created_at ? Date.parse(message.created_at) : undefined,
-            replyContext: null,
-            effectiveWasMentioned: true,
-            commandAuthorized: false,
-          } satisfies Extract<
-            Awaited<ReturnType<typeof resolveIMessageInboundDecision>>,
-            { kind: "dispatch" }
-          >)
-        : decision;
+    if (decision.kind === "reaction") {
+      enqueueIMessageReactionSystemEvent({ decision, runtime, logVerbose });
+      return;
+    }
 
+    const storePath = resolveStorePath(cfg.session?.store, {
+      agentId: decision.route.agentId,
+    });
     const previousTimestamp = readSessionUpdatedAt({
-      agentId: dispatchDecision.route.agentId,
-      sessionKey: dispatchDecision.route.sessionKey,
+      storePath,
+      sessionKey: decision.route.sessionKey,
     });
     const { ctxPayload, chatTarget } = buildIMessageInboundContext({
       cfg,
-      decision: dispatchDecision,
+      decision,
       message,
       previousTimestamp,
       remoteHost,
@@ -534,7 +521,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       },
     });
 
-    const updateTarget = chatTarget || dispatchDecision.sender;
+    const updateTarget = chatTarget || decision.sender;
     const pinnedMainDmOwner = resolvePinnedMainDmOwnerFromAllowlist({
       dmScope: cfg.session?.dmScope,
       allowFrom,
@@ -578,9 +565,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
 
     const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
       cfg,
-      agentId: dispatchDecision.route.agentId,
+      agentId: decision.route.agentId,
       channel: "imessage",
-      accountId: dispatchDecision.route.accountId,
+      accountId: decision.route.accountId,
       typing:
         supportsTyping && typingTarget
           ? {
@@ -626,7 +613,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       markDispatchIdle,
     } = createReplyDispatcherWithTyping({
       ...replyPipeline,
-      humanDelay: resolveHumanDelayConfig(cfg, dispatchDecision.route.agentId),
+      humanDelay: resolveHumanDelayConfig(cfg, decision.route.agentId),
       deliver: async (payload, info) => {
         const target = ctxPayload.To;
         if (!target) {
@@ -637,7 +624,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           cfg,
           channel: "imessage",
           accountId: accountInfo.accountId,
-          agentId: dispatchDecision.route.agentId,
+          agentId: decision.route.agentId,
           ctxPayload,
           payload,
           info,
@@ -675,8 +662,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
 
     await runInboundReplyTurn({
       channel: "imessage",
-      accountId: dispatchDecision.route.accountId,
-      raw: dispatchDecision,
+      accountId: decision.route.accountId,
+      raw: decision,
       adapter: {
         ingest: () => ({
           id: ctxPayload.MessageSid ?? `${ctxPayload.From}:${Date.now()}`,
@@ -684,28 +671,28 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           rawText: ctxPayload.RawBody ?? "",
           textForAgent: ctxPayload.BodyForAgent,
           textForCommands: ctxPayload.CommandBody,
-          raw: dispatchDecision,
+          raw: decision,
         }),
         resolveTurn: () => ({
           channel: "imessage",
-          accountId: dispatchDecision.route.accountId,
-          agentId: dispatchDecision.route.agentId,
-          routeSessionKey: dispatchDecision.route.sessionKey,
+          accountId: decision.route.accountId,
+          routeSessionKey: decision.route.sessionKey,
+          storePath,
           ctxPayload,
           recordInboundSession,
           record: {
             updateLastRoute:
-              !dispatchDecision.isGroup && updateTarget
+              !decision.isGroup && updateTarget
                 ? {
-                    sessionKey: dispatchDecision.route.mainSessionKey,
+                    sessionKey: decision.route.mainSessionKey,
                     channel: "imessage",
                     to: updateTarget,
-                    accountId: dispatchDecision.route.accountId,
+                    accountId: decision.route.accountId,
                     mainDmOwnerPin:
-                      pinnedMainDmOwner && dispatchDecision.senderNormalized
+                      pinnedMainDmOwner && decision.senderNormalized
                         ? {
                             ownerRecipient: pinnedMainDmOwner,
-                            senderRecipient: dispatchDecision.senderNormalized,
+                            senderRecipient: decision.senderNormalized,
                             onSkip: ({ ownerRecipient, senderRecipient }) => {
                               logVerbose(
                                 `imessage: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
@@ -720,8 +707,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             },
           },
           history: {
-            isGroup: dispatchDecision.isGroup,
-            historyKey: dispatchDecision.historyKey,
+            isGroup: decision.isGroup,
+            historyKey: decision.historyKey,
             historyMap: groupHistories,
             limit: historyLimit,
           },

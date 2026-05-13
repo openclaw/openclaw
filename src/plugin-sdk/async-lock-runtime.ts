@@ -1,3 +1,3 @@
-// Process-local async lock helper for small runtime critical sections.
+// Process-local async lock helper for small runtime state files.
 
-export { createAsyncLock } from "../infra/async-lock.js";
+export { createAsyncLock } from "../infra/json-files.js";

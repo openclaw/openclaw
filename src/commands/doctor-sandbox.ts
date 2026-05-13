@@ -7,6 +7,12 @@ import {
   isDockerDaemonUnavailable,
   resolveSandboxScope,
 } from "../agents/sandbox.js";
+import {
+  inspectLegacySandboxRegistryFiles,
+  migrateLegacySandboxRegistryFiles,
+  type LegacySandboxRegistryInspection,
+  type LegacySandboxRegistryMigrationResult,
+} from "../agents/sandbox/registry.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runCommandWithTimeout, runExec } from "../process/exec.js";
@@ -14,12 +20,6 @@ import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
-import {
-  inspectLegacySandboxRegistryFiles,
-  migrateLegacySandboxRegistryFiles,
-  type LegacySandboxRegistryInspection,
-  type LegacySandboxRegistryMigrationResult,
-} from "./doctor/legacy/sandbox-registry.js";
 
 type SandboxScriptInfo = {
   scriptPath: string;
@@ -282,7 +282,7 @@ function formatLegacyRegistryInspectionLine(file: LegacySandboxRegistryInspectio
 function formatLegacyRegistryMigrationLine(result: LegacySandboxRegistryMigrationResult): string {
   const file = shortenHomePath(result.registryPath);
   if (result.status === "migrated") {
-    return `- Migrated ${result.entries} ${result.kind} registry entr${result.entries === 1 ? "y" : "ies"} from ${file} into SQLite.`;
+    return `- Migrated ${result.kind} registry from ${file} into ${result.entries} shard${result.entries === 1 ? "" : "s"}.`;
   }
   if (result.status === "removed-empty") {
     return `- Removed empty legacy ${result.kind} registry ${file}.`;
@@ -305,7 +305,7 @@ export async function maybeRepairSandboxRegistryFiles(prompter: DoctorPrompter):
       [
         "Legacy sandbox registry files detected.",
         ...legacyFiles.map(formatLegacyRegistryInspectionLine),
-        `Run ${formatCliCommand("openclaw doctor --fix")} to migrate them into SQLite.`,
+        `Run ${formatCliCommand("openclaw doctor --fix")} to migrate them to sharded registry files.`,
       ].join("\n"),
       "Sandbox",
     );

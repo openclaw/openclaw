@@ -290,7 +290,7 @@ describeLive("gateway live trajectory export", () => {
         "manifest.json",
         "metadata.json",
         "prompts.json",
-        "session-branch.json",
+        "session.jsonl",
         "tools.json",
       ]) {
         expect(bundleNames).toContain(expectedName);

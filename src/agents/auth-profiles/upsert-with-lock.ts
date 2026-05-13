@@ -1,3 +1,4 @@
+import { ensureAuthStoreFile, resolveAuthStorePath } from "./paths.js";
 import { updateAuthProfileStoreWithLock } from "./store.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 
@@ -6,13 +7,12 @@ export async function upsertAuthProfileWithLock(params: {
   credential: AuthProfileCredential;
   agentDir?: string;
 }): Promise<AuthProfileStore | null> {
+  const authPath = resolveAuthStorePath(params.agentDir);
+  ensureAuthStoreFile(authPath);
+
   try {
     return await updateAuthProfileStoreWithLock({
       agentDir: params.agentDir,
-      saveOptions: {
-        filterExternalAuthProfiles: false,
-        forceLocalProfileIds: [params.profileId],
-      },
       updater: (store) => {
         store.profiles[params.profileId] = params.credential;
         return true;

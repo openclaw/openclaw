@@ -28,7 +28,7 @@ Ollama provider config uses `baseUrl` as the canonical key. OpenClaw also accept
     Custom provider ids that set `api: "ollama"` follow the same rules. For example, an `ollama-remote` provider that points at a private LAN Ollama host can use `apiKey: "ollama-local"` and sub-agents will resolve that marker through the Ollama provider hook instead of treating it as a missing credential. Memory search can also set `agents.defaults.memorySearch.provider` to that custom provider id so embeddings use the matching Ollama endpoint.
   </Accordion>
   <Accordion title="Auth profiles">
-    SQLite auth-profile rows store the credential for a provider id. Put endpoint settings (`baseUrl`, `api`, model ids, headers, timeouts) in `models.providers.<id>`. Older flat auth-profile files such as `{ "ollama-windows": { "apiKey": "ollama-local" } }` are not a runtime format; run `openclaw doctor --fix` to import them as canonical `ollama-windows:default` API-key profiles. `baseUrl` in that file is compatibility noise and should be moved to provider config.
+    `auth-profiles.json` stores the credential for a provider id. Put endpoint settings (`baseUrl`, `api`, model ids, headers, timeouts) in `models.providers.<id>`. Older flat auth-profile files such as `{ "ollama-windows": { "apiKey": "ollama-local" } }` are not a runtime format; run `openclaw doctor --fix` to rewrite them to the canonical `ollama-windows:default` API-key profile with a backup. `baseUrl` in that file is compatibility noise and should be moved to provider config.
   </Accordion>
   <Accordion title="Memory embedding scope">
     When Ollama is used for memory embeddings, bearer auth is scoped to the host where it was declared:
@@ -190,7 +190,7 @@ When you set `OLLAMA_API_KEY` (or an auth profile) and **do not** define `models
 | Token limits         | Sets `maxTokens` to the default Ollama max-token cap used by OpenClaw                                                                                                |
 | Costs                | Sets all costs to `0`                                                                                                                                                |
 
-This avoids manual model entries while keeping the catalog aligned with the local Ollama instance. You can use a full ref such as `ollama/<pulled-model>:latest` in local `infer model run`; OpenClaw resolves that installed model from Ollama's live catalog without requiring a hand-written model catalog entry.
+This avoids manual model entries while keeping the catalog aligned with the local Ollama instance. You can use a full ref such as `ollama/<pulled-model>:latest` in local `infer model run`; OpenClaw resolves that installed model from Ollama's live catalog without requiring a hand-written `models.json` entry.
 
 For signed-in Ollama hosts, some `:cloud` models may be usable through `/api/chat`
 and `/api/show` before they appear in `/api/tags`. When you explicitly select a
@@ -1092,7 +1092,7 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
   <Accordion title="Kimi or GLM returns garbled symbols">
     Hosted Kimi/GLM responses that are long, non-linguistic symbol runs are treated as failed provider output instead of a successful assistant answer. That lets normal retry, fallback, or error handling take over without persisting the corrupted text into the session.
 
-    If it happens repeatedly, capture the raw model name, the current session id, and whether the run used `Cloud + Local` or `Cloud only`, then try a fresh session and a fallback model:
+    If it happens repeatedly, capture the raw model name, the current session file, and whether the run used `Cloud + Local` or `Cloud only`, then try a fresh session and a fallback model:
 
     ```bash
     openclaw infer model run --model ollama/kimi-k2.5:cloud --prompt "Reply with exactly: ok" --json

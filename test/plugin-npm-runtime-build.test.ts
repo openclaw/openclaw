@@ -58,12 +58,6 @@ describe("plugin npm runtime build planning", () => {
     expect(qqbotRuntimePlan.entry).toEqual({
       api: path.join(repoRoot, "extensions", "qqbot", "api.ts"),
       "channel-plugin-api": path.join(repoRoot, "extensions", "qqbot", "channel-plugin-api.ts"),
-      "doctor-legacy-state-api": path.join(
-        repoRoot,
-        "extensions",
-        "qqbot",
-        "doctor-legacy-state-api.ts",
-      ),
       index: path.join(repoRoot, "extensions", "qqbot", "index.ts"),
       "runtime-api": path.join(repoRoot, "extensions", "qqbot", "runtime-api.ts"),
       "secret-contract-api": path.join(repoRoot, "extensions", "qqbot", "secret-contract-api.ts"),

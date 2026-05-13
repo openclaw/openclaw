@@ -1,7 +1,7 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createDefaultCanvasCliDependencies, registerNodesCanvasCommands } from "./src/cli.js";
 import { canvasConfigSchema, isCanvasHostEnabled } from "./src/config.js";
-import { resolveCanvasHttpPathToMaterializedLocalPath } from "./src/documents.js";
+import { resolveCanvasHttpPathToLocalPath } from "./src/documents.js";
 import { A2UI_PATH, CANVAS_HOST_PATH, CANVAS_WS_PATH } from "./src/host/a2ui.js";
 import { createCanvasHttpRouteHandler } from "./src/http-route.js";
 import { createCanvasTool } from "./src/tool.js";
@@ -66,9 +66,7 @@ export default definePluginEntry({
         start: () => {},
         stop: () => httpRouteHandler.close(),
       });
-      api.registerHostedMediaResolver((mediaUrl) =>
-        resolveCanvasHttpPathToMaterializedLocalPath(mediaUrl),
-      );
+      api.registerHostedMediaResolver((mediaUrl) => resolveCanvasHttpPathToLocalPath(mediaUrl));
     }
     api.registerNodeInvokePolicy({
       commands: CANVAS_NODE_COMMANDS,

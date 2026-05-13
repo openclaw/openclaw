@@ -76,7 +76,7 @@ You can tune console verbosity independently via:
 OpenClaw can mask sensitive tokens before log or transcript output leaves the
 process. This logging redaction policy is applied at console, file-log, OTLP
 log-record, and session transcript text sinks, so matching secret values are
-masked before structured log records or transcript messages are persisted.
+masked before JSONL lines or messages are written to disk.
 
 - `logging.redactSensitive`: `off` | `tools` (default: `tools`)
 - `logging.redactPatterns`: array of regex strings (overrides defaults)

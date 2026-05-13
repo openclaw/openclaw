@@ -1031,10 +1031,7 @@ function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | nu
   return cloneTaskRecord(next);
 }
 
-function upsertTaskDeliveryState(
-  state: TaskDeliveryState,
-  options: { persist?: boolean } = {},
-): TaskDeliveryState {
+function upsertTaskDeliveryState(state: TaskDeliveryState): TaskDeliveryState {
   const current = taskDeliveryStates.get(state.taskId);
   const next: TaskDeliveryState = {
     taskId: state.taskId,
@@ -1049,9 +1046,7 @@ function upsertTaskDeliveryState(
     return cloneTaskDeliveryState({ taskId: state.taskId });
   }
   taskDeliveryStates.set(state.taskId, next);
-  if (options.persist !== false) {
-    persistTaskDeliveryStateUpsert(next);
-  }
+  persistTaskDeliveryStateUpsert(next);
   return cloneTaskDeliveryState(next);
 }
 
@@ -1062,12 +1057,7 @@ function getTaskDeliveryState(taskId: string): TaskDeliveryState | undefined {
 
 function canDeliverTaskToRequesterOrigin(task: TaskRecord): boolean {
   const owner = resolveTaskDeliveryOwner(task);
-  if (
-    shouldRouteCompletionThroughRequesterSession({
-      requesterSessionKey: owner.sessionKey,
-      requesterSessionOrigin: owner.requesterOrigin,
-    })
-  ) {
+  if (shouldRouteCompletionThroughRequesterSession(owner.sessionKey)) {
     return false;
   }
   const origin = owner.requesterOrigin;
@@ -1603,13 +1593,10 @@ export function createTaskRecord(params: {
       (record.endedAt ?? record.lastEventAt ?? record.createdAt) + DEFAULT_TASK_RETENTION_MS;
   }
   tasks.set(taskId, record);
-  upsertTaskDeliveryState(
-    {
-      taskId,
-      requesterOrigin: normalizeDeliveryContext(params.requesterOrigin),
-    },
-    { persist: false },
-  );
+  upsertTaskDeliveryState({
+    taskId,
+    requesterOrigin: normalizeDeliveryContext(params.requesterOrigin),
+  });
   addRunIdIndex(taskId, record.runId);
   addOwnerKeyIndex(taskId, record);
   addParentFlowIdIndex(taskId, record);

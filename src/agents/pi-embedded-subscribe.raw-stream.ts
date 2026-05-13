@@ -1,20 +1,42 @@
+import fs from "node:fs";
+import path from "node:path";
+import { resolveStateDir } from "../config/paths.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { getStateDiagnosticWriter, type StateDiagnosticWriter } from "./state-diagnostic-writer.js";
+import { appendRegularFile } from "../infra/fs-safe.js";
 
-const rawStreamStateWriters = new Map<string, StateDiagnosticWriter>();
-const RAW_STREAM_SQLITE_LABEL = "sqlite://state/diagnostics/raw-stream";
-const RAW_STREAM_SQLITE_SCOPE = "diagnostics.raw_stream";
+let rawStreamReady = false;
 
 function isRawStreamEnabled(): boolean {
   return isTruthyEnvValue(process.env.OPENCLAW_RAW_STREAM);
+}
+
+function resolveRawStreamPath(): string {
+  return (
+    process.env.OPENCLAW_RAW_STREAM_PATH?.trim() ||
+    path.join(resolveStateDir(), "logs", "raw-stream.jsonl")
+  );
 }
 
 export function appendRawStream(payload: Record<string, unknown>) {
   if (!isRawStreamEnabled()) {
     return;
   }
-  getStateDiagnosticWriter(rawStreamStateWriters, {
-    label: RAW_STREAM_SQLITE_LABEL,
-    scope: RAW_STREAM_SQLITE_SCOPE,
-  }).write(payload);
+  const rawStreamPath = resolveRawStreamPath();
+  if (!rawStreamReady) {
+    rawStreamReady = true;
+    try {
+      fs.mkdirSync(path.dirname(rawStreamPath), { recursive: true });
+    } catch {
+      // ignore raw stream mkdir failures
+    }
+  }
+  try {
+    void appendRegularFile({
+      filePath: rawStreamPath,
+      content: `${JSON.stringify(payload)}\n`,
+      rejectSymlinkParents: true,
+    });
+  } catch {
+    // ignore raw stream write failures
+  }
 }

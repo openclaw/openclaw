@@ -4,7 +4,8 @@ import { inspect } from "node:util";
 import { cancel, isCancel } from "@clack/prompts";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
-import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
+import { resolveConfigPath } from "../config/paths.js";
+import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveControlUiLinks } from "../gateway/control-ui-links.js";
@@ -22,7 +23,6 @@ import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { stylePromptTitle } from "../terminal/prompt-style.js";
 import { resolveConfigDir, shortenHomeInString, shortenHomePath, sleep } from "../utils.js";
 import { VERSION } from "../version.js";
-import { listAgentRuntimeStatePaths } from "./cleanup-utils.js";
 import type { NodeManagerChoice, OnboardMode, ResetScope } from "./onboard-types.js";
 export { randomToken } from "./random-token.js";
 
@@ -161,7 +161,7 @@ function resolveSshTargetHint(): string {
   return `${user}@${host}`;
 }
 
-export async function ensureWorkspaceReady(
+export async function ensureWorkspaceAndSessions(
   workspaceDir: string,
   runtime: RuntimeEnv,
   options?: {
@@ -176,6 +176,9 @@ export async function ensureWorkspaceReady(
     skipOptionalBootstrapFiles: options?.skipOptionalBootstrapFiles,
   });
   runtime.log(`Workspace OK: ${shortenHomePath(ws.dir)}`);
+  const sessionsDir = resolveSessionTranscriptsDirForAgent(options?.agentId);
+  await fs.mkdir(sessionsDir, { recursive: true });
+  runtime.log(`Sessions OK: ${shortenHomePath(sessionsDir)}`);
 }
 
 export function resolveNodeManagerOptions(): Array<{
@@ -212,9 +215,7 @@ export async function handleReset(scope: ResetScope, workspaceDir: string, runti
     return;
   }
   await moveToTrash(path.join(resolveConfigDir(), "credentials"), runtime);
-  for (const target of await listAgentRuntimeStatePaths(resolveStateDir())) {
-    await moveToTrash(target, runtime);
-  }
+  await moveToTrash(resolveSessionTranscriptsDirForAgent(), runtime);
   if (scope === "full") {
     await moveToTrash(workspaceDir, runtime);
   }

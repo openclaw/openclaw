@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import type { TransientProviderRetryParams } from "../provider-runtime/operation-retry.js";
 import { executeWithApiKeyRotation } from "./api-key-rotation.js";
-import type { TransientProviderRetryParams } from "./provider-operation-retry.js";
 
 function abortError(message: string): Error {
   return Object.assign(new Error(message), { name: "AbortError" });

@@ -132,7 +132,7 @@ DigitalOcean is the simplest paid VPS path. If you prefer cheaper or free option
 
 OpenClaw state lives under:
 
-- `~/.openclaw/` — `openclaw.json`, SQLite state databases with auth profiles and sessions, and channel/provider state.
+- `~/.openclaw/` — `openclaw.json`, per-agent `auth-profiles.json`, channel/provider state, and session data.
 - `~/.openclaw/workspace/` — the agent workspace (SOUL.md, memory, artifacts).
 
 These survive Droplet reboots. To take a portable snapshot:

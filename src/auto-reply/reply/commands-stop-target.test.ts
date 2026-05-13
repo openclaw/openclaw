@@ -18,7 +18,6 @@ const persistAbortTargetEntryMock = vi.hoisted(() => vi.fn(async () => true));
 const replyRunAbortMock = vi.hoisted(() => vi.fn());
 const resolveSessionIdMock = vi.hoisted(() => vi.fn(() => undefined));
 const stopSubagentsForRequesterMock = vi.hoisted(() => vi.fn(() => ({ stopped: 0 })));
-const legacyStorePathProperty = ["store", "Path"].join("");
 
 vi.mock("../../agents/pi-embedded.js", () => ({
   abortEmbeddedPiRun: abortEmbeddedPiRunMock,
@@ -46,7 +45,7 @@ vi.mock("./abort.js", () => ({
   stopSubagentsForRequester: stopSubagentsForRequesterMock,
 }));
 
-vi.mock("./commands-session-entry.js", () => ({
+vi.mock("./commands-session-store.js", () => ({
   persistAbortTargetEntry: persistAbortTargetEntryMock,
 }));
 
@@ -125,6 +124,7 @@ function buildStopParams(): HandleCommandsParams {
       updatedAt: Date.now(),
     },
     sessionStore: {},
+    storePath: "/tmp/sessions.json",
   } as unknown as HandleCommandsParams;
 }
 
@@ -160,13 +160,14 @@ describe("handleStopCommand target fallback", () => {
           key?: string;
           entry?: unknown;
           sessionStore?: unknown;
+          storePath?: string;
         },
       ]
     >;
     expect(persistAbortTargetParams?.key).toBe("agent:target:telegram:direct:123");
     expect(persistAbortTargetParams?.entry).toBeUndefined();
     expect(persistAbortTargetParams?.sessionStore).toBe(params.sessionStore);
-    expect(persistAbortTargetParams).not.toHaveProperty(legacyStorePathProperty);
+    expect(persistAbortTargetParams?.storePath).toBe("/tmp/sessions.json");
     const [[stopSubagentsParams]] = stopSubagentsForRequesterMock.mock.calls as unknown as Array<
       [{ cfg?: unknown; requesterSessionKey?: string }]
     >;

@@ -1,6 +1,6 @@
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { AuthProfileStore } from "../../auth-profiles.js";
-import type { Api, Model } from "../../pi-ai-contract.js";
 import type { RuntimeAuthState } from "./helpers.js";
 
 const mocks = vi.hoisted(() => ({

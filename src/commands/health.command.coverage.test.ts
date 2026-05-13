@@ -115,14 +115,14 @@ describe("healthCommand (coverage)", () => {
             ackMaxChars: 160,
           },
           sessions: {
-            databasePath: "/tmp/openclaw-agent.sqlite",
+            path: "/tmp/sessions.json",
             count: 2,
             recent,
           },
         },
       ],
       sessions: {
-        databasePath: "/tmp/openclaw-agent.sqlite",
+        path: "/tmp/sessions.json",
         count: 2,
         recent,
       },

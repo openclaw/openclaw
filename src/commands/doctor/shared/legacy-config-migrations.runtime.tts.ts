@@ -48,10 +48,6 @@ function hasLegacyTtsEnabled(value: unknown): boolean {
   return typeof getRecord(value)?.enabled === "boolean";
 }
 
-function hasLegacyTtsPrefsPath(value: unknown): boolean {
-  return typeof getRecord(value)?.prefsPath === "string";
-}
-
 function hasLegacyTtsEnabledInAgentLocations(value: unknown): boolean {
   const agents = getRecord(value);
   if (hasLegacyTtsEnabled(getRecord(getRecord(agents?.defaults)?.tts))) {
@@ -96,53 +92,6 @@ function hasLegacyTtsEnabledInPluginLocations(value: unknown): boolean {
     const entry = getRecord(entryValue);
     const config = getRecord(entry?.config);
     return hasLegacyTtsEnabled(getRecord(config?.tts));
-  });
-}
-
-function hasLegacyTtsPrefsPathInAgentLocations(value: unknown): boolean {
-  const agents = getRecord(value);
-  if (hasLegacyTtsPrefsPath(getRecord(getRecord(agents?.defaults)?.tts))) {
-    return true;
-  }
-  const agentList = Array.isArray(agents?.list) ? agents.list : [];
-  return agentList.some((entry) => hasLegacyTtsPrefsPath(getRecord(getRecord(entry)?.tts)));
-}
-
-function hasLegacyTtsPrefsPathInChannelLocations(value: unknown): boolean {
-  const channels = getRecord(value);
-  for (const [channelId, channelValue] of Object.entries(channels ?? {})) {
-    if (isBlockedObjectKey(channelId)) {
-      continue;
-    }
-    const channel = getRecord(channelValue);
-    if (hasLegacyTtsPrefsPath(getRecord(channel?.tts))) {
-      return true;
-    }
-    const accounts = getRecord(channel?.accounts);
-    for (const [accountId, accountValue] of Object.entries(accounts ?? {})) {
-      if (isBlockedObjectKey(accountId)) {
-        continue;
-      }
-      if (hasLegacyTtsPrefsPath(getRecord(getRecord(accountValue)?.tts))) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-function hasLegacyTtsPrefsPathInPluginLocations(value: unknown): boolean {
-  const entries = getRecord(value);
-  if (!entries) {
-    return false;
-  }
-  return Object.entries(entries).some(([pluginId, entryValue]) => {
-    if (isBlockedObjectKey(pluginId) || !LEGACY_TTS_PLUGIN_IDS.has(pluginId)) {
-      return false;
-    }
-    const entry = getRecord(entryValue);
-    const config = getRecord(entry?.config);
-    return hasLegacyTtsPrefsPath(getRecord(config?.tts));
   });
 }
 
@@ -241,18 +190,6 @@ function migrateLegacyTtsEnabled(
   changes.push(`Moved ${pathLabel}.enabled → ${pathLabel}.auto "${nextAuto}".`);
 }
 
-function migrateLegacyTtsPrefsPath(
-  tts: Record<string, unknown> | null | undefined,
-  pathLabel: string,
-  changes: string[],
-): void {
-  if (!tts || typeof tts.prefsPath !== "string") {
-    return;
-  }
-  delete tts.prefsPath;
-  changes.push(`Removed ${pathLabel}.prefsPath; TTS prefs now use SQLite plugin state.`);
-}
-
 function visitKnownTtsConfigLocations(
   raw: Record<string, unknown>,
   visit: (tts: Record<string, unknown> | null | undefined, pathLabel: string) => void,
@@ -341,33 +278,6 @@ const LEGACY_TTS_ENABLED_RULES: LegacyConfigRule[] = [
   },
 ];
 
-const LEGACY_TTS_PREFS_PATH_RULES: LegacyConfigRule[] = [
-  {
-    path: ["messages", "tts"],
-    message:
-      'messages.tts.prefsPath is legacy; TTS prefs now live in SQLite plugin state. Run "openclaw doctor --fix".',
-    match: (value) => hasLegacyTtsPrefsPath(value),
-  },
-  {
-    path: ["agents"],
-    message:
-      'agents.*.tts.prefsPath is legacy; TTS prefs now live in SQLite plugin state. Run "openclaw doctor --fix".',
-    match: (value) => hasLegacyTtsPrefsPathInAgentLocations(value),
-  },
-  {
-    path: ["channels"],
-    message:
-      'channels.*.tts.prefsPath is legacy; TTS prefs now live in SQLite plugin state. Run "openclaw doctor --fix".',
-    match: (value) => hasLegacyTtsPrefsPathInChannelLocations(value),
-  },
-  {
-    path: ["plugins", "entries"],
-    message:
-      'plugins.entries.voice-call.config.tts.prefsPath is legacy; TTS prefs now live in SQLite plugin state. Run "openclaw doctor --fix".',
-    match: (value) => hasLegacyTtsPrefsPathInPluginLocations(value),
-  },
-];
-
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_TTS: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
     id: "tts.providers-generic-shape",
@@ -403,16 +313,6 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_TTS: LegacyConfigMigrationSpec[] =
     apply: (raw, changes) => {
       visitKnownTtsConfigLocations(raw, (tts, pathLabel) =>
         migrateLegacyTtsEnabled(tts, pathLabel, changes),
-      );
-    },
-  }),
-  defineLegacyConfigMigration({
-    id: "tts.prefs-path-sqlite",
-    describe: "Remove legacy TTS prefsPath file overrides",
-    legacyRules: LEGACY_TTS_PREFS_PATH_RULES,
-    apply: (raw, changes) => {
-      visitKnownTtsConfigLocations(raw, (tts, pathLabel) =>
-        migrateLegacyTtsPrefsPath(tts, pathLabel, changes),
       );
     },
   }),

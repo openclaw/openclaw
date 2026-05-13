@@ -5,9 +5,7 @@
 set -euo pipefail
 
 CLAUDE_CREDS="$HOME/.claude/.credentials.json"
-OPENCLAW_STATE="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"
-OPENCLAW_AGENT_DIR="$OPENCLAW_STATE/agents/main/agent"
-OPENCLAW_AUTH_STORE="$OPENCLAW_STATE/state/openclaw.sqlite#table/auth_profile_stores/$OPENCLAW_AGENT_DIR"
+OPENCLAW_AUTH="$HOME/.openclaw/agents/main/agent/auth-profiles.json"
 
 # Colors for terminal output
 RED='\033[0;31m'
@@ -22,24 +20,7 @@ fetch_models_status_json() {
     openclaw models status --json 2>/dev/null || true
 }
 
-fetch_openclaw_auth_store_json() {
-    node --input-type=module - "$OPENCLAW_STATE/state/openclaw.sqlite" "$OPENCLAW_AGENT_DIR" <<'NODE' 2>/dev/null || true
-import { DatabaseSync } from "node:sqlite";
-const [, , dbPath, key] = process.argv;
-const db = new DatabaseSync(dbPath, { readOnly: true });
-try {
-  const row = db.prepare("SELECT store_json FROM auth_profile_stores WHERE store_key = ?").get(key);
-  if (typeof row?.store_json === "string") {
-    process.stdout.write(row.store_json);
-  }
-} finally {
-  db.close();
-}
-NODE
-}
-
 STATUS_JSON="$(fetch_models_status_json)"
-OPENCLAW_AUTH_JSON="$(fetch_openclaw_auth_store_json)"
 USE_JSON=0
 if [ -n "$STATUS_JSON" ]; then
     USE_JSON=1
@@ -141,7 +122,7 @@ check_openclaw_auth() {
         return $?
     fi
 
-    if [ -z "$OPENCLAW_AUTH_JSON" ]; then
+    if [ ! -f "$OPENCLAW_AUTH" ]; then
         echo "MISSING"
         return 1
     fi
@@ -150,7 +131,7 @@ check_openclaw_auth() {
     expires=$(jq -r '
         [.profiles | to_entries[] | select(.value.provider == "anthropic") | .value.expires]
         | max // 0
-    ' <<<"$OPENCLAW_AUTH_JSON" 2>/dev/null || echo "0")
+    ' "$OPENCLAW_AUTH" 2>/dev/null || echo "0")
 
     calc_status_from_expires "$expires"
 }
@@ -167,7 +148,7 @@ if [ "$OUTPUT_MODE" = "json" ]; then
         openclaw_expires=$(json_expires_for_anthropic_any)
     else
         claude_expires=$(jq -r '.claudeAiOauth.expiresAt // 0' "$CLAUDE_CREDS" 2>/dev/null || echo "0")
-        openclaw_expires=$(jq -r '.profiles["anthropic:default"].expires // 0' <<<"$OPENCLAW_AUTH_JSON" 2>/dev/null || echo "0")
+        openclaw_expires=$(jq -r '.profiles["anthropic:default"].expires // 0' "$OPENCLAW_AUTH" 2>/dev/null || echo "0")
     fi
 
     jq -n \
@@ -247,7 +228,7 @@ else
 fi
 
 echo ""
-echo "OpenClaw Auth ($OPENCLAW_AUTH_STORE):"
+echo "OpenClaw Auth (~/.openclaw/agents/main/agent/auth-profiles.json):"
 if [ "$USE_JSON" -eq 1 ]; then
     best_profile=$(json_best_anthropic_profile)
     expires=$(json_expires_for_anthropic_any)
@@ -258,11 +239,11 @@ else
         | map(select(.value.provider == "anthropic"))
         | sort_by(.value.expires) | reverse
         | .[0].key // "none"
-    ' <<<"$OPENCLAW_AUTH_JSON" 2>/dev/null || echo "none")
+    ' "$OPENCLAW_AUTH" 2>/dev/null || echo "none")
     expires=$(jq -r '
         [.profiles | to_entries[] | select(.value.provider == "anthropic") | .value.expires]
         | max // 0
-    ' <<<"$OPENCLAW_AUTH_JSON" 2>/dev/null || echo "0")
+    ' "$OPENCLAW_AUTH" 2>/dev/null || echo "0")
     api_keys=0
 fi
 

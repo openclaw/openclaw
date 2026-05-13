@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { Command, Option } from "commander";
 import { routeLogsToStderr } from "../logging/console.js";
 import { formatDocsLink } from "../terminal/links.js";
@@ -11,6 +13,7 @@ import {
   COMPLETION_SKIP_PLUGIN_COMMANDS_ENV,
   installCompletion,
   isCompletionShell,
+  resolveCompletionCachePath,
   resolveShellFromEnv,
   type CompletionShell,
 } from "./completion-runtime.js";
@@ -31,6 +34,21 @@ export function getCompletionScript(shell: CompletionShell, program: Command): s
   return generateFishCompletion(program);
 }
 
+async function writeCompletionCache(params: {
+  program: Command;
+  shells: CompletionShell[];
+  binName: string;
+}): Promise<void> {
+  const firstShell = params.shells[0] ?? "zsh";
+  const cacheDir = path.dirname(resolveCompletionCachePath(firstShell, params.binName));
+  await fs.mkdir(cacheDir, { recursive: true });
+  for (const shell of params.shells) {
+    const script = getCompletionScript(shell, params.program);
+    const targetPath = resolveCompletionCachePath(shell, params.binName);
+    await fs.writeFile(targetPath, script, "utf-8");
+  }
+}
+
 function writeCompletionRegistrationWarning(message: string): void {
   process.stderr.write(`[completion] ${message}\n`);
 }
@@ -45,7 +63,7 @@ async function registerSubcommandsForCompletion(program: Command): Promise<void>
       await registerSubCliByName(program, entry.name, process.argv, { purpose: "completion" });
     } catch (error) {
       writeCompletionRegistrationWarning(
-        `skipping subcommand \`${entry.name}\` while building completion: ${error instanceof Error ? error.message : String(error)}`,
+        `skipping subcommand \`${entry.name}\` while building completion cache: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
   }
@@ -66,6 +84,10 @@ export function registerCompletionCli(program: Command) {
       ),
     )
     .option("-i, --install", "Install completion script to shell profile")
+    .option(
+      "--write-state",
+      "Write completion scripts to $OPENCLAW_STATE_DIR/completions (no stdout)",
+    )
     .option("-y, --yes", "Skip confirmation (non-interactive)", false)
     .action(async (options) => {
       // Route logs to stderr so plugin loading messages do not corrupt
@@ -92,9 +114,22 @@ export function registerCompletionCli(program: Command) {
         });
       }
 
+      if (options.writeState) {
+        const writeShells = options.shell ? [shell] : [...COMPLETION_SHELLS];
+        await writeCompletionCache({
+          program,
+          shells: writeShells,
+          binName: program.name(),
+        });
+      }
+
       if (options.install) {
         const targetShell = options.shell ?? resolveShellFromEnv();
         await installCompletion(targetShell, Boolean(options.yes), program.name());
+        return;
+      }
+
+      if (options.writeState) {
         return;
       }
 

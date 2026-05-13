@@ -1,4 +1,4 @@
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { describe, expect, it, vi } from "vitest";
 
 const piCodingAgentMocks = vi.hoisted(() => ({
@@ -6,9 +6,9 @@ const piCodingAgentMocks = vi.hoisted(() => ({
   generateSummary: vi.fn(async () => "summary"),
 }));
 
-vi.mock("./pi-coding-agent-contract.js", async () => {
-  const actual = await vi.importActual<typeof import("./pi-coding-agent-contract.js")>(
-    "./pi-coding-agent-contract.js",
+vi.mock("@earendil-works/pi-coding-agent", async () => {
+  const actual = await vi.importActual<typeof import("@earendil-works/pi-coding-agent")>(
+    "@earendil-works/pi-coding-agent",
   );
   return {
     ...actual,

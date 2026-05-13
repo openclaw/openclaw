@@ -1,5 +1,5 @@
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { resolveMatrixTargetIdentity } from "./target-ids.js";
+import { resolveMatrixDirectUserId, resolveMatrixTargetIdentity } from "./target-ids.js";
 
 function trimMaybeString(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -25,11 +25,15 @@ function resolveMatrixSessionAccountId(value: unknown): string | undefined {
 
 function resolveMatrixStoredRoomId(params: {
   deliveryTo?: unknown;
-  nativeChannelId?: unknown;
+  lastTo?: unknown;
+  originNativeChannelId?: unknown;
+  originTo?: unknown;
 }): string | undefined {
   return (
     resolveMatrixRoomTargetId(params.deliveryTo) ??
-    resolveMatrixRoomTargetId(params.nativeChannelId)
+    resolveMatrixRoomTargetId(params.lastTo) ??
+    resolveMatrixRoomTargetId(params.originNativeChannelId) ??
+    resolveMatrixRoomTargetId(params.originTo)
   );
 }
 
@@ -39,9 +43,19 @@ type MatrixStoredSessionEntryLike = {
     to?: unknown;
     accountId?: unknown;
   };
+  origin?: {
+    provider?: unknown;
+    from?: unknown;
+    to?: unknown;
+    nativeChannelId?: unknown;
+    nativeDirectUserId?: unknown;
+    accountId?: unknown;
+    chatType?: unknown;
+  };
+  lastChannel?: unknown;
+  lastTo?: unknown;
+  lastAccountId?: unknown;
   chatType?: unknown;
-  nativeChannelId?: unknown;
-  nativeDirectUserId?: unknown;
 };
 
 export function resolveMatrixStoredSessionMeta(entry?: MatrixStoredSessionEntryLike): {
@@ -53,15 +67,35 @@ export function resolveMatrixStoredSessionMeta(entry?: MatrixStoredSessionEntryL
   if (!entry) {
     return null;
   }
-  const channel = trimMaybeString(entry.deliveryContext?.channel);
-  const accountId = resolveMatrixSessionAccountId(entry.deliveryContext?.accountId) ?? undefined;
+  const channel =
+    trimMaybeString(entry.deliveryContext?.channel) ??
+    trimMaybeString(entry.lastChannel) ??
+    trimMaybeString(entry.origin?.provider);
+  const accountId =
+    resolveMatrixSessionAccountId(
+      entry.deliveryContext?.accountId ?? entry.lastAccountId ?? entry.origin?.accountId,
+    ) ?? undefined;
   const roomId = resolveMatrixStoredRoomId({
     deliveryTo: entry.deliveryContext?.to,
-    nativeChannelId: entry.nativeChannelId,
+    lastTo: entry.lastTo,
+    originNativeChannelId: entry.origin?.nativeChannelId,
+    originTo: entry.origin?.to,
   });
-  const chatType = trimMaybeString(entry.chatType) ?? undefined;
+  const chatType =
+    trimMaybeString(entry.origin?.chatType) ?? trimMaybeString(entry.chatType) ?? undefined;
   const directUserId =
-    chatType === "direct" ? trimMaybeString(entry.nativeDirectUserId) : undefined;
+    chatType === "direct"
+      ? (trimMaybeString(entry.origin?.nativeDirectUserId) ??
+        resolveMatrixDirectUserId({
+          from: trimMaybeString(entry.origin?.from),
+          to:
+            (roomId ? `room:${roomId}` : undefined) ??
+            trimMaybeString(entry.deliveryContext?.to) ??
+            trimMaybeString(entry.lastTo) ??
+            trimMaybeString(entry.origin?.to),
+          chatType,
+        }))
+      : undefined;
   if (!channel && !accountId && !roomId && !directUserId) {
     return null;
   }

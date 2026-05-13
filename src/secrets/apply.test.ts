@@ -2,12 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { authProfileStoreKey } from "../agents/auth-profiles/persisted.js";
-import {
-  readAuthProfileStorePayloadResult,
-  writeAuthProfileStorePayload,
-  type AuthProfilePayloadValue,
-} from "../agents/auth-profiles/sqlite-storage.js";
 import {
   buildTalkTestProviderConfig,
   TALK_TEST_PROVIDER_API_KEY_PATH,
@@ -40,8 +34,8 @@ type ApplyFixture = {
   rootDir: string;
   stateDir: string;
   configPath: string;
-  authStoreAgentDir: string;
-  stateDbPath: string;
+  authStorePath: string;
+  authJsonPath: string;
   envPath: string;
   env: NodeJS.ProcessEnv;
 };
@@ -80,8 +74,8 @@ function buildFixturePaths(rootDir: string) {
     rootDir,
     stateDir,
     configPath: path.join(stateDir, "openclaw.json"),
-    authStoreAgentDir: path.join(stateDir, "agents", "main", "agent"),
-    stateDbPath: path.join(stateDir, "state", "openclaw.sqlite"),
+    authStorePath: path.join(stateDir, "agents", "main", "agent", "auth-profiles.json"),
+    authJsonPath: path.join(stateDir, "agents", "main", "agent", "auth.json"),
     envPath: path.join(stateDir, ".env"),
   };
 }
@@ -91,7 +85,7 @@ async function createApplyFixture(): Promise<ApplyFixture> {
     await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-apply-")),
   );
   await fs.mkdir(path.dirname(paths.configPath), { recursive: true });
-  await fs.mkdir(paths.authStoreAgentDir, { recursive: true });
+  await fs.mkdir(path.dirname(paths.authStorePath), { recursive: true });
   return {
     ...paths,
     env: {
@@ -102,24 +96,6 @@ async function createApplyFixture(): Promise<ApplyFixture> {
   };
 }
 
-function writeAuthStoreFixture(fixture: ApplyFixture, value: unknown): void {
-  writeAuthProfileStorePayload(
-    authProfileStoreKey(fixture.authStoreAgentDir),
-    value as AuthProfilePayloadValue,
-    { env: fixture.env },
-  );
-}
-
-function readAuthStoreFixture(fixture: ApplyFixture): AuthProfilePayloadValue {
-  const result = readAuthProfileStorePayloadResult(authProfileStoreKey(fixture.authStoreAgentDir), {
-    env: fixture.env,
-  });
-  if (!result.exists || result.value === undefined) {
-    throw new Error("Expected auth profile store fixture to exist.");
-  }
-  return result.value;
-}
-
 async function seedDefaultApplyFixture(fixture: ApplyFixture): Promise<void> {
   await writeJsonFile(fixture.configPath, {
     models: {
@@ -128,7 +104,7 @@ async function seedDefaultApplyFixture(fixture: ApplyFixture): Promise<void> {
       },
     },
   });
-  writeAuthStoreFixture(fixture, {
+  await writeJsonFile(fixture.authStorePath, {
     version: 1,
     profiles: {
       "openai:default": {
@@ -137,6 +113,12 @@ async function seedDefaultApplyFixture(fixture: ApplyFixture): Promise<void> {
         key: "sk-ope...text", // pragma: allowlist secret
         keyRef: OPENAI_API_KEY_ENV_REF,
       },
+    },
+  });
+  await writeJsonFile(fixture.authJsonPath, {
+    openai: {
+      type: "api_key",
+      key: "sk-openai-plaintext", // pragma: allowlist secret
     },
   });
   await fs.writeFile(
@@ -202,6 +184,7 @@ function createOpenAiExecProviderPlan(): SecretsApplyPlan {
     options: {
       scrubEnv: false,
       scrubAuthProfilesForProviderTargets: false,
+      scrubLegacyAuthJson: false,
     },
   });
 }
@@ -258,6 +241,7 @@ function createOneWayScrubOptions(): NonNullable<SecretsApplyPlan["options"]> {
   return {
     scrubEnv: true,
     scrubAuthProfilesForProviderTargets: true,
+    scrubLegacyAuthJson: true,
   };
 }
 
@@ -303,7 +287,7 @@ describe("secrets apply", () => {
     };
     expect(nextConfig.models.providers.openai.apiKey).toEqual(OPENAI_API_KEY_ENV_REF);
 
-    const nextAuthStore = readAuthStoreFixture(fixture) as {
+    const nextAuthStore = JSON.parse(await fs.readFile(fixture.authStorePath, "utf8")) as {
       profiles: { "openai:default": { key?: string; keyRef?: unknown } };
     };
     expect(nextAuthStore.profiles["openai:default"].key).toBeUndefined();
@@ -313,13 +297,19 @@ describe("secrets apply", () => {
       id: "OPENAI_API_KEY",
     });
 
+    const nextAuthJson = JSON.parse(await fs.readFile(fixture.authJsonPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    expect(nextAuthJson.openai).toBeUndefined();
+
     const nextEnv = await fs.readFile(fixture.envPath, "utf8");
     expect(nextEnv).not.toContain("sk-openai-plaintext");
     expect(nextEnv).toContain("UNRELATED=value");
   });
 
   it("preserves auth-profile tokenRef during provider scrub", async () => {
-    writeAuthStoreFixture(fixture, {
+    await writeJsonFile(fixture.authStorePath, {
       version: 1,
       profiles: {
         "openai:bot": {
@@ -337,7 +327,7 @@ describe("secrets apply", () => {
 
     await runSecretsApply({ plan, env: fixture.env, write: true });
 
-    const nextAuthStore = readAuthStoreFixture(fixture) as {
+    const nextAuthStore = JSON.parse(await fs.readFile(fixture.authStorePath, "utf8")) as {
       profiles: { "openai:bot": { token?: string; tokenRef?: unknown } };
     };
     expect(nextAuthStore.profiles["openai:bot"].token).toBeUndefined();
@@ -345,7 +335,7 @@ describe("secrets apply", () => {
   });
 
   it("scrubs malformed auth-profile ref residue during provider scrub", async () => {
-    writeAuthStoreFixture(fixture, {
+    await writeJsonFile(fixture.authStorePath, {
       version: 1,
       profiles: {
         "openai:default": {
@@ -363,7 +353,7 @@ describe("secrets apply", () => {
 
     await runSecretsApply({ plan, env: fixture.env, write: true });
 
-    const nextAuthStore = readAuthStoreFixture(fixture) as {
+    const nextAuthStore = JSON.parse(await fs.readFile(fixture.authStorePath, "utf8")) as {
       profiles: { "openai:default": { key?: string; keyRef?: unknown } };
     };
     expect(nextAuthStore.profiles["openai:default"].key).toBeUndefined();
@@ -409,7 +399,7 @@ describe("secrets apply", () => {
     }
     const execScriptPath = path.join(fixture.rootDir, "resolver.sh");
     await writeOpenAiExecResolverConfig({ fixture, execScriptPath });
-    writeAuthStoreFixture(fixture, {
+    await writeJsonFile(fixture.authStorePath, {
       version: 1,
       profiles: {
         "openai:default": {
@@ -439,7 +429,7 @@ describe("secrets apply", () => {
         },
       },
     });
-    writeAuthStoreFixture(fixture, {
+    await writeJsonFile(fixture.authStorePath, {
       version: 1,
       profiles: {
         "openai:default": {
@@ -455,6 +445,7 @@ describe("secrets apply", () => {
       options: {
         scrubEnv: false,
         scrubAuthProfilesForProviderTargets: false,
+        scrubLegacyAuthJson: false,
       },
     });
 
@@ -478,6 +469,7 @@ describe("secrets apply", () => {
       options: {
         scrubEnv: false,
         scrubAuthProfilesForProviderTargets: false,
+        scrubLegacyAuthJson: false,
       },
     });
 
@@ -499,6 +491,7 @@ describe("secrets apply", () => {
       options: {
         scrubEnv: false,
         scrubAuthProfilesForProviderTargets: false,
+        scrubLegacyAuthJson: false,
       },
     });
 
@@ -525,14 +518,15 @@ describe("secrets apply", () => {
       options: {
         scrubEnv: false,
         scrubAuthProfilesForProviderTargets: false,
+        scrubLegacyAuthJson: false,
       },
     };
 
     const result = await runSecretsApply({ plan, env: fixture.env, write: true });
     expect(result.changed).toBe(true);
-    expect(result.changedFiles).toContain(fixture.stateDbPath);
+    expect(result.changedFiles).toContain(fixture.authStorePath);
 
-    const nextAuthStore = readAuthStoreFixture(fixture) as {
+    const nextAuthStore = JSON.parse(await fs.readFile(fixture.authStorePath, "utf8")) as {
       profiles: { "openai:default": { key?: string; keyRef?: unknown } };
     };
     expect(nextAuthStore.profiles["openai:default"].key).toBeUndefined();
@@ -562,11 +556,12 @@ describe("secrets apply", () => {
       options: {
         scrubEnv: false,
         scrubAuthProfilesForProviderTargets: false,
+        scrubLegacyAuthJson: false,
       },
     };
 
     await runSecretsApply({ plan, env: fixture.env, write: true });
-    const nextAuthStore = readAuthStoreFixture(fixture) as {
+    const nextAuthStore = JSON.parse(await fs.readFile(fixture.authStorePath, "utf8")) as {
       profiles: {
         "openai:bot": {
           type: string;
@@ -595,10 +590,12 @@ describe("secrets apply", () => {
     const first = await runSecretsApply({ plan, env: fixture.env, write: true });
     expect(first.changed).toBe(true);
     const configAfterFirst = await fs.readFile(fixture.configPath, "utf8");
-    const authStoreAfterFirst = readAuthStoreFixture(fixture);
+    const authStoreAfterFirst = await fs.readFile(fixture.authStorePath, "utf8");
+    const authJsonAfterFirst = await fs.readFile(fixture.authJsonPath, "utf8");
     const envAfterFirst = await fs.readFile(fixture.envPath, "utf8");
 
     await fs.chmod(fixture.configPath, 0o400);
+    await fs.chmod(fixture.authStorePath, 0o400);
 
     const second = await runSecretsApply({ plan, env: fixture.env, write: true });
     expect(second.mode).toBe("write");
@@ -606,7 +603,8 @@ describe("secrets apply", () => {
     expect(stripVolatileConfigMeta(configAfterSecond)).toEqual(
       stripVolatileConfigMeta(configAfterFirst),
     );
-    expect(readAuthStoreFixture(fixture)).toEqual(authStoreAfterFirst);
+    await expect(fs.readFile(fixture.authStorePath, "utf8")).resolves.toBe(authStoreAfterFirst);
+    await expect(fs.readFile(fixture.authJsonPath, "utf8")).resolves.toBe(authJsonAfterFirst);
     await expect(fs.readFile(fixture.envPath, "utf8")).resolves.toBe(envAfterFirst);
   });
 
@@ -630,6 +628,7 @@ describe("secrets apply", () => {
       options: {
         scrubEnv: false,
         scrubAuthProfilesForProviderTargets: false,
+        scrubLegacyAuthJson: false,
       },
     });
 
@@ -709,6 +708,7 @@ describe("secrets apply", () => {
       options: {
         scrubEnv: false,
         scrubAuthProfilesForProviderTargets: false,
+        scrubLegacyAuthJson: false,
       },
     };
 
@@ -748,6 +748,7 @@ describe("secrets apply", () => {
       options: {
         scrubEnv: false,
         scrubAuthProfilesForProviderTargets: false,
+        scrubLegacyAuthJson: false,
       },
     });
 
@@ -808,6 +809,7 @@ describe("secrets apply", () => {
       options: {
         scrubEnv: false,
         scrubAuthProfilesForProviderTargets: false,
+        scrubLegacyAuthJson: false,
       },
     };
 

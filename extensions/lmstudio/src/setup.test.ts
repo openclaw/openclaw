@@ -700,7 +700,6 @@ describe("lmstudio setup", () => {
 
   it("non-interactive setup fails when requested model is missing", async () => {
     const ctx = buildNonInteractiveContext({
-      customBaseUrl: "http://localhost:1234/api/v1/",
       customModelId: "missing-model",
     });
 

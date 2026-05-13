@@ -16,10 +16,8 @@ vi.mock("../../agents/auth-profiles/persisted.js", () => ({
 }));
 
 vi.mock("../../agents/auth-profiles/paths.js", () => ({
-  resolveAuthProfileStoreLocationForDisplay: vi.fn((agentDir?: string) =>
-    agentDir
-      ? `/tmp/openclaw.sqlite#table/auth_profile_stores/${agentDir}`
-      : "/tmp/openclaw.sqlite#table/auth_profile_stores/main",
+  resolveAuthStorePathForDisplay: vi.fn((agentDir?: string) =>
+    agentDir ? `${agentDir}/auth-profiles.json` : "/tmp/auth-profiles.json",
   ),
 }));
 
@@ -67,7 +65,7 @@ vi.mock("../../agents/model-auth.js", () => {
             ? { apiKey: process.env.OPENAI_API_KEY, source: "env: OPENAI_API_KEY" }
             : null;
         }
-        return { apiKey, source: "stored model catalog" };
+        return { apiKey, source: "models.json" };
       },
     ),
   };
@@ -89,7 +87,7 @@ function resolveOpenAiOverview(apiKey: string) {
       },
     } as never,
     store: { version: 1, profiles: {} } as never,
-    modelsPath: "SQLite model catalog for /tmp/openclaw-agent-main",
+    modelsPath: "/tmp/models.json",
   });
 }
 
@@ -112,7 +110,7 @@ describe("resolveProviderAuthOverview", () => {
           },
         },
       } as never,
-      modelsPath: "SQLite model catalog for /tmp/openclaw-agent-main",
+      modelsPath: "/tmp/models.json",
     });
 
     expect(overview.profiles.labels[0]).toContain("token:ref(env:GITHUB_TOKEN)");
@@ -139,13 +137,13 @@ describe("resolveProviderAuthOverview", () => {
           },
         },
       } as never,
-      modelsPath: "SQLite model catalog for /tmp/openclaw-agent-custom",
+      modelsPath: "/tmp/openclaw-agent-custom/models.json",
       agentDir: "/tmp/openclaw-agent-custom",
     });
 
     expect(overview.effective).toEqual({
       kind: "profiles",
-      detail: "/tmp/openclaw.sqlite#table/auth_profile_stores//tmp/openclaw-agent-custom",
+      detail: "/tmp/openclaw-agent-custom/auth-profiles.json",
     });
   });
 
@@ -170,35 +168,35 @@ describe("resolveProviderAuthOverview", () => {
           },
         },
       } as never,
-      modelsPath: "SQLite model catalog for /tmp/openclaw-agent-custom",
+      modelsPath: "/tmp/openclaw-agent-custom/models.json",
       agentDir: "/tmp/openclaw-agent-custom",
     });
 
     expect(overview.effective).toEqual({
       kind: "profiles",
-      detail: "/tmp/openclaw.sqlite#table/auth_profile_stores/main",
+      detail: "/tmp/auth-profiles.json",
     });
   });
 
-  it("renders marker-backed model catalog auth as marker detail", () => {
+  it("renders marker-backed models.json auth as marker detail", () => {
     const overview = withEnv({ OPENAI_API_KEY: undefined }, () =>
       resolveOpenAiOverview(NON_ENV_SECRETREF_MARKER),
     );
 
     expect(overview.effective.kind).toBe("missing");
     expect(overview.effective.detail).toBe("missing");
-    expect(overview.modelCatalog?.value).toContain(`marker(${NON_ENV_SECRETREF_MARKER})`);
+    expect(overview.modelsJson?.value).toContain(`marker(${NON_ENV_SECRETREF_MARKER})`);
   });
 
-  it("keeps env-var-shaped model catalog values masked to avoid accidental plaintext exposure", () => {
+  it("keeps env-var-shaped models.json values masked to avoid accidental plaintext exposure", () => {
     const overview = withEnv({ OPENAI_API_KEY: undefined }, () =>
       resolveOpenAiOverview("OPENAI_API_KEY"),
     );
 
     expect(overview.effective.kind).toBe("missing");
     expect(overview.effective.detail).toBe("missing");
-    expect(overview.modelCatalog?.value).not.toContain("marker(");
-    expect(overview.modelCatalog?.value).not.toContain("OPENAI_API_KEY");
+    expect(overview.modelsJson?.value).not.toContain("marker(");
+    expect(overview.modelsJson?.value).not.toContain("OPENAI_API_KEY");
   });
 
   it("treats env-var marker as usable only when the env key is currently resolvable", () => {

@@ -8,13 +8,11 @@ import {
 } from "openclaw/plugin-sdk/memory-host-core";
 import {
   appendMemoryHostEvent,
-  readMemoryHostEvents,
+  resolveMemoryHostEventLogPath,
 } from "openclaw/plugin-sdk/memory-host-events";
-import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { syncMemoryWikiBridgeSources } from "./bridge.js";
-import { readMemoryWikiLogEntries } from "./log.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createVault } = createMemoryWikiTestHarness();
@@ -36,7 +34,6 @@ describe("syncMemoryWikiBridgeSources", () => {
 
   afterEach(() => {
     clearMemoryPluginState();
-    resetPluginStateStoreForTests();
   });
 
   function nextCaseRoot(name: string): string {
@@ -146,7 +143,10 @@ describe("syncMemoryWikiBridgeSources", () => {
     expect(second.skippedCount).toBe(3);
     expect(second.removedCount).toBe(0);
 
-    await expect(readMemoryWikiLogEntries(vaultDir)).resolves.toHaveLength(2);
+    const logLines = (await fs.readFile(path.join(vaultDir, ".openclaw-wiki", "log.jsonl"), "utf8"))
+      .trim()
+      .split("\n");
+    expect(logLines).toHaveLength(2);
   });
 
   it("returns a no-op result outside bridge mode", async () => {
@@ -223,18 +223,14 @@ describe("syncMemoryWikiBridgeSources", () => {
         },
       ],
     });
-    const eventContent = JSON.stringify(await readMemoryHostEvents({ workspaceDir }), null, 2);
     registerBridgeArtifacts([
       {
         kind: "event-log",
         workspaceDir,
-        relativePath: "memory/events/memory-host-events.json",
-        absolutePath: "sqlite:plugin_state_entries/memory-core/memory-host.events",
+        relativePath: "memory/.dreams/events.jsonl",
+        absolutePath: resolveMemoryHostEventLogPath(workspaceDir),
         agentIds: ["main"],
         contentType: "json",
-        content: eventContent,
-        sizeBytes: Buffer.byteLength(eventContent),
-        updatedAtMs: Date.parse("2026-04-05T12:00:00.000Z"),
       },
     ]);
 
@@ -251,7 +247,7 @@ describe("syncMemoryWikiBridgeSources", () => {
     expect(result.removedCount).toBe(0);
     const page = await fs.readFile(path.join(vaultDir, result.pagePaths[0] ?? ""), "utf8");
     expect(page).toContain("sourceType: memory-bridge-events");
-    expect(page).toContain('"type": "memory.recall.recorded"');
+    expect(page).toContain('"type":"memory.recall.recorded"');
   });
 
   it("prunes stale bridge pages when the source artifact disappears", async () => {

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AgentTool, AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { createOpenClawReadTool, createSandboxedReadTool } from "./pi-tools.read.js";
@@ -133,7 +133,7 @@ describe("createOpenClawCodingTools read behavior", () => {
   });
 
   it("returns already-read adaptive content when pagination reaches EOF", async () => {
-    const readResult: AgentToolResult = {
+    const readResult: AgentToolResult<unknown> = {
       content: [
         {
           type: "text",
@@ -195,7 +195,7 @@ describe("createOpenClawCodingTools read behavior", () => {
   });
 
   it("strips truncation.content details from read results while preserving other fields", async () => {
-    const readResult: AgentToolResult = {
+    const readResult: AgentToolResult<unknown> = {
       content: [{ type: "text" as const, text: "line-0001" }],
       details: {
         truncation: {

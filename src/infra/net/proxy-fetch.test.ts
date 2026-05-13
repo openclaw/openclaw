@@ -154,9 +154,10 @@ describe("makeProxyFetch", () => {
 
     expect(proxyAgentSpy).toHaveBeenCalledWith(proxyUrl);
     expect(undiciFetch).toHaveBeenCalledOnce();
-    const [input, init] = undiciFetch.mock.calls[0] ?? [];
+    const [input] = requireUndiciFetchCall();
+    const init = requireUndiciFetchInit();
     expect(input).toBe("https://api.example.com/v1/audio");
-    expect(init?.dispatcher).toBe(getLastAgent());
+    expect(init.dispatcher).toBe(getLastAgent());
   });
 
   it("reuses the same ProxyAgent across calls", async () => {
@@ -330,9 +331,10 @@ describe("resolveProxyFetchFromEnv", () => {
 
     await fetchFn("https://api.example.com");
     expect(undiciFetch).toHaveBeenCalledOnce();
-    const [input, init] = undiciFetch.mock.calls[0] ?? [];
+    const [input] = requireUndiciFetchCall();
+    const init = requireUndiciFetchInit();
     expect(input).toBe("https://api.example.com");
-    expect(init?.dispatcher).toBe(EnvHttpProxyAgent.lastCreated);
+    expect(init.dispatcher).toBe(EnvHttpProxyAgent.lastCreated);
   });
 
   it("converts global FormData bodies when using proxy env fetch", async () => {

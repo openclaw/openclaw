@@ -1,14 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { upsertSessionEntry } from "../../config/sessions/store.js";
-import { replaceSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { CURRENT_SESSION_VERSION } from "../transcript/session-transcript-contract.js";
 import {
   resetCliCompactionTestDeps,
   runCliTurnCompactionLifecycle,
@@ -21,7 +18,7 @@ function buildContextEngine(params: {
   return {
     info: {
       id: "legacy",
-      name: "Built-in Context Engine",
+      name: "Legacy Context Engine",
     },
     async ingest() {
       return { ingested: false };
@@ -44,38 +41,34 @@ function buildContextEngine(params: {
   };
 }
 
-function seedSqliteTranscript(params: { sessionId: string; cwd: string }) {
-  replaceSqliteSessionTranscriptEvents({
-    agentId: "main",
-    sessionId: params.sessionId,
-    events: [
-      {
+async function writeSessionFile(params: { sessionFile: string; sessionId: string }) {
+  await fs.mkdir(path.dirname(params.sessionFile), { recursive: true });
+  await fs.writeFile(
+    params.sessionFile,
+    [
+      JSON.stringify({
         type: "session",
         version: CURRENT_SESSION_VERSION,
         id: params.sessionId,
         timestamp: new Date(0).toISOString(),
-        cwd: params.cwd,
-      },
-      {
+        cwd: path.dirname(params.sessionFile),
+      }),
+      JSON.stringify({
         type: "message",
-        id: "user-1",
-        parentId: null,
         message: { role: "user", content: "old ask", timestamp: 1 },
-        timestamp: new Date(1).toISOString(),
-      },
-      {
+      }),
+      JSON.stringify({
         type: "message",
-        id: "assistant-1",
-        parentId: "user-1",
         message: {
           role: "assistant",
           content: [{ type: "text", text: "old answer" }],
           timestamp: 2,
         },
-        timestamp: new Date(2).toISOString(),
-      },
-    ],
-  });
+      }),
+      "",
+    ].join("\n"),
+    "utf-8",
+  );
 }
 
 describe("runCliTurnCompactionLifecycle", () => {
@@ -83,33 +76,37 @@ describe("runCliTurnCompactionLifecycle", () => {
 
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-compaction-"));
-    vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
   });
 
   afterEach(async () => {
     resetCliCompactionTestDeps();
-    closeOpenClawAgentDatabasesForTest();
-    vi.unstubAllEnvs();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
   it("compacts over-budget CLI transcripts and clears external CLI resume state", async () => {
     const sessionKey = "agent:main:cli";
     const sessionId = "session-cli";
-    seedSqliteTranscript({ sessionId, cwd: tmpDir });
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const storePath = path.join(tmpDir, "sessions.json");
+    await writeSessionFile({ sessionFile, sessionId });
 
     const sessionEntry: SessionEntry = {
       sessionId,
       updatedAt: Date.now(),
+      sessionFile,
       contextTokens: 1_000,
       totalTokens: 950,
       totalTokensFresh: true,
       cliSessionBindings: {
         "claude-cli": { sessionId: "claude-session" },
       },
+      cliSessionIds: {
+        "claude-cli": "claude-session",
+      },
+      claudeCliSessionId: "claude-session",
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    upsertSessionEntry({ agentId: "main", sessionKey, entry: sessionEntry });
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
 
     const compactCalls: Array<Parameters<ContextEngine["compact"]>[0]> = [];
     const maintenance = vi.fn(async () => ({ changed: false, bytesFreed: 0, rewrittenEntries: 0 }));
@@ -139,6 +136,7 @@ describe("runCliTurnCompactionLifecycle", () => {
       sessionKey,
       sessionEntry,
       sessionStore,
+      storePath,
       sessionAgentId: "main",
       workspaceDir: tmpDir,
       agentDir: tmpDir,
@@ -147,33 +145,46 @@ describe("runCliTurnCompactionLifecycle", () => {
     });
 
     expect(compactCalls).toHaveLength(1);
-    expect(compactCalls[0]).toMatchObject({
-      sessionId,
-      sessionKey,
-      tokenBudget: 1_000,
-      currentTokenCount: 950,
-      force: true,
-      compactionTarget: "budget",
-    });
-    expect(maintenance).toHaveBeenCalledWith(
-      expect.objectContaining({
-        reason: "compaction",
-        sessionId,
-        sessionKey,
-      }),
-    );
+    const compactCall = compactCalls[0];
+    expect(compactCall?.sessionId).toBe(sessionId);
+    expect(compactCall?.sessionKey).toBe(sessionKey);
+    expect(compactCall?.sessionFile).toBe(sessionFile);
+    expect(compactCall?.tokenBudget).toBe(1_000);
+    expect(compactCall?.currentTokenCount).toBe(950);
+    expect(compactCall?.force).toBe(true);
+    expect(compactCall?.compactionTarget).toBe("budget");
+    expect(maintenance).toHaveBeenCalledTimes(1);
+    const maintenanceCalls = maintenance.mock.calls as unknown as Array<
+      [
+        {
+          reason?: string;
+          sessionId?: string;
+          sessionKey?: string;
+          sessionFile?: string;
+        },
+      ]
+    >;
+    const maintenanceCall = maintenanceCalls[0]?.[0];
+    expect(maintenanceCall?.reason).toBe("compaction");
+    expect(maintenanceCall?.sessionId).toBe(sessionId);
+    expect(maintenanceCall?.sessionKey).toBe(sessionKey);
+    expect(maintenanceCall?.sessionFile).toBe(sessionFile);
     expect(updatedEntry?.compactionCount).toBe(1);
     expect(updatedEntry?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+    expect(updatedEntry?.cliSessionIds?.["claude-cli"]).toBeUndefined();
+    expect(updatedEntry?.claudeCliSessionId).toBeUndefined();
   });
 
   it("initializes built-in context engines before resolving CLI compaction engine", async () => {
     const sessionKey = "agent:main:cli";
     const sessionId = "session-cli-init";
-    seedSqliteTranscript({ sessionId, cwd: tmpDir });
+    const sessionFile = path.join(tmpDir, "session-init.jsonl");
+    await writeSessionFile({ sessionFile, sessionId });
 
     const sessionEntry: SessionEntry = {
       sessionId,
       updatedAt: Date.now(),
+      sessionFile,
       contextTokens: 1_000,
       totalTokens: 100,
       totalTokensFresh: true,

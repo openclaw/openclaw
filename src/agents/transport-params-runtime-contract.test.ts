@@ -1,3 +1,5 @@
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { Context, Model } from "@earendil-works/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   GPT_PARALLEL_TOOL_CALLS_PAYLOAD_APIS,
@@ -6,8 +8,6 @@ import {
   OPENAI_GPT5_TRANSPORT_DEFAULTS,
   UNRELATED_TOOL_CALLS_PAYLOAD_APIS,
 } from "../../test/helpers/agents/transport-params-runtime-contract.js";
-import type { StreamFn } from "./agent-core-contract.js";
-import type { Context, Model } from "./pi-ai-contract.js";
 import {
   __testing as extraParamsTesting,
   applyExtraParamsToAgent,

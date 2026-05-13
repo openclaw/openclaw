@@ -1,11 +1,14 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "../api.js";
 import type { VoiceCallTtsConfig } from "./config.js";
 
-export type CoreConfig = OpenClawConfig & {
-  messages?: OpenClawConfig["messages"] & {
+export type CoreConfig = {
+  session?: {
+    store?: string;
+  };
+  messages?: {
     tts?: VoiceCallTtsConfig;
   };
+  [key: string]: unknown;
 };
 
 export type CoreAgentDeps = OpenClawPluginApi["runtime"]["agent"];

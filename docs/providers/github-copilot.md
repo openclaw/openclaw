@@ -89,7 +89,7 @@ You can also omit `--auth-choice`; passing `--github-copilot-token` infers the
 GitHub Copilot provider auth choice. If the flag is omitted, onboarding falls
 back to `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, then `GITHUB_TOKEN`. Use
 `--secret-input-mode ref` with `COPILOT_GITHUB_TOKEN` set to store an env-backed
-`tokenRef` instead of plaintext in the SQLite auth-profile row.
+`tokenRef` instead of plaintext in `auth-profiles.json`.
 
 <AccordionGroup>
   <Accordion title="Interactive TTY required">

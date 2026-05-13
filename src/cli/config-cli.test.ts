@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import { createCliRuntimeCapture, mockRuntimeModule } from "./test-runtime-capture.js";
 
@@ -21,13 +21,6 @@ const mockWriteConfigFile = vi.fn<
 >(async () => {});
 const mockResolveSecretRefValue = vi.fn();
 const mockReadBestEffortRuntimeConfigSchema = vi.fn();
-
-function sourceBundledPluginTestEnv(): Record<string, string> {
-  return {
-    OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
-    OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-  };
-}
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
@@ -238,9 +231,6 @@ describe("config cli", () => {
   });
 
   beforeEach(() => {
-    for (const [key, value] of Object.entries(sourceBundledPluginTestEnv())) {
-      vi.stubEnv(key, value);
-    }
     vi.clearAllMocks();
     resetRuntimeCapture();
     mockReadBestEffortRuntimeConfigSchema.mockResolvedValue({
@@ -278,10 +268,6 @@ describe("config cli", () => {
       throw new Error(`__exit__:${code} - ${errorMessages}`);
     });
     mockResolveSecretRefValue.mockResolvedValue("resolved-secret");
-  });
-
-  afterEach(() => {
-    vi.unstubAllEnvs();
   });
 
   describe("config set - issue #6070", () => {

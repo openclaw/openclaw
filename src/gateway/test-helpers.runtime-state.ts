@@ -61,9 +61,10 @@ type GatewayTestHoistedState = {
     agentsConfig: Record<string, unknown> | undefined;
     bindingsConfig: AgentBinding[] | undefined;
     channelsConfig: Record<string, unknown> | undefined;
+    sessionStorePath: string | undefined;
     sessionConfig: Record<string, unknown> | undefined;
     allowFrom: string[] | undefined;
-    cronStoreKey: string | undefined;
+    cronStorePath: string | undefined;
     cronEnabled: boolean | undefined;
     gatewayBind: "auto" | "lan" | "tailnet" | "loopback" | undefined;
     gatewayAuth: Record<string, unknown> | undefined;
@@ -119,9 +120,10 @@ const gatewayTestHoisted = vi.hoisted(() => {
       agentsConfig: undefined,
       bindingsConfig: undefined,
       channelsConfig: undefined,
+      sessionStorePath: undefined,
       sessionConfig: undefined,
       allowFrom: undefined,
-      cronStoreKey: undefined,
+      cronStorePath: undefined,
       cronEnabled: false,
       gatewayBind: undefined,
       gatewayAuth: undefined,

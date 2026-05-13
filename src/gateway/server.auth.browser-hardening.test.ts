@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
 import { ConnectErrorDetailCodes } from "../gateway/protocol/connect-error-details.js";
@@ -55,13 +57,13 @@ async function createSignedDevice(params: {
   scopes: string[];
   clientId: string;
   clientMode: string;
-  identityKey?: string;
+  identityPath?: string;
   nonce: string;
   signedAtMs?: number;
 }) {
-  const identity = loadOrCreateDeviceIdentity(
-    params.identityKey ? { key: params.identityKey } : undefined,
-  );
+  const identity = params.identityPath
+    ? loadOrCreateDeviceIdentity(params.identityPath)
+    : loadOrCreateDeviceIdentity();
   const signedAtMs = params.signedAtMs ?? Date.now();
   const payload = buildDeviceAuthPayload({
     deviceId: identity.deviceId,
@@ -365,7 +367,7 @@ describe("gateway auth browser hardening", () => {
           scopes: ["operator.admin"],
           clientId: TEST_OPERATOR_CLIENT.id,
           clientMode: TEST_OPERATOR_CLIENT.mode,
-          identityKey: `test:browser-device:${randomUUID()}`,
+          identityPath: path.join(os.tmpdir(), `openclaw-browser-device-${randomUUID()}.json`),
           nonce: nonce ?? "",
         });
         const res = await connectReq(browserWs, {
@@ -403,7 +405,7 @@ describe("gateway auth browser hardening", () => {
           scopes: ["operator.admin"],
           clientId: CONTROL_UI_CLIENT.id,
           clientMode: CONTROL_UI_CLIENT.mode,
-          identityKey: `openclaw-control-ui-device-${randomUUID()}`,
+          identityPath: path.join(os.tmpdir(), `openclaw-control-ui-device-${randomUUID()}.json`),
           nonce: nonce ?? "",
         });
         const res = await connectReq(browserWs, {

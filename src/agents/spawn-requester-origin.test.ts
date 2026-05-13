@@ -28,14 +28,11 @@ describe("resolveRequesterOriginForChild", () => {
 
   function expectOrigin(
     origin: ReturnType<typeof resolveRequesterOriginForChild>,
-    expected: { channel: string; accountId: string; to: string; chatType?: string },
+    expected: { channel: string; accountId: string; to: string },
   ) {
     expect(origin?.channel).toBe(expected.channel);
     expect(origin?.accountId).toBe(expected.accountId);
     expect(origin?.to).toBe(expected.to);
-    if (expected.chatType) {
-      expect(origin?.chatType).toBe(expected.chatType);
-    }
   }
 
   it.each([
@@ -71,7 +68,6 @@ describe("resolveRequesterOriginForChild", () => {
           channel: "qa-channel",
           accountId: "bot-alpha-qa",
           to,
-          chatType: peerKind,
         },
       );
     },

@@ -1,10 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
 import { createMSTeamsConversationStoreMemory } from "./conversation-store-memory.js";
-import { createMSTeamsConversationStoreState } from "./conversation-store-state.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import { msteamsRuntimeStub } from "./test-runtime.js";
@@ -16,10 +15,10 @@ type StoreFactory = {
 
 const storeFactories: StoreFactory[] = [
   {
-    name: "sqlite",
+    name: "fs",
     createStore: async () => {
       const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-store-"));
-      return createMSTeamsConversationStoreState({
+      return createMSTeamsConversationStoreFs({
         env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
         ttlMs: 60_000,
       });
@@ -33,7 +32,6 @@ const storeFactories: StoreFactory[] = [
 
 describe.each(storeFactories)("msteams conversation store ($name)", ({ createStore }) => {
   beforeEach(() => {
-    resetPluginStateStoreForTests();
     setMSTeamsRuntime(msteamsRuntimeStub);
   });
 

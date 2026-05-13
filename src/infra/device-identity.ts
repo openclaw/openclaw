@@ -1,18 +1,8 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { Insertable, Selectable } from "kysely";
 import { resolveStateDir } from "../config/paths.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "./kysely-sync.js";
+import { privateFileStoreSync } from "./private-file-store.js";
 
 export type DeviceIdentity = {
   deviceId: string;
@@ -20,7 +10,7 @@ export type DeviceIdentity = {
   privateKeyPem: string;
 };
 
-export type StoredDeviceIdentity = {
+type StoredIdentity = {
   version: 1;
   deviceId: string;
   publicKeyPem: string;
@@ -28,51 +18,19 @@ export type StoredDeviceIdentity = {
   createdAtMs: number;
 };
 
-const DEVICE_IDENTITY_KEY = "default";
-
-type DeviceIdentityDatabase = Pick<OpenClawStateKyselyDatabase, "device_identities">;
-type DeviceIdentityRow = Selectable<DeviceIdentityDatabase["device_identities"]>;
-type DeviceIdentityInsert = Insertable<DeviceIdentityDatabase["device_identities"]>;
-
-export type DeviceIdentityStoreOptions = {
-  env?: NodeJS.ProcessEnv;
-  key?: string;
-  checkLegacyIdentity?: boolean;
+type StoredSwiftIdentity = {
+  deviceId: string;
+  publicKey: string;
+  privateKey: string;
+  createdAtMs: number;
 };
 
-export class DeviceIdentityMigrationRequiredError extends Error {
-  constructor(filePath: string) {
-    super(
-      `Legacy device identity exists at ${filePath} but has not been imported into SQLite. Run "openclaw doctor --fix" before starting the gateway or connecting this client.`,
-    );
-    this.name = "DeviceIdentityMigrationRequiredError";
-  }
-}
-
-export class DeviceIdentityStorageError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "DeviceIdentityStorageError";
-  }
-}
-
-function normalizeIdentityStoreOptions(
-  options: DeviceIdentityStoreOptions = {},
-): Required<Pick<DeviceIdentityStoreOptions, "env" | "key" | "checkLegacyIdentity">> {
-  const env = options.env ?? process.env;
-  const key = options.key?.trim() || DEVICE_IDENTITY_KEY;
-  return {
-    env,
-    key,
-    checkLegacyIdentity: options.checkLegacyIdentity ?? key === DEVICE_IDENTITY_KEY,
-  };
-}
-
-function resolveLegacyIdentityPath(env: NodeJS.ProcessEnv): string {
-  return path.join(resolveStateDir(env), "identity", "device.json");
+function resolveDefaultIdentityPath(): string {
+  return path.join(resolveStateDir(), "identity", "device.json");
 }
 
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
+const ED25519_PKCS8_PRIVATE_PREFIX = Buffer.from("302e020100300506032b657004220420", "hex");
 
 function base64UrlEncode(buf: Buffer): string {
   return buf.toString("base64").replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/g, "");
@@ -82,6 +40,23 @@ function base64UrlDecode(input: string): Buffer {
   const normalized = input.replaceAll("-", "+").replaceAll("_", "/");
   const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
   return Buffer.from(padded, "base64");
+}
+
+function pemEncode(label: "PUBLIC KEY" | "PRIVATE KEY", der: Buffer): string {
+  const body =
+    der
+      .toString("base64")
+      .match(/.{1,64}/g)
+      ?.join("\n") ?? "";
+  return `-----BEGIN ${label}-----\n${body}\n-----END ${label}-----\n`;
+}
+
+function publicKeyPemFromRaw(publicKeyRaw: Buffer): string {
+  return pemEncode("PUBLIC KEY", Buffer.concat([ED25519_SPKI_PREFIX, publicKeyRaw]));
+}
+
+function privateKeyPemFromRaw(privateKeyRaw: Buffer): string {
+  return pemEncode("PRIVATE KEY", Buffer.concat([ED25519_PKCS8_PRIVATE_PREFIX, privateKeyRaw]));
 }
 
 function derivePublicKeyRaw(publicKeyPem: string): Buffer {
@@ -101,6 +76,24 @@ function fingerprintPublicKey(publicKeyPem: string): string {
   return crypto.createHash("sha256").update(raw).digest("hex");
 }
 
+function tryFingerprintPublicKey(publicKeyPem: string): string | null {
+  try {
+    return fingerprintPublicKey(publicKeyPem);
+  } catch {
+    return null;
+  }
+}
+
+function keyPairMatches(publicKeyPem: string, privateKeyPem: string): boolean {
+  try {
+    const payload = Buffer.from("openclaw-device-identity-self-check", "utf8");
+    const signature = crypto.sign(null, payload, crypto.createPrivateKey(privateKeyPem));
+    return crypto.verify(null, payload, crypto.createPublicKey(publicKeyPem), signature);
+  } catch {
+    return false;
+  }
+}
+
 function generateIdentity(): DeviceIdentity {
   const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
   const publicKeyPem = publicKey.export({ type: "spki", format: "pem" });
@@ -109,77 +102,113 @@ function generateIdentity(): DeviceIdentity {
   return { deviceId, publicKeyPem, privateKeyPem };
 }
 
-function parseStoredIdentity(value: unknown): StoredDeviceIdentity | null {
-  if (
-    !value ||
-    typeof value !== "object" ||
-    Array.isArray(value) ||
-    (value as { version?: unknown }).version !== 1 ||
-    typeof (value as { deviceId?: unknown }).deviceId !== "string" ||
-    typeof (value as { publicKeyPem?: unknown }).publicKeyPem !== "string" ||
-    typeof (value as { privateKeyPem?: unknown }).privateKeyPem !== "string"
-  ) {
-    return null;
-  }
-  return value as StoredDeviceIdentity;
+type NormalizedStoredIdentity =
+  | {
+      kind: "identity";
+      identity: DeviceIdentity;
+      stored?: StoredIdentity;
+      validForReadOnly: boolean;
+    }
+  | { kind: "recognized-invalid" };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object";
 }
 
-function rowToStoredIdentity(row: DeviceIdentityRow): StoredDeviceIdentity {
-  return {
-    version: 1,
-    deviceId: row.device_id,
-    publicKeyPem: row.public_key_pem,
-    privateKeyPem: row.private_key_pem,
-    createdAtMs: row.created_at_ms,
-  };
-}
-
-function storedIdentityToRow(
-  key: string,
-  stored: StoredDeviceIdentity,
-  updatedAtMs: number,
-): DeviceIdentityInsert {
-  return {
-    identity_key: key,
-    device_id: stored.deviceId,
-    public_key_pem: stored.publicKeyPem,
-    private_key_pem: stored.privateKeyPem,
-    created_at_ms: stored.createdAtMs,
-    updated_at_ms: updatedAtMs,
-  };
-}
-
-function deriveStoredDeviceIdOrThrow(stored: StoredDeviceIdentity): string {
-  const derivedId = deriveDeviceIdFromPublicKey(stored.publicKeyPem);
-  if (!derivedId) {
-    throw new DeviceIdentityStorageError(
-      'Stored device identity is invalid. Run "openclaw doctor --fix" before starting the gateway or connecting this client.',
-    );
-  }
-  return derivedId;
-}
-
-function readStoredIdentity(options?: DeviceIdentityStoreOptions): StoredDeviceIdentity | null {
-  const store = normalizeIdentityStoreOptions(options);
-  const database = openOpenClawStateDatabase({ env: store.env });
-  const db = getNodeSqliteKysely<DeviceIdentityDatabase>(database.db);
-  const row = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db.selectFrom("device_identities").selectAll().where("identity_key", "=", store.key),
+function hasRecognizedIdentityShape(parsed: unknown): boolean {
+  return (
+    isRecord(parsed) &&
+    ("publicKeyPem" in parsed ||
+      "privateKeyPem" in parsed ||
+      "publicKey" in parsed ||
+      "privateKey" in parsed)
   );
-  if (!row) {
-    return null;
-  }
-  const parsed = parseStoredIdentity(rowToStoredIdentity(row));
-  if (!parsed) {
-    throw new DeviceIdentityStorageError(
-      'Stored device identity is invalid. Run "openclaw doctor --fix" before starting the gateway or connecting this client.',
-    );
-  }
-  return parsed;
 }
 
-function legacyIdentityFileExists(filePath: string): boolean {
+function normalizeStoredIdentity(parsed: unknown): NormalizedStoredIdentity | null {
+  if (
+    isRecord(parsed) &&
+    "version" in parsed &&
+    parsed.version === 1 &&
+    "deviceId" in parsed &&
+    typeof parsed.deviceId === "string" &&
+    "publicKeyPem" in parsed &&
+    typeof parsed.publicKeyPem === "string" &&
+    "privateKeyPem" in parsed &&
+    typeof parsed.privateKeyPem === "string"
+  ) {
+    const stored = parsed as StoredIdentity;
+    const derivedId = tryFingerprintPublicKey(stored.publicKeyPem);
+    if (!derivedId || !keyPairMatches(stored.publicKeyPem, stored.privateKeyPem)) {
+      return { kind: "recognized-invalid" };
+    }
+    const identity = {
+      deviceId: derivedId,
+      publicKeyPem: stored.publicKeyPem,
+      privateKeyPem: stored.privateKeyPem,
+    };
+    return derivedId === stored.deviceId
+      ? { kind: "identity", identity, validForReadOnly: true }
+      : {
+          kind: "identity",
+          identity,
+          validForReadOnly: false,
+          stored: {
+            ...stored,
+            deviceId: derivedId,
+          },
+        };
+  }
+
+  if (
+    isRecord(parsed) &&
+    !("version" in parsed) &&
+    "deviceId" in parsed &&
+    typeof parsed.deviceId === "string" &&
+    "publicKey" in parsed &&
+    typeof parsed.publicKey === "string" &&
+    "privateKey" in parsed &&
+    typeof parsed.privateKey === "string"
+  ) {
+    const stored = parsed as StoredSwiftIdentity;
+    const publicKeyRaw = base64UrlDecode(stored.publicKey);
+    const privateKeyRaw = base64UrlDecode(stored.privateKey);
+    if (publicKeyRaw.length !== 32 || privateKeyRaw.length !== 32) {
+      return { kind: "recognized-invalid" };
+    }
+    const publicKeyPem = publicKeyPemFromRaw(publicKeyRaw);
+    const privateKeyPem = privateKeyPemFromRaw(privateKeyRaw);
+    if (!keyPairMatches(publicKeyPem, privateKeyPem)) {
+      return { kind: "recognized-invalid" };
+    }
+    const derivedId = fingerprintPublicKey(publicKeyPem);
+    const validForReadOnly = derivedId === stored.deviceId;
+    const migrated: StoredIdentity = {
+      version: 1,
+      deviceId: derivedId,
+      publicKeyPem,
+      privateKeyPem,
+      createdAtMs:
+        typeof stored.createdAtMs === "number" && Number.isFinite(stored.createdAtMs)
+          ? stored.createdAtMs
+          : Date.now(),
+    };
+    return {
+      kind: "identity",
+      identity: {
+        deviceId: derivedId,
+        publicKeyPem,
+        privateKeyPem,
+      },
+      validForReadOnly,
+      stored: migrated,
+    };
+  }
+
+  return hasRecognizedIdentityShape(parsed) ? { kind: "recognized-invalid" } : null;
+}
+
+function identityFileExists(filePath: string): boolean {
   try {
     return fs.statSync(filePath).isFile();
   } catch {
@@ -187,118 +216,63 @@ function legacyIdentityFileExists(filePath: string): boolean {
   }
 }
 
-function assertNoUnimportedLegacyIdentity(filePath: string): void {
-  if (legacyIdentityFileExists(filePath)) {
-    throw new DeviceIdentityMigrationRequiredError(filePath);
-  }
-}
-
-function writeStoredIdentity(
-  stored: StoredDeviceIdentity,
-  options?: DeviceIdentityStoreOptions,
-): void {
-  const store = normalizeIdentityStoreOptions(options);
-  const row = storedIdentityToRow(store.key, stored, Date.now());
-  runOpenClawStateWriteTransaction(
-    (database) => {
-      const db = getNodeSqliteKysely<DeviceIdentityDatabase>(database.db);
-      executeSqliteQuerySync(
-        database.db,
-        db
-          .insertInto("device_identities")
-          .values(row)
-          .onConflict((conflict) =>
-            conflict.column("identity_key").doUpdateSet({
-              device_id: row.device_id,
-              public_key_pem: row.public_key_pem,
-              private_key_pem: row.private_key_pem,
-              created_at_ms: row.created_at_ms,
-              updated_at_ms: row.updated_at_ms,
-            }),
-          ),
-      );
-    },
-    { env: store.env },
-  );
-}
-
-export function loadOrCreateDeviceIdentity(options?: DeviceIdentityStoreOptions): DeviceIdentity {
-  const store = normalizeIdentityStoreOptions(options);
-  const parsed = readStoredIdentity(store);
-  if (parsed) {
-    const derivedId = deriveStoredDeviceIdOrThrow(parsed);
-    if (derivedId && derivedId !== parsed.deviceId) {
-      const updated: StoredDeviceIdentity = {
-        ...parsed,
-        deviceId: derivedId,
-      };
-      writeStoredIdentity(updated, store);
-      return {
-        deviceId: derivedId,
-        publicKeyPem: parsed.publicKeyPem,
-        privateKeyPem: parsed.privateKeyPem,
-      };
+export function loadOrCreateDeviceIdentity(
+  filePath: string = resolveDefaultIdentityPath(),
+): DeviceIdentity {
+  try {
+    const store = privateFileStoreSync(path.dirname(filePath));
+    const parsed = store.readJsonIfExists(path.basename(filePath));
+    const normalized = normalizeStoredIdentity(parsed);
+    if (normalized?.kind === "identity") {
+      if (normalized.stored) {
+        try {
+          store.writeJson(path.basename(filePath), normalized.stored, {
+            trailingNewline: true,
+          });
+        } catch {
+          // Keep using recognized OpenClaw key material even if best-effort normalization fails.
+        }
+      }
+      return normalized.identity;
     }
-    return {
-      deviceId: parsed.deviceId,
-      publicKeyPem: parsed.publicKeyPem,
-      privateKeyPem: parsed.privateKeyPem,
-    };
-  }
-
-  if (store.checkLegacyIdentity) {
-    assertNoUnimportedLegacyIdentity(resolveLegacyIdentityPath(store.env));
+    if (normalized?.kind === "recognized-invalid") {
+      return generateIdentity();
+    }
+  } catch {
+    if (identityFileExists(filePath)) {
+      return generateIdentity();
+    }
   }
 
   const identity = generateIdentity();
-  const stored: StoredDeviceIdentity = {
+  const stored: StoredIdentity = {
     version: 1,
     deviceId: identity.deviceId,
     publicKeyPem: identity.publicKeyPem,
     privateKeyPem: identity.privateKeyPem,
     createdAtMs: Date.now(),
   };
-  writeStoredIdentity(stored, store);
+  privateFileStoreSync(path.dirname(filePath)).writeJson(path.basename(filePath), stored, {
+    trailingNewline: true,
+  });
   return identity;
 }
 
 export function loadDeviceIdentityIfPresent(
-  options?: DeviceIdentityStoreOptions,
+  filePath: string = resolveDefaultIdentityPath(),
 ): DeviceIdentity | null {
   try {
-    const parsed = readStoredIdentity(options);
-    if (!parsed) {
+    const parsed = privateFileStoreSync(path.dirname(filePath)).readJsonIfExists(
+      path.basename(filePath),
+    );
+    const normalized = normalizeStoredIdentity(parsed);
+    if (normalized?.kind !== "identity" || !normalized.validForReadOnly) {
       return null;
     }
-    const derivedId = deriveDeviceIdFromPublicKey(parsed.publicKeyPem);
-    if (!derivedId || derivedId !== parsed.deviceId) {
-      return null;
-    }
-    return {
-      deviceId: parsed.deviceId,
-      publicKeyPem: parsed.publicKeyPem,
-      privateKeyPem: parsed.privateKeyPem,
-    };
+    return normalized.identity;
   } catch {
     return null;
   }
-}
-
-export function loadDeviceIdentityIfPresentForEnv(
-  env: NodeJS.ProcessEnv = process.env,
-): DeviceIdentity | null {
-  return loadDeviceIdentityIfPresent({ env });
-}
-
-export function parseStoredDeviceIdentitySnapshot(value: unknown): StoredDeviceIdentity | null {
-  return parseStoredIdentity(value);
-}
-
-export function writeStoredDeviceIdentitySnapshot(
-  stored: StoredDeviceIdentity,
-  options?: DeviceIdentityStoreOptions,
-): void {
-  writeStoredIdentity(stored, options);
 }
 
 export function signDevicePayload(privateKeyPem: string, payload: string): string {

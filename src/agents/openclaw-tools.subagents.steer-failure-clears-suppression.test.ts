@@ -1,8 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   callGatewayMock,
   setSubagentsConfigOverride,
@@ -15,25 +14,21 @@ import {
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 
 describe("openclaw-tools: subagents steer failure", () => {
-  let stateDir = "";
-
-  beforeEach(async () => {
+  beforeEach(() => {
     resetSubagentRegistryForTests();
     callGatewayMock.mockClear();
-    stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagents-steer-"));
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const storePath = path.join(
+      os.tmpdir(),
+      `openclaw-subagents-steer-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
+    );
     setSubagentsConfigOverride({
       session: {
         mainKey: "main",
         scope: "per-sender",
+        store: storePath,
       },
     });
-  });
-
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-    vi.unstubAllEnvs();
-    fs.rmSync(stateDir, { recursive: true, force: true });
+    fs.writeFileSync(storePath, "{}", "utf-8");
   });
 
   it("restores announce behavior when steer replacement dispatch fails", async () => {

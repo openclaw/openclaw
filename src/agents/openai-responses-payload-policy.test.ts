@@ -1,9 +1,9 @@
+import type { Model } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
   applyOpenAIResponsesPayloadPolicy,
   resolveOpenAIResponsesPayloadPolicy,
 } from "./openai-responses-payload-policy.js";
-import type { Model } from "./pi-ai-contract.js";
 
 describe("openai responses payload policy", () => {
   it("forces store for native OpenAI responses payloads but keeps disable mode for transport defaults", () => {

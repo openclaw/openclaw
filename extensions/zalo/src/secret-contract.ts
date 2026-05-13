@@ -11,7 +11,7 @@ export const secretTargetRegistryEntries: SecretTargetRegistryEntry[] = [
   {
     id: "channels.zalo.accounts.*.botToken",
     targetType: "channels.zalo.accounts.*.botToken",
-    store: "openclaw.json",
+    configFile: "openclaw.json",
     pathPattern: "channels.zalo.accounts.*.botToken",
     secretShape: "secret_input",
     expectedResolvedValue: "string",
@@ -22,7 +22,7 @@ export const secretTargetRegistryEntries: SecretTargetRegistryEntry[] = [
   {
     id: "channels.zalo.accounts.*.webhookSecret",
     targetType: "channels.zalo.accounts.*.webhookSecret",
-    store: "openclaw.json",
+    configFile: "openclaw.json",
     pathPattern: "channels.zalo.accounts.*.webhookSecret",
     secretShape: "secret_input",
     expectedResolvedValue: "string",
@@ -33,7 +33,7 @@ export const secretTargetRegistryEntries: SecretTargetRegistryEntry[] = [
   {
     id: "channels.zalo.botToken",
     targetType: "channels.zalo.botToken",
-    store: "openclaw.json",
+    configFile: "openclaw.json",
     pathPattern: "channels.zalo.botToken",
     secretShape: "secret_input",
     expectedResolvedValue: "string",
@@ -44,7 +44,7 @@ export const secretTargetRegistryEntries: SecretTargetRegistryEntry[] = [
   {
     id: "channels.zalo.webhookSecret",
     targetType: "channels.zalo.webhookSecret",
-    store: "openclaw.json",
+    configFile: "openclaw.json",
     pathPattern: "channels.zalo.webhookSecret",
     secretShape: "secret_input",
     expectedResolvedValue: "string",

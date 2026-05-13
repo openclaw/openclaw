@@ -2,14 +2,16 @@ import { randomUUID } from "node:crypto";
 import { resolveMissingRequestedScope } from "../shared/operator-scope-compat.js";
 import { normalizeArrayBackedTrimmedStringList } from "../shared/string-normalization.js";
 import { type NodeApprovalScope, resolveNodePairApprovalScopes } from "./node-pairing-authz.js";
-import { rejectPendingPairingRequest } from "./pairing-pending.js";
 import {
   createAsyncLock,
   pruneExpiredPending,
+  readJsonIfExists,
   reconcilePendingPairingRequests,
-  readPairingStateRecord,
-  writePairingStateRecord,
-} from "./pairing-state.js";
+  coercePairingStateRecord,
+  resolvePairingPaths,
+  writeJson,
+} from "./pairing-files.js";
+import { rejectPendingPairingRequest } from "./pairing-pending.js";
 import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
 
 type NodeDeclaredSurface = {
@@ -218,35 +220,25 @@ type ForbiddenNodePairingResult = { status: "forbidden"; missingScope: string };
 type ApproveNodePairingResult = ApprovedNodePairingResult | ForbiddenNodePairingResult | null;
 
 async function loadState(baseDir?: string): Promise<NodePairingStateFile> {
+  const { pendingPath, pairedPath } = resolvePairingPaths(baseDir, "nodes");
+  const [pending, paired] = await Promise.all([
+    readJsonIfExists<unknown>(pendingPath),
+    readJsonIfExists<unknown>(pairedPath),
+  ]);
   const state: NodePairingStateFile = {
-    pendingById: readPairingStateRecord<NodePairingPendingRequest>({
-      baseDir,
-      subdir: "nodes",
-      key: "pending",
-    }),
-    pairedByNodeId: readPairingStateRecord<NodePairingPairedNode>({
-      baseDir,
-      subdir: "nodes",
-      key: "paired",
-    }),
+    pendingById: coercePairingStateRecord<NodePairingPendingRequest>(pending),
+    pairedByNodeId: coercePairingStateRecord<NodePairingPairedNode>(paired),
   };
   pruneExpiredPending(state.pendingById, Date.now(), PENDING_TTL_MS);
   return state;
 }
 
 async function persistState(state: NodePairingStateFile, baseDir?: string) {
-  writePairingStateRecord({
-    baseDir,
-    subdir: "nodes",
-    key: "pending",
-    value: state.pendingById,
-  });
-  writePairingStateRecord({
-    baseDir,
-    subdir: "nodes",
-    key: "paired",
-    value: state.pairedByNodeId,
-  });
+  const { pendingPath, pairedPath } = resolvePairingPaths(baseDir, "nodes");
+  await Promise.all([
+    writeJson(pendingPath, state.pendingById),
+    writeJson(pairedPath, state.pairedByNodeId),
+  ]);
 }
 
 function normalizeNodeId(nodeId: string) {

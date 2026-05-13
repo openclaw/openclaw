@@ -57,7 +57,7 @@ Concrete examples:
 # Is the GitHub plugin enabled in this config?
 openclaw path resolve 'oc://config.jsonc/plugins/github/enabled' --json
 
-# Which tool-call names appear in this exported JSONL trace?
+# Which tool-call names appear in this session log?
 openclaw path find 'oc://session.jsonl/[event=tool_call]/name' --json
 
 # What bytes would this tiny config edit write?

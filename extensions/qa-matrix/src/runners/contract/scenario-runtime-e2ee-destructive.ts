@@ -1,11 +1,7 @@
-import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { chmod, copyFile, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import {
-  createPluginBlobStore,
-  createPluginStateKeyedStore,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createMatrixQaClient } from "../../substrate/client.js";
 import {
   createMatrixQaE2eeScenarioClient,
@@ -36,59 +32,10 @@ import {
   isMatrixQaExactMarkerReply,
   type MatrixQaScenarioContext,
 } from "./scenario-runtime-shared.js";
-import {
-  deleteMatrixSyncStore,
-  waitForMatrixSyncStoreWithCursor,
-} from "./scenario-runtime-state-files.js";
+import { waitForMatrixSyncStoreWithCursor } from "./scenario-runtime-state-files.js";
 import type { MatrixQaScenarioExecution } from "./scenario-types.js";
 
 type MatrixQaCliRuntime = Awaited<ReturnType<typeof createMatrixQaOpenClawCliRuntime>>;
-
-const MATRIX_IDB_SNAPSHOT_NAMESPACE = "idb-snapshots";
-const MATRIX_RECOVERY_KEY_NAMESPACE = "recovery-key";
-
-function resolveMatrixIdbSnapshotKey(storageKey: string): string {
-  return createHash("sha256").update(path.resolve(storageKey), "utf8").digest("hex").slice(0, 32);
-}
-
-function resolveMatrixRecoveryKeyStateKey(storageKey: string): string {
-  return createHash("sha256").update(storageKey.trim(), "utf8").digest("hex").slice(0, 32);
-}
-
-type MatrixQaStorageMetadata = {
-  rootDir?: string;
-  userId?: string;
-  deviceId?: string | null;
-};
-
-const matrixStorageMetaStore = createPluginStateKeyedStore<MatrixQaStorageMetadata>("matrix", {
-  namespace: "storage-meta",
-  maxEntries: 10_000,
-});
-
-const matrixIdbSnapshotStore = createPluginBlobStore("matrix", {
-  namespace: MATRIX_IDB_SNAPSHOT_NAMESPACE,
-  maxEntries: 1_000,
-});
-
-const matrixRecoveryKeyStore = createPluginStateKeyedStore<Record<string, unknown>>("matrix", {
-  namespace: MATRIX_RECOVERY_KEY_NAMESPACE,
-  maxEntries: 10_000,
-});
-
-async function withMatrixQaCliStateDir<T>(stateDir: string, action: () => Promise<T>): Promise<T> {
-  const previous = process.env.OPENCLAW_STATE_DIR;
-  process.env.OPENCLAW_STATE_DIR = stateDir;
-  try {
-    return await action();
-  } finally {
-    if (previous == null) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previous;
-    }
-  }
-}
 
 type MatrixQaCliBackupStatus = {
   backup?: {
@@ -515,8 +462,33 @@ function isMatrixQaDeletedDeviceStatus(params: {
   };
 }
 
-function resolveMatrixStorageMetaKey(rootDir: string): string {
-  return createHash("sha256").update(path.resolve(rootDir), "utf8").digest("hex").slice(0, 32);
+async function findFilesByName(params: { filename: string; rootDir: string }): Promise<string[]> {
+  const matches: string[] = [];
+  async function visit(dir: string, depth: number): Promise<void> {
+    if (depth > 10) {
+      return;
+    }
+    let entries: Array<{
+      isDirectory(): boolean;
+      isFile(): boolean;
+      name: string;
+    }>;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const entryPath = path.join(dir, entry.name);
+      if (entry.isFile() && entry.name === params.filename) {
+        matches.push(entryPath);
+      } else if (entry.isDirectory()) {
+        await visit(entryPath, depth + 1);
+      }
+    }
+  }
+  await visit(params.rootDir, 0);
+  return matches.toSorted();
 }
 
 async function findMatrixQaCliAccountRoot(params: {
@@ -524,47 +496,21 @@ async function findMatrixQaCliAccountRoot(params: {
   runtime: MatrixQaCliRuntime;
   userId: string;
 }) {
-  const entries = await matrixStorageMetaStore.entries();
-  for (const entry of entries) {
-    const metadata = entry.value;
-    if (
-      metadata.userId === params.userId &&
-      metadata.deviceId === params.deviceId &&
-      metadata.rootDir &&
-      path.resolve(metadata.rootDir).startsWith(path.resolve(params.runtime.stateDir))
-    ) {
-      return metadata.rootDir;
-    }
-  }
-
-  // Older migration snapshots may not have rootDir in the metadata value. Fall
-  // back to scanning Matrix token roots and checking the deterministic store key.
-  const matrixRoot = path.join(params.runtime.stateDir, "matrix");
-  const candidateRoots: string[] = [];
-  async function visit(dir: string, depth: number): Promise<void> {
-    if (depth > 10) {
-      return;
-    }
-    let entries: Array<{ isDirectory(): boolean; name: string }>;
+  const metadataPaths = await findFilesByName({
+    filename: "storage-meta.json",
+    rootDir: params.runtime.stateDir,
+  });
+  for (const metadataPath of metadataPaths) {
     try {
-      entries = await readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    if (entries.some((entry) => entry.isDirectory() && entry.name === "crypto")) {
-      candidateRoots.push(dir);
-    }
-    for (const entry of entries) {
-      if (entry.isDirectory()) {
-        await visit(path.join(dir, entry.name), depth + 1);
+      const metadata = JSON.parse(await readFile(metadataPath, "utf8")) as {
+        deviceId?: unknown;
+        userId?: unknown;
+      };
+      if (metadata.userId === params.userId && metadata.deviceId === params.deviceId) {
+        return path.dirname(metadataPath);
       }
-    }
-  }
-  await visit(matrixRoot, 0);
-  for (const rootDir of candidateRoots.toSorted()) {
-    const metadata = await matrixStorageMetaStore.lookup(resolveMatrixStorageMetaKey(rootDir));
-    if (metadata?.userId === params.userId && metadata.deviceId === params.deviceId) {
-      return rootDir;
+    } catch {
+      continue;
     }
   }
   throw new Error(`Matrix CLI account storage root was not created for ${params.userId}`);
@@ -577,15 +523,25 @@ async function mutateMatrixQaCliStateLoss(params: {
   userId: string;
 }) {
   const accountRoot = await findMatrixQaCliAccountRoot(params);
+  const recoveryKeyPath = path.join(accountRoot, "recovery-key.json");
+  const preservedRecoveryKeyPath = path.join(
+    params.runtime.stateDir,
+    "preserved-recovery-key.json",
+  );
+  let recoveryKeyPreserved = false;
+  if (params.preserveRecoveryKey) {
+    await copyFile(recoveryKeyPath, preservedRecoveryKeyPath);
+    await chmod(preservedRecoveryKeyPath, 0o600).catch(() => undefined);
+    recoveryKeyPreserved = true;
+  }
   await rm(accountRoot, { force: true, recursive: true });
-  if (!params.preserveRecoveryKey) {
-    await withMatrixQaCliStateDir(params.runtime.stateDir, async () => {
-      await matrixRecoveryKeyStore.delete(resolveMatrixRecoveryKeyStateKey(accountRoot));
-    });
+  if (params.preserveRecoveryKey) {
+    await mkdir(accountRoot, { recursive: true });
+    await copyFile(preservedRecoveryKeyPath, recoveryKeyPath);
   }
   return {
     accountRoot,
-    recoveryKeyPreserved: params.preserveRecoveryKey,
+    recoveryKeyPreserved,
   };
 }
 
@@ -595,19 +551,10 @@ async function corruptMatrixQaCliIdbSnapshot(params: {
   userId: string;
 }) {
   const accountRoot = await findMatrixQaCliAccountRoot(params);
-  const key = resolveMatrixIdbSnapshotKey(accountRoot);
-  await withMatrixQaCliStateDir(params.runtime.stateDir, async () => {
-    await matrixIdbSnapshotStore.register(
-      key,
-      {
-        version: 1,
-        storageKey: path.resolve(accountRoot),
-        corruptedAt: new Date().toISOString(),
-      },
-      Buffer.from("{ this is not valid indexeddb json\n"),
-    );
-  });
-  return `sqlite:${MATRIX_IDB_SNAPSHOT_NAMESPACE}/${key}`;
+  const idbSnapshotPath = path.join(accountRoot, "crypto-idb-snapshot.json");
+  await stat(idbSnapshotPath);
+  await writeFile(idbSnapshotPath, "{ this is not valid indexeddb json\n", "utf8");
+  return idbSnapshotPath;
 }
 
 async function deleteMatrixQaServerRoomKeyBackup(params: {
@@ -791,7 +738,7 @@ export async function runMatrixQaE2eeStateLossStoredRecoveryKeyScenario(
       timeoutMs: context.timeoutMs,
     });
     if (status.payload.recoveryKeyStored !== true) {
-      throw new Error("stored recovery-key restore did not keep SQLite recovery key usable");
+      throw new Error("stored recovery-key restore did not keep recovery-key.json usable on disk");
     }
     return {
       artifacts: {
@@ -803,7 +750,7 @@ export async function runMatrixQaE2eeStateLossStoredRecoveryKeyScenario(
         seededEventId: setup.seededEventId,
       },
       details: [
-        "Matrix crypto/runtime state was deleted while the SQLite recovery key survived",
+        "Matrix crypto/runtime state was deleted while recovery-key.json survived",
         `account root: ${mutation.accountRoot}`,
         `restore imported/total: ${restored.payload.imported ?? 0}/${restored.payload.total ?? 0}`,
         "restore command supplied recovery key: no",
@@ -1155,7 +1102,7 @@ export async function runMatrixQaE2eeCorruptCryptoIdbSnapshotScenario(
         restoreTotal: repaired.payload.total,
       },
       details: [
-        "corrupted SQLite IndexedDB snapshot was repaired by explicit backup restore",
+        "corrupted crypto-idb-snapshot.json was repaired by explicit backup restore",
         `corrupted path: ${corruptedPath}`,
         `restore imported/total: ${repaired.payload.imported ?? 0}/${repaired.payload.total ?? 0}`,
       ].join("\n"),
@@ -1398,7 +1345,6 @@ export async function runMatrixQaE2eeSyncStateLossCryptoIntactScenario(
   if (!context.gatewayStateDir || !context.restartGatewayAfterStateMutation) {
     throw new Error("Matrix E2EE sync-state loss scenario requires gateway state restart support");
   }
-  const gatewayStateDir = context.gatewayStateDir;
   const restoreAccountId = context.sutAccountId ?? "sut";
   const configPath = requireMatrixQaGatewayConfigPath(context);
   const originalAccountConfig = await readMatrixQaGatewayMatrixAccount({
@@ -1464,20 +1410,13 @@ export async function runMatrixQaE2eeSyncStateLossCryptoIntactScenario(
     const syncStore = await waitForMatrixSyncStoreWithCursor({
       accountId,
       context,
-      stateDir: gatewayStateDir,
+      stateDir: context.gatewayStateDir,
       timeoutMs: context.timeoutMs,
       userId: account.userId,
     });
-    if (!syncStore.rootDir) {
-      throw new Error("Matrix sync store root directory missing before destructive reset");
-    }
-    const syncStoreRootDir = syncStore.rootDir;
     await context.restartGatewayAfterStateMutation(
       async () => {
-        await deleteMatrixSyncStore({
-          rootDir: syncStoreRootDir,
-          stateDir: gatewayStateDir,
-        });
+        await rm(syncStore.pathname, { force: true });
       },
       {
         timeoutMs: context.timeoutMs,
@@ -1523,7 +1462,7 @@ export async function runMatrixQaE2eeSyncStateLossCryptoIntactScenario(
     });
     return {
       artifacts: {
-        deletedSyncStoreRoot: syncStore.rootDir,
+        deletedSyncStorePath: syncStore.pathname,
         driverEventId,
         reply,
         replyEventId: reply.eventId,
@@ -1531,7 +1470,7 @@ export async function runMatrixQaE2eeSyncStateLossCryptoIntactScenario(
       },
       details: [
         "gateway sync cursor was deleted while Matrix crypto state stayed intact",
-        `deleted sync store root: ${syncStore.rootDir}`,
+        `deleted sync store: ${syncStore.pathname}`,
         `driver event: ${driverEventId}`,
         `driver E2EE cursor: ${driverStartSince}`,
         `encrypted SUT reply event: ${encrypted.event.eventId}`,

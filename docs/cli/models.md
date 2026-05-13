@@ -39,7 +39,7 @@ Probes are real requests (may consume tokens and trigger rate limits).
 Use `--agent <id>` to inspect a configured agent's model/auth state. When omitted,
 the command uses `OPENCLAW_AGENT_DIR`/`PI_CODING_AGENT_DIR` if set, otherwise the
 configured default agent.
-Probe rows can come from auth profiles, env credentials, or the stored model catalog.
+Probe rows can come from auth profiles, env credentials, or `models.json`.
 For Codex OAuth troubleshooting, `openclaw models status`,
 `openclaw models auth list --provider openai-codex`, and
 `openclaw config get agents.defaults.model --json` are the quickest way to
@@ -50,8 +50,8 @@ Notes:
 
 - `models set <model-or-alias>` accepts `provider/model` or an alias.
 - `models list` is read-only: it reads config, auth profiles, existing catalog
-  state, and provider-owned catalog rows, but it does not rewrite the stored
-  model catalog.
+  state, and provider-owned catalog rows, but it does not rewrite
+  `models.json`.
 - The `Auth` column is provider-level and read-only. It is computed from local
   auth profile metadata, env markers, configured provider keys, local-provider
   markers, AWS Bedrock env/profile markers, and plugin synthetic-auth metadata;
@@ -188,11 +188,17 @@ specific configured agent store. The parent `--agent` flag is honored by
 `add`, `list`, `login`, `setup-token`, `paste-token`, and
 `login-github-copilot`.
 
+For OpenAI models, `--provider openai` defaults to ChatGPT/Codex account login.
+Use `--method api-key` only when you want to add an OpenAI API-key profile,
+usually as a backup for Codex subscription limits. The legacy
+`--provider openai-codex` spelling still works for existing scripts.
+
 Examples:
 
 ```bash
-openclaw models auth login --provider openai-codex --set-default
-openclaw models auth list --provider openai-codex
+openclaw models auth login --provider openai --set-default
+openclaw models auth login --provider openai --method api-key
+openclaw models auth list --provider openai
 ```
 
 Notes:

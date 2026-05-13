@@ -15,8 +15,6 @@ const ssrfMocks = vi.hoisted(() => ({
   resolvePinnedHostnameWithPolicy: vi.fn(),
 }));
 
-const FIXED_SENT_AT = 1_800_000_000_000;
-
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   resolvePinnedHostnameWithPolicy: ssrfMocks.resolvePinnedHostnameWithPolicy,
 }));
@@ -42,6 +40,7 @@ type LineRuntimeMocks = {
 };
 
 beforeEach(() => {
+  vi.setSystemTime(1_800_000_000_000);
   ssrfMocks.resolvePinnedHostnameWithPolicy.mockReset();
   ssrfMocks.resolvePinnedHostnameWithPolicy.mockResolvedValue({
     hostname: "example.com",
@@ -241,8 +240,6 @@ describe("line outbound sendPayload", () => {
   });
 
   it("sends quick-reply-only payloads with fallback text", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(FIXED_SENT_AT);
     const { runtime, mocks } = createRuntime();
     setLineRuntime(runtime);
     const cfg = { channels: { line: {} } } as OpenClawConfig;
@@ -298,7 +295,7 @@ describe("line outbound sendPayload", () => {
             meta: { messageCount: 1 },
           },
         ],
-        sentAt: FIXED_SENT_AT,
+        sentAt: 1_800_000_000_000,
         threadId: "c1",
       },
     });

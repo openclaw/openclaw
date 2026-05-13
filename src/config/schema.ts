@@ -1,4 +1,6 @@
 import crypto from "node:crypto";
+import { CHANNEL_IDS } from "../channels/ids.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import { computeBaseConfigSchemaResponse } from "./schema-base.js";
 import type { ConfigUiHint, ConfigUiHints } from "./schema.hints.js";
@@ -339,12 +341,36 @@ function applyChannelHints(hints: ConfigUiHints, channels: ChannelUiMetadata[]):
   return next;
 }
 
+function listHeartbeatTargetChannels(channels: ChannelUiMetadata[]): string[] {
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  for (const id of CHANNEL_IDS) {
+    const normalized = normalizeLowercaseStringOrEmpty(id);
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    ordered.push(normalized);
+  }
+  for (const channel of channels) {
+    const normalized = normalizeLowercaseStringOrEmpty(channel.id);
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    ordered.push(normalized);
+  }
+  return ordered;
+}
+
 function applyHeartbeatTargetHints(
   hints: ConfigUiHints,
-  _channels: ChannelUiMetadata[],
+  channels: ChannelUiMetadata[],
 ): ConfigUiHints {
   const next: ConfigUiHints = { ...hints };
-  const help = 'Delivery target ("last", "none", a bundled channel id, or a plugin channel id).';
+  const channelList = listHeartbeatTargetChannels(channels);
+  const channelHelp = channelList.length ? ` Known channels: ${channelList.join(", ")}.` : "";
+  const help = `Delivery target ("last", "none", or a channel id).${channelHelp}`;
   const paths = ["agents.defaults.heartbeat.target", "agents.list.*.heartbeat.target"];
   for (const path of paths) {
     const current = next[path] ?? {};

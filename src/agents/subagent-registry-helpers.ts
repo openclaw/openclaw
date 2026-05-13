@@ -1,9 +1,11 @@
+import fsSync, { promises as fs } from "node:fs";
+import path from "node:path";
 import { getRuntimeConfig } from "../config/config.js";
 import {
-  getSessionEntry,
-  listSessionEntries,
+  loadSessionStore,
   resolveAgentIdFromSessionKey,
-  upsertSessionEntry,
+  resolveStorePath,
+  updateSessionStore,
   type SessionEntry,
 } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -35,7 +37,6 @@ export const ANNOUNCE_COMPLETION_HARD_EXPIRY_MS = 30 * 60_000;
 const FROZEN_RESULT_TEXT_MAX_BYTES = 100 * 1024;
 
 type SubagentRunOrphanReason = "missing-session-entry" | "missing-session-id" | "stale-unended-run";
-type SessionEntryCache = Map<string, SessionEntry | undefined>;
 
 export function capFrozenResultText(resultText: string): string {
   const trimmed = resultText.trim();
@@ -73,32 +74,17 @@ export function logAnnounceGiveUp(entry: SubagentRunRecord, reason: "retry-limit
   );
 }
 
-function readSessionEntryByKey(params: {
-  agentId: string;
-  sessionKey: string;
-  cache?: SessionEntryCache;
-}): SessionEntry | undefined {
-  const normalized = normalizeLowercaseStringOrEmpty(params.sessionKey);
-  const cacheKey = `${params.agentId}\0${normalized}`;
-  if (params.cache?.has(cacheKey)) {
-    return params.cache.get(cacheKey);
-  }
-  const direct = getSessionEntry({
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-  });
+function findSessionEntryByKey(store: Record<string, SessionEntry>, sessionKey: string) {
+  const direct = store[sessionKey];
   if (direct) {
-    params.cache?.set(cacheKey, direct);
     return direct;
   }
-  for (const { sessionKey, entry } of listSessionEntries({ agentId: params.agentId })) {
-    const key = sessionKey;
+  const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
+  for (const [key, entry] of Object.entries(store)) {
     if (normalizeLowercaseStringOrEmpty(key) === normalized) {
-      params.cache?.set(cacheKey, entry);
       return entry;
     }
   }
-  params.cache?.set(cacheKey, undefined);
   return undefined;
 }
 
@@ -108,7 +94,9 @@ export async function persistSubagentSessionTiming(entry: SubagentRunRecord) {
     return;
   }
 
+  const cfg = getRuntimeConfig();
   const agentId = resolveAgentIdFromSessionKey(childSessionKey);
+  const storePath = resolveStorePath(cfg.session?.store, { agentId });
   const startedAt = getSubagentSessionStartedAt(entry);
   const endedAt =
     typeof entry.endedAt === "number" && Number.isFinite(entry.endedAt) ? entry.endedAt : undefined;
@@ -118,46 +106,41 @@ export async function persistSubagentSessionTiming(entry: SubagentRunRecord) {
       : getSubagentSessionRuntimeMs(entry);
   const status = resolveSubagentSessionStatus(entry);
 
-  const sessionEntry = readSessionEntryByKey({ agentId, sessionKey: childSessionKey });
-  if (!sessionEntry) {
-    return;
-  }
+  await updateSessionStore(storePath, (store) => {
+    const sessionEntry = findSessionEntryByKey(store, childSessionKey);
+    if (!sessionEntry) {
+      return;
+    }
 
-  const next: SessionEntry = { ...sessionEntry };
-  if (typeof startedAt === "number" && Number.isFinite(startedAt)) {
-    next.startedAt = startedAt;
-  } else {
-    delete next.startedAt;
-  }
+    if (typeof startedAt === "number" && Number.isFinite(startedAt)) {
+      sessionEntry.startedAt = startedAt;
+    } else {
+      delete sessionEntry.startedAt;
+    }
 
-  if (typeof endedAt === "number" && Number.isFinite(endedAt)) {
-    next.endedAt = endedAt;
-  } else {
-    delete next.endedAt;
-  }
+    if (typeof endedAt === "number" && Number.isFinite(endedAt)) {
+      sessionEntry.endedAt = endedAt;
+    } else {
+      delete sessionEntry.endedAt;
+    }
 
-  if (typeof runtimeMs === "number" && Number.isFinite(runtimeMs)) {
-    next.runtimeMs = runtimeMs;
-  } else {
-    delete next.runtimeMs;
-  }
+    if (typeof runtimeMs === "number" && Number.isFinite(runtimeMs)) {
+      sessionEntry.runtimeMs = runtimeMs;
+    } else {
+      delete sessionEntry.runtimeMs;
+    }
 
-  if (status) {
-    next.status = status;
-  } else {
-    delete next.status;
-  }
-
-  upsertSessionEntry({
-    agentId,
-    sessionKey: childSessionKey,
-    entry: next,
+    if (status) {
+      sessionEntry.status = status;
+    } else {
+      delete sessionEntry.status;
+    }
   });
 }
 
 export function resolveSubagentRunOrphanReason(params: {
   entry: SubagentRunRecord;
-  storeCache?: SessionEntryCache;
+  storeCache?: Map<string, Record<string, SessionEntry>>;
   includeStaleUnended?: boolean;
   now?: number;
 }): SubagentRunOrphanReason | null {
@@ -166,12 +149,15 @@ export function resolveSubagentRunOrphanReason(params: {
     return "missing-session-entry";
   }
   try {
+    const cfg = getRuntimeConfig();
     const agentId = resolveAgentIdFromSessionKey(childSessionKey);
-    const sessionEntry = readSessionEntryByKey({
-      agentId,
-      sessionKey: childSessionKey,
-      cache: params.storeCache,
-    });
+    const storePath = resolveStorePath(cfg.session?.store, { agentId });
+    let store = params.storeCache?.get(storePath);
+    if (!store) {
+      store = loadSessionStore(storePath);
+      params.storeCache?.set(storePath, store);
+    }
+    const sessionEntry = findSessionEntryByKey(store, childSessionKey);
     if (!sessionEntry) {
       return "missing-session-entry";
     }
@@ -189,6 +175,82 @@ export function resolveSubagentRunOrphanReason(params: {
   } catch {
     // Best-effort guard: avoid false orphan pruning on transient read/config failures.
     return null;
+  }
+}
+
+function isResolvedChildPath(params: { childPath: string; rootPath: string }) {
+  const rootWithSep = params.rootPath.endsWith(path.sep)
+    ? params.rootPath
+    : `${params.rootPath}${path.sep}`;
+  return params.childPath.startsWith(rootWithSep);
+}
+
+export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promise<void> {
+  if (!entry.attachmentsDir || !entry.attachmentsRootDir) {
+    return;
+  }
+
+  const resolveReal = async (targetPath: string): Promise<string | null> => {
+    try {
+      return await fs.realpath(targetPath);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+        return null;
+      }
+      throw err;
+    }
+  };
+
+  try {
+    const [rootReal, dirReal] = await Promise.all([
+      resolveReal(entry.attachmentsRootDir),
+      resolveReal(entry.attachmentsDir),
+    ]);
+    if (!dirReal) {
+      return;
+    }
+
+    const rootBase = rootReal ?? path.resolve(entry.attachmentsRootDir);
+    const dirBase = dirReal;
+    if (!isResolvedChildPath({ childPath: dirBase, rootPath: rootBase })) {
+      return;
+    }
+    await fs.rm(dirBase, { recursive: true, force: true });
+  } catch {
+    // best effort
+  }
+}
+
+function safeRemoveAttachmentsDirSync(entry: SubagentRunRecord): void {
+  if (!entry.attachmentsDir || !entry.attachmentsRootDir) {
+    return;
+  }
+
+  const resolveReal = (targetPath: string): string | null => {
+    try {
+      return fsSync.realpathSync.native(targetPath);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+        return null;
+      }
+      throw err;
+    }
+  };
+
+  try {
+    const rootReal = resolveReal(entry.attachmentsRootDir);
+    const dirReal = resolveReal(entry.attachmentsDir);
+    if (!dirReal) {
+      return;
+    }
+
+    const rootBase = rootReal ?? path.resolve(entry.attachmentsRootDir);
+    if (!isResolvedChildPath({ childPath: dirReal, rootPath: rootBase })) {
+      return;
+    }
+    fsSync.rmSync(dirReal, { recursive: true, force: true });
+  } catch {
+    // best effort
   }
 }
 
@@ -232,6 +294,11 @@ export function reconcileOrphanedRun(params: {
     params.entry.cleanupCompletedAt = now;
     changed = true;
   }
+  const shouldDeleteAttachments =
+    params.entry.cleanup === "delete" || !params.entry.retainAttachmentsOnKeep;
+  if (shouldDeleteAttachments) {
+    safeRemoveAttachmentsDirSync(params.entry);
+  }
   const removed = params.runs.delete(params.runId);
   params.resumedRuns.delete(params.runId);
   if (!removed && !changed) {
@@ -247,7 +314,7 @@ export function reconcileOrphanedRestoredRuns(params: {
   runs: Map<string, SubagentRunRecord>;
   resumedRuns: Set<string>;
 }) {
-  const storeCache: SessionEntryCache = new Map();
+  const storeCache = new Map<string, Record<string, SessionEntry>>();
   const now = Date.now();
   let changed = false;
   for (const [runId, entry] of params.runs.entries()) {

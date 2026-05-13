@@ -101,7 +101,7 @@ export async function resolveSlackThreadContextData(params: {
   threadTs: string | undefined;
   threadStarter: SlackThreadStarter | null;
   roomLabel: string;
-  agentId: string;
+  storePath: string;
   sessionKey: string;
   allowFromLower: string[];
   allowNameMatching: boolean;
@@ -187,7 +187,7 @@ export async function resolveSlackThreadContextData(params: {
   }
 
   threadSessionPreviousTimestamp = readSessionUpdatedAt({
-    agentId: params.agentId,
+    storePath: params.storePath,
     sessionKey: params.sessionKey,
   });
   const isNewThreadSession = !threadSessionPreviousTimestamp;

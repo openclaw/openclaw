@@ -12,6 +12,7 @@ export const SessionCompactionCheckpointReasonSchema = Type.Union([
 export const SessionCompactionTranscriptReferenceSchema = Type.Object(
   {
     sessionId: NonEmptyString,
+    sessionFile: Type.Optional(NonEmptyString),
     leafId: Type.Optional(NonEmptyString),
     entryId: Type.Optional(NonEmptyString),
   },
@@ -39,31 +40,43 @@ export const SessionsListParamsSchema = Type.Object(
   {
     /**
      * Maximum rows to return. Omitted Gateway RPC calls use a bounded default
-     * to keep large session row sets from monopolizing the event loop.
+     * to keep large session stores from monopolizing the event loop.
      */
     limit: Type.Optional(Type.Integer({ minimum: 1 })),
     activeMinutes: Type.Optional(Type.Integer({ minimum: 1 })),
     includeGlobal: Type.Optional(Type.Boolean()),
     includeUnknown: Type.Optional(Type.Boolean()),
     /**
-     * Read the first transcript rows to derive a title from the first user message.
-     * Use `limit` to bound result set on large stores.
+     * Limit returned agent-scoped rows to agents currently present in config.
+     * Broad disk discovery remains the default for recovery/ACP consumers.
+     */
+    configuredAgentsOnly: Type.Optional(Type.Boolean()),
+    /**
+     * Read first 8KB of each session transcript to derive title from first user message.
+     * Performs a file read per session - use `limit` to bound result set on large stores.
      */
     includeDerivedTitles: Type.Optional(Type.Boolean()),
     /**
-     * Read the latest transcript rows to extract the most recent message preview.
-     * Use `limit` to bound result set on large stores.
+     * Read last 16KB of each session transcript to extract most recent message preview.
+     * Performs a file read per session - use `limit` to bound result set on large stores.
      */
     includeLastMessage: Type.Optional(Type.Boolean()),
     label: Type.Optional(SessionLabelString),
     spawnedBy: Type.Optional(NonEmptyString),
     agentId: Type.Optional(NonEmptyString),
-    /**
-     * When true, list only configured agent databases and skip registered-but-not-configured
-     * agent databases discovered from state.
-     */
-    configuredAgentsOnly: Type.Optional(Type.Boolean()),
     search: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsCleanupParamsSchema = Type.Object(
+  {
+    agent: Type.Optional(NonEmptyString),
+    allAgents: Type.Optional(Type.Boolean()),
+    enforce: Type.Optional(Type.Boolean()),
+    activeKey: Type.Optional(NonEmptyString),
+    fixMissing: Type.Optional(Type.Boolean()),
+    fixDmScope: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
@@ -224,6 +237,7 @@ export const SessionsResetParamsSchema = Type.Object(
 export const SessionsDeleteParamsSchema = Type.Object(
   {
     key: NonEmptyString,
+    deleteTranscript: Type.Optional(Type.Boolean()),
     // Internal control: when false, still unbind thread bindings but skip hook emission.
     emitLifecycleHooks: Type.Optional(Type.Boolean()),
   },

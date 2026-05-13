@@ -1,13 +1,13 @@
 export {
   evaluateSessionFreshness,
-  getSessionEntry,
+  loadSessionStore,
   resolveSessionKey,
   resolveSessionResetPolicy,
   resolveSessionResetType,
+  resolveStorePath,
   resolveThreadFlag,
   resolveChannelResetConfig,
   updateLastRoute,
-  upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 export {
   getRuntimeConfig,

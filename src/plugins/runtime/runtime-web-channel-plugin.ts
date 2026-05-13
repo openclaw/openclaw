@@ -1,4 +1,4 @@
-import type { AgentToolResult } from "../../agents/agent-core-contract.js";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ChannelAgentTool } from "../../channels/plugins/types.core.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -95,7 +95,7 @@ type WebChannelHeavyRuntimeModule = {
   handleWhatsAppAction: (
     params: Record<string, unknown>,
     cfg: OpenClawConfig,
-  ) => Promise<AgentToolResult>;
+  ) => Promise<AgentToolResult<unknown>>;
   monitorWebChannel: (...args: unknown[]) => Promise<unknown>;
   monitorWebInbox: (...args: unknown[]) => Promise<unknown>;
   startWebLoginWithQr: (...args: unknown[]) => Promise<unknown>;

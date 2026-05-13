@@ -1,42 +1,25 @@
-import { statSync } from "node:fs";
+import { mkdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createManagedTaskFlow, resetTaskFlowRegistryForTests } from "./task-flow-registry.js";
 import {
   createTaskRecord,
   deleteTaskRecordById,
   findTaskByRunId,
+  markTaskLostById,
   maybeDeliverTaskStateChangeUpdate,
   resetTaskRegistryForTests,
 } from "./task-registry.js";
+import { resolveTaskRegistryDir, resolveTaskRegistrySqlitePath } from "./task-registry.paths.js";
 import {
   configureTaskRegistryRuntime,
   type TaskRegistryObserverEvent,
 } from "./task-registry.store.js";
-import {
-  loadTaskRegistryStateFromSqlite,
-  saveTaskRegistryStateToSqlite,
-} from "./task-registry.store.sqlite.js";
-import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
-import {
-  parseOptionalTaskTerminalOutcome,
-  parseTaskDeliveryStatus,
-  parseTaskNotifyPolicy,
-  parseTaskRuntime,
-  parseTaskScopeKind,
-  parseTaskStatus,
-} from "./task-registry.types.js";
+import type { TaskRecord } from "./task-registry.types.js";
 
 const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
-type TaskRegistryTestDatabase = Pick<
-  OpenClawStateKyselyDatabase,
-  "task_delivery_state" | "task_runs"
->;
 
 function requireFirstUpsertParams(upsertTaskWithDeliveryState: ReturnType<typeof vi.fn>): {
   task?: { taskId?: string };
@@ -97,10 +80,9 @@ describe("task-registry store runtime", () => {
       },
     });
 
-    expect(findTaskByRunId("run-restored")).toMatchObject({
-      taskId: "task-restored",
-      task: "Restored task",
-    });
+    const restored = findTaskByRunId("run-restored");
+    expect(restored?.taskId).toBe("task-restored");
+    expect(restored?.task).toBe("Restored task");
     expect(loadSnapshot).toHaveBeenCalledTimes(1);
 
     createTaskRecord({
@@ -122,54 +104,6 @@ describe("task-registry store runtime", () => {
     expect(latestSnapshot.tasks.get("task-restored")?.task).toBe("Restored task");
   });
 
-  it("rejects invalid persisted task enum values", () => {
-    expect(parseTaskRuntime("cron")).toBe("cron");
-    expect(parseTaskScopeKind("system")).toBe("system");
-    expect(parseTaskStatus("running")).toBe("running");
-    expect(parseTaskDeliveryStatus("pending")).toBe("pending");
-    expect(parseTaskNotifyPolicy("done_only")).toBe("done_only");
-    expect(parseOptionalTaskTerminalOutcome("blocked")).toBe("blocked");
-    expect(parseOptionalTaskTerminalOutcome(null)).toBeUndefined();
-
-    expect(() => parseTaskRuntime("timer")).toThrow("Invalid persisted task runtime");
-    expect(() => parseTaskScopeKind("workspace")).toThrow("Invalid persisted task scope kind");
-    expect(() => parseTaskStatus("done")).toThrow("Invalid persisted task status");
-    expect(() => parseTaskDeliveryStatus("ok")).toThrow("Invalid persisted task delivery status");
-    expect(() => parseTaskNotifyPolicy("verbose")).toThrow("Invalid persisted task notify policy");
-    expect(() => parseOptionalTaskTerminalOutcome("failed")).toThrow(
-      "Invalid persisted task terminal outcome",
-    );
-  });
-
-  it("rejects corrupt persisted task rows during sqlite restore", async () => {
-    await withOpenClawTestState(
-      { layout: "state-only", prefix: "openclaw-task-store-corrupt-" },
-      async () => {
-        resetTaskRegistryForTests();
-        const created = createTaskRecord({
-          runtime: "cron",
-          ownerKey: "agent:main:main",
-          scopeKind: "session",
-          sourceId: "job-corrupt",
-          runId: "run-corrupt-task-status",
-          task: "Corrupt task row",
-          status: "running",
-          deliveryStatus: "not_applicable",
-          notifyPolicy: "silent",
-        });
-
-        const database = openOpenClawStateDatabase();
-        const db = getNodeSqliteKysely<TaskRegistryTestDatabase>(database.db);
-        executeSqliteQuerySync(
-          database.db,
-          db.updateTable("task_runs").set({ status: "done" }).where("task_id", "=", created.taskId),
-        );
-
-        expect(() => loadTaskRegistryStateFromSqlite()).toThrow("Invalid persisted task status");
-      },
-    );
-  });
-
   it("emits incremental observer events for restore, mutation, and delete", () => {
     const events: TaskRegistryObserverEvent[] = [];
     configureTaskRegistryRuntime({
@@ -187,11 +121,10 @@ describe("task-registry store runtime", () => {
       },
     });
 
-    expect(findTaskByRunId("run-restored")).toMatchObject({
-      runId: "run-restored",
-      taskId: "task-restored",
-      task: "Restored task",
-    });
+    const restored = findTaskByRunId("run-restored");
+    expect(restored?.runId).toBe("run-restored");
+    expect(restored?.taskId).toBe("task-restored");
+    expect(restored?.task).toBe("Restored task");
     const created = createTaskRecord({
       runtime: "acp",
       ownerKey: "agent:main:main",
@@ -205,18 +138,26 @@ describe("task-registry store runtime", () => {
     expect(deleteTaskRecordById(created.taskId)).toBe(true);
 
     expect(events.map((event) => event.kind)).toEqual(["restored", "upserted", "deleted"]);
-    expect(events[0]).toMatchObject({
-      kind: "restored",
-      tasks: [expect.objectContaining({ taskId: "task-restored" })],
-    });
-    expect(events[1]).toMatchObject({
-      kind: "upserted",
-      task: expect.objectContaining({ taskId: created.taskId }),
-    });
-    expect(events[2]).toMatchObject({
-      kind: "deleted",
-      taskId: created.taskId,
-    });
+    const restoredEvent = events[0];
+    expect(restoredEvent?.kind).toBe("restored");
+    if (restoredEvent?.kind !== "restored") {
+      throw new Error("Expected restored observer event");
+    }
+    expect(restoredEvent.tasks.map((task) => task.taskId)).toEqual(["task-restored"]);
+
+    const upsertedEvent = events[1];
+    expect(upsertedEvent?.kind).toBe("upserted");
+    if (upsertedEvent?.kind !== "upserted") {
+      throw new Error("Expected upserted observer event");
+    }
+    expect(upsertedEvent.task.taskId).toBe(created.taskId);
+
+    const deletedEvent = events[2];
+    expect(deletedEvent?.kind).toBe("deleted");
+    if (deletedEvent?.kind !== "deleted") {
+      throw new Error("Expected deleted observer event");
+    }
+    expect(deletedEvent.taskId).toBe(created.taskId);
   });
 
   it("uses atomic task-plus-delivery store methods when available", async () => {
@@ -254,11 +195,7 @@ describe("task-registry store runtime", () => {
     expect(deleteTaskRecordById(created.taskId)).toBe(true);
 
     expect(upsertTaskWithDeliveryState).toHaveBeenCalled();
-    expect(requireFirstUpsertParams(upsertTaskWithDeliveryState)).toMatchObject({
-      task: expect.objectContaining({
-        taskId: created.taskId,
-      }),
-    });
+    expect(requireFirstUpsertParams(upsertTaskWithDeliveryState).task?.taskId).toBe(created.taskId);
     expect(
       upsertTaskWithDeliveryState.mock.calls.some((call) => {
         const params = call[0] as { deliveryState?: { lastNotifiedEventAt?: number } };
@@ -283,11 +220,10 @@ describe("task-registry store runtime", () => {
 
     resetTaskRegistryForTests({ persist: false });
 
-    expect(findTaskByRunId("run-sqlite")).toMatchObject({
-      taskId: created.taskId,
-      sourceId: "job-123",
-      task: "Run nightly cron",
-    });
+    const restored = findTaskByRunId("run-sqlite");
+    expect(restored?.taskId).toBe(created.taskId);
+    expect(restored?.sourceId).toBe("job-123");
+    expect(restored?.task).toBe("Run nightly cron");
   });
 
   it("persists parentFlowId with task rows", () => {
@@ -310,10 +246,9 @@ describe("task-registry store runtime", () => {
 
     resetTaskRegistryForTests({ persist: false });
 
-    expect(findTaskByRunId("run-flow-linked")).toMatchObject({
-      taskId: created.taskId,
-      parentFlowId: flow.flowId,
-    });
+    const restored = findTaskByRunId("run-flow-linked");
+    expect(restored?.taskId).toBe(created.taskId);
+    expect(restored?.parentFlowId).toBe(flow.flowId);
   });
 
   it("preserves requesterSessionKey when it differs from ownerKey across sqlite restore", () => {
@@ -332,12 +267,11 @@ describe("task-registry store runtime", () => {
 
     resetTaskRegistryForTests({ persist: false });
 
-    expect(findTaskByRunId("run-requester-session-restore")).toMatchObject({
-      taskId: created.taskId,
-      requesterSessionKey: "agent:main:workspace:channel:C1234567890",
-      ownerKey: "agent:main:main",
-      childSessionKey: "agent:main:workspace:channel:C1234567890",
-    });
+    const restored = findTaskByRunId("run-requester-session-restore");
+    expect(restored?.taskId).toBe(created.taskId);
+    expect(restored?.requesterSessionKey).toBe("agent:main:workspace:channel:C1234567890");
+    expect(restored?.ownerKey).toBe("agent:main:main");
+    expect(restored?.childSessionKey).toBe("agent:main:workspace:channel:C1234567890");
   });
 
   it("preserves taskKind across sqlite restore", () => {
@@ -356,56 +290,10 @@ describe("task-registry store runtime", () => {
 
     resetTaskRegistryForTests({ persist: false });
 
-    expect(findTaskByRunId("run-task-kind-restore")).toMatchObject({
-      taskId: created.taskId,
-      taskKind: "video_generation",
-      runId: "run-task-kind-restore",
-    });
-  });
-
-  it("prunes stale sqlite delivery state while retaining current rows", async () => {
-    await withOpenClawTestState(
-      { layout: "state-only", prefix: "openclaw-task-delivery-prune-" },
-      async () => {
-        const taskA = createStoredTask();
-        const taskB: TaskRecord = {
-          ...createStoredTask(),
-          taskId: "task-retained-delivery-b",
-          runId: "run-retained-delivery-b",
-        };
-        const deliveryA: TaskDeliveryState = {
-          taskId: taskA.taskId,
-          lastNotifiedEventAt: 100,
-        };
-        const deliveryB: TaskDeliveryState = {
-          taskId: taskB.taskId,
-          lastNotifiedEventAt: 200,
-        };
-
-        saveTaskRegistryStateToSqlite({
-          tasks: new Map([
-            [taskA.taskId, taskA],
-            [taskB.taskId, taskB],
-          ]),
-          deliveryStates: new Map([
-            [deliveryA.taskId, deliveryA],
-            [deliveryB.taskId, deliveryB],
-          ]),
-        });
-
-        saveTaskRegistryStateToSqlite({
-          tasks: new Map([
-            [taskA.taskId, taskA],
-            [taskB.taskId, taskB],
-          ]),
-          deliveryStates: new Map([[deliveryB.taskId, deliveryB]]),
-        });
-
-        const restored = loadTaskRegistryStateFromSqlite();
-        expect(restored.deliveryStates.has(taskA.taskId)).toBe(false);
-        expect(restored.deliveryStates.get(taskB.taskId)).toEqual(deliveryB);
-      },
-    );
+    const restored = findTaskByRunId("run-task-kind-restore");
+    expect(restored?.taskId).toBe(created.taskId);
+    expect(restored?.taskKind).toBe("video_generation");
+    expect(restored?.runId).toBe("run-task-kind-restore");
   });
 
   it("hardens the sqlite task store directory and file modes", async () => {
@@ -427,11 +315,181 @@ describe("task-registry store runtime", () => {
           notifyPolicy: "silent",
         });
 
-        const databasePath = resolveOpenClawStateSqlitePath(process.env);
-        const registryDir = path.dirname(databasePath);
-        expect(databasePath.endsWith(path.join("state", "openclaw.sqlite"))).toBe(true);
+        const registryDir = resolveTaskRegistryDir(process.env);
+        const sqlitePath = resolveTaskRegistrySqlitePath(process.env);
         expect(statSync(registryDir).mode & 0o777).toBe(0o700);
-        expect(statSync(databasePath).mode & 0o777).toBe(0o600);
+        expect(statSync(sqlitePath).mode & 0o777).toBe(0o600);
+      },
+    );
+  });
+
+  it("migrates legacy ownerless cron rows to system scope", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-task-store-legacy-" },
+      async () => {
+        const sqlitePath = resolveTaskRegistrySqlitePath(process.env);
+        mkdirSync(path.dirname(sqlitePath), { recursive: true });
+        const { DatabaseSync } = requireNodeSqlite();
+        const db = new DatabaseSync(sqlitePath);
+        db.exec(`
+      CREATE TABLE task_runs (
+        task_id TEXT PRIMARY KEY,
+        runtime TEXT NOT NULL,
+        source_id TEXT,
+        requester_session_key TEXT NOT NULL,
+        child_session_key TEXT,
+        parent_task_id TEXT,
+        agent_id TEXT,
+        run_id TEXT,
+        label TEXT,
+        task TEXT NOT NULL,
+        status TEXT NOT NULL,
+        delivery_status TEXT NOT NULL,
+        notify_policy TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        started_at INTEGER,
+        ended_at INTEGER,
+        last_event_at INTEGER,
+        cleanup_after INTEGER,
+        error TEXT,
+        progress_summary TEXT,
+        terminal_summary TEXT,
+        terminal_outcome TEXT
+      );
+    `);
+        db.exec(`
+      CREATE TABLE task_delivery_state (
+        task_id TEXT PRIMARY KEY,
+        requester_origin_json TEXT,
+        last_notified_event_at INTEGER
+      );
+    `);
+        db.prepare(`
+      INSERT INTO task_runs (
+        task_id,
+        runtime,
+        source_id,
+        requester_session_key,
+        child_session_key,
+        run_id,
+        task,
+        status,
+        delivery_status,
+        notify_policy,
+        created_at,
+        last_event_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+          "legacy-cron-task",
+          "cron",
+          "nightly-digest",
+          "",
+          "agent:main:cron:nightly-digest",
+          "legacy-cron-run",
+          "Nightly digest",
+          "running",
+          "not_applicable",
+          "silent",
+          100,
+          100,
+        );
+        db.close();
+
+        resetTaskRegistryForTests({ persist: false });
+
+        const restored = findTaskByRunId("legacy-cron-run");
+        expect(restored?.taskId).toBe("legacy-cron-task");
+        expect(restored?.ownerKey).toBe("system:cron:nightly-digest");
+        expect(restored?.scopeKind).toBe("system");
+        expect(restored?.deliveryStatus).toBe("not_applicable");
+        expect(restored?.notifyPolicy).toBe("silent");
+      },
+    );
+  });
+
+  it("keeps legacy requester_session_key rows writable after restore", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-task-store-legacy-write-" },
+      async () => {
+        const sqlitePath = resolveTaskRegistrySqlitePath(process.env);
+        mkdirSync(path.dirname(sqlitePath), { recursive: true });
+        const { DatabaseSync } = requireNodeSqlite();
+        const db = new DatabaseSync(sqlitePath);
+        db.exec(`
+      CREATE TABLE task_runs (
+        task_id TEXT PRIMARY KEY,
+        runtime TEXT NOT NULL,
+        source_id TEXT,
+        requester_session_key TEXT NOT NULL,
+        child_session_key TEXT,
+        parent_task_id TEXT,
+        agent_id TEXT,
+        run_id TEXT,
+        label TEXT,
+        task TEXT NOT NULL,
+        status TEXT NOT NULL,
+        delivery_status TEXT NOT NULL,
+        notify_policy TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        started_at INTEGER,
+        ended_at INTEGER,
+        last_event_at INTEGER,
+        cleanup_after INTEGER,
+        error TEXT,
+        progress_summary TEXT,
+        terminal_summary TEXT,
+        terminal_outcome TEXT
+      );
+    `);
+        db.exec(`
+      CREATE TABLE task_delivery_state (
+        task_id TEXT PRIMARY KEY,
+        requester_origin_json TEXT,
+        last_notified_event_at INTEGER
+      );
+    `);
+        db.prepare(`
+      INSERT INTO task_runs (
+        task_id,
+        runtime,
+        requester_session_key,
+        run_id,
+        task,
+        status,
+        delivery_status,
+        notify_policy,
+        created_at,
+        last_event_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+          "legacy-session-task",
+          "acp",
+          "agent:main:main",
+          "legacy-session-run",
+          "Legacy session task",
+          "running",
+          "pending",
+          "done_only",
+          100,
+          100,
+        );
+        db.close();
+
+        resetTaskRegistryForTests({ persist: false });
+
+        const lost = markTaskLostById({
+          taskId: "legacy-session-task",
+          endedAt: 200,
+          lastEventAt: 200,
+          error: "session missing",
+        });
+        expect(lost?.taskId).toBe("legacy-session-task");
+        expect(lost?.status).toBe("lost");
+        expect(lost?.error).toBe("session missing");
+        const restored = findTaskByRunId("legacy-session-run");
+        expect(restored?.taskId).toBe("legacy-session-task");
+        expect(restored?.status).toBe("lost");
+        expect(restored?.error).toBe("session missing");
       },
     );
   });

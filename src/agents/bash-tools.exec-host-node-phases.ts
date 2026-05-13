@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import {
   describeInterpreterInlineEval,
   type InterpreterInlineEvalHit,
@@ -11,13 +12,12 @@ import {
   type SystemRunApprovalPlan,
   evaluateShellAllowlist,
   hasDurableExecApproval,
-  resolveExecApprovalsDocument,
+  resolveExecApprovalsFromFile,
 } from "../infra/exec-approvals.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
 import { parsePreparedSystemRunPayload } from "../infra/system-run-approval-context.js";
 import { formatExecCommand, resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 import { normalizeNullableString } from "../shared/string-coerce.js";
-import type { AgentToolResult } from "./agent-core-contract.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 import { renderExecOutputText } from "./bash-tools.exec-output.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
@@ -329,13 +329,13 @@ export async function analyzeNodeApprovalRequirement(params: {
         { timeoutMs: 10_000 },
         { nodeId: params.target.nodeId },
       );
-      const approvalsDocument =
+      const approvalsFile =
         approvalsSnapshot && typeof approvalsSnapshot === "object"
           ? approvalsSnapshot.file
           : undefined;
-      if (approvalsDocument && typeof approvalsDocument === "object") {
-        const resolved = resolveExecApprovalsDocument({
-          document: approvalsDocument as ExecApprovalsFile,
+      if (approvalsFile && typeof approvalsFile === "object") {
+        const resolved = resolveExecApprovalsFromFile({
+          file: approvalsFile as ExecApprovalsFile,
           agentId: params.request.agentId,
           overrides: { security: "full" },
         });

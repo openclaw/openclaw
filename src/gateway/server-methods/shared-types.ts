@@ -42,7 +42,7 @@ export type RespondFn = (
 export type GatewayRequestContext = {
   deps: CliDeps;
   cron: CronServiceContract;
-  cronStoreKey: string;
+  cronStorePath: string;
   getRuntimeConfig: () => OpenClawConfig;
   execApprovalManager?: ExecApprovalManager;
   pluginApprovalManager?: ExecApprovalManager<PluginApprovalRequestPayload>;

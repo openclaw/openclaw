@@ -1,5 +1,6 @@
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { deriveSessionChatType } from "../../sessions/session-chat-type.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { resolveSourceReplyDeliveryMode } from "./source-reply-delivery-mode.js";
 
@@ -7,6 +8,7 @@ export type CompletionChatType = ChatType | "unknown";
 
 export type CompletionDeliverySessionEntry = {
   chatType?: string | null;
+  origin?: { chatType?: string | null } | null;
 };
 
 export function resolveCompletionChatType(params: {
@@ -16,18 +18,18 @@ export function resolveCompletionChatType(params: {
   directOrigin?: DeliveryContext;
   requesterSessionOrigin?: DeliveryContext;
 }): CompletionChatType {
-  const explicit = normalizeChatType(params.requesterEntry?.chatType ?? undefined);
+  const explicit = normalizeChatType(
+    params.requesterEntry?.chatType ?? params.requesterEntry?.origin?.chatType ?? undefined,
+  );
   if (explicit) {
     return explicit;
   }
 
-  const directOriginChatType = normalizeChatType(params.directOrigin?.chatType);
-  if (directOriginChatType) {
-    return directOriginChatType;
-  }
-  const requesterOriginChatType = normalizeChatType(params.requesterSessionOrigin?.chatType);
-  if (requesterOriginChatType) {
-    return requesterOriginChatType;
+  for (const key of [params.targetRequesterSessionKey, params.requesterSessionKey]) {
+    const derived = deriveSessionChatType(key);
+    if (derived !== "unknown") {
+      return derived;
+    }
   }
 
   return inferCompletionChatTypeFromTarget(
@@ -55,14 +57,10 @@ export function completionRequiresMessageToolDelivery(params: {
   );
 }
 
-export function shouldRouteCompletionThroughRequesterSession(params: {
-  requesterSessionKey?: string | null;
-  targetRequesterSessionKey?: string | null;
-  requesterEntry?: CompletionDeliverySessionEntry;
-  directOrigin?: DeliveryContext;
-  requesterSessionOrigin?: DeliveryContext;
-}): boolean {
-  const chatType = resolveCompletionChatType(params);
+export function shouldRouteCompletionThroughRequesterSession(
+  sessionKey: string | undefined | null,
+): boolean {
+  const chatType = deriveSessionChatType(sessionKey);
   return chatType === "group" || chatType === "channel";
 }
 

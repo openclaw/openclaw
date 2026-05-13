@@ -130,12 +130,16 @@ export async function dispatchSynologyChatInboundTurn(params: {
             CommandAuthorized: params.msg.commandAuthorized,
           },
         });
+        const storePath = resolved.rt.channel.session.resolveStorePath(currentCfg.session?.store, {
+          agentId: resolved.route.agentId,
+        });
         return {
           cfg: currentCfg,
           channel: CHANNEL_ID,
           accountId: params.account.accountId,
           agentId: resolved.route.agentId,
           routeSessionKey: resolved.route.sessionKey,
+          storePath,
           ctxPayload: msgCtx,
           recordInboundSession: resolved.rt.channel.session.recordInboundSession,
           dispatchReplyWithBufferedBlockDispatcher:

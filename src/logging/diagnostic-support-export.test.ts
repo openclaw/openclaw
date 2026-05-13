@@ -150,7 +150,7 @@ describe("diagnostic support export", () => {
             logLevelName: "info",
             name: JSON.stringify({
               module: "matrix-auto-reply",
-              stateLocation: path.join(tempDir, "cron", "jobs.json"),
+              storePath: path.join(tempDir, "cron", "jobs.json"),
             }),
             hostname: "support-host",
           },

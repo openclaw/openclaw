@@ -6,7 +6,6 @@ import { emitDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diag
 import { resetFatalErrorHooksForTest, runFatalErrorHooks } from "../infra/fatal-error-hooks.js";
 import {
   installDiagnosticStabilityFatalHook,
-  listDiagnosticStabilityBundlesSync,
   MAX_DIAGNOSTIC_STABILITY_BUNDLE_BYTES,
   readDiagnosticStabilityBundleFileSync,
   readLatestDiagnosticStabilityBundleSync,
@@ -41,6 +40,10 @@ describe("diagnostic stability bundles", () => {
     resetStabilityBundleTestState();
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
+
+  function readBundle(file: string): DiagnosticStabilityBundle {
+    return JSON.parse(fs.readFileSync(file, "utf8")) as DiagnosticStabilityBundle;
+  }
 
   function createImportedBundle(): Record<string, unknown> {
     return {
@@ -100,8 +103,9 @@ describe("diagnostic stability bundles", () => {
     });
 
     expect(result.status).toBe("written");
-    const bundle = result.status === "written" ? result.bundle : ({} as DiagnosticStabilityBundle);
-    const raw = JSON.stringify(bundle);
+    const file = result.status === "written" ? result.path : "";
+    const bundle = readBundle(file);
+    const raw = fs.readFileSync(file, "utf8");
 
     expect(bundle.version).toBe(1);
     expect(bundle.generatedAt).toBe("2026-04-22T12:00:00.000Z");
@@ -145,12 +149,8 @@ describe("diagnostic stability bundles", () => {
     if (result.status !== "written") {
       throw new Error(`expected written bundle, got ${result.status}`);
     }
-    const latest = readLatestDiagnosticStabilityBundleSync({ stateDir: tempDir });
-    if (latest.status !== "found") {
-      throw new Error(`expected latest bundle, got ${latest.status}`);
-    }
-    const bundle = latest.bundle;
-    const raw = JSON.stringify(bundle);
+    const bundle = readBundle(result.path);
+    const raw = fs.readFileSync(result.path, "utf8");
     expect(bundle.reason).toBe("gateway.restart_startup_failed");
     expect(bundle.error).toEqual({
       name: "Error",
@@ -174,13 +174,13 @@ describe("diagnostic stability bundles", () => {
 
     expect(messages).toHaveLength(1);
     expect(messages[0]).toContain("wrote stability bundle:");
-    expect(messages[0]).toContain("sqlite:diagnostics.stability/");
+    expect(messages[0]).toContain(tempDir);
 
     resetDiagnosticStabilityBundleForTest();
     expect(runFatalErrorHooks({ reason: "uncaught_exception" })).toStrictEqual([]);
   });
 
-  it("retains only the newest SQLite bundles", () => {
+  it("retains only the newest bundle files", () => {
     startDiagnosticStabilityRecorder();
     emitDiagnosticEvent({ type: "webhook.received", channel: "telegram" });
 
@@ -194,11 +194,11 @@ describe("diagnostic stability bundles", () => {
       expect(result.status).toBe("written");
     }
 
-    const bundles = listDiagnosticStabilityBundlesSync({ stateDir: tempDir });
-    expect(bundles).toHaveLength(2);
-    expect(bundles[0].path).toContain("12-00-03");
-    expect(bundles[1].path).toContain("12-00-02");
-    expect(fs.existsSync(path.join(tempDir, "logs", "stability"))).toBe(false);
+    const bundleDir = path.join(tempDir, "logs", "stability");
+    const files = fs.readdirSync(bundleDir).toSorted();
+    expect(files).toHaveLength(2);
+    expect(files[0]).toContain("12-00-02");
+    expect(files[1]).toContain("12-00-03");
   });
 
   it("reads the newest retained bundle", () => {

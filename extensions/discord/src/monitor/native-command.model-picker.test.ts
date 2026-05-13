@@ -7,7 +7,11 @@ import type { ChatCommandDefinition, CommandArgsParsing } from "openclaw/plugin-
 import type { ModelsProviderData } from "openclaw/plugin-sdk/command-auth";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import * as globalsModule from "openclaw/plugin-sdk/runtime-env";
-import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  loadSessionStore,
+  resolveStorePath,
+  saveSessionStore,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import * as commandTextModule from "openclaw/plugin-sdk/text-utility-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defineThrowingDiscordChannelGetter } from "../test-support/partial-channel.js";
@@ -47,7 +51,6 @@ type MockInteraction = {
 };
 
 let tempDir: string;
-let previousStateDir: string | undefined;
 
 function createModelsProviderData(entries: Record<string, string[]>): ModelsProviderData {
   return createBaseModelsProviderData(entries, { defaultProviderOrder: "sorted" });
@@ -55,7 +58,9 @@ function createModelsProviderData(entries: Record<string, string[]>): ModelsProv
 
 function createModelPickerContext(): ModelPickerContext {
   const cfg = {
-    session: {},
+    session: {
+      store: path.join(tempDir, "sessions.json"),
+    },
     channels: {
       discord: {
         dm: {
@@ -167,6 +172,16 @@ function createDispatchSpy() {
   return vi.fn<DispatchDiscordCommandInteraction>().mockResolvedValue({ accepted: true });
 }
 
+type MockWithCalls = { mock: { calls: unknown[][] } };
+
+function firstMockArg(mock: MockWithCalls, label: string) {
+  const call = mock.mock.calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call[0];
+}
+
 function createModelPickerFallbackButton(
   context: ModelPickerContext,
   dispatchCommandInteraction: DispatchDiscordCommandInteraction = createDispatchSpy(),
@@ -225,7 +240,9 @@ function expectDispatchedModelSelection(params: {
   model: string;
   runtime?: string;
 }) {
-  const dispatchCall = params.dispatchSpy.mock.calls[0]?.[0];
+  const dispatchCall = firstMockArg(params.dispatchSpy, "dispatchCommandInteraction") as
+    | Parameters<DispatchDiscordCommandInteraction>[0]
+    | undefined;
   expect(dispatchCall?.prompt).toBe(
     params.runtime
       ? `/model ${params.model} --runtime ${params.runtime}`
@@ -268,8 +285,6 @@ function createBoundThreadBindingManager(params: {
 describe("Discord model picker interactions", () => {
   beforeEach(async () => {
     tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-discord-model-picker-"));
-    previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = tempDir;
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -277,11 +292,6 @@ describe("Discord model picker interactions", () => {
   afterEach(async () => {
     vi.useRealTimers();
     await rm(tempDir, { recursive: true, force: true });
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
   });
 
   it("registers distinct fallback ids for button and select handlers", () => {
@@ -487,7 +497,7 @@ describe("Discord model picker interactions", () => {
     expect(withTimeoutSpy).toHaveBeenCalledTimes(1);
     await vi.waitFor(() => expect(dispatchSpy).toHaveBeenCalledTimes(1));
     expect(submitInteraction.followUp).toHaveBeenCalledTimes(1);
-    const followUpPayload = submitInteraction.followUp.mock.calls[0]?.[0] as {
+    const followUpPayload = firstMockArg(submitInteraction.followUp, "interaction.followUp") as {
       components?: Array<{ components?: Array<{ content?: string }> }>;
     };
     const followUpText = JSON.stringify(followUpPayload);
@@ -523,10 +533,7 @@ describe("Discord model picker interactions", () => {
     await button.run(interaction as unknown as PickerButtonInteraction, data);
 
     expect(interaction.editReply).toHaveBeenCalledTimes(1);
-    const updatePayload = interaction.editReply.mock.calls[0]?.[0];
-    if (!updatePayload) {
-      throw new Error("recents button did not emit an update payload");
-    }
+    const updatePayload = firstMockArg(interaction.editReply, "interaction.editReply");
     const updateText = JSON.stringify(updatePayload);
     expect(updateText).toContain("gpt-4o");
     expect(updateText).toContain("claude-sonnet-4-5");
@@ -622,11 +629,9 @@ describe("Discord model picker interactions", () => {
       lmstudio: ["unsloth/gemma-4-26b-a4b-it@iq4_xs"],
     });
     const modelCommand = createModelCommandDefinition();
-    const sessionKey = "agent:worker:subagent:bound";
-    upsertSessionEntry({
-      agentId: "worker",
-      sessionKey,
-      entry: {
+    const storePath = resolveStorePath(context.cfg.session?.store, { agentId: "worker" });
+    await saveSessionStore(storePath, {
+      "agent:worker:subagent:bound": {
         updatedAt: Date.now(),
         sessionId: "bound-session",
       },
@@ -649,17 +654,19 @@ describe("Discord model picker interactions", () => {
       mi: "1",
     });
 
-    const entry = getSessionEntry({ agentId: "worker", sessionKey });
-    expect(entry?.providerOverride).toBe("lmstudio");
-    expect(entry?.modelOverride).toBe("unsloth/gemma-4-26b-a4b-it@iq4_xs");
-    expect(entry?.liveModelSwitchPending).toBe(true);
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(store["agent:worker:subagent:bound"]?.providerOverride).toBe("lmstudio");
+    expect(store["agent:worker:subagent:bound"]?.modelOverride).toBe(
+      "unsloth/gemma-4-26b-a4b-it@iq4_xs",
+    );
+    expect(store["agent:worker:subagent:bound"]?.liveModelSwitchPending).toBe(true);
     expectDispatchedModelSelection({
       dispatchSpy,
       model: "lmstudio/unsloth/gemma-4-26b-a4b-it@iq4_xs",
     });
-    expect(JSON.stringify(submitInteraction.followUp.mock.calls[0]?.[0])).toContain(
-      "✅ Model set to lmstudio/unsloth/gemma-4-26b-a4b-it@iq4_xs.",
-    );
+    expect(
+      JSON.stringify(firstMockArg(submitInteraction.followUp, "interaction.followUp")),
+    ).toContain("✅ Model set to lmstudio/unsloth/gemma-4-26b-a4b-it@iq4_xs.");
   });
 
   it("does not write a fallback override when hidden /model dispatch is rejected", async () => {
@@ -672,11 +679,9 @@ describe("Discord model picker interactions", () => {
     });
     const pickerData = createDefaultModelPickerData();
     const modelCommand = createModelCommandDefinition();
-    const sessionKey = "agent:worker:subagent:bound";
-    upsertSessionEntry({
-      agentId: "worker",
-      sessionKey,
-      entry: {
+    const storePath = resolveStorePath(context.cfg.session?.store, { agentId: "worker" });
+    await saveSessionStore(storePath, {
+      "agent:worker:subagent:bound": {
         updatedAt: Date.now(),
         sessionId: "bound-session",
       },
@@ -700,12 +705,12 @@ describe("Discord model picker interactions", () => {
       createModelsViewSubmitData(),
     );
 
-    const entry = getSessionEntry({ agentId: "worker", sessionKey });
-    expect(entry?.providerOverride).toBeUndefined();
-    expect(entry?.modelOverride).toBeUndefined();
-    expect(JSON.stringify(submitInteraction.followUp.mock.calls[0]?.[0])).toContain(
-      "❌ Failed to apply openai/gpt-4o.",
-    );
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(store["agent:worker:subagent:bound"]?.providerOverride).toBeUndefined();
+    expect(store["agent:worker:subagent:bound"]?.modelOverride).toBeUndefined();
+    expect(
+      JSON.stringify(firstMockArg(submitInteraction.followUp, "interaction.followUp")),
+    ).toContain("❌ Failed to apply openai/gpt-4o.");
   });
 
   it("loads model picker data from the effective bound route", async () => {
@@ -781,7 +786,7 @@ describe("Discord model picker interactions", () => {
     });
 
     expect(loadSpy).toHaveBeenCalledWith(cfg, "main");
-    const payload = JSON.stringify(interaction.reply.mock.calls[0]?.[0]);
+    const payload = JSON.stringify(firstMockArg(interaction.reply, "interaction.reply"));
     expect(payload).toContain("openai-codex");
     expect(payload).toContain("gpt-5.5-codex");
     expect(payload).not.toContain("Provider not found");

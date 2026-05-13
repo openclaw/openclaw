@@ -311,7 +311,7 @@ async function finalizeLineInboundContext(params: {
     senderLabel,
   });
 
-  const { envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
+  const { storePath, envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
     cfg: params.cfg,
     agentId: params.route.agentId,
     sessionKey: params.route.sessionKey,
@@ -393,6 +393,7 @@ async function finalizeLineInboundContext(params: {
     ctxPayload,
     replyToken: (params.event as { replyToken: string }).replyToken,
     turn: {
+      storePath,
       record: {
         updateLastRoute: !params.source.isGroup
           ? {

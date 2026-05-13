@@ -142,21 +142,17 @@ steps:
       - assert:
           expr: "!JSON.stringify(writtenConfig.channels?.discord ?? {}).includes(setupSpec.discordToken)"
           message: Crestodian persisted the raw Discord token.
-      - call: readQaCrestodianAuditEntries
-        saveAs: auditEntries
-        args:
-          - ref: env
-      - set: auditOperations
+      - set: auditText
         value:
-          expr: "auditEntries.map((entry) => entry.operation).filter(Boolean)"
+          expr: "await fs.readFile(path.join(stateDir, 'audit', 'crestodian.jsonl'), 'utf8')"
       - forEach:
           items:
             ref: setupSpec.auditOperations
           item: operation
           actions:
             - assert:
-                expr: "auditOperations.includes(operation)"
+                expr: 'auditText.includes(`"operation":"${operation}"`)'
                 message:
-                  expr: "`missing audit entry for ${operation}: ${JSON.stringify(auditEntries)}`"
+                  expr: "`missing audit entry for ${operation}: ${auditText}`"
     detailsExpr: "`stateDir=${stateDir}\\nconfigPath=${configPath}\\nagent=${JSON.stringify(agent)}\\nDiscord SecretRef=${JSON.stringify(writtenConfig.channels?.discord?.token)}`"
 ```

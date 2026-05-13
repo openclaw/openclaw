@@ -2,10 +2,10 @@ import { getAcpSessionManager } from "../../../acp/control-plane/manager.js";
 import { formatAcpRuntimeErrorText } from "../../../acp/runtime/error-text.js";
 import { toAcpRuntimeError } from "../../../acp/runtime/errors.js";
 import { getAcpRuntimeBackend, requireAcpRuntimeBackend } from "../../../acp/runtime/registry.js";
-import { listSessionEntries } from "../../../config/sessions.js";
+import { resolveSessionStorePathForAcp } from "../../../acp/runtime/session-meta.js";
+import { loadSessionStore } from "../../../config/sessions.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
-import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -187,13 +187,16 @@ export function handleAcpSessionsAction(
     return stopWithText("⚠️ Missing session key.");
   }
 
-  let sessionEntries: Array<{ sessionKey: string; entry: SessionEntry }>;
+  const { storePath } = resolveSessionStorePathForAcp({
+    cfg: params.cfg,
+    sessionKey: currentSessionKey,
+  });
+
+  let store: Record<string, SessionEntry>;
   try {
-    sessionEntries = listSessionEntries({
-      agentId: resolveAgentIdFromSessionKey(currentSessionKey),
-    });
+    store = loadSessionStore(storePath);
   } catch {
-    sessionEntries = [];
+    store = {};
   }
 
   const bindingContext = resolveAcpCommandBindingContext(params);
@@ -201,11 +204,11 @@ export function handleAcpSessionsAction(
   const normalizedAccountId = bindingContext.accountId || undefined;
   const bindingService = getSessionBindingService();
 
-  const rows = sessionEntries
-    .filter((row) => Boolean(row.entry.acp))
-    .toSorted((a, b) => (b.entry.updatedAt ?? 0) - (a.entry.updatedAt ?? 0))
+  const rows = Object.entries(store)
+    .filter(([, entry]) => Boolean(entry?.acp))
+    .toSorted(([, a], [, b]) => (b?.updatedAt ?? 0) - (a?.updatedAt ?? 0))
     .slice(0, 20)
-    .map(({ sessionKey: key, entry }) => {
+    .map(([key, entry]) => {
       const bindingThreadId = bindingService
         .listBySession(key)
         .find(

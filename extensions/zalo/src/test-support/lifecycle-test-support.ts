@@ -1,4 +1,5 @@
 import { request as httpRequest } from "node:http";
+import { createPluginRuntimeMediaMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { expect, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import type { ResolvedZaloAccount } from "../types.js";
@@ -167,8 +168,12 @@ export function createImageLifecycleCore() {
       }),
   );
   const recordInboundSessionMock = vi.fn(async () => undefined);
-  const fetchRemoteMediaMock = vi.fn(async () => ({
+  const readRemoteMediaBufferMock = vi.fn(async () => ({
     buffer: Buffer.from("image-bytes"),
+    contentType: "image/jpeg",
+  }));
+  const saveRemoteMediaMock = vi.fn(async () => ({
+    path: "/tmp/zalo-photo.jpg",
     contentType: "image/jpeg",
   }));
   const saveMediaBufferMock = vi.fn(async () => ({
@@ -198,6 +203,9 @@ export function createImageLifecycleCore() {
         })) as unknown as PluginRuntime["channel"]["routing"]["resolveAgentRoute"],
       },
       session: {
+        resolveStorePath: vi.fn(
+          () => "/tmp/zalo-sessions.json",
+        ) as unknown as PluginRuntime["channel"]["session"]["resolveStorePath"],
         readSessionUpdatedAt: vi.fn(
           () => undefined,
         ) as unknown as PluginRuntime["channel"]["session"]["readSessionUpdatedAt"],
@@ -209,12 +217,14 @@ export function createImageLifecycleCore() {
           () => "code",
         ) as unknown as PluginRuntime["channel"]["text"]["resolveMarkdownTableMode"],
       },
-      media: {
-        fetchRemoteMedia:
-          fetchRemoteMediaMock as unknown as PluginRuntime["channel"]["media"]["fetchRemoteMedia"],
+      media: createPluginRuntimeMediaMock({
+        readRemoteMediaBuffer:
+          readRemoteMediaBufferMock as unknown as PluginRuntime["channel"]["media"]["readRemoteMediaBuffer"],
+        saveRemoteMedia:
+          saveRemoteMediaMock as unknown as PluginRuntime["channel"]["media"]["saveRemoteMedia"],
         saveMediaBuffer:
           saveMediaBufferMock as unknown as PluginRuntime["channel"]["media"]["saveMediaBuffer"],
-      },
+      }) as unknown as PluginRuntime["channel"]["media"],
       reply: {
         finalizeInboundContext:
           finalizeInboundContextMock as unknown as PluginRuntime["channel"]["reply"]["finalizeInboundContext"],
@@ -246,6 +256,7 @@ export function createImageLifecycleCore() {
             {},
           );
           await resolved.recordInboundSession({
+            storePath: resolved.storePath,
             sessionKey: resolved.ctxPayload.SessionKey ?? resolved.routeSessionKey,
             ctx: resolved.ctxPayload,
             groupResolution: resolved.record?.groupResolution,
@@ -287,6 +298,7 @@ export function createImageLifecycleCore() {
         runAssembled: vi.fn(
           async (params: Parameters<PluginRuntime["channel"]["turn"]["runAssembled"]>[0]) => {
             await params.recordInboundSession({
+              storePath: params.storePath,
               sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
               ctx: params.ctxPayload,
               groupResolution: params.record?.groupResolution,
@@ -336,7 +348,8 @@ export function createImageLifecycleCore() {
     core,
     finalizeInboundContextMock,
     recordInboundSessionMock,
-    fetchRemoteMediaMock,
+    readRemoteMediaBufferMock,
+    saveRemoteMediaMock,
     saveMediaBufferMock,
     readAllowFromStoreMock,
     upsertPairingRequestMock,
@@ -344,7 +357,8 @@ export function createImageLifecycleCore() {
 }
 
 export function expectImageLifecycleDelivery(params: {
-  fetchRemoteMediaMock: ReturnType<typeof vi.fn>;
+  readRemoteMediaBufferMock: ReturnType<typeof vi.fn>;
+  saveRemoteMediaMock?: ReturnType<typeof vi.fn>;
   saveMediaBufferMock: ReturnType<typeof vi.fn>;
   finalizeInboundContextMock: ReturnType<typeof vi.fn>;
   recordInboundSessionMock: ReturnType<typeof vi.fn>;
@@ -357,11 +371,12 @@ export function expectImageLifecycleDelivery(params: {
   const senderName = params.senderName ?? "Test User";
   const mediaPath = params.mediaPath ?? "/tmp/zalo-photo.jpg";
   const mediaType = params.mediaType ?? "image/jpeg";
-  expect(params.fetchRemoteMediaMock).toHaveBeenCalledWith({
+  const saveRemoteMediaMock = params.saveRemoteMediaMock ?? params.readRemoteMediaBufferMock;
+  expect(saveRemoteMediaMock).toHaveBeenCalledWith({
     url: photoUrl,
     maxBytes: 5 * 1024 * 1024,
   });
-  expect(params.saveMediaBufferMock).toHaveBeenCalledTimes(1);
+  expect(params.saveMediaBufferMock).not.toHaveBeenCalled();
   expect(params.finalizeInboundContextMock).toHaveBeenCalledWith(
     expect.objectContaining({
       SenderName: senderName,

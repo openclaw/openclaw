@@ -19,7 +19,8 @@ struct DebugSettings: View {
     @State private var launchAgentWriteDisabled = GatewayLaunchAgentManager.isLaunchAgentWriteDisabled()
     @State private var launchAgentWriteError: String?
     @State private var gatewayRootInput: String = GatewayProcessManager.shared.projectRootPath()
-    @State private var sessionDatabasePath: String = SessionLoader.defaultDatabasePath
+    @State private var sessionStorePath: String = SessionLoader.defaultStorePath
+    @State private var sessionStoreSaveError: String?
     @State private var debugSendInFlight = false
     @State private var debugSendStatus: String?
     @State private var debugSendError: String?
@@ -29,6 +30,7 @@ struct DebugSettings: View {
     @State private var tunnelResetInFlight = false
     @State private var tunnelResetStatus: String?
     @State private var pendingKill: DebugActions.PortListener?
+    @AppStorage(debugFileLogEnabledKey) private var diagnosticsFileLogEnabled: Bool = false
     @AppStorage(appLogLevelKey) private var appLogLevelRaw: String = AppLogLevel.default.rawValue
 
     @State private var canvasSessionKey: String = "main"
@@ -67,7 +69,7 @@ struct DebugSettings: View {
         .task {
             guard !self.isPreview else { return }
             await self.reloadModels()
-            self.refreshSessionDatabasePath()
+            self.loadSessionStorePath()
         }
         .alert(item: self.$pendingKill) { listener in
             Alert(
@@ -261,10 +263,28 @@ struct DebugSettings: View {
                         .labelsHidden()
                         .help("Controls the macOS app log verbosity.")
 
-                        Text("Use Console.app or `log stream` for macOS app logs.")
+                        Toggle("Write rolling diagnostics log (JSONL)", isOn: self.$diagnosticsFileLogEnabled)
+                            .toggleStyle(.checkbox)
+                            .help(
+                                "Writes a rotating, local-only log under ~/Library/Logs/OpenClaw/. " +
+                                    "Enable only while actively debugging.")
+
+                        HStack(spacing: 8) {
+                            Button("Open folder") {
+                                NSWorkspace.shared.open(DiagnosticsFileLog.logDirectoryURL())
+                            }
+                            .buttonStyle(.bordered)
+                            Button("Clear") {
+                                Task { try? await DiagnosticsFileLog.shared.clear() }
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                        Text(DiagnosticsFileLog.logFileURL().path)
                             .font(.caption2.monospaced())
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
                     }
                 }
             }
@@ -380,17 +400,25 @@ struct DebugSettings: View {
 
                 Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 10) {
                     GridRow {
-                        self.gridLabel("Session database")
+                        self.gridLabel("Session store")
                         VStack(alignment: .leading, spacing: 6) {
-                            Text(self.sessionDatabasePath)
-                                .font(.caption.monospaced())
-                                .foregroundStyle(.secondary)
-                                .lineLimit(2)
-                                .truncationMode(.middle)
-                                .textSelection(.enabled)
-                            Text("Runtime session state is stored in the per-agent SQLite database.")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
+                            HStack(spacing: 8) {
+                                TextField("Path", text: self.$sessionStorePath)
+                                    .textFieldStyle(.roundedBorder)
+                                    .font(.caption.monospaced())
+                                    .frame(width: 360)
+                                Button("Save") { self.saveSessionStorePath() }
+                                    .buttonStyle(.borderedProminent)
+                            }
+                            if let sessionStoreSaveError {
+                                Text(sessionStoreSaveError)
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Text("Used by the CLI session loader; stored in ~/.openclaw/openclaw.json.")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     }
                     GridRow {
@@ -731,8 +759,31 @@ struct DebugSettings: View {
         GatewayProcessManager.shared.setProjectRoot(path: self.gatewayRootInput)
     }
 
-    private func refreshSessionDatabasePath() {
-        self.sessionDatabasePath = SessionLoader.defaultDatabasePath
+    private func loadSessionStorePath() {
+        let parsed = OpenClawConfigFile.loadDict()
+        guard
+            let session = parsed["session"] as? [String: Any],
+            let path = session["store"] as? String
+        else {
+            self.sessionStorePath = SessionLoader.defaultStorePath
+            return
+        }
+        self.sessionStorePath = path
+    }
+
+    private func saveSessionStorePath() {
+        let trimmed = self.sessionStorePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        var root = OpenClawConfigFile.loadDict()
+
+        var session = root["session"] as? [String: Any] ?? [:]
+        session["store"] = trimmed.isEmpty ? SessionLoader.defaultStorePath : trimmed
+        root["session"] = session
+
+        guard OpenClawConfigFile.saveDict(root) else {
+            self.sessionStoreSaveError = "Config write rejected to protect gateway auth/mode."
+            return
+        }
+        self.sessionStoreSaveError = nil
     }
 
     private var bindingOverride: Binding<String> {
@@ -904,7 +955,8 @@ extension DebugSettings {
         view.modelsLoading = false
         view.modelsError = "Failed to load models"
         view.gatewayRootInput = "/tmp/openclaw"
-        view.sessionDatabasePath = "/tmp/openclaw-agent.sqlite"
+        view.sessionStorePath = "/tmp/sessions.json"
+        view.sessionStoreSaveError = "Save failed"
         view.debugSendInFlight = true
         view.debugSendStatus = "Sent"
         view.debugSendError = "Failed"
@@ -942,7 +994,7 @@ extension DebugSettings {
         _ = view.experimentsSection
         _ = view.gridLabel("Test")
 
-        view.refreshSessionDatabasePath()
+        view.loadSessionStorePath()
         await view.reloadModels()
     }
 }

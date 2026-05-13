@@ -1,9 +1,12 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
-import { upsertSessionEntry } from "../config/sessions/store.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  parseRawSessionConversationRef,
+  parseThreadSessionSuffix,
+} from "../sessions/session-key-utils.js";
 import { withTempDirSync } from "../test-helpers/temp-dir.js";
 import {
   doesApprovalRequestMatchChannelAccount,
@@ -17,6 +20,30 @@ import {
 } from "./exec-approval-session-target.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 import type { PluginApprovalRequest } from "./plugin-approvals.js";
+
+vi.mock("../channels/plugins/session-conversation.js", () => ({
+  resolveSessionConversationRef(sessionKey: string | undefined | null) {
+    const raw = parseRawSessionConversationRef(sessionKey);
+    if (!raw) {
+      return null;
+    }
+    const parsed = parseThreadSessionSuffix(raw.rawId);
+    const id = (parsed.baseSessionKey ?? raw.rawId).trim();
+    if (!id) {
+      return null;
+    }
+    return {
+      channel: raw.channel,
+      kind: raw.kind,
+      rawId: raw.rawId,
+      id,
+      threadId: parsed.threadId,
+      baseSessionKey: `${raw.prefix}:${id}`,
+      baseConversationId: id,
+      parentConversationCandidates: parsed.threadId ? [id] : [],
+    };
+  },
+}));
 
 vi.mock("./outbound/targets.js", async () => {
   return await vi.importActual<typeof import("./outbound/targets-session.js")>(
@@ -34,41 +61,15 @@ const baseRequest: ExecApprovalRequest = {
   expiresAtMs: 6000,
 };
 
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-  vi.unstubAllEnvs();
-});
-
-function seedSessionRowsForStateDir(
-  stateDir: string,
+function writeStoreFile(
+  storePath: string,
   entries: Record<string, Partial<SessionEntry>>,
-  defaultAgentId = "main",
 ): OpenClawConfig {
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-  for (const [sessionKey, entry] of Object.entries(entries)) {
-    upsertSessionEntry({
-      agentId: resolveTestAgentIdForSession({ sessionKey, defaultAgentId }),
-      sessionKey,
-      entry: {
-        sessionId: entry.sessionId ?? sessionKey.replace(/:/g, "_"),
-        updatedAt: entry.updatedAt ?? Date.now(),
-        ...entry,
-      },
-    });
-  }
-  return {} as OpenClawConfig;
-}
-
-function resolveTestAgentIdForSession(params: {
-  sessionKey: string;
-  defaultAgentId: string;
-}): string {
-  const parsedAgentId = params.sessionKey.match(/^agent:([^:]+):/u)?.[1];
-  if (parsedAgentId) {
-    return parsedAgentId;
-  }
-  return params.defaultAgentId;
+  fs.mkdirSync(path.dirname(storePath), { recursive: true });
+  fs.writeFileSync(storePath, JSON.stringify(entries), "utf-8");
+  return {
+    session: { store: storePath },
+  } as OpenClawConfig;
 }
 
 function expectResolvedSessionTarget(
@@ -127,7 +128,7 @@ function resolveSlackPluginOriginTarget(params: { cfg: OpenClawConfig; turnSourc
 describe("exec approval session target", () => {
   type PlaceholderStoreCase = {
     name: string;
-    agentId: string;
+    relativeStoreDir: string;
     entries: Record<string, Partial<SessionEntry>>;
     request: ExecApprovalRequest;
     expected: ReturnType<typeof resolveExecApprovalSessionTarget>;
@@ -135,7 +136,8 @@ describe("exec approval session target", () => {
 
   it("returns null for blank session keys, missing entries, and unresolved targets", () => {
     withTempDirSync({ prefix: "openclaw-exec-approval-session-target-" }, (tmpDir) => {
-      const cfg = seedSessionRowsForStateDir(tmpDir, {
+      const storePath = path.join(tmpDir, "sessions.json");
+      const cfg = writeStoreFile(storePath, {
         "agent:main:main": {
           sessionId: "main",
           updatedAt: 1,
@@ -157,7 +159,8 @@ describe("exec approval session target", () => {
 
   it("prefers turn-source routing over stale session delivery state", () => {
     withTempDirSync({ prefix: "openclaw-exec-approval-session-target-" }, (tmpDir) => {
-      const cfg = seedSessionRowsForStateDir(tmpDir, {
+      const storePath = path.join(tmpDir, "sessions.json");
+      const cfg = writeStoreFile(storePath, {
         "agent:main:main": {
           sessionId: "main",
           updatedAt: 1,
@@ -186,8 +189,8 @@ describe("exec approval session target", () => {
 
   it.each([
     {
-      name: "uses the parsed session-key agent id for SQLite rows",
-      agentId: "helper",
+      name: "uses the parsed session-key agent id for store-path placeholders",
+      relativeStoreDir: "helper",
       entries: {
         "agent:helper:main": {
           sessionId: "main",
@@ -208,7 +211,7 @@ describe("exec approval session target", () => {
     },
     {
       name: "falls back to request agent id for legacy session keys",
-      agentId: "worker-1",
+      relativeStoreDir: "worker-1",
       entries: {
         "legacy-main": {
           sessionId: "legacy-main",
@@ -225,20 +228,25 @@ describe("exec approval session target", () => {
       expected: {
         channel: "telegram",
         to: "-100123",
-        accountId: "default",
-        threadId: "77",
+        accountId: undefined,
+        threadId: 77,
       },
     },
-  ] satisfies PlaceholderStoreCase[])("$name", ({ agentId, entries, request, expected }) => {
-    withTempDirSync({ prefix: "openclaw-exec-approval-session-target-" }, (tmpDir) => {
-      const cfg = seedSessionRowsForStateDir(tmpDir, entries, agentId);
-      expect(expectResolvedSessionTarget(cfg, request)).toEqual(expected);
-    });
-  });
+  ] satisfies PlaceholderStoreCase[])(
+    "$name",
+    ({ relativeStoreDir, entries, request, expected }) => {
+      withTempDirSync({ prefix: "openclaw-exec-approval-session-target-" }, (tmpDir) => {
+        const cfg = writeStoreFile(path.join(tmpDir, relativeStoreDir, "sessions.json"), entries);
+        cfg.session = { store: path.join(tmpDir, "{agentId}", "sessions.json") };
+        expect(expectResolvedSessionTarget(cfg, request)).toEqual(expected);
+      });
+    },
+  );
 
-  it("preserves string thread ids from SQLite session rows", () => {
+  it("preserves string thread ids from the session store", () => {
     withTempDirSync({ prefix: "openclaw-exec-approval-session-target-" }, (tmpDir) => {
-      const cfg = seedSessionRowsForStateDir(tmpDir, {
+      const storePath = path.join(tmpDir, "sessions.json");
+      const cfg = writeStoreFile(storePath, {
         "agent:main:main": {
           sessionId: "main",
           updatedAt: 1,
@@ -258,86 +266,42 @@ describe("exec approval session target", () => {
     });
   });
 
-  it("reads typed channel conversation metadata for approval requests", () => {
-    withTempDirSync({ prefix: "openclaw-approval-conversation-" }, (stateDir) => {
-      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-      const sessionKey = "agent:main:matrix:channel:!Ops:Example.org:thread:$root";
-      upsertSessionEntry({
-        agentId: "main",
-        sessionKey,
-        entry: {
-          sessionId: "matrix-session",
-          updatedAt: Date.now(),
-          chatType: "channel",
-          deliveryContext: {
-            channel: "matrix",
-            to: "!Ops:Example.org",
-            accountId: "default",
-            threadId: "$root",
-          },
-        },
-        conversationIdentities: [
-          {
-            conversationId: "conv_matrix_ops_thread",
-            channel: "matrix",
-            accountId: "default",
-            kind: "channel",
-            peerId: "!Ops:Example.org",
-            parentConversationId: "!Ops:Example.org",
-            threadId: "$root",
-          },
-        ],
-      });
-      const request = buildPluginRequest({ sessionKey });
+  it("parses channel-scoped session conversation fallbacks for approval requests", () => {
+    const request = buildPluginRequest({
+      sessionKey: "agent:main:matrix:channel:!Ops:Example.org:thread:$root",
+    });
 
-      expect(
-        resolveApprovalRequestSessionConversation({
-          request,
-          channel: "matrix",
-        }),
-      ).toEqual({
+    expect(
+      resolveApprovalRequestSessionConversation({
+        request,
         channel: "matrix",
-        kind: "channel",
-        id: "!Ops:Example.org",
-        rawId: "!Ops:Example.org",
-        threadId: "$root",
-        baseSessionKey: sessionKey,
-        baseConversationId: "!Ops:Example.org",
-        parentConversationCandidates: [],
-      });
+      }),
+    ).toEqual({
+      channel: "matrix",
+      kind: "channel",
+      id: "!Ops:Example.org",
+      rawId: "!Ops:Example.org:thread:$root",
+      threadId: "$root",
+      baseSessionKey: "agent:main:matrix:channel:!Ops:Example.org",
+      baseConversationId: "!Ops:Example.org",
+      parentConversationCandidates: ["!Ops:Example.org"],
     });
   });
 
-  it("ignores typed session conversation metadata for other channels", () => {
-    withTempDirSync({ prefix: "openclaw-approval-conversation-" }, (stateDir) => {
-      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-      const sessionKey = "agent:main:matrix:channel:!ops:example.org";
-      upsertSessionEntry({
-        agentId: "main",
-        sessionKey,
-        entry: {
-          sessionId: "matrix-session",
-          updatedAt: Date.now(),
-          chatType: "channel",
-          deliveryContext: {
-            channel: "matrix",
-            to: "!ops:example.org",
-            accountId: "default",
-          },
-        },
-      });
-      const request = buildPluginRequest({ sessionKey });
-
-      expect(
-        resolveApprovalRequestSessionConversation({
-          request,
-          channel: "slack",
-        }),
-      ).toBeNull();
+  it("ignores session conversation fallbacks for other channels", () => {
+    const request = buildPluginRequest({
+      sessionKey: "agent:main:matrix:channel:!ops:example.org",
     });
+
+    expect(
+      resolveApprovalRequestSessionConversation({
+        request,
+        channel: "slack",
+      }),
+    ).toBeNull();
   });
 
-  it("prefers explicit turn-source account bindings when the session row is missing", () => {
+  it("prefers explicit turn-source account bindings when session store is missing", () => {
     const cfg = {} as OpenClawConfig;
     const request = buildRequest({
       turnSourceChannel: "slack",
@@ -384,13 +348,18 @@ describe("exec approval session target", () => {
 
   it("falls back to the stored session binding when turn source uses another channel", () => {
     withTempDirSync({ prefix: "openclaw-exec-approval-session-target-" }, (tmpDir) => {
-      const cfg = seedSessionRowsForStateDir(tmpDir, {
+      const storePath = path.join(tmpDir, "sessions.json");
+      const cfg = writeStoreFile(storePath, {
         "agent:main:matrix:channel:!ops:example.org": {
           sessionId: "main",
           updatedAt: 1,
-          lastChannel: "matrix",
-          lastTo: "room:!ops:example.org",
-          lastAccountId: "ops",
+          origin: {
+            provider: "matrix",
+            accountId: "ops",
+          },
+          lastChannel: "slack",
+          lastTo: "channel:C123",
+          lastAccountId: "work",
         },
       });
       const request = buildRequest({
@@ -409,7 +378,8 @@ describe("exec approval session target", () => {
 
   it("falls back to the session-bound account when no turn-source account is present", () => {
     withTempDirSync({ prefix: "openclaw-exec-approval-session-target-" }, (tmpDir) => {
-      const cfg = seedSessionRowsForStateDir(tmpDir, {
+      const storePath = path.join(tmpDir, "sessions.json");
+      const cfg = writeStoreFile(storePath, {
         "agent:main:main": {
           sessionId: "main",
           updatedAt: 1,
@@ -435,7 +405,8 @@ describe("exec approval session target", () => {
 
   it("prefers explicit turn-source accounts over stale session account bindings", () => {
     withTempDirSync({ prefix: "openclaw-exec-approval-session-target-" }, (tmpDir) => {
-      const cfg = seedSessionRowsForStateDir(tmpDir, {
+      const storePath = path.join(tmpDir, "sessions.json");
+      const cfg = writeStoreFile(storePath, {
         "agent:main:main": {
           sessionId: "main",
           updatedAt: 1,
@@ -463,7 +434,8 @@ describe("exec approval session target", () => {
 
   it("reconciles plugin-request turn source and session origin targets through the shared helper", () => {
     withTempDirSync({ prefix: "openclaw-exec-approval-session-target-" }, (tmpDir) => {
-      const cfg = seedSessionRowsForStateDir(tmpDir, {
+      const storePath = path.join(tmpDir, "sessions.json");
+      const cfg = writeStoreFile(storePath, {
         "agent:main:main": {
           sessionId: "main",
           updatedAt: 1,
@@ -483,7 +455,8 @@ describe("exec approval session target", () => {
 
   it("returns null when explicit turn source conflicts with the session-bound origin target", () => {
     withTempDirSync({ prefix: "openclaw-exec-approval-session-target-" }, (tmpDir) => {
-      const cfg = seedSessionRowsForStateDir(tmpDir, {
+      const storePath = path.join(tmpDir, "sessions.json");
+      const cfg = writeStoreFile(storePath, {
         "agent:main:main": {
           sessionId: "main",
           updatedAt: 1,

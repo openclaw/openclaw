@@ -1,4 +1,4 @@
-import type { Api, Model } from "../pi-ai-contract.js";
+import type { Api, Model } from "@earendil-works/pi-ai";
 
 type PiModelWithOptionalContextTokens = Model<Api> & {
   contextTokens?: number;

@@ -45,12 +45,11 @@ import {
   resolveThreadBindingInactivityExpiresAt,
   resolveThreadBindingMaxAgeExpiresAt,
   resolveThreadBindingMaxAgeMs,
-  saveBindingsToStore,
+  resolveThreadBindingsPath,
+  saveBindingsToDisk,
   setBindingRecord,
-  seedThreadBindingStoreForTests,
   THREAD_BINDING_TOUCH_PERSIST_MIN_INTERVAL_MS,
   shouldDefaultPersist,
-  readThreadBindingStoreForTests,
   resetThreadBindingsForTests,
 } from "./thread-bindings.state.js";
 import {
@@ -290,7 +289,7 @@ export function createThreadBindingManager(params: {
       };
       setBindingRecord(nextRecord);
       if (touchParams.persist ?? persist) {
-        saveBindingsToStore({
+        saveBindingsToDisk({
           minIntervalMs: THREAD_BINDING_TOUCH_PERSIST_MIN_INTERVAL_MS,
         });
       }
@@ -408,7 +407,7 @@ export function createThreadBindingManager(params: {
 
       setBindingRecord(record);
       if (persist) {
-        saveBindingsToStore();
+        saveBindingsToDisk();
       }
 
       const introText = bindParams.introText?.trim();
@@ -435,7 +434,7 @@ export function createThreadBindingManager(params: {
       }
       rememberRecentUnboundWebhookEcho(removed);
       if (persist) {
-        saveBindingsToStore();
+        saveBindingsToDisk();
       }
       if (unbindParams.sendFarewell !== false) {
         const cfg = resolveCurrentCfg();
@@ -542,7 +541,7 @@ export function getThreadBindingManager(accountId?: string): ThreadBindingManage
 }
 
 export const __testing = {
-  readThreadBindingStoreForTests,
+  resolveThreadBindingsPath,
   resolveThreadBindingThreadName,
   resetThreadBindingsForTests,
   runThreadBindingSweepForAccount: async (accountId?: string) => {
@@ -551,5 +550,4 @@ export const __testing = {
       await sweep();
     }
   },
-  seedThreadBindingStoreForTests,
 };

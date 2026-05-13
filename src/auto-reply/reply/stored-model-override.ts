@@ -3,6 +3,7 @@ import {
   normalizeModelRef,
   resolvePersistedOverrideModelRef,
 } from "../../agents/model-selection.js";
+import { resolveSessionParentSessionKey } from "../../channels/plugins/session-conversation.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
@@ -19,6 +20,10 @@ function resolveParentSessionKeyCandidate(params: {
   const explicit = normalizeOptionalString(params.parentSessionKey);
   if (explicit && explicit !== params.sessionKey) {
     return explicit;
+  }
+  const derived = resolveSessionParentSessionKey(params.sessionKey);
+  if (derived && derived !== params.sessionKey) {
+    return derived;
   }
   return null;
 }

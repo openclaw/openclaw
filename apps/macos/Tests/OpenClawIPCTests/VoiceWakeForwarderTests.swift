@@ -25,6 +25,8 @@ import Testing
         let entry = VoiceWakeForwarder.SessionRouteEntry(
             key: "agent:main:telegram:group:6812765697",
             channel: "telegram",
+            lastChannel: "telegram",
+            lastTo: "telegram:6812765697",
             deliveryContext: .init(channel: "telegram", to: "telegram:6812765697"))
 
         let opts = VoiceWakeForwarder.forwardOptions(

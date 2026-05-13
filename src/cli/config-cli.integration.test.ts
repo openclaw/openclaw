@@ -4,22 +4,8 @@ import path from "node:path";
 import JSON5 from "json5";
 import { describe, expect, it } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
-import { sourceBundledPluginTestEnv } from "../config/test-helpers.js";
 import { captureEnv } from "../test-utils/env.js";
 import { runConfigSet } from "./config-cli.js";
-
-const SOURCE_PLUGIN_ENV_KEYS = [
-  "OPENCLAW_BUNDLED_PLUGINS_DIR",
-  "OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR",
-] as const;
-
-function captureConfigCliEnv(extraKeys: string[]) {
-  return captureEnv([...SOURCE_PLUGIN_ENV_KEYS, ...extraKeys]);
-}
-
-function applySourcePluginEnv(): void {
-  Object.assign(process.env, sourceBundledPluginTestEnv());
-}
 
 function createTestRuntime() {
   const logs: string[] = [];
@@ -85,7 +71,7 @@ async function withExecDryRunConfigHarness(
   const configPath = path.join(tempDir, "openclaw.json");
   const batchPath = path.join(tempDir, "batch.json");
   const markerPath = path.join(tempDir, "marker.txt");
-  const envSnapshot = captureConfigCliEnv(["OPENCLAW_CONFIG_PATH", "OPENCLAW_TEST_FAST"]);
+  const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH", "OPENCLAW_TEST_FAST"]);
   try {
     fs.writeFileSync(
       configPath,
@@ -106,7 +92,6 @@ async function withExecDryRunConfigHarness(
 
     process.env.OPENCLAW_TEST_FAST = "1";
     process.env.OPENCLAW_CONFIG_PATH = configPath;
-    applySourcePluginEnv();
     clearConfigCache();
     clearRuntimeConfigSnapshot();
 
@@ -128,7 +113,7 @@ describe("config cli integration", () => {
   it("accepts plugin hook conversation-access policy via config set", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-cli-plugin-hooks-"));
     const configPath = path.join(tempDir, "openclaw.json");
-    const envSnapshot = captureConfigCliEnv(["OPENCLAW_CONFIG_PATH", "OPENCLAW_TEST_FAST"]);
+    const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH", "OPENCLAW_TEST_FAST"]);
     try {
       fs.writeFileSync(
         configPath,
@@ -144,7 +129,6 @@ describe("config cli integration", () => {
 
       process.env.OPENCLAW_TEST_FAST = "1";
       process.env.OPENCLAW_CONFIG_PATH = configPath;
-      applySourcePluginEnv();
       clearConfigCache();
       clearRuntimeConfigSnapshot();
 
@@ -173,7 +157,7 @@ describe("config cli integration", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-cli-int-"));
     const configPath = path.join(tempDir, "openclaw.json");
     const batchPath = path.join(tempDir, "batch.json");
-    const envSnapshot = captureConfigCliEnv([
+    const envSnapshot = captureEnv([
       "OPENCLAW_CONFIG_PATH",
       "OPENCLAW_TEST_FAST",
       "DISCORD_BOT_TOKEN",
@@ -216,7 +200,6 @@ describe("config cli integration", () => {
       process.env.OPENCLAW_TEST_FAST = "1";
       process.env.OPENCLAW_CONFIG_PATH = configPath;
       process.env.DISCORD_BOT_TOKEN = "test-token";
-      applySourcePluginEnv();
       clearConfigCache();
       clearRuntimeConfigSnapshot();
 
@@ -262,7 +245,7 @@ describe("config cli integration", () => {
   it("keeps file unchanged when real-file dry-run fails and reports JSON error payload", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-cli-int-fail-"));
     const configPath = path.join(tempDir, "openclaw.json");
-    const envSnapshot = captureConfigCliEnv([
+    const envSnapshot = captureEnv([
       "OPENCLAW_CONFIG_PATH",
       "OPENCLAW_TEST_FAST",
       "MISSING_TEST_SECRET",
@@ -288,7 +271,6 @@ describe("config cli integration", () => {
       process.env.OPENCLAW_TEST_FAST = "1";
       process.env.OPENCLAW_CONFIG_PATH = configPath;
       delete process.env.MISSING_TEST_SECRET;
-      applySourcePluginEnv();
       clearConfigCache();
       clearRuntimeConfigSnapshot();
 

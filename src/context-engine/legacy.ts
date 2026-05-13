@@ -1,4 +1,4 @@
-import type { AgentMessage } from "../agents/agent-core-contract.js";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { delegateCompactionToRuntime } from "./delegate.js";
 import type {
@@ -11,16 +11,17 @@ import type {
 } from "./types.js";
 
 /**
- * Built-in context engine for the default "legacy" slot id.
+ * LegacyContextEngine wraps the existing compaction behavior behind the
+ * ContextEngine interface, preserving 100% backward compatibility.
  *
- * The public id stays "legacy" for config compatibility, but runtime transcript
- * persistence is SQLite-owned now. This engine only preserves the default
- * assembly and compaction behavior behind the ContextEngine interface.
+ * - ingest: no-op (SessionManager handles message persistence)
+ * - assemble: pass-through (existing sanitize/validate/limit pipeline in attempt.ts handles this)
+ * - compact: delegates to compactEmbeddedPiSessionDirect
  */
 export class LegacyContextEngine implements ContextEngine {
   readonly info: ContextEngineInfo = {
     id: "legacy",
-    name: "Built-in Context Engine",
+    name: "Legacy Context Engine",
     version: "1.0.0",
   };
 
@@ -30,7 +31,7 @@ export class LegacyContextEngine implements ContextEngine {
     message: AgentMessage;
     isHeartbeat?: boolean;
   }): Promise<IngestResult> {
-    // No-op: the active SQLite transcript writer owns message persistence.
+    // No-op: SessionManager handles message persistence in the legacy flow
     return { ingested: false };
   }
 
@@ -44,7 +45,7 @@ export class LegacyContextEngine implements ContextEngine {
     model?: string;
   }): Promise<AssembleResult> {
     // Pass-through: the existing sanitize -> validate -> limit -> repair pipeline
-    // in attempt.ts handles context assembly for the default engine.
+    // in attempt.ts handles context assembly for the legacy engine.
     // We just return the messages as-is with a rough token estimate.
     return {
       messages: params.messages,
@@ -55,6 +56,7 @@ export class LegacyContextEngine implements ContextEngine {
   async afterTurn(_params: {
     sessionId: string;
     sessionKey?: string;
+    sessionFile: string;
     messages: AgentMessage[];
     prePromptMessageCount: number;
     autoCompactionSummary?: string;
@@ -62,12 +64,13 @@ export class LegacyContextEngine implements ContextEngine {
     tokenBudget?: number;
     runtimeContext?: ContextEngineRuntimeContext;
   }): Promise<void> {
-    // No-op: persistence happens through the SQLite transcript writer.
+    // No-op: legacy flow persists context directly in SessionManager.
   }
 
   async compact(params: {
     sessionId: string;
     sessionKey?: string;
+    sessionFile: string;
     tokenBudget?: number;
     force?: boolean;
     currentTokenCount?: number;
@@ -79,6 +82,6 @@ export class LegacyContextEngine implements ContextEngine {
   }
 
   async dispose(): Promise<void> {
-    // Nothing to clean up for the built-in engine.
+    // Nothing to clean up for legacy engine
   }
 }

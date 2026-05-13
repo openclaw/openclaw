@@ -79,7 +79,7 @@ function labelsForSessionOptions(params: {
     params.sessionKey,
     {
       ts: 0,
-      databasePath: "",
+      path: "",
       count: params.sessions?.length ?? 0,
       defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
       sessions: params.sessions ?? [],
@@ -140,7 +140,7 @@ function createChatSessionState(overrides: Partial<AppViewState> = {}) {
     sessionsShowArchived: false,
     sessionsResult: {
       ts: 0,
-      databasePath: "",
+      path: "",
       count: 1,
       defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
       sessions: [row({ key: "agent:ops:main" })],
@@ -929,7 +929,7 @@ describe("switchChatSession", () => {
       chatStreamStartedAt: 1,
       sessionsResult: {
         ts: 0,
-        databasePath: "",
+        path: "",
         count: 2,
         defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
         sessions: [

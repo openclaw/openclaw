@@ -743,7 +743,7 @@ extension GatewayConnection {
 
     struct CronSchedulerStatus: Decodable {
         let enabled: Bool
-        let storeKey: String
+        let storePath: String
         let jobs: Int
         let nextWakeAtMs: Int?
     }

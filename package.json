@@ -111,14 +111,6 @@
       "types": "./dist/plugin-sdk/provider-setup.d.ts",
       "default": "./dist/plugin-sdk/provider-setup.js"
     },
-    "./plugin-sdk/provider-ai": {
-      "types": "./dist/plugin-sdk/provider-ai.d.ts",
-      "default": "./dist/plugin-sdk/provider-ai.js"
-    },
-    "./plugin-sdk/provider-ai-oauth": {
-      "types": "./dist/plugin-sdk/provider-ai-oauth.d.ts",
-      "default": "./dist/plugin-sdk/provider-ai-oauth.js"
-    },
     "./plugin-sdk/sandbox": {
       "types": "./dist/plugin-sdk/sandbox.d.ts",
       "default": "./dist/plugin-sdk/sandbox.js"
@@ -315,6 +307,10 @@
       "types": "./dist/plugin-sdk/outbound-runtime.d.ts",
       "default": "./dist/plugin-sdk/outbound-runtime.js"
     },
+    "./plugin-sdk/pair-loop-guard-runtime": {
+      "types": "./dist/plugin-sdk/pair-loop-guard-runtime.d.ts",
+      "default": "./dist/plugin-sdk/pair-loop-guard-runtime.js"
+    },
     "./plugin-sdk/poll-runtime": {
       "types": "./dist/plugin-sdk/poll-runtime.d.ts",
       "default": "./dist/plugin-sdk/poll-runtime.js"
@@ -430,10 +426,6 @@
     "./plugin-sdk/text-chunking": {
       "types": "./dist/plugin-sdk/text-chunking.d.ts",
       "default": "./dist/plugin-sdk/text-chunking.js"
-    },
-    "./plugin-sdk/agent-core": {
-      "types": "./dist/plugin-sdk/agent-core.d.ts",
-      "default": "./dist/plugin-sdk/agent-core.js"
     },
     "./plugin-sdk/agent-runtime": {
       "types": "./dist/plugin-sdk/agent-runtime.d.ts",
@@ -610,14 +602,6 @@
     "./plugin-sdk/migration-runtime": {
       "types": "./dist/plugin-sdk/migration-runtime.d.ts",
       "default": "./dist/plugin-sdk/migration-runtime.js"
-    },
-    "./plugin-sdk/plugin-state-runtime": {
-      "types": "./dist/plugin-sdk/plugin-state-runtime.d.ts",
-      "default": "./dist/plugin-sdk/plugin-state-runtime.js"
-    },
-    "./plugin-sdk/sqlite-state-lock": {
-      "types": "./dist/plugin-sdk/sqlite-state-lock.d.ts",
-      "default": "./dist/plugin-sdk/sqlite-state-lock.js"
     },
     "./plugin-sdk/markdown-table-runtime": {
       "types": "./dist/plugin-sdk/markdown-table-runtime.d.ts",
@@ -855,6 +839,10 @@
       "types": "./dist/plugin-sdk/channel-pairing.d.ts",
       "default": "./dist/plugin-sdk/channel-pairing.js"
     },
+    "./plugin-sdk/channel-pairing-paths": {
+      "types": "./dist/plugin-sdk/channel-pairing-paths.d.ts",
+      "default": "./dist/plugin-sdk/channel-pairing-paths.js"
+    },
     "./plugin-sdk/channel-policy": {
       "types": "./dist/plugin-sdk/channel-policy.d.ts",
       "default": "./dist/plugin-sdk/channel-policy.js"
@@ -874,6 +862,10 @@
     "./plugin-sdk/context-visibility-runtime": {
       "types": "./dist/plugin-sdk/context-visibility-runtime.d.ts",
       "default": "./dist/plugin-sdk/context-visibility-runtime.js"
+    },
+    "./plugin-sdk/file-lock": {
+      "types": "./dist/plugin-sdk/file-lock.d.ts",
+      "default": "./dist/plugin-sdk/file-lock.js"
     },
     "./plugin-sdk/fetch-runtime": {
       "types": "./dist/plugin-sdk/fetch-runtime.d.ts",
@@ -898,10 +890,6 @@
     "./plugin-sdk/session-store-runtime": {
       "types": "./dist/plugin-sdk/session-store-runtime.d.ts",
       "default": "./dist/plugin-sdk/session-store-runtime.js"
-    },
-    "./plugin-sdk/sqlite-runtime": {
-      "types": "./dist/plugin-sdk/sqlite-runtime.d.ts",
-      "default": "./dist/plugin-sdk/sqlite-runtime.js"
     },
     "./plugin-sdk/session-transcript-hit": {
       "types": "./dist/plugin-sdk/session-transcript-hit.d.ts",
@@ -1038,10 +1026,6 @@
     "./plugin-sdk/memory-core-host-engine-qmd": {
       "types": "./dist/plugin-sdk/memory-core-host-engine-qmd.d.ts",
       "default": "./dist/plugin-sdk/memory-core-host-engine-qmd.js"
-    },
-    "./plugin-sdk/memory-core-host-engine-session-transcripts": {
-      "types": "./dist/plugin-sdk/memory-core-host-engine-session-transcripts.d.ts",
-      "default": "./dist/plugin-sdk/memory-core-host-engine-session-transcripts.js"
     },
     "./plugin-sdk/memory-core-host-engine-storage": {
       "types": "./dist/plugin-sdk/memory-core-host-engine-storage.d.ts",
@@ -1361,12 +1345,11 @@
     "canvas:a2ui:bundle": "node scripts/bundle-a2ui.mjs",
     "changed:lanes": "node scripts/changed-lanes.mjs",
     "check": "node scripts/check.mjs",
-    "check:architecture": "pnpm check:import-cycles && pnpm check:madge-import-cycles && pnpm check:deprecated-api-usage && pnpm check:deprecated-jsdoc && pnpm check:database-first-legacy-stores && pnpm db:kysely:check && pnpm lint:kysely",
+    "check:architecture": "pnpm check:import-cycles && pnpm check:madge-import-cycles && pnpm check:deprecated-api-usage && pnpm check:deprecated-jsdoc",
     "check:base-config-schema": "node --import tsx scripts/generate-base-config-schema.ts --check",
     "check:bundled-channel-config-metadata": "node --import tsx scripts/generate-bundled-channel-config-metadata.ts --check",
     "check:changed": "node scripts/check-changed.mjs",
     "check:changelog-attributions": "node scripts/check-changelog-attributions.mjs",
-    "check:database-first-legacy-stores": "node scripts/check-database-first-legacy-stores.mjs",
     "check:deprecated-api-usage": "node scripts/check-deprecated-api-usage.mjs",
     "check:deprecated-jsdoc": "node scripts/check-deprecated-jsdoc.mjs",
     "check:docs": "pnpm format:docs:check && pnpm lint:docs && pnpm docs:check-mdx && pnpm docs:check-i18n-glossary && pnpm docs:check-links",
@@ -1374,6 +1357,7 @@
     "check:import-cycles": "node --import tsx scripts/check-import-cycles.ts",
     "check:loc": "node --import tsx scripts/check-ts-max-loc.ts --max 500",
     "check:madge-import-cycles": "node --import tsx scripts/check-madge-import-cycles.ts",
+    "check:media-download-helpers": "node scripts/check-media-download-helper-roundtrip.mjs",
     "check:no-conflict-markers": "node scripts/check-no-conflict-markers.mjs",
     "check:no-runtime-action-load-config": "node scripts/check-no-runtime-action-load-config.mjs",
     "check:opengrep-rule-metadata": "node security/opengrep/check-rule-metadata.mjs",
@@ -1420,10 +1404,6 @@
     "deps:ownership-surface:report": "node scripts/dependency-ownership-surface-report.mjs",
     "deps:transitive-risk:report": "node scripts/transitive-manifest-risk-report.mjs",
     "deps:vuln:gate": "node scripts/dependency-vulnerability-gate.mjs",
-    "deps:sbom-risk": "node scripts/sbom-risk-report.mjs",
-    "deps:sbom-risk:check": "node scripts/sbom-risk-report.mjs --check",
-    "db:kysely:check": "node scripts/generate-kysely-types.mjs --verify",
-    "db:kysely:gen": "node scripts/generate-kysely-types.mjs",
     "dev": "node scripts/run-node.mjs",
     "docs:bin": "node scripts/build-docs-list.mjs",
     "docs:check-i18n-glossary": "node scripts/check-docs-i18n-glossary.mjs",
@@ -1471,7 +1451,6 @@
     "lint:auth:pairing-account-scope": "node scripts/check-pairing-account-scope.mjs",
     "lint:core": "node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json src ui packages",
     "lint:docker-e2e": "node scripts/check-docker-e2e-boundaries.mjs",
-    "lint:kysely": "node scripts/check-kysely-guardrails.mjs",
     "lint:docs": "pnpm dlx --config.resolution-mode=highest markdownlint-cli2 --config config/markdownlint-cli2.jsonc",
     "lint:docs:fix": "pnpm dlx --config.resolution-mode=highest markdownlint-cli2 --config config/markdownlint-cli2.jsonc --fix",
     "lint:extensions:no-deprecated-channel-access": "node --import tsx scripts/check-no-deprecated-channel-access.ts",
@@ -1639,7 +1618,6 @@
     "test:docker:onboard": "bash scripts/e2e/onboard-docker.sh",
     "test:docker:openai-chat-tools": "bash scripts/e2e/openai-chat-tools-docker.sh",
     "test:docker:openai-image-auth": "bash scripts/e2e/openai-image-auth-docker.sh",
-    "test:docker:openai-chat-tools": "bash scripts/e2e/openai-chat-tools-docker.sh",
     "test:docker:openai-web-search-minimal": "bash scripts/e2e/openai-web-search-minimal-docker.sh",
     "test:docker:openwebui": "bash scripts/e2e/openwebui-docker.sh",
     "test:docker:pi-bundle-mcp-tools": "bash scripts/e2e/pi-bundle-mcp-tools-docker.sh",

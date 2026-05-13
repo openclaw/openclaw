@@ -29,9 +29,6 @@
       "./index.ts"
     ],
     "setupEntry": "./setup-entry.ts",
-    "setupFeatures": {
-      "doctorLegacyState": true
-    },
     "channel": {
       "id": "feishu",
       "label": "Feishu",

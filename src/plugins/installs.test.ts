@@ -1,9 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  buildNpmResolutionInstallFields,
-  recordPluginInstall,
-  recordPluginInstallInRecordMap,
-} from "./installs.js";
+import { buildNpmResolutionInstallFields, recordPluginInstall } from "./installs.js";
 
 function expectRecordedInstall(pluginId: string, next: ReturnType<typeof recordPluginInstall>) {
   expect(next).toEqual({
@@ -90,29 +86,5 @@ describe("recordPluginInstall", () => {
     const next = recordPluginInstall({}, { pluginId: "demo", source: "npm", spec: "demo@latest" });
 
     expectRecordedInstall("demo", next);
-  });
-
-  it("updates install record maps without a config-shaped carrier", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-05-11T04:00:00.000Z"));
-
-    const next = recordPluginInstallInRecordMap(
-      {
-        demo: {
-          source: "npm",
-          spec: "demo@1.0.0",
-          installedAt: "2026-04-22T00:00:00.000Z",
-        },
-      },
-      { pluginId: "demo", source: "npm", spec: "demo@latest" },
-    );
-
-    expect(next).toEqual({
-      demo: {
-        source: "npm",
-        spec: "demo@latest",
-        installedAt: "2026-05-11T04:00:00.000Z",
-      },
-    });
   });
 });

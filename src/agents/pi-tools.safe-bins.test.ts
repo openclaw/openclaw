@@ -12,7 +12,7 @@ let createOpenClawCodingTools: typeof import("./pi-tools.js").createOpenClawCodi
 
 const { mockExecApprovals, supervisorSpawnMock } = vi.hoisted(() => {
   const execApprovals = {
-    path: "/tmp/openclaw.sqlite#table/exec_approvals_config/current",
+    path: "/tmp/exec-approvals.json",
     socketPath: "/tmp/exec-approvals.sock",
     token: "token",
     defaults: {
@@ -137,7 +137,7 @@ vi.mock("../plugins/tools.js", () => ({
   getPluginToolMeta: () => undefined,
 }));
 
-vi.mock("./pi-coding-agent-contract.js", () => ({
+vi.mock("@earendil-works/pi-coding-agent", () => ({
   AuthStorage: vi.fn(),
   CURRENT_SESSION_VERSION: 1,
   ModelRegistry: vi.fn(),

@@ -1,16 +1,10 @@
-import { createHash } from "node:crypto";
-import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import fs from "node:fs";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { replaceFileAtomicSync } from "openclaw/plugin-sdk/security-runtime";
 
-const MAX_ENTRIES = 900;
+const MAX_ENTRIES = 2_048;
 const TOPIC_NAME_CACHE_STATE_KEY = Symbol.for("openclaw.telegramTopicNameCacheState");
 const DEFAULT_TOPIC_NAME_CACHE_KEY = "__default__";
-const TOPIC_NAME_STORE = createPluginStateSyncKeyedStore<TopicEntry & { scopeKey: string }>(
-  "telegram",
-  {
-    namespace: "topic-names",
-    maxEntries: MAX_ENTRIES,
-  },
-);
 
 type TopicEntry = {
   name: string;
@@ -31,6 +25,17 @@ type TopicNameCacheState = {
   stores: Map<string, TopicNameStoreState>;
 };
 
+function createTopicNameStore(): TopicNameStore {
+  return new Map<string, TopicEntry>();
+}
+
+function createTopicNameStoreState(): TopicNameStoreState {
+  return {
+    lastUpdatedAt: 0,
+    store: createTopicNameStore(),
+  };
+}
+
 function getTopicNameCacheState(): TopicNameCacheState {
   const globalStore = globalThis as Record<PropertyKey, unknown>;
   const existing = globalStore[TOPIC_NAME_CACHE_STATE_KEY] as TopicNameCacheState | undefined;
@@ -42,25 +47,17 @@ function getTopicNameCacheState(): TopicNameCacheState {
   return state;
 }
 
-export function resolveTopicNameCacheScope(scope: string): string {
-  const trimmed = scope.trim();
-  return trimmed ? `telegram-topic-names:${trimmed}` : DEFAULT_TOPIC_NAME_CACHE_KEY;
+function cacheKey(chatId: number | string, threadId: number | string): string {
+  return `${chatId}:${threadId}`;
 }
 
-function topicEntryKey(
-  scopeKey: string,
-  chatId: number | string,
-  threadId: number | string,
-): string {
-  return createHash("sha256")
-    .update(`${scopeKey}\0${String(chatId)}\0${String(threadId)}`, "utf8")
-    .digest("hex")
-    .slice(0, 32);
+export function resolveTopicNameCachePath(storePath: string): string {
+  return `${storePath}.telegram-topic-names.json`;
 }
 
-function evictOldest(store: TopicNameStore): string | undefined {
+function evictOldest(store: TopicNameStore): void {
   if (store.size <= MAX_ENTRIES) {
-    return undefined;
+    return;
   }
   let oldestKey: string | undefined;
   let oldestTime = Infinity;
@@ -73,7 +70,6 @@ function evictOldest(store: TopicNameStore): string | undefined {
   if (oldestKey) {
     store.delete(oldestKey);
   }
-  return oldestKey;
 }
 
 function isTopicEntry(value: unknown): value is TopicEntry {
@@ -89,66 +85,71 @@ function isTopicEntry(value: unknown): value is TopicEntry {
   );
 }
 
-function readPersistedTopicNames(scopeKey: string): TopicNameStore {
-  const entries = TOPIC_NAME_STORE.entries()
-    .filter((entry) => entry.value.scopeKey === scopeKey && isTopicEntry(entry.value))
-    .map((entry): [string, TopicEntry] => {
-      const { scopeKey: _scopeKey, ...value } = entry.value;
-      return [entry.key, value];
-    })
-    .toSorted(([, left], [, right]) => right.updatedAt - left.updatedAt)
-    .slice(0, MAX_ENTRIES);
-  return new Map(entries);
+function readPersistedTopicNames(persistedPath: string): TopicNameStore {
+  if (!fs.existsSync(persistedPath)) {
+    return createTopicNameStore();
+  }
+  try {
+    const raw = fs.readFileSync(persistedPath, "utf-8");
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const entries = Object.entries(parsed)
+      .filter((entry): entry is [string, TopicEntry] => isTopicEntry(entry[1]))
+      .toSorted(([, left], [, right]) => right.updatedAt - left.updatedAt)
+      .slice(0, MAX_ENTRIES);
+    return new Map(entries);
+  } catch (error) {
+    logVerbose(`telegram: failed to read topic-name cache: ${String(error)}`);
+    return createTopicNameStore();
+  }
 }
 
-function getTopicStoreState(scopeKey?: string): TopicNameStoreState {
+function getTopicStoreState(persistedPath?: string): TopicNameStoreState {
   const state = getTopicNameCacheState();
-  const stateKey = scopeKey ?? DEFAULT_TOPIC_NAME_CACHE_KEY;
+  const stateKey = persistedPath ?? DEFAULT_TOPIC_NAME_CACHE_KEY;
   const existing = state.stores.get(stateKey);
   if (existing) {
     return existing;
   }
-  const next = {
-    lastUpdatedAt: 0,
-    store: readPersistedTopicNames(stateKey),
-  };
+  const next = persistedPath
+    ? {
+        lastUpdatedAt: 0,
+        store: readPersistedTopicNames(persistedPath),
+      }
+    : createTopicNameStoreState();
   next.lastUpdatedAt = Math.max(0, ...Array.from(next.store.values(), (entry) => entry.updatedAt));
   state.stores.set(stateKey, next);
   return next;
 }
 
-function getTopicStore(scopeKey?: string): TopicNameStore {
-  return getTopicStoreState(scopeKey).store;
+function getTopicStore(persistedPath?: string): TopicNameStore {
+  return getTopicStoreState(persistedPath).store;
 }
 
-function nextUpdatedAt(scopeKey?: string): number {
-  const state = getTopicStoreState(scopeKey);
+function nextUpdatedAt(persistedPath?: string): number {
+  const state = getTopicStoreState(persistedPath);
   const now = Date.now();
   state.lastUpdatedAt = now > state.lastUpdatedAt ? now : state.lastUpdatedAt + 1;
   return state.lastUpdatedAt;
 }
 
-function removeTopicStore(scopeKey?: string): void {
+function removeTopicStore(persistedPath?: string): void {
   const state = getTopicNameCacheState();
-  const stateKey = scopeKey ?? DEFAULT_TOPIC_NAME_CACHE_KEY;
-  for (const entry of TOPIC_NAME_STORE.entries()) {
-    if (entry.value.scopeKey === stateKey) {
-      TOPIC_NAME_STORE.delete(entry.key);
-    }
+  const stateKey = persistedPath ?? DEFAULT_TOPIC_NAME_CACHE_KEY;
+  if (persistedPath) {
+    fs.rmSync(persistedPath, { force: true });
   }
   state.stores.delete(stateKey);
 }
 
-function persistTopicEntry(scopeKey: string, key: string, entry: TopicEntry): void {
-  TOPIC_NAME_STORE.register(key, {
-    scopeKey,
-    name: entry.name,
-    updatedAt: entry.updatedAt,
-    ...(typeof entry.iconColor === "number" ? { iconColor: entry.iconColor } : {}),
-    ...(typeof entry.iconCustomEmojiId === "string"
-      ? { iconCustomEmojiId: entry.iconCustomEmojiId }
-      : {}),
-    ...(typeof entry.closed === "boolean" ? { closed: entry.closed } : {}),
+function persistTopicStore(persistedPath: string, store: TopicNameStore): void {
+  if (store.size === 0) {
+    fs.rmSync(persistedPath, { force: true });
+    return;
+  }
+  replaceFileAtomicSync({
+    filePath: persistedPath,
+    content: JSON.stringify(Object.fromEntries(store)),
+    tempPrefix: ".telegram-topic-name-cache",
   });
 }
 
@@ -156,39 +157,40 @@ export function updateTopicName(
   chatId: number | string,
   threadId: number | string,
   patch: Partial<Omit<TopicEntry, "updatedAt">>,
-  optionalScopeKey?: string,
+  persistedPath?: string,
 ): void {
-  const scopeKey = optionalScopeKey ?? DEFAULT_TOPIC_NAME_CACHE_KEY;
-  const cache = getTopicStore(scopeKey);
-  const storeKey = topicEntryKey(scopeKey, chatId, threadId);
-  const existing = cache.get(storeKey);
+  const cache = getTopicStore(persistedPath);
+  const key = cacheKey(chatId, threadId);
+  const existing = cache.get(key);
   const merged: TopicEntry = {
     name: patch.name ?? existing?.name ?? "",
     iconColor: patch.iconColor ?? existing?.iconColor,
     iconCustomEmojiId: patch.iconCustomEmojiId ?? existing?.iconCustomEmojiId,
     closed: patch.closed ?? existing?.closed,
-    updatedAt: nextUpdatedAt(scopeKey),
+    updatedAt: nextUpdatedAt(persistedPath),
   };
   if (!merged.name) {
     return;
   }
-  cache.set(storeKey, merged);
-  const evictedKey = evictOldest(cache);
-  if (evictedKey) {
-    TOPIC_NAME_STORE.delete(evictedKey);
+  cache.set(key, merged);
+  evictOldest(cache);
+  if (persistedPath) {
+    try {
+      persistTopicStore(persistedPath, cache);
+    } catch (error) {
+      logVerbose(`telegram: failed to persist topic-name cache: ${String(error)}`);
+    }
   }
-  persistTopicEntry(scopeKey, storeKey, merged);
 }
 
 export function getTopicName(
   chatId: number | string,
   threadId: number | string,
-  optionalScopeKey?: string,
+  persistedPath?: string,
 ): string | undefined {
-  const scopeKey = optionalScopeKey ?? DEFAULT_TOPIC_NAME_CACHE_KEY;
-  const entry = getTopicStore(scopeKey).get(topicEntryKey(scopeKey, chatId, threadId));
+  const entry = getTopicStore(persistedPath).get(cacheKey(chatId, threadId));
   if (entry) {
-    entry.updatedAt = nextUpdatedAt(scopeKey);
+    entry.updatedAt = nextUpdatedAt(persistedPath);
   }
   return entry?.name;
 }
@@ -196,10 +198,9 @@ export function getTopicName(
 export function getTopicEntry(
   chatId: number | string,
   threadId: number | string,
-  optionalScopeKey?: string,
+  persistedPath?: string,
 ): TopicEntry | undefined {
-  const scopeKey = optionalScopeKey ?? DEFAULT_TOPIC_NAME_CACHE_KEY;
-  return getTopicStore(scopeKey).get(topicEntryKey(scopeKey, chatId, threadId));
+  return getTopicStore(persistedPath).get(cacheKey(chatId, threadId));
 }
 
 export function clearTopicNameCache(): void {
@@ -215,9 +216,4 @@ export function topicNameCacheSize(): number {
 
 export function resetTopicNameCacheForTest(): void {
   getTopicNameCacheState().stores.clear();
-}
-
-export function resetTopicNameCacheStoreForTest(): void {
-  getTopicNameCacheState().stores.clear();
-  TOPIC_NAME_STORE.clear();
 }

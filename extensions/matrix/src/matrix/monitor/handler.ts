@@ -18,9 +18,14 @@ import {
 } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { hasFinalInboundReplyDispatch } from "openclaw/plugin-sdk/inbound-reply-dispatch";
+import type { ChannelBotLoopProtectionFacts } from "openclaw/plugin-sdk/inbound-reply-dispatch";
+import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
-import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  loadSessionStore,
+  resolveSessionStoreEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   CoreConfig,
@@ -292,7 +297,7 @@ function markTrackedRoomIfFirst(set: Set<string>, roomId: string): boolean {
 }
 
 function resolveMatrixSharedDmContextNotice(params: {
-  agentId: string;
+  storePath: string;
   sessionKey: string;
   roomId: string;
   accountId: string;
@@ -308,11 +313,12 @@ function resolveMatrixSharedDmContextNotice(params: {
   }
 
   try {
+    const store = loadSessionStore(params.storePath);
     const currentSession = resolveMatrixStoredSessionMeta(
-      getSessionEntry({
-        agentId: params.agentId,
+      resolveSessionStoreEntry({
+        store,
         sessionKey: params.sessionKey,
-      }),
+      }).existing,
     );
     if (!currentSession) {
       return null;
@@ -391,6 +397,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     core,
     cfg,
     accountId,
+    accountConfig,
     runtime,
     logger,
     logVerboseMessage,
@@ -686,6 +693,22 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           await commitInboundEventIfClaimed();
           return undefined;
         }
+        const botLoopProtection: ChannelBotLoopProtectionFacts | undefined =
+          isConfiguredBotSender && senderId !== selfUserId
+            ? {
+                scopeId: accountId,
+                conversationId: roomId,
+                senderId,
+                receiverId: selfUserId,
+                config: mergePairLoopGuardConfig(
+                  accountConfig?.botLoopProtection,
+                  roomConfig?.botLoopProtection,
+                ),
+                defaultsConfig: cfg.channels?.defaults?.botLoopProtection,
+                defaultEnabled: true,
+                nowMs: eventTs ?? undefined,
+              }
+            : undefined;
 
         if (isRoom && roomConfig && !roomConfigInfo?.allowed) {
           logVerboseMessage(`matrix: room disabled room=${roomId} (${roomMatchMeta})`);
@@ -1134,6 +1157,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           triggerSnapshot,
           threadRootId,
           thread,
+          botLoopProtection,
           effectiveGroupAllowFrom,
           effectiveRoomUsers,
         };
@@ -1188,6 +1212,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         triggerSnapshot,
         threadRootId,
         thread,
+        botLoopProtection,
         effectiveGroupAllowFrom,
         effectiveRoomUsers,
       } = resolvedIngressResult;
@@ -1264,9 +1289,12 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const roomName = roomInfo?.name;
       const envelopeFrom = isDirectMessage ? senderName : (roomName ?? roomId);
       const textWithId = `${bodyText}\n[matrix event id: ${messageId} room: ${roomId}]`;
+      const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
+        agentId: _route.agentId,
+      });
       const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(cfg);
       const previousTimestamp = core.channel.session.readSessionUpdatedAt({
-        agentId: _route.agentId,
+        storePath,
         sessionKey: _route.sessionKey,
       });
       const sharedDmNoticeSessionKey = threadTarget
@@ -1276,7 +1304,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         ? hasExplicitSessionBinding
           ? null
           : resolveMatrixSharedDmContextNotice({
-              agentId: _route.agentId,
+              storePath,
               sessionKey: sharedDmNoticeSessionKey,
               roomId,
               accountId: _route.accountId,
@@ -2002,10 +2030,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           resolveTurn: () => ({
             channel: "matrix",
             accountId: _route.accountId,
-            agentId: _route.agentId,
             routeSessionKey: _route.sessionKey,
+            storePath,
             ctxPayload,
             recordInboundSession: core.channel.session.recordInboundSession,
+            botLoopProtection,
             record: {
               updateLastRoute: isDirectMessage
                 ? {
@@ -2035,7 +2064,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               onRecordError: (err) => {
                 logger.warn("failed updating session meta", {
                   error: String(err),
-                  agentId: _route.agentId,
+                  storePath,
                   sessionKey: ctxPayload.SessionKey ?? _route.sessionKey,
                 });
               },
@@ -2126,6 +2155,12 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         },
       });
       if (!turnResult.dispatched) {
+        if (
+          turnResult.admission.kind === "drop" &&
+          turnResult.admission.reason === "bot-loop-protection"
+        ) {
+          await commitInboundEventIfClaimed();
+        }
         return;
       }
       const { dispatchResult } = turnResult;

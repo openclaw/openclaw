@@ -481,6 +481,37 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector('[aria-label="Read aloud"]')).toBeNull();
   });
 
+  it("reserves bubble space when assistant message actions render", () => {
+    const container = document.createElement("div");
+    renderAssistantMessage(container, {
+      role: "assistant",
+      content: "Short reply",
+      timestamp: 1000,
+    });
+
+    const assistantBubble = expectElement(
+      container,
+      ".chat-group.assistant .chat-bubble",
+      HTMLElement,
+    );
+    expect(assistantBubble.classList.contains("has-copy")).toBe(true);
+    expect(assistantBubble.querySelector(".chat-bubble-actions")).toBeInstanceOf(HTMLElement);
+
+    renderGroupedMessage(
+      container,
+      {
+        role: "user",
+        content: "Short reply",
+        timestamp: 1001,
+      },
+      "user",
+    );
+
+    const userBubble = expectElement(container, ".chat-group.user .chat-bubble", HTMLElement);
+    expect(userBubble.classList.contains("has-copy")).toBe(false);
+    expect(userBubble.querySelector(".chat-bubble-actions")).toBeNull();
+  });
+
   it("positions delete confirm by message side", () => {
     const container = document.createElement("div");
     clearDeleteConfirmSkip();

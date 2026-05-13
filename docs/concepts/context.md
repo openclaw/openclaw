@@ -157,10 +157,9 @@ Details: [Slash commands](/tools/slash-commands).
 
 What persists across messages depends on the mechanism:
 
-- **Normal history** persists in the SQLite session transcript until compaction
-  replaces the active history with a summary and recent tail.
+- **Normal history** persists in the session transcript until compacted/pruned by policy.
 - **Compaction** persists a summary into the transcript and keeps recent messages intact.
-- **Pruning** drops old tool results from the _in-memory_ prompt to free context-window space, but does not rewrite the SQLite session transcript. The full history remains inspectable through session history/export tooling.
+- **Pruning** drops old tool results from the _in-memory_ prompt to free context-window space, but does not rewrite the session transcript - the full history is still inspectable on disk.
 
 Docs: [Session](/concepts/session), [Compaction](/concepts/compaction), [Session pruning](/concepts/session-pruning).
 

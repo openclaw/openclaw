@@ -1,26 +1,24 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test } from "vitest";
-import { getSessionEntry } from "../config/sessions.js";
-import { hasSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
-import { testState, seedGatewaySessionEntries } from "./test-helpers.js";
+import { testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   sessionStoreEntry,
   directSessionReq,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionFixtureDir } = setupGatewaySessionsTestHarness();
+const { createSessionStoreDir } = setupGatewaySessionsTestHarness();
 
 test("sessions.reset recomputes model from defaults instead of stale runtime model", async () => {
-  await createSessionFixtureDir();
+  await createSessionStoreDir();
   testState.agentConfig = {
     model: {
       primary: "openai/gpt-test-a",
     },
   };
 
-  await seedGatewaySessionEntries({
+  await writeSessionStore({
     entries: {
       main: sessionStoreEntry("sess-stale-model", {
         modelProvider: "qwencode",
@@ -35,6 +33,7 @@ test("sessions.reset recomputes model from defaults instead of stale runtime mod
     key: string;
     entry: {
       sessionId: string;
+      sessionFile?: string;
       modelProvider?: string;
       model?: string;
       contextTokens?: number;
@@ -44,26 +43,25 @@ test("sessions.reset recomputes model from defaults instead of stale runtime mod
   expect(reset.ok).toBe(true);
   expect(reset.payload?.key).toBe("agent:main:main");
   expect(reset.payload?.entry.sessionId).not.toBe("sess-stale-model");
+  const sessionFile = reset.payload?.entry.sessionFile;
+  if (!sessionFile) {
+    throw new Error("expected reset session file");
+  }
   expect(reset.payload?.entry.modelProvider).toBe("openai");
   expect(reset.payload?.entry.model).toBe("gpt-test-a");
   expect(reset.payload?.entry.contextTokens).toBeUndefined();
-  expect(
-    hasSqliteSessionTranscriptEvents({
-      agentId: "main",
-      sessionId: reset.payload?.entry.sessionId ?? "",
-    }),
-  ).toBe(true);
+  expect((await fs.stat(sessionFile)).isFile()).toBe(true);
 });
 
 test("sessions.reset drops cached skills snapshot so /new rebuilds visible skills", async () => {
-  await createSessionFixtureDir();
+  const { storePath } = await createSessionStoreDir();
   testState.agentConfig = {
     model: {
       primary: "openai/gpt-test-a",
     },
   };
 
-  await seedGatewaySessionEntries({
+  await writeSessionStore({
     entries: {
       main: sessionStoreEntry("sess-stale-skills", {
         skillsSnapshot: {
@@ -88,20 +86,22 @@ test("sessions.reset drops cached skills snapshot so /new rebuilds visible skill
   expect(reset.payload?.entry.sessionId).not.toBe("sess-stale-skills");
   expect(reset.payload?.entry.skillsSnapshot).toBeUndefined();
 
-  expect(
-    getSessionEntry({ agentId: "main", sessionKey: "agent:main:main" })?.skillsSnapshot,
-  ).toBeUndefined();
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    { skillsSnapshot?: unknown }
+  >;
+  expect(store["agent:main:main"]?.skillsSnapshot).toBeUndefined();
 });
 
 test("sessions.reset preserves legacy explicit model overrides without modelOverrideSource", async () => {
-  await createSessionFixtureDir();
+  const { storePath } = await createSessionStoreDir();
   testState.agentConfig = {
     model: {
       primary: "openai/gpt-test-a",
     },
   };
 
-  await seedGatewaySessionEntries({
+  await writeSessionStore({
     entries: {
       main: sessionStoreEntry("sess-explicit-model-override", {
         providerOverride: "anthropic",
@@ -131,23 +131,32 @@ test("sessions.reset preserves legacy explicit model overrides without modelOver
   expect(reset.payload?.entry.modelProvider).toBe("anthropic");
   expect(reset.payload?.entry.model).toBe("claude-opus-4-1");
 
-  const stored = getSessionEntry({ agentId: "main", sessionKey: "agent:main:main" });
-  expect(stored?.providerOverride).toBe("anthropic");
-  expect(stored?.modelOverride).toBe("claude-opus-4-1");
-  expect(stored?.modelOverrideSource).toBe("user");
-  expect(stored?.modelProvider).toBe("anthropic");
-  expect(stored?.model).toBe("claude-opus-4-1");
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    {
+      providerOverride?: string;
+      modelOverride?: string;
+      modelOverrideSource?: string;
+      modelProvider?: string;
+      model?: string;
+    }
+  >;
+  expect(store["agent:main:main"]?.providerOverride).toBe("anthropic");
+  expect(store["agent:main:main"]?.modelOverride).toBe("claude-opus-4-1");
+  expect(store["agent:main:main"]?.modelOverrideSource).toBe("user");
+  expect(store["agent:main:main"]?.modelProvider).toBe("anthropic");
+  expect(store["agent:main:main"]?.model).toBe("claude-opus-4-1");
 });
 
 test("sessions.reset clears fallback-pinned model overrides and restores the selected model", async () => {
-  await createSessionFixtureDir();
+  const { storePath } = await createSessionStoreDir();
   testState.agentConfig = {
     model: {
       primary: "openai/gpt-test-a",
     },
   };
 
-  await seedGatewaySessionEntries({
+  await writeSessionStore({
     entries: {
       main: sessionStoreEntry("sess-fallback-model-override", {
         providerOverride: "anthropic",
@@ -177,22 +186,30 @@ test("sessions.reset clears fallback-pinned model overrides and restores the sel
   expect(reset.payload?.entry.modelProvider).toBe("openai");
   expect(reset.payload?.entry.model).toBe("gpt-test-a");
 
-  const stored = getSessionEntry({ agentId: "main", sessionKey: "agent:main:main" });
-  expect(stored?.providerOverride).toBeUndefined();
-  expect(stored?.modelOverride).toBeUndefined();
-  expect(stored?.modelProvider).toBe("openai");
-  expect(stored?.model).toBe("gpt-test-a");
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    {
+      providerOverride?: string;
+      modelOverride?: string;
+      modelProvider?: string;
+      model?: string;
+    }
+  >;
+  expect(store["agent:main:main"]?.providerOverride).toBeUndefined();
+  expect(store["agent:main:main"]?.modelOverride).toBeUndefined();
+  expect(store["agent:main:main"]?.modelProvider).toBe("openai");
+  expect(store["agent:main:main"]?.model).toBe("gpt-test-a");
 });
 
 test("sessions.reset follows the updated default after an auto fallback pinned an older default", async () => {
-  await createSessionFixtureDir();
+  const { storePath } = await createSessionStoreDir();
   testState.agentConfig = {
     model: {
       primary: "openai/gpt-test-c",
     },
   };
 
-  await seedGatewaySessionEntries({
+  await writeSessionStore({
     entries: {
       main: sessionStoreEntry("sess-fallback-stale-default", {
         providerOverride: "anthropic",
@@ -222,26 +239,31 @@ test("sessions.reset follows the updated default after an auto fallback pinned a
   expect(reset.payload?.entry.modelProvider).toBe("openai");
   expect(reset.payload?.entry.model).toBe("gpt-test-c");
 
-  const stored = getSessionEntry({ agentId: "main", sessionKey: "agent:main:main" });
-  expect(stored?.providerOverride).toBeUndefined();
-  expect(stored?.modelOverride).toBeUndefined();
-  expect(stored?.modelProvider).toBe("openai");
-  expect(stored?.model).toBe("gpt-test-c");
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    {
+      providerOverride?: string;
+      modelOverride?: string;
+      modelProvider?: string;
+      model?: string;
+    }
+  >;
+  expect(store["agent:main:main"]?.providerOverride).toBeUndefined();
+  expect(store["agent:main:main"]?.modelOverride).toBeUndefined();
+  expect(store["agent:main:main"]?.modelProvider).toBe("openai");
+  expect(store["agent:main:main"]?.model).toBe("gpt-test-c");
 });
 
 test("sessions.reset preserves spawned session ownership metadata", async () => {
-  const { dir } = await createSessionFixtureDir();
-  const stateDir = await fs.realpath(process.env.OPENCLAW_STATE_DIR ?? dir);
-  const customTranscriptLocator = path.join(
-    stateDir,
-    "agents",
-    "main",
-    "sessions",
+  const { storePath } = await createSessionStoreDir();
+  const customSessionFile = path.join(
+    await fs.realpath(path.dirname(storePath)),
     "custom-owned-child-transcript.jsonl",
   );
-  await seedGatewaySessionEntries({
+  await writeSessionStore({
     entries: {
       "subagent:child": sessionStoreEntry("sess-owned-child", {
+        sessionFile: customSessionFile,
         chatType: "group",
         channel: "discord",
         groupId: "group-1",
@@ -275,6 +297,9 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
         execAsk: "on-miss",
         execNode: "mac-mini",
         displayName: "Ops Child",
+        cliSessionIds: {
+          "claude-cli": "cli-session-123",
+        },
         cliSessionBindings: {
           "claude-cli": {
             sessionId: "cli-session-123",
@@ -282,6 +307,7 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
             extraSystemPromptHash: "prompt-hash",
           },
         },
+        claudeCliSessionId: "cli-session-123",
         deliveryContext: {
           channel: "discord",
           to: "discord:child",
@@ -297,7 +323,7 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
     ok: true;
     key: string;
     entry: {
-      sessionId?: string;
+      sessionFile?: string;
       chatType?: string;
       channel?: string;
       groupId?: string;
@@ -339,6 +365,8 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
           mcpConfigHash?: string;
         }
       >;
+      cliSessionIds?: Record<string, string>;
+      claudeCliSessionId?: string;
       deliveryContext?: {
         channel?: string;
         to?: string;
@@ -350,8 +378,7 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
   }>("sessions.reset", { key: "subagent:child" });
 
   expect(reset.ok).toBe(true);
-  const resetSessionId = reset.payload?.entry.sessionId;
-  expect(resetSessionId).toBeTruthy();
+  expect(reset.payload?.entry.sessionFile).toBe(customSessionFile);
   expect(reset.payload?.entry.chatType).toBe("group");
   expect(reset.payload?.entry.channel).toBe("discord");
   expect(reset.payload?.entry.groupId).toBe("group-1");
@@ -391,59 +418,123 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
       extraSystemPromptHash: "prompt-hash",
     },
   });
+  expect(reset.payload?.entry.cliSessionIds).toEqual({
+    "claude-cli": "cli-session-123",
+  });
+  expect(reset.payload?.entry.claudeCliSessionId).toBe("cli-session-123");
   expect(reset.payload?.entry.deliveryContext).toEqual({
     channel: "discord",
-    to: "group-1",
+    to: "discord:child",
     accountId: "acct-1",
     threadId: "thread-1",
   });
   expect(reset.payload?.entry.label).toBe("owned child");
 
-  const stored = getSessionEntry({ agentId: "main", sessionKey: "agent:main:subagent:child" });
-  expect(stored?.chatType).toBe("group");
-  expect(stored?.channel).toBe("discord");
-  expect(stored?.groupId).toBe("group-1");
-  expect(stored?.subject).toBe("Ops Thread");
-  expect(stored?.groupChannel).toBe("dev");
-  expect(stored?.space).toBe("hq");
-  expect(stored?.spawnedBy).toBe("agent:main:main");
-  expect(stored?.spawnedWorkspaceDir).toBe("/tmp/child-workspace");
-  expect(stored?.parentSessionKey).toBe("agent:main:main");
-  expect(stored?.forkedFromParent).toBe(true);
-  expect(stored?.spawnDepth).toBe(2);
-  expect(stored?.subagentRole).toBe("orchestrator");
-  expect(stored?.subagentControlScope).toBe("children");
-  expect(stored?.elevatedLevel).toBe("on");
-  expect(stored?.ttsAuto).toBe("always");
-  expect(stored?.providerOverride).toBe("anthropic");
-  expect(stored?.modelOverride).toBe("claude-opus-4-1");
-  expect(stored?.authProfileOverride).toBe("work");
-  expect(stored?.authProfileOverrideSource).toBe("user");
-  expect(stored?.authProfileOverrideCompactionCount).toBe(7);
-  expect(stored?.sendPolicy).toBe("deny");
-  expect(stored?.queueMode).toBe("interrupt");
-  expect(stored?.queueDebounceMs).toBe(250);
-  expect(stored?.queueCap).toBe(9);
-  expect(stored?.queueDrop).toBe("old");
-  expect(stored?.groupActivation).toBe("always");
-  expect(stored?.groupActivationNeedsSystemIntro).toBe(true);
-  expect(stored?.execHost).toBe("gateway");
-  expect(stored?.execSecurity).toBe("allowlist");
-  expect(stored?.execAsk).toBe("on-miss");
-  expect(stored?.execNode).toBe("mac-mini");
-  expect(stored?.displayName).toBe("Ops Child");
-  expect(stored?.cliSessionBindings).toEqual({
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    {
+      sessionFile?: string;
+      chatType?: string;
+      channel?: string;
+      groupId?: string;
+      subject?: string;
+      groupChannel?: string;
+      space?: string;
+      spawnedBy?: string;
+      spawnedWorkspaceDir?: string;
+      parentSessionKey?: string;
+      forkedFromParent?: boolean;
+      spawnDepth?: number;
+      subagentRole?: string;
+      subagentControlScope?: string;
+      elevatedLevel?: string;
+      ttsAuto?: string;
+      providerOverride?: string;
+      modelOverride?: string;
+      authProfileOverride?: string;
+      authProfileOverrideSource?: string;
+      authProfileOverrideCompactionCount?: number;
+      sendPolicy?: string;
+      queueMode?: string;
+      queueDebounceMs?: number;
+      queueCap?: number;
+      queueDrop?: string;
+      groupActivation?: string;
+      groupActivationNeedsSystemIntro?: boolean;
+      execHost?: string;
+      execSecurity?: string;
+      execAsk?: string;
+      execNode?: string;
+      displayName?: string;
+      cliSessionBindings?: Record<
+        string,
+        {
+          sessionId?: string;
+          authProfileId?: string;
+          extraSystemPromptHash?: string;
+          mcpConfigHash?: string;
+        }
+      >;
+      cliSessionIds?: Record<string, string>;
+      claudeCliSessionId?: string;
+      deliveryContext?: {
+        channel?: string;
+        to?: string;
+        accountId?: string;
+        threadId?: string;
+      };
+      label?: string;
+    }
+  >;
+  expect(store["agent:main:subagent:child"]?.sessionFile).toBe(customSessionFile);
+  expect(store["agent:main:subagent:child"]?.chatType).toBe("group");
+  expect(store["agent:main:subagent:child"]?.channel).toBe("discord");
+  expect(store["agent:main:subagent:child"]?.groupId).toBe("group-1");
+  expect(store["agent:main:subagent:child"]?.subject).toBe("Ops Thread");
+  expect(store["agent:main:subagent:child"]?.groupChannel).toBe("dev");
+  expect(store["agent:main:subagent:child"]?.space).toBe("hq");
+  expect(store["agent:main:subagent:child"]?.spawnedBy).toBe("agent:main:main");
+  expect(store["agent:main:subagent:child"]?.spawnedWorkspaceDir).toBe("/tmp/child-workspace");
+  expect(store["agent:main:subagent:child"]?.parentSessionKey).toBe("agent:main:main");
+  expect(store["agent:main:subagent:child"]?.forkedFromParent).toBe(true);
+  expect(store["agent:main:subagent:child"]?.spawnDepth).toBe(2);
+  expect(store["agent:main:subagent:child"]?.subagentRole).toBe("orchestrator");
+  expect(store["agent:main:subagent:child"]?.subagentControlScope).toBe("children");
+  expect(store["agent:main:subagent:child"]?.elevatedLevel).toBe("on");
+  expect(store["agent:main:subagent:child"]?.ttsAuto).toBe("always");
+  expect(store["agent:main:subagent:child"]?.providerOverride).toBe("anthropic");
+  expect(store["agent:main:subagent:child"]?.modelOverride).toBe("claude-opus-4-1");
+  expect(store["agent:main:subagent:child"]?.authProfileOverride).toBe("work");
+  expect(store["agent:main:subagent:child"]?.authProfileOverrideSource).toBe("user");
+  expect(store["agent:main:subagent:child"]?.authProfileOverrideCompactionCount).toBe(7);
+  expect(store["agent:main:subagent:child"]?.sendPolicy).toBe("deny");
+  expect(store["agent:main:subagent:child"]?.queueMode).toBe("interrupt");
+  expect(store["agent:main:subagent:child"]?.queueDebounceMs).toBe(250);
+  expect(store["agent:main:subagent:child"]?.queueCap).toBe(9);
+  expect(store["agent:main:subagent:child"]?.queueDrop).toBe("old");
+  expect(store["agent:main:subagent:child"]?.groupActivation).toBe("always");
+  expect(store["agent:main:subagent:child"]?.groupActivationNeedsSystemIntro).toBe(true);
+  expect(store["agent:main:subagent:child"]?.execHost).toBe("gateway");
+  expect(store["agent:main:subagent:child"]?.execSecurity).toBe("allowlist");
+  expect(store["agent:main:subagent:child"]?.execAsk).toBe("on-miss");
+  expect(store["agent:main:subagent:child"]?.execNode).toBe("mac-mini");
+  expect(store["agent:main:subagent:child"]?.displayName).toBe("Ops Child");
+  expect(store["agent:main:subagent:child"]?.cliSessionBindings).toEqual({
     "claude-cli": {
       sessionId: "cli-session-123",
       authProfileId: "anthropic:work",
       extraSystemPromptHash: "prompt-hash",
     },
   });
-  expect(stored?.deliveryContext).toEqual({
+  expect(store["agent:main:subagent:child"]?.cliSessionIds).toEqual({
+    "claude-cli": "cli-session-123",
+  });
+  expect(store["agent:main:subagent:child"]?.claudeCliSessionId).toBe("cli-session-123");
+  expect(store["agent:main:subagent:child"]?.deliveryContext).toEqual({
     channel: "discord",
-    to: "group-1",
+    to: "discord:child",
     accountId: "acct-1",
     threadId: "thread-1",
   });
-  expect(stored?.label).toBe("owned child");
+  expect(store["agent:main:subagent:child"]?.label).toBe("owned child");
 });

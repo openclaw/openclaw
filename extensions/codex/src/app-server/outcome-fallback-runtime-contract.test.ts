@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
 import { classifyEmbeddedPiRunResultForModelFallback } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -25,10 +26,13 @@ type MirrorTaggedMessage = { __openclaw?: { mirrorIdentity?: string } };
 async function createParams(): Promise<EmbeddedRunAttemptParams> {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-outcome-contract-"));
   tempDirs.add(tempDir);
+  const sessionFile = path.join(tempDir, "session.jsonl");
+  SessionManager.open(sessionFile);
   return {
     prompt: OUTCOME_FALLBACK_RUNTIME_CONTRACT.prompt,
     sessionId: OUTCOME_FALLBACK_RUNTIME_CONTRACT.sessionId,
     sessionKey: OUTCOME_FALLBACK_RUNTIME_CONTRACT.sessionKey,
+    sessionFile,
     workspaceDir: tempDir,
     runId: OUTCOME_FALLBACK_RUNTIME_CONTRACT.runId,
     provider: "codex",

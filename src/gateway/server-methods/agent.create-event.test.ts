@@ -2,9 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 
 const configMocks = vi.hoisted(() => ({
+  storePath: "",
   workspaceDir: "",
   getRuntimeConfig: vi.fn(() => ({
     agents: {
@@ -15,6 +15,7 @@ const configMocks = vi.hoisted(() => ({
     },
     session: {
       mainKey: "main",
+      store: configMocks.storePath,
     },
   })),
 }));
@@ -47,19 +48,20 @@ function firstMockCall<T extends readonly unknown[]>(mock: { mock: { calls: read
 
 describe("agent handler session create events", () => {
   let tempDir: string;
+  let storePath: string;
 
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-create-event-"));
-    vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
+    storePath = path.join(tempDir, "sessions.json");
+    configMocks.storePath = storePath;
     configMocks.workspaceDir = tempDir;
     configMocks.getRuntimeConfig.mockClear();
     agentIngressMocks.agentCommandFromIngress.mockClear();
     agentIngressMocks.agentCommandFromIngress.mockResolvedValue({ ok: true });
+    await fs.writeFile(storePath, "{}\n", "utf8");
   });
 
   afterEach(async () => {
-    closeOpenClawAgentDatabasesForTest();
-    vi.unstubAllEnvs();
     await fs.rm(tempDir, { recursive: true, force: true });
     vi.restoreAllMocks();
   });

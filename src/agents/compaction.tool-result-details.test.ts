@@ -1,6 +1,6 @@
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AssistantMessage, ToolResultMessage } from "@earendil-works/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AssistantMessage, ToolResultMessage } from "./pi-ai-contract.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 
 const piCodingAgentMocks = vi.hoisted(() => ({
@@ -8,9 +8,9 @@ const piCodingAgentMocks = vi.hoisted(() => ({
   estimateTokens: vi.fn((_message: unknown) => 1),
 }));
 
-vi.mock("./pi-coding-agent-contract.js", async () => {
-  const actual = await vi.importActual<typeof import("./pi-coding-agent-contract.js")>(
-    "./pi-coding-agent-contract.js",
+vi.mock("@earendil-works/pi-coding-agent", async () => {
+  const actual = await vi.importActual<typeof import("@earendil-works/pi-coding-agent")>(
+    "@earendil-works/pi-coding-agent",
   );
   return {
     ...actual,

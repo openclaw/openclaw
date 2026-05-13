@@ -36,8 +36,8 @@ describe("codex conversation controls", () => {
   });
 
   it("persists fast mode and permissions for later bound turns", async () => {
-    const sessionId = "session";
-    await writeCodexAppServerBinding(sessionId, {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-1",
       cwd: tempDir,
       model: "gpt-5.4",
@@ -46,14 +46,14 @@ describe("codex conversation controls", () => {
       sandbox: "danger-full-access",
     });
 
-    await expect(setCodexConversationFastMode({ sessionId, enabled: true })).resolves.toBe(
+    await expect(setCodexConversationFastMode({ sessionFile, enabled: true })).resolves.toBe(
       "Codex fast mode enabled.",
     );
-    await expect(setCodexConversationPermissions({ sessionId, mode: "default" })).resolves.toBe(
+    await expect(setCodexConversationPermissions({ sessionFile, mode: "default" })).resolves.toBe(
       "Codex permissions set to default.",
     );
 
-    const binding = await readCodexAppServerBinding(sessionId);
+    const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.threadId).toBe("thread-1");
     expect(binding?.serviceTier).toBe("priority");
     expect(binding?.approvalPolicy).toBe("on-request");
@@ -61,7 +61,7 @@ describe("codex conversation controls", () => {
   });
 
   it("does not persist public OpenAI provider after model changes on native auth bindings", async () => {
-    const sessionId = "session";
+    const sessionFile = path.join(tempDir, "session.jsonl");
     upsertAuthProfile({
       profileId: "work",
       credential: {
@@ -72,7 +72,7 @@ describe("codex conversation controls", () => {
         expires: Date.now() + 60_000,
       },
     });
-    await writeCodexAppServerBinding(sessionId, {
+    await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-1",
       cwd: tempDir,
       authProfileId: "work",
@@ -87,11 +87,13 @@ describe("codex conversation controls", () => {
       })),
     });
 
-    await expect(setCodexConversationModel({ sessionId, model: "gpt-5.5" })).resolves.toBe(
+    await expect(setCodexConversationModel({ sessionFile, model: "gpt-5.5" })).resolves.toBe(
       "Codex model set to gpt-5.5.",
     );
 
-    const binding = await readCodexAppServerBinding(sessionId);
+    const raw = await fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8");
+    const binding = await readCodexAppServerBinding(sessionFile);
+    expect(raw).not.toContain('"modelProvider": "openai"');
     expect(binding?.threadId).toBe("thread-1");
     expect(binding?.authProfileId).toBe("work");
     expect(binding?.model).toBe("gpt-5.5");
@@ -99,8 +101,8 @@ describe("codex conversation controls", () => {
   });
 
   it("escapes model names returned from Codex before chat display", async () => {
-    const sessionId = "session";
-    await writeCodexAppServerBinding(sessionId, {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-1",
       cwd: tempDir,
       model: "gpt-5.4",
@@ -114,7 +116,7 @@ describe("codex conversation controls", () => {
       })),
     });
 
-    await expect(setCodexConversationModel({ sessionId, model: "gpt-5.5" })).resolves.toBe(
+    await expect(setCodexConversationModel({ sessionFile, model: "gpt-5.5" })).resolves.toBe(
       "Codex model set to gpt-5.5 &lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09.",
     );
   });

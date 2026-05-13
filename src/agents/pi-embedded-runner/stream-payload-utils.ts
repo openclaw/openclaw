@@ -1,4 +1,4 @@
-import type { StreamFn } from "../agent-core-contract.js";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
 
 export function streamWithPayloadPatch(
   underlying: StreamFn,

@@ -29,6 +29,7 @@ function createDirectDmRuntime() {
           })),
         },
         session: {
+          resolveStorePath: vi.fn(() => "/tmp/direct-dm-session-store"),
           readSessionUpdatedAt: vi.fn(() => 1234),
           recordInboundSession,
         },
@@ -192,7 +193,7 @@ describe("plugin-sdk/direct-dm", () => {
 
     const result = await dispatchInboundDirectDmWithRuntime({
       cfg: {
-        session: {},
+        session: { store: { type: "jsonl" } },
       } as never,
       runtime,
       channel: "nostr",
@@ -215,6 +216,7 @@ describe("plugin-sdk/direct-dm", () => {
     expect(result.route.agentId).toBe("agent-main");
     expect(result.route.accountId).toBe("default");
     expect(result.route.sessionKey).toBe("dm:sender-1");
+    expect(result.storePath).toBe("/tmp/direct-dm-session-store");
     expect(result.ctxPayload.Body).toBe("env:hello world");
     expect(result.ctxPayload.BodyForAgent).toBe("hello world");
     expect(result.ctxPayload.From).toBe("nostr:sender-1");

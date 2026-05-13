@@ -77,6 +77,7 @@ describe("resolveDirectStatusReplyForSession", () => {
         sessionId: "sess-main",
       },
       store: {},
+      storePath: "/tmp/sessions.json",
     });
     resolveSessionAgentId.mockReturnValue("main");
     listAgentEntries.mockReturnValue([]);
@@ -125,6 +126,7 @@ describe("resolveDirectStatusReplyForSession", () => {
         sessionId: "sess-main",
       },
       store: {},
+      storePath: "/tmp/sessions.json",
     });
     resolveCurrentDirectiveLevels.mockResolvedValueOnce({
       currentThinkLevel: "off",
@@ -161,6 +163,7 @@ describe("resolveDirectStatusReplyForSession", () => {
         sessionId: "sess-main",
       },
       store: {},
+      storePath: "/tmp/sessions.json",
     });
     resolveCurrentDirectiveLevels.mockResolvedValueOnce({
       currentThinkLevel: "off",
@@ -192,6 +195,7 @@ describe("resolveDirectStatusReplyForSession", () => {
         reasoningLevel: "stream",
       },
       store: {},
+      storePath: "/tmp/sessions.json",
     });
     resolveCurrentDirectiveLevels.mockResolvedValueOnce({
       currentThinkLevel: "off",
@@ -223,6 +227,7 @@ describe("resolveDirectStatusReplyForSession", () => {
         reasoningLevel: "stream",
       },
       store: {},
+      storePath: "/tmp/sessions.json",
     });
     resolveCurrentDirectiveLevels.mockResolvedValueOnce({
       currentThinkLevel: "off",

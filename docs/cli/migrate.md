@@ -10,10 +10,6 @@ title: "Migrate"
 
 Import state from another agent system through a plugin-owned migration provider. Bundled providers cover Codex CLI state, [Claude](/install/migrating-claude), and [Hermes](/install/migrating-hermes); third-party plugins can register additional providers.
 
-Legacy OpenClaw file-to-database imports are doctor-owned. Run
-`openclaw doctor --fix` after upgrading an older state directory so doctor can
-create the database and import legacy files in one migration pass.
-
 <Tip>
 For user-facing walkthroughs, see [Migrating from Claude](/install/migrating-claude) and [Migrating from Hermes](/install/migrating-hermes). The [migration hub](/install/migrating) lists all paths.
 </Tip>
@@ -201,7 +197,7 @@ For migrated source-installed curated plugins, apply writes:
 
 - `plugins.entries.codex.enabled: true`
 - `plugins.entries.codex.config.codexPlugins.enabled: true`
-- `plugins.entries.codex.config.codexPlugins.allow_destructive_actions: false`
+- `plugins.entries.codex.config.codexPlugins.allow_destructive_actions: true`
 - one explicit plugin entry with `marketplaceName: "openai-curated"` and
   `pluginName` for each selected plugin
 

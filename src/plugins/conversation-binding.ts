@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
-import type { Insertable, Selectable } from "kysely";
+import fs from "node:fs";
+import path from "node:path";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import {
   createConversationBindingRecord,
@@ -7,23 +8,16 @@ import {
   unbindConversationBindingRecord,
 } from "../bindings/records.js";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
-import { resolveStateDir } from "../config/paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { expandHomePrefix } from "../infra/home-dir.js";
+import { writeJson } from "../infra/json-files.js";
 import { type ConversationRef } from "../infra/outbound/session-binding-service.js";
-import { sqliteNullableText } from "../infra/sqlite-row-values.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabaseOptions,
-} from "../state/openclaw-state-db.js";
 import type {
   PluginConversationBinding,
   PluginConversationBindingResolvedEvent,
@@ -35,6 +29,7 @@ import { getActivePluginRegistry } from "./runtime.js";
 
 const log = createSubsystemLogger("plugins/binding");
 
+const APPROVALS_PATH = "~/.openclaw/plugin-binding-approvals.json";
 const PLUGIN_BINDING_CUSTOM_ID_PREFIX = "pluginbind";
 const PLUGIN_BINDING_OWNER = "plugin";
 const PLUGIN_BINDING_SESSION_PREFIX = "plugin-binding";
@@ -60,15 +55,6 @@ type PluginBindingApprovalsFile = {
   version: 1;
   approvals: PluginBindingApprovalEntry[];
 };
-
-type PluginBindingApprovalsDatabase = Pick<OpenClawStateKyselyDatabase, "plugin_binding_approvals">;
-
-type PluginBindingApprovalRow = Selectable<
-  PluginBindingApprovalsDatabase["plugin_binding_approvals"]
->;
-type PluginBindingApprovalInsert = Insertable<
-  PluginBindingApprovalsDatabase["plugin_binding_approvals"]
->;
 
 type PluginBindingConversation = {
   channel: string;
@@ -169,10 +155,8 @@ function getPluginBindingGlobalState(): PluginBindingGlobalState {
   return pluginBindingGlobalState;
 }
 
-function pluginBindingApprovalDbOptions(): OpenClawStateDatabaseOptions {
-  return {
-    env: { ...process.env, OPENCLAW_STATE_DIR: resolveStateDir(process.env) },
-  };
+function resolveApprovalsPath(): string {
+  return expandHomePrefix(APPROVALS_PATH);
 }
 
 function normalizeChannel(value: string): string {
@@ -352,79 +336,36 @@ function createApprovalRequestId(): string {
   return crypto.randomBytes(9).toString("base64url");
 }
 
-export function normalizePluginBindingApprovalsSnapshot(
-  value: unknown,
-): PluginBindingApprovalsFile {
-  const parsed = value as Partial<PluginBindingApprovalsFile> | undefined;
-  if (!Array.isArray(parsed?.approvals)) {
-    return { version: 1, approvals: [] };
-  }
-  const approvals = new Map<string, PluginBindingApprovalEntry>();
-  for (const rawEntry of parsed.approvals) {
-    if (rawEntry === null || typeof rawEntry !== "object") {
-      continue;
-    }
-    const entry = rawEntry as Partial<PluginBindingApprovalEntry>;
-    const normalized: PluginBindingApprovalEntry = {
-      pluginRoot: typeof entry.pluginRoot === "string" ? entry.pluginRoot : "",
-      pluginId: typeof entry.pluginId === "string" ? entry.pluginId : "",
-      pluginName: typeof entry.pluginName === "string" ? entry.pluginName : undefined,
-      channel: typeof entry.channel === "string" ? normalizeChannel(entry.channel) : "",
-      accountId: normalizeOptionalString(entry.accountId) ?? "default",
-      approvedAt:
-        typeof entry.approvedAt === "number" && Number.isFinite(entry.approvedAt)
-          ? Math.floor(entry.approvedAt)
-          : Date.now(),
-    };
-    if (!normalized.pluginRoot || !normalized.pluginId || !normalized.channel) {
-      continue;
-    }
-    approvals.set(buildApprovalScopeKey(normalized), normalized);
-  }
-  return { version: 1, approvals: [...approvals.values()] };
-}
-
-function pluginBindingApprovalToRow(
-  entry: PluginBindingApprovalEntry,
-): PluginBindingApprovalInsert {
-  return {
-    plugin_root: entry.pluginRoot,
-    channel: normalizeChannel(entry.channel),
-    account_id: normalizeOptionalString(entry.accountId) ?? "default",
-    plugin_id: entry.pluginId,
-    plugin_name: sqliteNullableText(entry.pluginName),
-    approved_at: Math.floor(entry.approvedAt),
-  };
-}
-
-function rowToPluginBindingApproval(row: PluginBindingApprovalRow): PluginBindingApprovalEntry {
-  return {
-    pluginRoot: row.plugin_root,
-    pluginId: row.plugin_id,
-    pluginName: sqliteNullableText(row.plugin_name) ?? undefined,
-    channel: normalizeChannel(row.channel),
-    accountId: normalizeOptionalString(row.account_id) ?? "default",
-    approvedAt: row.approved_at,
-  };
-}
-
-function loadApprovalsFromSqlite(): PluginBindingApprovalsFile {
+function loadApprovalsFromDisk(): PluginBindingApprovalsFile {
+  const filePath = resolveApprovalsPath();
   try {
-    const database = openOpenClawStateDatabase(pluginBindingApprovalDbOptions());
-    const db = getNodeSqliteKysely<PluginBindingApprovalsDatabase>(database.db);
-    const rows = executeSqliteQuerySync(
-      database.db,
-      db
-        .selectFrom("plugin_binding_approvals")
-        .select(["plugin_root", "channel", "account_id", "plugin_id", "plugin_name", "approved_at"])
-        .orderBy("approved_at", "asc")
-        .orderBy("plugin_root", "asc")
-        .orderBy("channel", "asc")
-        .orderBy("account_id", "asc"),
-    ).rows;
+    if (!fs.existsSync(filePath)) {
+      return { version: 1, approvals: [] };
+    }
+    const raw = fs.readFileSync(filePath, "utf8");
+    const parsed = JSON.parse(raw) as Partial<PluginBindingApprovalsFile>;
+    if (!Array.isArray(parsed.approvals)) {
+      return { version: 1, approvals: [] };
+    }
     return {
       version: 1,
-      approvals: rows.map(rowToPluginBindingApproval),
+      approvals: parsed.approvals
+        .filter(
+          (entry): entry is PluginBindingApprovalEntry =>
+            entry !== null && typeof entry === "object",
+        )
+        .map((entry) => ({
+          pluginRoot: typeof entry.pluginRoot === "string" ? entry.pluginRoot : "",
+          pluginId: typeof entry.pluginId === "string" ? entry.pluginId : "",
+          pluginName: typeof entry.pluginName === "string" ? entry.pluginName : undefined,
+          channel: typeof entry.channel === "string" ? normalizeChannel(entry.channel) : "",
+          accountId: normalizeOptionalString(entry.accountId) ?? "default",
+          approvedAt:
+            typeof entry.approvedAt === "number" && Number.isFinite(entry.approvedAt)
+              ? Math.floor(entry.approvedAt)
+              : Date.now(),
+        }))
+        .filter((entry) => entry.pluginRoot && entry.pluginId && entry.channel),
     };
   } catch (error) {
     log.warn(`plugin binding approvals load failed: ${String(error)}`);
@@ -432,64 +373,22 @@ function loadApprovalsFromSqlite(): PluginBindingApprovalsFile {
   }
 }
 
-export function writePluginBindingApprovalsSnapshot(file: PluginBindingApprovalsFile): void {
-  const normalized = normalizePluginBindingApprovalsSnapshot(file);
-  const rows = normalized.approvals.map(pluginBindingApprovalToRow);
-  runOpenClawStateWriteTransaction((database) => {
-    const db = getNodeSqliteKysely<PluginBindingApprovalsDatabase>(database.db);
-    if (rows.length === 0) {
-      executeSqliteQuerySync(database.db, db.deleteFrom("plugin_binding_approvals"));
-      return;
-    }
-    const currentRows = executeSqliteQuerySync(
-      database.db,
-      db.selectFrom("plugin_binding_approvals").select(["plugin_root", "channel", "account_id"]),
-    ).rows;
-    const retainedScopes = new Set(
-      rows.map((row) => `${row.plugin_root}\0${row.channel}\0${row.account_id}`),
-    );
-    for (const row of currentRows) {
-      if (retainedScopes.has(`${row.plugin_root}\0${row.channel}\0${row.account_id}`)) {
-        continue;
-      }
-      executeSqliteQuerySync(
-        database.db,
-        db
-          .deleteFrom("plugin_binding_approvals")
-          .where("plugin_root", "=", row.plugin_root)
-          .where("channel", "=", row.channel)
-          .where("account_id", "=", row.account_id),
-      );
-    }
-    for (const row of rows) {
-      executeSqliteQuerySync(
-        database.db,
-        db
-          .insertInto("plugin_binding_approvals")
-          .values(row)
-          .onConflict((conflict) =>
-            conflict.columns(["plugin_root", "channel", "account_id"]).doUpdateSet({
-              plugin_id: (eb) => eb.ref("excluded.plugin_id"),
-              plugin_name: (eb) => eb.ref("excluded.plugin_name"),
-              approved_at: (eb) => eb.ref("excluded.approved_at"),
-            }),
-          ),
-      );
-    }
-  }, pluginBindingApprovalDbOptions());
-  const state = getPluginBindingGlobalState();
-  state.approvalsCache = normalized;
-  state.approvalsLoaded = true;
-}
-
 async function saveApprovals(file: PluginBindingApprovalsFile): Promise<void> {
-  writePluginBindingApprovalsSnapshot(file);
+  const filePath = resolveApprovalsPath();
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const state = getPluginBindingGlobalState();
+  state.approvalsCache = file;
+  state.approvalsLoaded = true;
+  await writeJson(filePath, file, {
+    mode: 0o600,
+    trailingNewline: true,
+  });
 }
 
 function getApprovals(): PluginBindingApprovalsFile {
   const state = getPluginBindingGlobalState();
   if (!state.approvalsLoaded || !state.approvalsCache) {
-    state.approvalsCache = loadApprovalsFromSqlite();
+    state.approvalsCache = loadApprovalsFromDisk();
     state.approvalsLoaded = true;
   }
   return state.approvalsCache;

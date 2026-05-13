@@ -15,14 +15,6 @@ type LoadChannelSetupPluginRegistrySnapshotForChannel =
   typeof import("../commands/channel-setup/plugin-install.js").loadChannelSetupPluginRegistrySnapshotForChannel;
 type PluginRegistry = ReturnType<LoadChannelSetupPluginRegistrySnapshotForChannel>;
 
-function mockCall(mock: { mock: { calls: unknown[][] } }, callIndex = 0): unknown[] {
-  const call = mock.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`expected mock call ${callIndex}`);
-  }
-  return call;
-}
-
 function makeSetupPlugin(params: {
   id: string;
   label: string;
@@ -92,6 +84,14 @@ function callArg<T>(mock: { mock: { calls: unknown[][] } }, index = 0, _type?: (
     throw new Error(`Expected mock call ${index}`);
   }
   return call[0] as T;
+}
+
+function mockCall(mock: { mock: { calls: unknown[][] } }, index = 0): unknown[] {
+  const call = mock.mock.calls[index];
+  if (!call) {
+    throw new Error(`Expected mock call ${index}`);
+  }
+  return call;
 }
 
 function expectExternalCatalogInstallCall(index = 0) {

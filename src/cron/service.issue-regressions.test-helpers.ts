@@ -32,7 +32,7 @@ export {
 };
 
 export async function startCronForStore(params: {
-  storeKey: string;
+  storePath: string;
   cronEnabled?: boolean;
   enqueueSystemEvent?: CronServiceOptions["enqueueSystemEvent"];
   requestHeartbeat?: CronServiceOptions["requestHeartbeat"];
@@ -47,7 +47,7 @@ export async function startCronForStore(params: {
 
   const cron = new CronService({
     cronEnabled: params.cronEnabled ?? true,
-    storeKey: params.storeKey,
+    storePath: params.storePath,
     log: noopLogger,
     enqueueSystemEvent,
     requestHeartbeat,

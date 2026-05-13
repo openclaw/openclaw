@@ -4,8 +4,6 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import { clearConfigCache } from "../config/config.js";
-import { getSessionEntry } from "../config/sessions.js";
-import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { __setMaxChatHistoryMessagesBytesForTest } from "./server-constants.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/shared-types.js";
@@ -19,7 +17,7 @@ import {
   onceMessage,
   rpcReq,
   testState,
-  seedGatewaySessionEntries,
+  writeSessionStore,
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -73,6 +71,7 @@ async function withGatewayChatHarness(
   const createSessionDir = async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     tempDirs.push(sessionDir);
+    testState.sessionStorePath = path.join(sessionDir, "sessions.json");
     return sessionDir;
   };
 
@@ -81,6 +80,7 @@ async function withGatewayChatHarness(
   } finally {
     __setMaxChatHistoryMessagesBytesForTest();
     clearConfigCache();
+    testState.sessionStorePath = undefined;
     ws.close();
     await Promise.all(
       tempDirs.map((dir) =>
@@ -90,8 +90,8 @@ async function withGatewayChatHarness(
   }
 }
 
-async function seedMainSessionEntry() {
-  await seedGatewaySessionEntries({
+async function writeMainSessionStore() {
+  await writeSessionStore({
     entries: {
       main: { sessionId: "sess-main", updatedAt: Date.now() },
     },
@@ -108,12 +108,8 @@ async function writeGatewayConfig(config: Record<string, unknown>) {
   clearConfigCache();
 }
 
-async function writeMainSessionTranscript(_sessionDir: string, lines: string[]) {
-  replaceSqliteSessionTranscriptEvents({
-    agentId: "main",
-    sessionId: "sess-main",
-    events: lines.map((line) => JSON.parse(line) as unknown),
-  });
+async function writeMainSessionTranscript(sessionDir: string, lines: string[]) {
+  await fs.writeFile(path.join(sessionDir, "sess-main.jsonl"), `${lines.join("\n")}\n`, "utf-8");
 }
 
 async function fetchHistoryMessages(
@@ -142,7 +138,7 @@ async function prepareMainHistoryHarness(params: {
   }
   await connectOk(params.ws);
   const sessionDir = await params.createSessionDir();
-  await seedMainSessionEntry();
+  await writeMainSessionStore();
   return sessionDir;
 }
 
@@ -150,10 +146,11 @@ describe("gateway server chat", () => {
   test("chat.history does not wait for model catalog discovery to return history", async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
       testState.agentConfig = {
         model: { primary: "test-provider/slow-catalog-model" },
       };
-      await seedGatewaySessionEntries({
+      await writeSessionStore({
         entries: {
           main: {
             sessionId: "sess-main",
@@ -207,6 +204,7 @@ describe("gateway server chat", () => {
     } finally {
       clearConfigCache();
       testState.agentConfig = undefined;
+      testState.sessionStorePath = undefined;
       await fs.rm(sessionDir, { recursive: true, force: true });
     }
   });
@@ -215,7 +213,8 @@ describe("gateway server chat", () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     const dispatchRelease = createDeferred<void>();
     try {
-      await seedGatewaySessionEntries({
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
         entries: {
           main: {
             sessionId: "sess-main",
@@ -338,6 +337,7 @@ describe("gateway server chat", () => {
     } finally {
       dispatchRelease.resolve();
       dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
       clearConfigCache();
       await fs.rm(sessionDir, { recursive: true, force: true });
     }
@@ -347,7 +347,8 @@ describe("gateway server chat", () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     const dispatchRelease = createDeferred<void>();
     try {
-      await seedGatewaySessionEntries({
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
         entries: {
           main: {
             sessionId: "sess-main",
@@ -453,6 +454,7 @@ describe("gateway server chat", () => {
     } finally {
       dispatchRelease.resolve();
       dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
       clearConfigCache();
       await fs.rm(sessionDir, { recursive: true, force: true });
     }
@@ -461,7 +463,8 @@ describe("gateway server chat", () => {
   test("chat.send starts the next WebChat turn after the prior internal run finishes", async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     try {
-      await seedGatewaySessionEntries({
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
         entries: {
           main: {
             sessionId: "sess-main",
@@ -556,6 +559,7 @@ describe("gateway server chat", () => {
       expect(context.addChatRun).toHaveBeenCalledTimes(2);
     } finally {
       dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
       clearConfigCache();
       await fs.rm(sessionDir, { recursive: true, force: true });
     }
@@ -605,7 +609,7 @@ describe("gateway server chat", () => {
       );
       process.env.HOME = homeDir;
       try {
-        await seedGatewaySessionEntries({
+        await writeSessionStore({
           entries: {
             main: {
               sessionId: "sess-main",
@@ -667,7 +671,7 @@ describe("gateway server chat", () => {
       expect(bytes).toBeLessThanOrEqual(historyMaxBytes);
       expect(messages.length).toBeLessThan(45);
 
-      await seedGatewaySessionEntries({
+      await writeSessionStore({
         entries: {
           main: {
             sessionId: "sess-main",
@@ -685,9 +689,16 @@ describe("gateway server chat", () => {
       });
       expect(sendRes.ok).toBe(true);
 
-      const stored = getSessionEntry({ agentId: "main", sessionKey: "agent:main:main" });
-      expect(stored?.lastChannel).toBe("whatsapp");
-      expect(stored?.lastTo).toBe("+1555");
+      const sessionStorePath = testState.sessionStorePath;
+      if (!sessionStorePath) {
+        throw new Error("expected session store path");
+      }
+      const stored = JSON.parse(await fs.readFile(sessionStorePath, "utf-8")) as Record<
+        string,
+        { lastChannel?: string; lastTo?: string } | undefined
+      >;
+      expect(stored["agent:main:main"]?.lastChannel).toBe("whatsapp");
+      expect(stored["agent:main:main"]?.lastTo).toBe("+1555");
     });
   });
 
@@ -697,7 +708,7 @@ describe("gateway server chat", () => {
       await connectOk(ws);
 
       await createSessionDir();
-      await seedMainSessionEntry();
+      await writeMainSessionStore();
       testState.agentConfig = { blockStreamingDefault: "on" };
       try {
         let capturedOpts: GetReplyOptions | undefined;
@@ -825,7 +836,7 @@ describe("gateway server chat", () => {
       await connectOk(ws);
 
       const sessionDir = await createSessionDir();
-      await seedMainSessionEntry();
+      await writeMainSessionStore();
 
       await writeMainSessionTranscript(sessionDir, [
         JSON.stringify({
@@ -861,7 +872,7 @@ describe("gateway server chat", () => {
       await connectOk(ws);
 
       const sessionDir = await createSessionDir();
-      await seedMainSessionEntry();
+      await writeMainSessionStore();
 
       const lines = [
         JSON.stringify({
@@ -1076,7 +1087,7 @@ describe("gateway server chat", () => {
       await connectOk(ws);
 
       await createSessionDir();
-      await seedMainSessionEntry();
+      await writeMainSessionStore();
 
       mockGetReplyFromConfigOnce(async (_ctx, opts) => {
         opts?.onAgentRunStart?.(opts.runId ?? "idem-abort-1");

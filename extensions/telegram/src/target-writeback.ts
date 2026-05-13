@@ -3,7 +3,11 @@ import {
   readConfigFileSnapshotForWrite,
   replaceConfigFile,
 } from "openclaw/plugin-sdk/config-mutation";
-import { resolveCronStoreKey, updateCronStoreJobs } from "openclaw/plugin-sdk/cron-store-runtime";
+import {
+  loadCronStore,
+  resolveCronStorePath,
+  saveCronStore,
+} from "openclaw/plugin-sdk/cron-store-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -192,10 +196,12 @@ export async function maybePersistResolvedTelegramTarget(params: {
   }
 
   try {
-    const storeKey = resolveCronStoreKey();
-    const result = await updateCronStoreJobs(storeKey, (job) => {
+    const storePath = resolveCronStorePath(params.cfg.cron?.store);
+    const store = await loadCronStore(storePath);
+    let cronChanged = false;
+    for (const job of store.jobs) {
       if (job.delivery?.channel !== "telegram") {
-        return undefined;
+        continue;
       }
       const nextTarget = rewriteTargetIfMatch({
         rawValue: job.delivery.to,
@@ -203,17 +209,13 @@ export async function maybePersistResolvedTelegramTarget(params: {
         resolvedTarget,
       });
       if (!nextTarget) {
-        return undefined;
+        continue;
       }
-      return {
-        ...job,
-        delivery: {
-          ...job.delivery,
-          to: nextTarget,
-        },
-      };
-    });
-    if (result.updatedJobs > 0) {
+      job.delivery.to = nextTarget;
+      cronChanged = true;
+    }
+    if (cronChanged) {
+      await saveCronStore(storePath, store);
       if (params.verbose) {
         writebackLogger.warn(`resolved Telegram cron delivery target ${raw} -> ${resolvedTarget}`);
       }

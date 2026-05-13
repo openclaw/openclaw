@@ -1,5 +1,5 @@
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ModelCompatConfig } from "../config/types.models.js";
-import type { Api, Model } from "../agents/pi-ai-contract.js";
 
 /**
  * Fully-resolved runtime model shape used after provider/plugin-owned

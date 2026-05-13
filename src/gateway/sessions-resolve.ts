@@ -1,5 +1,4 @@
-import { listSessionEntries } from "../config/sessions/store.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import { loadSessionStore, updateSessionStore, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSessionIdMatchSelection } from "../sessions/session-id-resolution.js";
 import { parseSessionLabel } from "../sessions/session-label.js";
@@ -13,9 +12,10 @@ import {
 import {
   filterAndSortSessionEntries,
   listSessionsFromStore,
-  loadCombinedSessionEntriesForGateway,
+  loadCombinedSessionStoreForGateway,
+  migrateAndPruneGatewaySessionStoreKey,
   resolveDeletedAgentIdFromSessionKey,
-  resolveGatewaySessionDatabaseTarget,
+  resolveGatewaySessionStoreTarget,
 } from "./session-utils.js";
 
 export type SessionsResolveResult = { ok: true; key: string } | { ok: false; error: ErrorShape };
@@ -57,7 +57,8 @@ function validateSessionAgentExists(
 function isResolvedSessionKeyVisible(params: {
   cfg: OpenClawConfig;
   p: SessionsResolveParams;
-  store: Record<string, SessionEntry>;
+  storePath: string;
+  store: ReturnType<typeof loadSessionStore>;
   key: string;
 }) {
   if (typeof params.p.spawnedBy !== "string" || params.p.spawnedBy.trim().length === 0) {
@@ -65,15 +66,10 @@ function isResolvedSessionKeyVisible(params: {
   }
   return listSessionsFromStore({
     cfg: params.cfg,
+    storePath: params.storePath,
     store: params.store,
     opts: resolveSessionVisibilityFilterOptions(params.p),
   }).sessions.some((session) => session.key === params.key);
-}
-
-function loadAgentSessionRows(agentId: string): Record<string, SessionEntry> {
-  return Object.fromEntries(
-    listSessionEntries({ agentId }).map(({ sessionKey, entry }) => [sessionKey, entry]),
-  );
 }
 
 function findVisibleSessionIdMatches(params: {
@@ -121,13 +117,14 @@ export async function resolveSessionKeyFromResolveParams(params: {
   }
 
   if (hasKey) {
-    const target = resolveGatewaySessionDatabaseTarget({ cfg, key });
-    const store = loadAgentSessionRows(target.agentId);
+    const target = resolveGatewaySessionStoreTarget({ cfg, key });
+    const store = loadSessionStore(target.storePath);
     if (store[target.canonicalKey]) {
       if (
         !isResolvedSessionKeyVisible({
           cfg,
           p,
+          storePath: target.storePath,
           store,
           key: target.canonicalKey,
         })
@@ -140,11 +137,36 @@ export async function resolveSessionKeyFromResolveParams(params: {
       }
       return { ok: true, key: target.canonicalKey };
     }
-    return noSessionFoundResult(key);
+    const legacyKey = target.storeKeys.find((candidate) => store[candidate]);
+    if (!legacyKey) {
+      return noSessionFoundResult(key);
+    }
+    await updateSessionStore(target.storePath, (s) => {
+      const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({ cfg, key, store: s });
+      if (!s[primaryKey] && s[legacyKey]) {
+        s[primaryKey] = s[legacyKey];
+      }
+    });
+    if (
+      !isResolvedSessionKeyVisible({
+        cfg,
+        p,
+        storePath: target.storePath,
+        store: loadSessionStore(target.storePath),
+        key: target.canonicalKey,
+      })
+    ) {
+      return noSessionFoundResult(key);
+    }
+    const agentCheckLegacy = validateSessionAgentExists(cfg, target.canonicalKey);
+    if (agentCheckLegacy) {
+      return agentCheckLegacy;
+    }
+    return { ok: true, key: target.canonicalKey };
   }
 
   if (hasSessionId) {
-    const { entries: store } = loadCombinedSessionEntriesForGateway(cfg, { agentId: p.agentId });
+    const { store } = loadCombinedSessionStoreForGateway(cfg, { agentId: p.agentId });
     const matches = findVisibleSessionIdMatches({ store, p, sessionId });
     const selection = resolveSessionIdMatchSelection(matches, sessionId);
     if (selection.kind === "none") {
@@ -178,9 +200,10 @@ export async function resolveSessionKeyFromResolveParams(params: {
     };
   }
 
-  const { entries: store } = loadCombinedSessionEntriesForGateway(cfg, { agentId: p.agentId });
+  const { storePath, store } = loadCombinedSessionStoreForGateway(cfg, { agentId: p.agentId });
   const list = listSessionsFromStore({
     cfg,
+    storePath,
     store,
     opts: {
       includeGlobal: p.includeGlobal === true,

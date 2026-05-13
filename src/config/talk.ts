@@ -26,6 +26,22 @@ function normalizeSilenceTimeoutMs(value: unknown): number | undefined {
   return value;
 }
 
+function buildLegacyTalkProviderCompat(
+  value: Record<string, unknown>,
+): TalkProviderConfig | undefined {
+  const provider: TalkProviderConfig = {};
+  for (const key of ["voiceId", "voiceAliases", "modelId", "outputFormat"] as const) {
+    if (value[key] !== undefined) {
+      provider[key] = value[key];
+    }
+  }
+  const apiKey = normalizeTalkSecretInput(value.apiKey);
+  if (apiKey !== undefined) {
+    provider.apiKey = apiKey;
+  }
+  return Object.keys(provider).length > 0 ? provider : undefined;
+}
+
 function normalizeTalkProviderConfig(value: unknown): TalkProviderConfig | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -216,7 +232,8 @@ export function buildTalkConfigResponse(value: unknown): TalkConfigResponse | un
     return undefined;
   }
   const normalized = normalizeTalkSection(value as TalkConfig);
-  if (!normalized) {
+  const legacyCompat = buildLegacyTalkProviderCompat(value);
+  if (!normalized && !legacyCompat) {
     return undefined;
   }
 
@@ -243,7 +260,9 @@ export function buildTalkConfigResponse(value: unknown): TalkConfigResponse | un
     payload.realtime = normalized.realtime;
   }
 
-  const resolved = resolveActiveTalkProviderConfig(normalized);
+  const resolved =
+    resolveActiveTalkProviderConfig(normalized) ??
+    (legacyCompat ? { provider: "elevenlabs", config: legacyCompat } : undefined);
   const activeProvider = resolved?.provider;
   if (activeProvider) {
     payload.provider = activeProvider;

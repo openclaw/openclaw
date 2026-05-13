@@ -13,10 +13,12 @@ describe("live Docker state staging", () => {
     expect(script).toContain("--exclude=.artifacts");
   });
 
-  it("keeps host workspace artifacts out of the container state copy", () => {
+  it("keeps host-only generated registry state out of the container copy", () => {
     const script = readFileSync(stageScriptPath, "utf8");
 
     expect(script).toContain("--exclude=workspace");
     expect(script).toContain("--exclude=sandboxes");
+    expect(script).toContain("--exclude=plugins/installs.json");
+    expect(script).toContain("host-absolute paths");
   });
 });

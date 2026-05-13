@@ -128,7 +128,6 @@ export function resolveRequesterOriginForChild(params: {
     channel: params.requesterChannel,
     accountId: boundAccountId ?? params.requesterAccountId,
     to: params.requesterTo,
-    chatType: inferredPeerKind,
     threadId: params.requesterThreadId,
   });
 }

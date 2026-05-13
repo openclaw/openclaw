@@ -33,9 +33,6 @@
       "./index.ts"
     ],
     "setupEntry": "./setup-entry.ts",
-    "setupFeatures": {
-      "doctorLegacyState": true
-    },
     "channel": {
       "id": "qqbot",
       "label": "QQ Bot",

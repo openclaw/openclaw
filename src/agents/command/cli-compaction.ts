@@ -1,11 +1,12 @@
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { AgentCompactionMode } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ensureContextEnginesInitialized as ensureContextEnginesInitializedImpl } from "../../context-engine/init.js";
 import { resolveContextEngine as resolveContextEngineImpl } from "../../context-engine/registry.js";
-import type { ContextEngine, ContextEngineTranscriptScope } from "../../context-engine/types.js";
+import type { ContextEngine } from "../../context-engine/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { AgentMessage } from "../agent-core-contract.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../pi-embedded-runner/compaction-runtime-context.js";
 import { runContextEngineMaintenance as runContextEngineMaintenanceImpl } from "../pi-embedded-runner/context-engine-maintenance.js";
 import { shouldPreemptivelyCompactBeforePrompt as shouldPreemptivelyCompactBeforePromptImpl } from "../pi-embedded-runner/run/preemptive-compaction.js";
@@ -16,12 +17,9 @@ import {
   resolveEffectiveCompactionMode,
 } from "../pi-settings.js";
 import type { SkillSnapshot } from "../skills.js";
-import {
-  readTranscriptStateForSession as readTranscriptStateForSessionImpl,
-  type TranscriptState,
-} from "../transcript/transcript-state.js";
-import { recordCliCompactionInSessionEntry as recordCliCompactionInSessionEntryImpl } from "./session-entry-updates.js";
+import { recordCliCompactionInStore as recordCliCompactionInStoreImpl } from "./session-store.js";
 
+type SessionManagerLike = ReturnType<typeof SessionManager.open>;
 type SettingsManagerLike = {
   getCompactionReserveTokens: () => number;
   getCompactionKeepRecentTokens: () => number;
@@ -34,10 +32,7 @@ type SettingsManagerLike = {
   setCompactionEnabled?: (enabled: boolean) => void;
 };
 type CliCompactionDeps = {
-  readTranscriptStateForSession: (scope: {
-    agentId: string;
-    sessionId: string;
-  }) => Promise<TranscriptState>;
+  openSessionManager: (sessionFile: string) => SessionManagerLike;
   ensureContextEnginesInitialized: () => void;
   resolveContextEngine: (cfg: OpenClawConfig) => Promise<ContextEngine>;
   createPreparedEmbeddedPiSettingsManager: (params: {
@@ -54,13 +49,13 @@ type CliCompactionDeps = {
   shouldPreemptivelyCompactBeforePrompt: typeof shouldPreemptivelyCompactBeforePromptImpl;
   resolveLiveToolResultMaxChars: typeof resolveLiveToolResultMaxCharsImpl;
   runContextEngineMaintenance: typeof runContextEngineMaintenanceImpl;
-  recordCliCompactionInSessionEntry: typeof recordCliCompactionInSessionEntryImpl;
+  recordCliCompactionInStore: typeof recordCliCompactionInStoreImpl;
 };
 
 const log = createSubsystemLogger("agents/cli-compaction");
 
 const cliCompactionDeps: CliCompactionDeps = {
-  readTranscriptStateForSession: readTranscriptStateForSessionImpl,
+  openSessionManager: (sessionFile: string) => SessionManager.open(sessionFile),
   ensureContextEnginesInitialized: ensureContextEnginesInitializedImpl,
   resolveContextEngine: resolveContextEngineImpl,
   createPreparedEmbeddedPiSettingsManager: createPreparedEmbeddedPiSettingsManagerImpl,
@@ -68,7 +63,7 @@ const cliCompactionDeps: CliCompactionDeps = {
   shouldPreemptivelyCompactBeforePrompt: shouldPreemptivelyCompactBeforePromptImpl,
   resolveLiveToolResultMaxChars: resolveLiveToolResultMaxCharsImpl,
   runContextEngineMaintenance: runContextEngineMaintenanceImpl,
-  recordCliCompactionInSessionEntry: recordCliCompactionInSessionEntryImpl,
+  recordCliCompactionInStore: recordCliCompactionInStoreImpl,
 };
 
 export function setCliCompactionTestDeps(overrides: Partial<typeof cliCompactionDeps>): void {
@@ -77,7 +72,7 @@ export function setCliCompactionTestDeps(overrides: Partial<typeof cliCompaction
 
 export function resetCliCompactionTestDeps(): void {
   Object.assign(cliCompactionDeps, {
-    readTranscriptStateForSession: readTranscriptStateForSessionImpl,
+    openSessionManager: (sessionFile: string) => SessionManager.open(sessionFile),
     ensureContextEnginesInitialized: ensureContextEnginesInitializedImpl,
     resolveContextEngine: resolveContextEngineImpl,
     createPreparedEmbeddedPiSettingsManager: createPreparedEmbeddedPiSettingsManagerImpl,
@@ -85,7 +80,7 @@ export function resetCliCompactionTestDeps(): void {
     shouldPreemptivelyCompactBeforePrompt: shouldPreemptivelyCompactBeforePromptImpl,
     resolveLiveToolResultMaxChars: resolveLiveToolResultMaxCharsImpl,
     runContextEngineMaintenance: runContextEngineMaintenanceImpl,
-    recordCliCompactionInSessionEntry: recordCliCompactionInSessionEntryImpl,
+    recordCliCompactionInStore: recordCliCompactionInStoreImpl,
   });
 }
 
@@ -96,8 +91,8 @@ function resolvePositiveInteger(value: number | undefined): number | undefined {
   return Math.floor(value);
 }
 
-function getSessionBranchMessages(transcriptState: TranscriptState): AgentMessage[] {
-  return transcriptState
+function getSessionBranchMessages(sessionManager: SessionManagerLike): AgentMessage[] {
+  return sessionManager
     .getBranch()
     .flatMap((entry) =>
       entry.type === "message" && typeof entry.message === "object" && entry.message !== null
@@ -116,7 +111,8 @@ async function compactCliTranscript(params: {
   contextEngine: ContextEngine;
   sessionId: string;
   sessionKey: string;
-  transcriptScope: ContextEngineTranscriptScope;
+  sessionFile: string;
+  sessionManager: SessionManagerLike;
   cfg: OpenClawConfig;
   workspaceDir: string;
   agentDir: string;
@@ -156,7 +152,7 @@ async function compactCliTranscript(params: {
   const compactResult = await params.contextEngine.compact({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
-    transcriptScope: params.transcriptScope,
+    sessionFile: params.sessionFile,
     tokenBudget: params.contextTokenBudget,
     currentTokenCount: params.currentTokenCount,
     force: true,
@@ -175,8 +171,9 @@ async function compactCliTranscript(params: {
     contextEngine: params.contextEngine,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
-    transcriptScope: params.transcriptScope,
+    sessionFile: params.sessionFile,
     reason: "compaction",
+    sessionManager: params.sessionManager,
     runtimeContext,
     config: params.cfg,
   });
@@ -189,6 +186,7 @@ export async function runCliTurnCompactionLifecycle(params: {
   sessionKey: string;
   sessionEntry: SessionEntry | undefined;
   sessionStore?: Record<string, SessionEntry>;
+  storePath?: string;
   sessionAgentId: string;
   workspaceDir: string;
   agentDir: string;
@@ -201,21 +199,15 @@ export async function runCliTurnCompactionLifecycle(params: {
   thinkLevel?: Parameters<typeof buildEmbeddedCompactionRuntimeContext>[0]["thinkLevel"];
   extraSystemPrompt?: string;
 }): Promise<SessionEntry | undefined> {
+  const sessionFile = params.sessionEntry?.sessionFile;
   const contextTokenBudget = resolvePositiveInteger(params.sessionEntry?.contextTokens);
-  if (!params.sessionEntry?.sessionId || !contextTokenBudget) {
+  if (!sessionFile || !contextTokenBudget) {
     return params.sessionEntry;
   }
-  const transcriptScope = {
-    agentId: params.sessionAgentId,
-    sessionId: params.sessionEntry.sessionId,
-  };
 
   cliCompactionDeps.ensureContextEnginesInitialized();
   const contextEngine = await cliCompactionDeps.resolveContextEngine(params.cfg);
-  const transcriptState = await cliCompactionDeps.readTranscriptStateForSession({
-    agentId: params.sessionAgentId,
-    sessionId: params.sessionEntry.sessionId,
-  });
+  const sessionManager = cliCompactionDeps.openSessionManager(sessionFile);
   const settingsManager = await cliCompactionDeps.createPreparedEmbeddedPiSettingsManager({
     cwd: params.workspaceDir,
     agentDir: params.agentDir,
@@ -229,7 +221,7 @@ export async function runCliTurnCompactionLifecycle(params: {
   });
 
   const preemptiveCompaction = cliCompactionDeps.shouldPreemptivelyCompactBeforePrompt({
-    messages: getSessionBranchMessages(transcriptState),
+    messages: getSessionBranchMessages(sessionManager),
     prompt: "",
     contextTokenBudget,
     reserveTokens: settingsManager.getCompactionReserveTokens(),
@@ -255,7 +247,8 @@ export async function runCliTurnCompactionLifecycle(params: {
     contextEngine,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
-    transcriptScope,
+    sessionFile,
+    sessionManager,
     cfg: params.cfg,
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
@@ -271,15 +264,16 @@ export async function runCliTurnCompactionLifecycle(params: {
     extraSystemPrompt: params.extraSystemPrompt,
   });
 
-  if (!compacted || !params.sessionStore) {
+  if (!compacted || !params.sessionStore || !params.storePath) {
     return params.sessionEntry;
   }
 
   return (
-    (await cliCompactionDeps.recordCliCompactionInSessionEntry({
+    (await cliCompactionDeps.recordCliCompactionInStore({
       provider: params.provider,
       sessionKey: params.sessionKey,
       sessionStore: params.sessionStore,
+      storePath: params.storePath,
     })) ?? params.sessionEntry
   );
 }

@@ -1,14 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { authProfileStoreKey } from "./auth-profiles/persisted.js";
-import {
-  readAuthProfileStatePayloadResult,
-  readAuthProfileStorePayloadResult,
-} from "./auth-profiles/sqlite-storage.js";
-import { authProfileStateKey } from "./auth-profiles/state.js";
+import { describe, expect, it, vi } from "vitest";
+import { resolveAuthStatePath, resolveAuthStorePath } from "./auth-profiles/paths.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStoreForLocalUpdate,
@@ -38,41 +32,7 @@ function expectProfileFields(profile: unknown, expected: Record<string, unknown>
   }
 }
 
-function readRawPersistedAuthProfiles(agentDir?: string): {
-  profiles: Record<string, unknown>;
-  order?: unknown;
-  lastGood?: unknown;
-  usageStats?: unknown;
-} {
-  const result = readAuthProfileStorePayloadResult(authProfileStoreKey(agentDir));
-  const raw = result.exists ? result.value : undefined;
-  expect(raw).toBeTruthy();
-  return raw as {
-    profiles: Record<string, unknown>;
-    order?: unknown;
-    lastGood?: unknown;
-    usageStats?: unknown;
-  };
-}
-
 describe("saveAuthProfileStore", () => {
-  let stateRoot = "";
-
-  beforeEach(async () => {
-    stateRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-save-state-root-"));
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateRoot);
-  });
-
-  afterEach(async () => {
-    closeOpenClawStateDatabaseForTest();
-    clearRuntimeAuthProfileStoreSnapshots();
-    vi.unstubAllEnvs();
-    if (stateRoot) {
-      await fs.rm(stateRoot, { recursive: true, force: true });
-      stateRoot = "";
-    }
-  });
-
   it("strips plaintext when keyRef/tokenRef are present", async () => {
     const structuredCloneSpy = vi.spyOn(globalThis, "structuredClone");
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-save-"));
@@ -102,7 +62,7 @@ describe("saveAuthProfileStore", () => {
 
       saveAuthProfileStore(store, agentDir);
 
-      const parsed = readRawPersistedAuthProfiles(agentDir) as {
+      const parsed = JSON.parse(await fs.readFile(resolveAuthStorePath(agentDir), "utf8")) as {
         profiles: Record<
           string,
           { key?: string; keyRef?: unknown; token?: string; tokenRef?: unknown }
@@ -177,7 +137,7 @@ describe("saveAuthProfileStore", () => {
         refresh: "refresh-2",
       });
 
-      const persisted = readRawPersistedAuthProfiles(agentDir) as {
+      const persisted = JSON.parse(await fs.readFile(resolveAuthStorePath(agentDir), "utf8")) as {
         profiles: Record<string, { access?: string; refresh?: string }>;
       };
       expectProfileFields(persisted.profiles["anthropic:default"], {
@@ -185,11 +145,12 @@ describe("saveAuthProfileStore", () => {
         refresh: "refresh-2",
       });
     } finally {
+      clearRuntimeAuthProfileStoreSnapshots();
       await fs.rm(agentDir, { recursive: true, force: true });
     }
   });
 
-  it("writes runtime scheduling state to SQLite only", async () => {
+  it("writes runtime scheduling state to auth-state.json only", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-save-state-"));
     try {
       const store: AuthProfileStore = {
@@ -216,7 +177,14 @@ describe("saveAuthProfileStore", () => {
 
       saveAuthProfileStore(store, agentDir);
 
-      const authProfiles = readRawPersistedAuthProfiles(agentDir);
+      const authProfiles = JSON.parse(
+        await fs.readFile(resolveAuthStorePath(agentDir), "utf8"),
+      ) as {
+        profiles: Record<string, unknown>;
+        order?: unknown;
+        lastGood?: unknown;
+        usageStats?: unknown;
+      };
       expect(authProfiles.profiles["anthropic:default"]).toEqual({
         type: "api_key",
         provider: "anthropic",
@@ -226,15 +194,14 @@ describe("saveAuthProfileStore", () => {
       expect(authProfiles.lastGood).toBeUndefined();
       expect(authProfiles.usageStats).toBeUndefined();
 
-      const sqliteStateResult = readAuthProfileStatePayloadResult(authProfileStateKey(agentDir));
-      const sqliteState = (sqliteStateResult.exists ? sqliteStateResult.value : undefined) as {
+      const authState = JSON.parse(await fs.readFile(resolveAuthStatePath(agentDir), "utf8")) as {
         order?: Record<string, string[]>;
         lastGood?: Record<string, string>;
         usageStats?: Record<string, { lastUsed?: number }>;
       };
-      expect(sqliteState.order?.anthropic).toEqual(["anthropic:default"]);
-      expect(sqliteState.lastGood?.anthropic).toBe("anthropic:default");
-      expect(sqliteState.usageStats?.["anthropic:default"]?.lastUsed).toBe(123);
+      expect(authState.order?.anthropic).toEqual(["anthropic:default"]);
+      expect(authState.lastGood?.anthropic).toBe("anthropic:default");
+      expect(authState.usageStats?.["anthropic:default"]?.lastUsed).toBe(123);
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
@@ -244,6 +211,7 @@ describe("saveAuthProfileStore", () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-save-inherited-"));
     const stateDir = path.join(root, ".openclaw");
     const childAgentDir = path.join(stateDir, "agents", "worker", "agent");
+    const childAuthPath = resolveAuthStorePath(childAgentDir);
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     vi.stubEnv("OPENCLAW_AGENT_DIR", "");
     try {
@@ -275,7 +243,7 @@ describe("saveAuthProfileStore", () => {
         filterExternalAuthProfiles: false,
       });
 
-      const child = readRawPersistedAuthProfiles(childAgentDir) as {
+      const child = JSON.parse(await fs.readFile(childAuthPath, "utf8")) as {
         profiles: Record<string, unknown>;
       };
       expectProfileFields(child.profiles["openai:default"], {
@@ -303,6 +271,8 @@ describe("saveAuthProfileStore", () => {
         refresh: "main-refreshed-refresh-token",
       });
     } finally {
+      clearRuntimeAuthProfileStoreSnapshots();
+      vi.unstubAllEnvs();
       await fs.rm(root, { recursive: true, force: true });
     }
   });
@@ -311,6 +281,7 @@ describe("saveAuthProfileStore", () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-save-stale-inherited-"));
     const stateDir = path.join(root, ".openclaw");
     const childAgentDir = path.join(stateDir, "agents", "worker", "agent");
+    const childAuthPath = resolveAuthStorePath(childAgentDir);
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     vi.stubEnv("OPENCLAW_AGENT_DIR", "");
     try {
@@ -359,7 +330,7 @@ describe("saveAuthProfileStore", () => {
         filterExternalAuthProfiles: false,
       });
 
-      const child = readRawPersistedAuthProfiles(childAgentDir) as {
+      const child = JSON.parse(await fs.readFile(childAuthPath, "utf8")) as {
         profiles: Record<string, unknown>;
       };
       expectProfileFields(child.profiles["openai:default"], {
@@ -383,6 +354,7 @@ describe("saveAuthProfileStore", () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-save-snapshot-"));
     const stateDir = path.join(root, ".openclaw");
     const childAgentDir = path.join(stateDir, "agents", "worker", "agent");
+    const childAuthPath = resolveAuthStorePath(childAgentDir);
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     vi.stubEnv("OPENCLAW_AGENT_DIR", "");
     try {
@@ -416,7 +388,7 @@ describe("saveAuthProfileStore", () => {
         filterExternalAuthProfiles: false,
       });
 
-      const child = readRawPersistedAuthProfiles(childAgentDir) as {
+      const child = JSON.parse(await fs.readFile(childAuthPath, "utf8")) as {
         profiles: Record<string, unknown>;
       };
       expect(child.profiles["openai-codex:default"]).toBeUndefined();

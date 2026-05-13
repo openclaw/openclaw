@@ -4,13 +4,9 @@ import { createDefaultDeps } from "./cli/deps.js";
 import type { promptYesNo as promptYesNoRuntime } from "./cli/prompt.js";
 import { waitForever } from "./cli/wait.js";
 import { loadConfig } from "./config/config.js";
+import { resolveStorePath } from "./config/sessions/paths.js";
 import { deriveSessionKey, resolveSessionKey } from "./config/sessions/session-key.js";
-import {
-  getSessionEntry,
-  listSessionEntries,
-  patchSessionEntry,
-  upsertSessionEntry,
-} from "./config/sessions/store.js";
+import { loadSessionStore, saveSessionStore } from "./config/sessions/store.js";
 import type { ensureBinary as ensureBinaryRuntime } from "./infra/binaries.js";
 import {
   describePortOwner,
@@ -85,12 +81,11 @@ export {
   ensurePortAvailable,
   handlePortError,
   loadConfig,
-  getSessionEntry,
-  listSessionEntries,
+  loadSessionStore,
   normalizeE164,
-  patchSessionEntry,
   PortInUseError,
   resolveSessionKey,
-  upsertSessionEntry,
+  resolveStorePath,
+  saveSessionStore,
   waitForever,
 };

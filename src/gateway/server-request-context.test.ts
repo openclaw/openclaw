@@ -9,7 +9,7 @@ describe("createGatewayRequestContext", () => {
     const runtimeState: Pick<GatewayServerLiveState, "cronState"> = {
       cronState: {
         cron: cronA,
-        storeKey: "cron-a",
+        storePath: "/tmp/cron-a",
         cronEnabled: true,
       },
     };
@@ -68,15 +68,15 @@ describe("createGatewayRequestContext", () => {
     });
 
     expect(context.cron).toBe(cronA);
-    expect(context.cronStoreKey).toBe("cron-a");
+    expect(context.cronStorePath).toBe("/tmp/cron-a");
 
     runtimeState.cronState = {
       cron: cronB,
-      storeKey: "cron-b",
+      storePath: "/tmp/cron-b",
       cronEnabled: true,
     };
 
     expect(context.cron).toBe(cronB);
-    expect(context.cronStoreKey).toBe("cron-b");
+    expect(context.cronStorePath).toBe("/tmp/cron-b");
   });
 });

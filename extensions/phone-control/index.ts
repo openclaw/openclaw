@@ -1,5 +1,7 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createPluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -32,12 +34,7 @@ type ArmStateFileV2 = {
 type ArmStateFile = ArmStateFileV1 | ArmStateFileV2;
 
 const STATE_VERSION = 2;
-const ARM_STATE_NAMESPACE = "arm-state";
-const ARM_STATE_KEY = "current";
-const armStateStore = createPluginStateKeyedStore<ArmStateFile>("phone-control", {
-  namespace: ARM_STATE_NAMESPACE,
-  maxEntries: 4,
-});
+const STATE_REL_PATH = ["plugins", "phone-control", "armed.json"] as const;
 const PHONE_ADMIN_SCOPE = "operator.admin";
 
 const GROUP_COMMANDS: Record<Exclude<ArmGroup, "all">, string[]> = {
@@ -96,51 +93,77 @@ function formatDuration(ms: number): string {
   return `${d}d`;
 }
 
-function isArmStateFile(parsed: unknown): parsed is ArmStateFile {
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return false;
-  }
-  const record = parsed as Record<string, unknown>;
-  if (record.version !== 1 && record.version !== 2) {
-    return false;
-  }
-  if (typeof record.armedAtMs !== "number") {
-    return false;
-  }
-  if (!(record.expiresAtMs === null || typeof record.expiresAtMs === "number")) {
-    return false;
-  }
-
-  if (record.version === 1) {
-    return (
-      Array.isArray(record.removedFromDeny) &&
-      record.removedFromDeny.every((v: unknown) => typeof v === "string")
-    );
-  }
-
-  const group = typeof record.group === "string" ? record.group : "";
-  return (
-    (group === "camera" || group === "screen" || group === "writes" || group === "all") &&
-    Array.isArray(record.armedCommands) &&
-    record.armedCommands.every((v: unknown) => typeof v === "string") &&
-    Array.isArray(record.addedToAllow) &&
-    record.addedToAllow.every((v: unknown) => typeof v === "string") &&
-    Array.isArray(record.removedFromDeny) &&
-    record.removedFromDeny.every((v: unknown) => typeof v === "string")
-  );
+function resolveStatePath(stateDir: string): string {
+  return path.join(stateDir, ...STATE_REL_PATH);
 }
 
-async function readArmState(): Promise<ArmStateFile | null> {
-  const state = await armStateStore.lookup(ARM_STATE_KEY);
-  return isArmStateFile(state) ? state : null;
+async function readArmState(statePath: string): Promise<ArmStateFile | null> {
+  try {
+    const raw = await fs.readFile(statePath, "utf8");
+    // Type as unknown record first to allow property access during validation
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (parsed.version !== 1 && parsed.version !== 2) {
+      return null;
+    }
+    if (typeof parsed.armedAtMs !== "number") {
+      return null;
+    }
+    if (!(parsed.expiresAtMs === null || typeof parsed.expiresAtMs === "number")) {
+      return null;
+    }
+
+    if (parsed.version === 1) {
+      if (
+        !Array.isArray(parsed.removedFromDeny) ||
+        !parsed.removedFromDeny.every((v: unknown) => typeof v === "string")
+      ) {
+        return null;
+      }
+      return parsed as unknown as ArmStateFile;
+    }
+
+    const group = typeof parsed.group === "string" ? parsed.group : "";
+    if (group !== "camera" && group !== "screen" && group !== "writes" && group !== "all") {
+      return null;
+    }
+    if (
+      !Array.isArray(parsed.armedCommands) ||
+      !parsed.armedCommands.every((v: unknown) => typeof v === "string")
+    ) {
+      return null;
+    }
+    if (
+      !Array.isArray(parsed.addedToAllow) ||
+      !parsed.addedToAllow.every((v: unknown) => typeof v === "string")
+    ) {
+      return null;
+    }
+    if (
+      !Array.isArray(parsed.removedFromDeny) ||
+      !parsed.removedFromDeny.every((v: unknown) => typeof v === "string")
+    ) {
+      return null;
+    }
+    return parsed as unknown as ArmStateFile;
+  } catch {
+    return null;
+  }
 }
 
-async function writeArmState(state: ArmStateFile | null): Promise<void> {
+async function writeArmState(statePath: string, state: ArmStateFile | null): Promise<void> {
   if (!state) {
-    await armStateStore.delete(ARM_STATE_KEY);
+    try {
+      await fs.unlink(statePath);
+    } catch {
+      // ignore
+    }
     return;
   }
-  await armStateStore.register(ARM_STATE_KEY, state);
+  await replaceFileAtomic({
+    filePath: statePath,
+    content: `${JSON.stringify(state, null, 2)}\n`,
+    tempPrefix: ".phone-control-arm",
+  });
 }
 
 function normalizeDenyList(cfg: OpenClawPluginApi["config"]): string[] {
@@ -171,10 +194,11 @@ function patchConfigNodeLists(
 async function disarmNow(params: {
   api: OpenClawPluginApi;
   stateDir: string;
+  statePath: string;
   reason: string;
 }): Promise<{ changed: boolean; restored: string[]; removed: string[] }> {
-  const { api, stateDir, reason } = params;
-  const state = await readArmState();
+  const { api, stateDir, statePath, reason } = params;
+  const state = await readArmState(statePath);
   if (!state) {
     return { changed: false, restored: [], removed: [] };
   }
@@ -206,16 +230,18 @@ async function disarmNow(params: {
   }
 
   if (removed.length > 0 || restored.length > 0) {
-    const next = patchConfigNodeLists(cfg, {
-      allowCommands: uniqSorted([...allow]),
-      denyCommands: uniqSorted([...deny]),
-    });
-    await api.runtime.config.replaceConfigFile({
-      nextConfig: next,
+    await api.runtime.config.mutateConfigFile({
       afterWrite: { mode: "auto" },
+      mutate: (draft) => {
+        const next = patchConfigNodeLists(draft, {
+          allowCommands: uniqSorted([...allow]),
+          denyCommands: uniqSorted([...deny]),
+        });
+        Object.assign(draft, next);
+      },
     });
   }
-  await writeArmState(null);
+  await writeArmState(statePath, null);
   api.logger.info(`phone-control: disarmed (${reason}) stateDir=${stateDir}`);
   return {
     changed: removed.length > 0 || restored.length > 0,
@@ -293,8 +319,9 @@ export default definePluginEntry({
     const timerService: OpenClawPluginService = {
       id: "phone-control-expiry",
       start: async (ctx) => {
+        const statePath = resolveStatePath(ctx.stateDir);
         const tick = async () => {
-          const state = await readArmState();
+          const state = await readArmState(statePath);
           if (!state || state.expiresAtMs == null) {
             return;
           }
@@ -304,6 +331,7 @@ export default definePluginEntry({
           await disarmNow({
             api,
             stateDir: ctx.stateDir,
+            statePath,
             reason: "expired",
           });
         };
@@ -339,14 +367,15 @@ export default definePluginEntry({
         const action = normalizeLowercaseStringOrEmpty(tokens[0]);
 
         const stateDir = api.runtime.state.resolveStateDir();
+        const statePath = resolveStatePath(stateDir);
 
         if (!action || action === "help") {
-          const state = await readArmState();
+          const state = await readArmState(statePath);
           return { text: `${formatStatus(state)}\n\n${formatHelp()}` };
         }
 
         if (action === "status") {
-          const state = await readArmState();
+          const state = await readArmState(statePath);
           return { text: formatStatus(state) };
         }
 
@@ -359,6 +388,7 @@ export default definePluginEntry({
           const res = await disarmNow({
             api,
             stateDir,
+            statePath,
             reason: "manual",
           });
           if (!res.changed) {
@@ -400,16 +430,18 @@ export default definePluginEntry({
               removedFromDeny.push(cmd);
             }
           }
-          const next = patchConfigNodeLists(cfg, {
-            allowCommands: uniqSorted([...allowSet]),
-            denyCommands: uniqSorted([...denySet]),
-          });
-          await api.runtime.config.replaceConfigFile({
-            nextConfig: next,
+          await api.runtime.config.mutateConfigFile({
             afterWrite: { mode: "auto" },
+            mutate: (draft) => {
+              const next = patchConfigNodeLists(draft, {
+                allowCommands: uniqSorted([...allowSet]),
+                denyCommands: uniqSorted([...denySet]),
+              });
+              Object.assign(draft, next);
+            },
           });
 
-          await writeArmState({
+          await writeArmState(statePath, {
             version: STATE_VERSION,
             armedAtMs: Date.now(),
             expiresAtMs,

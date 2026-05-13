@@ -8,7 +8,9 @@ import {
 import type { OpenClawConfig } from "./config-runtime.js";
 
 const EMPTY_SESSION_CFG = {
-  session: {},
+  session: {
+    store: ".artifacts/test/approval-native-helpers-empty-sessions.json",
+  },
 } satisfies OpenClawConfig;
 
 describe("createChannelNativeOriginTargetResolver", () => {

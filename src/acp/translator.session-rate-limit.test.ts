@@ -291,7 +291,7 @@ describe("acp session UX bridge behavior", () => {
       if (method === "sessions.list") {
         return {
           ts: Date.now(),
-          databasePath: "/tmp/openclaw/state/openclaw.sqlite",
+          path: "/tmp/sessions.json",
           count: 1,
           defaults: {
             modelProvider: null,
@@ -419,7 +419,7 @@ describe("acp session UX bridge behavior", () => {
       if (method === "sessions.list") {
         return {
           ts: Date.now(),
-          databasePath: "/tmp/openclaw/state/openclaw.sqlite",
+          path: "/tmp/sessions.json",
           count: 1,
           defaults: {
             modelProvider: null,
@@ -489,7 +489,7 @@ describe("acp setSessionMode bridge behavior", () => {
       if (method === "sessions.list") {
         return {
           ts: Date.now(),
-          databasePath: "/tmp/openclaw/state/openclaw.sqlite",
+          path: "/tmp/sessions.json",
           count: 1,
           defaults: {
             modelProvider: null,
@@ -545,7 +545,7 @@ describe("acp setSessionConfigOption bridge behavior", () => {
       if (method === "sessions.list") {
         return {
           ts: Date.now(),
-          databasePath: "/tmp/openclaw/state/openclaw.sqlite",
+          path: "/tmp/sessions.json",
           count: 1,
           defaults: {
             modelProvider: null,
@@ -602,7 +602,7 @@ describe("acp setSessionConfigOption bridge behavior", () => {
       if (method === "sessions.list") {
         return {
           ts: Date.now(),
-          databasePath: "/tmp/openclaw/state/openclaw.sqlite",
+          path: "/tmp/sessions.json",
           count: 1,
           defaults: {
             modelProvider: null,
@@ -653,7 +653,7 @@ describe("acp setSessionConfigOption bridge behavior", () => {
       if (method === "sessions.list") {
         return {
           ts: Date.now(),
-          databasePath: "/tmp/openclaw/state/openclaw.sqlite",
+          path: "/tmp/sessions.json",
           count: 1,
           defaults: {
             modelProvider: null,
@@ -709,7 +709,7 @@ describe("acp setSessionConfigOption bridge behavior", () => {
       if (method === "sessions.list") {
         return {
           ts: Date.now(),
-          databasePath: "/tmp/openclaw/state/openclaw.sqlite",
+          path: "/tmp/sessions.json",
           count: 1,
           defaults: {
             modelProvider: null,
@@ -755,7 +755,7 @@ describe("acp setSessionConfigOption bridge behavior", () => {
       if (method === "sessions.list") {
         return {
           ts: Date.now(),
-          databasePath: "/tmp/openclaw/state/openclaw.sqlite",
+          path: "/tmp/sessions.json",
           count: 1,
           defaults: {
             modelProvider: null,
@@ -921,7 +921,7 @@ describe("acp session metadata and usage updates", () => {
       if (method === "sessions.list") {
         return {
           ts: Date.now(),
-          databasePath: "/tmp/openclaw/state/openclaw.sqlite",
+          path: "/tmp/sessions.json",
           count: 1,
           defaults: {
             modelProvider: null,
@@ -996,7 +996,7 @@ describe("acp session metadata and usage updates", () => {
       if (method === "sessions.list") {
         return {
           ts: Date.now(),
-          databasePath: "/tmp/openclaw/state/openclaw.sqlite",
+          path: "/tmp/sessions.json",
           count: 1,
           defaults: {
             modelProvider: null,

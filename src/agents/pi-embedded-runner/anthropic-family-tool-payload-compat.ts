@@ -1,6 +1,6 @@
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import { streamSimple } from "@earendil-works/pi-ai";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import type { StreamFn } from "../agent-core-contract.js";
-import { streamSimple } from "../pi-ai-contract.js";
 type AnthropicToolSchemaMode = "openai-functions";
 type AnthropicToolChoiceMode = "openai-string-modes";
 

@@ -1,7 +1,8 @@
 import { subagentRuns } from "../../../agents/subagent-registry-memory.js";
 import { countPendingDescendantRunsFromRuns } from "../../../agents/subagent-registry-queries.js";
 import { getSubagentRunsSnapshotForRead } from "../../../agents/subagent-registry-state.js";
-import { getSessionEntry } from "../../../config/sessions/store.js";
+import { resolveStorePath } from "../../../config/sessions/paths.js";
+import { loadSessionStore } from "../../../config/sessions/store-load.js";
 import { formatTimeAgo } from "../../../infra/format-time/format-relative.ts";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { formatDurationCompact } from "../../../shared/subagents-format.js";
@@ -83,22 +84,17 @@ function resolveSubagentEntryForToken(
   return { entry: resolved.entry };
 }
 
-function loadSubagentSessionEntry(childKey: string) {
+function loadSubagentSessionEntry(params: SubagentsCommandContext["params"], childKey: string) {
   const parsed = parseAgentSessionKey(childKey);
-  const agentId = parsed?.agentId;
-  if (!agentId) {
-    return { entry: undefined };
-  }
-  return {
-    entry: getSessionEntry({
-      agentId,
-      sessionKey: childKey,
-    }),
-  };
+  const storePath = resolveStorePath(params.cfg.session?.store, {
+    agentId: parsed?.agentId,
+  });
+  const store = loadSessionStore(storePath);
+  return { entry: store[childKey] };
 }
 
 export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): CommandHandlerResult {
-  const { requesterKey, runs, restTokens } = ctx;
+  const { params, requesterKey, runs, restTokens } = ctx;
   const target = restTokens[0];
   if (!target) {
     return stopWithText("ℹ️ Usage: /subagents info <id|#>");
@@ -110,7 +106,7 @@ export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): Command
   }
 
   const run = targetResolution.entry;
-  const { entry: sessionEntry } = loadSubagentSessionEntry(run.childSessionKey);
+  const { entry: sessionEntry } = loadSubagentSessionEntry(params, run.childSessionKey);
   const runtime =
     run.startedAt && Number.isFinite(run.startedAt)
       ? (formatDurationCompact((run.endedAt ?? Date.now()) - run.startedAt) ?? "n/a")
@@ -145,11 +141,7 @@ export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): Command
     linkedTask ? `TaskStatus: ${linkedTask.status}` : undefined,
     `Session: ${run.childSessionKey}`,
     `SessionId: ${sessionEntry?.sessionId ?? "n/a"}`,
-    `Transcript: ${
-      sessionEntry?.sessionId
-        ? `agent=${parseAgentSessionKey(run.childSessionKey)?.agentId ?? "main"} session=${sessionEntry.sessionId}`
-        : "n/a"
-    }`,
+    `Transcript: ${sessionEntry?.sessionFile ?? "n/a"}`,
     `Runtime: ${runtime}`,
     `Created: ${formatTimestampWithAge(run.createdAt)}`,
     `Started: ${formatTimestampWithAge(run.startedAt)}`,

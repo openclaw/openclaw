@@ -64,14 +64,14 @@ describe("redactSensitiveStatusSummary", () => {
         },
       },
       sessions: {
-        databasePaths: ["/tmp/openclaw/openclaw-agent.sqlite"],
+        paths: ["/tmp/openclaw/sessions.json"],
         count: 1,
         defaults: { model: "gpt-5", contextTokens: 200_000 },
         recent: [createRecentSessionRow()],
         byAgent: [
           {
             agentId: "main",
-            databasePath: "/tmp/openclaw/main/openclaw-agent.sqlite",
+            path: "/tmp/openclaw/main-sessions.json",
             count: 1,
             recent: [createRecentSessionRow()],
           },
@@ -80,11 +80,11 @@ describe("redactSensitiveStatusSummary", () => {
     };
 
     const redacted = redactSensitiveStatusSummary(input);
-    expect(redacted.sessions.databasePaths).toEqual([]);
+    expect(redacted.sessions.paths).toStrictEqual([]);
     expect(redacted.sessions.defaults).toEqual({ model: null, contextTokens: null });
-    expect(redacted.sessions.recent).toEqual([]);
-    expect(redacted.sessions.byAgent[0]?.databasePath).toBe("[redacted]");
-    expect(redacted.sessions.byAgent[0]?.recent).toEqual([]);
+    expect(redacted.sessions.recent).toStrictEqual([]);
+    expect(redacted.sessions.byAgent[0]?.path).toBe("[redacted]");
+    expect(redacted.sessions.byAgent[0]?.recent).toStrictEqual([]);
     expect(redacted.runtimeVersion).toBe("2026.3.8");
     expect(redacted.heartbeat).toEqual(input.heartbeat);
     expect(redacted.channelSummary).toEqual(input.channelSummary);

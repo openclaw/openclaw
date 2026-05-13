@@ -266,6 +266,7 @@ Use `allowBots` when you intentionally want inter-agent Matrix traffic:
 - `allowBots: true` accepts messages from other configured Matrix bot accounts in allowed rooms and DMs.
 - `allowBots: "mentions"` accepts those messages only when they visibly mention this bot in rooms. DMs are still allowed.
 - `groups.<room>.allowBots` overrides the account-level setting for one room.
+- Accepted configured-bot messages use shared [bot loop protection](/channels/bot-loop-protection). Configure `channels.defaults.botLoopProtection`, then override with `channels.matrix.botLoopProtection` or `channels.matrix.groups.<room>.botLoopProtection` when one room needs a different budget.
 - OpenClaw still ignores messages from the same Matrix user ID to avoid self-reply loops.
 - Matrix does not expose a native bot flag here; OpenClaw treats "bot-authored" as "sent by another configured Matrix account on this OpenClaw gateway".
 
@@ -480,9 +481,9 @@ openclaw matrix devices prune-stale
   </Accordion>
 
   <Accordion title="Crypto store">
-    Matrix E2EE uses the official `matrix-js-sdk` Rust crypto path with `fake-indexeddb` as the IndexedDB shim. OpenClaw persists the IndexedDB crypto snapshot into SQLite plugin blobs; older `crypto-idb-snapshot.json` files are imported by `openclaw doctor --fix`.
+    Matrix E2EE uses the official `matrix-js-sdk` Rust crypto path with `fake-indexeddb` as the IndexedDB shim. Crypto state persists to `crypto-idb-snapshot.json` (restrictive file permissions).
 
-    Account-scoped Matrix roots under `~/.openclaw/matrix/accounts/<account>/<homeserver>__<user>/<token-hash>/` are now mainly migration anchors plus recovery-key storage. Runtime sync, thread binding, startup verification, and IndexedDB snapshot state live in SQLite. When the token changes but the account identity stays the same, OpenClaw reuses the best existing root so prior state remains visible.
+    Encrypted runtime state lives under `~/.openclaw/matrix/accounts/<account>/<homeserver>__<user>/<token-hash>/` and includes the sync store, crypto store, recovery key, IDB snapshot, thread bindings, and startup verification state. When the token changes but the account identity stays the same, OpenClaw reuses the best existing root so prior state remains visible.
 
   </Accordion>
 </AccordionGroup>

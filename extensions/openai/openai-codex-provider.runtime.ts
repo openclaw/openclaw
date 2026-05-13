@@ -1,7 +1,7 @@
 import {
   getOAuthApiKey as getOAuthApiKeyFromPi,
   refreshOpenAICodexToken as refreshOpenAICodexTokenFromPi,
-} from "openclaw/plugin-sdk/provider-ai-oauth";
+} from "@earendil-works/pi-ai/oauth";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
 
 type OpenAICodexProviderRuntimeDeps = {

@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
 import type { OpenClawConfig } from "../config/types.js";
 import type { TtsAutoMode, TtsConfig, TtsMode } from "../config/types.tts.js";
 import { normalizeAccountId, normalizeAgentId } from "../routing/session-key.js";
@@ -5,8 +7,8 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { normalizeTtsAutoMode } from "./tts-auto-mode.js";
-import { readTtsUserPrefs, resolveTtsPrefsRef } from "./tts-prefs-store.js";
 export { normalizeTtsAutoMode } from "./tts-auto-mode.js";
 
 const BLOCKED_MERGE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
@@ -142,14 +144,34 @@ export function resolveConfiguredTtsMode(
   return resolveEffectiveTtsConfig(cfg, contextOrAgentId).mode ?? "final";
 }
 
-function readTtsPrefsAutoMode(prefsRef: string): TtsAutoMode | undefined {
-  const prefs = readTtsUserPrefs(prefsRef);
-  const auto = normalizeTtsAutoMode(prefs.tts?.auto);
-  if (auto) {
-    return auto;
+function resolveTtsPrefsPathValue(prefsPath: string | undefined): string {
+  if (prefsPath?.trim()) {
+    return resolveUserPath(prefsPath.trim());
   }
-  if (typeof prefs.tts?.enabled === "boolean") {
-    return prefs.tts.enabled ? "always" : "off";
+  const envPath = process.env.OPENCLAW_TTS_PREFS?.trim();
+  if (envPath) {
+    return resolveUserPath(envPath);
+  }
+  return path.join(resolveConfigDir(process.env), "settings", "tts.json");
+}
+
+function readTtsPrefsAutoMode(prefsPath: string): TtsAutoMode | undefined {
+  try {
+    if (!existsSync(prefsPath)) {
+      return undefined;
+    }
+    const prefs = JSON.parse(readFileSync(prefsPath, "utf8")) as {
+      tts?: { auto?: unknown; enabled?: unknown };
+    };
+    const auto = normalizeTtsAutoMode(prefs.tts?.auto);
+    if (auto) {
+      return auto;
+    }
+    if (typeof prefs.tts?.enabled === "boolean") {
+      return prefs.tts.enabled ? "always" : "off";
+    }
+  } catch {
+    return undefined;
   }
   return undefined;
 }
@@ -167,7 +189,7 @@ export function shouldAttemptTtsPayload(params: {
   }
 
   const raw = resolveEffectiveTtsConfig(params.cfg, params);
-  const prefsAuto = readTtsPrefsAutoMode(resolveTtsPrefsRef());
+  const prefsAuto = readTtsPrefsAutoMode(resolveTtsPrefsPathValue(raw?.prefsPath));
   if (prefsAuto) {
     return prefsAuto !== "off";
   }

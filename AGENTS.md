@@ -92,9 +92,6 @@ Skills own workflows; root owns hard policy and routing.
 - No `@ts-nocheck`. Lint suppressions only intentional + explained.
 - External boundaries: prefer `zod` or existing schema helpers.
 - Runtime branching: discriminated unions/closed codes over freeform strings. Avoid semantic sentinels (`?? 0`, empty object/string).
-- Storage adapters: quarantine schema/nullability mess at the boundary. Use one named mapper from domain object to DB row, one mapper from DB row to domain object, and keep read/write paths boring.
-- Discriminated unions: use exhaustive `switch` mappers instead of repeated inline conditionals. If insert/update share shape, build the row once and reuse it; split primary keys once for update sets.
-- Kysely rows: prefer generated `Insertable`/`Selectable` types for mapper contracts. Do not duplicate nullable-column logic inside `values(...)` and `doUpdateSet(...)`.
 - Dynamic import: no static+dynamic import for same prod module. Use `*.runtime.ts` lazy boundary. After edits: `pnpm build`; check `[INEFFECTIVE_DYNAMIC_IMPORT]`.
 - Cycles: keep `pnpm check:import-cycles` + architecture/madge green.
 - Classes: no prototype mixins/mutations. Prefer inheritance/composition. Tests prefer per-instance stubs.

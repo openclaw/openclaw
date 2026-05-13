@@ -106,10 +106,12 @@ Notes:
 
 ### `wiki compile`
 
-Rebuild indexes, related blocks, dashboards, and SQLite-backed compiled digests.
+Rebuild indexes, related blocks, dashboards, and compiled digests.
 
-The stable machine-facing digests live in OpenClaw's SQLite plugin state so
-agents and runtime code do not have to scrape Markdown pages.
+This writes stable machine-facing artifacts under:
+
+- `.openclaw-wiki/cache/agent-digest.json`
+- `.openclaw-wiki/cache/claims.jsonl`
 
 If `render.createDashboards` is enabled, compile also refreshes report pages.
 

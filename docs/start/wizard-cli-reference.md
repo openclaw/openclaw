@@ -232,7 +232,7 @@ Model behavior:
 
 Credential and profile paths:
 
-- Auth profiles (API keys + OAuth): `~/.openclaw/state/openclaw.sqlite#table/auth_profile_stores/<agentDir>`
+- Auth profiles (API keys + OAuth): `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
 - Legacy OAuth import: `~/.openclaw/credentials/oauth.json`
 
 Credential storage mode:
@@ -259,10 +259,10 @@ Credential storage mode:
 
 <Note>
 Headless and server tip: complete OAuth on a machine with a browser, then copy
-that agent's SQLite auth-profile row (for example
-`~/.openclaw/state/openclaw.sqlite#table/auth_profile_stores/<agentDir>`, or the matching
-`$OPENCLAW_STATE_DIR/...` path) to the gateway host. `credentials/oauth.json` is
-only a legacy import source.
+that agent's `auth-profiles.json` (for example
+`~/.openclaw/agents/<agentId>/agent/auth-profiles.json`, or the matching
+`$OPENCLAW_STATE_DIR/...` path) to the gateway host. `credentials/oauth.json`
+is only a legacy import source.
 </Note>
 
 ## Outputs and internals
@@ -289,11 +289,7 @@ Typical fields in `~/.openclaw/openclaw.json`:
 `openclaw agents add` writes `agents.list[]` and optional `bindings`.
 
 WhatsApp credentials go under `~/.openclaw/credentials/whatsapp/<accountId>/`.
-Session rows and transcripts are stored in SQLite:
-`~/.openclaw/state/openclaw.sqlite` plus
-`~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`.
-Legacy `agents/<agentId>/sessions/` files are doctor migration inputs or
-explicit debug/export artifacts only.
+Sessions are stored under `~/.openclaw/agents/<agentId>/sessions/`.
 
 <Note>
 Some channels are delivered as plugins. When selected during setup, the wizard

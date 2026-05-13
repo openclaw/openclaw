@@ -1,4 +1,4 @@
-import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import {
   createActionGate,
   jsonResult,
@@ -18,7 +18,7 @@ export const whatsAppActionRuntime = {
 export async function handleWhatsAppAction(
   params: Record<string, unknown>,
   cfg: OpenClawConfig,
-): Promise<AgentToolResult> {
+): Promise<AgentToolResult<unknown>> {
   const action = readStringParam(params, "action", { required: true });
   const whatsAppConfig = cfg.channels?.whatsapp;
   const isActionEnabled = createActionGate(whatsAppConfig?.actions);

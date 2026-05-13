@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { applyModelOverrideToSessionEntry } from "openclaw/plugin-sdk/model-session-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { patchSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { resolveStorePath, updateSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ButtonInteraction, StringSelectMenuInteraction } from "../internal/discord.js";
 import {
@@ -35,24 +35,25 @@ async function persistDiscordModelPickerOverride(params: {
   model: string;
   isDefault: boolean;
 }): Promise<boolean> {
-  let persisted = false;
-  await patchSessionEntry({
+  const storePath = resolveStorePath(params.cfg.session?.store, {
     agentId: params.route.agentId,
-    sessionKey: params.route.sessionKey,
-    update: (entry) => {
-      const next = { ...entry };
-      const updated = applyModelOverrideToSessionEntry({
-        entry: next,
+  });
+  let persisted = false;
+  await updateSessionStore(storePath, (store) => {
+    const entry = store[params.route.sessionKey];
+    if (!entry) {
+      return;
+    }
+    persisted =
+      applyModelOverrideToSessionEntry({
+        entry,
         selection: {
           provider: params.provider,
           model: params.model,
           isDefault: params.isDefault,
         },
         markLiveSwitchPending: true,
-      }).updated;
-      persisted = updated || persisted;
-      return updated ? next : null;
-    },
+      }).updated || persisted;
   });
   return persisted;
 }

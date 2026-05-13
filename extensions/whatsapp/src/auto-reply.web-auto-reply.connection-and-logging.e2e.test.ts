@@ -868,7 +868,7 @@ describe("web auto-reply connection", () => {
               envelopeTimezone: "utc",
             },
           },
-          session: {},
+          session: { store: store.storePath },
         }));
 
         await monitorWebChannel(false, capture.listenerFactory as never, false, resolver);
@@ -955,6 +955,7 @@ describe("web auto-reply connection", () => {
 
     await vi.advanceTimersByTimeAsync(1_000);
     controller.abort();
+    await vi.runAllTimersAsync();
     await run.catch(() => {});
 
     const content = await fs.readFile(logPath, "utf-8");

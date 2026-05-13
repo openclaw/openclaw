@@ -12,11 +12,11 @@ import {
   resolveMainSessionAlias,
 } from "../../agents/tools/sessions-helpers.js";
 import {
-  getSessionEntry,
-  listSessionEntries,
-  resolveSessionRowEntry,
+  loadSessionStore,
+  resolveSessionStoreEntry,
+  resolveStorePath,
   type SessionEntry,
-  upsertSessionEntry,
+  updateSessionStore,
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
@@ -101,16 +101,22 @@ export function formatAbortReplyText(stoppedSubagents?: number): string {
 export function resolveSessionEntryForKey(
   store: Record<string, SessionEntry> | undefined,
   sessionKey: string | undefined,
-): { entry?: SessionEntry; key?: string } {
+): { entry?: SessionEntry; key?: string; legacyKeys?: string[] } {
   if (!store || !sessionKey) {
     return {};
   }
-  const resolved = resolveSessionRowEntry({ entries: store, sessionKey });
+  const resolved = resolveSessionStoreEntry({ store, sessionKey });
   if (resolved.existing) {
-    return {
-      entry: resolved.existing,
-      key: resolved.normalizedKey,
-    };
+    return resolved.legacyKeys.length > 0
+      ? {
+          entry: resolved.existing,
+          key: resolved.normalizedKey,
+          legacyKeys: resolved.legacyKeys,
+        }
+      : {
+          entry: resolved.existing,
+          key: resolved.normalizedKey,
+        };
   }
   return {};
 }
@@ -165,6 +171,7 @@ export function stopSubagentsForRequester(params: {
     return { stopped: 0 };
   }
 
+  const storeCache = new Map<string, Record<string, SessionEntry>>();
   const seenChildKeys = new Set<string>();
   let stopped = 0;
 
@@ -178,8 +185,13 @@ export function stopSubagentsForRequester(params: {
     if (!run.endedAt) {
       const cleared = clearSessionQueues([childKey]);
       const parsed = parseAgentSessionKey(childKey);
-      const agentId = parsed?.agentId;
-      const entry = getSessionEntry({ agentId: agentId ?? "main", sessionKey: childKey });
+      const storePath = resolveStorePath(params.cfg.session?.store, { agentId: parsed?.agentId });
+      let store = storeCache.get(storePath);
+      if (!store) {
+        store = loadSessionStore(storePath);
+        storeCache.set(storePath, store);
+      }
+      const entry = store[childKey];
       const sessionId = replyRunRegistry.resolveSessionId(childKey) ?? entry?.sessionId;
       const aborted =
         (childKey ? replyRunRegistry.abort(childKey) : false) ||
@@ -254,10 +266,9 @@ export async function tryFastAbortFromMessage(params: {
   const requesterSessionKey = targetKey ?? ctx.SessionKey ?? abortKey;
 
   if (targetKey) {
-    const store = Object.fromEntries(
-      listSessionEntries({ agentId }).map(({ sessionKey, entry }) => [sessionKey, entry]),
-    );
-    const { entry, key } = resolveSessionEntryForKey(store, targetKey);
+    const storePath = resolveStorePath(cfg.session?.store, { agentId });
+    const store = loadSessionStore(storePath);
+    const { entry, key, legacyKeys } = resolveSessionEntryForKey(store, targetKey);
     const resolvedTargetKey = key ?? targetKey;
     const acpManager = abortDeps.getAcpSessionManager();
     const acpResolution = acpManager.resolveSession({
@@ -298,14 +309,25 @@ export async function tryFastAbortFromMessage(params: {
       applyAbortCutoffToSessionEntry(entry, abortCutoff);
       entry.updatedAt = Date.now();
       store[key] = entry;
-      const nextEntry = getSessionEntry({ agentId, sessionKey: key }) ?? entry;
-      nextEntry.abortedLastRun = true;
-      applyAbortCutoffToSessionEntry(nextEntry, abortCutoff);
-      nextEntry.updatedAt = Date.now();
-      upsertSessionEntry({
-        agentId,
-        sessionKey: key,
-        entry: nextEntry,
+      for (const legacyKey of legacyKeys ?? []) {
+        if (legacyKey !== key) {
+          delete store[legacyKey];
+        }
+      }
+      await updateSessionStore(storePath, (nextStore) => {
+        const nextEntry = nextStore[key] ?? entry;
+        if (!nextEntry) {
+          return;
+        }
+        nextEntry.abortedLastRun = true;
+        applyAbortCutoffToSessionEntry(nextEntry, abortCutoff);
+        nextEntry.updatedAt = Date.now();
+        nextStore[key] = nextEntry;
+        for (const legacyKey of legacyKeys ?? []) {
+          if (legacyKey !== key) {
+            delete nextStore[legacyKey];
+          }
+        }
       });
     } else if (abortKey) {
       setAbortMemory(abortKey, true);

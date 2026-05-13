@@ -1,4 +1,4 @@
-import type { AgentMessage } from "../../agent-core-contract.js";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 
 export const PRUNED_HISTORY_IMAGE_MARKER = "[image data removed - already processed by model]";
 export const PRUNED_HISTORY_MEDIA_REFERENCE_MARKER =

@@ -62,6 +62,7 @@ describe("unit-fast vitest lane", () => {
     expect(testConfig.include).toContain("src/commands/status-overview-values.test.ts");
     expect(testConfig.include).toContain("src/entry.respawn.test.ts");
     expect(testConfig.include).toContain("src/entry.version-fast-path.test.ts");
+    expect(testConfig.include).toContain("src/flows/doctor-startup-channel-maintenance.test.ts");
     expect(testConfig.include).toContain("src/crestodian/rescue-policy.test.ts");
     expect(testConfig.include).toContain("src/crestodian/assistant.configured.test.ts");
     expect(testConfig.include).toContain("src/flows/search-setup.test.ts");

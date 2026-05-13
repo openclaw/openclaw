@@ -18,8 +18,8 @@ import {
   restoreFastTestEnv,
   runEmbeddedPiAgentMock,
   runWithModelFallbackMock,
+  updateSessionStoreMock,
   runCliAgentMock,
-  upsertSessionEntryMock,
 } from "./run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
@@ -125,7 +125,7 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     });
 
     resolveAgentConfigMock.mockReturnValue(undefined);
-    upsertSessionEntryMock.mockResolvedValue(undefined);
+    updateSessionStoreMock.mockResolvedValue(undefined);
 
     resolveCronSessionMock.mockReturnValue(
       makeCronSession({

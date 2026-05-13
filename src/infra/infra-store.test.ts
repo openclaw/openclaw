@@ -2,8 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { importLegacyVoiceWakeRoutingConfigFileToSqlite } from "../commands/doctor/legacy/voicewake-routing.js";
-import { importLegacyVoiceWakeConfigFileToSqlite } from "../commands/doctor/legacy/voicewake.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   getChannelActivity,
@@ -16,6 +14,7 @@ import {
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
 } from "./diagnostic-events.js";
+import { readSessionStoreJson5 } from "./state-migrations.fs.js";
 import {
   loadVoiceWakeRoutingConfig,
   normalizeVoiceWakeTriggerWord,
@@ -52,6 +51,35 @@ const missingStoreDefaultCases = [
 ];
 
 describe("infra store", () => {
+  describe("state migrations fs", () => {
+    it("treats array session stores as invalid", async () => {
+      await withTempDir("openclaw-session-store-", async (dir) => {
+        const storePath = path.join(dir, "sessions.json");
+        await fs.writeFile(storePath, "[]", "utf-8");
+
+        const result = readSessionStoreJson5(storePath);
+        expect(result.ok).toBe(false);
+        expect(result.store).toStrictEqual({});
+      });
+    });
+
+    it("parses JSON5 object session stores", async () => {
+      await withTempDir("openclaw-session-store-", async (dir) => {
+        const storePath = path.join(dir, "sessions.json");
+        await fs.writeFile(
+          storePath,
+          "{\n  // comment allowed in JSON5\n  main: { sessionId: 's1', updatedAt: 123 },\n}\n",
+          "utf-8",
+        );
+
+        const result = readSessionStoreJson5(storePath);
+        expect(result.ok).toBe(true);
+        expect(result.store.main?.sessionId).toBe("s1");
+        expect(result.store.main?.updatedAt).toBe(123);
+      });
+    });
+  });
+
   describe("missing store defaults", () => {
     it.each(missingStoreDefaultCases)(
       "$name returns defaults when missing",
@@ -78,6 +106,24 @@ describe("infra store", () => {
       await withTempDir("openclaw-voicewake-", async (baseDir) => {
         const saved = await setVoiceWakeTriggers(["", "   "], baseDir);
         expect(saved.triggers).toEqual(defaultVoiceWakeTriggers());
+      });
+    });
+
+    it("sanitizes malformed persisted config values", async () => {
+      await withTempDir("openclaw-voicewake-", async (baseDir) => {
+        await fs.mkdir(path.join(baseDir, "settings"), { recursive: true });
+        await fs.writeFile(
+          path.join(baseDir, "settings", "voicewake.json"),
+          JSON.stringify({
+            triggers: ["  wake ", "", 42, null],
+            updatedAtMs: -1,
+          }),
+          "utf-8",
+        );
+
+        const loaded = await loadVoiceWakeConfig(baseDir);
+        expect(loaded.triggers).toEqual(["wake"]);
+        expect(loaded.updatedAtMs).toBe(0);
       });
     });
   });

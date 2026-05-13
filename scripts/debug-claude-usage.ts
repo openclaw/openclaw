@@ -3,9 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { loadPersistedAuthProfileStore } from "../src/agents/auth-profiles/persisted.ts";
 import { normalizeOptionalString } from "../src/shared/string-coerce.ts";
-import { resolveOpenClawStateSqlitePath } from "../src/state/openclaw-state-db.paths.ts";
 
 type Args = {
   agentId: string;
@@ -49,17 +47,14 @@ const parseArgs = (): Args => {
 
 const loadAuthProfiles = (agentId: string) => {
   const stateRoot = process.env.OPENCLAW_STATE_DIR?.trim() || path.join(os.homedir(), ".openclaw");
-  const agentDir = path.join(stateRoot, "agents", agentId, "agent");
-  const store = loadPersistedAuthProfileStore(agentDir, {
-    env: { ...process.env, OPENCLAW_STATE_DIR: stateRoot },
-  }) as {
-    profiles?: Record<string, { provider?: string; type?: string; token?: string; key?: string }>;
-  } | null;
-  const authLocation = `${resolveOpenClawStateSqlitePath({ ...process.env, OPENCLAW_STATE_DIR: stateRoot })}#table/auth_profile_stores/${agentDir}`;
-  if (!store) {
-    throw new Error(`Missing SQLite auth store: ${authLocation}`);
+  const authPath = path.join(stateRoot, "agents", agentId, "agent", "auth-profiles.json");
+  if (!fs.existsSync(authPath)) {
+    throw new Error(`Missing: ${authPath}`);
   }
-  return { authLocation, store };
+  const store = JSON.parse(fs.readFileSync(authPath, "utf8")) as {
+    profiles?: Record<string, { provider?: string; type?: string; token?: string; key?: string }>;
+  };
+  return { authPath, store };
 };
 
 const pickAnthropicTokens = (store: {
@@ -327,8 +322,8 @@ const fetchClaudeWebUsage = async (sessionKey: string) => {
 
 const main = async () => {
   const opts = parseArgs();
-  const { authLocation, store } = loadAuthProfiles(opts.agentId);
-  console.log(`Auth store: ${authLocation}`);
+  const { authPath, store } = loadAuthProfiles(opts.agentId);
+  console.log(`Auth file: ${authPath}`);
 
   const keychain = readClaudeCliKeychain();
   if (keychain) {

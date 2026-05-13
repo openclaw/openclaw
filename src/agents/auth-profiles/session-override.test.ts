@@ -169,11 +169,19 @@ describe("resolveSessionAuthProfileOverride", () => {
         sessionEntry,
         sessionStore,
         sessionKey: "agent:main:main",
+        storePath: undefined,
         isNewSession: false,
       });
 
       expect(resolved).toBeUndefined();
       expect(authStoreMocks.ensureAuthProfileStore).not.toHaveBeenCalled();
+      try {
+        await fs.access(`${agentDir}/auth-profiles.json`);
+      } catch (error) {
+        expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+        return;
+      }
+      throw new Error("Expected auth-profiles.json to be absent");
     });
   });
 
@@ -199,6 +207,7 @@ describe("resolveSessionAuthProfileOverride", () => {
         sessionEntry,
         sessionStore,
         sessionKey: "agent:main:main",
+        storePath: undefined,
         isNewSession: false,
       });
 
@@ -248,6 +257,7 @@ describe("resolveSessionAuthProfileOverride", () => {
         sessionEntry,
         sessionStore,
         sessionKey: "agent:main:main",
+        storePath: undefined,
         isNewSession: false,
       });
 
@@ -305,6 +315,7 @@ describe("resolveSessionAuthProfileOverride", () => {
         sessionEntry,
         sessionStore,
         sessionKey: "agent:main:main",
+        storePath: undefined,
         isNewSession: false,
       });
 
@@ -352,6 +363,7 @@ describe("resolveSessionAuthProfileOverride", () => {
         sessionEntry,
         sessionStore,
         sessionKey: "agent:main:main",
+        storePath: undefined,
         isNewSession: false,
       });
 
@@ -394,6 +406,7 @@ describe("resolveSessionAuthProfileOverride", () => {
         sessionEntry,
         sessionStore,
         sessionKey: "agent:main:main",
+        storePath: undefined,
         isNewSession: false,
       });
 
@@ -436,6 +449,7 @@ describe("resolveSessionAuthProfileOverride", () => {
         sessionEntry,
         sessionStore,
         sessionKey: "agent:main:main",
+        storePath: undefined,
         isNewSession: false,
       });
 
@@ -483,6 +497,7 @@ describe("resolveSessionAuthProfileOverride", () => {
         sessionEntry,
         sessionStore,
         sessionKey: "agent:main:main",
+        storePath: undefined,
         isNewSession: false,
       });
 
@@ -533,6 +548,7 @@ describe("resolveSessionAuthProfileOverride", () => {
         sessionEntry,
         sessionStore,
         sessionKey: "agent:main:main",
+        storePath: undefined,
         isNewSession: false,
       });
 

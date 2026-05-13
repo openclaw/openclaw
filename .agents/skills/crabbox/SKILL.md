@@ -188,8 +188,7 @@ Live-provider debug template for direct AWS/Hetzner leases:
 
 ```sh
 mkdir -p .crabbox/logs
-CRABBOX_ENV_ALLOW=OPENAI_API_KEY,OPENAI_BASE_URL \
-  pnpm crabbox:run -- --provider aws \
+pnpm crabbox:run -- --provider aws \
   --preflight \
   --allow-env OPENAI_API_KEY,OPENAI_BASE_URL \
   --timing-json \
@@ -201,8 +200,9 @@ CRABBOX_ENV_ALLOW=OPENAI_API_KEY,OPENAI_BASE_URL \
 ```
 
 Do not pass `--capture-*`, `--download`, `--checksum`, `--force-sync-large`, or
-`--sync-only` to delegated providers. Crabbox rejects them because the provider
-owns sync or command transport.
+`--sync-only` to delegated providers. Also do not pass `--script*` or
+`--fresh-pr` there. Crabbox rejects these because the provider owns sync or
+command transport.
 
 ## Efficient Bug E2E Verification
 

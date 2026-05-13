@@ -126,7 +126,7 @@ You can append `:fastest` or `:cheapest` to any model id. Set your default order
 
       You can add these as separate entries in `models.providers.huggingface.models` or set `model.primary` with the suffix. You can also set your default provider order in [Inference Provider settings](https://hf.co/settings/inference-providers) (no suffix = use that order).
 
-    - **Config merge:** Existing entries in `models.providers.huggingface.models` and the stored model catalog are kept when config is merged. So any custom `name`, `alias`, or model options you set there are preserved.
+    - **Config merge:** Existing entries in `models.providers.huggingface.models` (e.g. in `models.json`) are kept when config is merged. So any custom `name`, `alias`, or model options you set there are preserved.
 
   </Accordion>
 

@@ -20,6 +20,10 @@ enum AppLogSettings {
     static func setLogLevel(_ level: Logger.Level) {
         UserDefaults.standard.set(level.rawValue, forKey: self.logLevelKey)
     }
+
+    static func fileLoggingEnabled() -> Bool {
+        UserDefaults.standard.bool(forKey: debugFileLogEnabledKey)
+    }
 }
 
 enum AppLogLevel: String, CaseIterable, Identifiable {
@@ -56,7 +60,9 @@ enum OpenClawLogging {
     private static let didBootstrap: Void = {
         LoggingSystem.bootstrap { label in
             let (subsystem, category) = Self.parseLabel(label)
-            return OpenClawOSLogHandler(subsystem: subsystem, category: category)
+            let osHandler = OpenClawOSLogHandler(subsystem: subsystem, category: category)
+            let fileHandler = OpenClawFileLogHandler(label: label)
+            return MultiplexLogHandler([osHandler, fileHandler])
         }
     }()
 
@@ -185,5 +191,67 @@ struct OpenClawOSLogHandler: AppLogLevelBackedHandler {
             .map { "\($0.key)=\(stringifyLogMetadataValue($0.value))" }
             .joined(separator: " ")
         return "\(message.description) [\(meta)]"
+    }
+}
+
+struct OpenClawFileLogHandler: AppLogLevelBackedHandler {
+    let label: String
+    var metadata: Logger.Metadata = [:]
+
+    func log(event: LogEvent) {
+        self.writeLog(
+            level: event.level,
+            message: event.message,
+            metadata: event.metadata,
+            source: event.source,
+            file: event.file,
+            function: event.function,
+            line: event.line)
+    }
+
+    func log(
+        level: Logger.Level,
+        message: Logger.Message,
+        metadata: Logger.Metadata?,
+        source: String,
+        file: String,
+        function: String,
+        line: UInt)
+    {
+        self.writeLog(
+            level: level,
+            message: message,
+            metadata: metadata,
+            source: source,
+            file: file,
+            function: function,
+            line: line)
+    }
+
+    private func writeLog(
+        level: Logger.Level,
+        message: Logger.Message,
+        metadata: Logger.Metadata?,
+        source: String,
+        file: String,
+        function: String,
+        line: UInt)
+    {
+        guard AppLogSettings.fileLoggingEnabled() else { return }
+        let (subsystem, category) = OpenClawLogging.parseLabel(self.label)
+        var fields: [String: String] = [
+            "subsystem": subsystem,
+            "category": category,
+            "level": level.rawValue,
+            "source": source,
+            "file": file,
+            "function": function,
+            "line": "\(line)",
+        ]
+        let merged = self.metadata.merging(metadata ?? [:], uniquingKeysWith: { _, new in new })
+        for (key, value) in merged {
+            fields["meta.\(key)"] = stringifyLogMetadataValue(value)
+        }
+        DiagnosticsFileLog.shared.log(category: category, event: message.description, fields: fields)
     }
 }

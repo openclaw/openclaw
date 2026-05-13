@@ -1,7 +1,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
+import {
+  appendMemoryHostEvent,
+  resolveMemoryHostEventLogPath,
+} from "openclaw/plugin-sdk/memory-host-events";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { listMemoryCorePublicArtifacts } from "./public-artifacts.js";
@@ -48,9 +51,7 @@ describe("listMemoryCorePublicArtifacts", () => {
       },
     };
 
-    const artifacts = await listMemoryCorePublicArtifacts({ cfg });
-    expect(artifacts).toHaveLength(4);
-    expect(artifacts).toEqual([
+    await expect(listMemoryCorePublicArtifacts({ cfg })).resolves.toEqual([
       {
         kind: "memory-root",
         workspaceDir,
@@ -78,13 +79,10 @@ describe("listMemoryCorePublicArtifacts", () => {
       {
         kind: "event-log",
         workspaceDir,
-        relativePath: "memory/events/memory-host-events.json",
-        absolutePath: "sqlite:plugin_state_entries/memory-core/memory-host.events",
+        relativePath: "memory/.dreams/events.jsonl",
+        absolutePath: resolveMemoryHostEventLogPath(workspaceDir),
         agentIds: ["main"],
         contentType: "json",
-        content: expect.stringContaining('"type": "memory.recall.recorded"'),
-        sizeBytes: expect.any(Number),
-        updatedAtMs: Date.parse("2026-04-06T12:00:00.000Z"),
       },
     ]);
   });

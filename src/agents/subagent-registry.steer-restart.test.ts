@@ -53,15 +53,14 @@ vi.mock("../config/sessions.js", () => {
   );
 
   return {
-    getSessionEntry: vi.fn(({ sessionKey }: { sessionKey: string }) => sessionStore[sessionKey]),
-    listSessionEntries: vi.fn(() =>
-      Object.entries(sessionStore).map(([sessionKey, entry]) => ({ sessionKey, entry })),
-    ),
+    loadSessionStore: vi.fn(() => sessionStore),
     resolveAgentIdFromSessionKey: (key: string) => {
       const match = key.match(/^agent:([^:]+)/);
       return match?.[1] ?? "main";
     },
     resolveMainSessionKey: () => "agent:main:main",
+    resolveStorePath: () => "/tmp/test-store",
+    updateSessionStore: vi.fn(),
   };
 });
 
@@ -150,8 +149,8 @@ vi.mock("../sessions/session-lifecycle-events.js", () => ({
 }));
 
 vi.mock("./subagent-registry.store.js", () => ({
-  loadSubagentRegistryFromState: vi.fn(() => new Map()),
-  saveSubagentRegistryToState: vi.fn(() => {}),
+  loadSubagentRegistryFromDisk: vi.fn(() => new Map()),
+  saveSubagentRegistryToDisk: vi.fn(() => {}),
 }));
 
 describe("subagent registry steer restarts", () => {

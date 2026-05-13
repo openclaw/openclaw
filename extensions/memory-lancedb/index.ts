@@ -625,16 +625,7 @@ export default definePluginEntry({
       });
       return;
     }
-    const dbPath = cfg.dbPath?.trim();
-    if (!dbPath) {
-      api.registerService({
-        id: "memory-lancedb",
-        start: () => {
-          api.logger.warn("memory-lancedb: disabled until configured (dbPath required)");
-        },
-      });
-      return;
-    }
+    const dbPath = cfg.dbPath!;
     const resolvedDbPath = dbPath.includes("://") ? dbPath : api.resolvePath(dbPath);
     const { model, dimensions } = cfg.embedding;
     const disabledHookCfg = { ...cfg, autoCapture: false, autoRecall: false };

@@ -15,14 +15,8 @@ const platformMock = await vi.hoisted(async () => {
 
 vi.mock("../../utils/platform.js", () => ({
   getHomeDir: () => platformMock.homeDir,
-  getQQBotMediaDir: (...subPaths: string[]) => {
-    const dir = platformMock.path.join(
-      platformMock.homeDir,
-      ".openclaw",
-      "media",
-      "qqbot",
-      ...subPaths,
-    );
+  getQQBotDataDir: (...subPaths: string[]) => {
+    const dir = platformMock.path.join(platformMock.homeDir, ".openclaw", "qqbot", ...subPaths);
     platformMock.fs.mkdirSync(dir, { recursive: true });
     return dir;
   },

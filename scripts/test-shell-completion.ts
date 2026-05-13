@@ -26,8 +26,11 @@
 import os from "node:os";
 import path from "node:path";
 import { confirm, isCancel } from "@clack/prompts";
-import { installCompletion } from "../src/cli/completion-runtime.js";
-import { checkShellCompletionStatus } from "../src/commands/doctor-completion.js";
+import { installCompletion } from "../src/cli/completion-cli.js";
+import {
+  checkShellCompletionStatus,
+  ensureCompletionCacheExists,
+} from "../src/commands/doctor-completion.js";
 import { stylePromptMessage } from "../src/terminal/prompt-style.js";
 import { theme } from "../src/terminal/theme.js";
 
@@ -77,9 +80,9 @@ ${theme.heading("Options:")}
   --help, -h        Show this help message
 
 ${theme.heading("Behavior:")}
-  - If profile points at the retired completion cache: rewrites it
+  - If profile has completion but no cache: auto-regenerates cache
   - If no completion at all: prompts to install
-  - If completion is already installed: nothing to do
+  - If both profile and cache exist: nothing to do
 
 ${theme.heading("Examples:")}
   node --import tsx scripts/test-shell-completion.ts
@@ -133,12 +136,14 @@ async function main() {
   console.log(`  Shell: ${theme.accent(status.shell)} ${theme.muted("(detected from $SHELL)")}`);
   console.log(`  Platform: ${theme.muted(process.platform)} ${theme.muted(`(${os.release()})`)}`);
   console.log(`  Profile: ${theme.muted(getShellProfilePath(status.shell))}`);
+  console.log(`  Cache path: ${theme.muted(status.cachePath)}`);
   console.log("");
   console.log(
     `  Profile configured: ${status.profileInstalled ? theme.success("yes") : theme.warn("no")}`,
   );
+  console.log(`  Cache exists: ${status.cacheExists ? theme.success("yes") : theme.warn("no")}`);
   console.log(
-    `  Uses retired cache: ${status.usesRetiredCache ? theme.error("yes (needs rewrite)") : theme.success("no")}`,
+    `  Uses slow pattern: ${status.usesSlowPattern ? theme.error("yes (needs upgrade)") : theme.success("no")}`,
   );
   console.log("");
 
@@ -147,16 +152,33 @@ async function main() {
     return;
   }
 
-  if (status.usesRetiredCache) {
-    console.log(theme.warn("Profile uses retired completion cache. Rewriting..."));
-    await installCompletion(status.shell, false, CLI_NAME, {
-      retiredCachePath: status.retiredCachePath,
-    });
-    console.log(theme.success("Rewrote completion profile."));
+  // Profile uses slow dynamic pattern - upgrade to cached version
+  if (status.usesSlowPattern) {
+    console.log(theme.warn("Profile uses slow dynamic completion. Upgrading to cached version..."));
+    const cacheGenerated = await ensureCompletionCacheExists(CLI_NAME);
+    if (cacheGenerated) {
+      await installCompletion(status.shell, false, CLI_NAME);
+      console.log(theme.success("Upgraded to cached completion."));
+    } else {
+      console.log(theme.error("Failed to generate cache."));
+    }
     return;
   }
 
-  if (status.profileInstalled && !options.force) {
+  // Profile has completion but no cache - auto-fix
+  if (status.profileInstalled && !status.cacheExists) {
+    console.log(theme.warn("Profile has completion but cache is missing. Regenerating..."));
+    const cacheGenerated = await ensureCompletionCacheExists(CLI_NAME);
+    if (cacheGenerated) {
+      console.log(theme.success("Cache regenerated successfully."));
+    } else {
+      console.log(theme.error("Failed to regenerate cache."));
+    }
+    return;
+  }
+
+  // Both profile and cache exist - nothing to do
+  if (status.profileInstalled && status.cacheExists && !options.force) {
     console.log(theme.muted("Shell completion is fully configured. To test the prompt:"));
     console.log(
       theme.muted("  1. Remove the '# OpenClaw Completion' block from your shell profile"),
@@ -180,6 +202,18 @@ async function main() {
     return;
   }
 
+  // Generate cache first (required for fast shell startup)
+  if (!status.cacheExists) {
+    console.log(theme.muted("Generating completion cache..."));
+    const cacheGenerated = await ensureCompletionCacheExists(CLI_NAME);
+    if (!cacheGenerated) {
+      console.log(theme.error("Failed to generate completion cache."));
+      return;
+    }
+    console.log(theme.success("Cache generated."));
+  }
+
+  // Install to shell profile
   await installCompletion(status.shell, false, CLI_NAME);
 }
 

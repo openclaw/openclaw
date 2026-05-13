@@ -1,5 +1,3 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-
 type QaChannelActionConfig = {
   messages?: boolean;
   reactions?: boolean;
@@ -34,9 +32,12 @@ type QaChannelConfig = QaChannelAccountConfig & {
   defaultAccount?: string;
 };
 
-export type CoreConfig = OpenClawConfig & {
-  channels?: OpenClawConfig["channels"] & {
+export type CoreConfig = {
+  channels?: {
     "qa-channel"?: QaChannelConfig;
+  };
+  session?: {
+    store?: string;
   };
 };
 

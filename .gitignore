@@ -57,8 +57,6 @@ apps/ios/.swiftpm/
 apps/ios/.derivedData/
 apps/ios/.local-signing.xcconfig
 vendor/
-!src/auto-reply/reply/export-html/vendor/
-!src/auto-reply/reply/export-html/vendor/**
 apps/ios/Clawdbot.xcodeproj/
 apps/ios/Clawdbot.xcodeproj/**
 apps/macos/.build/**
@@ -101,13 +99,9 @@ USER.md
 # though the bare names match the local-untracked rule above.
 !extensions/oc-path/src/oc-path/tests/fixtures/real/IDENTITY.md
 !extensions/oc-path/src/oc-path/tests/fixtures/real/USER.md
-!docs/reference/templates/IDENTITY.md
-!docs/reference/templates/USER.md
 *.tgz
 *.tar.gz
 *.zip
-!test/fixtures/plugins-install/*.tgz
-!test/fixtures/plugins-install/*.zip
 .idea
 .vscode/
 
@@ -126,6 +120,8 @@ USER.md
 !.agents/skills/gitcrawl/
 !.agents/skills/gitcrawl/**
 !.agents/skills/openclaw-docs/**
+!.agents/skills/openclaw-refactor-docs/
+!.agents/skills/openclaw-refactor-docs/**
 !.agents/skills/openclaw-debugging/
 !.agents/skills/openclaw-debugging/**
 !.agents/skills/openclaw-ghsa-maintainer/

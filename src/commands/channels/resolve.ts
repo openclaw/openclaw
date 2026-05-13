@@ -16,7 +16,6 @@ import {
 } from "../../config/config.js";
 import { danger } from "../../globals.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
-import { hasPendingPluginInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -155,7 +154,10 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
   }
   if (resolvedExplicit?.configChanged) {
     cfg = resolvedExplicit.cfg;
-    if (hasPendingPluginInstallRecords(cfg)) {
+    const shouldMovePluginInstalls = Boolean(
+      cfg.plugins?.installs && Object.keys(cfg.plugins.installs).length > 0,
+    );
+    if (shouldMovePluginInstalls) {
       const committed = await commitConfigWithPendingPluginInstalls({
         nextConfig: cfg,
         baseHash: (await sourceSnapshotPromise)?.hash,

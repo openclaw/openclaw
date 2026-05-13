@@ -118,50 +118,6 @@ function setup(
   return harness;
 }
 
-function createSessionRuntimeMock(sessionStore: Record<string, unknown>) {
-  return {
-    getSessionEntry: vi.fn(
-      ({ sessionKey }: { sessionKey: string }) => sessionStore[sessionKey] as never,
-    ),
-    listSessionEntries: vi.fn(() =>
-      Object.entries(sessionStore).map(([sessionKey, entry]) => ({
-        sessionKey,
-        entry: entry as never,
-      })),
-    ),
-    patchSessionEntry: vi.fn(
-      async ({
-        sessionKey,
-        fallbackEntry,
-        update,
-      }: {
-        sessionKey: string;
-        fallbackEntry?: Record<string, unknown>;
-        update: (
-          entry: Record<string, unknown>,
-        ) => Promise<Record<string, unknown> | null> | Record<string, unknown> | null;
-      }) => {
-        const existing = (sessionStore[sessionKey] ?? fallbackEntry) as
-          | Record<string, unknown>
-          | undefined;
-        if (!existing) {
-          return null;
-        }
-        const patch = await update(existing);
-        if (!patch) {
-          return existing;
-        }
-        const next = { ...existing, ...patch };
-        sessionStore[sessionKey] = next;
-        return next;
-      },
-    ),
-    upsertSessionEntry: vi.fn(({ sessionKey, entry }: { sessionKey: string; entry: unknown }) => {
-      sessionStore[sessionKey] = entry;
-    }),
-  };
-}
-
 function jsonResponse(value: unknown): Response {
   return new Response(JSON.stringify(value), {
     status: 200,
@@ -4121,7 +4077,13 @@ describe("google-meet plugin", () => {
         resolveAgentDir: vi.fn(() => "/tmp/agent"),
         resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
         ensureAgentWorkspace: vi.fn(async () => {}),
-        session: createSessionRuntimeMock(sessionStore),
+        session: {
+          resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
+          loadSessionStore: vi.fn(() => sessionStore),
+          saveSessionStore: vi.fn(async () => {}),
+          updateSessionStore: vi.fn(async (_storePath, mutator) => mutator(sessionStore as never)),
+          resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
+        },
         runEmbeddedPiAgent: vi.fn(async () => ({
           payloads: [{ text: "Use the Portugal launch data." }],
           meta: {},
@@ -4283,7 +4245,13 @@ describe("google-meet plugin", () => {
         resolveAgentDir: vi.fn(() => "/tmp/agent"),
         resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
         ensureAgentWorkspace: vi.fn(async () => {}),
-        session: createSessionRuntimeMock(sessionStore),
+        session: {
+          resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
+          loadSessionStore: vi.fn(() => sessionStore),
+          saveSessionStore: vi.fn(async () => {}),
+          updateSessionStore: vi.fn(async (_storePath, mutator) => mutator(sessionStore as never)),
+          resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
+        },
         runEmbeddedPiAgent: vi.fn(async (_request: unknown) => ({
           payloads: [{ text: "Use the Portugal launch data." }],
           meta: {},
@@ -4499,7 +4467,13 @@ describe("google-meet plugin", () => {
         resolveAgentDir: vi.fn(() => "/tmp/agent"),
         resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
         ensureAgentWorkspace: vi.fn(async () => {}),
-        session: createSessionRuntimeMock(sessionStore),
+        session: {
+          resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
+          loadSessionStore: vi.fn(() => sessionStore),
+          saveSessionStore: vi.fn(async () => {}),
+          updateSessionStore: vi.fn(async (_storePath, mutator) => mutator(sessionStore as never)),
+          resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
+        },
         runEmbeddedPiAgent: vi.fn(async (_request: unknown) => ({
           payloads: [{ text: "The launch is still on track." }],
           meta: {},
@@ -4767,7 +4741,13 @@ describe("google-meet plugin", () => {
         resolveAgentDir: vi.fn(() => "/tmp/agent"),
         resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
         ensureAgentWorkspace: vi.fn(async () => {}),
-        session: createSessionRuntimeMock(sessionStore),
+        session: {
+          resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
+          loadSessionStore: vi.fn(() => sessionStore),
+          saveSessionStore: vi.fn(async () => {}),
+          updateSessionStore: vi.fn(async (_storePath, mutator) => mutator(sessionStore as never)),
+          resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
+        },
         runEmbeddedPiAgent: vi.fn(async () => ({
           payloads: [{ text: "Use the launch update." }],
           meta: {},

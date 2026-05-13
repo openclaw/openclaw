@@ -1,5 +1,6 @@
 import type { HookConfig, HookInstallRecord } from "../config/types.hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getLegacyInternalHookHandlers } from "./legacy-config.js";
 
 function hasEnabledFlag(entry: HookConfig | undefined): boolean {
   return entry?.enabled !== false;
@@ -33,7 +34,7 @@ export function hasConfiguredInternalHooks(config: OpenClawConfig): boolean {
   if (hasConfiguredInstalls(internal.installs)) {
     return true;
   }
-  return false;
+  return getLegacyInternalHookHandlers(config).length > 0;
 }
 
 export function resolveConfiguredInternalHookNames(config: OpenClawConfig): Set<string> | null {
@@ -66,6 +67,9 @@ export function resolveConfiguredInternalHookNames(config: OpenClawConfig): Set<
   }
 
   if ((internal.load?.extraDirs ?? []).some((dir) => dir.trim().length > 0)) {
+    return null;
+  }
+  if (getLegacyInternalHookHandlers(config).length > 0) {
     return null;
   }
   return names;

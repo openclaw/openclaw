@@ -1,4 +1,4 @@
-import type { ModelRegistry } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type {
   ProviderCatalogContext,
   ProviderResolveDynamicModelContext,

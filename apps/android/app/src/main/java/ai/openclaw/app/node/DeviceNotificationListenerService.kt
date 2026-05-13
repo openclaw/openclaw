@@ -3,7 +3,6 @@ package ai.openclaw.app.node
 import ai.openclaw.app.NotificationBurstLimiter
 import ai.openclaw.app.SecurePrefs
 import ai.openclaw.app.allowsPackage
-import ai.openclaw.app.gateway.OpenClawSQLiteStateStore
 import ai.openclaw.app.isWithinQuietHours
 import android.app.Notification
 import android.app.NotificationManager
@@ -13,6 +12,7 @@ import android.content.Context
 import android.content.Intent
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
+import androidx.core.content.edit
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -278,6 +278,8 @@ class DeviceNotificationListenerService : NotificationListenerService() {
   }
 
   companion object {
+    private const val recentPackagesPref = "notifications.forwarding.recentPackages"
+    private const val legacyRecentPackagesPref = "notifications.recentPackages"
     private const val recentPackagesLimit = 64
 
     @Volatile private var activeService: DeviceNotificationListenerService? = null
@@ -290,9 +292,32 @@ class DeviceNotificationListenerService : NotificationListenerService() {
       nodeEventSink = sink
     }
 
-    fun recentPackages(context: Context): List<String> =
-      OpenClawSQLiteStateStore(context)
-        .readRecentNotificationPackages(recentPackagesLimit)
+    private fun recentPackagesPrefs(context: Context) = context.applicationContext.getSharedPreferences("openclaw.secure", Context.MODE_PRIVATE)
+
+    private fun migrateLegacyRecentPackagesIfNeeded(context: Context) {
+      val prefs = recentPackagesPrefs(context)
+      val hasNew = prefs.contains(recentPackagesPref)
+      val legacy = prefs.getString(legacyRecentPackagesPref, null)?.trim().orEmpty()
+      if (!hasNew && legacy.isNotEmpty()) {
+        prefs.edit {
+          putString(recentPackagesPref, legacy)
+          remove(legacyRecentPackagesPref)
+        }
+      } else if (hasNew && prefs.contains(legacyRecentPackagesPref)) {
+        prefs.edit { remove(legacyRecentPackagesPref) }
+      }
+    }
+
+    fun recentPackages(context: Context): List<String> {
+      migrateLegacyRecentPackagesIfNeeded(context)
+      val prefs = recentPackagesPrefs(context)
+      val stored = prefs.getString(recentPackagesPref, null).orEmpty()
+      return stored
+        .split(',')
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .distinct()
+    }
 
     fun isAccessEnabled(context: Context): Boolean {
       val manager = context.getSystemService(NotificationManager::class.java) ?: return false
@@ -341,13 +366,18 @@ class DeviceNotificationListenerService : NotificationListenerService() {
       val service = activeService ?: return
       val normalized = packageName?.trim().orEmpty()
       if (normalized.isEmpty() || normalized == service.packageName) return
+      migrateLegacyRecentPackagesIfNeeded(service.applicationContext)
+      val prefs = recentPackagesPrefs(service.applicationContext)
       val existing =
-        recentPackages(service.applicationContext)
-          .filter { it != normalized }
+        prefs
+          .getString(recentPackagesPref, null)
+          .orEmpty()
+          .split(',')
+          .map { it.trim() }
+          .filter { it.isNotEmpty() && it != normalized }
           .take(recentPackagesLimit - 1)
       val updated = listOf(normalized) + existing
-      OpenClawSQLiteStateStore(service.applicationContext)
-        .replaceRecentNotificationPackages(updated, recentPackagesLimit)
+      prefs.edit { putString(recentPackagesPref, updated.joinToString(",")) }
     }
   }
 

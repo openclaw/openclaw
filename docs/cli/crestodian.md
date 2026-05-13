@@ -129,7 +129,7 @@ you pass `--yes` for a direct command:
 Applied writes are recorded in:
 
 ```text
-SQLite core plugin state: core:crestodian/audit
+~/.openclaw/audit/crestodian.jsonl
 ```
 
 Discovery is not audited. Only applied operations and writes are logged.

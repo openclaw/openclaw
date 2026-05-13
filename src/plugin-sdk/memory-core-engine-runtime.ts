@@ -17,12 +17,46 @@ export type BuiltinMemoryEmbeddingProviderDoctorMetadata = {
   autoSelectPriority?: number;
 };
 
+export type DreamingArtifactsAuditIssue = {
+  severity: "warn" | "error";
+  code:
+    | "dreaming-session-corpus-unreadable"
+    | "dreaming-session-corpus-self-ingested"
+    | "dreaming-session-ingestion-unreadable"
+    | "dreaming-diary-unreadable";
+  message: string;
+  fixable: boolean;
+};
+
+export type DreamingArtifactsAuditSummary = {
+  dreamsPath?: string;
+  sessionCorpusDir: string;
+  sessionCorpusFileCount: number;
+  suspiciousSessionCorpusFileCount: number;
+  suspiciousSessionCorpusLineCount: number;
+  sessionIngestionPath: string;
+  sessionIngestionExists: boolean;
+  issues: DreamingArtifactsAuditIssue[];
+};
+
+export type RepairDreamingArtifactsResult = {
+  changed: boolean;
+  archiveDir?: string;
+  archivedDreamsDiary: boolean;
+  archivedSessionCorpus: boolean;
+  archivedSessionIngestion: boolean;
+  archivedPaths: string[];
+  warnings: string[];
+};
+
 export type ShortTermAuditIssue = {
   severity: "warn" | "error";
   code:
     | "recall-store-unreadable"
     | "recall-store-empty"
     | "recall-store-invalid"
+    | "recall-lock-stale"
+    | "recall-lock-unreadable"
     | "qmd-index-missing"
     | "qmd-index-empty"
     | "qmd-collections-empty";
@@ -31,7 +65,8 @@ export type ShortTermAuditIssue = {
 };
 
 export type ShortTermAuditSummary = {
-  storeLabel: string;
+  storePath: string;
+  lockPath: string;
   updatedAt?: string;
   exists: boolean;
   entryCount: number;
@@ -54,6 +89,7 @@ export type RepairShortTermPromotionArtifactsResult = {
   changed: boolean;
   removedInvalidEntries: number;
   rewroteStore: boolean;
+  removedStaleLock: boolean;
 };
 
 type MemoryIndexManagerFacade = {
@@ -72,6 +108,9 @@ type FacadeModule = {
       collections?: number;
     };
   }) => Promise<ShortTermAuditSummary>;
+  auditDreamingArtifacts: (params: {
+    workspaceDir: string;
+  }) => Promise<DreamingArtifactsAuditSummary>;
   getBuiltinMemoryEmbeddingProviderDoctorMetadata: (
     providerId: string,
   ) => BuiltinMemoryEmbeddingProviderDoctorMetadata | null;
@@ -88,6 +127,11 @@ type FacadeModule = {
   repairShortTermPromotionArtifacts: (params: {
     workspaceDir: string;
   }) => Promise<RepairShortTermPromotionArtifactsResult>;
+  repairDreamingArtifacts: (params: {
+    workspaceDir: string;
+    archiveDiary?: boolean;
+    now?: Date;
+  }) => Promise<RepairDreamingArtifactsResult>;
 };
 
 function loadFacadeModule(): FacadeModule {
@@ -102,6 +146,8 @@ export const auditShortTermPromotionArtifacts: FacadeModule["auditShortTermPromo
   loadFacadeModule()["auditShortTermPromotionArtifacts"](
     ...args,
   )) as FacadeModule["auditShortTermPromotionArtifacts"];
+export const auditDreamingArtifacts: FacadeModule["auditDreamingArtifacts"] = ((...args) =>
+  loadFacadeModule()["auditDreamingArtifacts"](...args)) as FacadeModule["auditDreamingArtifacts"];
 export const getBuiltinMemoryEmbeddingProviderDoctorMetadata: FacadeModule["getBuiltinMemoryEmbeddingProviderDoctorMetadata"] =
   ((...args) =>
     loadFacadeModule()["getBuiltinMemoryEmbeddingProviderDoctorMetadata"](
@@ -122,3 +168,7 @@ export const repairShortTermPromotionArtifacts: FacadeModule["repairShortTermPro
     loadFacadeModule()["repairShortTermPromotionArtifacts"](
       ...args,
     )) as FacadeModule["repairShortTermPromotionArtifacts"];
+export const repairDreamingArtifacts: FacadeModule["repairDreamingArtifacts"] = ((...args) =>
+  loadFacadeModule()["repairDreamingArtifacts"](
+    ...args,
+  )) as FacadeModule["repairDreamingArtifacts"];

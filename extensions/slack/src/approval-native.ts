@@ -96,20 +96,10 @@ function resolveSlackFallbackOriginTarget(request: ApprovalRequest): SlackOrigin
     channel: "slack",
     bundledFallback: false,
   });
-  const parsedSessionKey = request.request.sessionKey?.match(
-    /(?:^|:)slack:(channel|group):([^:]+)(?::thread:(.+))?$/iu,
-  );
-  const sessionKeyTarget = parsedSessionKey
-    ? {
-        id: parsedSessionKey[2]?.toUpperCase() ?? "",
-        threadId: parsedSessionKey[3],
-      }
-    : null;
-  const target = sessionTarget ?? sessionKeyTarget;
-  if (!target) {
+  if (!sessionTarget) {
     return null;
   }
-  const parsed = parseSlackTarget(target.id.toUpperCase(), {
+  const parsed = parseSlackTarget(sessionTarget.id.toUpperCase(), {
     defaultKind: "channel",
   });
   if (!parsed) {
@@ -117,7 +107,7 @@ function resolveSlackFallbackOriginTarget(request: ApprovalRequest): SlackOrigin
   }
   return {
     to: `${parsed.kind}:${parsed.id}`,
-    threadId: target.threadId,
+    threadId: sessionTarget.threadId,
   };
 }
 

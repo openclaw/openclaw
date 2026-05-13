@@ -1,4 +1,6 @@
-import { createHash } from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { readAcpSessionEntry } from "openclaw/plugin-sdk/acp-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -12,22 +14,17 @@ import {
   type SessionBindingRecord,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
 import { normalizeAccountId, isAcpSessionKey } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveTelegramToken } from "./token.js";
 
 const DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_THREAD_BINDING_MAX_AGE_MS = 0;
 const THREAD_BINDINGS_SWEEP_INTERVAL_MS = 60_000;
-const THREAD_BINDING_STORE = createPluginStateSyncKeyedStore<TelegramThreadBindingRecord>(
-  "telegram",
-  {
-    namespace: "thread-bindings",
-    maxEntries: 50_000,
-  },
-);
+const STORE_VERSION = 1;
 
 let telegramSendModulePromise: Promise<typeof import("./send.js")> | undefined;
 
@@ -38,7 +35,7 @@ async function loadTelegramSendModule() {
 
 type TelegramBindingTargetKind = "subagent" | "acp";
 
-export type TelegramThreadBindingRecord = {
+type TelegramThreadBindingRecord = {
   accountId: string;
   conversationId: string;
   targetKind: TelegramBindingTargetKind;
@@ -51,6 +48,11 @@ export type TelegramThreadBindingRecord = {
   idleTimeoutMs?: number;
   maxAgeMs?: number;
   metadata?: Record<string, unknown>;
+};
+
+type StoredTelegramBindingState = {
+  version: number;
+  bindings: TelegramThreadBindingRecord[];
 };
 
 type TelegramThreadBindingManager = {
@@ -112,18 +114,6 @@ function normalizeDurationMs(raw: unknown, fallback: number): number {
 
 function resolveBindingKey(params: { accountId: string; conversationId: string }): string {
   return `${params.accountId}:${params.conversationId}`;
-}
-
-function resolveStoredBindingKey(params: { accountId: string; conversationId: string }): string {
-  const accountHash = createHash("sha256")
-    .update(params.accountId, "utf8")
-    .digest("hex")
-    .slice(0, 16);
-  const conversationHash = createHash("sha256")
-    .update(params.conversationId, "utf8")
-    .digest("hex")
-    .slice(0, 16);
-  return `${accountHash}:${conversationHash}`;
 }
 
 function toSessionBindingTargetKind(raw: TelegramBindingTargetKind): BindingTargetKind {
@@ -233,6 +223,11 @@ function fromSessionBindingInput(params: {
   return record;
 }
 
+function resolveBindingsPath(accountId: string, env: NodeJS.ProcessEnv = process.env): string {
+  const stateDir = resolveStateDir(env, os.homedir);
+  return path.join(stateDir, "telegram", `thread-bindings-${accountId}.json`);
+}
+
 function summarizeLifecycleForLog(
   record: TelegramThreadBindingRecord,
   defaults: {
@@ -248,70 +243,69 @@ function summarizeLifecycleForLog(
   return `idle=${idleLabel} maxAge=${maxAgeLabel}`;
 }
 
-function sanitizeStoredBinding(
-  accountId: string,
-  entry: Partial<TelegramThreadBindingRecord> | null | undefined,
-): TelegramThreadBindingRecord | null {
-  const conversationId = normalizeOptionalString(entry?.conversationId);
-  const targetSessionKey = normalizeOptionalString(entry?.targetSessionKey) ?? "";
-  const targetKind = entry?.targetKind === "subagent" ? "subagent" : "acp";
-  if (!conversationId || !targetSessionKey) {
-    return null;
+function loadBindingsFromDisk(accountId: string): TelegramThreadBindingRecord[] {
+  const filePath = resolveBindingsPath(accountId);
+  try {
+    const raw = fs.readFileSync(filePath, "utf-8");
+    const parsed = JSON.parse(raw) as StoredTelegramBindingState;
+    if (parsed?.version !== STORE_VERSION || !Array.isArray(parsed.bindings)) {
+      return [];
+    }
+    const bindings: TelegramThreadBindingRecord[] = [];
+    for (const entry of parsed.bindings) {
+      const conversationId = normalizeOptionalString(entry?.conversationId);
+      const targetSessionKey = normalizeOptionalString(entry?.targetSessionKey) ?? "";
+      const targetKind = entry?.targetKind === "subagent" ? "subagent" : "acp";
+      if (!conversationId || !targetSessionKey) {
+        continue;
+      }
+      const boundAt =
+        typeof entry?.boundAt === "number" && Number.isFinite(entry.boundAt)
+          ? Math.floor(entry.boundAt)
+          : Date.now();
+      const lastActivityAt =
+        typeof entry?.lastActivityAt === "number" && Number.isFinite(entry.lastActivityAt)
+          ? Math.floor(entry.lastActivityAt)
+          : boundAt;
+      const record: TelegramThreadBindingRecord = {
+        accountId,
+        conversationId,
+        targetSessionKey,
+        targetKind,
+        boundAt,
+        lastActivityAt,
+      };
+      if (typeof entry?.idleTimeoutMs === "number" && Number.isFinite(entry.idleTimeoutMs)) {
+        record.idleTimeoutMs = Math.max(0, Math.floor(entry.idleTimeoutMs));
+      }
+      if (typeof entry?.maxAgeMs === "number" && Number.isFinite(entry.maxAgeMs)) {
+        record.maxAgeMs = Math.max(0, Math.floor(entry.maxAgeMs));
+      }
+      if (typeof entry?.agentId === "string" && entry.agentId.trim()) {
+        record.agentId = entry.agentId.trim();
+      }
+      if (typeof entry?.label === "string" && entry.label.trim()) {
+        record.label = entry.label.trim();
+      }
+      if (typeof entry?.boundBy === "string" && entry.boundBy.trim()) {
+        record.boundBy = entry.boundBy.trim();
+      }
+      if (entry?.metadata && typeof entry.metadata === "object") {
+        record.metadata = { ...entry.metadata };
+      }
+      bindings.push(record);
+    }
+    return bindings;
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    if (code !== "ENOENT") {
+      logVerbose(`telegram thread bindings load failed (${accountId}): ${String(err)}`);
+    }
+    return [];
   }
-  const boundAt =
-    typeof entry?.boundAt === "number" && Number.isFinite(entry.boundAt)
-      ? Math.floor(entry.boundAt)
-      : Date.now();
-  const lastActivityAt =
-    typeof entry?.lastActivityAt === "number" && Number.isFinite(entry.lastActivityAt)
-      ? Math.floor(entry.lastActivityAt)
-      : boundAt;
-  const record: TelegramThreadBindingRecord = {
-    accountId,
-    conversationId,
-    targetSessionKey,
-    targetKind,
-    boundAt,
-    lastActivityAt,
-  };
-  if (typeof entry?.idleTimeoutMs === "number" && Number.isFinite(entry.idleTimeoutMs)) {
-    record.idleTimeoutMs = Math.max(0, Math.floor(entry.idleTimeoutMs));
-  }
-  if (typeof entry?.maxAgeMs === "number" && Number.isFinite(entry.maxAgeMs)) {
-    record.maxAgeMs = Math.max(0, Math.floor(entry.maxAgeMs));
-  }
-  if (typeof entry?.agentId === "string" && entry.agentId.trim()) {
-    record.agentId = entry.agentId.trim();
-  }
-  if (typeof entry?.label === "string" && entry.label.trim()) {
-    record.label = entry.label.trim();
-  }
-  if (typeof entry?.boundBy === "string" && entry.boundBy.trim()) {
-    record.boundBy = entry.boundBy.trim();
-  }
-  if (entry?.metadata && typeof entry.metadata === "object") {
-    record.metadata = { ...entry.metadata };
-  }
-  return record;
 }
 
-function loadBindingsFromStore(accountId: string): TelegramThreadBindingRecord[] {
-  const bindings: TelegramThreadBindingRecord[] = [];
-  for (const entry of THREAD_BINDING_STORE.entries()) {
-    if (entry.value.accountId !== accountId) {
-      continue;
-    }
-    const sanitized = sanitizeStoredBinding(accountId, entry.value);
-    if (sanitized) {
-      bindings.push(sanitized);
-      continue;
-    }
-    THREAD_BINDING_STORE.delete(entry.key);
-  }
-  return bindings;
-}
-
-async function persistBindingsToStore(params: {
+async function persistBindingsToDisk(params: {
   accountId: string;
   persist: boolean;
   bindings?: TelegramThreadBindingRecord[];
@@ -319,26 +313,15 @@ async function persistBindingsToStore(params: {
   if (!params.persist) {
     return;
   }
-  const bindings =
-    params.bindings ??
-    [...getThreadBindingsState().bindingsByAccountConversation.values()].filter(
-      (entry) => entry.accountId === params.accountId,
-    );
-  const nextKeys = new Set<string>();
-  for (const binding of bindings) {
-    const stored = sanitizeStoredBinding(params.accountId, binding);
-    if (!stored) {
-      continue;
-    }
-    const key = resolveStoredBindingKey(stored);
-    nextKeys.add(key);
-    THREAD_BINDING_STORE.register(key, stored);
-  }
-  for (const entry of THREAD_BINDING_STORE.entries()) {
-    if (entry.value.accountId === params.accountId && !nextKeys.has(entry.key)) {
-      THREAD_BINDING_STORE.delete(entry.key);
-    }
-  }
+  const payload: StoredTelegramBindingState = {
+    version: STORE_VERSION,
+    bindings:
+      params.bindings ??
+      [...getThreadBindingsState().bindingsByAccountConversation.values()].filter(
+        (entry) => entry.accountId === params.accountId,
+      ),
+  };
+  await writeJsonFileAtomically(resolveBindingsPath(params.accountId), payload);
 }
 
 function listBindingsForAccount(accountId: string): TelegramThreadBindingRecord[] {
@@ -360,7 +343,7 @@ function enqueuePersistBindings(params: {
   const next = previous
     .catch(() => undefined)
     .then(async () => {
-      await persistBindingsToStore(params);
+      await persistBindingsToDisk(params);
     });
   getThreadBindingsState().persistQueueByAccountId.set(params.accountId, next);
   const cleanup = () => {
@@ -445,7 +428,7 @@ export function createTelegramThreadBindingManager(params: {
   );
   const maxAgeMs = normalizeDurationMs(params.maxAgeMs, DEFAULT_THREAD_BINDING_MAX_AGE_MS);
 
-  const loaded = loadBindingsFromStore(accountId);
+  const loaded = loadBindingsFromDisk(accountId);
   for (const entry of loaded) {
     const key = resolveBindingKey({
       accountId,
@@ -921,7 +904,7 @@ export function setTelegramThreadBindingMaxAgeBySessionKey(params: {
   });
 }
 
-export async function resetTelegramThreadBindingsForTests(params: { clearStore?: boolean } = {}) {
+export async function resetTelegramThreadBindingsForTests() {
   for (const manager of getThreadBindingsState().managersByAccountId.values()) {
     manager.stop();
   }
@@ -932,9 +915,6 @@ export async function resetTelegramThreadBindingsForTests(params: { clearStore?:
   getThreadBindingsState().persistQueueByAccountId.clear();
   getThreadBindingsState().managersByAccountId.clear();
   getThreadBindingsState().bindingsByAccountConversation.clear();
-  if (params.clearStore) {
-    THREAD_BINDING_STORE.clear();
-  }
 }
 
 export const __testing = {

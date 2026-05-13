@@ -5,7 +5,7 @@ export { sendDurableMessageBatch } from "../channels/message/runtime.js";
 export { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
 export { agentCommandFromIngress } from "../commands/agent.js";
 export { getRuntimeConfig } from "../config/io.js";
-export { patchSessionEntry } from "../config/sessions.js";
+export { updateSessionStore } from "../config/sessions.js";
 export { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 export { requestHeartbeat } from "../infra/heartbeat-wake.js";
 export { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
@@ -19,6 +19,7 @@ export { parseMessageWithAttachments, resolveChatAttachmentMaxBytes } from "./ch
 export { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
 export {
   loadSessionEntry,
+  migrateAndPruneGatewaySessionStoreKey,
   resolveGatewayModelSupportsImages,
   resolveSessionModelRef,
 } from "./session-utils.js";

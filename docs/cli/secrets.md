@@ -71,8 +71,8 @@ Scan OpenClaw state for:
 
 - plaintext secret storage
 - unresolved refs
-- precedence drift (SQLite auth-profile credentials shadowing `openclaw.json` refs)
-- stored model catalog residues (provider `apiKey` values and sensitive provider headers)
+- precedence drift (`auth-profiles.json` credentials shadowing `openclaw.json` refs)
+- generated `agents/*/agent/models.json` residues (provider `apiKey` values and sensitive provider headers)
 - legacy residues (legacy auth store entries, OAuth reminders)
 
 Header residue note:
@@ -126,15 +126,15 @@ Flags:
 
 - `--providers-only`: configure `secrets.providers` only, skip credential mapping.
 - `--skip-provider-setup`: skip provider setup and map credentials to existing providers.
-- `--agent <id>`: scope SQLite auth-profile target discovery and writes to one agent store.
+- `--agent <id>`: scope `auth-profiles.json` target discovery and writes to one agent store.
 - `--allow-exec`: allow exec SecretRef checks during preflight/apply (may execute provider commands).
 
 Notes:
 
 - Requires an interactive TTY.
 - You cannot combine `--providers-only` with `--skip-provider-setup`.
-- `configure` targets secret-bearing fields in `openclaw.json` plus SQLite auth-profile rows for the selected agent scope.
-- `configure` supports creating new auth-profile mappings directly in the picker flow.
+- `configure` targets secret-bearing fields in `openclaw.json` plus `auth-profiles.json` for the selected agent scope.
+- `configure` supports creating new `auth-profiles.json` mappings directly in the picker flow.
 - Canonical supported surface: [SecretRef Credential Surface](/reference/secretref-credential-surface).
 - It performs preflight resolution before apply.
 - If preflight/apply includes exec refs, keep `--allow-exec` set for both steps.
@@ -176,7 +176,7 @@ Plan contract details (allowed target paths, validation rules, and failure seman
 What `apply` may update:
 
 - `openclaw.json` (SecretRef targets + provider upserts/deletes)
-- SQLite auth-profile rows (provider-target scrubbing)
+- `auth-profiles.json` (provider-target scrubbing)
 - legacy `auth.json` residues
 - `~/.openclaw/.env` known secret keys whose values were migrated
 

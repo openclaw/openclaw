@@ -33,7 +33,7 @@ function isExactPinnedVersion(spec: string): boolean {
 }
 
 function isPiOverrideKey(key: string): boolean {
-  return key.startsWith("@earendil-works/pi-") || key.includes("@earendil-works/pi-");
+  return key.startsWith("@mariozechner/pi-") || key.includes("@mariozechner/pi-");
 }
 
 function readPiDependencySpecs() {

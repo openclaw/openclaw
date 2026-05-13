@@ -23,6 +23,7 @@ export type AcpxMcpServer = {
 
 export type AcpxPluginConfig = {
   cwd?: string;
+  stateDir?: string;
   probeAgent?: string;
   permissionMode?: AcpxPermissionMode;
   nonInteractivePermissions?: AcpxNonInteractivePermissionPolicy;
@@ -37,6 +38,7 @@ export type AcpxPluginConfig = {
 
 export type ResolvedAcpxPluginConfig = {
   cwd: string;
+  stateDir: string;
   probeAgent?: string;
   permissionMode: AcpxPermissionMode;
   nonInteractivePermissions: AcpxNonInteractivePermissionPolicy;
@@ -76,6 +78,7 @@ const McpServerConfigSchema = z.object({
 
 export const AcpxPluginConfigSchema = z.strictObject({
   cwd: nonEmptyTrimmedString("cwd must be a non-empty string").optional(),
+  stateDir: nonEmptyTrimmedString("stateDir must be a non-empty string").optional(),
   probeAgent: nonEmptyTrimmedString("probeAgent must be a non-empty string").optional(),
   permissionMode: z
     .enum(ACPX_PERMISSION_MODES, {

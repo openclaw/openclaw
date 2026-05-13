@@ -783,6 +783,7 @@ export const MemorySearchSchema = z
     store: z
       .object({
         driver: z.literal("sqlite").optional(),
+        path: z.string().optional(),
         fts: z
           .object({
             tokenizer: z.union([z.literal("unicode61"), z.literal("trigram")]).optional(),

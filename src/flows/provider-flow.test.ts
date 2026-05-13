@@ -16,30 +16,31 @@ type ResolveProviderModelPickerFlowContributions =
   typeof import("./provider-flow.runtime.js").resolveProviderModelPickerFlowContributions;
 
 const resolveProviderInstallCatalogEntries = vi.hoisted(() =>
-  vi.fn<ResolveProviderInstallCatalogEntries>(),
+  vi.fn<ResolveProviderInstallCatalogEntries>(() => []),
 );
-const resolveManifestProviderAuthChoices = vi.hoisted(() =>
-  vi.fn<ResolveManifestProviderAuthChoices>(),
-);
-const resolveProviderWizardOptions = vi.hoisted(() => vi.fn<ResolveProviderWizardOptions>());
-const resolveProviderModelPickerEntries = vi.hoisted(() =>
-  vi.fn<ResolveProviderModelPickerEntries>(),
-);
-const resolvePluginProviders = vi.hoisted(() => vi.fn<ResolvePluginProviders>());
-
 vi.mock("../plugins/provider-install-catalog.js", () => ({
   resolveProviderInstallCatalogEntries,
 }));
 
+const resolveManifestProviderAuthChoices = vi.hoisted(() =>
+  vi.fn<ResolveManifestProviderAuthChoices>(() => []),
+);
 vi.mock("../plugins/provider-auth-choices.js", () => ({
   resolveManifestProviderAuthChoices,
 }));
 
+const resolveProviderWizardOptions = vi.hoisted(() =>
+  vi.fn<ResolveProviderWizardOptions>(() => []),
+);
+const resolveProviderModelPickerEntries = vi.hoisted(() =>
+  vi.fn<ResolveProviderModelPickerEntries>(() => []),
+);
 vi.mock("../plugins/provider-wizard.js", () => ({
   resolveProviderWizardOptions,
   resolveProviderModelPickerEntries,
 }));
 
+const resolvePluginProviders = vi.hoisted(() => vi.fn<ResolvePluginProviders>(() => []));
 vi.mock("../plugins/providers.runtime.js", () => ({
   resolvePluginProviders,
 }));

@@ -137,7 +137,7 @@ vi.mock("../secrets/target-registry-data.js", () => ({
   getSecretTargetRegistry: () => [],
 }));
 
-vi.mock("../commands/doctor/shared/channel-legacy-config-rules.js", () => ({
+vi.mock("../channels/plugins/legacy-config.js", () => ({
   collectChannelLegacyConfigRules: () => [],
 }));
 

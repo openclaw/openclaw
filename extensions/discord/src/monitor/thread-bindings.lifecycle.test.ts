@@ -333,7 +333,9 @@ describe("thread binding lifecycle", () => {
       expect(hoisted.restGet).not.toHaveBeenCalled();
       expect(hoisted.sendWebhookMessageDiscord).not.toHaveBeenCalled();
       expect(hoisted.sendMessageDiscord).toHaveBeenCalledTimes(1);
-      const farewell = hoisted.sendMessageDiscord.mock.calls[0]?.[1] as string | undefined;
+      const farewell = mockCallArg(hoisted.sendMessageDiscord, 0, 1, "sendMessageDiscord") as
+        | string
+        | undefined;
       expect(farewell).toContain("after 1m of inactivity");
     } finally {
       vi.useRealTimers();
@@ -372,7 +374,9 @@ describe("thread binding lifecycle", () => {
 
       expect(manager.getByThreadId("thread-1")).toBeUndefined();
       expect(hoisted.sendMessageDiscord).toHaveBeenCalledTimes(1);
-      const farewell = hoisted.sendMessageDiscord.mock.calls[0]?.[1] as string | undefined;
+      const farewell = mockCallArg(hoisted.sendMessageDiscord, 0, 1, "sendMessageDiscord") as
+        | string
+        | undefined;
       expect(farewell).toContain("max age of 1m");
     } finally {
       vi.useRealTimers();
@@ -741,7 +745,7 @@ describe("thread binding lifecycle", () => {
       vi.setSystemTime(touchedAt);
       manager.touchThread({ threadId: "thread-1" });
 
-      __testing.resetThreadBindingsForTests({ clearStore: false });
+      __testing.resetThreadBindingsForTests();
       const reloaded = createTestThreadBindingManager({
         accountId: "default",
         persist: true,
@@ -949,9 +953,12 @@ describe("thread binding lifecycle", () => {
       threadId: "thread-created-runtime",
       targetSessionKey: "agent:main:subagent:child-runtime",
     });
-    const firstClientArgs = hoisted.createDiscordRestClient.mock.calls[0]?.[0] as
-      | { accountId?: string; token?: string }
-      | undefined;
+    const firstClientArgs = mockCallArg(
+      hoisted.createDiscordRestClient,
+      0,
+      0,
+      "createDiscordRestClient",
+    ) as { accountId?: string; token?: string } | undefined;
     expectFields(firstClientArgs, "first client args", {
       accountId: "runtime",
       token: "runtime-token",
@@ -1404,7 +1411,7 @@ describe("thread binding lifecycle", () => {
       if (sessionKey === "agent:codex:acp:healthy") {
         return {
           sessionKey,
-          rowSessionKey: sessionKey,
+          storeSessionKey: sessionKey,
           acp: {
             backend: "acpx",
             agent: "codex",
@@ -1417,7 +1424,7 @@ describe("thread binding lifecycle", () => {
       }
       return {
         sessionKey,
-        rowSessionKey: sessionKey,
+        storeSessionKey: sessionKey,
         acp: undefined,
       };
     });
@@ -1445,7 +1452,7 @@ describe("thread binding lifecycle", () => {
     expect(hoisted.sendWebhookMessageDiscord).not.toHaveBeenCalled();
   });
 
-  it("keeps ACP bindings when SQLite session row reads fail during startup reconciliation", async () => {
+  it("keeps ACP bindings when session store reads fail during startup reconciliation", async () => {
     const manager = createTestThreadBindingManager({
       accountId: "default",
       persist: false,
@@ -1466,8 +1473,9 @@ describe("thread binding lifecycle", () => {
 
     hoisted.readAcpSessionEntry.mockReturnValue({
       sessionKey: "agent:codex:acp:uncertain",
-      rowSessionKey: "agent:codex:acp:uncertain",
+      storeSessionKey: "agent:codex:acp:uncertain",
       cfg: EMPTY_DISCORD_TEST_CONFIG,
+      storePath: "/tmp/mock-sessions.json",
       storeReadFailed: true,
       entry: undefined,
       acp: undefined,
@@ -1554,7 +1562,7 @@ describe("thread binding lifecycle", () => {
 
     hoisted.readAcpSessionEntry.mockReturnValue({
       sessionKey: "agent:codex:acp:running",
-      rowSessionKey: "agent:codex:acp:running",
+      storeSessionKey: "agent:codex:acp:running",
       acp: {
         backend: "acpx",
         agent: "codex",
@@ -1598,7 +1606,7 @@ describe("thread binding lifecycle", () => {
 
     hoisted.readAcpSessionEntry.mockReturnValue({
       sessionKey: "agent:codex:acp:running-uncertain",
-      rowSessionKey: "agent:codex:acp:running-uncertain",
+      storeSessionKey: "agent:codex:acp:running-uncertain",
       acp: {
         backend: "acpx",
         agent: "codex",
@@ -1650,7 +1658,7 @@ describe("thread binding lifecycle", () => {
 
     hoisted.readAcpSessionEntry.mockReturnValue({
       sessionKey: "agent:codex:acp:error",
-      rowSessionKey: "agent:codex:acp:error",
+      storeSessionKey: "agent:codex:acp:error",
       acp: {
         backend: "acpx",
         agent: "codex",
@@ -1708,7 +1716,7 @@ describe("thread binding lifecycle", () => {
       const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey ?? "";
       return {
         sessionKey,
-        rowSessionKey: sessionKey,
+        storeSessionKey: sessionKey,
         acp: {
           backend: "acpx",
           agent: "codex",
@@ -1778,7 +1786,7 @@ describe("thread binding lifecycle", () => {
       const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey ?? "";
       return {
         sessionKey,
-        rowSessionKey: sessionKey,
+        storeSessionKey: sessionKey,
         acp: {
           backend: "acpx",
           agent: "codex",
@@ -1832,32 +1840,45 @@ describe("thread binding lifecycle", () => {
     process.env.OPENCLAW_STATE_DIR = stateDir;
     try {
       __testing.resetThreadBindingsForTests();
+      const bindingsPath = __testing.resolveThreadBindingsPath();
+      fs.mkdirSync(path.dirname(bindingsPath), { recursive: true });
       const boundAt = Date.now() - 10_000;
       const expiresAt = boundAt + 60_000;
-      __testing.seedThreadBindingStoreForTests("default:thread-legacy-active", {
-        accountId: "default",
-        channelId: "parent-1",
-        threadId: "thread-legacy-active",
-        targetKind: "subagent",
-        targetSessionKey: "agent:main:subagent:legacy-active",
-        agentId: "main",
-        boundBy: "system",
-        boundAt,
-        lastActivityAt: boundAt,
-        expiresAt,
-      });
-      __testing.seedThreadBindingStoreForTests("default:thread-legacy-disabled", {
-        accountId: "default",
-        channelId: "parent-1",
-        threadId: "thread-legacy-disabled",
-        targetKind: "subagent",
-        targetSessionKey: "agent:main:subagent:legacy-disabled",
-        agentId: "main",
-        boundBy: "system",
-        boundAt,
-        lastActivityAt: boundAt,
-        expiresAt: 0,
-      });
+      fs.writeFileSync(
+        bindingsPath,
+        JSON.stringify(
+          {
+            version: 1,
+            bindings: {
+              "thread-legacy-active": {
+                accountId: "default",
+                channelId: "parent-1",
+                threadId: "thread-legacy-active",
+                targetKind: "subagent",
+                targetSessionKey: "agent:main:subagent:legacy-active",
+                agentId: "main",
+                boundBy: "system",
+                boundAt,
+                expiresAt,
+              },
+              "thread-legacy-disabled": {
+                accountId: "default",
+                channelId: "parent-1",
+                threadId: "thread-legacy-disabled",
+                targetKind: "subagent",
+                targetSessionKey: "agent:main:subagent:legacy-disabled",
+                agentId: "main",
+                boundBy: "system",
+                boundAt,
+                expiresAt: 0,
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
 
       const manager = createTestThreadBindingManager({
         accountId: "default",
@@ -1921,27 +1942,45 @@ describe("thread binding lifecycle", () => {
     process.env.OPENCLAW_STATE_DIR = stateDir;
     try {
       __testing.resetThreadBindingsForTests();
+      const bindingsPath = __testing.resolveThreadBindingsPath();
+      fs.mkdirSync(path.dirname(bindingsPath), { recursive: true });
       const now = Date.now();
-      __testing.seedThreadBindingStoreForTests("default:thread-1", {
-        accountId: "default",
-        channelId: "parent-1",
-        threadId: "thread-1",
-        targetKind: "subagent",
-        targetSessionKey: "agent:main:subagent:child",
-        agentId: "main",
-        boundBy: "system",
-        boundAt: now,
-        lastActivityAt: now,
-        idleTimeoutMs: 60_000,
-        maxAgeMs: 0,
-      });
+      fs.writeFileSync(
+        bindingsPath,
+        JSON.stringify(
+          {
+            version: 1,
+            bindings: {
+              "thread-1": {
+                accountId: "default",
+                channelId: "parent-1",
+                threadId: "thread-1",
+                targetKind: "subagent",
+                targetSessionKey: "agent:main:subagent:child",
+                agentId: "main",
+                boundBy: "system",
+                boundAt: now,
+                lastActivityAt: now,
+                idleTimeoutMs: 60_000,
+                maxAgeMs: 0,
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
 
       const removed = unbindThreadBindingsBySessionKey({
         targetSessionKey: "agent:main:subagent:child",
       });
       expect(removed).toHaveLength(1);
 
-      expect(Object.keys(__testing.readThreadBindingStoreForTests())).toStrictEqual([]);
+      const payload = JSON.parse(fs.readFileSync(bindingsPath, "utf-8")) as {
+        bindings?: Record<string, unknown>;
+      };
+      expect(Object.keys(payload.bindings ?? {})).toStrictEqual([]);
     } finally {
       __testing.resetThreadBindingsForTests();
       if (previousStateDir === undefined) {

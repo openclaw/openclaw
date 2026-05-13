@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -6,11 +6,7 @@ import {
   createEmptyPluginRegistry,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  closeOpenClawStateDatabaseForTest,
-} from "openclaw/plugin-sdk/sqlite-runtime";
+import { clearSessionStoreCacheForTest } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType, type AutocompleteInteraction } from "../internal/discord.js";
 import { createNoopThreadBindingManager } from "./thread-bindings.js";
@@ -124,12 +120,14 @@ vi.mock("openclaw/plugin-sdk/models-provider-runtime", () => ({
   buildModelsProviderData: buildModelsProviderDataMock,
 }));
 
+const STORE_PATH = path.join(
+  os.tmpdir(),
+  `openclaw-discord-think-autocomplete-${process.pid}.json`,
+);
 const SESSION_KEY = "agent:main:main";
 let findCommandByNativeName: typeof import("openclaw/plugin-sdk/command-auth").findCommandByNativeName;
 let resolveCommandArgChoices: typeof import("openclaw/plugin-sdk/command-auth").resolveCommandArgChoices;
 let resolveDiscordNativeChoiceContext: typeof import("./native-command-model-picker-ui.js").resolveDiscordNativeChoiceContext;
-let tempDir: string;
-let previousStateDir: string | undefined;
 
 function installProviderThinkingRegistryForTest(): void {
   const registry = createEmptyPluginRegistry();
@@ -200,10 +198,8 @@ describe("discord native /think autocomplete", () => {
       await loadDiscordThinkAutocompleteModulesForTest());
   });
 
-  beforeEach(async () => {
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-discord-think-autocomplete-"));
-    previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = tempDir;
+  beforeEach(() => {
+    clearSessionStoreCacheForTest();
     ensureConfiguredBindingRouteReadyMock.mockReset();
     ensureConfiguredBindingRouteReadyMock.mockResolvedValue({ ok: true });
     resolveConfiguredBindingRouteMock.mockReset();
@@ -221,27 +217,25 @@ describe("discord native /think autocomplete", () => {
         : undefined,
     );
     installProviderThinkingRegistryForTest();
-    upsertSessionEntry({
-      agentId: "main",
-      sessionKey: SESSION_KEY,
-      entry: {
-        sessionId: "main",
-        updatedAt: Date.now(),
-        providerOverride: "openai-codex",
-        modelOverride: "gpt-5.4",
-      },
-    });
+    fs.mkdirSync(path.dirname(STORE_PATH), { recursive: true });
+    fs.writeFileSync(
+      STORE_PATH,
+      JSON.stringify({
+        [SESSION_KEY]: {
+          updatedAt: Date.now(),
+          providerOverride: "openai-codex",
+          modelOverride: "gpt-5.4",
+        },
+      }),
+      "utf8",
+    );
   });
 
-  afterEach(async () => {
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    await rm(tempDir, { recursive: true, force: true });
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
+  afterEach(() => {
+    clearSessionStoreCacheForTest();
+    try {
+      fs.unlinkSync(STORE_PATH);
+    } catch {}
   });
 
   function createConfig() {
@@ -253,7 +247,9 @@ describe("discord native /think autocomplete", () => {
           },
         },
       },
-      session: {},
+      session: {
+        store: STORE_PATH,
+      },
     } as OpenClawConfig;
   }
 
@@ -321,16 +317,17 @@ describe("discord native /think autocomplete", () => {
           ? { levels: [{ id: "off" }, { id: "max" }] }
           : undefined,
     );
-    upsertSessionEntry({
-      agentId: "main",
-      sessionKey: SESSION_KEY,
-      entry: {
-        sessionId: "main",
-        updatedAt: Date.now(),
-        providerOverride: "anthropic",
-        modelOverride: "claude-opus-4-7",
-      },
-    });
+    fs.writeFileSync(
+      STORE_PATH,
+      JSON.stringify({
+        [SESSION_KEY]: {
+          updatedAt: Date.now(),
+          providerOverride: "anthropic",
+          modelOverride: "claude-opus-4-7",
+        },
+      }),
+      "utf8",
+    );
     const cfg = createConfig();
     resolveConfiguredBindingRouteMock.mockImplementation(createConfiguredRouteResult);
     const interaction = {

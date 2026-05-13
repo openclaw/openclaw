@@ -2,14 +2,14 @@ import os from "node:os";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSubagentSpawnTestConfig,
-  installSessionEntryCaptureMock,
+  installSessionStoreCaptureMock,
   loadSubagentSpawnModuleForTest,
 } from "./subagent-spawn.test-helpers.js";
 import { installAcceptedSubagentGatewayMock } from "./test-helpers/subagent-gateway.js";
 
 const hoisted = vi.hoisted(() => ({
   callGatewayMock: vi.fn(),
-  upsertSessionEntryMock: vi.fn(),
+  updateSessionStoreMock: vi.fn(),
   registerSubagentRunMock: vi.fn(),
   emitSessionLifecycleEventMock: vi.fn(),
   hookRunner: {
@@ -54,7 +54,7 @@ describe("spawnSubagentDirect thread binding delivery", () => {
     ({ spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
       callGatewayMock: hoisted.callGatewayMock,
       getRuntimeConfig: () => currentConfig,
-      upsertSessionEntryMock: hoisted.upsertSessionEntryMock,
+      updateSessionStoreMock: hoisted.updateSessionStoreMock,
       registerSubagentRunMock: hoisted.registerSubagentRunMock,
       emitSessionLifecycleEventMock: hoisted.emitSessionLifecycleEventMock,
       hookRunner: hoisted.hookRunner,
@@ -84,13 +84,13 @@ describe("spawnSubagentDirect thread binding delivery", () => {
       to: params.conversationId ? `channel:${String(params.conversationId)}` : undefined,
     });
     hoisted.callGatewayMock.mockReset();
-    hoisted.upsertSessionEntryMock.mockReset();
+    hoisted.updateSessionStoreMock.mockReset();
     hoisted.registerSubagentRunMock.mockReset();
     hoisted.emitSessionLifecycleEventMock.mockReset();
     hoisted.hookRunner.hasHooks.mockReset();
     hoisted.hookRunner.runSubagentSpawning.mockReset();
     installAcceptedSubagentGatewayMock(hoisted.callGatewayMock);
-    installSessionEntryCaptureMock(hoisted.upsertSessionEntryMock);
+    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock);
   });
 
   it("passes the target agent's bound account to thread binding hooks", async () => {

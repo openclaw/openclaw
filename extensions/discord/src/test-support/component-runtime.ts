@@ -19,6 +19,7 @@ type DiscordComponentRuntimeMocks = {
   readAllowFromStoreMock: AsyncUnknownMock;
   readSessionUpdatedAtMock: UnknownMock;
   recordInboundSessionMock: AsyncUnknownMock;
+  resolveStorePathMock: UnknownMock;
   resolvePluginConversationBindingApprovalMock: AsyncUnknownMock;
   upsertPairingRequestMock: AsyncUnknownMock;
 };
@@ -32,6 +33,7 @@ const runtimeMocks = vi.hoisted(
     readAllowFromStoreMock: vi.fn(),
     readSessionUpdatedAtMock: vi.fn(),
     recordInboundSessionMock: vi.fn(),
+    resolveStorePathMock: vi.fn(),
     resolvePluginConversationBindingApprovalMock: vi.fn(),
     upsertPairingRequestMock: vi.fn(),
   }),
@@ -45,6 +47,7 @@ export const enqueueSystemEventMock: UnknownMock = runtimeMocks.enqueueSystemEve
 export const upsertPairingRequestMock: AsyncUnknownMock = runtimeMocks.upsertPairingRequestMock;
 export const recordInboundSessionMock: AsyncUnknownMock = runtimeMocks.recordInboundSessionMock;
 export const readSessionUpdatedAtMock: UnknownMock = runtimeMocks.readSessionUpdatedAtMock;
+export const resolveStorePathMock: UnknownMock = runtimeMocks.resolveStorePathMock;
 const resolvePluginConversationBindingApprovalMock: AsyncUnknownMock =
   runtimeMocks.resolvePluginConversationBindingApprovalMock;
 const buildPluginBindingResolvedTextMock: UnknownMock =
@@ -133,6 +136,7 @@ vi.mock("../monitor/agent-components.deps.runtime.js", () => {
   return {
     enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
     readSessionUpdatedAt: (...args: unknown[]) => readSessionUpdatedAtMock(...args),
+    resolveStorePath: (...args: unknown[]) => resolveStorePathMock(...args),
   };
 });
 
@@ -159,6 +163,7 @@ export function resetDiscordComponentRuntimeMocks() {
   readSessionUpdatedAtMock.mockClear().mockReturnValue(undefined);
   upsertPairingRequestMock.mockClear().mockResolvedValue({ code: "PAIRCODE", created: true });
   recordInboundSessionMock.mockClear().mockResolvedValue(undefined);
+  resolveStorePathMock.mockClear().mockReturnValue("/tmp/openclaw-sessions-test.json");
   resolvePluginConversationBindingApprovalMock.mockReset().mockResolvedValue({
     status: "approved",
     binding: {

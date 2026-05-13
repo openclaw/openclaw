@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
   completeMock: vi.fn(),
-  ensureOpenClawModelCatalogMock: vi.fn(async () => {}),
+  ensureOpenClawModelsJsonMock: vi.fn(async () => {}),
   getApiKeyForModelMock: vi.fn(async () => ({
     apiKey: "oauth-test", // pragma: allowlist secret
     source: "test",
@@ -24,7 +24,7 @@ const hoisted = vi.hoisted(() => ({
 }));
 const {
   completeMock,
-  ensureOpenClawModelCatalogMock,
+  ensureOpenClawModelsJsonMock,
   getApiKeyForModelMock,
   resolveApiKeyForProviderMock,
   requireApiKeyMock,
@@ -48,24 +48,23 @@ type AuthRequestCall = {
   store?: unknown;
 };
 
-function requireFirstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error(`Expected ${label} call`);
-  }
-  return call;
-}
-
-function requireMockCallAt(
-  mock: { mock: { calls: unknown[][] } },
+function requireMockCallAt<const Calls extends readonly unknown[][]>(
+  mock: { mock: { calls: Calls } },
   index: number,
   label: string,
-): unknown[] {
+): Calls[number] {
   const call = mock.mock.calls[index];
   if (!call) {
-    throw new Error(`Expected ${label} call`);
+    throw new Error(`Expected ${label} call ${index}`);
   }
-  return call;
+  return call as Calls[number];
+}
+
+function requireFirstMockCall<const Calls extends readonly unknown[][]>(
+  mock: { mock: { calls: Calls } },
+  label: string,
+): Calls[number] {
+  return requireMockCallAt(mock, 0, label);
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -75,10 +74,9 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-vi.mock("../agents/pi-ai-contract.js", async () => {
-  const actual = await vi.importActual<typeof import("../agents/pi-ai-contract.js")>(
-    "../agents/pi-ai-contract.js",
-  );
+vi.mock("@earendil-works/pi-ai", async () => {
+  const actual =
+    await vi.importActual<typeof import("@earendil-works/pi-ai")>("@earendil-works/pi-ai");
   return {
     ...actual,
     complete: completeMock,
@@ -89,7 +87,7 @@ vi.mock("../agents/models-config.js", async () => ({
   ...(await vi.importActual<typeof import("../agents/models-config.js")>(
     "../agents/models-config.js",
   )),
-  ensureOpenClawModelCatalog: ensureOpenClawModelCatalogMock,
+  ensureOpenClawModelsJson: ensureOpenClawModelsJsonMock,
 }));
 
 vi.mock("../agents/model-auth.js", () => ({
@@ -118,7 +116,6 @@ vi.mock("../plugins/provider-runtime.js", async () => ({
 
 vi.mock("../agents/pi-embedded-runner/model.js", () => ({
   resolveModelAsync: resolveModelAsyncMock,
-  resolveModelWithRegistry: resolveModelWithRegistryMock,
 }));
 
 const { describeImageWithModel } = await import("./image.js");
@@ -204,7 +201,7 @@ describe("describeImageWithModel", () => {
       text: "portal ok",
       model: "MiniMax-VL-01",
     });
-    expect(ensureOpenClawModelCatalogMock).toHaveBeenCalled();
+    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalled();
     const authRequest = getApiKeyForModelCall();
     expect(authRequest?.store).toBe(authStore);
     expect(requireApiKeyMock).toHaveBeenCalled();
@@ -430,12 +427,7 @@ describe("describeImageWithModel", () => {
     });
     expect(completeMock).toHaveBeenCalledOnce();
     const firstCall = requireFirstMockCall(completeMock, "image completion");
-    const [completionModel, contextRaw, optionsRaw] = firstCall;
-    const context = requireRecord(contextRaw, "image completion context") as {
-      systemPrompt?: string;
-      messages: Array<{ role?: string; content?: unknown }>;
-    };
-    const options = requireRecord(optionsRaw, "image completion options");
+    const [completionModel, context, options] = firstCall;
     expect(completionModel).toEqual({
       provider: "openai-codex",
       id: "gpt-5.4",
@@ -455,9 +447,8 @@ describe("describeImageWithModel", () => {
       throw new Error("expected image completion user message");
     }
     expect(userMessage.role).toBe("user");
-    const userContent = userMessage.content as unknown[];
-    expect(userContent).toHaveLength(1);
-    expect(userContent[0]).toEqual({
+    expect(userMessage.content).toHaveLength(1);
+    expect(userMessage.content[0]).toEqual({
       type: "image",
       data: Buffer.from("png-bytes").toString("base64"),
       mimeType: "image/png",
@@ -501,11 +492,7 @@ describe("describeImageWithModel", () => {
       model: "google/gemini-2.5-flash",
     });
     const firstCall = requireFirstMockCall(completeMock, "OpenRouter image completion");
-    const [, contextRaw] = firstCall;
-    const context = requireRecord(contextRaw, "OpenRouter image completion context") as {
-      systemPrompt?: string;
-      messages: Array<{ role?: string; content?: unknown }>;
-    };
+    const [, context] = firstCall;
     expect(context.systemPrompt).toBeUndefined();
     const userMessage = context.messages[0];
     if (!userMessage) {
@@ -625,10 +612,7 @@ describe("describeImageWithModel", () => {
       });
       expect(completeMock).toHaveBeenCalledTimes(2);
       const retryCall = requireMockCallAt(completeMock, 1, "retry image completion");
-      const [retryModel, , retryOptionsRaw] = retryCall;
-      const retryOptions = requireRecord(retryOptionsRaw, "retry image completion options") as {
-        onPayload?: (payload: unknown, model: unknown) => unknown;
-      };
+      const [retryModel, , retryOptions] = retryCall;
       if (!retryOptions?.onPayload) {
         throw new Error("expected retry payload mapper");
       }
@@ -673,12 +657,8 @@ describe("describeImageWithModel", () => {
     await vi.advanceTimersByTimeAsync(25);
     await assertion;
     const firstCall = requireFirstMockCall(completeMock, "timed image completion");
-    const [, , optionsRaw] = firstCall;
-    const options = requireRecord(optionsRaw, "timed image completion options") as {
-      signal?: AbortSignal;
-      timeoutMs?: number;
-    };
-    if (!options.signal) {
+    const [, , options] = firstCall;
+    if (!options?.signal) {
       throw new Error("Expected image completion abort signal");
     }
     expect(options.signal.aborted).toBe(true);
@@ -687,7 +667,7 @@ describe("describeImageWithModel", () => {
 
   it("rejects when image runtime setup exceeds the request timeout", async () => {
     vi.useFakeTimers();
-    ensureOpenClawModelCatalogMock.mockImplementationOnce(() => new Promise(() => {}));
+    ensureOpenClawModelsJsonMock.mockImplementationOnce(() => new Promise(() => {}));
 
     const result = describeImageWithModel({
       cfg: {},

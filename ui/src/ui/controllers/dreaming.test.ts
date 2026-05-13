@@ -100,8 +100,6 @@ describe("dreaming controller", () => {
         remPhaseHitCount: 4,
         promotedTotal: 21,
         promotedToday: 2,
-        storeLabel: "sqlite:plugin_state_entries/memory-core/dreaming.short-term-recall",
-        phaseSignalLabel: "sqlite:plugin_state_entries/memory-core/dreaming.phase-signals",
         shortTermEntries: [
           {
             key: "memory:memory/2026-04-05.md:1:2",
@@ -196,10 +194,6 @@ describe("dreaming controller", () => {
     expect(status?.totalSignalCount).toBe(20);
     expect(status?.phaseSignalCount).toBe(11);
     expect(status?.promotedToday).toBe(2);
-    expect(status?.storeLabel).toBe("sqlite:plugin_state_entries/memory-core/dreaming.short-term-recall");
-    expect(status?.phaseSignalLabel).toBe(
-      "sqlite:plugin_state_entries/memory-core/dreaming.phase-signals",
-    );
     expect(status?.shortTermEntries).toHaveLength(1);
     expect(status?.shortTermEntries[0]?.snippet).toBe(
       "Emma prefers shorter, lower-pressure check-ins.",

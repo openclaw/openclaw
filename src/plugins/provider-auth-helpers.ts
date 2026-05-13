@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { OAuthCredentials } from "@earendil-works/pi-ai";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { buildAuthProfileId } from "../agents/auth-profiles/identity.js";
-import { upsertAuthProfile, upsertAuthProfileWithLock } from "../agents/auth-profiles/profiles.js";
-import type { OAuthCredentials } from "../agents/pi-ai-contract.js";
+import { upsertAuthProfile } from "../agents/auth-profiles/profiles.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -261,7 +261,7 @@ function resolveSiblingAgentDirs(primaryAgentDir: string): string[] {
     const real = safeRealpathSync(dir);
     if (real && !seen.has(real)) {
       seen.add(real);
-      result.push(dir);
+      result.push(real);
     }
   }
   return result;
@@ -291,7 +291,7 @@ export async function writeOAuthCredentials(
     ...(options?.displayName ? { displayName: options.displayName } : {}),
   };
 
-  await upsertAuthProfileWithLock({
+  upsertAuthProfile({
     profileId,
     credential,
     agentDir: resolvedAgentDir,
@@ -305,7 +305,7 @@ export async function writeOAuthCredentials(
         continue;
       }
       try {
-        await upsertAuthProfileWithLock({
+        upsertAuthProfile({
           profileId,
           credential,
           agentDir: targetAgentDir,

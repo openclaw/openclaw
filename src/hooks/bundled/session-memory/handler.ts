@@ -24,7 +24,7 @@ import {
 import { resolveHookConfig } from "../../config.js";
 import type { HookHandler } from "../../hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
-import { getRecentTranscriptContent } from "./transcript.js";
+import { findPreviousSessionFile, getRecentSessionContentWithResetFallback } from "./transcript.js";
 
 const log = createSubsystemLogger("hooks/session-memory");
 
@@ -171,11 +171,38 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
       unknown
     >;
     const currentSessionId = sessionEntry.sessionId as string;
+    let currentSessionFile = (sessionEntry.sessionFile as string) || undefined;
+
+    // If sessionFile is empty or looks like a new/reset file, try to find the previous session file.
+    if (!currentSessionFile || currentSessionFile.includes(".reset.")) {
+      const sessionsDirs = new Set<string>();
+      if (currentSessionFile) {
+        sessionsDirs.add(path.dirname(currentSessionFile));
+      }
+      sessionsDirs.add(path.join(workspaceDir, "sessions"));
+
+      for (const sessionsDir of sessionsDirs) {
+        const recoveredSessionFile = await findPreviousSessionFile({
+          sessionsDir,
+          currentSessionFile,
+          sessionId: currentSessionId,
+        });
+        if (!recoveredSessionFile) {
+          continue;
+        }
+        currentSessionFile = recoveredSessionFile;
+        log.debug("Found previous session file", { file: currentSessionFile });
+        break;
+      }
+    }
 
     log.debug("Session context resolved", {
       sessionId: currentSessionId,
+      sessionFile: currentSessionFile,
       hasCfg: Boolean(cfg),
     });
+
+    const sessionFile = currentSessionFile || undefined;
 
     // Read message count from hook config (default: 15)
     const hookConfig = resolveHookConfig(cfg, "session-memory");
@@ -187,14 +214,9 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
     let slug: string | null = null;
     let sessionContent: string | null = null;
 
-    if (currentSessionId) {
-      sessionContent = await getRecentTranscriptContent(
-        {
-          agentId,
-          sessionId: currentSessionId,
-        },
-        messageCount,
-      );
+    if (sessionFile) {
+      // Get recent conversation content, with fallback to rotated reset transcript.
+      sessionContent = await getRecentSessionContentWithResetFallback(sessionFile, messageCount);
       log.debug("Session content loaded", {
         length: sessionContent?.length ?? 0,
         messageCount,

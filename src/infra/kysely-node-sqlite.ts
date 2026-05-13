@@ -17,7 +17,6 @@ import {
   SqliteAdapter,
   SqliteIntrospector,
   SqliteQueryCompiler,
-  InsertQueryNode,
   createQueryId,
 } from "kysely";
 
@@ -157,7 +156,7 @@ class NodeSqliteKyselyConnection implements DatabaseConnection {
       numAffectedRows: BigInt(changes),
       rows: [],
     };
-    if (InsertQueryNode.is(compiledQuery.query) && changes > 0) {
+    if (isInsertStatement(sql) && changes > 0) {
       return Promise.resolve({
         ...baseResult,
         insertId: BigInt(lastInsertRowid),
@@ -177,6 +176,10 @@ class NodeSqliteKyselyConnection implements DatabaseConnection {
       yield { rows: [row as O] };
     }
   }
+}
+
+function isInsertStatement(sql: string): boolean {
+  return sql.trimStart().toLowerCase().startsWith("insert");
 }
 
 function createSavepointCommand(command: string, savepointName: string): RawNode {

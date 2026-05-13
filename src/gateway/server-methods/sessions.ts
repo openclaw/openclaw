@@ -1,30 +1,32 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 import { resolveModelAgentRuntimeMetadata } from "../../agents/agent-runtime-metadata.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import {
+  listAgentIds,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../../agents/agent-scope.js";
 import {
   abortEmbeddedPiRun,
   isEmbeddedPiRunActive,
   waitForEmbeddedPiRunEnd,
 } from "../../agents/pi-embedded-runner/runs.js";
 import { compactEmbeddedPiSession } from "../../agents/pi-embedded.js";
-import { CURRENT_SESSION_VERSION } from "../../agents/transcript/session-transcript-contract.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { normalizeReasoningLevel, normalizeThinkLevel } from "../../auto-reply/thinking.js";
 import {
-  deleteSessionEntry,
-  getSessionEntry,
-  listSessionEntries,
-  patchSessionEntry,
+  loadSessionStore,
+  runSessionsCleanup,
+  serializeSessionCleanupResult,
   resolveMainSessionKey,
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
   type SessionEntry,
-  upsertSessionEntry,
+  updateSessionStore,
 } from "../../config/sessions.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
-import {
-  appendSqliteSessionTranscriptEvent,
-  hasSqliteSessionTranscriptEvents,
-  replaceSqliteSessionTranscriptEvents,
-} from "../../config/sessions/transcript-store.sqlite.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   createInternalHookEvent,
@@ -57,6 +59,7 @@ import {
   ErrorCodes,
   errorShape,
   validateSessionsAbortParams,
+  validateSessionsCleanupParams,
   validateSessionsCompactParams,
   validateSessionsCompactionBranchParams,
   validateSessionsCompactionGetParams,
@@ -83,19 +86,23 @@ import {
 } from "../session-compaction-checkpoints.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
+  archiveFileOnDisk,
   buildGatewaySessionRow,
   listSessionsFromStoreAsync,
-  loadCombinedSessionEntriesForGateway,
+  loadCombinedSessionStoreForGateway,
   loadGatewaySessionRow,
   loadSessionEntry,
+  migrateAndPruneGatewaySessionStoreKey,
   readRecentSessionMessagesWithStatsAsync,
-  readRecentSessionTranscriptEvents,
+  readRecentSessionTranscriptLines,
   readSessionMessageCountAsync,
   readSessionPreviewItemsFromTranscript,
   resolveDeletedAgentIdFromSessionKey,
-  resolveGatewaySessionDatabaseTarget,
+  resolveFreshestSessionEntryFromStoreKeys,
+  resolveGatewaySessionStoreTarget,
   resolveSessionDisplayModelIdentityRef,
   resolveSessionModelRef,
+  resolveSessionTranscriptCandidates,
   type SessionsPatchResult,
   type SessionsPreviewEntry,
   type SessionsPreviewResult,
@@ -112,6 +119,22 @@ import type {
   RespondFn,
 } from "./types.js";
 import { assertValidParams } from "./validation.js";
+
+function filterSessionStoreToConfiguredAgents(
+  cfg: OpenClawConfig,
+  store: Record<string, SessionEntry>,
+): Record<string, SessionEntry> {
+  const configuredAgentIds = new Set(listAgentIds(cfg).map((agentId) => normalizeAgentId(agentId)));
+  return Object.fromEntries(
+    Object.entries(store).filter(([key]) => {
+      if (key === "global" || key === "unknown") {
+        return true;
+      }
+      const parsed = parseAgentSessionKey(key);
+      return parsed ? configuredAgentIds.has(normalizeAgentId(parsed.agentId)) : false;
+    }),
+  );
+}
 
 type SessionsRuntimeModule = typeof import("./sessions.runtime.js");
 
@@ -198,31 +221,8 @@ function rejectPluginRuntimeDeleteMismatch(params: {
 }
 
 function resolveGatewaySessionTargetFromKey(key: string, cfg: OpenClawConfig) {
-  const target = resolveGatewaySessionDatabaseTarget({ cfg, key });
-  return { cfg, target };
-}
-
-function loadSessionRowsForTarget(target: ReturnType<typeof resolveGatewaySessionDatabaseTarget>): {
-  store: Record<string, SessionEntry>;
-  entry?: SessionEntry;
-  storeKey?: string;
-} {
-  const entry = getSessionEntry({
-    agentId: target.agentId,
-    sessionKey: target.canonicalKey,
-  });
-  const store = entry ? { [target.canonicalKey]: entry } : {};
-  return {
-    store,
-    entry,
-    storeKey: entry ? target.canonicalKey : undefined,
-  };
-}
-
-function loadAgentSessionRows(agentId: string): Record<string, SessionEntry> {
-  return Object.fromEntries(
-    listSessionEntries({ agentId }).map(({ sessionKey, entry }) => [sessionKey, entry]),
-  );
+  const target = resolveGatewaySessionStoreTarget({ cfg, key });
+  return { cfg, target, storePath: target.storePath };
 }
 
 function resolveOptionalInitialSessionMessage(params: {
@@ -276,6 +276,7 @@ function emitSessionsChanged(
             groupChannel: sessionRow.groupChannel,
             space: sessionRow.space,
             chatType: sessionRow.chatType,
+            origin: sessionRow.origin,
             spawnedBy: sessionRow.spawnedBy,
             spawnedWorkspaceDir: sessionRow.spawnedWorkspaceDir,
             forkedFromParent: sessionRow.forkedFromParent,
@@ -298,6 +299,10 @@ function emitSessionsChanged(
             abortedLastRun: sessionRow.abortedLastRun,
             inputTokens: sessionRow.inputTokens,
             outputTokens: sessionRow.outputTokens,
+            lastChannel: sessionRow.lastChannel,
+            lastTo: sessionRow.lastTo,
+            lastAccountId: sessionRow.lastAccountId,
+            lastThreadId: sessionRow.lastThreadId,
             totalTokens: sessionRow.totalTokens,
             totalTokensFresh: sessionRow.totalTokensFresh,
             contextTokens: sessionRow.contextTokens,
@@ -355,6 +360,7 @@ function buildDashboardSessionKey(agentId: string): string {
 function cloneCheckpointSessionEntry(params: {
   currentEntry: SessionEntry;
   nextSessionId: string;
+  nextSessionFile: string;
   label?: string;
   parentSessionKey?: string;
   totalTokens?: number;
@@ -363,6 +369,7 @@ function cloneCheckpointSessionEntry(params: {
   return {
     ...params.currentEntry,
     sessionId: params.nextSessionId,
+    sessionFile: params.nextSessionFile,
     updatedAt: Date.now(),
     systemSent: false,
     abortedLastRun: false,
@@ -391,14 +398,23 @@ function cloneCheckpointSessionEntry(params: {
   };
 }
 
-function ensureSessionTranscriptScope(params: {
+function ensureSessionTranscriptFile(params: {
   sessionId: string;
+  storePath: string;
+  sessionFile?: string;
   agentId: string;
-}): { ok: true } | { ok: false; error: string } {
+}): { ok: true; transcriptPath: string } | { ok: false; error: string } {
   try {
-    if (
-      !hasSqliteSessionTranscriptEvents({ agentId: params.agentId, sessionId: params.sessionId })
-    ) {
+    const transcriptPath = resolveSessionFilePath(
+      params.sessionId,
+      params.sessionFile ? { sessionFile: params.sessionFile } : undefined,
+      resolveSessionFilePathOptions({
+        storePath: params.storePath,
+        agentId: params.agentId,
+      }),
+    );
+    if (!fs.existsSync(transcriptPath)) {
+      fs.mkdirSync(path.dirname(transcriptPath), { recursive: true });
       const header = {
         type: "session",
         version: CURRENT_SESSION_VERSION,
@@ -406,13 +422,12 @@ function ensureSessionTranscriptScope(params: {
         timestamp: new Date().toISOString(),
         cwd: process.cwd(),
       };
-      appendSqliteSessionTranscriptEvent({
-        agentId: params.agentId,
-        sessionId: params.sessionId,
-        event: header,
+      fs.writeFileSync(transcriptPath, `${JSON.stringify(header)}\n`, {
+        encoding: "utf-8",
+        mode: 0o600,
       });
     }
-    return { ok: true };
+    return { ok: true, transcriptPath };
   } catch (err) {
     return {
       ok: false,
@@ -566,7 +581,7 @@ async function handleSessionSend(params: {
   if (!key) {
     return;
   }
-  const { cfg, entry, canonicalKey } = loadSessionEntry(key);
+  const { cfg, entry, canonicalKey, storePath } = loadSessionEntry(key);
   // Reject sends/steers targeting sessions whose owning agent was deleted (#65524).
   const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, canonicalKey);
   if (deletedAgentId !== null) {
@@ -608,10 +623,7 @@ async function handleSessionSend(params: {
   }
 
   const messageSeq =
-    (await readSessionMessageCountAsync({
-      agentId: resolveAgentIdFromSessionKey(canonicalKey),
-      sessionId: entry.sessionId,
-    })) + 1;
+    (await readSessionMessageCountAsync(entry.sessionId, storePath, entry.sessionFile)) + 1;
   let sendAcked = false;
   let sendPayload: unknown;
   let sendCached = false;
@@ -694,10 +706,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const payload = await measureDiagnosticsTimelineSpan(
       "gateway.sessions.list",
       async () => {
-        const { databasePath, entries: store } = measureDiagnosticsTimelineSpanSync(
+        const { storePath, store } = measureDiagnosticsTimelineSpanSync(
           "gateway.sessions.list.store_load",
           () =>
-            loadCombinedSessionEntriesForGateway(cfg, {
+            loadCombinedSessionStoreForGateway(cfg, {
               agentId: p.agentId,
               configuredAgentsOnly,
             }),
@@ -710,6 +722,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
             },
           },
         );
+        const listStore = configuredAgentsOnly
+          ? filterSessionStoreToConfiguredAgents(cfg, store)
+          : store;
         const modelCatalog = await measureDiagnosticsTimelineSpan(
           "gateway.sessions.list.model_catalog",
           () => loadOptionalSessionsListModelCatalog(context),
@@ -723,8 +738,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           () =>
             listSessionsFromStoreAsync({
               cfg,
-              databasePath,
-              store,
+              storePath,
+              store: listStore,
               modelCatalog,
               opts: p,
             }),
@@ -732,7 +747,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
             config: cfg,
             phase: "sessions.list",
             attributes: {
-              storeEntries: Object.keys(store).length,
+              storeEntries: Object.keys(listStore).length,
             },
           },
         );
@@ -769,6 +784,43 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       },
     );
     respond(true, payload, undefined);
+  },
+  "sessions.cleanup": async ({ params, respond, context }) => {
+    if (!assertValidParams(params, validateSessionsCleanupParams, "sessions.cleanup", respond)) {
+      return;
+    }
+    try {
+      const { mode, appliedSummaries } = await runSessionsCleanup({
+        cfg: context.getRuntimeConfig(),
+        opts: {
+          agent: params.agent,
+          allAgents: params.allAgents,
+          enforce: params.enforce,
+          activeKey: params.activeKey,
+          fixMissing: params.fixMissing,
+          fixDmScope: params.fixDmScope,
+        },
+      });
+      const result = serializeSessionCleanupResult({
+        mode,
+        dryRun: false,
+        summaries: appliedSummaries,
+      });
+      respond(true, result, undefined);
+      for (const summary of appliedSummaries) {
+        emitSessionsChanged(context, {
+          reason: "cleanup",
+          sessionKey: undefined,
+        });
+        if (summary.wouldMutate) {
+          context.logGateway.debug(
+            `sessions.cleanup applied ${summary.storePath}: ${summary.beforeCount} -> ${summary.afterCount}`,
+          );
+        }
+      }
+    } catch (error) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(error)));
+    }
   },
   "sessions.subscribe": ({ client, context, respond }) => {
     const connId = client?.connId?.trim();
@@ -853,18 +905,30 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
 
     const cfg = context.getRuntimeConfig();
+    const storeCache = new Map<string, Record<string, SessionEntry>>();
     const previews: SessionsPreviewEntry[] = [];
 
     for (const key of keys) {
       try {
-        const target = resolveGatewaySessionDatabaseTarget({ cfg, key });
-        const { entry } = loadSessionRowsForTarget(target);
+        const storeTarget = resolveGatewaySessionStoreTarget({ cfg, key, scanLegacyKeys: false });
+        const store =
+          storeCache.get(storeTarget.storePath) ?? loadSessionStore(storeTarget.storePath);
+        storeCache.set(storeTarget.storePath, store);
+        const target = resolveGatewaySessionStoreTarget({
+          cfg,
+          key,
+          store,
+        });
+        const entry = resolveFreshestSessionEntryFromStoreKeys(store, target.storeKeys);
         if (!entry?.sessionId) {
           previews.push({ key, status: "missing", items: [] });
           continue;
         }
         const items = readSessionPreviewItemsFromTranscript(
-          { agentId: target.agentId, sessionId: entry.sessionId },
+          entry.sessionId,
+          target.storePath,
+          entry.sessionFile,
+          target.agentId,
           limit,
           maxChars,
         );
@@ -889,14 +953,16 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const cfg = context.getRuntimeConfig();
-    const { target } = resolveGatewaySessionTargetFromKey(key, cfg);
-    const { store, entry } = loadSessionRowsForTarget(target);
+    const { target, storePath } = resolveGatewaySessionTargetFromKey(key, cfg);
+    const store = loadSessionStore(storePath);
+    const entry = resolveFreshestSessionEntryFromStoreKeys(store, target.storeKeys);
     if (!entry) {
       respond(true, { session: null }, undefined);
       return;
     }
     const row = buildGatewaySessionRow({
       cfg,
+      storePath,
       store,
       key: target.canonicalKey,
       entry,
@@ -1081,7 +1147,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         });
         await triggerInternalHook(hookEvent);
       }
-      const parentTarget = resolveGatewaySessionDatabaseTarget({
+      const parentTarget = resolveGatewaySessionStoreTarget({
         cfg,
         key: canonicalParentSessionKey,
       });
@@ -1090,6 +1156,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         cfg,
         key: canonicalParentSessionKey,
         target: parentTarget,
+        storePath: parentTarget.storePath,
         entry: parentEntry,
         reason: "new",
       });
@@ -1104,50 +1171,46 @@ export const sessionsHandlers: GatewayRequestHandlers = {
             mainKey: cfg.session?.mainKey,
           })
       : buildDashboardSessionKey(agentId);
-    const target = resolveGatewaySessionDatabaseTarget({ cfg, key });
+    const target = resolveGatewaySessionStoreTarget({ cfg, key });
     const targetAgentId = resolveAgentIdFromSessionKey(target.canonicalKey);
-    const createdStore = loadAgentSessionRows(target.agentId);
-    const patched = await applySessionsPatchToStore({
-      cfg,
-      store: createdStore,
-      storeKey: target.canonicalKey,
-      patch: {
-        key: target.canonicalKey,
-        label: normalizeOptionalString(p.label),
-        model: normalizeOptionalString(p.model),
-      },
-      loadGatewayModelCatalog: context.loadGatewayModelCatalog,
-    });
-    const created = !patched.ok
-      ? patched
-      : {
-          ...patched,
-          entry: canonicalParentSessionKey
-            ? {
-                ...patched.entry,
-                parentSessionKey: canonicalParentSessionKey,
-              }
-            : patched.entry,
-        };
-    if (created.ok) {
-      upsertSessionEntry({
-        agentId: target.agentId,
-        sessionKey: target.canonicalKey,
-        entry: created.entry,
+    const created = await updateSessionStore(target.storePath, async (store) => {
+      const patched = await applySessionsPatchToStore({
+        cfg,
+        store,
+        storeKey: target.canonicalKey,
+        patch: {
+          key: target.canonicalKey,
+          label: normalizeOptionalString(p.label),
+          model: normalizeOptionalString(p.model),
+        },
+        loadGatewayModelCatalog: context.loadGatewayModelCatalog,
       });
-    }
+      if (!patched.ok || !canonicalParentSessionKey) {
+        return patched;
+      }
+      const nextEntry: SessionEntry = {
+        ...patched.entry,
+        parentSessionKey: canonicalParentSessionKey,
+      };
+      store[target.canonicalKey] = nextEntry;
+      return {
+        ...patched,
+        entry: nextEntry,
+      };
+    });
     if (!created.ok) {
       respond(false, undefined, created.error);
       return;
     }
-    const ensured = ensureSessionTranscriptScope({
+    const ensured = ensureSessionTranscriptFile({
       sessionId: created.entry.sessionId,
+      storePath: target.storePath,
+      sessionFile: created.entry.sessionFile,
       agentId: targetAgentId,
     });
     if (!ensured.ok) {
-      deleteSessionEntry({
-        agentId: target.agentId,
-        sessionKey: target.canonicalKey,
+      await updateSessionStore(target.storePath, (store) => {
+        delete store[target.canonicalKey];
       });
       respond(
         false,
@@ -1157,17 +1220,35 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const createdEntry = created.entry;
+    const createdEntry =
+      created.entry.sessionFile === ensured.transcriptPath
+        ? created.entry
+        : {
+            ...created.entry,
+            sessionFile: ensured.transcriptPath,
+          };
+    if (createdEntry !== created.entry) {
+      await updateSessionStore(target.storePath, (store) => {
+        const existing = store[target.canonicalKey];
+        if (existing) {
+          store[target.canonicalKey] = {
+            ...existing,
+            sessionFile: ensured.transcriptPath,
+          };
+        }
+      });
+    }
 
     const initialMessage = resolveOptionalInitialSessionMessage(p);
     let runPayload: Record<string, unknown> | undefined;
     let runError: unknown;
     let runMeta: Record<string, unknown> | undefined;
     const messageSeq = initialMessage
-      ? (await readSessionMessageCountAsync({
-          agentId: target.agentId,
-          sessionId: createdEntry.sessionId,
-        })) + 1
+      ? (await readSessionMessageCountAsync(
+          createdEntry.sessionId,
+          target.storePath,
+          createdEntry.sessionFile,
+        )) + 1
       : undefined;
 
     if (initialMessage) {
@@ -1225,7 +1306,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
     if (canonicalParentSessionKey && p.emitCommandHooks === true) {
       const { entry: parentEntry } = loadSessionEntry(canonicalParentSessionKey);
-      const parentTarget = resolveGatewaySessionDatabaseTarget({
+      const parentTarget = resolveGatewaySessionStoreTarget({
         cfg,
         key: canonicalParentSessionKey,
       });
@@ -1235,6 +1316,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         cfg,
         sessionKey: canonicalParentSessionKey,
         sessionId: parentEntry?.sessionId,
+        storePath: parentTarget.storePath,
+        sessionFile: parentEntry?.sessionFile,
         agentId: parentTarget.agentId,
         reason: "new",
         nextSessionId: createdEntry.sessionId,
@@ -1245,6 +1328,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         sessionKey: target.canonicalKey,
         sessionId: createdEntry.sessionId,
         resumedFrom: parentEntry?.sessionId,
+        storePath: target.storePath,
+        sessionFile: createdEntry.sessionFile,
         agentId: target.agentId,
       });
     }
@@ -1273,7 +1358,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
     const loaded = loadSessionEntry(key);
     const { cfg, entry, canonicalKey } = loaded;
-    const target = resolveGatewaySessionDatabaseTarget({ cfg, key: canonicalKey });
+    const target = resolveGatewaySessionStoreTarget({ cfg, key: canonicalKey });
     if (!entry?.sessionId) {
       respond(
         false,
@@ -1283,7 +1368,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const checkpoint = getSessionCompactionCheckpoint({ entry, checkpointId });
-    if (!checkpoint?.preCompaction.sessionId) {
+    if (!checkpoint?.preCompaction.sessionFile) {
       respond(
         false,
         undefined,
@@ -1292,10 +1377,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const branchedSession = await forkCompactionCheckpointTranscriptAsync({
-      agentId: target.agentId,
-      sourceSessionId: checkpoint.preCompaction.sessionId,
+      sourceFile: checkpoint.preCompaction.sessionFile,
+      sessionDir: path.dirname(checkpoint.preCompaction.sessionFile),
     });
-    if (!branchedSession?.sessionId) {
+    if (!branchedSession?.sessionFile) {
       respond(
         false,
         undefined,
@@ -1308,15 +1393,14 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const nextEntry = cloneCheckpointSessionEntry({
       currentEntry: entry,
       nextSessionId: branchedSession.sessionId,
+      nextSessionFile: branchedSession.sessionFile,
       label,
       parentSessionKey: canonicalKey,
       totalTokens: checkpoint.tokensBefore,
     });
 
-    upsertSessionEntry({
-      agentId: target.agentId,
-      sessionKey: nextKey,
-      entry: nextEntry,
+    await updateSessionStore(target.storePath, (store) => {
+      store[nextKey] = nextEntry;
     });
 
     respond(
@@ -1373,7 +1457,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const loaded = loadSessionEntry(key);
-    const { entry, canonicalKey } = loaded;
+    const { entry, canonicalKey, storePath } = loaded;
     if (!entry?.sessionId) {
       respond(
         false,
@@ -1383,7 +1467,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const checkpoint = getSessionCompactionCheckpoint({ entry, checkpointId });
-    if (!checkpoint?.preCompaction.sessionId) {
+    if (!checkpoint?.preCompaction.sessionFile) {
       respond(
         false,
         undefined,
@@ -1405,12 +1489,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const target = resolveGatewaySessionDatabaseTarget({ cfg: loaded.cfg, key: canonicalKey });
     const restoredSession = await forkCompactionCheckpointTranscriptAsync({
-      agentId: target.agentId,
-      sourceSessionId: checkpoint.preCompaction.sessionId,
+      sourceFile: checkpoint.preCompaction.sessionFile,
+      sessionDir: path.dirname(checkpoint.preCompaction.sessionFile),
     });
-    if (!restoredSession?.sessionId) {
+    if (!restoredSession?.sessionFile) {
       respond(
         false,
         undefined,
@@ -1421,14 +1504,13 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const nextEntry = cloneCheckpointSessionEntry({
       currentEntry: entry,
       nextSessionId: restoredSession.sessionId,
+      nextSessionFile: restoredSession.sessionFile,
       totalTokens: checkpoint.tokensBefore,
       preserveCompactionCheckpoints: true,
     });
 
-    upsertSessionEntry({
-      agentId: target.agentId,
-      sessionKey: canonicalKey,
-      entry: nextEntry,
+    await updateSessionStore(storePath, (store) => {
+      store[canonicalKey] = nextEntry;
     });
 
     respond(
@@ -1585,28 +1667,24 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const { cfg, target } = resolveGatewaySessionTargetFromKey(key, context.getRuntimeConfig());
-    const loaded = loadSessionRowsForTarget(target);
-    const patchStore = loadAgentSessionRows(target.agentId);
-    if (loaded.entry) {
-      patchStore[target.canonicalKey] = loaded.entry;
-    }
-    const applied = await applySessionsPatchToStore({
-      cfg,
-      store: patchStore,
-      storeKey: target.canonicalKey,
-      patch: p,
-      loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+    const { cfg, target, storePath } = resolveGatewaySessionTargetFromKey(
+      key,
+      context.getRuntimeConfig(),
+    );
+    const applied = await updateSessionStore(storePath, async (store) => {
+      const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({ cfg, key, store });
+      return await applySessionsPatchToStore({
+        cfg,
+        store,
+        storeKey: primaryKey,
+        patch: p,
+        loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+      });
     });
     if (!applied.ok) {
       respond(false, undefined, applied.error);
       return;
     }
-    upsertSessionEntry({
-      agentId: target.agentId,
-      sessionKey: target.canonicalKey,
-      entry: applied.entry,
-    });
 
     if (hasInternalHookListeners("session", "patch")) {
       const hookContext: SessionPatchHookContext = structuredClone({
@@ -1643,7 +1721,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     });
     const result: SessionsPatchResult = {
       ok: true,
-      databasePath: target.databasePath,
+      path: storePath,
       key: target.canonicalKey,
       entry: applied.entry,
       resolved: {
@@ -1773,7 +1851,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const { cfg, target } = resolveGatewaySessionTargetFromKey(key, context.getRuntimeConfig());
+    const { cfg, target, storePath } = resolveGatewaySessionTargetFromKey(
+      key,
+      context.getRuntimeConfig(),
+    );
     const mainKey = resolveMainSessionKey(cfg);
     if (target.canonicalKey === mainKey) {
       respond(
@@ -1784,13 +1865,15 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
+    const deleteTranscript = typeof p.deleteTranscript === "boolean" ? p.deleteTranscript : true;
     const {
+      archiveSessionTranscriptsForSessionDetailed,
       cleanupSessionBeforeMutation,
       emitGatewaySessionEndPluginHook,
       emitSessionUnboundLifecycleEvent,
     } = await loadSessionsRuntimeModule();
 
-    const { entry, canonicalKey } = loadSessionEntry(key);
+    const { entry, legacyKey, canonicalKey } = loadSessionEntry(key);
     if (rejectPluginRuntimeDeleteMismatch({ client, key: canonicalKey ?? key, entry, respond })) {
       return;
     }
@@ -1799,6 +1882,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       key,
       target,
       entry,
+      legacyKey,
+      canonicalKey,
       reason: "session-delete",
     });
     if (mutationCleanupError) {
@@ -1806,21 +1891,36 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const sessionId = entry?.sessionId;
-    const deleteKey = canonicalKey ?? target.canonicalKey;
-    const deleted = entry
-      ? deleteSessionEntry({
-          agentId: target.agentId,
-          sessionKey: deleteKey,
-        })
-      : false;
+    const deleted = await updateSessionStore(storePath, (store) => {
+      const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({ cfg, key, store });
+      const hadEntry = Boolean(store[primaryKey]);
+      if (hadEntry) {
+        delete store[primaryKey];
+      }
+      return hadEntry;
+    });
 
+    const archivedTranscripts =
+      deleted && deleteTranscript
+        ? archiveSessionTranscriptsForSessionDetailed({
+            sessionId,
+            storePath,
+            sessionFile: entry?.sessionFile,
+            agentId: target.agentId,
+            reason: "deleted",
+          })
+        : [];
+    const archived = archivedTranscripts.map((entry) => entry.archivedPath);
     if (deleted) {
       emitGatewaySessionEndPluginHook({
         cfg,
         sessionKey: target.canonicalKey ?? key,
         sessionId,
+        storePath,
+        sessionFile: entry?.sessionFile,
         agentId: target.agentId,
         reason: "deleted",
+        archivedTranscripts,
       });
       const emitLifecycleHooks = p.emitLifecycleHooks !== false;
       await emitSessionUnboundLifecycleEvent({
@@ -1830,7 +1930,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       });
     }
 
-    respond(true, { ok: true, key: target.canonicalKey, deleted }, undefined);
+    respond(true, { ok: true, key: target.canonicalKey, deleted, archived }, undefined);
     if (deleted) {
       emitSessionsChanged(context, {
         sessionKey: target.canonicalKey,
@@ -1849,14 +1949,20 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         ? Math.max(1, Math.floor(p.limit))
         : 200;
 
-    const { target } = resolveGatewaySessionTargetFromKey(key, context.getRuntimeConfig());
-    const { entry } = loadSessionRowsForTarget(target);
+    const { target, storePath } = resolveGatewaySessionTargetFromKey(
+      key,
+      context.getRuntimeConfig(),
+    );
+    const store = loadSessionStore(storePath);
+    const entry = resolveFreshestSessionEntryFromStoreKeys(store, target.storeKeys);
     if (!entry?.sessionId) {
       respond(true, { messages: [] }, undefined);
       return;
     }
     const { messages } = await readRecentSessionMessagesWithStatsAsync(
-      { agentId: target.agentId, sessionId: entry.sessionId },
+      entry.sessionId,
+      storePath,
+      entry.sessionFile,
       {
         maxMessages: limit,
         maxLines: limit * 20 + 20,
@@ -1882,8 +1988,15 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         ? Math.max(1, Math.floor(p.maxLines))
         : undefined;
 
-    const { cfg, target } = resolveGatewaySessionTargetFromKey(key, context.getRuntimeConfig());
-    const compactTarget = loadSessionRowsForTarget(target);
+    const { cfg, target, storePath } = resolveGatewaySessionTargetFromKey(
+      key,
+      context.getRuntimeConfig(),
+    );
+    // Lock + read in a short critical section; transcript work happens outside.
+    const compactTarget = await updateSessionStore(storePath, (store) => {
+      const { entry, primaryKey } = migrateAndPruneGatewaySessionStoreKey({ cfg, key, store });
+      return { entry, primaryKey };
+    });
     const entry = compactTarget.entry;
     const sessionId = entry?.sessionId;
     if (!sessionId) {
@@ -1900,7 +2013,13 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    if (!hasSqliteSessionTranscriptEvents({ agentId: target.agentId, sessionId })) {
+    const filePath = resolveSessionTranscriptCandidates(
+      sessionId,
+      storePath,
+      entry?.sessionFile,
+      target.agentId,
+    ).find((candidate) => fs.existsSync(candidate));
+    if (!filePath) {
       respond(
         true,
         {
@@ -1935,9 +2054,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         resolveAgentWorkspaceDir(cfg, target.agentId);
       const result = await compactEmbeddedPiSession({
         sessionId,
-        agentId: target.agentId,
         sessionKey: target.canonicalKey,
         allowGatewaySubagentBinding: true,
+        sessionFile: filePath,
         workspaceDir,
         config: cfg,
         provider: resolvedModel.provider,
@@ -1954,30 +2073,32 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       });
 
       if (result.ok && result.compacted) {
-        await patchSessionEntry({
-          agentId: target.agentId,
-          sessionKey: target.canonicalKey,
-          fallbackEntry: entry,
-          update: (entryToUpdate) => {
-            entryToUpdate.updatedAt = Date.now();
-            entryToUpdate.compactionCount = Math.max(0, entryToUpdate.compactionCount ?? 0) + 1;
-            if (result.result?.sessionId && result.result.sessionId !== entryToUpdate.sessionId) {
-              entryToUpdate.sessionId = result.result.sessionId;
-            }
-            delete entryToUpdate.inputTokens;
-            delete entryToUpdate.outputTokens;
-            if (
-              typeof result.result?.tokensAfter === "number" &&
-              Number.isFinite(result.result.tokensAfter)
-            ) {
-              entryToUpdate.totalTokens = result.result.tokensAfter;
-              entryToUpdate.totalTokensFresh = true;
-            } else {
-              delete entryToUpdate.totalTokens;
-              delete entryToUpdate.totalTokensFresh;
-            }
-            return entryToUpdate;
-          },
+        await updateSessionStore(storePath, (store) => {
+          const entryKey = compactTarget.primaryKey;
+          const entryToUpdate = store[entryKey];
+          if (!entryToUpdate) {
+            return;
+          }
+          entryToUpdate.updatedAt = Date.now();
+          entryToUpdate.compactionCount = Math.max(0, entryToUpdate.compactionCount ?? 0) + 1;
+          if (result.result?.sessionId && result.result.sessionId !== entryToUpdate.sessionId) {
+            entryToUpdate.sessionId = result.result.sessionId;
+          }
+          if (result.result?.sessionFile) {
+            entryToUpdate.sessionFile = result.result.sessionFile;
+          }
+          delete entryToUpdate.inputTokens;
+          delete entryToUpdate.outputTokens;
+          if (
+            typeof result.result?.tokensAfter === "number" &&
+            Number.isFinite(result.result.tokensAfter)
+          ) {
+            entryToUpdate.totalTokens = result.result.tokensAfter;
+            entryToUpdate.totalTokensFresh = true;
+          } else {
+            delete entryToUpdate.totalTokens;
+            delete entryToUpdate.totalTokensFresh;
+          }
         });
       }
 
@@ -2002,45 +2123,43 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const tail = readRecentSessionTranscriptEvents({
+    const tail = readRecentSessionTranscriptLines({
       sessionId,
+      storePath,
+      sessionFile: entry?.sessionFile,
       agentId: target.agentId,
-      maxEvents: maxLines,
+      maxLines,
     });
-    const events = tail?.events ?? [];
-    const totalEvents = tail?.totalEvents ?? 0;
-    if (totalEvents <= maxLines) {
+    const lines = tail?.lines ?? [];
+    const totalLines = tail?.totalLines ?? 0;
+    if (totalLines <= maxLines) {
       respond(
         true,
         {
           ok: true,
           key: target.canonicalKey,
           compacted: false,
-          kept: totalEvents,
+          kept: totalLines,
         },
         undefined,
       );
       return;
     }
 
-    replaceSqliteSessionTranscriptEvents({
-      agentId: target.agentId,
-      sessionId,
-      events,
-    });
+    const archived = archiveFileOnDisk(filePath, "bak");
+    fs.writeFileSync(filePath, `${lines.join("\n")}\n`, "utf-8");
 
-    await patchSessionEntry({
-      agentId: target.agentId,
-      sessionKey: target.canonicalKey,
-      fallbackEntry: entry,
-      update: (entryToUpdate) => {
-        delete entryToUpdate.inputTokens;
-        delete entryToUpdate.outputTokens;
-        delete entryToUpdate.totalTokens;
-        delete entryToUpdate.totalTokensFresh;
-        entryToUpdate.updatedAt = Date.now();
-        return entryToUpdate;
-      },
+    await updateSessionStore(storePath, (store) => {
+      const entryKey = compactTarget.primaryKey;
+      const entryToUpdate = store[entryKey];
+      if (!entryToUpdate) {
+        return;
+      }
+      delete entryToUpdate.inputTokens;
+      delete entryToUpdate.outputTokens;
+      delete entryToUpdate.totalTokens;
+      delete entryToUpdate.totalTokensFresh;
+      entryToUpdate.updatedAt = Date.now();
     });
 
     respond(
@@ -2049,7 +2168,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         ok: true,
         key: target.canonicalKey,
         compacted: true,
-        kept: events.length,
+        archived,
+        kept: lines.length,
       },
       undefined,
     );

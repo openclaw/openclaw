@@ -93,9 +93,11 @@ const registryStoreMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../config/sessions.js", () => ({
-  getSessionEntry: vi.fn(({ sessionKey }: { sessionKey: string }) => sessionStore[sessionKey]),
+  loadSessionStore: vi.fn(() => sessionStore),
   resolveAgentIdFromSessionKey: (key: string) => key.match(/^agent:([^:]+)/)?.[1] ?? "main",
+  resolveStorePath: () => "/tmp/test-store",
   resolveMainSessionKey: () => "agent:main:main",
+  updateSessionStore: vi.fn(),
 }));
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
@@ -107,12 +109,12 @@ vi.mock("../browser-lifecycle-cleanup.js", () => ({
 }));
 
 vi.mock("./subagent-depth.js", () => ({
-  getSubagentDepthFromSessionEntries: () => 0,
+  getSubagentDepthFromSessionStore: () => 0,
 }));
 
 vi.mock("./subagent-registry.store.js", () => ({
-  loadSubagentRegistryFromState: registryStoreMocks.loadRegistryMock,
-  saveSubagentRegistryToState: registryStoreMocks.saveRegistryMock,
+  loadSubagentRegistryFromDisk: registryStoreMocks.loadRegistryMock,
+  saveSubagentRegistryToDisk: registryStoreMocks.saveRegistryMock,
 }));
 
 describe("subagent registry lifecycle error grace", () => {

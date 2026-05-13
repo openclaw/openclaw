@@ -1,10 +1,10 @@
 import { AnthropicVertex as AnthropicVertexSdk } from "@anthropic-ai/vertex-sdk";
-import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
 import {
   streamAnthropic as streamAnthropicDefault,
   type AnthropicOptions,
   type Model,
-} from "openclaw/plugin-sdk/provider-ai";
+} from "@earendil-works/pi-ai";
 import {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,

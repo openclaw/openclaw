@@ -1,24 +1,21 @@
 import type { DatabaseSync } from "node:sqlite";
-import {
-  MEMORY_INDEX_TABLE_NAMES,
-  type MemorySource,
-} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
 export function deleteMemoryFtsRows(params: {
   db: DatabaseSync;
   tableName?: string;
-  sourceKey: string;
+  path: string;
   source: MemorySource;
   currentModel?: string;
 }): void {
-  const tableName = params.tableName ?? MEMORY_INDEX_TABLE_NAMES.fts;
+  const tableName = params.tableName ?? "chunks_fts";
   if (params.currentModel) {
     params.db
-      .prepare(`DELETE FROM ${tableName} WHERE source_key = ? AND source = ? AND model = ?`)
-      .run(params.sourceKey, params.source, params.currentModel);
+      .prepare(`DELETE FROM ${tableName} WHERE path = ? AND source = ? AND model = ?`)
+      .run(params.path, params.source, params.currentModel);
     return;
   }
   params.db
-    .prepare(`DELETE FROM ${tableName} WHERE source_key = ? AND source = ?`)
-    .run(params.sourceKey, params.source);
+    .prepare(`DELETE FROM ${tableName} WHERE path = ? AND source = ?`)
+    .run(params.path, params.source);
 }

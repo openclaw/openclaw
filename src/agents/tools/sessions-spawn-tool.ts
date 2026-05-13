@@ -108,6 +108,7 @@ async function cleanupUntrackedAcpSession(sessionKey: string): Promise<void> {
       method: "sessions.delete",
       params: {
         key,
+        deleteTranscript: true,
         emitLifecycleHooks: false,
       },
       timeoutMs: 10_000,

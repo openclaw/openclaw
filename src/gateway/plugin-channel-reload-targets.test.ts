@@ -15,9 +15,7 @@ describe("plugin channel reload targets", () => {
     expect(pluginConfigTargetsChanged(targets, ["plugins.entries.acme-chat.config.mode"])).toBe(
       true,
     );
-    expect(
-      pluginConfigTargetsChanged(targets, ["installedPluginIndex.installRecords.acme-chat.source"]),
-    ).toBe(true);
+    expect(pluginConfigTargetsChanged(targets, ["plugins.installs.acme-chat.source"])).toBe(true);
     expect(pluginConfigTargetsChanged(targets, ["plugins.entries.matrix.config.mode"])).toBe(true);
     expect(pluginConfigTargetsChanged(targets, ["plugins.entries.matrix-chat.enabled"])).toBe(true);
     expect(pluginConfigTargetsChanged(targets, ["plugins.entries.other.enabled"])).toBe(false);

@@ -154,13 +154,13 @@ the previous pending request is superseded and a new `requestId` is created.
 Run `openclaw devices list` again before approval.
 
 The node host stores its node id, token, display name, and gateway connection info in
-the SQLite state database.
+`~/.openclaw/node.json`.
 
 ## Exec approvals
 
 `system.run` is gated by local exec approvals:
 
-- host-local SQLite approvals state
+- `~/.openclaw/exec-approvals.json`
 - [Exec approvals](/tools/exec-approvals)
 - `openclaw approvals --node <id|name|ip>` (edit from the Gateway)
 

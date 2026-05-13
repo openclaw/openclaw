@@ -1,6 +1,8 @@
+import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import path from "node:path";
 import { getRuntimeConfig } from "../config/io.js";
-import { getSessionEntry } from "../config/sessions.js";
+import { loadSessionStore } from "../config/sessions.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import {
@@ -31,7 +33,9 @@ import {
 import {
   readRecentSessionMessagesWithStatsAsync,
   readSessionMessagesAsync,
-  resolveGatewaySessionDatabaseTarget,
+  resolveFreshestSessionEntryFromStoreKeys,
+  resolveGatewaySessionStoreTarget,
+  resolveSessionTranscriptCandidates,
 } from "./session-utils.js";
 
 const log = createSubsystemLogger("gateway/sessions-history-sse");
@@ -70,6 +74,19 @@ function resolveLimit(req: IncomingMessage): number | undefined {
     return 1;
   }
   return Math.min(MAX_SESSION_HISTORY_LIMIT, Math.max(1, value));
+}
+
+function canonicalizePath(value: string | undefined): string | undefined {
+  const trimmed = normalizeOptionalString(value);
+  if (!trimmed) {
+    return undefined;
+  }
+  const resolved = path.resolve(trimmed);
+  try {
+    return fs.realpathSync(resolved);
+  } catch {
+    return resolved;
+  }
 }
 
 function sseWrite(res: ServerResponse, event: string, payload: unknown): void {
@@ -118,11 +135,9 @@ export async function handleSessionHistoryHttpRequest(
   }
   const { cfg } = authResult;
 
-  const target = resolveGatewaySessionDatabaseTarget({ cfg, key: sessionKey });
-  const entry = getSessionEntry({
-    agentId: target.agentId,
-    sessionKey: target.canonicalKey,
-  });
+  const target = resolveGatewaySessionStoreTarget({ cfg, key: sessionKey });
+  const store = loadSessionStore(target.storePath);
+  const entry = resolveFreshestSessionEntryFromStoreKeys(store, target.storeKeys);
   if (!entry?.sessionId) {
     sendJson(res, 404, {
       ok: false,
@@ -142,13 +157,10 @@ export async function handleSessionHistoryHttpRequest(
   const boundedSnapshot =
     cursor === undefined && typeof limit === "number"
       ? await readRecentSessionMessagesWithStatsAsync(
-          {
-            agentId: target.agentId,
-            sessionId: entry.sessionId,
-          },
-          {
-            ...resolveSessionHistoryTailReadOptions(limit),
-          },
+          entry.sessionId,
+          target.storePath,
+          entry.sessionFile,
+          resolveSessionHistoryTailReadOptions(limit),
         )
       : undefined;
   // Cursor reads still need an arbitrary historical window. The common first
@@ -156,16 +168,10 @@ export async function handleSessionHistoryHttpRequest(
   const rawSnapshot =
     boundedSnapshot?.messages ??
     (entry?.sessionId
-      ? await readSessionMessagesAsync(
-          {
-            agentId: target.agentId,
-            sessionId: entry.sessionId,
-          },
-          {
-            mode: "full",
-            reason: "session history cursor pagination",
-          },
-        )
+      ? await readSessionMessagesAsync(entry.sessionId, target.storePath, entry.sessionFile, {
+          mode: "full",
+          reason: "session history cursor pagination",
+        })
       : []);
   const historySnapshot = buildSessionHistorySnapshot({
     rawMessages: rawSnapshot,
@@ -185,11 +191,25 @@ export async function handleSessionHistoryHttpRequest(
     return true;
   }
 
+  const transcriptCandidates = entry?.sessionId
+    ? new Set(
+        resolveSessionTranscriptCandidates(
+          entry.sessionId,
+          target.storePath,
+          entry.sessionFile,
+          target.agentId,
+        )
+          .map((candidate) => canonicalizePath(candidate))
+          .filter((candidate): candidate is string => typeof candidate === "string"),
+      )
+    : new Set<string>();
+
   let sentHistory = history;
   const sseState = SessionHistorySseState.fromRawSnapshot({
     target: {
-      agentId: target.agentId,
       sessionId: entry.sessionId,
+      storePath: target.storePath,
+      sessionFile: entry.sessionFile,
     },
     rawMessages: rawSnapshot,
     rawTranscriptSeq: boundedSnapshot?.totalMessages,
@@ -290,10 +310,8 @@ export async function handleSessionHistoryHttpRequest(
     if (!entry?.sessionId) {
       return;
     }
-    if (update.sessionId !== entry.sessionId) {
-      return;
-    }
-    if (update.agentId && update.agentId !== target.agentId) {
+    const updatePath = canonicalizePath(update.sessionFile);
+    if (!updatePath || !transcriptCandidates.has(updatePath)) {
       return;
     }
     queueStreamWork(async () => {

@@ -72,6 +72,7 @@ vi.mock("./runtime-api.js", () => ({
   recordSessionMetaFromInbound: async () => {},
   resolveChannelContextVisibilityMode: () => "standard",
   resolveInboundSessionEnvelopeContext: () => ({
+    storePath: "/tmp/sessions.json",
     envelopeOptions: {},
     previousTimestamp: undefined,
   }),

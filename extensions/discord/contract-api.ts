@@ -13,6 +13,7 @@ export {
   unsupportedSecretRefSurfacePatterns,
   collectUnsupportedSecretRefConfigCandidates,
 } from "./src/security-contract.js";
+export { deriveLegacySessionChatType } from "./src/session-contract.js";
 export type {
   DiscordInteractiveHandlerContext,
   DiscordInteractiveHandlerRegistration,

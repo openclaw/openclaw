@@ -133,6 +133,8 @@ vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
   }),
   getDebugProxyCaptureStore: () => captureMock.store,
   resolveDebugProxySettings: () => ({
+    dbPath: process.env.OPENCLAW_DEBUG_PROXY_DB_PATH ?? "",
+    blobDir: process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR ?? "",
     proxyUrl: process.env.OPENCLAW_DEBUG_PROXY_URL ?? "",
     sessionId: "qa-lab-test",
   }),
@@ -776,7 +778,8 @@ describe("qa-lab server", () => {
     cleanups.push(async () => {
       await rm(tempDir, { recursive: true, force: true });
     });
-    process.env.OPENCLAW_STATE_DIR = tempDir;
+    process.env.OPENCLAW_DEBUG_PROXY_DB_PATH = path.join(tempDir, "capture.sqlite");
+    process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR = path.join(tempDir, "blobs");
     const store = captureMock.store;
     store.upsertSession({
       id: "qa-capture-session",
@@ -784,6 +787,8 @@ describe("qa-lab server", () => {
       mode: "proxy-run",
       sourceScope: "openclaw",
       sourceProcess: "openclaw",
+      dbPath: process.env.OPENCLAW_DEBUG_PROXY_DB_PATH,
+      blobDir: process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR,
     });
     store.recordEvent({
       sessionId: "qa-capture-session",
@@ -851,7 +856,8 @@ describe("qa-lab server", () => {
       port: 0,
     });
     cleanups.push(async () => {
-      delete process.env.OPENCLAW_STATE_DIR;
+      delete process.env.OPENCLAW_DEBUG_PROXY_DB_PATH;
+      delete process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR;
       await lab.stop();
     });
 

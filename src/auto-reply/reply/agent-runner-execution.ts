@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
 import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
@@ -33,18 +34,16 @@ import { isLikelyExecutionAckPrompt } from "../../agents/pi-embedded-runner/run/
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { buildAgentRuntimeOutcomePlan } from "../../agents/runtime-plan/build.js";
 import {
-  deleteSessionEntry,
-  getSessionEntry,
   resolveGroupSessionKey,
+  resolveSessionTranscriptPath,
   type SessionEntry,
-  upsertSessionEntry,
+  updateSessionStore,
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
-import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import { emitAgentEvent, onAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   hasNonEmptyString,
@@ -1101,15 +1100,12 @@ export async function runAgentTurnWithFallback(params: {
   runtimePolicySessionKey?: string;
   getActiveSessionEntry: () => SessionEntry | undefined;
   activeSessionStore?: Record<string, SessionEntry>;
+  storePath?: string;
   resolvedVerboseLevel: VerboseLevel;
   toolProgressDetail?: "explain" | "raw";
   replyMediaContext?: ReplyMediaContext;
 }): Promise<AgentRunLoopResult> {
   const TRANSIENT_HTTP_RETRY_DELAY_MS = 2_500;
-  const sessionAgentId =
-    params.followupRun.run.agentId ??
-    resolveAgentIdFromSessionKey(params.sessionKey ?? "") ??
-    "main";
   let didLogHeartbeatStrip = false;
   let autoCompactionCount = 0;
   // Track payloads sent directly (not via pipeline) during tool flush to avoid duplicates.
@@ -1260,10 +1256,9 @@ export async function runAgentTurnWithFallback(params: {
     ) {
       return undefined;
     }
-    const sessionKey = params.sessionKey;
 
     const activeSessionEntry =
-      params.getActiveSessionEntry() ?? params.activeSessionStore[sessionKey];
+      params.getActiveSessionEntry() ?? params.activeSessionStore[params.sessionKey];
     if (!activeSessionEntry) {
       return undefined;
     }
@@ -1299,24 +1294,22 @@ export async function runAgentTurnWithFallback(params: {
     if (!applied.updated || !nextState) {
       return undefined;
     }
-    params.activeSessionStore[sessionKey] = activeSessionEntry;
+    params.activeSessionStore[params.sessionKey] = activeSessionEntry;
 
     try {
-      const persistedEntry = getSessionEntry({
-        agentId: sessionAgentId,
-        sessionKey,
-      });
-      if (persistedEntry) {
-        applyFallbackSelectionState(persistedEntry, nextState);
-        upsertSessionEntry({
-          agentId: sessionAgentId,
-          sessionKey,
-          entry: persistedEntry,
+      if (params.storePath) {
+        await updateSessionStore(params.storePath, (store) => {
+          const persistedEntry = store[params.sessionKey!];
+          if (!persistedEntry) {
+            return;
+          }
+          applyFallbackSelectionState(persistedEntry, nextState);
+          store[params.sessionKey!] = persistedEntry;
         });
       }
     } catch (error) {
       rollbackFallbackSelectionStateIfUnchanged(activeSessionEntry, nextState, previousState);
-      params.activeSessionStore[sessionKey] = activeSessionEntry;
+      params.activeSessionStore[params.sessionKey] = activeSessionEntry;
       throw error;
     }
 
@@ -1327,21 +1320,20 @@ export async function runAgentTurnWithFallback(params: {
         previousState,
       );
       if (rolledBackInMemory) {
-        params.activeSessionStore![sessionKey] = activeSessionEntry;
+        params.activeSessionStore![params.sessionKey!] = activeSessionEntry;
       }
-      const persistedEntry = getSessionEntry({
-        agentId: sessionAgentId,
-        sessionKey,
-      });
-      if (persistedEntry) {
-        if (rollbackFallbackSelectionStateIfUnchanged(persistedEntry, nextState, previousState)) {
-          upsertSessionEntry({
-            agentId: sessionAgentId,
-            sessionKey,
-            entry: persistedEntry,
-          });
+      if (!params.storePath) {
+        return;
+      }
+      await updateSessionStore(params.storePath, (store) => {
+        const persistedEntry = store[params.sessionKey!];
+        if (!persistedEntry) {
+          return;
         }
-      }
+        if (rollbackFallbackSelectionStateIfUnchanged(persistedEntry, nextState, previousState)) {
+          store[params.sessionKey!] = persistedEntry;
+        }
+      });
     };
   };
 
@@ -1516,12 +1508,52 @@ export async function runAgentTurnWithFallback(params: {
             });
             return (async () => {
               let lifecycleTerminalEmitted = false;
+              let lastBridgedAssistantText: string | undefined;
+              let assistantBridgeUnsubscribed = false;
+              let assistantBridgeDelivery: Promise<void> = Promise.resolve();
+              const deliverBridgedAssistantText = async (text: string): Promise<void> => {
+                const textForTyping = await handlePartialForTyping({ text } as ReplyPayload);
+                if (textForTyping === undefined || !params.opts?.onPartialReply) {
+                  return;
+                }
+                await params.opts.onPartialReply({ text: textForTyping });
+              };
+              const queueBridgedAssistantText = (text: string) => {
+                assistantBridgeDelivery = assistantBridgeDelivery
+                  .then(() => deliverBridgedAssistantText(text))
+                  .catch(() => undefined);
+              };
+              const drainAssistantBridgeDelivery = async (): Promise<void> => {
+                await assistantBridgeDelivery;
+              };
+              const rawUnsubscribeAssistantBridge = onAgentEvent((evt) => {
+                if (evt.runId !== runId || evt.stream !== "assistant") {
+                  return;
+                }
+                if (params.followupRun.run.silentExpected) {
+                  return;
+                }
+                const text = typeof evt.data.text === "string" ? evt.data.text : undefined;
+                if (text === undefined || text === lastBridgedAssistantText) {
+                  return;
+                }
+                lastBridgedAssistantText = text;
+                queueBridgedAssistantText(text);
+              });
+              const unsubscribeAssistantBridge = () => {
+                if (assistantBridgeUnsubscribed) {
+                  return;
+                }
+                assistantBridgeUnsubscribed = true;
+                rawUnsubscribeAssistantBridge();
+              };
               try {
                 const result = await runCliAgent({
                   sessionId: params.followupRun.run.sessionId,
                   sessionKey: params.sessionKey,
                   agentId: params.followupRun.run.agentId,
                   trigger: params.isHeartbeat ? "heartbeat" : "user",
+                  sessionFile: params.followupRun.run.sessionFile,
                   workspaceDir: params.followupRun.run.workspaceDir,
                   config: runtimeConfig,
                   prompt: params.commandBody,
@@ -1562,6 +1594,9 @@ export async function runAgentTurnWithFallback(params: {
                   result.meta?.systemPromptReport,
                 );
 
+                unsubscribeAssistantBridge();
+                await drainAssistantBridgeDelivery();
+
                 // CLI backends don't emit streaming assistant events, so we need to
                 // emit one with the final text so server-chat can populate its buffer
                 // and send the response to TUI/WebSocket clients.
@@ -1587,6 +1622,8 @@ export async function runAgentTurnWithFallback(params: {
 
                 return result;
               } catch (err) {
+                unsubscribeAssistantBridge();
+                await drainAssistantBridgeDelivery();
                 if (rollbackFallbackCandidateSelection) {
                   try {
                     await rollbackFallbackCandidateSelection();
@@ -1610,6 +1647,7 @@ export async function runAgentTurnWithFallback(params: {
                 lifecycleTerminalEmitted = true;
                 throw err;
               } finally {
+                unsubscribeAssistantBridge();
                 // Defensive backstop: never let a CLI run complete without a terminal
                 // lifecycle event, otherwise downstream consumers can hang.
                 if (!lifecycleTerminalEmitted) {
@@ -2034,7 +2072,7 @@ export async function runAgentTurnWithFallback(params: {
         if (liveModelSwitchRetries > MAX_LIVE_SWITCH_RETRIES) {
           // Prevent infinite loop when persisted session selection keeps
           // conflicting with fallback model choices (e.g. overloaded primary
-          // triggers fallback, but the persisted session row keeps pulling back to the
+          // triggers fallback, but session store keeps pulling back to the
           // overloaded model). Surface the last error to the user instead.
           // See: https://github.com/openclaw/openclaw/issues/58348
           defaultRuntime.error(
@@ -2155,21 +2193,35 @@ export async function runAgentTurnWithFallback(params: {
       }
 
       // Auto-recover from Gemini session corruption by resetting the session
-      if (isSessionCorruption && params.sessionKey) {
+      if (
+        isSessionCorruption &&
+        params.sessionKey &&
+        params.activeSessionStore &&
+        params.storePath
+      ) {
         const sessionKey = params.sessionKey;
+        const corruptedSessionId = params.getActiveSessionEntry()?.sessionId;
         defaultRuntime.error(
           `Session history corrupted (Gemini function call ordering). Resetting session: ${params.sessionKey}`,
         );
 
         try {
-          // Keep the in-memory snapshot consistent with the SQLite row reset.
-          if (params.activeSessionStore) {
-            delete params.activeSessionStore[sessionKey];
+          // Delete transcript file if it exists
+          if (corruptedSessionId) {
+            const transcriptPath = resolveSessionTranscriptPath(corruptedSessionId);
+            try {
+              fs.unlinkSync(transcriptPath);
+            } catch {
+              // Ignore if file doesn't exist
+            }
           }
 
-          deleteSessionEntry({
-            agentId: sessionAgentId,
-            sessionKey,
+          // Keep the in-memory snapshot consistent with the on-disk store reset.
+          delete params.activeSessionStore[sessionKey];
+
+          // Remove session entry from store using a fresh, locked snapshot.
+          await updateSessionStore(params.storePath, (store) => {
+            delete store[sessionKey];
           });
         } catch (cleanupErr) {
           defaultRuntime.error(

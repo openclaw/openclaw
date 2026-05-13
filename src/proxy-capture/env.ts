@@ -2,10 +2,16 @@ import { randomUUID } from "node:crypto";
 import type { Agent } from "node:http";
 import { createRequire } from "node:module";
 import process from "node:process";
-import { resolveDebugProxyCertDir } from "./paths.js";
+import {
+  resolveDebugProxyBlobDir,
+  resolveDebugProxyCertDir,
+  resolveDebugProxyDbPath,
+} from "./paths.js";
 
 export const OPENCLAW_DEBUG_PROXY_ENABLED = "OPENCLAW_DEBUG_PROXY_ENABLED";
 export const OPENCLAW_DEBUG_PROXY_URL = "OPENCLAW_DEBUG_PROXY_URL";
+export const OPENCLAW_DEBUG_PROXY_DB_PATH = "OPENCLAW_DEBUG_PROXY_DB_PATH";
+export const OPENCLAW_DEBUG_PROXY_BLOB_DIR = "OPENCLAW_DEBUG_PROXY_BLOB_DIR";
 export const OPENCLAW_DEBUG_PROXY_CERT_DIR = "OPENCLAW_DEBUG_PROXY_CERT_DIR";
 export const OPENCLAW_DEBUG_PROXY_SESSION_ID = "OPENCLAW_DEBUG_PROXY_SESSION_ID";
 export const OPENCLAW_DEBUG_PROXY_REQUIRE = "OPENCLAW_DEBUG_PROXY_REQUIRE";
@@ -14,6 +20,8 @@ export type DebugProxySettings = {
   enabled: boolean;
   required: boolean;
   proxyUrl?: string;
+  dbPath: string;
+  blobDir: string;
   certDir: string;
   sessionId: string;
   sourceProcess: string;
@@ -43,6 +51,8 @@ export function resolveDebugProxySettings(
     enabled,
     required: isTruthy(env[OPENCLAW_DEBUG_PROXY_REQUIRE]),
     proxyUrl: env[OPENCLAW_DEBUG_PROXY_URL]?.trim() || undefined,
+    dbPath: env[OPENCLAW_DEBUG_PROXY_DB_PATH]?.trim() || resolveDebugProxyDbPath(env),
+    blobDir: env[OPENCLAW_DEBUG_PROXY_BLOB_DIR]?.trim() || resolveDebugProxyBlobDir(env),
     certDir: env[OPENCLAW_DEBUG_PROXY_CERT_DIR]?.trim() || resolveDebugProxyCertDir(env),
     sessionId,
     sourceProcess: "openclaw",
@@ -54,6 +64,8 @@ export function applyDebugProxyEnv(
   params: {
     proxyUrl: string;
     sessionId: string;
+    dbPath?: string;
+    blobDir?: string;
     certDir?: string;
   },
 ): NodeJS.ProcessEnv {
@@ -62,6 +74,8 @@ export function applyDebugProxyEnv(
     [OPENCLAW_DEBUG_PROXY_ENABLED]: "1",
     [OPENCLAW_DEBUG_PROXY_REQUIRE]: "1",
     [OPENCLAW_DEBUG_PROXY_URL]: params.proxyUrl,
+    [OPENCLAW_DEBUG_PROXY_DB_PATH]: params.dbPath ?? resolveDebugProxyDbPath(env),
+    [OPENCLAW_DEBUG_PROXY_BLOB_DIR]: params.blobDir ?? resolveDebugProxyBlobDir(env),
     [OPENCLAW_DEBUG_PROXY_CERT_DIR]: params.certDir ?? resolveDebugProxyCertDir(env),
     [OPENCLAW_DEBUG_PROXY_SESSION_ID]: params.sessionId,
     HTTP_PROXY: params.proxyUrl,

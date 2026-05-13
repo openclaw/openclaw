@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { type RawData, WebSocketServer } from "ws";
@@ -12,14 +13,9 @@ const GATEWAY_CONNECT_TIMEOUT_MS = 5_000;
 const tempRoots: string[] = [];
 
 async function createTempDeviceIdentity() {
-  const tempRoot = await fs.mkdtemp(
-    path.join(process.env.OPENCLAW_STATE_DIR ?? "/tmp", "connect-"),
-  );
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-connect-"));
   tempRoots.push(tempRoot);
-  return loadOrCreateDeviceIdentity({
-    env: { ...process.env, OPENCLAW_STATE_DIR: tempRoot },
-    key: "connect-client",
-  });
+  return loadOrCreateDeviceIdentity(path.join(tempRoot, "device.json"));
 }
 
 async function startMinimalGatewayServer(params: { token: string }) {

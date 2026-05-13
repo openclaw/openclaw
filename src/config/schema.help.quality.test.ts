@@ -54,6 +54,9 @@ const TARGET_KEYS = [
   "memory.qmd.paths.path",
   "memory.qmd.paths.pattern",
   "memory.qmd.paths.name",
+  "memory.qmd.sessions.enabled",
+  "memory.qmd.sessions.exportDir",
+  "memory.qmd.sessions.retentionDays",
   "memory.qmd.update.interval",
   "memory.qmd.update.debounceMs",
   "memory.qmd.update.onBoot",
@@ -92,6 +95,7 @@ const TARGET_KEYS = [
   "agents.defaults.memorySearch.remote.batch.pollIntervalMs",
   "agents.defaults.memorySearch.remote.batch.timeoutMinutes",
   "agents.defaults.memorySearch.local.modelPath",
+  "agents.defaults.memorySearch.store.path",
   "agents.defaults.memorySearch.inputType",
   "agents.defaults.memorySearch.queryInputType",
   "agents.defaults.memorySearch.documentInputType",
@@ -124,6 +128,7 @@ const TARGET_KEYS = [
   "gateway.controlUi.embedSandbox",
   "cron",
   "cron.enabled",
+  "cron.store",
   "cron.maxConcurrentRuns",
   "cron.retry",
   "cron.retry.maxAttempts",
@@ -131,6 +136,7 @@ const TARGET_KEYS = [
   "cron.retry.retryOn",
   "cron.webhook",
   "cron.webhookToken",
+  "cron.sessionRetention",
   "cron.runLog",
   "cron.runLog.maxBytes",
   "cron.runLog.keepLines",
@@ -139,15 +145,18 @@ const TARGET_KEYS = [
   "session.dmScope",
   "session.identityLinks",
   "session.resetTriggers",
+  "session.idleMinutes",
   "session.reset",
   "session.reset.mode",
   "session.reset.atHour",
   "session.reset.idleMinutes",
   "session.resetByType",
   "session.resetByType.direct",
+  "session.resetByType.dm",
   "session.resetByType.group",
   "session.resetByType.thread",
   "session.resetByChannel",
+  "session.store",
   "session.typingIntervalSeconds",
   "session.typingMode",
   "session.mainKey",
@@ -168,6 +177,15 @@ const TARGET_KEYS = [
   "session.threadBindings.maxAgeHours",
   "session.threadBindings.spawnSessions",
   "session.threadBindings.defaultSpawnContext",
+  "session.maintenance",
+  "session.maintenance.mode",
+  "session.maintenance.pruneAfter",
+  "session.maintenance.pruneDays",
+  "session.maintenance.maxEntries",
+  "session.maintenance.rotateBytes",
+  "session.maintenance.resetArchiveRetention",
+  "session.maintenance.maxDiskBytes",
+  "session.maintenance.highWaterBytes",
   "approvals",
   "approvals.exec",
   "approvals.exec.enabled",
@@ -253,6 +271,11 @@ const TARGET_KEYS = [
   "channels.defaults.heartbeat.showOk",
   "channels.defaults.heartbeat.showAlerts",
   "channels.defaults.heartbeat.useIndicator",
+  "channels.defaults.botLoopProtection",
+  "channels.defaults.botLoopProtection.enabled",
+  "channels.defaults.botLoopProtection.maxEventsPerWindow",
+  "channels.defaults.botLoopProtection.windowSeconds",
+  "channels.defaults.botLoopProtection.cooldownSeconds",
   "gateway",
   "gateway.mode",
   "gateway.bind",
@@ -392,7 +415,7 @@ const TARGET_KEYS = [
   "agents.defaults.compaction.postCompactionSections",
   "agents.defaults.compaction.timeoutSeconds",
   "agents.defaults.compaction.model",
-  "agents.defaults.compaction.rotateAfterCompaction",
+  "agents.defaults.compaction.truncateAfterCompaction",
   "agents.defaults.compaction.maxActiveTranscriptBytes",
   "agents.defaults.compaction.memoryFlush",
   "agents.defaults.compaction.memoryFlush.enabled",
@@ -416,15 +439,7 @@ const ENUM_EXPECTATIONS: Record<string, string[]> = {
   "hooks.mappings[].wakeMode": ['"now"', '"next-heartbeat"'],
   "hooks.gmail.tailscale.mode": ['"off"', '"serve"', '"funnel"'],
   "hooks.gmail.thinking": ['"off"', '"minimal"', '"low"', '"medium"', '"high"'],
-  "messages.queue.mode": [
-    '"steer"',
-    '"followup"',
-    '"collect"',
-    '"steer-backlog"',
-    '"steer+backlog"',
-    '"queue"',
-    '"interrupt"',
-  ],
+  "messages.queue.mode": ['"steer"', '"followup"', '"collect"', '"interrupt"'],
   "messages.queue.drop": ['"old"', '"new"', '"summarize"'],
   "channels.defaults.groupPolicy": ['"open"', '"disabled"', '"allowlist"'],
   "channels.defaults.contextVisibility": ['"all"', '"allowlist"', '"allowlist_quote"'],
@@ -657,6 +672,9 @@ describe("config help copy quality", () => {
     expect(FIELD_HELP["memory.qmd.paths.pattern"].includes("**/*.md")).toBe(true);
     expect(FIELD_HELP["memory.qmd.update.interval"].includes("5m")).toBe(true);
     expect(FIELD_HELP["memory.qmd.update.embedInterval"].includes("60m")).toBe(true);
+    expect(FIELD_HELP["agents.defaults.memorySearch.store.path"]).toContain(
+      "~/.openclaw/memory/{agentId}.sqlite",
+    );
   });
 
   it("documents cron deprecation, migration, and retention formats", () => {
@@ -664,6 +682,12 @@ describe("config help copy quality", () => {
     expect(/deprecated|legacy/i.test(legacy)).toBe(true);
     expect(legacy.includes('delivery.mode="webhook"')).toBe(true);
     expect(legacy.includes("delivery.to")).toBe(true);
+
+    const retention = FIELD_HELP["cron.sessionRetention"];
+    expect(retention.includes("24h")).toBe(true);
+    expect(retention.includes("7d")).toBe(true);
+    expect(retention.includes("1h30m")).toBe(true);
+    expect(/false/i.test(retention)).toBe(true);
 
     const token = FIELD_HELP["cron.webhookToken"];
     expect(/token|bearer/i.test(token)).toBe(true);
@@ -683,9 +707,39 @@ describe("config help copy quality", () => {
     expect(/raw|unnormalized/i.test(rawKeyPrefix)).toBe(true);
   });
 
+  it("documents session write-lock acquire timeout defaults", () => {
+    const acquireTimeout = FIELD_HELP["session.writeLock.acquireTimeoutMs"];
+    expect(acquireTimeout.includes("60000")).toBe(true);
+    expect(/transcript|lock/i.test(acquireTimeout)).toBe(true);
+  });
+
+  it("documents session maintenance duration/size examples and deprecations", () => {
+    const pruneAfter = FIELD_HELP["session.maintenance.pruneAfter"];
+    expect(pruneAfter.includes("30d")).toBe(true);
+    expect(pruneAfter.includes("12h")).toBe(true);
+
+    const rotate = FIELD_HELP["session.maintenance.rotateBytes"];
+    expect(/deprecated/i.test(rotate)).toBe(true);
+    expect(rotate.includes("doctor --fix")).toBe(true);
+
+    const deprecated = FIELD_HELP["session.maintenance.pruneDays"];
+    expect(/deprecated/i.test(deprecated)).toBe(true);
+    expect(deprecated.includes("session.maintenance.pruneAfter")).toBe(true);
+
+    const resetRetention = FIELD_HELP["session.maintenance.resetArchiveRetention"];
+    expect(resetRetention.includes(".reset.")).toBe(true);
+    expect(/false/i.test(resetRetention)).toBe(true);
+
+    const maxDisk = FIELD_HELP["session.maintenance.maxDiskBytes"];
+    expect(maxDisk.includes("500mb")).toBe(true);
+
+    const highWater = FIELD_HELP["session.maintenance.highWaterBytes"];
+    expect(highWater.includes("80%")).toBe(true);
+  });
+
   it("documents cron run-log retention controls", () => {
     const runLog = FIELD_HELP["cron.runLog"];
-    expect(runLog.includes("SQLite")).toBe(true);
+    expect(runLog.includes("cron/runs")).toBe(true);
 
     const maxBytes = FIELD_HELP["cron.runLog.maxBytes"];
     expect(maxBytes.includes("2mb")).toBe(true);
@@ -726,7 +780,7 @@ describe("config help copy quality", () => {
 
     const queueMode = FIELD_HELP["messages.queue.mode"];
     expect(queueMode.includes('"interrupt"')).toBe(true);
-    expect(queueMode.includes('"steer+backlog"')).toBe(true);
+    expect(queueMode.includes('"steer"')).toBe(true);
   });
 
   it("documents gateway bind modes and web reconnect semantics", () => {

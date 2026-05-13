@@ -12,9 +12,9 @@ through Codex app-server instead of the built-in PI harness.
 
 Use the Codex harness when you want Codex to own the low-level agent session:
 native thread resume, native tool continuation, native compaction, and
-app-server execution. OpenClaw still owns chat channels, session state,
-transcript mirroring, model selection, OpenClaw dynamic tools, approvals, media
-delivery, and the visible transcript mirror.
+app-server execution. OpenClaw still owns chat channels, session files, model
+selection, OpenClaw dynamic tools, approvals, media delivery, and the visible
+transcript mirror.
 
 The normal setup uses canonical OpenAI model refs such as `openai/gpt-5.5`.
 Do not configure `openai-codex/gpt-*` model refs. Put OpenAI agent auth order
@@ -556,7 +556,7 @@ Minimal migrated config:
         config: {
           codexPlugins: {
             enabled: true,
-            allow_destructive_actions: false,
+            allow_destructive_actions: true,
             plugins: {
               "google-calendar": {
                 enabled: true,

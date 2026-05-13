@@ -1,8 +1,4 @@
-import type {
-  ContextEvent,
-  ExtensionAPI,
-  ExtensionContext,
-} from "../../agent-extension-contract.js";
+import type { ContextEvent, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { pruneContextMessages } from "./pruner.js";
 import { getContextPruningRuntime } from "./runtime.js";
 

@@ -1,5 +1,5 @@
+import type { Component } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
-import type { Component } from "./pi-tui-contract.js";
 import { createOverlayHandlers } from "./tui-overlays.js";
 
 class DummyComponent implements Component {

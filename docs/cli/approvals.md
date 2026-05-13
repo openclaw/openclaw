@@ -9,7 +9,7 @@ title: "Approvals"
 # `openclaw approvals`
 
 Manage exec approvals for the **local host**, **gateway host**, or a **node host**.
-By default, commands target the local approvals state in SQLite. Use `--gateway` to target the gateway, or `--node` to target a specific node.
+By default, commands target the local approvals file on disk. Use `--gateway` to target the gateway, or `--node` to target a specific node.
 
 Alias: `openclaw exec-approvals`
 
@@ -21,13 +21,13 @@ Related:
 ## `openclaw exec-policy`
 
 `openclaw exec-policy` is the local convenience command for keeping the requested
-`tools.exec.*` config and the local host approvals state aligned in one step.
+`tools.exec.*` config and the local host approvals file aligned in one step.
 
 Use it when you want to:
 
-- inspect the local requested policy, host approvals state, and effective merge
+- inspect the local requested policy, host approvals file, and effective merge
 - apply a local preset such as YOLO or deny-all
-- synchronize local `tools.exec.*` and local exec approvals state
+- synchronize local `tools.exec.*` and local `~/.openclaw/exec-approvals.json`
 
 Examples:
 
@@ -49,10 +49,10 @@ Output modes:
 Current scope:
 
 - `exec-policy` is **local-only**
-- it updates the local config file and the local approvals state together
+- it updates the local config file and the local approvals file together
 - it does **not** push policy to the gateway host or a node host
 - `--host node` is rejected in this command because node exec approvals are fetched from the node at runtime and must be managed through node-targeted approvals commands instead
-- `openclaw exec-policy show` marks `host=node` scopes as node-managed at runtime instead of deriving an effective policy from local approvals state
+- `openclaw exec-policy show` marks `host=node` scopes as node-managed at runtime instead of deriving an effective policy from the local approvals file
 
 If you need to edit remote host approvals directly, keep using `openclaw approvals set --gateway`
 or `openclaw approvals set --node <id|name|ip>`.
@@ -73,9 +73,9 @@ openclaw approvals get --gateway
 
 Precedence is intentional:
 
-- the host approvals state is the enforceable source of truth
+- the host approvals file is the enforceable source of truth
 - requested `tools.exec` policy can narrow or broaden intent, but the effective result is still derived from the host rules
-- `--node` combines the node host approvals state with gateway `tools.exec` policy, because both still apply at runtime
+- `--node` combines the node host approvals file with gateway `tools.exec` policy, because both still apply at runtime
 - if gateway config is unavailable, the CLI falls back to the node approvals snapshot and notes that the final runtime policy could not be computed
 
 ## Replace approvals from a file
@@ -123,7 +123,7 @@ openclaw approvals set --node <id|name|ip> --stdin <<'EOF'
 EOF
 ```
 
-This changes the **host approvals state** only. To keep the requested OpenClaw policy aligned, also set:
+This changes the **host approvals file** only. To keep the requested OpenClaw policy aligned, also set:
 
 ```bash
 openclaw config set tools.exec.host gateway
@@ -169,8 +169,8 @@ openclaw approvals allowlist remove "~/Projects/**/bin/rg"
 
 Targeting notes:
 
-- no target flags means the local approvals state
-- `--gateway` targets the gateway host approvals state
+- no target flags means the local approvals file on disk
+- `--gateway` targets the gateway host approvals file
 - `--node` targets one node host after resolving id, name, IP, or id prefix
 
 `allowlist add|remove` also supports:
@@ -182,7 +182,7 @@ Targeting notes:
 - `--node` uses the same resolver as `openclaw nodes` (id, name, ip, or id prefix).
 - `--agent` defaults to `"*"`, which applies to all agents.
 - The node host must advertise `system.execApprovals.get/set` (macOS app or headless node host).
-- Approvals are stored per host in the SQLite state database. Legacy `~/.openclaw/exec-approvals.json` files are imported by `openclaw doctor --fix`.
+- Approvals files are stored per host at `~/.openclaw/exec-approvals.json`.
 
 ## Related
 

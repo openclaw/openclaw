@@ -7,7 +7,7 @@ import { commitmentsDismissCommand, commitmentsListCommand } from "./commitments
 const mocks = vi.hoisted(() => ({
   listCommitments: vi.fn(),
   markCommitmentsStatus: vi.fn(),
-  resolveCommitmentDatabasePath: vi.fn(() => "/tmp/openclaw/state/openclaw.sqlite"),
+  resolveCommitmentStorePath: vi.fn(() => "/tmp/openclaw-commitments.json"),
   getRuntimeConfig: vi.fn(() => ({
     commitments: {
       enabled: true,
@@ -18,7 +18,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../commitments/store.js", () => ({
   listCommitments: mocks.listCommitments,
   markCommitmentsStatus: mocks.markCommitmentsStatus,
-  resolveCommitmentDatabasePath: mocks.resolveCommitmentDatabasePath,
+  resolveCommitmentStorePath: mocks.resolveCommitmentStorePath,
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -82,7 +82,7 @@ describe("commitments command", () => {
 
     expect(logs.map(stripAnsi)).toEqual([
       "Commitments: 1",
-      "Database: /tmp/openclaw/state/openclaw.sqlite",
+      "Store: /tmp/openclaw-commitments.json",
       "Status filter: pending",
       "ID               Status     Kind             Due                      Scope                        Suggested text",
       "cm_escape        pending    event_check_in   2026-04-30T17:00:00.000Z main/telegram/+15551234567   How did it go?\\nspoofed",
@@ -100,7 +100,7 @@ describe("commitments command", () => {
       count: 1,
       status: "pending",
       agentId: null,
-      databasePath: "/tmp/openclaw/state/openclaw.sqlite",
+      store: "/tmp/openclaw-commitments.json",
       commitments: [{ id: "cm_escape" }],
     });
   });

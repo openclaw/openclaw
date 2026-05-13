@@ -1,4 +1,4 @@
-import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ChannelMessageActionAdapter } from "openclaw/plugin-sdk/channel-contract";
 import type { SlackActionContext } from "./action-runtime.js";
 import { handleSlackMessageAction } from "./message-action-dispatch.js";
@@ -10,7 +10,7 @@ type SlackActionInvoke = (
   action: Record<string, unknown>,
   cfg: unknown,
   toolContext: unknown,
-) => Promise<AgentToolResult>;
+) => Promise<AgentToolResult<unknown>>;
 
 let slackActionRuntimePromise: Promise<typeof import("./action-runtime.runtime.js")> | undefined;
 

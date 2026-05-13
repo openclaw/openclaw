@@ -1,7 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import { readInstalledPluginRecords } from "../installed-plugin-index.mjs";
 
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 
@@ -30,6 +28,12 @@ function assertPathInside(parentPath, childPath, label) {
   }
 }
 
+function installRecords() {
+  const indexPath = path.join(stateDir(), "plugins", "installs.json");
+  const index = fs.existsSync(indexPath) ? readJson(indexPath) : {};
+  return index.installRecords || index.records || cfg.plugins?.installs || {};
+}
+
 function findPackageJson(packageName, roots) {
   const packagePath = packageName.startsWith("@")
     ? path.join(...packageName.split("/"), "package.json")
@@ -38,29 +42,9 @@ function findPackageJson(packageName, roots) {
   return candidates.find((candidate) => fs.existsSync(candidate));
 }
 
-function stateDatabasePath() {
-  return path.join(stateDir(), "state", "openclaw.sqlite");
-}
-
-function readAuthProfileStorePayload(storeKey) {
-  const dbPath = stateDatabasePath();
-  if (!fs.existsSync(dbPath)) {
-    throw new Error(`missing OpenClaw state database: ${dbPath}`);
-  }
-  const db = new DatabaseSync(dbPath, { readOnly: true });
-  try {
-    const row = db
-      .prepare("SELECT store_json FROM auth_profile_stores WHERE store_key = ?")
-      .get(storeKey);
-    return typeof row?.store_json === "string" ? JSON.parse(row.store_json) : undefined;
-  } finally {
-    db.close();
-  }
-}
-
 const cfg = readJson(configPath());
 const inspect = readJson("/tmp/openclaw-codex-inspect.json");
-const records = readInstalledPluginRecords();
+const records = installRecords();
 const codexRecord = records.codex || inspect.install;
 if (!codexRecord) {
   throw new Error(`missing codex install record: ${JSON.stringify(records)}`);
@@ -123,16 +107,11 @@ if (providerRuntime && providerRuntime !== "codex") {
   throw new Error(`unexpected OpenAI provider runtime: ${providerRuntime}`);
 }
 
-const authAgentDir = path.join(stateDir(), "agents", "main", "agent");
-const authStore = readAuthProfileStorePayload(authAgentDir);
-const authRaw = JSON.stringify(authStore ?? {});
-if (!authStore || !authRaw.includes("OPENAI_API_KEY")) {
+const authPath = path.join(stateDir(), "agents", "main", "agent", "auth-profiles.json");
+const authRaw = fs.readFileSync(authPath, "utf8");
+if (!authRaw.includes("OPENAI_API_KEY")) {
   throw new Error("auth profile did not persist OPENAI_API_KEY env ref");
 }
 if (authRaw.includes("sk-openclaw-codex-on-demand-e2e")) {
   throw new Error("auth profile persisted the raw OpenAI test key");
-}
-const authPath = path.join(authAgentDir, "auth-profiles.json");
-if (fs.existsSync(authPath)) {
-  throw new Error(`auth profile should be SQLite-backed, found legacy file: ${authPath}`);
 }

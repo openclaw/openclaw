@@ -1,9 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-
-process.env.OPENCLAW_BUNDLED_PLUGINS_DIR ??= path.join(process.cwd(), "extensions");
-
-const { buildSecretRefCredentialMatrix } = await import("../src/secrets/credential-matrix.js");
+import { buildSecretRefCredentialMatrix } from "../src/secrets/credential-matrix.js";
 
 const outputPath = path.join(
   process.cwd(),

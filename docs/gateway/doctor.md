@@ -84,17 +84,16 @@ cat ~/.openclaw/openclaw.json
     - Codex OAuth shadowing warnings (`models.providers.openai-codex`).
     - OAuth TLS prerequisites check for OpenAI Codex OAuth profiles.
     - Plugin/tool allowlist warnings when `plugins.allow` is restrictive but tool policy still asks for wildcard or plugin-owned tools.
-    - Legacy on-disk state migration (session/transcript import, agent dir layout, WhatsApp auth).
-    - Legacy runtime JSON state import into SQLite for device identity/auth, bootstrap tokens, device and node pairing ledgers, web push subscriptions/VAPID keys, and APNs registrations.
+    - Legacy on-disk state migration (sessions/agent dir/WhatsApp auth).
     - Legacy plugin manifest contract key migration (`speechProviders`, `realtimeTranscriptionProviders`, `realtimeVoiceProviders`, `mediaUnderstandingProviders`, `imageGenerationProviders`, `videoGenerationProviders`, `webFetchProviders`, `webSearchProviders` → `contracts`).
-    - Legacy cron store migration (`jobId`, `schedule.cron`, top-level delivery/payload fields, payload `provider`, simple `notify: true` webhook fallback jobs, `jobs.json`, `jobs-state.json`, and `cron/runs/*.jsonl` import into SQLite).
+    - Legacy cron store migration (`jobId`, `schedule.cron`, top-level delivery/payload fields, payload `provider`, simple `notify: true` webhook fallback jobs).
     - Legacy whole-agent runtime-policy cleanup; provider/model runtime policy is the active route selector.
     - Stale plugin config cleanup when plugins are enabled; when `plugins.enabled=false`, stale plugin references are treated as inert containment config and are preserved.
 
   </Accordion>
   <Accordion title="State and integrity">
-    - Session/transcript database integrity checks and legacy transcript import repair.
-    - Transcript branch repair for duplicated prompt-rewrite branches created by affected 2026.4.24 builds.
+    - Session lock file inspection and stale lock cleanup.
+    - Session transcript repair for duplicated prompt-rewrite branches created by affected 2026.4.24 builds.
     - Wedged subagent restart-recovery tombstone detection, with `--fix` support for clearing stale aborted recovery flags so startup does not keep treating the child as restart-aborted.
     - State integrity and permissions checks (sessions, transcripts, state dir).
     - Config file permission checks (chmod 600) when running locally.
@@ -275,13 +274,13 @@ That stages grounded durable candidates into the short-term dreaming store while
     - Stale whole-agent runtime config and persisted session runtime pins are removed because runtime selection is provider/model-scoped.
     - Existing provider/model runtime policy is preserved unless the repaired legacy model ref needs Codex routing to keep the old auth path.
     - Existing model fallback lists are preserved with their legacy entries rewritten; copied per-model settings move from the legacy key to the canonical `openai/*` key.
-    - Persisted session `modelProvider`/`providerOverride`, `model`/`modelOverride`, fallback notices, auth-profile pins, and Codex harness pins are repaired across all discovered agent databases.
+    - Persisted session `modelProvider`/`providerOverride`, `model`/`modelOverride`, fallback notices, and auth-profile pins are repaired across all discovered agent session stores.
     - `/codex ...` means "control or bind a native Codex conversation from chat."
     - `/acp ...` or `runtime: "acp"` means "use the external ACP/acpx adapter."
 
   </Accordion>
   <Accordion title="2g. Session route cleanup">
-    Doctor also scans discovered agent databases for stale auto-created route state after you move configured models or runtime away from a plugin-owned route such as Codex.
+    Doctor also scans discovered agent session stores for stale auto-created route state after you move configured models or runtime away from a plugin-owned route such as Codex.
 
     `openclaw doctor --fix` can clear auto-created stale state such as `modelOverrideSource: "auto"` model pins, runtime model metadata, pinned harness ids, CLI session bindings, and auto auth-profile overrides when their owning route is no longer configured. Explicit user or legacy session model choices are reported for manual review and left untouched; switch them with `/model ...`, `/new`, or reset the session when that route is no longer intended.
 
@@ -289,22 +288,22 @@ That stages grounded durable candidates into the short-term dreaming store while
   <Accordion title="3. Legacy state migrations (disk layout)">
     Doctor can migrate older on-disk layouts into the current structure:
 
-    - Sessions and transcripts:
-      - from legacy `sessions.json` and transcript JSONL files into `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
+    - Sessions store + transcripts:
+      - from `~/.openclaw/sessions/` to `~/.openclaw/agents/<agentId>/sessions/`
     - Agent dir:
       - from `~/.openclaw/agent/` to `~/.openclaw/agents/<agentId>/agent/`
     - WhatsApp auth state (Baileys):
       - from legacy `~/.openclaw/credentials/*.json` (except `oauth.json`)
       - to `~/.openclaw/credentials/whatsapp/<accountId>/...` (default account id: `default`)
 
-    These migrations are best-effort and idempotent; doctor will emit warnings when it leaves any legacy folders behind as backups. Session JSON/JSONL import is a doctor step only; Gateway startup does not import, prune, lock, truncate, or rewrite legacy session files. WhatsApp auth is intentionally only migrated via `openclaw doctor`. Talk provider/provider-map normalization now compares by structural equality, so key-order-only diffs no longer trigger repeat no-op `doctor --fix` changes.
+    These migrations are best-effort and idempotent; doctor will emit warnings when it leaves any legacy folders behind as backups. The Gateway/CLI also auto-migrates the legacy sessions + agent dir on startup so history/auth/models land in the per-agent path without a manual doctor run. WhatsApp auth is intentionally only migrated via `openclaw doctor`. Talk provider/provider-map normalization now compares by structural equality, so key-order-only diffs no longer trigger repeat no-op `doctor --fix` changes.
 
   </Accordion>
   <Accordion title="3a. Legacy plugin manifest migrations">
     Doctor scans all installed plugin manifests for deprecated top-level capability keys (`speechProviders`, `realtimeTranscriptionProviders`, `realtimeVoiceProviders`, `mediaUnderstandingProviders`, `imageGenerationProviders`, `videoGenerationProviders`, `webFetchProviders`, `webSearchProviders`). When found, it offers to move them into the `contracts` object and rewrite the manifest file in-place. This migration is idempotent; if the `contracts` key already has the same values, the legacy key is removed without duplicating the data.
   </Accordion>
   <Accordion title="3b. Legacy cron store migrations">
-    Doctor also checks for a legacy cron job store (`~/.openclaw/cron/jobs.json` by default, or `cron.store` when overridden), normalizes old job shapes, and imports the canonical rows into the shared SQLite state database before the scheduler sees them.
+    Doctor also checks the cron job store (`~/.openclaw/cron/jobs.json` by default, or `cron.store` when overridden) for old job shapes that the scheduler still accepts for compatibility.
 
     Current cron cleanups include:
 
@@ -314,37 +313,17 @@ That stages grounded durable candidates into the short-term dreaming store while
     - top-level delivery fields (`deliver`, `channel`, `to`, `provider`, ...) → `delivery`
     - payload `provider` delivery aliases → explicit `delivery.channel`
     - simple legacy `notify: true` webhook fallback jobs → explicit `delivery.mode="webhook"` with `delivery.to=cron.webhook`
-    - legacy `jobs.json` job definitions → the shared SQLite state database
-    - legacy `jobs-state.json` runtime sidecars → the shared SQLite state database
-    - legacy `cron/runs/*.jsonl` run history files → the shared SQLite state database
 
     Doctor only auto-migrates `notify: true` jobs when it can do so without changing behavior. If a job combines legacy notify fallback with an existing non-webhook delivery mode, doctor warns and leaves that job for manual review.
 
     On Linux, doctor also warns when the user's crontab still invokes legacy `~/.openclaw/bin/ensure-whatsapp.sh`. That host-local script is not maintained by current OpenClaw and can write false `Gateway inactive` messages to `~/.openclaw/logs/whatsapp-health.log` when cron cannot reach the systemd user bus. Remove the stale crontab entry with `crontab -e`; use `openclaw channels status --probe`, `openclaw doctor`, and `openclaw gateway status` for current health checks.
 
   </Accordion>
-  <Accordion title="Legacy runtime JSON imports">
-    Doctor checks for older runtime JSON ledgers that are now stored in
-    `~/.openclaw/state/openclaw.sqlite`. In `--fix` mode it imports each legacy
-    file into SQLite and removes the file after a successful import.
-
-    Current imports include:
-
-    - `identity/device.json`
-    - `identity/device-auth.json`
-    - `devices/bootstrap.json`
-    - `devices/pending.json` and `devices/paired.json`
-    - `nodes/pending.json` and `nodes/paired.json`
-    - `push/web-push-subscriptions.json`
-    - `push/vapid-keys.json`
-    - `push/apns-registrations.json`
-
+  <Accordion title="3c. Session lock cleanup">
+    Doctor scans every agent session directory for stale write-lock files — files left behind when a session exited abnormally. For each lock file found it reports: the path, PID, whether the PID is still alive, lock age, and whether it is considered stale (dead PID, older than 30 minutes, or a live PID that can be proven to belong to a non-OpenClaw process). In `--fix` / `--repair` mode it removes stale lock files automatically; otherwise it prints a note and instructs you to rerun with `--fix`.
   </Accordion>
-  <Accordion title="3c. Legacy session file cleanup">
-    Doctor treats old session JSON/JSONL trees as migration inputs. In `--fix` / `--repair` mode it imports supported legacy rows into the per-agent SQLite database, verifies the resulting database state, and can remove obsolete file-era sidecars after a successful import. Runtime session writes no longer depend on lock files or whole-file rewrite queues.
-  </Accordion>
-  <Accordion title="3d. Transcript branch repair">
-    Doctor scans imported transcript state for the duplicated branch shape created by the 2026.4.24 prompt transcript rewrite bug: an abandoned user turn with OpenClaw internal runtime context plus an active sibling containing the same visible user prompt. In `--fix` / `--repair` mode, doctor rewrites the SQLite transcript rows to the active branch so gateway history and memory readers no longer see duplicate turns.
+  <Accordion title="3d. Session transcript branch repair">
+    Doctor scans agent session JSONL files for the duplicated branch shape created by the 2026.4.24 prompt transcript rewrite bug: an abandoned user turn with OpenClaw internal runtime context plus an active sibling containing the same visible user prompt. In `--fix` / `--repair` mode, doctor backs up each affected file next to the original and rewrites the transcript to the active branch so gateway history and memory readers no longer see duplicate turns.
   </Accordion>
   <Accordion title="4. State integrity checks (session persistence, routing, and safety)">
     The state directory is the operational brainstem. If it vanishes, you lose sessions, credentials, logs, and config (unless you have backups elsewhere).
@@ -355,9 +334,9 @@ That stages grounded durable candidates into the short-term dreaming store while
     - **State dir permissions**: verifies writability; offers to repair permissions (and emits a `chown` hint when owner/group mismatch is detected).
     - **macOS cloud-synced state dir**: warns when state resolves under iCloud Drive (`~/Library/Mobile Documents/com~apple~CloudDocs/...`) or `~/Library/CloudStorage/...` because sync-backed paths can cause slower I/O and lock/sync races.
     - **Linux SD or eMMC state dir**: warns when state resolves to an `mmcblk*` mount source, because SD or eMMC-backed random I/O can be slower and wear faster under session and credential writes.
-    - **Agent database missing**: `agents/<agentId>/agent/openclaw-agent.sqlite` is required to persist session history, transcript rows, VFS rows, artifacts, and agent-local cache state.
-    - **Transcript mismatch**: warns when recent session entries point at missing or inconsistent transcript rows.
-    - **Main transcript stalled**: flags when the main transcript is not accumulating new events.
+    - **Session dirs missing**: `sessions/` and the session store directory are required to persist history and avoid `ENOENT` crashes.
+    - **Transcript mismatch**: warns when recent session entries have missing transcript files.
+    - **Main session "1-line JSONL"**: flags when the main transcript has only one line (history is not accumulating).
     - **Multiple state dirs**: warns when multiple `~/.openclaw` folders exist across home directories or when `OPENCLAW_STATE_DIR` points elsewhere (history can split between installs).
     - **Remote mode reminder**: if `gateway.mode=remote`, doctor reminds you to run it on the remote host (the state lives there).
     - **Config file permissions**: warns if `~/.openclaw/openclaw.json` is group/world readable and offers to tighten to `600`.
@@ -443,8 +422,11 @@ That stages grounded durable candidates into the short-term dreaming store while
   <Accordion title="11c. Shell completion">
     Doctor checks whether tab completion is installed for the current shell (zsh, bash, fish, or PowerShell):
 
-    - If the shell profile points at the retired completion cache under OpenClaw state, doctor rewrites the profile to generate completions from the CLI directly.
+    - If the shell profile uses a slow dynamic completion pattern (`source <(openclaw completion ...)`), doctor upgrades it to the faster cached file variant.
+    - If completion is configured in the profile but the cache file is missing, doctor regenerates the cache automatically.
     - If no completion is configured at all, doctor prompts to install it (interactive mode only; skipped with `--non-interactive`).
+
+    Run `openclaw completion --write-state` to regenerate the cache manually.
 
   </Accordion>
   <Accordion title="12. Gateway auth checks (local token)">

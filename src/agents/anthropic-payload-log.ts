@@ -1,11 +1,14 @@
 import crypto from "node:crypto";
+import path from "node:path";
+import type { AgentMessage, StreamFn } from "@earendil-works/pi-agent-core";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import { resolveStateDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveUserPath } from "../utils.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
-import type { AgentMessage, StreamFn } from "./agent-core-contract.js";
 import { sanitizeDiagnosticPayload } from "./payload-redaction.js";
-import type { Api, Model } from "./pi-ai-contract.js";
-import { getStateDiagnosticWriter, type StateDiagnosticWriter } from "./state-diagnostic-writer.js";
+import { getQueuedFileWriter, type QueuedFileWriter } from "./queued-file-writer.js";
 
 type PayloadLogStage = "request" | "usage";
 
@@ -27,27 +30,25 @@ type PayloadLogEvent = {
 
 type PayloadLogConfig = {
   enabled: boolean;
-  destination: string;
+  filePath: string;
 };
 
-type PayloadLogWriter = StateDiagnosticWriter;
+type PayloadLogWriter = QueuedFileWriter;
 
-const stateWriters = new Map<string, PayloadLogWriter>();
+const writers = new Map<string, PayloadLogWriter>();
 const log = createSubsystemLogger("agent/anthropic-payload");
-const ANTHROPIC_PAYLOAD_SQLITE_LABEL = "sqlite://state/diagnostics/anthropic-payload";
-const ANTHROPIC_PAYLOAD_SQLITE_SCOPE = "diagnostics.anthropic_payload";
 
 function resolvePayloadLogConfig(env: NodeJS.ProcessEnv): PayloadLogConfig {
   const enabled = parseBooleanValue(env.OPENCLAW_ANTHROPIC_PAYLOAD_LOG) ?? false;
-  return { enabled, destination: ANTHROPIC_PAYLOAD_SQLITE_LABEL };
+  const fileOverride = env.OPENCLAW_ANTHROPIC_PAYLOAD_LOG_FILE?.trim();
+  const filePath = fileOverride
+    ? resolveUserPath(fileOverride)
+    : path.join(resolveStateDir(env), "logs", "anthropic-payload.jsonl");
+  return { enabled, filePath };
 }
 
-function getWriter(cfg: PayloadLogConfig, env: NodeJS.ProcessEnv): PayloadLogWriter {
-  return getStateDiagnosticWriter(stateWriters, {
-    env,
-    label: cfg.destination,
-    scope: ANTHROPIC_PAYLOAD_SQLITE_SCOPE,
-  });
+function getWriter(filePath: string): PayloadLogWriter {
+  return getQueuedFileWriter(writers, filePath);
 }
 
 function formatError(error: unknown): string | undefined {
@@ -111,7 +112,7 @@ export function createAnthropicPayloadLogger(params: {
     return null;
   }
 
-  const writer = params.writer ?? getWriter(cfg, env);
+  const writer = params.writer ?? getWriter(cfg.filePath);
   const base: Omit<PayloadLogEvent, "ts" | "stage"> = {
     runId: params.runId,
     sessionId: params.sessionId,
@@ -123,10 +124,11 @@ export function createAnthropicPayloadLogger(params: {
   };
 
   const record = (event: PayloadLogEvent) => {
-    if (!safeJsonStringify(event)) {
+    const line = safeJsonStringify(event);
+    if (!line) {
       return;
     }
-    writer.write(event);
+    writer.write(`${line}\n`);
   };
 
   const wrapStreamFn: AnthropicPayloadLogger["wrapStreamFn"] = (streamFn) => {
@@ -181,6 +183,6 @@ export function createAnthropicPayloadLogger(params: {
     });
   };
 
-  log.info("anthropic payload logger enabled", { destination: writer.destination });
+  log.info("anthropic payload logger enabled", { filePath: writer.filePath });
   return { enabled: true, wrapStreamFn, recordUsage };
 }

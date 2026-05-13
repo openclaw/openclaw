@@ -345,9 +345,10 @@ console.log(JSON.stringify(result));
     expect(missingKey.stderr).toContain("PARALLELS_TEST_MISSING_KEY is required");
   });
 
-  it("seeds configured agent workspace files before OS smoke agent turns", () => {
+  it("seeds agent workspace state before OS smoke agent turns", () => {
     const workspace = readFileSync(TS_PATHS.agentWorkspace, "utf8");
 
+    expect(workspace).toContain("workspace-state.json");
     expect(workspace).toContain("IDENTITY.md");
     expect(workspace).toContain("BOOTSTRAP.md");
 
@@ -527,7 +528,7 @@ console.log(JSON.stringify(result));
     expect(script).toContain("agent turn attempt $attempt failed or finished without OK response");
     expect(script).not.toContain("$config.models.providers");
     expect(script).not.toContain("timeoutSeconds = 300");
-    expect(script).not.toContain("$sessionId.jsonl");
+    expect(script).toContain('"$sessionId.jsonl"');
   });
 
   it("gives GPT-5.5 enough Parallels model time on slower desktop guests", () => {

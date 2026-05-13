@@ -1,16 +1,19 @@
+import fsp from "node:fs/promises";
+import path from "node:path";
+import { migrateSessionEntries, parseSessionEntries } from "@earendil-works/pi-coding-agent";
 import {
-  loadSqliteSessionTranscriptEvents,
-  resolveSqliteSessionTranscriptScope,
-} from "../../config/sessions/transcript-store.sqlite.js";
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
+} from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isPathInside } from "../../infra/path-guards.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 import {
   limitAgentHookHistoryMessages,
   MAX_AGENT_HOOK_HISTORY_MESSAGES,
 } from "../harness/hook-history.js";
-import { type TranscriptEntry } from "../transcript/session-transcript-contract.js";
 
-export const MAX_CLI_SESSION_HISTORY_BYTES = 5 * 1024 * 1024;
+export const MAX_CLI_SESSION_HISTORY_FILE_BYTES = 5 * 1024 * 1024;
 export const MAX_CLI_SESSION_HISTORY_MESSAGES = MAX_AGENT_HOOK_HISTORY_MESSAGES;
 export const MAX_CLI_SESSION_RESEED_HISTORY_CHARS = 12 * 1024;
 
@@ -113,40 +116,69 @@ export function buildCliSessionHistoryPrompt(params: {
   ].join("\n");
 }
 
-function resolveSafeCliTranscriptScope(params: {
+async function safeRealpath(filePath: string): Promise<string | undefined> {
+  try {
+    return await fsp.realpath(filePath);
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveSafeCliSessionFile(params: {
   sessionId: string;
+  sessionFile: string;
   sessionKey?: string;
   agentId?: string;
   config?: OpenClawConfig;
-}): { agentId: string; sessionId: string } {
+}): { sessionFile: string; sessionsDir: string } {
   const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
     config: params.config,
     agentId: params.agentId,
   });
-  return {
+  const pathOptions = resolveSessionFilePathOptions({
     agentId: sessionAgentId ?? defaultAgentId,
-    sessionId: params.sessionId,
+    storePath: params.config?.session?.store,
+  });
+  const sessionFile = resolveSessionFilePath(
+    params.sessionId,
+    { sessionFile: params.sessionFile },
+    pathOptions,
+  );
+  return {
+    sessionFile,
+    sessionsDir: pathOptions?.sessionsDir ?? path.dirname(sessionFile),
   };
 }
 
 async function loadCliSessionEntries(params: {
   sessionId: string;
+  sessionFile: string;
   sessionKey?: string;
   agentId?: string;
   config?: OpenClawConfig;
 }): Promise<unknown[]> {
   try {
-    const scope = resolveSqliteSessionTranscriptScope(resolveSafeCliTranscriptScope(params));
-    if (!scope) {
+    const { sessionFile, sessionsDir } = resolveSafeCliSessionFile(params);
+    const entryStat = await fsp.lstat(sessionFile);
+    if (!entryStat.isFile() || entryStat.isSymbolicLink()) {
       return [];
     }
-    const entries = loadSqliteSessionTranscriptEvents(scope)
-      .map((entry) => entry.event)
-      .filter((entry): entry is TranscriptEntry => Boolean(entry && typeof entry === "object"));
-    if (JSON.stringify(entries).length > MAX_CLI_SESSION_HISTORY_BYTES) {
+    const realSessionsDir = (await safeRealpath(sessionsDir)) ?? path.resolve(sessionsDir);
+    const realSessionFile = await safeRealpath(sessionFile);
+    if (
+      !realSessionFile ||
+      realSessionFile === realSessionsDir ||
+      !isPathInside(realSessionsDir, realSessionFile)
+    ) {
       return [];
     }
+    const stat = await fsp.stat(realSessionFile);
+    if (!stat.isFile() || stat.size > MAX_CLI_SESSION_HISTORY_FILE_BYTES) {
+      return [];
+    }
+    const entries = parseSessionEntries(await fsp.readFile(realSessionFile, "utf-8"));
+    migrateSessionEntries(entries);
     return entries.filter((entry) => entry.type !== "session");
   } catch {
     return [];
@@ -155,6 +187,7 @@ async function loadCliSessionEntries(params: {
 
 export async function loadCliSessionHistoryMessages(params: {
   sessionId: string;
+  sessionFile: string;
   sessionKey?: string;
   agentId?: string;
   config?: OpenClawConfig;
@@ -168,6 +201,7 @@ export async function loadCliSessionHistoryMessages(params: {
 
 export async function loadCliSessionReseedMessages(params: {
   sessionId: string;
+  sessionFile: string;
   sessionKey?: string;
   agentId?: string;
   config?: OpenClawConfig;

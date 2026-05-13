@@ -97,7 +97,7 @@ const knownDeprecatedSurfaceMarkers = [
   },
   {
     code: "plugin-install-config-ledger",
-    file: "src/commands/doctor/shared/plugin-install-config-migration.ts",
+    file: "src/config/plugin-install-config-migration.ts",
     marker: "stripShippedPluginInstallConfigRecords",
   },
   {

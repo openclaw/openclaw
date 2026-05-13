@@ -33,25 +33,6 @@ const MEMORY_SEARCH_RULE: LegacyConfigRule = {
     'top-level memorySearch was moved; use agents.defaults.memorySearch instead. Run "openclaw doctor --fix".',
 };
 
-const LEGACY_MEMORY_SEARCH_STORE_PATH_RULES: LegacyConfigRule[] = [
-  {
-    path: ["memorySearch", "store", "path"],
-    message:
-      'memorySearch.store.path is legacy; memory indexes now live in each agent database. Run "openclaw doctor --fix".',
-  },
-  {
-    path: ["agents", "defaults", "memorySearch", "store", "path"],
-    message:
-      'agents.defaults.memorySearch.store.path is legacy; memory indexes now live in each agent database. Run "openclaw doctor --fix".',
-  },
-  {
-    path: ["agents", "list"],
-    message:
-      'agents.list[].memorySearch.store.path is legacy; memory indexes now live in each agent database. Run "openclaw doctor --fix".',
-    match: (value) => hasAgentListMemorySearchStorePath(value),
-  },
-];
-
 const HEARTBEAT_RULE: LegacyConfigRule = {
   path: ["heartbeat"],
   message:
@@ -116,32 +97,6 @@ const LEGACY_AGENT_LLM_TIMEOUT_RULES: LegacyConfigRule[] = [
 
 function sandboxScopeFromPerSession(perSession: boolean): "session" | "shared" {
   return perSession ? "session" : "shared";
-}
-
-function hasMemorySearchStorePath(value: unknown): boolean {
-  const memorySearch = getRecord(value);
-  const store = getRecord(memorySearch?.store);
-  return typeof store?.path === "string";
-}
-
-function hasAgentListMemorySearchStorePath(value: unknown): boolean {
-  return (
-    Array.isArray(value) &&
-    value.some((entry) => hasMemorySearchStorePath(getRecord(entry)?.memorySearch))
-  );
-}
-
-function removeLegacyMemorySearchStorePath(
-  memorySearch: Record<string, unknown> | null | undefined,
-  pathLabel: string,
-  changes: string[],
-): void {
-  const store = getRecord(memorySearch?.store);
-  if (!store || typeof store.path !== "string") {
-    return;
-  }
-  delete store.path;
-  changes.push(`Removed ${pathLabel}.store.path; memory indexes now use each agent database.`);
 }
 
 function splitLegacyHeartbeat(legacyHeartbeat: Record<string, unknown>): {
@@ -344,32 +299,6 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
           "Merged memorySearch → agents.defaults.memorySearch (filled missing fields from legacy; kept explicit agents.defaults values).",
       });
       delete raw.memorySearch;
-    },
-  }),
-  defineLegacyConfigMigration({
-    id: "memorySearch.store.path->agent-database",
-    describe: "Remove legacy memory search sidecar index paths",
-    legacyRules: LEGACY_MEMORY_SEARCH_STORE_PATH_RULES,
-    apply: (raw, changes) => {
-      removeLegacyMemorySearchStorePath(getRecord(raw.memorySearch), "memorySearch", changes);
-
-      const agents = getRecord(raw.agents);
-      removeLegacyMemorySearchStorePath(
-        getRecord(getRecord(agents?.defaults)?.memorySearch),
-        "agents.defaults.memorySearch",
-        changes,
-      );
-
-      if (!Array.isArray(agents?.list)) {
-        return;
-      }
-      for (const [index, agent] of agents.list.entries()) {
-        removeLegacyMemorySearchStorePath(
-          getRecord(getRecord(agent)?.memorySearch),
-          `agents.list[${index}].memorySearch`,
-          changes,
-        );
-      }
     },
   }),
   defineLegacyConfigMigration({

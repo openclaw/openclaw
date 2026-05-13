@@ -441,7 +441,7 @@ See [MiniMax Search](/tools/minimax-search) for full web search configuration an
 - Alternate chat model: `MiniMax-M2.7-highspeed`
 - Onboarding and direct API-key setup write text-only model definitions for both M2.7 variants
 - Image understanding uses the plugin-owned `MiniMax-VL-01` media provider
-- Update pricing values in `models.providers` if you need exact cost tracking
+- Update pricing values in `models.json` if you need exact cost tracking
 - Use `openclaw models list` to confirm the current provider id, then switch with `openclaw models set minimax/MiniMax-M2.7` or `openclaw models set minimax-portal/MiniMax-M2.7`
 
 <Tip>

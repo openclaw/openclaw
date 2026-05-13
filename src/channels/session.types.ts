@@ -3,7 +3,7 @@ import type { GroupKeyResolution, SessionEntry } from "../config/sessions/types.
 
 export type InboundLastRouteUpdate = {
   sessionKey: string;
-  channel: SessionEntry["channel"];
+  channel: SessionEntry["lastChannel"];
   to: string;
   accountId?: string;
   threadId?: string | number;
@@ -15,7 +15,7 @@ export type InboundLastRouteUpdate = {
 };
 
 export type RecordInboundSession = (params: {
-  agentId?: string;
+  storePath: string;
   sessionKey: string;
   ctx: MsgContext;
   groupResolution?: GroupKeyResolution | null;

@@ -1,9 +1,8 @@
-import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import path from "node:path";
+import { loadJsonFile, saveJsonFile } from "openclaw/plugin-sdk/json-store";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 
-const STICKER_CACHE_STORE = createPluginStateSyncKeyedStore<CachedSticker>("telegram", {
-  namespace: "sticker-cache",
-  maxEntries: 10_000,
-});
+const CACHE_VERSION = 1;
 
 export interface CachedSticker {
   fileId: string;
@@ -15,6 +14,32 @@ export interface CachedSticker {
   receivedFrom?: string;
 }
 
+interface StickerCache {
+  version: number;
+  stickers: Record<string, CachedSticker>;
+}
+
+function getCacheFile(): string {
+  return path.join(resolveStateDir(), "telegram", "sticker-cache.json");
+}
+
+function loadCache(): StickerCache {
+  const data = loadJsonFile(getCacheFile());
+  if (!data || typeof data !== "object") {
+    return { version: CACHE_VERSION, stickers: {} };
+  }
+  const cache = data as StickerCache;
+  if (cache.version !== CACHE_VERSION) {
+    // Future: handle migration if needed
+    return { version: CACHE_VERSION, stickers: {} };
+  }
+  return cache;
+}
+
+function saveCache(cache: StickerCache): void {
+  saveJsonFile(getCacheFile(), cache);
+}
+
 function normalizeStickerSearchText(value: unknown): string {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
@@ -23,24 +48,28 @@ function normalizeStickerSearchText(value: unknown): string {
  * Get a cached sticker by its unique ID.
  */
 export function getCachedSticker(fileUniqueId: string): CachedSticker | null {
-  return STICKER_CACHE_STORE.lookup(fileUniqueId) ?? null;
+  const cache = loadCache();
+  return cache.stickers[fileUniqueId] ?? null;
 }
 
 /**
  * Add or update a sticker in the cache.
  */
 export function cacheSticker(sticker: CachedSticker): void {
-  STICKER_CACHE_STORE.register(sticker.fileUniqueId, sticker);
+  const cache = loadCache();
+  cache.stickers[sticker.fileUniqueId] = sticker;
+  saveCache(cache);
 }
 
 /**
  * Search cached stickers by text query (fuzzy match on description + emoji + setName).
  */
 export function searchStickers(query: string, limit = 10): CachedSticker[] {
+  const cache = loadCache();
   const queryLower = normalizeStickerSearchText(query);
   const results: Array<{ sticker: CachedSticker; score: number }> = [];
 
-  for (const { value: sticker } of STICKER_CACHE_STORE.entries()) {
+  for (const sticker of Object.values(cache.stickers)) {
     let score = 0;
     const descLower = normalizeStickerSearchText(sticker.description);
 
@@ -83,14 +112,16 @@ export function searchStickers(query: string, limit = 10): CachedSticker[] {
  * Get all cached stickers (for debugging/listing).
  */
 export function getAllCachedStickers(): CachedSticker[] {
-  return STICKER_CACHE_STORE.entries().map((entry) => entry.value);
+  const cache = loadCache();
+  return Object.values(cache.stickers);
 }
 
 /**
  * Get cache statistics.
  */
 export function getCacheStats(): { count: number; oldestAt?: string; newestAt?: string } {
-  const stickers = getAllCachedStickers();
+  const cache = loadCache();
+  const stickers = Object.values(cache.stickers);
   if (stickers.length === 0) {
     return { count: 0 };
   }
@@ -102,8 +133,4 @@ export function getCacheStats(): { count: number; oldestAt?: string; newestAt?: 
     oldestAt: sorted[0]?.cachedAt,
     newestAt: sorted[sorted.length - 1]?.cachedAt,
   };
-}
-
-export function resetTelegramStickerCacheForTests(): void {
-  STICKER_CACHE_STORE.clear();
 }

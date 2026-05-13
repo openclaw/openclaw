@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { buildBackupArchiveRoot } from "./backup-shared.js";
 import { backupVerifyCommand } from "./backup-verify.js";
 
@@ -137,69 +136,6 @@ describe("backupVerifyCommand", () => {
       expect(verified.ok).toBe(true);
       expect(verified.archiveRoot).toBe(archiveRoot);
       expect(verified.assetCount).toBeGreaterThan(0);
-    } finally {
-      await fs.rm(archiveDir, { recursive: true, force: true });
-    }
-  });
-
-  it("runs integrity checks for manifest-declared SQLite snapshots", async () => {
-    const archiveDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-sqlite-verify-"));
-    try {
-      const runtime = createBackupVerifyRuntime();
-      const archiveRoot = buildBackupArchiveRoot(Date.UTC(2026, 2, 9, 0, 0, 0));
-      const archivePath = path.join(archiveDir, "backup.tar.gz");
-      const manifestPath = path.join(archiveDir, "manifest.json");
-      const sqlitePath = path.join(archiveDir, "openclaw.sqlite");
-      const sqliteArchivePath = `${archiveRoot}/payload/posix/tmp/.openclaw/state/openclaw.sqlite`;
-      const sqlite = requireNodeSqlite();
-      const db = new sqlite.DatabaseSync(sqlitePath);
-      try {
-        db.exec("CREATE TABLE sample (value TEXT NOT NULL);");
-      } finally {
-        db.close();
-      }
-      await fs.writeFile(
-        manifestPath,
-        `${JSON.stringify(
-          {
-            ...createBackupManifest(`${archiveRoot}/payload/posix/tmp/.openclaw`, archiveRoot),
-            databaseSnapshots: [
-              {
-                role: "state",
-                sourcePath: "/tmp/.openclaw/state/openclaw.sqlite",
-                archivePath: sqliteArchivePath,
-                byteSize: 8192,
-                integrity: "ok",
-              },
-            ],
-          },
-          null,
-          2,
-        )}\n`,
-        "utf8",
-      );
-      await tar.c(
-        {
-          file: archivePath,
-          gzip: true,
-          portable: true,
-          preservePaths: true,
-          onWriteEntry: (entry) => {
-            if (entry.path === manifestPath) {
-              entry.path = `${archiveRoot}/manifest.json`;
-              return;
-            }
-            if (entry.path === sqlitePath) {
-              entry.path = sqliteArchivePath;
-            }
-          },
-        },
-        [manifestPath, sqlitePath],
-      );
-
-      await expect(backupVerifyCommand(runtime, { archive: archivePath })).resolves.toMatchObject({
-        ok: true,
-      });
     } finally {
       await fs.rm(archiveDir, { recursive: true, force: true });
     }

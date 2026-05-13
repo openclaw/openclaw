@@ -1,6 +1,6 @@
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
-import type { AssistantMessage } from "./pi-ai-contract.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
   formatBillingErrorMessage,
@@ -282,9 +282,7 @@ describe("formatAssistantErrorText", () => {
   });
 
   it("returns a contention-specific message for OAuth refresh lock timeouts", () => {
-    const msg = makeAssistantError(
-      "Timed out acquiring SQLite state lock auth.oauth-refresh:sha256-abcd",
-    );
+    const msg = makeAssistantError("file lock timeout for /tmp/openclaw-oauth-refresh.lock");
     expect(formatAssistantErrorText(msg)).toBe(
       "Authentication refresh is already in progress elsewhere and this attempt timed out waiting for it. Retry in a moment.",
     );

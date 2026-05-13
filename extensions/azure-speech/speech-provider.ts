@@ -71,9 +71,8 @@ function normalizeAzureSpeechProviderConfig(
   rawConfig: Record<string, unknown>,
 ): AzureSpeechProviderConfig {
   const raw = resolveAzureSpeechConfigRecord(rawConfig);
+  const region = trimToUndefined(raw?.region) ?? readAzureSpeechEnvRegion();
   const endpoint = trimToUndefined(raw?.endpoint) ?? readAzureSpeechEnvEndpoint();
-  const region =
-    trimToUndefined(raw?.region) ?? (endpoint ? undefined : readAzureSpeechEnvRegion());
   const baseUrl = normalizeAzureSpeechBaseUrl({
     baseUrl: trimToUndefined(raw?.baseUrl),
     endpoint,
@@ -98,8 +97,8 @@ function normalizeAzureSpeechProviderConfig(
 
 function readAzureSpeechProviderConfig(config: SpeechProviderConfig): AzureSpeechProviderConfig {
   const defaults = normalizeAzureSpeechProviderConfig({});
+  const region = trimToUndefined(config.region) ?? defaults.region;
   const endpoint = trimToUndefined(config.endpoint) ?? defaults.endpoint;
-  const region = trimToUndefined(config.region) ?? (endpoint ? undefined : defaults.region);
   const baseUrl = normalizeAzureSpeechBaseUrl({
     baseUrl: trimToUndefined(config.baseUrl) ?? defaults.baseUrl,
     endpoint,

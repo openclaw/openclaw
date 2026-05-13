@@ -1,13 +1,18 @@
 import fs from "node:fs";
 import { normalizeProviderId } from "../../../agents/provider-id.js";
+import {
+  extractShippedPluginInstallConfigRecords,
+  stripShippedPluginInstallConfigRecords,
+} from "../../../config/plugin-install-config-migration.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
-import type { InstalledPluginIndexStoreOptions } from "../../../plugins/installed-plugin-index-store-options.js";
 import {
   inspectPersistedInstalledPluginIndex,
   readPersistedInstalledPluginIndexSync,
+  resolveInstalledPluginIndexStorePath,
   writePersistedInstalledPluginIndex,
   type InstalledPluginIndexStoreInspection,
+  type InstalledPluginIndexStoreOptions,
 } from "../../../plugins/installed-plugin-index-store.js";
 import {
   loadInstalledPluginIndex,
@@ -17,11 +22,6 @@ import {
 } from "../../../plugins/installed-plugin-index.js";
 import { loadPluginManifestRegistryForInstalledIndex } from "../../../plugins/manifest-registry-installed.js";
 import type { PluginManifestRecord } from "../../../plugins/manifest-registry.js";
-import { resolveLegacyInstalledPluginIndexStorePath } from "../legacy/installed-plugin-index-path.js";
-import {
-  extractShippedPluginInstallConfigRecords,
-  stripShippedPluginInstallConfigRecords,
-} from "./plugin-install-config-migration.js";
 
 export const DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV = "OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION";
 export const FORCE_PLUGIN_REGISTRY_MIGRATION_ENV = "OPENCLAW_FORCE_PLUGIN_REGISTRY_MIGRATION";
@@ -72,7 +72,7 @@ export function preflightPluginRegistryInstallMigration(
   params: PluginRegistryInstallMigrationParams = {},
 ): PluginRegistryInstallMigrationPreflight {
   const env = params.env ?? process.env;
-  const filePath = resolveLegacyInstalledPluginIndexStorePath(params);
+  const filePath = resolveInstalledPluginIndexStorePath(params);
   const force = hasEnvFlag(env, FORCE_PLUGIN_REGISTRY_MIGRATION_ENV);
   const deprecationWarnings = force ? [forceDeprecationWarning()] : [];
   if (hasEnvFlag(env, DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV)) {
@@ -83,23 +83,17 @@ export function preflightPluginRegistryInstallMigration(
       deprecationWarnings,
     };
   }
-  const currentRegistry = !force ? readPersistedInstalledPluginIndexSync(params) : null;
-  if (currentRegistry) {
-    return {
-      action: "skip-existing",
-      filePath,
-      force,
-      deprecationWarnings,
-    };
-  }
   const pathExists = params.existsSync ?? fs.existsSync;
-  if (!force && pathExists(filePath) && readPersistedInstalledPluginIndexSync(params)) {
-    return {
-      action: "skip-existing",
-      filePath,
-      force,
-      deprecationWarnings,
-    };
+  if (!force && pathExists(filePath)) {
+    const currentRegistry = readPersistedInstalledPluginIndexSync(params);
+    if (currentRegistry) {
+      return {
+        action: "skip-existing",
+        filePath,
+        force,
+        deprecationWarnings,
+      };
+    }
   }
   return {
     action: "migrate",

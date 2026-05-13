@@ -1,14 +1,12 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   clearDeviceAuthToken,
-  loadDeviceAuthStore,
   loadDeviceAuthToken,
   storeDeviceAuthToken,
 } from "./device-auth-store.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 
 function createEnv(stateDir: string): NodeJS.ProcessEnv {
   return {
@@ -17,7 +15,9 @@ function createEnv(stateDir: string): NodeJS.ProcessEnv {
   };
 }
 
-type DeviceAuthTestDatabase = Pick<OpenClawStateKyselyDatabase, "device_auth_tokens">;
+function deviceAuthFile(stateDir: string): string {
+  return path.join(stateDir, "identity", "device-auth.json");
+}
 
 describe("infra/device-auth-store", () => {
   it("stores and loads device auth tokens under the configured state dir", async () => {
@@ -46,7 +46,9 @@ describe("infra/device-auth-store", () => {
         }),
       ).toEqual(entry);
 
-      expect(loadDeviceAuthStore({ env: createEnv(stateDir) })).toEqual({
+      const raw = await fs.readFile(deviceAuthFile(stateDir), "utf8");
+      expect(raw.endsWith("\n")).toBe(true);
+      expect(JSON.parse(raw)).toEqual({
         version: 1,
         deviceId: "device-1",
         tokens: {
@@ -56,51 +58,22 @@ describe("infra/device-auth-store", () => {
     });
   });
 
-  it("returns null for missing or mismatched token rows", async () => {
+  it("returns null for missing, invalid, or mismatched stores", async () => {
     await withTempDir("openclaw-device-auth-", async (stateDir) => {
       const env = createEnv(stateDir);
 
       expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator", env })).toBeNull();
 
-      const database = openOpenClawStateDatabase({ env });
-      const db = getNodeSqliteKysely<DeviceAuthTestDatabase>(database.db);
-      executeSqliteQuerySync(
-        database.db,
-        db.insertInto("device_auth_tokens").values({
-          device_id: "device-2",
-          role: "operator",
-          token: "x",
-          scopes_json: "[]",
-          updated_at_ms: 1,
-        }),
+      await fs.mkdir(path.dirname(deviceAuthFile(stateDir)), { recursive: true });
+      await fs.writeFile(deviceAuthFile(stateDir), '{"version":2,"deviceId":"device-1"}\n', "utf8");
+      expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator", env })).toBeNull();
+
+      await fs.writeFile(
+        deviceAuthFile(stateDir),
+        '{"version":1,"deviceId":"device-2","tokens":{"operator":{"token":"x","role":"operator","scopes":[],"updatedAtMs":1}}}\n',
+        "utf8",
       );
       expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator", env })).toBeNull();
-    });
-  });
-
-  it("stores one device token without deleting other devices", async () => {
-    await withTempDir("openclaw-device-auth-", async (stateDir) => {
-      const env = createEnv(stateDir);
-
-      storeDeviceAuthToken({
-        deviceId: "device-2",
-        role: "operator",
-        token: "device-2-token",
-        env,
-      });
-      storeDeviceAuthToken({
-        deviceId: "device-1",
-        role: "operator",
-        token: "device-1-token",
-        env,
-      });
-
-      expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator", env })).toMatchObject({
-        token: "device-1-token",
-      });
-      expect(loadDeviceAuthToken({ deviceId: "device-2", role: "operator", env })).toMatchObject({
-        token: "device-2-token",
-      });
     });
   });
 
@@ -131,42 +104,6 @@ describe("infra/device-auth-store", () => {
       expect(loadDeviceAuthToken({ deviceId: "device-1", role: "node", env })?.token).toBe(
         "node-token",
       );
-    });
-  });
-
-  it("updates retained token rows while pruning removed roles", async () => {
-    await withTempDir("openclaw-device-auth-", async (stateDir) => {
-      const env = createEnv(stateDir);
-
-      storeDeviceAuthToken({
-        deviceId: "device-1",
-        role: "operator",
-        token: "operator-token",
-        env,
-      });
-      storeDeviceAuthToken({
-        deviceId: "device-1",
-        role: "node",
-        token: "node-token",
-        env,
-      });
-
-      clearDeviceAuthToken({
-        deviceId: "device-1",
-        role: "node",
-        env,
-      });
-      storeDeviceAuthToken({
-        deviceId: "device-1",
-        role: "operator",
-        token: "operator-token-2",
-        env,
-      });
-
-      expect(loadDeviceAuthToken({ deviceId: "device-1", role: "node", env })).toBeNull();
-      expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator", env })).toMatchObject({
-        token: "operator-token-2",
-      });
     });
   });
 });

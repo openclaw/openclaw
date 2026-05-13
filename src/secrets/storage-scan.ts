@@ -4,7 +4,7 @@ import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUserPath } from "../utils.js";
-import { listAuthProfileStoreAgentDirs as listAuthProfileStoreAgentDirsFromAuthStorePaths } from "./auth-store-paths.js";
+import { listAuthProfileStorePaths as listAuthProfileStorePathsFromAuthStorePaths } from "./auth-store-paths.js";
 import { parseEnvValue } from "./shared.js";
 
 function isJsonObject(value: unknown): value is Record<string, unknown> {
@@ -15,8 +15,8 @@ export function parseEnvAssignmentValue(raw: string): string {
   return parseEnvValue(raw);
 }
 
-export function listAuthProfileStoreAgentDirs(config: OpenClawConfig, stateDir: string): string[] {
-  return listAuthProfileStoreAgentDirsFromAuthStorePaths(config, stateDir);
+export function listAuthProfileStorePaths(config: OpenClawConfig, stateDir: string): string[] {
+  return listAuthProfileStorePathsFromAuthStorePaths(config, stateDir);
 }
 
 export function listLegacyAuthJsonPaths(stateDir: string): string[] {
@@ -45,15 +45,15 @@ function resolveActiveAgentDir(stateDir: string, env: NodeJS.ProcessEnv = proces
   return path.join(resolveUserPath(stateDir), "agents", "main", "agent");
 }
 
-export function listAgentModelCatalogDirs(
+export function listAgentModelsJsonPaths(
   config: OpenClawConfig,
   stateDir: string,
   env: NodeJS.ProcessEnv = process.env,
 ): string[] {
   const resolvedStateDir = resolveUserPath(stateDir);
-  const dirs = new Set<string>();
-  dirs.add(path.join(resolvedStateDir, "agents", "main", "agent"));
-  dirs.add(resolveActiveAgentDir(stateDir, env));
+  const paths = new Set<string>();
+  paths.add(path.join(resolvedStateDir, "agents", "main", "agent", "models.json"));
+  paths.add(path.join(resolveActiveAgentDir(stateDir, env), "models.json"));
 
   const agentsRoot = path.join(resolvedStateDir, "agents");
   if (fs.existsSync(agentsRoot)) {
@@ -61,20 +61,20 @@ export function listAgentModelCatalogDirs(
       if (!entry.isDirectory()) {
         continue;
       }
-      dirs.add(path.join(agentsRoot, entry.name, "agent"));
+      paths.add(path.join(agentsRoot, entry.name, "agent", "models.json"));
     }
   }
 
   for (const agentId of listAgentIds(config)) {
     if (agentId === "main") {
-      dirs.add(path.join(resolvedStateDir, "agents", "main", "agent"));
+      paths.add(path.join(resolvedStateDir, "agents", "main", "agent", "models.json"));
       continue;
     }
     const agentDir = resolveAgentDir(config, agentId);
-    dirs.add(resolveUserPath(agentDir));
+    paths.add(path.join(resolveUserPath(agentDir), "models.json"));
   }
 
-  return [...dirs];
+  return [...paths];
 }
 
 export type ReadJsonObjectOptions = {

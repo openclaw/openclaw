@@ -2,7 +2,7 @@ import { formatUnknownError } from "./errors.js";
 import { buildFileInfoCard, parseFileConsentInvoke, uploadToConsentUrl } from "./file-consent.js";
 import { normalizeMSTeamsConversationId } from "./inbound.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
-import { getPendingUploadState, removePendingUploadState } from "./pending-uploads-state.js";
+import { getPendingUploadFs, removePendingUploadFs } from "./pending-uploads-fs.js";
 import { getPendingUpload, removePendingUpload } from "./pending-uploads.js";
 import { withRevokedProxyFallback } from "./revoked-context.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
@@ -32,10 +32,10 @@ async function handleMSTeamsFileConsentInvoke(
       ? consentResponse.context.uploadId
       : undefined;
   // Prefer the in-memory store (same-process reply path); fall back to the
-  // SQLite-backed store so CLI `message send --media` flows work even when the
+  // FS-backed store so CLI `message send --media` flows work even when the
   // invoke callback is delivered to a different process.
   const inMemoryFile = getPendingUpload(uploadId);
-  const fsFile = inMemoryFile ? undefined : await getPendingUploadState(uploadId);
+  const fsFile = inMemoryFile ? undefined : await getPendingUploadFs(uploadId);
   const pendingFile:
     | {
         buffer: Buffer;
@@ -115,7 +115,7 @@ async function handleMSTeamsFileConsentInvoke(
         await context.sendActivity("File upload failed. Please try again.");
       } finally {
         removePendingUpload(uploadId);
-        await removePendingUploadState(uploadId);
+        await removePendingUploadFs(uploadId);
       }
     } else {
       log.debug?.("pending file not found for consent", { uploadId });
@@ -124,7 +124,7 @@ async function handleMSTeamsFileConsentInvoke(
   } else {
     log.debug?.("user declined file consent", { uploadId });
     removePendingUpload(uploadId);
-    await removePendingUploadState(uploadId);
+    await removePendingUploadFs(uploadId);
   }
 
   return true;

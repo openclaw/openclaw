@@ -1,25 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 
 const command = process.argv[2];
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
-
-function readAuthProfileStorePayload(stateDir, storeKey) {
-  const dbPath = path.join(stateDir, "state", "openclaw.sqlite");
-  if (!fs.existsSync(dbPath)) {
-    throw new Error(`missing OpenClaw state database: ${dbPath}`);
-  }
-  const db = new DatabaseSync(dbPath, { readOnly: true });
-  try {
-    const row = db
-      .prepare("SELECT store_json FROM auth_profile_stores WHERE store_key = ?")
-      .get(storeKey);
-    return typeof row?.store_json === "string" ? JSON.parse(row.store_json) : undefined;
-  } finally {
-    db.close();
-  }
-}
 
 function assertOnboardState() {
   const home = process.argv[3];
@@ -34,16 +17,15 @@ function assertOnboardState() {
   if (!fs.existsSync(agentDir)) {
     throw new Error("onboard did not create main agent dir");
   }
-  const authStore = readAuthProfileStorePayload(stateDir, agentDir);
-  const authRaw = JSON.stringify(authStore ?? {});
-  if (!authStore || !authRaw.includes("OPENAI_API_KEY")) {
+  if (!fs.existsSync(authPath)) {
+    throw new Error("onboard did not create auth-profiles.json");
+  }
+  const authRaw = fs.readFileSync(authPath, "utf8");
+  if (!authRaw.includes("OPENAI_API_KEY")) {
     throw new Error("auth profile did not persist OPENAI_API_KEY env ref");
   }
   if (authRaw.includes("sk-openclaw-npm-onboard-e2e")) {
     throw new Error("auth profile persisted the raw OpenAI test key");
-  }
-  if (fs.existsSync(authPath)) {
-    throw new Error(`auth profile should be SQLite-backed, found legacy file: ${authPath}`);
   }
 }
 

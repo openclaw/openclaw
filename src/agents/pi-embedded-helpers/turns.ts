@@ -1,5 +1,5 @@
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import type { AgentMessage } from "../agent-core-contract.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
 
 type AnthropicContentBlock = {

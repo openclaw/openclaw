@@ -60,7 +60,7 @@ export type PromptBuildHookRunner = {
 
 // Cache drained next-turn injections by runId so retry attempts within the
 // same run reuse the first-attempt drain rather than calling drain again
-// (which destructively consumes from the persisted session row and would return [] on
+// (which destructively consumes from the session store and would return [] on
 // retry, dropping injection context). The cache is bounded to keep memory flat
 // across long-lived processes; entries are evicted FIFO once the cap is hit.
 const PROMPT_BUILD_DRAIN_CACHE_MAX = 256;

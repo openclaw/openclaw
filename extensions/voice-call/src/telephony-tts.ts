@@ -213,6 +213,7 @@ function collectTelephonyProviderConfigs(
     "modelOverrides",
     "persona",
     "personas",
+    "prefsPath",
     "provider",
     "providers",
     "summaryModel",

@@ -1,8 +1,5 @@
-import {
-  loadSqliteSessionTranscriptEvents,
-  resolveSqliteSessionTranscriptScope,
-  type SqliteSessionTranscriptScope,
-} from "../../../config/sessions/transcript-store.sqlite.js";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { hasInterSessionUserProvenance } from "../../../sessions/input-provenance.js";
 
 function extractTextMessageContent(content: unknown): string | undefined {
@@ -24,25 +21,20 @@ function extractTextMessageContent(content: unknown): string | undefined {
   return undefined;
 }
 
-export async function getRecentTranscriptContent(
-  target: {
-    agentId?: string;
-    sessionId?: string;
-  },
+export async function getRecentSessionContent(
+  sessionFilePath: string,
   messageCount: number = 15,
 ): Promise<string | null> {
   try {
-    const scope = resolveScopeForTranscriptTarget(target);
-    if (!scope) {
-      return null;
-    }
-    const events = loadSqliteSessionTranscriptEvents(scope);
+    const content = await fs.readFile(sessionFilePath, "utf-8");
+    const lines = content.trim().split("\n");
 
     const allMessages: string[] = [];
-    for (const { event } of events) {
+    for (const line of lines) {
       try {
-        if (isRecord(event) && event.type === "message" && event.message) {
-          const msg = event.message as {
+        const entry = JSON.parse(line);
+        if (entry.type === "message" && entry.message) {
+          const msg = entry.message as {
             role?: unknown;
             content?: unknown;
             provenance?: unknown;
@@ -59,7 +51,7 @@ export async function getRecentTranscriptContent(
           }
         }
       } catch {
-        // Skip invalid transcript rows.
+        // Skip invalid JSON lines.
       }
     }
 
@@ -69,20 +61,88 @@ export async function getRecentTranscriptContent(
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+export async function getRecentSessionContentWithResetFallback(
+  sessionFilePath: string,
+  messageCount: number = 15,
+): Promise<string | null> {
+  const primary = await getRecentSessionContent(sessionFilePath, messageCount);
+  if (primary) {
+    return primary;
+  }
+
+  try {
+    const dir = path.dirname(sessionFilePath);
+    const base = path.basename(sessionFilePath);
+    const resetPrefix = `${base}.reset.`;
+    const files = await fs.readdir(dir);
+    const resetCandidates = files.filter((name) => name.startsWith(resetPrefix)).toSorted();
+
+    if (resetCandidates.length === 0) {
+      return primary;
+    }
+
+    const latestResetPath = path.join(dir, resetCandidates[resetCandidates.length - 1]);
+    return (await getRecentSessionContent(latestResetPath, messageCount)) || primary;
+  } catch {
+    return primary;
+  }
 }
 
-function resolveScopeForTranscriptTarget(target: {
-  agentId?: string;
+function stripResetSuffix(fileName: string): string {
+  const resetIndex = fileName.indexOf(".reset.");
+  return resetIndex === -1 ? fileName : fileName.slice(0, resetIndex);
+}
+
+export async function findPreviousSessionFile(params: {
+  sessionsDir: string;
+  currentSessionFile?: string;
   sessionId?: string;
-}): SqliteSessionTranscriptScope | undefined {
-  const sessionId = target.sessionId?.trim();
-  if (!sessionId) {
-    return undefined;
+}): Promise<string | undefined> {
+  try {
+    const files = await fs.readdir(params.sessionsDir);
+    const fileSet = new Set(files);
+
+    const baseFromReset = params.currentSessionFile
+      ? stripResetSuffix(path.basename(params.currentSessionFile))
+      : undefined;
+    if (baseFromReset && fileSet.has(baseFromReset)) {
+      return path.join(params.sessionsDir, baseFromReset);
+    }
+
+    const trimmedSessionId = params.sessionId?.trim();
+    if (trimmedSessionId) {
+      const canonicalFile = `${trimmedSessionId}.jsonl`;
+      if (fileSet.has(canonicalFile)) {
+        return path.join(params.sessionsDir, canonicalFile);
+      }
+
+      const topicVariants = files
+        .filter(
+          (name) =>
+            name.startsWith(`${trimmedSessionId}-topic-`) &&
+            name.endsWith(".jsonl") &&
+            !name.includes(".reset."),
+        )
+        .toSorted()
+        .toReversed();
+      if (topicVariants.length > 0) {
+        return path.join(params.sessionsDir, topicVariants[0]);
+      }
+    }
+
+    if (!params.currentSessionFile) {
+      return undefined;
+    }
+
+    const nonResetJsonl = files
+      .filter((name) => name.endsWith(".jsonl") && !name.includes(".reset."))
+      .toSorted()
+      .toReversed();
+    if (nonResetJsonl.length > 0) {
+      return path.join(params.sessionsDir, nonResetJsonl[0]);
+    }
+  } catch {
+    // Ignore directory read errors.
   }
-  return resolveSqliteSessionTranscriptScope({
-    agentId: target.agentId,
-    sessionId,
-  });
+  return undefined;
 }

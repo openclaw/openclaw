@@ -17,11 +17,12 @@ export type AgentHarnessSideQuestionParams = {
   agentDir: string;
   provider: string;
   model: string;
-  runtimeModel?: import("../pi-ai-contract.js").Model<import("../pi-ai-contract.js").Api>;
+  runtimeModel?: import("@earendil-works/pi-ai").Model<import("@earendil-works/pi-ai").Api>;
   question: string;
   sessionEntry: import("../../config/sessions.js").SessionEntry;
   sessionStore?: Record<string, import("../../config/sessions.js").SessionEntry>;
   sessionKey?: string;
+  storePath?: string;
   resolvedThinkLevel?: import("../../auto-reply/thinking.js").ThinkLevel;
   resolvedReasoningLevel: import("../../auto-reply/thinking.js").ReasoningLevel;
   blockReplyChunking?: import("../pi-embedded-block-chunker.js").BlockReplyChunking;
@@ -29,6 +30,7 @@ export type AgentHarnessSideQuestionParams = {
   opts?: import("../../auto-reply/get-reply-options.types.js").GetReplyOptions;
   isNewSession: boolean;
   sessionId: string;
+  sessionFile: string;
   agentId?: string;
   workspaceDir?: string;
   authProfileId?: string;
@@ -44,6 +46,7 @@ export type AgentHarnessCompactResult =
 export type AgentHarnessResetParams = {
   sessionId?: string;
   sessionKey?: string;
+  sessionFile?: string;
   reason?: "new" | "reset" | "idle" | "daily" | "compaction" | "deleted" | "unknown";
 };
 

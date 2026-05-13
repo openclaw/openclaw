@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  planOpenClawModelCatalog,
-  planOpenClawModelCatalogWithDeps,
-  type ResolveImplicitProvidersForModelCatalog,
+  planOpenClawModelsJson,
+  planOpenClawModelsJsonWithDeps,
+  type ResolveImplicitProvidersForModelsJson,
 } from "./models-config.plan.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 import { createProviderAuthResolver } from "./models-config.providers.secrets.js";
@@ -67,7 +67,7 @@ describe("models-config", () => {
   });
 
   it("does not override explicit github-copilot provider config", async () => {
-    const plan = await planOpenClawModelCatalog({
+    const plan = await planOpenClawModelsJson({
       cfg: {
         models: {
           providers: {
@@ -98,14 +98,14 @@ describe("models-config", () => {
   });
 
   it("passes explicit provider config to implicit discovery so plugins can skip duplicates", async () => {
-    const resolveImplicitProviders = vi.fn<ResolveImplicitProvidersForModelCatalog>(
+    const resolveImplicitProviders = vi.fn<ResolveImplicitProvidersForModelsJson>(
       async ({ explicitProviders }) => {
         expect(explicitProviders.vllm?.baseUrl).toBe("http://127.0.0.1:8000/v1");
         return {};
       },
     );
 
-    const plan = await planOpenClawModelCatalogWithDeps(
+    const plan = await planOpenClawModelsJsonWithDeps(
       {
         cfg: {
           models: {
@@ -145,7 +145,7 @@ describe("models-config", () => {
     });
   });
 
-  it("keeps a non-empty existing model catalog baseUrl when merge mode regenerates the provider", async () => {
+  it("keeps a non-empty existing models.json baseUrl when merge mode regenerates the provider", async () => {
     const kilocodeProvider = {
       baseUrl: "https://api.kilo.ai/api/gateway/v1",
       api: "openai-completions" as const,
@@ -165,7 +165,7 @@ describe("models-config", () => {
       2,
     )}\n`;
 
-    const plan = await planOpenClawModelCatalogWithDeps(
+    const plan = await planOpenClawModelsJsonWithDeps(
       {
         cfg: {
           models: {
@@ -245,12 +245,12 @@ describe("models-config", () => {
 
 function createCopilotImplicitResolver(
   provider: ProviderConfig,
-): ResolveImplicitProvidersForModelCatalog {
+): ResolveImplicitProvidersForModelsJson {
   return async () => ({ "github-copilot": provider });
 }
 
 async function planCopilotWithImplicitProvider(params: { provider: ProviderConfig }) {
-  return await planOpenClawModelCatalogWithDeps(
+  return await planOpenClawModelsJsonWithDeps(
     {
       cfg: { models: { providers: {} } },
       agentDir: "/tmp/openclaw-agent",

@@ -1,6 +1,6 @@
 ---
 name: command-logger
-description: "Log all command events to the shared SQLite state database"
+description: "Log all command events to a centralized audit file"
 homepage: https://docs.openclaw.ai/automation/hooks#command-logger
 metadata:
   {
@@ -15,19 +15,19 @@ metadata:
 
 # Command Logger Hook
 
-Logs all command events (`/new`, `/reset`, `/stop`, etc.) to the shared SQLite state database for debugging and monitoring purposes.
+Logs all command events (`/new`, `/reset`, `/stop`, etc.) to a centralized audit log file for debugging and monitoring purposes.
 
 ## What It Does
 
 Every time you issue a command to the agent:
 
 1. **Captures event details** - Command action, timestamp, session key, sender ID, source
-2. **Stores in SQLite** - Inserts a row into `command_log_entries` in `state/openclaw.sqlite`
+2. **Appends to log file** - Writes a JSON line to `~/.openclaw/logs/commands.log`
 3. **Silent operation** - Runs in the background without user notifications
 
 ## Output Format
 
-Log entries are stored as queryable SQLite columns with the original JSON payload in `entry_json`:
+Log entries are written in JSONL (JSON Lines) format:
 
 ```json
 {"timestamp":"2026-01-16T14:30:00.000Z","action":"new","sessionKey":"agent:main:main","senderId":"+1234567890","source":"telegram"}
@@ -41,9 +41,9 @@ Log entries are stored as queryable SQLite columns with the original JSON payloa
 - **Analytics**: Analyze command patterns and frequency
 - **Troubleshooting**: Investigate issues by reviewing command history
 
-## Storage Location
+## Log File Location
 
-`~/.openclaw/state/openclaw.sqlite`, table `command_log_entries`.
+`~/.openclaw/logs/commands.log`
 
 ## Requirements
 
@@ -53,8 +53,8 @@ No requirements - this hook works out of the box on all platforms.
 
 No configuration needed. The hook automatically:
 
-- Creates the shared SQLite database if it doesn't exist
-- Appends a command-log row without overwriting older entries
+- Creates the log directory if it doesn't exist
+- Appends to the log file (doesn't overwrite)
 - Handles errors silently without disrupting command execution
 
 ## Disabling
@@ -79,22 +79,44 @@ Or via config:
 }
 ```
 
+## Log Rotation
+
+The hook does not automatically rotate logs. To manage log size, you can:
+
+1. **Manual rotation**:
+
+   ```bash
+   mv ~/.openclaw/logs/commands.log ~/.openclaw/logs/commands.log.old
+   ```
+
+2. **Use logrotate** (Linux):
+   Create `/etc/logrotate.d/openclaw`:
+   ```
+   /home/username/.openclaw/logs/commands.log {
+       weekly
+       rotate 4
+       compress
+       missingok
+       notifempty
+   }
+   ```
+
 ## Viewing Logs
 
 View recent commands:
 
 ```bash
-sqlite3 ~/.openclaw/state/openclaw.sqlite 'select datetime(timestamp_ms / 1000, "unixepoch"), action, session_key, sender_id, source from command_log_entries order by timestamp_ms desc limit 20;'
+tail -n 20 ~/.openclaw/logs/commands.log
 ```
 
 Pretty-print with jq:
 
 ```bash
-sqlite3 -json ~/.openclaw/state/openclaw.sqlite 'select entry_json from command_log_entries order by timestamp_ms desc limit 20;' | jq .
+cat ~/.openclaw/logs/commands.log | jq .
 ```
 
 Filter by action:
 
 ```bash
-sqlite3 ~/.openclaw/state/openclaw.sqlite 'select entry_json from command_log_entries where action = "new" order by timestamp_ms desc;'
+grep '"action":"new"' ~/.openclaw/logs/commands.log | jq .
 ```

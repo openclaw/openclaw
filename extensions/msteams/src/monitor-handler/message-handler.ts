@@ -694,7 +694,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     quoteSenderName ??= quoteInfo?.sender;
 
     const envelopeFrom = isDirectMessage ? senderName : conversationType;
-    const { envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
+    const { storePath, envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
       cfg,
       agentId: route.agentId,
       sessionKey: route.sessionKey,
@@ -859,8 +859,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           resolveTurn: () => ({
             channel: "msteams",
             accountId: route.accountId,
-            agentId: route.agentId,
             routeSessionKey: route.sessionKey,
+            storePath,
             ctxPayload,
             recordInboundSession: core.channel.session.recordInboundSession,
             record: {

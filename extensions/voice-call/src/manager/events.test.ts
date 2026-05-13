@@ -7,7 +7,7 @@ import type { VoiceCallProvider } from "../providers/base.js";
 import type { AnswerCallInput, HangupCallInput, NormalizedEvent } from "../types.js";
 import type { CallManagerContext } from "./context.js";
 import { processEvent } from "./events.js";
-import { createMemoryCallRecordStore, flushPendingCallRecordWritesForTest } from "./store.js";
+import { flushPendingCallRecordWritesForTest } from "./store.js";
 
 const contexts: CallManagerContext[] = [];
 
@@ -22,11 +22,12 @@ afterEach(async () => {
     }
     ctx.transcriptWaiters.clear();
     await flushPendingCallRecordWritesForTest();
+    fs.rmSync(ctx.storePath, { recursive: true, force: true });
   }
 });
 
 function createContext(overrides: Partial<CallManagerContext> = {}): CallManagerContext {
-  const storeKey = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-voice-call-events-test-"));
+  const storePath = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-voice-call-events-test-"));
   const ctx: CallManagerContext = {
     activeCalls: new Map(),
     providerCallIdMap: new Map(),
@@ -38,7 +39,7 @@ function createContext(overrides: Partial<CallManagerContext> = {}): CallManager
       provider: "plivo",
       fromNumber: "+15550000000",
     }),
-    callStore: createMemoryCallRecordStore(storeKey),
+    storePath,
     webhookUrl: null,
     activeTurnCalls: new Set(),
     transcriptWaiters: new Map(),

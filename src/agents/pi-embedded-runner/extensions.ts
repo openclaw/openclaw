@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { ExtensionFactory, SessionManager } from "@earendil-works/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
-import type { AgentToolResult } from "../agent-core-contract.js";
-import type { ExtensionFactory } from "../agent-extension-contract.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { createAgentToolResultMiddlewareRunner } from "../harness/tool-result-middleware.js";
@@ -14,7 +14,6 @@ import { computeEffectiveSettings } from "../pi-hooks/context-pruning/settings.j
 import { makeToolPrunablePredicate } from "../pi-hooks/context-pruning/tools.js";
 import { ensurePiCompactionReserveTokens, resolveEffectiveCompactionMode } from "../pi-settings.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
-import type { SessionManager } from "../transcript/session-transcript-contract.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "./cache-ttl.js";
 
 type PiToolResultEvent = {
@@ -23,7 +22,7 @@ type PiToolResultEvent = {
   toolCallId?: string;
   toolName?: string;
   input?: unknown;
-  content?: AgentToolResult["content"];
+  content?: AgentToolResult<unknown>["content"];
   details?: unknown;
   isError?: boolean;
 };
@@ -50,7 +49,7 @@ function buildAgentToolResultMiddlewareFactory(): ExtensionFactory {
       const current = {
         content,
         details: event.details,
-      } satisfies AgentToolResult;
+      } satisfies AgentToolResult<unknown>;
       const result = await runner.applyToolResultMiddleware({
         threadId: event.threadId,
         turnId: event.turnId,

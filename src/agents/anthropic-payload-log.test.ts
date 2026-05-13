@@ -1,21 +1,17 @@
 import crypto from "node:crypto";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { describe, expect, it } from "vitest";
-import { listDiagnosticEvents } from "../infra/diagnostic-events-store.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createAnthropicPayloadLogger } from "./anthropic-payload-log.js";
 
 describe("createAnthropicPayloadLogger", () => {
   it("sanitizes credential fields and image base64 payload data before writing logs", async () => {
-    const events: unknown[] = [];
+    const lines: string[] = [];
     const logger = createAnthropicPayloadLogger({
       env: { OPENCLAW_ANTHROPIC_PAYLOAD_LOG: "1" },
       writer: {
-        destination: "memory",
-        write: (event) => events.push(event),
+        filePath: "memory",
+        write: (line) => lines.push(line),
+        flush: async () => undefined,
       },
     });
     expect(typeof logger?.wrapStreamFn).toBe("function");
@@ -51,7 +47,7 @@ describe("createAnthropicPayloadLogger", () => {
     }
     await wrapped({ api: "anthropic-messages" } as never, { messages: [] } as never, {});
 
-    const event = (events[0] ?? {}) as Record<string, unknown>;
+    const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
     const sanitizedPayload = (event.payload ?? {}) as Record<string, unknown>;
     const message = ((sanitizedPayload.messages as unknown[] | undefined) ?? []) as Array<
       Record<string, unknown>
@@ -67,37 +63,5 @@ describe("createAnthropicPayloadLogger", () => {
     expect(source.bytes).toBe(4);
     expect(source.sha256).toBe(crypto.createHash("sha256").update("QUJDRA==").digest("hex"));
     expect(event.payloadDigest).toMatch(/^[a-f0-9]{64}$/u);
-  });
-
-  it("stores default anthropic payload events in SQLite state", async () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-anthropic-payload-"));
-    const env = {
-      OPENCLAW_ANTHROPIC_PAYLOAD_LOG: "1",
-      OPENCLAW_STATE_DIR: stateDir,
-    };
-    try {
-      const logger = createAnthropicPayloadLogger({ env });
-      expect(logger).not.toBeNull();
-
-      const streamFn: StreamFn = ((model, __, options) => {
-        options?.onPayload?.({ messages: [] }, model);
-        return {} as never;
-      }) as StreamFn;
-      await logger?.wrapStreamFn(streamFn)(
-        { api: "anthropic-messages" } as never,
-        { messages: [] } as never,
-        {},
-      );
-
-      const entries = listDiagnosticEvents<Record<string, unknown>>(
-        "diagnostics.anthropic_payload",
-        { env },
-      );
-      expect(entries).toHaveLength(1);
-      expect(entries[0]?.value).toMatchObject({ stage: "request" });
-    } finally {
-      closeOpenClawStateDatabaseForTest();
-      fs.rmSync(stateDir, { recursive: true, force: true });
-    }
   });
 });

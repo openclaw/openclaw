@@ -21,6 +21,7 @@ vi.mock("../../agents/auth-profiles.js", () => ({
   ensureAuthProfileStore: mocks.ensureAuthProfileStore,
   externalCliDiscoveryForProviderAuth: mocks.externalCliDiscoveryForProviderAuth,
   resolveAuthProfileDisplayLabel: mocks.resolveAuthProfileDisplayLabel,
+  resolveAuthStatePathForDisplay: (agentDir: string) => `${agentDir}/auth-state.json`,
 }));
 
 vi.mock("./load-config.js", () => ({
@@ -97,7 +98,7 @@ describe("modelsAuthListCommand", () => {
       {
         agentDir: "/tmp/openclaw/agents/coder",
         agentId: "coder",
-        authStateStore: "sqlite",
+        authStatePath: "/tmp/openclaw/agents/coder/auth-state.json",
         profiles: [
           {
             cooldownUntil: "2027-01-15T08:00:10.000Z",
@@ -113,21 +114,6 @@ describe("modelsAuthListCommand", () => {
       },
     ]);
     expect(JSON.stringify(runtime.jsonPayloads[0])).not.toContain("secret");
-    expect(runtime.jsonPayloads[0]).toMatchObject({
-      agentId: "coder",
-      authStateStore: "sqlite",
-      provider: "openai-codex",
-      profiles: [
-        {
-          id: "openai-codex:user@example.com",
-          provider: "openai-codex",
-          type: "oauth",
-          email: "user@example.com",
-          expiresAt: "2027-01-15T08:00:00.000Z",
-          cooldownUntil: "2027-01-15T08:00:10.000Z",
-        },
-      ],
-    });
   });
 
   it("treats the OpenAI filter as the friendly view over API-key and Codex subscription profiles", async () => {
@@ -167,7 +153,7 @@ describe("modelsAuthListCommand", () => {
       {
         agentDir: "/tmp/openclaw/agents/main",
         agentId: "main",
-        authStateStore: "sqlite",
+        authStatePath: "/tmp/openclaw/agents/main/auth-state.json",
         profiles: [
           {
             id: "openai:api-key-backup",
@@ -196,6 +182,10 @@ describe("modelsAuthListCommand", () => {
 
     await modelsAuthListCommand({}, runtime);
 
-    expect(runtime.logs).toEqual(["Agent: main", "Auth runtime state: SQLite", "Profiles: (none)"]);
+    expect(runtime.logs).toEqual([
+      "Agent: main",
+      "Auth state file: /tmp/openclaw/agents/main/auth-state.json",
+      "Profiles: (none)",
+    ]);
   });
 });

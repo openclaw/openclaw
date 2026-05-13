@@ -51,13 +51,13 @@ export function resolveMatrixLegacyFlatStoreRoot(stateDir: string): string {
 
 export function resolveMatrixLegacyFlatStoragePaths(stateDir: string): {
   rootDir: string;
-  syncStorePath: string;
+  storagePath: string;
   cryptoPath: string;
 } {
   const rootDir = resolveMatrixLegacyFlatStoreRoot(stateDir);
   return {
     rootDir,
-    syncStorePath: path.join(rootDir, "bot-storage.json"),
+    storagePath: path.join(rootDir, "bot-storage.json"),
     cryptoPath: path.join(rootDir, "crypto"),
   };
 }

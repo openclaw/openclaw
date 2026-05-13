@@ -75,27 +75,24 @@ delivery are OpenClaw-owned layers on top of that core.
 
 ## Sessions
 
-Session rows and transcript events are stored in SQLite at:
+Session transcripts are stored as JSONL at:
 
-- `~/.openclaw/state/openclaw.sqlite`
-- `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
+- `~/.openclaw/agents/<agentId>/sessions/<SessionId>.jsonl`
 
 The session ID is stable and chosen by OpenClaw.
-Legacy session folders and JSONL files are only imported by doctor.
+Legacy session folders from other tools are not read.
 
 ## Steering while streaming
 
-When queue mode is `steer`, inbound messages are injected into the current run.
-Queued steering is delivered **after the current assistant turn finishes
-executing its tool calls**, before the next LLM call. Pi drains all pending
-steering messages together for `steer`; legacy `queue` drains one message per
-model boundary. Steering no longer skips remaining tool calls from the current
-assistant message.
+Inbound prompts that arrive mid-run are steered into the current run by default.
+Steering is delivered **after the current assistant turn finishes executing its
+tool calls**, before the next LLM call, and no longer skips remaining tool calls
+from the current assistant message.
 
-When queue mode is `followup` or `collect`, inbound messages are held until the
-current turn ends, then a new agent turn starts with the queued payloads. See
-[Queue](/concepts/queue) and [Steering queue](/concepts/queue-steering) for mode
-and boundary behavior.
+`/queue steer` is the default active-run behavior. `/queue followup` and
+`/queue collect` make messages wait for a later turn instead of steering.
+`/queue interrupt` aborts the active run instead. See [Queue](/concepts/queue)
+and [Steering queue](/concepts/queue-steering) for queue and boundary behavior.
 
 Block streaming sends completed assistant blocks as soon as they finish; it is
 **off by default** (`agents.defaults.blockStreamingDefault: "off"`).

@@ -151,7 +151,7 @@ export function registerCronSimpleCommands(cron: Command) {
   addGatewayClientOptions(
     cron
       .command("runs")
-      .description("Show cron run history")
+      .description("Show cron run history (JSONL-backed)")
       .requiredOption("--id <id>", "Job id")
       .option("--limit <n>", "Max entries (default 50)", "50")
       .action(async (opts) => {

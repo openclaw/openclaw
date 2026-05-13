@@ -2,9 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { saveAuthProfileStore, type AuthProfileStore } from "./auth-profiles.js";
+import type { AuthProfileStore } from "./auth-profiles.js";
 import { resolvePiCredentialMapFromStore } from "./pi-auth-credentials.js";
-import { addEnvBackedPiCredentials } from "./pi-auth-discovery-core.js";
+import {
+  addEnvBackedPiCredentials,
+  scrubLegacyStaticAuthJsonEntriesForDiscovery,
+} from "./pi-auth-discovery-core.js";
 import { discoverAuthStorage } from "./pi-model-discovery.js";
 
 vi.mock("./model-auth-env-vars.js", () => ({
@@ -62,8 +65,15 @@ async function writeLegacyAuthJson(
   await fs.writeFile(path.join(agentDir, "auth.json"), JSON.stringify(authEntries, null, 2));
 }
 
-function saveAuthProfiles(agentDir: string, store: AuthProfileStore): void {
-  saveAuthProfileStore(store, agentDir);
+async function writeAuthProfilesJson(agentDir: string, store: AuthProfileStore): Promise<void> {
+  await fs.writeFile(path.join(agentDir, "auth-profiles.json"), JSON.stringify(store, null, 2));
+}
+
+async function readLegacyAuthJson(agentDir: string): Promise<Record<string, unknown>> {
+  return JSON.parse(await fs.readFile(path.join(agentDir, "auth.json"), "utf8")) as Record<
+    string,
+    unknown
+  >;
 }
 
 describe("discoverAuthStorage", () => {
@@ -163,7 +173,7 @@ describe("discoverAuthStorage", () => {
 
   it("marks keyRef-only auth profiles configured for read-only model discovery", async () => {
     await withAgentDir(async (agentDir) => {
-      saveAuthProfiles(agentDir, {
+      await writeAuthProfilesJson(agentDir, {
         version: 1,
         profiles: {
           "fixture-ref-provider:default": {
@@ -189,9 +199,8 @@ describe("discoverAuthStorage", () => {
     });
   });
 
-  it("does not touch retired auth.json during discovery", async () => {
+  it("scrubs static api_key entries from legacy auth.json and keeps oauth entries", async () => {
     await withAgentDir(async (agentDir) => {
-      const authPath = path.join(agentDir, "auth.json");
       await writeLegacyAuthJson(agentDir, {
         openrouter: { type: "api_key", key: "legacy-static-key" },
         "openai-codex": {
@@ -201,12 +210,39 @@ describe("discoverAuthStorage", () => {
           expires: Date.now() + 60_000,
         },
       });
-      const before = await fs.readFile(authPath, "utf8");
 
-      const storage = discoverAuthStorage(agentDir, { skipCredentials: true });
+      scrubLegacyStaticAuthJsonEntriesForDiscovery(path.join(agentDir, "auth.json"));
 
-      expect(storage).toBeTruthy();
-      await expect(fs.readFile(authPath, "utf8")).resolves.toBe(before);
+      const parsed = await readLegacyAuthJson(agentDir);
+      expect(parsed.openrouter).toBeUndefined();
+      const codexEntry = parsed["openai-codex"] as { type?: string; access?: string } | undefined;
+      expect(codexEntry?.type).toBe("oauth");
+      expect(codexEntry?.access).toBe("oauth-access");
+    });
+  });
+
+  it("preserves legacy auth.json when auth store is forced read-only", async () => {
+    await withAgentDir(async (agentDir) => {
+      const previous = process.env.OPENCLAW_AUTH_STORE_READONLY;
+      process.env.OPENCLAW_AUTH_STORE_READONLY = "1";
+      try {
+        await writeLegacyAuthJson(agentDir, {
+          openrouter: { type: "api_key", key: "legacy-static-key" },
+        });
+
+        scrubLegacyStaticAuthJsonEntriesForDiscovery(path.join(agentDir, "auth.json"));
+
+        const parsed = await readLegacyAuthJson(agentDir);
+        const openrouterEntry = parsed.openrouter as { type?: string; key?: string } | undefined;
+        expect(openrouterEntry?.type).toBe("api_key");
+        expect(openrouterEntry?.key).toBe("legacy-static-key");
+      } finally {
+        if (previous === undefined) {
+          delete process.env.OPENCLAW_AUTH_STORE_READONLY;
+        } else {
+          process.env.OPENCLAW_AUTH_STORE_READONLY = previous;
+        }
+      }
     });
   });
 

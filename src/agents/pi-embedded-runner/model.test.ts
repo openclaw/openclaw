@@ -743,7 +743,7 @@ describe("resolveModel", () => {
     });
   });
 
-  it("drops marker headers from discovered model catalog entries", () => {
+  it("drops marker headers from discovered models.json entries", () => {
     mockDiscoveredModel(discoverModels, {
       provider: "custom",
       modelId: "listed-model",

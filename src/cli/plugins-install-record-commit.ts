@@ -1,12 +1,20 @@
 import { isDeepStrictEqual } from "node:util";
-import { replaceConfigFile } from "../config/config.js";
+import {
+  replaceConfigFile,
+  resolveConfigWriteAfterWrite,
+  transformConfigFileWithRetry,
+  type ConfigMutationCommit,
+  type ConfigMutationResult,
+  type ConfigMutationContext,
+  type ConfigTransformResult,
+  type TransformConfigFileWithRetryParams,
+} from "../config/config.js";
 import type { ConfigWriteOptions } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
   loadInstalledPluginIndexInstallRecords,
   PLUGIN_INSTALLS_CONFIG_PATH,
-  readPendingPluginInstallRecords,
   withoutPluginInstallRecords,
   writePersistedInstalledPluginIndexInstallRecords,
 } from "../plugins/installed-plugin-index-records.js";
@@ -21,6 +29,19 @@ function mergeUnsetPaths(
 
 type ConfigCommit = (config: OpenClawConfig, writeOptions?: ConfigWriteOptions) => Promise<void>;
 const PLUGIN_SOURCE_CHANGED_RESTART_REASON = "plugin source changed";
+
+function mergeAfterWrite(
+  writeOptions: ConfigWriteOptions | undefined,
+  afterWrite: ConfigWriteOptions["afterWrite"],
+): ConfigWriteOptions | undefined {
+  if (afterWrite === undefined) {
+    return writeOptions;
+  }
+  return {
+    ...writeOptions,
+    afterWrite,
+  };
+}
 
 async function commitPluginInstallRecordsWithWriter(params: {
   previousInstallRecords?: Record<string, PluginInstallRecord>;
@@ -87,7 +108,7 @@ export async function commitConfigWriteWithPendingPluginInstalls(params: {
   installRecords: Record<string, PluginInstallRecord>;
   movedInstallRecords: boolean;
 }> {
-  const pendingInstallRecords = readPendingPluginInstallRecords(params.nextConfig);
+  const pendingInstallRecords = params.nextConfig.plugins?.installs ?? {};
   if (Object.keys(pendingInstallRecords).length === 0) {
     if (params.writeOptions) {
       await params.commit(params.nextConfig, params.writeOptions);
@@ -139,6 +160,56 @@ export async function commitConfigWithPendingPluginInstalls(params: {
         ...(params.baseHash !== undefined ? { baseHash: params.baseHash } : {}),
         ...(writeOptions ? { writeOptions } : {}),
       });
+    },
+  });
+}
+
+export async function transformConfigWithPendingPluginInstalls<T = void>(
+  params: Omit<TransformConfigFileWithRetryParams<T>, "commit">,
+): Promise<ConfigMutationResult<T>> {
+  const commit: ConfigMutationCommit = async ({ nextConfig, snapshot, baseHash, writeOptions }) => {
+    const requestedAfterWrite = params.afterWrite ?? params.writeOptions?.afterWrite;
+    const committed = await commitConfigWriteWithPendingPluginInstalls({
+      nextConfig,
+      ...(writeOptions ? { writeOptions: mergeAfterWrite(writeOptions, params.afterWrite) } : {}),
+      commit: async (config, commitWriteOptions) => {
+        await replaceConfigFile({
+          nextConfig: config,
+          snapshot,
+          writeOptions: commitWriteOptions ?? {},
+          ...(baseHash !== undefined ? { baseHash } : {}),
+        });
+      },
+    });
+    const afterWrite = resolveConfigWriteAfterWrite(
+      requestedAfterWrite ??
+        (committed.movedInstallRecords
+          ? { mode: "restart", reason: PLUGIN_SOURCE_CHANGED_RESTART_REASON }
+          : undefined),
+    );
+    return {
+      config: committed.config,
+      afterWrite,
+    };
+  };
+
+  return await transformConfigFileWithRetry<T>({
+    ...params,
+    commit,
+  });
+}
+
+export async function mutateConfigWithPendingPluginInstalls<T = void>(
+  params: Omit<TransformConfigFileWithRetryParams<T>, "commit" | "transform"> & {
+    mutate: (draft: OpenClawConfig, context: ConfigMutationContext) => Promise<T | void> | T | void;
+  },
+): Promise<ConfigMutationResult<T>> {
+  return await transformConfigWithPendingPluginInstalls<T>({
+    ...params,
+    transform: async (currentConfig, context): Promise<ConfigTransformResult<T>> => {
+      const draft = structuredClone(currentConfig);
+      const result = (await params.mutate(draft, context)) as T | undefined;
+      return { nextConfig: draft, result };
     },
   });
 }

@@ -522,6 +522,7 @@ export async function dispatchCronDelivery(
         method: "sessions.delete",
         params: {
           key: params.agentSessionKey,
+          deleteTranscript: true,
           emitLifecycleHooks: false,
         },
         timeoutMs: 10_000,

@@ -1,4 +1,4 @@
-import type { AgentToolResult } from "../../agents/agent-core-contract.js";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
   readNumberParam,
@@ -129,7 +129,7 @@ export type MessageActionRunResult =
       to: string;
       handledBy: "plugin" | "core";
       payload: unknown;
-      toolResult?: AgentToolResult;
+      toolResult?: AgentToolResult<unknown>;
       sendResult?: MessageSendResult;
       dryRun: boolean;
     }
@@ -156,7 +156,7 @@ export type MessageActionRunResult =
       to: string;
       handledBy: "plugin" | "core";
       payload: unknown;
-      toolResult?: AgentToolResult;
+      toolResult?: AgentToolResult<unknown>;
       pollResult?: MessagePollResult;
       dryRun: boolean;
     }
@@ -166,11 +166,13 @@ export type MessageActionRunResult =
       action: Exclude<ChannelMessageActionName, "send" | "poll">;
       handledBy: "plugin" | "dry-run";
       payload: unknown;
-      toolResult?: AgentToolResult;
+      toolResult?: AgentToolResult<unknown>;
       dryRun: boolean;
     };
 
-export function getToolResult(result: MessageActionRunResult): AgentToolResult | undefined {
+export function getToolResult(
+  result: MessageActionRunResult,
+): AgentToolResult<unknown> | undefined {
   return "toolResult" in result ? result.toolResult : undefined;
 }
 

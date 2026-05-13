@@ -57,7 +57,7 @@ describe("concept vocabulary", () => {
 
   it("drops chat scaffolding stop words from derived concept tags", () => {
     const tags = deriveConceptTags({
-      path: "memory/session-ingestion/2026-04-16.txt",
+      path: "memory/.dreams/session-corpus/2026-04-16.txt",
       snippet:
         "Assistant: the system should remind you about the Ollama provider setup in your workspace.",
     });

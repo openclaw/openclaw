@@ -243,6 +243,7 @@ export async function reviewTranscriptForProposal(params: {
     messages: params.messages,
   });
   const sessionId = `skill-workshop-review-${randomUUID()}`;
+  const stateDir = params.api.runtime.state.resolveStateDir();
   const fallbackModel = resolveReviewerFallbackModel({
     api: params.api,
     agentId: params.ctx.agentId,
@@ -253,6 +254,7 @@ export async function reviewTranscriptForProposal(params: {
     agentId: params.ctx.agentId,
     messageProvider: params.ctx.messageProvider,
     messageChannel: params.ctx.channelId,
+    sessionFile: path.join(stateDir, "skill-workshop", `${sessionId}.json`),
     workspaceDir: params.ctx.workspaceDir,
     agentDir: params.api.runtime.agent.resolveAgentDir(params.api.config, params.ctx.agentId),
     config: params.api.config,

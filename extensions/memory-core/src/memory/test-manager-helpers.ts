@@ -30,7 +30,7 @@ export async function getRequiredMemoryIndexManager(params: {
     purpose: params.purpose,
   });
   if (!result.manager) {
-    throw new Error(result.error ? `manager missing: ${result.error}` : "manager missing");
+    throw new Error("manager missing");
   }
   if (!("sync" in result.manager) || typeof result.manager.sync !== "function") {
     throw new Error("manager does not support sync");

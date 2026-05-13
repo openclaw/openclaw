@@ -1,6 +1,8 @@
-import { loadSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
-import { loadCronStoreSync, resolveCronStoreKey } from "../cron/store.js";
+import fs from "node:fs";
+import path from "node:path";
+import { resolveStateDir } from "../config/paths.js";
 
+const SESSION_TAIL_BYTES = 64 * 1024;
 const MAX_QUOTED_FIELD_CHARS = 140;
 
 type CronSessionContext = {
@@ -41,6 +43,45 @@ export function parseCronRunSessionKey(sessionKey?: string): {
   };
 }
 
+function resolveSessionFile(params: {
+  agentId?: string;
+  cronRunId?: string;
+  activeSessionId?: string;
+}): string | undefined {
+  const agentId = params.agentId?.trim();
+  const runId = params.activeSessionId?.trim() || params.cronRunId?.trim();
+  if (!agentId || !runId) {
+    return undefined;
+  }
+  return path.join(resolveStateDir(), "agents", agentId, "sessions", `${runId}.jsonl`);
+}
+
+function readTailText(filePath: string): { text: string; truncated: boolean } | undefined {
+  let fd: number | undefined;
+  try {
+    const stat = fs.statSync(filePath);
+    if (!stat.isFile() || stat.size <= 0) {
+      return undefined;
+    }
+    const length = Math.min(stat.size, SESSION_TAIL_BYTES);
+    const start = Math.max(0, stat.size - length);
+    const buffer = Buffer.alloc(length);
+    fd = fs.openSync(filePath, "r");
+    const read = fs.readSync(fd, buffer, 0, length, start);
+    return { text: buffer.subarray(0, read).toString("utf8"), truncated: start > 0 };
+  } catch {
+    return undefined;
+  } finally {
+    if (fd !== undefined) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        // best-effort diagnostic context only
+      }
+    }
+  }
+}
+
 function textFromContent(content: unknown): string | undefined {
   if (typeof content === "string") {
     return content;
@@ -60,36 +101,33 @@ function textFromContent(content: unknown): string | undefined {
   return texts.length ? texts.join(" ") : undefined;
 }
 
-function readAssistantTextFromTranscriptEvent(event: unknown): string | undefined {
-  if (!event || typeof event !== "object" || Array.isArray(event)) {
+export function readLastAssistantFromSessionFile(filePath: string | undefined): string | undefined {
+  if (!filePath) {
     return undefined;
   }
-  const message = (event as { message?: { role?: unknown; content?: unknown } }).message;
-  if (message?.role !== "assistant") {
+  const tail = readTailText(filePath);
+  if (!tail?.text) {
     return undefined;
   }
-  return textFromContent(message.content)?.trim();
-}
-
-export function readLastAssistantFromSqliteTranscript(params: {
-  agentId?: string;
-  sessionId?: string;
-}): string | undefined {
-  const agentId = params.agentId?.trim();
-  const sessionId = params.sessionId?.trim();
-  if (!agentId || !sessionId) {
-    return undefined;
+  const lines = tail.text.split(/\r?\n/).filter(Boolean);
+  if (tail.truncated && lines.length > 0) {
+    lines.shift();
   }
-  try {
-    const events = loadSqliteSessionTranscriptEvents({ agentId, sessionId });
-    for (let index = events.length - 1; index >= 0; index -= 1) {
-      const text = readAssistantTextFromTranscriptEvent(events[index].event);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    try {
+      const parsed = JSON.parse(lines[index]) as {
+        message?: { role?: unknown; content?: unknown };
+      };
+      if (parsed.message?.role !== "assistant") {
+        continue;
+      }
+      const text = textFromContent(parsed.message.content)?.trim();
       if (text) {
         return text;
       }
+    } catch {
+      // Ignore partial or non-JSON diagnostic transcript lines.
     }
-  } catch {
-    // Diagnostic context is best-effort and must never block recovery logging.
   }
   return undefined;
 }
@@ -99,8 +137,9 @@ function readCronJobName(cronJobId: string | undefined): string | undefined {
     return undefined;
   }
   try {
-    const store = loadCronStoreSync(resolveCronStoreKey());
-    const job = store.jobs.find((entry) => entry.id === cronJobId);
+    const raw = fs.readFileSync(path.join(resolveStateDir(), "cron", "jobs.json"), "utf8");
+    const parsed = JSON.parse(raw) as { jobs?: Array<{ id?: unknown; name?: unknown }> };
+    const job = parsed.jobs?.find((entry) => entry.id === cronJobId);
     return typeof job?.name === "string" && job.name.trim() ? job.name.trim() : undefined;
   } catch {
     return undefined;
@@ -118,10 +157,9 @@ export function resolveCronSessionDiagnosticContext(params: {
   return {
     ...parsed,
     cronJobName: readCronJobName(parsed.cronJobId),
-    lastAssistant: readLastAssistantFromSqliteTranscript({
-      agentId: parsed.agentId,
-      sessionId: params.activeSessionId?.trim() || parsed.cronRunId,
-    }),
+    lastAssistant: readLastAssistantFromSessionFile(
+      resolveSessionFile({ ...parsed, activeSessionId: params.activeSessionId }),
+    ),
   };
 }
 

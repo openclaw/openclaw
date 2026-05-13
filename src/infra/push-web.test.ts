@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -13,7 +12,6 @@ import {
   registerWebPushSubscription,
   resolveVapidKeys,
   sendWebPushNotification,
-  writeWebPushRegistrationStateSnapshot,
 } from "./push-web.js";
 
 type WebPushSubscription = NonNullable<Awaited<ReturnType<typeof loadWebPushSubscription>>>;
@@ -44,10 +42,6 @@ function expectLoadedSubscription(
   }
   expect(loaded.endpoint).not.toBe("");
   return loaded;
-}
-
-function hashEndpointForTest(endpoint: string): string {
-  return createHash("sha256").update(endpoint).digest("hex").slice(0, 32);
 }
 
 beforeEach(async () => {
@@ -157,37 +151,6 @@ describe("subscription CRUD", () => {
     });
     const list = await listWebPushSubscriptions(tmpDir);
     expect(list).toHaveLength(2);
-  });
-
-  it("prunes stale subscription snapshot rows while retaining current rows", async () => {
-    const retained = await registerWebPushSubscription({
-      endpoint: "https://push.example.com/retained",
-      keys,
-      baseDir: tmpDir,
-    });
-    await registerWebPushSubscription({
-      endpoint: "https://push.example.com/stale",
-      keys,
-      baseDir: tmpDir,
-    });
-
-    await writeWebPushRegistrationStateSnapshot(
-      {
-        subscriptionsByEndpointHash: {
-          [hashEndpointForTest(retained.endpoint)]: {
-            ...retained,
-            keys: { p256dh: "updated-p256dh", auth: retained.keys.auth },
-          },
-        },
-      },
-      tmpDir,
-    );
-
-    await expect(listWebPushSubscriptions(tmpDir)).resolves.toHaveLength(1);
-    const loaded = expectLoadedSubscription(
-      await loadWebPushSubscription(retained.subscriptionId, tmpDir),
-    );
-    expect(loaded.keys.p256dh).toBe("updated-p256dh");
   });
 
   it("clears a subscription by ID", async () => {

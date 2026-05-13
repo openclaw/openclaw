@@ -210,11 +210,13 @@ describe("talk normalization", () => {
     });
   });
 
-  it("does not treat legacy flat provider fields as a runtime Talk provider", () => {
-    expect(
-      buildTalkConfigResponse({
-        voiceId: "voice-123",
-      }),
-    ).toBeUndefined();
+  it("does not inject provider apiKey defaults during snapshot materialization", () => {
+    const payload = buildTalkConfigResponse({
+      voiceId: "voice-123",
+    });
+
+    expect(payload?.provider).toBe("elevenlabs");
+    expect(payload?.resolved?.config.voiceId).toBe("voice-123");
+    expect(payload?.resolved?.config.apiKey).toBeUndefined();
   });
 });

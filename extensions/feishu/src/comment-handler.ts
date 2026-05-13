@@ -212,6 +212,10 @@ export async function handleFeishuCommentEvent(
     OriginatingTo: commentTarget,
   });
 
+  const storePath = core.channel.session.resolveStorePath(effectiveCfg.session?.store, {
+    agentId: route.agentId,
+  });
+
   const { dispatcher, replyOptions, markDispatchIdle, markRunComplete, cleanupTypingReaction } =
     createFeishuCommentReplyDispatcher({
       cfg: effectiveCfg,
@@ -247,8 +251,8 @@ export async function handleFeishuCommentEvent(
         resolveTurn: () => ({
           channel: "feishu",
           accountId: route.accountId,
-          agentId: route.agentId,
           routeSessionKey: commentSessionKey,
+          storePath,
           ctxPayload,
           recordInboundSession: core.channel.session.recordInboundSession,
           record: {

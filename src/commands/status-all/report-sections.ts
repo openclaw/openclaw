@@ -111,7 +111,7 @@ export function buildStatusAgentsSection(params: {
       bootstrapPending?: boolean | null;
       sessionsCount: number;
       lastActiveAgeMs?: number | null;
-      sessionsDatabasePath: string;
+      sessionsPath: string;
     }>;
   };
   ok: (text: string) => string;

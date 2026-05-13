@@ -2,13 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
-import {
-  openOpenClawStateDatabase,
-  type OpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
   __testing,
@@ -65,22 +59,6 @@ function setMinimalCurrentConversationRegistry(): void {
       },
     ]),
   );
-}
-
-type CurrentConversationBindingsTestDatabase = Pick<
-  OpenClawStateKyselyDatabase,
-  "current_conversation_bindings"
->;
-
-function getCurrentConversationBindingsTestDb(): {
-  database: OpenClawStateDatabase;
-  db: ReturnType<typeof getNodeSqliteKysely<CurrentConversationBindingsTestDatabase>>;
-} {
-  const database = openOpenClawStateDatabase();
-  return {
-    database,
-    db: getNodeSqliteKysely<CurrentConversationBindingsTestDatabase>(database.db),
-  };
 }
 
 describe("generic current-conversation bindings", () => {
@@ -174,21 +152,31 @@ describe("generic current-conversation bindings", () => {
   });
 
   it("normalizes persisted target session keys on reload", async () => {
-    __testing.persistBindingForTests({
-      bindingId: "generic:workspace\u241fdefault\u241f\u241fuser:U123",
-      targetSessionKey: " agent:codex:acp:workspace-dm ",
-      targetKind: "session",
-      conversation: {
-        channel: "workspace",
-        accountId: "default",
-        conversationId: "user:U123",
-      },
-      status: "active",
-      boundAt: 1234,
-      metadata: {
-        label: "workspace-dm",
-      },
-    });
+    const filePath = __testing.resolveBindingsFilePath();
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(
+      filePath,
+      JSON.stringify({
+        version: 1,
+        bindings: [
+          {
+            bindingId: "generic:workspace\u241fdefault\u241f\u241fuser:U123",
+            targetSessionKey: " agent:codex:acp:workspace-dm ",
+            targetKind: "session",
+            conversation: {
+              channel: "workspace",
+              accountId: "default",
+              conversationId: "user:U123",
+            },
+            status: "active",
+            boundAt: 1234,
+            metadata: {
+              label: "workspace-dm",
+            },
+          },
+        ],
+      }),
+    );
 
     const resolved = resolveGenericCurrentConversationBinding({
       channel: "workspace",
@@ -209,78 +197,6 @@ describe("generic current-conversation bindings", () => {
       bindingId: "generic:workspace\u241fdefault\u241f\u241fuser:U123",
       targetSessionKey: "agent:codex:acp:workspace-dm",
     });
-  });
-
-  it("reloads persisted bindings from typed columns, not the debug JSON copy", async () => {
-    await bindGenericCurrentConversation({
-      targetSessionKey: "agent:codex:acp:workspace-dm",
-      targetKind: "session",
-      conversation: {
-        channel: "workspace",
-        accountId: "default",
-        conversationId: "user:U123",
-        conversationKind: "direct",
-      },
-      metadata: {
-        label: "workspace-dm",
-        targetSessionId: "workspace-session",
-      },
-    });
-    const { database, db } = getCurrentConversationBindingsTestDb();
-    const before = executeSqliteQuerySync(
-      database.db,
-      db
-        .selectFrom("current_conversation_bindings")
-        .select([
-          "target_agent_id",
-          "target_session_id",
-          "target_session_key",
-          "conversation_kind",
-          "conversation_id",
-        ]),
-    ).rows;
-    expect(before).toEqual([
-      {
-        target_agent_id: "codex",
-        target_session_id: "workspace-session",
-        target_session_key: "agent:codex:acp:workspace-dm",
-        conversation_kind: "direct",
-        conversation_id: "user:U123",
-      },
-    ]);
-    executeSqliteQuerySync(
-      database.db,
-      db
-        .updateTable("current_conversation_bindings")
-        .set({
-          record_json: JSON.stringify({
-            bindingId: "generic:wrong",
-            targetSessionKey: "agent:wrong",
-            conversation: {
-              channel: "wrong",
-              accountId: "wrong",
-              conversationId: "wrong",
-            },
-            status: "ended",
-            boundAt: 1,
-          }),
-        })
-        .where("binding_key", "=", "workspace\u241fdefault\u241f\u241fuser:U123"),
-    );
-
-    __testing.resetCurrentConversationBindingsForTests();
-
-    const resolved = resolveGenericCurrentConversationBinding({
-      channel: "workspace",
-      accountId: "default",
-      conversationId: "user:U123",
-    });
-    expectBindingFields(resolved, {
-      bindingId: "generic:workspace\u241fdefault\u241f\u241fuser:U123",
-      targetSessionKey: "agent:codex:acp:workspace-dm",
-      status: "active",
-    });
-    expectBindingMetadata(resolved, { label: "workspace-dm" });
   });
 
   it("drops self-parent conversation refs when storing generic current bindings", async () => {
@@ -318,22 +234,32 @@ describe("generic current-conversation bindings", () => {
   });
 
   it("migrates persisted legacy self-parent binding ids on load", async () => {
-    __testing.persistBindingForTests({
-      bindingId: "generic:forum\u241fdefault\u241f6098642967\u241f6098642967",
-      targetSessionKey: "agent:codex:acp:forum-dm",
-      targetKind: "session",
-      conversation: {
-        channel: "forum",
-        accountId: "default",
-        conversationId: "6098642967",
-        parentConversationId: "6098642967",
-      },
-      status: "active",
-      boundAt: 1234,
-      metadata: {
-        label: "forum-dm",
-      },
-    });
+    const filePath = __testing.resolveBindingsFilePath();
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(
+      filePath,
+      JSON.stringify({
+        version: 1,
+        bindings: [
+          {
+            bindingId: "generic:forum\u241fdefault\u241f6098642967\u241f6098642967",
+            targetSessionKey: "agent:codex:acp:forum-dm",
+            targetKind: "session",
+            conversation: {
+              channel: "forum",
+              accountId: "default",
+              conversationId: "6098642967",
+              parentConversationId: "6098642967",
+            },
+            status: "active",
+            boundAt: 1234,
+            metadata: {
+              label: "forum-dm",
+            },
+          },
+        ],
+      }),
+    );
 
     const resolved = resolveGenericCurrentConversationBinding({
       channel: "forum",

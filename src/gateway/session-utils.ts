@@ -46,16 +46,20 @@ import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
   buildGroupDisplayName,
-  getSessionEntry,
+  loadSessionStore,
+  resolveAllAgentSessionStoreTargetsSync,
   resolveAgentMainSessionKey,
   resolveFreshSessionTotalTokens,
+  resolveStorePath,
   type SessionEntry,
+  type SessionStoreTarget,
   type SessionScope,
 } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
 import {
+  DEFAULT_AGENT_ID,
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
@@ -74,15 +78,18 @@ import {
   normalizeOptionalString,
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
-import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
-import { resolveSessionRowAgentId, resolveSessionRowKey } from "./session-row-key.js";
+import {
+  resolveSessionStoreAgentId,
+  resolveSessionStoreKey,
+  resolveStoredSessionKeyForAgentStore,
+} from "./session-store-key.js";
 import {
   readRecentSessionUsageFromTranscript,
   readSessionTitleFieldsFromTranscriptAsync,
   readSessionTitleFieldsFromTranscript,
-} from "./session-transcript-readers.js";
+} from "./session-utils.fs.js";
 import type {
   GatewayAgentRow,
   GatewaySessionRow,
@@ -92,6 +99,8 @@ import type {
 } from "./session-utils.types.js";
 
 export {
+  archiveFileOnDisk,
+  archiveSessionTranscripts,
   attachOpenClawTranscriptMeta,
   capArrayByJsonBytes,
   readFirstUserMessageFromTranscript,
@@ -101,7 +110,7 @@ export {
   readRecentSessionUsageFromTranscriptAsync,
   readRecentSessionMessagesAsync,
   readRecentSessionMessagesWithStatsAsync,
-  readRecentSessionTranscriptEvents,
+  readRecentSessionTranscriptLines,
   readRecentSessionUsageFromTranscript,
   readSessionMessageCountAsync,
   readSessionTitleFieldsFromTranscript,
@@ -109,9 +118,10 @@ export {
   readSessionPreviewItemsFromTranscript,
   readSessionMessagesAsync,
   visitSessionMessagesAsync,
-} from "./session-transcript-readers.js";
-export type { ReadSessionMessagesAsyncOptions } from "./session-transcript-readers.js";
-export { canonicalizeSpawnedByForAgent, resolveSessionRowKey } from "./session-row-key.js";
+  resolveSessionTranscriptCandidates,
+} from "./session-utils.fs.js";
+export type { ReadSessionMessagesAsyncOptions } from "./session-utils.fs.js";
+export { canonicalizeSpawnedByForAgent, resolveSessionStoreKey } from "./session-store-key.js";
 export type {
   GatewayAgentRow,
   GatewaySessionRow,
@@ -608,6 +618,7 @@ function resolveTranscriptUsageFallback(params: {
   cfg: OpenClawConfig;
   key: string;
   entry?: SessionEntry;
+  storePath: string;
   fallbackProvider?: string;
   fallbackModel?: string;
   maxTranscriptBytes?: number;
@@ -628,7 +639,10 @@ function resolveTranscriptUsageFallback(params: {
     ? normalizeAgentId(parsed.agentId)
     : resolveDefaultAgentId(params.cfg);
   const snapshot = readRecentSessionUsageFromTranscript(
-    { agentId, sessionId: entry.sessionId },
+    entry.sessionId,
+    params.storePath,
+    entry.sessionFile,
+    agentId,
     typeof params.maxTranscriptBytes === "number" ? params.maxTranscriptBytes : 256 * 1024,
   );
   if (!snapshot) {
@@ -667,7 +681,7 @@ function resolveTranscriptUsageFallback(params: {
 
 /**
  * Returns the owning agent id if the session key belongs to an agent that is no
- * longer present in config (deleted). Returns null for non-agent or global
+ * longer present in config (deleted). Returns null for non-agent legacy/global
  * keys, or when the owning agent still exists (#65524).
  */
 export function resolveDeletedAgentIdFromSessionKey(
@@ -688,25 +702,156 @@ export function resolveDeletedAgentIdFromSessionKey(
 export function loadSessionEntry(sessionKey: string) {
   const cfg = getRuntimeConfig();
   const key = normalizeOptionalString(sessionKey) ?? "";
-  const target = resolveGatewaySessionDatabaseTarget({
+  const target = resolveGatewaySessionStoreTarget({
     cfg,
     key,
   });
-  const store: Record<string, SessionEntry> = {};
-  const entry = getSessionEntry({
-    agentId: target.agentId,
-    sessionKey: target.canonicalKey,
-  });
-  if (entry) {
-    store[target.canonicalKey] = entry;
-  }
+  const storePath = target.storePath;
+  const store = loadSessionStore(storePath);
+  const freshestMatch = resolveFreshestSessionStoreMatchFromStoreKeys(store, target.storeKeys);
+  const legacyKey = freshestMatch?.key !== target.canonicalKey ? freshestMatch?.key : undefined;
   return {
     cfg,
-    agentId: target.agentId,
+    storePath,
     store,
-    entry,
+    entry: freshestMatch?.entry,
     canonicalKey: target.canonicalKey,
+    legacyKey,
   };
+}
+
+export function resolveFreshestSessionStoreMatchFromStoreKeys(
+  store: Record<string, SessionEntry>,
+  storeKeys: string[],
+): { key: string; entry: SessionEntry } | undefined {
+  let freshest: { key: string; entry: SessionEntry } | undefined;
+  for (const key of storeKeys) {
+    const entry = store[key];
+    if (!entry) {
+      continue;
+    }
+    const match = { key, entry };
+    if (!freshest || (match.entry.updatedAt ?? 0) > (freshest.entry.updatedAt ?? 0)) {
+      freshest = match;
+    }
+  }
+  return freshest;
+}
+
+export function resolveFreshestSessionEntryFromStoreKeys(
+  store: Record<string, SessionEntry>,
+  storeKeys: string[],
+): SessionEntry | undefined {
+  return resolveFreshestSessionStoreMatchFromStoreKeys(store, storeKeys)?.entry;
+}
+
+function findFreshestStoreMatch(
+  store: Record<string, SessionEntry>,
+  ...candidates: string[]
+): { entry: SessionEntry; key: string } | undefined {
+  const matches = new Map<string, { entry: SessionEntry; key: string }>();
+  for (const candidate of candidates) {
+    const trimmed = normalizeOptionalString(candidate) ?? "";
+    if (!trimmed) {
+      continue;
+    }
+    const exact = store[trimmed];
+    if (exact) {
+      matches.set(trimmed, { entry: exact, key: trimmed });
+    }
+    for (const key of findStoreKeysIgnoreCase(store, trimmed)) {
+      const entry = store[key];
+      if (entry) {
+        matches.set(key, { entry, key });
+      }
+    }
+  }
+  if (matches.size === 0) {
+    return undefined;
+  }
+  let freshest: { entry: SessionEntry; key: string } | undefined;
+  for (const match of matches.values()) {
+    if (!freshest || (match.entry.updatedAt ?? 0) > (freshest.entry.updatedAt ?? 0)) {
+      freshest = match;
+    }
+  }
+  return freshest;
+}
+
+/**
+ * Find all on-disk store keys that match the given key case-insensitively.
+ * Returns every key from the store whose lowercased form equals the target's lowercased form.
+ */
+export function findStoreKeysIgnoreCase(
+  store: Record<string, unknown>,
+  targetKey: string,
+): string[] {
+  const lowered = normalizeLowercaseStringOrEmpty(targetKey);
+  const matches: string[] = [];
+  for (const key of Object.keys(store)) {
+    if (normalizeLowercaseStringOrEmpty(key) === lowered) {
+      matches.push(key);
+    }
+  }
+  return matches;
+}
+
+/**
+ * Remove legacy key variants for one canonical session key.
+ * Candidates can include aliases (for example, "agent:ops:main" when canonical is "agent:ops:work").
+ */
+export function pruneLegacyStoreKeys(params: {
+  store: Record<string, unknown>;
+  canonicalKey: string;
+  candidates: Iterable<string>;
+}) {
+  const keysToDelete = new Set<string>();
+  for (const candidate of params.candidates) {
+    const trimmed = normalizeOptionalString(candidate ?? "") ?? "";
+    if (!trimmed) {
+      continue;
+    }
+    if (trimmed !== params.canonicalKey) {
+      keysToDelete.add(trimmed);
+    }
+    for (const match of findStoreKeysIgnoreCase(params.store, trimmed)) {
+      if (match !== params.canonicalKey) {
+        keysToDelete.add(match);
+      }
+    }
+  }
+  for (const key of keysToDelete) {
+    delete params.store[key];
+  }
+}
+
+export function migrateAndPruneGatewaySessionStoreKey(params: {
+  cfg: OpenClawConfig;
+  key: string;
+  store: Record<string, SessionEntry>;
+}) {
+  const target = resolveGatewaySessionStoreTarget({
+    cfg: params.cfg,
+    key: params.key,
+    store: params.store,
+  });
+  const primaryKey = target.canonicalKey;
+  const freshestMatch = resolveFreshestSessionStoreMatchFromStoreKeys(
+    params.store,
+    target.storeKeys,
+  );
+  if (freshestMatch) {
+    const currentPrimary = params.store[primaryKey];
+    if (!currentPrimary || (freshestMatch.entry.updatedAt ?? 0) > (currentPrimary.updatedAt ?? 0)) {
+      params.store[primaryKey] = freshestMatch.entry;
+    }
+  }
+  pruneLegacyStoreKeys({
+    store: params.store,
+    canonicalKey: primaryKey,
+    candidates: target.storeKeys,
+  });
+  return { target, primaryKey, entry: params.store[primaryKey] };
 }
 
 export function classifySessionKey(key: string, entry?: SessionEntry): GatewaySessionRow["kind"] {
@@ -717,6 +862,9 @@ export function classifySessionKey(key: string, entry?: SessionEntry): GatewaySe
     return "unknown";
   }
   if (entry?.chatType === "group" || entry?.chatType === "channel") {
+    return "group";
+  }
+  if (key.includes(":group:") || key.includes(":channel:")) {
     return "group";
   }
   return "direct";
@@ -736,6 +884,10 @@ export function parseGroupKey(
     }
   }
   return null;
+}
+
+function isStorePathTemplate(store?: string): boolean {
+  return typeof store === "string" && store.includes("{agentId}");
 }
 
 function listExistingAgentIdsFromDisk(): string[] {
@@ -880,25 +1032,246 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
   return { defaultId, mainKey, scope, agents };
 }
 
-export function resolveGatewaySessionDatabaseTarget(params: { cfg: OpenClawConfig; key: string }): {
-  agentId: string;
-  databasePath: string;
+function buildGatewaySessionStoreScanTargets(params: {
+  cfg: OpenClawConfig;
+  key: string;
   canonicalKey: string;
-} {
-  const key = normalizeOptionalString(params.key) ?? "";
-  const canonicalKey = resolveSessionRowKey({
-    cfg: params.cfg,
-    sessionKey: key,
-  });
-  const agentId = resolveSessionRowAgentId(params.cfg, canonicalKey);
-  return {
+  agentId: string;
+}): string[] {
+  const targets = new Set<string>();
+  if (params.canonicalKey) {
+    targets.add(params.canonicalKey);
+  }
+  if (params.key && params.key !== params.canonicalKey) {
+    targets.add(params.key);
+  }
+  if (params.canonicalKey === "global" || params.canonicalKey === "unknown") {
+    return [...targets];
+  }
+  const agentMainKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId });
+  if (params.canonicalKey === agentMainKey) {
+    targets.add(`agent:${params.agentId}:main`);
+  }
+  return [...targets];
+}
+
+function resolveGatewaySessionStoreCandidates(
+  cfg: OpenClawConfig,
+  agentId: string,
+): SessionStoreTarget[] {
+  const storeConfig = cfg.session?.store;
+  const defaultTarget = {
     agentId,
-    databasePath: resolveOpenClawAgentSqlitePath({ agentId }),
-    canonicalKey,
+    storePath: resolveStorePath(storeConfig, { agentId }),
+  };
+  if (!isStorePathTemplate(storeConfig)) {
+    return [defaultTarget];
+  }
+  const targets = new Map<string, SessionStoreTarget>();
+  targets.set(defaultTarget.storePath, defaultTarget);
+  for (const target of resolveAllAgentSessionStoreTargetsSync(cfg)) {
+    if (target.agentId === agentId) {
+      targets.set(target.storePath, target);
+    }
+  }
+  return [...targets.values()];
+}
+
+function resolveGatewaySessionStoreLookup(params: {
+  cfg: OpenClawConfig;
+  key: string;
+  canonicalKey: string;
+  agentId: string;
+  initialStore?: Record<string, SessionEntry>;
+}): {
+  storePath: string;
+  store: Record<string, SessionEntry>;
+  match: { entry: SessionEntry; key: string } | undefined;
+} {
+  const scanTargets = buildGatewaySessionStoreScanTargets(params);
+  const candidates = resolveGatewaySessionStoreCandidates(params.cfg, params.agentId);
+  const fallback = candidates[0] ?? {
+    agentId: params.agentId,
+    storePath: resolveStorePath(params.cfg.session?.store, { agentId: params.agentId }),
+  };
+  let selectedStorePath = fallback.storePath;
+  let selectedStore = params.initialStore ?? loadSessionStore(fallback.storePath);
+  let selectedMatch = findFreshestStoreMatch(selectedStore, ...scanTargets);
+  let selectedUpdatedAt = selectedMatch?.entry.updatedAt ?? Number.NEGATIVE_INFINITY;
+
+  for (let index = 1; index < candidates.length; index += 1) {
+    const candidate = candidates[index];
+    if (!candidate) {
+      continue;
+    }
+    const store = loadSessionStore(candidate.storePath);
+    const match = findFreshestStoreMatch(store, ...scanTargets);
+    if (!match) {
+      continue;
+    }
+    const updatedAt = match.entry.updatedAt ?? 0;
+    // Mirror combined-store merge behavior so follow-up mutations target the
+    // same backing store that won the listing merge when ids collide.
+    if (!selectedMatch || updatedAt >= selectedUpdatedAt) {
+      selectedStorePath = candidate.storePath;
+      selectedStore = store;
+      selectedMatch = match;
+      selectedUpdatedAt = updatedAt;
+    }
+  }
+
+  return {
+    storePath: selectedStorePath,
+    store: selectedStore,
+    match: selectedMatch,
   };
 }
 
-export { loadCombinedSessionEntriesForGateway } from "../config/sessions/combined-session-entries-gateway.js";
+function resolveExplicitDeletedLegacyMainStoreTarget(params: {
+  cfg: OpenClawConfig;
+  key: string;
+  scanLegacyKeys?: boolean;
+}): {
+  agentId: string;
+  storePath: string;
+  canonicalKey: string;
+  storeKeys: string[];
+} | null {
+  const parsed = parseAgentSessionKey(params.key);
+  const legacyAgentId = normalizeAgentId(parsed?.agentId);
+  if (
+    !parsed ||
+    legacyAgentId !== DEFAULT_AGENT_ID ||
+    listAgentIds(params.cfg).includes(legacyAgentId)
+  ) {
+    return null;
+  }
+
+  // Only preserve agent:main:* when it is backed by a discovered deleted-main store.
+  // Shared-store legacy aliases should continue remapping to the configured default agent.
+  const canonicalKey = resolveStoredSessionKeyForAgentStore({
+    cfg: params.cfg,
+    agentId: legacyAgentId,
+    sessionKey: params.key,
+  });
+  const agentMainKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId: legacyAgentId });
+  const legacyAgentMainKey = `agent:${legacyAgentId}:main`;
+  const lookupSeeds = Array.from(
+    new Set([params.key, canonicalKey, agentMainKey, legacyAgentMainKey]),
+  );
+  let best:
+    | {
+        storePath: string;
+        store: Record<string, SessionEntry>;
+        match: { entry: SessionEntry; key: string };
+      }
+    | undefined;
+  for (const target of resolveAllAgentSessionStoreTargetsSync(params.cfg)) {
+    if (target.agentId !== legacyAgentId) {
+      continue;
+    }
+    const store = loadSessionStore(target.storePath);
+    const match = findFreshestStoreMatch(store, ...lookupSeeds);
+    if (!match) {
+      continue;
+    }
+    if (!best || (match.entry.updatedAt ?? 0) >= (best.match.entry.updatedAt ?? 0)) {
+      best = { storePath: target.storePath, store, match };
+    }
+  }
+  if (!best) {
+    return null;
+  }
+
+  const storeKeys = new Set<string>([canonicalKey]);
+  if (params.key !== canonicalKey) {
+    storeKeys.add(params.key);
+  }
+  storeKeys.add(best.match.key);
+  if (params.scanLegacyKeys !== false) {
+    for (const seed of lookupSeeds) {
+      storeKeys.add(seed);
+      for (const legacyKey of findStoreKeysIgnoreCase(best.store, seed)) {
+        storeKeys.add(legacyKey);
+      }
+    }
+  }
+  return {
+    agentId: legacyAgentId,
+    storePath: best.storePath,
+    canonicalKey,
+    storeKeys: Array.from(storeKeys),
+  };
+}
+
+export function resolveGatewaySessionStoreTarget(params: {
+  cfg: OpenClawConfig;
+  key: string;
+  scanLegacyKeys?: boolean;
+  store?: Record<string, SessionEntry>;
+}): {
+  agentId: string;
+  storePath: string;
+  canonicalKey: string;
+  storeKeys: string[];
+} {
+  const key = normalizeOptionalString(params.key) ?? "";
+  const explicitDeletedMainTarget = resolveExplicitDeletedLegacyMainStoreTarget({
+    cfg: params.cfg,
+    key,
+    scanLegacyKeys: params.scanLegacyKeys,
+  });
+  if (explicitDeletedMainTarget) {
+    return explicitDeletedMainTarget;
+  }
+
+  const canonicalKey = resolveSessionStoreKey({
+    cfg: params.cfg,
+    sessionKey: key,
+  });
+  const agentId = resolveSessionStoreAgentId(params.cfg, canonicalKey);
+  const { storePath, store } = resolveGatewaySessionStoreLookup({
+    cfg: params.cfg,
+    key,
+    canonicalKey,
+    agentId,
+    initialStore: params.store,
+  });
+
+  if (canonicalKey === "global" || canonicalKey === "unknown") {
+    const storeKeys = key && key !== canonicalKey ? [canonicalKey, key] : [key];
+    return { agentId, storePath, canonicalKey, storeKeys };
+  }
+
+  const storeKeys = new Set<string>();
+  storeKeys.add(canonicalKey);
+  if (key && key !== canonicalKey) {
+    storeKeys.add(key);
+  }
+  if (params.scanLegacyKeys !== false) {
+    // Scan the on-disk store for case variants of every target to find
+    // legacy mixed-case entries (e.g. "agent:ops:MAIN" when canonical is "agent:ops:work").
+    const scanTargets = buildGatewaySessionStoreScanTargets({
+      cfg: params.cfg,
+      key,
+      canonicalKey,
+      agentId,
+    });
+    for (const seed of scanTargets) {
+      for (const legacyKey of findStoreKeysIgnoreCase(store, seed)) {
+        storeKeys.add(legacyKey);
+      }
+    }
+  }
+  return {
+    agentId,
+    storePath,
+    canonicalKey,
+    storeKeys: Array.from(storeKeys),
+  };
+}
+
+export { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
 
 export function resolveGatewaySessionThinkingDefault(params: {
   cfg: OpenClawConfig;
@@ -1175,6 +1548,7 @@ export function resolveSessionDisplayModelIdentityRef(params: {
 
 export function buildGatewaySessionRow(params: {
   cfg: OpenClawConfig;
+  storePath: string;
   store: Record<string, SessionEntry>;
   key: string;
   entry?: SessionEntry;
@@ -1188,7 +1562,7 @@ export function buildGatewaySessionRow(params: {
   skipTranscriptUsageFallback?: boolean;
   lightweightListRow?: boolean;
 }): GatewaySessionRow {
-  const { cfg, store, key, entry } = params;
+  const { cfg, storePath, store, key, entry } = params;
   const lightweight = params.lightweightListRow === true;
   const skipTranscriptUsage = params.skipTranscriptUsageFallback === true;
   const now = params.now ?? Date.now();
@@ -1199,6 +1573,8 @@ export function buildGatewaySessionRow(params: {
   const groupChannel = entry?.groupChannel;
   const space = entry?.space;
   const id = parsed?.id;
+  const origin = entry?.origin;
+  const originLabel = origin?.label;
   const displayName =
     entry?.displayName ??
     (channel
@@ -1211,10 +1587,9 @@ export function buildGatewaySessionRow(params: {
           key,
         })
       : undefined) ??
-    entry?.label;
-  const deliveryFields = normalizeSessionDeliveryFields({
-    deliveryContext: entry?.deliveryContext,
-  });
+    entry?.label ??
+    originLabel;
+  const deliveryFields = normalizeSessionDeliveryFields(entry);
   const parsedAgent = parseAgentSessionKey(key);
   const sessionAgentId = normalizeAgentId(parsedAgent?.agentId ?? resolveDefaultAgentId(cfg));
   const rowContext = params.rowContext;
@@ -1303,6 +1678,7 @@ export function buildGatewaySessionRow(params: {
           cfg,
           key,
           entry,
+          storePath,
           fallbackProvider: resolvedModel.provider,
           fallbackModel: resolvedModel.model ?? DEFAULT_MODEL,
           maxTranscriptBytes: params.transcriptUsageMaxBytes,
@@ -1384,10 +1760,12 @@ export function buildGatewaySessionRow(params: {
   let derivedTitle: string | undefined;
   let lastMessagePreview: string | undefined;
   if (entry?.sessionId && (params.includeDerivedTitles || params.includeLastMessage)) {
-    const fields = readSessionTitleFieldsFromTranscript({
-      agentId: sessionAgentId,
-      sessionId: entry.sessionId,
-    });
+    const fields = readSessionTitleFieldsFromTranscript(
+      entry.sessionId,
+      storePath,
+      entry.sessionFile,
+      sessionAgentId,
+    );
     if (params.includeDerivedTitles) {
       derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage);
     }
@@ -1429,6 +1807,7 @@ export function buildGatewaySessionRow(params: {
     groupChannel,
     space,
     chatType: entry?.chatType,
+    origin,
     updatedAt,
     sessionId: entry?.sessionId,
     systemSent: entry?.systemSent,
@@ -1462,10 +1841,10 @@ export function buildGatewaySessionRow(params: {
     agentRuntime,
     contextTokens,
     deliveryContext: deliveryFields.deliveryContext,
-    lastChannel: deliveryFields.lastChannel,
-    lastTo: deliveryFields.lastTo,
-    lastAccountId: deliveryFields.lastAccountId,
-    lastThreadId: deliveryFields.lastThreadId,
+    lastChannel: deliveryFields.lastChannel ?? entry?.lastChannel,
+    lastTo: deliveryFields.lastTo ?? entry?.lastTo,
+    lastAccountId: deliveryFields.lastAccountId ?? entry?.lastAccountId,
+    lastThreadId: deliveryFields.lastThreadId ?? entry?.lastThreadId,
     compactionCheckpointCount: entry?.compactionCheckpoints?.length,
     latestCompactionCheckpoint,
     pluginExtensions: pluginExtensions.length > 0 ? pluginExtensions : undefined,
@@ -1503,12 +1882,13 @@ export function loadGatewaySessionRow(
     transcriptUsageMaxBytes?: number;
   },
 ): GatewaySessionRow | null {
-  const { cfg, store, entry, canonicalKey } = loadSessionEntry(sessionKey);
+  const { cfg, storePath, store, entry, canonicalKey } = loadSessionEntry(sessionKey);
   if (!entry) {
     return null;
   }
   return buildGatewaySessionRow({
     cfg,
+    storePath,
     store,
     key: canonicalKey,
     entry,
@@ -1710,12 +2090,12 @@ export function filterAndSortSessionEntries(params: {
 
 export function listSessionsFromStore(params: {
   cfg: OpenClawConfig;
-  databasePath?: string;
+  storePath: string;
   store: Record<string, SessionEntry>;
   modelCatalog?: ModelCatalogEntry[];
   opts: import("./protocol/index.js").SessionsListParams;
 }): SessionsListResult {
-  const { cfg, store, opts } = params;
+  const { cfg, storePath, store, opts } = params;
   const now = Date.now();
   const sessionListTranscriptUsageMaxBytes = 64 * 1024;
   const sessionListTranscriptFieldRows = 100;
@@ -1741,6 +2121,7 @@ export function listSessionsFromStore(params: {
     const includeTranscriptFields = index < sessionListTranscriptFieldRows;
     return buildGatewaySessionRow({
       cfg,
+      storePath,
       store,
       key,
       entry,
@@ -1756,7 +2137,7 @@ export function listSessionsFromStore(params: {
 
   return {
     ts: now,
-    databasePath: params.databasePath ?? "(multiple)",
+    path: storePath,
     count: sessions.length,
     totalCount,
     limitApplied,
@@ -1768,23 +2149,22 @@ export function listSessionsFromStore(params: {
 
 /**
  * Async version of listSessionsFromStore that yields to the event loop between
- * batches of session row builds. This prevents large session row sets from
+ * batches of session row builds. This prevents large session stores from
  * blocking the event loop during sessions.list requests.
  *
- * The synchronous transcript lookup in readSessionTitleFieldsFromTranscript
- * (SQLite event scans for derived titles and last-message previews) is the
- * dominant blocker.
+ * The synchronous file I/O in readSessionTitleFieldsFromTranscript (head/tail
+ * reads for derived titles and last-message previews) is the dominant blocker.
  * By yielding every SESSIONS_LIST_YIELD_BATCH_SIZE rows, we keep the event
  * loop responsive for WebSocket heartbeats, channel I/O, and concurrent RPC.
  */
 export async function listSessionsFromStoreAsync(params: {
   cfg: OpenClawConfig;
-  databasePath?: string;
+  storePath: string;
   store: Record<string, SessionEntry>;
   modelCatalog?: ModelCatalogEntry[];
   opts: import("./protocol/index.js").SessionsListParams;
 }): Promise<SessionsListResult> {
-  const { cfg, store, opts } = params;
+  const { cfg, storePath, store, opts } = params;
   const now = Date.now();
   const sessionListTranscriptUsageMaxBytes = 64 * 1024;
   const sessionListTranscriptFieldRows = 100;
@@ -1812,6 +2192,7 @@ export async function listSessionsFromStoreAsync(params: {
     const includeTranscriptFields = i < sessionListTranscriptFieldRows;
     const row = buildGatewaySessionRow({
       cfg,
+      storePath,
       store,
       key,
       entry,
@@ -1834,10 +2215,12 @@ export async function listSessionsFromStoreAsync(params: {
       const sessionAgentId = parsed?.agentId
         ? normalizeAgentId(parsed.agentId)
         : resolveDefaultAgentId(cfg);
-      const fields = await readSessionTitleFieldsFromTranscriptAsync({
-        agentId: sessionAgentId,
-        sessionId: entry.sessionId,
-      });
+      const fields = await readSessionTitleFieldsFromTranscriptAsync(
+        entry.sessionId,
+        storePath,
+        entry.sessionFile,
+        sessionAgentId,
+      );
       if (includeDerivedTitles) {
         row.derivedTitle = deriveSessionTitle(entry, fields.firstUserMessage);
       }
@@ -1855,7 +2238,7 @@ export async function listSessionsFromStoreAsync(params: {
 
   return {
     ts: now,
-    databasePath: params.databasePath ?? "(multiple)",
+    path: storePath,
     count: sessions.length,
     totalCount,
     limitApplied,

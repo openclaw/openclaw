@@ -2,12 +2,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { loadDoctorCommandForTest, terminalNoteMock } from "./doctor.note-test-helpers.js";
 import {
   createDoctorRuntime,
   ensureAuthProfileStore,
   mockDoctorConfigSnapshot,
-} from "./doctor/e2e-harness.js";
+} from "./doctor.e2e-harness.js";
+import { loadDoctorCommandForTest, terminalNoteMock } from "./doctor.note-test-helpers.js";
 import "./doctor.fast-path-mocks.js";
 
 let doctorCommand: typeof import("./doctor.js").doctorCommand;
@@ -104,7 +104,7 @@ describe("doctor command", () => {
     });
   });
 
-  it("initializes SQLite state when the state directory is missing", async () => {
+  it("warns when the state directory is missing", async () => {
     mockDoctorConfigSnapshot();
 
     const missingDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-missing-state-"));
@@ -115,11 +115,8 @@ describe("doctor command", () => {
       workspaceSuggestions: false,
     });
 
-    const stateNote = terminalNoteMock.mock.calls.find(([message]) =>
-      String(message).includes("state directory missing"),
-    );
-    expect(stateNote).toBeUndefined();
-    expect(fs.existsSync(path.join(missingDir, "state", "openclaw.sqlite"))).toBe(true);
+    const stateNote = requireTerminalNote({ messageIncludes: "state directory missing" });
+    expect(String(stateNote[0])).toContain("CRITICAL");
   });
 
   it("routes browser readiness through health contributions and degrades gracefully when browser facade is unavailable", async () => {

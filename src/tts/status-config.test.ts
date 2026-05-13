@@ -3,9 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
-import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { resolveStatusTtsSnapshot } from "./status-config.js";
-import { writeTtsUserPrefsSnapshot } from "./tts-prefs-store.js";
 
 let fixtureRoot = "";
 let fixtureId = 0;
@@ -15,7 +13,6 @@ beforeAll(() => {
 });
 
 afterAll(() => {
-  resetPluginStateStoreForTests();
   if (fixtureRoot) {
     fs.rmSync(fixtureRoot, { recursive: true, force: true });
   }
@@ -35,7 +32,6 @@ async function withStatusTempHome(run: (home: string) => Promise<void>): Promise
   try {
     await run(home);
   } finally {
-    resetPluginStateStoreForTests();
     restoreEnv("HOME", previousHome);
     restoreEnv("USERPROFILE", previousUserProfile);
     restoreEnv("OPENCLAW_HOME", previousOpenClawHome);
@@ -53,19 +49,30 @@ function restoreEnv(key: string, value: string | undefined): void {
 
 describe("resolveStatusTtsSnapshot", () => {
   it("uses prefs overrides without loading speech providers", async () => {
-    await withStatusTempHome(async () => {
-      writeTtsUserPrefsSnapshot({
-        tts: {
-          auto: "always",
-          provider: "edge",
-          maxLength: 2048,
-          summarize: false,
-        },
-      });
+    await withStatusTempHome(async (home) => {
+      const prefsPath = path.join(home, ".openclaw", "settings", "tts.json");
+      fs.mkdirSync(path.dirname(prefsPath), { recursive: true });
+      fs.writeFileSync(
+        prefsPath,
+        JSON.stringify({
+          tts: {
+            auto: "always",
+            provider: "edge",
+            maxLength: 2048,
+            summarize: false,
+          },
+        }),
+      );
 
       expect(
         resolveStatusTtsSnapshot({
-          cfg: {} as OpenClawConfig,
+          cfg: {
+            messages: {
+              tts: {
+                prefsPath,
+              },
+            },
+          } as OpenClawConfig,
         }),
       ).toEqual({
         autoMode: "always",
@@ -282,13 +289,18 @@ describe("resolveStatusTtsSnapshot", () => {
   });
 
   it("uses provider metadata for local provider prefs overrides", async () => {
-    await withStatusTempHome(async () => {
-      writeTtsUserPrefsSnapshot({
-        tts: {
-          auto: "always",
-          provider: "edge",
-        },
-      });
+    await withStatusTempHome(async (home) => {
+      const prefsPath = path.join(home, ".openclaw", "settings", "tts.json");
+      fs.mkdirSync(path.dirname(prefsPath), { recursive: true });
+      fs.writeFileSync(
+        prefsPath,
+        JSON.stringify({
+          tts: {
+            auto: "always",
+            provider: "edge",
+          },
+        }),
+      );
 
       expect(
         resolveStatusTtsSnapshot({
@@ -296,6 +308,7 @@ describe("resolveStatusTtsSnapshot", () => {
             messages: {
               tts: {
                 provider: "openai",
+                prefsPath,
                 providers: {
                   microsoft: {
                     voice: "en-US-AvaMultilingualNeural",
@@ -319,19 +332,24 @@ describe("resolveStatusTtsSnapshot", () => {
     });
   });
 
-  it("uses SQLite-backed prefs by default", async () => {
+  it("derives the default prefs path from OPENCLAW_CONFIG_PATH when set", async () => {
     await withStatusTempHome(async (home) => {
       const stateDir = path.join(home, ".openclaw-dev");
-
-      delete process.env.OPENCLAW_STATE_DIR;
-      vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
-      try {
-        writeTtsUserPrefsSnapshot({
+      const prefsPath = path.join(stateDir, "settings", "tts.json");
+      fs.mkdirSync(path.dirname(prefsPath), { recursive: true });
+      fs.writeFileSync(
+        prefsPath,
+        JSON.stringify({
           tts: {
             auto: "always",
             provider: "openai",
           },
-        });
+        }),
+      );
+
+      delete process.env.OPENCLAW_STATE_DIR;
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
+      try {
         expect(
           resolveStatusTtsSnapshot({
             cfg: {

@@ -261,16 +261,44 @@ Enable it via CLI:
 pnpm gateway:watch --raw-stream
 ```
 
+Optional path override:
+
+```bash
+pnpm gateway:watch --raw-stream --raw-stream-path ~/.openclaw/logs/raw-stream.jsonl
+```
+
 Equivalent env vars:
 
 ```bash
 OPENCLAW_RAW_STREAM=1
+OPENCLAW_RAW_STREAM_PATH=~/.openclaw/logs/raw-stream.jsonl
 ```
 
-Default storage:
+Default file:
 
-SQLite diagnostics (`diagnostics.raw_stream`). Use an explicit export/debug
-command when you need a file artifact.
+`~/.openclaw/logs/raw-stream.jsonl`
+
+## Raw chunk logging (pi-mono)
+
+To capture **raw OpenAI-compat chunks** before they are parsed into blocks,
+pi-mono exposes a separate logger:
+
+```bash
+PI_RAW_STREAM=1
+```
+
+Optional path:
+
+```bash
+PI_RAW_STREAM_PATH=~/.pi-mono/logs/raw-openai-completions.jsonl
+```
+
+Default file:
+
+`~/.pi-mono/logs/raw-openai-completions.jsonl`
+
+> Note: this is only emitted by processes using pi-mono's
+> `openai-completions` provider.
 
 ## Safety notes
 

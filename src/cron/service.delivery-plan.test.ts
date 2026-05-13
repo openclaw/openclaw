@@ -8,7 +8,7 @@ import {
 } from "./service.test-harness.js";
 
 const noopLogger = createNoopLogger();
-const { makeStoreKey } = createCronStoreHarness({ prefix: "openclaw-cron-delivery-" });
+const { makeStorePath } = createCronStoreHarness({ prefix: "openclaw-cron-delivery-" });
 
 type DeliveryMode = "none" | "announce";
 
@@ -30,7 +30,7 @@ async function withCronService(
 ) {
   await withCronServiceForTest(
     {
-      makeStoreKey,
+      makeStorePath,
       logger: noopLogger,
       cronEnabled: false,
       runIsolatedAgentJob: params.runIsolatedAgentJob,
