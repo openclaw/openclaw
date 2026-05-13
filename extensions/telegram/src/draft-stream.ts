@@ -238,7 +238,6 @@ export function createTelegramDraftStream(params: {
   const minInitialChars = params.minInitialChars;
   const chatId = params.chatId;
   const threadParams = buildTelegramThreadParams(params.thread);
-  const allowThreadlessFallback = shouldAllowTelegramThreadlessFallback(params.thread);
   const replyToMessageId = normalizeTelegramReplyToMessageId(params.replyToMessageId);
   const sendMessageParams =
     replyToMessageId != null
@@ -330,7 +329,7 @@ export function createTelegramDraftStream(params: {
       if (!usedThreadParams || !THREAD_NOT_FOUND_RE.test(formatErrorMessage(err))) {
         throw err;
       }
-      if (!allowThreadlessFallback) {
+      if (!shouldAllowTelegramThreadlessFallback(params.thread)) {
         throw err;
       }
       const threadlessSendMessageParams = { ...sendMessageParams };
