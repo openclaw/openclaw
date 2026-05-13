@@ -236,6 +236,33 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(ensureInput).not.toHaveProperty("thinking");
   });
 
+  it("keeps ACPX clients alive across OpenClaw oneshot ensure-to-turn handoff", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    const ensure = vi.spyOn(delegate, "ensureSession").mockResolvedValue({
+      sessionKey: "agent:claude:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "claude",
+    });
+
+    await runtime.ensureSession({
+      sessionKey: "agent:claude:acp:test",
+      agent: "claude",
+      mode: "oneshot",
+      cwd: "/tmp/workspace",
+    });
+
+    expect(readFirstEnsureSessionInput(ensure)).toEqual({
+      sessionKey: "agent:claude:acp:test",
+      agent: "claude",
+      mode: "persistent",
+      cwd: "/tmp/workspace",
+    });
+  });
+
   it("does not normalize model startup for non-Codex ACP agents", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => undefined),

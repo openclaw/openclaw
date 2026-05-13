@@ -2,10 +2,36 @@ import {
   implicitMentionKindWhen,
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-mention-gating";
-import { createPluginRuntimeMediaMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { vi } from "vitest";
 import type { PluginRuntime } from "./runtime-api.js";
 import { setMatrixRuntime } from "./runtime.js";
+
+type MatrixPluginRuntimeMediaMock = NonNullable<NonNullable<PluginRuntime["channel"]>["media"]>;
+
+function createMatrixRuntimeMediaMock(
+  overrides: Partial<MatrixPluginRuntimeMediaMock> = {},
+): MatrixPluginRuntimeMediaMock {
+  const readRemoteMediaBuffer =
+    vi.fn() as unknown as MatrixPluginRuntimeMediaMock["readRemoteMediaBuffer"];
+  return {
+    readRemoteMediaBuffer,
+    fetchRemoteMedia:
+      readRemoteMediaBuffer as unknown as MatrixPluginRuntimeMediaMock["fetchRemoteMedia"],
+    saveRemoteMedia: vi.fn().mockResolvedValue({
+      path: "/tmp/test-media.jpg",
+      contentType: "image/jpeg",
+    }) as unknown as MatrixPluginRuntimeMediaMock["saveRemoteMedia"],
+    saveResponseMedia: vi.fn().mockResolvedValue({
+      path: "/tmp/test-media.jpg",
+      contentType: "image/jpeg",
+    }) as unknown as MatrixPluginRuntimeMediaMock["saveResponseMedia"],
+    saveMediaBuffer: vi.fn().mockResolvedValue({
+      path: "/tmp/test-media.jpg",
+      contentType: "image/jpeg",
+    }) as unknown as MatrixPluginRuntimeMediaMock["saveMediaBuffer"],
+    ...overrides,
+  };
+}
 
 type MatrixTestRuntimeOptions = {
   cfg?: Record<string, unknown>;
@@ -76,7 +102,7 @@ export function installMatrixMonitorTestRuntime(
         implicitMentionKindWhen,
         resolveInboundMentionDecision,
       },
-      media: createPluginRuntimeMediaMock({
+      media: createMatrixRuntimeMediaMock({
         saveMediaBuffer: options.saveMediaBuffer ?? vi.fn(),
       }) as unknown as PluginRuntime["channel"]["media"],
     },
