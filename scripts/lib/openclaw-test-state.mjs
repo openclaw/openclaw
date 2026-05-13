@@ -254,12 +254,22 @@ function renderExports(env) {
 }
 
 function generateAuthProfileSecretKey() {
-  return randomBytes(32).toString("base64url");
+  return randomBytes(32).toString("hex");
 }
 
 function renderAuthProfileSecretKeyExport() {
   return [
-    `OPENCLAW_AUTH_PROFILE_SECRET_KEY="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("base64url"))')"`,
+    'OPENCLAW_AUTH_PROFILE_SECRET_KEY_FILE="$OPENCLAW_TEST_STATE_HOME/.openclaw-test-auth-profile-secret-key"',
+    'if [ -s "$OPENCLAW_AUTH_PROFILE_SECRET_KEY_FILE" ]; then',
+    '  OPENCLAW_AUTH_PROFILE_SECRET_KEY="$(cat "$OPENCLAW_AUTH_PROFILE_SECRET_KEY_FILE")"',
+    "else",
+    '  OPENCLAW_AUTH_PROFILE_SECRET_KEY="$(od -An -N 32 -tx1 /dev/urandom | tr -d " \\n")"',
+    '  ( umask 077; printf "%s\\n" "$OPENCLAW_AUTH_PROFILE_SECRET_KEY" > "$OPENCLAW_AUTH_PROFILE_SECRET_KEY_FILE" )',
+    "fi",
+    'if [ -z "$OPENCLAW_AUTH_PROFILE_SECRET_KEY" ]; then',
+    '  echo "failed to generate OPENCLAW_AUTH_PROFILE_SECRET_KEY" >&2',
+    "  return 1 2>/dev/null || exit 1",
+    "fi",
     "export OPENCLAW_AUTH_PROFILE_SECRET_KEY",
   ];
 }
