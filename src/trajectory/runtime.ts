@@ -150,7 +150,7 @@ function truncatedTrajectoryValue(reason: string, details: Record<string, unknow
   };
 }
 
-function limitTrajectoryString(value: string, maxChars: number): string | unknown {
+function limitTrajectoryString(value: string, maxChars: number): unknown {
   if (value.length <= maxChars) {
     return value;
   }
