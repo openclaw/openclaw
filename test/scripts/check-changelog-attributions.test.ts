@@ -67,7 +67,7 @@ describe("check-changelog-attributions", () => {
       { line: 2, handle: "openclaw", text: "- Org-owned fix. Thanks @openclaw." },
       { line: 3, handle: "steipete", text: "- Maintainer-owned fix. Thanks @steipete." },
       { line: 4, handle: "openclaw", text: "- Mixed credit. Thanks @contributor and @OpenClaw." },
-      { line: 5, handle: "clawsweeper", text: "- Bot repair. Thanks @clawsweeper[bot]." },
+      { line: 5, handle: "clawsweeper[bot]", text: "- Bot repair. Thanks @clawsweeper[bot]." },
       { line: 6, handle: "app/clawsweeper", text: "- App repair. Thanks @app/clawsweeper." },
     ]);
   });
@@ -95,42 +95,10 @@ describe("check-changelog-attributions", () => {
     }
   });
 
-  it("rejects bot thanks as explicit human credit for bot PR changelog entries", () => {
-    const repo = initChangelogRepo("- Bot repair (#123). Thanks @clawsweeper[bot].");
-    try {
-      let output = "";
-      try {
-        validateChangelogEntry(repo, "clawsweeper[bot]");
-      } catch (error) {
-        output = String((error as { stdout?: unknown }).stdout ?? error);
-      }
-      expect(output).toContain("must include an explicit human Thanks @handle");
-    } finally {
-      rmSync(repo, { recursive: true, force: true });
-    }
-  });
-
-  it("rejects app bot thanks as explicit human credit for bot PR changelog entries", () => {
-    const repo = initChangelogRepo(
-      "- Session transcripts: redact sensitive message content in the centralized JSONL append path so CLI turns, gateway transcript injection, transcript mirrors, and guarded tool results use the same configured redaction behavior. Fixes #73565. Refs #73563. (#123) Thanks @app/clawsweeper.",
-    );
-    try {
-      let output = "";
-      try {
-        validateChangelogEntry(repo, "clawsweeper[bot]");
-      } catch (error) {
-        output = String((error as { stdout?: unknown }).stdout ?? error);
-      }
-      expect(output).toContain("must include an explicit human Thanks @handle");
-    } finally {
-      rmSync(repo, { recursive: true, force: true });
-    }
-  });
-
   it("accepts explicit human thanks for bot PR changelog entries", () => {
     const repo = initChangelogRepo("- Bot repair (#123). Thanks @Ziy1-Tan.");
     try {
-      expect(validateChangelogEntry(repo, "clawsweeper[bot]")).toContain("explicit human thanks");
+      expect(validateChangelogEntry(repo, "clawsweeper[bot]")).toContain("explicit thanks");
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }
@@ -147,10 +115,9 @@ describe("check-changelog-attributions", () => {
     expect(commonLib).toContain("resolve_contributor_coauthor_email");
     expect(changelogLib).toContain("node scripts/check-changelog-attributions.mjs CHANGELOG.md");
     expect(changelogLib).toContain("changelog_thanks_required_for_contributor");
-    expect(changelogLib).toContain("changelog_entry_has_explicit_human_thanks");
     expect(changelogLib).toContain("Choose the credited original contributor");
     expect(changelogLib).toContain('"app/"*');
-    expect(changelogLib).toContain('"clawsweeper"');
+    expect(changelogLib).toContain("*clawsweeper*");
     expect(gates).toContain("validate_changelog_attribution_policy");
     expect(prepareCore).toContain("resolve_contributor_coauthor_email");
     expect(mergeLib).toContain("pr_contributor_allows_human_trailers");

@@ -4,34 +4,26 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const FORBIDDEN_CHANGELOG_THANKS_HANDLES = [
-  "codex",
-  "openclaw",
-  "steipete",
-  "clawsweeper",
-  "openclaw-clawsweeper",
-  "app/clawsweeper",
-  "app/openclaw-clawsweeper",
-  "clawsweeper[bot]",
-  "openclaw-clawsweeper[bot]",
-];
+export const FORBIDDEN_CHANGELOG_THANKS_HANDLES = ["codex", "openclaw", "steipete", "clawsweeper"];
 
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+const THANKS_HANDLE_PATTERN = /\bThanks\b[^\n]*@([-_/A-Za-z0-9]+(?:\[bot\])?)/iu;
+
+function isForbiddenThanksHandle(handle) {
+  const normalized = handle.toLowerCase();
+  return FORBIDDEN_CHANGELOG_THANKS_HANDLES.some((forbidden) =>
+    forbidden === "clawsweeper" ? normalized.includes(forbidden) : normalized === forbidden,
+  );
 }
-
-const HANDLE_PATTERN = FORBIDDEN_CHANGELOG_THANKS_HANDLES.map(escapeRegExp).join("|");
-const FORBIDDEN_THANKS_PATTERN = new RegExp(
-  `\\bThanks\\b[^\\n]*@(${HANDLE_PATTERN})(?=\\b|[^A-Za-z0-9-])`,
-  "iu",
-);
 
 export function findForbiddenChangelogThanks(content) {
   return content
     .split(/\r?\n/u)
     .map((text, index) => {
-      const match = text.match(FORBIDDEN_THANKS_PATTERN);
-      return match ? { line: index + 1, handle: match[1].toLowerCase(), text } : null;
+      const match = text.match(THANKS_HANDLE_PATTERN);
+      if (!match || !isForbiddenThanksHandle(match[1])) {
+        return null;
+      }
+      return { line: index + 1, handle: match[1].toLowerCase(), text };
     })
     .filter(Boolean);
 }

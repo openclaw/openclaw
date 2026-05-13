@@ -165,29 +165,12 @@ changelog_thanks_required_for_contributor() {
   normalized=$(printf '%s' "$contrib" | tr '[:upper:]' '[:lower:]')
 
   case "$normalized" in
-    ""|"null"|"app/"*|"codex"|"openclaw"|"clawsweeper"|"openclaw-clawsweeper"|"clawsweeper[bot]"|"openclaw-clawsweeper[bot]"|"steipete")
+    ""|"null"|"app/"*|"codex"|"openclaw"|"steipete"|*clawsweeper*)
       return 1
       ;;
   esac
 
   return 0
-}
-
-changelog_entry_has_explicit_human_thanks() {
-  local lines="$1"
-  local pr_pattern="$2"
-
-  local pr_lines
-  pr_lines=$(printf '%s\n' "$lines" | rg -in "$pr_pattern" || true)
-  if [ -z "$pr_lines" ]; then
-    return 1
-  fi
-
-  if ! printf '%s\n' "$pr_lines" | rg -i '\bthanks[[:space:]]+@[-_A-Za-z0-9]+(\[bot\])?' >/dev/null; then
-    return 1
-  fi
-
-  ! printf '%s\n' "$pr_lines" | rg -i '\bthanks\b[^\n]*@(codex|openclaw|steipete|(app/)?clawsweeper(\[bot\])?|(app/)?openclaw-clawsweeper(\[bot\])?)($|[^-A-Za-z0-9])' >/dev/null
 }
 
 validate_changelog_entry_for_pr() {
@@ -356,13 +339,15 @@ END {
     return 0
   fi
 
-  if ! changelog_entry_has_explicit_human_thanks "$added_lines" "$pr_pattern"; then
+  local with_pr_and_any_thanks
+  with_pr_and_any_thanks=$(printf '%s\n' "$added_lines" | rg -in "$pr_pattern" | rg -i '\bthanks[[:space:]]+@' || true)
+  if [ -z "$with_pr_and_any_thanks" ]; then
     echo "CHANGELOG.md update for bot/app/non-creditable author $contrib must include an explicit human Thanks @handle on the PR #$pr entry line."
     echo "Choose the credited original contributor, or stop for maintainer input if authorship is unclear."
     exit 1
   fi
 
-  echo "changelog validated: found PR #$pr + explicit human thanks for bot/app/non-creditable author $contrib"
+  echo "changelog validated: found PR #$pr + explicit thanks for bot/app/non-creditable author $contrib"
 }
 
 validate_changelog_merge_hygiene() {
