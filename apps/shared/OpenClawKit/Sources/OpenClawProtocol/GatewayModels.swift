@@ -3243,7 +3243,7 @@ public struct TalkSessionCreateParams: Codable, Sendable {
 
     public init(
         sessionkey: String?,
-        spawnedby: String? = nil,
+        spawnedby: String?,
         provider: String?,
         model: String?,
         voice: String?,
