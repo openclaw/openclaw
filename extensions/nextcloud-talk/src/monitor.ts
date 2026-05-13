@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { safeParseJsonWithSchema } from "openclaw/plugin-sdk/extension-shared";
+import { safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
 import {
   WEBHOOK_RATE_LIMIT_DEFAULTS,
   createAuthRateLimiter,
@@ -109,8 +109,38 @@ function formatError(err: unknown): string {
   return typeof err === "string" ? err : JSON.stringify(err);
 }
 
-function parseWebhookPayload(body: string): NextcloudTalkWebhookPayload | null {
-  return safeParseJsonWithSchema(NextcloudTalkWebhookPayloadSchema, body);
+function parseWebhookJson(body: string): { ok: true; value: unknown } | { ok: false } {
+  try {
+    return { ok: true, value: JSON.parse(body) };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isSupportedWebhookMessageShape(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  const actor = value.actor;
+  const object = value.object;
+  const target = value.target;
+  if (!isRecord(actor) || !isRecord(object) || !isRecord(target)) {
+    return false;
+  }
+  return (
+    (value.type === "Create" || value.type === "Update" || value.type === "Delete") &&
+    actor.type === "Person" &&
+    object.type === "Note" &&
+    target.type === "Collection"
+  );
+}
+
+function parseWebhookPayload(value: unknown): NextcloudTalkWebhookPayload | null {
+  return safeParseWithSchema(NextcloudTalkWebhookPayloadSchema, value);
 }
 
 function writeJsonResponse(
@@ -183,10 +213,19 @@ function decodeWebhookCreateMessage(params: {
   | { kind: "message"; message: NextcloudTalkInboundMessage }
   | { kind: "ignore" }
   | { kind: "invalid" } {
-  const payload = parseWebhookPayload(params.body);
-  if (!payload) {
+  const payloadJson = parseWebhookJson(params.body);
+  if (!payloadJson.ok) {
     writeWebhookError(params.res, 400, WEBHOOK_ERRORS.invalidPayloadFormat);
     return { kind: "invalid" };
+  }
+
+  const payload = parseWebhookPayload(payloadJson.value);
+  if (!payload) {
+    if (isSupportedWebhookMessageShape(payloadJson.value)) {
+      writeWebhookError(params.res, 400, WEBHOOK_ERRORS.invalidPayloadFormat);
+      return { kind: "invalid" };
+    }
+    return { kind: "ignore" };
   }
   if (payload.type !== "Create") {
     return { kind: "ignore" };
