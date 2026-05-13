@@ -1,12 +1,15 @@
 import type { Bot } from "grammy";
+import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import {
   createFinalizableDraftStreamControlsForState,
   takeMessageIdAfterStop,
 } from "openclaw/plugin-sdk/channel-lifecycle";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 import { isSafeToRetrySendError, isTelegramClientRejection } from "./network-errors.js";
 import { normalizeTelegramReplyToMessageId } from "./outbound-params.js";
+import { recordSentMessage } from "./sent-message-cache.js";
 
 const TELEGRAM_STREAM_MAX_CHARS = 4096;
 const DEFAULT_THROTTLE_MS = 1000;
@@ -88,6 +91,8 @@ function findTelegramDraftChunkLength(
 export function createTelegramDraftStream(params: {
   api: Bot["api"];
   chatId: Parameters<Bot["api"]["sendMessage"]>[0];
+  cfg?: Pick<OpenClawConfig, "session">;
+  accountId?: string;
   maxChars?: number;
   thread?: TelegramThreadSpec | null;
   replyToMessageId?: number;
@@ -131,6 +136,19 @@ export function createTelegramDraftStream(params: {
   let generation = 0;
   let deliveredTextOffset = 0;
   let resetStreamToNewMessage: (options?: { keepPending?: boolean; resetOffset?: boolean }) => void;
+  const recordSuccessfulOutbound = (messageId: number | undefined) => {
+    if (!params.cfg) {
+      return;
+    }
+    if (typeof messageId === "number" && Number.isFinite(messageId)) {
+      recordSentMessage(chatId, messageId, params.cfg);
+    }
+    recordChannelActivity({
+      channel: "telegram",
+      accountId: params.accountId,
+      direction: "outbound",
+    });
+  };
   type PreviewSendParams = {
     renderedText: string;
     renderedParseMode: "HTML" | undefined;
@@ -184,6 +202,7 @@ export function createTelegramDraftStream(params: {
       } else {
         await params.api.editMessageText(chatId, streamMessageId, renderedText);
       }
+      recordSuccessfulOutbound(streamMessageId);
       return true;
     }
     messageSendAttempted = true;
@@ -208,6 +227,7 @@ export function createTelegramDraftStream(params: {
       return false;
     }
     const normalizedMessageId = Math.trunc(sentMessageId);
+    recordSuccessfulOutbound(normalizedMessageId);
     const visibleSinceMs = Date.now();
     if (sendGeneration !== generation) {
       params.onSupersededPreview?.({

@@ -551,6 +551,8 @@ export const dispatchTelegramMessage = async ({
       ? (telegramDeps.createTelegramDraftStream ?? createTelegramDraftStream)({
           api: bot.api,
           chatId,
+          cfg,
+          accountId: route.accountId,
           maxChars: draftMaxChars,
           thread: threadSpec,
           replyToMessageId: draftReplyToMessageId,

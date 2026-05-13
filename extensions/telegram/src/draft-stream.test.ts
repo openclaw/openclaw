@@ -1,6 +1,10 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { Bot } from "grammy";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTelegramDraftStream } from "./draft-stream.js";
+import { clearSentMessageCache, wasSentByBot } from "./sent-message-cache.js";
 
 type TelegramDraftStreamParams = Parameters<typeof createTelegramDraftStream>[0];
 
@@ -56,12 +60,32 @@ function createForceNewMessageHarness(params: { throttleMs?: number } = {}) {
 }
 
 describe("createTelegramDraftStream", () => {
+  afterEach(() => {
+    clearSentMessageCache();
+  });
+
   it("sends stream preview message with message_thread_id when provided", async () => {
     const api = createMockDraftApi();
     const stream = createForumDraftStream(api);
 
     stream.update("Hello");
     await expectInitialForumSend(api);
+  });
+
+  it("records delivered preview messages for bot-owned filtering", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-draft-"));
+    const cfg = { session: { store: path.join(tmpDir, "sessions.json") } };
+    try {
+      const api = createMockDraftApi();
+      const stream = createDraftStream(api, { cfg });
+
+      stream.update("Hello");
+      await stream.flush();
+
+      expect(wasSentByBot(123, 17, cfg)).toBe(true);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
   it("edits existing stream preview message on subsequent updates", async () => {
