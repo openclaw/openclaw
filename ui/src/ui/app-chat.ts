@@ -185,7 +185,7 @@ function enqueueChatMessage(
   refreshSessions?: boolean,
   localCommand?: { args: string; name: string },
 ) {
-  const trimmed = text.trim();
+  const trimmed = text.trimEnd(); // Preserve leading whitespace for code blocks / ASCII diagrams
   const hasAttachments = Boolean(attachments && attachments.length > 0);
   if (!trimmed && !hasAttachments) {
     return;
@@ -210,7 +210,7 @@ function enqueuePendingRunMessage(
   pendingRunId: string,
   attachments?: ChatAttachment[],
 ) {
-  const trimmed = text.trim();
+  const trimmed = text.trimEnd(); // Preserve leading whitespace for code blocks / ASCII diagrams
   const hasAttachments = Boolean(attachments && attachments.length > 0);
   if (!trimmed && !hasAttachments) {
     return;
@@ -521,7 +521,7 @@ export async function handleSendChat(
     return;
   }
   const previousDraft = host.chatMessage;
-  const message = (messageOverride ?? host.chatMessage).trim();
+  const message = (messageOverride ?? host.chatMessage).trimEnd(); // Preserve leading whitespace for code blocks / ASCII diagrams
   const submittedSessionKey = host.sessionKey;
   const attachments = host.chatAttachments ?? [];
   const attachmentsToSend = messageOverride == null ? snapshotChatAttachments(attachments) : [];
