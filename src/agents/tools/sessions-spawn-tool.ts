@@ -120,7 +120,7 @@ async function mapWithConcurrency<T, R>(
   worker: (item: T, index: number) => Promise<R>,
 ): Promise<R[]> {
   const limit = Math.max(1, Math.min(items.length || 1, Math.floor(concurrency)));
-  const results = new Array<R>(items.length);
+  const results: R[] = [];
   let nextIndex = 0;
 
   async function runWorker() {

@@ -395,13 +395,11 @@ export async function getReplyFromConfig(
     // If it's a user message, we deliver the lost reply first, then continue.
     // For now, let's just return the lost reply if it's a heartbeat.
     if (opts?.isHeartbeat) {
-      const heartbeatPending = classifyHeartbeatPendingFinalDelivery(
-        text,
-        resolveHeartbeatAckMaxChars(cfg, agentId),
-      );
+      const heartbeatAckMaxChars = resolveHeartbeatAckMaxChars(cfg, agentId);
+      const heartbeatPending = classifyHeartbeatPendingFinalDelivery(text, heartbeatAckMaxChars);
       if (
         heartbeatPending.shouldClear ||
-        isHeartbeatOkResponse({ role: "assistant", content: text })
+        isHeartbeatOkResponse({ role: "assistant", content: text }, heartbeatAckMaxChars)
       ) {
         const updatedAt = Date.now();
         sessionEntry.pendingFinalDelivery = undefined;

@@ -130,8 +130,9 @@ export function resolveSessionCleanupAction(params: {
 
 async function hasActiveTaskForSessionKey(sessionKey: string): Promise<boolean> {
   try {
-    const { hasActiveTaskForChildSessionKey } = await import("../../tasks/task-registry.js");
-    return hasActiveTaskForChildSessionKey({ sessionKey });
+    const { hasActiveTaskForChildSessionKeyForStatus } =
+      await import("../../tasks/task-status-access.js");
+    return hasActiveTaskForChildSessionKeyForStatus({ sessionKey });
   } catch {
     return false;
   }
