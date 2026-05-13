@@ -28,7 +28,8 @@ const PLUGIN_DOC_ALIASES = new Map([
   ["tavily", "/tools/tavily"],
   ["tokenjuice", "/tools/tokenjuice"],
 ]);
-const PLUGIN_REFERENCE_EXTRA_SECTIONS = new Map([]);
+/** @type {Map<string, string>} */
+const PLUGIN_REFERENCE_EXTRA_SECTIONS = new Map();
 
 function readJson(relativePath) {
   return JSON.parse(fs.readFileSync(path.join(ROOT, relativePath), "utf8"));
