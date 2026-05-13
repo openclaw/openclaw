@@ -285,6 +285,49 @@ describe("session cost usage", () => {
     });
   });
 
+  it("falls back to sparse output for all-time / unbounded ranges", async () => {
+    // The usage UI's "All" range sends startDate: 1970-01-01 through the same
+    // cost-summary path. Zero-filling that span would synthesize ~20k empty
+    // buckets per call, so windows wider than MAX_ZERO_FILL_DAYS (366) keep
+    // their original sparse (activity-only) shape.
+    const root = await makeSessionCostRoot("cost-all-time");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const todayLocal = new Date();
+    todayLocal.setHours(12, 0, 0, 0);
+    const endMs = todayLocal.getTime();
+    const entry = {
+      type: "message",
+      timestamp: todayLocal.toISOString(),
+      message: {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.4",
+        usage: {
+          input: 50,
+          output: 50,
+          totalTokens: 100,
+          cost: { total: 0.05 },
+        },
+      },
+    };
+    await fs.writeFile(path.join(sessionsDir, "sess-all.jsonl"), JSON.stringify(entry), "utf-8");
+
+    await withStateDir(root, async () => {
+      // startMs = 0 mirrors the "All" range filter from the UI.
+      const summary = await loadCostUsageSummary({ startMs: 0, endMs });
+      // Wider than the 366-day fill threshold -> sparse, not dense. We should
+      // get at most a handful of entries (only the day with activity, in this
+      // case 1) rather than ~20k zero buckets.
+      expect(summary.daily.length).toBeLessThanOrEqual(5);
+      const populated = summary.daily.filter((d) => d.totalTokens > 0);
+      expect(populated).toHaveLength(1);
+      expect(populated[0]?.totalTokens).toBe(100);
+      expect(summary.totals.totalTokens).toBe(100);
+    });
+  });
+
   it("serves usage cost from durable aggregate cache without rescanning stale files", async () => {
     const root = await makeSessionCostRoot("cost-cache");
     const sessionsDir = path.join(root, "agents", "main", "sessions");

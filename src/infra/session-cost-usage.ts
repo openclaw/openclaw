@@ -625,6 +625,18 @@ const formatDayKey = (date: Date): string =>
  * the first or last hour of the day; we additionally probe ±1h around each
  * step to defensively cover that edge case so no calendar day is skipped.
  */
+/**
+ * Maximum window (in days) for which we will zero-fill missing calendar
+ * days. Bounded ranges from the UI's range filter top out at 90 days for
+ * the explicit picker and "All" is the wildcard escape hatch — anything
+ * wider than this threshold is treated as an all-time / open-ended range
+ * and falls back to sparse behavior (only days with activity), since a
+ * dense series at that scale would produce tens of thousands of zero
+ * buckets (e.g. a 1970-based startMs → ~20k entries) without any user
+ * value. 366 days covers a full year + leap-day cushion.
+ */
+const MAX_ZERO_FILL_DAYS = 366;
+
 const fillMissingDays = (
   dailyMap: Map<string, CostUsageTotals>,
   startMs: number,
@@ -634,6 +646,13 @@ const fillMissingDays = (
     return;
   }
   const dayMs = 24 * 60 * 60 * 1000;
+  // Bound the fill so unbounded / all-time ranges don't generate tens of
+  // thousands of zero buckets. Wider ranges keep their existing sparse
+  // (activity-only) shape.
+  const spanDays = Math.floor((endMs - startMs) / dayMs) + 1;
+  if (spanDays > MAX_ZERO_FILL_DAYS) {
+    return;
+  }
   const endKey = formatDayKey(new Date(endMs));
   // Iterate a few hours past endMs to guarantee we cover the final calendar
   // day even when DST shifts the local clock relative to the millisecond grid.
