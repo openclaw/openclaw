@@ -27,12 +27,13 @@ describe("plugin registry runtime config scope", () => {
       previousHash: null,
       nextHash: "next",
     } as unknown as Awaited<ReturnType<PluginRuntime["config"]["replaceConfigFile"]>>;
+    const mutateConfigFile: PluginRuntime["config"]["mutateConfigFile"] = async () => ({
+      ...replaceResult,
+      result: undefined,
+    });
     const configRuntime = {
       current: vi.fn(() => config),
-      mutateConfigFile: async <T = void>() => ({
-        ...replaceResult,
-        result: undefined as T | undefined,
-      }),
+      mutateConfigFile,
       replaceConfigFile: async () => replaceResult,
       loadConfig: vi.fn(() => {
         loadScope = getPluginRuntimeGatewayRequestScope();
@@ -42,13 +43,16 @@ describe("plugin registry runtime config scope", () => {
         writeScope = getPluginRuntimeGatewayRequestScope();
       }),
     } satisfies PluginRuntime["config"];
-    const pluginRegistry = createTestRegistry({ config: configRuntime } as PluginRuntime);
+    const pluginRegistry = createTestRegistry({
+      config: configRuntime,
+    } as unknown as PluginRuntime);
     const record = createPluginRecord({
       id: "legacy-plugin",
       name: "Legacy Plugin",
       source: "/plugins/legacy-plugin/index.js",
       origin: "global",
       enabled: true,
+      configSchema: false,
     });
     const api = pluginRegistry.createApi(record, { config });
 
