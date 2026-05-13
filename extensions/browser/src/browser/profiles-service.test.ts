@@ -151,6 +151,29 @@ describe("BrowserProfilesService", () => {
     expect(writeConfigFile).toHaveBeenCalled();
   });
 
+  it("allocates local ports from the rebased config snapshot", async () => {
+    const resolved = resolveBrowserConfig({});
+    const { ctx, state } = createCtx(resolved);
+    vi.mocked(getRuntimeConfig)
+      .mockReturnValueOnce({ browser: { profiles: {} } })
+      .mockReturnValue({
+        browser: {
+          profiles: {
+            other: { cdpPort: 18801, color: "#0066CC" },
+          },
+        },
+      });
+
+    const service = createBrowserProfilesService(ctx);
+    const result = await service.createProfile({ name: "work" });
+
+    expect(result.cdpPort).toBe(18802);
+    expect(state.resolved.profiles.work?.cdpPort).toBe(18802);
+    const profiles = writtenBrowserConfig().profiles as Record<string, { cdpPort?: number }>;
+    expect(profiles.other?.cdpPort).toBe(18801);
+    expect(profiles.work?.cdpPort).toBe(18802);
+  });
+
   it("accepts per-profile cdpUrl for remote Chrome", async () => {
     const resolved = resolveBrowserConfig({
       ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
@@ -306,6 +329,45 @@ describe("BrowserProfilesService", () => {
     const result = await service.deleteProfile("remote");
 
     expect(result.deleted).toBe(false);
+    expect(ctx.forProfile).not.toHaveBeenCalled();
+    expect(movePathToTrash).not.toHaveBeenCalled();
+  });
+
+  it("clears a rebased default profile when deleting that profile", async () => {
+    const resolved = resolveBrowserConfig({
+      profiles: {
+        work: { cdpUrl: "http://10.0.0.42:9222", color: "#0066CC" },
+      },
+    });
+    const { ctx } = createCtx(resolved);
+
+    vi.mocked(getRuntimeConfig)
+      .mockReturnValueOnce({
+        browser: {
+          defaultProfile: "openclaw",
+          profiles: {
+            openclaw: { cdpPort: 18800, color: "#FF4500" },
+            work: { cdpUrl: "http://10.0.0.42:9222", color: "#0066CC" },
+          },
+        },
+      })
+      .mockReturnValue({
+        browser: {
+          defaultProfile: "work",
+          profiles: {
+            openclaw: { cdpPort: 18800, color: "#FF4500" },
+            work: { cdpUrl: "http://10.0.0.42:9222", color: "#0066CC" },
+          },
+        },
+      });
+
+    const service = createBrowserProfilesService(ctx);
+    const result = await service.deleteProfile("work");
+
+    expect(result.deleted).toBe(false);
+    const browser = writtenBrowserConfig();
+    expect(browser.defaultProfile).toBeUndefined();
+    expect(browser.profiles).not.toHaveProperty("work");
     expect(ctx.forProfile).not.toHaveBeenCalled();
     expect(movePathToTrash).not.toHaveBeenCalled();
   });

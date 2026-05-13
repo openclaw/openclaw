@@ -8,7 +8,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUserPath } from "../utils.js";
 import { assertCdpEndpointAllowed } from "./cdp.helpers.js";
 import { resolveOpenClawUserDataDir } from "./chrome.js";
-import { parseHttpUrl, resolveProfile } from "./config.js";
+import { parseHttpUrl, resolveBrowserConfig, resolveProfile } from "./config.js";
 import {
   BrowserConflictError,
   BrowserProfileNotFoundError,
@@ -107,11 +107,10 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
       throw new BrowserConflictError(`profile "${name}" already exists`);
     }
 
-    const usedColors = getUsedColors(resolvedProfiles);
-    const profileColor =
-      params.color && HEX_COLOR_RE.test(params.color) ? params.color : allocateColor(usedColors);
+    const explicitProfileColor =
+      params.color && HEX_COLOR_RE.test(params.color) ? params.color : undefined;
 
-    let profileConfig: BrowserProfileConfig;
+    let parsedCdpUrl: string | undefined;
     if (normalizedUserDataDir && driver !== "existing-session") {
       throw new BrowserValidationError(
         "driver=existing-session is required when userDataDir is provided",
@@ -136,48 +135,82 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
       } catch (err) {
         throw new BrowserValidationError(formatErrorMessage(err));
       }
-      profileConfig = {
-        cdpUrl: parsed.normalized,
-        ...(driver ? { driver } : {}),
-        color: profileColor,
-      };
-    } else {
-      if (driver === "existing-session") {
-        // existing-session uses Chrome MCP auto-connect; no CDP port needed
-        profileConfig = {
-          driver,
-          attachOnly: true,
-          ...(normalizedUserDataDir ? { userDataDir: normalizedUserDataDir } : {}),
-          color: profileColor,
-        };
-      } else {
-        const usedPorts = getUsedPorts(resolvedProfiles);
-        const range = cdpPortRange(state.resolved);
-        const cdpPort = allocateCdpPort(usedPorts, range);
-        if (cdpPort === null) {
-          throw new BrowserResourceExhaustedError("no available CDP ports in range");
-        }
-        profileConfig = {
-          cdpPort,
-          ...(driver ? { driver } : {}),
-          color: profileColor,
-        };
-      }
+      parsedCdpUrl = parsed.normalized;
     }
 
-    await mutateConfigFile({
+    const mutation = await mutateConfigFile<BrowserProfileConfig>({
       afterWrite: { mode: "auto" },
-      mutate: (draft) => {
+      mutate: async (draft) => {
+        const latestResolved = resolveBrowserConfig({
+          ...state.resolved,
+          ...draft.browser,
+          profiles: draft.browser?.profiles ?? state.resolved.profiles,
+        });
+        const latestProfiles = draft.browser?.profiles ?? {};
+        if (name in latestProfiles || name in latestResolved.profiles) {
+          throw new BrowserConflictError(`profile "${name}" already exists`);
+        }
+
+        const profileColor =
+          explicitProfileColor ?? allocateColor(getUsedColors(latestResolved.profiles));
+
+        let nextProfileConfig: BrowserProfileConfig;
+        if (parsedCdpUrl) {
+          try {
+            await assertCdpEndpointAllowed(parsedCdpUrl, latestResolved.ssrfPolicy);
+          } catch (err) {
+            throw new BrowserValidationError(formatErrorMessage(err));
+          }
+          nextProfileConfig = {
+            cdpUrl: parsedCdpUrl,
+            ...(driver ? { driver } : {}),
+            color: profileColor,
+          };
+        } else if (driver === "existing-session") {
+          // existing-session uses Chrome MCP auto-connect; no CDP port needed.
+          nextProfileConfig = {
+            driver,
+            attachOnly: true,
+            ...(normalizedUserDataDir ? { userDataDir: normalizedUserDataDir } : {}),
+            color: profileColor,
+          };
+        } else {
+          const usedPorts = getUsedPorts(latestResolved.profiles);
+          const rangeStart = draft.browser?.cdpPortRangeStart ?? state.resolved.cdpPortRangeStart;
+          const range = cdpPortRange({
+            controlPort: state.resolved.controlPort,
+            cdpPortRangeStart: rangeStart,
+            cdpPortRangeEnd:
+              draft.browser?.cdpPortRangeStart === undefined
+                ? state.resolved.cdpPortRangeEnd
+                : latestResolved.cdpPortRangeEnd,
+          });
+          const cdpPort = allocateCdpPort(usedPorts, range);
+          if (cdpPort === null) {
+            throw new BrowserResourceExhaustedError("no available CDP ports in range");
+          }
+          nextProfileConfig = {
+            cdpPort,
+            ...(driver ? { driver } : {}),
+            color: profileColor,
+          };
+        }
+
         draft.browser = {
           ...draft.browser,
           profiles: {
             ...draft.browser?.profiles,
-            [name]: profileConfig,
+            [name]: nextProfileConfig,
           },
         };
+        return nextProfileConfig;
       },
     });
 
+    const profileConfig = mutation.result;
+    if (!profileConfig) {
+      throw new BrowserProfileNotFoundError(`profile "${name}" not found after creation`);
+    }
     state.resolved.profiles[name] = profileConfig;
     const resolved = resolveProfile(state.resolved, name);
     if (!resolved) {
@@ -241,9 +274,15 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
       afterWrite: { mode: "auto" },
       mutate: (draft) => {
         const { [name]: _removed, ...remainingProfiles } = draft.browser?.profiles ?? {};
-        draft.browser = {
+        const nextBrowser = {
           ...draft.browser,
           profiles: remainingProfiles,
+        };
+        if (nextBrowser.defaultProfile === name) {
+          delete nextBrowser.defaultProfile;
+        }
+        draft.browser = {
+          ...nextBrowser,
         };
       },
     });
