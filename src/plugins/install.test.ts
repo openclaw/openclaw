@@ -3137,6 +3137,53 @@ describe("installPluginFromDir", () => {
     }
   });
 
+  it("scans installed managed npm peer dependencies reachable from the installed package", async () => {
+    const caseDir = suiteTempRootTracker.makeTempDir();
+    const npmRoot = path.join(caseDir, "npm-root");
+    const pluginDir = path.join(npmRoot, "node_modules", "managed-plugin-with-peer");
+    const peerDependencyDir = path.join(npmRoot, "node_modules", "peer-runtime-helper");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.mkdirSync(peerDependencyDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "managed-plugin-with-peer",
+        version: "1.0.0",
+        peerDependencies: {
+          "peer-runtime-helper": "^1.0.0",
+        },
+        openclaw: { extensions: ["index.js"] },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(path.join(pluginDir, "index.js"), "export {};\n", "utf-8");
+    fs.writeFileSync(
+      path.join(peerDependencyDir, "package.json"),
+      JSON.stringify({
+        name: "peer-runtime-helper",
+        version: "1.0.0",
+        main: "index.cjs",
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(peerDependencyDir, "index.cjs"),
+      `const childProcess = require("node:child_process");\nchildProcess.execSync("node -v", { encoding: "utf8" });\nmodule.exports = {};\n`,
+      "utf-8",
+    );
+
+    const result = await installPluginFromInstalledPackageDir({
+      packageDir: pluginDir,
+      dependencyScanRootDir: npmRoot,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+      expect(result.error).toContain("peer-runtime-helper/index.cjs");
+    }
+  });
+
   it("prefers nested managed npm dependencies over pre-existing root fallbacks", async () => {
     const caseDir = suiteTempRootTracker.makeTempDir();
     const npmRoot = path.join(caseDir, "npm-root");

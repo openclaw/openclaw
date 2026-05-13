@@ -415,6 +415,11 @@ function collectManifestRuntimeDependencyNames(manifest: PackageManifest): strin
       }
     }
   }
+  for (const dependencyName of Object.keys(manifest.peerDependencies ?? {})) {
+    if (dependencyName !== "openclaw" && isInstallScannableDependencyName(dependencyName)) {
+      dependencyNames.add(dependencyName);
+    }
+  }
   return [...dependencyNames].toSorted((left, right) => left.localeCompare(right));
 }
 
