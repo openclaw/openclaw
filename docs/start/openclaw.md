@@ -159,6 +159,22 @@ Example:
 }
 ```
 
+<Warning>
+**Group chat replies are private by default.** OpenClaw uses `messages.groupChat.visibleReplies: "message_tool"` for group/channel rooms. Your agent still processes every @mention, but its replies stay invisible unless it explicitly calls `message(action=send)`. To restore legacy auto-posting, add this to your config:
+
+```json5
+{
+  messages: {
+    groupChat: {
+      visibleReplies: "automatic",
+    },
+  },
+}
+```
+
+The gateway hot-reloads this change after saving the file. See [Group visible replies](/channels/groups#visible-replies) for details.
+</Warning>
+
 ## Sessions and memory
 
 - Session files: `~/.openclaw/agents/<agentId>/sessions/{{SessionId}}.jsonl`
