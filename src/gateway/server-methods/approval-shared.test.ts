@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
-import { handleApprovalResolve, handlePendingApprovalRequest } from "./approval-shared.js";
+import {
+  handleApprovalResolve,
+  handlePendingApprovalRequest,
+  isApprovalRecordVisibleToClient,
+} from "./approval-shared.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const hasApprovalTurnSourceRouteMock = vi.hoisted(() => vi.fn(() => true));
@@ -15,13 +19,14 @@ function createApprovalClient(params: {
   connId: string;
   clientId: string;
   deviceId?: string;
+  scopes?: string[];
 }): GatewayClient {
   return {
     connId: params.connId,
     connect: {
       client: { id: params.clientId },
       device: params.deviceId ? { id: params.deviceId } : undefined,
-      scopes: ["operator.approvals"],
+      scopes: params.scopes ?? ["operator.approvals"],
     },
   } as GatewayClient;
 }
@@ -44,6 +49,32 @@ function createApprovalClientLookup(clients: GatewayClient[]): ApprovalClientLoo
 describe("handlePendingApprovalRequest", () => {
   afterEach(() => {
     hasApprovalTurnSourceRouteMock.mockClear();
+  });
+
+  it("allows operator.admin clients to see requester-bound approvals", () => {
+    const manager = new ExecApprovalManager();
+    const record = manager.create(
+      {
+        command: "echo ok",
+      },
+      60_000,
+      "approval-admin-visible",
+    );
+    record.requestedByDeviceId = "device-owner";
+    record.requestedByConnId = "conn-owner";
+    record.requestedByClientId = "client-owner";
+
+    expect(
+      isApprovalRecordVisibleToClient({
+        record,
+        client: createApprovalClient({
+          connId: "conn-admin",
+          clientId: "client-admin",
+          deviceId: "device-admin",
+          scopes: ["operator.admin"],
+        }),
+      }),
+    ).toBe(true);
   });
 
   it("does not resolve turn-source routes when approval clients are already available", async () => {

@@ -6,6 +6,7 @@ import type {
   ExecApprovalManager,
   ExecApprovalRecord,
 } from "../exec-approval-manager.js";
+import { ADMIN_SCOPE } from "../method-scopes.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -85,6 +86,11 @@ export function isApprovalRecordVisibleToClient<TPayload>(params: {
   record: ExecApprovalRecord<TPayload>;
   client: GatewayClient | null;
 }): boolean {
+  const scopes = Array.isArray(params.client?.connect?.scopes) ? params.client.connect.scopes : [];
+  if (scopes.includes(ADMIN_SCOPE)) {
+    return true;
+  }
+
   const requestedByDeviceId = normalizeApprovalIdentity(params.record.requestedByDeviceId);
   if (requestedByDeviceId) {
     return requestedByDeviceId === normalizeApprovalIdentity(params.client?.connect?.device?.id);
