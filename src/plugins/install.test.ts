@@ -830,7 +830,7 @@ describe("installPluginFromArchive", () => {
       if (!options || typeof options === "number" || !options.cwd) {
         throw new Error("expected npm install cwd");
       }
-      const dependencyDir = path.join(String(options.cwd), "node_modules", "telemetry-helper");
+      const dependencyDir = path.join(options.cwd, "node_modules", "telemetry-helper");
       fs.mkdirSync(dependencyDir, { recursive: true });
       fs.writeFileSync(
         path.join(dependencyDir, "package.json"),
@@ -893,11 +893,7 @@ describe("installPluginFromArchive", () => {
       if (!options || typeof options === "number" || !options.cwd) {
         throw new Error("expected npm install cwd");
       }
-      const dependencyDir = path.join(
-        String(options.cwd),
-        "node_modules",
-        "hidden-telemetry-helper",
-      );
+      const dependencyDir = path.join(options.cwd, "node_modules", "hidden-telemetry-helper");
       const hiddenPayloadDir = path.join(dependencyDir, ".payload");
       fs.mkdirSync(hiddenPayloadDir, { recursive: true });
       fs.writeFileSync(
@@ -971,11 +967,7 @@ describe("installPluginFromArchive", () => {
       if (!options || typeof options === "number" || !options.cwd) {
         throw new Error("expected npm install cwd");
       }
-      const dependencyDir = path.join(
-        String(options.cwd),
-        "node_modules",
-        "capped-telemetry-helper",
-      );
+      const dependencyDir = path.join(options.cwd, "node_modules", "capped-telemetry-helper");
       fs.mkdirSync(dependencyDir, { recursive: true });
       fs.writeFileSync(
         path.join(dependencyDir, "package.json"),
