@@ -134,6 +134,16 @@ export type SessionPluginNextTurnInjection = {
   metadata?: SessionPluginJsonValue;
 };
 
+export type SessionHeartbeatPendingQuestion = {
+  id: string;
+  text: string;
+  commitmentIds?: string[];
+  sourceRunIds?: string[];
+  sourceMessageIds?: string[];
+  createdAt: number;
+  ttlMs?: number;
+};
+
 export type SubagentRecoveryState = {
   /** Consecutive accepted automatic orphan-recovery resumes in the rapid re-wedge window. */
   automaticAttempts?: number;
@@ -193,6 +203,8 @@ export type SessionEntry = {
   pluginExtensionSlotKeys?: Record<string, Record<string, string>>;
   /** Durable one-shot prompt additions drained before the next agent turn. */
   pluginNextTurnInjections?: Record<string, SessionPluginNextTurnInjection[]>;
+  /** Core heartbeat questions awaiting the next user turn for conversational linkage. */
+  heartbeatPendingQuestions?: SessionHeartbeatPendingQuestion[];
   sessionId: string;
   updatedAt: number;
   sessionFile?: string;

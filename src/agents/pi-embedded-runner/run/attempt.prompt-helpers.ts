@@ -1,3 +1,4 @@
+import { drainHeartbeatPendingQuestionContext } from "../../../config/sessions/pending-question-context.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type {
   ContextEnginePromptCacheInfo,
@@ -64,12 +65,13 @@ export type PromptBuildHookRunner = {
 // retry, dropping injection context). The cache is bounded to keep memory flat
 // across long-lived processes; entries are evicted FIFO once the cap is hit.
 const PROMPT_BUILD_DRAIN_CACHE_MAX = 256;
-const promptBuildDrainCache = new Map<string, PluginNextTurnInjectionRecord[]>();
+type PromptBuildDrainCacheEntry = {
+  queuedInjections: PluginNextTurnInjectionRecord[];
+  heartbeatPendingQuestionContext?: string;
+};
+const promptBuildDrainCache = new Map<string, PromptBuildDrainCacheEntry>();
 
-function rememberDrainedInjections(
-  runId: string,
-  injections: PluginNextTurnInjectionRecord[],
-): void {
+function rememberDrainedInjections(runId: string, entry: PromptBuildDrainCacheEntry): void {
   if (promptBuildDrainCache.has(runId)) {
     promptBuildDrainCache.delete(runId);
   } else if (promptBuildDrainCache.size >= PROMPT_BUILD_DRAIN_CACHE_MAX) {
@@ -78,7 +80,7 @@ function rememberDrainedInjections(
       promptBuildDrainCache.delete(oldest);
     }
   }
-  promptBuildDrainCache.set(runId, injections);
+  promptBuildDrainCache.set(runId, entry);
 }
 
 /**
@@ -100,18 +102,29 @@ export async function resolvePromptBuildHookResult(params: {
   legacyBeforeAgentStartResult?: PluginHookBeforeAgentStartResult;
 }): Promise<PluginHookBeforePromptBuildResult> {
   const runId = params.hookCtx.runId;
-  const cachedInjections = runId ? promptBuildDrainCache.get(runId) : undefined;
-  const queuedContext = cachedInjections
+  const cachedDrain = runId ? promptBuildDrainCache.get(runId) : undefined;
+  const drainedPluginContext = cachedDrain
     ? {
-        queuedInjections: cachedInjections,
-        ...buildPluginAgentTurnPrepareContext({ queuedInjections: cachedInjections }),
+        queuedInjections: cachedDrain.queuedInjections,
+        ...buildPluginAgentTurnPrepareContext({ queuedInjections: cachedDrain.queuedInjections }),
       }
     : await drainPluginNextTurnInjectionContext({
         cfg: params.config,
         sessionKey: params.hookCtx.sessionKey,
       });
-  if (runId && !cachedInjections) {
-    rememberDrainedInjections(runId, queuedContext.queuedInjections);
+  const heartbeatPendingQuestionContext =
+    cachedDrain?.heartbeatPendingQuestionContext ??
+    (params.hookCtx.trigger === "user"
+      ? await drainHeartbeatPendingQuestionContext({
+          cfg: params.config,
+          sessionKey: params.hookCtx.sessionKey,
+        })
+      : undefined);
+  if (runId && !cachedDrain) {
+    rememberDrainedInjections(runId, {
+      queuedInjections: drainedPluginContext.queuedInjections,
+      ...(heartbeatPendingQuestionContext ? { heartbeatPendingQuestionContext } : {}),
+    });
   }
   const turnPrepareResult =
     params.hookRunner?.runAgentTurnPrepare && params.hookRunner.hasHooks("agent_turn_prepare")
@@ -120,7 +133,7 @@ export async function resolvePromptBuildHookResult(params: {
             {
               prompt: params.prompt,
               messages: params.messages,
-              queuedInjections: queuedContext.queuedInjections,
+              queuedInjections: drainedPluginContext.queuedInjections,
             },
             params.hookCtx,
           )
@@ -182,14 +195,15 @@ export async function resolvePromptBuildHookResult(params: {
   return {
     systemPrompt: promptBuildResult?.systemPrompt ?? legacyResult?.systemPrompt,
     prependContext: joinPresentTextSegments([
-      queuedContext.prependContext,
+      heartbeatPendingQuestionContext,
+      drainedPluginContext.prependContext,
       turnPrepareResult?.prependContext,
       heartbeatContribution?.prependContext,
       promptBuildResult?.prependContext,
       legacyResult?.prependContext,
     ]),
     appendContext: joinPresentTextSegments([
-      queuedContext.appendContext,
+      drainedPluginContext.appendContext,
       turnPrepareResult?.appendContext,
       heartbeatContribution?.appendContext,
       promptBuildResult?.appendContext,

@@ -32,6 +32,8 @@ describe("runHeartbeatOnce commitments", () => {
     to: string;
     sourceUserText?: string;
     sourceAssistantText?: string;
+    sourceMessageId?: string;
+    sourceRunId?: string;
   }): CommitmentRecord {
     return {
       id: params.id,
@@ -58,6 +60,8 @@ describe("runHeartbeatOnce commitments", () => {
       createdAtMs: nowMs - 24 * 60 * 60_000,
       updatedAtMs: nowMs - 24 * 60 * 60_000,
       attempts: 0,
+      sourceMessageId: params.sourceMessageId ?? "14517",
+      sourceRunId: params.sourceRunId ?? "e3f41c01-062c-4c5d-967d-500998f34f30",
     };
   }
 
@@ -160,10 +164,19 @@ describe("runHeartbeatOnce commitments", () => {
           nowMs: () => nowMs,
         },
       });
+      const sessionStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+        string,
+        { sessionFile?: string; heartbeatPendingQuestions?: Array<Record<string, unknown>> }
+      >;
+      const transcript = sessionStore[sessionKey]?.sessionFile
+        ? await fs.readFile(sessionStore[sessionKey].sessionFile, "utf-8").catch(() => "")
+        : "";
 
       return {
         result,
         sendTelegram,
+        transcript,
+        sessionEntry: sessionStore[sessionKey],
         store: await loadCommitmentStore(),
       };
     });
@@ -384,6 +397,32 @@ describe("runHeartbeatOnce commitments", () => {
     expect(result.status).toBe("ran");
     expect(sendTelegram).toHaveBeenCalled();
     expectCommitmentFields(store.commitments[0], {
+      id: "cm_interview",
+      status: "sent",
+      attempts: 1,
+      sentAtMs: nowMs,
+    });
+  });
+
+  it("queues delivered commitment questions as pending next-turn context", async () => {
+    const { sessionEntry } = await setupCommitmentCase();
+
+    expect(sessionEntry?.heartbeatPendingQuestions).toEqual([
+      expect.objectContaining({
+        id: "heartbeat:commitments:agent:main:telegram:user-155462274:cm_interview",
+        text: "How did the interview go?",
+        commitmentIds: ["cm_interview"],
+        sourceMessageIds: ["14517"],
+        sourceRunIds: ["e3f41c01-062c-4c5d-967d-500998f34f30"],
+        createdAt: nowMs,
+      }),
+    ]);
+  });
+
+  it("marks delivered commitments as sent after queuing pending question context", async () => {
+    const { store } = await setupCommitmentCase();
+
+    expect(store.commitments[0]).toMatchObject({
       id: "cm_interview",
       status: "sent",
       attempts: 1,
