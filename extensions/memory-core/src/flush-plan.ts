@@ -8,7 +8,45 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 
 export const DEFAULT_MEMORY_FLUSH_SOFT_TOKENS = 4000;
+export const DEFAULT_MEMORY_FLUSH_SOFT_TOKENS_MAX = 900_000;
 export const DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES = 2 * 1024 * 1024;
+
+/**
+ * Default `softThresholdTokens` headroom buffer used when the operator did
+ * not pick a value in `agents.defaults.compaction.memoryFlush.softThresholdTokens`.
+ *
+ * History: prior to v2026.5.x this was a hard-coded 4000 regardless of model
+ * context window. On 1M-token models that left the flush trigger at ~99.6% of
+ * the window, so a bot with a long-lived session would skip pre-compaction
+ * flushes and arrive at the auto-compaction boundary with nothing persisted —
+ * producing the "bot turns slow over days" symptom (a fully resident, near-full
+ * prompt). Workspace operators had to manually set `softThresholdTokens` to a
+ * very large number (e.g. 900_000) to force eager pre-compaction flushing.
+ *
+ * The window-aware default keeps the legacy 4000 floor for small models and
+ * grows the buffer with the window, capped at 900_000 to stay within the
+ * upper bound operators already use as a manual override.
+ *
+ * Callers that cannot resolve the model context window (e.g. control-plane
+ * tooling building a plan for documentation purposes) should omit the param;
+ * we'll keep the legacy 4000 default in that path.
+ */
+export function defaultMemoryFlushSoftThresholdTokens(
+  modelContextWindowTokens?: number,
+): number {
+  if (
+    typeof modelContextWindowTokens !== "number" ||
+    !Number.isFinite(modelContextWindowTokens) ||
+    modelContextWindowTokens <= 0
+  ) {
+    return DEFAULT_MEMORY_FLUSH_SOFT_TOKENS;
+  }
+  const auto = Math.floor(modelContextWindowTokens * 0.7);
+  if (auto <= DEFAULT_MEMORY_FLUSH_SOFT_TOKENS) {
+    return DEFAULT_MEMORY_FLUSH_SOFT_TOKENS;
+  }
+  return Math.min(auto, DEFAULT_MEMORY_FLUSH_SOFT_TOKENS_MAX);
+}
 
 const MEMORY_FLUSH_TARGET_HINT =
   "Store durable memories only in memory/YYYY-MM-DD.md (create memory/ if needed).";
@@ -96,6 +134,16 @@ export function buildMemoryFlushPlan(
   params: {
     cfg?: OpenClawConfig;
     nowMs?: number;
+    /**
+     * Resolved model context window in tokens for the caller's run. Optional;
+     * when present we scale the default `softThresholdTokens` to keep the flush
+     * trigger at a sensible buffer below the window for large-window models.
+     * See {@link defaultMemoryFlushSoftThresholdTokens}.
+     *
+     * Always honored as an *override hint*: an explicit operator-set
+     * `agents.defaults.compaction.memoryFlush.softThresholdTokens` still wins.
+     */
+    modelContextWindowTokens?: number;
   } = {},
 ): MemoryFlushPlan | null {
   const resolved = params;
@@ -107,7 +155,8 @@ export function buildMemoryFlushPlan(
   }
 
   const softThresholdTokens =
-    normalizeNonNegativeInt(defaults?.softThresholdTokens) ?? DEFAULT_MEMORY_FLUSH_SOFT_TOKENS;
+    normalizeNonNegativeInt(defaults?.softThresholdTokens) ??
+    defaultMemoryFlushSoftThresholdTokens(resolved.modelContextWindowTokens);
   const forceFlushTranscriptBytes =
     parseNonNegativeByteSize(defaults?.forceFlushTranscriptBytes) ??
     DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES;

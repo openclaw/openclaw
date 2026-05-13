@@ -518,7 +518,10 @@ export async function runPreflightCompactionIfNeeded(params: {
     modelId: params.followupRun.run.model ?? params.defaultModel,
     agentCfgContextTokens: params.agentCfgContextTokens,
   });
-  const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg });
+  const memoryFlushPlan = resolveMemoryFlushPlan({
+    cfg: params.cfg,
+    modelContextWindowTokens: contextWindowTokens,
+  });
   const reserveTokensFloor =
     memoryFlushPlan?.reserveTokensFloor ??
     params.cfg.agents?.defaults?.compaction?.reserveTokensFloor ??
@@ -722,7 +725,19 @@ export async function runMemoryFlushIfNeeded(params: {
   replyOperation: ReplyOperation;
   onVisibleErrorPayloads?: (payloads: ReplyPayload[]) => void;
 }): Promise<SessionEntry | undefined> {
-  const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg });
+  // Resolve the model context window first so we can plumb it into the
+  // memory-flush plan resolver; window-aware defaults (notably
+  // `softThresholdTokens`) need it.
+  const contextWindowTokens = resolveMemoryFlushContextWindowTokens({
+    cfg: params.cfg,
+    provider: params.followupRun.run.provider,
+    modelId: params.followupRun.run.model ?? params.defaultModel,
+    agentCfgContextTokens: params.agentCfgContextTokens,
+  });
+  const memoryFlushPlan = resolveMemoryFlushPlan({
+    cfg: params.cfg,
+    modelContextWindowTokens: contextWindowTokens,
+  });
   if (!memoryFlushPlan) {
     return params.sessionEntry;
   }
@@ -747,12 +762,6 @@ export async function runMemoryFlushIfNeeded(params: {
   let entry =
     params.sessionEntry ??
     (params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined);
-  const contextWindowTokens = resolveMemoryFlushContextWindowTokens({
-    cfg: params.cfg,
-    provider: params.followupRun.run.provider,
-    modelId: params.followupRun.run.model ?? params.defaultModel,
-    agentCfgContextTokens: params.agentCfgContextTokens,
-  });
 
   const promptTokenEstimate = estimatePromptTokensForMemoryFlush(
     params.promptForEstimate ?? params.followupRun.prompt,
@@ -930,6 +939,7 @@ export async function runMemoryFlushIfNeeded(params: {
     resolveMemoryFlushPlan({
       cfg: params.cfg,
       nowMs: memoryFlushNowMs,
+      modelContextWindowTokens: contextWindowTokens,
     }) ?? memoryFlushPlan;
   const memoryFlushWritePath = activeMemoryFlushPlan.relativePath;
   const flushSystemPrompt = [
