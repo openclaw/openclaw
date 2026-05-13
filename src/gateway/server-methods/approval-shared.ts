@@ -7,7 +7,6 @@ import type {
   ExecApprovalRecord,
 } from "../exec-approval-manager.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../method-scopes.js";
-import { GATEWAY_CLIENT_IDS } from "../protocol/client-info.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -83,13 +82,6 @@ function normalizeApprovalIdentity(value: string | null | undefined): string | n
   return normalizeOptionalString(value) ?? null;
 }
 
-const BRIDGEABLE_NO_DEVICE_REQUEST_CLIENT_IDS = new Set<string>([
-  GATEWAY_CLIENT_IDS.CONTROL_UI,
-  GATEWAY_CLIENT_IDS.WEBCHAT_UI,
-  GATEWAY_CLIENT_IDS.WEBCHAT,
-  GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
-]);
-
 export function isApprovalRecordVisibleToClient<TPayload>(params: {
   record: ExecApprovalRecord<TPayload>;
   client: GatewayClient | null;
@@ -102,16 +94,7 @@ export function isApprovalRecordVisibleToClient<TPayload>(params: {
   const requestedByDeviceId = normalizeApprovalIdentity(params.record.requestedByDeviceId);
   const requestedByClientId = normalizeApprovalIdentity(params.record.requestedByClientId);
   const hasApprovalsScope = scopes.includes(APPROVALS_SCOPE);
-  const isBridgeableNoDeviceRequest =
-    requestedByDeviceId === null &&
-    requestedByClientId !== null &&
-    BRIDGEABLE_NO_DEVICE_REQUEST_CLIENT_IDS.has(requestedByClientId);
-  if (
-    hasApprovalsScope &&
-    (params.client?.internal?.approvalRuntime === true ||
-      requestedByClientId === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT ||
-      isBridgeableNoDeviceRequest)
-  ) {
+  if (hasApprovalsScope && params.client?.internal?.approvalRuntime === true) {
     return true;
   }
 
