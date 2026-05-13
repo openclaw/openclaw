@@ -9,6 +9,8 @@ import {
   type SimpleStreamOptions,
   type ThinkingLevel,
 } from "@mariozechner/pi-ai";
+import { extractCommandTag, recordLLMUsage } from "../logging/llm-metrics.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
@@ -854,6 +856,46 @@ function resolveAnthropicTransportOptions(
   return resolved;
 }
 
+const log = createSubsystemLogger("anthropic-transport");
+
+// Mirror of emitCodexUsageObservability in openai-transport-stream.ts — emits
+// per-request anthropic token usage to the shared openclaw_llm_* Prometheus
+// counter family with provider="anthropic" so dashboards stay populated even
+// when model fallback shifts traffic from codex to claude.
+function emitAnthropicUsageObservability(
+  model: AnthropicTransportModel,
+  context: Context,
+  usage: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number } | undefined,
+): void {
+  if (normalizeLowercaseStringOrEmpty(model.provider) !== "anthropic") return;
+  const cached = usage?.cacheRead ?? 0;
+  // Anthropic prompt-side cost is the sum of uncached input + cache-read +
+  // cache-creation. cache_creation_input_tokens are tokens written to the
+  // prompt cache on first turn / new prefix; they bill at +25% (5-min) or
+  // +100% (1-hour) so omitting them would materially under-count prompt
+  // usage on cache-write turns. The dedicated `cached` channel tracks only
+  // cache-reads since cache-writes are not "free" the way reads are.
+  const prompt = (usage?.input ?? 0) + cached + (usage?.cacheWrite ?? 0);
+  const completion = usage?.output ?? 0;
+  recordLLMUsage("anthropic", { prompt, completion, cached });
+  const messages = (context as { messages?: ReadonlyArray<{ role: string; content: unknown }> })
+    .messages;
+  const lastUser = messages?.findLast?.((m) => m.role === "user");
+  const commandTag = extractCommandTag(lastUser?.content);
+  log.info(
+    `llm_usage provider=anthropic model=${model.id} prompt=${prompt} completion=${completion} cached=${cached}`,
+    {
+      event: "llm_usage",
+      provider: "anthropic",
+      model: model.id,
+      prompt_tokens: prompt,
+      completion_tokens: completion,
+      cached_tokens: cached,
+      command: commandTag,
+    },
+  );
+}
+
 export function createAnthropicMessagesTransportStreamFn(): StreamFn {
   return (rawModel, context, rawOptions) => {
     const model = rawModel as AnthropicTransportModel;
@@ -1150,6 +1192,11 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           }
         }
         finalizeTransportStream({ stream, output, signal: transportOptions.signal });
+        // Emit after finalize so aborted/failed turns (finalize can throw when
+        // signal.aborted is true) don't count toward openclaw_llm_*_total. The
+        // failure path goes through failTransportStream in the catch block
+        // below and intentionally does not record usage.
+        emitAnthropicUsageObservability(model, context, output.usage);
       } catch (error) {
         failTransportStream({
           stream,

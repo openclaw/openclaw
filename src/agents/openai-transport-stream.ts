@@ -20,7 +20,7 @@ import type {
   ResponseInputMessageContentList,
 } from "openai/resources/responses/responses.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
-import { extractCommandTag, recordCodexUsage } from "../logging/codex-metrics.js";
+import { extractCommandTag, recordLLMUsage } from "../logging/llm-metrics.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
@@ -724,7 +724,10 @@ function createOpenAIResponsesClient(
 // subsystem logger so operators can attribute ChatGPT Plus rate-limit
 // pressure to specific commands. Scoped to the openai-codex provider —
 // other OpenAI Responses providers (e.g. Azure) don't share the same
-// account-level quota so don't get counted here.
+// account-level quota so don't get counted here. Anthropic transport has
+// its own sibling emit in anthropic-transport-stream.ts; both feed into
+// the same openclaw_llm_* counter family partitioned by provider so the
+// dashboard catches fallback flows.
 function emitCodexUsageObservability(
   model: Model<Api>,
   context: Context,
@@ -734,15 +737,16 @@ function emitCodexUsageObservability(
   const prompt = (usage?.input ?? 0) + (usage?.cacheRead ?? 0);
   const completion = usage?.output ?? 0;
   const cached = usage?.cacheRead ?? 0;
-  recordCodexUsage({ prompt, completion, cached });
+  recordLLMUsage("codex", { prompt, completion, cached });
   const messages = (context as { messages?: ReadonlyArray<{ role: string; content: unknown }> })
     .messages;
   const lastUser = messages?.findLast?.((m) => m.role === "user");
   const commandTag = extractCommandTag(lastUser?.content);
   log.info(
-    `codex_usage model=${model.id} prompt=${prompt} completion=${completion} cached=${cached}`,
+    `llm_usage provider=codex model=${model.id} prompt=${prompt} completion=${completion} cached=${cached}`,
     {
-      event: "codex_usage",
+      event: "llm_usage",
+      provider: "codex",
       model: model.id,
       prompt_tokens: prompt,
       completion_tokens: completion,

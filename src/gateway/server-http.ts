@@ -21,7 +21,7 @@ import {
   createDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
-import { formatCodexMetricsPrometheus } from "../logging/codex-metrics.js";
+import { formatLLMMetricsPrometheus } from "../logging/llm-metrics.js";
 import { resolveAssistantIdentity } from "./assistant-identity.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import {
@@ -751,7 +751,7 @@ export function createGatewayHttpServer(opts: {
           if (req.method !== "GET" || scopedRequestPath !== "/metrics") return false;
           res.statusCode = 200;
           res.setHeader("Content-Type", "text/plain; version=0.0.4; charset=utf-8");
-          res.end(formatCodexMetricsPrometheus());
+          res.end(formatLLMMetricsPrometheus());
           return true;
         },
       });
