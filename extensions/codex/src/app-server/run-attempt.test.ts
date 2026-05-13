@@ -723,18 +723,18 @@ describe("runCodexAppServerAttempt", () => {
     expect(binding.mcpServersFingerprint).toBe("mcp-v2");
   });
 
-  it("preserves an MCP-backed Codex thread when MCP config is not evaluated", async () => {
+  it("starts a no-MCP Codex thread when MCP config is evaluated empty", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     await writeCodexAppServerBinding(sessionFile, {
-      threadId: "existing-thread",
+      threadId: "old-thread",
       cwd: workspaceDir,
       dynamicToolsFingerprint: JSON.stringify([]),
       mcpServersFingerprint: "mcp-v1",
     });
     const request = vi.fn(async (method: string, _params: unknown) => {
-      if (method === "thread/resume") {
-        return threadStartResult("existing-thread");
+      if (method === "thread/start") {
+        return threadStartResult("new-thread");
       }
       throw new Error(`unexpected method: ${method}`);
     });
@@ -745,13 +745,13 @@ describe("runCodexAppServerAttempt", () => {
       cwd: workspaceDir,
       dynamicTools: [],
       appServer: createThreadLifecycleAppServerOptions(),
-      mcpServersFingerprintEvaluated: false,
+      mcpServersFingerprintEvaluated: true,
     });
 
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/resume"]);
-    expect(binding.threadId).toBe("existing-thread");
-    expect(binding.mcpServersFingerprint).toBe("mcp-v1");
-    expect((await readCodexAppServerBinding(sessionFile))?.mcpServersFingerprint).toBe("mcp-v1");
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
+    expect(binding.threadId).toBe("new-thread");
+    expect(binding.mcpServersFingerprint).toBeUndefined();
+    expect((await readCodexAppServerBinding(sessionFile))?.mcpServersFingerprint).toBeUndefined();
   });
 
   it("does not expose OpenClaw Tool Search controls through Codex dynamic tools", async () => {

@@ -72,7 +72,7 @@ describe("loadCodexBundleMcpThreadConfig", () => {
     expect(loaded.fingerprint).toMatch(/^[a-f0-9]{64}$/);
   });
 
-  it("skips MCP config when Pi would not create a bundle MCP runtime", () => {
+  it("returns an evaluated empty MCP config when Pi would not create a bundle MCP runtime", () => {
     const cfg = {
       mcp: {
         servers: {
@@ -98,7 +98,7 @@ describe("loadCodexBundleMcpThreadConfig", () => {
 
       expect(loaded.configPatch).toBeUndefined();
       expect(loaded.fingerprint).toBeUndefined();
-      expect(loaded.evaluated).toBe(false);
+      expect(loaded.evaluated).toBe(true);
     }
   });
 

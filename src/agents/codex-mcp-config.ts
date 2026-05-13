@@ -96,15 +96,15 @@ function fingerprintCodexMcpServersConfig(config: CodexMcpServersConfig): string
 export function loadCodexBundleMcpThreadConfig(
   params: LoadCodexBundleMcpThreadConfigParams,
 ): CodexBundleMcpThreadConfig {
-  const evaluated = shouldCreateBundleMcpRuntimeForAttempt({
+  const shouldCreateRuntime = shouldCreateBundleMcpRuntimeForAttempt({
     toolsEnabled: params.toolsEnabled ?? true,
     disableTools: params.disableTools,
     toolsAllow: params.toolsAllow,
   });
-  if (!evaluated) {
+  if (!shouldCreateRuntime) {
     return {
       diagnostics: [],
-      evaluated: false,
+      evaluated: true,
     };
   }
   const merged = loadMergedBundleMcpConfig({
