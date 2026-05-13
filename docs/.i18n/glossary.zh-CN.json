@@ -950,5 +950,9 @@
   {
     "source": "ACP agents setup",
     "target": "ACP Agents 设置"
+  },
+  {
+    "source": "ds4 (local DeepSeek V4)",
+    "target": "ds4（本地 DeepSeek V4）"
   }
 ]
