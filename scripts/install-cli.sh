@@ -520,12 +520,13 @@ install_node() {
     current_major="$("$(node_bin)" -v 2>/dev/null | tr -d 'v' | cut -d'.' -f1 || echo "")"
     if [[ -n "$current_major" && "$current_major" -ge 22 ]]; then
       emit_json "{\"event\":\"step\",\"name\":\"node\",\"status\":\"skip\",\"path\":\"${dir//\"/\\\\\\\"}\"}"
+      log "Using existing managed Node at ${dir}; this local-prefix runtime may differ from your shell/global node."
       return
     fi
   fi
 
   emit_json "{\"event\":\"step\",\"name\":\"node\",\"status\":\"start\",\"version\":\"${NODE_VERSION}\"}"
-  log "Installing Node ${NODE_VERSION} (user-space)..."
+  log "Installing managed Node ${NODE_VERSION} for the local-prefix runtime (this may differ from your shell/global node)..."
 
   mkdir -p "${PREFIX}/tools"
   tmp="$(mktemp -d)"
