@@ -463,6 +463,7 @@ type PreparedCronRunContext = {
   deliveryRequested: boolean;
   suppressExecNotifyOnExit: boolean;
   senderIsOwner: boolean;
+  allowEmptyAssistantReplyAsSilent: boolean;
   toolPolicy: ReturnType<typeof resolveCronToolPolicy>;
   skillsSnapshot: SkillSnapshot;
   liveSelection: CronLiveSelection;
@@ -794,6 +795,7 @@ async function prepareCronRunContext(params: {
       deliveryRequested,
       suppressExecNotifyOnExit: deliveryPlan.mode === "none",
       senderIsOwner: !isExternalHook,
+      allowEmptyAssistantReplyAsSilent: deliveryPlan.mode === "none",
       toolPolicy,
       skillsSnapshot,
       liveSelection,
@@ -1148,6 +1150,7 @@ export async function runCronIsolatedAgentTurn(params: {
       timeoutMs: prepared.context.timeoutMs,
       suppressExecNotifyOnExit: prepared.context.suppressExecNotifyOnExit,
       senderIsOwner: prepared.context.senderIsOwner,
+      allowEmptyAssistantReplyAsSilent: prepared.context.allowEmptyAssistantReplyAsSilent,
     });
     if (isAborted()) {
       return prepared.context.withRunSession({

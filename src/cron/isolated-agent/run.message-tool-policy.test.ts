@@ -337,6 +337,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       abortReason: () => "aborted",
       ...overrides,
       resolvedDelivery,
+      allowEmptyAssistantReplyAsSilent: overrides.allowEmptyAssistantReplyAsSilent ?? false,
     });
   }
 
