@@ -665,10 +665,25 @@ async function collectPackageManifestPaths(params: {
   };
 }
 
+function formatPackageScanRelativePath(params: {
+  packageDir: string;
+  relativePath: string;
+  relativeRootDir?: string;
+}): string {
+  if (!params.relativeRootDir) {
+    return params.relativePath;
+  }
+  const packageRelativePath = path.relative(params.relativeRootDir, params.packageDir);
+  return packageRelativePath
+    ? path.join(packageRelativePath, params.relativePath)
+    : params.relativePath;
+}
+
 async function scanManifestDependencyDenylist(params: {
   allowManagedNpmRootPackagePeerSymlinks?: boolean;
   logger: InstallScanLogger;
   packageDir: string;
+  relativeRootDir?: string;
   targetLabel: string;
 }): Promise<InstallSecurityScanResult | undefined> {
   const traversalResult = await collectPackageManifestPaths({
@@ -687,7 +702,11 @@ async function scanManifestDependencyDenylist(params: {
       continue;
     }
 
-    const manifestRelativePath = path.relative(params.packageDir, manifestPath) || "package.json";
+    const manifestRelativePath = formatPackageScanRelativePath({
+      packageDir: params.packageDir,
+      relativePath: path.relative(params.packageDir, manifestPath) || "package.json",
+      relativeRootDir: params.relativeRootDir,
+    });
     const reason = buildBlockedDependencyReason({
       findings: blockedDependencies,
       manifestPackageName: manifest.name,
@@ -708,7 +727,11 @@ async function scanManifestDependencyDenylist(params: {
   if (traversalResult.blockedDirectoryFinding) {
     const reason = buildBlockedDependencyDirectoryReason({
       dependencyName: traversalResult.blockedDirectoryFinding.dependencyName,
-      directoryRelativePath: traversalResult.blockedDirectoryFinding.directoryRelativePath,
+      directoryRelativePath: formatPackageScanRelativePath({
+        packageDir: params.packageDir,
+        relativePath: traversalResult.blockedDirectoryFinding.directoryRelativePath,
+        relativeRootDir: params.relativeRootDir,
+      }),
       targetLabel: params.targetLabel,
     });
     params.logger.warn?.(`WARNING: ${reason}`);
@@ -722,7 +745,11 @@ async function scanManifestDependencyDenylist(params: {
   if (traversalResult.blockedFileFinding) {
     const reason = buildBlockedDependencyFileReason({
       dependencyName: traversalResult.blockedFileFinding.dependencyName,
-      fileRelativePath: traversalResult.blockedFileFinding.fileRelativePath,
+      fileRelativePath: formatPackageScanRelativePath({
+        packageDir: params.packageDir,
+        relativePath: traversalResult.blockedFileFinding.fileRelativePath,
+        relativeRootDir: params.relativeRootDir,
+      }),
       targetLabel: params.targetLabel,
     });
     params.logger.warn?.(`WARNING: ${reason}`);
@@ -1143,6 +1170,7 @@ export async function scanInstalledPackageDependencyTreeRuntime(params: {
       logger: params.logger,
       packageDir,
       allowManagedNpmRootPackagePeerSymlinks: params.allowManagedNpmRootPackagePeerSymlinks,
+      relativeRootDir: params.dependencyScanRootDir ?? params.packageDir,
       targetLabel: `Plugin "${params.pluginId}" installation`,
     });
     if (dependencyBlocked) {
