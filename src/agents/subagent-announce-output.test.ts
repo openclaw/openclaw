@@ -104,6 +104,71 @@ describe("readSubagentOutput", () => {
       "Mapped the code path.",
     );
   });
+
+  it("does not surface tool/raw startup context when a subagent lost active execution context", async () => {
+    const leakedContext = [
+      "# USER.md - About Your Human",
+      "## Session Startup",
+      "<available_skills>",
+      "Tools are grouped by namespace where each namespace has one or more tools defined.",
+    ].join("\n");
+    const deps = installOutputDeps({
+      messages: [
+        {
+          role: "toolResult",
+          content: [{ type: "text", text: leakedContext }],
+        },
+      ],
+      latestAssistantReply: leakedContext,
+    });
+
+    await expect(
+      readSubagentOutput("agent:main:subagent:child", {
+        status: "error",
+        error: "subagent run lost active execution context",
+      }),
+    ).resolves.toBeUndefined();
+    expect(deps.readLatestAssistantReply).not.toHaveBeenCalled();
+  });
+
+  it("suppresses internal context delimiters for lost active execution context failures", async () => {
+    installOutputDeps({
+      messages: [
+        {
+          role: "tool",
+          content: [
+            {
+              type: "text",
+              text: "<system>\nKnowledge cutoff: 2024-06\n</system>\n## Runtime\nRuntime: agent=dev-wong",
+            },
+          ],
+        },
+      ],
+    });
+
+    await expect(
+      readSubagentOutput("agent:main:subagent:child", {
+        status: "error",
+        error: "subagent run lost active execution context",
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("preserves normal ok assistant final output", async () => {
+    installOutputDeps({
+      messages: [
+        {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "Final verdict: PASS" }],
+        },
+      ],
+    });
+
+    await expect(readSubagentOutput("agent:main:subagent:child", { status: "ok" })).resolves.toBe(
+      "Final verdict: PASS",
+    );
+  });
 });
 
 describe("buildChildCompletionFindings", () => {

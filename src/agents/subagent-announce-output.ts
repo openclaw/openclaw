@@ -284,6 +284,28 @@ function formatSubagentPartialProgress(
   return parts.join("\n\n") || undefined;
 }
 
+function isLostActiveExecutionContextOutcome(outcome?: SubagentRunOutcome): boolean {
+  return (
+    outcome?.status === "error" &&
+    typeof outcome.error === "string" &&
+    /subagent run lost active execution context/i.test(outcome.error)
+  );
+}
+
+function containsInternalRuntimeContext(text: string): boolean {
+  return [
+    /<\/?(?:system|available_skills|developer|user)>/i,
+    /#\s*(?:USER|SOUL|AGENTS|IDENTITY|TOOLS)\.md\b/i,
+    /\bSession Startup\b/i,
+    /\bProject Context\b/i,
+    /\bTools are grouped by namespace\b/i,
+    /\bKnowledge cutoff:\s*\d{4}-\d{2}\b/i,
+    /\[Subagent Context\]/i,
+    /^##\s*Runtime\b/im,
+    /Runtime:\s*agent=/i,
+  ].some((pattern) => pattern.test(text));
+}
+
 function selectSubagentOutputText(
   snapshot: SubagentOutputSnapshot,
   outcome?: SubagentRunOutcome,
@@ -291,15 +313,25 @@ function selectSubagentOutputText(
   if (snapshot.waitingForContinuation) {
     return undefined;
   }
+  const lostActiveExecutionContext = isLostActiveExecutionContextOutcome(outcome);
   if (snapshot.latestSilentText) {
     return snapshot.latestSilentText;
   }
   if (snapshot.latestAssistantText) {
+    if (
+      lostActiveExecutionContext &&
+      containsInternalRuntimeContext(snapshot.latestAssistantText)
+    ) {
+      return undefined;
+    }
     return snapshot.latestAssistantText;
   }
   const partialProgress = formatSubagentPartialProgress(snapshot, outcome);
   if (partialProgress) {
     return partialProgress;
+  }
+  if (lostActiveExecutionContext) {
+    return undefined;
   }
   return snapshot.latestRawText;
 }
@@ -318,7 +350,7 @@ export async function readSubagentOutput(
   if (selected?.trim()) {
     return selected;
   }
-  if (snapshot.waitingForContinuation) {
+  if (snapshot.waitingForContinuation || isLostActiveExecutionContextOutcome(outcome)) {
     return undefined;
   }
   const latestAssistant = await subagentAnnounceOutputDeps.readLatestAssistantReply({
