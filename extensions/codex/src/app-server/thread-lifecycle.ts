@@ -364,10 +364,10 @@ export function buildCodexRuntimeThreadConfig(config: JsonObject | undefined): J
   );
 }
 
-// Map the openclaw session-level `reasoningLevel` preference (off/on/stream)
-// to the codex `model_reasoning_summary` config value (none/auto/concise/detailed).
+// Map the openclaw session-level `reasoningLevel` preference to the codex
+// `model_reasoning_summary` config value, on positive opt-in only.
 //
-// Without this, codex's app-server falls back to its built-in default of
+// Without this, the codex app-server falls back to its built-in default of
 // `summary = "none"` — codex still *thinks*, but never emits
 // `item/reasoning/summaryTextDelta` notifications, so openclaw's
 // `CodexAppServerEventProjector` (which already handles those deltas) has
@@ -378,19 +378,20 @@ export function buildCodexRuntimeThreadConfig(config: JsonObject | undefined): J
 // `openai-transport-stream.ts` — this brings the codex app-server path to
 // parity.
 //
-// Returns `undefined` when reasoningLevel is unset so codex preserves whatever
-// `model_reasoning_summary` is configured in the user's `~/.codex/config.toml`.
-// Returns `undefined` for unknown values (forwards-compat with future enum
-// additions).
+// Important: openclaw defaults a missing `reasoningLevel` to `"off"` at
+// several callsites (commands-btw, directive-handling, get-reply-directives,
+// etc.), so by the time the value reaches this extension we cannot
+// distinguish "user explicitly set off" from "openclaw filled in a default".
+// We therefore only emit `model_reasoning_summary` for the positive opt-ins
+// (`"on"`, `"stream"`). For everything else — including `"off"` and unset —
+// we return `undefined` so codex's own default (or whatever the user has set
+// in `~/.codex/config.toml`) wins. Users who want to actively suppress
+// summaries can set `model_reasoning_summary = "none"` in their codex
+// config.toml; this extension will not override that.
 export function resolveCodexReasoningSummary(
   reasoningLevel: string | undefined,
-): "auto" | "none" | undefined {
-  if (!reasoningLevel) {
-    return undefined;
-  }
+): "auto" | undefined {
   switch (reasoningLevel) {
-    case "off":
-      return "none";
     case "on":
     case "stream":
       return "auto";

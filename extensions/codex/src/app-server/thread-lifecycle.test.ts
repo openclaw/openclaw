@@ -122,7 +122,13 @@ describe("Codex app-server reasoning summary plumbing", () => {
     expect(request.config).toMatchObject({ model_reasoning_summary: "auto" });
   });
 
-  it("sets model_reasoning_summary=none on thread/start when reasoningLevel=off", () => {
+  // openclaw defaults a missing reasoningLevel to "off" at several callsites
+  // (commands-btw, directive-handling, get-reply-directives), so we cannot
+  // distinguish "user explicitly set off" from "openclaw filled in a default".
+  // To avoid clobbering a user's `~/.codex/config.toml` setting from a default
+  // value, the extension does NOT emit model_reasoning_summary for "off".
+  // Users wanting summaries off should set it in codex config.toml directly.
+  it("omits model_reasoning_summary on thread/start when reasoningLevel=off (default-or-explicit; preserves codex config.toml)", () => {
     const request = buildThreadStartParams(
       createAttemptParams({ provider: "openai", reasoningLevel: "off" }),
       {
@@ -132,7 +138,7 @@ describe("Codex app-server reasoning summary plumbing", () => {
         developerInstructions: "test instructions",
       },
     );
-    expect(request.config).toMatchObject({ model_reasoning_summary: "none" });
+    expect(request.config).not.toHaveProperty("model_reasoning_summary");
   });
 
   it("plumbs model_reasoning_summary on thread/resume as well", () => {
@@ -171,16 +177,16 @@ describe("Codex app-server reasoning summary plumbing", () => {
   });
 
   describe("resolveCodexReasoningSummary", () => {
-    it("maps off → none", () => {
-      expect(resolveCodexReasoningSummary("off")).toBe("none");
-    });
     it("maps on → auto", () => {
       expect(resolveCodexReasoningSummary("on")).toBe("auto");
     });
     it("maps stream → auto", () => {
       expect(resolveCodexReasoningSummary("stream")).toBe("auto");
     });
-    it("returns undefined for unset (preserves codex defaults)", () => {
+    it("returns undefined for off (cannot distinguish explicit-off from openclaw default)", () => {
+      expect(resolveCodexReasoningSummary("off")).toBeUndefined();
+    });
+    it("returns undefined for unset (preserves codex config.toml defaults)", () => {
       expect(resolveCodexReasoningSummary(undefined)).toBeUndefined();
     });
     it("returns undefined for unknown values (forwards-compat)", () => {
