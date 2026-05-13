@@ -11,7 +11,7 @@ import {
 
 export type AgentHarnessPolicy = {
   runtime: EmbeddedAgentRuntime;
-  runtimeSource?: "model" | "provider" | "implicit";
+  runtimeSource?: "model" | "provider" | "defaults" | "implicit";
 };
 
 export function resolveAgentHarnessPolicy(params: {

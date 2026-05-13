@@ -6,7 +6,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { listAgentEntries, resolveSessionAgentIds } from "./agent-scope.js";
 import { normalizeProviderId } from "./provider-id.js";
 
-export type ModelRuntimePolicySource = "model" | "provider";
+export type ModelRuntimePolicySource = "model" | "provider" | "defaults";
 
 export type ResolvedModelRuntimePolicy = {
   policy?: AgentRuntimePolicyConfig;
@@ -161,6 +161,9 @@ export function resolveModelRuntimePolicy(params: {
   }
   if (hasRuntimePolicy(providerConfig?.agentRuntime)) {
     return { policy: providerConfig?.agentRuntime, source: "provider" };
+  }
+  if (hasRuntimePolicy(params.config?.agents?.defaults?.agentRuntime)) {
+    return { policy: params.config?.agents?.defaults?.agentRuntime, source: "defaults" };
   }
   return {};
 }
