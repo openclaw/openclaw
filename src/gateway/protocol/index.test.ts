@@ -273,7 +273,6 @@ describe("validateTalkSession", () => {
     expect(
       validateTalkSessionCreateParams({
         sessionKey: "agent:main:main",
-        agentId: "main",
         spawnedBy: "agent:main:parent",
         provider: "openai",
         model: "gpt-realtime-2",

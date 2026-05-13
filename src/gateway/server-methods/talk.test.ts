@@ -815,7 +815,6 @@ describe("talk.session unified handlers", () => {
         mode: "stt-tts",
         transport: "managed-room",
         sessionKey: "agent:worker:subagent:child",
-        agentId: "main",
         spawnedBy: "agent:main:parent",
       },
       client: { connId: "conn-1", connect: { scopes: ["operator.write"] } } as never,

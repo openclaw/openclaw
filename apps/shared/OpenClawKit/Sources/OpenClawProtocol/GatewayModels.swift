@@ -3228,7 +3228,6 @@ public struct TalkSessionCancelTurnParams: Codable, Sendable {
 
 public struct TalkSessionCreateParams: Codable, Sendable {
     public let sessionkey: String?
-    public let agentid: String?
     public let spawnedby: String?
     public let provider: String?
     public let model: String?
@@ -3244,7 +3243,6 @@ public struct TalkSessionCreateParams: Codable, Sendable {
 
     public init(
         sessionkey: String?,
-        agentid: String? = nil,
         spawnedby: String? = nil,
         provider: String?,
         model: String?,
@@ -3259,7 +3257,6 @@ public struct TalkSessionCreateParams: Codable, Sendable {
         ttlms: Int?)
     {
         self.sessionkey = sessionkey
-        self.agentid = agentid
         self.spawnedby = spawnedby
         self.provider = provider
         self.model = model
@@ -3276,7 +3273,6 @@ public struct TalkSessionCreateParams: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
-        case agentid = "agentId"
         case spawnedby = "spawnedBy"
         case provider
         case model
