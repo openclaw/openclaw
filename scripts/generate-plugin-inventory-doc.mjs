@@ -396,7 +396,7 @@ ${record.description}
 
 ## Surface
 
-${record.surface}${extraSections ? `\n\n${extraSections}` : ""}${relatedDocs ? `\n\n${relatedDocs}` : ""}
+${record.surface}${extraSections ? `\n\n${String(extraSections)}` : ""}${relatedDocs ? `\n\n${relatedDocs}` : ""}
 `;
 }
 
