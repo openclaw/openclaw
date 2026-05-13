@@ -52,6 +52,7 @@ async function packPlugin(params: {
   pluginId: string;
   version: string;
   rootDir: string;
+  indexJs?: string;
 }): Promise<PackedVersion> {
   const packageDir = path.join(params.rootDir, `package-${params.packageName}-${params.version}`);
   const peerDependenciesMeta = params.peerDependencies
@@ -94,7 +95,11 @@ async function packPlugin(params: {
     )}\n`,
     "utf8",
   );
-  await fs.writeFile(path.join(packageDir, "dist", "index.js"), "export {};\n", "utf8");
+  await fs.writeFile(
+    path.join(packageDir, "dist", "index.js"),
+    params.indexJs ?? "export {};\n",
+    "utf8",
+  );
 
   const packOutput = execFileSync(
     "npm",
@@ -432,6 +437,102 @@ describe("installPluginFromNpmSpec e2e", () => {
     });
     if (!second.ok) {
       throw new Error(second.error);
+    }
+
+    await expect(
+      fs.lstat(path.join(npmRoot, "node_modules", runtimePeer, "package.json")),
+    ).resolves.toBeTruthy();
+  });
+
+  it("does not attribute repaired pre-existing peer dependencies to later installs", async () => {
+    const rootDir = await makeTempDir("npm-plugin-repaired-peer-scan-e2e");
+    const npmRoot = path.join(rootDir, "managed-npm");
+    const pluginWithRuntimePeer = `existing-peer-plugin-${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+    const laterPlugin = `later-plugin-${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+    const runtimePeer = `runtime-peer-${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+    const registry = await startStaticRegistry([
+      {
+        packageName: pluginWithRuntimePeer,
+        latest: "1.0.0",
+        versions: [
+          await packPlugin({
+            packageName: pluginWithRuntimePeer,
+            peerDependencies: { [runtimePeer]: "^1.0.0" },
+            peerDependenciesMeta: {},
+            pluginId: pluginWithRuntimePeer,
+            version: "1.0.0",
+            rootDir,
+          }),
+        ],
+      },
+      {
+        packageName: laterPlugin,
+        latest: "1.0.0",
+        versions: [
+          await packPlugin({
+            packageName: laterPlugin,
+            pluginId: laterPlugin,
+            version: "1.0.0",
+            rootDir,
+          }),
+        ],
+      },
+      {
+        packageName: runtimePeer,
+        latest: "1.0.0",
+        versions: [
+          await packPlugin({
+            indexJs: "eval('1');\n",
+            packageName: runtimePeer,
+            pluginId: runtimePeer,
+            version: "1.0.0",
+            rootDir,
+          }),
+        ],
+      },
+    ]);
+    process.env.NPM_CONFIG_REGISTRY = registry;
+    process.env.npm_config_registry = registry;
+
+    await fs.mkdir(npmRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(npmRoot, "package.json"),
+      `${JSON.stringify(
+        {
+          private: true,
+          dependencies: { [pluginWithRuntimePeer]: "1.0.0" },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    await execFileAsync(
+      "npm",
+      [
+        "install",
+        "--omit=dev",
+        "--omit=peer",
+        "--legacy-peer-deps",
+        "--loglevel=error",
+        "--ignore-scripts",
+        "--no-audit",
+        "--no-fund",
+      ],
+      { cwd: npmRoot },
+    );
+    await expect(
+      fs.lstat(path.join(npmRoot, "node_modules", runtimePeer, "package.json")),
+    ).rejects.toHaveProperty("code", "ENOENT");
+
+    const later = await installPluginFromNpmSpec({
+      spec: `${laterPlugin}@1.0.0`,
+      npmDir: npmRoot,
+      logger: { info: () => {}, warn: () => {} },
+      timeoutMs: 120_000,
+    });
+    if (!later.ok) {
+      throw new Error(later.error);
     }
 
     await expect(

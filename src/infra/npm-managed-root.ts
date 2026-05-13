@@ -427,6 +427,13 @@ export async function syncManagedNpmRootPeerDependencies(params: {
   return changed;
 }
 
+export async function readManagedNpmRootPeerDependencyNames(params: {
+  npmRoot: string;
+}): Promise<Set<string>> {
+  const manifest = await readManagedNpmRootManifest(path.join(params.npmRoot, "package.json"));
+  return new Set(readManagedPeerDependencyKeys(manifest.openclaw));
+}
+
 export async function repairManagedNpmRootOpenClawPeer(params: {
   npmRoot: string;
   timeoutMs?: number;

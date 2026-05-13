@@ -12,6 +12,7 @@ import {
 import { resolveNpmIntegrityDriftWithDefaultMessage } from "../infra/npm-integrity.js";
 import {
   readManagedNpmRootInstalledDependency,
+  readManagedNpmRootPeerDependencyNames,
   readOpenClawManagedNpmRootOverrides,
   repairManagedNpmRootOpenClawPeer,
   removeManagedNpmRootDependency,
@@ -465,11 +466,16 @@ function resolveManagedNpmRootPackageDir(npmRoot: string, packageName: string): 
 
 async function listNewManagedNpmRootPackageDirs(params: {
   beforeInstallPackageNames: Set<string>;
+  excludePackageNames?: Set<string>;
   npmRoot: string;
 }): Promise<string[]> {
   const afterInstallPackageNames = await listManagedNpmRootPackageNames(params.npmRoot);
   return [...afterInstallPackageNames]
-    .filter((packageName) => !params.beforeInstallPackageNames.has(packageName))
+    .filter(
+      (packageName) =>
+        !params.beforeInstallPackageNames.has(packageName) &&
+        !params.excludePackageNames?.has(packageName),
+    )
     .map((packageName) => resolveManagedNpmRootPackageDir(params.npmRoot, packageName))
     .toSorted((left, right) => left.localeCompare(right));
 }
@@ -572,6 +578,9 @@ async function installPluginFromManagedNpmRoot(
     managedOverrides,
   });
   await syncManagedNpmRootPeerDependencies({ npmRoot, managedOverrides });
+  const preExistingManagedPeerDependencyNames = await readManagedNpmRootPeerDependencyNames({
+    npmRoot,
+  });
   const npmInstallArgs = [
     "npm",
     ...createSafeNpmInstallArgs({
@@ -751,6 +760,7 @@ async function installPluginFromManagedNpmRoot(
 
   const newRootPackageDirs = await listNewManagedNpmRootPackageDirs({
     beforeInstallPackageNames: preInstallRootPackageNames,
+    excludePackageNames: preExistingManagedPeerDependencyNames,
     npmRoot,
   });
   const result = await installPluginFromInstalledPackageDir({
