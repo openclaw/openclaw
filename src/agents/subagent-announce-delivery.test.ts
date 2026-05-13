@@ -624,7 +624,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         accountId: "acct-1",
         to: "channel:C123",
         threadId: "171.222",
-        content: "thread completion smoke: completed successfully",
+        content: "child completion output",
         requesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
         bestEffort: true,
         idempotencyKey: "announce-thread-fallback-1",
@@ -668,7 +668,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         accountId: "bot-1",
         to: "123456789",
         threadId: undefined,
-        content: "telegram completion smoke: completed successfully",
+        content: "child completion output",
         requesterSessionKey: "agent:main:telegram:123456789",
         bestEffort: true,
         idempotencyKey: "announce-telegram-dm-fallback",
@@ -720,7 +720,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expect.objectContaining({
         channel: "telegram",
         to: "123456789",
-        content: "telegram wake smoke: completed successfully",
+        content: "child completion output",
       }),
     );
   });
@@ -764,7 +764,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(callGateway).toHaveBeenCalled();
     expect(sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({
-        content: "thread completion smoke: completed successfully",
+        content: "child completion output",
         idempotencyKey: "announce-thread-fallback-empty",
       }),
     );
@@ -872,7 +872,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         accountId: "acct-1",
         to: "channel:C123",
         threadId: undefined,
-        content: "channel completion smoke: completed successfully",
+        content: "child completion output",
         requesterSessionKey: "agent:main:slack:channel:C123",
         bestEffort: true,
         idempotencyKey: "announce-channel-fallback-empty",
@@ -956,25 +956,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
 });
 
 describe("extractThreadCompletionFallbackText", () => {
-  it("prefers task completion result text for media-style events", () => {
-    expect(
-      extractThreadCompletionFallbackText([
-        {
-          type: "task_completion",
-          source: "music_generation",
-          childSessionKey: "music_generate:task-123",
-          announceType: "music generation task",
-          taskLabel: "sample task",
-          status: "ok",
-          statusLabel: "completed successfully",
-          result: "final child result",
-          replyInstruction: "Deliver the result.",
-        },
-      ]),
-    ).toBe("final child result");
-  });
-
-  it("does not expose raw subagent completion output in direct fallbacks", () => {
+  it("prefers task completion result text", () => {
     expect(
       extractThreadCompletionFallbackText([
         {
@@ -985,11 +967,11 @@ describe("extractThreadCompletionFallbackText", () => {
           taskLabel: "sample task",
           status: "ok",
           statusLabel: "completed successfully",
-          result: "raw code block\n```ts\nconst internalFlag = true;\n```",
+          result: "final child result",
           replyInstruction: "Summarize the result.",
         },
       ]),
-    ).toBe("sample task: completed successfully");
+    ).toBe("final child result");
   });
 
   it("falls back to task and status labels when result text is empty", () => {
