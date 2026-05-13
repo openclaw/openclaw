@@ -43,10 +43,11 @@ prompt.
 Use:
 
 - `/steer <message>` when you want to guide the active run right now.
-- `/queue steer` when you want future normal messages to steer active runs by
-  default.
-- `/queue collect` or `/queue followup` when new messages should wait for a
-  later turn instead of steering the active run.
+- Normal messages already try to steer active runs by default.
+- `/queue collect` or `/queue followup` when you want to choose how messages
+  wait for a later turn if steering is unavailable.
+- `/queue interrupt` when the newest message should replace the active run
+  instead of steering it.
 
 For queue modes and fallback behavior, see [Command queue](/concepts/queue) and
 [Steering queue](/concepts/queue-steering).
