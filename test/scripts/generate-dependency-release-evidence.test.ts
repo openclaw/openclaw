@@ -22,7 +22,7 @@ describe("generate-dependency-release-evidence", () => {
       [
         { command: "pnpm deps:vuln:gate", policy: "hard-blocking" },
         { command: "pnpm deps:transitive-risk:report", policy: "report-only" },
-        { command: "pnpm deps:sbom-risk", policy: "report-only" },
+        { command: "pnpm deps:ownership-surface:report", policy: "report-only" },
         { command: "pnpm deps:changes:report", policy: "report-only" },
       ],
     );

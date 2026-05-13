@@ -22,7 +22,7 @@ export const DEPENDENCY_EVIDENCE_REPORTS = [
   },
   {
     name: "Dependency ownership and install surface report",
-    command: "pnpm deps:sbom-risk",
+    command: "pnpm deps:ownership-surface:report",
     policy: "report-only",
     json: "dependency-ownership-surface-report.json",
     markdown: "dependency-ownership-surface-report.md",
@@ -242,7 +242,7 @@ function runEvidenceReports({ rootDir, outputDir, baseRef, execFileSyncImpl }) {
   runCommand(
     "pnpm",
     [
-      "deps:sbom-risk",
+      "deps:ownership-surface:report",
       "--",
       "--json",
       reportPath(outputDir, "dependency-ownership-surface-report.json"),

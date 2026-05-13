@@ -143,7 +143,7 @@ function collectReportTarget({ repoRoot, packageJson, ownershipPath }) {
   };
 }
 
-export function collectSbomRiskReport(params = {}) {
+export function collectDependencyOwnershipSurfaceReport(params = {}) {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
   const packageJson = readJson(path.join(repoRoot, "package.json"));
   const lockfile = readLockfile(path.join(repoRoot, "pnpm-lock.yaml"));
@@ -262,7 +262,7 @@ export function collectSbomRiskReport(params = {}) {
   };
 }
 
-export function collectSbomRiskCheckErrors(report) {
+export function collectDependencyOwnershipSurfaceCheckErrors(report) {
   return report.ownershipGaps.map(
     (name) => `root dependency '${name}' is missing from ${DEFAULT_OWNERSHIP_PATH}`,
   );
@@ -426,20 +426,20 @@ function writeArtifact(filePath, content) {
 
 function main(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
-  const report = collectSbomRiskReport();
+  const report = collectDependencyOwnershipSurfaceReport();
   writeArtifact(options.jsonPath, `${JSON.stringify(report, null, 2)}\n`);
   writeArtifact(options.markdownPath, renderTextReport(report));
   if (options.check) {
-    const errors = collectSbomRiskCheckErrors(report);
+    const errors = collectDependencyOwnershipSurfaceCheckErrors(report);
     if (errors.length > 0) {
       for (const error of errors) {
-        console.error(`[sbom-risk] ${error}`);
+        console.error(`[ownership-surface] ${error}`);
       }
       process.exitCode = 1;
       return;
     }
     if (!options.asJson) {
-      console.error("[sbom-risk] ok");
+      console.error("[ownership-surface] ok");
       return;
     }
   }
