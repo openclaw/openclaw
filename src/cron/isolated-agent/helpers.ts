@@ -275,12 +275,9 @@ export function resolveCronPayloadOutcome(params: {
   const normalizedFinalAssistantVisibleText = normalizeOptionalString(
     params.finalAssistantVisibleText,
   );
-  const hasSuccessfulPayloadAfterLastError =
+  const hasAnySuccessfulPayload =
     !params.runLevelError &&
-    lastErrorPayloadIndex >= 0 &&
-    params.payloads
-      .slice(lastErrorPayloadIndex + 1)
-      .some((payload) => payload?.isError !== true && Boolean(payload?.text?.trim()));
+    params.payloads.some((payload) => payload?.isError !== true && Boolean(payload?.text?.trim()));
   const hasSuccessfulPayloadBeforeLastError =
     !params.runLevelError &&
     lastErrorPayloadIndex > 0 &&
@@ -294,7 +291,7 @@ export function resolveCronPayloadOutcome(params: {
     isCronMessagePresentationWarning(lastErrorPayloadText) &&
     (normalizedFinalAssistantVisibleText !== undefined || hasSuccessfulPayloadBeforeLastError);
   const hasFatalStructuredErrorPayload =
-    hasErrorPayload && !hasSuccessfulPayloadAfterLastError && !hasPendingPresentationWarning;
+    hasErrorPayload && !hasAnySuccessfulPayload && !hasPendingPresentationWarning;
   const hasStructuredDeliveryPayloads = selectedDeliveryPayloads.some((payload) =>
     payloadHasStructuredDeliveryContent(payload),
   );
