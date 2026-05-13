@@ -369,7 +369,8 @@ describe("selectAgentHarness", () => {
     );
   });
 
-  it("ignores legacy agentRuntime as a runtime policy source", () => {
+  it("resolves agentRuntime from agents.defaults", () => {
+    registerSuccessfulCodexHarness();
     const config = {
       agents: {
         defaults: {
@@ -384,15 +385,15 @@ describe("selectAgentHarness", () => {
         modelId: "sonnet-4.6",
         config,
       }).id,
-    ).toBe("pi");
+    ).toBe("codex");
   });
 
-  it("ignores legacy agent CLI runtime aliases for OpenAI agent model runs", async () => {
+  it("resolves agentRuntime from agents.defaults for OpenAI agent model runs", async () => {
     registerSuccessfulCodexHarness();
     const config: OpenClawConfig = {
       agents: {
         defaults: {
-          agentRuntime: { id: "claude-cli" },
+          agentRuntime: { id: "codex" },
         },
       },
     };
