@@ -638,8 +638,15 @@ export async function runCli(argv: string[] = process.argv) {
 
     try {
       // Capture all console output into structured logs while keeping stdout/stderr behavior.
-      const { enableConsoleCapture } = await import("../logging.js");
+      const { enableConsoleCapture, routeLogsToStderr } = await import("../logging.js");
       enableConsoleCapture();
+      // The commander preAction hook routes logs to stderr for --json commands, but only
+      // after parseAsync resolves the action. Plugin command registration below loads the
+      // primary command's plugin to populate the command tree, and that plugin-loader
+      // chatter would otherwise land on stdout and corrupt JSON output. Route early.
+      if (hasJsonOutputFlag(normalizedArgv)) {
+        routeLogsToStderr();
+      }
 
       const [
         { buildProgram },
