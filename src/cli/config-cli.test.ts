@@ -2403,9 +2403,10 @@ describe("config cli", () => {
 
       await expect(
         runConfigCommand(["config", "unset", "tools.alsoAllow", "--json"]),
-      ).rejects.toThrow("config unset mode error: --json requires --dry-run.");
+      ).rejects.toThrow("__exit__:1");
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expectErrorIncludes("config unset mode error: --json requires --dry-run.");
     });
   });
 
