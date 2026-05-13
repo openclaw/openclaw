@@ -347,9 +347,28 @@ function isContextEngineBindingCompatible(
   );
 }
 
-function resolveContextEngineCitationsMode(config: JsonObject | undefined): JsonValue | undefined {
-  const memoryConfig = isJsonObject(config?.memory) ? config.memory : undefined;
-  return memoryConfig?.citations;
+function resolveContextEngineCitationsMode(config: unknown): JsonValue | undefined {
+  const rootConfig = isUnknownRecord(config) ? config : undefined;
+  const memoryConfig = isUnknownRecord(rootConfig?.memory) ? rootConfig.memory : undefined;
+  const citations = memoryConfig?.citations;
+  return isJsonConfigValue(citations) ? citations : undefined;
+}
+
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function isJsonConfigValue(value: unknown): value is JsonValue {
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
+    return true;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value);
+  }
+  if (Array.isArray(value)) {
+    return value.every(isJsonConfigValue);
+  }
+  return isUnknownRecord(value) && Object.values(value).every(isJsonConfigValue);
 }
 
 function shouldRecheckRecoverablePluginBinding(params: {
