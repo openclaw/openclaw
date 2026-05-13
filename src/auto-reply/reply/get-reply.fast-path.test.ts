@@ -266,6 +266,48 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(stored.pendingFinalDeliveryAttemptCount).toBe(1);
   });
 
+  it("does not replay stale heartbeat pending delivery when suppression is requested", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-heartbeat-pending-suppress-"));
+    const storePath = path.join(home, "sessions.json");
+    const sessionKey = "agent:main:telegram:123";
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "pending-user-final",
+          updatedAt: Date.now() - 60_000,
+          pendingFinalDelivery: true,
+          pendingFinalDeliveryText: "private prior user answer",
+          pendingFinalDeliveryCreatedAt: 1,
+        },
+      }),
+      "utf8",
+    );
+    const cfg = withFastReplyConfig({
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+          workspace: home,
+          heartbeat: { ackMaxChars: 300 },
+        },
+      },
+      session: { store: storePath },
+    } as OpenClawConfig);
+
+    await expect(
+      getReplyFromConfig(
+        buildGetReplyCtx(),
+        { isHeartbeat: true, suppressPendingFinalDeliveryReplay: true },
+        cfg,
+      ),
+    ).resolves.toEqual({ text: "ok" });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf8"))[sessionKey];
+    expect(stored.pendingFinalDelivery).toBe(true);
+    expect(stored.pendingFinalDeliveryText).toBe("private prior user answer");
+    expect(stored.pendingFinalDeliveryAttemptCount).toBeUndefined();
+  });
+
   it("handles native /status before workspace bootstrap", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-status-fast-"));
     const targetSessionKey = "agent:main:telegram:123";

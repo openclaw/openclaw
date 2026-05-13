@@ -34,6 +34,7 @@ import {
   type HeartbeatTask,
 } from "../auto-reply/heartbeat.js";
 import { resolveDefaultModel } from "../auto-reply/reply/directive-handling.defaults.js";
+import { resolveActiveReplyRunSessionId } from "../auto-reply/reply/reply-run-registry.js";
 import { resolveResponsePrefixTemplate } from "../auto-reply/reply/response-prefix-template.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
@@ -1277,6 +1278,14 @@ export async function runHeartbeatOnce(opts: {
   }
 
   const startedAt = opts.deps?.nowMs?.() ?? Date.now();
+  const skipRequestsInFlight = (): HeartbeatRunResult => {
+    emitHeartbeatEvent({
+      status: "skipped",
+      reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
+      durationMs: Date.now() - startedAt,
+    });
+    return { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT };
+  };
   if (!isWithinActiveHours(cfg, heartbeat, startedAt)) {
     return { status: "skipped", reason: "quiet-hours" };
   }
@@ -1355,13 +1364,11 @@ export async function runHeartbeatOnce(opts: {
   // an active streaming turn.  The wake-layer retry (heartbeat-wake.ts) will
   // re-schedule this wake automatically.  See #14396 (closed without merge).
   const sessionLaneKey = resolveEmbeddedSessionLane(sessionKey);
+  if (resolveActiveReplyRunSessionId(sessionKey)) {
+    return skipRequestsInFlight();
+  }
   if (getSize(sessionLaneKey) > 0) {
-    emitHeartbeatEvent({
-      status: "skipped",
-      reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
-      durationMs: Date.now() - startedAt,
-    });
-    return { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT };
+    return skipRequestsInFlight();
   }
 
   const previousUpdatedAt = entry?.updatedAt;
@@ -1491,6 +1498,9 @@ export async function runHeartbeatOnce(opts: {
       configuredSessionKey: configuredSession.sessionKey,
       sessionEntry: entry,
     });
+    if (resolveActiveReplyRunSessionId(isolatedSessionKey)) {
+      return skipRequestsInFlight();
+    }
     const isolatedStorePath = resolveStorePath(cfg.session?.store, { agentId });
     const staleIsolatedSessionKey = resolveStaleHeartbeatIsolatedSessionKey({
       sessionKey,
@@ -1708,6 +1718,7 @@ export async function runHeartbeatOnce(opts: {
       heartbeat?.lightContext === true ? "lightweight" : undefined;
     const replyOpts = {
       isHeartbeat: true,
+      suppressPendingFinalDeliveryReplay: true,
       ...(heartbeatModelOverride ? { heartbeatModelOverride } : {}),
       suppressToolErrorWarnings,
       ...(usesHeartbeatResponseTool ? { enableHeartbeatTool: true, forceHeartbeatTool: true } : {}),

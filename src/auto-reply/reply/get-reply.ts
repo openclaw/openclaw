@@ -390,9 +390,8 @@ export async function getReplyFromConfig(
   if (sessionEntry?.pendingFinalDelivery && sessionEntry.pendingFinalDeliveryText) {
     const text = sessionEntry.pendingFinalDeliveryText;
 
-    // If it's a heartbeat, we definitely want to try delivering the lost reply now.
-    // If it's a user message, we deliver the lost reply first, then continue.
-    // For now, let's just return the lost reply if it's a heartbeat.
+    // Heartbeats may safely clear ack-only pending state, but must not replay
+    // user-facing pending finals through a different delivery target.
     if (opts?.isHeartbeat) {
       const heartbeatPending = classifyHeartbeatPendingFinalDelivery(
         text,
@@ -425,7 +424,7 @@ export async function getReplyFromConfig(
             }),
           });
         }
-      } else {
+      } else if (opts.suppressPendingFinalDeliveryReplay !== true) {
         const updatedAt = Date.now();
         const attemptCount = (sessionEntry.pendingFinalDeliveryAttemptCount ?? 0) + 1;
         sessionEntry.pendingFinalDeliveryLastAttemptAt = updatedAt;
