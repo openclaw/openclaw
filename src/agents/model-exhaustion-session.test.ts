@@ -1,11 +1,15 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { runWithModelFallback } from "./model-fallback.js";
-import { updateSessionStoreEntry, resolveStoredSessionKeyForSessionId } from "../config/sessions.js";
+import { updateSessionStoreEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveStoredSessionKeyForSessionId } from "./command/session.js";
 import { FailoverError } from "./failover-error.js";
+import { runWithModelFallback } from "./model-fallback.js";
 
 vi.mock("../config/sessions.js", () => ({
   updateSessionStoreEntry: vi.fn(),
+}));
+
+vi.mock("./command/session.js", () => ({
   resolveStoredSessionKeyForSessionId: vi.fn(),
 }));
 
@@ -81,8 +85,15 @@ describe("model exhaustion session persistence", () => {
       storePath,
     });
 
-    const run = vi.fn()
-      .mockRejectedValueOnce(new FailoverError("rate limit", { reason: "rate_limit", provider: "openai", model: "gpt-4o" }))
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new FailoverError("rate limit", {
+          reason: "rate_limit",
+          provider: "openai",
+          model: "gpt-4o",
+        }),
+      )
       .mockResolvedValueOnce("ok");
 
     await runWithModelFallback({
@@ -96,7 +107,7 @@ describe("model exhaustion session persistence", () => {
     expect(updateSessionStoreEntry).toHaveBeenCalled();
     const updateCall = (updateSessionStoreEntry as any).mock.calls[0][0];
     expect(updateCall.sessionKey).toBe(sessionKey);
-    
+
     // Test the update function
     const entry = { sessionId };
     const updateResult = await updateCall.update(entry);

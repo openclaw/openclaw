@@ -3,6 +3,7 @@ import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
+import { updateSessionStoreEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitFailoverEvent } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -14,6 +15,7 @@ import { sanitizeForLog } from "../terminal/ansi.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
 import { hasAnyAuthProfileStoreSource } from "./auth-profiles/source-check.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { resolveStoredSessionKeyForSessionId } from "./command/session.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import {
   FailoverError,
@@ -44,8 +46,6 @@ import {
 } from "./model-selection-resolve.js";
 import { isLikelyContextOverflowError } from "./pi-embedded-helpers/errors.js";
 import type { FailoverReason } from "./pi-embedded-helpers/types.js";
-import { resolveStoredSessionKeyForSessionId } from "./command/session.js";
-import { updateSessionStoreEntry } from "../config/sessions.js";
 import { resolveSessionSuspensionReason, suspendSession } from "./session-suspension.js";
 
 const log = createSubsystemLogger("model-fallback");
@@ -336,7 +336,11 @@ function isPersistedModelHealthActive(params: {
   const key = resolveModelHealthKey(params.provider, params.model);
 
   const exhaustedUntil = params.entry?.exhaustedModels?.[key];
-  if (typeof exhaustedUntil === "number" && Number.isFinite(exhaustedUntil) && exhaustedUntil > params.now) {
+  if (
+    typeof exhaustedUntil === "number" &&
+    Number.isFinite(exhaustedUntil) &&
+    exhaustedUntil > params.now
+  ) {
     return true;
   }
 
@@ -345,8 +349,10 @@ function isPersistedModelHealthActive(params: {
     return false;
   }
   return (
-    resolveModelHealthKey(params.entry?.modelHealthProvider ?? "", params.entry?.modelHealthModel ?? "") ===
-    key
+    resolveModelHealthKey(
+      params.entry?.modelHealthProvider ?? "",
+      params.entry?.modelHealthModel ?? "",
+    ) === key
   );
 }
 
@@ -456,7 +462,10 @@ async function clearPersistedModelHealth(params: {
 
         const update: Partial<import("../config/sessions.js").SessionEntry> = {};
         if (mutated) {
-          update.exhaustedModels = exhaustedModels && Object.keys(exhaustedModels).length > 0 ? exhaustedModels : undefined;
+          update.exhaustedModels =
+            exhaustedModels && Object.keys(exhaustedModels).length > 0
+              ? exhaustedModels
+              : undefined;
         }
 
         if (
@@ -484,7 +493,10 @@ async function clearPersistedModelHealth(params: {
 }
 
 function shouldPersistModelHealthReason(reason: string | null | undefined): boolean {
-  return reason === "model_not_found" || shouldAllowCooldownProbeForReason(reason as FailoverReason | null | undefined);
+  return (
+    reason === "model_not_found" ||
+    shouldAllowCooldownProbeForReason(reason as FailoverReason | null | undefined)
+  );
 }
 
 function recordFailedCandidateAttempt(params: {
@@ -1021,11 +1033,16 @@ export async function runWithModelFallback<T>(params: {
       ? resolveStoredSessionKeyForSessionId({
           cfg: params.cfg,
           sessionId: params.sessionId,
-          agentId: params.agentDir ? path.basename(params.agentDir) : undefined,
+          agentId: params.agentDir
+            ? path.basename(params.agentDir) === "agent"
+              ? path.basename(path.dirname(params.agentDir))
+              : path.basename(params.agentDir)
+            : undefined,
         })
       : null;
-  const sessionHealthEntry =
-    sessionResolution?.sessionKey ? sessionResolution.sessionStore[sessionResolution.sessionKey] : undefined;
+  const sessionHealthEntry = sessionResolution?.sessionKey
+    ? sessionResolution.sessionStore[sessionResolution.sessionKey]
+    : undefined;
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
   const cooldownProbeUsedProviders = new Set<string>();
