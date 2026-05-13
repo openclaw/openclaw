@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { LookupFn } from "../../runtime-api.js";
-import { installMatrixTestRuntime } from "../../test-runtime.js";
+import { installMatrixTestRuntime } from "../../test-support/test-runtime.js";
 import type { CoreConfig } from "../../types.js";
 import {
   getMatrixScopedEnvVarNames,

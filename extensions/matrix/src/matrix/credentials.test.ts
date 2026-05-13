@@ -3,7 +3,7 @@ import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { installMatrixTestRuntime } from "../test-runtime.js";
+import { installMatrixTestRuntime } from "../test-support/test-runtime.js";
 import {
   credentialsMatchConfig,
   loadMatrixCredentials,

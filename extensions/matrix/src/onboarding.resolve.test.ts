@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WizardPrompter } from "../runtime-api.js";
-import { installMatrixTestRuntime } from "./test-runtime.js";
+import { installMatrixTestRuntime } from "./test-support/test-runtime.js";
 import type { CoreConfig } from "./types.js";
 
 const resolveMatrixTargetsMock = vi.hoisted(() =>

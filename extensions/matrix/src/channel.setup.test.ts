@@ -12,7 +12,7 @@ vi.mock("./matrix/actions/verification.js", () => ({
 import { matrixConfigAdapter } from "./config-adapter.js";
 import { runMatrixSetupBootstrapAfterConfigWrite } from "./setup-bootstrap.js";
 import { matrixSetupAdapter } from "./setup-core.js";
-import { installMatrixTestRuntime } from "./test-runtime.js";
+import { installMatrixTestRuntime } from "./test-support/test-runtime.js";
 import type { CoreConfig } from "./types.js";
 
 describe("matrix setup post-write bootstrap", () => {
