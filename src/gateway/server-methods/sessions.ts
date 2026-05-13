@@ -1669,12 +1669,18 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const { canonicalKey } = loadSessionEntry(key);
+    const requestedKeyAliases =
+      requestedKey &&
+      requestedKey !== key &&
+      (!requestedParamAgentId || sessionKeyBelongsToAgent(requestedKey, requestedParamAgentId, cfg))
+        ? [requestedKey]
+        : undefined;
     const abortSessionKey = resolveAbortSessionKey({
       context,
       requestedKey: key,
       canonicalKey,
       activeRunSessionKey: scopedActiveRunSessionKey,
-      aliasKeys: requestedKey && requestedKey !== key ? [requestedKey] : undefined,
+      aliasKeys: requestedKeyAliases,
     });
     // Capture run kinds before the abort because abortChatRunById deletes entries
     // from chatAbortControllers synchronously. We use this snapshot to choose the
