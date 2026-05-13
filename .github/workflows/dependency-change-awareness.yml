@@ -23,7 +23,7 @@ jobs:
         with:
           script: |
             const marker = "<!-- openclaw:dependency-change-awareness -->";
-            const labelName = "dependencies";
+            const labelName = "dependencies-changed";
             const maxListedFiles = 25;
             const pullRequest = context.payload.pull_request;
 

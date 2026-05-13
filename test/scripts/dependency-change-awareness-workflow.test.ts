@@ -79,7 +79,7 @@ describe("dependency change awareness workflow", () => {
     expect(step.with?.script).toContain("github.rest.issues.createComment");
     expect(step.with?.script).toContain("github.rest.issues.updateComment");
     expect(step.with?.script).toContain("github.rest.issues.deleteComment");
-    expect(workflow).toContain('"dependencies"');
+    expect(workflow).toContain('"dependencies-changed"');
   });
 
   it("detects the intended dependency-related file surfaces", () => {
