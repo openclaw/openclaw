@@ -246,7 +246,7 @@ async function fetchNpmManifest({ packageName, version, fetchImpl, registryBaseU
   };
 }
 
-export async function createDependencyRiskReport({
+export async function createTransitiveManifestRiskReport({
   packageVersions,
   exceptions = [],
   manifestLoader,
@@ -505,7 +505,7 @@ function renderExoticSources(lines, exoticSources) {
   lines.push("");
 }
 
-export function renderDependencyRiskMarkdownReport(report) {
+export function renderTransitiveManifestRiskMarkdownReport(report) {
   const lines = [
     "# Transitive Manifest Risk Report",
     "",
@@ -557,7 +557,7 @@ export function renderDependencyRiskMarkdownReport(report) {
   return `${lines.join("\n")}\n`;
 }
 
-const renderMarkdownReport = renderDependencyRiskMarkdownReport;
+const renderMarkdownReport = renderTransitiveManifestRiskMarkdownReport;
 
 function parseArgs(argv) {
   const options = {
@@ -600,7 +600,7 @@ async function writeArtifact(filePath, content) {
   await writeFile(filePath, content, "utf8");
 }
 
-export async function runDependencyRiskReport({
+export async function runTransitiveManifestRiskReport({
   rootDir = process.cwd(),
   exceptionsPath = DEFAULT_EXCEPTIONS_PATH,
   fetchImpl = fetch,
@@ -618,7 +618,7 @@ export async function runDependencyRiskReport({
     error.errors = errors;
     throw error;
   }
-  return createDependencyRiskReport({
+  return createTransitiveManifestRiskReport({
     packageVersions,
     exceptions,
     now,
@@ -635,7 +635,7 @@ export async function runDependencyRiskReport({
 
 export async function main(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
-  const report = await runDependencyRiskReport({
+  const report = await runTransitiveManifestRiskReport({
     rootDir: options.rootDir,
     exceptionsPath: options.exceptionsPath,
   });

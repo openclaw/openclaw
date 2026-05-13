@@ -25,7 +25,7 @@ function versionsFor(payload, packageName) {
   return new Set(payload[packageName] ?? []);
 }
 
-export function createDependencyChurnReport({
+export function createDependencyChangesReport({
   basePayload,
   headPayload,
   dependencyFileChanges = [],
@@ -258,7 +258,7 @@ async function writeArtifact(filePath, content) {
   await writeFile(filePath, content, "utf8");
 }
 
-export async function runDependencyChurnReport(options) {
+export async function runDependencyChangesReport(options) {
   const headLockfileText = await readFile(path.join(options.rootDir, options.headLockfile), "utf8");
   const baseLockfileText = options.baseRef
     ? readGitFile(options.baseRef, "pnpm-lock.yaml", options.rootDir)
@@ -266,7 +266,7 @@ export async function runDependencyChurnReport(options) {
   const dependencyFileChanges = options.baseRef
     ? gitDiffDependencyFiles(options.baseRef, options.rootDir)
     : [];
-  return createDependencyChurnReport({
+  return createDependencyChangesReport({
     basePayload: payloadFromLockfile(baseLockfileText),
     headPayload: payloadFromLockfile(headLockfileText),
     dependencyFileChanges,
@@ -277,7 +277,7 @@ export async function runDependencyChurnReport(options) {
 
 export async function main(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
-  const report = await runDependencyChurnReport(options);
+  const report = await runDependencyChangesReport(options);
   await writeArtifact(options.jsonPath, `${JSON.stringify(report, null, 2)}\n`);
   await writeArtifact(options.markdownPath, renderMarkdownReport(report));
   const artifactHint = options.markdownPath ? ` See ${options.markdownPath}.` : "";

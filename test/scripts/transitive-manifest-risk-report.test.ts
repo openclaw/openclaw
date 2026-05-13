@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
-  createDependencyRiskReport,
+  createTransitiveManifestRiskReport,
   parseKnownRiskExceptions,
-  renderDependencyRiskMarkdownReport,
-} from "../../scripts/dependency-risk-report.mjs";
+  renderTransitiveManifestRiskMarkdownReport,
+} from "../../scripts/transitive-manifest-risk-report.mjs";
 
-describe("dependency-risk-report", () => {
+describe("transitive-manifest-risk-report", () => {
   it("validates known-risk exceptions without requiring process metadata", () => {
     expect(
       parseKnownRiskExceptions(`exceptions:
@@ -37,7 +37,7 @@ describe("dependency-risk-report", () => {
   });
 
   it("reports floating transitive specs, lifecycle scripts, exotic sources, and young packages", async () => {
-    const report = await createDependencyRiskReport({
+    const report = await createTransitiveManifestRiskReport({
       packageVersions: [
         { packageName: "parent", version: "1.0.0" },
         { packageName: "tarball-package", version: "https://example.test/pkg.tgz" },
@@ -77,7 +77,7 @@ describe("dependency-risk-report", () => {
   });
 
   it("annotates matching known-risk exceptions and reports unused entries", async () => {
-    const report = await createDependencyRiskReport({
+    const report = await createTransitiveManifestRiskReport({
       packageVersions: [{ packageName: "parent", version: "1.0.0" }],
       exceptions: [
         {
@@ -121,7 +121,7 @@ describe("dependency-risk-report", () => {
   });
 
   it("documents JSON completeness and renders grouped Markdown summaries", async () => {
-    const report = await createDependencyRiskReport({
+    const report = await createTransitiveManifestRiskReport({
       packageVersions: [
         { packageName: "@earendil-works/pi-ai", version: "0.74.0" },
         { packageName: "aaa-package", version: "1.0.0" },
@@ -143,7 +143,7 @@ describe("dependency-risk-report", () => {
       }),
     });
 
-    const markdown = renderDependencyRiskMarkdownReport(report);
+    const markdown = renderTransitiveManifestRiskMarkdownReport(report);
 
     expect(markdown).toContain("# Transitive Manifest Risk Report");
     expect(markdown).toContain("## Scope");

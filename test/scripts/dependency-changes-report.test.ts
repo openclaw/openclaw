@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { createDependencyChurnReport } from "../../scripts/dependency-churn-report.mjs";
+import { createDependencyChangesReport } from "../../scripts/dependency-changes-report.mjs";
 
-describe("dependency-churn-report", () => {
+describe("dependency-changes-report", () => {
   it("reports added, removed, and changed packages", () => {
-    const report = createDependencyChurnReport({
+    const report = createDependencyChangesReport({
       basePayload: {
         removed: ["1.0.0"],
         stable: ["1.0.0"],
