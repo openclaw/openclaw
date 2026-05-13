@@ -236,6 +236,47 @@ describe("fallback-skip-cache", () => {
     ).toBe("auth_permanent");
   });
 
+  it("prunes expired buckets from sessions that are never queried again", async () => {
+    const { _peekFallbackSkipBucketsForTest } = await import("./fallback-skip-cache.js");
+
+    // Two short-lived sessions write markers, then never come back.
+    markFallbackCandidateSkipped({
+      sessionId: "one-off-1",
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+      reason: "auth",
+      now: 1_000,
+      ttlMs: 10_000,
+    });
+    markFallbackCandidateSkipped({
+      sessionId: "one-off-2",
+      provider: "google",
+      model: "gemini-3.1-pro-preview",
+      reason: "auth",
+      now: 1_000,
+      ttlMs: 10_000,
+    });
+
+    expect(_peekFallbackSkipBucketsForTest().size).toBe(2);
+
+    // A third session writes well after the first two have expired. The
+    // opportunistic global prune must drop the stale buckets even though
+    // those original sessions are never re-queried.
+    markFallbackCandidateSkipped({
+      sessionId: "later",
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+      reason: "auth",
+      now: 100_000,
+      ttlMs: 10_000,
+    });
+
+    const buckets = _peekFallbackSkipBucketsForTest();
+    expect(buckets.has("one-off-1")).toBe(false);
+    expect(buckets.has("one-off-2")).toBe(false);
+    expect(buckets.has("later")).toBe(true);
+  });
+
   it("defaults to DEFAULT_FALLBACK_SKIP_TTL_MS when ttlMs is omitted", () => {
     markFallbackCandidateSkipped({
       sessionId: "s1",

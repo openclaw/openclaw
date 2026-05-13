@@ -993,12 +993,27 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     );
   }
 
+  const chosenMethod = await pickProviderAuthMethod({
+    provider: selectedProvider,
+    requestedMethod: opts.method,
+    prompter,
+  });
+
+  if (!chosenMethod) {
+    throw new Error(
+      `Unknown auth method. Run ${formatCliCommand("openclaw models auth login --provider " + selectedProvider.id)} without --method to choose interactively.`,
+    );
+  }
+
   if (opts.force) {
-    // Purge existing profiles for this provider before invoking the auth
-    // flow. This is the documented escape hatch for stuck OAuth credentials
-    // (expired token, swapped account, etc.) where `auth login` would
-    // otherwise short-circuit on the cached profile and the user has no
-    // built-in way to force a fresh round-trip.
+    // Purge existing profiles for this provider only after we have a valid
+    // auth method to invoke. Running the purge earlier (before method
+    // resolution) would delete the user's working credentials and then
+    // throw on an unresolvable `--method`, leaving them without a usable
+    // profile and no auth flow started. This is the documented escape
+    // hatch for stuck OAuth credentials (expired token, swapped account,
+    // etc.) where `auth login` would otherwise short-circuit on the cached
+    // profile.
     try {
       await removeProviderAuthProfilesWithLock({
         provider: selectedProvider.id,
@@ -1013,18 +1028,6 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
         `Could not clear cached profiles for "${selectedProvider.id}" before re-login: ${message}. Continuing with existing profiles.`,
       );
     }
-  }
-
-  const chosenMethod = await pickProviderAuthMethod({
-    provider: selectedProvider,
-    requestedMethod: opts.method,
-    prompter,
-  });
-
-  if (!chosenMethod) {
-    throw new Error(
-      `Unknown auth method. Run ${formatCliCommand("openclaw models auth login --provider " + selectedProvider.id)} without --method to choose interactively.`,
-    );
   }
 
   await runProviderAuthMethod({

@@ -52,22 +52,47 @@ type SkipEntry = {
 
 type SkipBySession = Map<string, Map<string, SkipEntry>>;
 
-function getState(): SkipBySession {
+type SkipCacheState = {
+  buckets: SkipBySession;
+  lastGlobalPruneAtMs: number;
+};
+
+/**
+ * Minimum interval between two opportunistic global prunes. Keeps the
+ * worst-case cost of a hot write/check path amortized: even if a gateway
+ * tracks thousands of sessions, the cache is only walked every
+ * `GLOBAL_PRUNE_INTERVAL_MS`, not on every call.
+ */
+const GLOBAL_PRUNE_INTERVAL_MS = 5_000;
+
+function getState(): SkipCacheState {
   const globalStore = globalThis as typeof globalThis & {
     __openclawFallbackSkipCache?: SkipBySession;
+    __openclawFallbackSkipCacheState?: SkipCacheState;
   };
-  if (!globalStore.__openclawFallbackSkipCache) {
-    globalStore.__openclawFallbackSkipCache = new Map();
+  if (!globalStore.__openclawFallbackSkipCacheState) {
+    // Reuse the existing buckets map if a prior version of this module already
+    // populated the legacy global; otherwise start fresh.
+    const buckets = globalStore.__openclawFallbackSkipCache ?? new Map();
+    globalStore.__openclawFallbackSkipCacheState = {
+      buckets,
+      lastGlobalPruneAtMs: 0,
+    };
+    globalStore.__openclawFallbackSkipCache = buckets;
   }
-  return globalStore.__openclawFallbackSkipCache;
+  return globalStore.__openclawFallbackSkipCacheState;
+}
+
+function getBuckets(): SkipBySession {
+  return getState().buckets;
 }
 
 function sessionBucket(sessionId: string, create: boolean): Map<string, SkipEntry> | undefined {
-  const state = getState();
-  let bucket = state.get(sessionId);
+  const buckets = getBuckets();
+  let bucket = buckets.get(sessionId);
   if (!bucket && create) {
     bucket = new Map();
-    state.set(sessionId, bucket);
+    buckets.set(sessionId, bucket);
   }
   return bucket;
 }
@@ -80,6 +105,27 @@ function pruneExpired(bucket: Map<string, SkipEntry>, now: number): void {
   for (const [key, entry] of bucket.entries()) {
     if (entry.expiresAtMs <= now) {
       bucket.delete(key);
+    }
+  }
+}
+
+/**
+ * Walk every session bucket, drop expired markers, and remove buckets that
+ * end up empty. Called opportunistically from the hot write/check paths so
+ * stale buckets left behind by one-off sessions cannot accumulate across the
+ * gateway's lifetime — the per-bucket prune only fires when the same session
+ * is queried again, which is not guaranteed for short-lived sessions.
+ */
+function pruneAllExpired(now: number): void {
+  const state = getState();
+  if (now - state.lastGlobalPruneAtMs < GLOBAL_PRUNE_INTERVAL_MS) {
+    return;
+  }
+  state.lastGlobalPruneAtMs = now;
+  for (const [sessionId, bucket] of state.buckets.entries()) {
+    pruneExpired(bucket, now);
+    if (bucket.size === 0) {
+      state.buckets.delete(sessionId);
     }
   }
 }
@@ -102,6 +148,7 @@ export function markFallbackCandidateSkipped(params: {
   }
   const now = params.now ?? Date.now();
   const ttlMs = params.ttlMs ?? resolveConfiguredSkipTtlMs();
+  pruneAllExpired(now);
   const bucket = sessionBucket(params.sessionId, true);
   if (!bucket) {
     return;
@@ -126,14 +173,15 @@ export function isFallbackCandidateSkipped(params: {
   if (!params.sessionId || !params.provider || !params.model) {
     return false;
   }
+  const now = params.now ?? Date.now();
+  pruneAllExpired(now);
   const bucket = sessionBucket(params.sessionId, false);
   if (!bucket) {
     return false;
   }
-  const now = params.now ?? Date.now();
   pruneExpired(bucket, now);
   if (bucket.size === 0) {
-    getState().delete(params.sessionId);
+    getBuckets().delete(params.sessionId);
     return false;
   }
   const entry = bucket.get(candidateKey(params.provider, params.model));
@@ -171,7 +219,7 @@ export function clearFallbackSkipCacheForSession(sessionId: string | undefined):
   if (!sessionId) {
     return;
   }
-  getState().delete(sessionId);
+  getBuckets().delete(sessionId);
 }
 
 /**
@@ -179,5 +227,16 @@ export function clearFallbackSkipCacheForSession(sessionId: string | undefined):
  * cache is meant to outlive individual fallback runs.
  */
 export function __resetFallbackSkipCacheForTest(): void {
-  getState().clear();
+  const state = getState();
+  state.buckets.clear();
+  state.lastGlobalPruneAtMs = 0;
+}
+
+/**
+ * Test-only inspection hook for the global session-bucket map. Production
+ * code must not read this; the buckets are an implementation detail of the
+ * cache and may change shape.
+ */
+export function _peekFallbackSkipBucketsForTest(): SkipBySession {
+  return getBuckets();
 }

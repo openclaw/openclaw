@@ -1217,6 +1217,45 @@ describe("modelsAuthLoginCommand", () => {
     expect(runProviderAuth).toHaveBeenCalledOnce();
   });
 
+  it("--force does NOT purge cached profiles when the requested auth method is unknown", async () => {
+    const runtime = createRuntime();
+    const runOauthAuth = vi.fn().mockResolvedValue({ profiles: [] });
+    const runApiKeyAuth = vi.fn().mockResolvedValue({ profiles: [] });
+    mocks.resolvePluginSetupProvider.mockReturnValue(
+      createProvider({
+        id: "openai",
+        label: "OpenAI",
+        run: runOauthAuth as ProviderPlugin["auth"][number]["run"],
+        auth: [
+          {
+            id: "oauth",
+            label: "ChatGPT Login",
+            kind: "oauth",
+            run: runOauthAuth,
+          },
+          {
+            id: "api-key",
+            label: "OpenAI API Key",
+            kind: "api_key",
+            run: runApiKeyAuth,
+          },
+        ],
+      }),
+    );
+
+    // Using the wrong method id ("api_key" vs the registered "api-key") forces
+    // pickProviderAuthMethod to return null, which throws "Unknown auth method".
+    // The purge must NOT have run, otherwise the user's working credentials
+    // would be deleted before any auth flow had a chance to start.
+    await expect(
+      modelsAuthLoginCommand({ provider: "openai", method: "api_key", force: true }, runtime),
+    ).rejects.toThrow("Unknown auth method");
+
+    expect(mocks.removeProviderAuthProfilesWithLock).not.toHaveBeenCalled();
+    expect(runOauthAuth).not.toHaveBeenCalled();
+    expect(runApiKeyAuth).not.toHaveBeenCalled();
+  });
+
   it("reports loaded plugin providers when requested provider is unavailable", async () => {
     const runtime = createRuntime();
 
