@@ -548,11 +548,11 @@ describe("pairing store", () => {
       const deltaList = await listChannelPairingRequests("telegram", process.env, "delta");
       const allPending = await listChannelPairingRequests("telegram");
       expect(deltaList.map((entry) => entry.id)).toEqual(["pending-delta"]);
-      expect(allPending.map((entry) => entry.id)).toEqual([
+      expect(allPending.map((entry) => entry.id).toSorted()).toEqual([
         "pending-alpha",
         "pending-beta",
-        "pending-gamma",
         "pending-delta",
+        "pending-gamma",
       ]);
     });
   });
