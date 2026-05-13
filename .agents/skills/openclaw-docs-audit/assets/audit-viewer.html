@@ -79,10 +79,33 @@
         font-weight: 700;
       }
       h1 {
-        margin: 9px 0 8px;
+        margin: 0;
         font-size: 20px;
         line-height: 1.2;
         letter-spacing: 0;
+      }
+      .title-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 10px;
+        align-items: center;
+        margin: 9px 0 8px;
+      }
+      .page-select {
+        max-width: 210px;
+        min-width: 160px;
+        border: 1px solid var(--border-strong);
+        border-radius: 999px;
+        background: #0b1019;
+        color: var(--text);
+        padding: 7px 28px 7px 10px;
+        font-size: 12px;
+        line-height: 1.2;
+        outline: none;
+      }
+      .page-select:focus {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px var(--accent-soft);
       }
       .meta {
         color: var(--muted);
@@ -422,7 +445,10 @@
       <aside class="sidebar">
         <header class="brand">
           <div class="eyebrow">OpenClaw Docs Audit</div>
-          <h1 id="viewerTitle">Migration Map</h1>
+          <div class="title-row">
+            <h1 id="viewerTitle">Migration Map</h1>
+            <select class="page-select" id="pageSelect" aria-label="Audit page"></select>
+          </div>
           <div class="meta" id="datasetMeta"></div>
         </header>
         <section class="filters" aria-label="Filters">
@@ -472,12 +498,29 @@
         const units = data.pages.flatMap(function (page) {
           return page.units;
         });
-        const state = { selectedId: units[0] ? units[0].id : null, query: "" };
+        const pageViews =
+          data.pageViews && data.pageViews.length
+            ? data.pageViews
+            : data.pages.map(function (page) {
+                return {
+                  count: page.units.length,
+                  id: "source:" + page.page,
+                  kind: "source",
+                  label: page.page,
+                  page: page.page,
+                };
+              });
+        const state = {
+          query: "",
+          selectedId: units[0] ? units[0].id : null,
+          selectedViewId: pageViews[0] ? pageViews[0].id : "",
+        };
         const els = {
           datasetMeta: document.getElementById("datasetMeta"),
           destinationCount: document.getElementById("destinationCount"),
           destinationPane: document.getElementById("destinationPane"),
           legend: document.getElementById("legend"),
+          pageSelect: document.getElementById("pageSelect"),
           search: document.getElementById("search"),
           selectedId: document.getElementById("selectedId"),
           selectedSummary: document.getElementById("selectedSummary"),
@@ -522,6 +565,37 @@
           );
         }
 
+        function currentView() {
+          return (
+            pageViews.find(function (view) {
+              return view.id === state.selectedViewId;
+            }) || pageViews[0]
+          );
+        }
+
+        function unitsForView(view) {
+          if (!view) return units;
+          if (view.kind === "destination") {
+            return units.filter(function (unit) {
+              return unit.destinations.some(function (destination) {
+                return destination.ref && destination.ref.path === view.page;
+              });
+            });
+          }
+          const sourcePage = data.pages.find(function (page) {
+            return page.page === view.page;
+          });
+          return sourcePage ? sourcePage.units : [];
+        }
+
+        function destinationsForView(unit) {
+          const view = currentView();
+          if (!view || view.kind !== "destination") return unit.destinations;
+          return unit.destinations.filter(function (destination) {
+            return destination.ref && destination.ref.path === view.page;
+          });
+        }
+
         function searchable(unit) {
           return [
             unit.id,
@@ -563,17 +637,34 @@
           );
         }
 
+        function renderPageSelect() {
+          els.pageSelect.innerHTML = pageViews
+            .map(function (view) {
+              return (
+                '<option value="' +
+                escapeHtml(view.id) +
+                '">' +
+                escapeHtml(view.label) +
+                " (" +
+                view.count +
+                ")</option>"
+              );
+            })
+            .join("");
+          els.pageSelect.value = state.selectedViewId;
+        }
+
         function renderList() {
           const query = state.query.trim().toLowerCase();
-          const html = data.pages
-            .map(function (page) {
-              const pageUnits = page.units.filter(function (unit) {
-                return !query || searchable(unit).includes(query);
-              });
-              if (pageUnits.length === 0) return "";
-              return (
-                '<section class="page-group"><div class="page-title"><span>' +
-                escapeHtml(page.page) +
+          const view = currentView();
+          const pageUnits = unitsForView(view).filter(function (unit) {
+            return !query || searchable(unit).includes(query);
+          });
+          const html =
+            pageUnits.length === 0
+              ? ""
+              : '<section class="page-group"><div class="page-title"><span>' +
+                escapeHtml(view.page) +
                 "</span><span>" +
                 pageUnits.length +
                 "</span></div>" +
@@ -603,10 +694,7 @@
                     );
                   })
                   .join("") +
-                "</section>"
-              );
-            })
-            .join("");
+                "</section>";
           els.unitList.innerHTML =
             html ||
             '<div class="empty"><strong>No matching units</strong><span>Try a different filter.</span></div>';
@@ -619,12 +707,16 @@
         }
 
         function renderDetails() {
+          const viewUnits = unitsForView(currentView());
           const unit =
-            units.find(function (candidate) {
+            viewUnits.find(function (candidate) {
               return candidate.id === state.selectedId;
-            }) || units[0];
+            }) ||
+            viewUnits[0] ||
+            units[0];
           if (!unit) return;
           state.selectedId = unit.id;
+          const destinations = destinationsForView(unit);
           els.selectedId.textContent = unit.id + " / " + unit.page;
           els.selectedTitle.textContent = unit.label;
           els.selectedSummary.textContent = unit.summary;
@@ -632,30 +724,26 @@
             chip(unit.status, statusClass(unit.status)) +
             chip(unit.action, "") +
             chip(unit.reason, "") +
-            (unit.destinations.length
+            (destinations.length
               ? chip(
-                  unit.destinations.length +
-                    " destination" +
-                    (unit.destinations.length === 1 ? "" : "s"),
+                  destinations.length + " destination" + (destinations.length === 1 ? "" : "s"),
                   "",
                 )
               : chip("no destination", "removed"));
           els.sourceRef.textContent =
             refLabel(unit.source.ref) + " from " + data.sourceArchive.gitRef;
           els.sourcePane.innerHTML = renderCode(unit.source.lines);
-          els.destinationCount.textContent = unit.destinations.length
-            ? unit.destinations.length +
-              " mapped range" +
-              (unit.destinations.length === 1 ? "" : "s")
+          els.destinationCount.textContent = destinations.length
+            ? destinations.length + " mapped range" + (destinations.length === 1 ? "" : "s")
             : "removed";
-          if (unit.destinations.length === 0) {
+          if (destinations.length === 0) {
             els.destinationPane.innerHTML =
               '<div class="empty"><strong>No destination range</strong><span>' +
               escapeHtml(unit.notes || "The audit marks this content as intentionally removed.") +
               "</span></div>";
             return;
           }
-          els.destinationPane.innerHTML = unit.destinations
+          els.destinationPane.innerHTML = destinations
             .map(function (dest, index) {
               const generator = dest.generator
                 ? '<details class="generator"><summary>Generator source: ' +
@@ -682,7 +770,7 @@
         }
 
         function renderLegend() {
-          const counts = units.reduce(function (acc, unit) {
+          const counts = unitsForView(currentView()).reduce(function (acc, unit) {
             acc[unit.status] = (acc[unit.status] || 0) + 1;
             return acc;
           }, {});
@@ -697,10 +785,16 @@
         function renderMeta() {
           const unitCount = units.length;
           const pageCount = data.pages.length;
+          const view = currentView();
+          const viewCount = unitsForView(view).length;
           els.viewerTitle.textContent = data.viewerTitle || data.title || "Migration Map";
           els.datasetMeta.textContent =
+            viewCount +
+            " units for " +
+            view.page +
+            ". " +
             unitCount +
-            " units across " +
+            " total units across " +
             pageCount +
             " source page" +
             (pageCount === 1 ? "" : "s") +
@@ -710,6 +804,9 @@
         }
 
         function render() {
+          renderPageSelect();
+          renderMeta();
+          renderLegend();
           renderList();
           renderDetails();
         }
@@ -745,8 +842,15 @@
           renderList();
         });
 
-        renderMeta();
-        renderLegend();
+        els.pageSelect.addEventListener("change", function () {
+          state.selectedViewId = els.pageSelect.value;
+          state.query = "";
+          els.search.value = "";
+          state.selectedId = unitsForView(currentView())[0]?.id || null;
+          els.unitList.scrollTop = 0;
+          render();
+        });
+
         render();
       })();
     </script>

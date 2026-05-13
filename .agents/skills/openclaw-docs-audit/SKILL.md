@@ -214,7 +214,8 @@ Use the bundled script from repo root:
 node .agents/skills/openclaw-docs-audit/scripts/audit-report-viewer.mjs \
   --report .mem/main/specs/<spec-id>/reports/<detailed-report>.md \
   --out-dir .mem/main/specs/<spec-id>/report \
-  --basename <short-audit-name>
+  --basename <short-audit-name> \
+  --changed-pages docs/tools/plugin.md,docs/plugins/manage-plugins.md
 ```
 
 This writes:
@@ -228,6 +229,10 @@ The script reads the detailed checklist table, resolves source lines from the
 report `source_ref`, resolves current destination and generator lines, writes the
 JSON, and renders the static HTML from `./assets/audit-viewer.html`. Do not
 hand-edit generated viewer HTML; patch the template or script, then rerun it.
+
+Use `--changed-pages` when reviewing a PR-sized migration. The viewer selector
+uses those pages as page views: source pages show original audit units, while
+destination pages show only units that landed on the selected page.
 
 If JSON is the canonical source for a later edit, render from JSON instead:
 

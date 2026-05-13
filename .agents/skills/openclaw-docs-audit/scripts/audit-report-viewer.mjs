@@ -21,6 +21,7 @@ Options:
   --json-out <path>     Explicit JSON output path.
   --html-out <path>     Explicit HTML output path.
   --detailed-out <path> Optional normalized detailed markdown output path.
+  --changed-pages <csv> Markdown docs pages changed by the PR. Adds destination-page selector views.
   --source-ref <ref>    Source archive git ref or gitRef:path. Defaults from report frontmatter source_ref.
   --template <path>     HTML template. Defaults to this skill's assets/audit-viewer.html.
   --cwd <path>          Repo root. Defaults to process.cwd().
@@ -215,6 +216,68 @@ function parseDestinations(cell, cwd) {
     });
 }
 
+function parseChangedPages(value) {
+  return String(value || "")
+    .split(",")
+    .map((page) => page.trim())
+    .filter((page) => page.endsWith(".md") || page.endsWith(".mdx"));
+}
+
+function unitTouchesDestinationPage(unit, page) {
+  return unit.destinations.some((destination) => destination.ref?.path === page);
+}
+
+function buildPageViews(pages, changedPages) {
+  const units = pages.flatMap((page) => page.units);
+  const sourcePages = new Set(pages.map((page) => page.page));
+  const destinationPages = new Set(
+    units.flatMap((unit) =>
+      unit.destinations.map((destination) => destination.ref?.path).filter(Boolean),
+    ),
+  );
+  const orderedPages = changedPages.length
+    ? changedPages
+    : [...sourcePages, ...[...destinationPages].filter((page) => !sourcePages.has(page))];
+  const views = [];
+  const seen = new Set();
+
+  for (const page of orderedPages) {
+    if (seen.has(page)) continue;
+    seen.add(page);
+    if (sourcePages.has(page)) {
+      const sourcePage = pages.find((candidate) => candidate.page === page);
+      views.push({
+        count: sourcePage.units.length,
+        id: `source:${page}`,
+        kind: "source",
+        label: page,
+        page,
+      });
+      continue;
+    }
+    if (destinationPages.has(page)) {
+      views.push({
+        count: units.filter((unit) => unitTouchesDestinationPage(unit, page)).length,
+        id: `destination:${page}`,
+        kind: "destination",
+        label: page,
+        page,
+      });
+    }
+  }
+
+  if (!views.length && pages[0]) {
+    views.push({
+      count: pages[0].units.length,
+      id: `source:${pages[0].page}`,
+      kind: "source",
+      label: pages[0].page,
+      page: pages[0].page,
+    });
+  }
+  return views;
+}
+
 function parseDetailedReport(reportPath, options) {
   const cwd = options.cwd;
   const text = fs.readFileSync(reportPath, "utf8");
@@ -306,7 +369,9 @@ function parseDetailedReport(reportPath, options) {
   const pages = Array.from(pagesByName.values()).filter((page) => page.units.length > 0);
   for (const page of pages) page.count = page.units.length;
   const title = options.title || frontmatter.title || "Docs Rewrite Audit";
+  const changedPages = parseChangedPages(options.changedPages);
   return {
+    changedPages,
     frontmatter,
     generatedAt: new Date().toISOString(),
     generator: {
@@ -320,6 +385,7 @@ function parseDetailedReport(reportPath, options) {
     viewerTitle: title
       .replace(/\s+Paragraph Rewrite Audit$/, "")
       .replace(/\s+Rewrite Audit$/, " Migration Map"),
+    pageViews: buildPageViews(pages, changedPages),
     pages,
   };
 }
@@ -475,8 +541,13 @@ function main() {
   let data;
   if (dataPath) {
     data = JSON.parse(fs.readFileSync(dataPath, "utf8"));
+    if (args["changed-pages"]) {
+      data.changedPages = parseChangedPages(args["changed-pages"]);
+      data.pageViews = buildPageViews(data.pages, data.changedPages);
+    }
   } else {
     data = parseDetailedReport(reportPath, {
+      changedPages: args["changed-pages"],
       cwd,
       sourceRef: args["source-ref"],
       title: args.title,
