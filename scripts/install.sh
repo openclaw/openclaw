@@ -2863,25 +2863,27 @@ main() {
                 ui_info "Config already present; skipping onboarding"
                 skip_onboard=true
             fi
-            ui_info "Starting setup"
-            echo ""
-            if [[ -r /dev/tty && -w /dev/tty ]]; then
-                local claw="${OPENCLAW_BIN:-}"
-                if [[ -z "$claw" ]]; then
-                    claw="$(resolve_openclaw_bin || true)"
+            if [[ "$skip_onboard" != "true" ]]; then
+                ui_info "Starting setup"
+                echo ""
+                if [[ -r /dev/tty && -w /dev/tty ]]; then
+                    local claw="${OPENCLAW_BIN:-}"
+                    if [[ -z "$claw" ]]; then
+                        claw="$(resolve_openclaw_bin || true)"
+                    fi
+                    if [[ -z "$claw" ]]; then
+                        ui_info "Skipping onboarding (openclaw not on PATH yet)"
+                        warn_openclaw_not_found
+                        return 0
+                    fi
+                    exec </dev/tty
+                    exec "$claw" onboard
                 fi
-                if [[ -z "$claw" ]]; then
-                    ui_info "Skipping onboarding (openclaw not on PATH yet)"
-                    warn_openclaw_not_found
-                    return 0
-                fi
-                exec </dev/tty
-                exec "$claw" onboard
+                local user_claw
+                user_claw="$(openclaw_command_for_user "${OPENCLAW_BIN:-}")"
+                ui_info "No TTY; run ${user_claw} onboard to finish setup"
+                return 0
             fi
-            local user_claw
-            user_claw="$(openclaw_command_for_user "${OPENCLAW_BIN:-}")"
-            ui_info "No TTY; run ${user_claw} onboard to finish setup"
-            return 0
         fi
     fi
 
