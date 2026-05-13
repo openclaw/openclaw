@@ -1,4 +1,10 @@
-import type { Api, Context, Model, ProviderStreamOptions } from "@earendil-works/pi-ai";
+import type {
+  Api,
+  AssistantMessage,
+  Context,
+  Model,
+  ProviderStreamOptions,
+} from "@earendil-works/pi-ai";
 import { complete } from "@earendil-works/pi-ai";
 import { isMinimaxVlmModel, minimaxUnderstandImage } from "../agents/minimax-vlm.js";
 import {
@@ -15,7 +21,11 @@ import {
   coerceImageAssistantText,
   hasImageReasoningOnlyResponse,
 } from "../agents/tools/image-tool.helpers.js";
-import { resolveCopilotApiToken } from "../plugin-sdk/provider-auth.js";
+import {
+  buildCopilotIdeHeaders,
+  COPILOT_INTEGRATION_ID,
+  resolveCopilotApiToken,
+} from "../plugin-sdk/provider-auth.js";
 import type {
   ImageDescriptionRequest,
   ImageDescriptionResult,
@@ -175,19 +185,13 @@ async function resolveImageRuntime(params: {
   // a short-lived Copilot API token so the integrator scope (vscode-chat)
   // matches what runtime chat requests send.
   if (model.provider === "github-copilot") {
-    try {
-      const copilotToken = await resolveCopilotApiToken({
-        githubToken: apiKey,
-      });
-      apiKey = copilotToken.token;
-      // Apply the endpoint derived from the minted token so enterprise
-      // or proxy-routed Copilot deployments connect to the correct host.
-      const runtimeBaseUrl = copilotToken.baseUrl?.trim();
-      if (runtimeBaseUrl) {
-        model = { ...model, baseUrl: runtimeBaseUrl };
-      }
-    } catch {
-      // fall through with the original OAuth token and model baseUrl
+    const copilotToken = await resolveCopilotApiToken({
+      githubToken: apiKey,
+    });
+    apiKey = copilotToken.token;
+    const runtimeBaseUrl = copilotToken.baseUrl?.trim();
+    if (runtimeBaseUrl) {
+      model = { ...model, baseUrl: runtimeBaseUrl };
     }
   }
   authStorage.setRuntimeApiKey(model.provider, apiKey);
@@ -239,6 +243,19 @@ function shouldPlaceImagePromptInUserContent(model: Model<Api>): boolean {
     capabilities.endpointClass === "openrouter" ||
     (model.provider.toLowerCase() === "openrouter" && capabilities.endpointClass === "default")
   );
+}
+
+function buildImageRequestHeaders(model: Model<Api>): Record<string, string> | undefined {
+  if (model.provider !== "github-copilot") {
+    return undefined;
+  }
+  return {
+    ...buildCopilotIdeHeaders(),
+    "Copilot-Integration-Id": COPILOT_INTEGRATION_ID,
+    "Openai-Organization": "github-copilot",
+    "x-initiator": "user",
+    "Copilot-Vision-Request": "true",
+  };
 }
 
 async function describeImagesWithMinimax(params: {
@@ -382,7 +399,7 @@ async function describeImagesWithModelInternal(
     });
   }
 
-  registerProviderStreamForModel({
+  const providerStreamFn = registerProviderStreamForModel({
     model,
     cfg: params.cfg,
     agentDir: params.agentDir,
@@ -396,16 +413,22 @@ async function describeImagesWithModelInternal(
   const completeImage = async (onPayload?: ProviderStreamOptions["onPayload"]) => {
     const payloadHandler = composeImageDescriptionPayloadHandlers(onPayload, options.onPayload);
     const timeoutMs = resolveImageDescriptionTimeoutMs(params.timeoutMs, startedAtMs);
+    const headers = buildImageRequestHeaders(model);
+    const streamOptions = {
+      apiKey,
+      maxTokens,
+      signal: controller.signal,
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      ...(headers ? { headers } : {}),
+      ...(payloadHandler ? { onPayload: payloadHandler } : {}),
+    };
+    const task: Promise<AssistantMessage> = providerStreamFn
+      ? (async () => await (await providerStreamFn(model, context, streamOptions)).result())()
+      : complete(model, context, streamOptions);
     return await withImageDescriptionTimeout({
       controller,
       timeoutMs,
-      task: complete(model, context, {
-        apiKey,
-        maxTokens,
-        signal: controller.signal,
-        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-        ...(payloadHandler ? { onPayload: payloadHandler } : {}),
-      }),
+      task,
     });
   };
 
