@@ -528,6 +528,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "acp.enabled": "ACP Enabled",
   "acp.dispatch.enabled": "ACP Dispatch Enabled",
   "acp.backend": "ACP Backend",
+  "acp.fallbacks": "ACP Fallback Backends",
   "acp.defaultAgent": "ACP Default Agent",
   "acp.allowedAgents": "ACP Allowed Agents",
   "acp.maxConcurrentSessions": "ACP Max Concurrent Sessions",

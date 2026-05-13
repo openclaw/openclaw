@@ -20,6 +20,7 @@ function requireReadRemoteMediaBufferInput(): {
   fetchImpl?: unknown;
   maxBytes?: unknown;
   ssrfPolicy?: unknown;
+  retry?: unknown;
 } {
   const [call] = readRemoteMediaBufferMock.mock.calls;
   if (!call) {
@@ -89,6 +90,7 @@ describe("media understanding attachment URL fallback", () => {
           fetchImpl,
           maxBytes: 1024,
           ssrfPolicy: undefined,
+          retry: expect.objectContaining({ attempts: 3 }),
         });
         expect(typeof fetchImpl).toBe("function");
         // Clean up the temp file
@@ -117,6 +119,7 @@ describe("media understanding attachment URL fallback", () => {
           fetchImpl,
           maxBytes: 1024,
           ssrfPolicy: undefined,
+          retry: expect.objectContaining({ attempts: 3 }),
         });
         expect(typeof fetchImpl).toBe("function");
       },

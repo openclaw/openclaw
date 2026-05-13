@@ -27,6 +27,7 @@ type InstallScanFinding = {
   file: string;
   line: number;
   message: string;
+  evidence?: string;
 };
 
 type BuiltinInstallScan = {
@@ -339,6 +340,27 @@ function buildBuiltinScanFromSummary(summary: {
   };
 }
 
+function rebuildBuiltinScanCounts(scan: BuiltinInstallScan): BuiltinInstallScan {
+  let critical = 0;
+  let warn = 0;
+  let info = 0;
+  for (const finding of scan.findings) {
+    if (finding.severity === "critical") {
+      critical += 1;
+    } else if (finding.severity === "warn") {
+      warn += 1;
+    } else {
+      info += 1;
+    }
+  }
+  return {
+    ...scan,
+    critical,
+    warn,
+    info,
+  };
+}
+
 const DEFAULT_PACKAGE_MANIFEST_TRAVERSAL_LIMITS: PackageManifestTraversalLimits = {
   maxDepth: 64,
   maxDirectories: 10_000,
@@ -538,6 +560,56 @@ async function collectNonOverlappingPackageScanRoots(packageDirs: string[]): Pro
     selectedRoots.push({ packageDir, realPath });
   }
   return selectedRoots.map((selectedRoot) => selectedRoot.packageDir);
+}
+
+function normalizeRelativeScanPath(relativePath: string): string {
+  return relativePath.split(path.sep).join("/");
+}
+
+function isKnownBenignLanceDbFinding(params: {
+  finding: InstallScanFinding;
+  packageDir: string;
+}): boolean {
+  const relativePath = normalizeRelativeScanPath(
+    path.relative(params.packageDir, params.finding.file),
+  );
+  const evidence = params.finding.evidence ?? "";
+  if (params.finding.ruleId === "dangerous-exec" && relativePath === "dist/native.js") {
+    return (
+      /child_process/.test(evidence) &&
+      /\bexecSync\(\s*['"](?:ldd --version|which ldd)['"]/.test(evidence)
+    );
+  }
+  if (
+    params.finding.ruleId === "dynamic-code-execution" &&
+    relativePath === "dist/embedding/transformers.js"
+  ) {
+    return /\beval\(\s*['"]import\(["']@huggingface\/transformers["']\)['"]\s*\)/.test(evidence);
+  }
+  return false;
+}
+
+async function suppressKnownBenignInstalledDependencyFindings(params: {
+  builtinScan: BuiltinInstallScan;
+  packageDir: string;
+}): Promise<BuiltinInstallScan> {
+  if (params.builtinScan.status !== "ok" || params.builtinScan.findings.length === 0) {
+    return params.builtinScan;
+  }
+  const manifest = await tryReadJson<PackageManifest>(path.join(params.packageDir, "package.json"));
+  if (manifest?.name !== "@lancedb/lancedb") {
+    return params.builtinScan;
+  }
+  const findings = params.builtinScan.findings.filter(
+    (finding) => !isKnownBenignLanceDbFinding({ finding, packageDir: params.packageDir }),
+  );
+  if (findings.length === params.builtinScan.findings.length) {
+    return params.builtinScan;
+  }
+  return rebuildBuiltinScanCounts({
+    ...params.builtinScan,
+    findings,
+  });
 }
 
 async function collectPackageManifestPaths(params: {
@@ -764,6 +836,7 @@ async function scanManifestDependencyDenylist(params: {
 }
 
 async function scanDirectoryTarget(params: {
+  deferBuiltinWarnings?: boolean;
   excludeTestFiles?: boolean;
   failOnTruncated?: boolean;
   includeHiddenDirectories?: boolean;
@@ -793,7 +866,7 @@ async function scanDirectoryTarget(params: {
       );
     }
     const builtinScan = buildBuiltinScanFromSummary(scanSummary);
-    if (params.suppressBuiltinWarnings) {
+    if (params.suppressBuiltinWarnings || params.deferBuiltinWarnings) {
       return builtinScan;
     }
     if (scanSummary.critical > 0) {
@@ -1196,7 +1269,10 @@ export async function scanInstalledPackageDependencyTreeRuntime(params: {
     }
     const packageRealPath = await fs.realpath(packageDir).catch(() => path.resolve(packageDir));
     const isPluginRoot = packageRealPath === pluginRootRealPath;
-    const builtinScan = await scanDirectoryTarget({
+    const installedTreeSuspiciousMessage = `Plugin "{target}" installed tree has {count} suspicious code pattern(s). Run "openclaw security audit --deep" for details.`;
+    const installedTreeWarningMessage = `WARNING: Plugin "${params.pluginId}" installed tree contains dangerous code patterns`;
+    const rawBuiltinScan = await scanDirectoryTarget({
+      deferBuiltinWarnings: true,
       excludeTestFiles: isPluginRoot,
       failOnTruncated: true,
       includeHiddenDirectories: true,
@@ -1206,10 +1282,27 @@ export async function scanInstalledPackageDependencyTreeRuntime(params: {
       maxFiles: remainingMaxFiles,
       path: packageDir,
       suppressBuiltinWarnings: params.trustedSourceLinkedOfficialInstall === true,
-      suspiciousMessage: `Plugin "{target}" installed tree has {count} suspicious code pattern(s). Run "openclaw security audit --deep" for details.`,
+      suspiciousMessage: installedTreeSuspiciousMessage,
       targetName: params.pluginId,
-      warningMessage: `WARNING: Plugin "${params.pluginId}" installed tree contains dangerous code patterns`,
+      warningMessage: installedTreeWarningMessage,
     });
+    const builtinScan = await suppressKnownBenignInstalledDependencyFindings({
+      builtinScan: rawBuiltinScan,
+      packageDir,
+    });
+    if (params.trustedSourceLinkedOfficialInstall !== true && builtinScan.status === "ok") {
+      if (builtinScan.critical > 0) {
+        params.logger.warn?.(
+          `${installedTreeWarningMessage}: ${buildCriticalDetails({ findings: builtinScan.findings })}`,
+        );
+      } else if (builtinScan.warn > 0) {
+        params.logger.warn?.(
+          installedTreeSuspiciousMessage
+            .replace("{count}", String(builtinScan.warn))
+            .replace("{target}", params.pluginId),
+        );
+      }
+    }
     const builtinBlocked = resolveBuiltinScanDecision({
       builtinScan,
       logger: params.logger,

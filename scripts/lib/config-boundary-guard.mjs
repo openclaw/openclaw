@@ -15,6 +15,8 @@ const COMPAT_CONFIG_API_FILES = new Set([
   "src/plugins/compat/registry.ts",
   "src/plugins/contracts/config-boundary-guard.test.ts",
   "src/plugins/contracts/deprecated-internal-config-api.test.ts",
+  "src/plugins/registry.runtime-config.test.ts",
+  "src/plugins/registry.ts",
   "src/plugins/runtime/runtime-config.test.ts",
   "src/plugins/runtime/runtime-config.ts",
   "src/plugins/runtime/types-core.ts",
