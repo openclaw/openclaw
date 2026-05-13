@@ -41,6 +41,7 @@ export type {
 } from "./runtime-snapshot.js";
 export type {
   ConfigWriteNotification,
+  ConfigWriteResult,
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "./io.js";
 export {
