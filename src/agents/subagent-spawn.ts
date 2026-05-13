@@ -1067,6 +1067,7 @@ export async function spawnSubagentDirect(
     childDepth,
     maxSpawnDepth,
     persistentSession: spawnMode === "session",
+    task,
   });
 
   const toolSpawnMetadata = mapToolContextToSpawnedRunMetadata({
