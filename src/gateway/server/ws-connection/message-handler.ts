@@ -1251,8 +1251,9 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           }
         }
 
+        const shouldIssueDeviceToken = !trustedProxyAuthOk;
         const deviceToken =
-          device && hasServerApprovedDeviceTokenBaseline
+          shouldIssueDeviceToken && device && hasServerApprovedDeviceTokenBaseline
             ? await ensureDeviceToken({ deviceId: device.id, role, scopes })
             : null;
         if (role === "node") {

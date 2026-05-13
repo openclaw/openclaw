@@ -3173,6 +3173,67 @@ describe("runCodexAppServerAttempt", () => {
     await run;
   });
 
+  it("resolves queued steering only after turn/steer is accepted", async () => {
+    const request = vi.fn(async () => ({ turnId: "turn-1" }));
+    const queue = __testing.createCodexSteeringQueue({
+      client: { request } as never,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      answerPendingUserInput: () => false,
+      signal: new AbortController().signal,
+    });
+
+    await expect(queue.queue("accepted", { debounceMs: 0 })).resolves.toBeUndefined();
+
+    expect(request).toHaveBeenCalledWith("turn/steer", {
+      threadId: "thread-1",
+      expectedTurnId: "turn-1",
+      input: [{ type: "text", text: "accepted", text_elements: [] }],
+    });
+  });
+
+  it("rejects queued steering when turn/steer is rejected", async () => {
+    const request = vi.fn(async () => {
+      throw new Error("cannot steer a compact turn");
+    });
+    const queue = __testing.createCodexSteeringQueue({
+      client: { request } as never,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      answerPendingUserInput: () => false,
+      signal: new AbortController().signal,
+    });
+
+    await expect(queue.queue("rejected", { debounceMs: 0 })).rejects.toThrow(
+      "cannot steer a compact turn",
+    );
+
+    expect(request).toHaveBeenCalledWith("turn/steer", {
+      threadId: "thread-1",
+      expectedTurnId: "turn-1",
+      input: [{ type: "text", text: "rejected", text_elements: [] }],
+    });
+  });
+
+  it("rejects queued steering when the run aborts before debounce flush", async () => {
+    const controller = new AbortController();
+    const request = vi.fn(async () => ({ turnId: "turn-1" }));
+    const queue = __testing.createCodexSteeringQueue({
+      client: { request } as never,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      answerPendingUserInput: () => false,
+      signal: controller.signal,
+    });
+
+    const queued = queue.queue("aborted", { debounceMs: 0 });
+    const rejected = expect(queued).rejects.toThrow("codex app-server steering queue aborted");
+    controller.abort();
+
+    await rejected;
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("flushes pending default queued steering during normal turn cleanup", async () => {
     const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
 
@@ -3200,7 +3261,7 @@ describe("runCodexAppServerAttempt", () => {
     ]);
   });
 
-  it("keeps legacy queue steering as separate turn/steer requests", async () => {
+  it("batches explicit all-mode steering before sending turn/steer", async () => {
     const { requests, waitForMethod, completeTurn } = createStartedThreadHarness();
 
     const run = runCodexAppServerAttempt(
@@ -3208,12 +3269,8 @@ describe("runCodexAppServerAttempt", () => {
     );
     await waitForMethod("turn/start");
 
-    expect(
-      queueActiveRunMessageForTest("session-1", "first", { steeringMode: "one-at-a-time" }),
-    ).toBe(true);
-    expect(
-      queueActiveRunMessageForTest("session-1", "second", { steeringMode: "one-at-a-time" }),
-    ).toBe(true);
+    expect(queueActiveRunMessageForTest("session-1", "first", { steeringMode: "all" })).toBe(true);
+    expect(queueActiveRunMessageForTest("session-1", "second", { steeringMode: "all" })).toBe(true);
 
     await vi.waitFor(
       () =>
@@ -3223,15 +3280,10 @@ describe("runCodexAppServerAttempt", () => {
             params: {
               threadId: "thread-1",
               expectedTurnId: "turn-1",
-              input: [{ type: "text", text: "first", text_elements: [] }],
-            },
-          },
-          {
-            method: "turn/steer",
-            params: {
-              threadId: "thread-1",
-              expectedTurnId: "turn-1",
-              input: [{ type: "text", text: "second", text_elements: [] }],
+              input: [
+                { type: "text", text: "first", text_elements: [] },
+                { type: "text", text: "second", text_elements: [] },
+              ],
             },
           },
         ]),
