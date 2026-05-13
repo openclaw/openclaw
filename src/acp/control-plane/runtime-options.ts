@@ -342,7 +342,7 @@ export function buildRuntimeConfigOptionPairs(
   }
   if (
     typeof normalized.timeoutSeconds === "number" &&
-    isTimeoutConfigOptionAdvertised(advertisedConfigOptionKeys)
+    shouldEmitTimeoutConfigOption(advertisedConfigOptionKeys)
   ) {
     pairs.set(
       resolveRuntimeConfigOptionKey("timeout", advertisedConfigOptionKeys),
@@ -358,22 +358,13 @@ export function buildRuntimeConfigOptionPairs(
   return [...pairs.entries()];
 }
 
-/**
- * Returns true when the backend's advertised config keys either include a
- * timeout alias or are unknown to us (`undefined` / empty array). Returns
- * false only when advertisement info is present and lists no timeout alias
- * — in which case `buildRuntimeConfigOptionPairs` must NOT emit the pair,
- * because `applyManagerRuntimeControls` would otherwise reject the pre-turn
- * apply with `ACP_BACKEND_UNSUPPORTED_CONTROL`. OpenClaw's per-turn timeout
- * is still enforced in-process via `resolveTurnTimeoutMs` in `manager.core`.
- */
-function isTimeoutConfigOptionAdvertised(advertisedConfigOptionKeys?: readonly string[]): boolean {
+function shouldEmitTimeoutConfigOption(advertisedConfigOptionKeys?: readonly string[]): boolean {
   const advertisedKeys = buildAdvertisedConfigOptionKeyMap(advertisedConfigOptionKeys);
-  if (advertisedKeys.size === 0) {
-    return true;
-  }
-  return RUNTIME_CONFIG_OPTION_ALIASES.timeoutSeconds.some((alias) =>
-    advertisedKeys.has(normalizeLowercaseStringOrEmpty(alias)),
+  return (
+    advertisedKeys.size === 0 ||
+    RUNTIME_CONFIG_OPTION_ALIASES.timeoutSeconds.some((alias) =>
+      advertisedKeys.has(normalizeLowercaseStringOrEmpty(alias)),
+    )
   );
 }
 

@@ -476,13 +476,6 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   });
 
   it("ignores unsupported claude-agent-acp timeout config controls", async () => {
-    // Regression for openclaw/openclaw#81127: claude-agent-acp rejects any
-    // `session/set_config_option` whose configId it does not advertise
-    // (`Unknown config option: timeout`), which previously surfaced to callers
-    // as ACP_TURN_FAILED whenever `sessions_spawn` was invoked with
-    // `timeoutSeconds`. OpenClaw still enforces the per-turn timeout
-    // in-process via runTimeoutSeconds; the wire option just must not leave
-    // the wrapper.
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => ({
         acpxRecordId: "agent:claude:acp:test",
@@ -554,12 +547,6 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(
       __testing.isClaudeAcpCommand(`node "/tmp/openclaw/acpx/claude-agent-acp-wrapper.mjs"`),
     ).toBe(true);
-    // Generated ACP wrapper commands are built from `process.execPath`, which
-    // is `node.exe` on Windows. The detector must accept that launcher so the
-    // bundled Claude ACP wrapper path does not slip past the timeout
-    // suppression on Windows hosts. Generated commands use forward-slash
-    // paths (Node accepts those on Windows) — matching the same pattern as
-    // the existing CODEX_ACP_WRAPPER_COMMAND fixture.
     expect(
       __testing.isClaudeAcpCommand(
         `node.exe "C:/Users/runner/AppData/Local/Temp/openclaw/acpx/claude-agent-acp-wrapper.mjs"`,

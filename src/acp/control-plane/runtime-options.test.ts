@@ -2,11 +2,6 @@ import { describe, expect, it } from "vitest";
 import { buildRuntimeConfigOptionPairs } from "./runtime-options.js";
 
 describe("buildRuntimeConfigOptionPairs timeout advertisement", () => {
-  // Regression for openclaw/openclaw#81127: when a backend (e.g. claude-agent-acp)
-  // does not advertise a `timeout` config option, applyManagerRuntimeControls
-  // throws ACP_BACKEND_UNSUPPORTED_CONTROL before the runtime wrapper sees the
-  // call. The pair must not be emitted in that case. OpenClaw's per-turn
-  // timeout is still enforced in-process via manager.core.resolveTurnTimeoutMs.
   it("omits the timeout pair when advertised keys exclude every timeout alias", () => {
     const pairs = buildRuntimeConfigOptionPairs({ timeoutSeconds: 60 }, [
       "model",
