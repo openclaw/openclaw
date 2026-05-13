@@ -71,7 +71,7 @@ describe("doctor session state provider routes", () => {
     expect(route.runtime).toBe("codex-cli");
   });
 
-  it("ignores legacy environment runtime overrides before plugin-owned scans", () => {
+  it("honors default agent runtimes over legacy environment runtime overrides before plugin-owned scans", () => {
     const route = resolveConfiguredDoctorSessionStateRoute({
       cfg: {
         agents: {
@@ -84,7 +84,7 @@ describe("doctor session state provider routes", () => {
       sessionKey: "agent:main:telegram:direct:1",
       env: { OPENCLAW_AGENT_RUNTIME: "codex-cli" },
     });
-    expect(route.runtime).toBe("codex");
+    expect(route.runtime).toBe("pi");
   });
 
   it("clears auto-created route state when current route no longer uses the owner", () => {
