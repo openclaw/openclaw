@@ -77,4 +77,15 @@ describe("OpenAI reasoning effort support", () => {
       }),
     ).toBeUndefined();
   });
+
+  it("honors compat metadata that disables reasoning effort payloads", () => {
+    const model = {
+      provider: "xai",
+      id: "grok-4.20-beta-latest-reasoning",
+      compat: { supportsReasoningEffort: false },
+    };
+
+    expect(resolveOpenAISupportedReasoningEfforts(model)).toEqual([]);
+    expect(resolveOpenAIReasoningEffortForModel({ model, effort: "high" })).toBeUndefined();
+  });
 });
