@@ -470,9 +470,10 @@ export async function sendChatMessage(
   if (!state.client || !state.connected) {
     return null;
   }
-  const msg = message.trim();
+  const msg = message;
+  const hasText = msg.trim().length > 0;
   const hasAttachments = attachments && attachments.length > 0;
-  if (!msg && !hasAttachments) {
+  if (!hasText && !hasAttachments) {
     return null;
   }
   if (state.chatSending) {
@@ -494,7 +495,7 @@ export async function sendChatMessage(
       mimeType?: string;
     };
   }> = [];
-  if (msg) {
+  if (hasText) {
     contentBlocks.push({ type: "text", text: msg });
   }
   // Add image previews to the message for display
@@ -571,9 +572,10 @@ export async function sendDetachedChatMessage(
   if (!state.client || !state.connected) {
     return null;
   }
-  const msg = message.trim();
+  const msg = message;
+  const hasText = msg.trim().length > 0;
   const hasAttachments = attachments && attachments.length > 0;
-  if (!msg && !hasAttachments) {
+  if (!hasText && !hasAttachments) {
     return null;
   }
   state.lastError = null;
@@ -595,9 +597,10 @@ export async function sendSteerChatMessage(
   if (!state.client || !state.connected) {
     return null;
   }
-  const msg = message.trim();
+  const msg = message;
+  const hasText = msg.trim().length > 0;
   const hasAttachments = attachments && attachments.length > 0;
-  if (!msg && !hasAttachments) {
+  if (!hasText && !hasAttachments) {
     return null;
   }
   state.lastError = null;

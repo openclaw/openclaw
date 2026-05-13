@@ -609,6 +609,42 @@ describe("handleSendChat", () => {
     vi.unstubAllGlobals();
   });
 
+  it("submits WebChat drafts without trimming leading diagram whitespace", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "started" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const diagram = [
+      "+5V --+-- R68 3.3K --+-- TP175",
+      "      |               +-- R122 10K",
+      "      +-- R122 10K --+-- TP128",
+    ].join("\n");
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: diagram,
+      sessionKey: "agent:main",
+    });
+
+    await handleSendChat(host);
+
+    const payload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "chat.send",
+      "chat send payload",
+    );
+    expect(payload.message).toBe(diagram);
+    expect(host.chatMessages).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: diagram }],
+        timestamp: expect.any(Number),
+      },
+    ]);
+    expect(host.chatMessage).toBe("");
+  });
+
   it("cancels button-triggered /new resets when confirmation is declined", async () => {
     const confirm = vi.fn(() => false);
     vi.stubGlobal("confirm", confirm);

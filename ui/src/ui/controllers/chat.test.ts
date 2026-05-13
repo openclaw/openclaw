@@ -865,6 +865,27 @@ describe("sendChatMessage", () => {
     expect(state.chatMessages).toHaveLength(1);
   });
 
+  it("preserves leading whitespace in WebChat message text", async () => {
+    const request = vi.fn().mockResolvedValue({ runId: "run-1", status: "started" });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+    const diagram = [
+      "+5V --+-- R68 3.3K --+-- TP175",
+      "      |               +-- R122 10K",
+      "      +-- R122 10K --+-- TP128",
+    ].join("\n");
+
+    const result = await sendChatMessage(state, diagram);
+
+    expect(result).toMatch(UUID_V4_RE);
+    const [requestMethod, requestParams] = requireFirstRequestCall(request);
+    expect(requestMethod).toBe("chat.send");
+    expect(requireRecord(requestParams).message).toBe(diagram);
+    expectTextChatMessage(state.chatMessages[0], "user", diagram);
+  });
+
   it("passes the backing session id from history when sending after reconnect", async () => {
     const request = vi
       .fn()
