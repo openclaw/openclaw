@@ -4,6 +4,7 @@ import {
   resolveThreadBindingSpawnPolicy,
   supportsAutomaticThreadBindingSpawn,
 } from "../../channels/thread-bindings-policy.js";
+import { resolveSubagentMaxConcurrent } from "../../config/agent-limits.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
@@ -45,6 +46,7 @@ import {
 
 const SESSIONS_SPAWN_RUNTIMES = ["subagent", "acp"] as const;
 const SESSIONS_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
+const SESSIONS_SPAWN_AUTO_YIELD_DELAY_MS = 15_000;
 // Keep the schema local to avoid a circular import through acp-spawn/openclaw-tools.
 const SESSIONS_SPAWN_ACP_STREAM_TARGETS = ["parent"] as const;
 const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
@@ -88,6 +90,20 @@ function addRoleToFailureResult<T extends { status: string }>(
   return { ...result, role };
 }
 
+function normalizeAcceptedSpawnToolResult<T extends { status: string }>(
+  result: T,
+): T | (Omit<T, "status"> & { status: "ok"; accepted: true; spawnStatus: "accepted" }) {
+  if (result.status !== "accepted") {
+    return result;
+  }
+  return {
+    ...result,
+    status: "ok",
+    accepted: true,
+    spawnStatus: "accepted",
+  };
+}
+
 function resolveTrackedSpawnMode(params: {
   requestedMode?: "run" | "session";
   threadRequested: boolean;
@@ -96,6 +112,27 @@ function resolveTrackedSpawnMode(params: {
     return params.requestedMode;
   }
   return params.threadRequested ? "session" : "run";
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const limit = Math.max(1, Math.min(items.length || 1, Math.floor(concurrency)));
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+
+  async function runWorker() {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await worker(items[index], index);
+    }
+  }
+
+  await Promise.all(Array.from({ length: limit }, () => runWorker()));
+  return results;
 }
 
 async function cleanupUntrackedAcpSession(sessionKey: string): Promise<void> {
@@ -155,9 +192,10 @@ function resolveSessionsSpawnThreadAvailability(opts?: {
 function createSessionsSpawnToolSchema(params: {
   acpAvailable: boolean;
   threadAvailable: boolean;
+  sequentialSubagentMode: boolean;
 }) {
   const spawnModes = params.threadAvailable ? SUBAGENT_SPAWN_MODES : (["run"] as const);
-  const schema = {
+  const batchChildSchema = Type.Object({
     task: Type.String(),
     taskName: Type.Optional(
       Type.String({
@@ -165,6 +203,38 @@ function createSessionsSpawnToolSchema(params: {
           "Stable optional alias for later subagents targeting. Use lowercase letters, digits, and underscores, starting with a letter.",
       }),
     ),
+    label: Type.Optional(Type.String()),
+    agentId: Type.Optional(Type.String()),
+    model: Type.Optional(Type.String()),
+    thinking: Type.Optional(Type.String()),
+    runTimeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
+    timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
+    mode: optionalStringEnum(spawnModes),
+    cleanup: optionalStringEnum(["delete", "keep"] as const),
+    sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES),
+    context: optionalStringEnum(SUBAGENT_SPAWN_CONTEXT_MODES),
+    lightContext: Type.Optional(Type.Boolean()),
+  });
+  const schema = {
+    task: Type.Optional(Type.String()),
+    taskName: Type.Optional(
+      Type.String({
+        description:
+          "Stable optional alias for later subagents targeting. Use lowercase letters, digits, and underscores, starting with a letter.",
+      }),
+    ),
+    ...(params.sequentialSubagentMode
+      ? {}
+      : {
+          children: Type.Optional(
+            Type.Array(batchChildSchema, {
+              minItems: 1,
+              maxItems: 20,
+              description:
+                'Batch subagent fan-out. Each child accepts task, agentId, label, model, thinking, runTimeoutSeconds, mode, cleanup, sandbox, context, and lightContext. Batch mode supports runtime="subagent" only.',
+            }),
+          ),
+        }),
     label: Type.Optional(Type.String()),
     runtime: optionalStringEnum(
       params.acpAvailable ? SESSIONS_SPAWN_RUNTIMES : (["subagent"] as const),
@@ -259,22 +329,61 @@ export function createSessionsSpawnTool(
     config?: OpenClawConfig;
     /** Explicit agent ID override for cron/hook sessions where session key parsing may not work. */
     requesterAgentIdOverride?: string;
+    sessionId?: string;
+    onYield?: (message: string) => Promise<void> | void;
   } & SpawnedToolContext,
 ): AnyAgentTool {
+  const subagentMaxConcurrent = resolveSubagentMaxConcurrent(opts?.config ?? getRuntimeConfig());
+  const sequentialSubagentMode = subagentMaxConcurrent <= 1;
   const acpAvailable = isAcpRuntimeSpawnAvailable({
     config: opts?.config,
     sandboxed: opts?.sandboxed,
   });
   const threadAvailability = resolveSessionsSpawnThreadAvailability(opts);
   const threadAvailable = hasAnyThreadAvailability(threadAvailability);
+  let autoYieldTimer: ReturnType<typeof setTimeout> | undefined;
+  let autoYieldFired = false;
+
+  const scheduleAutoYieldAfterAcceptedSpawn = (result: unknown) => {
+    if (!opts?.sessionId || !opts.onYield || autoYieldFired) {
+      return;
+    }
+    if (!result || typeof result !== "object") {
+      return;
+    }
+    const record = result as Record<string, unknown>;
+    if (record.status !== "accepted" || record.inlineDelivery === true) {
+      return;
+    }
+    if (record.mode !== undefined && record.mode !== "run") {
+      return;
+    }
+    if (autoYieldTimer) {
+      clearTimeout(autoYieldTimer);
+    }
+    autoYieldTimer = setTimeout(() => {
+      autoYieldFired = true;
+      void opts.onYield?.("Waiting for spawned subagent completion.");
+    }, SESSIONS_SPAWN_AUTO_YIELD_DELAY_MS);
+    autoYieldTimer.unref?.();
+  };
+
   return {
     label: "Sessions",
     name: "sessions_spawn",
     displaySummary: acpAvailable
       ? SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY
       : SESSIONS_SPAWN_SUBAGENT_TOOL_DISPLAY_SUMMARY,
-    description: describeSessionsSpawnTool({ acpAvailable, threadAvailable }),
-    parameters: createSessionsSpawnToolSchema({ acpAvailable, threadAvailable }),
+    description: describeSessionsSpawnTool({
+      acpAvailable,
+      threadAvailable,
+      subagentMaxConcurrent,
+    }),
+    parameters: createSessionsSpawnToolSchema({
+      acpAvailable,
+      threadAvailable,
+      sequentialSubagentMode,
+    }),
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const unsupportedParam = UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS.find((key) =>
@@ -285,7 +394,10 @@ export function createSessionsSpawnTool(
           `sessions_spawn does not support "${unsupportedParam}". Use "message" or "sessions_send" for channel delivery.`,
         );
       }
-      const task = readStringParam(params, "task", { required: true });
+      const children = Array.isArray(params.children)
+        ? (params.children as Record<string, unknown>[])
+        : undefined;
+      const task = readStringParam(params, "task", { required: !children });
       const taskNameResult = normalizeSubagentTaskName(params.taskName);
       if (taskNameResult.error) {
         return jsonResult({
@@ -346,7 +458,16 @@ export function createSessionsSpawnTool(
       if (runtime === "acp" && context === "fork") {
         throw new Error('context="fork" is only supported for runtime="subagent".');
       }
-      // Back-compat: older callers used timeoutSeconds for this tool.
+      if (
+        typeof params.runTimeoutSeconds === "number" &&
+        typeof params.timeoutSeconds === "number" &&
+        Math.floor(params.runTimeoutSeconds) !== Math.floor(params.timeoutSeconds)
+      ) {
+        throw new ToolInputError(
+          "sessions_spawn received both runTimeoutSeconds and timeoutSeconds with different values. timeoutSeconds is a deprecated alias for runTimeoutSeconds; use only runTimeoutSeconds.",
+        );
+      }
+      // Back-compat: older callers used timeoutSeconds as the child run timeout.
       const timeoutSecondsCandidate =
         typeof params.runTimeoutSeconds === "number"
           ? params.runTimeoutSeconds
@@ -366,6 +487,128 @@ export function createSessionsSpawnTool(
             mimeType?: string;
           }>)
         : undefined;
+
+      if (children) {
+        if (runtime === "acp") {
+          return jsonResult({
+            status: "error",
+            error: 'children batch mode supports only runtime="subagent".',
+            ...roleContext,
+          });
+        }
+        if (sequentialSubagentMode) {
+          return jsonResult({
+            status: "forbidden",
+            error:
+              "children batch mode is disabled while agents.defaults.subagents.maxConcurrent=1; spawn one child with a single sessions_spawn call, immediately call sessions_yield, wait for its completion, then spawn the next child.",
+            ...roleContext,
+          });
+        }
+        if (Array.isArray(attachments) && attachments.length > 0) {
+          return jsonResult({
+            status: "error",
+            error:
+              "attachments are unsupported in children batch mode; pass attachments in single-spawn mode",
+            ...roleContext,
+          });
+        }
+        const results = await mapWithConcurrency(
+          children,
+          subagentMaxConcurrent,
+          async (child, index) => {
+            try {
+              const childTask = readStringParam(child, "task", { required: true });
+              const childAgentId = readStringParam(child, "agentId") ?? requestedAgentId;
+              const childLabel = readStringParam(child, "label") ?? label;
+              const childModel = readStringParam(child, "model") ?? modelOverride;
+              const childThinking = readStringParam(child, "thinking") ?? thinkingOverrideRaw;
+              const childMode =
+                child.mode === "run" || child.mode === "session" ? child.mode : mode;
+              const childCleanup =
+                child.cleanup === "keep" || child.cleanup === "delete" ? child.cleanup : cleanup;
+              const childSandbox = child.sandbox === "require" ? "require" : sandbox;
+              const childContext =
+                child.context === "fork" || child.context === "isolated" ? child.context : context;
+              const childLightContext =
+                typeof child.lightContext === "boolean" ? child.lightContext : lightContext;
+              if (
+                typeof child.runTimeoutSeconds === "number" &&
+                typeof child.timeoutSeconds === "number" &&
+                Math.floor(child.runTimeoutSeconds) !== Math.floor(child.timeoutSeconds)
+              ) {
+                throw new ToolInputError(
+                  `children[${index}] received both runTimeoutSeconds and timeoutSeconds with different values.`,
+                );
+              }
+              const childTimeoutSecondsCandidate =
+                typeof child.runTimeoutSeconds === "number"
+                  ? child.runTimeoutSeconds
+                  : typeof child.timeoutSeconds === "number"
+                    ? child.timeoutSeconds
+                    : runTimeoutSeconds;
+              const childRunTimeoutSeconds =
+                typeof childTimeoutSecondsCandidate === "number" &&
+                Number.isFinite(childTimeoutSecondsCandidate)
+                  ? Math.max(0, Math.floor(childTimeoutSecondsCandidate))
+                  : undefined;
+              const childResult = await spawnSubagentDirect(
+                {
+                  task: childTask,
+                  label: childLabel || undefined,
+                  agentId: childAgentId,
+                  model: childModel,
+                  thinking: childThinking,
+                  runTimeoutSeconds: childRunTimeoutSeconds,
+                  thread,
+                  mode: childMode,
+                  cleanup: childCleanup,
+                  sandbox: childSandbox,
+                  context: childContext,
+                  lightContext: childLightContext,
+                  expectsCompletionMessage,
+                },
+                {
+                  agentSessionKey: opts?.agentSessionKey,
+                  agentChannel: opts?.agentChannel,
+                  agentAccountId: opts?.agentAccountId,
+                  agentTo: opts?.agentTo,
+                  agentThreadId: opts?.agentThreadId,
+                  agentGroupId: opts?.agentGroupId,
+                  agentGroupChannel: opts?.agentGroupChannel,
+                  agentGroupSpace: opts?.agentGroupSpace,
+                  agentMemberRoleIds: opts?.agentMemberRoleIds,
+                  requesterAgentIdOverride: opts?.requesterAgentIdOverride,
+                  workspaceDir: opts?.workspaceDir,
+                },
+              );
+              scheduleAutoYieldAfterAcceptedSpawn(childResult);
+              return normalizeAcceptedSpawnToolResult(
+                addRoleToFailureResult(childResult, childAgentId),
+              );
+            } catch (err) {
+              return {
+                status: "error",
+                index,
+                error: summarizeError(err),
+              };
+            }
+          },
+        );
+        const failed = results.filter((result) => result.status === "error");
+        return jsonResult({
+          status: failed.length > 0 ? "partial_error" : "ok",
+          accepted: failed.length === 0,
+          spawnStatus: failed.length === 0 ? "accepted" : "partial_error",
+          count: results.length,
+          failures: failed.length,
+          results,
+        });
+      }
+      if (!task) {
+        throw new ToolInputError(
+          "sessions_spawn requires task unless children batch mode is used.",
+        );
+      }
 
       if (runtime === "acp") {
         const { isSpawnAcpAcceptedResult, spawnAcpDirect } = await loadAcpSpawnModule();
@@ -470,7 +713,10 @@ export function createSessionsSpawnTool(
             });
           }
         }
-        return jsonResult(addRoleToFailureResult(result, requestedAgentId));
+        scheduleAutoYieldAfterAcceptedSpawn(result);
+        return jsonResult(
+          normalizeAcceptedSpawnToolResult(addRoleToFailureResult(result, requestedAgentId)),
+        );
       }
 
       const result = await spawnSubagentDirect(
@@ -512,7 +758,10 @@ export function createSessionsSpawnTool(
         },
       );
 
-      return jsonResult(addRoleToFailureResult(result, requestedAgentId));
+      scheduleAutoYieldAfterAcceptedSpawn(result);
+      return jsonResult(
+        normalizeAcceptedSpawnToolResult(addRoleToFailureResult(result, requestedAgentId)),
+      );
     },
   };
 }

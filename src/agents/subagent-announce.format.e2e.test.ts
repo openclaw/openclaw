@@ -164,6 +164,7 @@ const { subagentRegistryMock } = vi.hoisted(() => ({
     isSubagentSessionRunActive: vi.fn(() => true),
     shouldIgnorePostCompletionAnnounceForSession: vi.fn((_sessionKey: string) => false),
     countActiveDescendantRuns: vi.fn((_sessionKey: string) => 0),
+    countLiveDescendantRunsExcludingRun: vi.fn((_sessionKey: string, _runId: string) => 0),
     countPendingDescendantRuns: vi.fn((_sessionKey: string) => 0),
     countPendingDescendantRunsExcludingRun: vi.fn((_sessionKey: string, _runId: string) => 0),
     getLatestSubagentRunByChildSessionKey: vi.fn(
@@ -441,6 +442,11 @@ describe("subagent announce formatting", () => {
       .mockImplementation((sessionKey: string) =>
         subagentRegistryMock.countActiveDescendantRuns(sessionKey),
       );
+    subagentRegistryMock.countLiveDescendantRunsExcludingRun
+      .mockClear()
+      .mockImplementation((sessionKey: string, _runId: string) =>
+        subagentRegistryMock.countActiveDescendantRuns(sessionKey),
+      );
     subagentRegistryMock.countPendingDescendantRunsExcludingRun
       .mockClear()
       .mockImplementation((sessionKey: string, _runId: string) =>
@@ -534,6 +540,122 @@ describe("subagent announce formatting", () => {
     const call = getAgentCall() as { params?: { message?: string } };
     const msg = call?.params?.message as string;
     expect(msg).toContain("completed successfully");
+  });
+
+  it("tells subagent orchestrators to yield while sibling completions are pending", async () => {
+    subagentRegistryMock.countLiveDescendantRunsExcludingRun.mockImplementation(
+      (sessionKey: string, runId: string) =>
+        sessionKey === "agent:cgo:subagent:orchestrator" && runId === "run-child-a" ? 2 : 0,
+    );
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:analytics:subagent:child-a",
+      childRunId: "run-child-a",
+      requesterSessionKey: "agent:cgo:subagent:orchestrator",
+      requesterDisplayKey: "cgo",
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+      roundOneReply: "analytics result",
+    });
+
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
+    const msg = call?.params?.message as string;
+    expect(msg).toContain("2 other child completion(s) are still pending after this event");
+    expect(msg).toContain("must be exactly a sessions_yield tool call with an empty message");
+    expect(msg).toContain("do not reply NO_REPLY");
+    expect(msg).toContain("overall subagent task is not finished yet");
+  });
+
+  it("does not tell sequential subagent orchestrators that zero active completions means final", async () => {
+    subagentRegistryMock.countLiveDescendantRunsExcludingRun.mockReturnValue(0);
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:user-research:subagent:last-child",
+      childRunId: "run-last-child",
+      requesterSessionKey: "agent:cgo:subagent:orchestrator",
+      requesterDisplayKey: "cgo",
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+      roundOneReply: "user research result",
+    });
+
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
+    const msg = call?.params?.message as string;
+    expect(msg).toContain(
+      "no other currently active child completions are pending after this event",
+    );
+    expect(msg).toContain("does not prove that all planned child work");
+    expect(msg).toContain("If your assignment requires more sequential child work");
+    expect(msg).toContain("spawn the next child now and then call sessions_yield");
+    expect(msg).toContain("If the assignment is fully satisfied");
+    expect(msg).toContain("Do not reply NO_REPLY for this completion unless it is a duplicate");
+    expect(msg).not.toContain("this is the final expected child completion");
+    expect(msg).not.toContain("Do not call sessions_yield");
+    expect(msg).not.toContain("Reply ONLY: NO_REPLY");
+  });
+
+  it("announces visible completion text as successful when wait status was stale timeout", async () => {
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:cgo:subagent:done",
+      childRunId: "run-cgo-done",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      ...defaultOutcomeAnnounce,
+      outcome: {
+        status: "timeout",
+        startedAt: 10,
+        endedAt: 20,
+        elapsedMs: 10,
+      },
+      expectsCompletionMessage: true,
+      roundOneReply: "CGO final synthesis",
+    });
+
+    const call = agentSpy.mock.calls[0]?.[0] as {
+      params?: {
+        message?: string;
+        internalEvents?: Array<{ status?: string; statusLabel?: string }>;
+      };
+    };
+    const msg = call?.params?.message as string;
+    expect(msg).toContain("status: completed successfully");
+    expect(msg).not.toContain("status: timed out");
+    expect(call?.params?.internalEvents?.[0]).toMatchObject({
+      status: "ok",
+      statusLabel: "completed successfully",
+    });
+  });
+
+  it("announces trusted completion text as successful even when completion delivery is disabled", async () => {
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:cgo:subagent:done-no-delivery",
+      childRunId: "run-cgo-done-no-delivery",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      ...defaultOutcomeAnnounce,
+      outcome: {
+        status: "timeout",
+        startedAt: 10,
+        endedAt: 20,
+        elapsedMs: 10,
+      },
+      expectsCompletionMessage: false,
+      roundOneReply: "CGO final synthesis",
+    });
+
+    const call = agentSpy.mock.calls[0]?.[0] as {
+      params?: {
+        message?: string;
+        internalEvents?: Array<{ status?: string; statusLabel?: string }>;
+      };
+    };
+    const msg = call?.params?.message as string;
+    expect(msg).toContain("status: completed successfully");
+    expect(msg).not.toContain("status: timed out");
+    expect(call?.params?.internalEvents?.[0]).toMatchObject({
+      status: "ok",
+      statusLabel: "completed successfully",
+    });
   });
 
   it("rechecks timed-out waits before announcing timeout when the run finishes immediately after", async () => {
@@ -741,6 +863,16 @@ describe("subagent announce formatting", () => {
     const call = getAgentCall() as { params?: Record<string, unknown> };
     const rawMessage = call?.params?.message;
     const msg = typeof rawMessage === "string" ? rawMessage : "";
+    expect(msg).toContain(
+      "This completion is not a duplicate merely because you previously sent progress/yield text",
+    );
+    expect(msg).toContain(
+      "If the result contains a marker, status line, or final synthesis that was not already sent to the user, you must send that completion now.",
+    );
+    expect(msg).toContain("A different prior marker/session/result is not a duplicate.");
+    expect(msg).toContain(
+      `Reply ${SILENT_REPLY_TOKEN} only if this exact completed child result or marker was already delivered in a prior user-facing final answer.`,
+    );
     expect(call?.params?.channel).toBe("discord");
     expect(call?.params?.to).toBe("channel:12345");
     expect(call?.params?.sessionKey).toBe("agent:main:main");
@@ -1869,8 +2001,9 @@ describe("subagent announce formatting", () => {
       queue: async () => "queued",
     });
 
-    expect(delivery.delivered).toBe(true);
+    expect(delivery.delivered).toBe(false);
     expect(delivery.path).toBe("queued");
+    expect(delivery.error).toBe("completion delivery queued but not yet visibly delivered");
     expect(direct).toHaveBeenCalledTimes(1);
   });
 
@@ -2272,8 +2405,12 @@ describe("subagent announce formatting", () => {
     expectInputProvenance(call?.params, "agent:main:subagent:orchestrator:subagent:worker");
     const message = typeof call?.params?.message === "string" ? call.params.message : "";
     expect(message).toContain(
-      "Convert this completion into a concise internal orchestration update for your parent agent",
+      "Use this completion as orchestration input for your assigned subagent task",
     );
+    expect(message).toContain("does not prove that all planned child work");
+    expect(message).toContain("spawn the next child now and then call sessions_yield");
+    expect(message).toContain("If the assignment is fully satisfied");
+    expect(message).not.toContain("Do not call sessions_yield");
   });
 
   it("retries reading subagent output when early lifecycle completion had no text", async () => {
@@ -2730,6 +2867,7 @@ describe("subagent announce formatting", () => {
       previousRunId: "run-parent-phase-1",
       nextRunId: "run-parent-phase-2",
       preserveFrozenResultFallback: true,
+      fallbackFrozenResultText: expect.stringContaining("result from child a"),
     });
   });
 

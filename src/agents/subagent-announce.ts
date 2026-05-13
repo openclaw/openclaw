@@ -80,12 +80,23 @@ function buildAnnounceReplyInstruction(params: {
   requesterIsSubagent: boolean;
   announceType: SubagentAnnounceType;
   expectsCompletionMessage?: boolean;
+  pendingDescendantRunsAfterCurrent?: number;
 }): string {
   if (params.requesterIsSubagent) {
-    return `Convert this completion into a concise internal orchestration update for your parent agent in your own words. Keep this internal context private (don't mention system/log/stats/session details or announce type). If this result is duplicate or no update is needed, reply ONLY: ${SILENT_REPLY_TOKEN}.`;
+    const pending = params.pendingDescendantRunsAfterCurrent;
+    if (typeof pending === "number" && pending === 0) {
+      return `Use this completion as orchestration input for your assigned subagent task. Keep this internal context private (don't mention system/log/stats/session details or announce type). Runtime orchestration status: no other currently active child completions are pending after this event. This does not prove that all planned child work in your assigned task is complete. If your assignment requires more sequential child work, spawn the next child now and then call sessions_yield. If the assignment is fully satisfied, synthesize your final answer to your requester now. Do not reply ${SILENT_REPLY_TOKEN} for this completion unless it is a duplicate or arrives after you already sent your final answer.`;
+    }
+    const runtimeStatus =
+      typeof pending === "number"
+        ? pending > 0
+          ? ` Runtime orchestration status: ${pending} other child completion(s) are still pending after this event. Your next assistant action for this pending completion must be exactly a sessions_yield tool call with an empty message. Do not send normal assistant text, and do not reply ${SILENT_REPLY_TOKEN}, because the overall subagent task is not finished yet.`
+          : ""
+        : "";
+    return `Use this completion as orchestration input for your assigned subagent task. Keep this internal context private (don't mention system/log/stats/session details or announce type).${runtimeStatus} If you are still waiting for other expected child completions, your next assistant action must be sessions_yield with an empty message. If all expected child completions are now available, synthesize your final answer to your requester. Reply ${SILENT_REPLY_TOKEN} only when this is a duplicate completion or it arrives after you already sent your final answer.`;
   }
   if (params.expectsCompletionMessage) {
-    return `A completed ${params.announceType} is ready for user delivery. Convert the result above into your normal assistant voice and send that user-facing update now. Keep this internal context private (don't mention system/log/stats/session details or announce type).`;
+    return `A completed ${params.announceType} is ready for user delivery. Convert the result above into your normal assistant voice and send that user-facing update now. Keep this internal context private (don't mention system/log/stats/session details or announce type). This completion is not a duplicate merely because you previously sent progress/yield text for the same user task. If the result contains a marker, status line, or final synthesis that was not already sent to the user, you must send that completion now. A different prior marker/session/result is not a duplicate. Reply ${SILENT_REPLY_TOKEN} only if this exact completed child result or marker was already delivered in a prior user-facing final answer.`;
   }
   return `A completed ${params.announceType} is ready for user delivery. Convert the result above into your normal assistant voice and send that user-facing update now. Keep this internal context private (don't mention system/log/stats/session details or announce type), and do not copy the internal event text verbatim. Reply ONLY: ${SILENT_REPLY_TOKEN} if this exact result was already delivered to the user in this same turn.`;
 }
@@ -156,6 +167,32 @@ function stripAndClassifyReply(text: string): string | null {
   return result;
 }
 
+function normalizeOutcomeForVisibleCompletion(params: {
+  outcome: SubagentRunOutcome;
+  reply?: string;
+  childCompletionFindings?: string;
+  expectsCompletionMessage: boolean;
+  trustedCompletionText?: boolean;
+}): SubagentRunOutcome {
+  if (params.outcome.status !== "timeout") {
+    return params.outcome;
+  }
+  if (!params.expectsCompletionMessage && params.trustedCompletionText !== true) {
+    return params.outcome;
+  }
+  const hasVisibleCompletion =
+    params.trustedCompletionText === true || Boolean(params.childCompletionFindings?.trim());
+  if (!hasVisibleCompletion) {
+    return params.outcome;
+  }
+  return {
+    status: "ok",
+    startedAt: params.outcome.startedAt,
+    endedAt: params.outcome.endedAt,
+    elapsedMs: params.outcome.elapsedMs,
+  };
+}
+
 async function wakeSubagentRunAfterDescendants(params: {
   runId: string;
   childSessionKey: string;
@@ -217,6 +254,7 @@ async function wakeSubagentRunAfterDescendants(params: {
     previousRunId: params.runId,
     nextRunId: wakeRunId,
     preserveFrozenResultFallback: true,
+    fallbackFrozenResultText: params.findings,
   });
 }
 
@@ -383,7 +421,9 @@ export async function runSubagentAnnounceFlow(params: {
         (isAnnounceSkip(fallbackReply) || isSilentReplyText(fallbackReply, SILENT_REPLY_TOKEN));
 
       if (!reply && allowFailedOutputCapture) {
-        reply = await readSubagentOutput(params.childSessionKey, outcome);
+        reply = await readSubagentOutput(params.childSessionKey, outcome, {
+          timeoutMs: params.timeoutMs,
+        });
       }
 
       if (!reply?.trim() && allowFailedOutputCapture) {
@@ -451,6 +491,14 @@ export async function runSubagentAnnounceFlow(params: {
     if (!outcome) {
       outcome = { status: "unknown" };
     }
+    outcome = normalizeOutcomeForVisibleCompletion({
+      outcome,
+      reply,
+      childCompletionFindings,
+      expectsCompletionMessage,
+      trustedCompletionText:
+        Boolean(params.roundOneReply?.trim()) || Boolean(params.fallbackReply?.trim()),
+    });
 
     // Build status label
     const statusLabel =
@@ -495,10 +543,27 @@ export async function runSubagentAnnounceFlow(params: {
       }
     }
 
+    let pendingDescendantRunsAfterCurrent: number | undefined;
+    if (requesterIsSubagent) {
+      try {
+        const registry = subagentRegistryRuntime ?? (await loadSubagentRegistryRuntime());
+        pendingDescendantRunsAfterCurrent = Math.max(
+          0,
+          registry.countLiveDescendantRunsExcludingRun(
+            targetRequesterSessionKey,
+            params.childRunId,
+          ),
+        );
+      } catch {
+        // Best-effort prompt enrichment only.
+      }
+    }
+
     const replyInstruction = buildAnnounceReplyInstruction({
       requesterIsSubagent,
       announceType,
       expectsCompletionMessage,
+      pendingDescendantRunsAfterCurrent,
     });
     const statsLine = await buildCompactAnnounceStatsLine({
       sessionKey: params.childSessionKey,
@@ -558,6 +623,8 @@ export async function runSubagentAnnounceFlow(params: {
       sourceSessionKey: params.childSessionKey,
       sourceChannel: INTERNAL_MESSAGE_CHANNEL,
       sourceTool: "subagent_announce",
+      externalFallbackContent:
+        expectsCompletionMessage && !requesterIsSubagent ? findings : undefined,
       targetRequesterSessionKey,
       requesterIsSubagent,
       expectsCompletionMessage: expectsCompletionMessage,
@@ -576,8 +643,9 @@ export async function runSubagentAnnounceFlow(params: {
     defaultRuntime.error?.(`Subagent announce failed: ${String(err)}`);
     // Best-effort follow-ups; ignore failures to avoid breaking the caller response.
   } finally {
-    // Patch label after all writes complete
-    if (params.label) {
+    // Patch labels only for persistent child sessions. One-shot run labels are
+    // task metadata in the subagent registry and commonly repeat across runs.
+    if (params.label && params.spawnMode === "session") {
       try {
         await subagentAnnounceDeps.callGateway({
           method: "sessions.patch",

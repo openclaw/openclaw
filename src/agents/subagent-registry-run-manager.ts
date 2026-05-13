@@ -1,9 +1,15 @@
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { resolveSubagentQueueAwareTimeoutMs } from "../config/agent-limits.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import { createRunningTaskRun } from "../tasks/detached-task-runtime.js";
+import {
+  completeTaskRunByRunId,
+  createQueuedTaskRun,
+  startTaskRunByRunId,
+} from "../tasks/detached-task-runtime.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { isRecoverableAgentWaitError, waitForAgentRun } from "./run-wait.js";
@@ -28,12 +34,21 @@ import {
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isAnnounceSkip } from "./tools/sessions-send-tokens.js";
 
 const log = createSubsystemLogger("agents/subagent-registry");
 const RECOVERABLE_WAIT_RETRY_DELAY_MS = process.env.OPENCLAW_TEST_FAST === "1" ? 25 : 5_000;
 
 function shouldDeleteAttachments(entry: SubagentRunRecord) {
   return entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep;
+}
+
+function normalizeFrozenResultFallback(text?: string | null): string | undefined {
+  const trimmed = text?.trim();
+  if (!trimmed || isSilentReplyText(trimmed, SILENT_REPLY_TOKEN) || isAnnounceSkip(trimmed)) {
+    return undefined;
+  }
+  return trimmed;
 }
 
 export function markSubagentRunPausedAfterYield(params: {
@@ -77,6 +92,14 @@ export function markSubagentRunPausedAfterYield(params: {
     entry.frozenResultCapturedAt = undefined;
     mutated = true;
   }
+  completeTaskRunByRunId({
+    runId: entry.runId,
+    runtime: "subagent",
+    sessionKey: entry.childSessionKey,
+    endedAt,
+    lastEventAt: endedAt,
+    terminalSummary: "yielded",
+  });
   return mutated;
 }
 
@@ -97,6 +120,7 @@ export type RegisterSubagentRunParams = {
   runTimeoutSeconds?: number;
   expectsCompletionMessage?: boolean;
   spawnMode?: "run" | "session";
+  wakeOnDescendantSettle?: boolean;
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;
@@ -121,6 +145,7 @@ export function createSubagentRunManager(params: {
   stopSweeper(): void;
   resumeSubagentRun(runId: string): void;
   clearPendingLifecycleError(runId: string): void;
+  countPendingDescendantRuns(rootSessionKey: string): number;
   resolveSubagentWaitTimeoutMs(cfg: OpenClawConfig, runTimeoutSeconds?: number): number;
   scheduleOrphanRecovery(args?: { delayMs?: number; maxRetries?: number }): void;
   notifyContextEngineSubagentEnded(args: {
@@ -201,6 +226,13 @@ export function createSubagentRunManager(params: {
         if (typeof entry.sessionStartedAt !== "number") {
           entry.sessionStartedAt = wait.startedAt;
         }
+        startTaskRunByRunId({
+          runId,
+          runtime: "subagent",
+          sessionKey: entry.childSessionKey,
+          startedAt: wait.startedAt,
+          lastEventAt: wait.startedAt,
+        });
         mutated = true;
       }
       if (typeof wait.endedAt === "number") {
@@ -212,6 +244,30 @@ export function createSubagentRunManager(params: {
         mutated = true;
       }
       const waitError = typeof wait.error === "string" ? wait.error : undefined;
+      if (wait.status === "timeout" && entry.pauseReason === "sessions_yield") {
+        if (entry.outcome !== undefined) {
+          entry.outcome = undefined;
+          params.persist();
+        }
+        return;
+      }
+      const pendingDescendantRuns =
+        wait.status === "timeout" ? params.countPendingDescendantRuns(entry.childSessionKey) : 0;
+      if (wait.status === "timeout" && pendingDescendantRuns > 0) {
+        if (entry.wakeOnDescendantSettle !== true) {
+          entry.wakeOnDescendantSettle = true;
+        }
+        if (
+          markSubagentRunPausedAfterYield({
+            entry,
+            startedAt: wait.startedAt,
+            endedAt: wait.endedAt,
+          })
+        ) {
+          params.persist();
+        }
+        return;
+      }
       const baseOutcome: SubagentRunOutcome =
         wait.status === "error"
           ? { status: "error", error: waitError }
@@ -290,6 +346,7 @@ export function createSubagentRunManager(params: {
     fallback?: SubagentRunRecord;
     runTimeoutSeconds?: number;
     preserveFrozenResultFallback?: boolean;
+    fallbackFrozenResultText?: string;
   }) => {
     const previousRunId = replaceParams.previousRunId.trim();
     const nextRunId = replaceParams.nextRunId.trim();
@@ -323,8 +380,14 @@ export function createSubagentRunManager(params: {
           ? now + archiveAfterMs
           : undefined;
     const runTimeoutSeconds = replaceParams.runTimeoutSeconds ?? source.runTimeoutSeconds ?? 0;
-    const waitTimeoutMs = params.resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
+    const waitTimeoutMs = resolveSubagentQueueAwareTimeoutMs({
+      cfg,
+      timeoutMs: params.resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds),
+    });
     const preserveFrozenResultFallback = replaceParams.preserveFrozenResultFallback === true;
+    const frozenResultFallback =
+      normalizeFrozenResultFallback(replaceParams.fallbackFrozenResultText) ??
+      normalizeFrozenResultFallback(source.frozenResultText);
     const sessionStartedAt = getSubagentSessionStartedAt(source) ?? now;
     const accumulatedRuntimeMs =
       getSubagentSessionRuntimeMs(
@@ -347,9 +410,9 @@ export function createSubagentRunManager(params: {
       outcome: undefined,
       frozenResultText: undefined,
       frozenResultCapturedAt: undefined,
-      fallbackFrozenResultText: preserveFrozenResultFallback ? source.frozenResultText : undefined,
+      fallbackFrozenResultText: preserveFrozenResultFallback ? frozenResultFallback : undefined,
       fallbackFrozenResultCapturedAt: preserveFrozenResultFallback
-        ? source.frozenResultCapturedAt
+        ? (source.frozenResultCapturedAt ?? (frozenResultFallback ? now : undefined))
         : undefined,
       cleanupCompletedAt: undefined,
       cleanupHandled: false,
@@ -390,7 +453,10 @@ export function createSubagentRunManager(params: {
           ? now + archiveAfterMs
           : undefined;
     const runTimeoutSeconds = registerParams.runTimeoutSeconds ?? 0;
-    const waitTimeoutMs = params.resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
+    const waitTimeoutMs = resolveSubagentQueueAwareTimeoutMs({
+      cfg,
+      timeoutMs: params.resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds),
+    });
     const requesterOrigin = normalizeDeliveryContext(registerParams.requesterOrigin);
     const entry: SubagentRunRecord = {
       runId,
@@ -410,20 +476,20 @@ export function createSubagentRunManager(params: {
       workspaceDir: registerParams.workspaceDir,
       runTimeoutSeconds,
       createdAt: now,
-      startedAt: now,
-      sessionStartedAt: now,
+      startedAt: undefined,
+      sessionStartedAt: undefined,
       accumulatedRuntimeMs: 0,
       archiveAtMs,
       cleanupHandled: false,
       completionAnnouncedAt: undefined,
-      wakeOnDescendantSettle: undefined,
+      wakeOnDescendantSettle: registerParams.wakeOnDescendantSettle === true ? true : undefined,
       attachmentsDir: registerParams.attachmentsDir,
       attachmentsRootDir: registerParams.attachmentsRootDir,
       retainAttachmentsOnKeep: registerParams.retainAttachmentsOnKeep,
     };
     params.runs.set(runId, entry);
     try {
-      createRunningTaskRun({
+      createQueuedTaskRun({
         runtime: "subagent",
         sourceId: runId,
         ownerKey: requesterSessionKey,
@@ -435,8 +501,6 @@ export function createSubagentRunManager(params: {
         task: registerParams.task,
         deliveryStatus:
           registerParams.expectsCompletionMessage === false ? "not_applicable" : "pending",
-        startedAt: now,
-        lastEventAt: now,
       });
     } catch (error) {
       log.warn("Failed to create background task for subagent run", {
@@ -513,7 +577,7 @@ export function createSubagentRunManager(params: {
       entry.outcome = withSubagentOutcomeTiming(
         { status: "error", error: reason },
         {
-          startedAt: entry.startedAt,
+          startedAt: entry.startedAt ?? now,
           endedAt: now,
         },
       );

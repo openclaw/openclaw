@@ -317,6 +317,25 @@ describe("subagent announce timeout config", () => {
     expect(completionDirectAgentCall?.timeoutMs).toBe(120_000);
   });
 
+  it("honors configured announce timeout while reading subagent transcript output", async () => {
+    setConfiguredAnnounceTimeout(900_000);
+    chatHistoryMessages = [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "worker finished" }],
+      },
+    ];
+
+    await runAnnounceFlowForTest("run-config-timeout-history", {
+      roundOneReply: undefined,
+      fallbackReply: undefined,
+      timeoutMs: 900_000,
+    });
+
+    const historyCall = findGatewayCall((call) => call.method === "chat.history");
+    expect(historyCall?.timeoutMs).toBe(900_000);
+  });
+
   it("retries gateway timeout for externally delivered completion announces before giving up", async () => {
     try {
       vi.stubEnv("OPENCLAW_TEST_FAST", "1");

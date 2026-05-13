@@ -2,6 +2,7 @@ import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
+  countLiveDescendantRunsExcludingRunFromRuns,
   countPendingDescendantRunsExcludingRunFromRuns,
   countPendingDescendantRunsFromRuns,
   isSubagentSessionRunActiveFromRuns,
@@ -59,6 +60,17 @@ export function countPendingDescendantRunsExcludingRun(
   excludeRunId: string,
 ): number {
   return countPendingDescendantRunsExcludingRunFromRuns(
+    getSubagentRunsSnapshotForRead(subagentRuns),
+    rootSessionKey,
+    excludeRunId,
+  );
+}
+
+export function countLiveDescendantRunsExcludingRun(
+  rootSessionKey: string,
+  excludeRunId: string,
+): number {
+  return countLiveDescendantRunsExcludingRunFromRuns(
     getSubagentRunsSnapshotForRead(subagentRuns),
     rootSessionKey,
     excludeRunId,

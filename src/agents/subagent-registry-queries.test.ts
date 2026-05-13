@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   countActiveRunsForSessionFromRuns,
+  countLiveDescendantRunsExcludingRunFromRuns,
   countPendingDescendantRunsExcludingRunFromRuns,
   countPendingDescendantRunsFromRuns,
   getSubagentRunByChildSessionKeyFromRuns,
@@ -345,6 +346,45 @@ describe("subagent registry query regressions", () => {
     ).toBe(1);
     expect(
       countPendingDescendantRunsExcludingRunFromRuns(runs, "agent:main:main", "run-sibling"),
+    ).toBe(1);
+  });
+
+  it("counts only live siblings for orchestrator completion prompt enrichment", () => {
+    const runs = toRunMap([
+      makeRun({
+        runId: "run-current",
+        childSessionKey: "agent:cgo:subagent:current",
+        requesterSessionKey: "agent:cgo:subagent:orchestrator",
+        endedAt: 300,
+        cleanupCompletedAt: undefined,
+      }),
+      makeRun({
+        runId: "run-delivered-sibling",
+        childSessionKey: "agent:cgo:subagent:delivered",
+        requesterSessionKey: "agent:cgo:subagent:orchestrator",
+        endedAt: 200,
+        cleanupCompletedAt: undefined,
+      }),
+      makeRun({
+        runId: "run-live-sibling",
+        childSessionKey: "agent:cgo:subagent:live",
+        requesterSessionKey: "agent:cgo:subagent:orchestrator",
+      }),
+    ]);
+
+    expect(
+      countPendingDescendantRunsExcludingRunFromRuns(
+        runs,
+        "agent:cgo:subagent:orchestrator",
+        "run-current",
+      ),
+    ).toBe(2);
+    expect(
+      countLiveDescendantRunsExcludingRunFromRuns(
+        runs,
+        "agent:cgo:subagent:orchestrator",
+        "run-current",
+      ),
     ).toBe(1);
   });
 

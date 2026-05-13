@@ -1268,7 +1268,10 @@ describe("buildSubagentSystemPrompt", () => {
       "Track expected child session keys and only send your final answer after completion events for ALL expected children arrive.",
     );
     expect(prompt).toContain(
-      "If a child completion event arrives AFTER you already sent your final answer, reply ONLY with NO_REPLY.",
+      "After ALL expected completions arrive, send the final answer even when some children failed, timed out, or returned partial results; report those statuses explicitly.",
+    );
+    expect(prompt).toContain(
+      "Reply ONLY with NO_REPLY when the exact same child completion result was already delivered in a prior final answer.",
     );
     expect(prompt).toContain("Avoid polling loops");
     expect(prompt).toContain("spawned by the main agent");

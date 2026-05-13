@@ -3,6 +3,7 @@ export {
   getLatestSubagentRunByChildSessionKey,
 } from "./subagent-registry-read.js";
 export {
+  countLiveDescendantRunsExcludingRun,
   countPendingDescendantRuns,
   countPendingDescendantRunsExcludingRun,
   isSubagentSessionRunActive,

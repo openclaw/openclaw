@@ -271,6 +271,31 @@ describe("subagent registry lifecycle hardening", () => {
     expect(persist).toHaveBeenCalled();
   });
 
+  it("persists kept subagent session timing when cleanup bookkeeping completes", async () => {
+    const persist = vi.fn();
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+      outcome: { status: "ok", startedAt: 2_000, endedAt: 4_000, elapsedMs: 2_000 },
+      cleanup: "keep",
+    });
+
+    const controller = createLifecycleController({ entry, persist });
+
+    controller.completeCleanupBookkeeping({
+      runId: entry.runId,
+      entry,
+      cleanup: "keep",
+      completedAt: 5_000,
+    });
+
+    expect(entry.cleanupCompletedAt).toBe(5_000);
+    expect(persist).toHaveBeenCalled();
+    await vi.waitFor(() =>
+      expect(helperMocks.persistSubagentSessionTiming).toHaveBeenCalledWith(entry),
+    );
+  });
+
   it("cleans up tracked browser sessions before subagent cleanup flow", async () => {
     const persist = vi.fn();
     const entry = createRunEntry({
@@ -694,6 +719,163 @@ describe("subagent registry lifecycle hardening", () => {
     expect(emitSubagentEndedHookForRun).toHaveBeenCalledTimes(1);
     expect(helperMocks.safeRemoveAttachmentsDir).toHaveBeenCalledTimes(1);
     expect(entry.cleanupCompletedAt).toBeTypeOf("number");
+    expect(persist).toHaveBeenCalled();
+  });
+
+  it("marks delivered cleanup complete before awaiting the ended hook", async () => {
+    const persist = vi.fn();
+    let resolveHook: (() => void) | undefined;
+    const emitSubagentEndedHookForRun = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveHook = resolve;
+        }),
+    );
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      expectsCompletionMessage: true,
+      retainAttachmentsOnKeep: true,
+    });
+
+    const controller = createLifecycleController({
+      entry,
+      persist,
+      shouldEmitEndedHookForRun: () => true,
+      emitSubagentEndedHookForRun,
+    });
+
+    await expect(
+      controller.completeSubagentRun({
+        runId: entry.runId,
+        endedAt: 4_000,
+        outcome: { status: "ok" },
+        reason: SUBAGENT_ENDED_REASON_COMPLETE,
+        triggerCleanup: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    await vi.waitFor(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
+    expect(emitSubagentEndedHookForRun).toHaveBeenCalledTimes(1);
+
+    resolveHook?.();
+  });
+
+  it("recovers a stale handled terminal cleanup without completion bookkeeping", async () => {
+    const persist = vi.fn();
+    const runSubagentAnnounceFlow = vi.fn(async () => true);
+    const entry = createRunEntry({
+      endedAt: Date.now() - 120_000,
+      cleanupHandled: true,
+      expectsCompletionMessage: true,
+      outcome: {
+        status: "error",
+        error: "gateway closed during cleanup before completion bookkeeping",
+      },
+      retainAttachmentsOnKeep: true,
+    });
+
+    const controller = createLifecycleController({
+      entry,
+      persist,
+      runSubagentAnnounceFlow,
+    });
+
+    await expect(
+      controller.completeSubagentRun({
+        runId: entry.runId,
+        endedAt: entry.endedAt,
+        outcome: {
+          status: "error",
+          error: "gateway closed during cleanup before completion bookkeeping",
+        },
+        reason: SUBAGENT_ENDED_REASON_COMPLETE,
+        triggerCleanup: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    await vi.waitFor(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
+    expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    expect(persist).toHaveBeenCalled();
+  });
+
+  it("reconciles delivered synthetic announce timeout outcomes to ok", async () => {
+    const persist = vi.fn();
+    const runSubagentAnnounceFlow = vi.fn(async () => true);
+    const entry = createRunEntry({
+      runId: "announce:v1:agent:crm:subagent:child:run-1",
+      endedAt: 8_000,
+      expectsCompletionMessage: true,
+      outcome: { status: "timeout", startedAt: 2_000, endedAt: 8_000, elapsedMs: 6_000 },
+      endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+      frozenResultText: "parent synthesized final answer",
+      retainAttachmentsOnKeep: true,
+    });
+
+    const controller = createLifecycleController({
+      entry,
+      persist,
+      runSubagentAnnounceFlow,
+    });
+
+    await expect(
+      controller.completeSubagentRun({
+        runId: entry.runId,
+        endedAt: entry.endedAt,
+        outcome: { status: "timeout" },
+        reason: SUBAGENT_ENDED_REASON_COMPLETE,
+        triggerCleanup: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    await vi.waitFor(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
+    expect(entry.outcome).toMatchObject({
+      status: "ok",
+      startedAt: 2_000,
+      endedAt: 8_000,
+      elapsedMs: 6_000,
+    });
+    expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    expect(persist).toHaveBeenCalled();
+  });
+
+  it("recovers handled synthetic announce timeouts after final result capture", async () => {
+    const persist = vi.fn();
+    const runSubagentAnnounceFlow = vi.fn(async () => true);
+    const entry = createRunEntry({
+      runId: "announce:v1:agent:crm:subagent:child:run-1",
+      endedAt: 8_000,
+      cleanupHandled: true,
+      expectsCompletionMessage: true,
+      outcome: { status: "timeout", startedAt: 2_000, endedAt: 8_000, elapsedMs: 6_000 },
+      endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+      frozenResultText: "parent synthesized final answer",
+      retainAttachmentsOnKeep: true,
+    });
+
+    const controller = createLifecycleController({
+      entry,
+      persist,
+      runSubagentAnnounceFlow,
+    });
+
+    await expect(
+      controller.completeSubagentRun({
+        runId: entry.runId,
+        endedAt: entry.endedAt,
+        outcome: { status: "timeout" },
+        reason: SUBAGENT_ENDED_REASON_COMPLETE,
+        triggerCleanup: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    await vi.waitFor(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
+    expect(entry.outcome).toMatchObject({
+      status: "ok",
+      startedAt: 2_000,
+      endedAt: 8_000,
+      elapsedMs: 6_000,
+    });
+    expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
     expect(persist).toHaveBeenCalled();
   });
 

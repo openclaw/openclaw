@@ -125,6 +125,29 @@ describe("sessions_spawn tool", () => {
     expect(schema.properties?.streamTo).toBeUndefined();
   });
 
+  it("hides batch fan-out and advertises sequential orchestration when maxConcurrent is one", () => {
+    const tool = createSessionsSpawnTool({
+      config: {
+        agents: {
+          defaults: {
+            subagents: {
+              maxConcurrent: 1,
+            },
+          },
+        },
+      },
+    });
+    const schema = tool.parameters as {
+      properties?: {
+        children?: { description?: string };
+      };
+    };
+
+    expect(tool.description).toContain("do not use `children:[...]`");
+    expect(tool.description).toContain("immediately call `sessions_yield`");
+    expect(schema.properties?.children).toBeUndefined();
+  });
+
   it("advertises ACP runtime affordances when an ACP backend is loaded", () => {
     registerAcpBackendForTest();
 
@@ -291,8 +314,10 @@ describe("sessions_spawn tool", () => {
       cleanup: "keep",
     });
 
-    expectDetailFields(result.details, {
-      status: "accepted",
+    expect(result.details).toMatchObject({
+      status: "ok",
+      accepted: true,
+      spawnStatus: "accepted",
       childSessionKey: "agent:main:subagent:1",
       runId: "run-subagent",
     });
@@ -356,8 +381,10 @@ describe("sessions_spawn tool", () => {
       taskName: "review_subagents",
     });
 
-    expectDetailFields(result.details, {
-      status: "accepted",
+    expect(result.details).toMatchObject({
+      status: "ok",
+      accepted: true,
+      spawnStatus: "accepted",
       childSessionKey: "agent:main:subagent:1",
     });
     const spawnArgs = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 0, "spawnSubagentDirect");
@@ -393,6 +420,172 @@ describe("sessions_spawn tool", () => {
     expectDetailFields(result.details, { status: "error" });
     expect(JSON.stringify(result.details)).toContain("Reserved subagent targets");
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
+  it("spawns children batch fan-out through native subagent runtime", async () => {
+    hoisted.spawnSubagentDirectMock
+      .mockResolvedValueOnce({
+        status: "accepted",
+        childSessionKey: "agent:analytics:subagent:1",
+        runId: "run-analytics",
+      })
+      .mockResolvedValueOnce({
+        status: "accepted",
+        childSessionKey: "agent:cro:subagent:1",
+        runId: "run-cro",
+      });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:cgo:subagent:parent",
+    });
+
+    const result = await tool.execute("call-batch", {
+      runtime: "subagent",
+      mode: "run",
+      context: "isolated",
+      lightContext: true,
+      runTimeoutSeconds: 300,
+      children: [
+        { agentId: "analytics", task: "analytics task", label: "analytics" },
+        { agentId: "cro", task: "cro task", label: "cro" },
+      ],
+    });
+
+    expect(result.details).toMatchObject({
+      status: "ok",
+      accepted: true,
+      spawnStatus: "accepted",
+      count: 2,
+      failures: 0,
+      results: [
+        {
+          status: "ok",
+          accepted: true,
+          spawnStatus: "accepted",
+          childSessionKey: "agent:analytics:subagent:1",
+          runId: "run-analytics",
+        },
+        {
+          status: "ok",
+          accepted: true,
+          spawnStatus: "accepted",
+          childSessionKey: "agent:cro:subagent:1",
+          runId: "run-cro",
+        },
+      ],
+    });
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledTimes(2);
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        task: "analytics task",
+        label: "analytics",
+        agentId: "analytics",
+        mode: "run",
+        context: "isolated",
+        lightContext: true,
+        runTimeoutSeconds: 300,
+      }),
+      expect.any(Object),
+    );
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        task: "cro task",
+        label: "cro",
+        agentId: "cro",
+        mode: "run",
+        context: "isolated",
+        lightContext: true,
+        runTimeoutSeconds: 300,
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("rejects children batch fan-out when subagent maxConcurrent is one", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:cgo:subagent:parent",
+      config: {
+        agents: {
+          defaults: {
+            subagents: {
+              maxConcurrent: 1,
+            },
+          },
+        },
+      },
+    });
+
+    const result = await tool.execute("call-batch-disabled", {
+      runtime: "subagent",
+      mode: "run",
+      context: "isolated",
+      children: [
+        { agentId: "analytics", task: "analytics task" },
+        { agentId: "cro", task: "cro task" },
+      ],
+    });
+
+    expect(result.details).toMatchObject({
+      status: "forbidden",
+    });
+    expect(JSON.stringify(result.details)).toContain(
+      "children batch mode is disabled while agents.defaults.subagents.maxConcurrent=1",
+    );
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
+  it("bounds children batch fan-out by subagent maxConcurrent config", async () => {
+    let active = 0;
+    let peakActive = 0;
+    hoisted.spawnSubagentDirectMock.mockImplementation(async (spawnArgs: { agentId?: string }) => {
+      active += 1;
+      peakActive = Math.max(peakActive, active);
+      await Promise.resolve();
+      active -= 1;
+      return {
+        status: "accepted",
+        childSessionKey: `agent:${spawnArgs.agentId ?? "main"}:subagent:1`,
+        runId: `run-${spawnArgs.agentId ?? "main"}`,
+      };
+    });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:cgo:subagent:parent",
+      config: {
+        agents: {
+          defaults: {
+            subagents: {
+              maxConcurrent: 2,
+            },
+          },
+        },
+      },
+    });
+
+    const result = await tool.execute("call-batch-bounded", {
+      runtime: "subagent",
+      mode: "run",
+      context: "isolated",
+      children: [
+        { agentId: "analytics", task: "analytics task" },
+        { agentId: "cro", task: "cro task" },
+        { agentId: "seo", task: "seo task" },
+      ],
+    });
+
+    expect(result.details).toMatchObject({
+      status: "ok",
+      accepted: true,
+      count: 3,
+      failures: 0,
+    });
+    expect(peakActive).toBe(2);
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledTimes(3);
+    expect(result.details.results).toEqual([
+      expect.objectContaining({ runId: "run-analytics" }),
+      expect.objectContaining({ runId: "run-cro" }),
+      expect.objectContaining({ runId: "run-seo" }),
+    ]);
   });
 
   it.each([
@@ -442,6 +635,51 @@ describe("sessions_spawn tool", () => {
     const spawnArgs = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 0, "spawnSubagentDirect");
     expect(spawnArgs.task).toBe("do thing");
     expect(spawnArgs.runTimeoutSeconds).toBe(2);
+  });
+
+  it("auto-yields shortly after accepted background subagent spawns", async () => {
+    vi.useFakeTimers();
+    try {
+      const onYield = vi.fn();
+      const tool = createSessionsSpawnTool({
+        agentSessionKey: "agent:main:main",
+        sessionId: "parent-session",
+        onYield,
+      });
+
+      await tool.execute("call-auto-yield-1", {
+        task: "first task",
+        mode: "run",
+      });
+      await tool.execute("call-auto-yield-2", {
+        task: "second task",
+        mode: "run",
+      });
+
+      expect(onYield).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(14_999);
+      expect(onYield).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(onYield).toHaveBeenCalledOnce();
+      expect(onYield).toHaveBeenCalledWith("Waiting for spawned subagent completion.");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects conflicting runTimeoutSeconds and timeoutSeconds values", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await expect(
+      tool.execute("call-timeout-conflict", {
+        task: "do thing",
+        runTimeoutSeconds: 300,
+        timeoutSeconds: 0,
+      }),
+    ).rejects.toThrow(/deprecated alias/);
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
   it("passes inherited workspaceDir from tool context, not from tool args", async () => {
@@ -513,8 +751,10 @@ describe("sessions_spawn tool", () => {
       streamTo: "parent",
     });
 
-    expectDetailFields(result.details, {
-      status: "accepted",
+    expect(result.details).toMatchObject({
+      status: "ok",
+      accepted: true,
+      spawnStatus: "accepted",
       childSessionKey: "agent:codex:acp:1",
       runId: "run-acp",
     });
@@ -633,8 +873,10 @@ describe("sessions_spawn tool", () => {
       agentId: "codex",
     });
 
-    expectDetailFields(result.details, {
-      status: "accepted",
+    expect(result.details).toMatchObject({
+      status: "ok",
+      accepted: true,
+      spawnStatus: "accepted",
       childSessionKey: "agent:codex:acp:1",
     });
     const spawnContext = mockCallArg(hoisted.spawnAcpDirectMock, 0, 1, "spawnAcpDirect");
@@ -804,8 +1046,10 @@ describe("sessions_spawn tool", () => {
       streamTo: "parent",
     });
 
-    expectDetailFields(result.details, {
-      status: "accepted",
+    expect(result.details).toMatchObject({
+      status: "ok",
+      accepted: true,
+      spawnStatus: "accepted",
       childSessionKey: "agent:main:subagent:1",
       runId: "run-subagent",
     });
@@ -852,8 +1096,10 @@ describe("sessions_spawn tool", () => {
       streamTo: "parent",
     });
 
-    expectDetailFields(result.details, {
-      status: "accepted",
+    expect(result.details).toMatchObject({
+      status: "ok",
+      accepted: true,
+      spawnStatus: "accepted",
       childSessionKey: "agent:main:subagent:1",
       runId: "run-subagent",
     });

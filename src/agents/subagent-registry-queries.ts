@@ -468,6 +468,25 @@ export function countPendingDescendantRunsExcludingRunFromRuns(
   return countPendingDescendantRunsInternal(runs, rootSessionKey, excludeRunId);
 }
 
+export function countLiveDescendantRunsExcludingRunFromRuns(
+  runs: Map<string, SubagentRunRecord>,
+  rootSessionKey: string,
+  excludeRunId: string,
+): number {
+  const excludedRunId = excludeRunId.trim();
+  let count = 0;
+  if (
+    !forEachDescendantRun(runs, rootSessionKey, (runId, entry) => {
+      if (runId !== excludedRunId && isLiveUnendedSubagentRun(entry)) {
+        count += 1;
+      }
+    })
+  ) {
+    return 0;
+  }
+  return count;
+}
+
 export function listDescendantRunsForRequesterFromRuns(
   runs: Map<string, SubagentRunRecord>,
   rootSessionKey: string,

@@ -21,6 +21,7 @@ import {
 } from "../utils/message-channel.js";
 import { buildAnnounceIdempotencyKey, resolveQueueAnnounceId } from "./announce-idempotency.js";
 import type { AgentInternalEvent } from "./internal-events.js";
+import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import {
   getAgentCommandDeliveryFailure,
   getGatewayAgentResult,
@@ -45,6 +46,7 @@ import {
   resolveExternalBestEffortDeliveryTarget,
   resolveQueueSettings,
   resolveStorePath,
+  sendMessage,
 } from "./subagent-announce-delivery.runtime.js";
 import {
   runSubagentAnnounceDispatch,
@@ -63,6 +65,7 @@ const AGENT_MEDIATED_COMPLETION_TOOLS = new Set(["music_generate", "video_genera
 type SubagentAnnounceDeliveryDeps = {
   callGateway: typeof callGateway;
   getRuntimeConfig: typeof getRuntimeConfig;
+  sendMessage: typeof sendMessage;
   getRequesterSessionActivity: (requesterSessionKey: string) => {
     sessionId?: string;
     isActive: boolean;
@@ -73,6 +76,7 @@ type SubagentAnnounceDeliveryDeps = {
 const defaultSubagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps = {
   callGateway,
   getRuntimeConfig,
+  sendMessage,
   getRequesterSessionActivity: (requesterSessionKey: string) => {
     const sessionId =
       resolveActiveEmbeddedRunSessionId(requesterSessionKey) ??
@@ -164,11 +168,23 @@ function resolveBoundConversationOrigin(params: {
 }
 
 function resolveRequesterSessionActivity(requesterSessionKey: string) {
+  const { entry } = loadRequesterSessionEntry(requesterSessionKey);
+  if (
+    entry?.status === "done" ||
+    entry?.status === "failed" ||
+    entry?.status === "killed" ||
+    entry?.status === "timeout" ||
+    typeof entry?.endedAt === "number"
+  ) {
+    return {
+      sessionId: undefined,
+      isActive: false,
+    };
+  }
   const activity = subagentAnnounceDeliveryDeps.getRequesterSessionActivity(requesterSessionKey);
   if (activity.sessionId || activity.isActive) {
     return activity;
   }
-  const { entry } = loadRequesterSessionEntry(requesterSessionKey);
   const sessionId = entry?.sessionId;
   return {
     sessionId,
@@ -283,30 +299,36 @@ async function waitForAnnounceRetryDelay(ms: number, signal?: AbortSignal): Prom
 export async function runAnnounceDeliveryWithRetry<T>(params: {
   operation: string;
   signal?: AbortSignal;
-  run: () => Promise<T>;
+  run: (attempt: number) => Promise<T>;
 }): Promise<T> {
   const retryDelaysMs = resolveDirectAnnounceTransientRetryDelaysMs();
   let retryIndex = 0;
+  let attempt = 1;
   for (;;) {
     if (params.signal?.aborted) {
       throw new Error("announce delivery aborted");
     }
     try {
-      return await params.run();
+      return await params.run(attempt);
     } catch (err) {
       const delayMs = retryDelaysMs[retryIndex];
       if (delayMs == null || !isTransientAnnounceDeliveryError(err) || params.signal?.aborted) {
         throw err;
       }
-      const nextAttempt = retryIndex + 2;
+      const nextAttempt = attempt + 1;
       const maxAttempts = retryDelaysMs.length + 1;
       defaultRuntime.log(
         `[warn] Subagent announce ${params.operation} transient failure, retrying ${nextAttempt}/${maxAttempts} in ${Math.round(delayMs / 1000)}s: ${summarizeDeliveryError(err)}`,
       );
       retryIndex += 1;
+      attempt = nextAttempt;
       await waitForAnnounceRetryDelay(delayMs, params.signal);
     }
   }
+}
+
+function directAnnounceIdempotencyKeyForAttempt(baseKey: string, attempt: number): string {
+  return attempt <= 1 ? baseKey : `${baseKey}:retry:${attempt}`;
 }
 
 export async function resolveSubagentCompletionOrigin(params: {
@@ -444,6 +466,7 @@ async function sendAnnounce(item: AnnounceQueueItem) {
         sourceTool: item.sourceTool ?? "subagent_announce",
       },
       idempotencyKey,
+      lane: requesterIsSubagent ? AGENT_LANE_SUBAGENT : undefined,
     },
     timeoutMs: announceTimeoutMs,
   });
@@ -486,6 +509,7 @@ async function maybeQueueSubagentAnnounce(params: {
   sourceChannel?: string;
   sourceTool?: string;
   internalEvents?: AgentInternalEvent[];
+  queueWhenSessionPresent?: boolean;
   signal?: AbortSignal;
 }): Promise<"steered" | "queued" | "none" | "dropped"> {
   if (params.signal?.aborted) {
@@ -521,7 +545,7 @@ async function maybeQueueSubagentAnnounce(params: {
     queueSettings.mode === "steer-backlog" ||
     queueSettings.mode === "interrupt";
   if (
-    isActive &&
+    (isActive || params.queueWhenSessionPresent) &&
     (shouldFollowup || queueSettings.mode === "steer" || queueSettings.mode === "queue")
   ) {
     const origin = resolveAnnounceOrigin(entry, params.requesterOrigin);
@@ -613,6 +637,7 @@ async function sendSubagentAnnounceDirectly(params: {
   sourceSessionKey?: string;
   sourceChannel?: string;
   sourceTool?: string;
+  externalFallbackContent?: string;
   requesterIsSubagent: boolean;
   signal?: AbortSignal;
 }): Promise<SubagentAnnounceDeliveryResult> {
@@ -628,6 +653,51 @@ async function sendSubagentAnnounceDirectly(params: {
     cfg,
     params.targetRequesterSessionKey,
   );
+  const sendExternalFallback = async (deliveryTarget: {
+    deliver: boolean;
+    channel?: string;
+    to?: string;
+    accountId?: string;
+    threadId?: string | number;
+  }): Promise<SubagentAnnounceDeliveryResult | null> => {
+    if (!params.expectsCompletionMessage || !deliveryTarget.deliver) {
+      return null;
+    }
+    const fallbackContent = params.externalFallbackContent?.trim();
+    if (!fallbackContent) {
+      return null;
+    }
+    const targetTo = deliveryTarget.to;
+    if (!targetTo) {
+      return null;
+    }
+    try {
+      await subagentAnnounceDeliveryDeps.sendMessage({
+        channel: deliveryTarget.channel,
+        to: targetTo,
+        accountId: deliveryTarget.accountId,
+        threadId: deliveryTarget.threadId,
+        content: fallbackContent,
+        agentId: resolveAgentIdFromSessionKey(params.targetRequesterSessionKey),
+        idempotencyKey: `${params.directIdempotencyKey}:external-fallback`,
+        mirror: {
+          sessionKey: params.targetRequesterSessionKey,
+          agentId: resolveAgentIdFromSessionKey(params.targetRequesterSessionKey),
+          idempotencyKey: `${params.directIdempotencyKey}:external-fallback`,
+        },
+      });
+      return {
+        delivered: true,
+        path: "direct",
+      };
+    } catch (err) {
+      return {
+        delivered: false,
+        path: "direct",
+        error: `completion external fallback failed: ${summarizeDeliveryError(err)}`,
+      };
+    }
+  };
   try {
     const completionDirectOrigin = normalizeDeliveryContext(params.completionDirectOrigin);
     const directOrigin = normalizeDeliveryContext(params.directOrigin);
@@ -704,8 +774,9 @@ async function sendSubagentAnnounceDirectly(params: {
       );
       if (wakeOutcome.queued) {
         return {
-          delivered: true,
+          delivered: false,
           path: "steered",
+          error: "completion steered to active requester but not yet visibly delivered",
         };
       }
       if (requesterActivity.isActive) {
@@ -735,7 +806,7 @@ async function sendSubagentAnnounceDirectly(params: {
           ? "completion direct announce agent call"
           : "direct announce agent call",
         signal: params.signal,
-        run: async () =>
+        run: async (attempt) =>
           await subagentAnnounceDeliveryDeps.callGateway({
             method: "agent",
             params: {
@@ -766,7 +837,11 @@ async function sendSubagentAnnounceDirectly(params: {
                 sourceChannel: params.sourceChannel ?? INTERNAL_MESSAGE_CHANNEL,
                 sourceTool: params.sourceTool ?? "subagent_announce",
               },
-              idempotencyKey: params.directIdempotencyKey,
+              idempotencyKey: directAnnounceIdempotencyKeyForAttempt(
+                params.directIdempotencyKey,
+                attempt,
+              ),
+              lane: params.requesterIsSubagent ? AGENT_LANE_SUBAGENT : undefined,
             },
             expectFinal: true,
             timeoutMs: announceTimeoutMs,
@@ -776,6 +851,10 @@ async function sendSubagentAnnounceDirectly(params: {
       if (isPermanentAnnounceDeliveryError(err)) {
         throw err;
       }
+      const fallback = await sendExternalFallback(deliveryTarget);
+      if (fallback) {
+        return fallback;
+      }
       // The requester-agent handoff is the delivery contract for background
       // completions. A failed handoff should retry/queue/fail visibly instead
       // of sending the child result directly to the external channel.
@@ -784,9 +863,20 @@ async function sendSubagentAnnounceDirectly(params: {
 
     const directAnnounceStillPending = isGatewayAgentRunPending(directAnnounceResponse);
     if (directAnnounceStillPending) {
+      if (agentMediatedCompletion) {
+        return {
+          delivered: true,
+          path: "direct",
+        };
+      }
+      const fallback = await sendExternalFallback(deliveryTarget);
+      if (fallback) {
+        return fallback;
+      }
       return {
-        delivered: true,
+        delivered: false,
         path: "direct",
+        error: "completion announce-agent run is still pending",
       };
     }
 
@@ -815,6 +905,10 @@ async function sendSubagentAnnounceDirectly(params: {
       shouldDeliverAgentFinal &&
       !hasVisibleGatewayAgentPayload(directAnnounceResponse)
     ) {
+      const fallback = await sendExternalFallback(deliveryTarget);
+      if (fallback) {
+        return fallback;
+      }
       return {
         delivered: false,
         path: "direct",
@@ -849,6 +943,7 @@ export async function deliverSubagentAnnouncement(params: {
   sourceSessionKey?: string;
   sourceChannel?: string;
   sourceTool?: string;
+  externalFallbackContent?: string;
   targetRequesterSessionKey: string;
   requesterIsSubagent: boolean;
   expectsCompletionMessage: boolean;
@@ -858,6 +953,7 @@ export async function deliverSubagentAnnouncement(params: {
 }): Promise<SubagentAnnounceDeliveryResult> {
   return await runSubagentAnnounceDispatch({
     expectsCompletionMessage: params.expectsCompletionMessage,
+    requesterIsSubagent: params.requesterIsSubagent,
     signal: params.signal,
     queue: async () =>
       await maybeQueueSubagentAnnounce({
@@ -871,6 +967,7 @@ export async function deliverSubagentAnnouncement(params: {
         sourceChannel: params.sourceChannel,
         sourceTool: params.sourceTool,
         internalEvents: params.internalEvents,
+        queueWhenSessionPresent: params.requesterIsSubagent,
         signal: params.signal,
       }),
     direct: async () =>
@@ -886,6 +983,7 @@ export async function deliverSubagentAnnouncement(params: {
         sourceSessionKey: params.sourceSessionKey,
         sourceChannel: params.sourceChannel,
         sourceTool: params.sourceTool,
+        externalFallbackContent: params.externalFallbackContent,
         requesterIsSubagent: params.requesterIsSubagent,
         expectsCompletionMessage: params.expectsCompletionMessage,
         signal: params.signal,

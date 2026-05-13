@@ -86,6 +86,50 @@ describe("readSubagentOutput", () => {
     );
   });
 
+  it("can recover visible completion output when a later duplicate says NO_REPLY", async () => {
+    installOutputDeps({
+      messages: [
+        ...sessionsYieldTurn(),
+        {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "FINAL_SYNTHESIS_OK" }],
+        },
+        {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "NO_REPLY" }],
+        },
+      ],
+    });
+
+    await expect(
+      readSubagentOutput("agent:main:subagent:child", undefined, {
+        preferVisibleBeforeSilent: true,
+      }),
+    ).resolves.toBe("FINAL_SYNTHESIS_OK");
+  });
+
+  it("keeps silent suppression by default when a later duplicate says NO_REPLY", async () => {
+    installOutputDeps({
+      messages: [
+        ...sessionsYieldTurn(),
+        {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "FINAL_SYNTHESIS_OK" }],
+        },
+        {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "NO_REPLY" }],
+        },
+      ],
+    });
+
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBe("NO_REPLY");
+  });
+
   it("keeps normal tool-use assistant output when the tool is not sessions_yield", async () => {
     installOutputDeps({
       messages: [

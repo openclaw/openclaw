@@ -341,6 +341,60 @@ describe("subagent announce seam flow", () => {
     });
   });
 
+  it("does not patch repeated labels for one-shot run-mode child sessions", async () => {
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-mode-label",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "run-mode task",
+      timeoutMs: 10,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "completed",
+      label: "analytics",
+      spawnMode: "run",
+      expectsCompletionMessage: true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(
+      callGatewayMock.mock.calls.some(
+        (call) => (call[0] as AgentCallRequest).method === "sessions.patch",
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps patching labels for persistent session-mode child sessions", async () => {
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "session-mode-label",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "session-mode task",
+      timeoutMs: 10,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "completed",
+      label: "analytics",
+      spawnMode: "session",
+      expectsCompletionMessage: true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(callGatewayMock).toHaveBeenCalledWith({
+      method: "sessions.patch",
+      params: { key: "agent:main:subagent:test", label: "analytics" },
+      timeoutMs: 10_000,
+    });
+  });
+
   it("uses origin.provider for channel-specific queue settings in active announce delivery", async () => {
     mockConfig = {
       session: {

@@ -76,6 +76,30 @@ describe("resolveDeferredCleanupDecision", () => {
     expect(decision).toEqual({ kind: "retry", retryCount: 2, resumeDelayMs: 2_000 });
   });
 
+  it("keeps retrying completion-message flows past the normal retry limit", () => {
+    const decision = resolveDecision({
+      entry: makeEntry({ expectsCompletionMessage: true, announceRetryCount: 3 }),
+      activeDescendantRuns: 0,
+      resolveAnnounceRetryDelayMs: (retryCount) => retryCount * 1_000,
+    });
+
+    expect(decision).toEqual({ kind: "retry", retryCount: 4, resumeDelayMs: 4_000 });
+  });
+
+  it("gives up delete cleanup for completion-message flows at the retry limit", () => {
+    const decision = resolveDecision({
+      entry: makeEntry({
+        cleanup: "delete",
+        expectsCompletionMessage: true,
+        announceRetryCount: 2,
+      }),
+      activeDescendantRuns: 0,
+      resolveAnnounceRetryDelayMs: (retryCount) => retryCount * 1_000,
+    });
+
+    expect(decision).toEqual({ kind: "give-up", reason: "retry-limit", retryCount: 3 });
+  });
+
   it("uses retry backoff for non-completion flows so cleanup can settle after announce failures", () => {
     const decision = resolveDecision({
       entry: makeEntry({ expectsCompletionMessage: false, announceRetryCount: 1 }),

@@ -91,6 +91,11 @@ const mocks = vi.hoisted(() => ({
   resetAnnounceQueuesForTests: vi.fn(),
   captureSubagentCompletionReply: vi.fn(async () => "final completion reply"),
   runSubagentAnnounceFlow: vi.fn(async () => true),
+  completeTaskRunByRunId: vi.fn(),
+  createQueuedTaskRun: vi.fn(),
+  failTaskRunByRunId: vi.fn(),
+  startTaskRunByRunId: vi.fn(),
+  setDetachedTaskDeliveryStatusByRunId: vi.fn(),
   getGlobalHookRunner: vi.fn(() => null),
   ensureRuntimePluginsLoaded: vi.fn(),
   ensureContextEnginesInitialized: vi.fn(),
@@ -140,6 +145,14 @@ vi.mock("./subagent-announce-queue.js", () => ({
 vi.mock("./subagent-announce.js", () => ({
   captureSubagentCompletionReply: mocks.captureSubagentCompletionReply,
   runSubagentAnnounceFlow: mocks.runSubagentAnnounceFlow,
+}));
+
+vi.mock("../tasks/detached-task-runtime.js", () => ({
+  completeTaskRunByRunId: mocks.completeTaskRunByRunId,
+  createQueuedTaskRun: mocks.createQueuedTaskRun,
+  failTaskRunByRunId: mocks.failTaskRunByRunId,
+  startTaskRunByRunId: mocks.startTaskRunByRunId,
+  setDetachedTaskDeliveryStatusByRunId: mocks.setDetachedTaskDeliveryStatusByRunId,
 }));
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
@@ -198,6 +211,12 @@ describe("subagent registry seam flow", () => {
       onSubagentEnded: mocks.onSubagentEnded,
     });
     mocks.scheduleOrphanRecovery.mockReset();
+    mocks.runSubagentAnnounceFlow.mockResolvedValue(true);
+    mocks.completeTaskRunByRunId.mockReset();
+    mocks.createQueuedTaskRun.mockReset();
+    mocks.failTaskRunByRunId.mockReset();
+    mocks.startTaskRunByRunId.mockReset();
+    mocks.setDetachedTaskDeliveryStatusByRunId.mockReset();
     mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
       if (request.method === "agent.wait") {
         return {
@@ -308,6 +327,298 @@ describe("subagent registry seam flow", () => {
     expect(replacement?.runId).toBe("run-yield-continuation");
     expect(replacement?.pauseReason).toBeUndefined();
     expect(replacement?.endedAt).toBeUndefined();
+  });
+
+  it("treats aborted end_turn lifecycle events as paused sessions_yield runs", async () => {
+    mod.registerSubagentRun({
+      runId: "run-yield-lifecycle",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "wait for child continuation",
+      cleanup: "keep",
+    });
+
+    const lastOnAgentEventCall = mocks.onAgentEvent.mock.calls[
+      mocks.onAgentEvent.mock.calls.length - 1
+    ] as unknown as
+      | [(evt: { runId: string; stream: string; data: Record<string, unknown> }) => void]
+      | undefined;
+    const lifecycleHandler = lastOnAgentEventCall?.[0];
+    expect(lifecycleHandler).toBeTypeOf("function");
+
+    lifecycleHandler?.({
+      runId: "run-yield-lifecycle",
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        endedAt: 333,
+        aborted: true,
+        stopReason: "end_turn",
+        livenessState: "paused",
+        yielded: true,
+      },
+    });
+
+    await waitForFast(() => {
+      const run = mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-yield-lifecycle");
+      expect(run?.endedAt).toBe(333);
+      expect(run?.pauseReason).toBe("sessions_yield");
+    });
+    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+    expect(mocks.failTaskRunByRunId).not.toHaveBeenCalled();
+  });
+
+  it("keeps aborted orchestrator lifecycle timeouts paused while descendants are pending", async () => {
+    mocks.callGateway.mockImplementation(
+      async (request: { method?: string; params?: { runId?: string } }) => {
+        if (request.method === "agent.wait") {
+          return { status: "pending" };
+        }
+        return {};
+      },
+    );
+
+    mod.registerSubagentRun({
+      runId: "descendant-after-abort",
+      childSessionKey: "agent:crm:subagent:child",
+      requesterSessionKey: "agent:cgo:subagent:orchestrator-abort",
+      requesterDisplayKey: "cgo",
+      task: "descendant after abort",
+      cleanup: "keep",
+    });
+    mod.registerSubagentRun({
+      runId: "orchestrator-abort",
+      childSessionKey: "agent:cgo:subagent:orchestrator-abort",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "orchestrator aborted while descendants run",
+      cleanup: "keep",
+    });
+
+    const lastOnAgentEventCall = mocks.onAgentEvent.mock.calls[
+      mocks.onAgentEvent.mock.calls.length - 1
+    ] as unknown as
+      | [(evt: { runId: string; stream: string; data: Record<string, unknown> }) => void]
+      | undefined;
+    const lifecycleHandler = lastOnAgentEventCall?.[0];
+    expect(lifecycleHandler).toBeTypeOf("function");
+
+    lifecycleHandler?.({
+      runId: "orchestrator-abort",
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        endedAt: 555,
+        aborted: true,
+      },
+    });
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    await waitForFast(() => {
+      const run = mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "orchestrator-abort");
+      expect(run?.pauseReason).toBe("sessions_yield");
+      expect(run?.wakeOnDescendantSettle).toBe(true);
+      expect(run?.outcome).toBeUndefined();
+    });
+    expect(mocks.failTaskRunByRunId).not.toHaveBeenCalled();
+    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+  });
+
+  it("treats yieldDetected interrupted lifecycle events as paused sessions_yield runs", async () => {
+    mod.registerSubagentRun({
+      runId: "run-yield-detected-lifecycle",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "wait for child continuation",
+      cleanup: "keep",
+    });
+
+    const lastOnAgentEventCall = mocks.onAgentEvent.mock.calls[
+      mocks.onAgentEvent.mock.calls.length - 1
+    ] as unknown as
+      | [(evt: { runId: string; stream: string; data: Record<string, unknown> }) => void]
+      | undefined;
+    const lifecycleHandler = lastOnAgentEventCall?.[0];
+    expect(lifecycleHandler).toBeTypeOf("function");
+
+    lifecycleHandler?.({
+      runId: "run-yield-detected-lifecycle",
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        endedAt: 444,
+        status: "interrupted",
+        yieldDetected: true,
+      },
+    });
+
+    await waitForFast(() => {
+      const run = mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-yield-detected-lifecycle");
+      expect(run?.endedAt).toBe(444);
+      expect(run?.pauseReason).toBe("sessions_yield");
+    });
+    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+  });
+
+  it("does not convert a lifecycle-paused sessions_yield run to timeout when agent.wait expires", async () => {
+    let resolveWait:
+      | ((value: { status: "timeout"; startedAt: number; endedAt: number }) => void)
+      | undefined;
+    const waitPromise = new Promise<{ status: "timeout"; startedAt: number; endedAt: number }>(
+      (resolve) => {
+        resolveWait = resolve;
+      },
+    );
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return waitPromise;
+      }
+      return {};
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-paused-wait-timeout",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "wait for child continuation",
+      cleanup: "keep",
+    });
+
+    const lastOnAgentEventCall = mocks.onAgentEvent.mock.calls[
+      mocks.onAgentEvent.mock.calls.length - 1
+    ] as unknown as
+      | [(evt: { runId: string; stream: string; data: Record<string, unknown> }) => void]
+      | undefined;
+    const lifecycleHandler = lastOnAgentEventCall?.[0];
+    lifecycleHandler?.({
+      runId: "run-paused-wait-timeout",
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        endedAt: 555,
+        status: "interrupted",
+        yieldDetected: true,
+      },
+    });
+
+    await waitForFast(() => {
+      const run = mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-paused-wait-timeout");
+      expect(run?.pauseReason).toBe("sessions_yield");
+    });
+
+    resolveWait?.({ status: "timeout", startedAt: 500, endedAt: 600 });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const run = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "run-paused-wait-timeout");
+    expect(run?.pauseReason).toBe("sessions_yield");
+    expect(run?.outcome).toBeUndefined();
+    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+  });
+
+  it("treats wake-on-descendant announce wait timeouts as yielded while descendants are pending", async () => {
+    mocks.callGateway.mockImplementation(
+      async (request: { method?: string; params?: { runId?: string } }) => {
+        if (request.method === "agent.wait") {
+          if (request.params?.runId === "announce-parent") {
+            return { status: "timeout", startedAt: 700, endedAt: 800 };
+          }
+          return { status: "pending" };
+        }
+        return {};
+      },
+    );
+
+    mod.registerSubagentRun({
+      runId: "child-still-running",
+      childSessionKey: "agent:crm:subagent:child",
+      requesterSessionKey: "agent:cgo:subagent:parent",
+      requesterDisplayKey: "cgo",
+      task: "child still running",
+      cleanup: "keep",
+    });
+    mod.registerSubagentRun({
+      runId: "announce-parent",
+      childSessionKey: "agent:cgo:subagent:parent",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "announce child completion while siblings are still running",
+      cleanup: "keep",
+      wakeOnDescendantSettle: true,
+    });
+
+    await waitForFast(() => {
+      const run = mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "announce-parent");
+      expect(run?.endedAt).toBe(800);
+      expect(run?.pauseReason).toBe("sessions_yield");
+    });
+
+    const run = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "announce-parent");
+    expect(run?.outcome).toBeUndefined();
+    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+  });
+
+  it("promotes timed-out orchestrators to wake-on-descendant while children are pending", async () => {
+    mocks.callGateway.mockImplementation(
+      async (request: { method?: string; params?: { runId?: string } }) => {
+        if (request.method === "agent.wait") {
+          if (request.params?.runId === "orchestrator") {
+            return { status: "timeout", startedAt: 900, endedAt: 1_000 };
+          }
+          return { status: "pending" };
+        }
+        return {};
+      },
+    );
+
+    mod.registerSubagentRun({
+      runId: "descendant-still-running",
+      childSessionKey: "agent:crm:subagent:child",
+      requesterSessionKey: "agent:cgo:subagent:orchestrator",
+      requesterDisplayKey: "cgo",
+      task: "descendant still running",
+      cleanup: "keep",
+    });
+    mod.registerSubagentRun({
+      runId: "orchestrator",
+      childSessionKey: "agent:cgo:subagent:orchestrator",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "orchestrate descendants",
+      cleanup: "keep",
+    });
+
+    await waitForFast(() => {
+      const run = mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "orchestrator");
+      expect(run?.pauseReason).toBe("sessions_yield");
+      expect(run?.wakeOnDescendantSettle).toBe(true);
+    });
+
+    const run = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "orchestrator");
+    expect(run?.outcome).toBeUndefined();
+    expect(mocks.failTaskRunByRunId).not.toHaveBeenCalled();
+    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
   });
 
   it("reconciles stale active runs from persisted terminal session state during sweep", async () => {
@@ -482,7 +793,7 @@ describe("subagent registry seam flow", () => {
     expectRecordFields(
       store["agent:main:subagent:child"],
       {
-        startedAt: Date.parse("2026-03-24T12:00:00Z"),
+        startedAt: 111,
         endedAt: 222,
         runtimeMs: 111,
         status: "done",
@@ -1086,6 +1397,191 @@ describe("subagent registry seam flow", () => {
           workspaceDir: "/tmp/workspace-archive",
         },
       );
+    });
+  });
+
+  it("normalizes completed cleanup rows to handled during sweep", async () => {
+    const now = Date.parse("2026-03-24T12:00:00Z");
+    mod.addSubagentRunForTests({
+      runId: "run-completed-cleanup-unhandled",
+      childSessionKey: "agent:main:subagent:child",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterOrigin: undefined,
+      requesterDisplayKey: "main",
+      task: "completed cleanup bookkeeping",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+      spawnMode: "run",
+      createdAt: now - 20_000,
+      startedAt: now - 10_000,
+      sessionStartedAt: now - 10_000,
+      accumulatedRuntimeMs: 0,
+      endedAt: now - 8_000,
+      outcome: { status: "ok", startedAt: now - 10_000, endedAt: now - 8_000, elapsedMs: 2_000 },
+      cleanupHandled: false,
+      cleanupCompletedAt: now - 1_000,
+    });
+
+    await mod.__testing.sweepOnceForTests();
+
+    expect(
+      mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-completed-cleanup-unhandled"),
+    ).toMatchObject({
+      cleanupCompletedAt: now - 1_000,
+      cleanupHandled: true,
+    });
+    expect(mocks.persistSubagentRunsToDisk).toHaveBeenCalled();
+  });
+
+  it("sweeper resumes paused wake-on-descendant runs after descendants finish cleanup", async () => {
+    const now = Date.parse("2026-03-24T12:00:00Z");
+    mod.addSubagentRunForTests({
+      runId: "announce:v1:agent:analytics:subagent:child:parent-run",
+      childSessionKey: "agent:cgo:subagent:parent",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterOrigin: {
+        channel: "telegram",
+        to: "115216005",
+      },
+      requesterDisplayKey: "main",
+      task: "deliver parent after descendants",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+      spawnMode: "run",
+      createdAt: now - 20_000,
+      startedAt: now - 10_000,
+      sessionStartedAt: now - 10_000,
+      accumulatedRuntimeMs: 0,
+      endedAt: now - 8_000,
+      cleanupHandled: false,
+      pauseReason: "sessions_yield",
+      wakeOnDescendantSettle: true,
+      frozenResultText: "parent final after descendants",
+      frozenResultCapturedAt: now - 1_000,
+    });
+
+    await mod.__testing.sweepOnceForTests();
+
+    await waitForFast(() => {
+      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          childRunId: "announce:v1:agent:analytics:subagent:child:parent-run",
+          childSessionKey: "agent:cgo:subagent:parent",
+          requesterSessionKey: "agent:main:main",
+          roundOneReply: "parent final after descendants",
+          wakeOnDescendantSettle: true,
+          outcome: expect.objectContaining({ status: "ok" }),
+        }),
+      );
+    });
+
+    await waitForFast(() => {
+      const run = mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "announce:v1:agent:analytics:subagent:child:parent-run");
+      expect(run?.cleanupCompletedAt).toBeTypeOf("number");
+      expect(run?.pauseReason).toBeUndefined();
+      expect(run?.cleanupHandled).toBe(true);
+    });
+  });
+
+  it("sweeps runs past explicit subagent timeout even when a stale live context remains", async () => {
+    const now = Date.parse("2026-03-24T12:00:00Z");
+    mocks.getAgentRunContext.mockReturnValue({ runId: "run-explicit-timeout" });
+    mod.addSubagentRunForTests({
+      runId: "run-explicit-timeout",
+      childSessionKey: "agent:main:subagent:child",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterOrigin: undefined,
+      requesterDisplayKey: "main",
+      task: "stuck announce wake",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+      spawnMode: "run",
+      createdAt: now - 121_000,
+      startedAt: now - 121_000,
+      sessionStartedAt: now - 121_000,
+      accumulatedRuntimeMs: 0,
+      runTimeoutSeconds: 60,
+      cleanupHandled: false,
+    });
+
+    await mod.__testing.sweepOnceForTests();
+
+    await waitForFast(() => {
+      const run = mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-explicit-timeout");
+      expect(run).toMatchObject({
+        endedAt: now,
+        cleanupCompletedAt: expect.any(Number),
+        outcome: expect.objectContaining({ status: "timeout" }),
+      });
+    });
+  });
+
+  it("resumes paused wake-on-descendant runs with captured final text after restore", async () => {
+    const restoredRun = {
+      runId: "announce:v1:agent:analytics:subagent:child:run-parent",
+      childSessionKey: "agent:cgo:subagent:parent",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterOrigin: {
+        channel: "telegram" as const,
+        to: "115216005",
+      },
+      requesterDisplayKey: "agent:main:main",
+      task: "deliver captured parent final",
+      cleanup: "keep" as const,
+      expectsCompletionMessage: true,
+      spawnMode: "run" as const,
+      createdAt: Date.parse("2026-03-24T11:50:00Z"),
+      startedAt: Date.parse("2026-03-24T11:50:30Z"),
+      endedAt: Date.parse("2026-03-24T11:51:00Z"),
+      cleanupHandled: false,
+      pauseReason: "sessions_yield" as const,
+      wakeOnDescendantSettle: true,
+      frozenResultText: "captured CGO final answer",
+      frozenResultCapturedAt: Date.parse("2026-03-24T11:52:00Z"),
+    };
+
+    mocks.loadSessionStore.mockReturnValue({
+      [restoredRun.childSessionKey]: {
+        sessionId: "sess-cgo-parent",
+        updatedAt: 1,
+      },
+    });
+    mocks.restoreSubagentRunsFromDisk.mockImplementationOnce(({ runs }) => {
+      runs.set(restoredRun.runId, restoredRun);
+      return 1;
+    });
+
+    mod.initSubagentRegistry();
+
+    await waitForFast(() => {
+      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    });
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        childRunId: restoredRun.runId,
+        childSessionKey: restoredRun.childSessionKey,
+        requesterSessionKey: restoredRun.requesterSessionKey,
+        roundOneReply: "captured CGO final answer",
+        wakeOnDescendantSettle: true,
+        outcome: expect.objectContaining({ status: "ok" }),
+      }),
+    );
+
+    await waitForFast(() => {
+      const [run] = mod.listSubagentRunsForRequester("agent:main:main");
+      expect(run?.cleanupCompletedAt).toBeTypeOf("number");
+      expect(run?.pauseReason).toBeUndefined();
+      expect(run?.outcome).toMatchObject({ status: "ok" });
     });
   });
 });

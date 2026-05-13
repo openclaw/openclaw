@@ -41,6 +41,7 @@ export function mapQueueOutcomeToDeliveryResult(
 
 export async function runSubagentAnnounceDispatch(params: {
   expectsCompletionMessage: boolean;
+  requesterIsSubagent?: boolean;
   signal?: AbortSignal;
   queue: () => Promise<SubagentAnnounceQueueOutcome>;
   direct: () => Promise<SubagentAnnounceDeliveryResult>;
@@ -85,6 +86,26 @@ export async function runSubagentAnnounceDispatch(params: {
     return withPhases(primaryDirect);
   }
 
+  if (params.requesterIsSubagent === true) {
+    const primaryQueueOutcome = await params.queue();
+    const primaryQueue = mapQueueOutcomeToDeliveryResult(primaryQueueOutcome);
+    appendPhase("queue-primary", primaryQueue);
+    if (primaryQueue.delivered) {
+      return withPhases(primaryQueue);
+    }
+    if (primaryQueueOutcome === "dropped") {
+      return withPhases(primaryQueue);
+    }
+
+    if (params.signal?.aborted) {
+      return withPhases(primaryQueue);
+    }
+
+    const primaryDirect = await params.direct();
+    appendPhase("direct-primary", primaryDirect);
+    return withPhases(primaryDirect);
+  }
+
   const primaryDirect = await params.direct();
   appendPhase("direct-primary", primaryDirect);
   if (primaryDirect.delivered) {
@@ -99,7 +120,11 @@ export async function runSubagentAnnounceDispatch(params: {
   const fallbackQueue = mapQueueOutcomeToDeliveryResult(fallbackQueueOutcome);
   appendPhase("queue-fallback", fallbackQueue);
   if (fallbackQueue.delivered) {
-    return withPhases(fallbackQueue);
+    return withPhases({
+      delivered: false,
+      path: fallbackQueue.path,
+      error: "completion delivery queued but not yet visibly delivered",
+    });
   }
 
   return withPhases(primaryDirect);

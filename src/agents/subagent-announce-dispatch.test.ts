@@ -110,6 +110,56 @@ describe("runSubagentAnnounceDispatch", () => {
     ]);
   });
 
+  it("uses queue-first ordering for completion delivery to a subagent requester", async () => {
+    const queue = vi.fn(async () => "steered" as const);
+    const direct = vi.fn(async () => ({
+      delivered: false,
+      path: "direct" as const,
+      error: "active requester session could not be woken",
+    }));
+
+    const result = await runSubagentAnnounceDispatch({
+      expectsCompletionMessage: true,
+      requesterIsSubagent: true,
+      queue,
+      direct,
+    });
+
+    expect(queue).toHaveBeenCalledTimes(1);
+    expect(direct).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      delivered: true,
+      path: "steered",
+      phases: [{ phase: "queue-primary", delivered: true, path: "steered", error: undefined }],
+    });
+  });
+
+  it("falls back to direct completion delivery for a subagent requester when queue cannot deliver", async () => {
+    const queue = vi.fn(async () => "none" as const);
+    const direct = vi.fn(async () => ({
+      delivered: true,
+      path: "direct" as const,
+    }));
+
+    const result = await runSubagentAnnounceDispatch({
+      expectsCompletionMessage: true,
+      requesterIsSubagent: true,
+      queue,
+      direct,
+    });
+
+    expect(queue).toHaveBeenCalledTimes(1);
+    expect(direct).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({
+      delivered: true,
+      path: "direct",
+      phases: [
+        { phase: "queue-primary", delivered: false, path: "none", error: undefined },
+        { phase: "direct-primary", delivered: true, path: "direct", error: undefined },
+      ],
+    });
+  });
+
   it("returns direct failure when completion fallback queue cannot deliver", async () => {
     const queue = vi.fn(async () => "none" as const);
     const direct = vi.fn(async () => ({

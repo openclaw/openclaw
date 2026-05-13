@@ -6,6 +6,7 @@ type ReplaceSubagentRunAfterSteerParams = {
   fallback?: SubagentRunRecord;
   runTimeoutSeconds?: number;
   preserveFrozenResultFallback?: boolean;
+  fallbackFrozenResultText?: string;
 };
 
 type ReplaceSubagentRunAfterSteerFn = (params: ReplaceSubagentRunAfterSteerParams) => boolean;

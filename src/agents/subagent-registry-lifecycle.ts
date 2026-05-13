@@ -48,6 +48,67 @@ type BrowserCleanupModule = Pick<
 const browserCleanupLoader = createLazyImportLoader<BrowserCleanupModule>(
   () => import("../browser-lifecycle-cleanup.js"),
 );
+export const STUCK_TIMEOUT_CLEANUP_HANDLED_GRACE_MS = 60_000;
+export const STUCK_TERMINAL_CLEANUP_HANDLED_GRACE_MS = STUCK_TIMEOUT_CLEANUP_HANDLED_GRACE_MS;
+
+export function isRecoverableStuckHandledCleanup(entry: SubagentRunRecord, now = Date.now()) {
+  const status: string | undefined = entry.outcome?.status;
+  return (
+    entry.cleanupHandled === true &&
+    typeof entry.cleanupCompletedAt !== "number" &&
+    typeof entry.endedAt === "number" &&
+    now - entry.endedAt > STUCK_TERMINAL_CLEANUP_HANDLED_GRACE_MS &&
+    entry.pendingFinalDelivery !== true &&
+    (status === "timeout" || status === "error" || status === "killed" || status === "ok")
+  );
+}
+
+function isSyntheticAnnounceRunId(runId: string): boolean {
+  return runId.startsWith("announce:v1:");
+}
+
+function isRecoverableDeliveredSyntheticAnnounceCleanup(
+  runId: string,
+  entry: SubagentRunRecord,
+): boolean {
+  return (
+    isSyntheticAnnounceRunId(runId) &&
+    entry.cleanupHandled === true &&
+    typeof entry.cleanupCompletedAt !== "number" &&
+    entry.outcome?.status === "timeout" &&
+    entry.endedReason === SUBAGENT_ENDED_REASON_COMPLETE &&
+    typeof entry.frozenResultText === "string" &&
+    entry.frozenResultText.trim().length > 0
+  );
+}
+
+function hasDeliveredSyntheticAnnounceFinalText(runId: string, entry: SubagentRunRecord): boolean {
+  return (
+    isSyntheticAnnounceRunId(runId) &&
+    entry.outcome?.status === "timeout" &&
+    entry.endedReason === SUBAGENT_ENDED_REASON_COMPLETE &&
+    typeof entry.frozenResultText === "string" &&
+    entry.frozenResultText.trim().length > 0
+  );
+}
+
+function reconcileDeliveredCompletionOutcome(runId: string, entry: SubagentRunRecord) {
+  if (!hasDeliveredSyntheticAnnounceFinalText(runId, entry)) {
+    return false;
+  }
+  const outcome = withSubagentOutcomeTiming(
+    { status: "ok" },
+    {
+      startedAt: entry.startedAt,
+      endedAt: entry.endedAt ?? Date.now(),
+    },
+  );
+  if (!shouldUpdateRunOutcome(entry.outcome, outcome)) {
+    return false;
+  }
+  entry.outcome = outcome;
+  return true;
+}
 
 async function loadCleanupBrowserSessionsForLifecycleEnd(): Promise<
   BrowserCleanupModule["cleanupBrowserSessionsForLifecycleEnd"]
@@ -411,8 +472,18 @@ export function createSubagentRegistryLifecycleController(params: {
     if (!entry) {
       return false;
     }
-    if (entry.cleanupCompletedAt || entry.cleanupHandled) {
+    if (entry.cleanupCompletedAt) {
       return false;
+    }
+    if (entry.cleanupHandled) {
+      if (
+        !isRecoverableDeliveredSyntheticAnnounceCleanup(runId, entry) &&
+        !isRecoverableStuckHandledCleanup(entry)
+      ) {
+        return false;
+      }
+      entry.cleanupHandled = false;
+      params.persist();
     }
     entry.cleanupHandled = true;
     params.persist();
@@ -467,6 +538,7 @@ export function createSubagentRegistryLifecycleController(params: {
     cleanup: "delete" | "keep";
     completedAt: number;
   }) => {
+    cleanupParams.entry.cleanupHandled = true;
     if (cleanupParams.entry.spawnMode !== "session") {
       void retireSessionMcpRuntimeForSessionKey({
         sessionKey: cleanupParams.entry.childSessionKey,
@@ -502,6 +574,13 @@ export function createSubagentRegistryLifecycleController(params: {
     });
     cleanupParams.entry.cleanupCompletedAt = cleanupParams.completedAt;
     params.persist();
+    void persistSubagentSessionTiming(cleanupParams.entry).catch((err) => {
+      params.warn("failed to persist completed subagent session timing", {
+        err,
+        runId: cleanupParams.entry.runId,
+        childSessionKey: cleanupParams.entry.childSessionKey,
+      });
+    });
     retryDeferredCompletedAnnounces(cleanupParams.runId);
   };
 
@@ -543,8 +622,9 @@ export function createSubagentRegistryLifecycleController(params: {
     if (didAnnounce) {
       if (!options?.skipAnnounce) {
         entry.completionAnnouncedAt = Date.now();
-        params.persist();
       }
+      const reconciledOutcome = reconcileDeliveredCompletionOutcome(runId, entry);
+      params.persist();
       clearPendingFinalDelivery(entry);
       if (!options?.skipDeliveryStatus) {
         safeSetSubagentTaskDeliveryStatus({
@@ -558,7 +638,6 @@ export function createSubagentRegistryLifecycleController(params: {
       entry.fallbackFrozenResultText = undefined;
       entry.fallbackFrozenResultCapturedAt = undefined;
       const completionReason = resolveCleanupCompletionReason(entry);
-      await emitCompletionEndedHookIfNeeded(entry, completionReason);
       const shouldDeleteAttachments = cleanup === "delete" || !entry.retainAttachmentsOnKeep;
       if (shouldDeleteAttachments) {
         await safeRemoveAttachmentsDir(entry);
@@ -573,6 +652,16 @@ export function createSubagentRegistryLifecycleController(params: {
         cleanup,
         completedAt: Date.now(),
       });
+      if (reconciledOutcome) {
+        if (entry.outcome) {
+          safeFinalizeSubagentTaskRun({
+            entry,
+            outcome: entry.outcome,
+          });
+        }
+        params.persist();
+      }
+      await emitCompletionEndedHookIfNeeded(entry, completionReason);
       return;
     }
 

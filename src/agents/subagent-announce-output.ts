@@ -229,8 +229,6 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
       }
       if (isAnnounceSkip(text) || isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
         snapshot.latestSilentText = text;
-        snapshot.latestAssistantText = undefined;
-        snapshot.assistantFragments = [];
         snapshot.waitingForContinuation = false;
         previousAssistantCalledYield = false;
         continue;
@@ -287,11 +285,15 @@ function formatSubagentPartialProgress(
 function selectSubagentOutputText(
   snapshot: SubagentOutputSnapshot,
   outcome?: SubagentRunOutcome,
+  options?: { preferVisibleBeforeSilent?: boolean },
 ): string | undefined {
   if (snapshot.waitingForContinuation) {
     return undefined;
   }
   if (snapshot.latestSilentText) {
+    if (options?.preferVisibleBeforeSilent === true && snapshot.assistantFragments.length > 0) {
+      return snapshot.assistantFragments.at(-1);
+    }
     return snapshot.latestSilentText;
   }
   if (snapshot.latestAssistantText) {
@@ -307,14 +309,20 @@ function selectSubagentOutputText(
 export async function readSubagentOutput(
   sessionKey: string,
   outcome?: SubagentRunOutcome,
+  options?: { preferVisibleBeforeSilent?: boolean; timeoutMs?: number },
 ): Promise<string | undefined> {
+  const timeoutMs =
+    typeof options?.timeoutMs === "number" && Number.isFinite(options.timeoutMs)
+      ? Math.max(1, Math.floor(options.timeoutMs))
+      : undefined;
   const history = await subagentAnnounceOutputDeps.callGateway({
     method: "chat.history",
     params: { sessionKey, limit: 100 },
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
   });
   const messages = Array.isArray(history?.messages) ? history.messages : [];
   const snapshot = summarizeSubagentOutputHistory(messages);
-  const selected = selectSubagentOutputText(snapshot, outcome);
+  const selected = selectSubagentOutputText(snapshot, outcome, options);
   if (selected?.trim()) {
     return selected;
   }
@@ -324,6 +332,15 @@ export async function readSubagentOutput(
   const latestAssistant = await subagentAnnounceOutputDeps.readLatestAssistantReply({
     sessionKey,
     limit: 100,
+    ...(timeoutMs !== undefined
+      ? {
+          callGateway: async (request) =>
+            await subagentAnnounceOutputDeps.callGateway({
+              ...request,
+              timeoutMs,
+            }),
+        }
+      : {}),
   });
   return latestAssistant?.trim() ? latestAssistant : undefined;
 }
@@ -397,7 +414,9 @@ export async function captureSubagentCompletionReply(
     maxWaitMs: isFastTestMode() ? 50 : 1_500,
     retryIntervalMs: isFastTestMode() ? FAST_TEST_RETRY_INTERVAL_MS : 100,
     readSubagentOutput: async (nextSessionKey) =>
-      await readSubagentOutput(nextSessionKey, options?.outcome),
+      await readSubagentOutput(nextSessionKey, options?.outcome, {
+        preferVisibleBeforeSilent: true,
+      }),
   });
 }
 

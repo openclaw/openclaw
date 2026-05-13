@@ -206,7 +206,7 @@ describe("subagent registry steer restarts", () => {
     runId: string,
     childSessionKey: string,
     task: string,
-    options: Partial<Pick<RegisterSubagentRunInput, "spawnMode">> = {},
+    options: Partial<Pick<RegisterSubagentRunInput, "cleanup" | "spawnMode">> = {},
   ): void => {
     registerRun({
       runId,
@@ -230,7 +230,10 @@ describe("subagent registry steer restarts", () => {
       requesterSessionKey?: string;
       requesterDisplayKey?: string;
     } & Partial<
-      Pick<RegisterSubagentRunInput, "spawnMode" | "requesterOrigin" | "expectsCompletionMessage">
+      Pick<
+        RegisterSubagentRunInput,
+        "cleanup" | "spawnMode" | "requesterOrigin" | "expectsCompletionMessage"
+      >
     >,
   ): void => {
     mod.registerSubagentRun({
@@ -240,7 +243,7 @@ describe("subagent registry steer restarts", () => {
       requesterDisplayKey: params.requesterDisplayKey ?? MAIN_REQUESTER_DISPLAY_KEY,
       requesterOrigin: params.requesterOrigin,
       task: params.task,
-      cleanup: "keep",
+      cleanup: params.cleanup ?? "keep",
       spawnMode: params.spawnMode,
       expectsCompletionMessage: params.expectsCompletionMessage,
     });
@@ -562,6 +565,38 @@ describe("subagent registry steer restarts", () => {
     expect(run.fallbackFrozenResultCapturedAt).toBe(1234);
   });
 
+  it("prefers descendant findings over stale frozen text for wake continuation fallback", () => {
+    registerRun({
+      runId: "run-wake-findings-old",
+      childSessionKey: "agent:main:subagent:wake-findings",
+      task: "wake findings fallback",
+    });
+
+    const previous = listMainRuns()[0];
+    expect(previous?.runId).toBe("run-wake-findings-old");
+    if (previous) {
+      previous.frozenResultText = "NO_REPLY";
+      previous.frozenResultCapturedAt = 1234;
+    }
+
+    const replaced = mod.replaceSubagentRunAfterSteer({
+      previousRunId: "run-wake-findings-old",
+      nextRunId: "run-wake-findings-new",
+      fallback: previous,
+      preserveFrozenResultFallback: true,
+      fallbackFrozenResultText: "child completion findings",
+    });
+    expect(replaced).toBe(true);
+
+    const run = listMainRuns().find((entry) => entry.runId === "run-wake-findings-new");
+    expect(run).toMatchObject({
+      frozenResultText: undefined,
+      fallbackFrozenResultText: "child completion findings",
+    });
+    mod.resetSubagentRegistryForTests({ persist: false });
+    vi.clearAllTimers();
+  });
+
   it("restores announce for a finished run when steer replacement dispatch fails", async () => {
     registerRun({
       runId: "run-failed-restart",
@@ -746,6 +781,7 @@ describe("subagent registry steer restarts", () => {
           "run-completion-retry",
           "agent:main:subagent:completion",
           "completion retry",
+          { cleanup: "delete" },
         );
 
         emitLifecycleEnd("run-completion-retry");
@@ -764,11 +800,15 @@ describe("subagent registry steer restarts", () => {
         expect(announceSpy).toHaveBeenCalledTimes(2);
         await vi.advanceTimersByTimeAsync(1);
         expect(announceSpy).toHaveBeenCalledTimes(3);
-        expect(listMainRuns()[0]?.announceRetryCount).toBe(3);
+        expect(
+          listMainRuns().find((entry) => entry.runId === "run-completion-retry"),
+        ).toBeUndefined();
 
         await vi.advanceTimersByTimeAsync(4_001);
         expect(announceSpy).toHaveBeenCalledTimes(3);
-        expect(listMainRuns()[0]?.cleanupCompletedAt).toBeTypeOf("number");
+        expect(
+          listMainRuns().find((entry) => entry.runId === "run-completion-retry"),
+        ).toBeUndefined();
       } finally {
         vi.useRealTimers();
       }

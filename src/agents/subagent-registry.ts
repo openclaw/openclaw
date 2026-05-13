@@ -15,10 +15,11 @@ import { registerPendingSpawnedChildrenQuery } from "../infra/outbound/pending-s
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createLazyImportLoader, createLazyPromiseLoader } from "../shared/lazy-promise.js";
 import { importRuntimeModule } from "../shared/runtime-import.js";
+import { startTaskRunByRunId } from "../tasks/detached-task-runtime.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { ensureRuntimePluginsLoaded as ensureRuntimePluginsLoadedFn } from "./runtime-plugins.js";
-import type { SubagentRunOutcome } from "./subagent-announce-output.js";
+import { type SubagentRunOutcome, withSubagentOutcomeTiming } from "./subagent-announce-output.js";
 import { resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -33,17 +34,22 @@ import {
 import {
   ANNOUNCE_EXPIRY_MS,
   MAX_ANNOUNCE_RETRY_COUNT,
+  getSubagentSessionRuntimeMs,
   reconcileOrphanedRestoredRuns,
   reconcileOrphanedRun,
   resolveAnnounceRetryDelayMs,
   resolveSubagentRunOrphanReason,
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
-import { createSubagentRegistryLifecycleController } from "./subagent-registry-lifecycle.js";
+import {
+  createSubagentRegistryLifecycleController,
+  isRecoverableStuckHandledCleanup,
+} from "./subagent-registry-lifecycle.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   countActiveDescendantRunsFromRuns,
   countActiveRunsForSessionFromRuns,
+  countLiveDescendantRunsExcludingRunFromRuns,
   countPendingDescendantRunsExcludingRunFromRuns,
   countPendingDescendantRunsFromRuns,
   getSubagentRunByChildSessionKeyFromRuns,
@@ -75,6 +81,16 @@ export {
   resolveSubagentSessionStatus,
 } from "./subagent-registry-helpers.js";
 const log = createSubsystemLogger("agents/subagent-registry");
+
+function isYieldedSubagentLifecycleEnd(data: Record<string, unknown> | undefined): boolean {
+  return (
+    data?.yielded === true ||
+    data?.yieldDetected === true ||
+    data?.livenessState === "paused" ||
+    data?.status === "interrupted" ||
+    (data?.aborted === true && data?.stopReason === "end_turn")
+  );
+}
 
 type SubagentAnnounceModule = Pick<
   typeof import("./subagent-announce.js"),
@@ -201,6 +217,28 @@ const SESSION_RUN_TTL_MS = 5 * 60_000; // 5 minutes
 const PENDING_LIFECYCLE_TERMINAL_TTL_MS = 5 * 60_000; // 5 minutes
 /** Grace period before treating a "running" subagent without a live run context as stale. */
 const STALE_ACTIVE_SUBAGENT_GRACE_MS = process.env.OPENCLAW_TEST_FAST === "1" ? 1_000 : 60_000;
+/** Extra grace after an explicit subagent run timeout before the sweeper force-settles it. */
+const EXPLICIT_SUBAGENT_TIMEOUT_SWEEP_GRACE_MS =
+  process.env.OPENCLAW_TEST_FAST === "1" ? 1_000 : 60_000;
+
+function isPastExplicitSubagentTimeout(entry: SubagentRunRecord, now = Date.now()): boolean {
+  if (typeof entry.endedAt === "number") {
+    return false;
+  }
+  const timeoutSeconds = entry.runTimeoutSeconds;
+  if (
+    typeof timeoutSeconds !== "number" ||
+    !Number.isFinite(timeoutSeconds) ||
+    timeoutSeconds <= 0
+  ) {
+    return false;
+  }
+  const runtimeMs = getSubagentSessionRuntimeMs(entry, now);
+  if (typeof runtimeMs !== "number" || !Number.isFinite(runtimeMs)) {
+    return false;
+  }
+  return runtimeMs > Math.floor(timeoutSeconds) * 1_000 + EXPLICIT_SUBAGENT_TIMEOUT_SWEEP_GRACE_MS;
+}
 
 function findSessionEntryByKey(store: Record<string, SessionEntry>, sessionKey: string) {
   const direct = store[sessionKey];
@@ -453,6 +491,18 @@ function schedulePendingLifecycleTimeout(params: { runId: string; endedAt: numbe
     if (entry.outcome?.status === "ok") {
       return;
     }
+    if (countPendingDescendantRuns(entry.childSessionKey) > 0) {
+      entry.wakeOnDescendantSettle = true;
+      if (
+        markSubagentRunPausedAfterYield({
+          entry,
+          endedAt: pending.endedAt,
+        })
+      ) {
+        persistSubagentRuns();
+      }
+      return;
+    }
     void completeSubagentRun({
       runId: params.runId,
       endedAt: pending.endedAt,
@@ -591,10 +641,26 @@ function resumeSubagentRun(runId: string) {
     return;
   }
   if (entry.pauseReason === "sessions_yield") {
+    const pendingDescendants = countPendingDescendantRuns(entry.childSessionKey);
+    if (entry.wakeOnDescendantSettle !== true || pendingDescendants > 0) {
+      return;
+    }
+    if (preparePausedYieldedRunForFinalDelivery(entry)) {
+      persistSubagentRuns();
+    }
+    if (!startSubagentAnnounceCleanupFlow(runId, entry)) {
+      return;
+    }
+    resumedRuns.add(runId);
     return;
   }
   // Skip entries that have exhausted their retry budget or expired (#18264).
-  if ((entry.announceRetryCount ?? 0) >= MAX_ANNOUNCE_RETRY_COUNT) {
+  // Completion-message flows are user-visible handoffs and already have a
+  // separate hard expiry; keep retrying them through transient announce gaps.
+  if (
+    (entry.expectsCompletionMessage !== true || entry.cleanup === "delete") &&
+    (entry.announceRetryCount ?? 0) >= MAX_ANNOUNCE_RETRY_COUNT
+  ) {
     void finalizeResumedAnnounceGiveUp({
       runId,
       entry,
@@ -721,6 +787,33 @@ function resolveSubagentWaitTimeoutMs(cfg: OpenClawConfig, runTimeoutSeconds?: n
   });
 }
 
+function hasCapturedFinalResultText(entry: SubagentRunRecord): boolean {
+  return typeof entry.frozenResultText === "string" && entry.frozenResultText.trim().length > 0;
+}
+
+function preparePausedYieldedRunForFinalDelivery(entry: SubagentRunRecord): boolean {
+  let mutated = false;
+  if (entry.pauseReason !== undefined) {
+    entry.pauseReason = undefined;
+    mutated = true;
+  }
+  if (entry.endedReason !== SUBAGENT_ENDED_REASON_COMPLETE) {
+    entry.endedReason = SUBAGENT_ENDED_REASON_COMPLETE;
+    mutated = true;
+  }
+  if (entry.outcome === undefined && hasCapturedFinalResultText(entry)) {
+    entry.outcome = withSubagentOutcomeTiming(
+      { status: "ok" },
+      {
+        startedAt: entry.startedAt,
+        endedAt: entry.endedAt ?? Date.now(),
+      },
+    );
+    mutated = true;
+  }
+  return mutated;
+}
+
 function startSweeper() {
   if (sweeper) {
     return;
@@ -753,6 +846,21 @@ async function sweepSubagentRuns() {
     let mutated = false;
     for (const [runId, entry] of subagentRuns.entries()) {
       if (typeof entry.endedAt !== "number") {
+        if (isPastExplicitSubagentTimeout(entry, now)) {
+          await completeSubagentRun({
+            runId,
+            endedAt: now,
+            outcome: {
+              status: "timeout",
+            },
+            reason: SUBAGENT_ENDED_REASON_COMPLETE,
+            sendFarewell: true,
+            accountId: entry.requesterOrigin?.accountId,
+            triggerCleanup: true,
+          });
+          continue;
+        }
+
         const hasLiveRunContext = Boolean(getAgentRunContext(runId));
         const activeAgeMs = now - (entry.startedAt ?? entry.createdAt);
         if (!hasLiveRunContext && activeAgeMs >= STALE_ACTIVE_SUBAGENT_GRACE_MS) {
@@ -810,6 +918,27 @@ async function sweepSubagentRuns() {
           });
           continue;
         }
+      }
+
+      if (typeof entry.cleanupCompletedAt === "number" && entry.cleanupHandled !== true) {
+        entry.cleanupHandled = true;
+        mutated = true;
+      }
+
+      if (
+        entry.pauseReason === "sessions_yield" &&
+        entry.wakeOnDescendantSettle === true &&
+        typeof entry.cleanupCompletedAt !== "number" &&
+        countPendingDescendantRuns(entry.childSessionKey) === 0
+      ) {
+        resumedRuns.delete(runId);
+        resumeSubagentRun(runId);
+        continue;
+      }
+
+      if (isRecoverableStuckHandledCleanup(entry, now)) {
+        startSubagentAnnounceCleanupFlow(runId, entry);
+        continue;
       }
 
       // Session-mode runs have no archiveAtMs — apply absolute TTL after cleanup completes.
@@ -917,6 +1046,13 @@ function ensureListener() {
           if (typeof entry.sessionStartedAt !== "number") {
             entry.sessionStartedAt = startedAt;
           }
+          startTaskRunByRunId({
+            runId: evt.runId,
+            runtime: "subagent",
+            sessionKey: entry.childSessionKey,
+            startedAt,
+            lastEventAt: startedAt,
+          });
           persistSubagentRuns();
         }
         return;
@@ -934,14 +1070,7 @@ function ensureListener() {
         });
         return;
       }
-      if (evt.data?.aborted) {
-        schedulePendingLifecycleTimeout({
-          runId: evt.runId,
-          endedAt,
-        });
-        return;
-      }
-      if (evt.data?.yielded === true) {
+      if (isYieldedSubagentLifecycleEnd(evt.data)) {
         if (
           markSubagentRunPausedAfterYield({
             entry,
@@ -952,6 +1081,13 @@ function ensureListener() {
         ) {
           persistSubagentRuns();
         }
+        return;
+      }
+      if (evt.data?.aborted) {
+        schedulePendingLifecycleTimeout({
+          runId: evt.runId,
+          endedAt,
+        });
         return;
       }
       clearPendingLifecycleError(evt.runId);
@@ -986,6 +1122,7 @@ const subagentRunManager = createSubagentRunManager({
   stopSweeper,
   resumeSubagentRun,
   clearPendingLifecycleError,
+  countPendingDescendantRuns,
   resolveSubagentWaitTimeoutMs,
   scheduleOrphanRecovery: (args) => scheduleSubagentOrphanRecovery(args),
   notifyContextEngineSubagentEnded,
@@ -1012,6 +1149,7 @@ export function replaceSubagentRunAfterSteer(params: {
   fallback?: SubagentRunRecord;
   runTimeoutSeconds?: number;
   preserveFrozenResultFallback?: boolean;
+  fallbackFrozenResultText?: string;
 }) {
   return subagentRunManager.replaceSubagentRunAfterSteer(params);
 }
@@ -1198,6 +1336,17 @@ export function countPendingDescendantRunsExcludingRun(
   excludeRunId: string,
 ): number {
   return countPendingDescendantRunsExcludingRunFromRuns(
+    subagentRegistryDeps.getSubagentRunsSnapshotForRead(subagentRuns),
+    rootSessionKey,
+    excludeRunId,
+  );
+}
+
+export function countLiveDescendantRunsExcludingRun(
+  rootSessionKey: string,
+  excludeRunId: string,
+): number {
+  return countLiveDescendantRunsExcludingRunFromRuns(
     subagentRegistryDeps.getSubagentRunsSnapshotForRead(subagentRuns),
     rootSessionKey,
     excludeRunId,

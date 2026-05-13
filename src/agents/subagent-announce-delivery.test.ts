@@ -1,9 +1,13 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   __testing as sessionBindingServiceTesting,
   registerSessionBindingAdapter,
 } from "../infra/outbound/session-binding-service.js";
 import type { AgentInternalEvent } from "./internal-events.js";
+import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import type {
   EmbeddedPiQueueMessageOptions,
   EmbeddedPiQueueMessageOutcome,
@@ -121,6 +125,7 @@ async function deliverSlackThreadAnnouncement(params: {
   sendMessage?: typeof runtimeSendMessage;
   internalEvents?: AgentInternalEvent[];
   sourceTool?: string;
+  externalFallbackContent?: string;
 }) {
   __testing.setDepsForTest({
     callGateway: params.callGateway,
@@ -129,6 +134,7 @@ async function deliverSlackThreadAnnouncement(params: {
       isActive: params.isActive,
     }),
     getRuntimeConfig: () => ({}) as never,
+    ...(params.sendMessage ? { sendMessage: params.sendMessage } : {}),
     ...(params.queueEmbeddedPiMessageWithOutcome
       ? { queueEmbeddedPiMessageWithOutcome: params.queueEmbeddedPiMessageWithOutcome }
       : {}),
@@ -149,6 +155,7 @@ async function deliverSlackThreadAnnouncement(params: {
     directIdempotencyKey: params.directIdempotencyKey,
     internalEvents: params.internalEvents,
     sourceTool: params.sourceTool,
+    externalFallbackContent: params.externalFallbackContent,
   });
 }
 
@@ -157,6 +164,7 @@ async function deliverDiscordDirectMessageCompletion(params: {
   sendMessage?: typeof runtimeSendMessage;
   internalEvents?: AgentInternalEvent[];
   sourceTool?: string;
+  externalFallbackContent?: string;
 }) {
   const origin = {
     channel: "discord",
@@ -170,6 +178,7 @@ async function deliverDiscordDirectMessageCompletion(params: {
       isActive: false,
     }),
     getRuntimeConfig: () => ({}) as never,
+    ...(params.sendMessage ? { sendMessage: params.sendMessage } : {}),
   });
 
   return deliverSubagentAnnouncement({
@@ -187,6 +196,7 @@ async function deliverDiscordDirectMessageCompletion(params: {
     directIdempotencyKey: "announce-dm-fallback-empty",
     internalEvents: params.internalEvents,
     sourceTool: params.sourceTool,
+    externalFallbackContent: params.externalFallbackContent,
   });
 }
 
@@ -196,6 +206,7 @@ async function deliverTelegramDirectMessageCompletion(params: {
   internalEvents?: AgentInternalEvent[];
   isActive?: boolean;
   queueEmbeddedPiMessageWithOutcome?: QueueEmbeddedPiMessageWithOutcome;
+  externalFallbackContent?: string;
 }) {
   const origin = {
     channel: "telegram",
@@ -209,6 +220,7 @@ async function deliverTelegramDirectMessageCompletion(params: {
       isActive: params.isActive === true,
     }),
     getRuntimeConfig: () => ({}) as never,
+    ...(params.sendMessage ? { sendMessage: params.sendMessage } : {}),
     ...(params.queueEmbeddedPiMessageWithOutcome
       ? { queueEmbeddedPiMessageWithOutcome: params.queueEmbeddedPiMessageWithOutcome }
       : {}),
@@ -228,6 +240,7 @@ async function deliverTelegramDirectMessageCompletion(params: {
     bestEffortDeliver: true,
     directIdempotencyKey: "announce-telegram-dm-fallback",
     internalEvents: params.internalEvents,
+    externalFallbackContent: params.externalFallbackContent,
   });
 }
 
@@ -254,6 +267,7 @@ async function deliverSlackChannelAnnouncement(params: {
   sendMessage?: typeof runtimeSendMessage;
   internalEvents?: AgentInternalEvent[];
   sourceTool?: string;
+  externalFallbackContent?: string;
 }) {
   const origin = {
     channel: "slack",
@@ -268,6 +282,7 @@ async function deliverSlackChannelAnnouncement(params: {
       isActive: params.isActive,
     }),
     getRuntimeConfig: () => ({}) as never,
+    ...(params.sendMessage ? { sendMessage: params.sendMessage } : {}),
     ...(params.queueEmbeddedPiMessageWithOutcome
       ? { queueEmbeddedPiMessageWithOutcome: params.queueEmbeddedPiMessageWithOutcome }
       : {}),
@@ -288,6 +303,7 @@ async function deliverSlackChannelAnnouncement(params: {
     directIdempotencyKey: params.directIdempotencyKey,
     internalEvents: params.internalEvents,
     sourceTool: params.sourceTool,
+    externalFallbackContent: params.externalFallbackContent,
   });
 }
 
@@ -537,7 +553,47 @@ describe("deliverSubagentAnnouncement queued delivery", () => {
 });
 
 describe("deliverSubagentAnnouncement completion delivery", () => {
-  it("keeps completion announces session-internal while preserving route context for active requesters", async () => {
+  it("queues dormant subagent requester announcements through the subagent lane", async () => {
+    const callGateway = createGatewayMock();
+    __testing.setDepsForTest({
+      callGateway,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-subagent-session",
+        isActive: false,
+      }),
+      getRuntimeConfig: () => ({}) as never,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:cgo:subagent:parent",
+      targetRequesterSessionKey: "agent:cgo:subagent:parent",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterIsSubagent: true,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-subagent-lane",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "queued",
+      }),
+    );
+    await vi.waitFor(() => expect(callGateway).toHaveBeenCalled());
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        params: expect.objectContaining({
+          sessionKey: "agent:cgo:subagent:parent",
+          deliver: false,
+          lane: AGENT_LANE_SUBAGENT,
+        }),
+      }),
+    );
+  });
+
+  it("does not mark active requester steering as visibly delivered for completion announces", async () => {
     const callGateway = createGatewayMock();
     const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeMock(true);
     const result = await deliverSlackThreadAnnouncement({
@@ -549,10 +605,13 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       queueEmbeddedPiMessageWithOutcome,
     });
 
-    expectRecordFields(result, {
-      delivered: true,
-      path: "steered",
-    });
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: false,
+        path: "steered",
+        error: "completion delivery queued but not yet visibly delivered",
+      }),
+    );
     expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledWith(
       "requester-session-1",
       "child done",
@@ -560,6 +619,55 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         steeringMode: "all",
         debounceMs: 500,
       },
+    );
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("marks active subagent requester steering as delivered for completion announces", async () => {
+    const callGateway = createGatewayMock();
+    const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeMock(true);
+    __testing.setDepsForTest({
+      callGateway,
+      queueEmbeddedPiMessageWithOutcome,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-subagent-session",
+        isActive: true,
+      }),
+      getRuntimeConfig: () =>
+        ({
+          session: { store: "memory" },
+          agents: {
+            defaults: {
+              subagents: {
+                announceTimeoutMs: 10_000,
+              },
+            },
+          },
+        }) as never,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:cgo:subagent:parent",
+      targetRequesterSessionKey: "agent:cgo:subagent:parent",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterIsSubagent: true,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-active-subagent-steer",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "steered",
+      }),
+    );
+    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledWith(
+      "requester-subagent-session",
+      "child done",
+      expect.objectContaining({
+        steeringMode: "all",
+      }),
     );
     expect(callGateway).not.toHaveBeenCalled();
   });
@@ -976,7 +1084,114 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("queues when an active Telegram requester cannot be woken directly", async () => {
+  it("uses a fresh idempotency key for transient direct announce retries", async () => {
+    const previousFastEnv = process.env.OPENCLAW_TEST_FAST;
+    process.env.OPENCLAW_TEST_FAST = "1";
+    try {
+      const callGateway = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("UNAVAILABLE: codex app-server client is closed"))
+        .mockResolvedValueOnce({
+          runId: "announce-thread-retry-key:retry:2",
+          status: "ok",
+          result: {
+            payloads: [{ text: "requester handled completion" }],
+          },
+        }) as unknown as typeof runtimeCallGateway;
+
+      const result = await deliverSlackThreadAnnouncement({
+        callGateway,
+        sessionId: "requester-session-retry",
+        isActive: false,
+        expectsCompletionMessage: true,
+        directIdempotencyKey: "announce-thread-retry-key",
+        internalEvents: [
+          {
+            type: "task_completion",
+            source: "subagent",
+            childSessionKey: "agent:worker:subagent:child",
+            childSessionId: "child-session-id",
+            announceType: "subagent task",
+            taskLabel: "thread completion retry smoke",
+            status: "ok",
+            statusLabel: "completed successfully",
+            result: "child completion output",
+            replyInstruction: "Summarize the result.",
+          },
+        ],
+      });
+
+      expect(result).toEqual(
+        expect.objectContaining({
+          delivered: true,
+          path: "direct",
+        }),
+      );
+      expect(callGateway).toHaveBeenCalledTimes(2);
+      expect(callGateway).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          params: expect.objectContaining({ idempotencyKey: "announce-thread-retry-key" }),
+        }),
+      );
+      expect(callGateway).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          params: expect.objectContaining({ idempotencyKey: "announce-thread-retry-key:retry:2" }),
+        }),
+      );
+    } finally {
+      if (previousFastEnv === undefined) {
+        delete process.env.OPENCLAW_TEST_FAST;
+      } else {
+        process.env.OPENCLAW_TEST_FAST = previousFastEnv;
+      }
+    }
+  });
+
+  it("falls back to direct outbound for Telegram DMs when announce-agent delivery fails after final text exists", async () => {
+    const callGateway = vi.fn(async () => {
+      throw new Error("UNAVAILABLE: requester wake failed");
+    }) as unknown as typeof runtimeCallGateway;
+    const sendMessage = createSendMessageMock();
+    const result = await deliverTelegramDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      externalFallbackContent: "OC010 final completion text after handoff failure",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:cgo:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "telegram completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "OC010 final completion text after handoff failure",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "direct",
+      }),
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "123456789",
+        accountId: "bot-1",
+        content: "OC010 final completion text after handoff failure",
+        idempotencyKey: "announce-telegram-dm-fallback:external-fallback",
+      }),
+    );
+  });
+
+  it("keeps completion pending when an active Telegram requester cannot be woken directly", async () => {
     const callGateway = createGatewayMock();
     const sendMessage = createSendMessageMock();
     const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeMock(false);
@@ -1001,25 +1216,28 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       ],
     });
 
-    expectRecordFields(result, {
-      delivered: true,
-      path: "queued",
-      phases: [
-        {
-          phase: "direct-primary",
-          delivered: false,
-          path: "direct",
-          error:
-            "active requester session could not be woken: queue_message_failed reason=not_streaming sessionId=requester-session-telegram gatewayHealth=live",
-        },
-        {
-          phase: "queue-fallback",
-          delivered: true,
-          path: "queued",
-          error: undefined,
-        },
-      ],
-    });
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: false,
+        path: "queued",
+        error: "completion delivery queued but not yet visibly delivered",
+        phases: [
+          {
+            phase: "direct-primary",
+            delivered: false,
+            path: "direct",
+            error:
+              "active requester session could not be woken: queue_message_failed reason=not_streaming sessionId=requester-session-telegram gatewayHealth=live",
+          },
+          {
+            phase: "queue-fallback",
+            delivered: true,
+            path: "queued",
+            error: undefined,
+          },
+        ],
+      }),
+    );
     expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledWith(
       "requester-session-telegram",
       "child done",
@@ -1030,6 +1248,88 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
     expect(callGateway).not.toHaveBeenCalled();
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("ignores stale embedded activity after requester session is terminal", async () => {
+    const tmp = mkdtempSync(path.join(tmpdir(), "openclaw-terminal-requester-"));
+    try {
+      writeFileSync(
+        path.join(tmp, "main.json"),
+        JSON.stringify({
+          "agent:main:telegram:123456789": {
+            status: "timeout",
+            sessionId: "requester-session-telegram",
+            channel: "telegram",
+            lastChannel: "telegram",
+            lastTo: "telegram:123456789",
+          },
+        }),
+      );
+      const callGateway = createGatewayMock({
+        result: {
+          payloads: [{ type: "text", text: "main final" }],
+        },
+      });
+      const sendMessage = createSendMessageMock();
+      const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeMock(true);
+      __testing.setDepsForTest({
+        callGateway,
+        sendMessage,
+        getRequesterSessionActivity: () => ({
+          sessionId: "requester-session-telegram",
+          isActive: true,
+        }),
+        queueEmbeddedPiMessageWithOutcome,
+        getRuntimeConfig: () =>
+          ({
+            session: {
+              store: path.join(tmp, "{agentId}.json"),
+            },
+          }) as never,
+      });
+
+      const origin = {
+        channel: "telegram",
+        to: "123456789",
+        accountId: "bot-1",
+      };
+      const result = await deliverSubagentAnnouncement({
+        requesterSessionKey: "agent:main:telegram:123456789",
+        targetRequesterSessionKey: "agent:main:telegram:123456789",
+        triggerMessage: "child done",
+        steerMessage: "child done",
+        requesterOrigin: origin,
+        requesterSessionOrigin: origin,
+        completionDirectOrigin: origin,
+        directOrigin: origin,
+        requesterIsSubagent: false,
+        expectsCompletionMessage: true,
+        bestEffortDeliver: true,
+        directIdempotencyKey: "announce-terminal-requester",
+      });
+
+      expect(result).toEqual(
+        expect.objectContaining({
+          delivered: true,
+          path: "direct",
+        }),
+      );
+      expect(queueEmbeddedPiMessageWithOutcome).not.toHaveBeenCalled();
+      expect(callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "agent",
+          params: expect.objectContaining({
+            sessionKey: "agent:main:telegram:123456789",
+            deliver: true,
+            channel: "telegram",
+            to: "123456789",
+          }),
+        }),
+      );
+      expect(sendMessage).not.toHaveBeenCalled();
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 
   it("reports failure when announce-agent returns no visible output", async () => {
@@ -1068,6 +1368,135 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       error: "completion agent did not produce a visible reply",
     });
     expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("falls back to direct outbound when top-level completion rewrite has no visible output", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverTelegramDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      externalFallbackContent: "OC010 final completion text",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:cgo:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "route smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "OC010 final completion text",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "direct",
+      }),
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "123456789",
+        accountId: "bot-1",
+        content: "OC010 final completion text",
+        idempotencyKey: "announce-telegram-dm-fallback:external-fallback",
+      }),
+    );
+  });
+
+  it("falls back to direct outbound when top-level completion announce remains pending", async () => {
+    const callGateway = createGatewayMock({
+      runId: "announce:queued",
+      status: "accepted",
+      acceptedAt: Date.now(),
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverTelegramDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      externalFallbackContent: "OC010 final completion text from pending handoff",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:cgo:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "route smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "OC010 final completion text from pending handoff",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "direct",
+      }),
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "123456789",
+        accountId: "bot-1",
+        content: "OC010 final completion text from pending handoff",
+        idempotencyKey: "announce-telegram-dm-fallback:external-fallback",
+      }),
+    );
+  });
+
+  it("keeps ordinary completion pending when announce-agent is queued behind an active requester", async () => {
+    const callGateway = createGatewayMock({
+      runId: "announce:queued",
+      status: "accepted",
+      acceptedAt: Date.now(),
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackThreadAnnouncement({
+      callGateway,
+      sendMessage,
+      sessionId: "requester-session-queued",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-thread-pending",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:cgo:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "full route completion",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: longChildCompletionOutput,
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: false,
+        path: "direct",
+        error: "completion announce-agent run is still pending",
+      }),
+    );
+    expect(callGateway).toHaveBeenCalled();
     expect(sendMessage).not.toHaveBeenCalled();
   });
 

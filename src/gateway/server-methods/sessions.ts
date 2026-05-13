@@ -799,6 +799,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           activeKey: params.activeKey,
           fixMissing: params.fixMissing,
           fixDmScope: params.fixDmScope,
+          fixStaleRunning: params.fixStaleRunning,
         },
       });
       const result = serializeSessionCleanupResult({

@@ -55,10 +55,13 @@ export function resolveDeferredCleanupDecision(params: {
   const expiryExceeded = isCompletionMessageFlow
     ? completionHardExpiryExceeded
     : endedAgo > params.announceExpiryMs;
-  if (retryCount >= params.maxAnnounceRetryCount || expiryExceeded) {
+  const retryLimitExceeded =
+    (!isCompletionMessageFlow || params.entry.cleanup === "delete") &&
+    retryCount >= params.maxAnnounceRetryCount;
+  if (retryLimitExceeded || expiryExceeded) {
     return {
       kind: "give-up",
-      reason: retryCount >= params.maxAnnounceRetryCount ? "retry-limit" : "expiry",
+      reason: retryLimitExceeded ? "retry-limit" : "expiry",
       retryCount,
     };
   }

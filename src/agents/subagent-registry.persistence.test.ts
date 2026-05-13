@@ -307,6 +307,48 @@ describe("subagent registry persistence", () => {
     ).toBe(false);
   });
 
+  it("sweeps stale handled timeout cleanup that has no completion bookkeeping", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    const now = Date.now();
+    const entry: SubagentRunRecord = {
+      runId: "run-stale-timeout-cleanup",
+      childSessionKey: "agent:main:subagent:stale-timeout-cleanup",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "stale timeout cleanup",
+      cleanup: "keep",
+      createdAt: now - 180_000,
+      startedAt: now - 180_000,
+      endedAt: now - 120_000,
+      cleanupHandled: true,
+      expectsCompletionMessage: true,
+      retainAttachmentsOnKeep: true,
+      outcome: {
+        status: "timeout",
+        startedAt: now - 180_000,
+        endedAt: now - 120_000,
+        elapsedMs: 60_000,
+      },
+    };
+    await writeChildSessionEntry({
+      sessionKey: entry.childSessionKey,
+      sessionId: "sess-stale-timeout-cleanup",
+    });
+    addSubagentRunForTests(entry);
+
+    await __testing.sweepOnceForTests();
+    await waitForRegistryWork(() => entry.cleanupCompletedAt != null);
+
+    expect(announceSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        childSessionKey: entry.childSessionKey,
+        childRunId: entry.runId,
+      }),
+    );
+    expect(entry.cleanupCompletedAt).toBeTypeOf("number");
+  });
+
   it("maps legacy announce fields into cleanup state", async () => {
     const persisted = {
       version: 1,

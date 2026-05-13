@@ -36,7 +36,15 @@ export function describeSessionsSendTool(): string {
 export function describeSessionsSpawnTool(options?: {
   acpAvailable?: boolean;
   threadAvailable?: boolean;
+  subagentMaxConcurrent?: number;
 }): string {
+  const sequentialSubagentMode =
+    typeof options?.subagentMaxConcurrent === "number" &&
+    Number.isFinite(options.subagentMaxConcurrent) &&
+    options.subagentMaxConcurrent <= 1;
+  const batchGuidance = sequentialSubagentMode
+    ? "For multi-agent native subagent work, do not use `children:[...]`; start one child with a single `sessions_spawn`, immediately call `sessions_yield`, wait for that completion event, then spawn the next child."
+    : "For multiple native subagents, prefer one batch call with `children:[...]` so fan-out starts in parallel within the same tool call.";
   const baseDescription = [
     'Spawn a clean isolated session by default with `runtime="subagent"` or `runtime="acp"`.',
     options?.threadAvailable
@@ -45,6 +53,7 @@ export function describeSessionsSpawnTool(options?: {
     "Subagents inherit the parent workspace directory automatically.",
     "Native subagents receive the delegated task in their first visible `[Subagent Task]` message.",
     'For native subagents only, set `context="fork"` when the child needs the current transcript context; otherwise omit it or use `context="isolated"`.',
+    batchGuidance,
     "Use this when the work should happen in a fresh child session instead of the current one.",
   ];
   if (options?.acpAvailable === false) {
