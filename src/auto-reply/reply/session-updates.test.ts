@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionEntry } from "../../config/sessions.js";
 
 const {
   buildWorkspaceSkillSnapshotMock,
@@ -55,11 +56,13 @@ vi.mock("../../routing/session-key.js", () => ({
   resolveAgentIdFromSessionKey: resolveAgentIdFromSessionKeyMock,
 }));
 
-const { ensureSkillSnapshot } = await import("./session-updates.js");
+const { ensureSkillSnapshot, __testing_resetResolvedSkillsCache } =
+  await import("./session-updates.js");
 
 describe("ensureSkillSnapshot", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    __testing_resetResolvedSkillsCache();
     buildWorkspaceSkillSnapshotMock.mockReturnValue({ prompt: "", skills: [], resolvedSkills: [] });
     getSkillsSnapshotVersionMock.mockReturnValue(0);
     shouldRefreshSnapshotForVersionMock.mockReturnValue(false);
@@ -105,5 +108,92 @@ describe("ensureSkillSnapshot", () => {
     expect(workspaceDir).toBe("/tmp/workspace");
     expect(snapshotParams.agentId).toBe("writer");
     expect(resolveAgentIdFromSessionKeyMock).not.toHaveBeenCalled();
+  });
+
+  it("reuses cached resolvedSkills across calls with same workspaceDir/version/filter", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+
+    const sessionStore: Record<string, SessionEntry> = {};
+    const sessionKey = "main";
+    const strippedSnapshot = {
+      prompt: "skills prompt",
+      skills: [{ name: "test" }],
+      version: 0,
+    };
+    const sessionEntry = {
+      sessionId: "sess-1",
+      updatedAt: Date.now(),
+      skillsSnapshot: strippedSnapshot,
+    };
+
+    await ensureSkillSnapshot({
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      isFirstTurnInSession: true,
+      workspaceDir: "/tmp/workspace",
+      cfg: {},
+    });
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
+
+    // Second call with different session entry but same workspaceDir/version/filter
+    const sessionEntry2 = {
+      sessionId: "sess-2",
+      updatedAt: Date.now(),
+      skillsSnapshot: { ...strippedSnapshot },
+    };
+    await ensureSkillSnapshot({
+      sessionEntry: sessionEntry2,
+      sessionStore: {},
+      sessionKey: "other",
+      isFirstTurnInSession: false,
+      workspaceDir: "/tmp/workspace",
+      cfg: {},
+    });
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("invalidates cache when skillFilter changes", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+
+    const sessionStore: Record<string, SessionEntry> = {};
+    const sessionKey = "main";
+    const strippedSnapshot = {
+      prompt: "skills prompt",
+      skills: [{ name: "test" }],
+      version: 0,
+    };
+    const sessionEntry = {
+      sessionId: "sess-1",
+      updatedAt: Date.now(),
+      skillsSnapshot: strippedSnapshot,
+    };
+
+    await ensureSkillSnapshot({
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      isFirstTurnInSession: true,
+      workspaceDir: "/tmp/workspace",
+      cfg: {},
+    });
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
+
+    // Different skillFilter — cache key changes, rebuild needed
+    const sessionEntry2 = {
+      sessionId: "sess-2",
+      updatedAt: Date.now(),
+      skillsSnapshot: { ...strippedSnapshot, skillFilter: ["old-filter"] },
+    };
+    await ensureSkillSnapshot({
+      sessionEntry: sessionEntry2,
+      sessionStore: {},
+      sessionKey: "other",
+      isFirstTurnInSession: false,
+      workspaceDir: "/tmp/workspace",
+      skillFilter: ["new-filter"],
+      cfg: {},
+    });
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(2);
   });
 });

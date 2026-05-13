@@ -122,6 +122,11 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
     return;
   }
 
+  // Watcher already exists and watch is enabled — skip filesystem scan.
+  if (existing) {
+    return;
+  }
+
   const watchTargets = resolveWatchTargets(workspaceDir, params.config);
   const pathsKey = watchTargets.join("|");
   if (existing && existing.pathsKey === pathsKey && existing.debounceMs === debounceMs) {

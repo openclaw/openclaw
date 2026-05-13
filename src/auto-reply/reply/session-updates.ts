@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { canExecRequestNode } from "../../agents/exec-defaults.js";
-import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
+import { buildWorkspaceSkillSnapshot, type SkillSnapshot } from "../../agents/skills.js";
 import { matchesSkillFilter } from "../../agents/skills/filter.js";
 import {
   getSkillsSnapshotVersion,
@@ -30,6 +30,14 @@ import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./session-hooks.js";
 export { drainFormattedSystemEvents } from "./session-system-events.js";
+
+// Warm-start resolvedSkills cache: avoids redundant buildSnapshot calls when
+// stripPersistedSkillsCache has removed resolvedSkills between turns.
+const _resolvedSkillsCache = new Map<string, unknown>();
+
+export function __testing_resetResolvedSkillsCache(): void {
+  _resolvedSkillsCache.clear();
+}
 
 // nextEntry.skillsSnapshot may carry resolvedSkills (full Skill[] with
 // SKILL.md bodies) for in-turn use. The persistence layer in
@@ -186,6 +194,24 @@ export async function ensureSkillSnapshot(params: {
       snapshotVersion,
     });
 
+  const _snapshotCacheKey = JSON.stringify([workspaceDir, snapshotVersion, skillFilter]);
+
+  // For hydrateResolvedSkills callbacks: reuse cached resolvedSkills when available.
+  const _cachedRebuild = (): SkillSnapshot => {
+    const cached = _resolvedSkillsCache.get(_snapshotCacheKey);
+    if (cached !== undefined) return { resolvedSkills: cached } as SkillSnapshot;
+    const snapshot = buildSnapshot();
+    _resolvedSkillsCache.set(_snapshotCacheKey, snapshot.resolvedSkills);
+    return snapshot;
+  };
+
+  // For direct build paths: build fresh and populate cache for subsequent turns.
+  const _buildAndCache = (): SkillSnapshot => {
+    const snapshot = buildSnapshot();
+    _resolvedSkillsCache.set(_snapshotCacheKey, snapshot.resolvedSkills);
+    return snapshot;
+  };
+
   if (isFirstTurnInSession && sessionStore && sessionKey) {
     const current = nextEntry ??
       sessionStore[sessionKey] ?? {
@@ -194,8 +220,8 @@ export async function ensureSkillSnapshot(params: {
       };
     const skillSnapshot =
       !current.skillsSnapshot || shouldRefreshSnapshot
-        ? buildSnapshot()
-        : hydrateResolvedSkills(current.skillsSnapshot, buildSnapshot);
+        ? _buildAndCache()
+        : hydrateResolvedSkills(current.skillsSnapshot, _cachedRebuild);
     nextEntry = {
       ...current,
       sessionId: sessionId ?? current.sessionId ?? crypto.randomUUID(),
@@ -212,10 +238,10 @@ export async function ensureSkillSnapshot(params: {
     (nextEntry?.skillsSnapshot !== existingSnapshot || !shouldRefreshSnapshot);
   const skillsSnapshot =
     hasFreshSnapshotInEntry && nextEntry?.skillsSnapshot
-      ? hydrateResolvedSkills(nextEntry.skillsSnapshot, buildSnapshot)
+      ? hydrateResolvedSkills(nextEntry.skillsSnapshot, _cachedRebuild)
       : shouldRefreshSnapshot || !nextEntry?.skillsSnapshot
-        ? buildSnapshot()
-        : hydrateResolvedSkills(nextEntry.skillsSnapshot, buildSnapshot);
+        ? _buildAndCache()
+        : hydrateResolvedSkills(nextEntry.skillsSnapshot, _cachedRebuild);
   if (
     skillsSnapshot &&
     sessionStore &&

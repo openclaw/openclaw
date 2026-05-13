@@ -151,4 +151,20 @@ describe("ensureSkillsWatcher", () => {
       ]);
     },
   );
+
+  it("reuses existing watcher on subsequent calls with same workspaceDir", () => {
+    refreshModule.ensureSkillsWatcher({ workspaceDir: "/tmp/workspace" });
+    expect(watchMock).toHaveBeenCalledTimes(1);
+
+    refreshModule.ensureSkillsWatcher({ workspaceDir: "/tmp/workspace" });
+    expect(watchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("creates separate watchers for different workspaces", () => {
+    refreshModule.ensureSkillsWatcher({ workspaceDir: "/tmp/workspace" });
+    expect(watchMock).toHaveBeenCalledTimes(1);
+
+    refreshModule.ensureSkillsWatcher({ workspaceDir: "/tmp/other" });
+    expect(watchMock).toHaveBeenCalledTimes(2);
+  });
 });
