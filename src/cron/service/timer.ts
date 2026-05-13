@@ -12,7 +12,7 @@ import {
   createRunningTaskRun,
   failTaskRunByRunId,
 } from "../../tasks/detached-task-runtime.js";
-import { clearCronJobActive, markCronJobActive } from "../active-jobs.js";
+import { clearCronJobActive, isCronJobActive, markCronJobActive } from "../active-jobs.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import {
   createCronRunDiagnosticsFromError,
@@ -1170,6 +1170,9 @@ function isRunnableJob(params: {
     return false;
   }
   if (typeof job.state.runningAtMs === "number") {
+    return false;
+  }
+  if (isCronJobActive(job.id)) {
     return false;
   }
   if (params.skipAtIfAlreadyRan && job.schedule.kind === "at" && job.state.lastStatus) {
