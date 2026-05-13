@@ -18,7 +18,7 @@ const validateConfigObjectWithPluginsMock = vi.hoisted(() =>
     issues: [],
   })),
 );
-const replaceConfigFileMock = vi.hoisted(() => vi.fn(async () => undefined));
+const replaceConfigFileMock = vi.hoisted(() => vi.fn(async (_params: unknown) => undefined));
 const getConfigOverridesMock = vi.hoisted(() => vi.fn(() => ({})));
 const getConfigValueAtPathMock = vi.hoisted(() => vi.fn());
 const parseConfigPathMock = vi.hoisted(() => vi.fn());
@@ -27,6 +27,55 @@ const resolveConfigWriteDeniedTextMock = vi.hoisted(() =>
   vi.fn<(...args: never[]) => string | null>(() => null),
 );
 const isInternalMessageChannelMock = vi.hoisted(() => vi.fn(() => false));
+
+type ConfigSnapshotMock = {
+  path?: string;
+  hash?: string | null;
+  parsed?: OpenClawConfig | null;
+  sourceConfig?: OpenClawConfig;
+  resolved?: OpenClawConfig;
+  runtimeConfig?: OpenClawConfig;
+};
+
+type TransformConfigFileWithRetryMockParams<T = unknown> = {
+  afterWrite?: unknown;
+  transform: (
+    currentConfig: OpenClawConfig,
+    context: { snapshot: ConfigSnapshotMock; previousHash: string | null; attempt: number },
+  ) =>
+    | Promise<{ nextConfig: OpenClawConfig; result?: T }>
+    | { nextConfig: OpenClawConfig; result?: T };
+};
+
+function configFromSnapshot(snapshot: ConfigSnapshotMock): OpenClawConfig {
+  return structuredClone(
+    snapshot.sourceConfig ?? snapshot.resolved ?? snapshot.runtimeConfig ?? snapshot.parsed ?? {},
+  );
+}
+
+async function transformConfigFileWithRetryMock<T = unknown>(
+  params: TransformConfigFileWithRetryMockParams<T>,
+) {
+  const snapshot = (await readConfigFileSnapshotMock()) as ConfigSnapshotMock;
+  const previousHash = snapshot.hash ?? null;
+  const transformed = await params.transform(configFromSnapshot(snapshot), {
+    snapshot,
+    previousHash,
+    attempt: 0,
+  });
+  const afterWrite = params.afterWrite ?? { mode: "auto" };
+  await replaceConfigFileMock({ nextConfig: transformed.nextConfig, afterWrite });
+  return {
+    path: snapshot.path ?? "/tmp/openclaw.json",
+    previousHash,
+    snapshot,
+    nextConfig: transformed.nextConfig,
+    result: transformed.result,
+    attempts: 1,
+    afterWrite,
+    followUp: { action: "none" },
+  };
+}
 
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveSessionAgentId: vi.fn(() => "agent:main"),
@@ -82,6 +131,7 @@ vi.mock("../../config/config.js", () => ({
   readConfigFileSnapshot: readConfigFileSnapshotMock,
   validateConfigObjectWithPlugins: validateConfigObjectWithPluginsMock,
   replaceConfigFile: replaceConfigFileMock,
+  transformConfigFileWithRetry: transformConfigFileWithRetryMock,
 }));
 
 vi.mock("../../config/runtime-overrides.js", () => ({

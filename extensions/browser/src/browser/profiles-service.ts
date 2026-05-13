@@ -171,7 +171,7 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
         draft.browser = {
           ...draft.browser,
           profiles: {
-            ...(draft.browser?.profiles ?? {}),
+            ...draft.browser?.profiles,
             [name]: profileConfig,
           },
         };
