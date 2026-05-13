@@ -4,11 +4,25 @@ const STALE_ACP_SESSION_MESSAGE_RE =
   /(ACP (session )?metadata is missing|missing ACP metadata|Session is not ACP-enabled|Resource not found|working directory does not exist)/i;
 
 export function isAcpStaleSessionError(params: { code: string; message: string }): boolean {
-  if (params.code !== "ACP_SESSION_INIT_FAILED") {
-    return false;
+  return (
+    params.code === "ACP_SESSION_INIT_FAILED" && STALE_ACP_SESSION_MESSAGE_RE.test(params.message)
+  );
+}
+
+export async function unbindStaleAcpSessionBindings(params: {
+  targetSessionKey: string;
+  unbind: (input: {
+    targetSessionKey: string;
+    reason: typeof ACP_STALE_BINDING_UNBIND_REASON;
+  }) => Promise<unknown[]>;
+}): Promise<{ ok: true; removedCount: number } | { ok: false; error: unknown }> {
+  try {
+    const removed = await params.unbind({
+      targetSessionKey: params.targetSessionKey,
+      reason: ACP_STALE_BINDING_UNBIND_REASON,
+    });
+    return { ok: true, removedCount: removed.length };
+  } catch (error) {
+    return { ok: false, error };
   }
-  if (!STALE_ACP_SESSION_MESSAGE_RE.test(params.message)) {
-    return false;
-  }
-  return true;
 }

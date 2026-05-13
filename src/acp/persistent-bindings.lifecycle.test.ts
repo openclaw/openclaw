@@ -201,6 +201,8 @@ describe("ensureConfiguredAcpBindingSession", () => {
     const initializeArgs = expectInitializeArgs();
     expect(initializeArgs.agent).toBe("codex");
   });
+});
+
 describe("resetAcpSessionInPlace", () => {
   it("clears configured bindings and lets the next turn recreate them", async () => {
     const spec = {
@@ -324,6 +326,39 @@ describe("resetAcpSessionInPlace", () => {
     managerMocks.closeSession.mockRejectedValueOnce(
       new Error("ACP runtime working directory does not exist: /tmp/opik-runtime-pr2"),
     );
+
+    const result = await resetAcpSessionInPlace({
+      cfg: baseCfg,
+      sessionKey,
+      reason: "new",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      skipped: true,
+      error: "ACP runtime working directory does not exist: /tmp/opik-runtime-pr2",
+    });
+    expect(bindingServiceMocks.unbind).toHaveBeenCalledWith({
+      targetSessionKey: sessionKey,
+      reason: "acp-session-init-failed",
+    });
+  });
+
+  it("unbinds stale bindings when close returns a missing-cwd runtime notice", async () => {
+    const sessionKey = "agent:claude:acp:binding:demo-binding:default:stale";
+    sessionMetaMocks.readAcpSessionEntry.mockReturnValue({
+      acp: {
+        agent: "claude",
+        mode: "persistent",
+        backend: "acpx",
+        runtimeOptions: { cwd: "/tmp/opik-runtime-pr2" },
+      },
+    });
+    managerMocks.closeSession.mockResolvedValueOnce({
+      runtimeClosed: false,
+      metaCleared: false,
+      runtimeNotice: "ACP runtime working directory does not exist: /tmp/opik-runtime-pr2",
+    });
 
     const result = await resetAcpSessionInPlace({
       cfg: baseCfg,

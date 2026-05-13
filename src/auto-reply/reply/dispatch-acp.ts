@@ -7,8 +7,8 @@ import {
   resolveSessionIdentityFromMeta,
 } from "../../acp/runtime/session-identity.js";
 import {
-  ACP_STALE_BINDING_UNBIND_REASON,
   isAcpStaleSessionError,
+  unbindStaleAcpSessionBindings,
 } from "../../acp/runtime/stale-session.js";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -179,18 +179,24 @@ async function maybeUnbindStaleBoundConversations(params: {
   }
   try {
     const { getSessionBindingService } = await loadDispatchAcpManagerRuntime();
-    const removed = await getSessionBindingService().unbind({
+    const result = await unbindStaleAcpSessionBindings({
       targetSessionKey: params.targetSessionKey,
-      reason: ACP_STALE_BINDING_UNBIND_REASON,
+      unbind: (input) => getSessionBindingService().unbind(input),
     });
-    if (removed.length > 0) {
+    if (result.ok && result.removedCount > 0) {
       logVerbose(
-        `dispatch-acp: removed ${removed.length} stale bound conversation(s) for ${params.targetSessionKey} after ${params.error.code}: ${params.error.message}`,
+        `dispatch-acp: removed ${result.removedCount} stale bound conversation(s) for ${params.targetSessionKey} after ${params.error.code}: ${params.error.message}`,
       );
     }
+    if (result.ok) {
+      return;
+    }
+    logVerbose(
+      `dispatch-acp: failed to unbind stale bound conversations for ${params.targetSessionKey}: ${formatErrorMessage(result.error)}`,
+    );
   } catch (error) {
     logVerbose(
-      `dispatch-acp: failed to unbind stale bound conversations for ${params.targetSessionKey}: ${formatErrorMessage(error)}`,
+      `dispatch-acp: failed to load stale binding cleanup for ${params.targetSessionKey}: ${formatErrorMessage(error)}`,
     );
   }
 }

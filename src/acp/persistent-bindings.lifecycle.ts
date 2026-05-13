@@ -15,8 +15,8 @@ import {
 import { toAcpRuntimeError } from "./runtime/errors.js";
 import { readAcpSessionEntry } from "./runtime/session-meta.js";
 import {
-  ACP_STALE_BINDING_UNBIND_REASON,
   isAcpStaleSessionError,
+  unbindStaleAcpSessionBindings as unbindStaleAcpSessionBindingRecords,
 } from "./runtime/stale-session.js";
 
 function sessionMatchesConfiguredBinding(params: {
@@ -141,6 +141,25 @@ export async function ensureConfiguredAcpBindingReady(params: {
   };
 }
 
+async function cleanupStaleAcpSessionBindings(params: {
+  sessionKey: string;
+  message: string;
+}): Promise<void> {
+  const result = await unbindStaleAcpSessionBindingRecords({
+    targetSessionKey: params.sessionKey,
+    unbind: (input) => getSessionBindingService().unbind(input),
+  });
+  if (result.ok) {
+    logVerbose(
+      `acp-configured-binding: removed ${result.removedCount} stale binding(s) for ${params.sessionKey} after reset failure: ${params.message}`,
+    );
+    return;
+  }
+  logVerbose(
+    `acp-configured-binding: failed to unbind stale bindings for ${params.sessionKey}: ${formatErrorMessage(result.error)}`,
+  );
+}
+
 export async function resetAcpSessionInPlace(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -177,7 +196,7 @@ export async function resetAcpSessionInPlace(params: {
   const acpManager = getAcpSessionManager();
 
   try {
-    await acpManager.closeSession({
+    const closeResult = await acpManager.closeSession({
       cfg: params.cfg,
       sessionKey,
       reason: `${params.reason}-in-place-reset`,
@@ -186,6 +205,22 @@ export async function resetAcpSessionInPlace(params: {
       allowBackendUnavailable: true,
       requireAcpSession: false,
     });
+    const runtimeNotice =
+      typeof closeResult.runtimeNotice === "string" ? closeResult.runtimeNotice : "";
+    if (
+      runtimeNotice &&
+      isAcpStaleSessionError({ code: "ACP_SESSION_INIT_FAILED", message: runtimeNotice })
+    ) {
+      await cleanupStaleAcpSessionBindings({
+        sessionKey,
+        message: runtimeNotice,
+      });
+      return {
+        ok: false,
+        skipped: true,
+        error: runtimeNotice,
+      };
+    }
 
     return { ok: true };
   } catch (error) {
@@ -196,19 +231,7 @@ export async function resetAcpSessionInPlace(params: {
     });
     const message = acpError.message;
     if (isAcpStaleSessionError({ code: acpError.code, message })) {
-      try {
-        const removedBindings = await getSessionBindingService().unbind({
-          targetSessionKey: sessionKey,
-          reason: ACP_STALE_BINDING_UNBIND_REASON,
-        });
-        logVerbose(
-          `acp-configured-binding: removed ${removedBindings.length} stale binding(s) for ${sessionKey} after reset failure: ${message}`,
-        );
-      } catch (unbindError) {
-        logVerbose(
-          `acp-configured-binding: failed to unbind stale bindings for ${sessionKey}: ${formatErrorMessage(unbindError)}`,
-        );
-      }
+      await cleanupStaleAcpSessionBindings({ sessionKey, message });
       return {
         ok: false,
         skipped: true,
