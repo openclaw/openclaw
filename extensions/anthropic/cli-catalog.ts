@@ -1,5 +1,4 @@
-import type { ModelCatalogEntry } from "openclaw/plugin-sdk/model-catalog-runtime";
-
+import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
 import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS } from "./cli-constants.js";
 
 // Claude CLI is externally maintained — the Claude binary owns which models it
