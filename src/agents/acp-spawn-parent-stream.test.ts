@@ -531,7 +531,9 @@ describe("startAcpSpawnParentStreamRelay", () => {
       });
 
       // 4 hops: queueMicrotask → .then callback → await mkdir → await appendRegularFile
-      for (let i = 0; i < 5; i++) await Promise.resolve();
+      for (let i = 0; i < 5; i++) {
+        await Promise.resolve();
+      }
 
       // Guard: appendRegularFile must be in-flight before we test drain ordering.
       expect(appendRegularFileMock).toHaveBeenCalledOnce();
