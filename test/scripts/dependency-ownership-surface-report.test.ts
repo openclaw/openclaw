@@ -138,6 +138,8 @@ snapshots:
     expect(markdown).toContain("## Root Dependencies By Resolved Transitive Package Count");
     expect(markdown).toContain("`core-lib`: 3 resolved transitive packages");
     expect(markdown).toContain("## Workspace Packages With The Most Dependencies");
+    expect(markdown).toContain("3 direct dependencies");
+    expect(markdown).not.toContain("dependencys");
     expect(markdown).toContain("## Packages With Install-Time Or Platform-Specific Behavior");
     expect(markdown).toContain("`transitive-native@1.0.0`: requires build");
     expect(markdown).not.toContain("# Dependency Risk Report");

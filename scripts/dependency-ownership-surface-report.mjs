@@ -354,7 +354,7 @@ export function renderDependencyOwnershipSurfaceMarkdownReport(report) {
   for (const importer of report.importerClosures) {
     lines.push(
       `- ${markdownCode(importer.importer)}: ${pluralize(importer.closureSize, "package")}; ` +
-        `${pluralize(importer.directDependencyCount, "direct dependency")}`,
+        `${pluralize(importer.directDependencyCount, "direct dependency", "direct dependencies")}`,
     );
   }
 
