@@ -797,6 +797,7 @@ describe("exec approval handlers", () => {
     respond: ReturnType<typeof vi.fn>;
     context: { broadcast: (event: string, payload: unknown) => void };
     params?: Record<string, unknown>;
+    client?: ExecApprovalRequestArgs["client"];
   }) {
     const requestParams = {
       ...defaultExecApprovalRequestParams,
@@ -840,7 +841,7 @@ describe("exec approval handlers", () => {
         hasExecApprovalClients: () => true,
         ...params.context,
       }),
-      client: null,
+      client: params.client ?? null,
       req: { id: "req-1", type: "req", method: "exec.approval.request" },
       isWebchatConnect: execApprovalNoop,
     });
@@ -2052,6 +2053,57 @@ describe("exec approval handlers", () => {
 
     manager.resolve("approval-ios-push", "allow-once");
     await requestPromise;
+  });
+
+  it("does not count iOS push delivery to hidden approval targets as a route", async () => {
+    const iosPushDelivery = {
+      handleRequested: vi.fn(
+        async (
+          _request: unknown,
+          opts?: {
+            isTargetVisible?: (target: { deviceId: string; scopes: readonly string[] }) => boolean;
+          },
+        ) =>
+          opts?.isTargetVisible?.({
+            deviceId: "device-other",
+            scopes: ["operator.approvals"],
+          }) ?? true,
+      ),
+      handleResolved: vi.fn(async () => {}),
+      handleExpired: vi.fn(async () => {}),
+    };
+    const { manager, handlers, respond, context } = createForwardingExecApprovalFixture({
+      iosPushDelivery,
+    });
+    const expireSpy = vi.spyOn(manager, "expire");
+
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      client: {
+        connId: "conn-owner",
+        connect: {
+          client: { id: "client-owner" },
+          device: { id: "device-owner" },
+          scopes: ["operator.approvals"],
+        },
+      } as ExecApprovalRequestArgs["client"],
+      params: {
+        timeoutMs: 60_000,
+        id: "approval-ios-hidden-push",
+        host: "gateway",
+      },
+    });
+
+    expect(iosPushDelivery.handleRequested).toHaveBeenCalledTimes(1);
+    expect(expireSpy).toHaveBeenCalledWith("approval-ios-hidden-push", "no-approval-route");
+    expect(lastMockCallArg(respond)).toBe(true);
+    expectRecordFields(lastMockCallArg(respond, 1), {
+      id: "approval-ios-hidden-push",
+      decision: null,
+    });
+    expect(lastMockCallArg(respond, 2)).toBeUndefined();
   });
 
   it("sends iOS cleanup delivery on resolve", async () => {

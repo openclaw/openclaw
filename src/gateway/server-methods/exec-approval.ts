@@ -22,6 +22,7 @@ import {
 import { resolveSystemRunApprovalRequestContext } from "../../infra/system-run-approval-context.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
+import { GATEWAY_CLIENT_IDS } from "../protocol/client-info.js";
 import {
   ErrorCodes,
   errorShape,
@@ -39,7 +40,7 @@ import {
   respondPendingApprovalLookupError,
   resolvePendingApprovalRecord,
 } from "./approval-shared.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayClient, GatewayRequestHandlers } from "./types.js";
 
 const APPROVAL_ALLOW_ALWAYS_UNAVAILABLE_DETAILS = {
   reason: "APPROVAL_ALLOW_ALWAYS_UNAVAILABLE",
@@ -47,7 +48,12 @@ const APPROVAL_ALLOW_ALWAYS_UNAVAILABLE_DETAILS = {
 const RESERVED_PLUGIN_APPROVAL_ID_PREFIX = "plugin:";
 
 type ExecApprovalIosPushDelivery = {
-  handleRequested?: (request: ExecApprovalRequest) => Promise<boolean>;
+  handleRequested?: (
+    request: ExecApprovalRequest,
+    opts?: {
+      isTargetVisible?: (target: { deviceId: string; scopes: readonly string[] }) => boolean;
+    },
+  ) => Promise<boolean>;
   handleResolved?: (resolved: ExecApprovalResolved) => Promise<void>;
   handleExpired?: (request: ExecApprovalRequest) => Promise<void>;
 };
@@ -375,12 +381,26 @@ export function createExecApprovalHandlers(
           }
           if (opts?.iosPushDelivery?.handleRequested) {
             deliveryTasks.push(
-              opts.iosPushDelivery.handleRequested(requestEvent).catch((err) => {
-                context.logGateway?.error?.(
-                  `exec approvals: iOS push request failed: ${String(err)}`,
-                );
-                return false;
-              }),
+              opts.iosPushDelivery
+                .handleRequested(requestEvent, {
+                  isTargetVisible: (target) =>
+                    isApprovalRecordVisibleToClient({
+                      record,
+                      client: {
+                        connect: {
+                          client: { id: GATEWAY_CLIENT_IDS.IOS_APP },
+                          device: { id: target.deviceId },
+                          scopes: [...target.scopes],
+                        },
+                      } as GatewayClient,
+                    }),
+                })
+                .catch((err) => {
+                  context.logGateway?.error?.(
+                    `exec approvals: iOS push request failed: ${String(err)}`,
+                  );
+                  return false;
+                }),
             );
           }
           if (deliveryTasks.length === 0) {
