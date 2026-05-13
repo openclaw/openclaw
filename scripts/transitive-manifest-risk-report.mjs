@@ -538,12 +538,12 @@ export function renderTransitiveManifestRiskMarkdownReport(report) {
     renderPackageFindingSummary(lines, rollups.packageFindings);
     renderFloatingDependencyTargets(lines, rollups.floatingTargets);
     renderLifecycleScriptPackages(lines, rollups.lifecyclePackages);
+    renderExoticSources(lines, rollups.exoticSources);
     renderRecentlyPublishedVersions(
       lines,
       rollups.recentlyPublishedVersions,
       "Recently Published Versions Not Covered By Workspace Exclusions",
     );
-    renderExoticSources(lines, rollups.exoticSources);
   }
 
   renderRecentlyPublishedVersions(
