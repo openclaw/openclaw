@@ -117,7 +117,9 @@ export function resolveSessionKeyForRun(runId: string, opts: { agentId?: string 
   const storeKey = resolvePreferredSessionKeyForSessionIdMatches(matches, runId);
   if (storeKey) {
     const sessionKey = resolveRunSessionKeyForCaller(cfg, storeKey, requestedAgentId);
-    registerAgentRunContext(runId, { sessionKey: storeKey });
+    if (!cached) {
+      registerAgentRunContext(runId, { sessionKey: storeKey });
+    }
     setResolvedSessionKeyCache(runId, cacheAgentId, sessionKey);
     return sessionKey;
   }

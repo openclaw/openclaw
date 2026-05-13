@@ -116,6 +116,25 @@ describe("resolveSessionKeyForRun", () => {
     });
   });
 
+  it("does not overwrite active run context when a scoped lookup finds another agent store entry", () => {
+    hoisted.loadConfigMock.mockReturnValue({});
+    registerAgentRunContext("run-1", { sessionKey: "agent:retired:acp:run-1" });
+    hoisted.loadCombinedSessionStoreForGatewayMock.mockImplementation(
+      (_cfg: OpenClawConfig, opts?: { agentId?: string }) => ({
+        storePath: "(multiple)",
+        store:
+          opts?.agentId === "main"
+            ? {
+                "agent:main:acp:run-1": { sessionId: "run-1", updatedAt: 123 },
+              }
+            : {},
+      }),
+    );
+
+    expect(resolveSessionKeyForRun("run-1", { agentId: "main" })).toBe("acp:run-1");
+    expect(resolveSessionKeyForRun("run-1")).toBe("agent:retired:acp:run-1");
+  });
+
   it("keeps run lookup cache entries scoped by agent", () => {
     hoisted.loadConfigMock.mockReturnValue({});
     hoisted.loadCombinedSessionStoreForGatewayMock.mockImplementation(
