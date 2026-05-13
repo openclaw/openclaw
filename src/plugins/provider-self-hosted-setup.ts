@@ -1,5 +1,6 @@
 import type { ApiKeyCredential, AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { upsertAuthProfileWithLock } from "../agents/auth-profiles/upsert-with-lock.js";
+import { findNormalizedProviderValue, normalizeProviderId } from "../agents/provider-id.js";
 import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_COST,
@@ -395,21 +396,41 @@ export async function discoverOpenAICompatibleSelfHostedProvider<
 >(params: {
   ctx: ProviderDiscoveryContext;
   providerId: string;
-  buildProvider: (params: { apiKey?: string }) => Promise<T>;
+  buildProvider: (params: { apiKey?: string; baseUrl?: string }) => Promise<T>;
 }): Promise<{ provider: T & { apiKey: string } } | null> {
-  if (params.ctx.config.models?.providers?.[params.providerId]) {
+  const configuredProvider = findNormalizedProviderValue(
+    params.ctx.config.models?.providers,
+    params.providerId,
+  );
+  if (configuredProvider && !hasProviderWildcardVisibility(params.ctx.config, params.providerId)) {
     return null;
   }
   const { apiKey, discoveryApiKey } = params.ctx.resolveProviderApiKey(params.providerId);
   if (!apiKey) {
     return null;
   }
+  const discoveredProvider = await params.buildProvider({
+    apiKey: discoveryApiKey,
+    baseUrl: configuredProvider?.baseUrl,
+  });
   return {
     provider: {
-      ...(await params.buildProvider({ apiKey: discoveryApiKey })),
+      ...configuredProvider,
+      ...discoveredProvider,
       apiKey,
     },
   };
+}
+
+function hasProviderWildcardVisibility(cfg: OpenClawConfig, providerId: string): boolean {
+  const normalizedProviderId = normalizeProviderId(providerId);
+  return Object.keys(cfg.agents?.defaults?.models ?? {}).some((key) => {
+    const trimmedKey = key.trim();
+    if (!trimmedKey.endsWith("/*")) {
+      return false;
+    }
+    return normalizeProviderId(trimmedKey.slice(0, -2)) === normalizedProviderId;
+  });
 }
 
 function buildMissingNonInteractiveModelIdMessage(params: {

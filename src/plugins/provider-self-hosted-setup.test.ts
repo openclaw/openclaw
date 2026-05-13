@@ -2,8 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   configureOpenAICompatibleSelfHostedProviderNonInteractive,
   discoverOpenAICompatibleLocalModels,
+  discoverOpenAICompatibleSelfHostedProvider,
 } from "./provider-self-hosted-setup.js";
-import type { ProviderAuthMethodNonInteractiveContext } from "./types.js";
+import type { ProviderAuthMethodNonInteractiveContext, ProviderDiscoveryContext } from "./types.js";
 
 const { fetchWithSsrFGuardMock, upsertAuthProfileWithLock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -61,6 +62,38 @@ function createContext(params: {
         key: apiKeyResult.key,
       }),
     ),
+  };
+}
+
+function createDiscoveryContext(
+  params: Partial<ProviderDiscoveryContext> = {},
+): ProviderDiscoveryContext {
+  return {
+    config: { agents: { defaults: {} } },
+    env: {},
+    resolveProviderApiKey: vi.fn(() => ({
+      apiKey: "runtime-vllm-key",
+      discoveryApiKey: "discovery-vllm-key",
+    })),
+    resolveProviderAuth: vi.fn(() => ({
+      apiKey: "runtime-vllm-key",
+      discoveryApiKey: "discovery-vllm-key",
+      mode: "api_key" as const,
+      source: "env" as const,
+    })),
+    ...params,
+  };
+}
+
+function modelConfig(id: string) {
+  return {
+    id,
+    name: id,
+    reasoning: false,
+    input: ["text" as const],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128000,
+    maxTokens: 8192,
   };
 }
 
@@ -393,6 +426,126 @@ describe("discoverOpenAICompatibleLocalModels", () => {
       timeoutMs: 5000,
     });
     expect(release).toHaveBeenCalledOnce();
+  });
+});
+
+describe("discoverOpenAICompatibleSelfHostedProvider", () => {
+  it("keeps explicit provider config manual-only without provider wildcard visibility", async () => {
+    const buildProvider = vi.fn(async () => ({
+      baseUrl: "http://127.0.0.1:8000/v1",
+      api: "openai-completions",
+      models: [{ id: "Qwen/Qwen3-32B", name: "Qwen/Qwen3-32B" }],
+    }));
+    const ctx = createDiscoveryContext({
+      config: {
+        agents: {
+          defaults: {
+            models: { "vllm/Qwen/Qwen3-32B": {} },
+          },
+        },
+        models: {
+          providers: {
+            vllm: {
+              baseUrl: "http://configured-vllm.example/v1",
+              api: "openai-completions",
+              models: [modelConfig("manual-model")],
+            },
+          },
+        },
+      },
+    });
+
+    const result = await discoverOpenAICompatibleSelfHostedProvider({
+      ctx,
+      providerId: "vllm",
+      buildProvider,
+    });
+
+    expect(result).toBeNull();
+    expect(buildProvider).not.toHaveBeenCalled();
+    expect(ctx.resolveProviderApiKey).not.toHaveBeenCalled();
+  });
+
+  it("discovers through explicit provider baseUrl when provider wildcard visibility is configured", async () => {
+    const buildProvider = vi.fn(async (params: { apiKey?: string; baseUrl?: string }) => ({
+      baseUrl: params.baseUrl ?? "http://default-vllm.example/v1",
+      api: "openai-completions",
+      models: [{ id: "Qwen/Qwen3-32B", name: "Qwen/Qwen3-32B" }],
+    }));
+    const ctx = createDiscoveryContext({
+      config: {
+        agents: {
+          defaults: {
+            models: { "vllm/*": {} },
+          },
+        },
+        models: {
+          providers: {
+            vllm: {
+              baseUrl: "http://configured-vllm.example/v1",
+              api: "openai-completions",
+              request: { allowPrivateNetwork: true },
+              models: [],
+            },
+          },
+        },
+      },
+    });
+
+    const result = await discoverOpenAICompatibleSelfHostedProvider({
+      ctx,
+      providerId: "vllm",
+      buildProvider,
+    });
+
+    expect(buildProvider).toHaveBeenCalledWith({
+      apiKey: "discovery-vllm-key",
+      baseUrl: "http://configured-vllm.example/v1",
+    });
+    expect(result).toEqual({
+      provider: {
+        baseUrl: "http://configured-vllm.example/v1",
+        api: "openai-completions",
+        request: { allowPrivateNetwork: true },
+        models: [{ id: "Qwen/Qwen3-32B", name: "Qwen/Qwen3-32B" }],
+        apiKey: "runtime-vllm-key",
+      },
+    });
+  });
+
+  it("matches provider wildcard visibility through normalized provider ids", async () => {
+    const buildProvider = vi.fn(async () => ({
+      baseUrl: "http://configured-zai.example/v1",
+      api: "openai-completions",
+      models: [{ id: "zai-model", name: "Z.ai model" }],
+    }));
+    const ctx = createDiscoveryContext({
+      config: {
+        agents: {
+          defaults: {
+            models: { "z.ai/*": {} },
+          },
+        },
+        models: {
+          providers: {
+            zai: {
+              baseUrl: "http://configured-zai.example/v1",
+              api: "openai-completions",
+              models: [],
+            },
+          },
+        },
+      },
+    });
+
+    const result = await discoverOpenAICompatibleSelfHostedProvider({
+      ctx,
+      providerId: "zai",
+      buildProvider,
+    });
+
+    expect(result?.provider.models).toEqual([{ id: "zai-model", name: "Z.ai model" }]);
+    expect(buildProvider).toHaveBeenCalledOnce();
   });
 });
 
