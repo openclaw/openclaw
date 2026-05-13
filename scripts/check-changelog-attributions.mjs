@@ -5,7 +5,6 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const FORBIDDEN_CHANGELOG_THANKS_EXACT_HANDLES = [
-  "",
   "null",
   "codex",
   "openclaw",
@@ -16,7 +15,6 @@ export const FORBIDDEN_CHANGELOG_THANKS_EXACT_HANDLES = [
   "openclaw-clawsweeper[bot]",
 ];
 export const FORBIDDEN_CHANGELOG_THANKS_HANDLE_PREFIXES = ["app/"];
-export const FORBIDDEN_CHANGELOG_THANKS_HANDLE_SUBSTRINGS = ["clawsweeper"];
 
 const THANKS_PATTERN = /\bThanks\b/iu;
 const THANKED_HANDLE_PATTERN = /@([-_/A-Za-z0-9]+(?:\[bot\])?)/giu;
@@ -24,6 +22,9 @@ const THANKED_HANDLE_PATTERN = /@([-_/A-Za-z0-9]+(?:\[bot\])?)/giu;
 export function isForbiddenChangelogThanksHandle(handle, options = {}) {
   const { strictBotHandle = false } = options;
   const normalized = handle.toLowerCase();
+  if (normalized === "") {
+    return true;
+  }
   if (
     FORBIDDEN_CHANGELOG_THANKS_EXACT_HANDLES.includes(normalized) ||
     FORBIDDEN_CHANGELOG_THANKS_HANDLE_PREFIXES.some((prefix) => normalized.startsWith(prefix))
@@ -33,9 +34,7 @@ export function isForbiddenChangelogThanksHandle(handle, options = {}) {
   if (strictBotHandle) {
     return false;
   }
-  return FORBIDDEN_CHANGELOG_THANKS_HANDLE_SUBSTRINGS.some((substring) =>
-    normalized.includes(substring),
-  );
+  return false;
 }
 
 export function findForbiddenChangelogThanks(content) {

@@ -108,7 +108,7 @@ describe("check-changelog-attributions", () => {
     expect(isForbiddenChangelogThanksHandle("openclaw-clawsweeper")).toBe(true);
     expect(isForbiddenChangelogThanksHandle("openclaw-clawsweeper[bot]")).toBe(true);
     expect(isForbiddenChangelogThanksHandle("Ziy1-Tan")).toBe(false);
-    expect(isForbiddenChangelogThanksHandle("human-clawsweeper-fan")).toBe(true);
+    expect(isForbiddenChangelogThanksHandle("human-clawsweeper-fan")).toBe(false);
     expect(
       isForbiddenChangelogThanksHandle("human-clawsweeper-fan", { strictBotHandle: true }),
     ).toBe(false);
