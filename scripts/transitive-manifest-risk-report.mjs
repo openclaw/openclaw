@@ -9,7 +9,6 @@ import {
   createBulkAdvisoryPayload,
 } from "./pre-commit/pnpm-audit-prod.mjs";
 
-const DEFAULT_EXCEPTIONS_PATH = "config/dependency-risk-exceptions.yaml";
 const INSTALL_LIFECYCLE_SCRIPTS = ["preinstall", "install", "postinstall", "prepare"];
 const EXACT_SEMVER_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
 const EXACT_NPM_ALIAS_PATTERN =
@@ -132,111 +131,6 @@ function findMinimumReleaseAgeExcludeSelector(selectors, packageName, version) {
   );
 }
 
-function validateException(exception, index) {
-  const errors = [];
-  const prefix = `exceptions[${index}]`;
-  if (!exception || typeof exception !== "object") {
-    return [`${prefix} must be an object.`];
-  }
-  if (typeof exception.reason !== "string" || exception.reason.trim() === "") {
-    errors.push(`${prefix}.reason must be a non-empty string.`);
-  }
-  if (!exception.match || typeof exception.match !== "object") {
-    errors.push(`${prefix}.match must be an object.`);
-    return errors;
-  }
-  if (typeof exception.match.package !== "string" || exception.match.package.trim() === "") {
-    errors.push(`${prefix}.match.package must be a non-empty string.`);
-  }
-  const hasDependency =
-    exception.match.dependency && typeof exception.match.dependency === "object";
-  const hasDiscriminator =
-    typeof exception.match.version === "string" ||
-    typeof exception.match.script === "string" ||
-    typeof exception.match.source === "string" ||
-    hasDependency;
-  if (!hasDiscriminator) {
-    errors.push(`${prefix}.match must include at least one precise discriminator besides package.`);
-  }
-  if (hasDependency) {
-    if (
-      typeof exception.match.dependency.name !== "string" ||
-      exception.match.dependency.name.trim() === ""
-    ) {
-      errors.push(`${prefix}.match.dependency.name must be a non-empty string.`);
-    }
-  }
-  return errors;
-}
-
-export function parseKnownRiskExceptions(text) {
-  const parsed = YAML.parse(text) ?? {};
-  const exceptions = Array.isArray(parsed.exceptions) ? parsed.exceptions : [];
-  const errors = exceptions.flatMap((exception, index) => validateException(exception, index));
-  return { exceptions, errors };
-}
-
-async function loadKnownRiskExceptions(rootDir, exceptionsPath) {
-  try {
-    return parseKnownRiskExceptions(await readFile(path.join(rootDir, exceptionsPath), "utf8"));
-  } catch (error) {
-    if (error?.code === "ENOENT") {
-      return { exceptions: [], errors: [] };
-    }
-    throw error;
-  }
-}
-
-function matchesException(finding, exception) {
-  const match = exception.match;
-  if (match.package !== finding.packageName) {
-    return false;
-  }
-  if (typeof match.version === "string" && match.version !== finding.version) {
-    return false;
-  }
-  if (typeof match.script === "string" && match.script !== finding.script) {
-    return false;
-  }
-  if (typeof match.source === "string" && match.source !== finding.source) {
-    return false;
-  }
-  if (match.dependency) {
-    if (finding.dependency?.name !== match.dependency.name) {
-      return false;
-    }
-    if (
-      typeof match.dependency.spec === "string" &&
-      finding.dependency?.spec !== match.dependency.spec
-    ) {
-      return false;
-    }
-  }
-  return true;
-}
-
-function annotateKnownFindings(findings, exceptions) {
-  const usedExceptionIndexes = new Set();
-  const annotated = findings.map((finding) => {
-    const exceptionIndex = exceptions.findIndex((exception) =>
-      matchesException(finding, exception),
-    );
-    if (exceptionIndex === -1) {
-      return { ...finding, known: false, reason: null };
-    }
-    usedExceptionIndexes.add(exceptionIndex);
-    return {
-      ...finding,
-      known: true,
-      reason: exceptions[exceptionIndex].reason,
-    };
-  });
-  const unusedExceptions = exceptions
-    .map((exception, index) => ({ exception, index }))
-    .filter(({ index }) => !usedExceptionIndexes.has(index));
-  return { findings: annotated, unusedExceptions };
-}
-
 function collectManifestFindings({
   packageName,
   version,
@@ -327,7 +221,6 @@ async function fetchNpmManifest({ packageName, version, fetchImpl, registryBaseU
 
 export async function createTransitiveManifestRiskReport({
   packageVersions,
-  exceptions = [],
   manifestLoader,
   now = new Date(),
   minimumReleaseAgeMinutes = null,
@@ -367,24 +260,24 @@ export async function createTransitiveManifestRiskReport({
       });
     }
   }
-  const annotated = annotateKnownFindings(findings, exceptions);
-  const byType = annotated.findings.reduce((counts, finding) => {
-    counts[finding.type] = (counts[finding.type] ?? 0) + 1;
-    return counts;
-  }, {});
-  const knownByType = annotated.findings.reduce((counts, finding) => {
-    if (finding.known) {
-      counts[finding.type] = (counts[finding.type] ?? 0) + 1;
+  const sortedFindings = findings.toSorted((left, right) => {
+    if (left.type !== right.type) {
+      return left.type.localeCompare(right.type);
     }
+    if (left.packageName !== right.packageName) {
+      return left.packageName.localeCompare(right.packageName);
+    }
+    return left.version.localeCompare(right.version);
+  });
+  const byType = sortedFindings.reduce((counts, finding) => {
+    counts[finding.type] = (counts[finding.type] ?? 0) + 1;
     return counts;
   }, {});
   return {
     generatedAt: now.toISOString(),
     packageVersions: packageVersions.length,
-    findingCount: annotated.findings.length,
-    knownFindingCount: annotated.findings.filter((finding) => finding.known).length,
+    findingCount: sortedFindings.length,
     byType,
-    knownByType,
     workspacePolicy: {
       minimumReleaseAgeMinutes,
       minimumReleaseAgeExclude,
@@ -404,16 +297,7 @@ export async function createTransitiveManifestRiskReport({
       return left.version.localeCompare(right.version);
     }),
     metadataFailures,
-    unusedExceptions: annotated.unusedExceptions,
-    findings: annotated.findings.toSorted((left, right) => {
-      if (left.type !== right.type) {
-        return left.type.localeCompare(right.type);
-      }
-      if (left.packageName !== right.packageName) {
-        return left.packageName.localeCompare(right.packageName);
-      }
-      return left.version.localeCompare(right.version);
-    }),
+    findings: sortedFindings,
   };
 }
 
@@ -505,15 +389,8 @@ function collectMarkdownRollups(findings) {
 function renderCompleteEvidence(lines) {
   lines.push("## Complete Evidence", "");
   lines.push(
-    "The complete actionable finding list is available in the JSON report, including every package, version, dependency, specifier, and known-risk annotation. Recently published versions covered by pnpm workspace release-age exclusions are listed separately under workspaceExcludedFindings. The sections below summarize the same data by package, dependency target, and finding class for human review.",
+    "The complete actionable finding list is available in the JSON report, including every package, version, dependency, and specifier. Recently published versions covered by pnpm workspace release-age exclusions are listed separately under workspaceExcludedFindings. The sections below summarize the same data by package, dependency target, and finding class for human review.",
   );
-  lines.push("");
-}
-
-function renderKnownExceptionSummary(lines, report) {
-  lines.push("## Known Exception Summary", "");
-  lines.push(`- Known findings: ${report.knownFindingCount}`);
-  lines.push(`- Unused known-risk entries: ${report.unusedExceptions.length}`);
   lines.push("");
 }
 
@@ -622,10 +499,8 @@ export function renderTransitiveManifestRiskMarkdownReport(report) {
     "",
     `- Resolved package versions inspected: ${report.packageVersions}`,
     `- Actionable findings: ${report.findingCount}`,
-    `- Known findings: ${report.knownFindingCount}`,
     `- Signals covered by workspace policy exclusions: ${report.workspaceExcludedFindingCount ?? 0}`,
     `- Metadata failures: ${report.metadataFailures.length}`,
-    `- Unused known-risk entries: ${report.unusedExceptions.length}`,
     "",
     "## Actionable Findings By Type",
     "",
@@ -633,7 +508,7 @@ export function renderTransitiveManifestRiskMarkdownReport(report) {
   for (const [type, count] of Object.entries(report.byType).toSorted(([left], [right]) =>
     left.localeCompare(right),
   )) {
-    lines.push(`- ${type}: ${count} (${report.knownByType[type] ?? 0} known)`);
+    lines.push(`- ${type}: ${count}`);
   }
   lines.push("");
 
@@ -652,7 +527,6 @@ export function renderTransitiveManifestRiskMarkdownReport(report) {
   }
 
   renderCompleteEvidence(lines);
-  renderKnownExceptionSummary(lines, report);
 
   if (report.findings.length > 0) {
     const rollups = collectMarkdownRollups(report.findings);
@@ -690,7 +564,6 @@ const renderMarkdownReport = renderTransitiveManifestRiskMarkdownReport;
 function parseArgs(argv) {
   const options = {
     rootDir: process.cwd(),
-    exceptionsPath: DEFAULT_EXCEPTIONS_PATH,
     jsonPath: null,
     markdownPath: null,
   };
@@ -701,10 +574,6 @@ function parseArgs(argv) {
     }
     if (arg === "--root") {
       options.rootDir = argv[++index];
-      continue;
-    }
-    if (arg === "--exceptions") {
-      options.exceptionsPath = argv[++index];
       continue;
     }
     if (arg === "--json") {
@@ -730,25 +599,15 @@ async function writeArtifact(filePath, content) {
 
 export async function runTransitiveManifestRiskReport({
   rootDir = process.cwd(),
-  exceptionsPath = DEFAULT_EXCEPTIONS_PATH,
   fetchImpl = fetch,
   now = new Date(),
 } = {}) {
   const lockfileText = await readFile(path.join(rootDir, "pnpm-lock.yaml"), "utf8");
   const payload = createBulkAdvisoryPayload(collectAllResolvedPackagesFromLockfile(lockfileText));
   const packageVersions = packageVersionsFromPayload(payload);
-  const [{ exceptions, errors }, settings] = await Promise.all([
-    loadKnownRiskExceptions(rootDir, exceptionsPath),
-    loadWorkspaceRiskSettings(rootDir),
-  ]);
-  if (errors.length > 0) {
-    const error = new Error(`Invalid dependency risk exceptions:\n${errors.join("\n")}`);
-    error.errors = errors;
-    throw error;
-  }
+  const settings = await loadWorkspaceRiskSettings(rootDir);
   return createTransitiveManifestRiskReport({
     packageVersions,
-    exceptions,
     now,
     minimumReleaseAgeMinutes: settings.minimumReleaseAgeMinutes,
     minimumReleaseAgeExclude: settings.minimumReleaseAgeExclude,
@@ -766,7 +625,6 @@ export async function main(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
   const report = await runTransitiveManifestRiskReport({
     rootDir: options.rootDir,
-    exceptionsPath: options.exceptionsPath,
   });
   await writeArtifact(options.jsonPath, `${JSON.stringify(report, null, 2)}\n`);
   await writeArtifact(options.markdownPath, renderMarkdownReport(report));
@@ -774,7 +632,6 @@ export async function main(argv = process.argv.slice(2)) {
   process.stdout.write(
     `INFO transitive manifest risk report: inspected ${report.packageVersions} resolved ` +
       `package manifests; ${report.findingCount} report-only awareness findings, ` +
-      `${report.knownFindingCount} known exceptions, ` +
       `${report.metadataFailures.length} metadata failures; release not blocked.${artifactHint}\n`,
   );
   return 0;

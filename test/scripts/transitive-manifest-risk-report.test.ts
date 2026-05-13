@@ -1,41 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   createTransitiveManifestRiskReport,
-  parseKnownRiskExceptions,
   renderTransitiveManifestRiskMarkdownReport,
 } from "../../scripts/transitive-manifest-risk-report.mjs";
 
 describe("transitive-manifest-risk-report", () => {
-  it("validates known-risk exceptions without requiring process metadata", () => {
-    expect(
-      parseKnownRiskExceptions(`exceptions:
-  - match:
-      package: sharp
-      version: 0.34.5
-      script: install
-    reason: Expected native install.
-`).errors,
-    ).toEqual([]);
-
-    expect(
-      parseKnownRiskExceptions(`exceptions:
-  - match:
-      package: sharp
-    reason: Too broad.
-`).errors,
-    ).toEqual([
-      "exceptions[0].match must include at least one precise discriminator besides package.",
-    ]);
-
-    expect(
-      parseKnownRiskExceptions(`exceptions:
-  - match:
-      package: sharp
-      script: install
-`).errors,
-    ).toEqual(["exceptions[0].reason must be a non-empty string."]);
-  });
-
   it("reports floating transitive specs, lifecycle scripts, exotic sources, and recently published versions", async () => {
     const report = await createTransitiveManifestRiskReport({
       packageVersions: [
@@ -132,50 +101,6 @@ describe("transitive-manifest-risk-report", () => {
     ]);
   });
 
-  it("annotates matching known-risk exceptions and reports unused entries", async () => {
-    const report = await createTransitiveManifestRiskReport({
-      packageVersions: [{ packageName: "parent", version: "1.0.0" }],
-      exceptions: [
-        {
-          match: {
-            package: "parent",
-            version: "1.0.0",
-            dependency: { name: "floating", spec: "^1.2.3" },
-          },
-          reason: "Known upstream range.",
-        },
-        {
-          match: { package: "other", version: "1.0.0" },
-          reason: "No longer used.",
-        },
-      ],
-      manifestLoader: async () => ({
-        publishedAt: "2026-04-01T00:00:00Z",
-        manifest: {
-          dependencies: {
-            floating: "^1.2.3",
-          },
-        },
-      }),
-    });
-
-    expect(report.knownFindingCount).toBe(1);
-    expect(report.findings).toMatchObject([
-      {
-        type: "floating-transitive-spec",
-        known: true,
-        reason: "Known upstream range.",
-      },
-    ]);
-    expect(report.unusedExceptions).toMatchObject([
-      {
-        exception: {
-          reason: "No longer used.",
-        },
-      },
-    ]);
-  });
-
   it("documents JSON completeness and renders grouped Markdown summaries", async () => {
     const report = await createTransitiveManifestRiskReport({
       packageVersions: [
@@ -226,7 +151,6 @@ describe("transitive-manifest-risk-report", () => {
     expect(markdown).toContain(
       "The complete actionable finding list is available in the JSON report",
     );
-    expect(markdown).toContain("## Known Exception Summary");
     expect(markdown).toContain("## Published Package Manifests With Risk Findings");
     expect(markdown).toContain("`@earendil-works/pi-ai@0.74.0`: 1 manifest finding");
     expect(markdown).toContain("`aaa-package@1.0.0`: 1 manifest finding");
