@@ -57,7 +57,10 @@ type LifecycleHost = {
   controlUiResponsivenessObserver?: { disconnect: () => void } | null;
   popStateHandler: () => void;
   topbarObserver: ResizeObserver | null;
-  settings?: { documentTitleSyncEnabled?: boolean } | null;
+  settings?: {
+    documentTitleSyncEnabled?: boolean;
+    token?: string | null;
+  } | null;
 };
 
 // Matches the static <title> in ui/index.html; used when the per-agent title sync is disabled.

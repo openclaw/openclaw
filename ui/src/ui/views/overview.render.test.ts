@@ -26,6 +26,7 @@ function createOverviewProps(overrides: Partial<OverviewProps> = {}): OverviewPr
       navWidth: 220,
       navGroupsCollapsed: {},
       borderRadius: 50,
+      documentTitleSyncEnabled: true,
       locale: "en",
     },
     password: "",

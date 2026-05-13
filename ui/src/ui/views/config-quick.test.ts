@@ -58,6 +58,8 @@ function createProps(overrides: Partial<QuickSettingsProps> = {}): QuickSettings
     onOpenCustomThemeImport: vi.fn(),
     setThemeMode: vi.fn(),
     setBorderRadius: vi.fn(),
+    documentTitleSyncEnabled: true,
+    setDocumentTitleSyncEnabled: vi.fn(),
     userAvatar: null,
     onUserAvatarChange: vi.fn(),
     configObject: {},
