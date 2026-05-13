@@ -3471,13 +3471,6 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/dreaming.ts",
-      "text": ", then reload this tab."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/dreaming.ts",
       "text": "Claims"
     },
     {
@@ -3513,20 +3506,6 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/dreaming.ts",
-      "text": "Dreams"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/dreaming.ts",
-      "text": "Enable"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/dreaming.ts",
       "text": "Ended on:"
     },
     {
@@ -3542,20 +3521,6 @@
       "name": "text",
       "path": "ui/src/ui/views/dreaming.ts",
       "text": "Import details"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/dreaming.ts",
-      "text": "Imported Insights"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/dreaming.ts",
-      "text": "Imported Insights and Memory Palace are provided by the bundled"
     },
     {
       "count": 1,
@@ -3590,28 +3555,7 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/dreaming.ts",
-      "text": "Memory Palace"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/dreaming.ts",
       "text": "Memory palace is not populated yet"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/dreaming.ts",
-      "text": "Memory Wiki is not enabled"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/dreaming.ts",
-      "text": "memory-wiki"
     },
     {
       "count": 1,
@@ -3626,13 +3570,6 @@
       "name": "text",
       "path": "ui/src/ui/views/dreaming.ts",
       "text": "No imported insights yet"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/dreaming.ts",
-      "text": "Open Config"
     },
     {
       "count": 1,
@@ -3661,20 +3598,6 @@
       "name": "text",
       "path": "ui/src/ui/views/dreaming.ts",
       "text": "Page details"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/dreaming.ts",
-      "text": "plugin."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/dreaming.ts",
-      "text": "plugins.entries.memory-wiki.enabled = true"
     },
     {
       "count": 1,
@@ -3710,27 +3633,6 @@
       "name": "text",
       "path": "ui/src/ui/views/dreaming.ts",
       "text": "Started with:"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/dreaming.ts",
-      "text": "These are imported insights clustered from external history; use them to review what imports surfaced before any of it graduates into durable memory."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/dreaming.ts",
-      "text": "This is the compiled memory wiki surface the system can search and reason over; use it to inspect actual memory pages, claims, open questions, and contradictions rather than raw imported source chats."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/dreaming.ts",
-      "text": "This is the raw dream diary the system writes while replaying and consolidating memory; use it to inspect what the memory system is noticing, and where it still looks noisy or thin."
     },
     {
       "count": 1,

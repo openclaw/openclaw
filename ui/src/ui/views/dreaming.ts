@@ -618,28 +618,13 @@ function renderWikiPreviewOverlay(props: DreamingProps) {
 function renderDiarySubtabExplainer() {
   switch (activeDiarySubTab) {
     case "dreams":
-      return html`
-        <p class="dreams-diary__explainer">
-          This is the raw dream diary the system writes while replaying and consolidating memory;
-          use it to inspect what the memory system is noticing, and where it still looks noisy or
-          thin.
-        </p>
-      `;
+      return html` <p class="dreams-diary__explainer">${t("dreaming.diary.explainerDreams")}</p> `;
     case "insights":
       return html`
-        <p class="dreams-diary__explainer">
-          These are imported insights clustered from external history; use them to review what
-          imports surfaced before any of it graduates into durable memory.
-        </p>
+        <p class="dreams-diary__explainer">${t("dreaming.diary.explainerInsights")}</p>
       `;
     case "palace":
-      return html`
-        <p class="dreams-diary__explainer">
-          This is the compiled memory wiki surface the system can search and reason over; use it to
-          inspect actual memory pages, claims, open questions, and contradictions rather than raw
-          imported source chats.
-        </p>
-      `;
+      return html` <p class="dreams-diary__explainer">${t("dreaming.diary.explainerPalace")}</p> `;
   }
   return nothing;
 }
@@ -1372,7 +1357,7 @@ function renderDiarySection(props: DreamingProps) {
                 props.onRequestUpdate?.();
               }}
             >
-              Dreams
+              ${t("dreaming.diary.subtabDreams")}
             </button>
             <button
               class="dreams-diary__subtab ${activeDiarySubTab === "insights"
@@ -1385,7 +1370,7 @@ function renderDiarySection(props: DreamingProps) {
                 props.onRequestUpdate?.();
               }}
             >
-              Imported Insights
+              ${t("dreaming.diary.subtabInsights")}
             </button>
             <button
               class="dreams-diary__subtab ${activeDiarySubTab === "palace"
@@ -1398,7 +1383,7 @@ function renderDiarySection(props: DreamingProps) {
                 props.onRequestUpdate?.();
               }}
             >
-              Memory Palace
+              ${t("dreaming.diary.subtabPalace")}
             </button>
           </div>
           <button
@@ -1425,18 +1410,18 @@ function renderDiarySection(props: DreamingProps) {
             }}
           >
             ${memoryWikiUnavailable
-              ? "How to enable"
+              ? t("dreaming.diary.howToEnable")
               : activeDiarySubTab === "dreams"
                 ? props.dreamDiaryLoading
                   ? t("dreaming.diary.reloading")
                   : t("dreaming.diary.reload")
                 : activeDiarySubTab === "insights"
                   ? props.wikiImportInsightsLoading
-                    ? "Reloading…"
-                    : "Reload"
+                    ? t("dreaming.diary.reloading")
+                    : t("dreaming.diary.reload")
                   : props.wikiMemoryPalaceLoading
-                    ? "Reloading…"
-                    : "Reload"}
+                    ? t("dreaming.diary.reloading")
+                    : t("dreaming.diary.reload")}
           </button>
         </div>
         ${renderDiarySubtabExplainer()}
@@ -1445,18 +1430,18 @@ function renderDiarySection(props: DreamingProps) {
       ${memoryWikiUnavailable
         ? html`
             <div class="dreams-diary__empty">
-              <div class="dreams-diary__empty-text">Memory Wiki is not enabled</div>
-              <div class="dreams-diary__empty-hint">
-                Imported Insights and Memory Palace are provided by the bundled
-                <code>memory-wiki</code> plugin.
+              <div class="dreams-diary__empty-text">
+                ${t("dreaming.diary.memoryWikiNotEnabled")}
               </div>
               <div class="dreams-diary__empty-hint">
-                Enable <code>plugins.entries.memory-wiki.enabled = true</code>, then reload this
-                tab.
+                ${t("dreaming.diary.memoryWikiDescription")}
+              </div>
+              <div class="dreams-diary__empty-hint">
+                ${t("dreaming.diary.memoryWikiEnableHint")}
               </div>
               <div class="dreams-diary__empty-actions">
                 <button class="btn btn--subtle btn--sm" @click=${() => props.onOpenConfig()}>
-                  Open Config
+                  ${t("dreaming.diary.openConfig")}
                 </button>
               </div>
             </div>

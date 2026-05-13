@@ -424,7 +424,7 @@ describe("dreaming view", () => {
         onOpenConfig,
       }),
     );
-    expect(container.querySelector(".dreams-diary__empty-text")?.textContent).toBe(
+    expect(container.querySelector(".dreams-diary__empty-text")?.textContent?.trim()).toBe(
       "Memory Wiki is not enabled",
     );
     expect(
