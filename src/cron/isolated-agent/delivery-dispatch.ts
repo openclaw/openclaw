@@ -29,6 +29,10 @@ import {
 import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
 import { createCronExecutionId } from "../run-id.js";
 import { hasScheduledNextRunAtMs } from "../service/jobs.js";
+import {
+  resolveCronDeliverySessionKey,
+  resolveCronNotificationSessionKey,
+} from "../session-target.js";
 import type { CronJob, CronRunTelemetry } from "../types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
 import { pickLastNonEmptyTextFromPayloads, pickSummaryFromOutput } from "./helpers.js";
@@ -645,7 +649,13 @@ export async function dispatchCronDelivery(
       const deliverySession = buildOutboundSessionContext({
         cfg: params.cfgWithAgentDefaults,
         agentId: params.agentId,
-        sessionKey: params.agentSessionKey,
+        sessionKey:
+          params.job.sessionTarget === "isolated"
+            ? resolveCronNotificationSessionKey({
+                jobId: params.job.id,
+                sessionKey: resolveCronDeliverySessionKey(params.job),
+              })
+            : params.agentSessionKey,
       });
 
       // Track bestEffort partial failures so we can log them and avoid

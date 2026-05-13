@@ -1040,6 +1040,8 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       session: { dmScope: "per-channel-peer" },
     } as never;
     params.agentSessionKey = "agent:main:telegram:123456";
+    // Non-isolated job should use agentSessionKey directly
+    (params.job as { sessionTarget?: string }).sessionTarget = "session:agent:main:main";
 
     const state = await dispatchCronDelivery(params);
 
@@ -1049,6 +1051,28 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       cfg: params.cfgWithAgentDefaults,
       agentId: "main",
       sessionKey: "agent:main:telegram:123456",
+    });
+  });
+
+  it("uses resolveCronNotificationSessionKey for isolated cron delivery session context", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    const params = makeBaseParams({ synthesizedText: "hello from isolated cron" });
+    params.cfgWithAgentDefaults = {
+      session: { dmScope: "per-channel-peer" },
+    } as never;
+    params.agentSessionKey = "agent:main:cron:test-job";
+    (params.job as { sessionTarget?: string }).sessionTarget = "isolated";
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.result).toBeUndefined();
+    expect(state.delivered).toBe(true);
+    expect(buildOutboundSessionContext).toHaveBeenCalledWith({
+      cfg: params.cfgWithAgentDefaults,
+      agentId: "main",
+      sessionKey: "cron:test-job:failure",
     });
   });
 
