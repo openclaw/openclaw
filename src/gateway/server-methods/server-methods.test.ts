@@ -1550,9 +1550,7 @@ describe("exec approval handlers", () => {
       },
     });
     const { request } = getRequestedExecApprovalPayload(broadcasts);
-    expect(request["commandAnalysis"]).toEqual(
-      expect.objectContaining({ commandCount: 1, nestedCommandCount: 0 }),
-    );
+    expectRecordFields(request["commandAnalysis"], { commandCount: 1, nestedCommandCount: 0 });
     expect(request["commandSpans"]).toBeUndefined();
   });
 
@@ -1574,9 +1572,7 @@ describe("exec approval handlers", () => {
       },
     });
     const { request } = getRequestedExecApprovalPayload(broadcasts);
-    expect(request["commandAnalysis"]).toEqual(
-      expect.objectContaining({ commandCount: 1, nestedCommandCount: 0 }),
-    );
+    expectRecordFields(request["commandAnalysis"], { commandCount: 1, nestedCommandCount: 0 });
     expect(request["commandSpans"]).toBeUndefined();
   });
 

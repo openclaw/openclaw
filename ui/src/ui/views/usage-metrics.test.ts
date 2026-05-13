@@ -57,6 +57,10 @@ function makeSessionWithQuarterHourly(
   } as unknown as UsageSessionEntry;
 }
 
+function peakErrorSummaries(result: ReturnType<typeof buildPeakErrorHours>) {
+  return result.map(({ value, sub }) => ({ value, sub }));
+}
+
 describe("buildPeakErrorHours", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -77,7 +81,7 @@ describe("buildPeakErrorHours", () => {
     const result = buildPeakErrorHours([session], "utc");
 
     // hour 0: 5/10 = 50%, hour 23: 4/8 = 50%, hour 9: 3/15 = 20%, hour 1: 2/20 = 10%
-    expect(result.map(({ value, sub }) => ({ value, sub }))).toStrictEqual([
+    expect(peakErrorSummaries(result)).toStrictEqual([
       { value: "50.00%", sub: "5 errors · 10 msgs" },
       { value: "50.00%", sub: "4 errors · 8 msgs" },
       { value: "20.00%", sub: "3 errors · 15 msgs" },
@@ -93,10 +97,10 @@ describe("buildPeakErrorHours", () => {
     ]);
 
     const result = buildPeakErrorHours([session], "utc");
-    expect(result.length).toBe(1);
     // Aggregated: 5 errors / 15 total = 33.33%
-    expect(result[0].value).toBe("33.33%");
-    expect(result[0].sub).toBe("5 errors · 15 msgs");
+    expect(peakErrorSummaries(result)).toStrictEqual([
+      { value: "33.33%", sub: "5 errors · 15 msgs" },
+    ]);
   });
 
   it("shifts UTC quarter-hour buckets to local timezone in local mode", () => {
@@ -113,9 +117,8 @@ describe("buildPeakErrorHours", () => {
     ]);
 
     const result = buildPeakErrorHours([session], "local");
-    expect(result.length).toBe(2);
 
-    expect(result.map(({ value, sub }) => ({ value, sub }))).toStrictEqual([
+    expect(peakErrorSummaries(result)).toStrictEqual([
       { value: "30.00%", sub: "3 errors · 10 msgs" }, // local hour 5
       { value: "20.00%", sub: "4 errors · 20 msgs" }, // local hour 15
     ]);
@@ -133,9 +136,9 @@ describe("buildPeakErrorHours", () => {
     ]);
 
     const result = buildPeakErrorHours([session], "local");
-    expect(result.length).toBe(1);
-    expect(result[0].value).toBe("50.00%");
-    expect(result[0].sub).toBe("5 errors · 10 msgs");
+    expect(peakErrorSummaries(result)).toStrictEqual([
+      { value: "50.00%", sub: "5 errors · 10 msgs" },
+    ]);
   });
 
   it("wraps correctly for positive local timezone near midnight (UTC+8, late quarter)", () => {
@@ -150,9 +153,9 @@ describe("buildPeakErrorHours", () => {
     ]);
 
     const result = buildPeakErrorHours([session], "local");
-    expect(result.length).toBe(1);
-    expect(result[0].value).toBe("50.00%");
-    expect(result[0].sub).toBe("6 errors · 12 msgs");
+    expect(peakErrorSummaries(result)).toStrictEqual([
+      { value: "50.00%", sub: "6 errors · 12 msgs" },
+    ]);
   });
 
   it("returns empty array when no sessions have errors", () => {
@@ -198,15 +201,14 @@ describe("buildPeakErrorHours", () => {
     const session = makeSessionWithQuarterHourly(buckets);
 
     const result = buildPeakErrorHours([session], "utc");
-    expect(result.length).toBe(5);
 
     // Should be sorted by rate descending — highest rate first
-    expect(result.map((r) => r.value)).toStrictEqual([
-      "16.00%",
-      "14.00%",
-      "12.00%",
-      "10.00%",
-      "8.00%",
+    expect(peakErrorSummaries(result)).toStrictEqual([
+      { value: "16.00%", sub: "16 errors · 100 msgs" },
+      { value: "14.00%", sub: "14 errors · 100 msgs" },
+      { value: "12.00%", sub: "12 errors · 100 msgs" },
+      { value: "10.00%", sub: "10 errors · 100 msgs" },
+      { value: "8.00%", sub: "8 errors · 100 msgs" },
     ]);
   });
 
@@ -219,10 +221,10 @@ describe("buildPeakErrorHours", () => {
     ]);
 
     const result = buildPeakErrorHours([session1, session2], "utc");
-    expect(result.length).toBe(1);
     // quarterIndex 20 → hour 5: aggregated 10 errors / 30 msgs = 33.33%
-    expect(result[0].value).toBe("33.33%");
-    expect(result[0].sub).toBe("10 errors · 30 msgs");
+    expect(peakErrorSummaries(result)).toStrictEqual([
+      { value: "33.33%", sub: "10 errors · 30 msgs" },
+    ]);
   });
 
   it("falls back to proportional allocation when utcQuarterHourMessageCounts is absent", () => {
@@ -257,7 +259,7 @@ describe("buildPeakErrorHours", () => {
     } as unknown as UsageSessionEntry;
 
     const result = buildPeakErrorHours([session], "utc");
-    expect(result.map(({ value, sub }) => ({ value, sub }))).toStrictEqual([
+    expect(peakErrorSummaries(result)).toStrictEqual([
       { value: "30.00%", sub: "3 errors · 10 msgs" },
     ]);
   });

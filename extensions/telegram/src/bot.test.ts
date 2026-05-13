@@ -103,11 +103,27 @@ function requireArray(value: unknown, label: string): unknown[] {
 }
 
 function mockArg(source: MockCallSource, callIndex: number, argIndex: number, label: string) {
-  const call = source.mock.calls.at(callIndex);
+  const call = source.mock.calls[callIndex];
   if (!call) {
     throw new Error(`expected mock call: ${label}`);
   }
   return call[argIndex];
+}
+
+function mockCall(source: MockCallSource, callIndex: number, label: string) {
+  const call = source.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected mock call: ${label}`);
+  }
+  return call;
+}
+
+function firstEditMessageTextArg(argIndex: number) {
+  return mockArg(editMessageTextSpy as unknown as MockCallSource, 0, argIndex, "edit message text");
+}
+
+function firstSystemEventArg(argIndex: number) {
+  return mockArg(enqueueSystemEventSpy as unknown as MockCallSource, 0, argIndex, "system event");
 }
 
 function mockMsgContextArg(
@@ -564,7 +580,11 @@ describe("createTelegramBot", () => {
     });
 
     expect(editMessageReplyMarkupSpy).toHaveBeenCalledTimes(1);
-    const [chatId, messageId, replyMarkup] = editMessageReplyMarkupSpy.mock.calls.at(0) ?? [];
+    const [chatId, messageId, replyMarkup] = mockCall(
+      editMessageReplyMarkupSpy as unknown as MockCallSource,
+      0,
+      "edit reply markup",
+    );
     expect(chatId).toBe(1234);
     expect(messageId).toBe(21);
     expect(replyMarkup).toEqual({ reply_markup: { inline_keyboard: [] } });
@@ -999,7 +1019,11 @@ describe("createTelegramBot", () => {
     expect(listCall.cfg).toBeTypeOf("object");
     expect(listCall.agentIds).toEqual(["main"]);
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
-    const [chatId, messageId, text, params] = editMessageTextSpy.mock.calls.at(0) ?? [];
+    const [chatId, messageId, text, params] = mockCall(
+      editMessageTextSpy as unknown as MockCallSource,
+      0,
+      "edit message text",
+    );
     expect(chatId).toBe(1234);
     expect(messageId).toBe(12);
     expect(String(text)).toContain(`${INFO_EMOJI} Commands (2/`);
@@ -1154,10 +1178,10 @@ describe("createTelegramBot", () => {
 
       expect(replySpy).not.toHaveBeenCalled();
       expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
-      expect(editMessageTextSpy.mock.calls.at(0)?.[2]).toContain(
+      expect(String(firstEditMessageTextArg(2))).toContain(
         `${CHECK_MARK_EMOJI} Model reset to default`,
       );
-      expect(editMessageTextSpy.mock.calls.at(0)?.[2]).toContain(
+      expect(String(firstEditMessageTextArg(2))).toContain(
         "Session selection cleared. Runtime unchanged. New replies use the agent's configured default.",
       );
 
@@ -1230,7 +1254,7 @@ describe("createTelegramBot", () => {
 
     expect(replySpy).not.toHaveBeenCalled();
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
-    const [, , , params] = editMessageTextSpy.mock.calls.at(0) ?? [];
+    const params = firstEditMessageTextArg(3);
     const inlineKeyboard = (
       params as {
         reply_markup?: {
@@ -1304,10 +1328,10 @@ describe("createTelegramBot", () => {
 
       expect(replySpy).not.toHaveBeenCalled();
       expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
-      expect(editMessageTextSpy.mock.calls.at(0)?.[2]).toContain(
+      expect(String(firstEditMessageTextArg(2))).toContain(
         `${CHECK_MARK_EMOJI} Model reset to default`,
       );
-      expect(editMessageTextSpy.mock.calls.at(0)?.[2]).toContain(
+      expect(String(firstEditMessageTextArg(2))).toContain(
         "Session selection cleared. Runtime unchanged. New replies use the agent's configured default.",
       );
 
@@ -1379,13 +1403,17 @@ describe("createTelegramBot", () => {
 
       expect(replySpy).not.toHaveBeenCalled();
       expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
-      const editCall = editMessageTextSpy.mock.calls.at(0);
-      expect(editCall?.[0]).toBe(1234);
-      expect(editCall?.[1]).toBe(17);
-      expect(editCall?.[2]).toBe(
+      const editCall = mockCall(
+        editMessageTextSpy as unknown as MockCallSource,
+        0,
+        "edit message text",
+      );
+      expect(editCall[0]).toBe(1234);
+      expect(editCall[1]).toBe(17);
+      expect(editCall[2]).toBe(
         `${CHECK_MARK_EMOJI} Model changed to <b>openai/gpt-5.4</b>\n\nSession-only model selection. Runtime unchanged. Use /model openai/gpt-5.4 --runtime &lt;runtime&gt; to switch harnesses. The agent default in openclaw.json is unchanged; /reset or a new session may return to that default.`,
       );
-      expect(requireRecord(editCall?.[3], "edit params").parse_mode).toBe("HTML");
+      expect(requireRecord(editCall[3], "edit params").parse_mode).toBe("HTML");
 
       const entry = Object.values(loadSessionStore(storePath, { skipCache: true }))[0];
       expect(entry?.providerOverride).toBe("openai");
@@ -1534,9 +1562,7 @@ describe("createTelegramBot", () => {
 
     expect(replySpy).not.toHaveBeenCalled();
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
-    expect(editMessageTextSpy.mock.calls.at(0)?.[2]).toContain(
-      'Could not resolve model "shared-model".',
-    );
+    expect(String(firstEditMessageTextArg(2))).toContain('Could not resolve model "shared-model".');
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-compact-2");
   });
 
@@ -3164,7 +3190,7 @@ describe("createTelegramBot", () => {
     });
 
     expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(1);
-    expect(enqueueSystemEventSpy.mock.calls.at(0)?.[0]).toBe(
+    expect(firstSystemEventArg(0)).toBe(
       `Telegram reaction added: ${THUMBS_UP_EMOJI} by Ada (@ada_bot) on msg 42`,
     );
     expect(String(systemEventOptions().contextKey)).toContain("telegram:reaction:add:1234:42:9");
@@ -3392,10 +3418,8 @@ describe("createTelegramBot", () => {
     });
 
     expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(1);
-    expect(enqueueSystemEventSpy.mock.calls.at(0)?.[0]).toBe(
-      `Telegram reaction added: ${PARTY_EMOJI} by Ada on msg 99`,
-    );
-    expect(enqueueSystemEventSpy.mock.calls.at(0)?.[1]).toBeTypeOf("object");
+    expect(firstSystemEventArg(0)).toBe(`Telegram reaction added: ${PARTY_EMOJI} by Ada on msg 99`);
+    expect(firstSystemEventArg(1)).toBeTypeOf("object");
   });
 
   it("skips reaction in own mode when message is not sent by bot", async () => {
@@ -3589,7 +3613,7 @@ describe("createTelegramBot", () => {
     });
 
     expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(1);
-    expect(enqueueSystemEventSpy.mock.calls.at(0)?.[0]).toBe(
+    expect(firstSystemEventArg(0)).toBe(
       `Telegram reaction added: ${FIRE_EMOJI} by Bob (@bob_user) on msg 100`,
     );
     expect(String(systemEventOptions().sessionKey)).toContain("telegram:group:5678:topic:1");
@@ -3625,9 +3649,7 @@ describe("createTelegramBot", () => {
     });
 
     expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(1);
-    expect(enqueueSystemEventSpy.mock.calls.at(0)?.[0]).toBe(
-      `Telegram reaction added: ${EYES_EMOJI} by Bob on msg 101`,
-    );
+    expect(firstSystemEventArg(0)).toBe(`Telegram reaction added: ${EYES_EMOJI} by Bob on msg 101`);
     expect(String(systemEventOptions().sessionKey)).toContain("telegram:group:5678:topic:1");
     expect(String(systemEventOptions().contextKey)).toContain("telegram:reaction:add:5678:101:10");
   });
@@ -3660,13 +3682,13 @@ describe("createTelegramBot", () => {
     });
 
     expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(1);
-    expect(enqueueSystemEventSpy.mock.calls.at(0)?.[0]).toBe(
+    expect(firstSystemEventArg(0)).toBe(
       `Telegram reaction added: ${HEART_EMOJI} by Charlie on msg 200`,
     );
     expect(String(systemEventOptions().sessionKey)).toContain("telegram:group:9999");
     expect(String(systemEventOptions().contextKey)).toContain("telegram:reaction:add:9999:200:11");
     // Verify session key does NOT contain :topic:
-    const eventOptions = enqueueSystemEventSpy.mock.calls.at(0)?.[1] as {
+    const eventOptions = firstSystemEventArg(1) as {
       sessionKey?: string;
     };
     const sessionKey = eventOptions.sessionKey ?? "";

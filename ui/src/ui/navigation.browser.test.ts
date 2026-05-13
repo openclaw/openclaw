@@ -356,7 +356,12 @@ describe("control UI routing", () => {
 
     expectElement(app, ".sidebar-version", HTMLElement);
     const statusDot = expectElement(app, ".sidebar-version__status", HTMLElement);
-    expect(statusDot.getAttribute("aria-label")).toContain("Online");
+    expect(statusDot.getAttribute("aria-label")).toBe("Gateway status: Online");
+    expect(statusDot.getAttribute("title")).toBe("Gateway status: Online");
+    expect([...statusDot.classList]).toEqual([
+      "sidebar-version__status",
+      "sidebar-connection-status--online",
+    ]);
 
     app.applySettings({ ...app.settings, navWidth: 360 });
     await app.updateComplete;

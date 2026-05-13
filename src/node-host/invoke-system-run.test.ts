@@ -165,7 +165,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   }
 
   function expectExecDeniedEvent(sendNodeEvent: MockedSendNodeEvent): void {
-    const call = sendNodeEvent.mock.calls.at(0);
+    const call = sendNodeEvent.mock.calls[0];
     if (!call) {
       throw new Error("expected sendNodeEvent call");
     }
@@ -1696,12 +1696,8 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
               },
             });
 
-            expect(seenArgv, testCase.name).toContainEqual([
-              "cmd.exe",
-              "/d",
-              "/s",
-              "/c",
-              `${scriptPath} --limit 5`,
+            expect(seenArgv, testCase.name).toEqual([
+              ["cmd.exe", "/d", "/s", "/c", `${scriptPath} --limit 5`],
             ]);
             expect(invoke.runCommand, testCase.name).not.toHaveBeenCalled();
             expectApprovalRequiredDenied({

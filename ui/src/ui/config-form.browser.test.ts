@@ -149,8 +149,7 @@ describe("config form renderer", () => {
     const selectedLabels = Array.from(selects).map((select) =>
       select.selectedOptions[0]?.textContent?.trim(),
     );
-    expect(selectedLabels).toContain("openai");
-    expect(selectedLabels).toContain("tailnet");
+    expect(selectedLabels).toEqual(["tailnet", "openai"]);
   });
 
   it("renders map fields from additionalProperties", () => {
@@ -334,8 +333,7 @@ describe("config form renderer", () => {
       },
     };
     const analysis = analyzeConfigSchema(schema);
-    expect(analysis.unsupportedPaths).not.toContain("models.providers");
-    expect(analysis.unsupportedPaths).not.toContain("models.providers.*.apiKey");
+    expect(analysis.unsupportedPaths).toEqual([]);
 
     render(
       renderConfigForm({
@@ -372,7 +370,7 @@ describe("config form renderer", () => {
       },
     };
     let analysis = analyzeConfigSchema(renderableUnionSchema);
-    expect(analysis.unsupportedPaths).not.toContain("mixed");
+    expect(analysis.unsupportedPaths).toEqual([]);
 
     const nullableSchema = {
       type: "object",
@@ -381,7 +379,7 @@ describe("config form renderer", () => {
       },
     };
     analysis = analyzeConfigSchema(nullableSchema);
-    expect(analysis.unsupportedPaths).not.toContain("note");
+    expect(analysis.unsupportedPaths).toEqual([]);
 
     const untypedAdditionalPropertiesSchema = {
       type: "object",
@@ -401,7 +399,7 @@ describe("config form renderer", () => {
       },
     };
     analysis = analyzeConfigSchema(untypedAdditionalPropertiesSchema);
-    expect(analysis.unsupportedPaths).not.toContain("channels");
+    expect(analysis.unsupportedPaths).toEqual([]);
   });
 
   it("treats additionalProperties true as editable map fields", () => {
@@ -415,7 +413,7 @@ describe("config form renderer", () => {
       },
     };
     const analysis = analyzeConfigSchema(schema);
-    expect(analysis.unsupportedPaths).not.toContain("accounts");
+    expect(analysis.unsupportedPaths).toEqual([]);
 
     const onPatch = vi.fn();
     const container = document.createElement("div");
