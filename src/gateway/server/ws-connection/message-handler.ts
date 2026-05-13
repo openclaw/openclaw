@@ -6,6 +6,7 @@ import {
   getDeviceBootstrapTokenProfile,
   redeemDeviceBootstrapTokenProfile,
   revokeDeviceBootstrapToken,
+  restoreDeviceBootstrapToken,
   verifyDeviceBootstrapToken,
 } from "../../../infra/device-bootstrap.js";
 import {
@@ -1478,13 +1479,9 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           },
         };
 
-        try {
-          await sendFrame({ type: "res", id: frame.id, ok: true, payload: helloOk });
-        } catch (err) {
-          setCloseCause("hello-send-failed", { error: formatForLog(err) });
-          close();
-          return;
-        }
+        let revokedBootstrapTokenRecord:
+          | Awaited<ReturnType<typeof revokeDeviceBootstrapToken>>["record"]
+          | undefined;
         if (authMethod === "bootstrap-token" && bootstrapTokenCandidate && device) {
           try {
             if (issuedBootstrapProfile) {
@@ -1501,6 +1498,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                   logGateway.warn(
                     `bootstrap token revoke skipped after profile redemption device=${device.id}`,
                   );
+                } else {
+                  revokedBootstrapTokenRecord = revoked.record;
                 }
               }
             }
@@ -1509,6 +1508,22 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               `bootstrap token post-connect bookkeeping failed device=${device.id}: ${formatForLog(err)}`,
             );
           }
+        }
+        try {
+          await sendFrame({ type: "res", id: frame.id, ok: true, payload: helloOk });
+        } catch (err) {
+          if (revokedBootstrapTokenRecord) {
+            try {
+              await restoreDeviceBootstrapToken({ record: revokedBootstrapTokenRecord });
+            } catch (restoreErr) {
+              logGateway.warn(
+                `bootstrap token restore after hello-send failure failed device=${device?.id ?? "unknown"}: ${formatForLog(restoreErr)}`,
+              );
+            }
+          }
+          setCloseCause("hello-send-failed", { error: formatForLog(err) });
+          close();
+          return;
         }
         logWs("out", "hello-ok", {
           connId,
