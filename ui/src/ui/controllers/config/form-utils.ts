@@ -11,7 +11,7 @@ export function serializeConfigForm(form: Record<string, unknown>): string {
 const REDACTED_SENTINEL = "__OPENCLAW_REDACTED__";
 const OMIT_VALUE = Symbol("omit-redacted-sentinel");
 
-function stripUnrestorableValue(value: unknown, original: unknown): unknown | typeof OMIT_VALUE {
+function stripUnrestorableValue(value: unknown, original: unknown): unknown {
   if (value === REDACTED_SENTINEL) {
     return original === REDACTED_SENTINEL ? value : OMIT_VALUE;
   }
