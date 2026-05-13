@@ -6,12 +6,22 @@ import { fileURLToPath } from "node:url";
 
 export const FORBIDDEN_CHANGELOG_THANKS_HANDLES = ["codex", "openclaw", "steipete", "clawsweeper"];
 
-const THANKS_HANDLE_PATTERN = /\bThanks\b[^\n]*@([-_/A-Za-z0-9]+(?:\[bot\])?)/iu;
+const THANKS_PATTERN = /\bThanks\b/iu;
+const THANKED_HANDLE_PATTERN = /@([-_/A-Za-z0-9]+(?:\[bot\])?)/giu;
 
-export function isForbiddenChangelogThanksHandle(handle) {
+export function isForbiddenChangelogThanksHandle(handle, options = {}) {
+  const { strictBotHandle = false } = options;
   const normalized = handle.toLowerCase();
   if (normalized === "null" || normalized.startsWith("app/")) {
     return true;
+  }
+  if (strictBotHandle && normalized.includes("clawsweeper")) {
+    return (
+      normalized === "clawsweeper" ||
+      normalized === "clawsweeper[bot]" ||
+      normalized === "openclaw-clawsweeper" ||
+      normalized === "openclaw-clawsweeper[bot]"
+    );
   }
   return FORBIDDEN_CHANGELOG_THANKS_HANDLES.some((forbidden) =>
     forbidden === "clawsweeper" ? normalized.includes(forbidden) : normalized === forbidden,
@@ -22,18 +32,26 @@ export function findForbiddenChangelogThanks(content) {
   return content
     .split(/\r?\n/u)
     .map((text, index) => {
-      const match = text.match(THANKS_HANDLE_PATTERN);
-      if (!match || !isForbiddenChangelogThanksHandle(match[1])) {
+      if (!THANKS_PATTERN.test(text)) {
         return null;
       }
-      return { line: index + 1, handle: match[1].toLowerCase(), text };
+      for (const match of text.matchAll(THANKED_HANDLE_PATTERN)) {
+        if (isForbiddenChangelogThanksHandle(match[1])) {
+          return { line: index + 1, handle: match[1].toLowerCase(), text };
+        }
+      }
+      return null;
     })
     .filter(Boolean);
 }
 
 export async function main(argv = process.argv.slice(2)) {
   if (argv[0] === "--is-forbidden-handle") {
-    process.exitCode = isForbiddenChangelogThanksHandle(argv[1] ?? "") ? 0 : 1;
+    process.exitCode = isForbiddenChangelogThanksHandle(argv[1] ?? "", {
+      strictBotHandle: true,
+    })
+      ? 0
+      : 1;
     return;
   }
 

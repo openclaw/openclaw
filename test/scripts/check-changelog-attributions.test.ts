@@ -83,11 +83,27 @@ describe("check-changelog-attributions", () => {
     ).toStrictEqual([]);
   });
 
+  it("checks every thanked handle on a changelog line", () => {
+    expect(
+      findForbiddenChangelogThanks("- Mixed credit (#123). Thanks @openclaw and @alice."),
+    ).toEqual([
+      {
+        line: 1,
+        handle: "openclaw",
+        text: "- Mixed credit (#123). Thanks @openclaw and @alice.",
+      },
+    ]);
+  });
+
   it("uses one attribution predicate for scanner and shell checks", () => {
     expect(isForbiddenChangelogThanksHandle("codex")).toBe(true);
     expect(isForbiddenChangelogThanksHandle("app/clawsweeper")).toBe(true);
     expect(isForbiddenChangelogThanksHandle("openclaw-clawsweeper[bot]")).toBe(true);
     expect(isForbiddenChangelogThanksHandle("Ziy1-Tan")).toBe(false);
+    expect(isForbiddenChangelogThanksHandle("human-clawsweeper-fan")).toBe(true);
+    expect(
+      isForbiddenChangelogThanksHandle("human-clawsweeper-fan", { strictBotHandle: true }),
+    ).toBe(false);
   });
 
   it("requires explicit human thanks for bot PR changelog entries", () => {
