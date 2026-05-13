@@ -4,7 +4,11 @@ import {
   takeMessageIdAfterStop,
 } from "openclaw/plugin-sdk/channel-lifecycle";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
+import {
+  buildTelegramThreadParams,
+  shouldAllowTelegramThreadlessFallback,
+  type TelegramThreadSpec,
+} from "./bot/helpers.js";
 import { isSafeToRetrySendError, isTelegramClientRejection } from "./network-errors.js";
 import { normalizeTelegramReplyToMessageId } from "./outbound-params.js";
 
@@ -22,16 +26,6 @@ function hasNumericMessageThreadId(
     params !== null &&
     typeof (params as { message_thread_id?: unknown }).message_thread_id === "number"
   );
-}
-
-function shouldAllowThreadlessFallback(thread?: TelegramThreadSpec | null): boolean {
-  if (thread?.scope === "dm") {
-    return true;
-  }
-  if (thread?.id == null) {
-    return true;
-  }
-  return Math.trunc(thread.id) === 1;
 }
 
 export type TelegramDraftStream = {
@@ -119,7 +113,7 @@ export function createTelegramDraftStream(params: {
   const minInitialChars = params.minInitialChars;
   const chatId = params.chatId;
   const threadParams = buildTelegramThreadParams(params.thread);
-  const allowThreadlessFallback = shouldAllowThreadlessFallback(params.thread);
+  const allowThreadlessFallback = shouldAllowTelegramThreadlessFallback(params.thread);
   const replyToMessageId = normalizeTelegramReplyToMessageId(params.replyToMessageId);
   const replyParams =
     replyToMessageId != null

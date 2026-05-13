@@ -83,6 +83,19 @@ export type TelegramThreadSpec = {
   scope: "dm" | "forum" | "none";
 };
 
+export function shouldAllowTelegramThreadlessFallback(
+  thread?: TelegramThreadSpec | null,
+  options?: { allowDmThreadFallback?: boolean },
+): boolean {
+  if (thread?.scope === "dm") {
+    return options?.allowDmThreadFallback === true;
+  }
+  if (thread?.id == null) {
+    return true;
+  }
+  return Math.trunc(thread.id) === TELEGRAM_GENERAL_TOPIC_ID;
+}
+
 function normalizeTelegramDmThreadReplies(value: unknown): TelegramDmThreadReplies | undefined {
   return value === "off" || value === "inbound" || value === "always" ? value : undefined;
 }

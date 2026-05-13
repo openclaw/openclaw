@@ -13,7 +13,11 @@ import { getOrCreateAccountThrottler } from "./account-throttler.js";
 import { type ResolvedTelegramAccount, resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { normalizeTelegramApiRoot } from "./api-root.js";
-import { buildTypingThreadParams } from "./bot/helpers.js";
+import {
+  buildTypingThreadParams,
+  shouldAllowTelegramThreadlessFallback,
+  type TelegramThreadSpec,
+} from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { splitTelegramCaption } from "./caption.js";
 import { resolveTelegramFetch } from "./fetch.js";
@@ -50,6 +54,7 @@ import {
   normalizeTelegramChatId,
   normalizeTelegramLookupTarget,
   parseTelegramTarget,
+  resolveTelegramTargetChatType,
 } from "./targets.js";
 import { resolveTelegramVoiceSend } from "./voice.js";
 
@@ -403,33 +408,25 @@ function removeMessageThreadIdParam<TParams extends TelegramThreadScopedParams |
   return (Object.keys(next).length > 0 ? next : undefined) as TParams;
 }
 
-function shouldAllowThreadlessFallback(params: {
+function resolveTelegramThreadlessFallbackSpec(params: {
   chatType?: "direct" | "group" | "unknown";
   resolvedChatId?: string;
   targetMessageThreadId?: number;
   messageThreadId?: number;
-}): boolean {
+}): TelegramThreadSpec {
   const chatType =
     params.chatType === "unknown" && params.resolvedChatId
-      ? resolveTelegramChatTypeFromId(params.resolvedChatId)
+      ? resolveTelegramTargetChatType(params.resolvedChatId)
       : params.chatType;
-  if (chatType === "direct") {
-    return true;
-  }
   const messageThreadId =
     params.messageThreadId != null ? params.messageThreadId : params.targetMessageThreadId;
-  if (messageThreadId == null) {
-    return true;
+  if (chatType === "direct") {
+    return messageThreadId == null ? { scope: "dm" } : { id: messageThreadId, scope: "dm" };
   }
-  return Math.trunc(messageThreadId) === 1;
-}
-
-function resolveTelegramChatTypeFromId(chatId: string): "direct" | "group" | "unknown" {
-  const normalized = normalizeTelegramChatId(chatId);
-  if (!normalized) {
-    return "unknown";
+  if (chatType === "group") {
+    return messageThreadId == null ? { scope: "none" } : { id: messageThreadId, scope: "forum" };
   }
-  return normalized.startsWith("-") ? "group" : "direct";
+  return messageThreadId == null ? { scope: "none" } : { id: messageThreadId, scope: "none" };
 }
 
 function isTelegramHtmlParseError(err: unknown): boolean {
@@ -568,9 +565,8 @@ async function withTelegramThreadFallback<
   params: TParams,
   label: string,
   verbose: boolean | undefined,
-  allowThreadlessRetry: boolean,
+  allowThreadlessFallback: boolean,
   attempt: (effectiveParams: TParams, effectiveLabel: string) => Promise<T>,
-  opts?: { allowThreadlessFallback?: boolean },
 ): Promise<T> {
   try {
     return await attempt(params, label);
@@ -578,13 +574,10 @@ async function withTelegramThreadFallback<
     // Do not widen this fallback to cover "chat not found".
     // chat-not-found is routing/auth/membership/token; stripping thread IDs hides root cause.
     if (
-      !allowThreadlessRetry ||
+      !allowThreadlessFallback ||
       !hasMessageThreadIdParam(params) ||
       !isTelegramThreadNotFoundError(err)
     ) {
-      throw err;
-    }
-    if (opts?.allowThreadlessFallback === false) {
       throw err;
     }
     if (verbose) {
@@ -661,12 +654,15 @@ export async function sendMessageTelegram(
     useReplyIdAsQuoteSource: true,
   });
   const hasThreadParams = Object.keys(threadParams).length > 0;
-  const allowThreadlessFallback = shouldAllowThreadlessFallback({
-    chatType: target.chatType,
-    resolvedChatId: chatId,
-    targetMessageThreadId: target.messageThreadId,
-    messageThreadId: opts.messageThreadId,
-  });
+  const allowThreadlessFallback = shouldAllowTelegramThreadlessFallback(
+    resolveTelegramThreadlessFallbackSpec({
+      chatType: target.chatType,
+      resolvedChatId: chatId,
+      targetMessageThreadId: target.messageThreadId,
+      messageThreadId: opts.messageThreadId,
+    }),
+    { allowDmThreadFallback: true },
+  );
   const requestWithDiag = createTelegramNonIdempotentRequestWithDiag({
     cfg,
     account,
@@ -704,7 +700,7 @@ export async function sendMessageTelegram(
       params,
       "message",
       opts.verbose,
-      target.chatType !== "direct",
+      allowThreadlessFallback,
       async (effectiveParams, label) => {
         const baseParams = effectiveParams ? { ...effectiveParams } : {};
         if (linkPreviewOptions) {
@@ -742,7 +738,6 @@ export async function sendMessageTelegram(
           requestPlain,
         });
       },
-      { allowThreadlessFallback },
     );
   };
 
@@ -905,10 +900,9 @@ export async function sendMessageTelegram(
         mediaParams,
         label,
         opts.verbose,
-        target.chatType !== "direct",
+        allowThreadlessFallback,
         async (effectiveParams, retryLabel) =>
           requestWithChatNotFound(() => sender(effectiveParams), retryLabel),
-        { allowThreadlessFallback },
       );
 
     const mediaSender = (() => {
@@ -1538,12 +1532,15 @@ export async function sendStickerTelegram(
     replyToMessageId: opts.replyToMessageId,
   });
   const hasThreadParams = Object.keys(threadParams).length > 0;
-  const allowThreadlessFallback = shouldAllowThreadlessFallback({
-    chatType: target.chatType,
-    resolvedChatId: chatId,
-    targetMessageThreadId: target.messageThreadId,
-    messageThreadId: opts.messageThreadId,
-  });
+  const allowThreadlessFallback = shouldAllowTelegramThreadlessFallback(
+    resolveTelegramThreadlessFallbackSpec({
+      chatType: target.chatType,
+      resolvedChatId: chatId,
+      targetMessageThreadId: target.messageThreadId,
+      messageThreadId: opts.messageThreadId,
+    }),
+    { allowDmThreadFallback: true },
+  );
 
   const requestWithDiag = createTelegramNonIdempotentRequestWithDiag({
     cfg,
@@ -1564,10 +1561,9 @@ export async function sendStickerTelegram(
     stickerParams,
     "sticker",
     opts.verbose,
-    target.chatType !== "direct",
+    allowThreadlessFallback,
     async (effectiveParams, label) =>
       requestWithChatNotFound(() => api.sendSticker(chatId, fileId.trim(), effectiveParams), label),
-    { allowThreadlessFallback },
   );
 
   const messageId = resolveTelegramMessageIdOrThrow(result, "sticker send");
@@ -1668,24 +1664,26 @@ export async function sendPollTelegram(
     ...(Object.keys(threadParams).length > 0 ? threadParams : {}),
     ...(opts.silent === true ? { disable_notification: true } : {}),
   };
-  const allowThreadlessFallback = shouldAllowThreadlessFallback({
-    chatType: target.chatType,
-    resolvedChatId: chatId,
-    targetMessageThreadId: target.messageThreadId,
-    messageThreadId: opts.messageThreadId,
-  });
+  const allowThreadlessFallback = shouldAllowTelegramThreadlessFallback(
+    resolveTelegramThreadlessFallbackSpec({
+      chatType: target.chatType,
+      resolvedChatId: chatId,
+      targetMessageThreadId: target.messageThreadId,
+      messageThreadId: opts.messageThreadId,
+    }),
+    { allowDmThreadFallback: true },
+  );
 
   const result = await withTelegramThreadFallback(
     pollParams,
     "poll",
     opts.verbose,
-    target.chatType !== "direct",
+    allowThreadlessFallback,
     async (effectiveParams, label) =>
       requestWithChatNotFound(
         () => api.sendPoll(chatId, normalizedPoll.question, pollOptions, effectiveParams),
         label,
       ),
-    { allowThreadlessFallback },
   );
 
   const messageId = resolveTelegramMessageIdOrThrow(result, "poll send");
