@@ -893,6 +893,9 @@ function shouldPrePairTestDevice(params: {
   if (params.opts?.prePairDevice !== undefined) {
     return params.opts.prePairDevice;
   }
+  if (params.opts?.skipDefaultAuth === true) {
+    return false;
+  }
   return (
     params.client.mode === GATEWAY_CLIENT_MODES.WEBCHAT ||
     params.client.id === GATEWAY_CLIENT_NAMES.WEBCHAT_UI
