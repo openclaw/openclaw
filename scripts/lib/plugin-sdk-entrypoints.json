@@ -53,6 +53,7 @@
   "outbound-media",
   "outbound-send-deps",
   "outbound-runtime",
+  "pair-loop-guard-runtime",
   "poll-runtime",
   "async-lock-runtime",
   "channel-activity-runtime",

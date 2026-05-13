@@ -309,6 +309,17 @@ function safeOriginalFilenameExtension(originalFilename?: string): string | unde
   return /^\.[a-z0-9]{1,16}$/.test(ext) ? ext : undefined;
 }
 
+function extensionForAuthoritativeHeaderMime(contentType?: string): string | undefined {
+  const mime = normalizeOptionalString(contentType?.split(";")[0]);
+  if (!mime || mime === "application/octet-stream" || mime === "binary/octet-stream") {
+    return undefined;
+  }
+  if (mime === "application/zip") {
+    return undefined;
+  }
+  return extensionForMime(mime);
+}
+
 function buildSavedMediaResult(params: {
   dir: string;
   id: string;
@@ -337,6 +348,52 @@ async function writeSavedMediaBuffer(params: {
         tempPrefix: `.${params.id}`,
       }),
   );
+}
+
+async function writeMediaStreamToFile(params: {
+  stream: AsyncIterable<unknown>;
+  tempPath: string;
+  maxBytes: number;
+}): Promise<{ sniffBuffer: Buffer; size: number }> {
+  const handle = await fs.open(params.tempPath, "wx", MEDIA_FILE_MODE);
+  const sniffChunks: Buffer[] = [];
+  let sniffLen = 0;
+  let total = 0;
+  try {
+    for await (const chunk of params.stream) {
+      const buffer = Buffer.isBuffer(chunk)
+        ? chunk
+        : typeof chunk === "string"
+          ? Buffer.from(chunk)
+          : chunk instanceof ArrayBuffer
+            ? Buffer.from(chunk)
+            : ArrayBuffer.isView(chunk)
+              ? Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength)
+              : undefined;
+      if (!buffer) {
+        throw new TypeError(`Unsupported media stream chunk: ${typeof chunk}`);
+      }
+      if (buffer.byteLength === 0) {
+        continue;
+      }
+      total += buffer.byteLength;
+      if (total > params.maxBytes) {
+        throw new Error(`Media exceeds ${formatMediaLimitMb(params.maxBytes)} limit`);
+      }
+      if (sniffLen < 16384) {
+        const remaining = 16384 - sniffLen;
+        sniffChunks.push(buffer.byteLength > remaining ? buffer.subarray(0, remaining) : buffer);
+        sniffLen += Math.min(buffer.byteLength, remaining);
+      }
+      await handle.write(buffer);
+    }
+    return {
+      sniffBuffer: Buffer.concat(sniffChunks, sniffLen),
+      size: total,
+    };
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
 }
 
 export type SaveMediaSourceErrorCode =
@@ -452,6 +509,7 @@ export async function saveMediaBuffer(
   subdir = "inbound",
   maxBytes = MAX_BYTES,
   originalFilename?: string,
+  detectionFilePathHint?: string,
 ): Promise<SavedMedia> {
   if (buffer.byteLength > maxBytes) {
     throw new Error(`Media exceeds ${formatMediaLimitMb(maxBytes)} limit`);
@@ -459,13 +517,64 @@ export async function saveMediaBuffer(
   const dir = resolveMediaScopedDir(subdir, "saveMediaBuffer");
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   const uuid = crypto.randomUUID();
-  const headerExt = extensionForMime(normalizeOptionalString(contentType?.split(";")[0]));
-  const mime = await detectMime({ buffer, headerMime: contentType });
+  const headerExt = extensionForAuthoritativeHeaderMime(contentType);
+  const mime = await detectMime({
+    buffer,
+    headerMime: contentType,
+    filePath: originalFilename ?? detectionFilePathHint,
+  });
   const ext =
     headerExt ?? extensionForMime(mime) ?? safeOriginalFilenameExtension(originalFilename) ?? "";
   const id = buildSavedMediaId({ baseId: uuid, ext, originalFilename });
   await writeSavedMediaBuffer({ subdir, id, buffer });
   return buildSavedMediaResult({ dir, id, size: buffer.byteLength, contentType: mime });
+}
+
+export async function saveMediaStream(
+  stream: AsyncIterable<unknown>,
+  contentType?: string,
+  subdir = "inbound",
+  maxBytes = MAX_BYTES,
+  originalFilename?: string,
+  detectionFilePathHint?: string,
+): Promise<SavedMedia> {
+  const dir = resolveMediaScopedDir(subdir, "saveMediaStream");
+  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+  const baseId = crypto.randomUUID();
+  const headerExt = extensionForAuthoritativeHeaderMime(contentType);
+  const saved = await retryAfterRecreatingDir(dir, () =>
+    writeSiblingTempFile<{ id: string; size: number; contentType?: string }>({
+      dir,
+      mode: MEDIA_FILE_MODE,
+      tempPrefix: `.${baseId}`,
+      writeTemp: async (tempPath) => {
+        const { sniffBuffer, size } = await writeMediaStreamToFile({
+          stream,
+          tempPath,
+          maxBytes,
+        });
+        const mime = await detectMime({
+          buffer: sniffBuffer,
+          headerMime: contentType,
+          filePath: originalFilename ?? detectionFilePathHint,
+        });
+        const ext =
+          headerExt ??
+          extensionForMime(mime) ??
+          safeOriginalFilenameExtension(originalFilename) ??
+          "";
+        const id = buildSavedMediaId({ baseId, ext, originalFilename });
+        return { id, size, contentType: mime };
+      },
+      resolveFinalPath: (result) => path.join(dir, result.id),
+    }),
+  );
+  return buildSavedMediaResult({
+    dir,
+    id: saved.result.id,
+    size: saved.result.size,
+    contentType: saved.result.contentType,
+  });
 }
 
 /**

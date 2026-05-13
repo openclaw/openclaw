@@ -2,6 +2,7 @@ import {
   implicitMentionKindWhen,
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-mention-gating";
+import { createPluginRuntimeMediaMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { vi } from "vitest";
 import type { PluginRuntime } from "./runtime-api.js";
 import { setMatrixRuntime } from "./runtime.js";
@@ -75,10 +76,9 @@ export function installMatrixMonitorTestRuntime(
         implicitMentionKindWhen,
         resolveInboundMentionDecision,
       },
-      media: {
-        fetchRemoteMedia: vi.fn(),
+      media: createPluginRuntimeMediaMock({
         saveMediaBuffer: options.saveMediaBuffer ?? vi.fn(),
-      },
+      }) as unknown as PluginRuntime["channel"]["media"],
     },
   });
 }

@@ -165,6 +165,29 @@ describe("handshake auth helpers", () => {
     ).toBe(false);
   });
 
+  it("requires explicit pairing for browser-origin clients even when locality resolves local", () => {
+    for (const locality of ["direct_local", "browser_container_local"] as const) {
+      expect(
+        shouldAllowSilentLocalPairing({
+          locality,
+          hasBrowserOriginHeader: true,
+          isControlUi: true,
+          isWebchat: true,
+          reason: "not-paired",
+        }),
+      ).toBe(false);
+      expect(
+        shouldAllowSilentLocalPairing({
+          locality,
+          hasBrowserOriginHeader: true,
+          isControlUi: true,
+          isWebchat: true,
+          reason: "role-upgrade",
+        }),
+      ).toBe(false);
+    }
+  });
+
   it("classifies direct local requests ahead of any Docker CLI fallback", () => {
     const connectParams = {
       client: {

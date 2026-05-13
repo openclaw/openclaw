@@ -660,7 +660,7 @@ describe("installPluginFromNpmSpec", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toContain("plain-crypto-js");
-      expect(result.error).toContain("node_modules/plain-crypto-js");
+      expect(result.error).toContain(path.join("node_modules", "plain-crypto-js"));
     }
   });
 

@@ -7,7 +7,7 @@ import type { PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { maxBytesForKind, type MediaKind } from "./constants.js";
-import { fetchRemoteMedia } from "./fetch.js";
+import { readRemoteMediaBuffer } from "./fetch.js";
 import {
   convertHeicToJpeg,
   hasAlphaChannel,
@@ -532,7 +532,7 @@ async function loadWebMediaInternal(
           allowPrivateProxy: true,
         }
       : undefined;
-    const fetched = await fetchRemoteMedia({
+    const fetched = await readRemoteMediaBuffer({
       url: mediaUrl,
       fetchImpl,
       requestInit,
