@@ -682,11 +682,7 @@ describe("createOpenClawCodingTools", () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();
     const agentId = `inherited-allow-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    const storeTemplate = path.join(
-      os.tmpdir(),
-      `openclaw-session-store-${agentId}-{agentId}.json`,
-    );
-    await writeSessionStore(storeTemplate, agentId, {
+    await writeSessionRows(agentId, {
       [`agent:${agentId}:subagent:limited`]: {
         sessionId: "limited-session",
         updatedAt: Date.now(),
@@ -699,11 +695,7 @@ describe("createOpenClawCodingTools", () => {
 
     createOpenClawCodingTools({
       sessionKey: `agent:${agentId}:subagent:limited`,
-      config: {
-        session: {
-          store: storeTemplate,
-        },
-      },
+      config: {},
     });
 
     expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);

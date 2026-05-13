@@ -130,14 +130,6 @@ function requireLoadWebMediaOptions(): Record<string, unknown> {
   return requireRecord(call[1]);
 }
 
-function requireLoadWebMediaCall(): readonly unknown[] {
-  const call = vi.mocked(loadWebMedia).mock.calls[0];
-  if (!call) {
-    throw new Error("Expected loadWebMedia to be called");
-  }
-  return call;
-}
-
 async function expectSandboxMediaRewrite(params: {
   sandboxDir: string;
   media?: string;
