@@ -2,6 +2,57 @@ import { describe, expect, it } from "vitest";
 import { validateConfigObject } from "./validation.js";
 
 describe("config schema regressions", () => {
+  it("accepts legacy Discord guild channel allow aliases during bundled validation", () => {
+    const res = validateConfigObject({
+      channels: {
+        discord: {
+          token: "test-token",
+          groupPolicy: "allowlist",
+          guilds: {
+            "111111111111111111": {
+              channels: {
+                "222222222222222222": {
+                  allow: false,
+                  requireMention: false,
+                },
+              },
+            },
+          },
+          accounts: {
+            work: {
+              token: "account-token",
+              groupPolicy: "allowlist",
+              guilds: {
+                "333333333333333333": {
+                  channels: {
+                    "444444444444444444": {
+                      allow: true,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(
+      res.config.channels?.discord?.guilds?.["111111111111111111"]?.channels?.[
+        "222222222222222222"
+      ],
+    ).toMatchObject({ enabled: false, requireMention: false });
+    expect(
+      res.config.channels?.discord?.accounts?.work?.guilds?.["333333333333333333"]?.channels?.[
+        "444444444444444444"
+      ],
+    ).toMatchObject({ enabled: true });
+  });
+
   it("accepts session write-lock acquire timeout", () => {
     const res = validateConfigObject({
       session: {

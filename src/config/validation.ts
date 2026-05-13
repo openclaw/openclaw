@@ -57,16 +57,105 @@ type AllowedValuesCollection = {
 };
 type JsonSchemaLike = Record<string, unknown>;
 
-function stripDeprecatedValidationKeys(raw: unknown): unknown {
-  if (!isRecord(raw) || !isRecord(raw.commands) || !Object.hasOwn(raw.commands, "modelsWrite")) {
+function migrateDiscordGuildChannelAllowAliasesInEntry(value: unknown): {
+  changed: boolean;
+  value: unknown;
+} {
+  const entry = isRecord(value) ? value : null;
+  const guilds = isRecord(entry?.guilds) ? entry.guilds : null;
+  if (!entry || !guilds) {
+    return { changed: false, value };
+  }
+
+  let guildsChanged = false;
+  const nextGuilds: Record<string, unknown> = { ...guilds };
+  for (const [guildId, guildValue] of Object.entries(guilds)) {
+    const guild = isRecord(guildValue) ? guildValue : null;
+    const channels = isRecord(guild?.channels) ? guild.channels : null;
+    if (!guild || !channels) {
+      continue;
+    }
+
+    let channelsChanged = false;
+    const nextChannels: Record<string, unknown> = { ...channels };
+    for (const [channelId, channelValue] of Object.entries(channels)) {
+      const channel = isRecord(channelValue) ? channelValue : null;
+      if (!channel || !Object.hasOwn(channel, "allow")) {
+        continue;
+      }
+      const nextChannel: Record<string, unknown> = { ...channel };
+      if (!Object.hasOwn(nextChannel, "enabled")) {
+        nextChannel.enabled = nextChannel.allow;
+      }
+      delete nextChannel.allow;
+      nextChannels[channelId] = nextChannel;
+      channelsChanged = true;
+    }
+
+    if (!channelsChanged) {
+      continue;
+    }
+    nextGuilds[guildId] = { ...guild, channels: nextChannels };
+    guildsChanged = true;
+  }
+
+  return guildsChanged
+    ? { changed: true, value: { ...entry, guilds: nextGuilds } }
+    : { changed: false, value };
+}
+
+function migrateDiscordGuildChannelAllowAliases(raw: unknown): unknown {
+  const root = isRecord(raw) ? raw : null;
+  const channels = isRecord(root?.channels) ? root.channels : null;
+  const discord = isRecord(channels?.discord) ? channels.discord : null;
+  if (!root || !channels || !discord) {
     return raw;
   }
-  const commands = { ...raw.commands };
-  delete commands.modelsWrite;
-  return {
-    ...raw,
-    commands,
+
+  const rootResult = migrateDiscordGuildChannelAllowAliasesInEntry(discord);
+  const accounts = isRecord(discord.accounts) ? discord.accounts : null;
+  let accountsChanged = false;
+  let nextAccounts: Record<string, unknown> | undefined;
+  if (accounts) {
+    nextAccounts = { ...accounts };
+    for (const [accountId, account] of Object.entries(accounts)) {
+      const result = migrateDiscordGuildChannelAllowAliasesInEntry(account);
+      if (!result.changed) {
+        continue;
+      }
+      nextAccounts[accountId] = result.value;
+      accountsChanged = true;
+    }
+  }
+
+  if (!rootResult.changed && !accountsChanged) {
+    return raw;
+  }
+
+  const nextDiscord = {
+    ...(rootResult.value as Record<string, unknown>),
+    ...(accountsChanged ? { accounts: nextAccounts } : {}),
   };
+  return {
+    ...root,
+    channels: {
+      ...channels,
+      discord: nextDiscord,
+    },
+  };
+}
+
+function stripDeprecatedValidationKeys(raw: unknown): unknown {
+  let next = raw;
+  if (isRecord(next) && isRecord(next.commands) && Object.hasOwn(next.commands, "modelsWrite")) {
+    const commands = { ...next.commands };
+    delete commands.modelsWrite;
+    next = {
+      ...next,
+      commands,
+    };
+  }
+  return migrateDiscordGuildChannelAllowAliases(next);
 }
 
 const CUSTOM_EXPECTED_ONE_OF_RE = /expected one of ((?:"[^"]+"(?:\|"?[^"]+"?)*)+)/i;
