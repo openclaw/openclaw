@@ -44,6 +44,7 @@ const WikiClaimEvidenceSchema = Type.Object(
     sourceId: Type.Optional(Type.String({ minLength: 1 })),
     path: Type.Optional(Type.String({ minLength: 1 })),
     lines: Type.Optional(Type.String({ minLength: 1 })),
+    hash: Type.Optional(Type.String({ minLength: 1 })),
     weight: Type.Optional(Type.Number({ minimum: 0 })),
     note: Type.Optional(Type.String({ minLength: 1 })),
     confidence: Type.Optional(Type.Number({ minimum: 0, maximum: 1 })),
