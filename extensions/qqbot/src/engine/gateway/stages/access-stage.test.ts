@@ -97,7 +97,7 @@ function buildDeps(
             }) as QQBotInboundAccess,
         ),
       },
-    } as InboundPipelineDeps["adapters"],
+    } as unknown as InboundPipelineDeps["adapters"],
   };
 }
 
