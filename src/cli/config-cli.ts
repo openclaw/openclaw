@@ -1795,9 +1795,12 @@ async function runConfigOperations(params: {
           ),
         );
       }
+      const noun = operations.every((operation) => operation.mutation === "delete")
+        ? "removal"
+        : "update";
       runtime.log(
         info(
-          `Dry run successful: ${operations.length} update(s) validated against ${shortenHomePath(snapshot.path)}.`,
+          `Dry run successful: ${operations.length} ${noun}(s) validated against ${shortenHomePath(snapshot.path)}.`,
         ),
       );
     }
@@ -1977,7 +1980,11 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
   }
 }
 
-export async function runConfigUnset(opts: { path: string; runtime?: RuntimeEnv }) {
+export async function runConfigUnset(opts: {
+  path: string;
+  dryRun?: boolean | undefined;
+  runtime?: RuntimeEnv;
+}) {
   const runtime = opts.runtime ?? defaultRuntime;
   try {
     const parsedPath = parseRequiredPath(opts.path);
@@ -1998,6 +2005,15 @@ export async function runConfigUnset(opts: { path: string; runtime?: RuntimeEnv 
         ),
       );
       runtime.exit(1);
+      return;
+    }
+    if (opts.dryRun) {
+      await runConfigOperations({
+        runtime,
+        operations: [buildDeleteOperation(parsedPath)],
+        options: { dryRun: true },
+        successMode: "set",
+      });
       return;
     }
     await replaceConfigFile({
@@ -2249,8 +2265,9 @@ export function registerConfigCli(program: Command) {
     .command("unset")
     .description("Remove a config value by dot path")
     .argument("<path>", "Config path (dot or bracket notation)")
-    .action(async (path: string) => {
-      await runConfigUnset({ path });
+    .option("--dry-run", "Validate the removal without writing openclaw.json", false)
+    .action(async (path: string, opts: { dryRun?: boolean | undefined }) => {
+      await runConfigUnset({ path, dryRun: opts.dryRun });
     });
 
   cmd

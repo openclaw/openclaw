@@ -1083,7 +1083,9 @@ describe("config cli", () => {
 
       const configCommand = program.commands.find((command) => command.name() === "config");
       const setCommand = configCommand?.commands.find((command) => command.name() === "set");
+      const unsetCommand = configCommand?.commands.find((command) => command.name() === "unset");
       const helpText = setCommand?.helpInformation() ?? "";
+      const unsetHelpText = unsetCommand?.helpInformation() ?? "";
       const configHelpText = configCommand?.helpInformation() ?? "";
 
       expect(configHelpText).toContain("get/set/patch/unset/file/schema/validate");
@@ -1106,6 +1108,8 @@ describe("config cli", () => {
       expect(helpText).toContain(
         "openclaw config set --batch-file ./config-set.batch.json --dry-run",
       );
+      expect(unsetHelpText).toContain("--dry-run");
+      expect(unsetHelpText).toContain("Validate the removal without writing openclaw.json");
     });
   });
 
@@ -2523,6 +2527,37 @@ describe("config cli", () => {
       expect(firstWriteConfigOptions()).toEqual({
         unsetPaths: [["channels", "discord", "guilds", "123"]],
       });
+    });
+
+    it("dry-runs config unset without writing (#80721)", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+        tools: {
+          profile: "coding",
+          alsoAllow: ["agents_list"],
+        },
+      };
+      setSnapshot(resolved, resolved);
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "unset", "tools.alsoAllow", "--dry-run"]);
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expectLogIncludes("Dry run successful: 1 removal(s) validated against /tmp/openclaw.json.");
+    });
+
+    it("keeps config unset dry-run path-not-found behavior write-free", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+      };
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigCommand(["config", "unset", "tools.alsoAllow", "--dry-run"]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expectErrorIncludes("Config path not found: tools.alsoAllow");
     });
   });
 
