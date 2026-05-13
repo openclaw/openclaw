@@ -150,9 +150,10 @@ export function buildMctlConnectStatus(params: {
   }
   if (params.credentials) {
     const needsReauth = expired && (params.credentials.refreshFailureCount ?? 0) > 0;
+    const state = needsReauth ? "needs_reauth" : expired ? "expired" : "connected";
     return {
-      state: needsReauth ? "needs_reauth" : expired ? "expired" : "connected",
-      connected: !expired,
+      state,
+      connected: state === "connected",
       pending: false,
       apiBase: params.credentials.apiBase || params.apiBase,
       login: params.credentials.login,

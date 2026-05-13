@@ -166,8 +166,8 @@ async function refreshMctlCredentials(
     login: decodeJwtSubject(accessToken) ?? credentials.login,
     updatedAt: new Date(now).toISOString(),
     expiresAt: expiresIn ? new Date(now + expiresIn * 1000).toISOString() : credentials.expiresAt,
-    refreshFailureCount: undefined,
-    refreshFailureFirstAt: undefined,
+    refreshFailureCount: 0,
+    refreshFailureFirstAt: null,
   };
   await writeMctlCredentials(refreshed);
   return refreshed;
@@ -180,10 +180,21 @@ export const mctlHandlers: GatewayRequestHandlers = {
       readMctlCredentials(),
       readMctlPendingConnect(),
     ]);
-    if (!pending && credentials && isExpired(credentials) && credentials.refreshToken.trim()) {
+    if (
+      !pending &&
+      credentials &&
+      isExpired(credentials) &&
+      credentials.refreshToken.trim() &&
+      (credentials.refreshFailureCount ?? 0) === 0
+    ) {
       credentials = await serializeMctlStatusByKey("mctl-oauth-refresh", async () => {
         const latest = await readMctlCredentials();
-        if (!latest || !isExpired(latest) || !latest.refreshToken.trim()) {
+        if (
+          !latest ||
+          !isExpired(latest) ||
+          !latest.refreshToken.trim() ||
+          (latest.refreshFailureCount ?? 0) > 0
+        ) {
           return latest;
         }
         return await refreshMctlCredentials(latest);
