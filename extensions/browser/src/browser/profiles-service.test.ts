@@ -8,7 +8,27 @@ import type { BrowserRouteContext, BrowserServerState } from "./server-context.j
 import { movePathToTrash } from "./trash.js";
 
 const configMocks = vi.hoisted(() => ({
+  getRuntimeConfig: vi.fn<() => OpenClawConfig>(),
   writeConfigFile: vi.fn<(cfg: OpenClawConfig) => Promise<void>>(async (_cfg) => {}),
+  mutateConfigFile: vi.fn(
+    async (params: {
+      mutate: (draft: OpenClawConfig, context: { snapshot: { path: string } }) => unknown;
+    }) => {
+      const draft = structuredClone(configMocks.getRuntimeConfig());
+      const result = await params.mutate(draft, { snapshot: { path: "/tmp/openclaw.json" } });
+      await configMocks.writeConfigFile(draft);
+      return {
+        path: "/tmp/openclaw.json",
+        previousHash: "test-hash",
+        snapshot: { path: "/tmp/openclaw.json" },
+        nextConfig: draft,
+        result,
+        attempts: 1,
+        afterWrite: { mode: "auto" },
+        followUp: { action: "none" },
+      };
+    },
+  ),
 }));
 const writeConfigFile = configMocks.writeConfigFile;
 
@@ -16,10 +36,11 @@ vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
   return {
     ...actual,
-    getRuntimeConfig: vi.fn(),
     replaceConfigFile: vi.fn(async ({ nextConfig }: { nextConfig: OpenClawConfig }) => {
       await configMocks.writeConfigFile(nextConfig);
     }),
+    mutateConfigFile: configMocks.mutateConfigFile,
+    getRuntimeConfig: configMocks.getRuntimeConfig,
   };
 });
 
