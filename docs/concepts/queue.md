@@ -1,8 +1,8 @@
 ---
-summary: "Auto-reply fallback queue modes, defaults, and per-session overrides"
+summary: "Auto-reply queue modes, defaults, and per-session overrides"
 read_when:
   - Changing auto-reply execution or concurrency
-  - Explaining /queue fallback modes or message steering behavior
+  - Explaining /queue modes or message steering behavior
 title: "Command queue"
 ---
 
@@ -25,29 +25,24 @@ We serialize inbound auto-reply runs (all channels) through a tiny in-process qu
 
 When unset, all inbound channel surfaces use:
 
-- same-turn steering for prompts that arrive while a session run is active
-- fallback `mode: "followup"`
+- `mode: "steer"`
 - `debounceMs: 500`
 - `cap: 20`
 - `drop: "summarize"`
 
-Same-turn steering is automatic. A prompt that arrives mid-run is first injected
+Same-turn steering is the default. A prompt that arrives mid-run is injected
 into the active runtime when the run can accept steering, so no second session
-run is started. If the active run cannot accept steering, OpenClaw uses the
-fallback queue mode.
+run is started. If the active run cannot accept steering, OpenClaw waits for the
+active run to finish before starting the prompt.
 
 ## Queue modes
 
-`/queue` controls fallback behavior after steering is unavailable or disabled by
-`interrupt`. It no longer has steering-specific modes:
+`/queue` controls active-run behavior:
 
+- `steer`: inject messages into the active runtime. Pi delivers all pending steering messages **after the current assistant turn finishes executing its tool calls**, before the next LLM call; Codex app-server receives one batched `turn/steer`. If the run is not actively streaming or steering is unavailable, OpenClaw waits until the active run ends before starting the prompt.
 - `followup`: enqueue each message for a later agent turn after the current run ends.
 - `collect`: coalesce queued messages into a **single** followup turn after the quiet window. If messages target different channels/threads, they drain individually to preserve routing.
 - `interrupt`: abort the active run for that session, then run the newest message.
-
-Pi delivers steered messages **after the current assistant turn finishes
-executing its tool calls**, before the next LLM call. Codex app-server receives
-one batched `turn/steer` request after the quiet window.
 
 For runtime-specific timing and dependency behavior, see
 [Steering queue](/concepts/queue-steering). For the explicit `/steer <message>`
@@ -59,7 +54,7 @@ Configure globally or per channel via `messages.queue`:
 {
   messages: {
     queue: {
-      mode: "followup",
+      mode: "steer",
       debounceMs: 500,
       cap: 20,
       drop: "summarize",
@@ -98,7 +93,7 @@ keys.
 
 ## Per-session overrides
 
-- Send `/queue <followup|collect|interrupt>` as a standalone command to store the fallback mode for the current session.
+- Send `/queue <steer|followup|collect|interrupt>` as a standalone command to store the queue mode for the current session.
 - Options can be combined: `/queue collect debounce:0.5s cap:25 drop:summarize`
 - `/queue default` or `/queue reset` clears the session override.
 

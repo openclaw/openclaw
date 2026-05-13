@@ -2,7 +2,7 @@
 summary: "Steer an active run without changing queue mode"
 read_when:
   - Using /steer or /tell while an agent is already running
-  - Comparing /steer with /queue steer
+  - Comparing /steer with /queue modes
   - Deciding whether to steer the current run, a sub-agent, or an ACP session
 title: "Steer"
 sidebarTitle: "Steer"
@@ -33,19 +33,20 @@ Behavior:
 
 ## Steer vs queue
 
-`/queue steer` changes how normal inbound messages behave when they arrive
-while a run is active. `/steer <message>` is an explicit command that tries to
-inject that command's message into the active run at the next supported runtime
-boundary, regardless of the stored `/queue` setting. When that injection is not
-available, the command prefix is stripped and `<message>` continues as a normal
-prompt.
+`/queue steer` makes normal inbound messages try to steer the active run when
+they arrive while a run is active. `/steer <message>` is an explicit command
+that tries to inject that command's message into the active run at the next
+supported runtime boundary, regardless of the stored `/queue` setting. When
+that injection is not available, the command prefix is stripped and `<message>`
+continues as a normal prompt.
 
 Use:
 
 - `/steer <message>` when you want to guide the active run right now.
-- Normal messages already try to steer active runs by default.
-- `/queue collect` or `/queue followup` when you want to choose how messages
-  wait for a later turn if steering is unavailable.
+- `/queue steer` when you want future normal messages to steer active runs by
+  default.
+- `/queue collect` or `/queue followup` when future normal messages should wait
+  for a later turn instead of steering the active run.
 - `/queue interrupt` when the newest message should replace the active run
   instead of steering it.
 

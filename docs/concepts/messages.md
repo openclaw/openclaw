@@ -126,12 +126,13 @@ default) and per-channel overrides like `channels.slack.historyLimit` or
 ## Queueing and followups
 
 If a run is already active, inbound messages are steered into the current run by
-default. `messages.queue` selects fallback behavior for runtimes that cannot
-accept same-turn steering.
+default. `messages.queue` selects whether active-run messages steer, queue for
+later, collect into one later turn, or interrupt the active run.
 
 - Configure via `messages.queue` (and `messages.queue.byChannel`).
-- Default fallback mode is `followup`, with a 500ms debounce.
-- Fallback modes: `followup`, `collect`, and `interrupt`.
+- Default mode is `steer`, with a 500ms debounce for Codex steering batches and
+  followup/collect queues.
+- Modes: `steer`, `followup`, `collect`, and `interrupt`.
 
 Details: [Command queue](/concepts/queue) and [Steering queue](/concepts/queue-steering).
 

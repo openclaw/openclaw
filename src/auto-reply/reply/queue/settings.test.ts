@@ -3,9 +3,9 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveQueueSettings } from "./settings.js";
 
 describe("resolveQueueSettings", () => {
-  it("defaults inbound channels to followup fallback settings", () => {
+  it("defaults inbound channels to steering settings", () => {
     expect(resolveQueueSettings({ cfg: {} as OpenClawConfig })).toEqual({
-      mode: "followup",
+      mode: "steer",
       debounceMs: 500,
       cap: 20,
       dropPolicy: "summarize",
@@ -55,19 +55,38 @@ describe("resolveQueueSettings", () => {
     });
   });
 
+  it("uses explicit steer mode from config", () => {
+    expect(
+      resolveQueueSettings({
+        cfg: {
+          messages: {
+            queue: {
+              mode: "steer",
+            },
+          },
+        } as OpenClawConfig,
+      }),
+    ).toEqual({
+      mode: "steer",
+      debounceMs: 500,
+      cap: 20,
+      dropPolicy: "summarize",
+    });
+  });
+
   it("ignores removed steering queue modes from stale config", () => {
     expect(
       resolveQueueSettings({
         cfg: {
           messages: {
             queue: {
-              mode: "steer" as never,
+              mode: "steer-backlog" as never,
             },
           },
         } as OpenClawConfig,
       }),
     ).toEqual({
-      mode: "followup",
+      mode: "steer",
       debounceMs: 500,
       cap: 20,
       dropPolicy: "summarize",

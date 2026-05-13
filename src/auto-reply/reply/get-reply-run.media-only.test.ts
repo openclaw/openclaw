@@ -103,7 +103,7 @@ vi.mock("./inbound-meta.js", () => ({
 }));
 
 vi.mock("./queue/settings-runtime.js", () => ({
-  resolveQueueSettings: vi.fn().mockReturnValue({ mode: "followup" }),
+  resolveQueueSettings: vi.fn().mockReturnValue({ mode: "steer" }),
 }));
 
 vi.mock("./route-reply.runtime.js", () => ({
@@ -515,63 +515,60 @@ describe("runPreparedReply media-only handling", () => {
     ["matrix", "collect"],
     ["msteams", "collect"],
     ["webchat", "followup"],
-  ] as const)(
-    "enables default same-turn steering for active %s runs before %s fallback",
-    async (channel, fallbackMode) => {
-      const queueSettings = await import("./queue/settings-runtime.js");
-      const piRuntime = await import("../../agents/pi-embedded.runtime.js");
-      vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({
-        mode: fallbackMode,
-        debounceMs: 500,
-        cap: 20,
-        dropPolicy: "summarize",
-      });
-      vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId)
-        .mockReturnValueOnce("active-session")
-        .mockReturnValueOnce("active-session");
-      vi.mocked(piRuntime.isEmbeddedPiRunActive).mockReturnValueOnce(true);
-      vi.mocked(piRuntime.isEmbeddedPiRunStreaming).mockReturnValueOnce(true);
+  ] as const)("enables default same-turn steering for active %s runs", async (channel) => {
+    const queueSettings = await import("./queue/settings-runtime.js");
+    const piRuntime = await import("../../agents/pi-embedded.runtime.js");
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({
+      mode: "steer",
+      debounceMs: 500,
+      cap: 20,
+      dropPolicy: "summarize",
+    });
+    vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId)
+      .mockReturnValueOnce("active-session")
+      .mockReturnValueOnce("active-session");
+    vi.mocked(piRuntime.isEmbeddedPiRunActive).mockReturnValueOnce(true);
+    vi.mocked(piRuntime.isEmbeddedPiRunStreaming).mockReturnValueOnce(true);
 
-      const params = baseParams({
-        sessionKey: `agent:main:${channel}:direct:steer-smoke`,
-      });
-      params.ctx = {
-        ...params.ctx,
-        Provider: channel,
-        OriginatingChannel: channel,
-        OriginatingTo: `${channel}-target`,
-        ChatType: "direct",
-      } as never;
-      params.sessionCtx = {
-        ...params.sessionCtx,
-        Provider: channel,
-        OriginatingChannel: channel,
-        OriginatingTo: `${channel}-target`,
-        ChatType: "direct",
-      } as never;
-      params.command = {
-        ...(params.command as Record<string, unknown>),
-        surface: channel,
-        channel,
-      } as never;
+    const params = baseParams({
+      sessionKey: `agent:main:${channel}:direct:steer-smoke`,
+    });
+    params.ctx = {
+      ...params.ctx,
+      Provider: channel,
+      OriginatingChannel: channel,
+      OriginatingTo: `${channel}-target`,
+      ChatType: "direct",
+    } as never;
+    params.sessionCtx = {
+      ...params.sessionCtx,
+      Provider: channel,
+      OriginatingChannel: channel,
+      OriginatingTo: `${channel}-target`,
+      ChatType: "direct",
+    } as never;
+    params.command = {
+      ...(params.command as Record<string, unknown>),
+      surface: channel,
+      channel,
+    } as never;
 
-      await runPreparedReply(params);
+    await runPreparedReply(params);
 
-      expect(queueSettings.resolveQueueSettings).toHaveBeenCalledWith(
-        expect.objectContaining({ channel }),
-      );
-      const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
-      expect(call).toMatchObject({
-        shouldSteer: true,
-        shouldFollowup: true,
-        isActive: true,
-        isStreaming: true,
-        resolvedQueue: expect.objectContaining({ mode: fallbackMode }),
-      });
-      expect(call?.followupRun.run.messageProvider).toBe(channel);
-      expect(call?.followupRun.originatingChannel).toBe(channel);
-    },
-  );
+    expect(queueSettings.resolveQueueSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ channel }),
+    );
+    const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
+    expect(call).toMatchObject({
+      shouldSteer: true,
+      shouldFollowup: true,
+      isActive: true,
+      isStreaming: true,
+      resolvedQueue: expect.objectContaining({ mode: "steer" }),
+    });
+    expect(call?.followupRun.run.messageProvider).toBe(channel);
+    expect(call?.followupRun.originatingChannel).toBe(channel);
+  });
 
   it("keeps thread history context on follow-up turns", async () => {
     const result = await runPreparedReply(

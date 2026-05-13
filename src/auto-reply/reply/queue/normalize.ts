@@ -9,6 +9,9 @@ export function normalizeQueueMode(raw?: string): QueueMode | undefined {
   if (cleaned === "interrupt" || cleaned === "interrupts" || cleaned === "abort") {
     return "interrupt";
   }
+  if (cleaned === "steer" || cleaned === "steering") {
+    return "steer";
+  }
   if (cleaned === "followup" || cleaned === "follow-ups" || cleaned === "followups") {
     return "followup";
   }

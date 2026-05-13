@@ -135,7 +135,7 @@ describe("legacy config detection", () => {
   });
   it("rejects retired messages.queue.mode without mutating the source", () => {
     expectOpenClawSchemaInvalidPreservesField({
-      config: { messages: { queue: { mode: "steer" } } },
+      config: { messages: { queue: { mode: "queue" } } },
       readValue: (parsed) =>
         (
           parsed as {
@@ -146,7 +146,7 @@ describe("legacy config detection", () => {
             };
           }
         ).messages?.queue?.mode,
-      expectedValue: "steer",
+      expectedValue: "queue",
       expectedPath: "messages.queue.mode",
     });
   });

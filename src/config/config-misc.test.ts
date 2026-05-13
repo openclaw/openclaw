@@ -1111,7 +1111,7 @@ describe("config strict validation", () => {
     const raw = {
       messages: {
         queue: {
-          mode: "steer",
+          mode: "queue",
           byChannel: {
             discord: "steer-backlog",
             telegram: "collect",
@@ -1123,7 +1123,7 @@ describe("config strict validation", () => {
 
     expect(issues.some((issue) => issue.path === "messages.queue.mode")).toBe(true);
     expect(issues.some((issue) => issue.path === "messages.queue.byChannel")).toBe(true);
-    expect(raw.messages.queue.mode).toBe("steer");
+    expect(raw.messages.queue.mode).toBe("queue");
     expect(raw.messages.queue.byChannel.discord).toBe("steer-backlog");
   });
 

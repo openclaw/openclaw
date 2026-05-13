@@ -8,9 +8,10 @@ title: "Steering queue"
 ---
 
 When a normal prompt arrives while a session run is already streaming, OpenClaw
-tries to send that prompt into the active runtime by default. No config entry
-and no queue directive are required. Pi and the native Codex app-server
-harness implement the delivery details differently.
+tries to send that prompt into the active runtime by default when the queue mode
+is `steer`. No config entry and no queue directive are required for that default
+behavior. Pi and the native Codex app-server harness implement the delivery
+details differently.
 
 ## Runtime boundary
 
@@ -32,19 +33,20 @@ quiet window, then sends a single `turn/steer` request with all collected user
 input in arrival order.
 
 Codex review and manual compaction turns reject same-turn steering. When a
-runtime cannot accept steering, OpenClaw applies the selected `/queue` fallback
-mode.
+runtime cannot accept steering in `steer` mode, OpenClaw waits for the active
+run to finish before starting the prompt.
 
 This page explains queue-mode steering for normal inbound messages. For the
 explicit `/steer <message>` command, see [Steer](/tools/steer).
 
 ## Modes
 
-| Fallback mode | Active-run behavior                                                                 | Later behavior                                                                      |
-| ------------- | ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `followup`    | Steers the prompt into the active runtime when the runtime accepts same-turn input. | Runs queued messages later when steering is unavailable.                            |
-| `collect`     | Steers the prompt into the active runtime when the runtime accepts same-turn input. | Coalesces compatible queued messages into one later turn after the debounce window. |
-| `interrupt`   | Aborts the active run instead of steering it.                                       | Starts the newest message after aborting.                                           |
+| Mode        | Active-run behavior                                    | Later behavior                                                                      |
+| ----------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------- |
+| `steer`     | Steers the prompt into the active runtime when it can. | Waits for the active run to finish if steering is unavailable.                      |
+| `followup`  | Does not steer.                                        | Runs queued messages later after the active run ends.                               |
+| `collect`   | Does not steer.                                        | Coalesces compatible queued messages into one later turn after the debounce window. |
+| `interrupt` | Aborts the active run instead of steering it.          | Starts the newest message after aborting.                                           |
 
 ## Burst example
 
@@ -53,10 +55,9 @@ If four users send messages while the agent is executing a tool call:
 - With default behavior, the active runtime receives all four messages in
   arrival order before its next model decision. Pi drains them at the next model
   boundary; Codex receives them as one batched `turn/steer`.
-- With `/queue collect`, OpenClaw still tries same-turn steering first. If the
-  runtime rejects steering, OpenClaw waits until the active run ends, then
-  creates a followup turn with compatible queued messages after the debounce
-  window.
+- With `/queue collect`, OpenClaw does not steer. It waits until the active run
+  ends, then creates a followup turn with compatible queued messages after the
+  debounce window.
 - With `/queue interrupt`, OpenClaw aborts the active run and starts the newest
   message instead of steering.
 
@@ -67,10 +68,9 @@ session, change the active run's tool policy, or split messages by sender. In
 multi-user channels, inbound prompts already include sender and route context, so
 the next model call can see who sent each message.
 
-Use `collect` when you want OpenClaw to build a later followup turn that can
-coalesce compatible messages and preserve followup queue drop policy if steering
-is unavailable. Use `interrupt` when the newest prompt should replace the active
-run instead of steering it.
+Use `followup` or `collect` when you want messages to queue by default instead
+of steering the active run. Use `interrupt` when the newest prompt should
+replace the active run.
 
 ## Debounce
 

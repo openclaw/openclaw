@@ -223,7 +223,7 @@ describe("runReplyAgent media path normalization", () => {
     expect(outboundAttachmentOptions?.mediaAccess?.workspaceDir).toBe("/tmp/workspace");
   });
 
-  it("steers active prompts independently of fallback queue mode", async () => {
+  it("steers active prompts in steer queue mode", async () => {
     queueEmbeddedPiMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
       queued: true,
       sessionId,
@@ -233,7 +233,7 @@ describe("runReplyAgent media path normalization", () => {
 
     await runReplyAgent(
       makeRunReplyAgentParams({
-        resolvedQueue: { mode: "followup" } as QueueSettings,
+        resolvedQueue: { mode: "steer" } as QueueSettings,
         shouldSteer: true,
         shouldFollowup: true,
         isStreaming: true,
@@ -250,6 +250,23 @@ describe("runReplyAgent media path normalization", () => {
     expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
   });
 
+  it("queues active prompts in followup mode without steering", async () => {
+    await runReplyAgent(
+      makeRunReplyAgentParams({
+        resolvedQueue: { mode: "followup" } as QueueSettings,
+        shouldSteer: false,
+        shouldFollowup: true,
+        isActive: true,
+        isRunActive: () => true,
+        isStreaming: true,
+      }),
+    );
+
+    expect(queueEmbeddedPiMessageWithOutcomeAsyncMock).not.toHaveBeenCalled();
+    expect(enqueueFollowupRunMock).toHaveBeenCalledOnce();
+    expect(enqueueFollowupRunMock.mock.calls[0]?.[1].prompt).toBe("generate chart");
+  });
+
   it("falls back to a queued followup when active steering is rejected", async () => {
     queueEmbeddedPiMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
       queued: false,
@@ -261,7 +278,7 @@ describe("runReplyAgent media path normalization", () => {
 
     await runReplyAgent(
       makeRunReplyAgentParams({
-        resolvedQueue: { mode: "followup" } as QueueSettings,
+        resolvedQueue: { mode: "steer" } as QueueSettings,
         shouldSteer: true,
         shouldFollowup: true,
         isActive: true,

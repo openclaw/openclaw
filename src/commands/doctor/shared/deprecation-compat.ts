@@ -157,10 +157,9 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     code: "doctor-message-queue-steering-modes",
     owner: "config",
     introduced: "2026-05-04",
-    source: "messages.queue.mode and messages.queue.byChannel retired steering modes",
+    source: "messages.queue.mode and messages.queue.byChannel retired queue modes",
     migration: "src/commands/doctor/shared/legacy-config-migrations.queue.ts",
-    replacement:
-      "automatic active-run steering plus followup, collect, or interrupt fallback modes",
+    replacement: "steer, followup, collect, or interrupt queue modes",
     docsPath: "/concepts/queue",
     tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
   }),

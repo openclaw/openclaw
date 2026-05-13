@@ -89,10 +89,10 @@ Steering is delivered **after the current assistant turn finishes executing its
 tool calls**, before the next LLM call, and no longer skips remaining tool calls
 from the current assistant message.
 
-`/queue followup` and `/queue collect` choose fallback behavior when same-turn
-steering is unavailable. `/queue interrupt` aborts the active run instead. See
-[Queue](/concepts/queue) and [Steering queue](/concepts/queue-steering) for
-fallback and boundary behavior.
+`/queue steer` is the default active-run behavior. `/queue followup` and
+`/queue collect` make messages wait for a later turn instead of steering.
+`/queue interrupt` aborts the active run instead. See [Queue](/concepts/queue)
+and [Steering queue](/concepts/queue-steering) for queue and boundary behavior.
 
 Block streaming sends completed assistant blocks as soon as they finish; it is
 **off by default** (`agents.defaults.blockStreamingDefault: "off"`).

@@ -192,10 +192,10 @@ describe("directive parsing", () => {
     expect(res.cleaned).toBe("please now");
   });
 
-  it("reports removed steering queue directives as unrecognized modes", () => {
+  it("matches steer queue directive", () => {
     const res = extractQueueDirective("please /queue steer now");
     expect(res.hasDirective).toBe(true);
-    expect(res.queueMode).toBeUndefined();
+    expect(res.queueMode).toBe("steer");
     expect(res.rawMode).toBe("steer");
     expect(res.cleaned).toBe("please now");
   });
@@ -242,7 +242,7 @@ describe("directive parsing", () => {
     expect(res.cleaned).toBe("thats not /usage:/tmp/hello");
   });
 
-  it("parses queue options and fallback modes", () => {
+  it("parses queue options and modes", () => {
     const res = extractQueueDirective("please /queue collect debounce:2s cap:5 drop:summarize now");
     expect(res.hasDirective).toBe(true);
     expect(res.queueMode).toBe("collect");

@@ -14,13 +14,13 @@ describe("maybeHandleQueueDirective", () => {
     expect(invalid?.text).toContain("Invalid cap");
     expect(invalid?.text).toContain("Invalid drop policy");
 
-    const removedMode = maybeHandleQueueDirective({
-      directives: parseInlineDirectives("/queue steer"),
+    const invalidMode = maybeHandleQueueDirective({
+      directives: parseInlineDirectives("/queue backlog"),
       cfg: {} as OpenClawConfig,
       channel: "quietchat",
     });
-    expect(removedMode?.text).toContain(
-      'Unrecognized queue mode "steer". Valid modes: followup, collect, interrupt.',
+    expect(invalidMode?.text).toContain(
+      'Unrecognized queue mode "backlog". Valid modes: steer, followup, collect, interrupt.',
     );
 
     const current = maybeHandleQueueDirective({
@@ -41,7 +41,7 @@ describe("maybeHandleQueueDirective", () => {
       "Current queue settings: mode=collect, debounce=1500ms, cap=9, drop=summarize.",
     );
     expect(current?.text).toContain(
-      "Options: modes followup, collect, interrupt; debounce:<ms|s|m>, cap:<n>, drop:old|new|summarize.",
+      "Options: modes steer, followup, collect, interrupt; debounce:<ms|s|m>, cap:<n>, drop:old|new|summarize.",
     );
   });
 });

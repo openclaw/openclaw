@@ -5,7 +5,7 @@ import {
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
 
-const RETIRED_QUEUE_MODES = new Set(["steer", "queue", "steer-backlog", "steer+backlog"]);
+const RETIRED_QUEUE_MODES = new Set(["queue", "steer-backlog", "steer+backlog"]);
 
 function isRetiredQueueMode(value: unknown): value is string {
   return typeof value === "string" && RETIRED_QUEUE_MODES.has(value);
@@ -26,9 +26,10 @@ function migrateQueueMode(params: {
   if (!isRetiredQueueMode(value)) {
     return false;
   }
-  params.owner[params.key] = "followup";
+  const replacement = value === "queue" ? "steer" : "followup";
+  params.owner[params.key] = replacement;
   params.changes.push(
-    `Moved deprecated ${params.path} "${value}" → "followup"; active-run steering is now automatic.`,
+    `Moved deprecated ${params.path} "${value}" → "${replacement}"; use "steer" for default active-run steering.`,
   );
   return true;
 }
@@ -37,13 +38,13 @@ const QUEUE_MODE_RULES: LegacyConfigRule[] = [
   {
     path: ["messages", "queue", "mode"],
     message:
-      'messages.queue.mode uses a retired steering mode; use followup, collect, or interrupt. Active-run steering is automatic. Run "openclaw doctor --fix".',
+      'messages.queue.mode uses a retired queue mode; use steer, followup, collect, or interrupt. Run "openclaw doctor --fix".',
     match: isRetiredQueueMode,
   },
   {
     path: ["messages", "queue", "byChannel"],
     message:
-      'messages.queue.byChannel contains a retired steering mode; use followup, collect, or interrupt. Active-run steering is automatic. Run "openclaw doctor --fix".',
+      'messages.queue.byChannel contains a retired queue mode; use steer, followup, collect, or interrupt. Run "openclaw doctor --fix".',
     match: hasRetiredQueueModeByChannel,
   },
 ];
@@ -51,7 +52,7 @@ const QUEUE_MODE_RULES: LegacyConfigRule[] = [
 export const LEGACY_CONFIG_MIGRATIONS_QUEUE: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
     id: "messages.queue.retired-steering-modes",
-    describe: "Move retired messages.queue steering modes to followup fallback mode",
+    describe: "Move retired messages.queue modes to followup mode",
     legacyRules: QUEUE_MODE_RULES,
     apply: (raw, changes) => {
       const queue = getRecord(getRecord(raw.messages)?.queue);

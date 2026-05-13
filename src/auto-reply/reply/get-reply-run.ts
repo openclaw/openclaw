@@ -908,11 +908,12 @@ export async function runPreparedReply(
   };
   let { activeSessionId, isActive, isStreaming } = resolveQueueBusyState();
   const isHeartbeatRun = opts?.isHeartbeat === true;
-  const shouldSteer =
-    !isHeartbeatRun && !effectiveResetTriggered && resolvedQueue.mode !== "interrupt";
+  const shouldSteer = !isHeartbeatRun && !effectiveResetTriggered && resolvedQueue.mode === "steer";
   const shouldFollowup =
     !effectiveResetTriggered &&
-    (resolvedQueue.mode === "followup" || resolvedQueue.mode === "collect");
+    (resolvedQueue.mode === "steer" ||
+      resolvedQueue.mode === "followup" ||
+      resolvedQueue.mode === "collect");
   const activeRunQueueAction = resolveActiveRunQueueAction({
     isActive,
     isHeartbeat: isHeartbeatRun,
