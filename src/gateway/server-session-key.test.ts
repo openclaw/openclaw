@@ -116,6 +116,26 @@ describe("resolveSessionKeyForRun", () => {
     });
   });
 
+  it("allows literal global session keys for scoped lookups when session scope is global", () => {
+    const cfg: OpenClawConfig = {
+      session: {
+        scope: "global",
+      },
+    };
+    hoisted.loadConfigMock.mockReturnValue(cfg);
+    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+      storePath: "(multiple)",
+      store: {
+        global: { sessionId: "run-global", updatedAt: 123 },
+      },
+    });
+
+    expect(resolveSessionKeyForRun("run-global", { agentId: "work" })).toBe("global");
+    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(cfg, {
+      agentId: "work",
+    });
+  });
+
   it("does not overwrite active run context when a scoped lookup finds another agent store entry", () => {
     hoisted.loadConfigMock.mockReturnValue({});
     registerAgentRunContext("run-1", { sessionKey: "agent:retired:acp:run-1" });

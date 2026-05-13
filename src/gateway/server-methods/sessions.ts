@@ -483,6 +483,10 @@ function sessionKeyBelongsToAgent(
   agentId: string,
   cfg: OpenClawConfig,
 ): boolean {
+  const key = normalizeOptionalString(sessionKey);
+  if (cfg.session?.scope === "global" && key?.toLowerCase() === "global") {
+    return true;
+  }
   const sessionAgentId = resolveSessionKeyAgentId(sessionKey, cfg);
   return Boolean(sessionAgentId && sessionAgentId === normalizeAgentId(agentId));
 }

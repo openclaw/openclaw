@@ -101,6 +101,36 @@ describe("sessions.abort agent scope", () => {
     );
   });
 
+  it("aborts global-scope active runs for non-default agents", async () => {
+    const activeRun = createActiveRun("global");
+    const context = {
+      chatAbortControllers: new Map([["run-global", activeRun]]),
+      getRuntimeConfig: () => ({
+        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        session: { scope: "global" },
+      }),
+    } as unknown as GatewayRequestContext;
+    resolveSessionKeyForRunMock.mockReturnValue(undefined);
+    const respond = vi.fn() as unknown as RespondFn;
+
+    await sessionsHandlers["sessions.abort"]({
+      req: { id: "req-global" } as never,
+      params: { runId: "run-global", agentId: "work" },
+      respond,
+      context,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(resolveSessionKeyForRunMock).not.toHaveBeenCalled();
+    expect(chatAbortMock).toHaveBeenCalledTimes(1);
+    expect(chatAbortMock.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        params: { sessionKey: "global", runId: "run-global" },
+      }),
+    );
+  });
+
   it("aborts an active legacy-key run owned by the configured default agent", async () => {
     const activeRun = createActiveRun("main");
     const context = {

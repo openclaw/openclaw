@@ -51,6 +51,9 @@ function setResolvedSessionKeyCache(
 }
 
 function sessionKeyMatchesAgent(sessionKey: string, agentId: string, cfg: OpenClawConfig): boolean {
+  if (cfg.session?.scope === "global" && sessionKey.trim().toLowerCase() === "global") {
+    return true;
+  }
   const normalizedAgentId = normalizeAgentId(agentId);
   const parsed = parseAgentSessionKey(sessionKey);
   if (!parsed && sessionKey.trim().toLowerCase().startsWith("agent:")) {
