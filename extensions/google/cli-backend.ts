@@ -28,9 +28,10 @@ export function buildGoogleGeminiCliBackend(): CliBackendPlugin {
     nativeToolMode: "always-on",
     config: {
       command: "gemini",
-      args: ["--skip-trust", "--output-format", "json", "--prompt", "{prompt}"],
+      args: ["--approval-mode", "yolo", "--output-format", "json", "--prompt", "{prompt}"],
       resumeArgs: [
-        "--skip-trust",
+        "--approval-mode",
+        "yolo",
         "--resume",
         "{sessionId}",
         "--output-format",
@@ -48,8 +49,14 @@ export function buildGoogleGeminiCliBackend(): CliBackendPlugin {
       sessionIdFields: ["session_id", "sessionId"],
       reliability: {
         watchdog: {
-          fresh: { ...CLI_FRESH_WATCHDOG_DEFAULTS },
-          resume: { ...CLI_RESUME_WATCHDOG_DEFAULTS },
+          fresh: {
+            ...CLI_FRESH_WATCHDOG_DEFAULTS,
+            noOutputTimeoutMs: 1800000, // 30 minutes
+          },
+          resume: {
+            ...CLI_RESUME_WATCHDOG_DEFAULTS,
+            noOutputTimeoutMs: 1800000, // 30 minutes
+          },
         },
       },
       serialize: true,
