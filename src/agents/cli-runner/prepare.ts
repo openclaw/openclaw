@@ -468,6 +468,11 @@ export async function prepareCliRunContext(
     injectedFiles: contextFiles,
     skillsPrompt,
     tools: [],
+    currentTurn: {
+      ...(params.currentTurnKind ? { kind: params.currentTurnKind } : {}),
+      promptChars: preparedPrompt.length,
+      runtimeContextChars: 0,
+    },
   });
 
   return {

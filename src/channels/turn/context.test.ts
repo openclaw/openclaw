@@ -133,6 +133,7 @@ describe("buildChannelTurnContext", () => {
 
     const expectedFields = {
       Body: "[User One] hello",
+      InboundTurnKind: "user_request",
       BodyForAgent: "hello",
       RawBody: "hello",
       CommandBody: "/status",
@@ -208,6 +209,20 @@ describe("buildChannelTurnContext", () => {
     );
 
     expect(ctx.CommandAuthorized).toBe(false);
+  });
+
+  it("carries room event semantics into the finalized context", () => {
+    const ctx = buildChannelTurnContext(
+      createBaseContextParams({
+        message: {
+          inboundTurnKind: "room_event",
+          rawBody: "side chatter",
+          envelopeFrom: "User One",
+        },
+      }),
+    );
+
+    expect(ctx.InboundTurnKind).toBe("room_event");
   });
 
   it("keeps legacy command authorization fallback for authorizer arrays", () => {

@@ -2,6 +2,7 @@ import type { ExecToolDefaults } from "../../../agents/bash-tools.js";
 import type { CurrentTurnPromptContext } from "../../../agents/pi-embedded-runner/run/params.js";
 import type { SkillSnapshot } from "../../../agents/skills.js";
 import type { SilentReplyPromptMode } from "../../../agents/system-prompt.types.js";
+import type { InboundTurnKind } from "../../../channels/turn/types.js";
 import type { SessionEntry } from "../../../config/sessions.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
@@ -27,6 +28,7 @@ export type FollowupRun = {
   prompt: string;
   /** User-visible prompt body persisted to transcript; excludes runtime-only prompt context. */
   transcriptPrompt?: string;
+  currentTurnKind?: InboundTurnKind;
   /** Explicit current-turn context that should be visible for this run but not persisted as user text. */
   currentTurnContext?: CurrentTurnPromptContext;
   /** Provider message ID, when available (for deduplication). */
@@ -101,6 +103,8 @@ export type FollowupRun = {
     skipProviderRuntimeHints?: boolean;
     silentExpected?: boolean;
     allowEmptyAssistantReplyAsSilent?: boolean;
+    suppressNextUserMessagePersistence?: boolean;
+    suppressTranscriptOnlyAssistantPersistence?: boolean;
   };
 };
 

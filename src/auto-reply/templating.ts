@@ -1,3 +1,4 @@
+import type { InboundTurnKind } from "../channels/turn/types.js";
 import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
@@ -40,6 +41,8 @@ type UntrustedStructuredContextEntry = {
 
 export type MsgContext = {
   Body?: string;
+  /** Semantic kind of inbound turn. Room events are observed chat events, not direct user requests. */
+  InboundTurnKind?: InboundTurnKind;
   /**
    * Agent prompt body (may include envelope/history/context). Prefer this for prompt shaping.
    * Should use real newlines (`\n`), not escaped `\\n`.

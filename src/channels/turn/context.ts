@@ -12,6 +12,7 @@ import type {
   AccessFacts,
   CommandFacts,
   ConversationFacts,
+  InboundTurnKind,
   InboundMediaFacts,
   MessageFacts,
   ReplyPlanFacts,
@@ -54,6 +55,7 @@ export type BuiltChannelTurnContext = FinalizedMsgContext & {
   RawBody: string;
   SessionKey: string;
   To: string;
+  InboundTurnKind: InboundTurnKind;
 };
 
 function keepSupplementalContext(params: {
@@ -162,6 +164,7 @@ export function buildChannelTurnContext(
 
   return finalizeInboundContext({
     Body: body,
+    InboundTurnKind: params.message.inboundTurnKind ?? "user_request",
     BodyForAgent: params.message.bodyForAgent ?? params.message.rawBody,
     InboundHistory: params.message.inboundHistory,
     RawBody: params.message.rawBody,

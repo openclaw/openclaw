@@ -745,6 +745,10 @@ export async function runPreparedReply(
   const skillsSnapshot = skillResult.skillsSnapshot;
   let { prefixedCommandBody, queuedBody, transcriptCommandBody, currentTurnContext } =
     await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies());
+  const isRoomEvent = sessionCtx.InboundTurnKind === "room_event";
+  if (isRoomEvent) {
+    transcriptCommandBody = "";
+  }
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
   }
@@ -944,6 +948,9 @@ export async function runPreparedReply(
         preparedSessionState = resolvePreparedSessionState();
         ({ prefixedCommandBody, queuedBody, transcriptCommandBody, currentTurnContext } =
           await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies()));
+        if (isRoomEvent) {
+          transcriptCommandBody = "";
+        }
       },
       resolveBusyState: resolveQueueBusyState,
     });
@@ -961,6 +968,7 @@ export async function runPreparedReply(
   const followupRun = {
     prompt: queuedBody,
     transcriptPrompt: transcriptCommandBody,
+    currentTurnKind: sessionCtx.InboundTurnKind,
     currentTurnContext,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     summaryLine: baseBodyTrimmedRaw,
@@ -1040,11 +1048,13 @@ export async function runPreparedReply(
       ownerNumbers: command.ownerList.length > 0 ? command.ownerList : undefined,
       inputProvenance: ctx.InputProvenance ?? sessionCtx.InputProvenance,
       extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
-      sourceReplyDeliveryMode: opts?.sourceReplyDeliveryMode,
+      sourceReplyDeliveryMode: isRoomEvent ? "message_tool_only" : opts?.sourceReplyDeliveryMode,
       silentReplyPromptMode,
       extraSystemPromptStatic: extraSystemPromptStaticParts.join("\n\n"),
       skipProviderRuntimeHints: useFastReplyRuntime,
       allowEmptyAssistantReplyAsSilent,
+      suppressNextUserMessagePersistence: isRoomEvent,
+      suppressTranscriptOnlyAssistantPersistence: isRoomEvent,
       ...(!useFastReplyRuntime &&
       isReasoningTagProvider(provider, {
         config: cfg,
