@@ -729,6 +729,8 @@ describe("talk.session unified handlers", () => {
       cfg: {},
       p: {
         key: "session:main",
+        agentId: undefined,
+        spawnedBy: undefined,
         includeGlobal: true,
         includeUnknown: true,
       },
@@ -805,6 +807,41 @@ describe("talk.session unified handlers", () => {
     expectRecordFields(closedEventPayload.talkEvent, { type: "session.closed", final: true });
     expect(mockCallArg(broadcastToConnIds, 2, 2)).toEqual(new Set(["conn-1"]));
     expect(mockCallArg(broadcastToConnIds, 2, 3)).toEqual({ dropIfSlow: true });
+  });
+
+  it("passes managed-room session visibility scope to session resolution", async () => {
+    const createRespond = vi.fn();
+    await talkHandlers["talk.session.create"]({
+      req: { type: "req", id: "1", method: "talk.session.create" },
+      params: {
+        mode: "stt-tts",
+        transport: "managed-room",
+        sessionKey: "agent:worker:subagent:child",
+        agentId: "main",
+        spawnedBy: "agent:main:parent",
+      },
+      client: { connId: "conn-1" } as never,
+      isWebchatConnect: () => false,
+      respond: createRespond as never,
+      context: {
+        getRuntimeConfig: () => ({}) as OpenClawConfig,
+      } as never,
+    });
+
+    expectRespondOk(createRespond, {
+      transport: "managed-room",
+      brain: "agent-consult",
+    });
+    expect(mocks.resolveSessionKeyFromResolveParams).toHaveBeenCalledWith({
+      cfg: {},
+      p: {
+        key: "agent:worker:subagent:child",
+        agentId: "main",
+        spawnedBy: "agent:main:parent",
+        includeGlobal: true,
+        includeUnknown: true,
+      },
+    });
   });
 
   it("requires managed-room ownership before turn control", async () => {
