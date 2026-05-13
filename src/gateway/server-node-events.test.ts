@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { NodeRegistry } from "./node-registry.js";
+import { PROTOCOL_VERSION } from "./protocol/index.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import type { loadSessionEntry as loadSessionEntryType } from "./session-utils.js";
 
@@ -203,8 +204,10 @@ function makeNodeClient(connId: string, nodeId: string, sent: string[] = []): Ga
       },
     } as unknown as GatewayWsClient["socket"],
     connect: {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
       client: {
-        id: "openclaw-node-host",
+        id: "node-host",
         version: "1.0.0",
         platform: "linux",
         mode: "node",
