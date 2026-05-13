@@ -148,11 +148,16 @@ function buildToolExecutionErrorResult(params: {
   toolName: string;
   message: string;
 }): AgentToolResult<unknown> {
-  return jsonResult({
+  // Mark caught tool execution failures with isError:true so downstream
+  // transports (Anthropic is_error, OpenAI tool_result, transcript repair,
+  // mutating-failure tracking) can distinguish them from successful
+  // status:"error" payloads. See issue #81546.
+  const result = jsonResult({
     status: "error",
     tool: params.toolName,
     error: params.message,
   });
+  return { ...result, isError: true } as AgentToolResult<unknown>;
 }
 
 function splitToolExecuteArgs(args: ToolExecuteArgsAny): {

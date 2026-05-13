@@ -53,6 +53,10 @@ describe("pi tool definition adapter", () => {
     expect(details?.tool).toBe("boom");
     expect(details?.error).toBe("nope");
     expect(JSON.stringify(result.details)).not.toContain("\n    at ");
+    // Regression for #81546: caught tool failures must carry isError:true so
+    // downstream transports/transcripts surface them as real errors instead of
+    // delivering an apparent-success status:"error" payload.
+    expect((result as { isError?: boolean }).isError).toBe(true);
   });
 
   it("normalizes exec tool aliases in error results", async () => {
@@ -64,6 +68,7 @@ describe("pi tool definition adapter", () => {
     expect(details?.status).toBe("error");
     expect(details?.tool).toBe("exec");
     expect(details?.error).toBe("nope");
+    expect((result as { isError?: boolean }).isError).toBe(true);
   });
 
   it("coerces details-only tool results to include content", async () => {
