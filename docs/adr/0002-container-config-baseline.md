@@ -2,7 +2,7 @@
 
 - **Status:** Accepted (baseline)
 - **Date:** 2026-05-13
-- **Deciders:** Tony Conforti (brickjawn)
+- **Deciders:** Tony (brickjawn)
 - **Captured by:** Claude Code, sprint-002 discovery
 - **Supersedes:** None
 - **Superseded by:** None
