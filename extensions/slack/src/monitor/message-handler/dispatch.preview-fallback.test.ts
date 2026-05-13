@@ -779,6 +779,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
     expect(updateLastRouteMock).toHaveBeenCalledWith({
       sessionKey: "agent:main:slack:direct:u1:thread:500.000",
+      agentId: "main",
       deliveryContext: {
         channel: "slack",
         to: "user:U1",
@@ -817,6 +818,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
     expect(updateLastRouteMock).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
+      agentId: "main",
       deliveryContext: {
         channel: "slack",
         to: "user:U1",
