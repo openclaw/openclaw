@@ -73,6 +73,17 @@ export async function createBrowserProfileConfig(params: {
   const mutation = await mutateConfigFile<BrowserProfileConfig>({
     afterWrite: { mode: "auto" },
     mutate: async (draft) => {
+      const rawDraftBrowser = draft.browser as
+        | (NonNullable<typeof draft.browser> & { cdpPortRangeEnd?: unknown })
+        | undefined;
+      const draftCdpPortRangeEnd =
+        typeof rawDraftBrowser?.cdpPortRangeEnd === "number"
+          ? rawDraftBrowser.cdpPortRangeEnd
+          : undefined;
+      const useRebasedPortRange =
+        draft.gateway?.port !== undefined ||
+        draft.browser?.cdpPortRangeStart !== undefined ||
+        draftCdpPortRangeEnd !== undefined;
       const latestResolved = resolveBrowserConfig(
         {
           ...params.resolved,
@@ -82,12 +93,14 @@ export async function createBrowserProfileConfig(params: {
         draft,
       );
       const latestRootResolved = resolveBrowserConfig(draft.browser, draft);
+      const latestProfileSource = useRebasedPortRange ? latestRootResolved : latestResolved;
       const latestProfiles = draft.browser?.profiles ?? {};
-      if (params.name in latestProfiles || params.name in latestResolved.profiles) {
+      if (params.name in latestProfiles || params.name in latestProfileSource.profiles) {
         throw new BrowserConflictError(`profile "${params.name}" already exists`);
       }
 
-      const profileColor = params.color ?? allocateColor(getUsedColors(latestResolved.profiles));
+      const profileColor =
+        params.color ?? allocateColor(getUsedColors(latestProfileSource.profiles));
 
       let nextProfileConfig: BrowserProfileConfig;
       if (params.parsedCdpUrl) {
@@ -109,18 +122,7 @@ export async function createBrowserProfileConfig(params: {
           color: profileColor,
         };
       } else {
-        const usedPorts = getUsedPorts(latestResolved.profiles);
-        const rawDraftBrowser = draft.browser as
-          | (NonNullable<typeof draft.browser> & { cdpPortRangeEnd?: unknown })
-          | undefined;
-        const draftCdpPortRangeEnd =
-          typeof rawDraftBrowser?.cdpPortRangeEnd === "number"
-            ? rawDraftBrowser.cdpPortRangeEnd
-            : undefined;
-        const useRebasedPortRange =
-          draft.gateway?.port !== undefined ||
-          draft.browser?.cdpPortRangeStart !== undefined ||
-          draftCdpPortRangeEnd !== undefined;
+        const usedPorts = getUsedPorts(latestProfileSource.profiles);
         const rangeSource = useRebasedPortRange ? latestRootResolved : params.resolved;
         const range = cdpPortRange({
           controlPort: rangeSource.controlPort,
