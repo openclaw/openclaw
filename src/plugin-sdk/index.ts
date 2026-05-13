@@ -52,7 +52,14 @@ export type {
   ProviderPreparedRuntimeAuth,
   RealtimeTranscriptionProviderPlugin,
   SpeechProviderPlugin,
+  UnifiedModelCatalogProviderContext,
+  UnifiedModelCatalogProviderPlugin,
 } from "../plugins/types.js";
+export type {
+  UnifiedModelCatalogEntry,
+  UnifiedModelCatalogKind,
+  UnifiedModelCatalogSource,
+} from "../model-catalog/types.js";
 export type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 export type { ResolvedProviderRuntimeAuth } from "../plugins/runtime/model-auth-types.js";
 export type {
@@ -61,6 +68,13 @@ export type {
   SubagentRunParams,
   SubagentRunResult,
 } from "../plugins/runtime/types.js";
+export type {
+  LlmCompleteCaller,
+  LlmCompleteMessage,
+  LlmCompleteParams,
+  LlmCompleteResult,
+  LlmCompleteUsage,
+} from "../plugins/runtime/types-core.js";
 export type {
   BoundTaskFlowsRuntime,
   BoundTaskRunsRuntime,
@@ -95,7 +109,10 @@ export type { RuntimeEnv } from "../runtime.js";
 export type { HookEntry } from "../hooks/types.js";
 export type { ReplyPayload } from "./reply-payload.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
-export type { ContextEngineFactory } from "../context-engine/registry.js";
+export type {
+  ContextEngineFactory,
+  ContextEngineFactoryContext,
+} from "../context-engine/registry.js";
 export type { DiagnosticEventPayload } from "../infra/diagnostic-events.js";
 export type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 export type {

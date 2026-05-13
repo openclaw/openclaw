@@ -10,7 +10,7 @@ import {
 } from "openclaw/plugin-sdk/fetch-runtime";
 import { danger, success } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger, toPinoLikeLogger } from "openclaw/plugin-sdk/runtime-env";
-import { ensureDir, resolveUserPath } from "openclaw/plugin-sdk/text-runtime";
+import { ensureDir, resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   readCredsJsonRaw,
   restoreCredsFromBackupIfNeeded,
@@ -20,13 +20,11 @@ import {
 } from "./auth-store.js";
 import {
   enqueueCredsSave,
-  waitForCredsSaveQueue,
   waitForCredsSaveQueueWithTimeout,
   writeCredsJsonAtomically,
-  type CredsQueueWaitResult,
 } from "./creds-persistence.js";
 import { renderQrTerminal } from "./qr-terminal.js";
-import { formatError, getStatusCode } from "./session-errors.js";
+import { getStatusCode } from "./session-errors.js";
 import {
   DisconnectReason,
   fetchLatestBaileysVersion,
@@ -130,7 +128,10 @@ async function printTerminalQr(qr: string): Promise<void> {
 export async function createWaSocket(
   printQr: boolean,
   verbose: boolean,
-  opts: { authDir?: string; onQr?: (qr: string) => void } & WhatsAppSocketTimingOptions = {},
+  opts: {
+    authDir?: string;
+    onQr?: (qr: string) => void;
+  } & WhatsAppSocketTimingOptions = {},
 ): Promise<ReturnType<typeof makeWASocket>> {
   const baseLogger = getChildLogger(
     { module: "baileys" },
@@ -189,7 +190,7 @@ export async function createWaSocket(
         if (qr) {
           opts.onQr?.(qr);
           if (printQr) {
-            console.log("Scan this QR in WhatsApp (Linked Devices):");
+            console.log("Open the WhatsApp app, go to Linked Devices, then scan this QR:");
             void printTerminalQr(qr).catch((err) => {
               sessionLogger.warn({ error: String(err) }, "failed rendering WhatsApp QR");
             });

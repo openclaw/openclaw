@@ -88,7 +88,8 @@ describe("gateway cli backend live helpers", () => {
       token: "gateway-token",
     });
 
-    expect(client).toBeTruthy();
+    expect(client.start).toBeTypeOf("function");
+    expect(client.stopAndWait).toBeTypeOf("function");
     expect(gatewayClientState.lastOptions).toMatchObject({
       url: "ws://127.0.0.1:18789",
       token: "gateway-token",
@@ -113,6 +114,38 @@ describe("gateway cli backend live helpers", () => {
     expect(shouldRunCliModelSwitchProbe("claude-cli", "claude-cli/claude-sonnet-4-6")).toBe(true);
     expect(shouldRunCliModelSwitchProbe("claude-cli", "claude-cli/claude-opus-4-6")).toBe(false);
     expect(shouldRunCliModelSwitchProbe("codex-cli", "codex-cli/gpt-5.5")).toBe(false);
+  });
+
+  it("configures legacy CLI model refs as canonical provider models plus CLI runtime", async () => {
+    const { resolveCliBackendLiveModelSelection } =
+      await import("./gateway-cli-backend.live-helpers.js");
+
+    expect(
+      resolveCliBackendLiveModelSelection({
+        rawModel: "codex-cli/gpt-5.4",
+        defaultProvider: "claude-cli",
+      }),
+    ).toEqual({
+      providerId: "codex-cli",
+      cliModelKey: "codex-cli/gpt-5.4",
+      configModelKey: "openai/gpt-5.4",
+      configModelSwitchTarget: undefined,
+      agentRuntime: { id: "codex-cli" },
+    });
+
+    expect(
+      resolveCliBackendLiveModelSelection({
+        rawModel: "claude-cli/claude-sonnet-4-6",
+        defaultProvider: "claude-cli",
+        modelSwitchTarget: "claude-cli/claude-opus-4-6",
+      }),
+    ).toEqual({
+      providerId: "claude-cli",
+      cliModelKey: "claude-cli/claude-sonnet-4-6",
+      configModelKey: "anthropic/claude-sonnet-4-6",
+      configModelSwitchTarget: "anthropic/claude-opus-4-6",
+      agentRuntime: { id: "claude-cli" },
+    });
   });
 
   it("lets env disable the model switch probe", async () => {

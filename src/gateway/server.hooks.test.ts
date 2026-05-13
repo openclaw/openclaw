@@ -26,6 +26,13 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+function requireNonEmptyString(value: string | null | undefined, label: string): string {
+  if (!value) {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
+}
+
 function buildHookJsonHeaders(options?: {
   token?: string | null;
   headers?: Record<string, string>;
@@ -76,6 +83,12 @@ function mockIsolatedRunOk(): void {
   });
 }
 
+async function waitForCronIsolatedRuns(count: number, timeoutMs = 2_000): Promise<void> {
+  await expect
+    .poll(() => cronIsolatedRun.mock.calls.length, { timeout: timeoutMs, interval: 10 })
+    .toBe(count);
+}
+
 async function postAgentHookWithIdempotency(
   port: number,
   idempotencyKey: string,
@@ -98,7 +111,7 @@ async function expectFirstHookDelivery(
 ) {
   const first = await postAgentHookWithIdempotency(port, idempotencyKey, headers);
   const firstBody = (await first.json()) as { runId?: string };
-  expect(firstBody.runId).toBeTruthy();
+  requireNonEmptyString(firstBody.runId, "first hook run id");
   await waitForSystemEvent(5_000);
   drainSystemEvents(resolveMainKey());
   return firstBody;
@@ -139,9 +152,11 @@ async function waitForSystemEventTexts(sessionKey: string, timeoutMs = 2_000) {
 }
 
 async function writeHookTransformModule(moduleName: string, source: string): Promise<void> {
-  const configPath = process.env.OPENCLAW_CONFIG_PATH;
-  expect(configPath).toBeTruthy();
-  const transformsDir = path.join(path.dirname(configPath!), "hooks", "transforms");
+  const configPath = requireNonEmptyString(
+    process.env.OPENCLAW_CONFIG_PATH,
+    "OPENCLAW_CONFIG_PATH",
+  );
+  const transformsDir = path.join(path.dirname(configPath), "hooks", "transforms");
   await fs.mkdir(transformsDir, { recursive: true });
   await fs.writeFile(path.join(transformsDir, moduleName), source, "utf-8");
 }
@@ -157,14 +172,16 @@ describe("gateway server hooks", () => {
       const resWake = await postHook(port, "/hooks/wake", { text: "Ping", mode: "next-heartbeat" });
       expect(resWake.status).toBe(200);
       const wakeEvents = await waitForSystemEvent();
-      expect(wakeEvents.some((e) => e.includes("Ping"))).toBe(true);
+      expect(wakeEvents).toEqual(expect.arrayContaining([expect.stringContaining("Ping")]));
       drainSystemEvents(resolveMainKey());
 
       mockIsolatedRunOkOnce();
       const resAgent = await postHook(port, "/hooks/agent", { message: "Do it", name: "Email" });
       expect(resAgent.status).toBe(200);
       const agentEvents = await waitForSystemEvent();
-      expect(agentEvents.some((e) => e.includes("Hook Email: done"))).toBe(true);
+      expect(agentEvents).toEqual(
+        expect.arrayContaining([expect.stringContaining("Hook Email: done")]),
+      );
       const firstCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
         job?: { payload?: { externalContentSource?: string } };
       };
@@ -236,7 +253,9 @@ describe("gateway server hooks", () => {
       );
       expect(resHeader.status).toBe(200);
       const headerEvents = await waitForSystemEvent();
-      expect(headerEvents.some((e) => e.includes("Header auth"))).toBe(true);
+      expect(headerEvents).toEqual(
+        expect.arrayContaining([expect.stringContaining("Header auth")]),
+      );
       drainSystemEvents(resolveMainKey());
 
       const resGet = await fetch(`http://127.0.0.1:${port}/hooks/wake`, {
@@ -306,9 +325,91 @@ describe("gateway server hooks", () => {
       expect(resAgent.status).toBe(200);
 
       const targetEvents = await waitForSystemEventTexts(HOOKS_MAIN_SESSION_KEY);
-      expect(targetEvents.some((event) => event.includes("Hook Email: done"))).toBe(true);
-      expect(peekSystemEventEntries(resolveMainKey())).toEqual([]);
+      expect(targetEvents).toEqual(
+        expect.arrayContaining([expect.stringContaining("Hook Email: done")]),
+      );
+      expect(peekSystemEventEntries(resolveMainKey())).toStrictEqual([]);
       drainSystemEvents(HOOKS_MAIN_SESSION_KEY);
+    });
+  });
+
+  test("hook announcement policy keeps no-deliver success silent without hiding failures", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      mappings: [
+        {
+          match: { path: "mapped-silent" },
+          action: "agent",
+          messageTemplate: "Mapped: {{payload.subject}}",
+          deliver: false,
+        },
+      ],
+    };
+    setMainAndHooksAgents();
+
+    await withGatewayServer(async ({ port }) => {
+      cronIsolatedRun.mockClear();
+      cronIsolatedRun.mockResolvedValueOnce({
+        status: "ok",
+        summary: "done",
+        delivered: false,
+      });
+      const directSilent = await postHook(port, "/hooks/agent", {
+        message: "Do it",
+        name: "Email",
+        deliver: false,
+      });
+      expect(directSilent.status).toBe(200);
+      await waitForCronIsolatedRuns(1);
+      expect(peekSystemEventEntries(resolveMainKey())).toStrictEqual([]);
+
+      cronIsolatedRun.mockResolvedValueOnce({
+        status: "ok",
+        summary: "mapped done",
+        delivered: false,
+      });
+      const mappedSilent = await postHook(port, "/hooks/mapped-silent", { subject: "Email" });
+      expect(mappedSilent.status).toBe(200);
+      await waitForCronIsolatedRuns(2);
+      expect(peekSystemEventEntries(resolveMainKey())).toStrictEqual([]);
+
+      cronIsolatedRun.mockResolvedValueOnce({
+        status: "error",
+        summary: "boom",
+        delivered: false,
+      });
+      const directFailure = await postHook(port, "/hooks/agent", {
+        message: "Do it",
+        name: "Email",
+        deliver: false,
+      });
+      expect(directFailure.status).toBe(200);
+      const failureEvents = await waitForSystemEventTexts(resolveMainKey());
+      expect(failureEvents).toContain("Hook Email (error): boom");
+      drainSystemEvents(resolveMainKey());
+    });
+  });
+
+  test("hook announcement policy suppresses fallback after attempted delivery", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    setMainAndHooksAgents();
+
+    await withGatewayServer(async ({ port }) => {
+      cronIsolatedRun.mockClear();
+      cronIsolatedRun.mockResolvedValueOnce({
+        status: "ok",
+        summary: "done",
+        delivered: false,
+        deliveryAttempted: true,
+      });
+      const response = await postHook(port, "/hooks/agent", {
+        message: "Do it",
+        name: "Email",
+      });
+      expect(response.status).toBe(200);
+      await waitForCronIsolatedRuns(1);
+      expect(peekSystemEventEntries(resolveMainKey())).toStrictEqual([]);
     });
   });
 
@@ -616,10 +717,12 @@ describe("gateway server hooks", () => {
 
   test("dedupes hook retries even when trusted-proxy client IP changes", async () => {
     testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
-    const configPath = process.env.OPENCLAW_CONFIG_PATH;
-    expect(configPath).toBeTruthy();
+    const configPath = requireNonEmptyString(
+      process.env.OPENCLAW_CONFIG_PATH,
+      "OPENCLAW_CONFIG_PATH",
+    );
     await fs.writeFile(
-      configPath!,
+      configPath,
       JSON.stringify({ gateway: { trustedProxies: ["127.0.0.1"] } }, null, 2),
       "utf-8",
     );
@@ -664,7 +767,7 @@ describe("gateway server hooks", () => {
       firstNowSpy.mockRestore();
 
       const firstBody = (await first.json()) as { runId?: string };
-      expect(firstBody.runId).toBeTruthy();
+      requireNonEmptyString(firstBody.runId, "first hook run id");
       await waitForSystemEvent();
       drainSystemEvents(resolveMainKey());
 
@@ -693,7 +796,7 @@ describe("gateway server hooks", () => {
       thirdNowSpy.mockRestore();
       expect(third.status).toBe(200);
       const thirdBody = (await third.json()) as { runId?: string };
-      expect(thirdBody.runId).toBeTruthy();
+      requireNonEmptyString(thirdBody.runId, "third hook run id");
       expect(thirdBody.runId).not.toBe(firstBody.runId);
       expect(cronIsolatedRun).toHaveBeenCalledTimes(2);
     });
@@ -791,7 +894,9 @@ describe("gateway server hooks", () => {
         throttled = await postHook(port, "/hooks/wake", { text: "blocked" }, { token: "wrong" });
       }
       expect(throttled?.status).toBe(429);
-      expect(throttled?.headers.get("retry-after")).toBeTruthy();
+      expect(requireNonEmptyString(throttled?.headers.get("retry-after"), "retry-after")).toMatch(
+        /^\d+$/,
+      );
 
       const allowed = await postHook(port, "/hooks/wake", { text: "auth reset" });
       expect(allowed.status).toBe(200);

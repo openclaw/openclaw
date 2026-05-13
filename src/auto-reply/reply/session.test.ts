@@ -52,11 +52,26 @@ vi.mock("./session-fork.js", () => ({
     sessionForkMocks.forkSessionFromParent(...args),
   resolveParentForkTokenCount: (...args: [{ parentEntry: SessionEntry; storePath: string }]) =>
     sessionForkMocks.resolveParentForkTokenCount(...args),
-  resolveParentForkMaxTokens: (cfg: { session?: { parentForkMaxTokens?: unknown } }) => {
-    const configured = cfg.session?.parentForkMaxTokens;
-    return typeof configured === "number" && Number.isFinite(configured) && configured >= 0
-      ? Math.floor(configured)
-      : 100_000;
+  resolveParentForkDecision: async (params: { parentEntry: SessionEntry; storePath: string }) => {
+    const maxTokens = 100_000;
+    const parentTokens = await sessionForkMocks.resolveParentForkTokenCount({
+      parentEntry: params.parentEntry,
+      storePath: params.storePath,
+    });
+    if (typeof parentTokens === "number" && parentTokens > maxTokens) {
+      return {
+        status: "skip",
+        reason: "parent-too-large",
+        maxTokens,
+        parentTokens,
+        message: `Parent context is too large to fork (${parentTokens}/${maxTokens} tokens); starting with isolated context instead.`,
+      };
+    }
+    return {
+      status: "fork",
+      maxTokens,
+      ...(typeof parentTokens === "number" ? { parentTokens } : {}),
+    };
   },
 }));
 
@@ -127,6 +142,13 @@ async function makeStorePath(prefix: string): Promise<string> {
 
 const createStorePath = makeStorePath;
 const TEST_NATIVE_MODEL_PROFILE_ID = "openai-codex:secondary@example.test";
+
+function requireString(value: string | undefined, label: string): string {
+  if (!value) {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
+}
 
 async function writeSessionStoreFast(
   storePath: string,
@@ -364,13 +386,12 @@ describe("initSessionState thread forking", () => {
 
     expect(result.sessionKey).toBe(threadSessionKey);
     expect(result.sessionEntry.sessionId).not.toBe(parentSessionId);
-    expect(result.sessionEntry.sessionFile).toBeTruthy();
     expect(result.sessionEntry.displayName).toBe(threadLabel);
 
-    const newSessionFile = result.sessionEntry.sessionFile;
-    if (!newSessionFile) {
-      throw new Error("Missing session file for forked thread");
-    }
+    const newSessionFile = requireString(
+      result.sessionEntry.sessionFile,
+      "forked thread session file",
+    );
     const headerLine = (await fs.readFile(newSessionFile, "utf-8"))
       .split(/\r?\n/)
       .find((line) => line.trim().length > 0);
@@ -599,84 +620,6 @@ describe("initSessionState thread forking", () => {
     expect(sessionForkMocks.forkSessionFromParent).not.toHaveBeenCalled();
   });
 
-  it("respects session.parentForkMaxTokens override", async () => {
-    const root = await makeCaseDir("openclaw-thread-session-overflow-override-");
-    const sessionsDir = path.join(root, "sessions");
-    await fs.mkdir(sessionsDir);
-
-    const parentSessionId = "parent-override";
-    const parentSessionFile = path.join(sessionsDir, "parent.jsonl");
-    const header = {
-      type: "session",
-      version: 3,
-      id: parentSessionId,
-      timestamp: new Date().toISOString(),
-      cwd: process.cwd(),
-    };
-    const message = {
-      type: "message",
-      id: "m1",
-      parentId: null,
-      timestamp: new Date().toISOString(),
-      message: { role: "user", content: "Parent prompt" },
-    };
-    const assistantMessage = {
-      type: "message",
-      id: "m2",
-      parentId: "m1",
-      timestamp: new Date().toISOString(),
-      message: { role: "assistant", content: "Parent reply" },
-    };
-    await fs.writeFile(
-      parentSessionFile,
-      `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(assistantMessage)}\n`,
-      "utf-8",
-    );
-
-    const storePath = path.join(root, "sessions.json");
-    const parentSessionKey = "agent:main:slack:channel:c1";
-    await writeSessionStoreFast(storePath, {
-      [parentSessionKey]: {
-        sessionId: parentSessionId,
-        sessionFile: parentSessionFile,
-        updatedAt: Date.now(),
-        totalTokens: 170_000,
-      },
-    });
-
-    const cfg = {
-      session: {
-        store: storePath,
-        parentForkMaxTokens: 200_000,
-      },
-    } as OpenClawConfig;
-
-    const threadSessionKey = "agent:main:slack:channel:c1:thread:789";
-    const result = await initSessionState({
-      ctx: {
-        Body: "Thread reply",
-        SessionKey: threadSessionKey,
-        ParentSessionKey: parentSessionKey,
-      },
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.sessionEntry.forkedFromParent).toBe(true);
-    expect(result.sessionEntry.sessionFile).toBeTruthy();
-    const forkedContent = await fs.readFile(result.sessionEntry.sessionFile ?? "", "utf-8");
-    const headerLine = forkedContent.split(/\r?\n/).find((line) => line.trim().length > 0);
-    if (!headerLine) {
-      throw new Error("Missing session header");
-    }
-    const parsedHeader = JSON.parse(headerLine) as { parentSession?: string };
-    const expectedParentSession = await fs.realpath(parentSessionFile);
-    const actualParentSession = parsedHeader.parentSession
-      ? await fs.realpath(parsedHeader.parentSession)
-      : undefined;
-    expect(actualParentSession).toBe(expectedParentSession);
-  });
-
   it("records topic-specific session files when MessageThreadId is present", async () => {
     const root = await makeCaseDir("openclaw-topic-session-");
     const storePath = path.join(root, "sessions.json");
@@ -695,11 +638,8 @@ describe("initSessionState thread forking", () => {
       commandAuthorized: true,
     });
 
-    const sessionFile = result.sessionEntry.sessionFile;
-    expect(sessionFile).toBeTruthy();
-    expect(path.basename(sessionFile ?? "")).toBe(
-      `${result.sessionEntry.sessionId}-topic-456.jsonl`,
-    );
+    const sessionFile = requireString(result.sessionEntry.sessionFile, "topic session file");
+    expect(path.basename(sessionFile)).toBe(`${result.sessionEntry.sessionId}-topic-456.jsonl`);
   });
 
   it("records topic-specific session files from SessionKey when MessageThreadId is absent", async () => {
@@ -721,11 +661,8 @@ describe("initSessionState thread forking", () => {
         commandAuthorized: true,
       });
 
-      const sessionFile = result.sessionEntry.sessionFile;
-      expect(sessionFile).toBeTruthy();
-      expect(path.basename(sessionFile ?? "")).toBe(
-        `${result.sessionEntry.sessionId}-topic-456.jsonl`,
-      );
+      const sessionFile = requireString(result.sessionEntry.sessionFile, "topic session file");
+      expect(path.basename(sessionFile)).toBe(`${result.sessionEntry.sessionId}-topic-456.jsonl`);
     } finally {
       resetPluginRuntimeStateForTest();
     }
@@ -792,6 +729,54 @@ describe("initSessionState RawBody", () => {
     expect(result.triggerBodyNormalized).toBe("/NEW KeepThisCase");
   });
 
+  it("drops cached skills snapshot when /new rotates an existing session", async () => {
+    const root = await makeCaseDir("openclaw-rawbody-reset-skills-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:signal:direct:uuid:reset-skills";
+    const existingSessionId = "session-with-stale-skills";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: Date.now(),
+        systemSent: true,
+        skillsSnapshot: {
+          prompt: "<available_skills><skill><name>stale</name></skill></available_skills>",
+          skills: [{ name: "stale" }],
+          version: 0,
+        },
+      },
+    });
+
+    const cfg = {
+      session: {
+        store: storePath,
+        resetTriggers: ["/new"],
+      },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        RawBody: "/new continue",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(true);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionEntry.skillsSnapshot).toBeUndefined();
+
+    const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      { skillsSnapshot?: unknown }
+    >;
+    expect(store[sessionKey]?.skillsSnapshot).toBeUndefined();
+  });
+
   it("drains stale system events when /new rotates an existing session", async () => {
     const root = await makeCaseDir("openclaw-rawbody-reset-system-events-");
     const storePath = path.join(root, "sessions.json");
@@ -836,7 +821,7 @@ describe("initSessionState RawBody", () => {
         isNewSession: true,
       }),
     ).resolves.toBeUndefined();
-    expect(peekSystemEvents(existingSessionId)).toEqual([]);
+    expect(peekSystemEvents(existingSessionId)).toStrictEqual([]);
   });
 
   it("rotates local session state for /new on bound ACP sessions", async () => {
@@ -1412,7 +1397,7 @@ describe("initSessionState reset policy", () => {
         isNewSession: true,
       }),
     ).resolves.toBeUndefined();
-    expect(peekSystemEvents(existingSessionId)).toEqual([]);
+    expect(peekSystemEvents(existingSessionId)).toStrictEqual([]);
   });
 
   it("treats sessions as stale before the daily reset when updated before yesterday's boundary", async () => {
@@ -1511,7 +1496,7 @@ describe("initSessionState reset policy", () => {
         isNewSession: true,
       }),
     ).resolves.toBeUndefined();
-    expect(peekSystemEvents(existingSessionId)).toEqual([]);
+    expect(peekSystemEvents(existingSessionId)).toStrictEqual([]);
   });
 
   it("keeps the existing stale session for /reset soft", async () => {
@@ -2193,6 +2178,69 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     }
   });
 
+  it("preserves usage family metadata across /new and /reset", async () => {
+    const storePath = await createStorePath("openclaw-reset-usage-family-");
+    const sessionKey = "agent:main:telegram:dm:user-usage-family";
+    const existingSessionId = "existing-session-usage-family";
+    const cases = [
+      {
+        name: "new preserves usage family metadata",
+        body: "/new",
+      },
+      {
+        name: "reset preserves usage family metadata",
+        body: "/reset",
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      await seedSessionStoreWithOverrides({
+        storePath,
+        sessionKey,
+        sessionId: existingSessionId,
+        overrides: {
+          usageFamilyKey: "family:user-usage-family",
+          usageFamilySessionIds: ["ancestor-session", existingSessionId],
+        },
+      });
+
+      const result = await initSessionState({
+        ctx: {
+          Body: testCase.body,
+          RawBody: testCase.body,
+          CommandBody: testCase.body,
+          From: "user-usage-family",
+          To: "bot",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          Provider: "telegram",
+          Surface: "telegram",
+        },
+        cfg: {
+          session: { store: storePath, idleMinutes: 999 },
+        } as OpenClawConfig,
+        commandAuthorized: true,
+      });
+
+      expect(result.resetTriggered, testCase.name).toBe(true);
+      expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
+      expect(result.sessionEntry.usageFamilyKey, testCase.name).toBe("family:user-usage-family");
+      expect(result.sessionEntry.usageFamilySessionIds, testCase.name).toEqual([
+        "ancestor-session",
+        existingSessionId,
+        result.sessionId,
+      ]);
+
+      const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      expect(stored[sessionKey].usageFamilyKey, testCase.name).toBe("family:user-usage-family");
+      expect(stored[sessionKey].usageFamilySessionIds, testCase.name).toEqual([
+        "ancestor-session",
+        existingSessionId,
+        result.sessionId,
+      ]);
+    }
+  });
+
   it("preserves selected auth profile overrides across /new and /reset", async () => {
     const storePath = await createStorePath("openclaw-reset-model-auth-");
     const sessionKey = "agent:main:telegram:dm:user-model-auth";
@@ -2645,7 +2693,10 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       expect(result.isNewSession).toBe(false);
       expect(result.sessionId).toBe(existingSessionId);
       expect(result.sessionEntry.cliSessionBindings?.["claude-cli"]).toEqual(cliBinding);
-      expect(await fs.stat(transcriptPath).catch(() => null)).not.toBeNull();
+      const transcriptStat = await fs.stat(transcriptPath).catch(() => null);
+      if (!transcriptStat) {
+        throw new Error("expected transcript file to remain after stale reset");
+      }
       const archived = (await fs.readdir(path.dirname(storePath))).filter((entry) =>
         entry.startsWith(`${existingSessionId}.jsonl.reset.`),
       );
@@ -2794,8 +2845,8 @@ describe("drainFormattedSystemEvents", () => {
         isNewSession: false,
       });
 
-      expect(expectedTimestamp).toBeDefined();
-      expect(result).toContain(`System: [${expectedTimestamp}] Model switched.`);
+      const expectedTimestampText = requireString(expectedTimestamp, "formatted timestamp");
+      expect(result).toContain(`System: [${expectedTimestampText}] Model switched.`);
     } finally {
       resetSystemEventsForTest();
       vi.useRealTimers();

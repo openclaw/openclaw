@@ -19,7 +19,6 @@ import {
   createOutboundSendDeps,
   defaultRuntime,
   deleteMediaBuffer,
-  deliverOutboundPayloads,
   enqueueSystemEvent,
   formatForLog,
   getRuntimeConfig,
@@ -31,7 +30,7 @@ import {
   normalizeRpcAttachmentsToChatAttachments,
   parseMessageWithAttachments,
   registerApnsRegistration,
-  requestHeartbeatNow,
+  requestHeartbeat,
   resolveChatAttachmentMaxBytes,
   resolveGatewayModelSupportsImages,
   resolveOutboundTarget,
@@ -39,6 +38,7 @@ import {
   resolveSessionModelRef,
   sanitizeInboundSystemTags,
   scopedHeartbeatWakeOptions,
+  sendDurableMessageBatch,
   updateSessionStore,
 } from "./server-node-events.runtime.js";
 
@@ -345,15 +345,19 @@ async function sendReceiptAck(params: {
     cfg: params.cfg,
     sessionKey: params.sessionKey,
   });
-  await deliverOutboundPayloads({
+  const send = await sendDurableMessageBatch({
     cfg: params.cfg,
     channel: params.channel,
     to: resolved.to,
     payloads: [{ text: params.text }],
     session,
     bestEffort: true,
+    durability: "best_effort",
     deps: createOutboundSendDeps(params.deps),
   });
+  if (send.status === "failed") {
+    throw send.error;
+  }
 }
 
 export const handleNodeEvent = async (
@@ -646,7 +650,12 @@ export const handleNodeEvent = async (
         trusted: false,
       });
       if (queued) {
-        requestHeartbeatNow({ reason: "notifications-event", sessionKey });
+        requestHeartbeat({
+          source: "notifications-event",
+          intent: "event",
+          reason: "notifications-event",
+          sessionKey,
+        });
       }
       return undefined;
     }
@@ -749,8 +758,13 @@ export const handleNodeEvent = async (
         // Scope wakes only for canonical agent sessions. Synthetic node-* fallback
         // keys should keep legacy unscoped behavior so enabled non-main heartbeat
         // agents still run when no explicit agent session is provided.
-        requestHeartbeatNow(
-          scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event", coalesceMs: 0 }),
+        requestHeartbeat(
+          scopedHeartbeatWakeOptions(sessionKey, {
+            source: "exec-event",
+            intent: "event",
+            reason: "exec-event",
+            coalesceMs: 0,
+          }),
         );
       }
       return undefined;

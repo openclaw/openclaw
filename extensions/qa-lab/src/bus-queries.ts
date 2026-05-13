@@ -1,4 +1,4 @@
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   QaBusAttachment,
   QaBusConversation,
@@ -37,6 +37,11 @@ export function normalizeConversationFromTarget(target: string): {
   if (trimmed.startsWith("channel:")) {
     return {
       conversation: { id: trimmed.slice("channel:".length), kind: "channel" },
+    };
+  }
+  if (trimmed.startsWith("group:")) {
+    return {
+      conversation: { id: trimmed.slice("group:".length), kind: "group" },
     };
   }
   if (trimmed.startsWith("dm:")) {

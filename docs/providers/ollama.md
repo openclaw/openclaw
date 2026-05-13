@@ -192,6 +192,12 @@ When you set `OLLAMA_API_KEY` (or an auth profile) and **do not** define `models
 
 This avoids manual model entries while keeping the catalog aligned with the local Ollama instance. You can use a full ref such as `ollama/<pulled-model>:latest` in local `infer model run`; OpenClaw resolves that installed model from Ollama's live catalog without requiring a hand-written `models.json` entry.
 
+For signed-in Ollama hosts, some `:cloud` models may be usable through `/api/chat`
+and `/api/show` before they appear in `/api/tags`. When you explicitly select a
+full `ollama/<model>:cloud` ref, OpenClaw validates that exact missing model with
+`/api/show` and adds it to the runtime catalog only if Ollama confirms model
+metadata. Typos still fail as unknown models instead of being auto-created.
+
 ```bash
 # See what models are available
 ollama list
@@ -214,6 +220,25 @@ That path still uses OpenClaw's configured provider, auth, and native Ollama
 transport, but it does not start a chat-agent turn or load MCP/tool context. If
 this succeeds while normal agent replies fail, troubleshoot the model's agent
 prompt/tool capacity next.
+
+For a narrow vision-model smoke test on the same lean path, add one or more
+image files to `infer model run`. This sends the prompt and image directly to
+the selected Ollama vision model without loading chat tools, memory, or prior
+session context:
+
+```bash
+OLLAMA_API_KEY=ollama-local \
+  openclaw infer model run \
+    --local \
+    --model ollama/qwen2.5vl:7b \
+    --prompt "Describe this image in one sentence." \
+    --file ./photo.jpg \
+    --json
+```
+
+`model run --file` accepts files detected as `image/*`, including common PNG,
+JPEG, and WebP inputs. Non-image files are rejected before Ollama is called.
+For speech recognition, use `openclaw infer audio transcribe` instead.
 
 When you switch a conversation with `/model ollama/<model>`, OpenClaw treats
 that as an exact user selection. If the configured Ollama `baseUrl` is
@@ -268,6 +293,8 @@ openclaw infer image describe \
 ```
 
 `--model` must be a full `<provider/model>` ref. When it is set, `openclaw infer image describe` runs that model directly instead of skipping description because the model supports native vision.
+
+Use `infer image describe` when you want OpenClaw's image-understanding provider flow, configured `agents.defaults.imageModel`, and image-description output shape. Use `infer model run --file` when you want a raw multimodal model probe with a custom prompt and one or more images.
 
 To make Ollama the default image-understanding model for inbound media, configure `agents.defaults.imageModel`:
 

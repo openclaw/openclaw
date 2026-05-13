@@ -375,7 +375,9 @@ function expectSingleNearLimitUpdate(params: {
   );
 }
 
-async function runNearLimitPayloadTest(mode: "single" | "random-chunked"): Promise<void> {
+async function runNearLimitPayloadTestAndExpectUpdate(
+  mode: "single" | "random-chunked",
+): Promise<void> {
   const seenUpdates: Array<{ update_id: number; message: { text: string } }> = [];
   handleUpdateSpy.mockImplementationOnce((update: unknown) => {
     seenUpdates.push(update as { update_id: number; message: { text: string } });
@@ -412,6 +414,7 @@ describe("startTelegramWebhook", () => {
     initSpy.mockClear();
     createTelegramBotSpy.mockClear();
     const runtimeLog = vi.fn();
+    const setStatus = vi.fn();
     const cfg = { bindings: [] };
     await withStartedWebhook(
       {
@@ -419,6 +422,7 @@ describe("startTelegramWebhook", () => {
         accountId: "opie",
         config: cfg,
         runtime: { log: runtimeLog, error: vi.fn(), exit: vi.fn() },
+        setStatus,
       },
       async ({ port }) => {
         expect(createTelegramBotSpy).toHaveBeenCalledWith(
@@ -438,6 +442,20 @@ describe("startTelegramWebhook", () => {
         expect(runtimeLog).toHaveBeenCalledWith(
           expect.stringContaining("webhook advertised to telegram on http://"),
         );
+        expect(setStatus).toHaveBeenNthCalledWith(1, {
+          mode: "webhook",
+          connected: false,
+          lastConnectedAt: null,
+          lastEventAt: null,
+          lastTransportActivityAt: null,
+        });
+        expect(setStatus).toHaveBeenNthCalledWith(2, {
+          mode: "webhook",
+          connected: true,
+          lastConnectedAt: expect.any(Number),
+          lastEventAt: expect.any(Number),
+          lastError: null,
+        });
       },
     );
   });
@@ -445,6 +463,7 @@ describe("startTelegramWebhook", () => {
   it("keeps local listener alive and retries when setWebhook has a recoverable startup failure", async () => {
     const runtimeLog = vi.fn();
     const runtimeError = vi.fn();
+    const setStatus = vi.fn();
     setWebhookSpy.mockRejectedValueOnce(new TypeError("fetch failed")).mockResolvedValueOnce(true);
 
     await withStartedWebhook(
@@ -452,6 +471,7 @@ describe("startTelegramWebhook", () => {
         secret: TELEGRAM_SECRET,
         path: TELEGRAM_WEBHOOK_PATH,
         runtime: { log: runtimeLog, error: runtimeError, exit: vi.fn() },
+        setStatus,
         webhookRegistrationRetryPolicy: {
           initialMs: 0,
           maxMs: 0,
@@ -470,6 +490,18 @@ describe("startTelegramWebhook", () => {
         expect(runtimeLog).toHaveBeenCalledWith("telegram setWebhook retry 1 scheduled in 0ms");
         expect(runtimeLog).toHaveBeenCalledWith(
           expect.stringContaining("webhook advertised to telegram on http://"),
+        );
+        expect(setStatus).toHaveBeenCalledWith({
+          mode: "webhook",
+          connected: false,
+          lastError: "fetch failed",
+        });
+        expect(setStatus).toHaveBeenCalledWith(
+          expect.objectContaining({
+            mode: "webhook",
+            connected: true,
+            lastError: null,
+          }),
         );
       },
     );
@@ -514,7 +546,9 @@ describe("startTelegramWebhook", () => {
         const certificate = setWebhookSpy.mock.calls[0]?.[1]?.certificate as
           | { path?: string; fileData?: string; filename?: string }
           | undefined;
-        expect(certificate).toBeDefined();
+        if (!certificate) {
+          throw new Error("expected Telegram webhook certificate payload");
+        }
         if (certificate && "path" in certificate && typeof certificate.path === "string") {
           expect(certificate.path).toBe("/path/to/cert.pem");
         } else {
@@ -532,6 +566,7 @@ describe("startTelegramWebhook", () => {
   it("invokes webhook handler on matching path", async () => {
     handleUpdateSpy.mockClear();
     createTelegramBotSpy.mockClear();
+    const setStatus = vi.fn();
     const cfg = { bindings: [] };
     await withStartedWebhook(
       {
@@ -539,6 +574,7 @@ describe("startTelegramWebhook", () => {
         accountId: "opie",
         config: cfg,
         path: TELEGRAM_WEBHOOK_PATH,
+        setStatus,
       },
       async ({ port }) => {
         expect(createTelegramBotSpy).toHaveBeenCalledWith(
@@ -555,6 +591,13 @@ describe("startTelegramWebhook", () => {
         });
         expect(response.status).toBe(200);
         await vi.waitFor(() => expect(handleUpdateSpy).toHaveBeenCalledWith(JSON.parse(payload)));
+        expect(setStatus).toHaveBeenCalledWith(
+          expect.objectContaining({
+            mode: "webhook",
+            connected: true,
+            lastError: null,
+          }),
+        );
       },
     );
   });
@@ -928,11 +971,11 @@ describe("startTelegramWebhook", () => {
   });
 
   it("handles near-limit payload with random chunk writes and event-loop yields", async () => {
-    await runNearLimitPayloadTest("random-chunked");
+    await runNearLimitPayloadTestAndExpectUpdate("random-chunked");
   });
 
   it("handles near-limit payload written in a single request write", async () => {
-    await runNearLimitPayloadTest("single");
+    await runNearLimitPayloadTestAndExpectUpdate("single");
   });
 
   it("rejects payloads larger than 1MB before invoking webhook handler", async () => {

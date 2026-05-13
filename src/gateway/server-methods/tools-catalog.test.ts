@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resolvePluginTools } from "../../plugins/tools.js";
+import {
+  ensureStandalonePluginToolRegistryLoaded,
+  resolvePluginTools,
+} from "../../plugins/tools.js";
 import { ErrorCodes } from "../protocol/index.js";
 import { toolsCatalogHandlers } from "./tools-catalog.js";
 
@@ -19,6 +22,7 @@ const pluginToolMetaState = new Map<string, { pluginId: string; optional: boolea
 vi.mock("../../plugins/tools.js", () => ({
   buildPluginToolMetadataKey: (pluginId: string, toolName: string) =>
     JSON.stringify([pluginId, toolName]),
+  ensureStandalonePluginToolRegistryLoaded: vi.fn(),
   resolvePluginTools: vi.fn(() => [
     { name: "voice_call", label: "voice_call", description: "Plugin calling tool" },
     {
@@ -90,9 +94,10 @@ describe("tools.catalog handler", () => {
         }
       | undefined;
     expect(payload?.agentId).toBe("main");
-    expect(payload?.groups.some((group) => group.source === "plugin")).toBe(false);
-    const media = payload?.groups.find((group) => group.id === "media");
-    expect(media?.tools.some((tool) => tool.id === "tts" && tool.source === "core")).toBe(true);
+    const groups = payload?.groups ?? [];
+    expect(groups.some((group) => group.source === "plugin")).toBe(false);
+    const media = groups.find((group) => group.id === "media");
+    expect(media?.tools.map((tool) => `${tool.source}:${tool.id}`) ?? []).toContain("core:tts");
   });
 
   it("includes plugin groups with plugin metadata", async () => {
@@ -155,6 +160,11 @@ describe("tools.catalog handler", () => {
     await invoke();
 
     expect(vi.mocked(resolvePluginTools)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowGatewaySubagentBinding: true,
+      }),
+    );
+    expect(vi.mocked(ensureStandalonePluginToolRegistryLoaded)).toHaveBeenCalledWith(
       expect.objectContaining({
         allowGatewaySubagentBinding: true,
       }),

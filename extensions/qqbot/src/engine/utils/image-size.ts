@@ -10,13 +10,13 @@ import type { SsrfPolicyConfig } from "../adapter/types.js";
 import { formatErrorMessage } from "./format.js";
 import { debugLog } from "./log.js";
 
-export interface ImageSize {
+interface ImageSize {
   width: number;
   height: number;
 }
 
 /** Default dimensions used when probing fails. */
-export const DEFAULT_IMAGE_SIZE: ImageSize = { width: 512, height: 512 };
+const DEFAULT_IMAGE_SIZE: ImageSize = { width: 512, height: 512 };
 
 /**
  * Parse image dimensions from the PNG header.
@@ -199,7 +199,7 @@ export async function getImageSizeFromUrl(
 }
 
 /** Parse image dimensions from a Base64 data URL. */
-export function getImageSizeFromDataUrl(dataUrl: string): ImageSize | null {
+function getImageSizeFromDataUrl(dataUrl: string): ImageSize | null {
   try {
     // Format: data:image/png;base64,xxxxx
     const matches = dataUrl.match(/^data:image\/[^;]+;base64,(.+)$/);
@@ -246,13 +246,4 @@ export function formatQQBotMarkdownImage(url: string, size: ImageSize | null): s
 /** Return true when markdown already contains QQ Bot size annotations. */
 export function hasQQBotImageSize(markdownImage: string): boolean {
   return /!\[#\d+px\s+#\d+px\]/.test(markdownImage);
-}
-
-/** Extract width and height from QQBot markdown image syntax: `![#Wpx #Hpx](url)`. */
-export function extractQQBotImageSize(markdownImage: string): ImageSize | null {
-  const match = markdownImage.match(/!\[#(\d+)px\s+#(\d+)px\]/);
-  if (match) {
-    return { width: Number.parseInt(match[1], 10), height: Number.parseInt(match[2], 10) };
-  }
-  return null;
 }

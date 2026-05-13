@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   auditGatewayServiceConfig,
@@ -71,9 +74,7 @@ describe("auditGatewayServiceConfig", () => {
         environment: { PATH: "/usr/bin:/bin" },
       },
     });
-    expect(audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeBun)).toBe(
-      true,
-    );
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayRuntimeBun)).toBe(true);
   });
 
   it("flags version-managed node paths", async () => {
@@ -118,6 +119,97 @@ describe("auditGatewayServiceConfig", () => {
     expect(
       audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayPathMissingDirs),
     ).toBe(false);
+  });
+
+  it("accepts canonical macOS gateway service PATH without user-bin defaults", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-home-"));
+    try {
+      const servicePath = buildMinimalServicePath({ platform: "darwin", env: { HOME: home } });
+      expect(servicePath).toBe(
+        "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+      );
+
+      const audit = await auditGatewayServiceConfig({
+        env: { HOME: home },
+        platform: "darwin",
+        command: {
+          programArguments: ["/usr/bin/node", "gateway"],
+          environment: { PATH: servicePath },
+        },
+      });
+
+      expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayPathMissingDirs)).toBe(false);
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("requires Homebrew directories in canonical macOS gateway service PATH", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-home-"));
+    try {
+      const audit = await auditGatewayServiceConfig({
+        env: { HOME: home },
+        platform: "darwin",
+        command: {
+          programArguments: ["/usr/bin/node", "gateway"],
+          environment: { PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" },
+        },
+      });
+
+      const issue = audit.issues.find(
+        (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayPathMissingDirs,
+      );
+      expect(issue?.message).toContain("/opt/homebrew/bin");
+      expect(issue?.message).toContain("/opt/homebrew/sbin");
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("still requires explicit env-configured tool roots in gateway service PATH", async () => {
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp/openclaw-testuser", PNPM_HOME: "/opt/pnpm" },
+      platform: "linux",
+      command: {
+        programArguments: ["/usr/bin/node", "gateway"],
+        environment: { PATH: "/usr/local/bin:/usr/bin:/bin" },
+      },
+    });
+
+    const issue = audit.issues.find(
+      (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayPathMissingDirs,
+    );
+    expect(issue?.message).toContain("/opt/pnpm");
+  });
+
+  it("flags stale Linux version-manager and package-manager PATH entries", async () => {
+    const env = { HOME: "/tmp/openclaw-testuser-nonminimal" };
+    const minimalPath = buildMinimalServicePath({ platform: "linux", env });
+    const staleEntries = [
+      `${env.HOME}/.volta/bin`,
+      `${env.HOME}/.asdf/shims`,
+      `${env.HOME}/.nvm/current/bin`,
+      `${env.HOME}/.local/share/fnm/current/bin`,
+      `${env.HOME}/.fnm/current/bin`,
+      `${env.HOME}/.local/share/pnpm`,
+      "/opt/pnpm/bin",
+    ];
+    const audit = await auditGatewayServiceConfig({
+      env,
+      platform: "linux",
+      command: {
+        programArguments: ["/usr/bin/node", "gateway"],
+        environment: { PATH: [minimalPath, ...staleEntries].join(":") },
+      },
+    });
+
+    const issue = audit.issues.find(
+      (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayPathNonMinimal,
+    );
+    expect(issue?.detail).toContain(`${env.HOME}/.volta/bin`);
+    expect(issue?.detail).toContain(`${env.HOME}/.local/share/fnm/current/bin`);
+    expect(issue?.detail).toContain(`${env.HOME}/.local/share/pnpm`);
+    expect(issue?.detail).toContain("/opt/pnpm/bin");
   });
 
   it("accepts Linux fnm aliases/default without requiring the legacy current symlink", async () => {
@@ -405,9 +497,10 @@ describe("checkTokenDrift", () => {
 
   it("detects drift when config has token but service has different token", () => {
     const result = checkTokenDrift({ serviceToken: "old-token", configToken: "new-token" });
-    expect(result).not.toBeNull();
-    expect(result?.code).toBe(SERVICE_AUDIT_CODES.gatewayTokenDrift);
-    expect(result?.message).toContain("differs from service token");
+    expect(result).toMatchObject({
+      code: SERVICE_AUDIT_CODES.gatewayTokenDrift,
+      message: expect.stringContaining("differs from service token"),
+    });
   });
 
   it("returns null when config has token but service has no token", () => {

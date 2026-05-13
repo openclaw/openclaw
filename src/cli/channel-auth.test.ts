@@ -225,7 +225,7 @@ describe("channel-auth", () => {
     mocks.loadConfig.mockReturnValue({ channels: { whatsapp: { enabled: false } } });
 
     await expect(runChannelLogin({}, runtime)).rejects.toThrow(
-      "Channel is required (no configured channels support login).",
+      "No configured channel supports login.",
     );
     expect(mocks.login).not.toHaveBeenCalled();
   });
@@ -260,9 +260,10 @@ describe("channel-auth", () => {
 
     await runChannelLogout({}, runtime);
 
-    expect(mocks.logoutAccount).toHaveBeenCalledWith(
+    expect(mocks.callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
-        cfg: autoEnabledCfg,
+        config: autoEnabledCfg,
+        method: "channels.logout",
       }),
     );
     expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
@@ -312,7 +313,7 @@ describe("channel-auth", () => {
     );
 
     await expect(runChannelLogin({}, runtime)).rejects.toThrow(
-      "multiple configured channels support login: whatsapp, zalouser",
+      "Multiple configured channels support login: whatsapp, zalouser.",
     );
     expect(mocks.login).not.toHaveBeenCalled();
   });
@@ -339,7 +340,7 @@ describe("channel-auth", () => {
     mocks.normalizeChannelId.mockImplementation(() => undefined);
 
     await expect(runChannelLogin({ channel: "bad-channel" }, runtime)).rejects.toThrow(
-      "Unsupported channel: bad-channel",
+      'Unsupported channel "bad-channel".',
     );
     expect(mocks.login).not.toHaveBeenCalled();
   });
@@ -352,7 +353,7 @@ describe("channel-auth", () => {
     });
 
     await expect(runChannelLogin({ channel: "whatsapp" }, runtime)).rejects.toThrow(
-      "Channel whatsapp does not support login",
+      'Channel "whatsapp" does not support login. Run `openclaw channels status --channel whatsapp` to inspect supported actions.',
     );
   });
 
@@ -518,7 +519,28 @@ describe("channel-auth", () => {
     );
   });
 
-  it("runs logout with resolved account and explicit account id", async () => {
+  it("runs logout through the live gateway with resolved account and explicit account id", async () => {
+    await runChannelLogout({ channel: "whatsapp", account: " acct-2 " }, runtime);
+
+    expect(mocks.callGateway).toHaveBeenCalledWith({
+      config: { channels: { whatsapp: {} } },
+      method: "channels.logout",
+      params: {
+        channel: "whatsapp",
+        accountId: "acct-2",
+      },
+      mode: "backend",
+      clientName: "gateway-client",
+      deviceIdentity: null,
+    });
+    expect(mocks.resolveAccount).not.toHaveBeenCalled();
+    expect(mocks.logoutAccount).not.toHaveBeenCalled();
+    expect(mocks.setVerbose).not.toHaveBeenCalled();
+  });
+
+  it("falls back to local auth cleanup when a local gateway logout is unreachable", async () => {
+    mocks.callGateway.mockRejectedValue(new Error("gateway unreachable"));
+
     await runChannelLogout({ channel: "whatsapp", account: " acct-2 " }, runtime);
 
     expect(mocks.resolveAccount).toHaveBeenCalledWith({ channels: { whatsapp: {} } }, "acct-2");
@@ -528,6 +550,9 @@ describe("channel-auth", () => {
       account: { id: "resolved-account" },
       runtime,
     });
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("running gateway did not stop it: gateway unreachable"),
+    );
     expect(mocks.setVerbose).not.toHaveBeenCalled();
   });
 
@@ -539,7 +564,7 @@ describe("channel-auth", () => {
     });
 
     await expect(runChannelLogout({ channel: "whatsapp" }, runtime)).rejects.toThrow(
-      "Channel whatsapp does not support logout",
+      'Channel "whatsapp" does not support logout. Run `openclaw channels status --channel whatsapp` to inspect supported actions.',
     );
   });
 });

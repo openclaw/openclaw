@@ -15,6 +15,49 @@ const errorWithCode = (message: string, code: string) =>
 const errorWithTelegramCode = (message: string, error_code: number) =>
   Object.assign(new Error(message), { error_code });
 
+const plainErrorPredicateCases = [
+  {
+    name: "isTelegramServerError",
+    predicate: isTelegramServerError,
+    error: new Error("500: Internal Server Error"),
+  },
+  {
+    name: "isTelegramClientRejection",
+    predicate: isTelegramClientRejection,
+    error: new Error("400: Bad Request"),
+  },
+];
+
+const nestedErrorCodePredicateCases = [
+  {
+    name: "isTelegramRateLimitError",
+    predicate: isTelegramRateLimitError,
+    inner: Object.assign(new Error("Too Many Requests"), { error_code: 429 }),
+  },
+  {
+    name: "isTelegramClientRejection",
+    predicate: isTelegramClientRejection,
+    inner: Object.assign(new Error("Forbidden"), { error_code: 403 }),
+  },
+];
+
+describe("Telegram error_code predicate contracts", () => {
+  it.each(plainErrorPredicateCases)(
+    "$name returns false for plain Error",
+    ({ error, predicate }) => {
+      expect(predicate(error)).toBe(false);
+    },
+  );
+
+  it.each(nestedErrorCodePredicateCases)(
+    "$name detects error_code in nested cause",
+    ({ inner, predicate }) => {
+      const outer = Object.assign(new Error("wrapped"), { cause: inner });
+      expect(predicate(outer)).toBe(true);
+    },
+  );
+});
+
 describe("isRecoverableTelegramNetworkError", () => {
   it("tracks Telegram polling origin separately from generic network matching", () => {
     const slackDnsError = Object.assign(
@@ -202,6 +245,14 @@ describe("isSafeToRetrySendError", () => {
     const wrapped = new MockHttpError("Network request for 'sendMessage' failed!", fetchError);
     expect(isSafeToRetrySendError(wrapped)).toBe(true);
   });
+
+  it("does not infer safe send retry from a plain grammY network envelope", () => {
+    const wrapped = new MockHttpError(
+      "Network request for 'sendMessage' failed!",
+      new TypeError("fetch failed"),
+    );
+    expect(isSafeToRetrySendError(wrapped)).toBe(false);
+  });
 });
 
 describe("isTelegramServerError", () => {
@@ -211,10 +262,6 @@ describe("isTelegramServerError", () => {
     ["Forbidden", 403, false],
   ])("returns %s for error_code %s", (message, errorCode, expected) => {
     expect(isTelegramServerError(errorWithTelegramCode(message, errorCode))).toBe(expected);
-  });
-
-  it("returns false for plain Error", () => {
-    expect(isTelegramServerError(new Error("500: Internal Server Error"))).toBe(false);
   });
 });
 
@@ -230,12 +277,6 @@ describe("isTelegramRateLimitError", () => {
     };
     expect(isTelegramRateLimitError(wrapped)).toBe(true);
   });
-
-  it("detects error_code in nested cause", () => {
-    const inner = Object.assign(new Error("Too Many Requests"), { error_code: 429 });
-    const outer = Object.assign(new Error("wrapped"), { cause: inner });
-    expect(isTelegramRateLimitError(outer)).toBe(true);
-  });
 });
 
 describe("isTelegramClientRejection", () => {
@@ -245,15 +286,5 @@ describe("isTelegramClientRejection", () => {
     ["Bad Gateway", 502, false],
   ])("returns %s for error_code %s", (message, errorCode, expected) => {
     expect(isTelegramClientRejection(errorWithTelegramCode(message, errorCode))).toBe(expected);
-  });
-
-  it("returns false for plain Error", () => {
-    expect(isTelegramClientRejection(new Error("400: Bad Request"))).toBe(false);
-  });
-
-  it("detects error_code in nested cause", () => {
-    const inner = Object.assign(new Error("Forbidden"), { error_code: 403 });
-    const outer = Object.assign(new Error("wrapped"), { cause: inner });
-    expect(isTelegramClientRejection(outer)).toBe(true);
   });
 });

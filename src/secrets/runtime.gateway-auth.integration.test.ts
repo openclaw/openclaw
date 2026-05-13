@@ -37,7 +37,6 @@ describe("secrets runtime snapshot gateway-auth integration", () => {
     await withEnvAsync(
       {
         OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-        OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
         OPENCLAW_VERSION: undefined,
       },
       async () => {
@@ -113,9 +112,11 @@ describe("secrets runtime snapshot gateway-auth integration", () => {
         ).rejects.toThrow(/runtime snapshot refresh failed: .*MISSING_GATEWAY_AUTH_TOKEN/i);
 
         const activeAfterFailure = getActiveSecretsRuntimeSnapshot();
-        expect(activeAfterFailure).not.toBeNull();
+        if (activeAfterFailure === null) {
+          throw new Error("Expected active secrets runtime snapshot");
+        }
         expect(getRuntimeConfig().gateway?.auth?.token).toBe("gateway-runtime-token");
-        expect(activeAfterFailure?.sourceConfig.gateway?.auth?.token).toEqual(initialTokenRef);
+        expect(activeAfterFailure.sourceConfig.gateway?.auth?.token).toEqual(initialTokenRef);
 
         const persistedConfig = JSON.parse(
           await fs.readFile(path.join(home, ".openclaw", "openclaw.json"), "utf8"),

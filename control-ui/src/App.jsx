@@ -38,6 +38,59 @@ const AI_REPO_MARKERS = [
 const isAiRepoTarget = (url = '') => AI_REPO_MARKERS.some(marker => url.includes(marker))
 const buildApiUrl = (path) => preferSameOriginApi ? path : `${configuredApiBaseUrl}${path}`
 
+const toBinaryMetric = (value) => value ? '1' : '0'
+
+const buildStripeWorker = (stripeStatus) => {
+  if (!stripeStatus) {
+    return null
+  }
+
+  const tone = stripeStatus.lastError ? 'error' : stripeStatus.secretConfigured ? 'ok' : 'warn'
+  const statusLabel = stripeStatus.lastError ? 'ERROR' : stripeStatus.secretConfigured ? 'ARMED' : 'IDLE'
+
+  return {
+    id: 'stripe',
+    icon: '💳',
+    label: 'Stripe',
+    tone,
+    statusLabel,
+    summary: stripeStatus.businessName || stripeStatus.accountId || stripeStatus.apiBaseUrl || 'Stripe API',
+    detail: stripeStatus.lastError || `${stripeStatus.livemode ? 'LIVE' : 'TEST'} · ${stripeStatus.keyVaultName || 'no-vault'}`,
+    metrics: [
+      { label: 'Rows', value: String(stripeStatus.persistedCount ?? 0) },
+      { label: 'Queued', value: String(stripeStatus.lastSyncQueued ?? 0) },
+      { label: 'Charge', value: toBinaryMetric(stripeStatus.chargesEnabled) },
+      { label: 'Payout', value: toBinaryMetric(stripeStatus.payoutsEnabled) }
+    ]
+  }
+}
+
+const buildRevolutWorker = (revolutStatus) => {
+  if (!revolutStatus) {
+    return null
+  }
+
+  const readyCount = Number(Boolean(revolutStatus.signerConfigured)) + Number(Boolean(revolutStatus.refreshTokenPresent))
+  const tone = revolutStatus.lastError ? 'error' : revolutStatus.configured ? 'ok' : 'warn'
+  const statusLabel = revolutStatus.lastError ? 'ERROR' : revolutStatus.configured ? 'ARMED' : 'IDLE'
+
+  return {
+    id: 'revolut',
+    icon: '🏦',
+    label: 'Revolut',
+    tone,
+    statusLabel,
+    summary: revolutStatus.signerBaseUrl || revolutStatus.revolutBaseUrl || 'Revolut signer',
+    detail: revolutStatus.lastError || `${revolutStatus.clientIdMode || 'jwt-sub'} · ${revolutStatus.signerPath || '/internal/auth/revolut/client-assertion'}`,
+    metrics: [
+      { label: 'Ready', value: `${readyCount}/2` },
+      { label: 'Access', value: toBinaryMetric(revolutStatus.accessTokenPresent) },
+      { label: 'Client', value: toBinaryMetric(revolutStatus.clientIdPresent) },
+      { label: 'Refresh', value: revolutStatus.lastRefreshStatus ? String(revolutStatus.lastRefreshStatus) : '--' }
+    ]
+  }
+}
+
 const buildWebSocketUrl = (path) => {
   if (preferSameOriginApi) {
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -63,19 +116,26 @@ function App() {
   const [targets, setTargets] = useState([])
   const [stats, setStats] = useState({ workers: 0, active: 0, completed: 0, failed: 0 })
   const [githubStatus, setGitHubStatus] = useState({ tokenPresent: false, authMode: 'public', rateLimit: null, lastError: null, lastUpdated: null })
+  const [stripeStatus, setStripeStatus] = useState(null)
+  const [revolutStatus, setRevolutStatus] = useState(null)
   const [isPaused, setIsPaused] = useState(false)
   const logsEndRef = useRef(null)
   const wsRef = useRef(null)
   const nextLogIdRef = useRef(0)
   const visibleTargets = targets.filter(target => target.status !== 'failed' && isAiRepoTarget(target.url || ''))
-  const successfulAiTargets = visibleTargets.filter(target => target.status === 'completed').length
-  const githubRateRemaining = githubStatus.rateLimit?.remaining ?? '--'
+  const financeWorkers = [buildStripeWorker(stripeStatus), buildRevolutWorker(revolutStatus)].filter(Boolean)
+  const stripeRows = stripeStatus?.persistedCount ?? 0
+  const revolutReady = revolutStatus
+    ? `${Number(Boolean(revolutStatus.signerConfigured)) + Number(Boolean(revolutStatus.refreshTokenPresent))}/2`
+    : '--'
   const githubAuthLabel = githubStatus.tokenPresent ? 'AUTH' : 'PUBLIC'
 
   const refreshDashboard = async () => {
-    const [targetsResult, githubResult] = await Promise.allSettled([
+    const [targetsResult, githubResult, stripeResult, revolutResult] = await Promise.allSettled([
       fetch(buildApiUrl('/api/targets')),
-      fetch(buildApiUrl('/api/github/status'))
+      fetch(buildApiUrl('/api/github/status')),
+      fetch(buildApiUrl('/api/stripe/status')),
+      fetch(buildApiUrl('/api/revolut/status'))
     ])
 
     if (targetsResult.status === 'fulfilled') {
@@ -97,6 +157,26 @@ function App() {
       }
     } else {
       console.error('Failed to fetch GitHub status:', githubResult.reason)
+    }
+
+    if (stripeResult.status === 'fulfilled') {
+      const response = stripeResult.value
+      if (response.ok) {
+        const data = await response.json()
+        setStripeStatus(data)
+      }
+    } else {
+      console.error('Failed to fetch Stripe status:', stripeResult.reason)
+    }
+
+    if (revolutResult.status === 'fulfilled') {
+      const response = revolutResult.value
+      if (response.ok) {
+        const data = await response.json()
+        setRevolutStatus(data)
+      }
+    } else {
+      console.error('Failed to fetch Revolut status:', revolutResult.reason)
     }
   }
 
@@ -231,16 +311,16 @@ function App() {
             <div className="stat-value" style={{ color: '#00b4ff' }}>{stats.completed}</div>
           </div>
           <div className="stat-card">
-            <div className="stat-label">AI Success</div>
-            <div className="stat-value" style={{ color: '#00ff88' }}>{successfulAiTargets}</div>
+            <div className="stat-label">Stripe Rows</div>
+            <div className="stat-value" style={{ color: '#00ff88' }}>{stripeRows}</div>
           </div>
           <div className="stat-card">
             <div className="stat-label">GitHub Auth</div>
             <div className="stat-value" style={{ color: githubStatus.tokenPresent ? '#00ff88' : '#ffaa00', fontSize: '1.1rem' }}>{githubAuthLabel}</div>
           </div>
           <div className="stat-card">
-            <div className="stat-label">Rate Left</div>
-            <div className="stat-value" style={{ color: '#7dd3c0' }}>{githubRateRemaining}</div>
+            <div className="stat-label">Revolut Ready</div>
+            <div className="stat-value" style={{ color: '#7dd3c0', fontSize: '1.1rem' }}>{revolutReady}</div>
           </div>
         </div>
       </header>
@@ -249,21 +329,50 @@ function App() {
         {/* TARGETS PANEL */}
         <aside className="targets-panel">
           <div className="panel-header">
-            <h2>🤖 AI Targets ({visibleTargets.length})</h2>
+            <div>
+              <h2>💼 Finance Workers ({financeWorkers.length})</h2>
+              <div className="panel-subtitle">Stripe og Revolut live runtime</div>
+            </div>
           </div>
           <div className="targets-list">
-            {visibleTargets.length === 0 ? (
-              <div className="empty-state">Engin virk AI targets fundust</div>
+            {financeWorkers.length === 0 ? (
+              <div className="empty-state">Bíð eftir Stripe/Revolut stöðu...</div>
             ) : (
-              visibleTargets.map((target, idx) => (
-                <div key={idx} className="target-item" title={target.url}>
-                  <span className="target-status">{getTargetStatus(target)}</span>
-                  <span className="target-url">{target.url || target.name}</span>
-                  {target.progress && (
-                    <span className="target-progress">{target.progress}%</span>
-                  )}
+              financeWorkers.map((worker) => (
+                <div key={worker.id} className="target-item target-item--finance" title={worker.summary}>
+                  <span className="target-status">{worker.icon}</span>
+                  <div className="target-body">
+                    <div className="target-row">
+                      <span className="target-url">{worker.label}</span>
+                      <span className={`status-chip status-chip--${worker.tone}`}>{worker.statusLabel}</span>
+                    </div>
+                    <div className="target-meta">{worker.summary}</div>
+                    <div className="target-metrics">
+                      {worker.metrics.map((metric) => (
+                        <div key={`${worker.id}-${metric.label}`} className="target-metric">
+                          <span>{metric.label}</span>
+                          <strong>{metric.value}</strong>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="target-detail">{worker.detail}</div>
+                  </div>
                 </div>
               ))
+            )}
+            {visibleTargets.length > 0 && (
+              <div className="targets-secondary-block">
+                <div className="targets-secondary-title">🤖 AI Targets ({visibleTargets.length})</div>
+                {visibleTargets.map((target, idx) => (
+                  <div key={`${target.url || target.name}-${idx}`} className="target-item" title={target.url}>
+                    <span className="target-status">{getTargetStatus(target)}</span>
+                    <span className="target-url">{target.url || target.name}</span>
+                    {target.progress && (
+                      <span className="target-progress">{target.progress}%</span>
+                    )}
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         </aside>

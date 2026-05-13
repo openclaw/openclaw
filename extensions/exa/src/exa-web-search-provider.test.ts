@@ -14,7 +14,11 @@ describe("exa web search provider", () => {
     expect(provider.id).toBe("exa");
     expect(provider.onboardingScopes).toEqual(["text-inference"]);
     expect(provider.credentialPath).toBe("plugins.entries.exa.config.webSearch.apiKey");
-    expect(applied.plugins?.entries?.exa?.enabled).toBe(true);
+    const pluginEntry = applied.plugins?.entries?.exa;
+    if (!pluginEntry) {
+      throw new Error("expected Exa plugin entry");
+    }
+    expect(pluginEntry.enabled).toBe(true);
   });
 
   it("keeps the lightweight contract surface aligned with provider metadata", () => {
@@ -39,11 +43,49 @@ describe("exa web search provider", () => {
       credentialPath: provider.credentialPath,
     });
     expect(contractProvider.createTool({ config: {}, searchConfig: {} })).toBeNull();
-    expect(applied.plugins?.entries?.exa?.enabled).toBe(true);
+    const pluginEntry = applied.plugins?.entries?.exa;
+    if (!pluginEntry) {
+      throw new Error("expected contract Exa plugin entry");
+    }
+    expect(pluginEntry.enabled).toBe(true);
   });
 
   it("prefers scoped configured api keys over environment fallbacks", () => {
     expect(__testing.resolveExaApiKey({ apiKey: "exa-secret" })).toBe("exa-secret");
+  });
+
+  it("resolves Exa search base URL overrides", () => {
+    expect(__testing.resolveExaSearchEndpoint()).toEqual({
+      endpoint: "https://api.exa.ai/search",
+    });
+    expect(__testing.resolveExaSearchEndpoint({ baseUrl: "https://proxy.example/exa" })).toEqual({
+      endpoint: "https://proxy.example/exa/search",
+    });
+    expect(__testing.resolveExaSearchEndpoint({ baseUrl: "proxy.example/exa/search/" })).toEqual({
+      endpoint: "https://proxy.example/exa/search",
+    });
+    expect(__testing.resolveExaSearchEndpoint({ baseUrl: "ftp://proxy.example/exa" })).toEqual(
+      expect.objectContaining({ error: "invalid_base_url" }),
+    );
+  });
+
+  it("partitions Exa cache keys by resolved endpoint", () => {
+    const base = {
+      type: "auto" as const,
+      query: "openclaw",
+      count: 5,
+    };
+    expect(
+      __testing.buildExaCacheKey({
+        ...base,
+        endpoint: "https://api.exa.ai/search",
+      }),
+    ).not.toBe(
+      __testing.buildExaCacheKey({
+        ...base,
+        endpoint: "https://proxy.example/exa/search",
+      }),
+    );
   });
 
   it("normalizes Exa result descriptions from highlights before text", () => {

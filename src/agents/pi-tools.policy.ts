@@ -4,6 +4,7 @@ import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { resolveChannelGroupToolsPolicy } from "../config/group-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
+import { logWarn } from "../logger.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   parseRawSessionConversationRef,
@@ -25,8 +26,12 @@ import {
   type SessionCapabilityStore,
   type SubagentSessionRole,
 } from "./subagent-capabilities.js";
-import { isToolAllowedByPolicies, isToolAllowedByPolicyName } from "./tool-policy-match.js";
-import { normalizeToolName } from "./tool-policy.js";
+import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
+import {
+  mergeAlsoAllowPolicy,
+  normalizeToolName,
+  resolveToolProfilePolicy,
+} from "./tool-policy.js";
 
 /**
  * Tools always denied for sub-agents regardless of depth.
@@ -227,7 +232,7 @@ function buildScopedGroupIdCandidates(groupId?: string | null): string[] {
   return [raw];
 }
 
-export function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
+function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
   channel?: string;
   groupIds?: string[];
 } {
@@ -239,13 +244,11 @@ export function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
   const conversationKey = threadId ? baseSessionKey : raw;
   const conversation = parseRawSessionConversationRef(conversationKey);
   if (conversation) {
-    const resolvedConversation = /:(?:sender|thread|topic):/iu.test(conversation.rawId)
-      ? resolveSessionConversation({
-          channel: conversation.channel,
-          kind: conversation.kind,
-          rawId: conversation.rawId,
-        })
-      : null;
+    const resolvedConversation = resolveSessionConversation({
+      channel: conversation.channel,
+      kind: conversation.kind,
+      rawId: conversation.rawId,
+    });
     return {
       channel: conversation.channel,
       groupIds: collectUniqueStrings([
@@ -279,7 +282,52 @@ export function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
   };
 }
 
-function resolveProviderToolPolicy(params: {
+type GroupToolPolicyContext = ReturnType<typeof resolveGroupContextFromSessionKey>;
+
+function resolveTrustedGroupIdFromContexts(params: {
+  groupId?: string | null;
+  sessionContext: GroupToolPolicyContext;
+  spawnedContext: GroupToolPolicyContext;
+}): {
+  groupId: string | null | undefined;
+  dropped: boolean;
+} {
+  const callerGroupId = (params.groupId ?? "").trim();
+  if (!callerGroupId) {
+    return { groupId: params.groupId, dropped: false };
+  }
+  const trustedGroupIds = collectUniqueStrings([
+    ...(params.sessionContext.groupIds ?? []),
+    ...(params.spawnedContext.groupIds ?? []),
+  ]);
+  // Fail closed when no server-derived session/spawn context can vouch for the
+  // caller group id. Non-group sessions must not opt into group-scoped tool
+  // policy by supplying an arbitrary groupId.
+  if (trustedGroupIds.length === 0) {
+    return { groupId: null, dropped: true };
+  }
+  if (trustedGroupIds.includes(callerGroupId)) {
+    return { groupId: params.groupId, dropped: false };
+  }
+  return { groupId: null, dropped: true };
+}
+
+export function resolveTrustedGroupId(params: {
+  groupId?: string | null;
+  sessionKey?: string | null;
+  spawnedBy?: string | null;
+}): {
+  groupId: string | null | undefined;
+  dropped: boolean;
+} {
+  return resolveTrustedGroupIdFromContexts({
+    groupId: params.groupId,
+    sessionContext: resolveGroupContextFromSessionKey(params.sessionKey),
+    spawnedContext: resolveGroupContextFromSessionKey(params.spawnedBy),
+  });
+}
+
+export function resolveProviderToolPolicy(params: {
   byProvider?: Record<string, ToolPolicyConfig>;
   modelProvider?: string;
   modelId?: string;
@@ -322,27 +370,42 @@ function hasExplicitToolSection(section: unknown): boolean {
   return section !== undefined && section !== null;
 }
 
-function resolveImplicitProfileAlsoAllow(params: {
+/** Detect tool config sections that previously widened profiles implicitly.
+ *  Used only for migration warnings — not merged into profileAlsoAllow.  #47487 */
+type ImplicitProfileGrantDetection = {
+  entries: Array<{ section: string; grants: string[] }>;
+};
+
+function detectImplicitProfileGrants(params: {
   globalTools?: OpenClawConfig["tools"];
   agentTools?: AgentToolsConfig;
-}): string[] | undefined {
-  const implicit = new Set<string>();
+  includeGlobalSections: boolean;
+}): ImplicitProfileGrantDetection | undefined {
+  const entries: ImplicitProfileGrantDetection["entries"] = [];
   if (
     hasExplicitToolSection(params.agentTools?.exec) ||
-    hasExplicitToolSection(params.globalTools?.exec)
+    (params.includeGlobalSections && hasExplicitToolSection(params.globalTools?.exec))
   ) {
-    implicit.add("exec");
-    implicit.add("process");
+    entries.push({ section: "tools.exec", grants: ["exec", "process"] });
   }
   if (
     hasExplicitToolSection(params.agentTools?.fs) ||
-    hasExplicitToolSection(params.globalTools?.fs)
+    (params.includeGlobalSections && hasExplicitToolSection(params.globalTools?.fs))
   ) {
-    implicit.add("read");
-    implicit.add("write");
-    implicit.add("edit");
+    entries.push({ section: "tools.fs", grants: ["read", "write", "edit"] });
   }
-  return implicit.size > 0 ? Array.from(implicit) : undefined;
+  if (entries.length === 0) {
+    return undefined;
+  }
+  return { entries };
+}
+
+function formatImplicitToolSections(sections: string[]): string {
+  return sections.join(" / ");
+}
+
+function formatToolListForWarning(toolNames: string[]): string {
+  return toolNames.map((toolName) => `"${toolName}"`).join(", ");
 }
 
 export function resolveEffectiveToolPolicy(params: {
@@ -365,6 +428,7 @@ export function resolveEffectiveToolPolicy(params: {
   const globalTools = params.config?.tools;
 
   const profile = agentTools?.profile ?? globalTools?.profile;
+  const profileSource = agentTools?.profile ? "agent" : globalTools?.profile ? "global" : undefined;
   const providerPolicy = resolveProviderToolPolicy({
     byProvider: globalTools?.byProvider,
     modelProvider: params.modelProvider,
@@ -377,13 +441,43 @@ export function resolveEffectiveToolPolicy(params: {
   });
   const explicitProfileAlsoAllow =
     resolveExplicitProfileAlsoAllow(agentTools) ?? resolveExplicitProfileAlsoAllow(globalTools);
-  const implicitProfileAlsoAllow = resolveImplicitProfileAlsoAllow({ globalTools, agentTools });
-  const profileAlsoAllow =
-    explicitProfileAlsoAllow || implicitProfileAlsoAllow
-      ? Array.from(
-          new Set([...(explicitProfileAlsoAllow ?? []), ...(implicitProfileAlsoAllow ?? [])]),
-        )
-      : undefined;
+
+  // Warn affected users about removed implicit grants (#47487), but only when
+  // the active profile/explicit alsoAllow do not already grant those tools.
+  if (profile) {
+    const implicitGrants = detectImplicitProfileGrants({
+      globalTools,
+      agentTools,
+      includeGlobalSections: profileSource === "global",
+    });
+    if (implicitGrants) {
+      const profilePolicy = mergeAlsoAllowPolicy(
+        resolveToolProfilePolicy(profile),
+        explicitProfileAlsoAllow,
+      );
+      const uncoveredEntries = implicitGrants.entries
+        .map((entry) => ({
+          section: entry.section,
+          grants: entry.grants.filter(
+            (toolName) => !isToolAllowedByPolicyName(toolName, profilePolicy),
+          ),
+        }))
+        .filter((entry) => entry.grants.length > 0);
+      const uncovered = uncoveredEntries.flatMap((entry) => entry.grants);
+      if (uncovered.length > 0) {
+        logWarn(
+          `tools policy: profile "${profile}"${agentId ? ` (agent "${agentId}")` : ""} has ` +
+            `configured tool sections (${formatImplicitToolSections(uncoveredEntries.map((entry) => entry.section))}) that no longer implicitly widen ` +
+            `the profile. Add alsoAllow: [${formatToolListForWarning(uncovered)}] ` +
+            `explicitly if these tools should be available. See #47487.`,
+        );
+      }
+    }
+  }
+
+  const profileAlsoAllow = explicitProfileAlsoAllow
+    ? Array.from(new Set(explicitProfileAlsoAllow))
+    : undefined;
   return {
     agentId,
     globalPolicy: pickSandboxToolPolicy(globalTools),
@@ -392,7 +486,7 @@ export function resolveEffectiveToolPolicy(params: {
     agentProviderPolicy: pickSandboxToolPolicy(agentProviderPolicy),
     profile,
     providerProfile: agentProviderPolicy?.profile ?? providerPolicy?.profile,
-    // alsoAllow is applied at the profile stage (to avoid being filtered out early).
+    // alsoAllow is applied at the profile stage to avoid early filtering.
     profileAlsoAllow,
     providerProfileAlsoAllow: Array.isArray(agentProviderPolicy?.alsoAllow)
       ? agentProviderPolicy?.alsoAllow
@@ -421,15 +515,22 @@ export function resolveGroupToolPolicy(params: {
   }
   const sessionContext = resolveGroupContextFromSessionKey(params.sessionKey);
   const spawnedContext = resolveGroupContextFromSessionKey(params.spawnedBy);
+  const trustedGroup = resolveTrustedGroupIdFromContexts({
+    groupId: params.groupId,
+    sessionContext,
+    spawnedContext,
+  });
+  // Keep server-derived ids first so a caller cannot use a trusted parent
+  // candidate to skip a more-specific session group policy.
   const groupIds = collectUniqueStrings([
-    ...buildScopedGroupIdCandidates(params.groupId),
     ...(sessionContext.groupIds ?? []),
     ...(spawnedContext.groupIds ?? []),
+    ...buildScopedGroupIdCandidates(trustedGroup.groupId),
   ]);
   if (groupIds.length === 0) {
     return undefined;
   }
-  const channelRaw = params.messageProvider ?? sessionContext.channel ?? spawnedContext.channel;
+  const channelRaw = sessionContext.channel ?? spawnedContext.channel ?? params.messageProvider;
   const channel = normalizeMessageChannel(channelRaw);
   if (!channel) {
     return undefined;
@@ -444,8 +545,8 @@ export function resolveGroupToolPolicy(params: {
     const toolsConfig = plugin?.groups?.resolveToolPolicy?.({
       cfg: params.config,
       groupId,
-      groupChannel: params.groupChannel,
-      groupSpace: params.groupSpace,
+      groupChannel: trustedGroup.dropped ? null : params.groupChannel,
+      groupSpace: trustedGroup.dropped ? null : params.groupSpace,
       accountId: params.accountId,
       senderId: params.senderId,
       senderName: params.senderName,

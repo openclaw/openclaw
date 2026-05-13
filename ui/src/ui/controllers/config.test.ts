@@ -8,6 +8,7 @@ import {
   resetConfigPendingChanges,
   runUpdate,
   saveConfig,
+  stageDefaultAgentConfigEntry,
   stageConfigPreset,
   updateConfigFormValue,
   type ConfigState,
@@ -52,6 +53,14 @@ function createRequestWithConfigGet() {
     }
     return {};
   });
+}
+
+function requireRequestCall(request: ReturnType<typeof vi.fn>, index = 0): unknown[] {
+  const call = request.mock.calls[index];
+  if (!call) {
+    throw new Error("expected client request call");
+  }
+  return call;
 }
 
 describe("applyConfigSnapshot", () => {
@@ -391,7 +400,7 @@ describe("resetConfigPendingChanges", () => {
     resetConfigPendingChanges(state);
 
     expect(state.configFormDirty).toBe(false);
-    expect(state.configForm).toEqual({});
+    expect(state.configForm).toStrictEqual({});
     expect(state.configRaw).toBe("");
   });
 });
@@ -477,6 +486,50 @@ describe("agent config helpers", () => {
       },
     });
   });
+
+  it("sets default via agents.list[].default instead of agents.defaultId", () => {
+    const state = createState();
+    state.configSnapshot = {
+      config: {
+        agents: {
+          list: [{ id: "alpha", default: true }, { id: "beta" }],
+        },
+      },
+      valid: true,
+      issues: [],
+      raw: "{\n}\n",
+    };
+
+    const updated = stageDefaultAgentConfigEntry(state, "beta");
+
+    expect(updated).toBe(true);
+    expect(state.configFormDirty).toBe(true);
+    expect(state.configForm).toEqual({
+      agents: {
+        list: [{ id: "alpha" }, { id: "beta", default: true }],
+      },
+    });
+  });
+
+  it("does not stage agents.defaultId when the target agent is absent", () => {
+    const state = createState();
+    state.configSnapshot = {
+      config: {
+        agents: {
+          list: [{ id: "alpha", default: true }],
+        },
+      },
+      valid: true,
+      issues: [],
+      raw: "{\n}\n",
+    };
+
+    const updated = stageDefaultAgentConfigEntry(state, "beta");
+
+    expect(updated).toBe(false);
+    expect(state.configFormDirty).toBe(false);
+    expect(state.configForm).toBeNull();
+  });
 });
 
 describe("applyConfig", () => {
@@ -528,8 +581,9 @@ describe("applyConfig", () => {
 
     await applyConfig(state);
 
-    expect(request.mock.calls[0]?.[0]).toBe("config.apply");
-    const params = request.mock.calls[0]?.[1] as {
+    const call = requireRequestCall(request);
+    expect(call[0]).toBe("config.apply");
+    const params = call[1] as {
       raw: string;
       baseHash: string;
       sessionKey: string;
@@ -570,8 +624,9 @@ describe("saveConfig", () => {
 
     await saveConfig(state);
 
-    expect(request.mock.calls[0]?.[0]).toBe("config.set");
-    const params = request.mock.calls[0]?.[1] as { raw: string; baseHash: string };
+    const call = requireRequestCall(request);
+    expect(call[0]).toBe("config.set");
+    const params = call[1] as { raw: string; baseHash: string };
     expect(params.baseHash).toBe("hash-original");
   });
 
@@ -600,8 +655,9 @@ describe("saveConfig", () => {
 
     await saveConfig(state);
 
-    expect(request.mock.calls[0]?.[0]).toBe("config.set");
-    const params = request.mock.calls[0]?.[1] as { raw: string; baseHash: string };
+    const call = requireRequestCall(request);
+    expect(call[0]).toBe("config.set");
+    const params = call[1] as { raw: string; baseHash: string };
     const parsed = JSON.parse(params.raw) as {
       gateway: { port: unknown; enabled: unknown };
     };
@@ -625,8 +681,9 @@ describe("saveConfig", () => {
 
     await saveConfig(state);
 
-    expect(request.mock.calls[0]?.[0]).toBe("config.set");
-    const params = request.mock.calls[0]?.[1] as { raw: string; baseHash: string };
+    const call = requireRequestCall(request);
+    expect(call[0]).toBe("config.set");
+    const params = call[1] as { raw: string; baseHash: string };
     const parsed = JSON.parse(params.raw) as {
       gateway: { port: unknown };
     };

@@ -7,13 +7,19 @@ import { isContainerEnvironment } from "./net.js";
 
 const EXTRA_CONTROL_UI_ALLOWED_ORIGINS_ENV = "OPENCLAW_CONTROL_UI_ALLOWED_ORIGINS";
 
+type ControlUiAllowedOriginsSeedResult = {
+  config: OpenClawConfig;
+  seededAllowedOrigins: boolean;
+  persistedAllowedOriginsSeed: boolean;
+};
+
 export async function maybeSeedControlUiAllowedOriginsAtStartup(params: {
   config: OpenClawConfig;
-  writeConfig: (config: OpenClawConfig) => Promise<void>;
+  writeConfig?: (config: OpenClawConfig) => Promise<void>;
   log: { info: (msg: string) => void; warn: (msg: string) => void };
   runtimeBind?: unknown;
   runtimePort?: unknown;
-}): Promise<{ config: OpenClawConfig; persistedAllowedOriginsSeed: boolean }> {
+}): Promise<ControlUiAllowedOriginsSeedResult> {
   const seeded = ensureControlUiAllowedOriginsForNonLoopbackBind(params.config, {
     isContainerEnvironment,
     runtimeBind: params.runtimeBind,
@@ -23,26 +29,53 @@ export async function maybeSeedControlUiAllowedOriginsAtStartup(params: {
     seeded.config,
     parseExtraControlUiAllowedOriginsFromEnv(),
   );
-  const shouldPersist =
-    Boolean(seeded.seededOrigins && seeded.bind) || merged.addedOrigins.length > 0;
-  if (!shouldPersist) {
-    return { config: params.config, persistedAllowedOriginsSeed: false };
+  const seededAllowedOrigins = Boolean(seeded.seededOrigins && seeded.bind);
+  const shouldUpdate = seededAllowedOrigins || merged.addedOrigins.length > 0;
+  if (!shouldUpdate) {
+    return {
+      config: params.config,
+      seededAllowedOrigins: false,
+      persistedAllowedOriginsSeed: false,
+    };
   }
-  try {
-    await params.writeConfig(merged.config);
+
+  if (!params.writeConfig) {
     if (seeded.seededOrigins && seeded.bind) {
       params.log.info(buildSeededOriginsInfoLog(seeded.seededOrigins, seeded.bind));
     }
     if (merged.addedOrigins.length > 0) {
       params.log.info(buildMergedOriginsInfoLog(merged.addedOrigins));
     }
-    return { config: merged.config, persistedAllowedOriginsSeed: true };
+    return {
+      config: merged.config,
+      seededAllowedOrigins,
+      persistedAllowedOriginsSeed: false,
+    };
+  }
+
+  try {
+    await params.writeConfig(merged.config);
+    if (seeded.seededOrigins && seeded.bind) {
+      params.log.info(buildSeededOriginsInfoLog(seeded.seededOrigins, seeded.bind, true));
+    }
+    if (merged.addedOrigins.length > 0) {
+      params.log.info(buildMergedOriginsInfoLog(merged.addedOrigins));
+    }
+    return {
+      config: merged.config,
+      seededAllowedOrigins,
+      persistedAllowedOriginsSeed: true,
+    };
   } catch (err) {
     params.log.warn(
       `gateway: failed to persist gateway.controlUi.allowedOrigins seed: ${String(err)}. The gateway will start with the in-memory value but config was not saved.`,
     );
   }
-  return { config: merged.config, persistedAllowedOriginsSeed: false };
+  return {
+    config: merged.config,
+    seededAllowedOrigins,
+    persistedAllowedOriginsSeed: false,
+  };
 }
 
 function parseExtraControlUiAllowedOriginsFromEnv(
@@ -115,11 +148,17 @@ function mergeConfiguredControlUiAllowedOrigins(
   };
 }
 
-function buildSeededOriginsInfoLog(origins: string[], bind: GatewayNonLoopbackBindMode): string {
+function buildSeededOriginsInfoLog(
+  origins: string[],
+  bind: GatewayNonLoopbackBindMode,
+  persisted = false,
+): string {
   return (
     `gateway: seeded gateway.controlUi.allowedOrigins ${JSON.stringify(origins)} ` +
     `for bind=${bind} (required since v2026.2.26; see issue #29385). ` +
-    "Add other origins to gateway.controlUi.allowedOrigins if needed."
+    (persisted
+      ? "Saved to config; add other origins to gateway.controlUi.allowedOrigins if needed."
+      : "Applied for this runtime without writing config; add other origins to gateway.controlUi.allowedOrigins if needed.")
   );
 }
 

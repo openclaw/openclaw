@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   enqueueSystemEvent,
   resetSystemEventsForTest,
@@ -941,19 +941,18 @@ describe("gateway startup reconciliation", () => {
       const managed = startupHarness.jobs.find((job) =>
         job.description?.includes("[managed-by=memory-core.short-term-promotion]"),
       );
-      expect(managed).toBeDefined();
+      if (!managed) {
+        throw new Error("expected managed short-term promotion dreaming job");
+      }
+      expect(managed.description).toContain("[managed-by=memory-core.short-term-promotion]");
 
-      const reloadedHarness = createCronHarness(
-        managed
-          ? [
-              {
-                ...managed,
-                schedule: managed.schedule ? { ...managed.schedule } : undefined,
-                payload: managed.payload ? { ...managed.payload } : undefined,
-              },
-            ]
-          : [],
-      );
+      const reloadedHarness = createCronHarness([
+        {
+          ...managed,
+          schedule: managed.schedule ? { ...managed.schedule } : undefined,
+          payload: managed.payload ? { ...managed.payload } : undefined,
+        },
+      ]);
       cronRef.current = reloadedHarness.cron;
       api.config = {
         plugins: {
@@ -1944,7 +1943,8 @@ describe("short-term dreaming trigger", () => {
     const result = await runShortTermDreamingPromotionIfTriggered({
       cleanedBody: [
         "[cron:e795558c-a273-4124-ba88-d4916688d977 Memory Dreaming Promotion] __openclaw_memory_core_short_term_promotion_dream__",
-        "Current time: Thursday, April 16th, 2026 - 3:10 PM (America/Los_Angeles) / 2026-04-16 22:10 UTC",
+        "Current time: Thursday, April 16th, 2026 - 3:10 PM (America/Los_Angeles)",
+        "Reference UTC: 2026-04-16 22:10 UTC",
       ].join("\n"),
       trigger: "cron",
       workspaceDir,
@@ -2316,11 +2316,27 @@ describe("short-term dreaming trigger", () => {
   it("fans out one dreaming run across configured agent workspaces", async () => {
     const logger = createLogger();
     const workspaceRoot = await createTempWorkspace("memory-dreaming-multi-");
+    const mainWorkspace = path.join(workspaceRoot, "main");
     const alphaWorkspace = path.join(workspaceRoot, "alpha");
     const betaWorkspace = path.join(workspaceRoot, "beta");
 
+    await writeDailyMemoryNote(mainWorkspace, "2026-04-02", ["Main workspace note."]);
     await writeDailyMemoryNote(alphaWorkspace, "2026-04-02", ["Alpha backup note."]);
     await writeDailyMemoryNote(betaWorkspace, "2026-04-02", ["Beta router note."]);
+    await recordShortTermRecalls({
+      workspaceDir: mainWorkspace,
+      query: "main workspace",
+      results: [
+        {
+          path: "memory/2026-04-02.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.9,
+          snippet: "Main workspace note.",
+          source: "memory",
+        },
+      ],
+    });
     await recordShortTermRecalls({
       workspaceDir: alphaWorkspace,
       query: "alpha backup",
@@ -2353,7 +2369,7 @@ describe("short-term dreaming trigger", () => {
     const result = await runShortTermDreamingPromotionIfTriggered({
       cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT,
       trigger: "heartbeat",
-      workspaceDir: alphaWorkspace,
+      workspaceDir: mainWorkspace,
       cfg: {
         agents: {
           defaults: {
@@ -2387,6 +2403,9 @@ describe("short-term dreaming trigger", () => {
     });
 
     expect(result?.handled).toBe(true);
+    expect(await fs.readFile(path.join(mainWorkspace, "MEMORY.md"), "utf-8")).toContain(
+      "Main workspace note.",
+    );
     expect(await fs.readFile(path.join(alphaWorkspace, "MEMORY.md"), "utf-8")).toContain(
       "Alpha backup note.",
     );
@@ -2394,7 +2413,7 @@ describe("short-term dreaming trigger", () => {
       "Beta router note.",
     );
     expect(logger.info).toHaveBeenCalledWith(
-      "memory-core: dreaming promotion complete (workspaces=2, candidates=2, applied=2, failed=0).",
+      "memory-core: dreaming promotion complete (workspaces=3, candidates=3, applied=3, failed=0).",
     );
   });
 });

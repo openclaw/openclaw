@@ -151,6 +151,10 @@ describe("update-startup", () => {
     return { log, parsed };
   }
 
+  async function expectPathMissing(targetPath: string): Promise<void> {
+    await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  }
+
   function createAutoUpdateSuccessMock() {
     return vi.fn().mockResolvedValue({
       ok: true,
@@ -295,7 +299,7 @@ describe("update-startup", () => {
     });
 
     expect(log.info).not.toHaveBeenCalled();
-    await expect(fs.stat(path.join(tempDir, "update-check.json"))).rejects.toThrow();
+    await expectPathMissing(path.join(tempDir, "update-check.json"));
   });
 
   it("defers stable auto-update until rollout window is due", async () => {
@@ -436,7 +440,7 @@ describe("update-startup", () => {
     );
   });
 
-  it("scheduleGatewayUpdateCheck returns a cleanup function", async () => {
+  it("scheduleGatewayUpdateCheck returns a cleanup function", () => {
     mockPackageUpdateStatus("latest", "2.0.0");
 
     const stop = scheduleGatewayUpdateCheck({
@@ -444,7 +448,6 @@ describe("update-startup", () => {
       log: { info: vi.fn() },
       isNixMode: false,
     });
-    expect(typeof stop).toBe("function");
     stop();
   });
 });

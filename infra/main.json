@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.43.8.12551",
-      "templateHash": "422832566310965132"
+      "templateHash": "4808214621628111225"
     }
   },
   "parameters": {
@@ -140,6 +140,27 @@
         "description": "Optional Revolut client secret consumed by the AlpaCore Engine."
       }
     },
+    "revolutSignerBaseUrl": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional Revolut signer base URL consumed by the Alphabet Harvester."
+      }
+    },
+    "revolutSignerServiceToken": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional Revolut signer service token consumed by the Alphabet Harvester."
+      }
+    },
+    "revolutRefreshToken": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional Revolut refresh token consumed by the Alphabet Harvester."
+      }
+    },
     "telegramBotToken": {
       "type": "securestring",
       "defaultValue": "",
@@ -185,7 +206,7 @@
     "alpaCoreServiceImageRef": "[if(empty(parameters('alpaCoreServiceImage')), parameters('baseContainerImage'), parameters('alpaCoreServiceImage'))]",
     "openWebUiImageRef": "[if(empty(parameters('openWebUiImage')), parameters('baseContainerImage'), parameters('openWebUiImage'))]",
     "openClawSecretDefinitions": "[if(empty(parameters('openClawGatewayToken')), createArray(), createArray(createObject('name', 'openclaw-gateway-token', 'value', parameters('openClawGatewayToken'))))]",
-    "harvesterSecretDefinitions": "[concat(createArray(createObject('name', 'postgres-admin-password', 'value', parameters('postgresAdminPassword'))), if(empty(parameters('shopifyApiSecret')), createArray(), createArray(createObject('name', 'shopify-api-secret', 'value', parameters('shopifyApiSecret')))))]",
+    "harvesterSecretDefinitions": "[concat(createArray(createObject('name', 'postgres-admin-password', 'value', parameters('postgresAdminPassword'))), if(empty(parameters('shopifyApiSecret')), createArray(), createArray(createObject('name', 'shopify-api-secret', 'value', parameters('shopifyApiSecret')))), if(empty(parameters('revolutSignerServiceToken')), createArray(), createArray(createObject('name', 'revolut-signer-service-token', 'value', parameters('revolutSignerServiceToken')))), if(empty(parameters('revolutRefreshToken')), createArray(), createArray(createObject('name', 'revolut-refresh-token', 'value', parameters('revolutRefreshToken')))))]",
     "alpaEngineSecretDefinitions": "[concat(createArray(createObject('name', 'postgres-admin-password', 'value', parameters('postgresAdminPassword'))), if(empty(parameters('revolutClientSecret')), createArray(), createArray(createObject('name', 'revolut-client-secret', 'value', parameters('revolutClientSecret')))), if(empty(parameters('telegramBotToken')), createArray(), createArray(createObject('name', 'telegram-bot-token', 'value', parameters('telegramBotToken')))))]",
     "openWebUiSecretDefinitions": "[concat(if(empty(parameters('webUiSecretKey')), createArray(), createArray(createObject('name', 'webui-secret-key', 'value', parameters('webUiSecretKey')))), if(empty(parameters('openAiApiKey')), createArray(), createArray(createObject('name', 'openai-api-key', 'value', parameters('openAiApiKey')))))]",
     "openWebUiEnv": "[concat(createArray(createObject('name', 'PORT', 'value', '8080'), createObject('name', 'ENV', 'value', 'prod'), createObject('name', 'OLLAMA_HOST', 'value', parameters('externalOllamaUrl')), createObject('name', 'OLLAMA_BASE_URL', 'value', parameters('externalOllamaUrl')), createObject('name', 'USE_OLLAMA_DOCKER', 'value', 'false'), createObject('name', 'SCARF_NO_ANALYTICS', 'value', 'true'), createObject('name', 'DO_NOT_TRACK', 'value', 'true'), createObject('name', 'ANONYMIZED_TELEMETRY', 'value', 'false')), if(empty(parameters('webUiSecretKey')), createArray(), createArray(createObject('name', 'WEBUI_SECRET_KEY', 'secretRef', 'webui-secret-key'))), if(empty(parameters('openAiApiKey')), createArray(), createArray(createObject('name', 'OPENAI_API_KEY', 'secretRef', 'openai-api-key'))))]"
@@ -648,7 +669,7 @@
             {
               "name": "harvester",
               "image": "[variables('harvesterImageRef')]",
-              "env": "[concat(createArray(createObject('name', 'NODE_ENV', 'value', 'production'), createObject('name', 'HARVESTER_PORT', 'value', '8080'), createObject('name', 'HARVESTER_WORKERS', 'value', '15'), createObject('name', 'HARVESTER_PUBLIC_URL', 'value', format('https://{0}.{1}', variables('harvesterContainerAppName'), reference(resourceId('Microsoft.App/managedEnvironments', variables('managedEnvironmentName')), '2024-03-01').defaultDomain)), createObject('name', 'HARVESTER_KEY_VAULT_URL', 'value', reference(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), '2023-07-01').vaultUri), createObject('name', 'STRIPE_SECRET_KEY_SECRET_NAME', 'value', 'STRIPE-SECRET-KEY'), createObject('name', 'AZURE_CLIENT_ID', 'value', reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName')), '2023-01-31').clientId), createObject('name', 'DATABASE_HOST', 'value', reference(resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('postgresServerName')), '2024-08-01').fullyQualifiedDomainName), createObject('name', 'DATABASE_PORT', 'value', '5432'), createObject('name', 'DATABASE_NAME', 'value', parameters('postgresDatabaseName')), createObject('name', 'DATABASE_USER', 'value', parameters('postgresAdminLogin')), createObject('name', 'DATABASE_PASSWORD', 'secretRef', 'postgres-admin-password'), createObject('name', 'DATABASE_SSLMODE', 'value', 'require')), if(empty(parameters('shopifyApiSecret')), createArray(), createArray(createObject('name', 'SHOPIFY_API_SECRET', 'secretRef', 'shopify-api-secret'))))]",
+              "env": "[concat(createArray(createObject('name', 'NODE_ENV', 'value', 'production'), createObject('name', 'HARVESTER_PORT', 'value', '8080'), createObject('name', 'HARVESTER_WORKERS', 'value', '15'), createObject('name', 'HARVESTER_PUBLIC_URL', 'value', format('https://{0}.{1}', variables('harvesterContainerAppName'), reference(resourceId('Microsoft.App/managedEnvironments', variables('managedEnvironmentName')), '2024-03-01').defaultDomain)), createObject('name', 'HARVESTER_KEY_VAULT_URL', 'value', reference(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), '2023-07-01').vaultUri), createObject('name', 'REVOLUT_SIGNER_BASE_URL', 'value', parameters('revolutSignerBaseUrl')), createObject('name', 'STRIPE_SECRET_KEY_SECRET_NAME', 'value', 'STRIPE-SECRET-KEY'), createObject('name', 'AZURE_CLIENT_ID', 'value', reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName')), '2023-01-31').clientId), createObject('name', 'DATABASE_HOST', 'value', reference(resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('postgresServerName')), '2024-08-01').fullyQualifiedDomainName), createObject('name', 'DATABASE_PORT', 'value', '5432'), createObject('name', 'DATABASE_NAME', 'value', parameters('postgresDatabaseName')), createObject('name', 'DATABASE_USER', 'value', parameters('postgresAdminLogin')), createObject('name', 'DATABASE_PASSWORD', 'secretRef', 'postgres-admin-password'), createObject('name', 'DATABASE_SSLMODE', 'value', 'require')), if(empty(parameters('shopifyApiSecret')), createArray(), createArray(createObject('name', 'SHOPIFY_API_SECRET', 'secretRef', 'shopify-api-secret'))), if(empty(parameters('revolutSignerServiceToken')), createArray(), createArray(createObject('name', 'REVOLUT_SIGNER_SERVICE_TOKEN', 'secretRef', 'revolut-signer-service-token'))), if(empty(parameters('revolutRefreshToken')), createArray(), createArray(createObject('name', 'REVOLUT_REFRESH_TOKEN', 'secretRef', 'revolut-refresh-token'))), if(empty(parameters('revolutClientId')), createArray(), createArray(createObject('name', 'REVOLUT_CLIENT_ID', 'value', parameters('revolutClientId')))))]",
               "probes": [
                 {
                   "type": "Liveness",

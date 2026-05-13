@@ -1,3 +1,4 @@
+import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
@@ -12,7 +13,7 @@ import {
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   GeneratedVideoAsset,
   VideoGenerationProvider,
@@ -52,7 +53,7 @@ const SEEDANCE_REFERENCE_MAX_AUDIOS_BY_MODEL = Object.fromEntries(
   SEEDANCE_2_REFERENCE_VIDEO_MODELS.map((model) => [model, SEEDANCE_REFERENCE_MAX_AUDIOS]),
 );
 const DEFAULT_HTTP_TIMEOUT_MS = 30_000;
-const DEFAULT_OPERATION_TIMEOUT_MS = 600_000;
+const DEFAULT_OPERATION_TIMEOUT_MS = 1_200_000;
 const POLL_INTERVAL_MS = 5_000;
 
 type FalVideoResponse = {
@@ -121,7 +122,7 @@ async function downloadFalVideo(
       url,
       buffer: Buffer.from(arrayBuffer),
       mimeType,
-      fileName: `video-1.${mimeType.includes("webm") ? "webm" : "mp4"}`,
+      fileName: `video-1.${extensionForMime(mimeType)?.slice(1) ?? "mp4"}`,
     };
   } finally {
     await release();

@@ -6,7 +6,7 @@ import {
   capturePluginRegistration,
   registerSingleProviderPlugin,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { readClaudeCliCredentialsForSetupMock, readClaudeCliCredentialsForRuntimeMock } = vi.hoisted(
   () => ({
@@ -24,6 +24,16 @@ vi.mock("./cli-auth-seam.js", () => {
 
 import anthropicPlugin from "./index.js";
 
+beforeEach(() => {
+  readClaudeCliCredentialsForSetupMock.mockReset();
+  readClaudeCliCredentialsForRuntimeMock.mockReset();
+});
+
+afterAll(() => {
+  vi.doUnmock("./cli-auth-seam.js");
+  vi.resetModules();
+});
+
 function createModelRegistry(models: ProviderRuntimeModel[]) {
   return {
     find(providerId: string, modelId: string) {
@@ -38,7 +48,7 @@ function createModelRegistry(models: ProviderRuntimeModel[]) {
 }
 
 describe("anthropic provider replay hooks", () => {
-  it("registers the claude-cli backend", async () => {
+  it("registers the claude-cli backend", () => {
     const captured = capturePluginRegistration({ register: anthropicPlugin.register });
 
     expect(captured.cliBackends).toContainEqual(
@@ -164,6 +174,35 @@ describe("anthropic provider replay hooks", () => {
     ).toBe("short");
   });
 
+  it("backfills Haiku into API-key agent model allowlists", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+
+    const next = provider.applyConfigDefaults?.({
+      provider: "anthropic",
+      env: {},
+      config: {
+        auth: {
+          profiles: {
+            "anthropic:api": { provider: "anthropic", mode: "api_key" },
+          },
+        },
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-sonnet-4-6" },
+            models: {
+              "anthropic/claude-sonnet-4-6": {},
+            },
+          },
+        },
+      },
+    } as never);
+
+    expect(next?.agents?.defaults?.models).toMatchObject({
+      "anthropic/claude-sonnet-4-6": { params: { cacheRetention: "short" } },
+      "anthropic/claude-haiku-4-5": { params: { cacheRetention: "short" } },
+    });
+  });
+
   it("backfills Claude CLI allowlist defaults through plugin hooks for older configs", async () => {
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
 
@@ -255,6 +294,30 @@ describe("anthropic provider replay hooks", () => {
         } as never)
         ?.levels.some((level) => level.id === "xhigh" || level.id === "max"),
     ).toBe(false);
+  });
+
+  it("does not forward-compat case-mismatched Anthropic model ids", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+
+    const resolved = provider.resolveDynamicModel?.({
+      provider: "anthropic",
+      modelId: "CLAUDE-OPUS-4-7",
+      modelRegistry: createModelRegistry([
+        {
+          id: "claude-opus-4-6",
+          name: "Claude Opus 4.6",
+          provider: "anthropic",
+          api: "anthropic-messages",
+          reasoning: true,
+          input: ["text", "image"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 200_000,
+          maxTokens: 32_000,
+        } as ProviderRuntimeModel,
+      ]),
+    } as ProviderResolveDynamicModelContext);
+
+    expect(resolved).toBeUndefined();
   });
 
   it("normalizes exact claude opus 4.7 variants to 1M context", async () => {
@@ -349,9 +412,11 @@ describe("anthropic provider replay hooks", () => {
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
     const cliAuth = provider.auth.find((entry) => entry.id === "cli");
 
-    expect(cliAuth).toBeDefined();
+    if (!cliAuth) {
+      throw new Error("expected Anthropic CLI auth method");
+    }
 
-    const result = await cliAuth?.run({
+    const result = await cliAuth.run({
       config: {},
     } as never);
 

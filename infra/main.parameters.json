@@ -59,6 +59,15 @@
     "revolutClientSecret": {
       "value": "${REVOLUT_CLIENT_SECRET}"
     },
+    "revolutSignerBaseUrl": {
+        "value": "${REVOLUT_SIGNER_BASE_URL}"
+    },
+    "revolutSignerServiceToken": {
+      "value": "${REVOLUT_SIGNER_SERVICE_TOKEN}"
+    },
+    "revolutRefreshToken": {
+      "value": "${REVOLUT_REFRESH_TOKEN}"
+    },
     "telegramBotToken": {
       "value": "${TELEGRAM_BOT_TOKEN}"
     },

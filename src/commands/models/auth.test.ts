@@ -3,6 +3,38 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { ProviderPlugin } from "../../plugins/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
+type AuthRunCall = {
+  agentDir?: string;
+  workspaceDir?: string;
+};
+
+type ResolvePluginProvidersCall = {
+  activate?: boolean;
+  bundledProviderAllowlistCompat?: boolean;
+  bundledProviderVitestCompat?: boolean;
+  config?: unknown;
+  includeUntrustedWorkspacePlugins?: boolean;
+  providerRefs?: string[];
+  workspaceDir?: string;
+};
+
+type UpsertAuthProfileCall = {
+  agentDir?: string;
+  credential?: {
+    provider?: string;
+    type?: string;
+  };
+  profileId?: string;
+};
+
+function readMockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0): unknown {
+  const value = mock.mock.calls[index]?.[0];
+  if (!value) {
+    throw new Error("Expected mock call argument");
+  }
+  return value;
+}
+
 const mocks = vi.hoisted(() => ({
   clackCancel: vi.fn(),
   clackConfirm: vi.fn(),
@@ -23,11 +55,13 @@ const mocks = vi.hoisted(() => ({
   isRemoteEnvironment: vi.fn(() => false),
   loadAuthProfileStoreForRuntime: vi.fn(),
   listProfilesForProvider: vi.fn(),
+  promoteAuthProfileInOrder: vi.fn(),
   clearAuthProfileCooldown: vi.fn(),
 }));
 
 vi.mock("../../agents/auth-profiles/profiles.js", () => ({
   listProfilesForProvider: mocks.listProfilesForProvider,
+  promoteAuthProfileInOrder: mocks.promoteAuthProfileInOrder,
   upsertAuthProfile: mocks.upsertAuthProfile,
 }));
 
@@ -45,7 +79,7 @@ vi.mock("../../plugins/provider-auth-helpers.js", () => ({
     params: {
       profileId: string;
       provider: string;
-      mode: "api_key" | "oauth" | "token";
+      mode: "api_key" | "aws-sdk" | "oauth" | "token";
       email?: string;
       displayName?: string;
     },
@@ -117,7 +151,7 @@ vi.mock("../oauth-env.js", () => ({
   isRemoteEnvironment: mocks.isRemoteEnvironment,
 }));
 
-vi.mock("../oauth-flow.js", () => ({
+vi.mock("../../plugins/provider-oauth-flow.js", () => ({
   createVpsAwareOAuthHandlers: vi.fn(() => ({
     onAuth: vi.fn(),
     onPrompt: vi.fn(),
@@ -128,7 +162,7 @@ vi.mock("../auth-token.js", () => ({
   validateAnthropicSetupToken: vi.fn(() => undefined),
 }));
 
-vi.mock("../provider-auth-helpers.js", () => {
+vi.mock("../../plugins/provider-auth-choice-helpers.js", () => {
   const normalize = (value: string | undefined) => value?.trim().toLowerCase() ?? "";
   const isRecord = (value: unknown): value is Record<string, unknown> =>
     Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -278,6 +312,7 @@ describe("modelsAuthLoginCommand", () => {
     mocks.clackSelect.mockReset();
     mocks.clackText.mockReset();
     mocks.upsertAuthProfile.mockReset();
+    mocks.promoteAuthProfileInOrder.mockReset();
 
     mocks.resolveDefaultAgentId.mockReturnValue("main");
     mocks.resolveAgentDir.mockReturnValue("/tmp/openclaw/agents/main");
@@ -367,7 +402,13 @@ describe("modelsAuthLoginCommand", () => {
 
     await modelsAuthLoginCommand({ provider: "openai-codex" }, runtime);
 
-    expect(mocks.loadAuthProfileStoreForRuntime).toHaveBeenCalledWith("/tmp/openclaw/agents/main");
+    expect(mocks.loadAuthProfileStoreForRuntime).toHaveBeenCalledWith("/tmp/openclaw/agents/main", {
+      externalCli: {
+        mode: "scoped",
+        allowKeychainPrompt: false,
+        providerIds: ["openai-codex"],
+      },
+    });
     expect(mocks.clearAuthProfileCooldown).toHaveBeenCalledWith({
       store: fakeStore,
       profileId: "openai-codex:user@example.com",
@@ -377,18 +418,19 @@ describe("modelsAuthLoginCommand", () => {
       runProviderAuth.mock.invocationCallOrder[0],
     );
     expect(runProviderAuth).toHaveBeenCalledOnce();
-    expect(mocks.upsertAuthProfile).toHaveBeenCalledWith({
-      profileId: "openai-codex:user@example.com",
-      credential: expect.objectContaining({
-        type: "oauth",
-        provider: "openai-codex",
-      }),
+    const upsertCall = readMockCallArg(mocks.upsertAuthProfile) as UpsertAuthProfileCall;
+    expect(upsertCall.profileId).toBe("openai-codex:user@example.com");
+    expect(upsertCall.credential?.type).toBe("oauth");
+    expect(upsertCall.credential?.provider).toBe("openai-codex");
+    expect(upsertCall.agentDir).toBe("/tmp/openclaw/agents/main");
+    expect(mocks.promoteAuthProfileInOrder).toHaveBeenCalledWith({
       agentDir: "/tmp/openclaw/agents/main",
-    });
-    expect(lastUpdatedConfig?.auth?.profiles?.["openai-codex:user@example.com"]).toMatchObject({
       provider: "openai-codex",
-      mode: "oauth",
+      profileId: "openai-codex:user@example.com",
     });
+    const savedProfile = lastUpdatedConfig?.auth?.profiles?.["openai-codex:user@example.com"];
+    expect(savedProfile?.provider).toBe("openai-codex");
+    expect(savedProfile?.mode).toBe("oauth");
     expect(runtime.log).toHaveBeenCalledWith(
       "Auth profile: openai-codex:user@example.com (openai-codex/oauth)",
     );
@@ -418,15 +460,21 @@ describe("modelsAuthLoginCommand", () => {
 
     expect(mocks.resolveDefaultAgentId).not.toHaveBeenCalled();
     expect(mocks.resolveAgentDir).toHaveBeenCalledWith(originalConfig, "coder");
-    expect(mocks.loadAuthProfileStoreForRuntime).toHaveBeenCalledWith("/tmp/openclaw/agents/coder");
-    expect(runProviderAuth).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentDir: "/tmp/openclaw/agents/coder",
-        workspaceDir: "/tmp/openclaw/workspaces/coder",
-      }),
+    expect(mocks.loadAuthProfileStoreForRuntime).toHaveBeenCalledWith(
+      "/tmp/openclaw/agents/coder",
+      {
+        externalCli: {
+          mode: "scoped",
+          allowKeychainPrompt: false,
+          providerIds: ["openai-codex"],
+        },
+      },
     );
-    expect(mocks.upsertAuthProfile).toHaveBeenCalledWith(
-      expect.objectContaining({ agentDir: "/tmp/openclaw/agents/coder" }),
+    const authRunCall = readMockCallArg(runProviderAuth) as AuthRunCall;
+    expect(authRunCall.agentDir).toBe("/tmp/openclaw/agents/coder");
+    expect(authRunCall.workspaceDir).toBe("/tmp/openclaw/workspaces/coder");
+    expect((readMockCallArg(mocks.upsertAuthProfile) as UpsertAuthProfileCall).agentDir).toBe(
+      "/tmp/openclaw/agents/coder",
     );
   });
 
@@ -470,17 +518,16 @@ describe("modelsAuthLoginCommand", () => {
       runtime,
     );
 
-    expect(mocks.resolvePluginProviders).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: {},
-        workspaceDir: "/tmp/openclaw/workspace",
-        bundledProviderAllowlistCompat: true,
-        bundledProviderVitestCompat: true,
-        includeUntrustedWorkspacePlugins: false,
-        providerRefs: ["anthropic"],
-        activate: true,
-      }),
-    );
+    const providerResolutionCall = readMockCallArg(
+      mocks.resolvePluginProviders,
+    ) as ResolvePluginProvidersCall;
+    expect(providerResolutionCall.config).toEqual({});
+    expect(providerResolutionCall.workspaceDir).toBe("/tmp/openclaw/workspace");
+    expect(providerResolutionCall.bundledProviderAllowlistCompat).toBe(true);
+    expect(providerResolutionCall.bundledProviderVitestCompat).toBe(true);
+    expect(providerResolutionCall.includeUntrustedWorkspacePlugins).toBe(false);
+    expect(providerResolutionCall.providerRefs).toEqual(["anthropic"]);
+    expect(providerResolutionCall.activate).toBe(true);
     expect(runClaudeCliMigration).toHaveBeenCalledOnce();
     expect(mocks.upsertAuthProfile).not.toHaveBeenCalled();
     expect(lastUpdatedConfig?.agents?.defaults?.model).toEqual({
@@ -510,24 +557,25 @@ describe("modelsAuthLoginCommand", () => {
       },
     };
     const note = vi.fn(async () => {});
+    const select = vi.fn();
     mocks.createClackPrompter.mockReturnValue({
       note,
-      select: vi.fn(),
+      select,
     });
     const runApiKeyAuth = vi.fn();
     const runClaudeCliMigration = vi.fn().mockImplementation(async (ctx) => {
       expect(ctx.config).toEqual(currentConfig);
       expect(ctx.agentDir).toBe("/tmp/openclaw/agents/main");
       expect(ctx.workspaceDir).toBe("/tmp/openclaw/workspace");
-      expect(ctx.prompter).toMatchObject({ note, select: expect.any(Function) });
+      expect(ctx.prompter.note).toBe(note);
+      expect(ctx.prompter.select).toBe(select);
       expect(ctx.runtime).toBe(runtime);
       expect(ctx.env).toBe(process.env);
       expect(ctx.allowSecretRefPrompt).toBe(false);
       expect(ctx.isRemote).toBe(false);
-      expect(ctx.openUrl).toEqual(expect.any(Function));
-      expect(ctx.oauth).toMatchObject({
-        createVpsAwareHandlers: expect.any(Function),
-      });
+      await ctx.openUrl("https://example.com/auth");
+      expect(mocks.openUrl).toHaveBeenCalledWith("https://example.com/auth");
+      expect(ctx.oauth.createVpsAwareHandlers).toBeTypeOf("function");
       return {
         profiles: [],
         defaultModel: "claude-cli/claude-sonnet-4-6",
@@ -875,14 +923,11 @@ describe("modelsAuthLoginCommand", () => {
     await modelsAuthSetupTokenCommand({ provider: "moonshot", yes: true, agent: "coder" }, runtime);
 
     expect(mocks.resolveDefaultAgentId).not.toHaveBeenCalled();
-    expect(runTokenAuth).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentDir: "/tmp/openclaw/agents/coder",
-        workspaceDir: "/tmp/openclaw/workspaces/coder",
-      }),
-    );
-    expect(mocks.upsertAuthProfile).toHaveBeenCalledWith(
-      expect.objectContaining({ agentDir: "/tmp/openclaw/agents/coder" }),
+    const tokenAuthCall = readMockCallArg(runTokenAuth) as AuthRunCall;
+    expect(tokenAuthCall.agentDir).toBe("/tmp/openclaw/agents/coder");
+    expect(tokenAuthCall.workspaceDir).toBe("/tmp/openclaw/workspaces/coder");
+    expect((readMockCallArg(mocks.upsertAuthProfile) as UpsertAuthProfileCall).agentDir).toBe(
+      "/tmp/openclaw/agents/coder",
     );
   });
 
@@ -920,14 +965,11 @@ describe("modelsAuthLoginCommand", () => {
     await modelsAuthAddCommand({ agent: "coder" }, runtime);
 
     expect(mocks.resolveDefaultAgentId).not.toHaveBeenCalled();
-    expect(runTokenAuth).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentDir: "/tmp/openclaw/agents/coder",
-        workspaceDir: "/tmp/openclaw/workspaces/coder",
-      }),
-    );
-    expect(mocks.upsertAuthProfile).toHaveBeenCalledWith(
-      expect.objectContaining({ agentDir: "/tmp/openclaw/agents/coder" }),
+    const tokenAuthCall = readMockCallArg(runTokenAuth) as AuthRunCall;
+    expect(tokenAuthCall.agentDir).toBe("/tmp/openclaw/agents/coder");
+    expect(tokenAuthCall.workspaceDir).toBe("/tmp/openclaw/workspaces/coder");
+    expect((readMockCallArg(mocks.upsertAuthProfile) as UpsertAuthProfileCall).agentDir).toBe(
+      "/tmp/openclaw/agents/coder",
     );
   });
 

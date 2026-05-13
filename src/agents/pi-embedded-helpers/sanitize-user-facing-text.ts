@@ -3,6 +3,7 @@ import {
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
   isCloudflareOrHtmlErrorPage,
+  MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
   parseApiErrorInfo,
   parseApiErrorPayload,
 } from "../../shared/assistant-error-format.js";
@@ -11,6 +12,11 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../../shared/string-coerce.js";
+import {
+  stripLegacyBracketToolCallBlocks,
+  stripMinimaxToolCallXml,
+  stripToolCallXmlTags,
+} from "../../shared/text/assistant-visible-text.js";
 import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
 import { stripInternalRuntimeContext } from "../internal-runtime-context.js";
 import { stableStringify } from "../stable-stringify.js";
@@ -40,6 +46,7 @@ const MODEL_CAPACITY_ERROR_USER_MESSAGE =
 const OVERLOADED_ERROR_USER_MESSAGE =
   "The AI service is temporarily overloaded. Please try again in a moment.";
 const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/gi;
+const TOOL_CALLS_OMITTED_PLACEHOLDER_LINE_RE = /^[ \t]*\[tool calls omitted\][ \t]*$/i;
 const ERROR_PREFIX_RE =
   /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|codex\s*error|request failed|failed|exception)(?:\s+\d{3})?[:\s-]+/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
@@ -209,6 +216,17 @@ export function isInvalidStreamingEventOrderError(raw: string): boolean {
   );
 }
 
+export function isStreamingJsonParseError(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  const trimmed = raw.trim();
+  if (trimmed === MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE) {
+    return true;
+  }
+  return false;
+}
+
 function hasRateLimitTpmHint(raw: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(raw);
   return /\btpm\b/i.test(lower) || lower.includes("tokens per minute");
@@ -320,6 +338,22 @@ function stripFinalTagsFromText(text: unknown): string {
   return normalized.replace(FINAL_TAG_RE, "");
 }
 
+function stripToolCallsOmittedPlaceholderLines(text: string): string {
+  let result = "";
+  let start = 0;
+  while (start < text.length) {
+    const newlineIndex = text.indexOf("\n", start);
+    const end = newlineIndex === -1 ? text.length : newlineIndex + 1;
+    const chunk = text.slice(start, end);
+    const line = chunk.endsWith("\n") ? chunk.slice(0, -1).replace(/\r$/, "") : chunk;
+    if (!TOOL_CALLS_OMITTED_PLACEHOLDER_LINE_RE.test(line)) {
+      result += chunk;
+    }
+    start = end;
+  }
+  return result;
+}
+
 function collapseConsecutiveDuplicateBlocks(text: string): string {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -371,7 +405,15 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
   }
   const errorContext = opts?.errorContext ?? false;
   const stripped = stripInboundMetadata(stripInternalRuntimeContext(stripFinalTagsFromText(raw)));
-  const trimmed = stripped.trim();
+  const withoutToolCallXml = stripToolCallXmlTags(stripMinimaxToolCallXml(stripped), {
+    stripFunctionCallsXmlPayloads: true,
+  });
+  // Replay repair may synthesize this placeholder to keep provider transcripts valid.
+  // It is internal scaffolding, so drop standalone placeholder lines before delivery
+  // while preserving ordinary inline mentions a user may be discussing.
+  const withoutPlaceholder = stripToolCallsOmittedPlaceholderLines(withoutToolCallXml);
+  const withoutToolCallBlocks = stripLegacyBracketToolCallBlocks(withoutPlaceholder);
+  const trimmed = withoutToolCallBlocks.trim();
   if (!trimmed) {
     return "";
   }
@@ -379,7 +421,6 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
   if (!errorContext && shouldRewriteRawPayloadWithoutErrorContext(trimmed)) {
     return formatRawAssistantErrorForUi(trimmed);
   }
-
   if (errorContext) {
     const execDeniedMessage = formatExecDeniedUserMessage(trimmed);
     if (execDeniedMessage) {
@@ -410,15 +451,15 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
     if (isBillingErrorMessage(trimmed)) {
       return BILLING_ERROR_USER_MESSAGE;
     }
-
     if (isInvalidStreamingEventOrderError(trimmed)) {
       return "LLM request failed: provider returned an invalid streaming response. Please try again.";
     }
-
     if (isRawApiErrorPayload(trimmed) || isLikelyHttpErrorText(trimmed)) {
       return formatRawAssistantErrorForUi(trimmed);
     }
-
+    if (isStreamingJsonParseError(trimmed)) {
+      return "LLM streaming response contained a malformed fragment. Please try again.";
+    }
     if (ERROR_PREFIX_RE.test(trimmed)) {
       const prefixedCopy = formatRateLimitOrOverloadedErrorCopy(trimmed);
       if (prefixedCopy) {
@@ -435,6 +476,6 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
     }
   }
 
-  const withoutLeadingEmptyLines = stripped.replace(/^(?:[ \t]*\r?\n)+/, "");
+  const withoutLeadingEmptyLines = withoutToolCallBlocks.replace(/^(?:[ \t]*\r?\n)+/, "");
   return collapseConsecutiveDuplicateBlocks(withoutLeadingEmptyLines);
 }

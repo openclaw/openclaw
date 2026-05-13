@@ -4,14 +4,18 @@ import { streamSimple } from "@mariozechner/pi-ai";
 import type { SettingsManager } from "@mariozechner/pi-coding-agent";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createDeepSeekV4OpenAICompatibleThinkingWrapper } from "../../plugin-sdk/provider-stream-shared.js";
 import {
   prepareProviderExtraParams as prepareProviderExtraParamsRuntime,
+  type ProviderRuntimePluginHandle,
   resolveProviderExtraParamsForTransport as resolveProviderExtraParamsForTransportRuntime,
   wrapProviderStreamFn as wrapProviderStreamFnRuntime,
 } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import { legacyModelKey, modelKey } from "../model-selection-normalize.js";
 import { supportsGptParallelToolCallsPayload } from "../provider-api-families.js";
 import { resolveProviderRequestPolicyConfig } from "../provider-request-config.js";
+import type { AgentRuntimeTransport } from "../runtime-plan/types.js";
 import { createGoogleThinkingPayloadWrapper } from "./google-stream-wrappers.js";
 import { log } from "./logger.js";
 import { createMinimaxThinkingDisabledWrapper } from "./minimax-stream-wrappers.js";
@@ -20,6 +24,8 @@ import {
   shouldApplySiliconFlowThinkingOffCompat,
 } from "./moonshot-stream-wrappers.js";
 import {
+  createOpenAICompletionsStrictMessageKeysWrapper,
+  createOpenAICompletionsToolsCompatWrapper,
   createOpenAIResponsesContextManagementWrapper,
   createOpenAIStringContentWrapper,
 } from "./openai-stream-wrappers.js";
@@ -37,6 +43,8 @@ const providerRuntimeDeps = {
   ...defaultProviderRuntimeDeps,
 };
 
+let preparedExtraParamsCache = new WeakMap<OpenClawConfig, Map<string, Record<string, unknown>>>();
+
 export const __testing = {
   setProviderRuntimeDepsForTest(
     deps: Partial<typeof defaultProviderRuntimeDeps> | undefined,
@@ -50,6 +58,7 @@ export const __testing = {
       deps?.wrapProviderStreamFn ?? defaultProviderRuntimeDeps.wrapProviderStreamFn;
   },
   resetProviderRuntimeDepsForTest(): void {
+    clearPreparedExtraParamsCache();
     providerRuntimeDeps.prepareProviderExtraParams =
       defaultProviderRuntimeDeps.prepareProviderExtraParams;
     providerRuntimeDeps.resolveProviderExtraParamsForTransport =
@@ -71,8 +80,11 @@ export function resolveExtraParams(params: {
   agentId?: string;
 }): Record<string, unknown> | undefined {
   const defaultParams = params.cfg?.agents?.defaults?.params ?? undefined;
-  const modelKey = `${params.provider}/${params.modelId}`;
-  const modelConfig = params.cfg?.agents?.defaults?.models?.[modelKey];
+  const canonicalKey = modelKey(params.provider, params.modelId);
+  const legacyKey = legacyModelKey(params.provider, params.modelId);
+  const configuredModels = params.cfg?.agents?.defaults?.models;
+  const modelConfig =
+    configuredModels?.[canonicalKey] ?? (legacyKey ? configuredModels?.[legacyKey] : undefined);
   const globalParams = modelConfig?.params ? { ...modelConfig.params } : undefined;
   const agentParams =
     params.agentId && params.cfg?.agents?.list
@@ -109,6 +121,9 @@ export function resolveExtraParams(params: {
     merged.cachedContent = resolvedCachedContent;
     delete merged.cached_content;
   }
+  if (params.provider === "openrouter") {
+    canonicalizeOpenRouterResponseCacheParams(merged, [defaultParams, globalParams, agentParams]);
+  }
 
   applyDefaultOpenAIGptRuntimeParams(params, merged);
 
@@ -118,9 +133,8 @@ export function resolveExtraParams(params: {
 type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   cacheRetention?: "none" | "short" | "long";
   cachedContent?: string;
-  openaiWsWarmup?: boolean;
 };
-export type SupportedTransport = Exclude<CacheRetentionStreamOptions["transport"], undefined>;
+export type SupportedTransport = AgentRuntimeTransport;
 
 function resolveSupportedTransport(value: unknown): SupportedTransport | undefined {
   return value === "sse" || value === "websocket" || value === "auto" ? value : undefined;
@@ -128,6 +142,60 @@ function resolveSupportedTransport(value: unknown): SupportedTransport | undefin
 
 function hasExplicitTransportSetting(settings: { transport?: unknown }): boolean {
   return Object.hasOwn(settings, "transport");
+}
+
+function clearPreparedExtraParamsCache(): void {
+  preparedExtraParamsCache = new WeakMap();
+}
+
+function fingerprintPreparedExtraParamsModel(model?: ProviderRuntimeModel): unknown {
+  if (!model) {
+    return null;
+  }
+  const record = model as unknown as Record<string, unknown>;
+  return {
+    api: model.api,
+    provider: model.provider,
+    id: model.id,
+    name: model.name,
+    baseUrl: model.baseUrl,
+    reasoning: model.reasoning,
+    input: model.input,
+    cost: model.cost,
+    compat: record.compat ?? null,
+    contextWindow: model.contextWindow,
+    contextTokens: model.contextTokens ?? null,
+    headers: record.headers ?? null,
+    maxTokens: model.maxTokens,
+    params: model.params ?? null,
+    requestTimeoutMs: model.requestTimeoutMs ?? null,
+  };
+}
+
+function resolvePreparedExtraParamsCacheKey(params: {
+  provider: string;
+  modelId: string;
+  agentDir?: string;
+  workspaceDir?: string;
+  extraParamsOverride?: Record<string, unknown>;
+  thinkingLevel?: ThinkLevel;
+  agentId?: string;
+  resolvedExtraParams?: Record<string, unknown>;
+  model?: ProviderRuntimeModel;
+  resolvedTransport?: SupportedTransport;
+}): string {
+  return JSON.stringify({
+    provider: params.provider,
+    modelId: params.modelId,
+    agentId: params.agentId ?? "",
+    agentDir: params.agentDir ?? "",
+    workspaceDir: params.workspaceDir ?? "",
+    thinkingLevel: params.thinkingLevel ?? "",
+    resolvedTransport: params.resolvedTransport ?? "",
+    extraParamsOverride: params.extraParamsOverride ?? null,
+    resolvedExtraParams: params.resolvedExtraParams ?? null,
+    model: fingerprintPreparedExtraParamsModel(params.model),
+  });
 }
 
 export function resolvePreparedExtraParams(params: {
@@ -142,6 +210,7 @@ export function resolvePreparedExtraParams(params: {
   resolvedExtraParams?: Record<string, unknown>;
   model?: ProviderRuntimeModel;
   resolvedTransport?: SupportedTransport;
+  providerRuntimeHandle?: ProviderRuntimePluginHandle;
 }): Record<string, unknown> {
   const resolvedExtraParams =
     params.resolvedExtraParams ??
@@ -172,11 +241,23 @@ export function resolvePreparedExtraParams(params: {
     merged.cachedContent = resolvedCachedContent;
     delete merged.cached_content;
   }
+  if (params.provider === "openrouter") {
+    canonicalizeOpenRouterResponseCacheParams(merged, [resolvedExtraParams, override]);
+  }
+  const cfg = params.cfg;
+  const cacheKey = cfg ? resolvePreparedExtraParamsCacheKey(params) : undefined;
+  if (cacheKey) {
+    const cached = preparedExtraParamsCache.get(cfg!)?.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+  }
   const prepared =
     providerRuntimeDeps.prepareProviderExtraParams({
       provider: params.provider,
       config: params.cfg,
       workspaceDir: params.workspaceDir,
+      runtimeHandle: params.providerRuntimeHandle,
       context: {
         config: params.cfg,
         agentDir: params.agentDir,
@@ -191,6 +272,7 @@ export function resolvePreparedExtraParams(params: {
     provider: params.provider,
     config: params.cfg,
     workspaceDir: params.workspaceDir,
+    runtimeHandle: params.providerRuntimeHandle,
     context: {
       config: params.cfg,
       agentDir: params.agentDir,
@@ -203,7 +285,16 @@ export function resolvePreparedExtraParams(params: {
       transport: params.resolvedTransport ?? resolveSupportedTransport(prepared.transport),
     },
   })?.patch;
-  return transportPatch ? { ...prepared, ...transportPatch } : prepared;
+  const result = transportPatch ? { ...prepared, ...transportPatch } : prepared;
+  if (cacheKey) {
+    let bucket = preparedExtraParamsCache.get(cfg!);
+    if (!bucket) {
+      bucket = new Map();
+      preparedExtraParamsCache.set(cfg!, bucket);
+    }
+    bucket.set(cacheKey, result);
+  }
+  return result;
 }
 
 function sanitizeExtraParamsRecord(
@@ -244,9 +335,6 @@ function applyDefaultOpenAIGptRuntimeParams(
   }
   if (!Object.hasOwn(merged, "text_verbosity") && !Object.hasOwn(merged, "textVerbosity")) {
     merged.text_verbosity = "low";
-  }
-  if (!Object.hasOwn(merged, "openaiWsWarmup")) {
-    merged.openaiWsWarmup = false;
   }
 }
 
@@ -304,9 +392,6 @@ function createStreamFnWithExtraParams(
         : typeof extraParams.transport;
     log.warn(`ignoring invalid transport param: ${transportSummary}`);
   }
-  if (typeof extraParams.openaiWsWarmup === "boolean") {
-    streamParams.openaiWsWarmup = extraParams.openaiWsWarmup;
-  }
   const cachedContent =
     typeof extraParams.cachedContent === "string"
       ? extraParams.cachedContent
@@ -355,21 +440,74 @@ function resolveAliasedParamValue(
   snakeCaseKey: string,
   camelCaseKey: string,
 ): unknown {
+  return resolveAliasedParamValueFromKeys(sources, [snakeCaseKey, camelCaseKey]);
+}
+
+function resolveAliasedParamValueFromKeys(
+  sources: Array<Record<string, unknown> | undefined>,
+  keys: readonly string[],
+): unknown {
   let resolved: unknown = undefined;
   let seen = false;
   for (const source of sources) {
     if (!source) {
       continue;
     }
-    const hasSnakeCaseKey = Object.hasOwn(source, snakeCaseKey);
-    const hasCamelCaseKey = Object.hasOwn(source, camelCaseKey);
-    if (!hasSnakeCaseKey && !hasCamelCaseKey) {
-      continue;
+    for (const key of keys) {
+      if (!Object.hasOwn(source, key)) {
+        continue;
+      }
+      resolved = source[key];
+      seen = true;
+      break;
     }
-    resolved = hasSnakeCaseKey ? source[snakeCaseKey] : source[camelCaseKey];
-    seen = true;
   }
   return seen ? resolved : undefined;
+}
+
+function applyCanonicalAliasedParamValue(params: {
+  merged: Record<string, unknown>;
+  sources: Array<Record<string, unknown> | undefined>;
+  keys: readonly string[];
+  canonicalKey: string;
+}): void {
+  const resolved = resolveAliasedParamValueFromKeys(params.sources, params.keys);
+  if (resolved === undefined) {
+    return;
+  }
+  for (const key of params.keys) {
+    delete params.merged[key];
+  }
+  params.merged[params.canonicalKey] = resolved;
+}
+
+function canonicalizeOpenRouterResponseCacheParams(
+  merged: Record<string, unknown>,
+  sources: Array<Record<string, unknown> | undefined>,
+): void {
+  applyCanonicalAliasedParamValue({
+    merged,
+    sources,
+    keys: ["responseCache", "response_cache"],
+    canonicalKey: "responseCache",
+  });
+  applyCanonicalAliasedParamValue({
+    merged,
+    sources,
+    keys: [
+      "responseCacheTtlSeconds",
+      "response_cache_ttl_seconds",
+      "responseCacheTtl",
+      "response_cache_ttl",
+    ],
+    canonicalKey: "responseCacheTtlSeconds",
+  });
+  applyCanonicalAliasedParamValue({
+    merged,
+    sources,
+    keys: ["responseCacheClear", "response_cache_clear"],
+    canonicalKey: "responseCacheClear",
+  });
 }
 
 function createParallelToolCallsWrapper(
@@ -550,8 +688,16 @@ function applyPostPluginStreamWrappers(
 ): void {
   ctx.agent.streamFn = createOpenRouterSystemCacheWrapper(ctx.agent.streamFn);
   ctx.agent.streamFn = createOpenAIStringContentWrapper(ctx.agent.streamFn);
+  ctx.agent.streamFn = createOpenAICompletionsStrictMessageKeysWrapper(ctx.agent.streamFn);
+  ctx.agent.streamFn = createOpenAICompletionsToolsCompatWrapper(ctx.agent.streamFn);
 
   if (!ctx.providerWrapperHandled) {
+    ctx.agent.streamFn = createDeepSeekV4OpenAICompatibleThinkingWrapper({
+      baseStreamFn: ctx.agent.streamFn,
+      thinkingLevel: ctx.thinkingLevel,
+      shouldPatchModel: isDeepSeekV4OpenAICompatibleModel,
+    });
+
     // Guard Google-family payloads against invalid negative thinking budgets
     // emitted by upstream model-ID heuristics for Gemini 3.1 variants.
     ctx.agent.streamFn = createGoogleThinkingPayloadWrapper(ctx.agent.streamFn, ctx.thinkingLevel);
@@ -613,6 +759,22 @@ function applyPostPluginStreamWrappers(
   const summary =
     typeof rawParallelToolCalls === "string" ? rawParallelToolCalls : typeof rawParallelToolCalls;
   log.warn(`ignoring invalid parallel_tool_calls param: ${summary}`);
+}
+
+function normalizeDeepSeekV4CandidateId(modelId: unknown): string | undefined {
+  if (typeof modelId !== "string") {
+    return undefined;
+  }
+  const withoutSuffix = modelId.trim().toLowerCase().split(":", 1)[0];
+  return withoutSuffix.split("/").pop();
+}
+
+function isDeepSeekV4OpenAICompatibleModel(model: Parameters<StreamFn>[0]): boolean {
+  const normalizedModelId = normalizeDeepSeekV4CandidateId(model.id);
+  return (
+    model.api === "openai-completions" &&
+    (normalizedModelId === "deepseek-v4-flash" || normalizedModelId === "deepseek-v4-pro")
+  );
 }
 
 /**
@@ -693,8 +855,8 @@ export function applyExtraParamsToAgent(
     },
   });
   agent.streamFn = pluginWrappedStreamFn ?? providerStreamBase;
-  // Apply caller/config extra params outside provider defaults so explicit values
-  // like `openaiWsWarmup=false` can override provider-added defaults.
+  // Apply caller/config extra params outside provider defaults so explicit runtime
+  // transport values can override provider-added defaults.
   applyPrePluginStreamWrappers(wrapperContext);
   const providerWrapperHandled =
     pluginWrappedStreamFn !== undefined && pluginWrappedStreamFn !== providerStreamBase;

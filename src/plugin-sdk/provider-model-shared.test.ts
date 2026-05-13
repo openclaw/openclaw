@@ -9,7 +9,7 @@ import {
 } from "./provider-model-shared.js";
 
 describe("buildProviderReplayFamilyHooks", () => {
-  it("covers the replay family matrix", async () => {
+  it("covers the replay family matrix", () => {
     const cases = [
       {
         family: "openai-compatible" as const,
@@ -22,6 +22,7 @@ describe("buildProviderReplayFamilyHooks", () => {
           sanitizeToolCallIds: true,
           applyAssistantFirstOrderingFix: true,
           validateGeminiTurns: true,
+          dropReasoningFromHistory: true,
         },
         hasSanitizeReplayHistory: false,
         reasoningMode: undefined,
@@ -196,6 +197,7 @@ describe("buildProviderReplayFamilyHooks", () => {
     const nativeIdsHooks = buildProviderReplayFamilyHooks({
       family: "openai-compatible",
       sanitizeToolCallIds: false,
+      dropReasoningFromHistory: false,
     });
     const nativeIdsPolicy = nativeIdsHooks.buildReplayPolicy?.({
       provider: "moonshot",
@@ -270,6 +272,9 @@ describe("resolveClaudeThinkingProfile", () => {
       levels: expect.arrayContaining([{ id: "adaptive" }]),
       defaultLevel: "adaptive",
     });
-    expect(profile.levels.some((level) => level.id === "xhigh" || level.id === "max")).toBe(false);
+    const fixedBudgetLevels = profile.levels.filter(
+      (level) => level.id === "xhigh" || level.id === "max",
+    );
+    expect(fixedBudgetLevels).toStrictEqual([]);
   });
 });

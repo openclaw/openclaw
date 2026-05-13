@@ -35,10 +35,10 @@ describe("provider replay helpers", () => {
     expect(policy).not.toHaveProperty("toolCallIdMode");
   });
 
-  it("drops historical reasoning for Gemma 4 openai-completions replay", () => {
+  it("drops historical reasoning for OpenAI-compatible chat completions replay", () => {
     expect(
       buildOpenAICompatibleReplayPolicy("openai-completions", {
-        modelId: "google/gemma-4-26b-a4b-it",
+        modelId: "qwen3.6-27b",
       }),
     ).toMatchObject({
       dropReasoningFromHistory: true,
@@ -46,8 +46,17 @@ describe("provider replay helpers", () => {
     expect(
       buildOpenAICompatibleReplayPolicy("openai-completions", {
         modelId: "google/gemma-3-27b-it",
+        dropReasoningFromHistory: false,
       }),
     ).not.toHaveProperty("dropReasoningFromHistory");
+    expect(
+      buildOpenAICompatibleReplayPolicy("openai-completions", {
+        modelId: "google/gemma-4-26b-a4b-it",
+        dropReasoningFromHistory: false,
+      }),
+    ).toMatchObject({
+      dropReasoningFromHistory: true,
+    });
     expect(
       buildOpenAICompatibleReplayPolicy("openai-responses", {
         modelId: "google/gemma-4-26b-a4b-it",

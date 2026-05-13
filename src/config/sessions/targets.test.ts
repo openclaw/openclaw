@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config.js";
 import { resolveStorePath } from "./paths.js";
 import {
+  resolveAgentSessionStoreTargetsSync,
   resolveAllAgentSessionStoreTargets,
   resolveAllAgentSessionStoreTargetsSync,
   resolveSessionStoreTargets,
@@ -39,6 +40,16 @@ function createCustomRootCfg(customRoot: string, defaultAgentId = "ops"): OpenCl
       list: [{ id: defaultAgentId, default: true }],
     },
   };
+}
+
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 async function resolveTargetsForCustomRoot(home: string, agentIds: string[]) {
@@ -138,6 +149,38 @@ describe("resolveSessionStoreTargets", () => {
   });
 });
 
+describe("resolveAgentSessionStoreTargetsSync", () => {
+  it("resolves one requested agent store from the direct path", async () => {
+    await withTempHome(async (home) => {
+      const customRoot = path.join(home, "custom-state");
+      const storePaths = await createAgentSessionStores(customRoot, ["main", "codex"]);
+      const cfg = createCustomRootCfg(customRoot, "main");
+
+      expect(resolveAgentSessionStoreTargetsSync(cfg, "codex", { env: process.env })).toEqual([
+        {
+          agentId: "codex",
+          storePath: storePaths.codex,
+        },
+      ]);
+    });
+  });
+
+  it("finds discovered directories whose names normalize to the requested agent", async () => {
+    await withTempHome(async (home) => {
+      const customRoot = path.join(home, "custom-state");
+      const storePaths = await createAgentSessionStores(customRoot, ["main", "Retired Agent"]);
+      const cfg = createCustomRootCfg(customRoot, "main");
+
+      expect(
+        resolveAgentSessionStoreTargetsSync(cfg, "retired-agent", { env: process.env }),
+      ).toContainEqual({
+        agentId: "retired-agent",
+        storePath: storePaths["Retired Agent"],
+      });
+    });
+  });
+});
+
 describe("resolveAllAgentSessionStoreTargets", () => {
   it("includes discovered on-disk agent stores alongside configured targets", async () => {
     await withTempHome(async (home) => {
@@ -153,7 +196,7 @@ describe("resolveAllAgentSessionStoreTargets", () => {
       const targets = await resolveAllAgentSessionStoreTargets(cfg, { env: process.env });
 
       expectTargetsToContainStores(targets, storePaths);
-      expect(targets.filter((target) => target.storePath === storePaths.ops)).toHaveLength(1);
+      expect(countMatching(targets, (target) => target.storePath === storePaths.ops)).toBe(1);
     });
   });
 
@@ -162,7 +205,7 @@ describe("resolveAllAgentSessionStoreTargets", () => {
       const { storePaths, targets } = await resolveTargetsForCustomRoot(home, ["ops", "retired"]);
 
       expectTargetsToContainStores(targets, storePaths);
-      expect(targets.filter((target) => target.storePath === storePaths.ops)).toHaveLength(1);
+      expect(countMatching(targets, (target) => target.storePath === storePaths.ops)).toBe(1);
     });
   });
 

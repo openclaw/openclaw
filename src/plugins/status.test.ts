@@ -7,14 +7,29 @@ import {
   createTypedHook,
   HOOK_ONLY_MESSAGE,
   LEGACY_BEFORE_AGENT_START_MESSAGE,
-  LEGACY_IMPLICIT_STARTUP_SIDECAR_MESSAGE,
 } from "./status.test-helpers.js";
 
 const loadConfigMock = vi.fn();
 const loadOpenClawPluginsMock = vi.fn();
 const loadPluginMetadataRegistrySnapshotMock = vi.fn();
+const loadPluginManifestRegistryForPluginRegistryMock = vi.fn();
 const loadPluginRegistrySnapshotWithMetadataMock = vi.fn();
 const loadPluginManifestRegistryForInstalledIndexMock = vi.fn();
+const loadPluginMetadataSnapshotMock = vi.fn((rawParams: unknown = {}) => {
+  const params = rawParams as { index?: unknown };
+  const manifestRegistry = loadPluginManifestRegistryForInstalledIndexMock(params) ?? {
+    plugins: [],
+    diagnostics: [],
+  };
+  return {
+    index: params.index ?? createInstalledPluginIndexSnapshot([]),
+    manifestRegistry,
+    plugins: manifestRegistry.plugins,
+    byPluginId: new Map(
+      manifestRegistry.plugins.map((plugin: { id: string }) => [plugin.id, plugin]),
+    ),
+  };
+});
 const applyPluginAutoEnableMock = vi.fn();
 const resolveBundledProviderCompatPluginIdsMock = vi.fn();
 const withBundledPluginAllowlistCompatMock = vi.fn();
@@ -50,6 +65,8 @@ vi.mock("./runtime/metadata-registry-loader.js", () => ({
 }));
 
 vi.mock("./plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry: (...args: unknown[]) =>
+    loadPluginManifestRegistryForPluginRegistryMock(...args),
   loadPluginRegistrySnapshotWithMetadata: (...args: unknown[]) =>
     loadPluginRegistrySnapshotWithMetadataMock(...args),
 }));
@@ -57,6 +74,10 @@ vi.mock("./plugin-registry.js", () => ({
 vi.mock("./manifest-registry-installed.js", () => ({
   loadPluginManifestRegistryForInstalledIndex: (...args: unknown[]) =>
     loadPluginManifestRegistryForInstalledIndexMock(...args),
+}));
+
+vi.mock("./plugin-metadata-snapshot.js", () => ({
+  loadPluginMetadataSnapshot: (...args: unknown[]) => loadPluginMetadataSnapshotMock(...args),
 }));
 
 vi.mock("./providers.js", () => ({
@@ -128,10 +149,10 @@ function createInstalledPluginIndexSnapshot(
 
 function expectInspectReport(
   pluginId: string,
+  options: Omit<Parameters<typeof buildPluginInspectReport>[0], "id"> = {},
 ): NonNullable<ReturnType<typeof buildPluginInspectReport>> {
-  const inspect = buildPluginInspectReport({ id: pluginId });
-  expect(inspect).not.toBeNull();
-  if (!inspect) {
+  const inspect = buildPluginInspectReport({ id: pluginId, ...options });
+  if (inspect === null) {
     throw new Error(`expected inspect report for ${pluginId}`);
   }
   return inspect;
@@ -186,10 +207,12 @@ function expectMetadataSnapshotLoaderCall(params: {
 }
 
 function expectAutoEnabledStatusLoad(params: { rawConfig: unknown }) {
-  expect(applyPluginAutoEnableMock).toHaveBeenCalledWith({
-    config: params.rawConfig,
-    env: process.env,
-  });
+  expect(applyPluginAutoEnableMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      config: params.rawConfig,
+      env: process.env,
+    }),
+  );
 }
 
 function createCompatChainFixture() {
@@ -292,8 +315,8 @@ function expectAutoEnabledDemoCompatibilityNoticesPreserveRawConfig() {
 }
 
 function expectNoCompatibilityWarnings() {
-  expect(buildPluginCompatibilityNotices()).toEqual([]);
-  expect(buildPluginCompatibilityWarnings()).toEqual([]);
+  expect(buildPluginCompatibilityNotices()).toStrictEqual([]);
+  expect(buildPluginCompatibilityWarnings()).toStrictEqual([]);
 }
 
 function expectCompatibilityOutput(params: { notices?: unknown[]; warnings?: string[] }) {
@@ -340,7 +363,7 @@ function expectBundleInspectState(
   },
 ) {
   expect(inspect.bundleCapabilities).toEqual(params.bundleCapabilities);
-  expect(inspect.mcpServers).toEqual([]);
+  expect(inspect.mcpServers).toStrictEqual([]);
   expect(inspect.shape).toBe(params.shape);
 }
 
@@ -363,8 +386,10 @@ describe("plugin status reports", () => {
     loadConfigMock.mockReset();
     loadOpenClawPluginsMock.mockReset();
     loadPluginMetadataRegistrySnapshotMock.mockReset();
+    loadPluginManifestRegistryForPluginRegistryMock.mockReset();
     loadPluginRegistrySnapshotWithMetadataMock.mockReset();
     loadPluginManifestRegistryForInstalledIndexMock.mockReset();
+    loadPluginMetadataSnapshotMock.mockClear();
     applyPluginAutoEnableMock.mockReset();
     resolveBundledProviderCompatPluginIdsMock.mockReset();
     withBundledPluginAllowlistCompatMock.mockReset();
@@ -375,6 +400,10 @@ describe("plugin status reports", () => {
     loadPluginRegistrySnapshotWithMetadataMock.mockReturnValue({
       snapshot: createInstalledPluginIndexSnapshot([]),
       source: "derived",
+      diagnostics: [],
+    });
+    loadPluginManifestRegistryForPluginRegistryMock.mockReturnValue({
+      plugins: [],
       diagnostics: [],
     });
     loadPluginManifestRegistryForInstalledIndexMock.mockReturnValue({
@@ -440,34 +469,34 @@ describe("plugin status reports", () => {
     loadPluginRegistrySnapshotWithMetadataMock.mockReturnValue({
       snapshot: createInstalledPluginIndexSnapshot([
         {
-          pluginId: "legacy-sidecar",
-          manifestPath: "/tmp/legacy-sidecar/openclaw.plugin.json",
+          pluginId: "provider-env-plugin",
+          manifestPath: "/tmp/provider-env-plugin/openclaw.plugin.json",
           manifestHash: "manifest-hash",
-          rootDir: "/tmp/legacy-sidecar",
+          rootDir: "/tmp/provider-env-plugin",
           origin: "workspace",
           enabled: true,
           startup: {
-            sidecar: true,
+            sidecar: false,
             memory: false,
             deferConfiguredChannelFullLoadUntilAfterListen: false,
             agentHarnesses: [],
           },
-          compat: ["legacy-implicit-startup-sidecar"],
+          compat: ["provider-auth-env-vars"],
         },
       ]),
       source: "derived",
       diagnostics: [],
     });
     loadPluginManifestRegistryForInstalledIndexMock.mockReturnValue({
-      plugins: [{ id: "legacy-sidecar", name: "Legacy Sidecar" }],
+      plugins: [{ id: "provider-env-plugin", name: "Provider Env Plugin" }],
       diagnostics: [],
     });
 
     const report = buildPluginRegistrySnapshotReport({ config: {} });
 
     expect(report.plugins[0]).toMatchObject({
-      id: "legacy-sidecar",
-      compat: ["legacy-implicit-startup-sidecar"],
+      id: "provider-env-plugin",
+      compat: ["provider-auth-env-vars"],
     });
   });
 
@@ -540,12 +569,13 @@ describe("plugin status reports", () => {
       }),
     );
 
-    const inspect = buildPluginInspectReport({ id: "demo", config: rawConfig });
+    const inspect = expectInspectReport("demo", { config: rawConfig });
 
-    expect(inspect).not.toBeNull();
-    expectInspectPolicy(inspect!, {
+    expectInspectPolicy(inspect, {
       allowPromptInjection: undefined,
       allowConversationAccess: undefined,
+      hookTimeoutMs: undefined,
+      hookTimeouts: undefined,
       allowModelOverride: true,
       allowedModels: ["openai/gpt-5.5"],
       hasAllowedModelsConfig: true,
@@ -689,26 +719,27 @@ describe("plugin status reports", () => {
       typedHooks: [createTypedHook({ pluginId: "google", hookName: "before_agent_start" })],
     });
 
-    const inspect = buildPluginInspectReport({ id: "google" });
+    const inspect = expectInspectReport("google");
 
-    expect(inspect).not.toBeNull();
-    expectInspectShape(inspect!, {
+    expectInspectShape(inspect, {
       shape: "hybrid-capability",
       capabilityMode: "hybrid",
       capabilityKinds: ["text-inference", "media-understanding", "image-generation", "web-search"],
     });
-    expect(inspect?.usesLegacyBeforeAgentStart).toBe(true);
-    expect(inspect?.compatibility).toEqual([
+    expect(inspect.usesLegacyBeforeAgentStart).toBe(true);
+    expect(inspect.compatibility).toEqual([
       createCompatibilityNotice({ pluginId: "google", code: "legacy-before-agent-start" }),
     ]);
-    expectInspectPolicy(inspect!, {
+    expectInspectPolicy(inspect, {
       allowPromptInjection: false,
       allowConversationAccess: true,
+      hookTimeoutMs: undefined,
+      hookTimeouts: undefined,
       allowModelOverride: true,
       allowedModels: ["openai/gpt-5.5"],
       hasAllowedModelsConfig: true,
     });
-    expect(inspect?.diagnostics).toEqual([
+    expect(inspect.diagnostics).toEqual([
       { level: "warn", pluginId: "google", message: "watch this surface" },
     ]);
   });
@@ -784,7 +815,7 @@ describe("plugin status reports", () => {
       capabilityKinds: ["context-engine"],
     });
     expect(inspect.capabilities).toEqual([{ kind: "context-engine", ids: ["moon-engine"] }]);
-    expect(inspect.compatibility).toEqual([]);
+    expect(inspect.compatibility).toStrictEqual([]);
     expectNoCompatibilityWarnings();
   });
 
@@ -833,27 +864,7 @@ describe("plugin status reports", () => {
     });
   });
 
-  it("builds compatibility warnings for deprecated implicit startup sidecar metadata", () => {
-    setSinglePluginLoadResult(
-      createPluginRecord({
-        id: "legacy-sidecar",
-        name: "Legacy Sidecar",
-        compat: ["legacy-implicit-startup-sidecar"],
-      }),
-    );
-
-    expectCompatibilityOutput({
-      notices: [
-        createCompatibilityNotice({
-          pluginId: "legacy-sidecar",
-          code: "legacy-implicit-startup-sidecar",
-        }),
-      ],
-      warnings: [`legacy-sidecar ${LEGACY_IMPLICIT_STARTUP_SIDECAR_MESSAGE}`],
-    });
-  });
-
-  it("does not warn when explicit startup-lazy metadata avoids legacy startup compatibility", () => {
+  it("does not warn for explicit startup-lazy metadata", () => {
     setSinglePluginLoadResult(
       createPluginRecord({
         id: "modern-startup-lazy",
@@ -929,14 +940,10 @@ describe("plugin status reports", () => {
     expect(
       summarizePluginCompatibility([
         notice,
-        createCompatibilityNotice({
-          pluginId: "legacy-plugin",
-          code: "legacy-implicit-startup-sidecar",
-        }),
         createCompatibilityNotice({ pluginId: "legacy-plugin", code: "hook-only" }),
       ]),
     ).toEqual({
-      noticeCount: 3,
+      noticeCount: 2,
       pluginCount: 1,
     });
   });

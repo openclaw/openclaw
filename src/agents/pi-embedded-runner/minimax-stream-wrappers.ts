@@ -19,6 +19,7 @@ function isMinimaxAnthropicMessagesModel(model: { api?: unknown; provider?: unkn
   );
 }
 
+/** @deprecated MiniMax provider-owned stream helper; do not use from third-party plugins. */
 export function createMinimaxFastModeWrapper(
   baseStreamFn: StreamFn | undefined,
   fastMode: boolean,
@@ -50,6 +51,7 @@ export function createMinimaxFastModeWrapper(
  * content. Disable thinking in the outgoing payload so MiniMax does not produce
  * reasoning_content deltas during streaming.
  */
+/** @deprecated MiniMax provider-owned stream helper; do not use from third-party plugins. */
 export function createMinimaxThinkingDisabledWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {

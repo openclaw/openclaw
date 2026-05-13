@@ -39,6 +39,7 @@ import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { areHeartbeatsEnabled } from "../infra/heartbeat-wake.js";
 import {
   getSessionBindingService,
@@ -145,6 +146,7 @@ type SpawnAcpResultFields = {
   childSessionKey?: string;
   runId?: string;
   mode?: SpawnAcpMode;
+  inlineDelivery?: boolean;
   streamLogPath?: string;
   note?: string;
 };
@@ -449,13 +451,7 @@ function normalizeOptionalAgentId(value: string | undefined | null): string | un
 }
 
 function summarizeError(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message;
-  }
-  if (typeof err === "string") {
-    return err;
-  }
-  return "error";
+  return formatErrorMessage(err);
 }
 
 function createAcpSpawnFailure(params: {
@@ -1494,6 +1490,7 @@ export async function spawnAcpDirect(
     childSessionKey: sessionKey,
     runId: childRunId,
     mode: spawnMode,
+    ...(deliveryPlan.useInlineDelivery ? { inlineDelivery: true } : {}),
     note: spawnMode === "session" ? ACP_SPAWN_SESSION_ACCEPTED_NOTE : ACP_SPAWN_ACCEPTED_NOTE,
   };
 }

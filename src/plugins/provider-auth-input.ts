@@ -6,15 +6,11 @@ import {
   normalizeStringifiedOptionalString,
 } from "../shared/string-coerce.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import {
-  resolveSecretInputModeForEnvSelection,
-  type SecretInputModePromptCopy,
-} from "./provider-auth-mode.js";
+import { resolveSecretInputModeForEnvSelection } from "./provider-auth-mode.js";
 import {
   extractEnvVarFromSourceLabel,
   promptSecretRefForSetup,
   resolveRefFallbackInput,
-  type SecretRefSetupPromptCopy,
 } from "./provider-auth-ref.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
 
@@ -216,6 +212,7 @@ export async function ensureApiKeyFromEnvOrPrompt(params: {
     message: params.promptMessage,
     placeholder: "API key",
     validate: params.validate,
+    sensitive: true,
   });
   const apiKey = params.normalize(key ?? "");
   await params.setCredential(apiKey, selectedMode);

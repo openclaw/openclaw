@@ -137,7 +137,6 @@ const providerRuntimeMocks = vi.hoisted(() => ({
     buildProviderAuthDoctorHintWithPlugin: vi.fn(() => undefined),
     buildProviderMissingAuthMessageWithPlugin: vi.fn(() => undefined),
     buildProviderUnknownModelHintWithPlugin: vi.fn(() => undefined),
-    clearProviderRuntimeHookCache: vi.fn(() => {}),
     createProviderEmbeddingProvider: vi.fn(() => undefined),
     formatProviderAuthProfileApiKeyWithPlugin: vi.fn(() => undefined),
     normalizeProviderResolvedModelWithPlugin: vi.fn(() => undefined),
@@ -145,7 +144,6 @@ const providerRuntimeMocks = vi.hoisted(() => ({
     prepareProviderExtraParams: vi.fn(() => undefined),
     prepareProviderRuntimeAuth: vi.fn(async () => undefined),
     refreshProviderOAuthCredentialWithPlugin: vi.fn(async () => undefined),
-    resetProviderRuntimeHookCacheForTest: vi.fn(() => {}),
     resolveProviderBinaryThinking: vi.fn(() => undefined),
     resolveProviderCacheTtlEligibility: vi.fn(() => undefined),
     resolveProviderCapabilitiesWithPlugin: vi.fn(() => undefined),
@@ -657,7 +655,7 @@ describe("resolveProviderAuths key normalization", () => {
         config,
         env: buildSuiteEnv(home),
       });
-      expect(auths).toEqual([]);
+      expect(auths).toStrictEqual([]);
     });
   });
 
@@ -669,7 +667,7 @@ describe("resolveProviderAuths key normalization", () => {
         config: {},
         env: buildSuiteEnv(home),
       });
-      expect(auths).toEqual([]);
+      expect(auths).toStrictEqual([]);
     });
   });
 
@@ -716,7 +714,7 @@ describe("resolveProviderAuths key normalization", () => {
 
   it("ignores marker-backed config keys for provider usage auth resolution", async () => {
     const auths = await resolveMinimaxAuthFromConfiguredKey(NON_ENV_SECRETREF_MARKER);
-    expect(auths).toEqual([]);
+    expect(auths).toStrictEqual([]);
   });
 
   it("keeps all-caps plaintext config keys eligible for provider usage auth resolution", async () => {

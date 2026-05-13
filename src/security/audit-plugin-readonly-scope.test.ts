@@ -23,7 +23,7 @@ vi.mock("../plugins/runtime/metadata-registry-loader.js", () => ({
     loadPluginMetadataRegistrySnapshotMock(...args),
 }));
 
-const { collectPluginSecurityAuditFindings } = await import("./audit.js");
+const { collectPluginSecurityAuditFindings, runSecurityAudit } = await import("./audit.js");
 
 function createAuditContext(params: {
   sourceConfig: Parameters<typeof collectPluginSecurityAuditFindings>[0]["sourceConfig"];
@@ -88,18 +88,27 @@ describe("security audit read-only plugin scope", () => {
       }),
     );
 
-    expect(resolveConfiguredChannelPluginIdsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: sourceConfig,
-        activationSourceConfig: sourceConfig,
-        env: {},
-      }),
-    );
-    expect(loadPluginMetadataRegistrySnapshotMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        onlyPluginIds: ["external-channel-plugin", "audit-plugin"],
-      }),
-    );
+    const resolveConfiguredChannelPluginIdsParams = resolveConfiguredChannelPluginIdsMock.mock
+      .calls[0]?.[0] as
+      | {
+          config?: unknown;
+          activationSourceConfig?: unknown;
+          env?: unknown;
+        }
+      | undefined;
+    expect(resolveConfiguredChannelPluginIdsParams?.config).toBe(sourceConfig);
+    expect(resolveConfiguredChannelPluginIdsParams?.activationSourceConfig).toBe(sourceConfig);
+    expect(resolveConfiguredChannelPluginIdsParams?.env).toStrictEqual({});
+
+    const loadSnapshotParams = loadPluginMetadataRegistrySnapshotMock.mock.calls[0]?.[0] as
+      | {
+          onlyPluginIds?: string[];
+        }
+      | undefined;
+    expect(loadSnapshotParams?.onlyPluginIds).toStrictEqual([
+      "external-channel-plugin",
+      "audit-plugin",
+    ]);
   });
 
   it("removes configured channel owner collectors only when channel security will audit them", async () => {
@@ -125,11 +134,12 @@ describe("security audit read-only plugin scope", () => {
       }),
     );
 
-    expect(loadPluginMetadataRegistrySnapshotMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        onlyPluginIds: ["audit-plugin"],
-      }),
-    );
+    const loadSnapshotParams = loadPluginMetadataRegistrySnapshotMock.mock.calls[0]?.[0] as
+      | {
+          onlyPluginIds?: string[];
+        }
+      | undefined;
+    expect(loadSnapshotParams?.onlyPluginIds).toStrictEqual(["audit-plugin"]);
   });
 
   it("skips plugin runtime and collector discovery when collector loading is disabled", async () => {
@@ -147,7 +157,29 @@ describe("security audit read-only plugin scope", () => {
       loadPluginSecurityCollectors: false,
     });
 
-    expect(findings).toEqual([]);
+    expect(findings).toStrictEqual([]);
+    expect(getActivePluginRegistryMock).not.toHaveBeenCalled();
+    expect(applyPluginAutoEnableMock).not.toHaveBeenCalled();
+    expect(loadPluginMetadataRegistrySnapshotMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps plain security audit off plugin collector runtime discovery by default", async () => {
+    const sourceConfig = {
+      plugins: {
+        allow: ["audit-plugin"],
+      },
+    };
+
+    await runSecurityAudit({
+      config: sourceConfig,
+      sourceConfig,
+      env: {},
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+      stateDir: "/tmp/openclaw-test-state",
+      configPath: "/tmp/openclaw-test-config.json",
+    });
+
     expect(getActivePluginRegistryMock).not.toHaveBeenCalled();
     expect(applyPluginAutoEnableMock).not.toHaveBeenCalled();
     expect(loadPluginMetadataRegistrySnapshotMock).not.toHaveBeenCalled();

@@ -62,6 +62,17 @@ param revolutClientId string = ''
 @description('Optional Revolut client secret consumed by the AlpaCore Engine.')
 param revolutClientSecret string = ''
 
+@description('Optional Revolut signer base URL consumed by the Alphabet Harvester.')
+param revolutSignerBaseUrl string = ''
+
+@secure()
+@description('Optional Revolut signer service token consumed by the Alphabet Harvester.')
+param revolutSignerServiceToken string = ''
+
+@secure()
+@description('Optional Revolut refresh token consumed by the Alphabet Harvester.')
+param revolutRefreshToken string = ''
+
 @secure()
 @description('Optional Telegram bot token consumed by the AlpaCore Engine.')
 param telegramBotToken string = ''
@@ -104,259 +115,328 @@ var openClawSecretDefinitions = empty(openClawGatewayToken)
         value: openClawGatewayToken
       }
     ]
-var openClawEnv = concat([
-  {
-    name: 'TZ'
-    value: openClawTimezone
-  }
-  {
-    name: 'OPENCLAW_DISABLE_BONJOUR'
-    value: openClawDisableBonjour
-  }
-  {
-    name: 'OPENCLAW_GATEWAY_BIND'
-    value: 'lan'
-  }
-  {
-    name: 'OPENCLAW_PLUGIN_STAGE_DIR'
-    value: '/var/lib/openclaw/plugin-runtime-deps'
-  }
-  {
-    name: 'OPENCLAW_CONTROL_UI_ALLOWED_ORIGINS'
-    value: '["https://${openClawContainerAppName}.${managedEnvironment.properties.defaultDomain}","http://${openClawContainerAppName}.${managedEnvironment.properties.defaultDomain}"]'
-  }
-], empty(openClawGatewayToken)
-  ? []
-  : [
-      {
-        name: 'OPENCLAW_GATEWAY_TOKEN'
-        secretRef: 'openclaw-gateway-token'
-      }
-    ])
-var harvesterSecretDefinitions = concat([
-  {
-    name: 'postgres-admin-password'
-    value: postgresAdminPassword
-  }
-], empty(shopifyApiSecret)
-  ? []
-  : [
-      {
-        name: 'shopify-api-secret'
-        value: shopifyApiSecret
-      }
-    ])
-var harvesterEnv = concat([
-  {
-    name: 'NODE_ENV'
-    value: 'production'
-  }
-  {
-    name: 'HARVESTER_PORT'
-    value: '8080'
-  }
-  {
-    name: 'HARVESTER_WORKERS'
-    value: '15'
-  }
-  {
-    name: 'HARVESTER_PUBLIC_URL'
-    value: 'https://${harvesterContainerAppName}.${managedEnvironment.properties.defaultDomain}'
-  }
-  {
-    name: 'HARVESTER_KEY_VAULT_URL'
-    value: keyVault.properties.vaultUri
-  }
-  {
-    name: 'STRIPE_SECRET_KEY_SECRET_NAME'
-    value: 'STRIPE-SECRET-KEY'
-  }
-  {
-    name: 'AZURE_CLIENT_ID'
-    value: userAssignedIdentity.properties.clientId
-  }
-  {
-    name: 'DATABASE_HOST'
-    value: postgresServer.properties.fullyQualifiedDomainName
-  }
-  {
-    name: 'DATABASE_PORT'
-    value: '5432'
-  }
-  {
-    name: 'DATABASE_NAME'
-    value: postgresDatabaseName
-  }
-  {
-    name: 'DATABASE_USER'
-    value: postgresAdminLogin
-  }
-  {
-    name: 'DATABASE_PASSWORD'
-    secretRef: 'postgres-admin-password'
-  }
-  {
-    name: 'DATABASE_SSLMODE'
-    value: 'require'
-  }
-], empty(shopifyApiSecret)
-  ? []
-  : [
-      {
-        name: 'SHOPIFY_API_SECRET'
-        secretRef: 'shopify-api-secret'
-      }
-    ])
-var alpaEngineSecretDefinitions = concat([
-  {
-    name: 'postgres-admin-password'
-    value: postgresAdminPassword
-  }
-], empty(revolutClientSecret)
-  ? []
-  : [
-      {
-        name: 'revolut-client-secret'
-        value: revolutClientSecret
-      }
-    ], empty(telegramBotToken)
-  ? []
-  : [
-      {
-        name: 'telegram-bot-token'
-        value: telegramBotToken
-      }
-    ])
-var alpaEngineEnv = concat([
-  {
-    name: 'ASPNETCORE_ENVIRONMENT'
-    value: 'Production'
-  }
-  {
-    name: 'ASPNETCORE_URLS'
-    value: 'http://+:8080'
-  }
-  {
-    name: 'ASPNETCORE_HTTP_PORTS'
-    value: '8080'
-  }
-  {
-    name: 'DATABASE_HOST'
-    value: postgresServer.properties.fullyQualifiedDomainName
-  }
-  {
-    name: 'DATABASE_PORT'
-    value: '5432'
-  }
-  {
-    name: 'DATABASE_NAME'
-    value: postgresDatabaseName
-  }
-  {
-    name: 'DATABASE_USER'
-    value: postgresAdminLogin
-  }
-  {
-    name: 'DATABASE_PASSWORD'
-    secretRef: 'postgres-admin-password'
-  }
-  {
-    name: 'OLLAMA_HOST'
-    value: externalOllamaUrl
-  }
-  {
-    name: 'HTTP_TIMEOUT'
-    value: '60'
-  }
-  {
-    name: 'OLLAMA_TIMEOUT'
-    value: '60000'
-  }
-], empty(revolutClientId)
-  ? []
-  : [
-      {
-        name: 'REVOLUT_CLIENT_ID'
-        value: revolutClientId
-      }
-    ], empty(revolutClientSecret)
-  ? []
-  : [
-      {
-        name: 'REVOLUT_CLIENT_SECRET'
-        secretRef: 'revolut-client-secret'
-      }
-    ], empty(telegramBotToken)
-  ? []
-  : [
-      {
-        name: 'TELEGRAM_BOT_TOKEN'
-        secretRef: 'telegram-bot-token'
-      }
-    ])
-var openWebUiSecretDefinitions = concat(empty(webUiSecretKey)
-  ? []
-  : [
-      {
-        name: 'webui-secret-key'
-        value: webUiSecretKey
-      }
-    ], empty(openAiApiKey)
-  ? []
-  : [
-      {
-        name: 'openai-api-key'
-        value: openAiApiKey
-      }
-    ])
-var openWebUiEnv = concat([
-  {
-    name: 'PORT'
-    value: '8080'
-  }
-  {
-    name: 'ENV'
-    value: 'prod'
-  }
-  {
-    name: 'OLLAMA_HOST'
-    value: externalOllamaUrl
-  }
-  {
-    name: 'OLLAMA_BASE_URL'
-    value: externalOllamaUrl
-  }
-  {
-    name: 'USE_OLLAMA_DOCKER'
-    value: 'false'
-  }
-  {
-    name: 'SCARF_NO_ANALYTICS'
-    value: 'true'
-  }
-  {
-    name: 'DO_NOT_TRACK'
-    value: 'true'
-  }
-  {
-    name: 'ANONYMIZED_TELEMETRY'
-    value: 'false'
-  }
-], empty(webUiSecretKey)
-  ? []
-  : [
-      {
-        name: 'WEBUI_SECRET_KEY'
-        secretRef: 'webui-secret-key'
-      }
-    ], empty(openAiApiKey)
-  ? []
-  : [
-      {
-        name: 'OPENAI_API_KEY'
-        secretRef: 'openai-api-key'
-      }
-    ])
+var openClawEnv = concat(
+  [
+    {
+      name: 'TZ'
+      value: openClawTimezone
+    }
+    {
+      name: 'OPENCLAW_DISABLE_BONJOUR'
+      value: openClawDisableBonjour
+    }
+    {
+      name: 'OPENCLAW_GATEWAY_BIND'
+      value: 'lan'
+    }
+    {
+      name: 'OPENCLAW_PLUGIN_STAGE_DIR'
+      value: '/var/lib/openclaw/plugin-runtime-deps'
+    }
+    {
+      name: 'OPENCLAW_CONTROL_UI_ALLOWED_ORIGINS'
+      value: '["https://${openClawContainerAppName}.${managedEnvironment.properties.defaultDomain}","http://${openClawContainerAppName}.${managedEnvironment.properties.defaultDomain}"]'
+    }
+  ],
+  empty(openClawGatewayToken)
+    ? []
+    : [
+        {
+          name: 'OPENCLAW_GATEWAY_TOKEN'
+          secretRef: 'openclaw-gateway-token'
+        }
+      ]
+)
+var harvesterSecretDefinitions = concat(
+  [
+    {
+      name: 'postgres-admin-password'
+      value: postgresAdminPassword
+    }
+  ],
+  empty(shopifyApiSecret)
+    ? []
+    : [
+        {
+          name: 'shopify-api-secret'
+          value: shopifyApiSecret
+        }
+      ],
+  empty(revolutSignerServiceToken)
+    ? []
+    : [
+        {
+          name: 'revolut-signer-service-token'
+          value: revolutSignerServiceToken
+        }
+      ],
+  empty(revolutRefreshToken)
+    ? []
+    : [
+        {
+          name: 'revolut-refresh-token'
+          value: revolutRefreshToken
+        }
+      ]
+)
+var harvesterEnv = concat(
+  [
+    {
+      name: 'NODE_ENV'
+      value: 'production'
+    }
+    {
+      name: 'HARVESTER_PORT'
+      value: '8080'
+    }
+    {
+      name: 'HARVESTER_WORKERS'
+      value: '15'
+    }
+    {
+      name: 'HARVESTER_PUBLIC_URL'
+      value: 'https://${harvesterContainerAppName}.${managedEnvironment.properties.defaultDomain}'
+    }
+    {
+      name: 'HARVESTER_KEY_VAULT_URL'
+      value: keyVault.properties.vaultUri
+    }
+    {
+      name: 'REVOLUT_SIGNER_BASE_URL'
+      value: revolutSignerBaseUrl
+    }
+    {
+      name: 'STRIPE_SECRET_KEY_SECRET_NAME'
+      value: 'STRIPE-SECRET-KEY'
+    }
+    {
+      name: 'AZURE_CLIENT_ID'
+      value: userAssignedIdentity.properties.clientId
+    }
+    {
+      name: 'DATABASE_HOST'
+      value: postgresServer.properties.fullyQualifiedDomainName
+    }
+    {
+      name: 'DATABASE_PORT'
+      value: '5432'
+    }
+    {
+      name: 'DATABASE_NAME'
+      value: postgresDatabaseName
+    }
+    {
+      name: 'DATABASE_USER'
+      value: postgresAdminLogin
+    }
+    {
+      name: 'DATABASE_PASSWORD'
+      secretRef: 'postgres-admin-password'
+    }
+    {
+      name: 'DATABASE_SSLMODE'
+      value: 'require'
+    }
+  ],
+  empty(shopifyApiSecret)
+    ? []
+    : [
+        {
+          name: 'SHOPIFY_API_SECRET'
+          secretRef: 'shopify-api-secret'
+        }
+      ],
+  empty(revolutSignerServiceToken)
+    ? []
+    : [
+        {
+          name: 'REVOLUT_SIGNER_SERVICE_TOKEN'
+          secretRef: 'revolut-signer-service-token'
+        }
+      ],
+  empty(revolutRefreshToken)
+    ? []
+    : [
+        {
+          name: 'REVOLUT_REFRESH_TOKEN'
+          secretRef: 'revolut-refresh-token'
+        }
+      ],
+  empty(revolutClientId)
+    ? []
+    : [
+        {
+          name: 'REVOLUT_CLIENT_ID'
+          value: revolutClientId
+        }
+      ]
+)
+var alpaEngineSecretDefinitions = concat(
+  [
+    {
+      name: 'postgres-admin-password'
+      value: postgresAdminPassword
+    }
+  ],
+  empty(revolutClientSecret)
+    ? []
+    : [
+        {
+          name: 'revolut-client-secret'
+          value: revolutClientSecret
+        }
+      ],
+  empty(telegramBotToken)
+    ? []
+    : [
+        {
+          name: 'telegram-bot-token'
+          value: telegramBotToken
+        }
+      ]
+)
+var alpaEngineEnv = concat(
+  [
+    {
+      name: 'ASPNETCORE_ENVIRONMENT'
+      value: 'Production'
+    }
+    {
+      name: 'ASPNETCORE_URLS'
+      value: 'http://+:8080'
+    }
+    {
+      name: 'ASPNETCORE_HTTP_PORTS'
+      value: '8080'
+    }
+    {
+      name: 'DATABASE_HOST'
+      value: postgresServer.properties.fullyQualifiedDomainName
+    }
+    {
+      name: 'DATABASE_PORT'
+      value: '5432'
+    }
+    {
+      name: 'DATABASE_NAME'
+      value: postgresDatabaseName
+    }
+    {
+      name: 'DATABASE_USER'
+      value: postgresAdminLogin
+    }
+    {
+      name: 'DATABASE_PASSWORD'
+      secretRef: 'postgres-admin-password'
+    }
+    {
+      name: 'OLLAMA_HOST'
+      value: externalOllamaUrl
+    }
+    {
+      name: 'HTTP_TIMEOUT'
+      value: '60'
+    }
+    {
+      name: 'OLLAMA_TIMEOUT'
+      value: '60000'
+    }
+  ],
+  empty(revolutClientId)
+    ? []
+    : [
+        {
+          name: 'REVOLUT_CLIENT_ID'
+          value: revolutClientId
+        }
+      ],
+  empty(revolutClientSecret)
+    ? []
+    : [
+        {
+          name: 'REVOLUT_CLIENT_SECRET'
+          secretRef: 'revolut-client-secret'
+        }
+      ],
+  empty(telegramBotToken)
+    ? []
+    : [
+        {
+          name: 'TELEGRAM_BOT_TOKEN'
+          secretRef: 'telegram-bot-token'
+        }
+      ]
+)
+var openWebUiSecretDefinitions = concat(
+  empty(webUiSecretKey)
+    ? []
+    : [
+        {
+          name: 'webui-secret-key'
+          value: webUiSecretKey
+        }
+      ],
+  empty(openAiApiKey)
+    ? []
+    : [
+        {
+          name: 'openai-api-key'
+          value: openAiApiKey
+        }
+      ]
+)
+var openWebUiEnv = concat(
+  [
+    {
+      name: 'PORT'
+      value: '8080'
+    }
+    {
+      name: 'ENV'
+      value: 'prod'
+    }
+    {
+      name: 'OLLAMA_HOST'
+      value: externalOllamaUrl
+    }
+    {
+      name: 'OLLAMA_BASE_URL'
+      value: externalOllamaUrl
+    }
+    {
+      name: 'USE_OLLAMA_DOCKER'
+      value: 'false'
+    }
+    {
+      name: 'SCARF_NO_ANALYTICS'
+      value: 'true'
+    }
+    {
+      name: 'DO_NOT_TRACK'
+      value: 'true'
+    }
+    {
+      name: 'ANONYMIZED_TELEMETRY'
+      value: 'false'
+    }
+  ],
+  empty(webUiSecretKey)
+    ? []
+    : [
+        {
+          name: 'WEBUI_SECRET_KEY'
+          secretRef: 'webui-secret-key'
+        }
+      ],
+  empty(openAiApiKey)
+    ? []
+    : [
+        {
+          name: 'OPENAI_API_KEY'
+          secretRef: 'openai-api-key'
+        }
+      ]
+)
 
 resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   name: logAnalyticsWorkspaceName
@@ -417,7 +497,10 @@ resource keyVaultSecretsOfficerRole 'Microsoft.Authorization/roleAssignments@202
   properties: {
     principalId: userAssignedIdentity.properties.principalId
     principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7')
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      'b86a8fe4-44ce-4948-aee5-eccb2c155cd7'
+    )
   }
 }
 
@@ -427,7 +510,10 @@ resource keyVaultSecretsUserRole 'Microsoft.Authorization/roleAssignments@2022-0
   properties: {
     principalId: userAssignedIdentity.properties.principalId
     principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      '4633458b-17de-408a-b874-0445c86b69e6'
+    )
   }
 }
 
@@ -581,7 +667,6 @@ resource telegramBotTokenSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' =
   ]
 }
 
-
 resource managedEnvironment 'Microsoft.App/managedEnvironments@2024-03-01' = {
   name: managedEnvironmentName
   location: location
@@ -603,7 +688,10 @@ resource acrPullRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   properties: {
     principalId: userAssignedIdentity.properties.principalId
     principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      '7f951dda-4ed3-4680-a7ca-43fe172d538d'
+    )
   }
 }
 

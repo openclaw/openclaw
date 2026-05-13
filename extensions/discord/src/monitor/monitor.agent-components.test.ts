@@ -1,10 +1,14 @@
-import type { ButtonInteraction, ComponentData, StringSelectMenuInteraction } from "@buape/carbon";
 import { ChannelType } from "discord-api-types/v10";
 import { expectPairingReplyText } from "openclaw/plugin-sdk/channel-test-helpers";
-import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { peekSystemEvents, resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  ButtonInteraction,
+  ComponentData,
+  StringSelectMenuInteraction,
+} from "../internal/discord.js";
 import {
   enqueueSystemEventMock,
   readAllowFromStoreMock,
@@ -101,11 +105,13 @@ describe("agent components", () => {
   async function expectSuccessfulDmButtonInteraction(params: {
     dmPolicy: "pairing" | "open";
     expectPairingStoreRead: boolean;
+    allowFrom?: string[];
   }) {
     const button = createAgentComponentButton({
       cfg: createCfg(),
       accountId: "default",
       dmPolicy: params.dmPolicy,
+      allowFrom: params.allowFrom,
     });
     const { interaction, defer, reply } = createDmButtonInteraction();
 
@@ -149,7 +155,7 @@ describe("agent components", () => {
       idLine: "Your Discord user id: 123456789",
     });
     expect(pairingText).toContain(`openclaw pairing approve discord ${code}`);
-    expect(peekSystemEvents(defaultDmSessionKey)).toEqual([]);
+    expect(peekSystemEvents(defaultDmSessionKey)).toStrictEqual([]);
     expect(readAllowFromStoreMock).toHaveBeenCalledWith("discord", "default");
   });
 
@@ -168,7 +174,7 @@ describe("agent components", () => {
       content: "You are not authorized to use this button.",
       ephemeral: true,
     });
-    expect(peekSystemEvents(defaultDmSessionKey)).toEqual([]);
+    expect(peekSystemEvents(defaultDmSessionKey)).toStrictEqual([]);
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
 
@@ -212,8 +218,8 @@ describe("agent components", () => {
       content: "You are not authorized to use this button.",
       ephemeral: true,
     });
-    expect(peekSystemEvents(defaultGroupDmSessionKey)).toEqual([]);
-    expect(peekSystemEvents(defaultDmSessionKey)).toEqual([]);
+    expect(peekSystemEvents(defaultGroupDmSessionKey)).toStrictEqual([]);
+    expect(peekSystemEvents(defaultDmSessionKey)).toStrictEqual([]);
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
 
@@ -241,7 +247,7 @@ describe("agent components", () => {
         sessionKey: defaultGroupDmSessionKey,
       }),
     );
-    expect(peekSystemEvents(defaultDmSessionKey)).toEqual([]);
+    expect(peekSystemEvents(defaultDmSessionKey)).toStrictEqual([]);
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
 
@@ -259,6 +265,7 @@ describe("agent components", () => {
     await expectSuccessfulDmButtonInteraction({
       dmPolicy: "open",
       expectPairingStoreRead: false,
+      allowFrom: ["*"],
     });
   });
 
@@ -295,7 +302,7 @@ describe("agent components", () => {
       content: "DM interactions are disabled.",
       ephemeral: true,
     });
-    expect(peekSystemEvents(defaultDmSessionKey)).toEqual([]);
+    expect(peekSystemEvents(defaultDmSessionKey)).toStrictEqual([]);
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
 

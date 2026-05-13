@@ -154,9 +154,8 @@ describe("dashboardCommand", () => {
     // hint string is written to runtime.log, which flows into the same
     // console-captured log file readable by operator.read-scoped devices.
     expect(formatControlUiSshHintMock).toHaveBeenCalledWith({ port: 18789, basePath: undefined });
-    expect(formatControlUiSshHintMock).not.toHaveBeenCalledWith(
-      expect.objectContaining({ token: expect.anything() }),
-    );
+    const [sshHintOptions] = formatControlUiSshHintMock.mock.calls[0] ?? [];
+    expect(sshHintOptions).not.toHaveProperty("token");
 
     // Double-check: no logged line contains the secret.
     for (const call of runtime.log.mock.calls) {
@@ -164,6 +163,27 @@ describe("dashboardCommand", () => {
       expect(line).not.toContain(secretToken);
       expect(line).not.toContain("#token=");
     }
+  });
+
+  it("guides user to manual auth when delivery channels both fail (CVE-safe)", async () => {
+    const secretToken = "super-secret-bearer-token";
+    mockSnapshot(secretToken);
+    copyToClipboardMock.mockResolvedValue(false);
+    detectBrowserOpenSupportMock.mockResolvedValue({ ok: false, reason: "ssh" });
+    formatControlUiSshHintMock.mockReturnValue("ssh hint without token");
+
+    await dashboardCommand(runtime);
+
+    const allLogs = runtime.log.mock.calls.map((call) => String(call[0])).join("\n");
+
+    // CVE: token value and fragment marker must not appear in logs.
+    expect(allLogs).not.toContain(secretToken);
+    expect(allLogs).not.toContain("#token=");
+
+    // UX: user must be pointed to where their token lives so they can self-recover.
+    expect(allLogs).toMatch(/OPENCLAW_GATEWAY_TOKEN/);
+    // UX: hint must name the URL fragment key so the user knows the syntax.
+    expect(allLogs).toContain("key `token`");
   });
 
   it("respects --no-open and tells user token URL is in clipboard", async () => {
@@ -179,8 +199,21 @@ describe("dashboardCommand", () => {
     );
   });
 
-  it("respects --no-open with plain URL hint when clipboard fails", async () => {
+  it("respects --no-open and falls through to manual-auth hint when clipboard fails (token configured)", async () => {
     mockSnapshot("abc");
+    copyToClipboardMock.mockResolvedValue(false);
+
+    await dashboardCommand(runtime, { noOpen: true });
+
+    // Redundant fallback hint is suppressed when the manual-auth hint speaks.
+    expect(runtime.log).not.toHaveBeenCalledWith(
+      "Browser launch disabled (--no-open). Use the URL above.",
+    );
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("OPENCLAW_GATEWAY_TOKEN"));
+  });
+
+  it("respects --no-open with plain URL hint when clipboard fails and no token is configured", async () => {
+    mockSnapshot("");
     copyToClipboardMock.mockResolvedValue(false);
 
     await dashboardCommand(runtime, { noOpen: true });

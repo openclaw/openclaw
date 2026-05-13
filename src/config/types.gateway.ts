@@ -38,21 +38,30 @@ export type DiscoveryConfig = {
   mdns?: MdnsDiscoveryConfig;
 };
 
-export type CanvasHostConfig = {
-  enabled?: boolean;
-  /** Directory to serve (default: ~/.openclaw/workspace/canvas). */
-  root?: string;
-  /** HTTP port to listen on (default: 18793). */
-  port?: number;
-  /** Enable live-reload file watching + WS reloads (default: true). */
-  liveReload?: boolean;
-};
-
 export type TalkProviderConfig = {
   /** Provider API key (optional; provider-specific env fallback may apply). */
   apiKey?: SecretInput;
   /** Provider-owned Talk config fields. */
   [key: string]: unknown;
+};
+
+export type TalkRealtimeConfig = {
+  /** Active realtime voice provider. */
+  provider?: string;
+  /** Provider-specific realtime voice config keyed by provider id. */
+  providers?: Record<string, TalkProviderConfig>;
+  /** Provider model override for realtime sessions. */
+  model?: string;
+  /** Provider voice override for realtime sessions. */
+  voice?: string;
+  /** Additional system instructions appended to realtime Talk sessions. */
+  instructions?: string;
+  /** Realtime execution mode. */
+  mode?: "realtime" | "stt-tts" | "transcription";
+  /** Byte/session transport. */
+  transport?: "webrtc" | "provider-websocket" | "gateway-relay" | "managed-room";
+  /** Tool/agent strategy for realtime sessions. */
+  brain?: "agent-consult" | "direct-tools" | "none";
 };
 
 export type ResolvedTalkConfig = {
@@ -67,6 +76,20 @@ export type TalkConfig = {
   provider?: string;
   /** Provider-specific Talk config keyed by provider id. */
   providers?: Record<string, TalkProviderConfig>;
+  /** Realtime Talk provider, model, voice, mode, transport, and brain config. */
+  realtime?: TalkRealtimeConfig;
+  /** Optional thinking level override for the agent run behind Talk realtime consults. */
+  consultThinkingLevel?:
+    | "off"
+    | "minimal"
+    | "low"
+    | "medium"
+    | "high"
+    | "xhigh"
+    | "adaptive"
+    | "max";
+  /** Optional fast mode override for the agent run behind Talk realtime consults. */
+  consultFastMode?: boolean;
   /** BCP 47 locale id used for Talk speech recognition on device nodes. */
   speechLocale?: string;
   /** Stop speaking when user starts talking (default: true). */
@@ -99,6 +122,8 @@ export type GatewayControlUiConfig = {
    * Default off; prefer hosted /__openclaw__/canvas or /__openclaw__/a2ui content.
    */
   allowExternalEmbedUrls?: boolean;
+  /** Optional max-width for grouped Control UI chat messages (default: min(900px, 68%)). */
+  chatMessageMaxWidth?: string;
   /** Allowed browser origins for Control UI/WebChat websocket connections. */
   allowedOrigins?: string[];
   /**
@@ -185,6 +210,13 @@ export type GatewayTailscaleConfig = {
   mode?: GatewayTailscaleMode;
   /** Reset serve/funnel configuration on shutdown. */
   resetOnExit?: boolean;
+  /**
+   * When `mode="serve"` and an externally configured Tailscale Funnel route
+   * already covers the gateway port, skip re-applying `tailscale serve` on
+   * startup. Lets operators manage Funnel exposure outside OpenClaw without
+   * losing it across gateway restarts.
+   */
+  preserveFunnel?: boolean;
 };
 
 export type GatewayRemoteConfig = {
@@ -215,8 +247,8 @@ export type GatewayReloadConfig = {
   debounceMs?: number;
   /**
    * Optional maximum time (ms) to wait for in-flight operations to complete
-   * before forcing a restart. Absent or 0 waits indefinitely and logs periodic
-   * still-pending warnings.
+   * before forcing a restart. Absent uses the gateway's default bounded wait;
+   * 0 waits indefinitely and logs periodic still-pending warnings.
    * Lower positive values risk aborting active subagent LLM calls.
    * @see https://github.com/openclaw/openclaw/issues/65485
    */
@@ -453,6 +485,11 @@ export type GatewayConfig = {
   tools?: GatewayToolsConfig;
   /** WebChat display/history settings. */
   webchat?: GatewayWebchatConfig;
+  /**
+   * Pre-auth Gateway WebSocket handshake timeout in milliseconds.
+   * Env var OPENCLAW_HANDSHAKE_TIMEOUT_MS takes precedence. Default: 15000.
+   */
+  handshakeTimeoutMs?: number;
   /**
    * Channel health monitor interval in minutes.
    * Periodically checks channel health and restarts unhealthy channels.

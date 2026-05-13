@@ -1,13 +1,11 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
-import { clearBundledProviderPolicySurfaceCache } from "../plugins/provider-public-artifacts.js";
 import { applyModelDefaults } from "./defaults.js";
 import type { OpenClawConfig } from "./types.js";
 
 describe("applyModelDefaults", () => {
   beforeEach(() => {
-    clearBundledProviderPolicySurfaceCache();
     vi.stubEnv(
       "OPENCLAW_BUNDLED_PLUGINS_DIR",
       path.resolve(import.meta.dirname, "../../extensions"),
@@ -16,7 +14,6 @@ describe("applyModelDefaults", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
-    clearBundledProviderPolicySurfaceCache();
   });
 
   function buildProxyProviderConfig(overrides?: { contextWindow?: number; maxTokens?: number }) {
@@ -128,6 +125,44 @@ describe("applyModelDefaults", () => {
     expect(next.agents?.defaults?.models?.["google/gemini-3.1-flash-lite-preview"]?.alias).toBe(
       "gemini-flash-lite",
     );
+  });
+
+  it("normalizes retired Gemini model keys before applying aliases", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "google/gemini-3-pro-preview": {},
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const next = applyModelDefaults(cfg);
+
+    expect(next.agents?.defaults?.models).toEqual({
+      "google/gemini-3.1-pro-preview": { alias: "gemini" },
+    });
+  });
+
+  it("normalizes retired Gemini primary and fallback refs", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "google/gemini-3-pro-preview",
+            fallbacks: ["google/gemini-3-pro-preview", "openai/gpt-5.5"],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const next = applyModelDefaults(cfg);
+
+    expect(next.agents?.defaults?.model).toEqual({
+      primary: "google/gemini-3.1-pro-preview",
+      fallbacks: ["google/gemini-3.1-pro-preview", "openai/gpt-5.5"],
+    });
   });
 
   it("fills missing model provider defaults", () => {

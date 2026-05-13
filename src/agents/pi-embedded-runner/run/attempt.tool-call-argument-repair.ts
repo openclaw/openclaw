@@ -1,12 +1,12 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
-import {
-  createHtmlEntityToolCallArgumentDecodingWrapper,
-  decodeHtmlEntitiesInObject,
-} from "../../../plugin-sdk/provider-stream-shared.js";
 import { extractBalancedJsonPrefix } from "../../../shared/balanced-json.js";
 import { normalizeProviderId } from "../../model-selection.js";
 import { log } from "../logger.js";
+import {
+  createHtmlEntityToolCallArgumentDecodingWrapper,
+  decodeHtmlEntitiesInObject,
+} from "../tool-call-argument-decoding.js";
 import { wrapStreamObjectEvents } from "./stream-wrapper.js";
 
 function isToolCallBlockType(type: unknown): boolean {
@@ -18,6 +18,10 @@ const MAX_TOOLCALL_REPAIR_LEADING_CHARS = 96;
 const MAX_TOOLCALL_REPAIR_TRAILING_CHARS = 3;
 const TOOLCALL_REPAIR_ALLOWED_LEADING_RE = /^[a-z0-9\s"'`.:/_\\-]+$/i;
 const TOOLCALL_REPAIR_ALLOWED_TRAILING_RE = /^[^\s{}[\]":,\\]{1,3}$/;
+const TOOLCALL_REPAIR_RESPONSES_APIS = new Set([
+  "azure-openai-responses",
+  "openai-codex-responses",
+]);
 
 function shouldAttemptMalformedToolCallRepair(partialJson: string, delta: string): boolean {
   if (/[}\]]/.test(delta)) {
@@ -298,10 +302,11 @@ export function shouldRepairMalformedToolCallArguments(params: {
   provider?: string;
   modelApi?: string | null;
 }): boolean {
+  const modelApi = params.modelApi ?? "";
   return (
-    (normalizeProviderId(params.provider ?? "") === "kimi" &&
-      params.modelApi === "anthropic-messages") ||
-    params.modelApi === "openai-completions"
+    (normalizeProviderId(params.provider ?? "") === "kimi" && modelApi === "anthropic-messages") ||
+    modelApi === "openai-completions" ||
+    TOOLCALL_REPAIR_RESPONSES_APIS.has(modelApi)
   );
 }
 

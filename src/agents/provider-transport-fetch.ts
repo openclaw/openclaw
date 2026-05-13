@@ -1,5 +1,13 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
-import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+import {
+  fetchWithSsrFGuard,
+  withTrustedEnvProxyGuardedFetchMode,
+} from "../infra/net/fetch-guard.js";
+import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
+import {
+  ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist,
+  type SsrFPolicy,
+} from "../infra/net/ssrf.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
 import {
   buildProviderRequestDispatcherPolicy,
@@ -9,6 +17,185 @@ import {
 } from "./provider-request-config.js";
 
 const DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS = 60;
+
+function hasReadableSseData(block: string): boolean {
+  const dataLines = block
+    .split(/\r\n|\n|\r/)
+    .filter((line) => line === "data" || line.startsWith("data:"))
+    .map((line) => {
+      if (line === "data") {
+        return "";
+      }
+      const value = line.slice("data:".length);
+      return value.startsWith(" ") ? value.slice(1) : value;
+    });
+  return dataLines.length > 0 && dataLines.join("\n").trim().length > 0;
+}
+
+function findSseEventBoundary(buffer: string): { index: number; length: number } | undefined {
+  let best: { index: number; length: number } | undefined;
+  for (const delimiter of ["\r\n\r\n", "\n\n", "\r\r"]) {
+    const index = buffer.indexOf(delimiter);
+    if (index === -1) {
+      continue;
+    }
+    if (!best || index < best.index) {
+      best = { index, length: delimiter.length };
+    }
+  }
+  return best;
+}
+
+function sanitizeOpenAISdkSseResponse(
+  response: Response,
+  options?: { synthesizeJsonAsSse?: boolean },
+): Response {
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!response.ok || !response.body) {
+    return response;
+  }
+  if (
+    options?.synthesizeJsonAsSse === true &&
+    (/\bapplication\/json\b/i.test(contentType) || /\+json\b/i.test(contentType))
+  ) {
+    const source = response.body;
+    const decoder = new TextDecoder();
+    const encoder = new TextEncoder();
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    let buffer = "";
+    const sseBody = new ReadableStream<Uint8Array>({
+      start() {
+        reader = source.getReader();
+      },
+      async pull(controller) {
+        try {
+          const chunk = await reader?.read();
+          if (!chunk || chunk.done) {
+            buffer += decoder.decode();
+            const data = buffer.trim();
+            if (data) {
+              controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+            }
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+            controller.close();
+            return;
+          }
+          buffer += decoder.decode(chunk.value, { stream: true });
+        } catch (error) {
+          controller.error(error);
+        }
+      },
+      async cancel(reason) {
+        await reader?.cancel(reason);
+      },
+    });
+    const headers = new Headers(response.headers);
+    headers.set("content-type", "text/event-stream; charset=utf-8");
+    return new Response(sseBody, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
+  }
+  if (!/\btext\/event-stream\b/i.test(contentType)) {
+    return response;
+  }
+
+  const source = response.body;
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let buffer = "";
+
+  const enqueueSanitized = (
+    controller: ReadableStreamDefaultController<Uint8Array>,
+    text: string,
+  ) => {
+    buffer += text;
+    for (;;) {
+      const boundary = findSseEventBoundary(buffer);
+      if (!boundary) {
+        return;
+      }
+      const block = buffer.slice(0, boundary.index);
+      const separator = buffer.slice(boundary.index, boundary.index + boundary.length);
+      buffer = buffer.slice(boundary.index + boundary.length);
+      // OpenAI's SDK currently tries to JSON.parse event-only or blank-data SSE
+      // messages. Drop those malformed keepalive-style blocks before it parses.
+      if (hasReadableSseData(block)) {
+        controller.enqueue(encoder.encode(`${block}${separator}`));
+      }
+    }
+  };
+
+  const sanitizedBody = new ReadableStream<Uint8Array>({
+    start() {
+      reader = source.getReader();
+    },
+    async pull(controller) {
+      try {
+        const chunk = await reader?.read();
+        if (!chunk || chunk.done) {
+          const tail = decoder.decode();
+          if (tail) {
+            enqueueSanitized(controller, tail);
+          }
+          if (buffer && hasReadableSseData(buffer)) {
+            controller.enqueue(encoder.encode(buffer));
+          }
+          buffer = "";
+          controller.close();
+          return;
+        }
+        enqueueSanitized(controller, decoder.decode(chunk.value, { stream: true }));
+      } catch (error) {
+        controller.error(error);
+      }
+    },
+    async cancel(reason) {
+      await reader?.cancel(reason);
+    },
+  });
+
+  return new Response(sanitizedBody, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
+
+async function requestBodyHasStreamTrue(
+  request: Request | undefined,
+  init: RequestInit | undefined,
+): Promise<boolean> {
+  const method = request?.method ?? init?.method;
+  if (method && method.toUpperCase() !== "POST") {
+    return false;
+  }
+  const headers = request?.headers ?? new Headers(init?.headers);
+  const contentType = headers.get("content-type") ?? "";
+  if (contentType && !/\bapplication\/json\b/i.test(contentType)) {
+    return false;
+  }
+
+  let text: string | undefined;
+  if (request) {
+    text = await request
+      .clone()
+      .text()
+      .catch(() => undefined);
+  } else if (typeof init?.body === "string") {
+    text = init.body;
+  }
+  if (!text) {
+    return false;
+  }
+  try {
+    return (JSON.parse(text) as { stream?: unknown }).stream === true;
+  } catch {
+    return false;
+  }
+}
 
 function parseRetryAfterSeconds(headers: Headers): number | undefined {
   const retryAfterMs = headers.get("retry-after-ms");
@@ -75,7 +262,11 @@ function shouldBypassLongSdkRetry(response: Response): boolean {
   return status === 429;
 }
 
-function buildManagedResponse(response: Response, release: () => Promise<void>): Response {
+function buildManagedResponse(
+  response: Response,
+  release: () => Promise<void>,
+  refreshTimeout?: () => void,
+): Response {
   if (!response.body) {
     void release();
     return response;
@@ -102,6 +293,7 @@ function buildManagedResponse(response: Response, release: () => Promise<void>):
           await finalize();
           return;
         }
+        refreshTimeout?.();
         controller.enqueue(chunk.value);
       } catch (error) {
         controller.error(error);
@@ -166,6 +358,44 @@ export function resolveModelRequestTimeoutMs(
     : undefined;
 }
 
+function resolveHttpHostname(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.trim()) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return undefined;
+    }
+    return parsed.hostname.toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveModelTransportSsrFPolicy(params: {
+  model: Model<Api>;
+  url: string;
+  allowPrivateNetwork?: boolean;
+}): SsrFPolicy | undefined {
+  const baseUrl = (params.model as { baseUrl?: unknown }).baseUrl;
+  const baseHostname = resolveHttpHostname(baseUrl);
+  const requestHostname = resolveHttpHostname(params.url);
+  const fakeIpPolicy =
+    typeof baseUrl === "string" && baseHostname && requestHostname === baseHostname
+      ? ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist(baseUrl)
+      : undefined;
+
+  if (fakeIpPolicy) {
+    return {
+      ...fakeIpPolicy,
+      ...(params.allowPrivateNetwork ? { allowPrivateNetwork: true } : {}),
+    };
+  }
+
+  return params.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined;
+}
+
 export function buildGuardedModelFetch(model: Model<Api>, timeoutMs?: number): typeof fetch {
   const requestConfig = resolveModelRequestPolicy(model);
   const dispatcherPolicy = buildProviderRequestDispatcherPolicy(requestConfig);
@@ -181,6 +411,11 @@ export function buildGuardedModelFetch(model: Model<Api>, timeoutMs?: number): t
           : (() => {
               throw new Error("Unsupported fetch input for transport-aware model request");
             })());
+    const policy = resolveModelTransportSsrFPolicy({
+      model,
+      url,
+      allowPrivateNetwork: requestConfig.allowPrivateNetwork,
+    });
     const requestInit =
       request &&
       ({
@@ -191,7 +426,8 @@ export function buildGuardedModelFetch(model: Model<Api>, timeoutMs?: number): t
         signal: request.signal,
         ...(request.body ? ({ duplex: "half" } as const) : {}),
       } satisfies RequestInit & { duplex?: "half" });
-    const result = await fetchWithSsrFGuard({
+    const synthesizeJsonAsSse = await requestBodyHasStreamTrue(request, requestInit ?? init);
+    const guardedFetchOptions = {
       url,
       init: requestInit ?? init,
       capture: {
@@ -206,8 +442,13 @@ export function buildGuardedModelFetch(model: Model<Api>, timeoutMs?: number): t
       // Provider transport intentionally keeps the secure default and never
       // replays unsafe request bodies across cross-origin redirects.
       allowCrossOriginUnsafeRedirectReplay: false,
-      ...(requestConfig.allowPrivateNetwork ? { policy: { allowPrivateNetwork: true } } : {}),
-    });
+      ...(policy ? { policy } : {}),
+    };
+    const result = await fetchWithSsrFGuard(
+      !dispatcherPolicy && shouldUseEnvHttpProxyForUrl(url)
+        ? withTrustedEnvProxyGuardedFetchMode(guardedFetchOptions)
+        : guardedFetchOptions,
+    );
     let response = result.response;
     if (shouldBypassLongSdkRetry(response)) {
       const headers = new Headers(response.headers);
@@ -218,6 +459,7 @@ export function buildGuardedModelFetch(model: Model<Api>, timeoutMs?: number): t
         headers,
       });
     }
-    return buildManagedResponse(response, result.release);
+    response = buildManagedResponse(response, result.release, result.refreshTimeout);
+    return sanitizeOpenAISdkSseResponse(response, { synthesizeJsonAsSse });
   };
 }

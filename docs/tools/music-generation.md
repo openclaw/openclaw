@@ -14,8 +14,12 @@ MiniMax, and workflow-configured ComfyUI today.
 
 For session-backed agent runs, OpenClaw starts music generation as a
 background task, tracks it in the task ledger, then wakes the agent again
-when the track is ready so the agent can post the finished audio back into
-the original channel.
+when the track is ready so the agent can tell the user and attach the
+finished audio. In group/channel chats that use message-tool-only visible
+delivery, the agent relays the result through the message tool. If the
+completion agent writes only a private final reply, OpenClaw falls back to a
+direct channel send with the generated media. The completion wake explicitly
+warns the agent that normal final replies are private in those routes.
 
 <Note>
 The built-in shared tool only appears when at least one music-generation
@@ -157,7 +161,7 @@ Direct generation example:
   Output format hint when the provider supports it.
 </ParamField>
 <ParamField path="filename" type="string">Output filename hint.</ParamField>
-<ParamField path="timeoutMs" type="number">Optional provider request timeout in milliseconds.</ParamField>
+<ParamField path="timeoutMs" type="number">Optional provider request timeout in milliseconds. Values below 10000ms are raised to 10000ms and reported in the tool result.</ParamField>
 
 <Note>
 Not all providers support all parameters. OpenClaw still validates hard

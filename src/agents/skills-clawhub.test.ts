@@ -11,7 +11,7 @@ const searchClawHubSkillsMock = vi.fn();
 const archiveCleanupMock = vi.fn();
 const withExtractedArchiveRootMock = vi.fn();
 const installPackageDirMock = vi.fn();
-const fileExistsMock = vi.fn();
+const pathExistsMock = vi.fn();
 
 vi.mock("../infra/clawhub.js", () => ({
   fetchClawHubSkillDetail: fetchClawHubSkillDetailMock,
@@ -29,8 +29,8 @@ vi.mock("../infra/install-package-dir.js", () => ({
   installPackageDir: installPackageDirMock,
 }));
 
-vi.mock("../infra/archive.js", () => ({
-  fileExists: fileExistsMock,
+vi.mock("../infra/fs-safe.js", () => ({
+  pathExists: pathExistsMock,
 }));
 
 const { installSkillFromClawHub, searchSkillsFromClawHub, updateSkillsFromClawHub } =
@@ -46,10 +46,10 @@ describe("skills-clawhub", () => {
     archiveCleanupMock.mockReset();
     withExtractedArchiveRootMock.mockReset();
     installPackageDirMock.mockReset();
-    fileExistsMock.mockReset();
+    pathExistsMock.mockReset();
 
     resolveClawHubBaseUrlMock.mockReturnValue("https://clawhub.ai");
-    fileExistsMock.mockImplementation(async (input: string) => input.endsWith("SKILL.md"));
+    pathExistsMock.mockImplementation(async (input: string) => input.endsWith("SKILL.md"));
     fetchClawHubSkillDetailMock.mockResolvedValue({
       skill: {
         slug: "agentreceipt",
@@ -70,7 +70,7 @@ describe("skills-clawhub", () => {
     archiveCleanupMock.mockResolvedValue(undefined);
     searchClawHubSkillsMock.mockResolvedValue([]);
     withExtractedArchiveRootMock.mockImplementation(async (params) => {
-      expect(params.rootMarkers).toEqual(["SKILL.md"]);
+      expect(params.rootMarkers).toEqual(["SKILL.md", "skill.md", "skills.md", "SKILL.MD"]);
       return await params.onExtracted("/tmp/extracted-skill");
     });
     installPackageDirMock.mockResolvedValue({
@@ -103,6 +103,25 @@ describe("skills-clawhub", () => {
     });
     expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
   });
+
+  it.each(["skill.md", "skills.md", "SKILL.MD"])(
+    "installs ClawHub archives whose packed root uses legacy marker %s",
+    async (marker) => {
+      pathExistsMock.mockImplementation(async (input: string) => input.endsWith(marker));
+
+      const result = await installSkillFromClawHub({
+        workspaceDir: "/tmp/workspace",
+        slug: "agentreceipt",
+      });
+
+      expect(result).toMatchObject({ ok: true });
+      expect(installPackageDirMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sourceDir: "/tmp/extracted-skill",
+        }),
+      );
+    },
+  );
 
   describe("legacy tracked slugs remain updatable", () => {
     async function createLegacyTrackedSkillFixture(slug: string) {

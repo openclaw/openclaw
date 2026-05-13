@@ -64,10 +64,8 @@ describe("pi tool definition adapter logging", () => {
 
     await def.execute("call-edit-1", { path: "notes.txt" }, undefined, undefined, extensionContext);
 
-    expect(logError).toHaveBeenCalledWith(
-      expect.stringContaining(
-        '[tools] edit failed: Missing required parameter: edits (received: path). Supply correct parameters before retrying. raw_params={"path":"notes.txt"}',
-      ),
+    expect(vi.mocked(logError).mock.calls[0]?.[0]).toContain(
+      '[tools] edit failed: Missing required parameter: edits (received: path). Supply correct parameters before retrying. raw_params={"path":"notes.txt"}',
     );
   });
 
@@ -96,19 +94,93 @@ describe("pi tool definition adapter logging", () => {
       extensionContext,
     );
 
-    expect(result).toEqual(
-      expect.objectContaining({
-        details: expect.objectContaining({
-          status: "blocked",
-          deniedReason: "plugin-before-tool-call",
-          reason: "blocked by policy",
-        }),
-      }),
-    );
+    const details = result.details as
+      | { status?: string; deniedReason?: string; reason?: string }
+      | undefined;
+    expect(details?.status).toBe("blocked");
+    expect(details?.deniedReason).toBe("plugin-before-tool-call");
+    expect(details?.reason).toBe("blocked by policy");
     expect(logError).not.toHaveBeenCalled();
     expect(mocks.logDebug).toHaveBeenCalledWith(
       "tools: exec blocked by before_tool_call: blocked by policy",
     );
+  });
+
+  it("logs provider AbortError failures when the agent run was not aborted", async () => {
+    const baseTool = {
+      name: "web_search",
+      label: "Web Search",
+      description: "searches",
+      parameters: Type.Object({
+        query: Type.String(),
+      }),
+      execute: async () => {
+        const error = new Error("This operation was aborted");
+        error.name = "AbortError";
+        throw error;
+      },
+    } satisfies AgentTool;
+    const [def] = toToolDefinitions([baseTool]);
+    if (!def) {
+      throw new Error("missing tool definition");
+    }
+
+    const result = await def.execute(
+      "call-web-search-abort",
+      { query: "OpenClaw" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    const details = result.details as
+      | { status?: string; tool?: string; error?: string }
+      | undefined;
+    expect(details?.status).toBe("error");
+    expect(details?.tool).toBe("web_search");
+    expect(details?.error).toBe("This operation was aborted");
+    expect(vi.mocked(logError).mock.calls[0]?.[0]).toContain(
+      "[tools] web_search failed: This operation was aborted",
+    );
+  });
+
+  it("rethrows AbortError failures when the agent run signal was aborted", async () => {
+    const baseTool = {
+      name: "web_search",
+      label: "Web Search",
+      description: "searches",
+      parameters: Type.Object({
+        query: Type.String(),
+      }),
+      execute: async () => {
+        const error = new Error("This operation was aborted");
+        error.name = "AbortError";
+        throw error;
+      },
+    } satisfies AgentTool;
+    const [def] = toToolDefinitions([baseTool]);
+    if (!def) {
+      throw new Error("missing tool definition");
+    }
+    const controller = new AbortController();
+    controller.abort();
+
+    let thrown: unknown;
+    try {
+      await def.execute(
+        "call-web-search-agent-abort",
+        { query: "OpenClaw" },
+        controller.signal,
+        undefined,
+        extensionContext,
+      );
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).name).toBe("AbortError");
+    expect((thrown as Error).message).toBe("This operation was aborted");
+    expect(logError).not.toHaveBeenCalled();
   });
 
   it("accepts nested edits arrays for the current edit schema", async () => {

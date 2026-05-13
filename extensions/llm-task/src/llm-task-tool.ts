@@ -1,12 +1,13 @@
-import fs from "node:fs/promises";
 import path from "node:path";
-import Ajv from "ajv";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { buildModelAliasIndex, resolveModelRefFromString } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  type JsonSchemaObject,
+  validateJsonSchemaValue,
+} from "openclaw/plugin-sdk/json-schema-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
-import { resolvePreferredOpenClawTmpDir } from "../api.js";
+import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "../api.js";
 import type { OpenClawPluginApi } from "../api.js";
-
-const AjvCtor = Ajv as unknown as typeof import("ajv").default;
 
 function stripCodeFences(s: string): string {
   const trimmed = s.trim();
@@ -41,6 +42,44 @@ function stripDuplicateProviderPrefix(provider: string | undefined, model: strin
   }
   const prefix = `${p}/`;
   return m.startsWith(prefix) ? m.slice(prefix.length) : m;
+}
+
+function resolveLlmTaskModelRef(params: {
+  api: OpenClawPluginApi;
+  provider?: string;
+  rawModel?: string;
+}): { provider?: string; model?: string } {
+  const defaultProvider =
+    normalizeOptionalString(params.provider) ??
+    normalizeOptionalString(params.api.runtime.agent.defaults.provider);
+  const rawModel = normalizeOptionalString(params.rawModel);
+  if (!rawModel || !defaultProvider) {
+    return {
+      provider: params.provider,
+      model: stripDuplicateProviderPrefix(params.provider, rawModel),
+    };
+  }
+
+  const cfg = params.api.config;
+  const aliasIndex = cfg
+    ? buildModelAliasIndex({
+        cfg,
+        defaultProvider,
+      })
+    : undefined;
+  const resolved = resolveModelRefFromString({
+    cfg,
+    raw: rawModel,
+    defaultProvider,
+    aliasIndex,
+  });
+  if (!resolved) {
+    return {
+      provider: params.provider,
+      model: stripDuplicateProviderPrefix(params.provider, rawModel),
+    };
+  }
+  return resolved.ref;
 }
 
 type PluginCfg = {
@@ -118,7 +157,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
       const primaryModel =
         typeof primary === "string" ? primary.split("/").slice(1).join("/") : undefined;
 
-      const provider =
+      const requestedProvider =
         (typeof params.provider === "string" && params.provider.trim()) ||
         (typeof pluginCfg.defaultProvider === "string" && pluginCfg.defaultProvider.trim()) ||
         primaryProvider ||
@@ -129,7 +168,12 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         (typeof pluginCfg.defaultModel === "string" && pluginCfg.defaultModel.trim()) ||
         primaryModel ||
         undefined;
-      const model = stripDuplicateProviderPrefix(provider, rawModel);
+      const { provider: resolvedProvider, model } = resolveLlmTaskModelRef({
+        api,
+        provider: requestedProvider,
+        rawModel,
+      });
+      const provider = resolvedProvider;
 
       const authProfileId =
         (typeof params.authProfileId === "string" && params.authProfileId.trim()) ||
@@ -208,78 +252,66 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
 
       const fullPrompt = `${system}\n\nTASK:\n${prompt}\n\nINPUT_JSON:\n${inputJson}\n`;
 
-      let tmpDir: string | null = null;
-      try {
-        tmpDir = await fs.mkdtemp(
-          path.join(resolvePreferredOpenClawTmpDir(), "openclaw-llm-task-"),
-        );
-        const sessionId = `llm-task-${Date.now()}`;
-        const sessionFile = path.join(tmpDir, "session.json");
+      return await withTempWorkspace(
+        { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-llm-task-" },
+        async ({ dir: tmpDir }) => {
+          const sessionId = `llm-task-${Date.now()}`;
+          const sessionFile = path.join(tmpDir, "session.json");
 
-        const result = await api.runtime.agent.runEmbeddedPiAgent({
-          sessionId,
-          sessionFile,
-          workspaceDir: api.config?.agents?.defaults?.workspace ?? process.cwd(),
-          config: api.config,
-          prompt: fullPrompt,
-          timeoutMs,
-          runId: `llm-task-${Date.now()}`,
-          provider,
-          model,
-          authProfileId,
-          authProfileIdSource: authProfileId ? "user" : "auto",
-          thinkLevel,
-          streamParams,
-          disableTools: true,
-        });
+          const result = await api.runtime.agent.runEmbeddedPiAgent({
+            sessionId,
+            sessionFile,
+            workspaceDir: api.config?.agents?.defaults?.workspace ?? process.cwd(),
+            config: api.config,
+            prompt: fullPrompt,
+            timeoutMs,
+            runId: `llm-task-${Date.now()}`,
+            provider,
+            model,
+            authProfileId,
+            authProfileIdSource: authProfileId ? "user" : "auto",
+            thinkLevel,
+            streamParams,
+            disableTools: true,
+          });
 
-        const text = collectText(
-          typeof result === "object" && result !== null && "payloads" in result
-            ? (result as { payloads?: Array<{ text?: string; isError?: boolean }> }).payloads
-            : undefined,
-        );
-        if (!text) {
-          throw new Error("LLM returned empty output");
-        }
-
-        const raw = stripCodeFences(text);
-        let parsed: unknown;
-        try {
-          parsed = JSON.parse(raw);
-        } catch {
-          throw new Error("LLM returned invalid JSON");
-        }
-
-        const schema = params.schema;
-        if (schema && typeof schema === "object" && !Array.isArray(schema)) {
-          const ajv = new AjvCtor({ allErrors: true, strict: false });
-          const validate = ajv.compile(schema);
-          const ok = validate(parsed);
-          if (!ok) {
-            const msg =
-              validate.errors
-                ?.map(
-                  (e: { instancePath?: string; message?: string }) =>
-                    `${e.instancePath || "<root>"} ${e.message || "invalid"}`,
-                )
-                .join("; ") ?? "invalid";
-            throw new Error(`LLM JSON did not match schema: ${msg}`);
+          const text = collectText(
+            typeof result === "object" && result !== null && "payloads" in result
+              ? (result as { payloads?: Array<{ text?: string; isError?: boolean }> }).payloads
+              : undefined,
+          );
+          if (!text) {
+            throw new Error("LLM returned empty output");
           }
-        }
 
-        return {
-          content: [{ type: "text", text: JSON.stringify(parsed, null, 2) }],
-          details: { json: parsed, provider, model },
-        };
-      } finally {
-        if (tmpDir) {
+          const raw = stripCodeFences(text);
+          let parsed: unknown;
           try {
-            await fs.rm(tmpDir, { recursive: true, force: true });
+            parsed = JSON.parse(raw);
           } catch {
-            // ignore
+            throw new Error("LLM returned invalid JSON");
           }
-        }
-      }
+
+          const schema = params.schema;
+          if (schema && typeof schema === "object" && !Array.isArray(schema)) {
+            const validation = validateJsonSchemaValue({
+              schema: schema as JsonSchemaObject,
+              cacheKey: "llm-task.result",
+              value: parsed,
+              cache: false,
+            });
+            if (!validation.ok) {
+              const msg = validation.errors.map((error) => error.text).join("; ") || "invalid";
+              throw new Error(`LLM JSON did not match schema: ${msg}`);
+            }
+          }
+
+          return {
+            content: [{ type: "text", text: JSON.stringify(parsed, null, 2) }],
+            details: { json: parsed, provider, model },
+          };
+        },
+      );
     },
   };
 }

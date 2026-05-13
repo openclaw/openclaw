@@ -69,6 +69,21 @@ describe("directive parsing", () => {
     expect(res.fastMode).toBe(true);
   });
 
+  it("parses default thinking and fast directives as override clears", () => {
+    expect(parseInlineDirectives("/think default")).toMatchObject({
+      hasThinkDirective: true,
+      thinkLevel: undefined,
+      rawThinkLevel: "default",
+      clearThinkLevel: true,
+    });
+    expect(parseInlineDirectives("/fast inherit")).toMatchObject({
+      hasFastDirective: true,
+      fastMode: undefined,
+      rawFastMode: "inherit",
+      clearFastMode: true,
+    });
+  });
+
   it("matches elevated with leading space", () => {
     const res = extractElevatedDirective(" please /elevated on now");
     expect(res.hasDirective).toBe(true);
@@ -175,6 +190,13 @@ describe("directive parsing", () => {
     expect(res.hasDirective).toBe(true);
     expect(res.queueMode).toBe("interrupt");
     expect(res.queueReset).toBe(false);
+    expect(res.cleaned).toBe("please now");
+  });
+
+  it("keeps legacy queue directive as queue mode", () => {
+    const res = extractQueueDirective("please /queue queue now");
+    expect(res.hasDirective).toBe(true);
+    expect(res.queueMode).toBe("queue");
     expect(res.cleaned).toBe("please now");
   });
 

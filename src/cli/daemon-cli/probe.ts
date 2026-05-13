@@ -1,13 +1,20 @@
+import type { OpenClawConfig } from "../../config/types.js";
+import type { GatewayProbeResult } from "../../gateway/probe.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { withProgress } from "../progress.js";
 
 type GatewayStatusProbeKind = "connect" | "read";
+type GatewayStatusRequireRpcProbeResult = {
+  ok: true;
+  authProbe: GatewayProbeResult | null;
+};
+type GatewayStatusProbeResult = GatewayProbeResult | GatewayStatusRequireRpcProbeResult;
 
-let probeGatewayModulePromise: Promise<typeof import("../../gateway/probe.js")> | undefined;
+const probeGatewayModuleLoader = createLazyImportLoader(() => import("../../gateway/probe.js"));
 
 async function loadProbeGatewayModule(): Promise<typeof import("../../gateway/probe.js")> {
-  probeGatewayModulePromise ??= import("../../gateway/probe.js");
-  return await probeGatewayModulePromise;
+  return await probeGatewayModuleLoader.load();
 }
 
 function resolveProbeFailureMessage(result: {
@@ -23,19 +30,25 @@ function resolveProbeFailureMessage(result: {
   return result.error ?? closeHint ?? "gateway probe failed";
 }
 
+function resolveGatewayStatusProbeDetails(result: GatewayStatusProbeResult) {
+  return "authProbe" in result ? result.authProbe : result;
+}
+
 export async function probeGatewayStatus(opts: {
   url: string;
   token?: string;
   password?: string;
+  config?: OpenClawConfig;
   tlsFingerprint?: string;
   timeoutMs: number;
+  preauthHandshakeTimeoutMs?: number;
   json?: boolean;
   requireRpc?: boolean;
   configPath?: string;
 }) {
   const kind = (opts.requireRpc ? "read" : "connect") satisfies GatewayStatusProbeKind;
   try {
-    const result = await withProgress(
+    const result = await withProgress<GatewayStatusProbeResult>(
       {
         label: "Checking gateway status...",
         indeterminate: true,
@@ -50,6 +63,9 @@ export async function probeGatewayStatus(opts: {
             password: opts.password,
           },
           tlsFingerprint: opts.tlsFingerprint,
+          ...(opts.preauthHandshakeTimeoutMs !== undefined
+            ? { preauthHandshakeTimeoutMs: opts.preauthHandshakeTimeoutMs }
+            : {}),
           timeoutMs: opts.timeoutMs,
           includeDetails: false,
         };
@@ -60,6 +76,7 @@ export async function probeGatewayStatus(opts: {
             token: opts.token,
             password: opts.password,
             tlsFingerprint: opts.tlsFingerprint,
+            ...(opts.config ? { config: opts.config } : {}),
             method: "status",
             timeoutMs: opts.timeoutMs,
             ...(opts.configPath ? { configPath: opts.configPath } : {}),
@@ -70,7 +87,10 @@ export async function probeGatewayStatus(opts: {
         return await probeGateway(probeOpts);
       },
     );
-    const auth = "auth" in result ? result.auth : result.authProbe?.auth;
+    const probeDetails = resolveGatewayStatusProbeDetails(result);
+    const auth = probeDetails?.auth;
+    const server = probeDetails?.server;
+    const serverSummary = server ? { server } : {};
     if (result.ok) {
       return {
         ok: true,
@@ -82,6 +102,7 @@ export async function probeGatewayStatus(opts: {
               : "read_only"
             : auth?.capability,
         auth,
+        ...serverSummary,
       } as const;
     }
     return {
@@ -89,6 +110,7 @@ export async function probeGatewayStatus(opts: {
       kind,
       capability: auth?.capability,
       auth,
+      ...serverSummary,
       error: resolveProbeFailureMessage(result),
     } as const;
   } catch (err) {

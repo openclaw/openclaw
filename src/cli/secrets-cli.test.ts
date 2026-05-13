@@ -175,6 +175,22 @@ describe("secrets CLI", () => {
     expect(runtimeLogs.at(-1)).toContain('"ok": true');
   });
 
+  it("explains Gateway reload failures without duplicate doctor noise", async () => {
+    callGatewayFromCli.mockRejectedValue(
+      new Error("gateway closed (1006 abnormal closure). Run `openclaw doctor` for diagnostics."),
+    );
+
+    await expect(
+      createProgram().parseAsync(["secrets", "reload"], { from: "user" }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors.at(-1)).toContain(
+      "Could not reload secrets because the Gateway did not respond: gateway closed (1006 abnormal closure).",
+    );
+    expect(runtimeErrors.at(-1)).toContain("openclaw gateway status --deep");
+    expect(runtimeErrors.at(-1)).not.toContain("diagnostics..");
+  });
+
   it("runs secrets audit and exits via check code", async () => {
     runSecretsAudit.mockResolvedValue({
       version: 1,
@@ -197,7 +213,7 @@ describe("secrets CLI", () => {
 
     await expect(
       createProgram().parseAsync(["secrets", "audit", "--check"], { from: "user" }),
-    ).rejects.toBeTruthy();
+    ).rejects.toThrow("__exit__:2");
     expect(runSecretsAudit).toHaveBeenCalledWith(
       expect.objectContaining({
         allowExec: false,
@@ -328,9 +344,10 @@ describe("secrets CLI", () => {
       await createProgram().parseAsync(["secrets", "apply", "--from", planPath, "--dry-run"], {
         from: "user",
       });
-      expect(runtimeLogs.some((line) => line.includes("Secrets apply dry-run note: skipped"))).toBe(
-        false,
+      const skippedExecNotes = runtimeLogs.filter((line) =>
+        line.includes("Secrets apply dry-run note: skipped"),
       );
+      expect(skippedExecNotes).toStrictEqual([]);
     });
   });
 
@@ -341,7 +358,10 @@ describe("secrets CLI", () => {
     confirm.mockResolvedValue(false);
 
     await createProgram().parseAsync(["secrets", "configure"], { from: "user" });
-    expect(runtimeLogs.some((line) => line.includes("Preflight note: skipped"))).toBe(false);
+    const preflightSkippedExecNotes = runtimeLogs.filter((line) =>
+      line.includes("Preflight note: skipped"),
+    );
+    expect(preflightSkippedExecNotes).toStrictEqual([]);
   });
 
   it("forwards --allow-exec to configure preflight and apply", async () => {

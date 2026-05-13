@@ -92,13 +92,13 @@ vi.mock("../infra/exec-approvals.js", () => ({
   })),
 }));
 
-vi.mock("../infra/exec-inline-eval.js", () => ({
+vi.mock("../infra/command-analysis/inline-eval.js", () => ({
   describeInterpreterInlineEval: vi.fn(() => "inline-eval"),
   detectInterpreterInlineEvalArgv: detectInterpreterInlineEvalArgvMock,
 }));
 
 vi.mock("../infra/node-shell.js", () => ({
-  buildNodeShellCommand: vi.fn(() => ["bash", "-lc", "bun ./script.ts"]),
+  buildNodeShellCommand: vi.fn(() => ["/bin/sh", "-lc", "bun ./script.ts"]),
 }));
 
 vi.mock("../infra/system-run-approval-context.js", () => ({
@@ -271,6 +271,10 @@ describe("executeNodeHostCommand", () => {
       warnings: [],
       agentId: "requested-agent",
       sessionKey: "requested-session",
+      turnSourceChannel: "telegram",
+      turnSourceTo: "telegram:12345",
+      turnSourceAccountId: "work",
+      turnSourceThreadId: "42",
     });
 
     expect(result.details?.status).toBe("approval-pending");
@@ -295,8 +299,13 @@ describe("executeNodeHostCommand", () => {
           approvalDecision: "allow-once",
           systemRunPlan: preparedPlan,
           timeoutMs: 30_000,
+          turnSourceChannel: "telegram",
+          turnSourceTo: "telegram:12345",
+          turnSourceAccountId: "work",
+          turnSourceThreadId: "42",
         }),
       }),
+      { scopes: ["operator.write", "operator.approvals"] },
     );
   });
 
@@ -331,9 +340,9 @@ describe("executeNodeHostCommand", () => {
     expect(result.details?.status).toBe("approval-pending");
     expect(parsePreparedSystemRunPayloadMock).not.toHaveBeenCalled();
     const expectedPlan = {
-      argv: ["bash", "-lc", "bun ./script.ts"],
+      argv: ["/bin/sh", "-lc", "bun ./script.ts"],
       cwd: "/tmp/work",
-      commandText: 'bash -lc "bun ./script.ts"',
+      commandText: '/bin/sh -lc "bun ./script.ts"',
       commandPreview: "bun ./script.ts",
       agentId: "requested-agent",
       sessionKey: "requested-session",
@@ -355,6 +364,7 @@ describe("executeNodeHostCommand", () => {
             systemRunPlan: expectedPlan,
           }),
         }),
+        { scopes: ["operator.write", "operator.approvals"] },
       );
     });
   });
@@ -381,7 +391,7 @@ describe("executeNodeHostCommand", () => {
       expect.objectContaining({
         command: "system.run",
         params: expect.objectContaining({
-          command: ["bash", "-lc", "bun ./script.ts"],
+          command: ["/bin/sh", "-lc", "bun ./script.ts"],
           rawCommand: "bun ./script.ts",
           suppressNotifyOnExit: true,
           timeoutMs: 30_000,
@@ -397,6 +407,36 @@ describe("executeNodeHostCommand", () => {
         }),
       }),
     );
+  });
+
+  it("rejects disconnected node targets before invoking system.run", async () => {
+    listNodesMock.mockResolvedValueOnce([
+      {
+        nodeId: "node-1",
+        commands: ["system.run", "system.run.prepare"],
+        connected: false,
+        platform: process.platform,
+      },
+    ]);
+
+    await expect(
+      executeNodeHostCommand({
+        command: "git log --oneline -5",
+        workdir: "/tmp/work",
+        env: {},
+        security: "allowlist",
+        ask: "off",
+        requestedNode: "node-1",
+        defaultTimeoutSec: 30,
+        approvalRunningNoticeMs: 0,
+        warnings: [],
+        agentId: "requested-agent",
+        sessionKey: "requested-session",
+      }),
+    ).rejects.toThrow(
+      "exec host=node requires a connected node (node-1 is currently disconnected)",
+    );
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
   it("returns a non-empty placeholder for silent node exec results", async () => {

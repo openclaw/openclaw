@@ -4,7 +4,7 @@ import type { NodeListNode } from "../shared/node-list-types.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { NodeSession } from "./node-registry.js";
 
-export type KnownNodeDevicePairingSource = {
+type KnownNodeDevicePairingSource = {
   nodeId: string;
   displayName?: string;
   platform?: string;
@@ -16,7 +16,7 @@ export type KnownNodeDevicePairingSource = {
   lastSeenReason?: string;
 };
 
-export type KnownNodeApprovedSource = {
+type KnownNodeApprovedSource = {
   nodeId: string;
   displayName?: string;
   platform?: string;
@@ -35,7 +35,7 @@ export type KnownNodeApprovedSource = {
   lastSeenReason?: string;
 };
 
-export type KnownNodeEntry = {
+type KnownNodeEntry = {
   nodeId: string;
   devicePairing?: KnownNodeDevicePairingSource;
   nodePairing?: KnownNodeApprovedSource;
@@ -43,17 +43,20 @@ export type KnownNodeEntry = {
   effective: NodeListNode;
 };
 
-export type KnownNodeCatalog = {
+type KnownNodeCatalog = {
   entriesById: Map<string, KnownNodeEntry>;
 };
 
-function uniqueSortedStrings(...items: Array<readonly string[] | undefined>): string[] {
+function uniqueSortedStrings(...items: Array<readonly unknown[] | undefined>): string[] {
   const values = new Set<string>();
   for (const item of items) {
-    if (!item) {
+    if (!Array.isArray(item)) {
       continue;
     }
     for (const value of item) {
+      if (typeof value !== "string") {
+        continue;
+      }
       const trimmed = value.trim();
       if (trimmed) {
         values.add(trimmed);
@@ -115,7 +118,12 @@ function resolveEffectiveLastSeen(params: {
       ? { atMs: params.devicePairing.lastSeenAtMs, reason: params.devicePairing.lastSeenReason }
       : undefined,
   ].filter((entry) => entry !== undefined);
-  const newest = candidates.toSorted((left, right) => right.atMs - left.atMs)[0];
+  let newest: { atMs: number; reason?: string } | undefined;
+  for (const candidate of candidates) {
+    if (!newest || candidate.atMs > newest.atMs) {
+      newest = candidate;
+    }
+  }
   if (!newest) {
     return {};
   }

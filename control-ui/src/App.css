@@ -104,6 +104,14 @@
   margin: 0;
 }
 
+.panel-subtitle {
+  margin-top: 0.25rem;
+  font-size: 0.75rem;
+  color: #7dd3c0;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
 .targets-list {
   flex: 1;
   overflow-y: auto;
@@ -115,7 +123,7 @@
 
 .target-item {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.75rem;
   padding: 0.75rem;
   background: rgba(0, 180, 255, 0.05);
@@ -134,14 +142,107 @@
 .target-status {
   font-size: 1.25rem;
   flex-shrink: 0;
+  line-height: 1.2;
+  margin-top: 0.1rem;
 }
 
 .target-url {
-  flex: 1;
   color: #ffffff;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.target-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.target-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.target-meta {
+  margin-top: 0.35rem;
+  color: #7dd3c0;
+  font-size: 0.8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.target-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem;
+  margin-top: 0.75rem;
+}
+
+.target-metric {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.45rem 0.55rem;
+  border-radius: 6px;
+  background: rgba(10, 14, 39, 0.65);
+  color: #7dd3c0;
+  font-size: 0.75rem;
+}
+
+.target-metric strong {
+  color: #ffffff;
+}
+
+.target-detail {
+  margin-top: 0.65rem;
+  color: #9cc9ff;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.status-chip {
+  flex-shrink: 0;
+  padding: 0.2rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: bold;
+  letter-spacing: 0.08em;
+}
+
+.status-chip--ok {
+  color: #00ff88;
+  background: rgba(0, 255, 136, 0.12);
+  border: 1px solid rgba(0, 255, 136, 0.35);
+}
+
+.status-chip--warn {
+  color: #ffaa00;
+  background: rgba(255, 170, 0, 0.12);
+  border: 1px solid rgba(255, 170, 0, 0.35);
+}
+
+.status-chip--error {
+  color: #ff3366;
+  background: rgba(255, 51, 102, 0.12);
+  border: 1px solid rgba(255, 51, 102, 0.35);
+}
+
+.targets-secondary-block {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(0, 255, 136, 0.15);
+}
+
+.targets-secondary-title {
+  margin-bottom: 0.75rem;
+  color: #7dd3c0;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 
 .target-progress {
@@ -149,6 +250,10 @@
   color: #00ff88;
   font-weight: bold;
   flex-shrink: 0;
+}
+
+.target-item--finance:hover {
+  transform: translateX(4px) scale(1.01);
 }
 
 /* LOG PANEL */
@@ -274,4 +379,47 @@
 
 .footer-right {
   font-weight: bold;
+}
+
+@media (max-width: 1100px) {
+  .header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1rem;
+  }
+
+  .header-right {
+    flex-wrap: wrap;
+  }
+
+  .targets-panel {
+    width: 400px;
+  }
+}
+
+@media (max-width: 900px) {
+  .app {
+    height: auto;
+    min-height: 100vh;
+  }
+
+  .main-content {
+    flex-direction: column;
+    overflow: visible;
+  }
+
+  .targets-panel {
+    width: 100%;
+    min-height: 320px;
+  }
+
+  .log-panel {
+    min-height: 420px;
+  }
+
+  .footer {
+    flex-direction: column;
+    gap: 0.5rem;
+    text-align: center;
+  }
 }

@@ -12,6 +12,7 @@ import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { estimateTokensFromChars } from "../../utils/cjk-chars.js";
 import type { ReplyPayload } from "../types.js";
 import type { HandleCommandsParams } from "./commands-types.js";
+import { renderContextTreemapPng } from "./context-treemap.js";
 
 function formatInt(n: number): string {
   return new Intl.NumberFormat("en-US").format(n);
@@ -91,6 +92,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
         "Try:",
         "- /context list   (short breakdown)",
         "- /context detail (per-file + per-tool + per-skill + system prompt size)",
+        "- /context map    (WinDirStat-style treemap image)",
         "- /context json   (same, machine-readable)",
         "",
         "Inline shortcut = a command token inside a normal message (e.g. “hey /status”). It runs immediately (allowlisted senders only) and is stripped before the model sees the remaining text.",
@@ -112,11 +114,27 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     return { text: JSON.stringify({ report, session }, null, 2) };
   }
 
+  if (sub === "map") {
+    const treemap = await renderContextTreemapPng({
+      report,
+      session: {
+        cachedContextTokens: cachedContextUsageTokens ?? null,
+        contextWindowTokens: session.contextTokens,
+      },
+    });
+    return {
+      text: treemap.caption,
+      mediaUrl: treemap.path,
+      trustedLocalMedia: true,
+      sensitiveMedia: true,
+    };
+  }
+
   if (sub !== "list" && sub !== "show" && sub !== "detail" && sub !== "deep") {
     return {
       text: [
         "Unknown /context mode.",
-        "Use: /context, /context list, /context detail, or /context json",
+        "Use: /context, /context list, /context detail, /context map, or /context json",
       ].join("\n"),
     };
   }

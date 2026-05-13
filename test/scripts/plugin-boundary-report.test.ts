@@ -1,30 +1,27 @@
-import { execFileSync } from "node:child_process";
-import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { createPluginBoundaryReport } from "../../scripts/plugin-boundary-report.js";
 
-const REPO_ROOT = resolve(import.meta.dirname, "../..");
-
-function runBoundaryReport(...args: string[]): string {
-  return execFileSync(
-    process.execPath,
-    ["--import", "tsx", "scripts/plugin-boundary-report.ts", ...args],
-    {
-      cwd: REPO_ROOT,
-      encoding: "utf8",
-      maxBuffer: 1024 * 1024,
-    },
-  );
+function requirePluginSdkSummary(summary: {
+  pluginSdk?: {
+    crossOwnerReservedImportCount?: unknown;
+    unusedReservedCount?: unknown;
+  };
+}) {
+  if (!summary.pluginSdk) {
+    throw new Error("Expected plugin SDK summary");
+  }
+  return summary.pluginSdk;
 }
 
 describe("plugin-boundary-report", () => {
   it("emits compact CI-safe summary JSON", () => {
-    const output = runBoundaryReport(
+    const result = createPluginBoundaryReport([
       "--summary",
       "--json",
       "--fail-on-cross-owner",
       "--fail-on-unclassified-unused-reserved",
-    );
-    const summary = JSON.parse(output) as {
+    ]);
+    const summary = JSON.parse(result.stdout) as {
       pluginSdk?: {
         crossOwnerReservedImportCount?: unknown;
         unusedReservedCount?: unknown;
@@ -34,8 +31,11 @@ describe("plugin-boundary-report", () => {
       };
     };
 
-    expect(summary.pluginSdk?.crossOwnerReservedImportCount).toBe(0);
-    expect(summary.pluginSdk?.unusedReservedCount).toBe(0);
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe("");
+    const pluginSdk = requirePluginSdkSummary(summary);
+    expect(pluginSdk.crossOwnerReservedImportCount).toBe(0);
+    expect(pluginSdk.unusedReservedCount).toBe(0);
     expect(["private-core-bridge", "private-package-core-integrated"]).toContain(
       summary.memoryHostSdk?.implementation,
     );

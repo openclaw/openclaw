@@ -9,19 +9,12 @@
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import type * as LanceDB from "@lancedb/lancedb";
-import OpenAI from "openai";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import {
-  getMemoryEmbeddingProvider,
-  type MemoryEmbeddingProvider,
-} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import { resolveDefaultAgentId } from "openclaw/plugin-sdk/memory-host-core";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
-import {
-  normalizeLowercaseStringOrEmpty,
-  truncateUtf16Safe,
-} from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { Type } from "typebox";
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
 import {
@@ -48,6 +41,12 @@ type MemoryEntry = {
   createdAt: number;
 };
 
+type MemoryListEntry = Omit<MemoryEntry, "vector">;
+
+type MemoryListOptions = {
+  orderByCreatedAt?: boolean;
+};
+
 type MemorySearchResult = {
   entry: MemoryEntry;
   score: number;
@@ -57,6 +56,40 @@ type AutoCaptureCursor = {
   nextIndex: number;
   lastMessageFingerprint?: string;
 };
+
+type OpenAiEmbeddingClient = {
+  post<T>(
+    path: string,
+    options: { body: unknown; timeout?: number; maxRetries?: number },
+  ): Promise<T>;
+};
+
+let openAiModulePromise: Promise<typeof import("openai")> | undefined;
+function loadOpenAiModule(): Promise<typeof import("openai")> {
+  openAiModulePromise ??= import("openai");
+  return openAiModulePromise;
+}
+
+let memoryEmbeddingProviderModulePromise:
+  | Promise<typeof import("openclaw/plugin-sdk/memory-core-host-engine-embeddings")>
+  | undefined;
+function loadMemoryEmbeddingProviderModule(): Promise<
+  typeof import("openclaw/plugin-sdk/memory-core-host-engine-embeddings")
+> {
+  memoryEmbeddingProviderModulePromise ??=
+    import("openclaw/plugin-sdk/memory-core-host-engine-embeddings");
+  return memoryEmbeddingProviderModulePromise;
+}
+
+let memoryHostCoreModulePromise:
+  | Promise<typeof import("openclaw/plugin-sdk/memory-host-core")>
+  | undefined;
+function loadMemoryHostCoreModule(): Promise<
+  typeof import("openclaw/plugin-sdk/memory-host-core")
+> {
+  memoryHostCoreModulePromise ??= import("openclaw/plugin-sdk/memory-host-core");
+  return memoryHostCoreModulePromise;
+}
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -151,6 +184,17 @@ function resolveAutoCaptureStartIndex(
 const TABLE_NAME = "memories";
 const DEFAULT_AUTO_RECALL_TIMEOUT_MS = 15_000;
 
+function parsePositiveIntegerOption(value: string | undefined, flag: string): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new Error(`${flag} must be a positive integer`);
+  }
+  return parsed;
+}
+
 class MemoryDB {
   private db: LanceDB.Connection | null = null;
   private table: LanceDB.Table | null = null;
@@ -241,6 +285,31 @@ class MemoryDB {
     return mapped.filter((r) => r.score >= minScore);
   }
 
+  async list(limit?: number, options: MemoryListOptions = {}): Promise<MemoryListEntry[]> {
+    await this.ensureInitialized();
+
+    let query = this.table!.query().select(["id", "text", "importance", "category", "createdAt"]);
+    // Push limit to LanceDB only when we don't need to sort in-memory.
+    if (!options.orderByCreatedAt && limit !== undefined) {
+      query = query.limit(limit);
+    }
+
+    const rows = await query.toArray();
+
+    const entries = rows.map((row) => ({
+      id: row.id as string,
+      text: row.text as string,
+      importance: row.importance as number,
+      category: row.category as MemoryEntry["category"],
+      createdAt: row.createdAt as number,
+    }));
+    if (options.orderByCreatedAt) {
+      entries.sort((a, b) => b.createdAt - a.createdAt);
+    }
+
+    return limit === undefined ? entries : entries.slice(0, limit);
+  }
+
   async delete(id: string): Promise<boolean> {
     await this.ensureInitialized();
     // Validate UUID format to prevent injection
@@ -256,6 +325,11 @@ class MemoryDB {
     await this.ensureInitialized();
     return this.table!.countRows();
   }
+
+  async getTable(): Promise<LanceDB.Table> {
+    await this.ensureInitialized();
+    return this.table!;
+  }
 }
 
 // ============================================================================
@@ -267,7 +341,7 @@ type Embeddings = {
 };
 
 class OpenAiCompatibleEmbeddings implements Embeddings {
-  private client: OpenAI;
+  private clientPromise: Promise<OpenAiEmbeddingClient>;
 
   constructor(
     apiKey: string,
@@ -275,11 +349,13 @@ class OpenAiCompatibleEmbeddings implements Embeddings {
     baseUrl?: string,
     private dimensions?: number,
   ) {
-    this.client = new OpenAI({ apiKey, baseURL: baseUrl });
+    this.clientPromise = loadOpenAiModule().then(
+      ({ default: OpenAI }) => new OpenAI({ apiKey, baseURL: baseUrl }) as OpenAiEmbeddingClient,
+    );
   }
 
   async embed(text: string, options?: { timeoutMs?: number }): Promise<number[]> {
-    const params: OpenAI.EmbeddingCreateParams = {
+    const params: Record<string, unknown> = {
       model: this.model,
       input: text,
     };
@@ -291,7 +367,9 @@ class OpenAiCompatibleEmbeddings implements Embeddings {
     // omitted, then decodes the response. Several compatible providers either
     // reject encoding_format or always return float arrays, so use the generic
     // transport and normalize the response ourselves.
-    const response = await this.client.post<EmbeddingCreateResponse>("/embeddings", {
+    const response = await (
+      await this.clientPromise
+    ).post<EmbeddingCreateResponse>("/embeddings", {
       body: params,
       ...(options?.timeoutMs ? { timeout: options.timeoutMs, maxRetries: 0 } : {}),
     });
@@ -320,10 +398,12 @@ class ProviderAdapterEmbeddings implements Embeddings {
   private async createProvider(): Promise<MemoryEmbeddingProvider> {
     const cfg = (this.api.runtime.config?.current?.() ?? this.api.config) as OpenClawConfig;
     const providerId = this.embedding.provider;
+    const { getMemoryEmbeddingProvider } = await loadMemoryEmbeddingProviderModule();
     const adapter = getMemoryEmbeddingProvider(providerId, cfg);
     if (!adapter) {
       throw new Error(`Unknown memory embedding provider: ${providerId}`);
     }
+    const { resolveDefaultAgentId } = await loadMemoryHostCoreModule();
     const defaultAgentId = resolveDefaultAgentId(cfg);
     const agentDir = this.api.runtime.agent.resolveAgentDir(cfg, defaultAgentId);
     const remote =
@@ -433,6 +513,7 @@ const MEMORY_TRIGGERS = [
   /my\s+\w+\s+is|is\s+my/i,
   /i (like|prefer|hate|love|want|need)/i,
   /always|never|important/i,
+  /记住|记下|我(喜欢|偏好|讨厌|爱|想要|需要)|我的.*是|决定|总是|从不|重要/i,
 ];
 
 const PROMPT_INJECTION_PATTERNS = [
@@ -749,7 +830,7 @@ export default definePluginEntry({
             }
 
             const list = results
-              .map((r) => `- [${r.entry.id.slice(0, 8)}] ${r.entry.text.slice(0, 60)}...`)
+              .map((r) => `- [${r.entry.id}] ${r.entry.text.slice(0, 60)}...`)
               .join("\n");
 
             // Strip vector data for serialization
@@ -791,9 +872,14 @@ export default definePluginEntry({
         memory
           .command("list")
           .description("List memories")
-          .action(async () => {
-            const count = await db.count();
-            console.log(`Total memories: ${count}`);
+          .option("--limit <n>", "Max results")
+          .option("--order-by-created-at", "Order memories by createdAt descending", false)
+          .action(async (opts) => {
+            const limit = parsePositiveIntegerOption(opts.limit, "--limit");
+            const entries = await db.list(limit, {
+              orderByCreatedAt: Boolean(opts.orderByCreatedAt),
+            });
+            console.log(JSON.stringify(entries, null, 2));
           });
 
         memory
@@ -813,6 +899,74 @@ export default definePluginEntry({
               score: r.score,
             }));
             console.log(JSON.stringify(output, null, 2));
+          });
+
+        memory
+          .command("query")
+          .description("Query memories (non-vector search)")
+          .option("--cols <columns>", "Columns to select, comma-separated")
+          .option("--filter <condition>", "Filter condition")
+          .option("--limit <n>", "Limit number of results", "10")
+          .option("--order-by <order>", "Order by column and direction (e.g., createdAt:desc)")
+          .action(async (opts) => {
+            const table = await db.getTable();
+            let query = table.query();
+            let sortColAdded = false;
+            let sortColName: string | undefined;
+            if (opts.cols) {
+              const columns = (opts.cols as string).split(",").map((c: string) => c.trim());
+              if (opts.orderBy) {
+                const [sortCol] = opts.orderBy.split(":");
+                sortColName = sortCol;
+                if (!columns.includes(sortCol)) {
+                  columns.push(sortCol);
+                  sortColAdded = true;
+                }
+              }
+              query = query.select(columns);
+            } else {
+              query = query.select(["id", "text", "importance", "category", "createdAt"]);
+            }
+            if (opts.filter) {
+              const filterCondition = String(opts.filter);
+              if (filterCondition.length > 200) {
+                throw new Error("Filter condition exceeds maximum length of 200 characters");
+              }
+              if (!/^[a-zA-Z0-9_\-\s='"><!.,()%*]+$/.test(filterCondition)) {
+                throw new Error("Filter condition contains invalid characters");
+              }
+              query = query.where(filterCondition);
+            }
+            const limit = Number.parseInt(opts.limit, 10);
+            if (Number.isNaN(limit) || limit <= 0) {
+              throw new Error("Invalid limit: must be a positive integer");
+            }
+
+            // Fetch all filtered rows first if we need to order them in memory
+            if (!opts.orderBy) {
+              query = query.limit(limit);
+            }
+            let rows = await query.toArray();
+            if (opts.orderBy) {
+              const [col, dir] = opts.orderBy.split(":");
+              const direction = dir?.toLowerCase() === "desc" ? -1 : 1;
+              rows.sort((a, b) => {
+                if (a[col] < b[col]) {
+                  return -1 * direction;
+                }
+                if (a[col] > b[col]) {
+                  return 1 * direction;
+                }
+                return 0;
+              });
+              rows = rows.slice(0, limit);
+              if (sortColAdded && sortColName) {
+                for (const row of rows) {
+                  delete row[sortColName];
+                }
+              }
+            }
+            console.log(JSON.stringify(rows, null, 2));
           });
 
         memory
