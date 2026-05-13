@@ -708,7 +708,7 @@ describe("talk.session unified handlers", () => {
         sessionKey: "session:main",
         ttlMs: 5000,
       },
-      client: { connId: "conn-1" } as never,
+      client: { connId: "conn-1", connect: { scopes: ["operator.admin"] } } as never,
       isWebchatConnect: () => false,
       respond: createRespond as never,
       context: {
@@ -844,6 +844,31 @@ describe("talk.session unified handlers", () => {
     });
   });
 
+  it("rejects unscoped managed-room session keys without admin scope", async () => {
+    const createRespond = vi.fn();
+    await talkHandlers["talk.session.create"]({
+      req: { type: "req", id: "1", method: "talk.session.create" },
+      params: {
+        mode: "stt-tts",
+        transport: "managed-room",
+        sessionKey: "agent:worker:main",
+      },
+      client: { connId: "conn-1", connect: { scopes: ["operator.write"] } } as never,
+      isWebchatConnect: () => false,
+      respond: createRespond as never,
+      context: {
+        getRuntimeConfig: () => ({}) as OpenClawConfig,
+      } as never,
+    });
+
+    expectRespondError(createRespond, {
+      code: ErrorCodes.INVALID_REQUEST,
+      message:
+        "talk.session.create managed-room sessionKey requires spawnedBy or gateway scope: operator.admin",
+    });
+    expect(mocks.resolveSessionKeyFromResolveParams).not.toHaveBeenCalled();
+  });
+
   it("requires managed-room ownership before turn control", async () => {
     const broadcastToConnIds = vi.fn();
     const createRespond = vi.fn();
@@ -854,7 +879,7 @@ describe("talk.session unified handlers", () => {
         transport: "managed-room",
         sessionKey: "session:main",
       },
-      client: { connId: "creator" } as never,
+      client: { connId: "creator", connect: { scopes: ["operator.admin"] } } as never,
       isWebchatConnect: () => false,
       respond: createRespond as never,
       context: {
