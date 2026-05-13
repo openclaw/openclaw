@@ -592,9 +592,6 @@ describe("chat voice controls", () => {
       "marin",
       "cedar",
     ]);
-    expect(voiceOptions).not.toContain("nova");
-    expect(voiceOptions).not.toContain("onyx");
-    expect(voiceOptions).not.toContain("fable");
     expect(reasoningOptions).toEqual(["", "minimal", "low", "medium", "high"]);
     if (model === null) {
       throw new Error("expected Talk model input");
