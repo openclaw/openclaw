@@ -3262,6 +3262,9 @@ export async function runEmbeddedAttempt(
           const promptSubmission = resolveRuntimeContextPromptParts({
             effectivePrompt,
             transcriptPrompt: effectiveTranscriptPrompt,
+            emptyTranscriptMode: params.suppressNextUserMessagePersistence
+              ? "model-prompt"
+              : "runtime-event",
           });
           const promptForModel = buildCurrentTurnPrompt({
             context: promptSubmission.runtimeOnly ? undefined : params.currentTurnContext,
@@ -3287,13 +3290,15 @@ export async function runEmbeddedAttempt(
                 appendSystemContext: buildRuntimeContextSystemContext(runtimeContextForHook),
               })
             : undefined;
-          systemPromptReport.currentTurn = {
-            ...(params.currentTurnKind ? { kind: params.currentTurnKind } : {}),
-            promptChars: promptForModel.length,
-            runtimeContextChars: promptSubmission.runtimeOnly
-              ? (runtimeSystemContext?.length ?? 0)
-              : (runtimeContextForHook?.length ?? 0),
-          };
+          if (systemPromptReport) {
+            systemPromptReport.currentTurn = {
+              ...(params.currentTurnKind ? { kind: params.currentTurnKind } : {}),
+              promptChars: promptForModel.length,
+              runtimeContextChars: promptSubmission.runtimeOnly
+                ? (runtimeSystemContext?.length ?? 0)
+                : (runtimeContextForHook?.length ?? 0),
+            };
+          }
           const systemPromptForHook = runtimeSystemPromptForHook ?? systemPromptText;
 
           const persistBlockedBeforeAgentRun = async (block: {
