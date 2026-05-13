@@ -61,6 +61,60 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
     }
   });
 
+  it("marks always-on ambient group messages as room events", async () => {
+    const ctx = await buildTelegramMessageContextForTest({
+      message: buildForumMessage(),
+      resolveGroupActivation: () => false,
+      resolveGroupRequireMention: () => false,
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: { requireMention: false },
+        topicConfig: undefined,
+      }),
+    });
+
+    expect(ctx?.ctxPayload.InboundTurnKind).toBe("room_event");
+  });
+
+  it("keeps room events as context for the next direct group request", async () => {
+    const groupHistories = new Map();
+    await buildTelegramMessageContextForTest({
+      message: { ...buildForumMessage(99), text: "side chatter" },
+      historyLimit: 10,
+      groupHistories,
+      resolveGroupActivation: () => false,
+      resolveGroupRequireMention: () => false,
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: { requireMention: false },
+        topicConfig: undefined,
+      }),
+    });
+
+    const ctx = await buildTelegramMessageContextForTest({
+      message: {
+        ...buildForumMessage(99),
+        message_id: 2,
+        text: "replying directly",
+        reply_to_message: {
+          message_id: 10,
+          chat: { id: -1001234567890, type: "supergroup", title: "Forum", is_forum: true },
+          from: { id: 7, first_name: "Bot", username: "bot", is_bot: true },
+          text: "previous bot message",
+        },
+      },
+      historyLimit: 10,
+      groupHistories,
+      resolveGroupActivation: () => false,
+      resolveGroupRequireMention: () => false,
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: { requireMention: false },
+        topicConfig: undefined,
+      }),
+    });
+
+    expect(ctx?.ctxPayload.InboundTurnKind).toBe("user_request");
+    expect(ctx?.ctxPayload.Body).toContain("side chatter");
+  });
+
   it("lets explicit topic requireMention=false override mention activation", async () => {
     const resolveGroupActivation = vi.fn(() => true);
 
