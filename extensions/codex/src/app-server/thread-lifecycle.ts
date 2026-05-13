@@ -300,6 +300,10 @@ export function buildThreadStartParams(
     agentDir: params.agentDir,
     config: params.config,
   });
+  const reasoningPatch = reasoningSummaryConfigPatch(params.reasoningLevel);
+  const mergedConfig = reasoningPatch
+    ? (mergeCodexThreadConfigs(options.config, reasoningPatch) ?? reasoningPatch)
+    : options.config;
   return {
     model: params.modelId,
     ...(modelProvider ? { modelProvider } : {}),
@@ -309,7 +313,7 @@ export function buildThreadStartParams(
     sandbox: options.appServer.sandbox,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
     serviceName: "OpenClaw",
-    config: buildCodexRuntimeThreadConfig(options.config),
+    config: buildCodexRuntimeThreadConfig(mergedConfig),
     developerInstructions: options.developerInstructions ?? buildDeveloperInstructions(params),
     dynamicTools: options.dynamicTools,
     experimentalRawEvents: true,
@@ -334,6 +338,10 @@ export function buildThreadResumeParams(
     agentDir: params.agentDir,
     config: params.config,
   });
+  const reasoningPatch = reasoningSummaryConfigPatch(params.reasoningLevel);
+  const mergedConfig = reasoningPatch
+    ? (mergeCodexThreadConfigs(options.config, reasoningPatch) ?? reasoningPatch)
+    : options.config;
   return {
     threadId: options.threadId,
     model: params.modelId,
@@ -342,7 +350,7 @@ export function buildThreadResumeParams(
     approvalsReviewer: options.appServer.approvalsReviewer,
     sandbox: options.appServer.sandbox,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
-    config: buildCodexRuntimeThreadConfig(options.config),
+    config: buildCodexRuntimeThreadConfig(mergedConfig),
     developerInstructions: options.developerInstructions ?? buildDeveloperInstructions(params),
     persistExtendedHistory: true,
   };
@@ -354,6 +362,46 @@ export function buildCodexRuntimeThreadConfig(config: JsonObject | undefined): J
       ...CODEX_CODE_MODE_THREAD_CONFIG,
     }
   );
+}
+
+// Map the openclaw session-level `reasoningLevel` preference (off/on/stream)
+// to the codex `model_reasoning_summary` config value (none/auto/concise/detailed).
+//
+// Without this, codex's app-server falls back to its built-in default of
+// `summary = "none"` — codex still *thinks*, but never emits
+// `item/reasoning/summaryTextDelta` notifications, so openclaw's
+// `CodexAppServerEventProjector` (which already handles those deltas) has
+// nothing to forward to the chat client. End result: long codex turns appear
+// silent to the user until the final answer arrives.
+//
+// The pi-embedded runtime already does the equivalent mapping via
+// `openai-transport-stream.ts` — this brings the codex app-server path to
+// parity.
+//
+// Returns `undefined` when reasoningLevel is unset so codex preserves whatever
+// `model_reasoning_summary` is configured in the user's `~/.codex/config.toml`.
+// Returns `undefined` for unknown values (forwards-compat with future enum
+// additions).
+export function resolveCodexReasoningSummary(
+  reasoningLevel: string | undefined,
+): "auto" | "none" | undefined {
+  if (!reasoningLevel) {
+    return undefined;
+  }
+  switch (reasoningLevel) {
+    case "off":
+      return "none";
+    case "on":
+    case "stream":
+      return "auto";
+    default:
+      return undefined;
+  }
+}
+
+function reasoningSummaryConfigPatch(reasoningLevel: string | undefined): JsonObject | undefined {
+  const summary = resolveCodexReasoningSummary(reasoningLevel);
+  return summary === undefined ? undefined : { model_reasoning_summary: summary };
 }
 
 export function buildTurnStartParams(
