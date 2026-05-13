@@ -453,7 +453,7 @@ export function buildGuardedModelFetch(
       `code=${read(record.code)}`,
       `causeName=${read(cause?.name)}`,
       `causeCode=${read(cause?.code)}`,
-      `message=${error instanceof Error ? error.message : String(error)}`,
+      `message=${error instanceof Error ? error.message : typeof error}`,
     ].join(" ");
   };
   return async (input, init) => {

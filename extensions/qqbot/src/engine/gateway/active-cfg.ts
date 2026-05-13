@@ -11,8 +11,9 @@
  */
 
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import type { CoreGatewayContext } from "./types.js";
 
-export type GatewayCfg = unknown;
+export type GatewayCfg = CoreGatewayContext["cfg"];
 
 export type GatewayCfgFetcher = () => GatewayCfg | undefined;
 

@@ -86,7 +86,18 @@ function buildDeps(
     cfg,
     runtime,
     startTyping: vi.fn(),
-    adapters: {} as InboundPipelineDeps["adapters"],
+    adapters: {
+      access: {
+        resolveInboundAccess: vi.fn(
+          async (): Promise<QQBotInboundAccess> =>
+            ({
+              senderAccess: {
+                decision: "allow",
+              },
+            }) as QQBotInboundAccess,
+        ),
+      },
+    } as InboundPipelineDeps["adapters"],
   };
 }
 
@@ -137,7 +148,7 @@ describe("runAccessStage — dynamic cfg routing (#69546)", () => {
     expect(captured[1]?.cfg).toBe(withPeer);
   });
 
-  it("never reads bindings from a previous cfg reference", () => {
+  it("never reads bindings from a previous cfg reference", async () => {
     const account = buildAccount();
     const seenCfgs = new Set<unknown>();
     const runtime = buildRuntime((params) => {
@@ -149,9 +160,9 @@ describe("runAccessStage — dynamic cfg routing (#69546)", () => {
     const cfgB: StubCfg = { bindings: [] };
     const cfgC: StubCfg = { bindings: [] };
 
-    runAccessStage(buildEvent("a"), buildDeps(cfgA, runtime, account));
-    runAccessStage(buildEvent("b"), buildDeps(cfgB, runtime, account));
-    runAccessStage(buildEvent("c"), buildDeps(cfgC, runtime, account));
+    await runAccessStage(buildEvent("a"), buildDeps(cfgA, runtime, account));
+    await runAccessStage(buildEvent("b"), buildDeps(cfgB, runtime, account));
+    await runAccessStage(buildEvent("c"), buildDeps(cfgC, runtime, account));
 
     expect(seenCfgs.size).toBe(3);
     expect(seenCfgs.has(cfgA)).toBe(true);

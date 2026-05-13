@@ -165,7 +165,7 @@ async function runNewWithPreviousSession(params: {
 }
 
 function isAsciiDigits(value: string): boolean {
-  return [...value].every((char) => char >= "0" && char <= "9");
+  return value.split("").every((char) => char >= "0" && char <= "9");
 }
 
 function expectDatedMemoryFile(files: string[], slug: string) {

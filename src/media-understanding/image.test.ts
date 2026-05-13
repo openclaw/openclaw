@@ -627,7 +627,7 @@ describe("describeImageWithModel", () => {
       const retryCall = requireMockCallAt(completeMock, 1, "retry image completion");
       const [retryModel, , retryOptionsRaw] = retryCall;
       const retryOptions = requireRecord(retryOptionsRaw, "retry image completion options") as {
-        onPayload?: (payload: unknown, model: unknown) => Promise<unknown> | unknown;
+        onPayload?: (payload: unknown, model: unknown) => unknown;
       };
       if (!retryOptions?.onPayload) {
         throw new Error("expected retry payload mapper");

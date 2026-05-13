@@ -133,7 +133,7 @@ describe("createOpenClawCodingTools read behavior", () => {
   });
 
   it("returns already-read adaptive content when pagination reaches EOF", async () => {
-    const readResult: AgentToolResult<unknown> = {
+    const readResult: AgentToolResult = {
       content: [
         {
           type: "text",

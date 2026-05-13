@@ -203,7 +203,7 @@ function isOffsetBeyondEof(error: unknown, args: Record<string, unknown>): boole
   );
 }
 
-function emptyReadResult(): AgentToolResult<unknown> {
+function emptyReadResult(): AgentToolResult {
   const textBlock = { type: "text", text: "" } satisfies TextContentBlock;
   return { content: [textBlock], details: undefined };
 }
@@ -213,7 +213,7 @@ async function executeReadPage(params: {
   toolCallId: string;
   args: Record<string, unknown>;
   signal?: AbortSignal;
-}): Promise<AgentToolResult<unknown>> {
+}): Promise<AgentToolResult> {
   try {
     return await params.base.execute(params.toolCallId, params.args, params.signal);
   } catch (error) {

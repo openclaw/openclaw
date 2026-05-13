@@ -120,7 +120,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
       direction: "inbound",
     });
 
-    const activeCfg = activeCfgProvider.getActiveCfg() as CoreGatewayContext["cfg"];
+    const activeCfg = activeCfgProvider.getActiveCfg();
 
     const inbound = await buildInboundContext(event, {
       account,
@@ -186,7 +186,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
   };
 
   const handleInteraction = createInteractionHandler(account, ctx.runtime, log, {
-    getActiveCfg: () => activeCfgProvider.getActiveCfg() as CoreGatewayContext["cfg"],
+    getActiveCfg: () => activeCfgProvider.getActiveCfg(),
   });
 
   const connection = new GatewayConnection({
