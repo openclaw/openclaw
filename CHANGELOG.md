@@ -8,6 +8,7 @@ Docs: https://docs.openclaw.ai
 
 - gateway: pass Talk session scope to resolver [AI]. (#81379) Thanks @pgondhi987.
 - Gateway protocol: require v4 clients and stream explicit chat `deltaText`/`replace` frames so SDK clients can consume assistant updates without local diffing. (#80725) Thanks @samzong.
+- OpenAI plugin: clarify remote Codex OAuth login copy so tunneled users know sign-in may finish automatically before they paste the redirect URL. (#81301) Thanks @rubencu.
 - GitHub Copilot: exchange OAuth tokens for Copilot API tokens on image understanding requests and route Gemini image payloads through Chat Completions, fixing Copilot Gemini image descriptions. (#80393, #80442) Thanks @afunnyhy.
 - Gateway: hide pending Node pairing commands, capabilities, and permissions until approval, and refresh the live approved surface when pairings change. (#80741) Thanks @samzong.
 - SGLang: preserve replayed reasoning history for OpenAI-compatible chat completions, keeping thinking-capable local models from losing prior reasoning turns. (#81091) Thanks @akrimm702.
