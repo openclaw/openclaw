@@ -17,6 +17,8 @@ public struct OpenClawChatView: View {
     @State private var hasPerformedInitialScroll = false
     @State private var isPinnedToBottom = true
     @State private var lastUserMessageID: UUID?
+    @AppStorage("openclaw.chat.autoScrollDuringStreaming")
+    private var autoScrollDuringStreaming = true
     private let showsSessionSwitcher: Bool
     private let style: Style
     private let markdownVariant: ChatMarkdownVariant
@@ -178,7 +180,11 @@ public struct OpenClawChatView: View {
             }
         }
         .onChange(of: self.viewModel.streamingAssistantText) { _, _ in
-            guard self.hasPerformedInitialScroll, self.isPinnedToBottom else { return }
+            guard ChatAutoScrollPolicy.shouldScrollForStreaming(
+                hasPerformedInitialScroll: self.hasPerformedInitialScroll,
+                isPinnedToBottom: self.isPinnedToBottom,
+                autoScrollDuringStreaming: self.autoScrollDuringStreaming)
+            else { return }
             withAnimation(.snappy(duration: 0.22)) {
                 self.scrollPosition = self.scrollerBottomID
             }
@@ -238,45 +244,82 @@ public struct OpenClawChatView: View {
 
     @ViewBuilder
     private var messageListOverlay: some View {
-        if self.viewModel.isLoading {
-            EmptyView()
-        } else if let error = self.activeErrorText {
-            let presentation = self.errorPresentation(for: error)
-            if self.hasVisibleMessageListContent {
-                VStack(spacing: 0) {
-                    ChatNoticeBanner(
+        ZStack {
+            if self.viewModel.isLoading {
+                EmptyView()
+            } else if let error = self.activeErrorText {
+                let presentation = self.errorPresentation(for: error)
+                if self.hasVisibleMessageListContent {
+                    VStack(spacing: 0) {
+                        ChatNoticeBanner(
+                            systemImage: presentation.systemImage,
+                            title: presentation.title,
+                            message: error,
+                            tint: presentation.tint,
+                            dismiss: { self.viewModel.errorText = nil },
+                            refresh: { self.viewModel.refresh() })
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.top, 8)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                } else {
+                    ChatNoticeCard(
                         systemImage: presentation.systemImage,
                         title: presentation.title,
                         message: error,
                         tint: presentation.tint,
-                        dismiss: { self.viewModel.errorText = nil },
-                        refresh: { self.viewModel.refresh() })
-                    Spacer(minLength: 0)
+                        actionTitle: "Refresh",
+                        action: { self.viewModel.refresh() })
+                        .padding(.horizontal, 24)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .padding(.horizontal, 10)
-                .padding(.top, 8)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            } else {
+            } else if self.showsEmptyState {
                 ChatNoticeCard(
-                    systemImage: presentation.systemImage,
-                    title: presentation.title,
-                    message: error,
-                    tint: presentation.tint,
-                    actionTitle: "Refresh",
-                    action: { self.viewModel.refresh() })
+                    systemImage: "bubble.left.and.bubble.right.fill",
+                    title: self.emptyStateTitle,
+                    message: self.emptyStateMessage,
+                    tint: .accentColor,
+                    actionTitle: nil,
+                    action: nil)
                     .padding(.horizontal, 24)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-        } else if self.showsEmptyState {
-            ChatNoticeCard(
-                systemImage: "bubble.left.and.bubble.right.fill",
-                title: self.emptyStateTitle,
-                message: self.emptyStateMessage,
-                tint: .accentColor,
-                actionTitle: nil,
-                action: nil)
-                .padding(.horizontal, 24)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            self.streamingAutoScrollToggle
+        }
+    }
+
+    @ViewBuilder
+    private var streamingAutoScrollToggle: some View {
+        if self.hasVisibleMessageListContent && !self.viewModel.isLoading {
+            VStack {
+                Spacer(minLength: 0)
+                HStack {
+                    Spacer(minLength: 0)
+                    Button {
+                        self.autoScrollDuringStreaming.toggle()
+                    } label: {
+                        Image(
+                            systemName: self.autoScrollDuringStreaming
+                                ? "arrow.down.to.line.compact"
+                                : "pause.fill")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .accessibilityLabel(
+                        self.autoScrollDuringStreaming
+                            ? "Disable streaming autoscroll"
+                            : "Enable streaming autoscroll")
+                    .help(
+                        self.autoScrollDuringStreaming
+                            ? "Disable streaming autoscroll"
+                            : "Enable streaming autoscroll")
+                }
+            }
+            .padding(.trailing, 12)
+            .padding(.bottom, 12)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
         }
     }
 
@@ -489,6 +532,16 @@ public struct OpenClawChatView: View {
             from: nil,
             for: nil)
         #endif
+    }
+}
+
+enum ChatAutoScrollPolicy {
+    static func shouldScrollForStreaming(
+        hasPerformedInitialScroll: Bool,
+        isPinnedToBottom: Bool,
+        autoScrollDuringStreaming: Bool) -> Bool
+    {
+        hasPerformedInitialScroll && isPinnedToBottom && autoScrollDuringStreaming
     }
 }
 
