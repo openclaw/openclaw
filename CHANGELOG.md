@@ -108,6 +108,7 @@ Docs: https://docs.openclaw.ai
 - Memory/LanceDB: make auto-capture recognize short CJK memory phrases and configurable literal triggers, so Chinese, Japanese, and Korean users can capture memories without regex or LLM intent detection. Fixes #75680. Thanks @vyctorbrzezowski and @guokewuming.
 - Plugins doctor: report stale plugin config warnings and avoid claiming full plugin health when config warnings remain. (#81515) Thanks @BKF-Gitty.
 - Sessions: display `model: "<agentId>-acp"` / `modelProvider: "acpx"` (ACP-runtime sentinel) for ACP control-plane sessions in `openclaw sessions` output, instead of the agent's configured model which was misleading. Catalog finding 20. (#79543)
+- Slack: normalize message read `before` and `after` timestamp bounds before calling Slack history or thread reply APIs. Fixes #80835. (#81338) Thanks @honor2030.
 
 ### Changes
 
