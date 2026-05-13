@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
     setPercent: vi.fn(),
     tick: vi.fn(),
   },
+  withProgress: vi.fn(),
   promptYesNo: vi.fn(),
   provider: {
     id: "hermes",
@@ -69,7 +70,8 @@ const {
   MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF,
   MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON,
 } = await import("./migrate/selection.js");
-const { migrateApplyCommand, migrateDefaultCommand } = await import("./migrate.js");
+const { migrateApplyCommand, migrateDefaultCommand, migratePlanCommand } =
+  await import("./migrate.js");
 
 function plan(overrides: Partial<MigrationPlan> = {}): MigrationPlan {
   return {

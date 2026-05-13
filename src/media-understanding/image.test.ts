@@ -56,6 +56,18 @@ function requireFirstMockCall(mock: { mock: { calls: unknown[][] } }, label: str
   return call;
 }
 
+function requireMockCallAt(
+  mock: { mock: { calls: unknown[][] } },
+  index: number,
+  label: string,
+): unknown[] {
+  const call = mock.mock.calls[index];
+  if (!call) {
+    throw new Error(`Expected ${label} call`);
+  }
+  return call;
+}
+
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`Expected ${label}`);
@@ -418,7 +430,12 @@ describe("describeImageWithModel", () => {
     });
     expect(completeMock).toHaveBeenCalledOnce();
     const firstCall = requireFirstMockCall(completeMock, "image completion");
-    const [completionModel, context, options] = firstCall;
+    const [completionModel, contextRaw, optionsRaw] = firstCall;
+    const context = requireRecord(contextRaw, "image completion context") as {
+      systemPrompt?: string;
+      messages: Array<{ role?: string; content?: unknown }>;
+    };
+    const options = requireRecord(optionsRaw, "image completion options");
     expect(completionModel).toEqual({
       provider: "openai-codex",
       id: "gpt-5.4",
@@ -438,8 +455,9 @@ describe("describeImageWithModel", () => {
       throw new Error("expected image completion user message");
     }
     expect(userMessage.role).toBe("user");
-    expect(userMessage.content).toHaveLength(1);
-    expect(userMessage.content[0]).toEqual({
+    const userContent = userMessage.content as unknown[];
+    expect(userContent).toHaveLength(1);
+    expect(userContent[0]).toEqual({
       type: "image",
       data: Buffer.from("png-bytes").toString("base64"),
       mimeType: "image/png",
@@ -483,7 +501,11 @@ describe("describeImageWithModel", () => {
       model: "google/gemini-2.5-flash",
     });
     const firstCall = requireFirstMockCall(completeMock, "OpenRouter image completion");
-    const [, context] = firstCall;
+    const [, contextRaw] = firstCall;
+    const context = requireRecord(contextRaw, "OpenRouter image completion context") as {
+      systemPrompt?: string;
+      messages: Array<{ role?: string; content?: unknown }>;
+    };
     expect(context.systemPrompt).toBeUndefined();
     const userMessage = context.messages[0];
     if (!userMessage) {
@@ -603,7 +625,10 @@ describe("describeImageWithModel", () => {
       });
       expect(completeMock).toHaveBeenCalledTimes(2);
       const retryCall = requireMockCallAt(completeMock, 1, "retry image completion");
-      const [retryModel, , retryOptions] = retryCall;
+      const [retryModel, , retryOptionsRaw] = retryCall;
+      const retryOptions = requireRecord(retryOptionsRaw, "retry image completion options") as {
+        onPayload?: (payload: unknown, model: unknown) => Promise<unknown> | unknown;
+      };
       if (!retryOptions?.onPayload) {
         throw new Error("expected retry payload mapper");
       }
@@ -648,8 +673,12 @@ describe("describeImageWithModel", () => {
     await vi.advanceTimersByTimeAsync(25);
     await assertion;
     const firstCall = requireFirstMockCall(completeMock, "timed image completion");
-    const [, , options] = firstCall;
-    if (!options?.signal) {
+    const [, , optionsRaw] = firstCall;
+    const options = requireRecord(optionsRaw, "timed image completion options") as {
+      signal?: AbortSignal;
+      timeoutMs?: number;
+    };
+    if (!options.signal) {
       throw new Error("Expected image completion abort signal");
     }
     expect(options.signal.aborted).toBe(true);

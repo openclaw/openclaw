@@ -11,6 +11,7 @@ import {
   formatConfigOverwriteLogMessage,
   listConfigAuditRecordsForTests,
   redactConfigAuditArgv,
+  scrubConfigAuditLog,
 } from "./io.audit.js";
 
 function createAuditRecordBase(configPath: string) {
@@ -213,10 +214,7 @@ describe("config io audit helpers", () => {
       record,
     });
 
-    const raw = fs.readFileSync(
-      path.join(home, ".openclaw", "logs", "config-audit.jsonl"),
-      "utf-8",
-    );
+    const raw = JSON.stringify(readAuditLog(home));
     expect(raw).not.toContain("AIzaSyD-very-real-looking");
     expect(raw).not.toContain("ya29.fake-access-token");
     expect(raw).not.toContain("abcd-efgh-ijkl-mnop");
@@ -517,7 +515,11 @@ describe("config io audit helpers", () => {
     });
 
     expect(result).toEqual({ scanned: 2, rewritten: 1, skipped: 0, aborted: false });
-    const after = readAuditLog(home);
+    const after = fs
+      .readFileSync(auditPath, "utf-8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as unknown);
     expect(after).toHaveLength(2);
     const firstAfter = requireAuditRecord(after[0]);
     const secondAfter = requireAuditRecord(after[1]);

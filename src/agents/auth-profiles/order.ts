@@ -342,33 +342,6 @@ function resolveAuthOrder(
   return findNormalizedProviderValue(order, provider);
 }
 
-function isNativeCredentialProviderCompatibleWithAuthProvider(params: {
-  cfg?: OpenClawConfig;
-  providerAuthKey: string;
-  credential: AuthProfileCredential | undefined;
-}): boolean {
-  if (!params.credential) {
-    return false;
-  }
-  return (
-    resolveProviderIdForAuth(params.credential.provider, { config: params.cfg }) ===
-    params.providerAuthKey
-  );
-}
-
-function mergeAliasOrderWithNativeProfiles(params: {
-  aliasOrder: string[];
-  nativeProfiles: string[];
-}): string[] {
-  const nativeIds = new Set(params.nativeProfiles);
-  const aliasHasNativeProfile = params.aliasOrder.some((profileId) => nativeIds.has(profileId));
-  return dedupeProfileIds(
-    aliasHasNativeProfile
-      ? [...params.aliasOrder, ...params.nativeProfiles]
-      : [...params.nativeProfiles, ...params.aliasOrder],
-  );
-}
-
 function orderProfilesByMode(order: string[], store: AuthProfileStore): string[] {
   const now = Date.now();
 

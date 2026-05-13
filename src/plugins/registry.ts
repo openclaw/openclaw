@@ -339,7 +339,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   ).toSorted();
   registry.coreGatewayMethodNames = coreGatewayMethodNames;
   const coreGatewayMethods = new Set(coreGatewayMethodNames);
-  const getHostCronService = () => registryParams.hostServices?.cron;
   const pluginHookRollback = new Map<string, HookRollbackEntry[]>();
   const pluginsWithChannelRegistrationConflict = new Set<string>();
   const pluginSideEffectGuards = new Map<string, Set<PluginSideEffectGuard>>();

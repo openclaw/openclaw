@@ -4,6 +4,7 @@ import { parseBooleanValue } from "../utils/boolean.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
 import type { AgentMessage, StreamFn } from "./agent-core-contract.js";
 import { sanitizeDiagnosticPayload } from "./payload-redaction.js";
+import { stableStringify } from "./stable-stringify.js";
 import { getStateDiagnosticWriter, type StateDiagnosticWriter } from "./state-diagnostic-writer.js";
 import { buildAgentTraceBase } from "./trace-base.js";
 

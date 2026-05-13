@@ -24,7 +24,13 @@ import { generateDtmfRedirectTwiml, generateNotifyTwiml } from "./twiml.js";
 
 type InitiateContext = Pick<
   CallManagerContext,
-  "activeCalls" | "providerCallIdMap" | "provider" | "config" | "callStore" | "webhookUrl"
+  | "activeCalls"
+  | "providerCallIdMap"
+  | "provider"
+  | "config"
+  | "callStore"
+  | "webhookUrl"
+  | "streamSessionIssuer"
 >;
 
 type SpeakContext = Pick<

@@ -12,6 +12,7 @@ import { isDangerousHostInheritedEnvVarName } from "../infra/host-env-security.j
 import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { resolveEventSessionKey, scopedHeartbeatWakeOptions } from "../routing/session-key.js";
+import { isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import type { AgentToolResult } from "./agent-core-contract.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";

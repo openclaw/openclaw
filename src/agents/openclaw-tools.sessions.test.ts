@@ -516,7 +516,6 @@ describe("sessions tools", () => {
           label: undefined,
           displayName: undefined,
           derivedTitle: "Visible project kickoff",
-          key: "agent:main:main",
           lastMessagePreview: "Visible latest reply",
           parentSessionKey: undefined,
           deliveryContext: undefined,

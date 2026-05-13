@@ -3,6 +3,7 @@ import {
   clearPluginInteractiveHandlers,
   registerPluginInteractiveHandler,
 } from "openclaw/plugin-sdk/plugin-runtime";
+import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramInteractiveHandlerContext } from "./interactive-dispatch.js";

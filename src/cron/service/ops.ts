@@ -33,7 +33,7 @@ import type {
 } from "./list-page-types.js";
 import { locked } from "./locked.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
-import type { CronServiceState, CronWakeMode } from "./state.js";
+import type { CronServiceState } from "./state.js";
 import { ensureLoaded, persist, warnIfDisabled } from "./store.js";
 import {
   applyJobResult,

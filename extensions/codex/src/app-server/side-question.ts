@@ -15,7 +15,11 @@ import {
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import { refreshCodexAppServerAuthTokens } from "./auth-bridge.js";
 import { isCodexAppServerApprovalRequest, type CodexAppServerClient } from "./client.js";
-import { readCodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
+import {
+  codexSandboxPolicyForTurn,
+  readCodexPluginConfig,
+  resolveCodexAppServerRuntimeOptions,
+} from "./config.js";
 import { filterCodexDynamicTools } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge, type CodexDynamicToolBridge } from "./dynamic-tools.js";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
@@ -234,7 +238,7 @@ export async function runCodexAppServerSideQuestion(
           threadId: childThreadId,
           input: [{ type: "text", text: params.question.trim(), text_elements: [] }],
           cwd,
-          approvalPolicy: appServer.approvalPolicy,
+          approvalPolicy,
           approvalsReviewer: appServer.approvalsReviewer,
           sandboxPolicy: codexSandboxPolicyForTurn(sandbox, cwd),
           model: params.model,

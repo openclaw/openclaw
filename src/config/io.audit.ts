@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { redactToolPayloadText } from "../logging/redact.js";
+import path from "node:path";
+import { redactSecrets, redactToolPayloadText } from "../logging/redact.js";
 import { createCorePluginStateSyncKeyedStore } from "../plugin-state/plugin-state-store.js";
 import { resolveStateDir } from "./paths.js";
 
@@ -136,6 +137,7 @@ export const CONFIG_AUDIT_OWNER_ID = "core:config";
 export const CONFIG_AUDIT_NAMESPACE = "audit";
 export const CONFIG_AUDIT_MAX_ENTRIES = 50_000;
 export const CONFIG_AUDIT_STORE_LABEL = "SQLite core:config/audit state";
+const LEGACY_CONFIG_AUDIT_LOG_FILENAME = ["config-audit", "jsonl"].join(".");
 
 export type ConfigWriteAuditResult = "rename" | "copy-fallback" | "failed" | "rejected";
 
@@ -291,6 +293,13 @@ function resolveConfigAuditProcessInfo(
   return snapshotConfigAuditProcessInfo();
 }
 
+export function resolveLegacyConfigAuditLogPath(
+  env: NodeJS.ProcessEnv,
+  homedir: () => string,
+): string {
+  return path.join(resolveStateDir(env, homedir), "logs", LEGACY_CONFIG_AUDIT_LOG_FILENAME);
+}
+
 export function formatConfigOverwriteLogMessage(params: {
   configPath: string;
   previousHash: string | null;
@@ -421,6 +430,140 @@ function resolveConfigAuditAppendRecord(params: ConfigAuditAppendParams): Config
   return record as ConfigAuditRecord;
 }
 
+export type ConfigAuditScrubResult = {
+  scanned: number;
+  rewritten: number;
+  skipped: number;
+  aborted: boolean;
+};
+
+type ConfigAuditScrubFs = {
+  promises: {
+    readFile(path: string, encoding: "utf-8"): Promise<string>;
+    stat(path: string): Promise<{ size: number }>;
+    writeFile(
+      path: string,
+      data: string,
+      options?: { encoding?: BufferEncoding; mode?: number },
+    ): Promise<unknown>;
+    rename(oldPath: string, newPath: string): Promise<unknown>;
+    unlink(path: string): Promise<unknown>;
+  };
+};
+
+export async function scrubConfigAuditLog(params: {
+  fs: ConfigAuditScrubFs;
+  env: NodeJS.ProcessEnv;
+  homedir: () => string;
+  dryRun?: boolean;
+}): Promise<ConfigAuditScrubResult> {
+  const auditPath = resolveLegacyConfigAuditLogPath(params.env, params.homedir);
+  let raw: string;
+  try {
+    raw = await params.fs.promises.readFile(auditPath, "utf-8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
+      return { scanned: 0, rewritten: 0, skipped: 0, aborted: false };
+    }
+    throw err;
+  }
+  const originalByteLength = Buffer.byteLength(raw, "utf-8");
+
+  let scanned = 0;
+  let rewritten = 0;
+  let skipped = 0;
+  let changed = false;
+  const outLines: string[] = [];
+
+  for (const line of raw.split("\n")) {
+    if (line.length === 0) {
+      outLines.push(line);
+      continue;
+    }
+    scanned += 1;
+    let record: unknown;
+    try {
+      record = JSON.parse(line);
+    } catch {
+      outLines.push(line);
+      skipped += 1;
+      continue;
+    }
+    if (!record || typeof record !== "object" || Array.isArray(record)) {
+      outLines.push(line);
+      skipped += 1;
+      continue;
+    }
+    const obj = record as Record<string, unknown>;
+    let mutated = false;
+    for (const key of ["argv", "execArgv"] as const) {
+      const value = obj[key];
+      if (
+        !Array.isArray(value) ||
+        !value.every((entry): entry is string => typeof entry === "string")
+      ) {
+        continue;
+      }
+      const redacted = redactConfigAuditArgv(value);
+      if (redacted.some((entry, index) => entry !== value[index])) {
+        obj[key] = redacted;
+        mutated = true;
+      }
+    }
+    if (mutated) {
+      rewritten += 1;
+      changed = true;
+      outLines.push(JSON.stringify(obj));
+    } else {
+      outLines.push(line);
+    }
+  }
+
+  if (!changed || params.dryRun) {
+    return { scanned, rewritten, skipped, aborted: false };
+  }
+  let preRenameSize: number;
+  try {
+    preRenameSize = (await params.fs.promises.stat(auditPath)).size;
+  } catch {
+    return { scanned, rewritten, skipped, aborted: true };
+  }
+  if (preRenameSize !== originalByteLength) {
+    return { scanned, rewritten, skipped, aborted: true };
+  }
+
+  const tmpPath = `${auditPath}.scrub.tmp`;
+  try {
+    await params.fs.promises.writeFile(tmpPath, outLines.join("\n"), {
+      encoding: "utf-8",
+      mode: 0o600,
+    });
+    let finalPreRenameSize: number;
+    try {
+      finalPreRenameSize = (await params.fs.promises.stat(auditPath)).size;
+    } catch {
+      try {
+        await params.fs.promises.unlink(tmpPath);
+      } catch {}
+      return { scanned, rewritten, skipped, aborted: true };
+    }
+    if (finalPreRenameSize !== originalByteLength) {
+      try {
+        await params.fs.promises.unlink(tmpPath);
+      } catch {}
+      return { scanned, rewritten, skipped, aborted: true };
+    }
+    await params.fs.promises.rename(tmpPath, auditPath);
+  } catch (err) {
+    try {
+      await params.fs.promises.unlink(tmpPath);
+    } catch {}
+    throw err;
+  }
+
+  return { scanned, rewritten, skipped, aborted: false };
+}
+
 function resolveConfigAuditStoreEnv(params: {
   env: NodeJS.ProcessEnv;
   homedir: () => string;
@@ -445,7 +588,7 @@ function configAuditEntryKey(record: ConfigAuditRecord): string {
 }
 
 function toStoredConfigAuditRecord(record: ConfigAuditRecord): ConfigAuditRecord {
-  return JSON.parse(JSON.stringify(record)) as ConfigAuditRecord;
+  return JSON.parse(JSON.stringify(redactSecrets(record))) as ConfigAuditRecord;
 }
 
 export async function appendConfigAuditRecord(params: ConfigAuditAppendParams): Promise<void> {

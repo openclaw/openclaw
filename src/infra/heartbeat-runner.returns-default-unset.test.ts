@@ -224,6 +224,14 @@ function expectReplyCall(
   }
 }
 
+function replyBody(replySpy: ReturnType<typeof vi.fn>, index = 0): Record<string, unknown> {
+  const call = replySpy.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected reply call ${index}`);
+  }
+  return requireRecord(call[0], `reply call ${index} body`);
+}
+
 type TestSessionRowsTarget = {
   agentId: string;
 };

@@ -19,19 +19,6 @@ import { useTempSessionsFixture } from "./test-helpers.js";
 import { replaceSqliteSessionTranscriptEvents } from "./transcript-store.sqlite.js";
 import { mergeSessionEntry, mergeSessionEntryWithPolicy, type SessionEntry } from "./types.js";
 
-type WriteTextAtomicCall = Parameters<typeof jsonFiles.writeTextAtomic>;
-
-function requireWriteTextAtomicCall(
-  spy: { mock: { calls: WriteTextAtomicCall[] } },
-  callIndex = 0,
-): WriteTextAtomicCall {
-  const call = spy.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`expected writeTextAtomic call ${callIndex}`);
-  }
-  return call;
-}
-
 describe("session path safety", () => {
   it("rejects unsafe session IDs", () => {
     const unsafeSessionIds = [

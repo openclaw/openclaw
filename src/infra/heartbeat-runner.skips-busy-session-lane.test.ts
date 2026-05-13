@@ -145,10 +145,10 @@ describe("heartbeat runner skips when target session lane is busy", () => {
   });
 
   it("returns lanes-busy for opt-in work in this agent's nested session lane", async () => {
-    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
+    await withTempHeartbeatSandbox(async ({ agentId, replySpy }) => {
       const cfg = createHeartbeatTelegramConfig();
       cfg.agents!.defaults!.heartbeat = { every: "30m", skipWhenBusy: true };
-      await seedHeartbeatTelegramSession(storePath, cfg);
+      await seedHeartbeatTelegramSession(agentId, cfg);
       const nestedSessionLane = resolveNestedAgentLaneForSession("agent:main:telegram:123");
 
       const result = await runHeartbeatOnce({

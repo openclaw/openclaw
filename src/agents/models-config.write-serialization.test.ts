@@ -78,7 +78,7 @@ function planParamsAt(callIndex: number): {
   providerDiscoveryTimeoutMs?: number;
   workspaceDir?: string;
 } {
-  const call = planOpenClawModelsJsonMock.mock.calls[callIndex];
+  const call = planOpenClawModelCatalogMock.mock.calls[callIndex];
   if (!call) {
     throw new Error(`expected models planner call #${callIndex + 1}`);
   }

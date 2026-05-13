@@ -48,6 +48,19 @@ function firstObjectArg(mock: MockWithCalls): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function fetchInputUrl(mock: MockWithCalls, callIndex: number): string {
+  const input = mock.mock.calls[callIndex]?.[0];
+  return typeof input === "string" ? input : String(input);
+}
+
+function parseFetchJsonBody(mock: MockWithCalls, callIndex: number): unknown {
+  const init = mock.mock.calls[callIndex]?.[1] as { body?: unknown } | undefined;
+  if (typeof init?.body !== "string") {
+    throw new Error(`expected fetch call ${callIndex} JSON body`);
+  }
+  return JSON.parse(init.body);
+}
+
 function recordField(value: unknown, field: string): Record<string, unknown> {
   if (value === undefined || value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`expected ${field} to be an object`);

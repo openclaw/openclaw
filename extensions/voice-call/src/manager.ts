@@ -76,6 +76,7 @@ export class CallManager {
   >();
   private maxDurationTimers = new Map<CallId, NodeJS.Timeout>();
   private initialMessageInFlight = new Set<CallId>();
+  streamSessionIssuer?: StreamSessionIssuer;
 
   constructor(config: VoiceCallConfig, options?: string | CallManagerStoreOptions) {
     this.config = config;

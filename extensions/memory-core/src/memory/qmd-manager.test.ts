@@ -35,6 +35,10 @@ const MEMORY_EMBEDDING_PROVIDERS_KEY = Symbol.for("openclaw.memoryEmbeddingProvi
 const MCPORTER_STATE_KEY = Symbol.for("openclaw.mcporterState");
 const QMD_EMBED_QUEUE_KEY = Symbol.for("openclaw.qmdEmbedQueueTail");
 
+type WatchOptions = {
+  ignored?: (watchPath: string) => boolean;
+};
+
 function hashQmdTestStateDir(stateDir: string): string {
   return createHash("sha256").update(path.resolve(stateDir), "utf8").digest("hex").slice(0, 16);
 }
@@ -99,14 +103,6 @@ function firstWatchOptions(): WatchOptions {
     throw new Error("Expected watch call");
   }
   return call[1];
-}
-
-function firstEmbedLockCall(): EmbedLockCall {
-  const call = withFileLockMock.mock.calls[0] as EmbedLockCall | undefined;
-  if (!call) {
-    throw new Error("Expected qmd embed lock call");
-  }
-  return call;
 }
 
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-foundation", async () => {

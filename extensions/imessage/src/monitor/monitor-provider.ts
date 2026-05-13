@@ -66,7 +66,6 @@ import {
 } from "./inbound-processing.js";
 import { createLoopRateLimiter } from "./loop-rate-limiter.js";
 import { parseIMessageNotification } from "./parse-notification.js";
-import { enqueueIMessageReactionSystemEvent } from "./reaction-system-event.js";
 import { normalizeAllowList, resolveRuntime } from "./runtime.js";
 import { createSelfChatCache } from "./self-chat-cache.js";
 import type { IMessagePayload, MonitorIMessageOpts } from "./types.js";

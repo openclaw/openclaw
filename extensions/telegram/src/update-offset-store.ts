@@ -1,4 +1,5 @@
 import { createPluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { fingerprintTelegramBotToken } from "./token-fingerprint.js";
 
 const STORE_VERSION = 2;
 const UPDATE_OFFSET_STORE = createPluginStateKeyedStore<TelegramUpdateOffsetState>("telegram", {

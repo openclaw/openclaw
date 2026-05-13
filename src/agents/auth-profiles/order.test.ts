@@ -30,6 +30,10 @@ vi.mock("./external-auth.js", () => ({
 import { resolveAuthProfileOrder } from "./order.js";
 import { markAuthProfileSuccess } from "./profiles.js";
 
+async function importAuthProfileModulesWithAliasRegistry() {
+  return { resolveAuthProfileOrder };
+}
+
 describe("resolveAuthProfileOrder", () => {
   beforeEach(() => {
     resetProviderAuthAliasMapCacheForTest();

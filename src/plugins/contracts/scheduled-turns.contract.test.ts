@@ -3,6 +3,8 @@ import {
   registerTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { CronServiceContract } from "../../cron/service-contract.js";
+import type { CronJob } from "../../cron/types.js";
 import type {
   GatewayRequestHandler,
   GatewayRequestHandlerOptions,
@@ -28,6 +30,9 @@ import type { OpenClawPluginApi } from "../types.js";
 
 const workflowMocks = vi.hoisted(() => ({
   callGatewayTool: vi.fn(),
+  cronListPage: vi.fn(),
+  cronAdd: vi.fn(),
+  cronRemove: vi.fn(),
 }));
 
 const WORKFLOW_PLUGIN_ID = "workflow-plugin";
@@ -125,8 +130,9 @@ function makeCronJob(input: Partial<CronJob> & { id: string }): CronJob {
 
 const cron = createMockCronService();
 
-function mockCronAdd(response: CronJob) {
-  workflowMocks.cronAdd.mockResolvedValue(response);
+function mockCronAdd(response: unknown) {
+  workflowMocks.cronAdd.mockResolvedValue(response as CronJob);
+  workflowMocks.callGatewayTool.mockResolvedValue(response);
 }
 
 function getCronAddBody() {

@@ -532,7 +532,7 @@ describe("voice-call outbound helpers", () => {
         fromNumber: "+14155550100",
         realtime: { enabled: true },
       },
-      storePath: "/tmp/voice-call.json",
+      storeKey: "voice-call-test",
       webhookUrl: "https://example.com/webhook",
       streamSessionIssuer,
     };
@@ -574,7 +574,7 @@ describe("voice-call outbound helpers", () => {
         fromNumber: "+14155550100",
         realtime: { enabled: true },
       },
-      storePath: "/tmp/voice-call.json",
+      storeKey: "voice-call-test",
       webhookUrl: "https://example.com/webhook",
       streamSessionIssuer,
     };
@@ -603,7 +603,7 @@ describe("voice-call outbound helpers", () => {
         fromNumber: "+14155550100",
         realtime: { enabled: false },
       },
-      storePath: "/tmp/voice-call.json",
+      storeKey: "voice-call-test",
       webhookUrl: "https://example.com/webhook",
       streamSessionIssuer,
     };

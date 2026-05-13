@@ -342,9 +342,7 @@ export async function updateAuthProfileStoreWithLock(params: {
 }
 
 export function loadAuthProfileStore(): AuthProfileStore {
-  const asStore = loadPersistedAuthProfileStore(undefined, {
-    rewriteInlineOAuthSecrets: process.env.OPENCLAW_AUTH_STORE_READONLY !== "1",
-  });
+  const asStore = loadPersistedAuthProfileStore();
   if (asStore) {
     return overlayExternalAuthProfiles(asStore);
   }

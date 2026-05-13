@@ -1,11 +1,7 @@
 import type { CronServiceContract, CronServiceRunResult } from "./service-contract.js";
 import type { CronListPageOptions } from "./service/list-page-types.js";
 import * as ops from "./service/ops.js";
-import {
-  type CronServiceDeps,
-  type CronWakeMode,
-  createCronServiceState,
-} from "./service/state.js";
+import { type CronServiceDeps, createCronServiceState } from "./service/state.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "./types.js";
 
 export type { CronEvent, CronServiceDeps } from "./service/state.js";

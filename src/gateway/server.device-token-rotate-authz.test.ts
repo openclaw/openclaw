@@ -148,7 +148,7 @@ async function issueMixedRolePairingScopedDevice(
   opts?: { platform?: string },
 ): Promise<{
   deviceId: string;
-  identityPath: string;
+  identityKey: string;
   identity: ReturnType<typeof loadDeviceIdentity>["identity"];
   pairingToken: string;
   publicKey: string;
@@ -178,7 +178,7 @@ async function issueMixedRolePairingScopedDevice(
   expect(approved.device.tokens?.node?.token).toBeTypeOf("string");
   return {
     deviceId: loaded.identity.deviceId,
-    identityPath: loaded.identityPath,
+    identityKey: loaded.identityKey,
     identity: loaded.identity,
     pairingToken,
     publicKey: loaded.publicKey,
@@ -289,7 +289,7 @@ describe("gateway device.token.rotate/revoke ownership guard (IDOR)", () => {
 
       pairingWs = await connectPairingScopedOperator({
         port: started.port,
-        identityPath: device.identityPath,
+        identityKey: device.identityKey,
         deviceToken: device.pairingToken,
       });
 
@@ -338,7 +338,7 @@ describe("gateway device.token.rotate/revoke ownership guard (IDOR)", () => {
 
       pairingWs = await connectPairingScopedOperator({
         port: started.port,
-        identityPath: device.identityPath,
+        identityKey: device.identityKey,
         deviceToken: device.pairingToken,
       });
 
@@ -468,7 +468,7 @@ describe("gateway device.token.rotate/revoke ownership guard (IDOR)", () => {
 
       pairingWs = await connectPairingScopedOperator({
         port: started.port,
-        identityPath: device.identityPath,
+        identityKey: device.identityKey,
         deviceToken: device.pairingToken,
       });
 

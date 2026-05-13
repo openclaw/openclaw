@@ -793,6 +793,7 @@ export async function runEmbeddedPiAgent(
           store: attemptAuthProfileStore,
           provider: harnessAuthProvider,
         }).filter(isForwardablePluginHarnessAuthProfile);
+        return resolvedOrder;
       };
       const pluginHarnessProfileOrder = pluginHarnessOwnsTransport
         ? resolvePluginHarnessProfileOrder()
@@ -2627,6 +2628,13 @@ export async function runEmbeddedPiAgent(
           });
           const timedOutDuringPrompt =
             timedOut && !timedOutDuringCompaction && !timedOutDuringToolExecution;
+          const hasPartialAssistantTextAfterPromptTimeout =
+            timedOutDuringPrompt &&
+            (attempt.assistantTexts ?? []).some((text) => text.trim().length > 0) &&
+            !attempt.clientToolCalls &&
+            !attempt.yieldDetected &&
+            !attempt.didSendViaMessagingTool &&
+            !attempt.didSendDeterministicApprovalPrompt;
           const attemptToolSummary = buildTraceToolSummary({
             toolMetas: attempt.toolMetas,
             hadFailure: Boolean(attempt.lastToolError),

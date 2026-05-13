@@ -45,6 +45,7 @@ const hoisted = vi.hoisted(() => {
   }));
   const resolveEmbeddedAgentRuntime = vi.fn(() => "pi");
   const ensureOpenClawModelCatalog = vi.fn(async () => undefined);
+  const ensureOpenClawModelsJson = ensureOpenClawModelCatalog;
   return {
     startPluginServices,
     startGmailWatcherWithLogs,
@@ -71,6 +72,7 @@ const hoisted = vi.hoisted(() => {
     resolveConfiguredModelRef,
     resolveEmbeddedAgentRuntime,
     ensureOpenClawModelCatalog,
+    ensureOpenClawModelsJson,
   };
 });
 

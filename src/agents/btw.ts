@@ -337,48 +337,6 @@ export async function runBtwSideQuestion(
     throw new Error(`Selected agent harness "${harness.id}" does not support /btw side questions.`);
   }
 
-  const sessionAgentId = resolveSessionAgentId({
-    sessionKey: params.sessionKey,
-    config: params.cfg,
-  });
-  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, sessionAgentId);
-  const harness = selectAgentHarness({
-    provider: params.provider,
-    modelId: params.model,
-    config: params.cfg,
-    agentId: sessionAgentId,
-    sessionKey: params.sessionKey,
-  });
-  if (harness.runSideQuestion) {
-    const { model, authProfileId, authProfileIdSource } = await resolveRuntimeModel({
-      cfg: params.cfg,
-      provider: params.provider,
-      model: params.model,
-      agentId: sessionAgentId,
-      agentDir: params.agentDir,
-      workspaceDir,
-      sessionEntry: params.sessionEntry,
-      sessionStore: params.sessionStore,
-      sessionKey: params.sessionKey,
-      isNewSession: params.isNewSession,
-    });
-    const result = await harness.runSideQuestion({
-      ...params,
-      provider: model.provider,
-      model: model.id,
-      runtimeModel: model,
-      sessionId,
-      agentId: sessionAgentId,
-      workspaceDir,
-      authProfileId,
-      authProfileIdSource,
-    });
-    return { text: result.text };
-  }
-  if (harness.id === "codex") {
-    throw new Error(`Selected agent harness "${harness.id}" does not support /btw side questions.`);
-  }
-
   const activeRunSnapshot = getActiveEmbeddedRunSnapshot(sessionId);
   const imageLimits = resolveImageSanitizationLimits(params.cfg);
   let messages: Message[] = [];

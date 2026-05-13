@@ -145,6 +145,30 @@ function decodeExportedSessionData(html: unknown): unknown {
   return JSON.parse(Buffer.from(match[1], "base64").toString("utf-8"));
 }
 
+function writeFileArg(callIndex: number, argIndex: number): unknown {
+  const call = hoisted.writeFileMock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected writeFile call ${callIndex}`);
+  }
+  return call[argIndex];
+}
+
+function writeFilePath(callIndex: number): string {
+  const filePath = writeFileArg(callIndex, 0);
+  if (typeof filePath !== "string") {
+    throw new TypeError("expected writeFile path string");
+  }
+  return filePath;
+}
+
+function writtenHtml(callIndex = 0): string {
+  const html = writeFileArg(callIndex, 1);
+  if (typeof html !== "string") {
+    throw new TypeError("expected written HTML string");
+  }
+  return html;
+}
+
 describe("buildExportSessionReply", () => {
   afterEach(() => {
     vi.useRealTimers();

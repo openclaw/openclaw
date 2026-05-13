@@ -66,10 +66,6 @@ type TelegramPersistedMessageCacheNode = {
   threadId?: string;
 };
 
-type PersistedMessageReadResult = TelegramMessageCacheBucket & {
-  needsRewrite: boolean;
-};
-
 const DEFAULT_MAX_MESSAGES = 5000;
 const DEFAULT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const persistedMessageCacheBuckets = new Map<string, TelegramMessageCacheBucket>();
@@ -216,7 +212,6 @@ function readPersistedMessages(scopeKey: string, maxMessages: number) {
     }
   } catch (error) {
     logVerbose(`telegram: failed to read message cache: ${String(error)}`);
-    needsRewrite = true;
   }
   return messages;
 }

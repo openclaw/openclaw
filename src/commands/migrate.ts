@@ -1,5 +1,6 @@
 import { cancel, isCancel } from "@clack/prompts";
 import { formatCliCommand } from "../cli/command-format.js";
+import { withProgress } from "../cli/progress.js";
 import { promptYesNo } from "../cli/prompt.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { redactMigrationPlan } from "../plugin-sdk/migration.js";
@@ -44,10 +45,15 @@ import type {
 
 export type { MigrateApplyOptions, MigrateCommonOptions, MigrateDefaultOptions };
 
-function selectMigrationItems(plan: MigrationPlan, opts: MigrateCommonOptions): MigrationPlan {
-  return applyMigrationPluginSelection(
-    applyMigrationSkillSelection(plan, opts.skills),
-    opts.plugins,
+const CODEX_UNVERIFIED_APP_BACKED_PLUGIN_WARNING =
+  "Codex app-backed plugins were planned without source app accessibility verification.";
+
+function isPlannedUnverifiedCodexAppPlugin(item: MigrationPlan["items"][number]): boolean {
+  return (
+    item.kind === "plugin" &&
+    item.action === "install" &&
+    item.status === "planned" &&
+    item.details?.sourceAppVerification === "not_run"
   );
 }
 

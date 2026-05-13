@@ -1,7 +1,6 @@
 import { listAgentEntries, listAgentIds, resolveAgentConfig } from "../agents/agent-scope.js";
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
-import { loadSessionStore } from "../config/sessions/store-load.js";
+import { getSessionEntry } from "../config/sessions/store.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveHeartbeatIntervalMs } from "../infra/heartbeat-summary.js";
@@ -118,16 +117,16 @@ export function describeHeartbeatSessionTargetIssues(cfg: OpenClawConfig): strin
     ) {
       continue;
     }
-    const storeAgentId = resolvedAgentId;
-    const storePath = resolveStorePath(cfg.session?.store, { agentId: storeAgentId });
-    const store = loadSessionStore(storePath);
-    const entry = store[canonicalSession];
+    const entry = getSessionEntry({
+      agentId: resolvedAgentId,
+      sessionKey: canonicalSession,
+    });
     if (entry) {
       continue;
     }
     warnings.push(
       [
-        `- Agent ${agentId} heartbeat.session pins ${configuredSession} (resolved to ${canonicalSession}) but that session has no entry in ${storePath}.`,
+        `- Agent ${agentId} heartbeat.session pins ${configuredSession} (resolved to ${canonicalSession}) but that session has no SQLite entry for agent ${resolvedAgentId}.`,
         `  Heartbeats will run but resolve delivery to channel="none"/reason="no-target", so replies are dropped silently.`,
         `  Fix: point heartbeat.session at a session the agent actually owns, set heartbeat.target="none" to suppress delivery, or remove the heartbeat.session field to fall back to the agent main session.`,
       ].join("\n"),

@@ -1,8 +1,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  deleteSessionEntry,
+  listSessionEntries,
+  upsertSessionEntry,
+} from "../config/sessions/store.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { describeHeartbeatSessionTargetIssues } from "./doctor-heartbeat-session-target.js";
 
@@ -14,6 +19,7 @@ describe("describeHeartbeatSessionTargetIssues", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -22,7 +28,6 @@ describe("describeHeartbeatSessionTargetIssues", () => {
     return {
       session: {
         mainKey: "work",
-        store: path.join(tmpDir, "agents", "{agentId}", "sessions", "sessions.json"),
       },
       agents: {
         list: [
@@ -43,7 +48,6 @@ describe("describeHeartbeatSessionTargetIssues", () => {
     return {
       session: {
         mainKey: "work",
-        store: path.join(tmpDir, "agents", "{agentId}", "sessions", "sessions.json"),
       },
       agents: {
         defaults: {
@@ -58,10 +62,14 @@ describe("describeHeartbeatSessionTargetIssues", () => {
     } as OpenClawConfig;
   }
 
-  function writeStore(cfg: OpenClawConfig, entries: Record<string, unknown>) {
-    const storePath = resolveStorePath(cfg.session?.store, { agentId: "ops" });
-    fs.mkdirSync(path.dirname(storePath), { recursive: true });
-    fs.writeFileSync(storePath, JSON.stringify(entries, null, 2));
+  function writeStore(_cfg: OpenClawConfig, entries: Record<string, SessionEntry>) {
+    vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
+    for (const { sessionKey } of listSessionEntries({ agentId: "ops" })) {
+      deleteSessionEntry({ agentId: "ops", sessionKey });
+    }
+    for (const [sessionKey, entry] of Object.entries(entries)) {
+      upsertSessionEntry({ agentId: "ops", sessionKey, entry });
+    }
   }
 
   it("uses runtime session canonicalization before warning", () => {
@@ -70,6 +78,8 @@ describe("describeHeartbeatSessionTargetIssues", () => {
       "agent:ops:work": {
         sessionId: "agent:ops:work",
         updatedAt: Date.now(),
+        lastChannel: "telegram",
+        lastTo: "123",
       },
     });
 

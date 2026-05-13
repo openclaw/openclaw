@@ -118,14 +118,6 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function requireFirstUpdateSessionStoreCall() {
-  const call = vi.mocked(sessions.updateSessionStore).mock.calls[0];
-  if (call === undefined) {
-    throw new Error("expected update session store call");
-  }
-  return call;
-}
-
 describe("subagent-orphan-recovery", () => {
   beforeEach(() => {
     vi.useFakeTimers();

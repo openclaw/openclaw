@@ -266,7 +266,7 @@ describe("memory tools", () => {
       });
       const event = events[0];
       expect(event?.type).toBe("memory.recall.recorded");
-      expect(event?.query).toBe("glacier backup");
+      expect((event as { query?: unknown } | undefined)?.query).toBe("glacier backup");
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }

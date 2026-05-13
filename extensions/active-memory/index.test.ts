@@ -225,6 +225,28 @@ describe("active-memory plugin", () => {
     }
     return value;
   };
+  const requireRecord = (value: unknown, message: string): Record<string, unknown> => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error(message);
+    }
+    return value as Record<string, unknown>;
+  };
+  const requirePrependContext = (result: unknown): string =>
+    requireNonEmptyString(
+      (result as { prependContext?: unknown } | undefined)?.prependContext,
+      "expected prependContext",
+    );
+  const expectPrependContextContains = (result: unknown, text: string) => {
+    expect(requirePrependContext(result)).toContain(text);
+  };
+  const lastEmbeddedRunParams = () => {
+    const calls = runEmbeddedPiAgent.mock.calls;
+    return requireRecord(calls[calls.length - 1]?.[0], "expected embedded run params");
+  };
+  const lastEmbeddedPrompt = () =>
+    requireNonEmptyString(lastEmbeddedRunParams().prompt, "expected embedded prompt");
+  const lastEmbeddedSessionKey = () =>
+    requireNonEmptyString(lastEmbeddedRunParams().sessionKey, "expected embedded session key");
   const seedSessionEntry = (sessionKey: string, entry: Record<string, unknown>) => {
     hoisted.sessionStore[sessionKey] = {
       sessionId: `${sessionKey}:session`,

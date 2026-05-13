@@ -11,7 +11,11 @@ import {
   startHeartbeatRunner,
 } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
-import { seedHeartbeatSession, withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
+import {
+  seedHeartbeatSession,
+  seedHeartbeatSessionRows,
+  withTempHeartbeatSandbox,
+} from "./heartbeat-runner.test-utils.js";
 import { requestHeartbeat, resetHeartbeatWakeStateForTests } from "./heartbeat-wake.js";
 
 installHeartbeatRunnerTestRuntime();
@@ -434,7 +438,7 @@ describe("runHeartbeatOnce commitments", () => {
 
   it("appends HEARTBEAT.md directives to commitment prompt when tasks are configured but none are due", async () => {
     const { result, sendTelegram, store } = await withTempHeartbeatSandbox(
-      async ({ tmpDir, storePath, replySpy }) => {
+      async ({ tmpDir, agentId, replySpy }) => {
         vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
         const sessionKey = "agent:main:telegram:user-155462274";
         const cfg: OpenClawConfig = {
@@ -448,7 +452,6 @@ describe("runHeartbeatOnce commitments", () => {
             },
           },
           channels: { telegram: { allowFrom: ["*"] } },
-          session: { store: storePath },
           commitments: { enabled: true },
         };
         // HEARTBEAT.md has a tasks block (task ran recently — NOT due) plus extra prose directives.
@@ -463,21 +466,17 @@ tasks:
 `,
           "utf-8",
         );
-        // Seed heartbeatTaskState so the task ran at nowMs (well within 5m interval — not due).
-        await fs.writeFile(
-          storePath,
-          JSON.stringify({
-            [sessionKey]: {
-              sessionId: "sid",
-              updatedAt: nowMs,
-              lastChannel: "telegram",
-              lastProvider: "telegram",
-              lastTo: "155462274",
-              heartbeatTaskState: { "check-deployment": nowMs },
-            },
-          }),
-        );
-        await saveCommitmentStore(undefined, {
+        // Seed heartbeatTaskState so the task ran at nowMs (well within 5m interval - not due).
+        await seedHeartbeatSessionRows(agentId, {
+          [sessionKey]: {
+            sessionId: "sid",
+            updatedAt: nowMs,
+            lastChannel: "telegram",
+            lastTo: "155462274",
+            heartbeatTaskState: { "check-deployment": nowMs },
+          },
+        });
+        await saveCommitmentStore({
           version: 1,
           commitments: [buildCommitment({ id: "cm_interview", sessionKey, to: "155462274" })],
         });

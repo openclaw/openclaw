@@ -59,6 +59,14 @@ vi.mock("../cli/command-config-resolution.runtime.js", () => ({
 
 const runtime = createThrowingTestRuntime();
 
+function requireResolveCommandConfigParams(): ResolveCommandConfigParams {
+  const call = resolveCommandConfigWithSecretsMock.mock.calls[0];
+  if (!call) {
+    throw new Error("expected resolveCommandConfigWithSecrets call");
+  }
+  return call[0];
+}
+
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(fn, { prefix: "openclaw-agent-" });
 }

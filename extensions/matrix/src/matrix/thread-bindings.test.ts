@@ -150,18 +150,6 @@ describe("matrix thread bindings", () => {
     return (await readPersistedBindings(customStateDir))[0]?.lastActivityAt;
   }
 
-  async function readPersistedBindings(bindingsPath: string) {
-    const raw = await fs.readFile(bindingsPath, "utf-8");
-    return JSON.parse(raw) as {
-      version?: number;
-      bindings?: Array<{
-        conversationId?: string;
-        parentConversationId?: string;
-        targetSessionKey?: string;
-      }>;
-    };
-  }
-
   async function expectPersistedThreadBinding(
     customStateDir: string | undefined,
     expected: {

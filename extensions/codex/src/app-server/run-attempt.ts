@@ -41,10 +41,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { markAuthProfileBlockedUntil, resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
-import {
-  buildCodexAppInventoryCacheKey,
-  defaultCodexAppInventoryCache,
-} from "./app-inventory-cache.js";
+import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import {
   refreshCodexAppServerAuthTokens,
@@ -1248,7 +1245,6 @@ export async function runCodexAppServerAttempt(
     // Determine terminal-turn status before invoking the projector so a throw
     // inside projector.handleNotification still releases the session lane.
     // See openclaw/openclaw#67996.
-    const isTurnCompletion = notification.method === "turn/completed" && isCurrentTurnNotification;
     const isTurnAbortMarker =
       isCurrentTurnNotification &&
       isCodexTurnAbortMarkerNotification(notification, {
@@ -2720,6 +2716,7 @@ function isCodexTurnAbortMarkerNotification(
   if (!isJsonObject(item) || readString(item, "role") !== "user") {
     return false;
   }
+  const role = readString(item, "role");
   const text = extractRawResponseItemText(item).trim();
   if (
     role === "user" &&

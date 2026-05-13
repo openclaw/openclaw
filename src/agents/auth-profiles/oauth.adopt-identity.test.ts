@@ -50,6 +50,22 @@ function readPersistedStore(agentDir: string): AuthProfileStore {
   return store;
 }
 
+function expectOAuthProfileFields(
+  store: AuthProfileStore,
+  profileId: string,
+  expected: Record<string, unknown>,
+): void {
+  const credential = store.profiles[profileId];
+  expect(credential).toBeDefined();
+  for (const [key, value] of Object.entries(expected)) {
+    if (key === "access" || key === "refresh" || key === "idToken") {
+      expect(credential).not.toHaveProperty(key);
+    } else {
+      expect((credential as Record<string, unknown> | undefined)?.[key]).toEqual(value);
+    }
+  }
+}
+
 // Cross-account-leak defense-in-depth: each adopt site in oauth.ts calls the
 // shared identity copy gate before copying main-store credentials into the
 // sub-agent store. Unit tests cover policy variants; this suite proves each

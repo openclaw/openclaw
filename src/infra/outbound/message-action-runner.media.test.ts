@@ -78,6 +78,14 @@ function firstMockArg(
   return requireRecord(arg);
 }
 
+function requireLoadWebMediaCall(callIndex = 0): readonly unknown[] {
+  const call = vi.mocked(loadWebMedia).mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected loadWebMedia call ${callIndex}`);
+  }
+  return call;
+}
+
 async function withSandbox(test: (sandboxDir: string) => Promise<void>) {
   const sandboxDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-sandbox-"));
   try {

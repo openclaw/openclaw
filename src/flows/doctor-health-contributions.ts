@@ -342,11 +342,6 @@ async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext): Promis
   await noteSessionTranscriptHealth({ shouldRepair: ctx.prompter.shouldRepair });
 }
 
-async function runConfigAuditScrubHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { maybeScrubConfigAuditLog } = await import("../commands/doctor-config-audit-scrub.js");
-  await maybeScrubConfigAuditLog({ shouldRepair: ctx.prompter.shouldRepair });
-}
-
 async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairLegacyCronStore, noteLegacyWhatsAppCrontabHealthCheck } =
     await import("../commands/doctor/legacy/cron.js");

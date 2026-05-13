@@ -91,7 +91,7 @@ function buildDeps(
 }
 
 describe("runAccessStage — dynamic cfg routing (#69546)", () => {
-  it("re-evaluates resolveAgentRoute against the cfg supplied on each call", () => {
+  it("re-evaluates resolveAgentRoute against the cfg supplied on each call", async () => {
     const account = buildAccount();
     const peerId = "480562E9913A985D4A79822A643E27B6";
 
@@ -120,13 +120,13 @@ describe("runAccessStage — dynamic cfg routing (#69546)", () => {
 
     const event = buildEvent(peerId);
 
-    const first = runAccessStage(event, buildDeps(accountOnly, runtime, account));
+    const first = await runAccessStage(event, buildDeps(accountOnly, runtime, account));
     expect(first.kind).toBe("allow");
     if (first.kind === "allow") {
       expect(first.route.agentId).toBe("study");
     }
 
-    const second = runAccessStage(event, buildDeps(withPeer, runtime, account));
+    const second = await runAccessStage(event, buildDeps(withPeer, runtime, account));
     expect(second.kind).toBe("allow");
     if (second.kind === "allow") {
       expect(second.route.agentId).toBe("tutor");

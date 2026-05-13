@@ -44,7 +44,7 @@ function createExistingSessionProfileState(params?: {
   };
 }
 
-function createManagedProfileState() {
+function createManagedProfileState(profileOverrides: Record<string, unknown> = {}) {
   return {
     resolved: {
       enabled: true,
