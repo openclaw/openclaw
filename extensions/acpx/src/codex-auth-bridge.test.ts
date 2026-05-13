@@ -16,6 +16,8 @@ const previousEnv = {
   CODEX_HOME: process.env.CODEX_HOME,
   GEMINI_API_KEY: process.env.GEMINI_API_KEY,
   GOOGLE_API_KEY: process.env.GOOGLE_API_KEY,
+  GOOGLE_GENAI_USE_GCA: process.env.GOOGLE_GENAI_USE_GCA,
+  GOOGLE_GENAI_USE_VERTEXAI: process.env.GOOGLE_GENAI_USE_VERTEXAI,
   OPENCLAW_AGENT_DIR: process.env.OPENCLAW_AGENT_DIR,
 };
 
@@ -111,6 +113,8 @@ afterEach(async () => {
   restoreEnv("CODEX_HOME");
   restoreEnv("GEMINI_API_KEY");
   restoreEnv("GOOGLE_API_KEY");
+  restoreEnv("GOOGLE_GENAI_USE_GCA");
+  restoreEnv("GOOGLE_GENAI_USE_VERTEXAI");
   restoreEnv("OPENCLAW_AGENT_DIR");
   for (const dir of tempDirs.splice(0)) {
     await fs.rm(dir, { recursive: true, force: true });
@@ -526,7 +530,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
     expect(process.env.ANTHROPIC_API_KEY).toBe("parent-secret");
   });
 
-  it("strips Gemini provider API keys only from the spawned ACP child env", async () => {
+  it("strips Gemini provider auth env only from the spawned ACP child env", async () => {
     const root = await makeTempDir();
     const stateDir = path.join(root, "state");
     const generated = generatedGeminiPaths(stateDir);
@@ -537,7 +541,16 @@ describe("prepareAcpxCodexAuthConfig", () => {
       geminiBinPath,
       [
         "#!/usr/bin/env node",
-        "console.log(JSON.stringify({ argv: process.argv.slice(2), geminiApiKey: process.env.GEMINI_API_KEY ?? null, googleApiKey: process.env.GOOGLE_API_KEY ?? null, inheritedProbe: process.env.OPENCLAW_ACPX_ENV_PROBE ?? null }));",
+        "console.log(",
+        "  JSON.stringify({",
+        "    argv: process.argv.slice(2),",
+        "    geminiApiKey: process.env.GEMINI_API_KEY ?? null,",
+        "    googleApiKey: process.env.GOOGLE_API_KEY ?? null,",
+        "    googleGenaiUseGca: process.env.GOOGLE_GENAI_USE_GCA ?? null,",
+        "    googleGenaiUseVertexai: process.env.GOOGLE_GENAI_USE_VERTEXAI ?? null,",
+        "    inheritedProbe: process.env.OPENCLAW_ACPX_ENV_PROBE ?? null,",
+        "  }),",
+        ");",
         "",
       ].join("\n"),
       "utf8",
@@ -545,6 +558,8 @@ describe("prepareAcpxCodexAuthConfig", () => {
     await fs.chmod(geminiBinPath, 0o755);
     process.env.GEMINI_API_KEY = "parent-gemini-secret";
     process.env.GOOGLE_API_KEY = "parent-google-secret";
+    process.env.GOOGLE_GENAI_USE_GCA = "parent-gca-selector";
+    process.env.GOOGLE_GENAI_USE_VERTEXAI = "parent-vertex-selector";
     const pluginConfig = resolveAcpxPluginConfig({
       rawConfig: {},
       workspaceDir: root,
@@ -561,6 +576,8 @@ describe("prepareAcpxCodexAuthConfig", () => {
         ...process.env,
         GEMINI_API_KEY: "child-gemini-secret",
         GOOGLE_API_KEY: "child-google-secret",
+        GOOGLE_GENAI_USE_GCA: "child-gca-selector",
+        GOOGLE_GENAI_USE_VERTEXAI: "child-vertex-selector",
         OPENCLAW_ACPX_ENV_PROBE: "preserved",
         PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
       },
@@ -569,14 +586,20 @@ describe("prepareAcpxCodexAuthConfig", () => {
       argv?: unknown;
       geminiApiKey?: unknown;
       googleApiKey?: unknown;
+      googleGenaiUseGca?: unknown;
+      googleGenaiUseVertexai?: unknown;
       inheritedProbe?: unknown;
     };
     expect(launched.argv).toEqual(["--acp"]);
     expect(launched.geminiApiKey).toBeNull();
     expect(launched.googleApiKey).toBeNull();
+    expect(launched.googleGenaiUseGca).toBeNull();
+    expect(launched.googleGenaiUseVertexai).toBeNull();
     expect(launched.inheritedProbe).toBe("preserved");
     expect(process.env.GEMINI_API_KEY).toBe("parent-gemini-secret");
     expect(process.env.GOOGLE_API_KEY).toBe("parent-google-secret");
+    expect(process.env.GOOGLE_GENAI_USE_GCA).toBe("parent-gca-selector");
+    expect(process.env.GOOGLE_GENAI_USE_VERTEXAI).toBe("parent-vertex-selector");
   });
 
   it("does not copy source Codex auth", async () => {
@@ -782,21 +805,21 @@ describe("prepareAcpxCodexAuthConfig", () => {
       stderrScript,
       `const chunks = [
         "token=sk-test",
-        "secret1234567890\n",
+        "secret1234567890\\n",
         "Authorization: Bearer bearer-secret",
-        "-token-1234567890\n",
-        '{"client_secret":"json-secret-1234567890","api_key":"json-api-key-1234567890"}\n',
-        "client-secret: kebab-secret-1234567890\n",
+        "-token-1234567890\\n",
+        '{"client_secret":"json-secret-1234567890","api_key":"json-api-key-1234567890"}\\n',
+        "client-secret: kebab-secret-1234567890\\n",
         "standalone sk-live-secret",
-        "1234567890\n",
+        "1234567890\\n",
         "url=https://example.test/callback?token=query-secret",
-        "-1234567890\n",
+        "-1234567890\\n",
         "github_pat_1234567890",
-        "abcdefghijklmnopqrstuvwxyz\n",
-        "-----BEGIN PRIVATE KEY-----\nprivate-secret-body\n",
-        "-----END PRIVATE KEY-----\n",
+        "abcdefghijklmnopqrstuvwxyz\\n",
+        "-----BEGIN PRIVATE KEY-----\\nprivate-secret-body\\n",
+        "-----END PRIVATE KEY-----\\n",
         "tail-token=tail-secret-1234567890",
-        "\n-----BEGIN PRIVATE KEY-----\ntruncated-private-secret",
+        "\\n-----BEGIN PRIVATE KEY-----\\ntruncated-private-secret",
       ];
       let index = 0;
       function writeNext() {

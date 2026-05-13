@@ -48,7 +48,12 @@ const BUILT_IN_ACP_HARNESS_METADATA = {
   },
   gemini: {
     displayName: "Gemini",
-    stripEnvVars: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+    stripEnvVars: [
+      "GEMINI_API_KEY",
+      "GOOGLE_API_KEY",
+      "GOOGLE_GENAI_USE_GCA",
+      "GOOGLE_GENAI_USE_VERTEXAI",
+    ],
   },
 } satisfies Record<string, BuiltInAcpHarnessMetadata>;
 
