@@ -1518,6 +1518,9 @@ export function createExecTool(
           "Warning: tools.exec.pathPrepend is ignored for host=node. Configure PATH on the node host/service instead.",
         );
       } else {
+        if (defaultPathPrepend.length > 0) {
+          env.OPENCLAW_PREPEND_PATH = defaultPathPrepend.join(path.delimiter);
+        }
         applyPathPrepend(env, defaultPathPrepend);
       }
 

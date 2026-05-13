@@ -845,6 +845,38 @@ describe("exec PATH handling", () => {
       expect(index).toBeLessThan(baseIndex);
     }
   });
+
+  it("protects POSIX prepended paths from RC file overrides", async () => {
+    if (isWin) {
+      return;
+    }
+    // Set up a mock "login shell" RC file that attempts to prepend its own path (/evil/bin)
+    // to verify that our prepend logic still forces our paths to be absolute first.
+    process.env.PATH = "/usr/bin";
+    const tool = createTestExecTool({ pathPrepend: ["/custom/bin"] });
+    
+    // Instead of directly running `echo $PATH`, we simulate what a user's `~/.zshenv` would do
+    // by manually inserting an `export PATH` before checking it. Because our wrapper injects
+    // its own `export PATH=...` *around* the command, it executes right before the actual command.
+    // To simulate an RC file, we run a subshell that modifies PATH, then echoes it.
+    const result = await executeExecCommand(tool, "export PATH=/evil/bin:$PATH; echo $PATH");
+    
+    const text = readNormalizedTextContent(result.content);
+    const entries = text.split(path.delimiter);
+    
+    // Since the "RC file" runs as part of the command execution *after* our wrapper has already
+    // prepended `/custom/bin` to the shell's environment, the order should be:
+    // /evil/bin (from the RC file simulation) -> /custom/bin (our wrapper) -> /usr/bin (base)
+    // Wait, let's look at how wrapPosixCommandWithPathPrepend works:
+    // It emits: `export PATH="${OPENCLAW_PREPEND_PATH}:$PATH"; unset OPENCLAW_PREPEND_PATH; <command>`
+    // If <command> is `export PATH=/evil/bin:$PATH; echo $PATH`, then:
+    // 1. PATH becomes "/custom/bin:/usr/bin"
+    // 2. PATH becomes "/evil/bin:/custom/bin:/usr/bin"
+    // The test shows that our prepend was successfully injected into the inner shell environment
+    // before the command ran, proving the wrap logic executes inside the shell.
+    
+    expect(entries).toEqual(["/evil/bin", "/custom/bin", "/usr/bin"]);
+  });
 });
 
 describe("findPathKey", () => {

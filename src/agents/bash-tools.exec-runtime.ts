@@ -571,6 +571,25 @@ export function buildExecRuntimeErrorOutcome(params: {
   };
 }
 
+/**
+ * Apply PATH prepends inside the shell command rather than just the environment.
+ * This ensures our paths take precedence even if user RC files (e.g. ~/.zshenv)
+ * prepend their own entries to PATH during shell startup.
+ */
+function wrapPosixCommandWithPathPrepend(command: string, env: Record<string, string>): string {
+  if (process.platform === "win32") {
+    return command;
+  }
+
+  if (!env.OPENCLAW_PREPEND_PATH) {
+    return command;
+  }
+
+  // Rely on the shell to safely expand the environment variable, 
+  // exactly matching the Docker sandbox implementation.
+  return `export PATH="\${OPENCLAW_PREPEND_PATH}:$PATH"; unset OPENCLAW_PREPEND_PATH; ${command}`;
+}
+
 export async function runExecProcess(opts: {
   command: string;
   // Execute this instead of `command` (which is kept for display/session/logging).
@@ -755,11 +774,17 @@ export async function runExecProcess(opts: {
       };
     }
     const { shell, args: shellArgs } = getShellConfig();
-    const childArgv = [shell, ...shellArgs, execCommand];
+    
+    // Apply PATH prepends inside the shell command rather than just the environment.
+    // This ensures our paths take precedence even if user RC files (e.g. ~/.zshenv)
+    // prepend their own entries to PATH during shell startup.
+    const commandWithPathPrepend = wrapPosixCommandWithPathPrepend(execCommand, shellRuntimeEnv);
+
+    const childArgv = [shell, ...shellArgs, commandWithPathPrepend];
     if (opts.usePty) {
       return {
         mode: "pty" as const,
-        ptyCommand: execCommand,
+        ptyCommand: commandWithPathPrepend,
         childFallbackArgv: childArgv,
         env: shellRuntimeEnv,
         stdinMode: "pipe-open" as const,
