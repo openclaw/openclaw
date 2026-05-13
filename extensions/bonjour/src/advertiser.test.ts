@@ -47,7 +47,15 @@ function warnMessages(): string[] {
 }
 
 function expectWarnContaining(fragment: string) {
-  expect(warnMessages().some((message) => message.includes(fragment))).toBe(true);
+  expect(warnMessages().join("\n")).toContain(fragment);
+}
+
+function mockCall(mock: ReturnType<typeof vi.fn>, index = 0): unknown[] {
+  const call = mock.mock.calls.at(index);
+  if (!call) {
+    throw new Error(`Expected mock call ${index}`);
+  }
+  return call;
 }
 
 function enableAdvertiserUnitMode(hostname = "test-host") {
@@ -311,7 +319,7 @@ describe("gateway bonjour advertiser", () => {
       const started = await startAdvertiser({ gatewayPort: 18789 });
       childProcessModule.exec('arp -a | findstr /C:"---"', () => {});
 
-      const execCall = execMock.mock.calls[0];
+      const execCall = mockCall(execMock);
       expect(execCall?.[0]).toBe('arp -a | findstr /C:"---"');
       expect(execCall?.[1]).toEqual({ windowsHide: true });
       expect(execCall?.[2]).toBeTypeOf("function");
@@ -371,7 +379,7 @@ describe("gateway bonjour advertiser", () => {
       ([event]) => event === "unhandledRejection",
     );
     expect(unhandledRejectionRegistration?.[1]).toBeTypeOf("function");
-    expect(processOn.mock.calls.some(([event]) => event === "uncaughtException")).toBe(false);
+    expect(processOn.mock.calls.map(([event]) => event)).not.toContain("uncaughtException");
 
     await started.stop();
   });
@@ -422,10 +430,10 @@ describe("gateway bonjour advertiser", () => {
       sshPort: 2222,
     });
 
-    const handler = registerUnhandledRejectionHandler.mock.calls[0]?.[0] as
+    const handler = mockCall(registerUnhandledRejectionHandler).at(0) as
       | ((reason: unknown) => boolean)
       | undefined;
-    const exceptionHandler = registerUncaughtExceptionHandler.mock.calls[0]?.[0] as
+    const exceptionHandler = mockCall(registerUncaughtExceptionHandler).at(0) as
       | ((reason: unknown) => boolean)
       | undefined;
     expect(handler).toBeTypeOf("function");
@@ -478,7 +486,7 @@ describe("gateway bonjour advertiser", () => {
       sshPort: 2222,
     });
 
-    const handler = registerUnhandledRejectionHandler.mock.calls[0]?.[0] as
+    const handler = mockCall(registerUnhandledRejectionHandler).at(0) as
       | ((reason: unknown) => boolean)
       | undefined;
     expect(handler?.(new Error("CIAO ANNOUNCEMENT CANCELLED"))).toBe(true);
@@ -488,7 +496,7 @@ describe("gateway bonjour advertiser", () => {
     });
 
     expectWarnContaining("suppressing ciao cancellation");
-    expect(warnMessages().some((message) => message.includes("restarting advertiser"))).toBe(true);
+    expectWarnContaining("restarting advertiser");
     expect(destroy).toHaveBeenCalledTimes(1);
     expect(advertise).toHaveBeenCalledTimes(2);
 
@@ -516,7 +524,7 @@ describe("gateway bonjour advertiser", () => {
 
     // allow promise rejection handler to run
     await Promise.resolve();
-    expect(warnMessages().some((message) => message.includes("advertise failed"))).toBe(true);
+    expectWarnContaining("advertise failed");
 
     // watchdog first retries, then recreates the advertiser after the service
     // stays unhealthy across multiple 5s ticks.
@@ -545,7 +553,7 @@ describe("gateway bonjour advertiser", () => {
     });
 
     expect(advertise).toHaveBeenCalledTimes(1);
-    expect(warnMessages().some((message) => message.includes("advertise threw"))).toBe(true);
+    expectWarnContaining("advertise threw");
 
     await started.stop();
   });
@@ -679,7 +687,7 @@ describe("gateway bonjour advertiser", () => {
 
     await vi.advanceTimersByTimeAsync(25_000);
 
-    expect(warnMessages().some((message) => message.includes("restarting advertiser"))).toBe(true);
+    expectWarnContaining("restarting advertiser");
     expect(createService).toHaveBeenCalledTimes(2);
     expect(advertise).toHaveBeenCalledTimes(2);
     expect(destroy).toHaveBeenCalledTimes(1);
@@ -748,11 +756,8 @@ describe("gateway bonjour advertiser", () => {
 
     expect(advertise).toHaveBeenCalledTimes(1);
     expect(createService).toHaveBeenCalledTimes(1);
-    expect(
-      warnMessages().every(
-        (message) =>
-          !message.includes("watchdog detected non-announced service; attempting re-advertise"),
-      ),
+    expect(warnMessages().join("\n")).not.toContain(
+      "watchdog detected non-announced service; attempting re-advertise",
     );
 
     await vi.advanceTimersByTimeAsync(10_000);

@@ -169,6 +169,18 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value;
 }
 
+function firstMockArg(mock: { mock: { calls: unknown[][] } }): unknown {
+  return mock.mock.calls[0]?.[0];
+}
+
+function firstMockStringArg(mock: { mock: { calls: unknown[][] } }, label: string): string {
+  const value = firstMockArg(mock);
+  if (typeof value !== "string") {
+    throw new Error(`Expected ${label} to be a string`);
+  }
+  return value;
+}
+
 function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
   for (const [key, value] of Object.entries(fields)) {
     expect(record[key]).toEqual(value);
@@ -669,7 +681,7 @@ describe("provider-runtime", () => {
     }
 
     expect(providerRuntimeWarnMock).toHaveBeenCalledTimes(1);
-    const warning = String(providerRuntimeWarnMock.mock.calls.at(0)?.[0] ?? "");
+    const warning = firstMockStringArg(providerRuntimeWarnMock, "provider warning");
     expect(warning).toContain('Provider plugin "legacy-providerWARN forged"');
     expect(warning).not.toContain("\n");
   });
@@ -870,7 +882,7 @@ describe("provider-runtime", () => {
       },
     });
     expectRecordFields(
-      requireRecord(extraParamsForTransport.mock.calls.at(0)?.[0], "transport params context"),
+      requireRecord(firstMockArg(extraParamsForTransport), "transport params context"),
       {
         provider: DEMO_PROVIDER_ID,
         modelId: MODEL.id,
@@ -1006,10 +1018,7 @@ describe("provider-runtime", () => {
     expect(contribution?.stablePrefix).toContain("<persona_latch>");
     expect(contribution?.stablePrefix).toContain("provider overlay");
     expect(contribution?.sectionOverrides?.execution_bias).toBe("saw built-in overlay");
-    const overlayContext = requireRecord(
-      resolvePromptOverlay.mock.calls.at(0)?.[0],
-      "overlay context",
-    );
+    const overlayContext = requireRecord(firstMockArg(resolvePromptOverlay), "overlay context");
     expect(overlayContext.provider).toBe("openrouter");
     expect(overlayContext.modelId).toBe("openai/gpt-5.4");
     expect(

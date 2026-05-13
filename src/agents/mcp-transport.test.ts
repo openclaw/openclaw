@@ -39,7 +39,10 @@ function redirectWithoutLocationResponse(status = 302): Response {
 }
 
 function latestStreamableTransportOptions(): StreamableTransportOptions {
-  const options = streamableTransportConstructorMock.mock.calls.at(-1)?.[1];
+  const latestCall = streamableTransportConstructorMock.mock.calls[
+    streamableTransportConstructorMock.mock.calls.length - 1
+  ] as unknown[] | undefined;
+  const options = latestCall?.[1];
   if (!options || typeof options !== "object") {
     throw new Error("Expected streamable HTTP transport options");
   }
@@ -52,6 +55,16 @@ function latestStreamableFetch() {
     throw new Error("Expected streamable HTTP transport fetch");
   }
   return fetch;
+}
+
+function runtimeFetchCall(index: number): [RequestInfo | URL, RequestInit | undefined] {
+  const call = runtimeFetchMock.mock.calls[index] as
+    | [RequestInfo | URL, RequestInit | undefined]
+    | undefined;
+  if (!call) {
+    throw new Error(`Expected runtime fetch call ${index}`);
+  }
+  return call;
 }
 
 describe("resolveMcpTransport", () => {
@@ -91,12 +104,12 @@ describe("resolveMcpTransport", () => {
     });
 
     expect(runtimeFetchMock).toHaveBeenCalledTimes(2);
-    expect(runtimeFetchMock.mock.calls[0]?.[0]).toBe("https://mcp.example.com/mcp");
-    expect(runtimeFetchMock.mock.calls[0]?.[1]?.redirect).toBe("manual");
-    expect(runtimeFetchMock.mock.calls[1]?.[0]).toBe("https://redirect.example/next");
-    expect(runtimeFetchMock.mock.calls[1]?.[1]?.redirect).toBe("manual");
+    expect(runtimeFetchCall(0)?.[0]).toBe("https://mcp.example.com/mcp");
+    expect(runtimeFetchCall(0)?.[1]?.redirect).toBe("manual");
+    expect(runtimeFetchCall(1)?.[0]).toBe("https://redirect.example/next");
+    expect(runtimeFetchCall(1)?.[1]?.redirect).toBe("manual");
 
-    const redirectedHeaders = new Headers(runtimeFetchMock.mock.calls[1]?.[1]?.headers);
+    const redirectedHeaders = new Headers(runtimeFetchCall(1)?.[1]?.headers);
     expect(redirectedHeaders.get("x-api-key")).toBeNull();
     expect(redirectedHeaders.get("accept")).toBe("application/json, text/event-stream");
     expect(redirectedHeaders.get("user-agent")).toBe("node");
@@ -128,11 +141,11 @@ describe("resolveMcpTransport", () => {
     });
 
     expect(runtimeFetchMock).toHaveBeenCalledTimes(2);
-    expect(runtimeFetchMock.mock.calls[1]?.[0]).toBe("https://redirect.example/mcp");
-    expect(runtimeFetchMock.mock.calls[1]?.[1]?.method).toBe("POST");
-    expect(runtimeFetchMock.mock.calls[1]?.[1]?.body).toBe(body);
+    expect(runtimeFetchCall(1)?.[0]).toBe("https://redirect.example/mcp");
+    expect(runtimeFetchCall(1)?.[1]?.method).toBe("POST");
+    expect(runtimeFetchCall(1)?.[1]?.body).toBe(body);
 
-    const redirectedHeaders = new Headers(runtimeFetchMock.mock.calls[1]?.[1]?.headers);
+    const redirectedHeaders = new Headers(runtimeFetchCall(1)?.[1]?.headers);
     expect(redirectedHeaders.get("x-api-key")).toBeNull();
     expect(redirectedHeaders.get("content-type")).toBe("application/json");
   });
@@ -158,11 +171,11 @@ describe("resolveMcpTransport", () => {
     });
 
     expect(runtimeFetchMock).toHaveBeenCalledTimes(2);
-    expect(runtimeFetchMock.mock.calls[1]?.[0]).toBe("https://mcp.example.com/mcp");
-    expect(runtimeFetchMock.mock.calls[1]?.[1]?.method).toBe("GET");
-    expect(runtimeFetchMock.mock.calls[1]?.[1]?.body).toBeUndefined();
+    expect(runtimeFetchCall(1)?.[0]).toBe("https://mcp.example.com/mcp");
+    expect(runtimeFetchCall(1)?.[1]?.method).toBe("GET");
+    expect(runtimeFetchCall(1)?.[1]?.body).toBeUndefined();
 
-    const redirectedHeaders = new Headers(runtimeFetchMock.mock.calls[1]?.[1]?.headers);
+    const redirectedHeaders = new Headers(runtimeFetchCall(1)?.[1]?.headers);
     expect(redirectedHeaders.get("content-type")).toBeNull();
   });
 

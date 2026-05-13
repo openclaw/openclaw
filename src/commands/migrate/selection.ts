@@ -493,6 +493,36 @@ export function reconcileInteractiveMigrationSkillToggleValues(
   );
 }
 
+export function reconcileInteractiveMigrationEnterValues(
+  selectedValues: readonly string[],
+  activatedValue: string | undefined,
+  selectableValues: readonly string[],
+  opts: { preserveDeselectedActivatedValue?: boolean } = {},
+): string[] {
+  if (activatedValue === MIGRATION_SELECTION_SKIP) {
+    return [MIGRATION_SELECTION_SKIP];
+  }
+  if (activatedValue === MIGRATION_SELECTION_TOGGLE_ALL_ON) {
+    return [MIGRATION_SELECTION_TOGGLE_ALL_ON, ...selectableValues];
+  }
+  if (activatedValue === MIGRATION_SELECTION_TOGGLE_ALL_OFF) {
+    return [MIGRATION_SELECTION_TOGGLE_ALL_OFF];
+  }
+  if (activatedValue !== undefined && selectableValues.includes(activatedValue)) {
+    const selectedSelectableValues = selectedValues.filter(
+      (value) =>
+        value !== MIGRATION_SELECTION_TOGGLE_ALL_ON &&
+        value !== MIGRATION_SELECTION_TOGGLE_ALL_OFF &&
+        value !== MIGRATION_SELECTION_SKIP,
+    );
+    if (opts.preserveDeselectedActivatedValue && !selectedValues.includes(activatedValue)) {
+      return selectedSelectableValues;
+    }
+    return Array.from(new Set([...selectedSelectableValues, activatedValue]));
+  }
+  return [...selectedValues];
+}
+
 export function reconcileInteractiveMigrationShortcutValues(
   previousValues: readonly string[],
   selectedValues: readonly string[],
