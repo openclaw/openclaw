@@ -92,4 +92,25 @@ describe("resolveQueueSettings", () => {
       dropPolicy: "summarize",
     });
   });
+
+  it("maps retired persisted session queue modes to compatible modes", () => {
+    expect(
+      resolveQueueSettings({
+        cfg: {} as OpenClawConfig,
+        sessionEntry: { queueMode: "queue" as never },
+      }).mode,
+    ).toBe("steer");
+    expect(
+      resolveQueueSettings({
+        cfg: {} as OpenClawConfig,
+        sessionEntry: { queueMode: "steer-backlog" as never },
+      }).mode,
+    ).toBe("followup");
+    expect(
+      resolveQueueSettings({
+        cfg: {} as OpenClawConfig,
+        sessionEntry: { queueMode: "steer+backlog" as never },
+      }).mode,
+    ).toBe("followup");
+  });
 });

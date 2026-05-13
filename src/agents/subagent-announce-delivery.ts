@@ -514,6 +514,7 @@ async function maybeQueueSubagentAnnounce(params: {
   }
 
   const shouldFollowup =
+    queueSettings.mode === "steer" ||
     queueSettings.mode === "followup" ||
     queueSettings.mode === "collect" ||
     queueSettings.mode === "interrupt";
