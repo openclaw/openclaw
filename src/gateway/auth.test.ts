@@ -1,4 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import os from "node:os";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import {
   assertGatewayAuthConfigured,
@@ -558,6 +560,26 @@ describe("gateway auth", () => {
 });
 
 describe("trusted-proxy auth", () => {
+  function mockLocalInterfaces(nonLoopbackAddress = "10.0.0.2") {
+    const spy = vi.isMockFunction(os.networkInterfaces)
+      ? vi.mocked(os.networkInterfaces)
+      : vi.spyOn(os, "networkInterfaces");
+    spy.mockReturnValue(
+      makeNetworkInterfacesSnapshot({
+        lo: [{ address: "127.0.0.1", family: "IPv4", internal: true }],
+        eth0: [{ address: nonLoopbackAddress, family: "IPv4" }],
+      }),
+    );
+  }
+
+  beforeEach(() => {
+    mockLocalInterfaces();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   type GatewayConnectInput = Parameters<typeof authorizeGatewayConnect>[0];
   const trustedProxyConfig = {
     userHeader: "x-forwarded-user",
@@ -600,6 +622,23 @@ describe("trusted-proxy auth", () => {
     expect(res.ok).toBe(true);
     expect(res.method).toBe("trusted-proxy");
     expect(res.user).toBe("nick@example.com");
+  });
+
+  it("rejects trusted-proxy headers from the host non-loopback interface address", async () => {
+    mockLocalInterfaces("10.0.0.1");
+
+    const res = await authorizeTrustedProxy({
+      trustedProxies: ["10.0.0.1"],
+      remoteAddress: "10.0.0.1",
+      headers: {
+        "x-forwarded-user": "nick@example.com",
+        "x-forwarded-proto": "https",
+        "x-openclaw-proxy-auth": "present",
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("trusted_proxy_local_interface_source");
   });
 
   it("rejects trusted-proxy HTTP requests from origins outside the allowlist", async () => {

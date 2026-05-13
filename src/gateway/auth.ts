@@ -14,6 +14,7 @@ import {
 import { type ResolvedGatewayAuth } from "./auth-resolve.js";
 import {
   isLoopbackAddress,
+  isLocalInterfaceAddress,
   resolveRequestClientIp,
   isTrustedProxyAddress,
   resolveClientIp,
@@ -282,6 +283,9 @@ function authorizeTrustedProxy(params: {
   }
   if (isLoopbackAddress(remoteAddr) && trustedProxyConfig.allowLoopback !== true) {
     return { reason: "trusted_proxy_loopback_source" };
+  }
+  if (!isLoopbackAddress(remoteAddr) && isLocalInterfaceAddress(remoteAddr)) {
+    return { reason: "trusted_proxy_local_interface_source" };
   }
 
   const requiredHeaders = trustedProxyConfig.requiredHeaders ?? [];
