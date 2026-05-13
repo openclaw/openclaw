@@ -1,6 +1,25 @@
 import { join, parse } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+const fetchGuardMocks = vi.hoisted(() => ({
+  fetchWithSsrFGuard: vi.fn(
+    async (params: {
+      url: string;
+      init?: RequestInit;
+      fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+      policy?: unknown;
+    }) => {
+      const fetchImpl = params.fetchImpl ?? globalThis.fetch;
+      const response = await fetchImpl(params.url, params.init);
+      return {
+        response,
+        finalUrl: params.url,
+        release: async () => {},
+      };
+    },
+  ),
+}));
+
 vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
     "openclaw/plugin-sdk/runtime-env",
@@ -17,19 +36,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
   );
   return {
     ...actual,
-    fetchWithSsrFGuard: async (params: {
-      url: string;
-      init?: RequestInit;
-      fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-    }) => {
-      const fetchImpl = params.fetchImpl ?? globalThis.fetch;
-      const response = await fetchImpl(params.url, params.init);
-      return {
-        response,
-        finalUrl: params.url,
-        release: async () => {},
-      };
-    },
+    fetchWithSsrFGuard: fetchGuardMocks.fetchWithSsrFGuard,
   };
 });
 
@@ -738,6 +745,7 @@ describe("loginGeminiCliOAuth", () => {
     delete process.env.GOOGLE_GENAI_USE_GCA;
     mockSettingsExistsSync.mockReset();
     mockSettingsReadFileSync.mockReset();
+    fetchGuardMocks.fetchWithSsrFGuard.mockClear();
     setOAuthSettingsFsForTest({
       existsSync: (...args) => mockSettingsExistsSync(...args),
       readFileSync: (...args) => mockSettingsReadFileSync(...args),
@@ -824,6 +832,32 @@ describe("loginGeminiCliOAuth", () => {
       "PKCE code verifier",
     );
     expect(codeVerifier).not.toBe(authState);
+  });
+
+  it("allows fake-IP DNS for Google OAuth helper requests through the SSRF guard", async () => {
+    const { requests } = installGeminiOAuthFetchMock(({ url }) => {
+      if (url === LOAD_PROD) {
+        return responseJson({
+          currentTier: { id: "standard-tier" },
+          cloudaicompanionProject: { id: "prod-project" },
+        });
+      }
+      return undefined;
+    });
+
+    const { loginGeminiCliOAuth } = await import("./oauth.js");
+    await runRemoteLoginWithCapturedAuthUrl(loginGeminiCliOAuth);
+
+    expect(requests.some((request) => request.url === TOKEN_URL)).toBe(true);
+    expect(requests.some((request) => request.url === LOAD_PROD)).toBe(true);
+    const guardedCalls = fetchGuardMocks.fetchWithSsrFGuard.mock.calls.map(([params]) => params);
+    for (const url of [TOKEN_URL, LOAD_PROD]) {
+      const call = guardedCalls.find((params) => params.url === url);
+      expect(call?.policy).toEqual({
+        allowPrivateNetwork: true,
+        hostnameAllowlist: ["googleapis.com", "*.googleapis.com"],
+      });
+    }
   });
 
   it("rejects manual callback input when the returned state does not match", async () => {

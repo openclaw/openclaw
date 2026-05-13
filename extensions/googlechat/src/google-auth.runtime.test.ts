@@ -115,6 +115,7 @@ describe("googlechat google auth runtime", () => {
         method: "POST",
       },
       policy: {
+        allowPrivateNetwork: true,
         hostnameAllowlist: ["accounts.google.com", "googleapis.com"],
       },
       url: "https://oauth2.googleapis.com/token",
@@ -191,6 +192,7 @@ describe("googlechat google auth runtime", () => {
         method: "POST",
       },
       policy: {
+        allowPrivateNetwork: true,
         hostnameAllowlist: ["accounts.google.com", "googleapis.com"],
       },
       url: "https://oauth2.googleapis.com/token",
@@ -228,6 +230,7 @@ describe("googlechat google auth runtime", () => {
         method: "POST",
       },
       policy: {
+        allowPrivateNetwork: true,
         hostnameAllowlist: ["accounts.google.com", "googleapis.com"],
       },
       url: "https://oauth2.googleapis.com/token",

@@ -58,9 +58,10 @@ type GoogleChatServiceAccountCredentials = Record<string, unknown> & {
 };
 
 const GOOGLE_AUTH_ALLOWED_HOST_SUFFIXES = ["accounts.google.com", "googleapis.com"];
-const GOOGLE_AUTH_POLICY = buildHostnameAllowlistPolicyFromSuffixAllowlist(
-  GOOGLE_AUTH_ALLOWED_HOST_SUFFIXES,
-);
+const GOOGLE_AUTH_POLICY = {
+  ...buildHostnameAllowlistPolicyFromSuffixAllowlist(GOOGLE_AUTH_ALLOWED_HOST_SUFFIXES),
+  allowPrivateNetwork: true,
+};
 const GOOGLE_AUTH_AUDIT_CONTEXT = "googlechat.auth.google-auth";
 const GOOGLE_AUTH_URI = "https://accounts.google.com/o/oauth2/auth";
 const GOOGLE_AUTH_PROVIDER_CERTS_URL = "https://www.googleapis.com/oauth2/v1/certs";

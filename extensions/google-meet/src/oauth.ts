@@ -59,7 +59,10 @@ async function executeGoogleTokenRequest(body: URLSearchParams): Promise<GoogleM
       },
       body,
     },
-    policy: { allowedHostnames: [GOOGLE_MEET_TOKEN_HOST] },
+    policy: {
+      allowedHostnames: [GOOGLE_MEET_TOKEN_HOST],
+      allowPrivateNetwork: true,
+    },
     auditContext: "google-meet.oauth.token",
   });
   try {

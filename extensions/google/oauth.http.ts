@@ -1,5 +1,13 @@
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  buildHostnameAllowlistPolicyFromSuffixAllowlist,
+  fetchWithSsrFGuard,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import { DEFAULT_FETCH_TIMEOUT_MS } from "./oauth.shared.js";
+
+const GOOGLE_OAUTH_HTTP_POLICY = {
+  ...buildHostnameAllowlistPolicyFromSuffixAllowlist(["googleapis.com"]),
+  allowPrivateNetwork: true,
+};
 
 export async function fetchWithTimeout(
   url: string,
@@ -10,6 +18,7 @@ export async function fetchWithTimeout(
     url,
     init,
     timeoutMs,
+    policy: GOOGLE_OAUTH_HTTP_POLICY,
   });
   try {
     const body = await response.arrayBuffer();
