@@ -428,10 +428,6 @@ function restrictCodexAppServerSandboxForOpenClawSandbox(
   };
 }
 
-function shouldLoadCodexBundleMcpThreadConfig(params: EmbeddedRunAttemptParams): boolean {
-  return !params.disableTools && supportsModelTools(params.model);
-}
-
 export async function runCodexAppServerAttempt(
   params: EmbeddedRunAttemptParams,
   options: {
@@ -523,13 +519,14 @@ export async function runCodexAppServerAttempt(
     : resolveCodexAppServerEnvApiKeyCacheKey({
         startOptions: appServer.start,
       });
-  const bundleMcpThreadConfig = shouldLoadCodexBundleMcpThreadConfig(params)
-    ? await loadCodexBundleMcpThreadConfig({
-        workspaceDir: effectiveWorkspace,
-        cfg: params.config,
-      })
-    : undefined;
-  for (const diagnostic of bundleMcpThreadConfig?.diagnostics ?? []) {
+  const bundleMcpThreadConfig = await loadCodexBundleMcpThreadConfig({
+    workspaceDir: effectiveWorkspace,
+    cfg: params.config,
+    toolsEnabled: supportsModelTools(params.model),
+    disableTools: params.disableTools,
+    toolsAllow: params.toolsAllow,
+  });
+  for (const diagnostic of bundleMcpThreadConfig.diagnostics) {
     embeddedAgentLog.warn(`bundle-mcp: ${diagnostic.pluginId}: ${diagnostic.message}`);
   }
   const activeContextEngine = isActiveHarnessContextEngine(params.contextEngine)
@@ -790,7 +787,8 @@ export async function runCodexAppServerAttempt(
             appServer: pluginAppServer,
             developerInstructions: promptBuild.developerInstructions,
             config: threadConfig,
-            mcpServersFingerprint: bundleMcpThreadConfig?.fingerprint,
+            mcpServersFingerprint: bundleMcpThreadConfig.fingerprint,
+            mcpServersFingerprintEvaluated: bundleMcpThreadConfig.evaluated,
             pluginThreadConfig: pluginThreadConfigEnabled
               ? {
                   enabled: true,

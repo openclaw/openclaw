@@ -12,6 +12,7 @@ import type {
   CodexMcpServersConfig,
   LoadCodexBundleMcpThreadConfigParams,
 } from "./codex-mcp-config.types.js";
+import { shouldCreateBundleMcpRuntimeForAttempt } from "./pi-embedded-runner/run/attempt-tool-construction-plan.js";
 
 export type {
   CodexBundleMcpThreadConfig,
@@ -95,6 +96,17 @@ function fingerprintCodexMcpServersConfig(config: CodexMcpServersConfig): string
 export function loadCodexBundleMcpThreadConfig(
   params: LoadCodexBundleMcpThreadConfigParams,
 ): CodexBundleMcpThreadConfig {
+  const evaluated = shouldCreateBundleMcpRuntimeForAttempt({
+    toolsEnabled: params.toolsEnabled ?? true,
+    disableTools: params.disableTools,
+    toolsAllow: params.toolsAllow,
+  });
+  if (!evaluated) {
+    return {
+      diagnostics: [],
+      evaluated: false,
+    };
+  }
   const merged = loadMergedBundleMcpConfig({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
@@ -104,6 +116,7 @@ export function loadCodexBundleMcpThreadConfig(
   if (Object.keys(mcpServers).length === 0) {
     return {
       diagnostics: merged.diagnostics,
+      evaluated: true,
     };
   }
   return {
@@ -111,6 +124,7 @@ export function loadCodexBundleMcpThreadConfig(
       mcp_servers: mcpServers,
     },
     diagnostics: merged.diagnostics,
+    evaluated: true,
     fingerprint: fingerprintCodexMcpServersConfig(mcpServers),
   };
 }

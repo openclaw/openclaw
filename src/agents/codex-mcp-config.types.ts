@@ -8,10 +8,14 @@ export type CodexBundleMcpThreadConfig = {
     mcp_servers: CodexMcpServersConfig;
   };
   diagnostics: BundleMcpDiagnostic[];
+  evaluated: boolean;
   fingerprint?: string;
 };
 
 export type LoadCodexBundleMcpThreadConfigParams = {
   workspaceDir: string;
   cfg?: OpenClawConfig;
+  toolsEnabled?: boolean;
+  disableTools?: boolean;
+  toolsAllow?: string[];
 };

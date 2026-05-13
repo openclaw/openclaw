@@ -72,13 +72,45 @@ describe("loadCodexBundleMcpThreadConfig", () => {
     expect(loaded.fingerprint).toMatch(/^[a-f0-9]{64}$/);
   });
 
+  it("skips MCP config when Pi would not create a bundle MCP runtime", () => {
+    const cfg = {
+      mcp: {
+        servers: {
+          search: {
+            transport: "streamable-http",
+            url: "https://mcp.example.com/mcp",
+          },
+        },
+      },
+    } as const;
+
+    for (const params of [
+      { toolsEnabled: false },
+      { toolsEnabled: true, disableTools: true },
+      { toolsEnabled: true, toolsAllow: [] },
+      { toolsEnabled: true, toolsAllow: ["memory_search"] },
+    ]) {
+      const loaded = loadCodexBundleMcpThreadConfig({
+        workspaceDir: "/workspace",
+        cfg,
+        ...params,
+      });
+
+      expect(loaded.configPatch).toBeUndefined();
+      expect(loaded.fingerprint).toBeUndefined();
+      expect(loaded.evaluated).toBe(false);
+    }
+  });
+
   it("omits the config patch when no MCP servers are configured", () => {
     const loaded = loadCodexBundleMcpThreadConfig({
       workspaceDir: "/workspace",
       cfg: {},
+      toolsEnabled: true,
     });
 
     expect(loaded.configPatch).toBeUndefined();
     expect(loaded.fingerprint).toBeUndefined();
+    expect(loaded.evaluated).toBe(true);
   });
 });
