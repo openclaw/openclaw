@@ -106,7 +106,7 @@ describe("gateway chat.inject transcript writes", () => {
   });
 
   it("emits and returns the redacted injected assistant message", async () => {
-    const { dir, transcriptPath, sessionId } = createTranscriptFixtureSync({
+    const { dir, agentId, sessionId } = createSqliteTranscriptFixtureSync({
       prefix: "openclaw-chat-inject-redact-",
       sessionId: "sess-redact",
     });
@@ -117,7 +117,7 @@ describe("gateway chat.inject transcript writes", () => {
 
     try {
       const appended = await appendInjectedAssistantMessageToTranscript({
-        transcriptPath,
+        agentId,
         sessionId,
         message: `Here is your key: ${fakeApiKey}`,
         config: { logging: { redactSensitive: "tools" } },

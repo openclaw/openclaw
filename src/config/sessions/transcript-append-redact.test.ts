@@ -219,13 +219,7 @@ describe("appendSessionTranscriptMessage - redaction", () => {
         role: "user",
         content: [{ type: "text", text: "email peter@dc.io and key sk-abcdef1234567890xyz ok" }],
       },
-      config: {
-        session: {
-          writeLock: {
-            acquireTimeoutMs: 25_000,
-          },
-        },
-      },
+      config: {},
     });
 
     const raw = readRawTranscript(sessionId);

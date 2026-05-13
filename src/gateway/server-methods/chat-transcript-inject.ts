@@ -112,6 +112,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
       sessionId,
       message: messageBody,
       now,
+      config: params.config,
     });
     if (sessionId) {
       emitSessionTranscriptUpdate({
