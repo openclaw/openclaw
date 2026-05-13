@@ -6,6 +6,10 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
+import {
+  recordChannelActivity,
+  resetChannelActivityForTest,
+} from "../../infra/channel-activity.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
 import {
   buildSystemRunApprovalBinding,
@@ -120,6 +124,67 @@ describe("waitForAgentJob", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("maps yielded aborted lifecycle end events to ok without timeout grace", async () => {
+    const runId = `run-yielded-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const waitPromise = waitForAgentJob({ runId, timeoutMs: 1_000 });
+
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 210 },
+    });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        endedAt: 220,
+        aborted: true,
+        yielded: true,
+        livenessState: "paused",
+      },
+    });
+
+    const snapshot = await waitPromise;
+    expect(snapshot).toMatchObject({
+      status: "ok",
+      startedAt: 210,
+      endedAt: 220,
+      livenessState: "paused",
+      yielded: true,
+    });
+  });
+
+  it("maps aborted end_turn lifecycle end events to ok without timeout grace", async () => {
+    const runId = `run-yielded-end-turn-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const waitPromise = waitForAgentJob({ runId, timeoutMs: 1_000 });
+
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 230 },
+    });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        endedAt: 240,
+        aborted: true,
+        stopReason: "end_turn",
+      },
+    });
+
+    const snapshot = await waitPromise;
+    expect(snapshot).toMatchObject({
+      status: "ok",
+      startedAt: 230,
+      endedAt: 240,
+      stopReason: "end_turn",
+      yielded: true,
+    });
   });
 
   it("keeps non-aborted lifecycle end events as ok", async () => {
@@ -2201,6 +2266,10 @@ describe("gateway healthHandlers.health cache freshness", () => {
     pricingState.clearGatewayModelPricingCacheState();
   });
 
+  afterEach(() => {
+    resetChannelActivityForTest();
+  });
+
   it("refreshes cached health when runtime channel lifecycle has changed", async () => {
     const cached = {
       ok: true,
@@ -2463,6 +2532,92 @@ describe("gateway healthHandlers.health cache freshness", () => {
             discord: {
               work: {
                 accountId: "work",
+                running: true,
+                connected: true,
+              },
+            },
+          },
+        }),
+        logHealth: { error: vi.fn() },
+      } as never,
+      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+    });
+
+    expect(refreshHealthSnapshot).toHaveBeenCalledWith({
+      probe: false,
+      includeSensitive: false,
+    });
+    expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
+  });
+
+  it("refreshes cached health when live channel activity changes", async () => {
+    const cached = {
+      ok: true,
+      ts: Date.now(),
+      durationMs: 1,
+      channels: {
+        telegram: {
+          configured: true,
+          running: true,
+          connected: true,
+          lastOutboundAt: null,
+          accounts: {
+            default: {
+              accountId: "default",
+              configured: true,
+              running: true,
+              connected: true,
+              lastOutboundAt: null,
+            },
+          },
+        },
+      },
+      channelOrder: ["telegram"],
+      channelLabels: { telegram: "Telegram" },
+      heartbeatSeconds: 0,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+    };
+    const fresh = {
+      ...cached,
+      ts: cached.ts + 1,
+      channels: {
+        telegram: {
+          ...cached.channels.telegram,
+          lastOutboundAt: 222,
+          accounts: {
+            default: {
+              ...cached.channels.telegram.accounts.default,
+              lastOutboundAt: 222,
+            },
+          },
+        },
+      },
+    };
+    recordChannelActivity({
+      channel: "telegram",
+      accountId: "default",
+      direction: "outbound",
+      at: 222,
+    });
+    const respond = vi.fn();
+    const refreshHealthSnapshot = vi.fn().mockResolvedValue(fresh);
+
+    await healthHandlers.health({
+      req: {} as never,
+      params: {} as never,
+      respond: respond as never,
+      context: {
+        getHealthCache: () => cached,
+        refreshHealthSnapshot,
+        getRuntimeSnapshot: () => ({
+          channels: {},
+          channelAccounts: {
+            telegram: {
+              default: {
+                accountId: "default",
                 running: true,
                 connected: true,
               },

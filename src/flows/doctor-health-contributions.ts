@@ -45,6 +45,7 @@ function resolveDoctorMode(cfg: OpenClawConfig): DoctorFlowMode {
 
 const UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV =
   "OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE";
+const DOCTOR_GATEWAY_HEALTH_TIMEOUT_MS = 10_000;
 
 function isTruthyEnvValue(value: string | undefined): boolean {
   if (!value) {
@@ -64,6 +65,10 @@ export function shouldSkipLegacyUpdateDoctorConfigWrite(params: {
     return false;
   }
   return true;
+}
+
+export function resolveDoctorGatewayHealthTimeoutMs(_options: DoctorOptions): number {
+  return DOCTOR_GATEWAY_HEALTH_TIMEOUT_MS;
 }
 
 function createDoctorHealthContribution(params: {
@@ -519,14 +524,14 @@ async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<voi
   const { healthOk, status } = await checkGatewayHealth({
     runtime: ctx.runtime,
     cfg: ctx.cfg,
-    timeoutMs: ctx.options.nonInteractive === true ? 3000 : 10_000,
+    timeoutMs: resolveDoctorGatewayHealthTimeoutMs(ctx.options),
   });
   ctx.healthOk = healthOk;
   ctx.gatewayStatus = status;
   ctx.gatewayMemoryProbe = healthOk
     ? await probeGatewayMemoryStatus({
         cfg: ctx.cfg,
-        timeoutMs: ctx.options.nonInteractive === true ? 3000 : 10_000,
+        timeoutMs: resolveDoctorGatewayHealthTimeoutMs(ctx.options),
       })
     : { checked: false, ready: false, skipped: false };
 }

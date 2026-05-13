@@ -1,6 +1,7 @@
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import type { ChannelHealthSummary, HealthSummary } from "../../commands/health.types.js";
 import { getStatusSummary } from "../../commands/status.js";
+import { getChannelActivity } from "../../infra/channel-activity.js";
 import { getGatewayModelPricingHealth } from "../model-pricing-cache-state.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
@@ -38,6 +39,27 @@ function cachedLifecycleDiffersFromRuntime(params: {
   return false;
 }
 
+function cachedActivityDiffersFromRuntime(params: {
+  cachedAccount: ChannelHealthSummary | undefined;
+  channelId: string;
+  accountId: string | undefined;
+}): boolean {
+  const activity = getChannelActivity({
+    channel: params.channelId as never,
+    accountId: params.accountId,
+  });
+  if (activity.inboundAt !== null && params.cachedAccount?.lastInboundAt !== activity.inboundAt) {
+    return true;
+  }
+  if (
+    activity.outboundAt !== null &&
+    params.cachedAccount?.lastOutboundAt !== activity.outboundAt
+  ) {
+    return true;
+  }
+  return false;
+}
+
 function cachedHealthDiffersFromRuntime(
   cached: HealthSummary,
   runtime: ChannelRuntimeSnapshot,
@@ -51,6 +73,11 @@ function cachedHealthDiffersFromRuntime(
       cachedLifecycleDiffersFromRuntime({
         cachedAccount: cachedChannel,
         runtimeSnapshot,
+      }) ||
+      cachedActivityDiffersFromRuntime({
+        cachedAccount: cachedChannel,
+        channelId,
+        accountId: runtimeSnapshot.accountId,
       })
     ) {
       return true;
@@ -73,6 +100,14 @@ function cachedHealthDiffersFromRuntime(
             accountId,
           }),
           runtimeSnapshot,
+        }) ||
+        cachedActivityDiffersFromRuntime({
+          cachedAccount: cachedAccountForRuntimeSnapshot({
+            cachedChannel,
+            accountId,
+          }),
+          channelId,
+          accountId,
         })
       ) {
         return true;

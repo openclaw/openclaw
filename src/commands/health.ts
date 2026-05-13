@@ -23,6 +23,7 @@ import { getGatewayModelPricingHealth } from "../gateway/model-pricing-cache-sta
 import { isGatewayModelPricingEnabled } from "../gateway/model-pricing-config.js";
 import type { ChannelRuntimeSnapshot } from "../gateway/server-channel-runtime.types.js";
 import { info } from "../globals.js";
+import { getChannelActivity } from "../infra/channel-activity.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
@@ -504,6 +505,16 @@ export async function getHealthSnapshot(params?: {
       });
       if (lastProbeAt) {
         snapshot.lastProbeAt = lastProbeAt;
+      }
+      const activity = getChannelActivity({
+        channel: plugin.id as never,
+        accountId,
+      });
+      if (snapshot.lastInboundAt == null) {
+        snapshot.lastInboundAt = activity.inboundAt;
+      }
+      if (snapshot.lastOutboundAt == null) {
+        snapshot.lastOutboundAt = activity.outboundAt;
       }
       const health = evaluateChannelHealth(snapshot, {
         channelId: plugin.id,

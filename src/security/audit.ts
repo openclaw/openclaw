@@ -35,6 +35,8 @@ import type { ExecFn } from "./windows-acl.js";
 type ExecDockerRawFn = typeof import("../agents/sandbox/docker.js").execDockerRaw;
 type ProbeGatewayFn = typeof import("../gateway/probe.js").probeGateway;
 
+export const DEFAULT_DEEP_GATEWAY_PROBE_TIMEOUT_MS = 30_000;
+
 export type {
   SecurityAuditFinding,
   SecurityAuditReport,
@@ -934,7 +936,7 @@ async function createAuditExecutionContext(
   const includeFilesystem = opts.includeFilesystem !== false;
   const includeChannelSecurity = opts.includeChannelSecurity !== false;
   const deep = opts.deep === true;
-  const deepTimeoutMs = Math.max(250, opts.deepTimeoutMs ?? 5000);
+  const deepTimeoutMs = Math.max(250, opts.deepTimeoutMs ?? DEFAULT_DEEP_GATEWAY_PROBE_TIMEOUT_MS);
   const stateDir = opts.stateDir ?? resolveStateDir(env);
   const configPath = opts.configPath ?? resolveConfigPath(env, stateDir);
   const workspaceDir =

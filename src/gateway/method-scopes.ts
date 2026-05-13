@@ -135,6 +135,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "artifacts.list",
     "artifacts.get",
     "artifacts.download",
+    "browser.readRequest",
   ],
   [WRITE_SCOPE]: [
     "message.action",
@@ -220,6 +221,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "agents.files.set",
     "update.status",
     "gateway.restart.request",
+    "browser.request",
   ],
   [TALK_SECRETS_SCOPE]: [],
 };

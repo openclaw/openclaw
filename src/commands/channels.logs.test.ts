@@ -10,6 +10,16 @@ const pluginRegistryMocks = vi.hoisted(() => ({
   listPluginContributionIds: vi.fn(() => ["external-chat"]),
 }));
 
+const gatewayCallMock = vi.hoisted(() =>
+  vi.fn(async () => {
+    throw new Error("gateway unavailable");
+  }),
+);
+
+vi.mock("../gateway/call.js", () => ({
+  callGateway: gatewayCallMock,
+}));
+
 vi.mock("../plugins/plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry: () => ({ diagnostics: [], plugins: [] }),
   loadPluginRegistrySnapshot: pluginRegistryMocks.loadPluginRegistrySnapshot,
@@ -26,13 +36,14 @@ import { channelsLogsCommand } from "./channels/logs.js";
 
 const runtime = createTestRuntime();
 
-function logLine(params: { module: string; message: string }) {
+function logLine(params: { module?: string; subsystem?: string; message: string }) {
+  const name = params.subsystem ? { subsystem: params.subsystem } : { module: params.module };
   return JSON.stringify({
     time: "2026-04-25T12:00:00.000Z",
     0: params.message,
     _meta: {
       logLevelName: "INFO",
-      name: JSON.stringify({ module: params.module }),
+      name: JSON.stringify(name),
     },
   });
 }
@@ -58,6 +69,8 @@ describe("channelsLogsCommand", () => {
     runtime.exit.mockClear();
     pluginRegistryMocks.loadPluginRegistrySnapshot.mockClear();
     pluginRegistryMocks.listPluginContributionIds.mockClear();
+    gatewayCallMock.mockReset();
+    gatewayCallMock.mockRejectedValue(new Error("gateway unavailable"));
   });
 
   afterEach(async () => {
@@ -85,6 +98,44 @@ describe("channelsLogsCommand", () => {
     const payload = readJsonPayload();
     expect(payload.channel).toBe("external-chat");
     expect(payload.lines.map((line) => line.message)).toEqual(["external sent"]);
+  });
+
+  it("matches gateway channel subsystem loggers", async () => {
+    await fs.writeFile(
+      logPath,
+      [
+        logLine({ subsystem: "channels/telegram", message: "telegram started" }),
+        logLine({ subsystem: "channels/slack", message: "slack started" }),
+      ].join("\n"),
+    );
+
+    await channelsLogsCommand({ channel: "telegram", json: true }, runtime);
+
+    const payload = readJsonPayload();
+    expect(payload.channel).toBe("telegram");
+    expect(payload.lines.map((line) => line.message)).toEqual(["telegram started"]);
+  });
+
+  it("reads channel logs from gateway logs.tail when available", async () => {
+    gatewayCallMock.mockResolvedValue({
+      file: "/gateway/openclaw.log",
+      lines: [
+        logLine({ subsystem: "channels/telegram", message: "telegram gateway log" }),
+        logLine({ subsystem: "channels/slack", message: "slack gateway log" }),
+      ],
+    });
+
+    await channelsLogsCommand({ channel: "telegram", json: true }, runtime);
+
+    expect(gatewayCallMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "logs.tail",
+        params: expect.objectContaining({ limit: 800, maxBytes: 1_000_000 }),
+      }),
+    );
+    const payload = readJsonPayload();
+    expect(payload.file).toBe("/gateway/openclaw.log");
+    expect(payload.lines.map((line) => line.message)).toEqual(["telegram gateway log"]);
   });
 
   it("falls back to the latest rolling log when the configured rolling file is missing", async () => {

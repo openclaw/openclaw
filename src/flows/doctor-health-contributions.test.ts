@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveDoctorHealthContributions,
+  resolveDoctorGatewayHealthTimeoutMs,
   shouldSkipLegacyUpdateDoctorConfigWrite,
 } from "./doctor-health-contributions.js";
 
@@ -103,6 +104,11 @@ describe("doctor health contributions", () => {
 
     expect(ids.indexOf("doctor:skills")).toBeGreaterThan(-1);
     expect(ids.indexOf("doctor:skills")).toBeLessThan(ids.indexOf("doctor:write-config"));
+  });
+
+  it("keeps non-interactive gateway health checks on the normal doctor timeout", () => {
+    expect(resolveDoctorGatewayHealthTimeoutMs({ nonInteractive: true })).toBe(10_000);
+    expect(resolveDoctorGatewayHealthTimeoutMs({ nonInteractive: false })).toBe(10_000);
   });
 
   it("skips doctor config writes under legacy update parents", () => {

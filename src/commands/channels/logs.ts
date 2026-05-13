@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { normalizeChannelId as normalizeBundledChannelId } from "../../channels/registry.js";
+import { callGateway } from "../../gateway/call.js";
 import { getResolvedLoggerSettings } from "../../logging.js";
 import { resolveLogFile } from "../../logging/log-tail.js";
 import { parseLogLine } from "../../logging/parse-log-line.js";
@@ -15,6 +16,10 @@ export type ChannelsLogsOptions = {
 };
 
 type LogLine = ReturnType<typeof parseLogLine>;
+type LogsTailPayload = {
+  file?: string;
+  lines?: string[];
+};
 
 const DEFAULT_LIMIT = 200;
 const MAX_BYTES = 1_000_000;
@@ -44,8 +49,11 @@ function matchesChannel(line: NonNullable<LogLine>, channel: string) {
   if (channel === "all") {
     return true;
   }
-  const needle = `gateway/channels/${channel}`;
-  if (line.subsystem?.includes(needle)) {
+  const channelLoggerNeedles = [`channels/${channel}`, `gateway/channels/${channel}`];
+  if (line.subsystem && channelLoggerNeedles.some((needle) => line.subsystem?.includes(needle))) {
+    return true;
+  }
+  if (line.module && channelLoggerNeedles.some((needle) => line.module?.includes(needle))) {
     return true;
   }
   if (line.module?.includes(channel)) {
@@ -86,6 +94,26 @@ async function readTailLines(file: string, limit: number): Promise<string[]> {
   }
 }
 
+async function readGatewayTailLines(limit: number): Promise<{ file: string; rawLines: string[] }> {
+  const fallbackFile = await resolveLogFile(getResolvedLoggerSettings().file);
+  try {
+    const payload = (await callGateway({
+      method: "logs.tail",
+      params: { limit, maxBytes: MAX_BYTES },
+      timeoutMs: 10_000,
+    })) as LogsTailPayload;
+    if (payload && Array.isArray(payload.lines)) {
+      return {
+        file: typeof payload.file === "string" && payload.file ? payload.file : fallbackFile,
+        rawLines: payload.lines,
+      };
+    }
+  } catch {
+    // Local fallback keeps this diagnostic command usable when the gateway RPC is unavailable.
+  }
+  return { file: fallbackFile, rawLines: await readTailLines(fallbackFile, limit) };
+}
+
 export async function channelsLogsCommand(
   opts: ChannelsLogsOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -97,8 +125,7 @@ export async function channelsLogsCommand(
       ? Math.floor(limitRaw)
       : DEFAULT_LIMIT;
 
-  const file = await resolveLogFile(getResolvedLoggerSettings().file);
-  const rawLines = await readTailLines(file, limit * 4);
+  const { file, rawLines } = await readGatewayTailLines(limit * 4);
   const parsed = rawLines
     .map(parseLogLine)
     .filter((line): line is NonNullable<LogLine> => Boolean(line));

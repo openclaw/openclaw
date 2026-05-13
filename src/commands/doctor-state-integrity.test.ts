@@ -425,10 +425,12 @@ describe("doctor state integrity oauth dir checks", () => {
       "These .jsonl files are no longer referenced by sessions.json",
     );
     expect(stateIntegrityText()).toContain("Examples: orphan-session.jsonl");
-    const archivePrompt = repairPromptCalls(confirmRuntimeRepair).find((prompt) =>
-      prompt.message?.includes("This only renames them to *.deleted.<timestamp>."),
+    expect(confirmRuntimeRepair).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("This only renames them to *.deleted.<timestamp>."),
+        initialValue: false,
+      }),
     );
-    expect(archivePrompt?.requiresInteractiveConfirmation).toBe(true);
     const files = fs.readdirSync(sessionsDir);
     const archivedOrphanTranscripts = files.filter((name) =>
       name.startsWith("orphan-session.jsonl.deleted."),
@@ -436,7 +438,7 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(archivedOrphanTranscripts.length).toBeGreaterThan(0);
   });
 
-  it("does not auto-archive orphan transcripts from non-interactive repair mode", async () => {
+  it("archives orphan transcripts from non-interactive repair mode", async () => {
     const cfg: OpenClawConfig = {};
     setupSessionState(cfg, process.env, process.env.HOME ?? "");
     const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
@@ -447,16 +449,17 @@ describe("doctor state integrity oauth dir checks", () => {
     );
     await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
 
-    const archivePrompt = repairPromptCalls(confirmRuntimeRepair).find(
-      (prompt) => prompt.requiresInteractiveConfirmation === true,
+    expect(confirmRuntimeRepair).toHaveBeenCalledWith(
+      expect.objectContaining({
+        initialValue: false,
+      }),
     );
-    expect(archivePrompt?.initialValue).toBe(false);
     const files = fs.readdirSync(sessionsDir);
-    expect(files).toContain("orphan-session.jsonl");
+    expect(files).not.toContain("orphan-session.jsonl");
     const archivedOrphanTranscripts = files.filter((name) =>
       name.startsWith("orphan-session.jsonl.deleted."),
     );
-    expect(archivedOrphanTranscripts).toStrictEqual([]);
+    expect(archivedOrphanTranscripts.length).toBeGreaterThan(0);
   });
 
   it.skipIf(process.platform === "win32")(

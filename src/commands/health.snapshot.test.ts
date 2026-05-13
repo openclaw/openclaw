@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
+import { recordChannelActivity, resetChannelActivityForTest } from "../infra/channel-activity.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import type { HealthSummary } from "./health.js";
 
@@ -470,6 +471,7 @@ describe("getHealthSnapshot", () => {
   });
 
   afterEach(() => {
+    resetChannelActivityForTest();
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
   });
@@ -621,6 +623,45 @@ describe("getHealthSnapshot", () => {
     expect(telegram.probe?.bot?.username).toBe("runtime_bot");
     expect(telegram.accounts?.default?.connected).toBe(true);
     expect(telegram.accounts?.default?.probe?.ok).toBe(true);
+  });
+
+  it("fills health channel activity from the live activity tracker", async () => {
+    testConfig = { channels: { telegram: { botToken: "t-1" } } };
+    testStore = {};
+    buildTelegramHealthSummaryForTest = (snapshot) => ({
+      accountId: snapshot.accountId,
+      configured: Boolean(snapshot.configured),
+    });
+    recordChannelActivity({
+      channel: "telegram",
+      accountId: "default",
+      direction: "inbound",
+      at: 111,
+    });
+    recordChannelActivity({
+      channel: "telegram",
+      accountId: "default",
+      direction: "outbound",
+      at: 222,
+    });
+
+    const snap = await getHealthSnapshot({ timeoutMs: 10, probe: false });
+    const telegram = snap.channels.telegram as {
+      lastInboundAt?: number | null;
+      lastOutboundAt?: number | null;
+      accounts?: Record<
+        string,
+        {
+          lastInboundAt?: number | null;
+          lastOutboundAt?: number | null;
+        }
+      >;
+    };
+
+    expect(telegram.lastInboundAt).toBe(111);
+    expect(telegram.lastOutboundAt).toBe(222);
+    expect(telegram.accounts?.default?.lastInboundAt).toBe(111);
+    expect(telegram.accounts?.default?.lastOutboundAt).toBe(222);
   });
 
   it("merges inspected account metadata with runtime state before building health summaries", async () => {

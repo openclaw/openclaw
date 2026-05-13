@@ -55,6 +55,8 @@ describe("method scope resolution", () => {
     ["talk.session.cancelOutput", ["operator.write"]],
     ["talk.session.submitToolResult", ["operator.write"]],
     ["talk.session.close", ["operator.write"]],
+    ["browser.readRequest", ["operator.read"]],
+    ["browser.request", ["operator.admin"]],
     ["update.status", ["operator.admin"]],
     ["config.patch", ["operator.admin"]],
     ["nativeHook.invoke", ["operator.admin"]],
@@ -244,13 +246,20 @@ describe("operator scope authorization", () => {
   });
 
   it("requires admin for browser.request", () => {
-    setPluginGatewayMethodScope("browser.request", "operator.admin");
-
     expect(authorizeOperatorScopesForMethod("browser.request", ["operator.write"])).toEqual({
       allowed: false,
       missingScope: "operator.admin",
     });
     expect(authorizeOperatorScopesForMethod("browser.request", ["operator.admin"])).toEqual({
+      allowed: true,
+    });
+  });
+
+  it("allows read-only browser gateway requests with operator.read", () => {
+    expect(authorizeOperatorScopesForMethod("browser.readRequest", ["operator.read"])).toEqual({
+      allowed: true,
+    });
+    expect(authorizeOperatorScopesForMethod("browser.readRequest", ["operator.write"])).toEqual({
       allowed: true,
     });
   });

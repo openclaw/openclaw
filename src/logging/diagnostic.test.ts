@@ -630,6 +630,70 @@ describe("stuck session diagnostics threshold", () => {
     );
   });
 
+  it("uses diagnostics.stuckSessionAbortMs for no-progress recovery even when run timeout is longer", () => {
+    const recoverStuckSession = vi.fn();
+
+    startDiagnosticHeartbeat(
+      {
+        diagnostics: {
+          enabled: true,
+          stuckSessionWarnMs: 30_000,
+          stuckSessionAbortMs: 60_000,
+        },
+      },
+      { recoverStuckSession },
+    );
+    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+    markDiagnosticEmbeddedRunStarted({
+      sessionId: "s1",
+      sessionKey: "main",
+      timeoutMs: 15 * 60_000,
+    });
+
+    vi.advanceTimersByTime(61_000);
+
+    expect(recoverStuckSession).toHaveBeenCalledWith({
+      sessionId: "s1",
+      sessionKey: "main",
+      ageMs: expect.any(Number),
+      queueDepth: 0,
+      allowActiveAbort: true,
+      stateGeneration: expect.any(Number),
+    });
+  });
+
+  it("caps stalled embedded run recovery at the configured run timeout when it is shorter", () => {
+    const recoverStuckSession = vi.fn();
+
+    startDiagnosticHeartbeat(
+      {
+        diagnostics: {
+          enabled: true,
+          stuckSessionWarnMs: 30_000,
+          stuckSessionAbortMs: 60_000,
+        },
+      },
+      { recoverStuckSession },
+    );
+    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+    markDiagnosticEmbeddedRunStarted({
+      sessionId: "s1",
+      sessionKey: "main",
+      timeoutMs: 45_000,
+    });
+
+    vi.advanceTimersByTime(61_000);
+
+    expect(recoverStuckSession).toHaveBeenCalledWith({
+      sessionId: "s1",
+      sessionKey: "main",
+      ageMs: expect.any(Number),
+      queueDepth: 0,
+      allowActiveAbort: true,
+      stateGeneration: expect.any(Number),
+    });
+  });
+
   it("marks diagnostic session state idle only after a mutating recovery outcome", async () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn().mockResolvedValue({
