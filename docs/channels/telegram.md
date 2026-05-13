@@ -300,19 +300,39 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 ## Feature reference
 
 <AccordionGroup>
-  <Accordion title="Live stream preview (message edits)">
+  <Accordion title="Live stream preview">
     OpenClaw can stream partial replies in real time:
 
-    - direct chats: preview message + `editMessageText`
+    - default transport: preview message + `editMessageText`
+    - optional native Telegram drafts in DMs: `sendMessageDraft` during generation, then a normal final message
     - groups/topics: preview message + `editMessageText`
 
     Requirement:
 
     - `channels.telegram.streaming` is `off | partial | block | progress` (default: `partial`)
+    - `streaming.nativeTransport: true` enables Telegram's native `sendMessageDraft` preview transport when Telegram accepts it
+    - if native drafts fail or are unsupported for the chat, OpenClaw falls back to the default message-edit preview transport for that turn
     - `progress` keeps one editable status draft for tool progress, clears it at completion, and sends the final answer as a normal message
     - `streaming.preview.toolProgress` controls whether tool/progress updates reuse the same edited preview message (default: `true` when preview streaming is active)
     - `streaming.preview.commandText` controls command/exec detail inside those tool-progress lines: `raw` (default, preserves released behavior) or `status` (tool label only)
     - legacy `channels.telegram.streamMode` and boolean `streaming` values are detected; run `openclaw doctor --fix` to migrate them to `channels.telegram.streaming.mode`
+
+    To opt into native Telegram draft previews where supported, set:
+
+    ```json
+    {
+      "channels": {
+        "telegram": {
+          "streaming": {
+            "mode": "partial",
+            "nativeTransport": true
+          }
+        }
+      }
+    }
+    ```
+
+    Native drafts are ephemeral Telegram UI previews, so OpenClaw still sends the completed answer with normal `sendMessage` final delivery.
 
     Tool-progress preview updates are the short status lines shown while tools run, for example command execution, file reads, planning updates, or patch summaries. Telegram keeps these enabled by default to match released OpenClaw behavior from `v2026.4.22` and later. To keep the edited preview for answer text but hide tool-progress lines, set:
 

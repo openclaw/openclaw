@@ -13,6 +13,12 @@ const DEFAULT_THROTTLE_MS = 1000;
 const THREAD_NOT_FOUND_RE = /400:\s*Bad Request:\s*message thread not found/i;
 
 type TelegramSendMessageParams = Parameters<Bot["api"]["sendMessage"]>[2];
+type TelegramSendMessageDraftParams = Parameters<Bot["api"]["sendMessageDraft"]>[3];
+type TelegramDraftStreamTransport = "message" | "native-draft";
+
+function createTelegramNativeDraftId(): number {
+  return Math.max(1, Math.floor(Math.random() * 0x7fffffff));
+}
 
 function hasNumericMessageThreadId(
   params: TelegramSendMessageParams | undefined,
@@ -89,6 +95,8 @@ export function createTelegramDraftStream(params: {
   api: Bot["api"];
   chatId: Parameters<Bot["api"]["sendMessage"]>[0];
   maxChars?: number;
+  transport?: TelegramDraftStreamTransport;
+  draftIdFactory?: () => number;
   thread?: TelegramThreadSpec | null;
   replyToMessageId?: number;
   throttleMs?: number;
@@ -130,6 +138,8 @@ export function createTelegramDraftStream(params: {
   let previewRevision = 0;
   let generation = 0;
   let deliveredTextOffset = 0;
+  let nativeDraftId = Math.trunc(params.draftIdFactory?.() ?? createTelegramNativeDraftId());
+  let nativeDraftTransportDisabled = params.transport !== "native-draft";
   let resetStreamToNewMessage: (options?: { keepPending?: boolean; resetOffset?: boolean }) => void;
   type PreviewSendParams = {
     renderedText: string;
@@ -223,6 +233,22 @@ export function createTelegramDraftStream(params: {
     return true;
   };
 
+  const sendNativeDraftTransportPreview = async ({
+    renderedText,
+    renderedParseMode,
+  }: PreviewSendParams): Promise<boolean> => {
+    if (typeof chatId !== "number") {
+      throw new Error("native Telegram message drafts require a numeric private chat id");
+    }
+    const draftParams: TelegramSendMessageDraftParams = {
+      ...threadParams,
+      ...(renderedParseMode ? { parse_mode: renderedParseMode } : {}),
+    };
+    streamVisibleSinceMs ??= Date.now();
+    await params.api.sendMessageDraft(chatId, nativeDraftId, renderedText, draftParams);
+    return true;
+  };
+
   const sendOrEditStreamMessage = async (text: string): Promise<boolean> => {
     if (streamState.stopped && !streamState.final) {
       return false;
@@ -281,7 +307,12 @@ export function createTelegramDraftStream(params: {
     }
     const sendGeneration = generation;
 
-    if (typeof streamMessageId !== "number" && minInitialChars != null && !streamState.final) {
+    if (
+      typeof streamMessageId !== "number" &&
+      streamVisibleSinceMs == null &&
+      minInitialChars != null &&
+      !streamState.final
+    ) {
       if (renderedText.length < minInitialChars) {
         return false;
       }
@@ -290,11 +321,32 @@ export function createTelegramDraftStream(params: {
     lastSentText = renderedText;
     lastSentParseMode = renderedParseMode;
     try {
-      const sent = await sendMessageTransportPreview({
-        renderedText,
-        renderedParseMode,
-        sendGeneration,
-      });
+      let sent: boolean;
+      if (!nativeDraftTransportDisabled) {
+        try {
+          sent = await sendNativeDraftTransportPreview({
+            renderedText,
+            renderedParseMode,
+            sendGeneration,
+          });
+        } catch (err) {
+          nativeDraftTransportDisabled = true;
+          params.warn?.(
+            `telegram native draft preview failed; falling back to message edits: ${formatErrorMessage(err)}`,
+          );
+          sent = await sendMessageTransportPreview({
+            renderedText,
+            renderedParseMode,
+            sendGeneration,
+          });
+        }
+      } else {
+        sent = await sendMessageTransportPreview({
+          renderedText,
+          renderedParseMode,
+          sendGeneration,
+        });
+      }
       if (sent) {
         previewRevision += 1;
         lastDeliveredText = trimmed;
@@ -322,6 +374,8 @@ export function createTelegramDraftStream(params: {
     streamVisibleSinceMs = undefined;
     lastSentText = "";
     lastSentParseMode = undefined;
+    nativeDraftId = Math.trunc(params.draftIdFactory?.() ?? createTelegramNativeDraftId());
+    nativeDraftTransportDisabled = params.transport !== "native-draft";
     if (options?.resetOffset !== false) {
       deliveredTextOffset = 0;
     }

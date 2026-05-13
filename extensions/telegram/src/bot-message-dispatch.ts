@@ -96,6 +96,7 @@ import {
   type LaneDeliveryResult,
   type LaneName,
 } from "./lane-delivery.js";
+import { resolveTelegramNativeDraftStreamingEnabled } from "./preview-streaming.js";
 import {
   createTelegramReasoningStepState,
   splitTelegramReasoningText,
@@ -544,6 +545,9 @@ export const dispatchTelegramMessage = async ({
       ? (replyQuoteMessageId ?? msg.message_id)
       : undefined;
   const draftMinInitialChars = streamMode === "progress" ? 0 : DRAFT_MIN_INITIAL_CHARS;
+  const draftStreamTransport = resolveTelegramNativeDraftStreamingEnabled(telegramCfg)
+    ? "native-draft"
+    : "message";
   const progressSeed = `${route.accountId}:${chatId}:${threadSpec.id ?? ""}`;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
   const createDraftLane = (laneName: LaneName, enabled: boolean): DraftLaneState => {
@@ -552,6 +556,7 @@ export const dispatchTelegramMessage = async ({
           api: bot.api,
           chatId,
           maxChars: draftMaxChars,
+          transport: draftStreamTransport,
           thread: threadSpec,
           replyToMessageId: draftReplyToMessageId,
           minInitialChars: draftMinInitialChars,

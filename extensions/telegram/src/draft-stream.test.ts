@@ -7,6 +7,7 @@ type TelegramDraftStreamParams = Parameters<typeof createTelegramDraftStream>[0]
 function createMockDraftApi(sendMessageImpl?: () => Promise<{ message_id: number }>) {
   return {
     sendMessage: vi.fn(sendMessageImpl ?? (async () => ({ message_id: 17 }))),
+    sendMessageDraft: vi.fn().mockResolvedValue(true),
     editMessageText: vi.fn().mockResolvedValue(true),
     deleteMessage: vi.fn().mockResolvedValue(true),
   };
@@ -76,6 +77,77 @@ describe("createTelegramDraftStream", () => {
     await stream.flush();
 
     expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "Hello again");
+  });
+
+  it("uses native Telegram message drafts when requested", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, {
+      transport: "native-draft",
+      draftIdFactory: () => 12345,
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+    stream.update("Hello again");
+    await stream.flush();
+
+    expect(api.sendMessageDraft).toHaveBeenNthCalledWith(1, 123, 12345, "Hello", {});
+    expect(api.sendMessageDraft).toHaveBeenNthCalledWith(2, 123, 12345, "Hello again", {});
+    expect(api.sendMessage).not.toHaveBeenCalled();
+    expect(api.editMessageText).not.toHaveBeenCalled();
+    expect(stream.messageId()).toBeUndefined();
+  });
+
+  it("passes rendered parse mode to native Telegram message drafts", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, {
+      transport: "native-draft",
+      draftIdFactory: () => 12345,
+      renderText: (text) => ({ text: `<i>${text}</i>`, parseMode: "HTML" }),
+    });
+
+    stream.update("hello");
+    await stream.flush();
+
+    expect(api.sendMessageDraft).toHaveBeenCalledWith(123, 12345, "<i>hello</i>", {
+      parse_mode: "HTML",
+    });
+  });
+
+  it("falls back to message previews when native Telegram message drafts fail", async () => {
+    const api = createMockDraftApi();
+    api.sendMessageDraft.mockRejectedValueOnce(new Error("draft unsupported"));
+    const stream = createDraftStream(api, {
+      transport: "native-draft",
+      draftIdFactory: () => 12345,
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+    stream.update("Hello again");
+    await stream.flush();
+
+    expect(api.sendMessageDraft).toHaveBeenCalledTimes(1);
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", undefined);
+    expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "Hello again");
+  });
+
+  it("rotates native Telegram message draft ids for new preview messages", async () => {
+    const api = createMockDraftApi();
+    const draftIds = [111, 222];
+    const stream = createDraftStream(api, {
+      transport: "native-draft",
+      draftIdFactory: () => draftIds.shift() ?? 333,
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+    stream.forceNewMessage();
+    stream.update("Next");
+    await stream.flush();
+
+    expect(api.sendMessageDraft).toHaveBeenNthCalledWith(1, 123, 111, "Hello", {});
+    expect(api.sendMessageDraft).toHaveBeenNthCalledWith(2, 123, 222, "Next", {});
   });
 
   it("waits for in-flight updates before final flush edit", async () => {

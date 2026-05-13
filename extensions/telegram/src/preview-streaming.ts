@@ -1,4 +1,5 @@
 import {
+  resolveChannelStreamingNativeTransport,
   resolveChannelPreviewStreamMode,
   type StreamingMode,
 } from "openclaw/plugin-sdk/channel-streaming";
@@ -12,4 +13,13 @@ export function resolveTelegramPreviewStreamMode(
   } = {},
 ): TelegramPreviewStreamMode {
   return resolveChannelPreviewStreamMode(params, "partial");
+}
+
+export function resolveTelegramNativeDraftStreamingEnabled(
+  params: {
+    nativeStreaming?: unknown;
+    streaming?: unknown;
+  } = {},
+): boolean {
+  return resolveChannelStreamingNativeTransport(params) === true;
 }
