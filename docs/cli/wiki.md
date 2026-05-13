@@ -71,15 +71,25 @@ is healthy, or Obsidian integration is available.
 
 When bridge mode is active and configured to read memory artifacts, this command
 queries the running Gateway so it sees the same active memory plugin context as
-agent/runtime memory.
+agent/runtime memory. Use `OPENCLAW_WIKI_CLI_FORCE_LOCAL=1` to skip the Gateway
+RPC and resolve status from local files (same escape hatch as `wiki doctor`).
 
 ### `wiki doctor`
 
 Run wiki health checks and surface configuration or vault problems.
 
 When bridge mode is active and configured to read memory artifacts, this command
-queries the running Gateway before building the report. Disabled bridge imports
-and bridge configs that do not read memory artifacts remain local/offline.
+queries the running Gateway before building the report. If the Gateway returns
+`unknown method: wiki.doctor`, the running Gateway likely does not have
+`memory-wiki` loaded (restart the Gateway after enabling the plugin, or ensure
+the CLI and Gateway are the same install). To build the report locally instead,
+run:
+
+```bash
+OPENCLAW_WIKI_CLI_FORCE_LOCAL=1 openclaw wiki doctor
+```
+
+Disabled bridge imports and configs that do not read memory artifacts remain local/offline.
 
 Typical issues include:
 

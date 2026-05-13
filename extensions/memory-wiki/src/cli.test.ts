@@ -298,6 +298,28 @@ cli note
     );
   });
 
+  it("skips gateway for bridge doctor when OPENCLAW_WIKI_CLI_FORCE_LOCAL=1", async () => {
+    const prev = process.env.OPENCLAW_WIKI_CLI_FORCE_LOCAL;
+    process.env.OPENCLAW_WIKI_CLI_FORCE_LOCAL = "1";
+    try {
+      const { config } = await createCliVault({
+        config: {
+          vaultMode: "bridge",
+          bridge: { enabled: true, readMemoryArtifacts: true },
+        },
+        initialize: true,
+      });
+      await runWikiDoctor({ config, json: true });
+      expect(callGatewayFromCliMock).not.toHaveBeenCalled();
+    } finally {
+      if (prev === undefined) {
+        delete process.env.OPENCLAW_WIKI_CLI_FORCE_LOCAL;
+      } else {
+        process.env.OPENCLAW_WIKI_CLI_FORCE_LOCAL = prev;
+      }
+    }
+  });
+
   it("sanitizes gateway status text output without changing JSON output", async () => {
     const { config } = await createCliVault({
       config: {

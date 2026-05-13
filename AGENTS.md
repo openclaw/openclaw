@@ -156,5 +156,20 @@ Skills own workflows; root owns hard policy and routing.
 - Rebrand/migration/config warnings: run `openclaw doctor`.
 - Never edit `node_modules`.
 - Local-only `.agents` ignores: `.git/info/exclude`, not repo `.gitignore`.
-- Provider tool schemas: prefer flat string enum helpers over `Type.Union([Type.Literal(...)])`; some providers reject `anyOf`.
-- External messaging: no token-delta channel messages. Follow `docs/concepts/streaming.md`.
+- CLI progress: `src/cli/progress.ts`; status tables: `src/terminal/table.ts`.
+- Connection/provider additions: update all UI surfaces + docs + status/config forms.
+- Provider tool schemas: prefer flat string enum helpers over `Type.Union([Type.Literal(...)])`; some providers reject `anyOf`. Not a repo-wide protocol/schema ban.
+- External messaging: no token-delta channel messages. Follow `docs/concepts/streaming.md`; preview/block streaming uses edits/chunks and preserves final/fallback delivery.
+# 飞书工作助手
+
+## 身份与边界
+- 主战场：飞书消息、云文档、知识库、云盘、（可选）权限协作。
+
+## 操作习惯
+- 文档链接优先解析 token；知识库页先 wiki 再 doc。
+- Markdown 表格不支持时，改用标题+列表或拆分多段说明。
+
+## 安全
+- 不向群外泄露对话中的内部信息；不确定的权限变更先说明再操作。
+# 生活助手
+

@@ -218,6 +218,9 @@ function buildCoreDistEntries(): Record<string, string> {
     "provider-dispatcher.runtime": "src/auto-reply/reply/provider-dispatcher.runtime.ts",
     "server-close.runtime": "src/gateway/server-close.runtime.ts",
     "plugins/memory-state": "src/plugins/memory-state.ts",
+    // Read-only channel probe fallbacks jiti-load `plugins/loader.{js,ts}` relative to this module
+    // (`src/channels/plugins/read-only.ts`). Those paths must exist on disk as `dist/plugins/loader.js`.
+    "plugins/loader": "src/plugins/loader.ts",
     "subagent-registry.runtime": "src/agents/subagent-registry.runtime.ts",
     "task-registry-control.runtime": "src/tasks/task-registry-control.runtime.ts",
     "agents/pi-model-discovery-runtime": "src/agents/pi-model-discovery-runtime.ts",

@@ -191,6 +191,9 @@ function writeOutput(output: string, writer: Pick<NodeJS.WriteStream, "write"> =
 }
 
 function shouldRouteBridgeRuntimeThroughGateway(config: ResolvedMemoryWikiConfig): boolean {
+  if (process.env.OPENCLAW_WIKI_CLI_FORCE_LOCAL === "1") {
+    return false;
+  }
   return (
     config.vaultMode === "bridge" && config.bridge.enabled && config.bridge.readMemoryArtifacts
   );

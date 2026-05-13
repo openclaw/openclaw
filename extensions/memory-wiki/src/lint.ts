@@ -50,11 +50,20 @@ function toExpectedPageType(page: WikiPageSummary): string {
   return page.kind;
 }
 
+/** Match `[[obsidian/target]]` and `[text](path/file.md)` targets to page paths (extension-agnostic). */
+function normalizeWikiLinkTargetForValidation(target: string): string {
+  const trimmed = target.trim().replace(/\\/g, "/");
+  const noHash = trimmed.split("#")[0]?.split("?")[0]?.trim() ?? trimmed;
+  return noHash.replace(/\.md$/i, "");
+}
+
 function collectBrokenLinkIssues(pages: WikiPageSummary[]): MemoryWikiLintIssue[] {
   const validTargets = new Set<string>();
   for (const page of pages) {
-    const withoutExtension = page.relativePath.replace(/\.md$/i, "");
+    const rel = page.relativePath.split(path.sep).join("/");
+    const withoutExtension = rel.replace(/\.md$/i, "");
     validTargets.add(page.relativePath);
+    validTargets.add(rel);
     validTargets.add(withoutExtension);
     validTargets.add(path.basename(withoutExtension));
   }
@@ -62,7 +71,13 @@ function collectBrokenLinkIssues(pages: WikiPageSummary[]): MemoryWikiLintIssue[
   const issues: MemoryWikiLintIssue[] = [];
   for (const page of pages) {
     for (const linkTarget of page.linkTargets) {
-      if (!validTargets.has(linkTarget)) {
+      const normalized = normalizeWikiLinkTargetForValidation(linkTarget);
+      const basename = path.basename(normalized);
+      const isValid =
+        validTargets.has(linkTarget.trim()) ||
+        validTargets.has(normalized) ||
+        validTargets.has(basename);
+      if (!isValid) {
         issues.push({
           severity: "warning",
           category: "links",

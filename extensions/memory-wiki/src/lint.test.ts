@@ -156,4 +156,32 @@ describe("lintMemoryWikiVault", () => {
     await expect(fs.readFile(result.reportPath, "utf8")).resolves.toContain("### Contradictions");
     await expect(fs.readFile(result.reportPath, "utf8")).resolves.toContain("### Open Questions");
   });
+
+  it("accepts native markdown links that include the .md extension", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-lint-mdlink-",
+      config: { vault: { renderMode: "native" } },
+    });
+    await Promise.all(
+      ["sources", "reports"].map((dir) => fs.mkdir(path.join(rootDir, dir), { recursive: true })),
+    );
+    await fs.writeFile(
+      path.join(rootDir, "sources", "doc.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.doc", title: "Doc" },
+        body: "# Doc\n",
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "reports", "refs.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "report", id: "report.refs", title: "Refs" },
+        body: "# Refs\n\n[Doc](sources/doc.md)\n",
+      }),
+      "utf8",
+    );
+    const result = await lintMemoryWikiVault(config);
+    expect(result.issues.filter((issue) => issue.code === "broken-wikilink")).toEqual([]);
+  });
 });
