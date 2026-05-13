@@ -540,6 +540,54 @@ describe("buildMinimaxSpeechProvider", () => {
         }),
       ).rejects.toThrow("MiniMax TTS API error (401): Unauthorized");
     });
+
+    it("throws on quota-exceeded envelope error (HTTP 200 with non-zero base_resp.status_code)", async () => {
+      // MiniMax always returns HTTP 200; quota/billing errors are signalled via
+      // base_resp.status_code.  The synthesize call must throw so the TTS
+      // dispatcher can attempt the configured fallback provider.
+      vi.mocked(globalThis.fetch).mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            base_resp: { status_code: 1002, status_msg: "Insufficient balance, please recharge!" },
+            data: { audio: "" },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+      await expect(
+        provider.synthesize({
+          text: "Test",
+          cfg: {} as never,
+          providerConfig: { apiKey: "sk-test" },
+          target: "audio-file",
+          timeoutMs: 30000,
+        }),
+      ).rejects.toThrow("MiniMax TTS API error (1002): Insufficient balance, please recharge!");
+    });
+
+    it("throws on quota-exceeded envelope error even when data.audio is non-empty", async () => {
+      // Guard against MiniMax returning a non-empty audio field alongside a
+      // non-zero status code; we must not treat that as a successful synthesis.
+      const bogusHex = Buffer.from("bogus").toString("hex");
+      vi.mocked(globalThis.fetch).mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            base_resp: { status_code: 1002, status_msg: "Quota exceeded" },
+            data: { audio: bogusHex },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+      await expect(
+        provider.synthesize({
+          text: "Test",
+          cfg: {} as never,
+          providerConfig: { apiKey: "sk-test" },
+          target: "audio-file",
+          timeoutMs: 30000,
+        }),
+      ).rejects.toThrow("MiniMax TTS API error (1002): Quota exceeded");
+    });
   });
 
   describe("listVoices", () => {
