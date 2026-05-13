@@ -1547,6 +1547,53 @@ export async function runAgentTurnWithFallback(params: {
                 assistantBridgeUnsubscribed = true;
                 rawUnsubscribeAssistantBridge();
               };
+              let lastBridgedReasoningText: string | undefined;
+              let reasoningBridgeUnsubscribed = false;
+              let reasoningBridgeDelivery: Promise<void> = Promise.resolve();
+              const deliverBridgedReasoningText = async (text: string): Promise<void> => {
+                if (typeof params.opts?.onReasoningStream !== "function") {
+                  return;
+                }
+                await params.opts.onReasoningStream({ text });
+              };
+              const queueBridgedReasoningText = (text: string) => {
+                reasoningBridgeDelivery = reasoningBridgeDelivery
+                  .then(() => deliverBridgedReasoningText(text))
+                  .catch(() => undefined);
+              };
+              const drainReasoningBridgeDelivery = async (): Promise<void> => {
+                await reasoningBridgeDelivery;
+              };
+              // CLI-runtime-only bridge: claude-opus-4-7 over `claude --output-format
+              // stream-json` suppresses readable `thinking_delta` events on the wire,
+              // so the reasoning preview lane stays silent during streaming. Bridge
+              // `stream: "assistant"` agent-events to `onReasoningStream` so the
+              // reasoning lane reflects the model's live text output. The reply lane
+              // is unaffected: `onPartialReply` is still settled by the assistant-text
+              // bridge above (PR #76914). API/native runtimes get reasoning content
+              // from real thinking_delta events and must NOT double-receive
+              // text_delta as reasoning — this bridge is gated on `isCliProvider`.
+              const rawUnsubscribeReasoningBridge = onAgentEvent((evt) => {
+                if (evt.runId !== runId || evt.stream !== "assistant") {
+                  return;
+                }
+                if (params.followupRun.run.silentExpected) {
+                  return;
+                }
+                const text = typeof evt.data.text === "string" ? evt.data.text : undefined;
+                if (text === undefined || text === lastBridgedReasoningText) {
+                  return;
+                }
+                lastBridgedReasoningText = text;
+                queueBridgedReasoningText(text);
+              });
+              const unsubscribeReasoningBridge = () => {
+                if (reasoningBridgeUnsubscribed) {
+                  return;
+                }
+                reasoningBridgeUnsubscribed = true;
+                rawUnsubscribeReasoningBridge();
+              };
               try {
                 const result = await runCliAgent({
                   sessionId: params.followupRun.run.sessionId,
@@ -1595,7 +1642,9 @@ export async function runAgentTurnWithFallback(params: {
                 );
 
                 unsubscribeAssistantBridge();
+                unsubscribeReasoningBridge();
                 await drainAssistantBridgeDelivery();
+                await drainReasoningBridgeDelivery();
 
                 // CLI backends don't emit streaming assistant events, so we need to
                 // emit one with the final text so server-chat can populate its buffer
@@ -1623,7 +1672,9 @@ export async function runAgentTurnWithFallback(params: {
                 return result;
               } catch (err) {
                 unsubscribeAssistantBridge();
+                unsubscribeReasoningBridge();
                 await drainAssistantBridgeDelivery();
+                await drainReasoningBridgeDelivery();
                 if (rollbackFallbackCandidateSelection) {
                   try {
                     await rollbackFallbackCandidateSelection();
@@ -1648,6 +1699,7 @@ export async function runAgentTurnWithFallback(params: {
                 throw err;
               } finally {
                 unsubscribeAssistantBridge();
+                unsubscribeReasoningBridge();
                 // Defensive backstop: never let a CLI run complete without a terminal
                 // lifecycle event, otherwise downstream consumers can hang.
                 if (!lifecycleTerminalEmitted) {
