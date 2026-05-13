@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- fix(plugins): scan installed dependency runtime code [AI]. (#81066) Thanks @pgondhi987.
 - Inherit tool restrictions for delegated sessions [AI]. (#80979) Thanks @pgondhi987.
 - Telegram: discard legacy long-poll update offsets that cannot be tied to the current bot token, so token rotation no longer leaves bots silently skipping new messages. (#80671) Thanks @sxxtony.
 - browser: enforce navigation checks for act interactions [AI]. (#81070) Thanks @pgondhi987.
