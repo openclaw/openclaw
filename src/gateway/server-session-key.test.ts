@@ -134,6 +134,34 @@ describe("resolveSessionKeyForRun", () => {
     expect(hoisted.loadCombinedSessionStoreForGatewayMock).not.toHaveBeenCalled();
   });
 
+  it("uses active legacy run contexts for the configured default agent", () => {
+    hoisted.loadConfigMock.mockReturnValue({
+      agents: { list: [{ id: "work", default: true }] },
+    });
+    registerAgentRunContext("run-live-work", { sessionKey: "main" });
+
+    expect(resolveSessionKeyForRun("run-live-work")).toBe("main");
+    expect(hoisted.loadCombinedSessionStoreForGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("uses legacy store entries for the configured default agent", () => {
+    const cfg: OpenClawConfig = {
+      agents: { list: [{ id: "work", default: true }] },
+    };
+    hoisted.loadConfigMock.mockReturnValue(cfg);
+    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+      storePath: "(multiple)",
+      store: {
+        main: { sessionId: "run-legacy-default", updatedAt: 123 },
+      },
+    });
+
+    expect(resolveSessionKeyForRun("run-legacy-default")).toBe("main");
+    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(cfg, {
+      agentId: "work",
+    });
+  });
+
   it("lets active run context override a cached miss", () => {
     hoisted.loadConfigMock.mockReturnValue({});
     hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
