@@ -54,6 +54,20 @@ type AcpxLaunchLeaseContext = {
   stableCommand?: string;
 };
 
+function delegateEnsureMode(mode: Parameters<AcpRuntime["ensureSession"]>[0]["mode"]):
+  | "persistent"
+  | "oneshot" {
+  // ACPX one-shot records close the adapter process immediately after session/new.
+  // OpenClaw then invokes the first prompt through a separate runTurn call, which
+  // forces ACPX to reconnect/load before any user prompt has been sent. Some ACP
+  // adapters, notably Claude Agent ACP, can create a fresh session and prompt in
+  // one process but fail this create-close-load-prompt sequence with a generic
+  // Internal error. Keep the ACPX client alive across OpenClaw's ensureSession →
+  // runTurn boundary by using ACPX persistent mode underneath; OpenClaw still owns
+  // oneshot lifecycle and closes the handle after the turn.
+  return mode === "oneshot" ? "persistent" : mode;
+}
+
 function readSessionRecordName(record: unknown): string {
   if (typeof record !== "object" || record === null) {
     return "";
@@ -865,17 +879,22 @@ export class AcpxRuntime implements AcpRuntime {
       resumeSessionId: input.resumeSessionId,
     }));
 
+    const delegateInput = {
+      ...input,
+      mode: delegateEnsureMode(input.mode),
+    };
+
     if (!codexModelOverride) {
       return await this.runWithLaunchLease({
         sessionKey: input.sessionKey,
         command: stableLaunchCommand,
         enabled: shouldStartWithLease,
-        run: () => delegate.ensureSession(input),
+        run: () => delegate.ensureSession(delegateInput),
       });
     }
 
     const normalizedInput = {
-      ...input,
+      ...delegateInput,
       ...(codexAcpSessionModelId(codexModelOverride)
         ? { model: codexAcpSessionModelId(codexModelOverride) }
         : {}),
