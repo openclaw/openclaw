@@ -12,7 +12,7 @@ const execFileAsync = promisify(execFile);
 /**
  * Windows cmd.exe dangerous characters that can be used for command injection.
  * Reference: Microsoft documentation on cmd.exe parsing and CVE-2024-27980
- * 
+ *
  * Characters blocked:
  * &  - Command separator (command1 & command2)
  * |  - Pipe (command1 | command2)
@@ -48,7 +48,8 @@ const WINDOWS_UNSAFE_CMD_CHARS_RE = /[&|<>\^%\r\n;`$(){}[\]=+'\\/*?!~]/;
  * Additional check for PowerShell-specific dangerous patterns.
  * Used when the command might be executed via PowerShell.
  */
-const POWERSHELL_UNSAFE_PATTERNS_RE = /\b(Invoke-Expression|IEX|Invoke-Command|Start-Process|Invoke-WebRequest|DownloadFile|Add-Type|Import-Module)\b/i;
+const POWERSHELL_UNSAFE_PATTERNS_RE =
+  /\b(Invoke-Expression|IEX|Invoke-Command|Start-Process|Invoke-WebRequest|DownloadFile|Add-Type|Import-Module)\b/i;
 
 function isWindowsBatchCommand(resolvedCommand: string): boolean {
   if (process.platform !== "win32") {
@@ -61,7 +62,7 @@ function isWindowsBatchCommand(resolvedCommand: string): boolean {
 /**
  * Validates argument for Windows cmd.exe execution.
  * Throws if dangerous characters or patterns are detected.
- * 
+ *
  * SECURITY: This is a critical security check to prevent command injection
  * on Windows platforms. When shell mode is required, all arguments must
  * pass this validation.
@@ -72,45 +73,45 @@ function validateWindowsArgument(arg: string, context?: string): void {
     const dangerousChar = charMatch ? charMatch[0] : "unknown";
     throw new Error(
       `Unsafe Windows cmd.exe argument detected: ${JSON.stringify(arg)}. ` +
-      `Dangerous character '${dangerousChar}' found. ` +
-      (context ? `Context: ${context}. ` : "") +
-      "Pass an explicit shell-wrapper argv at the call site instead."
+        `Dangerous character '${dangerousChar}' found. ` +
+        (context ? `Context: ${context}. ` : "") +
+        "Pass an explicit shell-wrapper argv at the call site instead.",
     );
   }
-  
+
   // Additional check for PowerShell-specific patterns
   if (POWERSHELL_UNSAFE_PATTERNS_RE.test(arg)) {
     throw new Error(
       `Unsafe PowerShell pattern detected in argument: ${JSON.stringify(arg)}. ` +
-      "PowerShell cmdlets like Invoke-Expression are blocked for security."
+        "PowerShell cmdlets like Invoke-Expression are blocked for security.",
     );
   }
-  
+
   // Check for null bytes (can truncate strings in some contexts)
-  if (arg.includes('\0')) {
+  if (arg.includes("\0")) {
     throw new Error(
       `Null byte detected in argument: ${JSON.stringify(arg)}. ` +
-      "Null bytes can be used to bypass security checks."
+        "Null bytes can be used to bypass security checks.",
     );
   }
-  
+
   // Check for Unicode control characters
   const controlCharMatch = arg.match(/[\u0000-\u001F\u007F-\u009F]/);
   if (controlCharMatch) {
     throw new Error(
       `Control character detected in argument (code: ${controlCharMatch[0].charCodeAt(0)}). ` +
-      "Control characters are blocked for security."
+        "Control characters are blocked for security.",
     );
   }
 }
 
 /**
  * Escapes argument for safe use in Windows cmd.exe command line.
- * 
+ *
  * SECURITY: This function assumes the argument has already been validated
  * by validateWindowsArgument(). Never use this on untrusted input without
  * prior validation.
- * 
+ *
  * @param arg - The argument to escape
  * @returns Escaped argument safe for cmd.exe
  * @throws Error if argument contains dangerous characters
@@ -118,7 +119,7 @@ function validateWindowsArgument(arg: string, context?: string): void {
 function escapeForCmdExe(arg: string): string {
   // SECURITY: Validate before escaping
   validateWindowsArgument(arg, "escapeForCmdExe");
-  
+
   // Quote when needed; double inner quotes for cmd parsing.
   if (!arg.includes(" ") && !arg.includes('"')) {
     return arg;
@@ -185,7 +186,7 @@ function resolveCommand(command: string): string {
 /**
  * Export validation function for use by other modules.
  * Allows callers to validate arguments before passing to exec/spawn.
- * 
+ *
  * @param arg - Argument to validate
  * @param context - Optional context for error messages
  * @throws Error if argument is unsafe
