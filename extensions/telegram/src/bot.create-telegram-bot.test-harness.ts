@@ -165,6 +165,12 @@ async function dispatchHarnessReplies(
       !payload.text.startsWith(params.dispatcherOptions.responsePrefix)
         ? `${params.dispatcherOptions.responsePrefix} ${payload.text}`
         : payload.text;
+    if (
+      text === "NO_REPLY" &&
+      params.dispatcherOptions.silentReplyContext?.conversationType === "group"
+    ) {
+      continue;
+    }
     const finalPayload = text === payload.text ? payload : { ...payload, text };
     try {
       await params.dispatcherOptions.deliver?.(finalPayload, { kind: "final" });

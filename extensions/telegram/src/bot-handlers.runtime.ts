@@ -2761,6 +2761,7 @@ export const registerTelegramHandlers = ({
           ...(nativeCallbackCommand ? { commandSource: "native" as const } : {}),
           forceWasMentioned: true,
           messageIdOverride: callback.id,
+          suppressSilentReplyFallback: true,
         },
       });
     } catch (err) {
