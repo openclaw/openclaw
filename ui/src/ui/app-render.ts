@@ -480,7 +480,7 @@ function buildAssistantAvatarRoute(basePathValue: string | null | undefined, age
 // ── Quick Settings data extraction helpers ──
 
 const KNOWN_CHANNEL_IDS = [
-  { id: "telegram", label: "Telegram" },
+  { id: "telegram", label: "Telegram Bot" },
   { id: "discord", label: "Discord" },
   { id: "slack", label: "Slack" },
   { id: "whatsapp", label: "WhatsApp" },
