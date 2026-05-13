@@ -395,16 +395,21 @@ API key auth, and dynamic model resolution.
         For providers that need custom request headers or body modifications:
 
         ```typescript
-        // wrapStreamFn returns a StreamFn derived from ctx.streamFn
+        // wrapStreamFn returns a StreamFn derived from ctx.streamFn.
+        // The wrapped function receives (model, context, options) and must
+        // forward all three to inner. Inject custom headers by merging into
+        // options.headers rather than mutating the model.
         wrapStreamFn: (ctx) => {
           if (!ctx.streamFn) return undefined;
           const inner = ctx.streamFn;
-          return async (params) => {
-            params.headers = {
-              ...params.headers,
-              "X-Acme-Version": "2",
-            };
-            return inner(params);
+          return (model, context, options) => {
+            return inner(model, context, {
+              ...options,
+              headers: {
+                ...options?.headers,
+                "X-Acme-Version": "2",
+              },
+            });
           };
         },
         ```
