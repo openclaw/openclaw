@@ -672,6 +672,41 @@ describe("resolveGatewayBindHost", () => {
     vi.spyOn(fs, "readFileSync").mockReturnValue("12:memory:/user.slice\n");
     expect(await resolveGatewayBindHost(undefined)).toBe("127.0.0.1");
   });
+
+  it("keeps explicit loopback pinned to 127.0.0.1 without preflight (#65619)", async () => {
+    // Regression: even when an intermittent `canBindToHost("127.0.0.1")`
+    // preflight would fail (port held by another process during the probe,
+    // macOS IPv4/IPv6 dual-stack quirks, etc.), an explicit `bind: "loopback"`
+    // must stay on 127.0.0.1. Falling through to 0.0.0.0 makes the downstream
+    // runtime guard in resolveGatewayRuntimeConfig reject startup with
+    // `gateway bind=loopback resolved to non-loopback host 0.0.0.0`, the
+    // reporter's #65619 macOS startup failure. Force the probe to "fail" via
+    // a net.createServer spy that always errors; explicit loopback must
+    // still return 127.0.0.1.
+    const net = require("node:net");
+    vi.spyOn(net, "createServer").mockImplementation((..._args: unknown[]) => {
+      const server: {
+        listen: (port: number, host: string) => void;
+        close: (cb?: () => void) => void;
+        on: (event: string, listener: (err?: Error) => void) => unknown;
+      } = {
+        on(event: string, listener: (err?: Error) => void) {
+          if (event === "error") {
+            // Schedule an error so the bind probe always reports failure.
+            setImmediate(() => listener(new Error("EADDRINUSE: probe failed")));
+          }
+          return server;
+        },
+        listen: () => undefined,
+        close: (cb?: () => void) => {
+          cb?.();
+        },
+      };
+      return server as unknown;
+    });
+
+    expect(await resolveGatewayBindHost("loopback")).toBe("127.0.0.1");
+  });
 });
 
 describe("defaultGatewayBindMode", () => {
