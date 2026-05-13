@@ -371,6 +371,44 @@ describe("runMemoryFlushIfNeeded", () => {
     ]);
   });
 
+  it("redacts and caps generic visible memory-flush failures before delivery", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+    };
+    const visibleErrorPayloads: Array<{ text?: string; isError?: boolean }> = [];
+    const token = "sk-abcdefghijklmnopqrstuv";
+    runWithModelFallbackMock.mockRejectedValueOnce(
+      new Error(`provider failed with Authorization: Bearer ${token} ${"x".repeat(800)}`),
+    );
+
+    await runMemoryFlushIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun(),
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-7",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+      onVisibleErrorPayloads: (payloads) => {
+        visibleErrorPayloads.push(...payloads);
+      },
+    });
+
+    const [payload] = visibleErrorPayloads;
+    expect(payload?.isError).toBe(true);
+    expect(payload?.text).toMatch(/^⚠️ provider failed with Authorization: Bearer /);
+    expect(payload?.text).not.toContain(token);
+    expect(payload?.text?.length).toBeLessThanOrEqual(600);
+    expect(payload?.text?.endsWith("…")).toBe(true);
+  });
+
   it("does not surface user-abort errors as visible payloads (regression: #80755)", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",

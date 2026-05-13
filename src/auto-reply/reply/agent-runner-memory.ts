@@ -24,6 +24,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readSessionMessagesAsync } from "../../gateway/session-utils.fs.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { isAbortError } from "../../infra/unhandled-rejections.js";
 import { resolveMemoryFlushPlan } from "../../plugins/memory-state.js";
 import { CommandLane } from "../../process/lanes.js";
@@ -50,6 +51,8 @@ import type { ReplyOperation } from "./reply-run-registry.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
 type PiEmbeddedRuntime = typeof import("../../agents/pi-embedded.js");
+
+const MAX_VISIBLE_MEMORY_FLUSH_ERROR_CHARS = 600;
 
 const piEmbeddedRuntimeLoader = createLazyImportLoader<PiEmbeddedRuntime>(
   () => import("../../agents/pi-embedded.js"),
@@ -170,12 +173,16 @@ function buildMemoryFlushErrorPayload(err: unknown): ReplyPayload | undefined {
   if (isAbortError(err)) {
     return undefined;
   }
-  const message = normalizeOptionalString(err instanceof Error ? err.message : String(err));
+  const message = normalizeOptionalString(formatErrorMessage(err));
   if (!message) {
     return undefined;
   }
+  const visibleText = message.startsWith("⚠️") ? message : `⚠️ ${message}`;
   return {
-    text: message.startsWith("⚠️") ? message : `⚠️ ${message}`,
+    text:
+      visibleText.length > MAX_VISIBLE_MEMORY_FLUSH_ERROR_CHARS
+        ? `${visibleText.slice(0, MAX_VISIBLE_MEMORY_FLUSH_ERROR_CHARS - 1)}…`
+        : visibleText,
     isError: true,
   };
 }
