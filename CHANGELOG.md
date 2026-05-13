@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Config: serialize and retry semantic config mutations centrally, so concurrent commands can rebase safe changes instead of clobbering or hand-rolling command-local retry loops. (#76601)
 - Require approval for setup-code device pairing [AI]. (#81292) Thanks @pgondhi987.
 - Docker: pin setup-time container paths so stale host `.env` OpenClaw paths cannot leak into Linux containers. Fixes #80381. (#81105) Thanks @brokemac79.
 - Channels/WeCom: refresh the official onboarding install to `@wecom/wecom-openclaw-plugin@2026.5.7` and update existing managed npm installs instead of failing on the package directory. Fixes #79884. (#80390) Thanks @brokemac79.
@@ -596,7 +597,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- Config: serialize and retry semantic config mutations centrally, so concurrent commands can rebase safe changes instead of clobbering or hand-rolling command-local retry loops.
 - Models/auth: keep `agents.defaults.model` when `openclaw models auth login` runs without `--set-default`, so provider onboarding patches add models without silently switching the primary. Fixes #78162. (#78241) Thanks @neeravmakwana.
 - Control UI/chat: localize the remaining chat welcome, composer, run-control, session/model/thinking selector, and zh-CN Skills labels through the Control UI i18n pipeline so non-English browser locales no longer see those chat controls in English. Fixes #79937. Thanks @BunsDev.
 - Control UI: surface browser-blocked WebSocket security failures with wss:// and loopback dashboard guidance instead of leaving the connection on a dead security error. Thanks @BunsDev.
