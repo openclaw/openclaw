@@ -169,6 +169,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
         const spawnedBy = normalizeOptionalString(params.spawnedBy);
         if (
           normalizeOptionalString(params.sessionKey) &&
+          !spawnedBy &&
           !canCreateUnscopedManagedRoomSession(client)
         ) {
           respond(
@@ -176,7 +177,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
             undefined,
             errorShape(
               ErrorCodes.INVALID_REQUEST,
-              `talk.session.create managed-room sessionKey requires gateway scope: ${ADMIN_SCOPE}`,
+              `talk.session.create managed-room sessionKey requires spawnedBy or gateway scope: ${ADMIN_SCOPE}`,
             ),
           );
           return;
