@@ -334,6 +334,18 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(result.body.byteLength).toBe(0);
   });
 
+  it("authenticates before checking whether a managed image record exists", async () => {
+    const { result } = await requestManagedImage({
+      stateDir,
+      pathName:
+        "/api/chat/media/outgoing/agent%3Amain%3Amain/11111111-1111-4111-8111-222222222222/full",
+      denyAuth: true,
+    });
+
+    expect(result.statusCode).toBe(401);
+    expect(result.body.byteLength).toBe(0);
+  });
+
   it("rejects non-owner trusted-proxy requests with self-declared session ownership", async () => {
     const { attachmentId, sessionKey } = await createFixture(stateDir);
 

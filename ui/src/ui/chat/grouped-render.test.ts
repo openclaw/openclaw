@@ -1749,7 +1749,7 @@ describe("grouped chat rendering", () => {
     expect(
       expectElement(container, ".chat-message-image", HTMLImageElement).getAttribute("src"),
     ).toBe(
-      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest+image.png&mediaTicket=ticket-retry",
+      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest+image.png&mediaTicket=ticket-retry&thumbnail=1",
     );
     expect(container.querySelector(".chat-assistant-attachment-badge")).toBeNull();
 

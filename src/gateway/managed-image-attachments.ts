@@ -1001,12 +1001,6 @@ export async function handleManagedOutgoingImageHttpRequest(
     sendStatus(res, 404, "not found");
     return true;
   }
-  const record = await readManagedImageRecord(attachmentId, opts.stateDir);
-  if (!record || record.sessionKey !== sessionKey) {
-    sendStatus(res, 404, "not found");
-    return true;
-  }
-
   const bearerToken = getBearerToken(req);
   const isControlUiDeviceRead =
     bearerToken && opts.authorizeControlUiDeviceReadToken
@@ -1045,6 +1039,12 @@ export async function handleManagedOutgoingImageHttpRequest(
       });
       return true;
     }
+  }
+
+  const record = await readManagedImageRecord(attachmentId, opts.stateDir);
+  if (!record || record.sessionKey !== sessionKey) {
+    sendStatus(res, 404, "not found");
+    return true;
   }
   return await serveManagedOutgoingImageRecord(res, record, variant, {
     thumbnailMaxSide: opts.thumbnailMaxSide,

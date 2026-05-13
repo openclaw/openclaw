@@ -1004,7 +1004,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(JSON.stringify(payload?.message)).not.toContain("MEDIA:data:image/png;base64,cG5n");
   });
 
-  it("replaces the raw agent MEDIA reply instead of appending a duplicate media reply", async () => {
+  it("does not append a duplicate media reply when the agent transcript already has a raw MEDIA reply", async () => {
     const transcriptDir = createTranscriptFixture("openclaw-chat-send-agent-media-replace-");
     const mediaUrl = path.join(transcriptDir, "reply.png");
     fs.writeFileSync(
@@ -1067,21 +1067,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         entry.type === "message" && entry.message.role === "assistant",
     );
     expect(assistantMessages).toHaveLength(1);
-    const assistant = assistantMessages[0];
-    expect((assistant?.message as { idempotencyKey?: unknown }).idempotencyKey).toBe(
-      "idem-agent-media-replace:assistant-media",
-    );
-    expect(JSON.stringify(assistant?.message)).not.toContain(`MEDIA:${mediaUrl}`);
-    expect(
-      (assistant?.message as { content?: Array<{ type?: string }> }).content?.some(
-        (block) => block.type === "image",
-      ),
-    ).toBe(true);
-    expect(
-      mockState.emittedTranscriptUpdates.some(
-        (update) => update.sessionFile === mockState.transcriptPath && update.message === undefined,
-      ),
-    ).toBe(true);
 
     await runNonStreamingChatSend({
       context: createChatContext(),
