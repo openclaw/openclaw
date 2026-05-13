@@ -1521,7 +1521,12 @@ export function createExecTool(
         if (defaultPathPrepend.length > 0) {
           env.OPENCLAW_PREPEND_PATH = defaultPathPrepend.join(path.delimiter);
         }
-        applyPathPrepend(env, defaultPathPrepend);
+        // In POSIX, we rely on the shell wrapper to prepend paths (to defeat RC file overrides),
+        // so we don't apply it to the env.PATH to avoid duplicate path segments.
+        // Windows does not use the shell wrapper, so it still needs direct env.PATH prepending.
+        if (process.platform === "win32") {
+          applyPathPrepend(env, defaultPathPrepend);
+        }
       }
 
       if (host === "node") {
