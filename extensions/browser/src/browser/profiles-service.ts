@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { BrowserProfileConfig, OpenClawConfig } from "../config/config.js";
+import type { BrowserProfileConfig } from "../config/config.js";
 import { getRuntimeConfig, mutateConfigFile } from "../config/config.js";
 import { deriveDefaultBrowserCdpPortRange } from "../config/port-defaults.js";
 import { formatErrorMessage } from "../infra/errors.js";
