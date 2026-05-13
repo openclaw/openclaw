@@ -6,7 +6,7 @@ import {
 } from "openclaw/plugin-sdk/channel-message";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
-import { resolveOutboundAttachmentFromUrl } from "openclaw/plugin-sdk/media-runtime";
+import { kindFromMime, resolveOutboundAttachmentFromUrl } from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-chunking";
@@ -47,6 +47,7 @@ type IMessageSendOpts = {
 type IMessageSendResult = {
   messageId: string;
   sentText: string;
+  echoText?: string;
   receipt: MessageReceipt;
 };
 
@@ -91,6 +92,17 @@ function resolveMessageId(result: Record<string, unknown> | null | undefined): s
     (typeof result.message_id === "number" ? String(result.message_id) : null) ||
     (typeof result.id === "number" ? String(result.id) : null);
   return raw ? raw.trim() : null;
+}
+
+function resolveOutboundEchoText(text: string, mediaContentType?: string): string | undefined {
+  if (text.trim()) {
+    return text;
+  }
+  const kind = kindFromMime(mediaContentType ?? undefined);
+  if (!kind) {
+    return undefined;
+  }
+  return kind === "image" ? "<media:image>" : `<media:${kind}>`;
 }
 
 function createIMessageSendReceipt(params: {
@@ -175,6 +187,7 @@ export async function sendMessageIMessage(
         : 16 * 1024 * 1024;
   let message = text ?? "";
   let filePath: string | undefined;
+  let mediaContentType: string | undefined;
 
   if (opts.mediaUrl?.trim()) {
     const resolveAttachmentFn = opts.resolveAttachmentImpl ?? resolveOutboundAttachmentFromUrl;
@@ -183,6 +196,7 @@ export async function sendMessageIMessage(
       readFile: opts.mediaReadFile,
     });
     filePath = resolved.path;
+    mediaContentType = resolved.contentType ?? undefined;
   }
 
   if (!message.trim() && !filePath) {
@@ -211,6 +225,7 @@ export async function sendMessageIMessage(
   if (!message.trim() && !filePath) {
     throw new Error("iMessage send requires text or media");
   }
+  const echoText = resolveOutboundEchoText(message, filePath ? mediaContentType : undefined);
   const resolvedReplyToId = sanitizeReplyToId(opts.replyToId);
   const params: Record<string, unknown> = {
     text: message,
@@ -253,7 +268,7 @@ export async function sendMessageIMessage(
     if (echoScope) {
       rememberPersistedIMessageEcho({
         scope: echoScope,
-        text: message,
+        text: echoText,
         messageId: resolvedId ?? undefined,
       });
     }
@@ -280,6 +295,7 @@ export async function sendMessageIMessage(
     return {
       messageId,
       sentText: message,
+      ...(echoText ? { echoText } : {}),
       receipt: createIMessageSendReceipt({
         messageId,
         target,

@@ -31,6 +31,7 @@ describe("sendMessageIMessage receipts", () => {
 
     expect(result.messageId).toBe("p:0/imsg-1");
     expect(result.sentText).toBe("hello");
+    expect(result.echoText).toBe("hello");
     expect(result.receipt.primaryPlatformMessageId).toBe("p:0/imsg-1");
     expect(result.receipt.platformMessageIds).toEqual(["p:0/imsg-1"]);
     expect(result.receipt.replyToId).toBe("reply-1");
@@ -71,6 +72,7 @@ describe("sendMessageIMessage receipts", () => {
 
     expect(result.messageId).toBe("12345");
     expect(result.sentText).toBe("");
+    expect(result.echoText).toBe("<media:image>");
     expect(result.receipt.primaryPlatformMessageId).toBe("12345");
     expect(result.receipt.platformMessageIds).toEqual(["12345"]);
     expect(client.request).toHaveBeenCalledWith(
@@ -115,6 +117,7 @@ describe("sendMessageIMessage receipts", () => {
     });
 
     expect(result.sentText).toBe("literal <media:image> text");
+    expect(result.echoText).toBe("literal <media:image> text");
     expect(client.request).toHaveBeenCalledWith(
       "send",
       expect.objectContaining({
