@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -33,17 +33,6 @@ function makeEnv(overrides: Record<string, string | undefined> = {}) {
     delete env.OPENCLAW_LOCAL_CHECK_MODE;
   }
   return env;
-}
-
-function runGit(cwd: string, args: string[]) {
-  const result = spawnSync("git", args, {
-    cwd,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  if (result.status !== 0) {
-    throw new Error(`git ${args.join(" ")} failed: ${result.stderr || result.stdout}`);
-  }
 }
 
 describe("local-heavy-check-runtime", () => {
@@ -376,7 +365,7 @@ describe("local-heavy-check-runtime", () => {
 
   it("uses a worktree-local heavy-check lock when explicitly requested", () => {
     const repoRoot = createTempDir("openclaw-local-heavy-check-worktree-");
-    runGit(repoRoot, ["init"]);
+    execFileSync("git", ["init"], { cwd: repoRoot, stdio: "ignore" });
     const cwd = path.join(repoRoot, "nested", "tooling");
     fs.mkdirSync(cwd, { recursive: true });
     const commonLockDir = path.join(repoRoot, ".git", "openclaw-local-checks", "heavy-check.lock");
