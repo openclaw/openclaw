@@ -507,6 +507,19 @@
       .diff-section:last-child {
         border-bottom: 0;
       }
+      .reference-section {
+        border-bottom: 1px solid var(--border);
+      }
+      .reference-section:last-child {
+        border-bottom: 0;
+      }
+      .reference-note {
+        padding: 10px 14px;
+        color: var(--muted);
+        background: rgba(230, 184, 47, 0.08);
+        border-top: 1px solid var(--border);
+        font-size: 12px;
+      }
       .diff-hunk {
         min-width: max-content;
         border-top: 1px solid var(--border);
@@ -895,16 +908,6 @@
           );
         }
 
-        function refsOverlap(left, right) {
-          return (
-            left &&
-            right &&
-            left.path === right.path &&
-            left.start <= right.end &&
-            right.start <= left.end
-          );
-        }
-
         function refsEqual(left, right) {
           return Boolean(left && right && refKey(left) === refKey(right));
         }
@@ -915,21 +918,6 @@
 
         function refLength(ref) {
           return ref ? Math.max(0, ref.end - ref.start + 1) : 0;
-        }
-
-        function compareRefs(left, right) {
-          const leftPath = left?.path || "";
-          const rightPath = right?.path || "";
-          if (leftPath !== rightPath) return leftPath.localeCompare(rightPath);
-          return (left?.start || 0) - (right?.start || 0);
-        }
-
-        function sortUnitsBySource(sourceUnits) {
-          return sourceUnits.slice().sort(function (left, right) {
-            return (
-              compareRefs(left.source?.ref, right.source?.ref) || left.id.localeCompare(right.id)
-            );
-          });
         }
 
         function sourceLinesForUnit(unit) {
@@ -955,26 +943,8 @@
           });
         }
 
-        function comparisonUnitsFor(unit, selectedDestinations) {
-          const refs = selectedDestinations
-            .map(function (destination) {
-              return destination.ref;
-            })
-            .filter(Boolean);
-          if (!refs.length) return [unit];
-          const related = new Map([[unit.id, unit]]);
-          units.forEach(function (candidate) {
-            if (
-              candidate.destinations.some(function (destination) {
-                return refs.some(function (ref) {
-                  return refsEqual(destination.ref, ref);
-                });
-              })
-            ) {
-              related.set(candidate.id, candidate);
-            }
-          });
-          return sortUnitsBySource(Array.from(related.values()));
+        function comparisonUnitsFor(unit) {
+          return [unit];
         }
 
         function destinationGroupsFor(comparisonUnits, selectedDestinations) {
@@ -1019,9 +989,7 @@
               }
             });
           });
-          return Array.from(groups.values()).sort(function (left, right) {
-            return compareRefs(left.destination?.ref, right.destination?.ref);
-          });
+          return Array.from(groups.values());
         }
 
         function sourceSummary(sourceUnits) {
@@ -1199,6 +1167,17 @@
               const destinationTitle = destination?.ref
                 ? refLabel(destination.ref)
                 : destination?.note || "No destination range";
+              if (destination?.changedSinceSource === false) {
+                return (
+                  '<section class="reference-section"><div class="snippet-meta"><span>Reference ' +
+                  (index + 1) +
+                  "</span><span>" +
+                  escapeHtml(destinationTitle) +
+                  '</span></div><div class="reference-note">File unchanged since the source ref; shown as related destination context, not as a diff.</div>' +
+                  renderCode(destinationLines) +
+                  "</section>"
+                );
+              }
               const generator =
                 destination?.generator && destination?.generatorLines
                   ? '<details class="generator"><summary>Generator source: ' +
@@ -1230,6 +1209,23 @@
               );
             })
             .join("");
+        }
+
+        function destinationSummary(groups) {
+          const diffCount = groups.filter(function (group) {
+            return group.destination?.changedSinceSource !== false;
+          }).length;
+          const referenceCount = groups.length - diffCount;
+          return (
+            [
+              diffCount ? diffCount + " diff" + (diffCount === 1 ? "" : "s") : "",
+              referenceCount
+                ? referenceCount + " reference" + (referenceCount === 1 ? "" : "s")
+                : "",
+            ]
+              .filter(Boolean)
+              .join(" · ") || "no file changes"
+          );
         }
 
         function renderPageSelect() {
@@ -1396,6 +1392,8 @@
           const destinations = destinationsForView(unit);
           const comparisonUnits = comparisonUnitsFor(unit, destinations);
           const destinationGroups = destinationGroupsFor(comparisonUnits, destinations);
+          const selectionChanged =
+            state.renderedUnitId !== unit.id || state.renderedViewId !== state.selectedViewId;
           els.selectedId.textContent = unit.id + " / " + unit.page;
           els.selectedTitle.textContent = unit.label;
           els.selectedSummary.textContent = unit.summary;
@@ -1412,10 +1410,7 @@
           els.sourceRef.textContent = sourceSummary(comparisonUnits);
           els.sourcePane.innerHTML = renderMappedSources(comparisonUnits);
           els.destinationCount.textContent = destinations.length
-            ? "unified diff · " +
-              destinationGroups.length +
-              " section" +
-              (destinationGroups.length === 1 ? "" : "s")
+            ? destinationSummary(destinationGroups)
             : "removed";
           els.destinationPane.innerHTML = destinations.length
             ? renderDiffView(destinationGroups)
@@ -1423,6 +1418,14 @@
               escapeHtml(unit.notes || "The audit marks this content as intentionally removed.") +
               "</span></div>" +
               renderDiffView(destinationGroups);
+          if (selectionChanged) {
+            els.sourcePane.scrollTop = 0;
+            els.sourcePane.scrollLeft = 0;
+            els.destinationPane.scrollTop = 0;
+            els.destinationPane.scrollLeft = 0;
+            state.renderedUnitId = unit.id;
+            state.renderedViewId = state.selectedViewId;
+          }
         }
 
         function renderLegend() {

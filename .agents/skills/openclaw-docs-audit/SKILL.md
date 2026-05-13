@@ -238,6 +238,8 @@ The viewer has block and doc modes. Block mode lists audit rows as cards. Doc
 mode renders the pre-rewrite source Markdown from `source_ref`; clicking a
 mapped source block selects the audit unit and updates the destination preview.
 
+For the parser, JSON, and static viewer flow, read `./flow.md`.
+
 If JSON is the canonical source for a later edit, render from JSON instead:
 
 ```bash
@@ -284,6 +286,15 @@ If the user asks for a chat-only audit, do not create a file.
 - Include frontmatter only as a single metadata row when it changed, moved, was
   removed, or affects navigation or discoverability.
 - Do not collapse a source unit just because the new docs are shorter.
+- Before marking a unit `covered`, check every material claim in the source block
+  against the cited destination range. For multi-claim units, enumerate the
+  claims mentally: commands, flags, failure modes, timing, defaults, compatibility
+  aliases, side effects, and rollback behavior all need equivalent coverage.
+- Do not cite a broad related section as coverage when only one sentence or row
+  is equivalent. Prefer the smallest exact destination range that proves the
+  claim. If equivalent content exists elsewhere, cite that exact range instead.
+- If the destination covers the general topic but loses a material subclaim,
+  mark the row `partially-covered` and name the missing subclaim in Notes.
 - Use `split` when one source unit maps to multiple destinations.
 - Use `merged` when several original units share one surviving destination.
 - Use `removed` only when the reason explains why the content no longer needs a

@@ -55,6 +55,12 @@ cd ~/.openclaw/npm
 npm install --omit=dev --omit=peer --legacy-peer-deps --ignore-scripts --no-audit --no-fund
 ```
 
+Mutable npm selectors such as `latest` or a dist-tag are resolved before install
+and recorded as the exact verified version. After npm writes `package-lock.json`,
+OpenClaw checks that the installed entry still matches the resolved version and
+integrity; if npm returns different metadata, the install fails and the managed
+package is rolled back.
+
 `openclaw plugins install npm-pack:<path.tgz>` uses that same managed npm root
 for a local npm-pack tarball. OpenClaw reads the tarball's npm metadata, adds it
 to the managed root as a copied `file:` dependency, runs the normal npm install,
