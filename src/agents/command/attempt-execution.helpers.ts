@@ -95,12 +95,26 @@ type TranscriptScanResult = {
 };
 
 /**
- * Delay between the first negative scan and the rescan that covers claude-cli's
- * asynchronous transcript flush. claude-cli writes the user-message header
- * before the assistant turn is flushed, so the first scan can race the JSONL
- * and see no assistant message even though one is about to land.
+ * Back-off ladder between negative scans of the claude-cli transcript. Element
+ * 0 is the first scan (no wait); subsequent entries are the delay before each
+ * retry. Two windows races together set the budget:
+ *  1. The within-file flush race: claude-cli writes the user-message header
+ *     before the assistant turn lands, so a fresh JSONL can briefly hold a
+ *     header with no assistant block.
+ *  2. The file-creation race: after a session-id rotation the JSONL itself
+ *     has not yet been created when the runtime probes; field observation
+ *     puts that window well past one second on busy hosts.
+ *
+ * The ladder covers both branches uniformly — the loop retries whether the
+ * file is missing or present-but-empty — and totals 3250ms of wait so a
+ * genuinely-no-session call still bounds out quickly while a slow flush has
+ * room to land.
  */
-const CLAUDE_CLI_TRANSCRIPT_FLUSH_RETRY_MS = 150;
+const CLAUDE_CLI_TRANSCRIPT_FLUSH_DELAYS_MS: readonly number[] = [0, 250, 500, 1000, 1500];
+const CLAUDE_CLI_TRANSCRIPT_FLUSH_TOTAL_MS = CLAUDE_CLI_TRANSCRIPT_FLUSH_DELAYS_MS.reduce(
+  (acc, n) => acc + n,
+  0,
+);
 
 async function claudeCliSessionTranscriptScan(params: {
   sessionId: string | undefined;
@@ -145,31 +159,34 @@ export async function claudeCliSessionTranscriptHasContent(params: {
   sessionId: string | undefined;
   homeDir?: string;
 }): Promise<boolean> {
-  const first = await claudeCliSessionTranscriptScan(params);
-  if (first.hasAssistant) {
-    return true;
-  }
-  // claude-cli flushes the user-message header before the assistant turn lands.
-  // If the JSONL is on disk but lacks an assistant message, the runtime is
-  // racing the flush — wait once and rescan before declaring transcript-missing.
-  // The wait is gated on fileExists so the genuinely-no-session path stays fast.
-  if (first.fileExists) {
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, CLAUDE_CLI_TRANSCRIPT_FLUSH_RETRY_MS);
-    });
-    const second = await claudeCliSessionTranscriptScan(params);
-    if (second.hasAssistant) {
+  let lastScan: TranscriptScanResult | null = null;
+  for (const wait of CLAUDE_CLI_TRANSCRIPT_FLUSH_DELAYS_MS) {
+    if (wait > 0) {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, wait);
+      });
+    }
+    const scan = await claudeCliSessionTranscriptScan(params);
+    if (scan.hasAssistant) {
       return true;
     }
-    cliBackendLog.warn(
-      `claude-cli transcript probe negative after ${CLAUDE_CLI_TRANSCRIPT_FLUSH_RETRY_MS}ms retry: sessionId=${second.sessionId ?? ""} homeDir=${second.homeDir ?? ""} projects=${JSON.stringify(second.projects)}`,
-    );
-    return false;
+    lastScan = scan;
   }
-  if (first.sessionId) {
-    cliBackendLog.warn(
-      `claude-cli transcript probe negative (no matching jsonl): sessionId=${first.sessionId} homeDir=${first.homeDir ?? ""} projectCount=${first.projects.length}`,
-    );
+  // The probe is the last gate before transcript-missing recovery, so emit a
+  // diagnostic for both negative branches: the file landed but stayed empty
+  // (within-file flush race lost) vs no JSONL ever appeared (file-creation
+  // race lost). The branch tells us which window we need to widen if the
+  // back-off is still too short in the field.
+  if (lastScan?.sessionId) {
+    if (lastScan.fileExists) {
+      cliBackendLog.warn(
+        `claude-cli transcript probe negative after ${CLAUDE_CLI_TRANSCRIPT_FLUSH_TOTAL_MS}ms (file exists, no asst): sessionId=${lastScan.sessionId} homeDir=${lastScan.homeDir ?? ""} projects=${JSON.stringify(lastScan.projects)}`,
+      );
+    } else {
+      cliBackendLog.warn(
+        `claude-cli transcript probe negative after ${CLAUDE_CLI_TRANSCRIPT_FLUSH_TOTAL_MS}ms (no matching jsonl): sessionId=${lastScan.sessionId} homeDir=${lastScan.homeDir ?? ""} projectCount=${lastScan.projects.length}`,
+      );
+    }
   }
   return false;
 }
