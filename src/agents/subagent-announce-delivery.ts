@@ -19,7 +19,6 @@ import {
   isInternalMessageChannel,
   normalizeMessageChannel,
 } from "../utils/message-channel.js";
-import { buildAnnounceIdempotencyKey, resolveQueueAnnounceId } from "./announce-idempotency.js";
 import type { AgentInternalEvent } from "./internal-events.js";
 import {
   getAgentCommandDeliveryFailure,
@@ -48,8 +47,7 @@ import {
   runSubagentAnnounceDispatch,
   type SubagentAnnounceDeliveryResult,
 } from "./subagent-announce-dispatch.js";
-import { resolveAnnounceOrigin, type DeliveryContext } from "./subagent-announce-origin.js";
-import { type AnnounceQueueItem, enqueueAnnounce } from "./subagent-announce-queue.js";
+import type { DeliveryContext } from "./subagent-announce-origin.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
@@ -400,53 +398,6 @@ export async function resolveSubagentCompletionOrigin(params: {
   }
 }
 
-async function sendAnnounce(item: AnnounceQueueItem) {
-  const cfg = subagentAnnounceDeliveryDeps.getRuntimeConfig();
-  const announceTimeoutMs = resolveSubagentAnnounceTimeoutMs(cfg);
-  const requesterIsSubagent = isInternalAnnounceRequesterSession(item.sessionKey);
-  const origin = item.origin;
-  const threadId =
-    origin?.threadId != null && origin.threadId !== ""
-      ? stringifyRouteThreadId(origin.threadId)
-      : undefined;
-  const deliveryTarget = !requesterIsSubagent
-    ? resolveExternalBestEffortDeliveryTarget({
-        channel: origin?.channel,
-        to: origin?.to,
-        accountId: origin?.accountId,
-        threadId,
-      })
-    : { deliver: false };
-  const idempotencyKey = buildAnnounceIdempotencyKey(
-    resolveQueueAnnounceId({
-      announceId: item.announceId,
-      sessionKey: item.sessionKey,
-      enqueuedAt: item.enqueuedAt,
-    }),
-  );
-  await subagentAnnounceDeliveryDeps.callGateway({
-    method: "agent",
-    params: {
-      sessionKey: item.sessionKey,
-      message: item.prompt,
-      channel: deliveryTarget.deliver ? deliveryTarget.channel : undefined,
-      accountId: deliveryTarget.deliver ? deliveryTarget.accountId : undefined,
-      to: deliveryTarget.deliver ? deliveryTarget.to : undefined,
-      threadId: deliveryTarget.deliver ? deliveryTarget.threadId : undefined,
-      deliver: deliveryTarget.deliver,
-      internalEvents: item.internalEvents,
-      inputProvenance: {
-        kind: "inter_session",
-        sourceSessionKey: item.sourceSessionKey,
-        sourceChannel: item.sourceChannel ?? INTERNAL_MESSAGE_CHANNEL,
-        sourceTool: item.sourceTool ?? "subagent_announce",
-      },
-      idempotencyKey,
-    },
-    timeoutMs: announceTimeoutMs,
-  });
-}
-
 export function loadRequesterSessionEntry(requesterSessionKey: string) {
   const cfg = subagentAnnounceDeliveryDeps.getRuntimeConfig();
   const canonicalKey = resolveRequesterStoreKey(cfg, requesterSessionKey);
@@ -463,14 +414,6 @@ export function loadSessionEntryByKey(sessionKey: string) {
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   const store = loadSessionStore(storePath);
   return store[sessionKey];
-}
-
-function buildAnnounceQueueKey(sessionKey: string, origin?: DeliveryContext): string {
-  const accountId = normalizeAccountId(origin?.accountId);
-  if (!accountId) {
-    return sessionKey;
-  }
-  return `${sessionKey}:acct:${accountId}`;
 }
 
 async function maybeQueueSubagentAnnounce(params: {
@@ -502,46 +445,15 @@ async function maybeQueueSubagentAnnounce(params: {
     sessionEntry: entry,
   });
 
-  const shouldSteer = queueSettings.mode === "steer";
-  if (shouldSteer) {
-    const queueOutcome = resolveQueueEmbeddedPiMessageOutcome(sessionId, params.steerMessage, {
-      steeringMode: "all",
-      ...(queueSettings.debounceMs !== undefined ? { debounceMs: queueSettings.debounceMs } : {}),
-    });
-    if (queueOutcome.queued) {
-      return "steered";
-    }
+  const queueOutcome = resolveQueueEmbeddedPiMessageOutcome(sessionId, params.steerMessage, {
+    steeringMode: "all",
+    ...(queueSettings.debounceMs !== undefined ? { debounceMs: queueSettings.debounceMs } : {}),
+  });
+  if (queueOutcome.queued) {
+    return "steered";
   }
 
-  const shouldFollowup =
-    queueSettings.mode === "steer" ||
-    queueSettings.mode === "followup" ||
-    queueSettings.mode === "collect" ||
-    queueSettings.mode === "interrupt";
-  if (isActive && shouldFollowup) {
-    const origin = resolveAnnounceOrigin(entry, params.requesterOrigin);
-    const didQueue = enqueueAnnounce({
-      key: buildAnnounceQueueKey(canonicalKey, origin),
-      item: {
-        announceId: params.announceId,
-        prompt: params.triggerMessage,
-        summaryLine: params.summaryLine,
-        internalEvents: params.internalEvents,
-        enqueuedAt: Date.now(),
-        sessionKey: canonicalKey,
-        origin,
-        sourceSessionKey: params.sourceSessionKey,
-        sourceChannel: params.sourceChannel,
-        sourceTool: params.sourceTool,
-      },
-      settings: queueSettings,
-      send: sendAnnounce,
-      shouldDefer: (item) => resolveRequesterSessionActivity(item.sessionKey).isActive,
-    });
-    return didQueue ? "queued" : "dropped";
-  }
-
-  return "none";
+  return isActive ? "dropped" : "none";
 }
 
 function hasVisibleGatewayAgentPayload(response: unknown): boolean {

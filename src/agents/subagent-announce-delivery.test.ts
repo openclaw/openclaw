@@ -423,9 +423,9 @@ describe("resolveSubagentCompletionOrigin", () => {
   });
 });
 
-describe("deliverSubagentAnnouncement queued delivery", () => {
+describe("deliverSubagentAnnouncement active requester steering", () => {
   async function deliverQueuedAnnouncement(params: {
-    mode?: "followup" | "collect";
+    mode?: "followup" | "collect" | "interrupt";
     queueEmbeddedPiMessageWithOutcome?: QueueEmbeddedPiMessageWithOutcome;
     requesterOrigin?: {
       channel?: string;
@@ -442,6 +442,8 @@ describe("deliverSubagentAnnouncement queued delivery", () => {
         sessionId: "paperclip-session",
         isActive: activityChecks++ === 0,
       }),
+      queueEmbeddedPiMessageWithOutcome:
+        params.queueEmbeddedPiMessageWithOutcome ?? createQueueOutcomeMock(true),
       getRuntimeConfig: () =>
         ({
           messages: {
@@ -451,9 +453,6 @@ describe("deliverSubagentAnnouncement queued delivery", () => {
             },
           },
         }) as never,
-      ...(params.queueEmbeddedPiMessageWithOutcome
-        ? { queueEmbeddedPiMessageWithOutcome: params.queueEmbeddedPiMessageWithOutcome }
-        : {}),
     });
 
     const result = await deliverSubagentAnnouncement({
@@ -469,40 +468,28 @@ describe("deliverSubagentAnnouncement queued delivery", () => {
 
     expectRecordFields(result, {
       delivered: true,
-      path: "queued",
+      path: "steered",
     });
-    await vi.waitFor(() => expect(callGateway).toHaveBeenCalledTimes(1));
     return callGateway;
   }
 
-  it("keeps queued announces with no external route session-only", async () => {
+  it("steers active announces with no external route", async () => {
     const callGateway = await deliverQueuedAnnouncement({});
 
-    expectGatewayAgentParams(callGateway, {
-      sessionKey: "agent:eng:paperclip:issue:123",
-      deliver: false,
-      channel: undefined,
-      accountId: undefined,
-      to: undefined,
-      threadId: undefined,
-    });
+    expect(callGateway).not.toHaveBeenCalled();
   });
 
-  it("keeps queued announces with channel-only origins session-only", async () => {
+  it("steers active announces with channel-only origins", async () => {
     const callGateway = await deliverQueuedAnnouncement({
       requesterOrigin: {
         channel: "slack",
       },
     });
 
-    expectGatewayAgentParams(callGateway, {
-      deliver: false,
-      channel: undefined,
-      to: undefined,
-    });
+    expect(callGateway).not.toHaveBeenCalled();
   });
 
-  it("keeps queued announces with internal origins session-only", async () => {
+  it("steers active announces with internal origins", async () => {
     const callGateway = await deliverQueuedAnnouncement({
       requesterOrigin: {
         channel: "webchat",
@@ -512,16 +499,10 @@ describe("deliverSubagentAnnouncement queued delivery", () => {
       },
     });
 
-    expectGatewayAgentParams(callGateway, {
-      deliver: false,
-      channel: undefined,
-      accountId: undefined,
-      to: undefined,
-      threadId: undefined,
-    });
+    expect(callGateway).not.toHaveBeenCalled();
   });
 
-  it("preserves queued external route fields when channel and target are present", async () => {
+  it("steers active announces with external route fields", async () => {
     const callGateway = await deliverQueuedAnnouncement({
       requesterOrigin: {
         channel: "slack",
@@ -531,17 +512,11 @@ describe("deliverSubagentAnnouncement queued delivery", () => {
       },
     });
 
-    expectGatewayAgentParams(callGateway, {
-      deliver: true,
-      channel: "slack",
-      accountId: "acct-1",
-      to: "channel:C123",
-      threadId: "171.222",
-    });
+    expect(callGateway).not.toHaveBeenCalled();
   });
 
-  it.each(["followup", "collect"] as const)(
-    "does not steer active requester announces in %s mode",
+  it.each(["followup", "collect", "interrupt"] as const)(
+    "steers active requester announces even in %s mode",
     async (mode) => {
       const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeMock(true);
       await deliverQueuedAnnouncement({
@@ -554,7 +529,7 @@ describe("deliverSubagentAnnouncement queued delivery", () => {
         },
       });
 
-      expect(queueEmbeddedPiMessageWithOutcome).not.toHaveBeenCalled();
+      expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledOnce();
     },
   );
 });
@@ -999,7 +974,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("queues when an active Telegram requester cannot be woken directly", async () => {
+  it("does not queue when an active Telegram requester cannot be woken directly", async () => {
     const callGateway = createGatewayMock();
     const sendMessage = createSendMessageMock();
     const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeMock(false);
@@ -1025,8 +1000,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
 
     expectRecordFields(result, {
-      delivered: true,
-      path: "queued",
+      delivered: false,
+      path: "direct",
       phases: [
         {
           phase: "direct-primary",
@@ -1037,13 +1012,24 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         },
         {
           phase: "queue-fallback",
-          delivered: true,
-          path: "queued",
+          delivered: false,
+          path: "none",
           error: undefined,
         },
       ],
     });
-    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledWith(
+    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledTimes(2);
+    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenNthCalledWith(
+      1,
+      "requester-session-telegram",
+      "child done",
+      {
+        steeringMode: "all",
+        debounceMs: 500,
+      },
+    );
+    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenNthCalledWith(
+      2,
       "requester-session-telegram",
       "child done",
       {
