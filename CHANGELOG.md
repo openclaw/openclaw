@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Restrict chat sender allowlist matching [AI]. (#80898) Thanks @pgondhi987.
 - Sessions: redact persisted tool result detail metadata before writing transcripts so diagnostic secrets do not survive tool output redaction. (#80444) Thanks @nimbleenigma.
 - Codex migration: make Enter activate the highlighted checkbox row before continuing, so `Skip for now` and bulk-selection rows work even when planned items start preselected.
 - fix: harden safe-bin argument validation [AI]. (#80999) Thanks @pgondhi987.
