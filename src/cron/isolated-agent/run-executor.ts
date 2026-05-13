@@ -434,6 +434,8 @@ export async function executeCronRun(params: {
   });
 
   const runStartedAt = params.runStartedAt ?? Date.now();
+  const didDescendantStartDuringRun = (entry: { startedAt?: number; createdAt?: number }) =>
+    didDescendantStartSinceRunStart(entry, runStartedAt);
   let emptyOutputRepairAttempted = false;
   let emptyOutputRepairFailed = false;
   const MAX_MODEL_SWITCH_RETRIES = 2;
@@ -510,8 +512,8 @@ export async function executeCronRun(params: {
     if (shouldRetryInterimAck) {
       const { countActiveDescendantRuns, listDescendantRunsForRequester } =
         await loadCronSubagentRegistryRuntime();
-      hasFreshDescendants = listDescendantRunsForRequester(params.runSessionKey).some((entry) =>
-        didDescendantStartSinceRunStart(entry, runStartedAt),
+      hasFreshDescendants = listDescendantRunsForRequester(params.runSessionKey).some(
+        didDescendantStartDuringRun,
       );
       hasActiveDescendants = countActiveDescendantRuns(params.runSessionKey) > 0;
     }
@@ -553,8 +555,8 @@ export async function executeCronRun(params: {
     if (shouldRetryEmptyOutput) {
       const { countActiveDescendantRuns, listDescendantRunsForRequester } =
         await loadCronSubagentRegistryRuntime();
-      hasFreshDescendants = listDescendantRunsForRequester(params.runSessionKey).some((entry) =>
-        didDescendantStartSinceRunStart(entry, runStartedAt),
+      hasFreshDescendants = listDescendantRunsForRequester(params.runSessionKey).some(
+        didDescendantStartDuringRun,
       );
       hasActiveDescendants = countActiveDescendantRuns(params.runSessionKey) > 0;
     }
