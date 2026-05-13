@@ -131,6 +131,16 @@ function extractPreparedNodeShellPayload(argv: readonly string[]): string | null
   return null;
 }
 
+function buildNodeApprovalAnalysisEnv(env: Record<string, string> | undefined): NodeJS.ProcessEnv {
+  return {
+    ...(env ?? {}),
+    // The gateway cannot see the node host PATH, so bare-name resolution must
+    // not fall back to the gateway process environment during the precheck.
+    PATH: "",
+    Path: "",
+  };
+}
+
 export function shouldSkipNodeApprovalPrepare(params: {
   hostSecurity: ExecSecurity;
   hostAsk: ExecAsk;
@@ -380,12 +390,13 @@ export async function analyzeNodeApprovalRequirement(params: {
 }): Promise<NodeApprovalAnalysis> {
   const approvalCommand = params.prepared.rawCommand;
   const approvalCwd = params.prepared.cwd ?? params.request.workdir;
+  const analysisEnv = buildNodeApprovalAnalysisEnv(params.target.env);
   const baseAllowlistEval = evaluateShellAllowlist({
     command: approvalCommand,
     allowlist: [],
     safeBins: new Set(),
     cwd: approvalCwd,
-    env: params.request.env,
+    env: analysisEnv,
     platform: params.target.platform,
     trustedSafeBinDirs: params.request.trustedSafeBinDirs,
   });
@@ -416,7 +427,7 @@ export async function analyzeNodeApprovalRequirement(params: {
         allowlist: [],
         safeBins: new Set(),
         cwd,
-        env: params.request.env,
+        env: analysisEnv,
         platform: params.target.platform,
         trustedSafeBinDirs: params.request.trustedSafeBinDirs,
       }),
@@ -467,7 +478,7 @@ export async function analyzeNodeApprovalRequirement(params: {
       commandRequiresSecurityAuditSuppressionApproval({
         command: entry.command,
         cwd: entry.cwd,
-        env: params.request.env,
+        env: analysisEnv,
         segments: entry.allowlistEval.segments,
       }),
     ) && !(params.hostSecurity === "full" && params.hostAsk === "off");
@@ -503,7 +514,7 @@ export async function analyzeNodeApprovalRequirement(params: {
             allowlist: resolved.allowlist,
             safeBins: new Set(),
             cwd: entry.cwd,
-            env: params.request.env,
+            env: analysisEnv,
             platform: params.target.platform,
             trustedSafeBinDirs: params.request.trustedSafeBinDirs,
           });
