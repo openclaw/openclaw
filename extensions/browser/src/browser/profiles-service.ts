@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { BrowserProfileConfig, OpenClawConfig } from "../config/config.js";
-import { getRuntimeConfig, replaceConfigFile } from "../config/config.js";
+import { getRuntimeConfig, mutateConfigFile } from "../config/config.js";
 import { deriveDefaultBrowserCdpPortRange } from "../config/port-defaults.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUserPath } from "../utils.js";
@@ -165,20 +165,17 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
       }
     }
 
-    const nextConfig: OpenClawConfig = {
-      ...cfg,
-      browser: {
-        ...cfg.browser,
-        profiles: {
-          ...rawProfiles,
-          [name]: profileConfig,
-        },
-      },
-    };
-
-    await replaceConfigFile({
-      nextConfig,
+    await mutateConfigFile({
       afterWrite: { mode: "auto" },
+      mutate: (draft) => {
+        draft.browser = {
+          ...draft.browser,
+          profiles: {
+            ...(draft.browser?.profiles ?? {}),
+            [name]: profileConfig,
+          },
+        };
+      },
     });
 
     state.resolved.profiles[name] = profileConfig;
@@ -240,18 +237,15 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
       }
     }
 
-    const { [name]: _removed, ...remainingProfiles } = profiles;
-    const nextConfig: OpenClawConfig = {
-      ...cfg,
-      browser: {
-        ...cfg.browser,
-        profiles: remainingProfiles,
-      },
-    };
-
-    await replaceConfigFile({
-      nextConfig,
+    await mutateConfigFile({
       afterWrite: { mode: "auto" },
+      mutate: (draft) => {
+        const { [name]: _removed, ...remainingProfiles } = draft.browser?.profiles ?? {};
+        draft.browser = {
+          ...draft.browser,
+          profiles: remainingProfiles,
+        };
+      },
     });
 
     delete state.resolved.profiles[name];

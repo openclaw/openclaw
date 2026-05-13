@@ -10,7 +10,7 @@ import type { ConfigSnapshotForInstallPersist } from "../../cli/plugins-install-
 import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
 import {
   readConfigFileSnapshot,
-  replaceConfigFile,
+  transformConfigFileWithRetry,
   validateConfigObjectWithPlugins,
 } from "../../config/config.js";
 import { assertConfigWriteAllowedInCurrentMode } from "../../config/nix-mode-write-guard.js";
@@ -53,6 +53,8 @@ import { parsePluginsCommand } from "./plugins-commands.js";
 function renderJsonBlock(label: string, value: unknown): string {
   return `${label}\n\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\``;
 }
+
+class PluginsCommandMutationError extends Error {}
 
 function buildPluginInspectJson(params: {
   id: string;
@@ -535,28 +537,36 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
     };
   }
 
-  const next = setPluginEnabledInConfig(
-    structuredClone(loaded.config),
-    plugin.id,
-    pluginsCommand.action === "enable",
-  );
-  const validated = validateConfigObjectWithPlugins(next);
-  if (!validated.ok) {
-    const issue = validated.issues[0];
-    return {
-      shouldContinue: false,
-      reply: {
-        text: `⚠️ Config invalid after /plugins ${pluginsCommand.action} (${issue.path}: ${issue.message}).`,
+  let committedConfig: OpenClawConfig;
+  try {
+    const committed = await transformConfigFileWithRetry({
+      afterWrite: { mode: "auto" },
+      transform: (currentConfig) => {
+        const next = setPluginEnabledInConfig(
+          structuredClone(currentConfig),
+          plugin.id,
+          pluginsCommand.action === "enable",
+        );
+        const validated = validateConfigObjectWithPlugins(next);
+        if (!validated.ok) {
+          const issue = validated.issues[0];
+          throw new PluginsCommandMutationError(
+            `Config invalid after /plugins ${pluginsCommand.action} (${issue.path}: ${issue.message}).`,
+          );
+        }
+        return { nextConfig: validated.config };
       },
-    };
+    });
+    committedConfig = committed.nextConfig;
+  } catch (error) {
+    if (error instanceof PluginsCommandMutationError) {
+      return { shouldContinue: false, reply: { text: `⚠️ ${error.message}` } };
+    }
+    throw error;
   }
-  await replaceConfigFile({
-    nextConfig: validated.config,
-    afterWrite: { mode: "auto" },
-  });
   let registryWarning: string | undefined;
   await refreshPluginRegistryAfterConfigMutation({
-    config: validated.config,
+    config: committedConfig,
     reason: "policy-changed",
     logger: {
       warn: (message) => {

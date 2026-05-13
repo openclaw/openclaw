@@ -8,7 +8,7 @@ import {
 } from "../../config/config-paths.js";
 import {
   readConfigFileSnapshot,
-  replaceConfigFile,
+  transformConfigFileWithRetry,
   validateConfigObjectWithPlugins,
 } from "../../config/config.js";
 import {
@@ -30,6 +30,12 @@ import type { CommandHandler } from "./commands-types.js";
 import { parseConfigCommand } from "./config-commands.js";
 import { resolveConfigWriteDeniedText } from "./config-write-authorization.js";
 import { parseDebugCommand } from "./debug-commands.js";
+
+class ConfigCommandMutationError extends Error {}
+
+function formatConfigCommandMutationError(error: unknown): string | null {
+  return error instanceof ConfigCommandMutationError ? error.message : null;
+}
 
 export const handleConfigCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
@@ -142,27 +148,42 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
   }
 
   if (configCommand.action === "unset") {
-    const removed = unsetConfigValueAtPath(parsedBase, parsedWritePath ?? []);
+    const path = parsedWritePath ?? [];
+    let removed = false;
+    try {
+      const result = await transformConfigFileWithRetry<{ removed: boolean }>({
+        base: "source",
+        afterWrite: { mode: "auto" },
+        transform: (currentConfig) => {
+          const next = structuredClone(currentConfig) as Record<string, unknown>;
+          const removed = unsetConfigValueAtPath(next, path);
+          if (!removed) {
+            return { nextConfig: currentConfig, result: { removed: false } };
+          }
+          const validated = validateConfigObjectWithPlugins(next);
+          if (!validated.ok) {
+            const issue = validated.issues[0];
+            throw new ConfigCommandMutationError(
+              `Config invalid after unset (${issue.path}: ${issue.message}).`,
+            );
+          }
+          return { nextConfig: validated.config, result: { removed: true } };
+        },
+      });
+      removed = Boolean(result.result?.removed);
+    } catch (error) {
+      const message = formatConfigCommandMutationError(error);
+      if (message) {
+        return { shouldContinue: false, reply: { text: `⚠️ ${message}` } };
+      }
+      throw error;
+    }
     if (!removed) {
       return {
         shouldContinue: false,
         reply: { text: `⚙️ No config value found for ${configCommand.path}.` },
       };
     }
-    const validated = validateConfigObjectWithPlugins(parsedBase);
-    if (!validated.ok) {
-      const issue = validated.issues[0];
-      return {
-        shouldContinue: false,
-        reply: {
-          text: `⚠️ Config invalid after unset (${issue.path}: ${issue.message}).`,
-        },
-      };
-    }
-    await replaceConfigFile({
-      nextConfig: validated.config,
-      afterWrite: { mode: "auto" },
-    });
     return {
       shouldContinue: false,
       reply: { text: `⚙️ Config updated: ${configCommand.path} removed.` },
@@ -170,21 +191,31 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
   }
 
   if (configCommand.action === "set") {
-    setConfigValueAtPath(parsedBase, parsedWritePath ?? [], configCommand.value);
-    const validated = validateConfigObjectWithPlugins(parsedBase);
-    if (!validated.ok) {
-      const issue = validated.issues[0];
-      return {
-        shouldContinue: false,
-        reply: {
-          text: `⚠️ Config invalid after set (${issue.path}: ${issue.message}).`,
+    const path = parsedWritePath ?? [];
+    try {
+      await transformConfigFileWithRetry({
+        base: "source",
+        afterWrite: { mode: "auto" },
+        transform: (currentConfig) => {
+          const next = structuredClone(currentConfig) as Record<string, unknown>;
+          setConfigValueAtPath(next, path, configCommand.value);
+          const validated = validateConfigObjectWithPlugins(next);
+          if (!validated.ok) {
+            const issue = validated.issues[0];
+            throw new ConfigCommandMutationError(
+              `Config invalid after set (${issue.path}: ${issue.message}).`,
+            );
+          }
+          return { nextConfig: validated.config };
         },
-      };
+      });
+    } catch (error) {
+      const message = formatConfigCommandMutationError(error);
+      if (message) {
+        return { shouldContinue: false, reply: { text: `⚠️ ${message}` } };
+      }
+      throw error;
     }
-    await replaceConfigFile({
-      nextConfig: validated.config,
-      afterWrite: { mode: "auto" },
-    });
     const valueLabel =
       typeof configCommand.value === "string"
         ? `"${configCommand.value}"`

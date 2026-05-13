@@ -3,7 +3,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { getRuntimeConfig, replaceConfigFile } from "../config/config.js";
+import { getRuntimeConfig, mutateConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { ensureGatewayStartupAuth } from "../gateway/startup-auth.js";
@@ -77,19 +77,17 @@ async function generateAndPersistBrowserControlToken(params: {
   generatedToken?: string;
 }> {
   const token = generateBrowserControlToken();
-  const nextCfg: OpenClawConfig = {
-    ...params.cfg,
-    gateway: {
-      ...params.cfg.gateway,
-      auth: {
-        ...params.cfg.gateway?.auth,
-        token,
-      },
-    },
-  };
-  await replaceConfigFile({
-    nextConfig: nextCfg,
+  await mutateConfigFile({
     afterWrite: { mode: "auto" },
+    mutate: (draft) => {
+      draft.gateway = {
+        ...draft.gateway,
+        auth: {
+          ...draft.gateway?.auth,
+          token,
+        },
+      };
+    },
   });
 
   // Re-read to stay consistent with any concurrent config writer.
@@ -112,19 +110,17 @@ async function generateAndPersistBrowserControlPassword(params: {
   generatedToken?: string;
 }> {
   const password = generateBrowserControlToken();
-  const nextCfg: OpenClawConfig = {
-    ...params.cfg,
-    gateway: {
-      ...params.cfg.gateway,
-      auth: {
-        ...params.cfg.gateway?.auth,
-        password,
-      },
-    },
-  };
-  await replaceConfigFile({
-    nextConfig: nextCfg,
+  await mutateConfigFile({
     afterWrite: { mode: "auto" },
+    mutate: (draft) => {
+      draft.gateway = {
+        ...draft.gateway,
+        auth: {
+          ...draft.gateway?.auth,
+          password,
+        },
+      };
+    },
   });
 
   // Re-read to stay consistent with any concurrent config writer.

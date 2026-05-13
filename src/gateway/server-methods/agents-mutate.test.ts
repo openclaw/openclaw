@@ -68,6 +68,27 @@ vi.mock("../../config/config.js", async () => {
     writeConfigFile: mocks.writeConfigFile,
     replaceConfigFile: async (params: { nextConfig: unknown }) =>
       await mocks.writeConfigFile(params.nextConfig),
+    mutateConfigFileWithRetry: async (params: {
+      mutate: (draft: Record<string, unknown>, context: unknown) => unknown;
+    }) => {
+      const draft = structuredClone(mocks.loadConfigReturn);
+      const result = await params.mutate(draft, {
+        snapshot: { path: "/tmp/openclaw/config.json" },
+        previousHash: "test-hash",
+        attempt: 0,
+      });
+      await mocks.writeConfigFile(draft);
+      return {
+        path: "/tmp/openclaw/config.json",
+        previousHash: "test-hash",
+        snapshot: { path: "/tmp/openclaw/config.json" },
+        nextConfig: draft,
+        result,
+        attempts: 1,
+        afterWrite: { mode: "auto" },
+        followUp: { action: "none" },
+      };
+    },
   };
 });
 

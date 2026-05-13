@@ -13,7 +13,7 @@ import { installSkill } from "../../agents/skills-install.js";
 import { buildWorkspaceSkillStatus } from "../../agents/skills-status.js";
 import { loadWorkspaceSkillEntries, type SkillEntry } from "../../agents/skills.js";
 import { listAgentWorkspaceDirs } from "../../agents/workspace-dirs.js";
-import { replaceConfigFile } from "../../config/config.js";
+import { mutateConfigFileWithRetry } from "../../config/config.js";
 import { redactConfigObject, REDACTED_SENTINEL } from "../../config/redact-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { fetchClawHubSkillDetail } from "../../infra/clawhub.js";
@@ -331,55 +331,53 @@ export const skillsHandlers: GatewayRequestHandlers = {
       apiKey?: string;
       env?: Record<string, string>;
     };
-    const cfg = context.getRuntimeConfig();
-    const skills = cfg.skills ? { ...cfg.skills } : {};
-    const entries = skills.entries ? { ...skills.entries } : {};
-    const current = entries[p.skillKey] ? { ...entries[p.skillKey] } : {};
-    if (typeof p.enabled === "boolean") {
-      current.enabled = p.enabled;
-    }
-    if (typeof p.apiKey === "string") {
-      const trimmed = normalizeSecretInput(p.apiKey);
-      if (trimmed === REDACTED_SENTINEL) {
-        // Keep the stored secret when a client round-trips a redacted response value.
-      } else if (trimmed) {
-        current.apiKey = trimmed;
-      } else {
-        delete current.apiKey;
-      }
-    }
-    if (p.env && typeof p.env === "object") {
-      const nextEnv = current.env ? { ...current.env } : {};
-      for (const [key, value] of Object.entries(p.env)) {
-        const trimmedKey = key.trim();
-        if (!trimmedKey) {
-          continue;
-        }
-        const trimmedVal = value.trim();
-        if (trimmedVal === REDACTED_SENTINEL) {
-          continue;
-        }
-        if (!trimmedVal) {
-          delete nextEnv[trimmedKey];
-        } else {
-          nextEnv[trimmedKey] = trimmedVal;
-        }
-      }
-      current.env = nextEnv;
-    }
-    entries[p.skillKey] = current;
-    skills.entries = entries;
-    const nextConfig: OpenClawConfig = {
-      ...cfg,
-      skills,
-    };
-    await replaceConfigFile({
-      nextConfig,
+    const committed = await mutateConfigFileWithRetry({
       afterWrite: { mode: "auto" },
+      mutate: (draft) => {
+        const skills = draft.skills ? { ...draft.skills } : {};
+        const entries = skills.entries ? { ...skills.entries } : {};
+        const current = entries[p.skillKey] ? { ...entries[p.skillKey] } : {};
+        if (typeof p.enabled === "boolean") {
+          current.enabled = p.enabled;
+        }
+        if (typeof p.apiKey === "string") {
+          const trimmed = normalizeSecretInput(p.apiKey);
+          if (trimmed === REDACTED_SENTINEL) {
+            // Keep the stored secret when a client round-trips a redacted response value.
+          } else if (trimmed) {
+            current.apiKey = trimmed;
+          } else {
+            delete current.apiKey;
+          }
+        }
+        if (p.env && typeof p.env === "object") {
+          const nextEnv = current.env ? { ...current.env } : {};
+          for (const [key, value] of Object.entries(p.env)) {
+            const trimmedKey = key.trim();
+            if (!trimmedKey) {
+              continue;
+            }
+            const trimmedVal = value.trim();
+            if (trimmedVal === REDACTED_SENTINEL) {
+              continue;
+            }
+            if (!trimmedVal) {
+              delete nextEnv[trimmedKey];
+            } else {
+              nextEnv[trimmedKey] = trimmedVal;
+            }
+          }
+          current.env = nextEnv;
+        }
+        entries[p.skillKey] = current;
+        skills.entries = entries;
+        draft.skills = skills;
+        return current;
+      },
     });
     respond(
       true,
-      { ok: true, skillKey: p.skillKey, config: redactConfigObject(current) },
+      { ok: true, skillKey: p.skillKey, config: redactConfigObject(committed.result ?? {}) },
       undefined,
     );
   },

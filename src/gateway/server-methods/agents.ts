@@ -26,7 +26,7 @@ import {
   listAgentEntries,
   pruneAgentConfig,
 } from "../../commands/agents.config.js";
-import { replaceConfigFile } from "../../config/config.js";
+import { mutateConfigFileWithRetry } from "../../config/config.js";
 import {
   purgeAgentSessionStoreEntries,
   resolveSessionTranscriptsDirForAgent,
@@ -546,9 +546,22 @@ export const agentsHandlers: GatewayRequestHandlers = {
         return;
       }
     }
-    await replaceConfigFile({
-      nextConfig,
+    await mutateConfigFileWithRetry({
       afterWrite: { mode: "auto" },
+      mutate: (draft) => {
+        if (findAgentEntryIndex(listAgentEntries(draft), agentId) >= 0) {
+          throw new Error(`agent "${agentId}" already exists`);
+        }
+        const latestNextConfig = applyAgentConfig(draft, {
+          agentId,
+          name: safeName,
+          workspace: workspaceDir,
+          model,
+          identity,
+          agentDir,
+        });
+        Object.assign(draft, latestNextConfig);
+      },
     });
 
     respond(true, { ok: true, agentId, name: safeName, workspace: workspaceDir, model }, undefined);
@@ -638,9 +651,21 @@ export const agentsHandlers: GatewayRequestHandlers = {
       }
     }
 
-    await replaceConfigFile({
-      nextConfig,
+    await mutateConfigFileWithRetry({
       afterWrite: { mode: "auto" },
+      mutate: (draft) => {
+        if (!isConfiguredAgent(draft, agentId)) {
+          throw new Error(`agent "${agentId}" not found`);
+        }
+        const latestNextConfig = applyAgentConfig(draft, {
+          agentId,
+          ...(safeName ? { name: safeName } : {}),
+          ...(workspaceDir ? { workspace: workspaceDir } : {}),
+          ...(model ? { model } : {}),
+          ...(identity ? { identity } : {}),
+        });
+        Object.assign(draft, latestNextConfig);
+      },
     });
 
     respond(true, { ok: true, agentId }, undefined);
@@ -667,30 +692,49 @@ export const agentsHandlers: GatewayRequestHandlers = {
     }
 
     const deleteFiles = typeof params.deleteFiles === "boolean" ? params.deleteFiles : true;
-    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-    const agentDir = resolveAgentDir(cfg, agentId);
-    const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
-
-    const result = pruneAgentConfig(cfg, agentId);
-    await replaceConfigFile({
-      nextConfig: result.config,
+    const committed = await mutateConfigFileWithRetry({
       afterWrite: { mode: "auto" },
+      mutate: (draft) => {
+        if (!isConfiguredAgent(draft, agentId)) {
+          throw new Error(`Agent "${agentId}" not found`);
+        }
+        const workspaceDir = resolveAgentWorkspaceDir(draft, agentId);
+        const agentDir = resolveAgentDir(draft, agentId);
+        const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
+        const result = pruneAgentConfig(draft, agentId);
+        Object.assign(draft, result.config);
+        return {
+          workspaceDir,
+          agentDir,
+          sessionsDir,
+          removedBindings: result.removedBindings,
+        };
+      },
     });
+    const deleteResult = committed.result;
+    if (!deleteResult) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "agent delete did not commit"));
+      return;
+    }
 
     // Purge session store entries so orphaned sessions cannot be targeted (#65524).
     await purgeAgentSessionStoreEntries(cfg, agentId);
 
     if (deleteFiles) {
-      const workspaceSharedWith = findOverlappingWorkspaceAgentIds(cfg, agentId, workspaceDir);
+      const workspaceSharedWith = findOverlappingWorkspaceAgentIds(
+        committed.nextConfig,
+        agentId,
+        deleteResult.workspaceDir,
+      );
       const deleteWorkspace = workspaceSharedWith.length === 0;
       await Promise.all([
-        ...(deleteWorkspace ? [moveToTrashBestEffort(workspaceDir)] : []),
-        moveToTrashBestEffort(agentDir),
-        moveToTrashBestEffort(sessionsDir),
+        ...(deleteWorkspace ? [moveToTrashBestEffort(deleteResult.workspaceDir)] : []),
+        moveToTrashBestEffort(deleteResult.agentDir),
+        moveToTrashBestEffort(deleteResult.sessionsDir),
       ]);
     }
 
-    respond(true, { ok: true, agentId, removedBindings: result.removedBindings }, undefined);
+    respond(true, { ok: true, agentId, removedBindings: deleteResult.removedBindings }, undefined);
   },
   "agents.files.list": async ({ params, respond, context }) => {
     if (!validateAgentsFilesListParams(params)) {
