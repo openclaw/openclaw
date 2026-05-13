@@ -776,11 +776,11 @@ function stripTrailingHeartbeatNotifyFalseMarker(text: string): {
   text: string;
   silent: boolean;
 } {
-  const stripped = text.replace(/(?:^|\r?\n)[ \t]*notify=false[ \t]*$/i, "").trimEnd();
-  if (stripped === text) {
+  const withoutMarker = text.replace(/(?:^|\r?\n)[ \t]*notify=false[ \t]*$/i, "");
+  if (withoutMarker === text) {
     return { text, silent: false };
   }
-  return { text: stripped, silent: true };
+  return { text: withoutMarker.trimEnd(), silent: true };
 }
 
 function normalizeHeartbeatReply(

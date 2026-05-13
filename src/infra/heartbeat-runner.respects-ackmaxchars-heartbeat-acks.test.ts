@@ -302,6 +302,12 @@ describe("runHeartbeatOnce ack handling", () => {
       expectedCalls: 1,
       expectedText: "Status includes notify=false in config",
     },
+    {
+      title: "does not mark ordinary trailing whitespace replies silent",
+      replyText: "Status done\n",
+      expectedCalls: 1,
+      expectedText: "Status done",
+    },
   ])("$title", async ({ replyText, messages, expectedCalls, expectedText, expectedSilent }) => {
     await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const { sendTelegram, cfg } = await runTelegramHeartbeatWithDefaults({
