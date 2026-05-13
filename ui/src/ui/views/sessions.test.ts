@@ -81,6 +81,26 @@ function readSessionDetailStats(container: ParentNode): Map<string, string> {
   );
 }
 
+function sessionTableHeaders(container: HTMLElement): Array<string | undefined> {
+  return Array.from(container.querySelectorAll("thead th")).map((cell) => cell.textContent?.trim());
+}
+
+const SESSION_TABLE_HEADERS = [
+  "",
+  "Key",
+  "Label",
+  "Kind",
+  "Status",
+  "Runtime",
+  "Updated",
+  "Tokens",
+  "Compaction",
+  "Thinking",
+  "Fast",
+  "Verbose",
+  "Reasoning",
+];
+
 describe("sessions view", () => {
   it("renders an explicit archived-session toggle", async () => {
     const container = document.createElement("div");
@@ -462,9 +482,7 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    expect(
-      Array.from(container.querySelectorAll("thead th")).map((cell) => cell.textContent?.trim()),
-    ).toContain("Status");
+    expect(sessionTableHeaders(container)).toEqual(SESSION_TABLE_HEADERS);
     const badges = Array.from(container.querySelectorAll(".session-status-badge"));
     expect(badges.map((badge) => badge.textContent?.trim())).toEqual(["Live", "Idle", "Failed"]);
     expect(badges.map((badge) => [...badge.classList])).toEqual([
@@ -505,13 +523,15 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    expect(
-      Array.from(container.querySelectorAll("thead th")).map((cell) => cell.textContent?.trim()),
-    ).toContain("Runtime");
+    expect(sessionTableHeaders(container)).toEqual(SESSION_TABLE_HEADERS);
     expect(container.querySelector(".session-runtime-cell")?.textContent?.trim()).toBe(
       "claude-cli (fallback none)",
     );
-    expect(container.textContent).not.toContain("agent:main:pi");
+    const rows = container.querySelectorAll("tbody tr.session-data-row");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.querySelector(".session-key-cell")?.textContent?.trim()).toBe(
+      "agent:main:claude",
+    );
   });
 
   it("keeps raw keys for inherited identity object properties", async () => {
@@ -760,10 +780,11 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    expect(container.querySelector(".session-key-cell")?.textContent).toContain(
+    const rows = container.querySelectorAll("tbody tr.session-data-row");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.querySelector(".session-key-cell")?.textContent?.trim()).toBe(
       "Data Expert (dingtalk)",
     );
-    expect(container.textContent).not.toContain("code-agent");
   });
 
   it("keeps session selects stable and deselects only the current page", async () => {
@@ -791,11 +812,20 @@ describe("sessions view", () => {
     const reasoning = selects[3] as HTMLSelectElement | undefined;
     expect(fast?.value).toBe("on");
     expect(verbose?.value).toBe("full");
-    expect(Array.from(verbose?.options ?? []).map((option) => option.value)).toContain("full");
+    expect(Array.from(verbose?.options ?? []).map((option) => option.value)).toEqual([
+      "",
+      "off",
+      "on",
+      "full",
+    ]);
     expect(reasoning?.value).toBe("custom-mode");
-    expect(Array.from(reasoning?.options ?? []).map((option) => option.value)).toContain(
+    expect(Array.from(reasoning?.options ?? []).map((option) => option.value)).toEqual([
+      "",
+      "off",
+      "on",
+      "stream",
       "custom-mode",
-    );
+    ]);
 
     const onSelectPage = vi.fn();
     const onDeselectPage = vi.fn();
@@ -856,13 +886,16 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    expect(container.textContent).toContain("No sessions match your filters.");
-    const showAll = Array.from(container.querySelectorAll("button")).find(
-      (button) => button.textContent?.trim() === "Show all",
+    const emptyState = container.querySelector(".data-table-empty-state");
+    expect(emptyState?.getAttribute("role")).toBe("status");
+    expect(emptyState?.firstElementChild?.textContent?.trim()).toBe(
+      "No sessions match your filters.",
     );
-    if (!showAll) {
+    const showAll = emptyState?.querySelector<HTMLButtonElement>("button");
+    if (!(showAll instanceof HTMLButtonElement)) {
       throw new Error("Expected filtered empty state to render a Show all button");
     }
+    expect(showAll.textContent?.trim()).toBe("Show all");
     showAll.click();
     expect(onClearFilters).toHaveBeenCalledTimes(1);
   });
@@ -882,7 +915,8 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    expect(container.textContent).toContain("No sessions found.");
-    expect(container.textContent).not.toContain("Show all");
+    const emptyCell = container.querySelector(".data-table-empty-cell");
+    expect(emptyCell?.textContent?.trim()).toBe("No sessions found.");
+    expect(emptyCell?.querySelector("button")).toBeNull();
   });
 });
