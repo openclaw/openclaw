@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { getTaskSessionLookupByIdForStatus } from "../../tasks/task-status-access.js";
 import {
   ErrorCodes,
@@ -292,19 +292,22 @@ function resolveQuerySessionKey(query: ArtifactQuery): string | undefined {
   }
   if (query.taskId) {
     const task = getTaskSessionLookupByIdForStatus(query.taskId);
+    const requesterSessionKey = asNonEmptyString(task?.requesterSessionKey);
+    const taskAgentId =
+      asNonEmptyString(task?.agentId) ??
+      (requesterSessionKey ? parseAgentSessionKey(requesterSessionKey)?.agentId : undefined);
     if (
       query.agentId &&
-      task?.agentId &&
-      normalizeAgentId(query.agentId) !== normalizeAgentId(task.agentId)
+      taskAgentId &&
+      normalizeAgentId(query.agentId) !== normalizeAgentId(taskAgentId)
     ) {
       return undefined;
     }
-    const requesterSessionKey = asNonEmptyString(task?.requesterSessionKey);
     if (requesterSessionKey) {
       return requesterSessionKey;
     }
     const runId = asNonEmptyString(task?.runId);
-    const agentId = query.agentId ?? task?.agentId;
+    const agentId = query.agentId ?? taskAgentId;
     return runId ? resolveSessionKeyForRun(runId, agentId ? { agentId } : {}) : undefined;
   }
   return undefined;
