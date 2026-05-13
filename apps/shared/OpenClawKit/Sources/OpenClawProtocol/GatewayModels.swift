@@ -1570,6 +1570,7 @@ public struct SessionsListParams: Codable, Sendable {
     public let label: String?
     public let spawnedby: String?
     public let agentid: String?
+    public let configuredagentsonly: Bool?
     public let search: String?
 
     public init(
@@ -1582,6 +1583,7 @@ public struct SessionsListParams: Codable, Sendable {
         label: String?,
         spawnedby: String?,
         agentid: String?,
+        configuredagentsonly: Bool?,
         search: String?)
     {
         self.limit = limit
@@ -1593,6 +1595,7 @@ public struct SessionsListParams: Codable, Sendable {
         self.label = label
         self.spawnedby = spawnedby
         self.agentid = agentid
+        self.configuredagentsonly = configuredagentsonly
         self.search = search
     }
 
@@ -1606,6 +1609,7 @@ public struct SessionsListParams: Codable, Sendable {
         case label
         case spawnedby = "spawnedBy"
         case agentid = "agentId"
+        case configuredagentsonly = "configuredAgentsOnly"
         case search
     }
 }

@@ -14,7 +14,7 @@ import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 
 export type GatewayCfg = object;
 
-export type GatewayCfgFetcher = () => GatewayCfg | undefined;
+export type GatewayCfgLoader = () => GatewayCfg | undefined;
 
 export interface ActiveCfgProvider {
   getActiveCfg(): GatewayCfg;
@@ -22,29 +22,29 @@ export interface ActiveCfgProvider {
 
 export interface ActiveCfgProviderOptions {
   fallback: GatewayCfg;
-  fetch?: GatewayCfgFetcher;
+  load?: GatewayCfgLoader;
 }
 
 export function createActiveCfgProvider(options: ActiveCfgProviderOptions): ActiveCfgProvider {
-  const fetch = options.fetch ?? defaultGatewayCfgFetcher;
+  const load = options.load ?? defaultGatewayCfgLoader;
   const fallback = options.fallback;
   return {
     getActiveCfg(): GatewayCfg {
-      return resolveActiveCfg(fetch, fallback);
+      return resolveActiveCfg(load, fallback);
     },
   };
 }
 
-export function resolveActiveCfg(fetch: GatewayCfgFetcher, fallback: GatewayCfg): GatewayCfg {
+export function resolveActiveCfg(load: GatewayCfgLoader, fallback: GatewayCfg): GatewayCfg {
   let fresh: GatewayCfg | undefined;
   try {
-    fresh = fetch();
+    fresh = load();
   } catch {
     return fallback;
   }
   return fresh ?? fallback;
 }
 
-function defaultGatewayCfgFetcher(): GatewayCfg | undefined {
+function defaultGatewayCfgLoader(): GatewayCfg | undefined {
   return getRuntimeConfig();
 }

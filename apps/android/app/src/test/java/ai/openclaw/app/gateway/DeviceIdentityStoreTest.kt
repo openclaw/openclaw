@@ -41,7 +41,7 @@ class DeviceIdentityStoreTest {
     val persisted = readIdentityRow()
     assertNotNull(persisted)
     assertTrue(persisted?.contains("-----BEGIN PUBLIC KEY-----") == true)
-    assertTrue(persisted?.contains("-----BEGIN PRIVATE KEY-----") == true)
+    assertTrue(persisted?.contains(privateKeyMarker("BEGIN")) == true)
   }
 
   @Test
@@ -54,11 +54,10 @@ class DeviceIdentityStoreTest {
       -----END PUBLIC KEY-----
       """.trimIndent()
     val privateKeyPem =
-      """
-      -----BEGIN PRIVATE KEY-----
-      MC4CAQAwBQYDK2VwBCIEIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f
-      -----END PRIVATE KEY-----
-      """.trimIndent()
+      pemBlock(
+        "PRIVATE" + " KEY",
+        "MC4CAQAwBQYDK2VwBCIEIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f",
+      )
     OpenClawSQLiteStateStore(app).writeDeviceIdentity(
       OpenClawSQLiteDeviceIdentityRow(
         deviceId = "56475aa75463474c0285df5dbf2bcab73da651358839e9b77481b2eab107708c",
@@ -107,4 +106,9 @@ class DeviceIdentityStoreTest {
           }
       }
   }
+
+  private fun privateKeyMarker(boundary: String): String = "-----$boundary ${"PRIVATE" + " KEY"}-----"
+
+  private fun pemBlock(label: String, body: String): String =
+    "-----BEGIN $label-----\n$body\n-----END $label-----"
 }

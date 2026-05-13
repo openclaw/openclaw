@@ -3,7 +3,7 @@ import {
   createActiveCfgProvider,
   resolveActiveCfg,
   type GatewayCfg,
-  type GatewayCfgFetcher,
+  type GatewayCfgLoader,
 } from "./active-cfg.js";
 
 const getRuntimeConfigMock = vi.hoisted(() => vi.fn<() => GatewayCfg | undefined>());
@@ -16,43 +16,43 @@ describe("resolveActiveCfg", () => {
   it("returns the freshly fetched value when present", () => {
     const fresh = { bindings: [{ id: "fresh" }] };
     const fallback = { bindings: [{ id: "stale" }] };
-    const fetch: GatewayCfgFetcher = () => fresh;
+    const load: GatewayCfgLoader = () => fresh;
 
-    expect(resolveActiveCfg(fetch, fallback)).toBe(fresh);
+    expect(resolveActiveCfg(load, fallback)).toBe(fresh);
   });
 
-  it("falls back when the fetcher returns undefined", () => {
+  it("falls back when the loader returns undefined", () => {
     const fallback = { bindings: [{ id: "stale" }] };
-    const fetch: GatewayCfgFetcher = () => undefined;
+    const load: GatewayCfgLoader = () => undefined;
 
-    expect(resolveActiveCfg(fetch, fallback)).toBe(fallback);
+    expect(resolveActiveCfg(load, fallback)).toBe(fallback);
   });
 
-  it("falls back when the fetcher throws", () => {
+  it("falls back when the loader throws", () => {
     const fallback = { bindings: [{ id: "stale" }] };
-    const fetch: GatewayCfgFetcher = () => {
+    const load: GatewayCfgLoader = () => {
       throw new Error("snapshot not initialised");
     };
 
-    expect(resolveActiveCfg(fetch, fallback)).toBe(fallback);
+    expect(resolveActiveCfg(load, fallback)).toBe(fallback);
   });
 });
 
 describe("createActiveCfgProvider", () => {
-  it("invokes the injected fetcher on every getActiveCfg call", () => {
+  it("invokes the injected loader on every getActiveCfg call", () => {
     const fallback = { bindings: [] };
     const first = { bindings: [{ id: "first" }] };
     const second = { bindings: [{ id: "second" }] };
-    const fetch = vi
+    const load = vi
       .fn<() => GatewayCfg | undefined>()
       .mockReturnValueOnce(first)
       .mockReturnValueOnce(second);
 
-    const provider = createActiveCfgProvider({ fallback, fetch });
+    const provider = createActiveCfgProvider({ fallback, load });
 
     expect(provider.getActiveCfg()).toBe(first);
     expect(provider.getActiveCfg()).toBe(second);
-    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(load).toHaveBeenCalledTimes(2);
   });
 
   it("never caches a previously fetched value", () => {
@@ -65,7 +65,7 @@ describe("createActiveCfgProvider", () => {
     let index = 0;
     const provider = createActiveCfgProvider({
       fallback,
-      fetch: () => calls[index++],
+      load: () => calls[index++],
     });
 
     expect(provider.getActiveCfg()).toBe(calls[0]);

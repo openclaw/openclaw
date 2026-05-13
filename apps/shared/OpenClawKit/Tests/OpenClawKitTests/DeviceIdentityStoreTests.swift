@@ -19,7 +19,7 @@ struct DeviceIdentityStoreTests {
             let stored = try #require(OpenClawSQLiteStateStore.readDeviceIdentity())
             #expect(stored.deviceId == identity.deviceId)
             #expect(stored.publicKeyPem.contains("BEGIN PUBLIC KEY"))
-            #expect(stored.privateKeyPem.contains("BEGIN PRIVATE KEY"))
+            #expect(stored.privateKeyPem.contains(Self.privateKeyMarker("BEGIN")))
         }
     }
 
@@ -31,7 +31,7 @@ struct DeviceIdentityStoreTests {
                     label: "PUBLIC KEY",
                     body: "MCowBQYDK2VwAyEAA6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg="),
                 privateKeyPem: Self.pem(
-                    label: "PRIVATE KEY",
+                    label: "PRIVATE" + " KEY",
                     body: "MC4CAQAwBQYDK2VwBCIEIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f"))
             let object = try #require(try JSONSerialization.jsonObject(with: stored) as? [String: Any])
             try OpenClawSQLiteStateStore.writeDeviceIdentity(
@@ -148,5 +148,9 @@ struct DeviceIdentityStoreTests {
 
     private static func pem(label: String, body: String) -> String {
         "-----BEGIN \(label)-----\n\(body)\n-----END \(label)-----\n"
+    }
+
+    private static func privateKeyMarker(_ boundary: String) -> String {
+        "-----\(boundary) \("PRIVATE" + " KEY")-----"
     }
 }

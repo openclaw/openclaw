@@ -3,8 +3,16 @@ import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "../auto-reply/reply/get-repl
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
 import { normalizeChatType, type ChatType } from "../channels/chat-type.js";
+import { createChannelReplyPipeline } from "../channels/message/reply-pipeline.js";
+import { sendDurableMessageBatch } from "../channels/message/runtime.js";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import { recordInboundSession } from "../channels/session.js";
+import {
+  deliverInboundReplyWithMessageSendContext,
+  isDurableInboundReplyDeliveryHandled,
+  runPreparedChannelTurn,
+  throwIfDurableInboundReplyDeliveryFailed,
+} from "../channels/turn/kernel.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import {
@@ -13,7 +21,6 @@ import {
 } from "../config/sessions/session-entries.sqlite.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
-import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import { ackDelivery, enqueueDelivery, failDelivery } from "../infra/outbound/delivery-queue.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
@@ -38,9 +45,11 @@ import {
 } from "../infra/session-delivery-queue.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { recordChannelMessageReplyDispatch } from "../plugin-sdk/channel-message.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
-import type { OutboundReplyPayload } from "../plugin-sdk/reply-payload.js";
+import {
+  normalizeOutboundReplyPayload,
+  type OutboundReplyPayload,
+} from "../plugin-sdk/reply-payload.js";
 import { mergeDeliveryContext } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
@@ -117,7 +126,7 @@ async function deliverRestartSentinelNotice(params: {
   }).catch(() => null);
   for (let attempt = 1; attempt <= OUTBOUND_MAX_ATTEMPTS; attempt += 1) {
     try {
-      const results = await deliverOutboundPayloads({
+      const result = await sendDurableMessageBatch({
         cfg: params.cfg,
         channel: params.channel,
         to: params.to,
@@ -129,8 +138,12 @@ async function deliverRestartSentinelNotice(params: {
         deps: params.deps,
         bestEffort: false,
         skipQueue: true,
+        durability: "required",
       });
-      if (results.length > 0) {
+      if (result.status === "failed" || result.status === "partial_failed") {
+        throw result.error;
+      }
+      if (result.status === "sent" && result.results.length > 0) {
         if (queueId) {
           await ackDelivery(queueId).catch(() => {});
         }
@@ -291,6 +304,12 @@ async function deliverQueuedSessionDelivery(params: {
     config: cfg,
   });
   let dispatchError: unknown;
+  const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
+    cfg,
+    agentId,
+    channel: route.channel,
+    accountId: route.accountId,
+  });
   const ctxPayload = finalizeInboundContext(
     {
       Body: userMessage,
@@ -323,56 +342,86 @@ async function deliverQueuedSessionDelivery(params: {
       forceChatType: true,
     },
   );
-  await recordChannelMessageReplyDispatch({
-    cfg,
+  await runPreparedChannelTurn({
     channel: route.channel,
     accountId: route.accountId,
     agentId,
     routeSessionKey: canonicalKey,
     ctxPayload,
     recordInboundSession,
-    dispatchReplyWithBufferedBlockDispatcher,
-    durable: {
-      to: route.to,
-      replyToId: route.replyToId,
-      threadId: route.threadId,
-      deps: params.deps,
-    },
-    deliver: async (payload) => {
-      if (isRestartContinuationBusyPayload(payload)) {
-        throw new Error(RESTART_CONTINUATION_BUSY_RETRY_ERROR);
-      }
-      const outboundPayload = resolveRestartContinuationOutboundPayload({
-        payload,
-        messageId,
-        replyToId: route.replyToId,
-      });
-      const results = await deliverOutboundPayloads({
+    runDispatch: async () =>
+      await dispatchReplyWithBufferedBlockDispatcher({
+        ctx: ctxPayload,
         cfg,
-        channel: route.channel,
-        to: route.to,
-        accountId: route.accountId,
-        replyToId: route.replyToId,
-        threadId: route.threadId,
-        payloads: [outboundPayload],
-        session: buildOutboundSessionContext({
-          cfg,
+        dispatcherOptions: {
+          ...replyPipeline,
+          deliver: async (payload, info) => {
+            const normalized =
+              payload && typeof payload === "object"
+                ? normalizeOutboundReplyPayload(payload as Record<string, unknown>)
+                : {};
+            if (isRestartContinuationBusyPayload(normalized)) {
+              throw new Error(RESTART_CONTINUATION_BUSY_RETRY_ERROR);
+            }
+            const outboundPayload = resolveRestartContinuationOutboundPayload({
+              payload: normalized,
+              messageId,
+              replyToId: route.replyToId,
+            });
+            const durable = await deliverInboundReplyWithMessageSendContext({
+              cfg,
+              channel: route.channel,
+              accountId: route.accountId,
+              agentId,
+              ctxPayload,
+              payload: outboundPayload,
+              info,
+              to: route.to,
+              replyToId: route.replyToId,
+              threadId: route.threadId,
+              deps: params.deps,
+            });
+            throwIfDurableInboundReplyDeliveryFailed(durable);
+            if (isDurableInboundReplyDeliveryHandled(durable)) {
+              return;
+            }
+            const result = await sendDurableMessageBatch({
+              cfg,
+              channel: route.channel,
+              to: route.to,
+              accountId: route.accountId,
+              replyToId: route.replyToId,
+              threadId: route.threadId,
+              payloads: [outboundPayload],
+              session: buildOutboundSessionContext({
+                cfg,
+                sessionKey: canonicalKey,
+              }),
+              deps: params.deps,
+              bestEffort: false,
+              durability: "required",
+            });
+            if (result.status === "failed" || result.status === "partial_failed") {
+              throw result.error;
+            }
+            if (result.status !== "sent" || result.results.length === 0) {
+              throw new Error("restart continuation delivery returned no results");
+            }
+          },
+          onError: (err) => {
+            dispatchError ??= err;
+          },
+        },
+        replyOptions: {
+          onModelSelected,
+        },
+      }),
+    record: {
+      onRecordError: (err) => {
+        log.warn(`restart continuation failed to record inbound session metadata: ${String(err)}`, {
           sessionKey: canonicalKey,
-        }),
-        deps: params.deps,
-        bestEffort: false,
-      });
-      if (results.length === 0) {
-        throw new Error("restart continuation delivery returned no results");
-      }
-    },
-    onRecordError: (err) => {
-      log.warn(`restart continuation failed to record inbound session metadata: ${String(err)}`, {
-        sessionKey: canonicalKey,
-      });
-    },
-    onDispatchError: (err) => {
-      dispatchError ??= err;
+        });
+      },
     },
   });
   if (dispatchError) {

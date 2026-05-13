@@ -9,6 +9,7 @@ type RecordInboundSessionAndDispatchReplyParams = Parameters<
 const mocks = vi.hoisted(() => {
   const state = {
     queuedSessionDelivery: null as Record<string, unknown> | null,
+    preparedTurn: null as Record<string, unknown> | null,
   };
 
   return {
@@ -18,6 +19,12 @@ const mocks = vi.hoisted(() => {
     },
     set queuedSessionDelivery(value: Record<string, unknown> | null) {
       state.queuedSessionDelivery = value;
+    },
+    get preparedTurn() {
+      return state.preparedTurn;
+    },
+    set preparedTurn(value: Record<string, unknown> | null) {
+      state.preparedTurn = value;
     },
     readRestartSentinel: vi.fn(async () => ({
       payload: {
@@ -212,22 +219,43 @@ vi.mock("../channels/plugins/index.js", async () => {
 });
 
 vi.mock("../channels/turn/kernel.js", () => ({
-  dispatchAssembledChannelTurn: async (params: {
-    delivery: {
-      preparePayload?: (payload: { text?: string; replyToId?: string | null }) => {
-        text?: string;
-        replyToId?: string | null;
-      };
+  runPreparedChannelTurn: async (params: { runDispatch: () => Promise<unknown> }) => {
+    mocks.preparedTurn = params as unknown as Record<string, unknown>;
+    try {
+      return await params.runDispatch();
+    } finally {
+      mocks.preparedTurn = null;
+    }
+  },
+  deliverInboundReplyWithMessageSendContext: vi.fn(async () => ({
+    status: "unsupported",
+    reason: "missing_outbound_handler",
+  })),
+  isDurableInboundReplyDeliveryHandled: vi.fn(
+    (result: { status: string }) =>
+      result.status === "handled_visible" || result.status === "handled_no_send",
+  ),
+  throwIfDurableInboundReplyDeliveryFailed: vi.fn((result: { status: string; error?: unknown }) => {
+    if (result.status === "failed") {
+      throw result.error;
+    }
+  }),
+}));
+
+vi.mock("../auto-reply/reply/provider-dispatcher.js", () => ({
+  dispatchReplyWithBufferedBlockDispatcher: async (params: {
+    dispatcherOptions: {
       deliver: (payload: { text?: string; replyToId?: string | null }) => Promise<void>;
       onError?: (err: unknown, info: { kind: string }) => void;
     };
   }) => {
     await mocks.recordInboundSessionAndDispatchReply({
+      ...mocks.preparedTurn,
       ...params,
       deliver: async (payload: { text?: string; replyToId?: string | null }) =>
-        params.delivery.deliver(params.delivery.preparePayload?.(payload) ?? payload),
+        await params.dispatcherOptions.deliver(payload),
       onDispatchError: (err: unknown, info: { kind: string }) =>
-        params.delivery.onError?.(err, info),
+        params.dispatcherOptions.onError?.(err, info),
     } as unknown as RecordInboundSessionAndDispatchReplyParams);
   },
 }));
@@ -357,6 +385,7 @@ describe("scheduleRestartSentinelWake", () => {
   beforeEach(() => {
     vi.useRealTimers();
     mocks.queuedSessionDelivery = null;
+    mocks.preparedTurn = null;
     mocks.readRestartSentinel.mockResolvedValue({
       payload: {
         sessionKey: "agent:main:main",

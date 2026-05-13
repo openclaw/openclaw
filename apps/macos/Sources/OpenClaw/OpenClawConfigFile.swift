@@ -5,7 +5,7 @@ import OpenClawProtocol
 enum OpenClawConfigFile {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "config")
     private static let fileLock = NSRecursiveLock()
-    nonisolated(unsafe) private static var configHealthState: [String: Any] = [:]
+    private nonisolated(unsafe) static var configHealthState: [String: Any] = [:]
 
     private static func withFileLock<T>(_ body: () throws -> T) rethrows -> T {
         self.fileLock.lock()

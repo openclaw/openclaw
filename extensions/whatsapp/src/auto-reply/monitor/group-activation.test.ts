@@ -4,7 +4,7 @@ import path from "node:path";
 import {
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawStateDatabaseForTest,
-} from "openclaw/plugin-sdk/testing";
+} from "openclaw/plugin-sdk/sqlite-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getSessionEntry, upsertSessionEntry } from "../config.runtime.js";
 import { resolveGroupActivationFor } from "./group-activation.js";

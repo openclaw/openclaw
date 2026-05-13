@@ -2,11 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeMainKey } from "openclaw/plugin-sdk/routing";
-import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import {
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawStateDatabaseForTest,
-} from "openclaw/plugin-sdk/testing";
+} from "openclaw/plugin-sdk/sqlite-runtime";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import type { WhatsAppSendResult } from "../inbound/send-result.js";
 import {
