@@ -5086,6 +5086,82 @@ describe("QmdMemoryManager", () => {
       }
     });
   });
+
+  it("sanitizes word-internal hyphens before passing query to qmd", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "query") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stdout", "[]");
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+
+    await expect(
+      manager.search("sqlite-vec backend 2026-05-04", {
+        sessionKey: "agent:main:slack:dm:u123",
+      }),
+    ).resolves.toStrictEqual([]);
+
+    const searchCall = spawnMock.mock.calls.find(
+      (call: unknown[]) => (call[1] as string[])?.[0] === "query",
+    );
+    // Word-internal hyphens should be replaced with spaces
+    expect(searchCall?.[1]?.[1]).toBe("sqlite vec backend 2026 05 04");
+    await manager.close();
+  });
+
+  it("preserves leading hyphens as NOT operators in qmd query", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "query") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stdout", "[]");
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+
+    await expect(
+      manager.search("-excluded term", {
+        sessionKey: "agent:main:slack:dm:u123",
+      }),
+    ).resolves.toStrictEqual([]);
+
+    const searchCall = spawnMock.mock.calls.find(
+      (call: unknown[]) => (call[1] as string[])?.[0] === "query",
+    );
+    // Leading hyphens are NOT operators and should be preserved
+    expect(searchCall?.[1]?.[1]).toBe("-excluded term");
+    await manager.close();
+  });
 });
 
 function createDeferred<T>() {

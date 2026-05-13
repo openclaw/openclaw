@@ -153,6 +153,15 @@ function normalizeHanBm25Query(query: string): string {
   return trimmed;
 }
 
+/**
+ * Replace word-internal hyphens with spaces so qmd's validateSemanticQuery
+ * does not misinterpret them as NOT operators (e.g. "sqlite-vec" → "sqlite vec").
+ * Leading hyphens (actual NOT syntax) are preserved.
+ */
+function sanitizeQmdSearchQuery(query: string): string {
+  return query.replace(/(\w)-(\w)/g, "$1 $2");
+}
+
 function parseQmdStatusVectorCount(raw: string): number | null {
   for (const line of raw.split(/\r?\n/)) {
     const match = line.match(/^\s*Vectors(?:\s*[:=]\s*|\s+)(\d+)\b/i);
@@ -1103,7 +1112,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       this.logScopeDenied(opts?.sessionKey);
       return [];
     }
-    const trimmed = query.trim();
+    const trimmed = sanitizeQmdSearchQuery(query.trim());
     if (!trimmed) {
       return [];
     }
