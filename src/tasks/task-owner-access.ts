@@ -11,9 +11,13 @@ import type { TaskNotifyPolicy, TaskRecord } from "./task-registry.types.js";
 import { buildTaskStatusSnapshot } from "./task-status.js";
 
 function canOwnerAccessTask(task: TaskRecord, callerOwnerKey: string): boolean {
+  const taskOwnerKey = normalizeOptionalString(task.ownerKey);
+  const normalizedCallerOwnerKey = normalizeOptionalString(callerOwnerKey);
   return (
     task.scopeKind === "session" &&
-    normalizeOptionalString(task.ownerKey) === normalizeOptionalString(callerOwnerKey)
+    taskOwnerKey !== undefined &&
+    normalizedCallerOwnerKey !== undefined &&
+    taskOwnerKey === normalizedCallerOwnerKey
   );
 }
 
