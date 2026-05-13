@@ -33,6 +33,7 @@ export function resolveTelegramConversationRoute(params: {
   route: ReturnType<typeof resolveAgentRoute>;
   configuredBinding: ConfiguredBindingRouteResult["bindingResolution"];
   configuredBindingSessionKey: string;
+  pluginOwnedRuntimeBinding: boolean;
 } {
   const peerId = params.isGroup
     ? buildTelegramGroupPeerId(params.chatId, params.resolvedThreadId)
@@ -118,6 +119,9 @@ export function resolveTelegramConversationRoute(params: {
     },
   });
   route = runtimeRoute.route;
+  const pluginOwnedRuntimeBinding = Boolean(
+    runtimeRoute.bindingRecord && !runtimeRoute.boundSessionKey,
+  );
   if (runtimeRoute.bindingRecord) {
     configuredBinding = null;
     configuredBindingSessionKey = "";
@@ -132,6 +136,7 @@ export function resolveTelegramConversationRoute(params: {
     route,
     configuredBinding,
     configuredBindingSessionKey,
+    pluginOwnedRuntimeBinding,
   };
 }
 
