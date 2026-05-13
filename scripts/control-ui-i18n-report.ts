@@ -30,6 +30,7 @@ const LOCALE_LABELS: Record<string, string> = {
   "zh-CN": "Simplified Chinese",
   "zh-TW": "Traditional Chinese",
 };
+const REPORT_LOCALES = new Set(Object.keys(LOCALE_LABELS));
 const PATH_LABELS: Record<string, string> = {
   "ui/src/ui/chat/chat-queue.ts": "Chat queue",
   "ui/src/ui/chat/grouped-render.ts": "Chat message groups",
@@ -108,13 +109,16 @@ export function parseArgs(argv: string[]): ReportArgs {
       continue;
     }
     if (arg === "--locale") {
-      args.locale = readOptionValue(argv, (index += 1), arg);
+      args.locale = parseLocale(readOptionValue(argv, (index += 1), arg));
       continue;
     }
     if (arg === "--top") {
       const raw = readOptionValue(argv, (index += 1), arg);
+      if (!/^[1-9][0-9]*$/.test(raw)) {
+        throw new Error(`--top must be a positive integer: ${raw}`);
+      }
       const top = Number.parseInt(raw, 10);
-      if (!Number.isSafeInteger(top) || top < 1) {
+      if (!Number.isSafeInteger(top)) {
         throw new Error(`--top must be a positive integer: ${raw}`);
       }
       args.top = top;
@@ -131,6 +135,13 @@ function readOptionValue(argv: string[], index: number, flag: string) {
     throw new Error(`${flag} requires a value`);
   }
   return value;
+}
+
+function parseLocale(locale: string) {
+  if (!REPORT_LOCALES.has(locale)) {
+    throw new Error(`unknown locale: ${locale}`);
+  }
+  return locale;
 }
 
 export function filterRawCopyEntries(entries: RawCopyBaselineEntry[], surface?: string) {
@@ -167,9 +178,13 @@ function compareCountThenName<T>(nameOf: (value: T) => string) {
 }
 
 function pathTokens(repoPath: string) {
-  return repoPath
-    .split("/")
-    .flatMap((part) => part.replace(/\.[^.]+$/, "").split(/[^A-Za-z0-9]+/))
+  return repoPath.split("/").flatMap((part) => surfaceTokens(part.replace(/\.[^.]+$/, "")));
+}
+
+function surfaceTokens(value: string) {
+  return value
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .split(/[^A-Za-z0-9]+/)
     .filter(Boolean)
     .map(normalizeToken);
 }
@@ -206,7 +221,9 @@ export function filterTranslationKeysBySurface(keys: string[], surface?: string)
     return keys;
   }
   const normalized = normalizeToken(surface);
-  return keys.filter((key) => key.split(".").some((part) => normalizeToken(part) === normalized));
+  return keys.filter((key) =>
+    key.split(".").some((part) => surfaceTokens(part).some((token) => token === normalized)),
+  );
 }
 
 export function formatReport(input: ReportInput) {

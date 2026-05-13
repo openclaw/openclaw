@@ -5,6 +5,7 @@ import {
   filterTranslationKeysBySurface,
   flattenTranslations,
   formatReport,
+  parseArgs,
   summarizeRawCopy,
   type RawCopyBaselineEntry,
 } from "../../scripts/control-ui-i18n-report.ts";
@@ -35,6 +36,23 @@ const entries: RawCopyBaselineEntry[] = [
 ];
 
 describe("control-ui-i18n report helpers", () => {
+  it("rejects invalid numeric limits", () => {
+    expect(() => parseArgs(["--top", "3abc"])).toThrow("--top must be a positive integer");
+    expect(() => parseArgs(["--top", "1.5"])).toThrow("--top must be a positive integer");
+    expect(() => parseArgs(["--top", "0"])).toThrow("--top must be a positive integer");
+    expect(() => parseArgs(["--top", "999999999999999999999999999"])).toThrow(
+      "--top must be a positive integer",
+    );
+  });
+
+  it("rejects locale path traversal before filesystem access", () => {
+    expect(parseArgs(["--locale", "zh-CN"])).toMatchObject({ locale: "zh-CN" });
+    expect(() => parseArgs(["--locale", "../zh-CN"])).toThrow("unknown locale");
+    expect(() => parseArgs(["--locale", "../../../../scripts/control-ui-i18n-report"])).toThrow(
+      "unknown locale",
+    );
+  });
+
   it("filters raw-copy entries by path surface token", () => {
     expect(filterRawCopyEntries(entries, "agents")).toEqual([entries[1]]);
     expect(filterRawCopyEntries(entries, "config")).toEqual([entries[2]]);
@@ -70,10 +88,26 @@ describe("control-ui-i18n report helpers", () => {
   it("filters same-as-English keys by translation key surface token", () => {
     expect(
       filterTranslationKeysBySurface(
-        ["agents.tabs.cronJobs", "chat.composer.send", "usage.common.emptyValue"],
+        [
+          "agents.tabs.cronJobs",
+          "chat.composer.send",
+          "sessionsView.thinking",
+          "usage.common.emptyValue",
+        ],
         "chat",
       ),
     ).toEqual(["chat.composer.send"]);
+    expect(
+      filterTranslationKeysBySurface(
+        [
+          "agents.tabs.cronJobs",
+          "chat.composer.send",
+          "sessionsView.thinking",
+          "usage.common.emptyValue",
+        ],
+        "sessions",
+      ),
+    ).toEqual(["sessionsView.thinking"]);
   });
 
   it("formats pasteable report text", () => {
