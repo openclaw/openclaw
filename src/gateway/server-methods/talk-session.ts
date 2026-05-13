@@ -186,8 +186,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           cfg: context.getRuntimeConfig(),
           p: {
             key: params.sessionKey,
-            agentId: params.agentId,
-            spawnedBy,
+            ...(spawnedBy ? { spawnedBy } : {}),
             includeGlobal: true,
             includeUnknown: true,
           },

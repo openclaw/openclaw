@@ -729,8 +729,6 @@ describe("talk.session unified handlers", () => {
       cfg: {},
       p: {
         key: "session:main",
-        agentId: undefined,
-        spawnedBy: undefined,
         includeGlobal: true,
         includeUnknown: true,
       },
@@ -809,7 +807,7 @@ describe("talk.session unified handlers", () => {
     expect(mockCallArg(broadcastToConnIds, 2, 3)).toEqual({ dropIfSlow: true });
   });
 
-  it("passes managed-room session visibility scope to session resolution", async () => {
+  it("passes managed-room spawnedBy visibility scope to session resolution", async () => {
     const createRespond = vi.fn();
     await talkHandlers["talk.session.create"]({
       req: { type: "req", id: "1", method: "talk.session.create" },
@@ -836,7 +834,6 @@ describe("talk.session unified handlers", () => {
       cfg: {},
       p: {
         key: "agent:worker:subagent:child",
-        agentId: "main",
         spawnedBy: "agent:main:parent",
         includeGlobal: true,
         includeUnknown: true,
