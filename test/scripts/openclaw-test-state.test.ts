@@ -19,6 +19,12 @@ function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
+function expectGeneratedSecretKey(value: string | undefined): void {
+  expect(typeof value).toBe("string");
+  expect(value?.length ?? 0).toBeGreaterThan(20);
+  expect(value).not.toBe("openclaw-test-state-auth-profile-secret-key");
+}
+
 describe("scripts/lib/openclaw-test-state", () => {
   it("creates a sourceable env file and JSON description", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-state-script-"));
@@ -47,13 +53,14 @@ describe("scripts/lib/openclaw-test-state", () => {
       expect(payload.stateDir).toBe(path.join(payload.home, ".openclaw"));
       expect(payload.configPath).toBe(path.join(payload.stateDir, "openclaw.json"));
       expect(payload.workspaceDir).toBe(path.join(payload.home, "workspace"));
+      expectGeneratedSecretKey(payload.env.OPENCLAW_AUTH_PROFILE_SECRET_KEY);
       expect(payload.env).toEqual({
         HOME: payload.home,
         USERPROFILE: payload.home,
         OPENCLAW_HOME: payload.home,
         OPENCLAW_STATE_DIR: payload.stateDir,
         OPENCLAW_CONFIG_PATH: payload.configPath,
-        OPENCLAW_AUTH_PROFILE_SECRET_KEY: "openclaw-test-state-auth-profile-secret-key",
+        OPENCLAW_AUTH_PROFILE_SECRET_KEY: payload.env.OPENCLAW_AUTH_PROFILE_SECRET_KEY,
       });
       expect(payload.config).toEqual({
         update: {
@@ -76,7 +83,7 @@ describe("scripts/lib/openclaw-test-state", () => {
       expect(JSON.parse(probe.stdout)).toEqual({
         home: payload.home,
         stateDir: payload.stateDir,
-        secretKey: "openclaw-test-state-auth-profile-secret-key",
+        secretKey: payload.env.OPENCLAW_AUTH_PROFILE_SECRET_KEY,
         channel: "stable",
       });
       await fs.rm(payload.root, { recursive: true, force: true });
@@ -119,7 +126,7 @@ describe("scripts/lib/openclaw-test-state", () => {
       );
       expect(payload.openclawHome).toBe(payload.home);
       expect(payload.workspace).toBe(`${payload.home}/workspace`);
-      expect(payload.secretKey).toBe("openclaw-test-state-auth-profile-secret-key");
+      expectGeneratedSecretKey(payload.secretKey);
       expect(payload.channel).toBe("stable");
 
       const customTemp = path.join(tempRoot, "state-tmp");
@@ -194,7 +201,7 @@ describe("scripts/lib/openclaw-test-state", () => {
       expect(payload.home).toContain("/openclaw-onboard-case-minimal-home.");
       expect(payload.agentDir).toBeNull();
       expect(payload.workspace).toBe(`${payload.home}/workspace`);
-      expect(payload.secretKey).toBe("openclaw-test-state-auth-profile-secret-key");
+      expectGeneratedSecretKey(payload.secretKey);
       expect(payload.config).toStrictEqual({});
 
       const existingHome = path.join(tempRoot, "existing-home");

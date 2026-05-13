@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,7 +8,6 @@ import { fileURLToPath } from "node:url";
 
 const DEFAULT_LABEL = "state";
 const DEFAULT_SCENARIO = "empty";
-const TEST_AUTH_PROFILE_SECRET_KEY = "openclaw-test-state-auth-profile-secret-key";
 const SCENARIOS = new Set([
   "empty",
   "minimal",
@@ -253,6 +253,17 @@ function renderExports(env) {
     .join("\n");
 }
 
+function generateAuthProfileSecretKey() {
+  return randomBytes(32).toString("base64url");
+}
+
+function renderAuthProfileSecretKeyExport() {
+  return [
+    `OPENCLAW_AUTH_PROFILE_SECRET_KEY="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("base64url"))')"`,
+    "export OPENCLAW_AUTH_PROFILE_SECRET_KEY",
+  ];
+}
+
 function renderConfigWrite(configPathExpression, config) {
   if (config === undefined) {
     return "";
@@ -283,7 +294,7 @@ function buildCreatePlan(options = {}) {
     OPENCLAW_HOME: home,
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_CONFIG_PATH: configPath,
-    OPENCLAW_AUTH_PROFILE_SECRET_KEY: TEST_AUTH_PROFILE_SECRET_KEY,
+    OPENCLAW_AUTH_PROFILE_SECRET_KEY: generateAuthProfileSecretKey(),
     ...scenarioEnv(scenario),
   };
   return {
@@ -332,7 +343,7 @@ export function renderShellSnippet(options = {}) {
     'export OPENCLAW_HOME="$OPENCLAW_TEST_STATE_HOME"',
     'export OPENCLAW_STATE_DIR="$OPENCLAW_TEST_STATE_HOME/.openclaw"',
     'export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"',
-    `export OPENCLAW_AUTH_PROFILE_SECRET_KEY=${shellQuote(TEST_AUTH_PROFILE_SECRET_KEY)}`,
+    ...renderAuthProfileSecretKeyExport(),
     'export OPENCLAW_TEST_WORKSPACE_DIR="$OPENCLAW_TEST_STATE_HOME/workspace"',
     'mkdir -p "$OPENCLAW_STATE_DIR" "$OPENCLAW_TEST_WORKSPACE_DIR"',
   ];
@@ -376,7 +387,7 @@ export function renderShellFunction() {
   export OPENCLAW_HOME="$OPENCLAW_TEST_STATE_HOME"
   export OPENCLAW_STATE_DIR="$OPENCLAW_TEST_STATE_HOME/.openclaw"
   export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"
-  export OPENCLAW_AUTH_PROFILE_SECRET_KEY=${shellQuote(TEST_AUTH_PROFILE_SECRET_KEY)}
+  ${renderAuthProfileSecretKeyExport().join("\n  ")}
   export OPENCLAW_TEST_WORKSPACE_DIR="$OPENCLAW_TEST_STATE_HOME/workspace"
   unset OPENCLAW_AGENT_DIR
   unset PI_CODING_AGENT_DIR
