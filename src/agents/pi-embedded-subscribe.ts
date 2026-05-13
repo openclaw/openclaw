@@ -158,6 +158,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     lastReasoningSent: undefined,
     pendingAssistantUsage: undefined,
     assistantUsageCommitted: false,
+    llmMetricsEmitted: false,
     compactionInFlight: false,
     lastCompactionTokensAfter: undefined,
     pendingCompactionRetry: 0,
@@ -269,6 +270,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.suppressBlockChunks = false;
     state.pendingAssistantUsage = undefined;
     state.assistantUsageCommitted = false;
+    state.llmMetricsEmitted = false;
     state.assistantMessageIndex += 1;
     state.lastAssistantStreamItemId = undefined;
     state.lastAssistantTextMessageIndex = -1;

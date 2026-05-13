@@ -40,7 +40,9 @@ const counters: Record<LLMProvider, ProviderCounters> = {
 // characters even if the message keeps going so long pasted blobs that begin
 // with `/` cannot smuggle data through the tag.
 export function extractCommandTag(content: unknown): string {
-  if (typeof content !== "string") return "n/a";
+  if (typeof content !== "string") {
+    return "n/a";
+  }
   const match = content.trimStart().match(/^\/([a-z][a-z0-9_-]{0,30})/i);
   return match ? `/${match[1].toLowerCase()}` : "freeform";
 }

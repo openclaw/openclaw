@@ -748,7 +748,9 @@ export function createGatewayHttpServer(opts: {
       requestStages.push({
         name: "metrics",
         run: () => {
-          if (req.method !== "GET" || scopedRequestPath !== "/metrics") return false;
+          if (req.method !== "GET" || scopedRequestPath !== "/metrics") {
+            return false;
+          }
           res.statusCode = 200;
           res.setHeader("Content-Type", "text/plain; version=0.0.4; charset=utf-8");
           res.end(formatLLMMetricsPrometheus());

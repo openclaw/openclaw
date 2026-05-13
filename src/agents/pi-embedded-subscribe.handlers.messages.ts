@@ -8,6 +8,8 @@ import {
 import { splitTrailingDirective } from "../auto-reply/reply/streaming-directives.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { extractCommandTag, type LLMProvider, recordLLMUsage } from "../logging/llm-metrics.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
 import { coerceChatContentText } from "../shared/chat-content.js";
 import {
@@ -57,6 +59,79 @@ function isOpenAiResponsesAssistantMessage(message: AgentMessage | undefined): b
   }
   const api = normalizeOptionalString((message as { api?: unknown }).api) ?? "";
   return api === "openai-responses" || api === "azure-openai-responses";
+}
+
+const sessionLlmMetricsLog = createSubsystemLogger("session-llm-metrics");
+
+// Single emit point for openclaw_llm_*_total counters. Runs at message_end for
+// every assistant turn regardless of which stream implementation produced it —
+// catches the WebSocket transport (createOpenAIWebSocketStreamFn), the
+// Responses HTTP transport, the Anthropic Messages transport, and the
+// streamSimple fallback from pi-ai that previous per-stream emit hooks could
+// not see.
+//
+// Usage source: state.pendingAssistantUsage, populated by recordAssistantUsage
+// from whichever event carried real numbers. Reading assistantMessage.usage
+// directly under-counts in providers (notably openai-completions) that emit
+// a zero snapshot on message_end and ship real token counts via timings on
+// the preceding message_update.done event.
+//
+// Counter shape mapping: input + cacheRead (+ cacheWrite for anthropic, where
+// cache_creation is also prompt-side cost) form `prompt`; `completion` =
+// output; `cached` = cacheRead. Cache-writes are not folded into `cached`
+// because dashboards use the ratio cacheRead/(prompt) for cache-hit %.
+function recordSessionLlmUsage(
+  ctx: EmbeddedPiSubscribeContext,
+  assistantMessage: AgentMessage,
+): void {
+  // Match the old per-stream hooks: aborted and error turns never bumped the
+  // counters because they fired only after the success path. Without this gate
+  // a transport failure or user abort would inflate the request/token totals.
+  const stopReason = normalizeOptionalString(
+    (assistantMessage as { stopReason?: unknown }).stopReason,
+  );
+  if (stopReason === "aborted" || stopReason === "error") {
+    return;
+  }
+  const providerRaw = normalizeOptionalString(
+    (assistantMessage as { provider?: unknown }).provider,
+  );
+  let provider: LLMProvider;
+  if (providerRaw === "openai-codex") {
+    provider = "codex";
+  } else if (providerRaw === "anthropic" || providerRaw === "anthropic-vertex") {
+    provider = "anthropic";
+  } else {
+    return;
+  }
+  // Read the already-normalized usage the subscriber pipeline committed for
+  // this turn. Falls back to an empty object so request count still ticks for
+  // turns that produced no usage data at all (matches old per-stream hook
+  // behavior where `requests_total` incremented once per completed stream).
+  const usage = ctx.state.pendingAssistantUsage ?? {};
+  const cached = usage.cacheRead ?? 0;
+  const prompt =
+    (usage.input ?? 0) + cached + (provider === "anthropic" ? (usage.cacheWrite ?? 0) : 0);
+  const completion = usage.output ?? 0;
+  recordLLMUsage(provider, { prompt, completion, cached });
+  const messages = (
+    ctx.params.session as { messages?: ReadonlyArray<{ role?: unknown; content?: unknown }> }
+  ).messages;
+  const lastUser = messages?.findLast?.((m) => m.role === "user");
+  const commandTag = extractCommandTag(lastUser?.content);
+  const modelId = normalizeOptionalString((assistantMessage as { model?: unknown }).model) ?? "";
+  sessionLlmMetricsLog.info(
+    `llm_usage provider=${provider} model=${modelId} prompt=${prompt} completion=${completion} cached=${cached}`,
+    {
+      event: "llm_usage",
+      provider,
+      model: modelId,
+      prompt_tokens: prompt,
+      completion_tokens: completion,
+      cached_tokens: cached,
+      command: commandTag,
+    },
+  );
 }
 
 function resolveAssistantStreamItemId(params: {
@@ -667,6 +742,14 @@ export function handleMessageEnd(
   ctx.noteLastAssistant(assistantMessage);
   ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
   ctx.commitAssistantUsage();
+  // Emit once per turn. assistantUsageCommitted can already be true here when
+  // handleMessageUpdate committed usage on the "done" event before message_end
+  // fires, so a dedicated flag is needed instead of piggybacking on it. The
+  // flag resets in resetAssistantMessageState when the next turn begins.
+  if (!ctx.state.llmMetricsEmitted) {
+    recordSessionLlmUsage(ctx, assistantMessage);
+    ctx.state.llmMetricsEmitted = true;
+  }
   if (suppressVisibleAssistantOutput) {
     return;
   }
