@@ -329,13 +329,18 @@ async function refreshRemoteNodeBinsUncoalesced(params: {
     return;
   }
 
-  const workspaceDirs = listAgentWorkspaceDirs(params.cfg);
   const requiredBins = new Set<string>();
-  for (const workspaceDir of workspaceDirs) {
-    const entries = loadWorkspaceSkillEntries(workspaceDir, { config: params.cfg });
-    for (const bin of collectRequiredBins(entries, "darwin")) {
-      requiredBins.add(bin);
+  try {
+    const workspaceDirs = listAgentWorkspaceDirs(params.cfg);
+    for (const workspaceDir of workspaceDirs) {
+      const entries = loadWorkspaceSkillEntries(workspaceDir, { config: params.cfg });
+      for (const bin of collectRequiredBins(entries, "darwin")) {
+        requiredBins.add(bin);
+      }
     }
+  } catch (err) {
+    log.warn(`failed to scan workspace skills for remote node ${params.nodeId}: ${String(err)}`);
+    return;
   }
   if (requiredBins.size === 0) {
     return;

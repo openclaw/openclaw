@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Remote nodes/skills: guard workspace skill directory scanning in the remote bin refresh path against filesystem errors, so a corrupted or permission-denied workspace entry no longer propagates an unhandled rejection that silently cancels the rest of the connected-node refresh loop.
 - iMessage: stop sending visible `<media:image>` placeholder text for media-only native image sends while preserving the internal echo key that prevents self-echo duplicate replies. (#81209) Thanks @homer-byte.
 - Agents/sessions: create configured agent main sessions before first `sessions_send` or gateway send, so agent-to-agent messages no longer fail when the target agent has not started yet.
 - gateway: pass Talk session scope to resolver [AI]. (#81379) Thanks @pgondhi987.
@@ -22,6 +23,7 @@ Docs: https://docs.openclaw.ai
 - Docker: pin setup-time container paths so stale host `.env` OpenClaw paths cannot leak into Linux containers. Fixes #80381. (#81105) Thanks @brokemac79.
 - Channels/WeCom: refresh the official onboarding install to `@wecom/wecom-openclaw-plugin@2026.5.7` and update existing managed npm installs instead of failing on the package directory. Fixes #79884. (#80390) Thanks @brokemac79.
 - Control UI/WebChat: keep short assistant replies clear of in-bubble copy/open action buttons by applying the existing reserved action spacing in the grouped chat renderer. Fixes #79509. (#81244) Thanks @JARVIS-Glasses.
+- Remote nodes/skills: guard workspace skill directory scanning in the remote bin refresh path against filesystem errors, so a corrupted or permission-denied workspace entry no longer propagates an unhandled rejection that silently cancels the rest of the connected-node refresh loop.
 - Anthropic: reseed Claude CLI fresh-session retries from bounded OpenClaw transcript history after session rotation, preventing conversation amnesia. Fixes #80905. (#80934) Thanks @bitloi.
 - Require explicit browser device pairing [AI]. (#81289) Thanks @pgondhi987.
 - Require Control UI pairing before proxy-scoped access [AI]. (#81288) Thanks @pgondhi987.

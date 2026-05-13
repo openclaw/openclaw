@@ -2,8 +2,9 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { getSkillsSnapshotVersion, resetSkillsRefreshForTest } from "../agents/skills/refresh.js";
+import * as workspaceModule from "../agents/skills/workspace.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { NodeRegistry } from "../gateway/node-registry.js";
 import {
@@ -361,6 +362,40 @@ describe("skills-remote", () => {
     } finally {
       removeRemoteNodeInfo(nodeId);
       fs.rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not propagate workspace skill-scan errors as unhandled rejections", async () => {
+    const nodeId = `node-${randomUUID()}`;
+    const spy = vi.spyOn(workspaceModule, "loadWorkspaceSkillEntries").mockImplementation(() => {
+      throw new Error("EACCES: permission denied, open '/workspace/SKILL.md'");
+    });
+    const cfg = {
+      agents: { defaults: { workspace: `/tmp/ws-${randomUUID()}` } },
+    } satisfies OpenClawConfig;
+    setSkillsRemoteRegistry({
+      listConnected: () => [],
+      get: () => undefined,
+      invoke: vi.fn(),
+    } as unknown as NodeRegistry);
+    recordRemoteNodeInfo({
+      nodeId,
+      displayName: "Remote Mac",
+      platform: "darwin",
+      commands: ["system.run", "system.which"],
+    });
+    try {
+      await expect(
+        refreshRemoteNodeBins({
+          nodeId,
+          platform: "darwin",
+          commands: ["system.run", "system.which"],
+          cfg,
+        }),
+      ).resolves.toBeUndefined();
+    } finally {
+      spy.mockRestore();
+      removeRemoteNodeInfo(nodeId);
     }
   });
 });

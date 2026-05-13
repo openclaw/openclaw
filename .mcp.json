@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "hokmah": {
+      "type": "http",
+      "url": "https://mcp.hokmah.dev/mcp"
+    }
+  }
+}
