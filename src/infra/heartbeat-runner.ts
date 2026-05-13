@@ -58,6 +58,7 @@ import {
   resolveAgentMainSessionKey,
 } from "../config/sessions/main-session.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
+import { sanitizeAssistantVisibleText } from "../shared/text/assistant-visible-text.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
 import { archiveRemovedSessionTranscripts, updateSessionStore } from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -771,13 +772,15 @@ function normalizeHeartbeatReply(
   ackMaxChars: number,
 ) {
   const rawText = typeof payload.text === "string" ? payload.text : "";
-  const textForStrip = stripLeadingHeartbeatResponsePrefix(rawText, responsePrefix);
+  const textForStrip = sanitizeAssistantVisibleText(
+    stripLeadingHeartbeatResponsePrefix(rawText, responsePrefix),
+  );
   const stripped = stripHeartbeatToken(textForStrip, {
     mode: "heartbeat",
     maxAckChars: ackMaxChars,
   });
   const hasMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
-  if (stripped.shouldSkip && !hasMedia) {
+  if ((stripped.shouldSkip || !stripped.text.trim()) && !hasMedia) {
     return {
       shouldSkip: true,
       text: "",

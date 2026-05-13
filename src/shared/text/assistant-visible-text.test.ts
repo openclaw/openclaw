@@ -307,6 +307,37 @@ describe("stripAssistantInternalScaffolding", () => {
       expectVisibleText("prefix </function> suffix", "prefix  suffix");
     });
 
+    it("strips bare tool-call container scaffolding lines", () => {
+      expectVisibleText(
+        ["<tool_calls>", "<tool_calls>", "<tool_calls>", "Visible answer"].join("\n"),
+        "Visible answer",
+      );
+    });
+
+    it("strips file_contents scaffolding blocks", () => {
+      expectVisibleText(
+        [
+          "Before",
+          "<file_contents path='.../HEARTBEAT.md' isStale=false isFullFile=true>",
+          " 1|# HEARTBEAT.md",
+          "</file_contents>",
+          "After",
+        ].join("\n"),
+        "Before\n\nAfter",
+      );
+    });
+
+    it("hides dangling file_contents scaffolding to end-of-string", () => {
+      expectVisibleText(
+        [
+          "Before",
+          "<file_contents path='.../HEARTBEAT.md' isStale=false isFullFile=true>",
+          " 1|# HEARTBEAT.md",
+        ].join("\n"),
+        "Before\n",
+      );
+    });
+
     it("strips standalone <function> blocks with nested <parameter> XML (#67093)", () => {
       expectVisibleText(
         'prefix\n<function name="sessions_spawn"><parameter name="sessionKey">agent:main</parameter><parameter name="timeout">0</parameter></function>\nsuffix',
@@ -448,6 +479,19 @@ describe("stripAssistantInternalScaffolding", () => {
       const input = [
         "```xml",
         '<tool_call> {"name": "find"} </tool_call>',
+        "```",
+        "",
+        "Visible text",
+      ].join("\n");
+      expectVisibleText(input, input);
+    });
+
+    it("preserves file_contents tags inside fenced code blocks", () => {
+      const input = [
+        "```xml",
+        "<file_contents path='example.md'>",
+        "literal",
+        "</file_contents>",
         "```",
         "",
         "Visible text",

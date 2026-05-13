@@ -283,6 +283,32 @@ describe("runHeartbeatOnce ack handling", () => {
       expectedCalls: 1,
       expectedText: "History check complete",
     },
+    {
+      title: "suppresses raw tool-call container scaffolding",
+      replyText: ["<tool_calls>", "<tool_calls>", "<tool_calls>"].join("\n"),
+      expectedCalls: 0,
+    },
+    {
+      title: "suppresses raw file_contents scaffolding",
+      replyText: [
+        "<file_contents path='.../HEARTBEAT.md' isStale=false isFullFile=true>",
+        " 1|# HEARTBEAT.md",
+        "</file_contents>",
+      ].join("\n"),
+      expectedCalls: 0,
+    },
+    {
+      title: "preserves visible heartbeat text while stripping internal scaffolding",
+      replyText: [
+        "Visible alert",
+        '<tool_call>{"name":"read","arguments":{"file_path":"HEARTBEAT.md"}}</tool_call>',
+        "<file_contents path='.../HEARTBEAT.md' isStale=false isFullFile=true>",
+        " 1|# HEARTBEAT.md",
+        "</file_contents>",
+      ].join("\n"),
+      expectedCalls: 1,
+      expectedText: "Visible alert",
+    },
   ])("$title", async ({ replyText, messages, expectedCalls, expectedText }) => {
     await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const { sendTelegram, cfg } = await runTelegramHeartbeatWithDefaults({
