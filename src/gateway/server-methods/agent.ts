@@ -117,6 +117,7 @@ import {
   canonicalizeSpawnedByForAgent,
   loadGatewaySessionRow,
   loadSessionEntry,
+  parseGroupKey,
   resolveGatewayModelSupportsImages,
   resolveSessionModelRef,
 } from "../session-utils.js";
@@ -280,6 +281,10 @@ function normalizeTrustedGroupMetadata(value?: {
   };
 }
 
+function groupIdsEqual(left?: string, right?: string): boolean {
+  return Boolean(left && right && left.toLowerCase() === right.toLowerCase());
+}
+
 function resolveTrustedGroupMetadata(params: {
   typedGroupId?: string;
   stored: TrustedGroupMetadata;
@@ -287,11 +292,15 @@ function resolveTrustedGroupMetadata(params: {
 }): TrustedGroupMetadata {
   const inheritedMatchesTyped =
     params.inherited?.groupId &&
-    (!params.typedGroupId || params.inherited.groupId === params.typedGroupId);
+    (!params.typedGroupId || groupIdsEqual(params.inherited.groupId, params.typedGroupId));
   const trustedGroupId = params.typedGroupId ?? params.inherited?.groupId;
   const storedMatchesTrusted =
-    params.stored.groupId && trustedGroupId && params.stored.groupId === trustedGroupId;
-  const groupId = storedMatchesTrusted ? params.stored.groupId : trustedGroupId;
+    params.stored.groupId && trustedGroupId && groupIdsEqual(params.stored.groupId, trustedGroupId);
+  const groupId = storedMatchesTrusted
+    ? params.stored.groupId
+    : inheritedMatchesTyped
+      ? params.inherited?.groupId
+      : trustedGroupId;
   if (!groupId) {
     return {};
   }
@@ -314,7 +323,7 @@ function requestGroupMatchesTrusted(params: {
   if (!requestGroupId) {
     return true;
   }
-  return Boolean(params.trustedGroupId && requestGroupId === params.trustedGroupId);
+  return groupIdsEqual(requestGroupId, params.trustedGroupId);
 }
 
 function emitSessionsChanged(
@@ -355,6 +364,10 @@ function emitSessionsChanged(
             deliveryContext: sessionRow.deliveryContext,
             parentSessionKey: sessionRow.parentSessionKey,
             childSessions: sessionRow.childSessions,
+            lastChannel: sessionRow.lastChannel,
+            lastTo: sessionRow.lastTo,
+            lastAccountId: sessionRow.lastAccountId,
+            lastThreadId: sessionRow.lastThreadId,
             thinkingLevel: sessionRow.thinkingLevel,
             fastMode: sessionRow.fastMode,
             verboseLevel: sessionRow.verboseLevel,
@@ -1024,10 +1037,16 @@ export const agentHandlers: GatewayRequestHandlers = {
       ) {
         try {
           const parentEntry = loadSessionEntry(spawnedByValue)?.entry;
+          const parentGroupKey = parseGroupKey(spawnedByValue);
           inheritedGroup = normalizeTrustedGroupMetadata({
             groupId: parentEntry?.groupId,
             groupChannel: parentEntry?.groupChannel,
             groupSpace: parentEntry?.space,
+          });
+          inheritedGroup = normalizeTrustedGroupMetadata({
+            groupId: inheritedGroup.groupId ?? parentGroupKey?.id,
+            groupChannel: inheritedGroup.groupChannel,
+            groupSpace: inheritedGroup.groupSpace,
           });
         } catch {
           inheritedGroup = undefined;
@@ -1039,7 +1058,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         typedGroupId:
           routingInfo?.chatType === "group" || routingInfo?.chatType === "channel"
             ? routingInfo.conversationPeerId
-            : undefined,
+            : parseGroupKey(canonicalKey)?.id,
       });
       const trustRequestSelectors =
         Boolean(trustedGroup.groupId) &&
@@ -1052,7 +1071,11 @@ export const agentHandlers: GatewayRequestHandlers = {
         resolvedGroupChannel = undefined;
         resolvedGroupSpace = undefined;
       } else {
-        resolvedGroupId = trustedGroup.groupId;
+        resolvedGroupId =
+          storedGroup.groupId ??
+          inheritedGroup?.groupId ??
+          normalizedSpawned.groupId ??
+          trustedGroup.groupId;
         resolvedGroupChannel =
           trustedGroup.groupChannel ??
           (trustRequestSelectors ? normalizedSpawned.groupChannel : undefined);

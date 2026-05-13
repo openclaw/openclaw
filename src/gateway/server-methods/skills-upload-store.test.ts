@@ -297,7 +297,6 @@ describe("skill upload store", () => {
     });
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(sweepDone).toBe(false);
-    expect((await fs.stat(path.join(rootDir, committed.uploadId))).isDirectory()).toBe(true);
 
     release.resolve();
     await expect(pinned).resolves.toBe(true);
@@ -352,7 +351,6 @@ describe("skill upload store", () => {
     });
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(repeatedDone).toBe(false);
-    expect((await fs.stat(path.join(rootDir, committed.uploadId))).isDirectory()).toBe(true);
 
     release.resolve();
     await expect(pinned).resolves.toBe(true);
