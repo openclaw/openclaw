@@ -434,7 +434,22 @@ export async function handleApprovalResolve<TPayload, TResolvedEvent extends obj
     snapshot: resolved.snapshot,
     nowMs: Date.now(),
   });
-  params.context.broadcast(params.resolvedEventName, resolvedEvent, { dropIfSlow: true });
+  const resolvedEventConnIds = resolveApprovalRequestRecipientConnIds({
+    context: params.context,
+    record: resolved.snapshot,
+  });
+  if (resolvedEventConnIds) {
+    params.context.broadcastToConnIds(
+      params.resolvedEventName,
+      resolvedEvent,
+      resolvedEventConnIds,
+      {
+        dropIfSlow: true,
+      },
+    );
+  } else {
+    params.context.broadcast(params.resolvedEventName, resolvedEvent, { dropIfSlow: true });
+  }
 
   const followUps = [
     params.forwardResolved

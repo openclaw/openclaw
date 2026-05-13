@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
-import { handlePendingApprovalRequest } from "./approval-shared.js";
+import { handleApprovalResolve, handlePendingApprovalRequest } from "./approval-shared.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const hasApprovalTurnSourceRouteMock = vi.hoisted(() => vi.fn(() => true));
@@ -219,5 +219,67 @@ describe("handlePendingApprovalRequest", () => {
 
     expect(manager.resolve(record.id, "allow-once")).toBe(true);
     await requestPromise;
+  });
+
+  it("targets resolved approval events to visible approval clients when available", async () => {
+    const manager = new ExecApprovalManager();
+    const record = manager.create(
+      {
+        command: "echo ok",
+      },
+      60_000,
+      "approval-resolved-visible",
+    );
+    record.requestedByDeviceId = "device-owner";
+    void manager.register(record, 60_000);
+    const respond = vi.fn();
+    const broadcast = vi.fn();
+    const broadcastToConnIds = vi.fn();
+    const visibleConnIds = new Set(["conn-owner-approval"]);
+
+    await handleApprovalResolve({
+      manager,
+      inputId: record.id,
+      decision: "allow-once",
+      respond,
+      context: {
+        broadcast,
+        broadcastToConnIds,
+        getApprovalClientConnIds: vi.fn(
+          createApprovalClientLookup([
+            createApprovalClient({
+              connId: "conn-owner-approval",
+              clientId: "client-owner",
+              deviceId: "device-owner",
+            }),
+            createApprovalClient({
+              connId: "conn-other-approval",
+              clientId: "client-other",
+              deviceId: "device-other",
+            }),
+          ]),
+        ),
+      } as unknown as GatewayRequestContext,
+      client: createApprovalClient({
+        connId: "conn-owner-approval",
+        clientId: "client-owner",
+        deviceId: "device-owner",
+      }),
+      resolvedEventName: "exec.approval.resolved",
+      buildResolvedEvent: ({ approvalId, decision, snapshot }) => ({
+        id: approvalId,
+        decision,
+        request: snapshot.request,
+      }),
+    });
+
+    expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(broadcast).not.toHaveBeenCalled();
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "exec.approval.resolved",
+      expect.objectContaining({ id: "approval-resolved-visible" }),
+      visibleConnIds,
+      { dropIfSlow: true },
+    );
   });
 });
