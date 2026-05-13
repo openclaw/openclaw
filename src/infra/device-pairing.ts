@@ -10,6 +10,7 @@ import {
   resolveScopeOutsideRequestedRoles,
   roleScopesAllow,
 } from "../shared/operator-scope-compat.js";
+import { revokeDeviceBootstrapTokensForDevice } from "./device-bootstrap.js";
 import {
   createAsyncLock,
   pruneExpiredPending,
@@ -19,7 +20,6 @@ import {
   resolvePairingPaths,
   writeJson,
 } from "./pairing-files.js";
-import { rejectPendingPairingRequest } from "./pairing-pending.js";
 import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
 
 export type DevicePairingPendingRequest = {
@@ -781,17 +781,19 @@ export async function rejectDevicePairing(
   baseDir?: string,
 ): Promise<{ requestId: string; deviceId: string } | null> {
   return await withLock(async () => {
-    return await rejectPendingPairingRequest<
-      DevicePairingPendingRequest,
-      DevicePairingStateFile,
-      "deviceId"
-    >({
-      requestId,
-      idKey: "deviceId",
-      loadState: () => loadState(baseDir),
-      persistState: (state) => persistState(state, baseDir, "pending"),
-      getId: (pending: DevicePairingPendingRequest) => pending.deviceId,
+    const state = await loadState(baseDir);
+    const pending = state.pendingById[requestId];
+    if (!pending) {
+      return null;
+    }
+    delete state.pendingById[requestId];
+    await persistState(state, baseDir, "pending");
+    await revokeDeviceBootstrapTokensForDevice({
+      deviceId: pending.deviceId,
+      publicKey: pending.publicKey,
+      baseDir,
     });
+    return { requestId, deviceId: pending.deviceId };
   });
 }
 

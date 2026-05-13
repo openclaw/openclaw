@@ -64,6 +64,7 @@ data class GatewayConnectErrorDetails(
   val code: String?,
   val canRetryWithDeviceToken: Boolean,
   val recommendedNextStep: String?,
+  val pauseReconnect: Boolean? = null,
   val reason: String? = null,
 )
 
@@ -736,6 +737,7 @@ class GatewaySession(
                 code = it["code"].asStringOrNull(),
                 canRetryWithDeviceToken = it["canRetryWithDeviceToken"].asBooleanOrNull() == true,
                 recommendedNextStep = it["recommendedNextStep"].asStringOrNull(),
+                pauseReconnect = it["pauseReconnect"].asBooleanOrNull(),
                 reason = it["reason"].asStringOrNull(),
               )
             }
@@ -1087,7 +1089,9 @@ internal fun shouldPauseGatewayReconnectAfterAuthFailure(
         hasBootstrapToken &&
           role?.trim() == "node" &&
           scopes.isEmpty() &&
-          error.details?.reason == "not-paired"
+          error.details?.reason == "not-paired" &&
+          (error.details?.pauseReconnect == false ||
+            error.details?.recommendedNextStep == "wait_then_retry")
       )
     "AUTH_TOKEN_MISMATCH" -> deviceTokenRetryBudgetUsed && !pendingDeviceTokenRetry
     else -> false
