@@ -170,7 +170,9 @@ export async function collectStatusScanOverview(params: {
           loadedConfig,
         ),
         mode: "read_only_status",
-        ...(params.runtime ? { runtime: params.runtime } : {}),
+        ...(params.runtime && params.commandName !== "status --json"
+          ? { runtime: params.runtime }
+          : {}),
       }),
   });
   params.progress?.tick();

@@ -161,6 +161,26 @@ describe("collectStatusScanOverview", () => {
     expect(result.channelIssues).toStrictEqual([]);
   });
 
+  it("keeps status --json secret diagnostics structured instead of logging before JSON", async () => {
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    const result = await collectStatusScanOverview({
+      commandName: "status --json",
+      opts: { timeoutMs: 1234 },
+      showSecrets: false,
+      runtime,
+    });
+
+    expect(mocks.resolveCommandConfigWithSecrets).toHaveBeenCalledOnce();
+    expect(mocks.resolveCommandConfigWithSecrets.mock.calls[0]?.[0]).not.toHaveProperty("runtime");
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(result.secretDiagnostics).toStrictEqual(["secret warning"]);
+  });
+
   it("skips channels.status when the gateway is unreachable", async () => {
     mocks.createStatusScanCoreBootstrap.mockResolvedValueOnce({
       tailscaleMode: "off",
