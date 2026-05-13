@@ -177,7 +177,7 @@ export function scanPolicyChannelRuntime(
       } = {
         id: channelId,
         accountId,
-        source: `runtime:channels/${channelId}/accounts/${accountId}`,
+        source: `runtime:channels/${runtimeRefSegment(channelId)}/accounts/${runtimeRefSegment(accountId)}`,
         running: snapshot.running === true,
       };
       if (typeof snapshot.enabled === "boolean") {
@@ -192,6 +192,10 @@ export function scanPolicyChannelRuntime(
   return entries.toSorted(
     (a, b) => a.id.localeCompare(b.id) || a.accountId.localeCompare(b.accountId),
   );
+}
+
+function runtimeRefSegment(value: string): string {
+  return encodeURIComponent(value);
 }
 
 export function scanPolicyChannels(cfg: Record<string, unknown>): readonly PolicyChannelEvidence[] {
