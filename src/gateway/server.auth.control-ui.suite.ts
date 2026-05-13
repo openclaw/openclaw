@@ -41,14 +41,6 @@ function expectArrayIncludes(actual: unknown, expectedValues: string[]): void {
   }
 }
 
-function expectArrayExcludes(actual: unknown, deniedValues: string[]): void {
-  expect(Array.isArray(actual)).toBe(true);
-  const values = actual as unknown[];
-  for (const denied of deniedValues) {
-    expect(values).not.toContain(denied);
-  }
-}
-
 export function registerControlUiAndPairingSuite(): void {
   const trustedProxyControlUiCases: Array<{
     name: string;
@@ -980,11 +972,11 @@ export function registerControlUiAndPairingSuite(): void {
     }
   });
 
-  test("auto-approves fresh node bootstrap pairing from qr setup code", async () => {
+  test("requires approval before qr setup code returns a durable node token", async () => {
     const { issueDeviceBootstrapToken, verifyDeviceBootstrapToken } =
       await import("../infra/device-bootstrap.js");
     const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
-    const { getPairedDevice, listDevicePairing, verifyDeviceToken } =
+    const { approveDevicePairing, getPairedDevice, listDevicePairing, verifyDeviceToken } =
       await import("../infra/device-pairing.js");
     const { server, port, prevToken } = await startControlUiServer("secret");
 
@@ -1010,8 +1002,38 @@ export function registerControlUiAndPairingSuite(): void {
         client,
         deviceIdentityPath: identityPath,
       });
-      expect(initial.ok).toBe(true);
-      const initialPayload = initial.payload as
+      expect(initial.ok).toBe(false);
+      expect(initial.error?.message ?? "").toContain("pairing required");
+      expect((initial.error?.details as { code?: string } | undefined)?.code).toBe(
+        ConnectErrorDetailCodes.PAIRING_REQUIRED,
+      );
+
+      const pendingAfterInitial = await listDevicePairing();
+      const pendingForDevice = pendingAfterInitial.pending.filter(
+        (entry) => entry.deviceId === identity.deviceId,
+      );
+      expect(pendingForDevice).toHaveLength(1);
+      expect(pendingForDevice[0]?.role).toBe("node");
+      expect(pendingForDevice[0]?.roles).toEqual(["node"]);
+      expect(await getPairedDevice(identity.deviceId)).toBeNull();
+      expect(
+        await approveDevicePairing(pendingForDevice[0]?.requestId ?? "", {
+          callerScopes: ["operator.pairing"],
+        }),
+      ).toMatchObject({ status: "approved" });
+      wsBootstrap.close();
+
+      const wsApproved = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
+      const approvedConnect = await connectReq(wsApproved, {
+        skipDefaultAuth: true,
+        bootstrapToken: issued.token,
+        role: "node",
+        scopes: [],
+        client,
+        deviceIdentityPath: identityPath,
+      });
+      expect(approvedConnect.ok).toBe(true);
+      const approvedPayload = approvedConnect.payload as
         | {
             type?: string;
             auth?: {
@@ -1026,61 +1048,32 @@ export function registerControlUiAndPairingSuite(): void {
             };
           }
         | undefined;
-      expect(initialPayload?.type).toBe("hello-ok");
-      const issuedDeviceToken = initialPayload?.auth?.deviceToken;
-      const issuedOperatorToken = initialPayload?.auth?.deviceTokens?.find(
-        (entry) => entry.role === "operator",
-      )?.deviceToken;
-      if (!issuedDeviceToken || !issuedOperatorToken) {
-        throw new Error("expected issued device and operator tokens");
+      expect(approvedPayload?.type).toBe("hello-ok");
+      const issuedDeviceToken = approvedPayload?.auth?.deviceToken;
+      if (!issuedDeviceToken) {
+        throw new Error("expected issued device token");
       }
-      expect(initialPayload?.auth?.role).toBe("node");
-      expect(initialPayload?.auth?.scopes ?? []).toEqual([]);
-      expect(initialPayload?.auth?.deviceTokens?.some((entry) => entry.role === "node")).toBe(
-        false,
-      );
-      const operatorBootstrapScopes = initialPayload?.auth?.deviceTokens?.find(
-        (entry) => entry.role === "operator",
-      )?.scopes;
-      expectArrayIncludes(operatorBootstrapScopes, [
-        "operator.approvals",
-        "operator.read",
-        "operator.talk.secrets",
-        "operator.write",
-      ]);
-      expectArrayExcludes(operatorBootstrapScopes, [
-        "node.camera",
-        "node.display",
-        "node.exec",
-        "node.voice",
-      ]);
-      expectArrayExcludes(operatorBootstrapScopes, ["operator.admin", "operator.pairing"]);
+      expect(approvedPayload?.auth?.role).toBe("node");
+      expect(approvedPayload?.auth?.scopes ?? []).toEqual([]);
+      expect(approvedPayload?.auth?.deviceTokens ?? []).toEqual([]);
 
       const afterBootstrap = await listDevicePairing();
       expect(
         afterBootstrap.pending.filter((entry) => entry.deviceId === identity.deviceId),
       ).toEqual([]);
       const paired = await getPairedDevice(identity.deviceId);
-      expectArrayIncludes(paired?.roles, ["node", "operator"]);
-      expectArrayIncludes(paired?.approvedScopes, [
-        "operator.approvals",
-        "operator.read",
-        "operator.talk.secrets",
-        "operator.write",
-      ]);
+      expect(paired?.roles).toEqual(["node"]);
+      expect(paired?.approvedScopes).toEqual([]);
       expect(paired?.tokens?.node?.token).toBe(issuedDeviceToken);
-      expect(paired?.tokens?.operator?.token).toBe(issuedOperatorToken);
-      if (!issuedDeviceToken || !issuedOperatorToken) {
-        throw new Error("expected hello-ok auth.deviceTokens for bootstrap onboarding");
-      }
+      expect(paired?.tokens?.operator).toBeUndefined();
 
       await new Promise<void>((resolve) => {
-        if (wsBootstrap.readyState === WebSocket.CLOSED) {
+        if (wsApproved.readyState === WebSocket.CLOSED) {
           resolve();
           return;
         }
-        wsBootstrap.once("close", () => resolve());
-        wsBootstrap.close();
+        wsApproved.once("close", () => resolve());
+        wsApproved.close();
       });
 
       const wsReplay = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
@@ -1131,7 +1124,7 @@ export function registerControlUiAndPairingSuite(): void {
       await expect(
         verifyDeviceToken({
           deviceId: identity.deviceId,
-          token: issuedOperatorToken,
+          token: issuedDeviceToken,
           role: "operator",
           scopes: [
             "operator.approvals",
@@ -1140,7 +1133,7 @@ export function registerControlUiAndPairingSuite(): void {
             "operator.write",
           ],
         }),
-      ).resolves.toEqual({ ok: true });
+      ).resolves.toEqual({ ok: false, reason: "token-missing" });
     } finally {
       await server.close();
       restoreGatewayToken(prevToken);
@@ -1149,6 +1142,7 @@ export function registerControlUiAndPairingSuite(): void {
 
   test("does not consume bootstrap token when node reconcile fails before hello-ok", async () => {
     const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
+    const { approveDevicePairing, listDevicePairing } = await import("../infra/device-pairing.js");
     const reconcileModule = await import("./node-connect-reconcile.js");
     const reconcileSpy = vi
       .spyOn(reconcileModule, "reconcileNodePairingOnConnect")
@@ -1171,6 +1165,25 @@ export function registerControlUiAndPairingSuite(): void {
           scopes: [],
         },
       });
+
+      const wsInitial = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
+      const initial = await connectReq(wsInitial, {
+        skipDefaultAuth: true,
+        bootstrapToken: issued.token,
+        role: "node",
+        scopes: [],
+        client: nodeClient,
+        deviceIdentityPath: identityPath,
+      });
+      expect(initial.ok).toBe(false);
+      wsInitial.close();
+      const pending = (await listDevicePairing()).pending.find(
+        (entry) => entry.clientId === nodeClient.id,
+      );
+      if (!pending) {
+        throw new Error("expected pending bootstrap pairing request");
+      }
+      await approveDevicePairing(pending.requestId, { callerScopes: ["operator.pairing"] });
 
       const wsFail = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
       await expect(

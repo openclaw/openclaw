@@ -692,9 +692,6 @@ export async function approveBootstrapDevicePairing(
   bootstrapProfile: DeviceBootstrapProfile,
   baseDir?: string,
 ): Promise<ApproveDevicePairingResult> {
-  // QR bootstrap handoff is an explicit trust path: it can seed the bounded
-  // node/operator baseline from the verified bootstrap profile without routing
-  // operator scope approval through the generic interactive approval checker.
   const approvedRoles = mergeRoles(bootstrapProfile.roles) ?? [];
   const approvedScopes = resolveBootstrapProfileScopesForRoles(
     approvedRoles,
@@ -725,28 +722,23 @@ export async function approveBootstrapDevicePairing(
 
     const now = Date.now();
     const existing = state.pairedByDeviceId[pending.deviceId];
-    const roles = mergeRoles(
-      existing?.roles,
-      existing?.role,
-      pending.roles,
-      pending.role,
-      approvedRoles,
-    );
+    const grantedRoles = requestedRoles;
+    const grantedScopes = resolveBootstrapProfileScopesForRoles(grantedRoles, pending.scopes ?? []);
+    const roles = mergeRoles(existing?.roles, existing?.role, pending.roles, pending.role);
     const nextApprovedScopes = mergeScopes(
       existing?.approvedScopes ?? existing?.scopes,
-      pending.scopes,
-      approvedScopes,
+      grantedScopes,
     );
     const sanitizedApprovedScopes = resolveBootstrapProfileScopesForRoles(
-      approvedRoles,
+      grantedRoles,
       nextApprovedScopes ?? [],
     );
     const tokens = existing?.tokens ? { ...existing.tokens } : {};
-    for (const roleForToken of approvedRoles) {
+    for (const roleForToken of grantedRoles) {
       const existingToken = tokens[roleForToken];
       const tokenScopes =
         roleForToken === OPERATOR_ROLE
-          ? resolveBootstrapProfileScopesForRole(roleForToken, approvedScopes)
+          ? resolveBootstrapProfileScopesForRole(roleForToken, grantedScopes)
           : [];
       tokens[roleForToken] = buildDeviceAuthToken({
         role: roleForToken,
