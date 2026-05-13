@@ -10,11 +10,13 @@ import { setMediaStoreNetworkDepsForTest } from "../media/store.js";
 const authorizeGatewayHttpRequestOrReplyMock = vi.fn();
 const resolveOpenAiCompatibleHttpOperatorScopesMock = vi.fn();
 const resolveOpenAiCompatibleHttpSenderIsOwnerMock = vi.fn();
+const getBearerTokenMock = vi.fn();
 const loadSessionEntryMock = vi.fn();
 const readSessionMessagesMock = vi.fn();
 
 vi.mock("./http-utils.js", () => ({
   authorizeGatewayHttpRequestOrReply: authorizeGatewayHttpRequestOrReplyMock,
+  getBearerToken: getBearerTokenMock,
   resolveOpenAiCompatibleHttpOperatorScopes: resolveOpenAiCompatibleHttpOperatorScopesMock,
   resolveOpenAiCompatibleHttpSenderIsOwner: resolveOpenAiCompatibleHttpSenderIsOwnerMock,
 }));
@@ -238,9 +240,11 @@ async function requestManagedImage(params: {
 
     return { result, auth };
   } finally {
-    await new Promise<void>((resolve, reject) =>
-      server.close((error) => (error ? reject(error) : resolve())),
-    );
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+      server.closeIdleConnections();
+      server.closeAllConnections();
+    });
   }
 }
 
@@ -311,6 +315,7 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
       stateDir,
       pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/thumbnail`,
       headers: { "x-openclaw-requester-session-key": sessionKey },
+      authResponse: { authMethod: "token" },
       thumbnailMaxSide: 60,
     });
 
