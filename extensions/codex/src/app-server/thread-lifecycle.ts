@@ -1,7 +1,9 @@
 import {
   embeddedAgentLog,
+  isActiveHarnessContextEngine,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { buildCodexUserMcpServersThreadConfigPatch } from "openclaw/plugin-sdk/codex-mcp-projection";
 import {
   CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY,
   renderCodexPromptOverlay,
@@ -9,6 +11,10 @@ import {
 import { isModernCodexModel } from "../../provider.js";
 import { isCodexAppServerConnectionClosedError, type CodexAppServerClient } from "./client.js";
 import { codexSandboxPolicyForTurn, type CodexAppServerRuntimeOptions } from "./config.js";
+import {
+  resolveCodexContextEngineProjectionMaxChars,
+  resolveCodexContextEngineProjectionReserveTokens,
+} from "./context-engine-projection.js";
 import {
   isCodexPluginThreadBindingStale,
   mergeCodexThreadConfigs,
@@ -34,8 +40,18 @@ import {
   readCodexAppServerBinding,
   writeCodexAppServerBinding,
   type CodexAppServerAuthProfileLookup,
+  type CodexAppServerContextEngineBinding,
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
+
+export type CodexAppServerThreadLifecycle = {
+  action: "started" | "resumed";
+  rotatedContextEngineBinding?: boolean;
+};
+
+export type CodexAppServerThreadLifecycleBinding = CodexAppServerThreadBinding & {
+  lifecycle: CodexAppServerThreadLifecycle;
+};
 
 export type CodexPluginThreadConfigProvider = {
   enabled: boolean;
@@ -58,15 +74,44 @@ export async function startOrResumeThread(params: {
   developerInstructions?: string;
   config?: JsonObject;
   pluginThreadConfig?: CodexPluginThreadConfigProvider;
-}): Promise<CodexAppServerThreadBinding> {
+}): Promise<CodexAppServerThreadLifecycleBinding> {
   const dynamicToolsFingerprint = fingerprintDynamicTools(params.dynamicTools);
+  const contextEngineBinding = buildContextEngineBinding(params.params);
+  const userMcpServersConfigPatch = buildCodexUserMcpServersThreadConfigPatch(params.params.config);
+  const userMcpServersFingerprint = fingerprintUserMcpServersConfigPatch(userMcpServersConfigPatch);
   let binding = await readCodexAppServerBinding(params.params.sessionFile, {
     authProfileStore: params.params.authProfileStore,
     agentDir: params.params.agentDir,
     config: params.params.config,
   });
   let preserveExistingBinding = false;
+  let rotatedContextEngineBinding = false;
   let prebuiltPluginThreadConfig: CodexPluginThreadConfig | undefined;
+  if (binding?.threadId && (binding.contextEngine || contextEngineBinding)) {
+    if (
+      !contextEngineBinding ||
+      !isContextEngineBindingCompatible(binding.contextEngine, contextEngineBinding)
+    ) {
+      embeddedAgentLog.debug(
+        "codex app-server context-engine binding changed; starting a new thread",
+        {
+          threadId: binding.threadId,
+          engineId: contextEngineBinding?.engineId,
+          previousEngineId: binding.contextEngine?.engineId,
+        },
+      );
+      await clearCodexAppServerBinding(params.params.sessionFile);
+      binding = undefined;
+      rotatedContextEngineBinding = true;
+    }
+  }
+  if (binding?.threadId && binding.userMcpServersFingerprint !== userMcpServersFingerprint) {
+    embeddedAgentLog.debug("codex app-server user MCP config changed; starting a new thread", {
+      threadId: binding.threadId,
+    });
+    await clearCodexAppServerBinding(params.params.sessionFile);
+    binding = undefined;
+  }
   if (binding?.threadId) {
     let pluginBindingStale = isCodexPluginThreadBindingStale({
       codexPluginsEnabled: params.pluginThreadConfig?.enabled ?? false,
@@ -163,9 +208,11 @@ export async function startOrResumeThread(params: {
             model: params.params.modelId,
             modelProvider: response.modelProvider ?? fallbackModelProvider,
             dynamicToolsFingerprint,
+            userMcpServersFingerprint,
             pluginAppsFingerprint: binding.pluginAppsFingerprint,
             pluginAppsInputFingerprint: binding.pluginAppsInputFingerprint,
             pluginAppPolicyContext: binding.pluginAppPolicyContext,
+            contextEngine: contextEngineBinding,
             createdAt: binding.createdAt,
           },
           {
@@ -182,9 +229,12 @@ export async function startOrResumeThread(params: {
           model: params.params.modelId,
           modelProvider: response.modelProvider ?? fallbackModelProvider,
           dynamicToolsFingerprint,
+          userMcpServersFingerprint,
           pluginAppsFingerprint: binding.pluginAppsFingerprint,
           pluginAppsInputFingerprint: binding.pluginAppsInputFingerprint,
           pluginAppPolicyContext: binding.pluginAppPolicyContext,
+          contextEngine: contextEngineBinding,
+          lifecycle: { action: "resumed" },
         };
       } catch (error) {
         if (isCodexAppServerConnectionClosedError(error)) {
@@ -201,7 +251,11 @@ export async function startOrResumeThread(params: {
   const pluginThreadConfig = params.pluginThreadConfig?.enabled
     ? (prebuiltPluginThreadConfig ?? (await params.pluginThreadConfig.build()))
     : undefined;
-  const config = mergeCodexThreadConfigs(params.config, pluginThreadConfig?.configPatch);
+  const config = mergeCodexThreadConfigs(
+    params.config,
+    userMcpServersConfigPatch,
+    pluginThreadConfig?.configPatch,
+  );
   const response = assertCodexThreadStartResponse(
     await params.client.request(
       "thread/start",
@@ -232,9 +286,11 @@ export async function startOrResumeThread(params: {
         model: response.model ?? params.params.modelId,
         modelProvider: response.modelProvider ?? modelProvider,
         dynamicToolsFingerprint,
+        userMcpServersFingerprint,
         pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
         pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
         pluginAppPolicyContext: pluginThreadConfig?.policyContext,
+        contextEngine: contextEngineBinding,
         createdAt,
       },
       {
@@ -253,12 +309,84 @@ export async function startOrResumeThread(params: {
     model: response.model ?? params.params.modelId,
     modelProvider: response.modelProvider ?? modelProvider,
     dynamicToolsFingerprint,
+    userMcpServersFingerprint,
     pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
     pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
     pluginAppPolicyContext: pluginThreadConfig?.policyContext,
+    contextEngine: contextEngineBinding,
     createdAt,
     updatedAt: createdAt,
+    lifecycle: {
+      action: "started",
+      ...(rotatedContextEngineBinding ? { rotatedContextEngineBinding } : {}),
+    },
   };
+}
+
+function buildContextEngineBinding(
+  params: EmbeddedRunAttemptParams,
+): CodexAppServerContextEngineBinding | undefined {
+  const contextEngine = isActiveHarnessContextEngine(params.contextEngine)
+    ? params.contextEngine
+    : undefined;
+  const engineId = contextEngine?.info?.id?.trim();
+  if (!contextEngine || !engineId) {
+    return undefined;
+  }
+  return {
+    schemaVersion: 1,
+    engineId,
+    policyFingerprint: JSON.stringify({
+      schemaVersion: 1,
+      engineId,
+      engineVersion: contextEngine.info.version,
+      ownsCompaction: contextEngine.info.ownsCompaction === true,
+      turnMaintenanceMode: contextEngine.info.turnMaintenanceMode,
+      citationsMode: resolveContextEngineCitationsMode(params.config),
+      contextTokenBudget: params.contextTokenBudget,
+      projectionMaxChars: resolveCodexContextEngineProjectionMaxChars({
+        contextTokenBudget: params.contextTokenBudget,
+        reserveTokens: resolveCodexContextEngineProjectionReserveTokens({
+          config: params.config,
+        }),
+      }),
+    }),
+  };
+}
+
+function isContextEngineBindingCompatible(
+  previous: CodexAppServerContextEngineBinding | undefined,
+  next: CodexAppServerContextEngineBinding,
+): boolean {
+  return (
+    previous?.schemaVersion === next.schemaVersion &&
+    previous.engineId === next.engineId &&
+    previous.policyFingerprint === next.policyFingerprint
+  );
+}
+
+function resolveContextEngineCitationsMode(config: unknown): JsonValue | undefined {
+  const rootConfig = isUnknownRecord(config) ? config : undefined;
+  const memoryConfig = isUnknownRecord(rootConfig?.memory) ? rootConfig.memory : undefined;
+  const citations = memoryConfig?.citations;
+  return isJsonConfigValue(citations) ? citations : undefined;
+}
+
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function isJsonConfigValue(value: unknown): value is JsonValue {
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
+    return true;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value);
+  }
+  if (Array.isArray(value)) {
+    return value.every(isJsonConfigValue);
+  }
+  return isUnknownRecord(value) && Object.values(value).every(isJsonConfigValue);
 }
 
 function shouldRecheckRecoverablePluginBinding(params: {
@@ -418,6 +546,12 @@ function fingerprintDynamicTools(dynamicTools: CodexDynamicToolSpec[]): string {
   return JSON.stringify(
     dynamicTools.map(fingerprintDynamicToolSpec).toSorted(compareJsonFingerprint),
   );
+}
+
+function fingerprintUserMcpServersConfigPatch(
+  configPatch: JsonObject | undefined,
+): string | undefined {
+  return configPatch ? JSON.stringify(stabilizeJsonValue(configPatch)) : undefined;
 }
 
 function fingerprintDynamicToolSpec(tool: JsonValue): JsonValue {
