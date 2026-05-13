@@ -71,7 +71,7 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 const mocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
   onAgentEvent: vi.fn(() => noop),
-  getAgentRunContext: vi.fn(() => undefined),
+  getAgentRunContext: vi.fn<() => { runId: string } | undefined>(() => undefined),
   getRuntimeConfig: vi.fn(() => ({
     agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
     session: { mainKey: "main", scope: "per-sender" as const },
@@ -84,7 +84,12 @@ const mocks = vi.hoisted(() => ({
   updateSessionStore: vi.fn(),
   emitSessionLifecycleEvent: vi.fn(),
   persistSubagentRunsToDisk: vi.fn(),
-  restoreSubagentRunsFromDisk: vi.fn(() => 0),
+  restoreSubagentRunsFromDisk: vi.fn<
+    (params: {
+      runs: Map<string, import("./subagent-registry.types.js").SubagentRunRecord>;
+      mergeOnly?: boolean;
+    }) => number
+  >(() => 0),
   getSubagentRunsSnapshotForRead: vi.fn(
     (runs: Map<string, import("./subagent-registry.types.js").SubagentRunRecord>) => new Map(runs),
   ),

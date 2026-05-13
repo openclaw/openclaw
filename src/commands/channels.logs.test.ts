@@ -11,7 +11,7 @@ const pluginRegistryMocks = vi.hoisted(() => ({
 }));
 
 const gatewayCallMock = vi.hoisted(() =>
-  vi.fn(async () => {
+  vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => {
     throw new Error("gateway unavailable");
   }),
 );

@@ -573,7 +573,15 @@ describe("sessions_spawn tool", () => {
       ],
     });
 
-    expect(result.details).toMatchObject({
+    const details = result.details as {
+      status: string;
+      accepted: boolean;
+      count: number;
+      failures: number;
+      results: unknown[];
+    };
+
+    expect(details).toMatchObject({
       status: "ok",
       accepted: true,
       count: 3,
@@ -581,7 +589,7 @@ describe("sessions_spawn tool", () => {
     });
     expect(peakActive).toBe(2);
     expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledTimes(3);
-    expect(result.details.results).toEqual([
+    expect(details.results).toEqual([
       expect.objectContaining({ runId: "run-analytics" }),
       expect.objectContaining({ runId: "run-cro" }),
       expect.objectContaining({ runId: "run-seo" }),

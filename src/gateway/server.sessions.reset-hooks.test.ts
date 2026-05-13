@@ -227,6 +227,12 @@ test("sessions.reset clears compacted transcript checkpoints", async () => {
             tokensBefore: 100,
             tokensAfter: 10,
             summary: "stale compacted instructions",
+            preCompaction: {
+              sessionId: "sess-main",
+            },
+            postCompaction: {
+              sessionId: "sess-main",
+            },
           },
         ],
       },

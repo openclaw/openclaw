@@ -168,6 +168,7 @@ describe("subagent registry lifecycle error grace", () => {
       getRuntimeConfig: loadConfigMock as typeof import("../config/config.js").getRuntimeConfig,
       loadSubagentRegistryRuntime: async () => ({
         countActiveDescendantRuns: mod.countActiveDescendantRuns,
+        countLiveDescendantRunsExcludingRun: mod.countLiveDescendantRunsExcludingRun,
         countPendingDescendantRuns: mod.countPendingDescendantRuns,
         countPendingDescendantRunsExcludingRun: mod.countPendingDescendantRunsExcludingRun,
         getLatestSubagentRunByChildSessionKey: mod.getLatestSubagentRunByChildSessionKey,

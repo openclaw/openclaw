@@ -38,7 +38,7 @@ describe("security audit deep probe failure", () => {
     });
 
     expect(observedTimeoutMs).toBe(DEFAULT_DEEP_GATEWAY_PROBE_TIMEOUT_MS);
-    expect(report.deep?.gateway.ok).toBe(true);
+    expect(report.deep?.gateway?.ok).toBe(true);
   });
 
   it("adds probe_failed warnings for deep probe failure modes", () => {

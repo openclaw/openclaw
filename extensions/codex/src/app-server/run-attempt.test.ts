@@ -1081,17 +1081,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(
       __testing.resolveDynamicToolTimeoutMs(
         {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          callId: "call-spawn",
-          namespace: null,
           tool: "sessions_spawn",
-          arguments: {
-            children: Array.from({ length: 7 }, (_, index) => ({
-              task: `child ${index}`,
-              agentId: "analytics",
-            })),
-          },
         },
         __testing.CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
       ),
@@ -1102,12 +1092,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(
       __testing.resolveDynamicToolTimeoutMs(
         {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          callId: "call-browser",
-          namespace: null,
           tool: "browser",
-          arguments: { action: "start" },
         },
         __testing.CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
       ),
