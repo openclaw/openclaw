@@ -7,7 +7,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { info } from "../globals.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { isCronSessionKey } from "../sessions/session-key-utils.js";
+import { isCronSessionKey, isAcpSessionKey } from "../sessions/session-key-utils.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { resolveAgentRuntimeLabel } from "../status/agent-runtime-label.js";
@@ -16,7 +16,6 @@ import { resolveSessionStoreTargetsOrExit } from "./session-store-targets.js";
 import {
   resolveSessionDisplayModelRef,
   resolveSessionDisplayDefaults,
-  resolveSessionDisplayModel,
 } from "./sessions-display-model.js";
 import {
   formatSessionAgeCell,
@@ -35,6 +34,14 @@ type SessionRow = SessionDisplayRow & {
   kind: "cron" | "direct" | "group" | "global" | "unknown";
   agentRuntime: ReturnType<typeof resolveModelAgentRuntimeMetadata>;
   runtimeLabel: string;
+  /**
+   * True only when the session entry has persisted ACP runtime metadata
+   * (`entry.acp` is present). Key-shape alone is not sufficient because ACP
+   * bridge sessions (translator.ts) may use ACP-shaped keys without ever
+   * writing `SessionAcpMeta` — those use the normal configured model and must
+   * not be overlaid with the acpx sentinel.
+   */
+  acpRuntime: boolean;
 };
 
 const AGENT_PAD = 10;
@@ -46,6 +53,39 @@ const TOP_N_SELECTION_LIMIT = 200;
 const contextLookupRuntimeLoader = createLazyImportLoader(() => import("../agents/context.js"));
 
 const formatKTokens = (value: number) => `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`;
+
+/**
+ * Inline ACP model overlay — catalog #20.
+ *
+ * When a session ran via the ACP control plane (e.g. key =
+ * `agent:copilot:acp:<uuid>` AND `entry.acp` is present), the agent's
+ * configured model is irrelevant: the actual model is selected inside the ACP
+ * child process. We overlay a sentinel `{ provider: "acpx",
+ * model: "<agentId>-acp" }` so the listing clearly signals "ACP runtime" and
+ * does not mislead operators into thinking the configured model ran.
+ *
+ * Key-shape alone is not sufficient: ACP bridge sessions (translator.ts) also
+ * use ACP-shaped keys but never persist `SessionAcpMeta` — they run the
+ * normal configured model and must not receive the sentinel. The `acpRuntime`
+ * flag is set at row-construction time from `entry.acp != null`.
+ *
+ * The resolver (`resolveSessionDisplayModelRef`) stays pure; this overlay
+ * applies only at the emit sites in this file.
+ *
+ * NOTE: Will be replaced by a shared `applyAcpModelOverlay` helper from
+ * `src/agents/acp-runtime-overlay.ts` once PR 2 lands.
+ */
+function applyAcpModelOverlayIfNeeded(
+  modelRef: { provider: string; model: string },
+  sessionKey: string,
+  acpRuntime: boolean,
+): { provider: string; model: string } {
+  if (!acpRuntime || !isAcpSessionKey(sessionKey)) {
+    return modelRef;
+  }
+  const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? "acp";
+  return { provider: "acpx", model: `${agentId}-acp` };
+}
 
 function compareSessionRowsByUpdatedAt(a: SessionRow, b: SessionRow): number {
   return (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
@@ -261,7 +301,12 @@ export async function sessionsCommand(
       .map(([key, entry]) => {
         const row = toSessionDisplayRow(key, entry);
         const agentId = parseAgentSessionKey(row.key)?.agentId ?? target.agentId;
-        const modelRef = resolveSessionDisplayModelRef(cfg, row);
+        const acpRuntime = entry?.acp != null;
+        const modelRef = applyAcpModelOverlayIfNeeded(
+          resolveSessionDisplayModelRef(cfg, row),
+          row.key,
+          acpRuntime,
+        );
         const agentRuntime = resolveModelAgentRuntimeMetadata({
           cfg,
           agentId,
@@ -271,6 +316,7 @@ export async function sessionsCommand(
         });
         return Object.assign({}, row, {
           agentId,
+          acpRuntime,
           agentRuntime,
           kind: classifySessionKey(row.key, store[row.key]),
           runtimeLabel: resolveSessionRuntimeLabel({
@@ -309,7 +355,11 @@ export async function sessionsCommand(
       sessions: await Promise.all(
         rows.map(async (row) => {
           const r = toJsonSessionRow(row);
-          const modelRef = resolveSessionDisplayModelRef(cfg, r);
+          const modelRef = applyAcpModelOverlayIfNeeded(
+            resolveSessionDisplayModelRef(cfg, r),
+            r.key,
+            row.acpRuntime,
+          );
           return {
             ...r,
             totalTokens: resolveSessionTotalTokens(r) ?? null,
@@ -368,7 +418,11 @@ export async function sessionsCommand(
   runtime.log(rich ? theme.heading(header) : header);
 
   for (const row of rows) {
-    const model = resolveSessionDisplayModel(cfg, row);
+    const model = applyAcpModelOverlayIfNeeded(
+      resolveSessionDisplayModelRef(cfg, row),
+      row.key,
+      row.acpRuntime,
+    ).model;
     const contextTokens =
       row.contextTokens ??
       configuredContextTokens ??
