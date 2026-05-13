@@ -3,7 +3,6 @@ import {
   buildMctlConnectStatus,
   clearMctlConnectState,
   decodeJwtSubject,
-  deleteMctlCredentials,
   deleteMctlPendingConnect,
   type MctlConnectionRecord,
   readMctlCredentials,
@@ -127,8 +126,19 @@ async function refreshMctlCredentials(
       if (latest && latest.refreshToken.trim() && latest.refreshToken.trim() !== refreshToken) {
         return latest;
       }
-      await deleteMctlCredentials();
-      return null;
+      // Preserve the file — deleting it would cause s3-sync to mirror an empty
+      // state to S3, making the breakage permanent across pod restarts. Instead
+      // mark the failure so the Control-UI can surface "needs_reauth" without
+      // losing the credentials entirely. The operator re-OAuths once; the file
+      // stays intact for the new token to overwrite.
+      const failed: MctlConnectionRecord = {
+        ...credentials,
+        refreshFailureCount: (credentials.refreshFailureCount ?? 0) + 1,
+        refreshFailureFirstAt: credentials.refreshFailureFirstAt ?? new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      await writeMctlCredentials(failed);
+      return failed;
     }
     return credentials;
   }
@@ -156,6 +166,8 @@ async function refreshMctlCredentials(
     login: decodeJwtSubject(accessToken) ?? credentials.login,
     updatedAt: new Date(now).toISOString(),
     expiresAt: expiresIn ? new Date(now + expiresIn * 1000).toISOString() : credentials.expiresAt,
+    refreshFailureCount: 0,
+    refreshFailureFirstAt: null,
   };
   await writeMctlCredentials(refreshed);
   return refreshed;
@@ -168,10 +180,21 @@ export const mctlHandlers: GatewayRequestHandlers = {
       readMctlCredentials(),
       readMctlPendingConnect(),
     ]);
-    if (!pending && credentials && isExpired(credentials) && credentials.refreshToken.trim()) {
+    if (
+      !pending &&
+      credentials &&
+      isExpired(credentials) &&
+      credentials.refreshToken.trim() &&
+      (credentials.refreshFailureCount ?? 0) === 0
+    ) {
       credentials = await serializeMctlStatusByKey("mctl-oauth-refresh", async () => {
         const latest = await readMctlCredentials();
-        if (!latest || !isExpired(latest) || !latest.refreshToken.trim()) {
+        if (
+          !latest ||
+          !isExpired(latest) ||
+          !latest.refreshToken.trim() ||
+          (latest.refreshFailureCount ?? 0) > 0
+        ) {
           return latest;
         }
         return await refreshMctlCredentials(latest);

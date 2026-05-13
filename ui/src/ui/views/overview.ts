@@ -279,7 +279,9 @@ export function renderOverview(props: OverviewProps) {
         ? "Authorization pending"
         : mctlStatus?.state === "expired"
           ? "Token expired"
-          : "Not connected";
+          : mctlStatus?.state === "needs_reauth"
+            ? "Re-authentication required"
+            : "Not connected";
   const codexLabel =
     codexStatus?.state === "connected"
       ? codexStatus.accountLabel
@@ -510,39 +512,47 @@ export function renderOverview(props: OverviewProps) {
           <div class="stat">
             <div class="stat-label">Expires</div>
             <div class="stat-value">
-              ${mctlStatus?.expiresAt ? formatRelativeTimestamp(Date.parse(mctlStatus.expiresAt)) : t("common.na")}
+              ${mctlStatus?.expiresAt
+                ? formatRelativeTimestamp(Date.parse(mctlStatus.expiresAt))
+                : t("common.na")}
             </div>
           </div>
           <div class="stat">
             <div class="stat-label">Updated</div>
             <div class="stat-value">
-              ${mctlStatus?.updatedAt ? formatRelativeTimestamp(Date.parse(mctlStatus.updatedAt)) : t("common.na")}
+              ${mctlStatus?.updatedAt
+                ? formatRelativeTimestamp(Date.parse(mctlStatus.updatedAt))
+                : t("common.na")}
             </div>
           </div>
         </div>
         <div class="row" style="margin-top: 14px;">
-          <button class="btn" ?disabled=${props.mctlConnectLoading} @click=${props.onStartMctlConnect}>
+          <button
+            class="btn"
+            ?disabled=${props.mctlConnectLoading}
+            @click=${props.onStartMctlConnect}
+          >
             ${props.mctlConnectLoading ? "Working..." : "Connect mctl"}
           </button>
           <button
             class="btn"
-            ?disabled=${props.mctlConnectLoading || !mctlStatus || mctlStatus.state === "disconnected"}
+            ?disabled=${props.mctlConnectLoading ||
+            !mctlStatus ||
+            mctlStatus.state === "disconnected"}
             @click=${props.onDisconnectMctl}
           >
             Disconnect
           </button>
         </div>
-        ${
-          props.mctlConnectError
-            ? html`<div class="callout danger" style="margin-top: 14px;">${props.mctlConnectError}</div>`
-            : html`<div class="callout" style="margin-top: 14px;">
-                ${
-                  mctlStatus?.state === "connected"
-                    ? "Credentials are stored in the service state directory and survive pod restarts."
-                    : "Connect once in the browser. The resulting credentials are stored in .openclaw for this service."
-                }
-              </div>`
-        }
+        ${props.mctlConnectError
+          ? html`<div class="callout danger" style="margin-top: 14px;">
+              ${props.mctlConnectError}
+            </div>`
+          : html`<div class="callout" style="margin-top: 14px;">
+              ${mctlStatus?.state === "connected"
+                ? "Credentials are stored in the service state directory and survive pod restarts."
+                : "Connect once in the browser. The resulting credentials are stored in .openclaw for this service."}
+            </div>`}
       </div>
 
       <div class="card">
@@ -562,21 +572,17 @@ export function renderOverview(props: OverviewProps) {
           <div class="stat">
             <div class="stat-label">Expires</div>
             <div class="stat-value">
-              ${
-                codexStatus?.expiresAt
-                  ? formatRelativeTimestamp(Date.parse(codexStatus.expiresAt))
-                  : t("common.na")
-              }
+              ${codexStatus?.expiresAt
+                ? formatRelativeTimestamp(Date.parse(codexStatus.expiresAt))
+                : t("common.na")}
             </div>
           </div>
           <div class="stat">
             <div class="stat-label">Requested</div>
             <div class="stat-value">
-              ${
-                codexStatus?.startedAt
-                  ? formatRelativeTimestamp(Date.parse(codexStatus.startedAt))
-                  : t("common.na")
-              }
+              ${codexStatus?.startedAt
+                ? formatRelativeTimestamp(Date.parse(codexStatus.startedAt))
+                : t("common.na")}
             </div>
           </div>
         </div>
@@ -592,67 +598,63 @@ export function renderOverview(props: OverviewProps) {
           <button
             class="btn"
             type="button"
-            ?disabled=${
-              props.codexConnectLoading ||
-              !codexCanManage ||
-              !codexStatus ||
-              codexStatus.state === "disconnected"
-            }
+            ?disabled=${props.codexConnectLoading ||
+            !codexCanManage ||
+            !codexStatus ||
+            codexStatus.state === "disconnected"}
             @click=${props.onDisconnectCodex}
           >
             Disconnect
           </button>
         </div>
-        ${
-          codexCanManage &&
-          codexStatus?.state === "browser_flow_started" &&
-          codexCompletionMode === "manual_input"
-            ? html`
-                <div style="margin-top: 14px; display: grid; gap: 8px;">
-                  <label class="field">
-                    <span>Paste localhost redirect URL or code</span>
-                    <input
-                      .value=${props.codexManualInput}
-                      @input=${(e: Event) =>
-                        props.onCodexManualInputChange((e.target as HTMLInputElement).value)}
-                      placeholder="http://localhost:1455/auth/callback?code=... or code"
-                    />
-                  </label>
-                  <div class="row">
-                    <button
-                      class="btn"
-                      type="button"
-                      ?disabled=${props.codexConnectLoading || !props.codexManualInput.trim()}
-                      @click=${props.onSubmitCodexManualInput}
-                    >
-                      Complete Codex Connect
-                    </button>
-                  </div>
+        ${codexCanManage &&
+        codexStatus?.state === "browser_flow_started" &&
+        codexCompletionMode === "manual_input"
+          ? html`
+              <div style="margin-top: 14px; display: grid; gap: 8px;">
+                <label class="field">
+                  <span>Paste localhost redirect URL or code</span>
+                  <input
+                    .value=${props.codexManualInput}
+                    @input=${(e: Event) =>
+                      props.onCodexManualInputChange((e.target as HTMLInputElement).value)}
+                    placeholder="http://localhost:1455/auth/callback?code=... or code"
+                  />
+                </label>
+                <div class="row">
+                  <button
+                    class="btn"
+                    type="button"
+                    ?disabled=${props.codexConnectLoading || !props.codexManualInput.trim()}
+                    @click=${props.onSubmitCodexManualInput}
+                  >
+                    Complete Codex Connect
+                  </button>
                 </div>
-              `
-            : nothing
-        }
-        ${
-          props.codexConnectError
-            ? html`<div class="callout danger" style="margin-top: 14px;">${props.codexConnectError}</div>`
-            : codexStatus?.lastError
-              ? html`<div class="callout danger" style="margin-top: 14px;">${codexStatus.lastError}</div>`
-              : html`<div class="callout" style="margin-top: 14px;">
-                  ${
-                    codexCanManage
-                      ? codexStatus?.state === "connected"
-                        ? "Credentials are stored in service state and survive pod restarts."
-                        : codexStatus?.state === "callback_received"
-                          ? "OpenClaw received the browser callback and is finalizing token exchange."
-                          : codexStatus?.state === "browser_flow_started"
-                            ? codexCompletionMode === "browser_callback"
-                              ? "Browser authorization is in progress. After OpenAI redirects back through app.mctl.ai, this page should finish automatically."
-                              : "OpenAI sign-in opened in a separate tab. After it redirects to localhost, copy the full URL from the browser bar and paste it here."
-                            : "Owner can connect OpenAI Codex once in the browser. Credentials persist in service state."
-                      : "Owner access required to connect or disconnect OpenAI Codex for this service."
-                  }
-                </div>`
-        }
+              </div>
+            `
+          : nothing}
+        ${props.codexConnectError
+          ? html`<div class="callout danger" style="margin-top: 14px;">
+              ${props.codexConnectError}
+            </div>`
+          : codexStatus?.lastError
+            ? html`<div class="callout danger" style="margin-top: 14px;">
+                ${codexStatus.lastError}
+              </div>`
+            : html`<div class="callout" style="margin-top: 14px;">
+                ${codexCanManage
+                  ? codexStatus?.state === "connected"
+                    ? "Credentials are stored in service state and survive pod restarts."
+                    : codexStatus?.state === "callback_received"
+                      ? "OpenClaw received the browser callback and is finalizing token exchange."
+                      : codexStatus?.state === "browser_flow_started"
+                        ? codexCompletionMode === "browser_callback"
+                          ? "Browser authorization is in progress. After OpenAI redirects back through app.mctl.ai, this page should finish automatically."
+                          : "OpenAI sign-in opened in a separate tab. After it redirects to localhost, copy the full URL from the browser bar and paste it here."
+                        : "Owner can connect OpenAI Codex once in the browser. Credentials persist in service state."
+                  : "Owner access required to connect or disconnect OpenAI Codex for this service."}
+              </div>`}
       </div>
     </section>
 
