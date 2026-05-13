@@ -101,6 +101,7 @@
   "agent-harness-runtime",
   "hook-runtime",
   "host-runtime",
+  "types",
   "process-runtime",
   "windows-spawn",
   "acp-runtime",

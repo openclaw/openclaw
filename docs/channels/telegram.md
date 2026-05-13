@@ -526,6 +526,28 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 }
 ```
 
+    Mini App button example:
+
+```json5
+{
+  action: "send",
+  channel: "telegram",
+  to: "123456789",
+  message: "Open app:",
+  presentation: {
+    blocks: [
+      {
+        type: "buttons",
+        buttons: [{ label: "Launch", web_app: { url: "https://example.com/app" } }],
+      },
+    ],
+  },
+}
+```
+
+    Telegram `web_app` buttons work only in private chats between a user and the
+    bot.
+
     Callback clicks are passed to the agent as text:
     `callback_data: <value>`
 
