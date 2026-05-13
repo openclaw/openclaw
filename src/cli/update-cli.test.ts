@@ -416,8 +416,16 @@ describe("update-cli", () => {
     >;
     return calls[index]?.[0];
   };
+  const lastNpmPluginUpdateCall = () =>
+    npmPluginUpdateCall(updateNpmInstalledPlugins.mock.calls.length - 1);
 
   const replaceConfigCall = (index = 0) => vi.mocked(replaceConfigFile).mock.calls[index]?.[0];
+  const lastReplaceConfigCall = () =>
+    replaceConfigCall(vi.mocked(replaceConfigFile).mock.calls.length - 1);
+
+  const writeJsonCall = (index = 0) => vi.mocked(defaultRuntime.writeJson).mock.calls[index]?.[0];
+  const lastWriteJsonCall = () =>
+    writeJsonCall(vi.mocked(defaultRuntime.writeJson).mock.calls.length - 1);
 
   const probeGatewayCall = (index = 0) => probeGateway.mock.calls[index]?.[0];
 
@@ -727,10 +735,13 @@ describe("update-cli", () => {
 
     await updateCliShared.tryWriteCompletionCache(root, false);
 
-    const logs = vi.mocked(runtimeCapture.log).mock.calls.map((call) => String(call[0]));
-    expect(logs.some((line) => line.includes("timed out after 30s"))).toBe(true);
-    expect(logs.some((line) => line.includes("openclaw completion --write-state"))).toBe(true);
-    expect(logs.some((line) => line.includes("Error: spawnSync"))).toBe(false);
+    const logOutput = vi
+      .mocked(runtimeCapture.log)
+      .mock.calls.map((call) => String(call[0]))
+      .join("\n");
+    expect(logOutput).toContain("timed out after 30s");
+    expect(logOutput).toContain("openclaw completion --write-state");
+    expect(logOutput).not.toContain("Error: spawnSync");
   });
 
   it("respawns into the updated package root before running post-update tasks", async () => {
@@ -1058,16 +1069,12 @@ describe("update-cli", () => {
       },
     );
 
-    const jsonOutput = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0] as
-      | UpdateRunResult
-      | undefined;
+    const jsonOutput = lastWriteJsonCall() as UpdateRunResult | undefined;
     expect(jsonOutput?.postUpdate?.plugins?.status).toBe("warning");
     expect(jsonOutput?.postUpdate?.plugins?.warnings?.[0]?.reason).toContain(
       "package.json is missing",
     );
-    const updateCall = updateNpmInstalledPlugins.mock.calls.at(-1)?.[0] as
-      | { skipIds?: Set<string> }
-      | undefined;
+    const updateCall = lastNpmPluginUpdateCall() as { skipIds?: Set<string> } | undefined;
     expect(updateCall?.skipIds?.has("demo")).toBe(true);
   });
 
@@ -1271,9 +1278,7 @@ describe("update-cli", () => {
 
     await updateCommand({ json: true, restart: false });
 
-    const jsonOutput = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0] as
-      | UpdateRunResult
-      | undefined;
+    const jsonOutput = lastWriteJsonCall() as UpdateRunResult | undefined;
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
     expect(jsonOutput?.status).toBe("ok");
     expect(jsonOutput?.reason).toBeUndefined();
@@ -1344,13 +1349,9 @@ describe("update-cli", () => {
 
     await updateCommand({ json: true, restart: false });
 
-    const updateCall = updateNpmInstalledPlugins.mock.calls.at(-1)?.[0] as
-      | { skipIds?: Set<string> }
-      | undefined;
+    const updateCall = lastNpmPluginUpdateCall() as { skipIds?: Set<string> } | undefined;
     expect(updateCall?.skipIds?.has("demo")).toBe(true);
-    const jsonOutput = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0] as
-      | UpdateRunResult
-      | undefined;
+    const jsonOutput = lastWriteJsonCall() as UpdateRunResult | undefined;
     expect(jsonOutput?.status).toBe("ok");
     expect(jsonOutput?.postUpdate?.plugins?.status).toBe("warning");
     expect(pluginWarning(jsonOutput)?.pluginId).toBe("demo");
@@ -1410,9 +1411,7 @@ describe("update-cli", () => {
 
     await updateCommand({ json: true, restart: false });
 
-    const jsonOutput = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0] as
-      | UpdateRunResult
-      | undefined;
+    const jsonOutput = lastWriteJsonCall() as UpdateRunResult | undefined;
     expect(jsonOutput?.postUpdate?.plugins?.status).toBe("warning");
     expect(pluginWarning(jsonOutput)?.pluginId).toBe("demo");
     expect(pluginWarning(jsonOutput)?.guidance).toEqual([
@@ -1496,9 +1495,7 @@ describe("update-cli", () => {
 
     await updateCommand({ yes: true, json: true, restart: false });
 
-    const jsonOutput = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0] as
-      | UpdateRunResult
-      | undefined;
+    const jsonOutput = lastWriteJsonCall() as UpdateRunResult | undefined;
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
     expect(jsonOutput?.status).toBe("ok");
     expect(jsonOutput?.reason).toBeUndefined();
@@ -1561,10 +1558,7 @@ describe("update-cli", () => {
         await updateStatusCommand({ json: true });
       },
       assert: () => {
-        const last = requireValue(
-          vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0],
-          "update status JSON output",
-        );
+        const last = requireValue(lastWriteJsonCall(), "update status JSON output");
         const parsed = last as Record<string, unknown>;
         const channel = parsed.channel as { value?: unknown };
         expect(channel.value).toBe(isBetaTag(VERSION) ? "beta" : "stable");
@@ -1584,10 +1578,7 @@ describe("update-cli", () => {
 
     await updateStatusCommand({ json: true });
 
-    const last = requireValue(
-      vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0],
-      "update status JSON output",
-    );
+    const last = requireValue(lastWriteJsonCall(), "update status JSON output");
     const parsed = last as Record<string, unknown>;
     const channel = parsed.channel as { value?: unknown; config?: unknown };
     expect(channel.value).toBe("dev");
@@ -2533,10 +2524,7 @@ describe("update-cli", () => {
         await updateCommand({ json: true });
       },
       assert: () => {
-        requireValue(
-          vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0],
-          "update JSON output",
-        );
+        requireValue(lastWriteJsonCall(), "update JSON output");
       },
     },
     {
@@ -2836,7 +2824,7 @@ describe("update-cli", () => {
 
     await updateCommand({ channel: "beta", yes: true });
 
-    const lastWrite = vi.mocked(replaceConfigFile).mock.calls.at(-1)?.[0] as
+    const lastWrite = lastReplaceConfigCall() as
       | { nextConfig?: { update?: { channel?: string } } }
       | undefined;
     expect(lastWrite?.nextConfig?.update?.channel).toBe("beta");

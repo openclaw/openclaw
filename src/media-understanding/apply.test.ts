@@ -25,14 +25,14 @@ const hasAvailableAuthForProviderMock = vi.hoisted(() =>
     return Boolean(resolved?.apiKey);
   }),
 );
-const fetchRemoteMediaMock = vi.hoisted(() => vi.fn());
+const readRemoteMediaBufferMock = vi.hoisted(() => vi.fn());
 const runFfmpegMock = vi.hoisted(() => vi.fn());
 const runExecMock = vi.hoisted(() => vi.fn());
 
 let applyMediaUnderstanding: typeof import("./apply.js").applyMediaUnderstanding;
 let clearMediaUnderstandingBinaryCacheForTests: typeof import("./runner.js").clearMediaUnderstandingBinaryCacheForTests;
 const mockedResolveApiKey = resolveApiKeyForProviderMock;
-const mockedFetchRemoteMedia = fetchRemoteMediaMock;
+const mockedReadRemoteMediaBuffer = readRemoteMediaBufferMock;
 const mockedRunFfmpeg = runFfmpegMock;
 const mockedRunExec = runExecMock;
 
@@ -279,7 +279,7 @@ describe("applyMediaUnderstanding", () => {
       },
     }));
     vi.doMock("../media/fetch.js", () => ({
-      fetchRemoteMedia: fetchRemoteMediaMock,
+      readRemoteMediaBuffer: readRemoteMediaBufferMock,
     }));
     vi.doMock("../media/ffmpeg-exec.js", () => ({
       runFfmpeg: runFfmpegMock,
@@ -333,10 +333,10 @@ describe("applyMediaUnderstanding", () => {
       mode: "api-key",
     });
     hasAvailableAuthForProviderMock.mockClear();
-    mockedFetchRemoteMedia.mockClear();
+    mockedReadRemoteMediaBuffer.mockClear();
     mockedRunFfmpeg.mockReset();
     mockedRunExec.mockReset();
-    mockedFetchRemoteMedia.mockResolvedValue({
+    mockedReadRemoteMediaBuffer.mockResolvedValue({
       buffer: createSafeAudioFixtureBuffer(2048),
       contentType: "audio/ogg",
       fileName: "note.ogg",
@@ -484,7 +484,7 @@ describe("applyMediaUnderstanding", () => {
   });
 
   it("injects a placeholder transcript when URL-only audio is too small", async () => {
-    mockedFetchRemoteMedia.mockResolvedValueOnce({
+    mockedReadRemoteMediaBuffer.mockResolvedValueOnce({
       buffer: Buffer.alloc(100),
       contentType: "audio/ogg",
       fileName: "tiny.ogg",
@@ -850,7 +850,7 @@ describe("applyMediaUnderstanding", () => {
     expect(ffmpegArgs.slice(0, 2)).toEqual(["-y", "-i"]);
     expect(String(ffmpegArgs[2]).endsWith("telegram-voice.ogg")).toBe(true);
     expect(ffmpegArgs.slice(3, 9)).toEqual(["-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le"]);
-    expect(String(ffmpegArgs[9]).includes("telegram-voice.wav")).toBe(true);
+    expect(String(ffmpegArgs[9])).toContain("telegram-voice.wav");
     expect(String(ffmpegArgs[9]).endsWith(".part")).toBe(true);
 
     const [command, args, options] = getRunExecCall();

@@ -40,11 +40,12 @@ openclaw gateway restart
 openclaw plugins inspect discord --runtime --json
 ```
 
-Bare package specs try ClawHub first, then npm fallback. To force a source, use
-`clawhub:@openclaw/discord` or `npm:@openclaw/discord`. After install, follow
-the plugin's setup doc, such as [Discord](/channels/discord), to add credentials
-and channel config. See [Manage plugins](/plugins/manage-plugins) for update,
-uninstall, and publishing commands.
+During the launch cutover, ordinary bare package specs still install from npm.
+Use `clawhub:@openclaw/discord` or `npm:@openclaw/discord` when you need an
+explicit source. After install, follow the plugin's setup doc, such as
+[Discord](/channels/discord), to add credentials and channel config. See
+[Manage plugins](/plugins/manage-plugins) for update, uninstall, and publishing
+commands.
 
 ## Core npm package
 
@@ -166,7 +167,7 @@ uninstall, and publishing commands.
 | [tlon](/plugins/reference/tlon)                                     | Adds the Tlon channel surface for sending and receiving OpenClaw messages.            | `@openclaw/tlon`<br />npm; ClawHub                                                               | channels: tlon; contracts: tools; skills                                     |
 | [twitch](/plugins/reference/twitch)                                 | Adds the Twitch channel surface for sending and receiving OpenClaw messages.          | `@openclaw/twitch`<br />npm; ClawHub                                                             | channels: twitch                                                             |
 | [voice-call](/plugins/reference/voice-call)                         | Adds agent-callable tools.                                                            | `@openclaw/voice-call`<br />npm; ClawHub                                                         | contracts: tools                                                             |
-| [whatsapp](/plugins/reference/whatsapp)                             | Adds the WhatsApp channel surface for sending and receiving OpenClaw messages.        | `@openclaw/whatsapp`<br />npm; ClawHub                                                           | channels: whatsapp                                                           |
+| [whatsapp](/plugins/reference/whatsapp)                             | Adds the WhatsApp channel surface for sending and receiving OpenClaw messages.        | `@openclaw/whatsapp`<br />ClawHub: `clawhub:@openclaw/whatsapp`; npm                             | channels: whatsapp                                                           |
 | [zalo](/plugins/reference/zalo)                                     | Adds the Zalo channel surface for sending and receiving OpenClaw messages.            | `@openclaw/zalo`<br />npm; ClawHub                                                               | channels: zalo                                                               |
 | [zalouser](/plugins/reference/zalouser)                             | Adds the Zalo Personal channel surface for sending and receiving OpenClaw messages.   | `@openclaw/zalouser`<br />npm; ClawHub                                                           | channels: zalouser; contracts: tools                                         |
 

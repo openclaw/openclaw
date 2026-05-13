@@ -42,6 +42,10 @@ vi.mock("../../tasks/detached-task-runtime.js", () => ({
 
 import { agentHandlers } from "./agent.js";
 
+function firstMockCall<T extends readonly unknown[]>(mock: { mock: { calls: readonly T[] } }) {
+  return mock.mock.calls[0];
+}
+
 describe("agent handler session create events", () => {
   let tempDir: string;
   let storePath: string;
@@ -90,7 +94,7 @@ describe("agent handler session create events", () => {
       req: { id: "req-agent-create-event" } as never,
     });
 
-    const responseCall = respond.mock.calls.at(0) as
+    const responseCall = firstMockCall(respond) as
       | [boolean, { status?: string; runId?: string }, unknown, { runId?: string }]
       | undefined;
     expect(responseCall?.[0]).toBe(true);
@@ -100,7 +104,7 @@ describe("agent handler session create events", () => {
     expect(responseCall?.[3]?.runId).toBe("idem-agent-create-event");
     await vi.waitFor(
       () => {
-        const call = broadcastToConnIds.mock.calls.at(0) as
+        const call = firstMockCall(broadcastToConnIds) as
           | [
               string,
               { sessionKey?: string; reason?: string },
