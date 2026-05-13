@@ -62,6 +62,7 @@ describe("discordMessageActions", () => {
       "emoji-list",
       "upload-file",
       "read",
+      "fetch",
       "edit",
       "delete",
       "pin",
@@ -109,6 +110,7 @@ describe("discordMessageActions", () => {
       "emoji-list",
       "upload-file",
       "read",
+      "fetch",
       "edit",
       "delete",
       "pin",
@@ -170,6 +172,7 @@ describe("discordMessageActions", () => {
       "emoji-list",
       "upload-file",
       "read",
+      "fetch",
       "edit",
       "delete",
       "pin",
@@ -236,6 +239,7 @@ describe("discordMessageActions", () => {
       "poll",
       "upload-file",
       "read",
+      "fetch",
       "edit",
       "delete",
       "pin",
@@ -271,6 +275,7 @@ describe("discordMessageActions", () => {
       "emoji-list",
       "upload-file",
       "read",
+      "fetch",
       "edit",
       "delete",
       "pin",
@@ -318,6 +323,7 @@ describe("discordMessageActions", () => {
     expect(discovery?.actions).toContain("send");
     expect(discovery?.actions).not.toContain("upload-file");
     expect(discovery?.actions).not.toContain("read");
+    expect(discovery?.actions).not.toContain("fetch");
     expect(discovery?.actions).not.toContain("edit");
     expect(discovery?.actions).not.toContain("delete");
   });
@@ -335,11 +341,14 @@ describe("discordMessageActions", () => {
     expect(discovery?.schema).toBeUndefined();
   });
 
-  it.each(["read", "search"])("routes %s actions through gateway execution mode", (action) => {
-    expect(discordMessageActions.resolveExecutionMode?.({ action: action as never })).toBe(
-      "gateway",
-    );
-  });
+  it.each(["read", "fetch", "search"])(
+    "routes %s actions through gateway execution mode",
+    (action) => {
+      expect(discordMessageActions.resolveExecutionMode?.({ action: action as never })).toBe(
+        "gateway",
+      );
+    },
+  );
 
   it.each(["send", "upload-file", "edit", "delete", "react", "pin", "poll"])(
     "routes %s actions through local execution mode",

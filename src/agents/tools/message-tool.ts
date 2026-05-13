@@ -271,6 +271,16 @@ function buildReactionSchema() {
 
 function buildFetchSchema() {
   return {
+    messageLink: Type.Optional(
+      Type.String({
+        description: "Provider-specific message URL to fetch, for example a Discord message link.",
+      }),
+    ),
+    url: Type.Optional(
+      Type.String({
+        description: "Alias for messageLink when fetching a single provider message by URL.",
+      }),
+    ),
     limit: Type.Optional(Type.Number()),
     pageSize: Type.Optional(Type.Number()),
     pageToken: Type.Optional(Type.String()),

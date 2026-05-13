@@ -438,6 +438,32 @@ describe("handleDiscordMessagingAction", () => {
     expect(fetchMessageDiscord).toHaveBeenCalledWith("C1", "M1", { cfg });
   });
 
+  it("fetches a Discord message from channel and message ids without guild id", async () => {
+    await handleMessagingAction(
+      "fetchMessage",
+      { channelId: "C1", messageId: "M1" },
+      enableAllActions,
+    );
+
+    expect(fetchMessageDiscord).toHaveBeenCalledWith("C1", "M1", { cfg: DISCORD_TEST_CFG });
+  });
+
+  it("fetches a Discord message from the public url alias", async () => {
+    const result = await handleMessagingAction(
+      "fetchMessage",
+      { url: "https://discord.com/channels/111/222/333" },
+      enableAllActions,
+    );
+
+    expect(fetchMessageDiscord).toHaveBeenCalledWith("222", "333", { cfg: DISCORD_TEST_CFG });
+    expect(result.details).toMatchObject({
+      ok: true,
+      guildId: "111",
+      channelId: "222",
+      messageId: "333",
+    });
+  });
+
   it("adds normalized timestamps to listPins payloads", async () => {
     listPinsDiscord.mockResolvedValueOnce([{ id: "1", timestamp: "2026-01-15T12:00:00.000Z" }]);
 

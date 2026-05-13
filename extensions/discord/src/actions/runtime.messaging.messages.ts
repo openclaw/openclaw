@@ -41,7 +41,8 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
       if (!ctx.isActionEnabled("messages")) {
         throw new Error("Discord message reads are disabled.");
       }
-      const messageLink = readStringParam(ctx.params, "messageLink");
+      const messageLink =
+        readStringParam(ctx.params, "messageLink") ?? readStringParam(ctx.params, "url");
       let guildId = readStringParam(ctx.params, "guildId");
       let channelId = readStringParam(ctx.params, "channelId");
       let messageId = readStringParam(ctx.params, "messageId");
@@ -51,9 +52,9 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
         channelId = parsed.channelId;
         messageId = parsed.messageId;
       }
-      if (!guildId || !channelId || !messageId) {
+      if (!channelId || !messageId) {
         throw new Error(
-          "Discord message fetch requires guildId, channelId, and messageId (or a valid messageLink).",
+          "Discord message fetch requires channelId and messageId (or a valid messageLink).",
         );
       }
       const message = await discordMessagingActionRuntime.fetchMessageDiscord(

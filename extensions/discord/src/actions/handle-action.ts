@@ -244,6 +244,24 @@ export async function handleDiscordMessageAction(
     );
   }
 
+  if (action === "fetch") {
+    const messageLink = readStringParam(params, "messageLink") ?? readStringParam(params, "url");
+    const messageId = readStringParam(params, "messageId", { required: !messageLink });
+    const channelId = messageLink ? readStringParam(params, "channelId") : resolveChannelId();
+    return await handleDiscordAction(
+      {
+        action: "fetchMessage",
+        accountId: accountId ?? undefined,
+        guildId: readStringParam(params, "guildId"),
+        channelId,
+        messageId,
+        messageLink,
+      },
+      cfg,
+      actionOptions,
+    );
+  }
+
   if (action === "edit") {
     const messageId = readStringParam(params, "messageId", { required: true });
     const content = readStringParam(params, "message", { required: true });

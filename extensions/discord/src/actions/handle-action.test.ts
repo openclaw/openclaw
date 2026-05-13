@@ -167,6 +167,55 @@ describe("handleDiscordMessageAction", () => {
     });
   });
 
+  it("maps fetch to Discord fetchMessage with channel and message ids", async () => {
+    const cfg = discordConfig();
+    await handleDiscordMessageAction({
+      action: "fetch",
+      params: {
+        channelId: "channel:123",
+        messageId: "msg-1",
+      },
+      cfg,
+    });
+
+    expectDiscordActionCall({
+      payload: {
+        action: "fetchMessage",
+        accountId: undefined,
+        guildId: undefined,
+        channelId: "123",
+        messageId: "msg-1",
+        messageLink: undefined,
+      },
+      cfg,
+      options: defaultActionOptions(),
+    });
+  });
+
+  it("maps fetch URL alias to Discord fetchMessage without requiring channel id", async () => {
+    const cfg = discordConfig();
+    await handleDiscordMessageAction({
+      action: "fetch",
+      params: {
+        url: "https://discord.com/channels/111/222/333",
+      },
+      cfg,
+    });
+
+    expectDiscordActionCall({
+      payload: {
+        action: "fetchMessage",
+        accountId: undefined,
+        guildId: undefined,
+        channelId: undefined,
+        messageId: undefined,
+        messageLink: "https://discord.com/channels/111/222/333",
+      },
+      cfg,
+      options: defaultActionOptions(),
+    });
+  });
+
   it("maps upload-file to Discord sendMessage with media read context", async () => {
     const mediaReadFile = vi.fn(async () => Buffer.from("image"));
     const mediaAccess = {
