@@ -148,7 +148,10 @@ export async function offerPostInstallMigrations(
     }
     try {
       const { migrateDefaultCommand } = await import("../commands/migrate.js");
-      await migrateDefaultCommand(params.runtime, { provider: candidate.provider.id });
+      await migrateDefaultCommand(params.runtime, {
+        provider: candidate.provider.id,
+        suppressPlanLog: true,
+      });
     } catch (error) {
       params.runtime.log(
         `${candidate.provider.label} migration failed: ${formatErrorMessage(error)}. ` +

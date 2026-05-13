@@ -7,6 +7,7 @@ import {
   abortEmbeddedPiRun,
   clearActiveEmbeddedRun,
   queueEmbeddedPiMessageWithOutcome,
+  resolveActiveEmbeddedRunSessionId,
   setActiveEmbeddedRun,
   type EmbeddedPiQueueMessageOptions,
 } from "../agents/pi-embedded-runner/runs.js";
@@ -105,7 +106,12 @@ export { resolveModelAuthMode } from "../agents/model-auth.js";
 export { supportsModelTools } from "../agents/model-tool-support.js";
 export { resolveAttemptSpawnWorkspaceDir } from "../agents/pi-embedded-runner/run/attempt.thread-helpers.js";
 export { buildEmbeddedAttemptToolRunContext } from "../agents/pi-embedded-runner/run/attempt.tool-run-context.js";
-export { abortEmbeddedPiRun as abortAgentHarnessRun, clearActiveEmbeddedRun, setActiveEmbeddedRun };
+export {
+  abortEmbeddedPiRun as abortAgentHarnessRun,
+  clearActiveEmbeddedRun,
+  resolveActiveEmbeddedRunSessionId,
+  setActiveEmbeddedRun,
+};
 
 /**
  * @deprecated Active-run queueing is an internal runtime concern. Use current
