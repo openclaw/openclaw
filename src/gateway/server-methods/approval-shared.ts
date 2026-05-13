@@ -95,7 +95,6 @@ export function isApprovalRecordVisibleToClient<TPayload>(params: {
   const requestedByDeviceId = normalizeApprovalIdentity(params.record.requestedByDeviceId);
   const requestedByClientId = normalizeApprovalIdentity(params.record.requestedByClientId);
   if (
-    !requestedByDeviceId &&
     requestedByClientId === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
     scopes.includes(APPROVALS_SCOPE)
   ) {

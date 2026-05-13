@@ -102,6 +102,32 @@ describe("handlePendingApprovalRequest", () => {
     ).toBe(true);
   });
 
+  it("allows approval-scoped clients to see device-bound gateway-client approvals", () => {
+    const manager = new ExecApprovalManager();
+    const record = manager.create(
+      {
+        command: "echo ok",
+      },
+      60_000,
+      "approval-gateway-device-visible",
+    );
+    record.requestedByDeviceId = "device-gateway";
+    record.requestedByConnId = "conn-gateway";
+    record.requestedByClientId = GATEWAY_CLIENT_IDS.GATEWAY_CLIENT;
+
+    expect(
+      isApprovalRecordVisibleToClient({
+        record,
+        client: createApprovalClient({
+          connId: "conn-mobile",
+          clientId: GATEWAY_CLIENT_IDS.IOS_APP,
+          deviceId: "device-mobile",
+          scopes: ["operator.approvals"],
+        }),
+      }),
+    ).toBe(true);
+  });
+
   it("does not widen non-gateway no-device approvals to every approval client", () => {
     const manager = new ExecApprovalManager();
     const record = manager.create(
@@ -298,6 +324,75 @@ describe("handlePendingApprovalRequest", () => {
     await requestPromise;
   });
 
+  it("targets device-bound gateway-client approvals to approval-scoped clients", async () => {
+    const manager = new ExecApprovalManager();
+    const record = manager.create(
+      {
+        command: "echo ok",
+      },
+      60_000,
+      "approval-gateway-device-mobile",
+    );
+    record.requestedByDeviceId = "device-gateway";
+    record.requestedByConnId = "conn-gateway";
+    record.requestedByClientId = GATEWAY_CLIENT_IDS.GATEWAY_CLIENT;
+    const decisionPromise = manager.register(record, 60_000);
+    const respond = vi.fn();
+    const broadcast = vi.fn();
+    const broadcastToConnIds = vi.fn();
+    const visibleConnIds = new Set(["conn-mobile-approval"]);
+    const requestPromise = handlePendingApprovalRequest({
+      manager,
+      record,
+      decisionPromise,
+      respond,
+      context: {
+        broadcast,
+        broadcastToConnIds,
+        getApprovalClientConnIds: vi.fn(
+          createApprovalClientLookup([
+            createApprovalClient({
+              connId: "conn-gateway",
+              clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+              deviceId: "device-gateway",
+            }),
+            createApprovalClient({
+              connId: "conn-mobile-approval",
+              clientId: GATEWAY_CLIENT_IDS.IOS_APP,
+              deviceId: "device-mobile",
+              scopes: ["operator.approvals"],
+            }),
+          ]),
+        ),
+        hasExecApprovalClients: vi.fn(() => {
+          throw new Error("expected targeted approval client lookup");
+        }),
+      } as unknown as GatewayRequestContext,
+      clientConnId: "conn-gateway",
+      requestEventName: "exec.approval.requested",
+      requestEvent: {
+        id: record.id,
+        request: record.request,
+        createdAtMs: record.createdAtMs,
+        expiresAtMs: record.expiresAtMs,
+      },
+      twoPhase: true,
+      deliverRequest: () => false,
+    });
+
+    await Promise.resolve();
+    expect(broadcast).not.toHaveBeenCalled();
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "exec.approval.requested",
+      expect.objectContaining({ id: "approval-gateway-device-mobile" }),
+      visibleConnIds,
+      { dropIfSlow: true },
+    );
+
+    expect(manager.resolve(record.id, "allow-once")).toBe(true);
+    await requestPromise;
+  });
+
   it("targets no-device approvals by client id after excluding the requester conn", async () => {
     const manager = new ExecApprovalManager();
     const record = manager.create(
@@ -404,6 +499,60 @@ describe("handlePendingApprovalRequest", () => {
       client: createApprovalClient({
         connId: "conn-mobile-approval",
         clientId: GATEWAY_CLIENT_IDS.IOS_APP,
+        scopes: ["operator.approvals"],
+      }),
+      resolvedEventName: "exec.approval.resolved",
+      buildResolvedEvent: ({ approvalId, decision, snapshot }) => ({
+        id: approvalId,
+        decision,
+        request: snapshot.request,
+      }),
+    });
+
+    expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(manager.getSnapshot(record.id)?.decision).toBe("allow-once");
+  });
+
+  it("allows approval-scoped clients to resolve device-bound gateway-client approvals", async () => {
+    const manager = new ExecApprovalManager();
+    const record = manager.create(
+      {
+        command: "echo ok",
+      },
+      60_000,
+      "approval-gateway-device-resolve",
+    );
+    record.requestedByDeviceId = "device-gateway";
+    record.requestedByConnId = "conn-gateway";
+    record.requestedByClientId = GATEWAY_CLIENT_IDS.GATEWAY_CLIENT;
+    void manager.register(record, 60_000);
+    const respond = vi.fn();
+    const broadcast = vi.fn();
+    const broadcastToConnIds = vi.fn();
+
+    await handleApprovalResolve({
+      manager,
+      inputId: record.id,
+      decision: "allow-once",
+      respond,
+      context: {
+        broadcast,
+        broadcastToConnIds,
+        getApprovalClientConnIds: vi.fn(
+          createApprovalClientLookup([
+            createApprovalClient({
+              connId: "conn-mobile-approval",
+              clientId: GATEWAY_CLIENT_IDS.IOS_APP,
+              deviceId: "device-mobile",
+              scopes: ["operator.approvals"],
+            }),
+          ]),
+        ),
+      } as unknown as GatewayRequestContext,
+      client: createApprovalClient({
+        connId: "conn-mobile-approval",
+        clientId: GATEWAY_CLIENT_IDS.IOS_APP,
+        deviceId: "device-mobile",
         scopes: ["operator.approvals"],
       }),
       resolvedEventName: "exec.approval.resolved",
