@@ -15,7 +15,15 @@ export function hasMeaningfulChannelConfigShallow(value: unknown): boolean {
   if (!isRecord(value)) {
     return false;
   }
-  return Object.keys(value).some((key) => key !== "enabled");
+  const keys = Object.keys(value);
+  if (keys.length === 0) {
+    return false;
+  }
+  // enabled:true alone should be enough to signal that the channel is configured.
+  if (keys.length === 1 && keys[0] === "enabled" && value.enabled === true) {
+    return true;
+  }
+  return keys.some((key) => key !== "enabled");
 }
 
 export function isStaticallyChannelConfigured(
