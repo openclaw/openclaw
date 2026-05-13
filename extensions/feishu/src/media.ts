@@ -180,7 +180,7 @@ function containsEastAsianScript(value: string): boolean {
   return /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(value);
 }
 
-function recoverUtf8FileNameFromLatin1Value(value: string): string {
+export function recoverUtf8FileNameFromLatin1Value(value: string): string {
   const recovered = Buffer.from(value, "latin1").toString("utf8");
   if (recovered !== value && !recovered.includes("\uFFFD") && containsEastAsianScript(recovered)) {
     return recovered;

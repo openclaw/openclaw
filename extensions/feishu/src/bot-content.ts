@@ -1,7 +1,7 @@
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { buildFeishuConversationId } from "./conversation-id.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
-import { downloadMessageResourceFeishu } from "./media.js";
+import { downloadMessageResourceFeishu, recoverUtf8FileNameFromLatin1Value } from "./media.js";
 import { isFeishuBroadcastMention } from "./mention.js";
 import { parsePostContent } from "./post.js";
 import { getFeishuRuntime } from "./runtime.js";
@@ -454,12 +454,15 @@ export async function resolveFeishuMediaList(params: {
     });
     const contentType =
       result.contentType ?? (await core.media.detectMime({ buffer: result.buffer }));
+    const fallbackFileName = mediaKeys.fileName
+      ? recoverUtf8FileNameFromLatin1Value(mediaKeys.fileName)
+      : undefined;
     const saved = await core.channel.media.saveMediaBuffer(
       result.buffer,
       contentType,
       "inbound",
       maxBytes,
-      result.fileName || mediaKeys.fileName,
+      result.fileName || fallbackFileName,
     );
     out.push({
       path: saved.path,

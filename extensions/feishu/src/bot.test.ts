@@ -333,7 +333,8 @@ vi.mock("./send.js", () => ({
   listFeishuThreadMessages: mockListFeishuThreadMessages,
 }));
 
-vi.mock("./media.js", () => ({
+vi.mock("./media.js", async () => ({
+  ...(await vi.importActual<typeof import("./media.js")>("./media.js")),
   downloadMessageResourceFeishu: mockDownloadMessageResourceFeishu,
 }));
 
@@ -1931,6 +1932,53 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockCallArg(mockSaveMediaBuffer, 0, 2)).toBe("inbound");
     expect(typeof mockCallArg(mockSaveMediaBuffer, 0, 3)).toBe("number");
     expect(mockCallArg(mockSaveMediaBuffer, 0, 4)).toBe("payload-name.mp4");
+  });
+
+  it("recovers mojibake CJK message payload filenames when download metadata omits them", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockDownloadMessageResourceFeishu.mockResolvedValueOnce({
+      buffer: Buffer.from("csv"),
+      contentType: "text/csv",
+    });
+    const fileName = "武汉15座山登山信息汇总.csv";
+    const latin1LookingFileName = Buffer.from(fileName, "utf8").toString("latin1");
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-sender",
+        },
+      },
+      message: {
+        message_id: "msg-media-payload-cjk-name",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "media",
+        content: JSON.stringify({
+          file_key: "file_media_payload",
+          image_key: "img_media_thumb",
+          file_name: latin1LookingFileName,
+        }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    const mediaBuffer = mockCallArg<Buffer>(mockSaveMediaBuffer, 0, 0);
+    expect(Buffer.isBuffer(mediaBuffer)).toBe(true);
+    expect(mediaBuffer.toString()).toBe("csv");
+    expect(mockCallArg(mockSaveMediaBuffer, 0, 1)).toBe("text/csv");
+    expect(mockCallArg(mockSaveMediaBuffer, 0, 2)).toBe("inbound");
+    expect(typeof mockCallArg(mockSaveMediaBuffer, 0, 3)).toBe("number");
+    expect(mockCallArg(mockSaveMediaBuffer, 0, 4)).toBe(fileName);
   });
 
   it("downloads embedded media tags from post messages as files", async () => {
