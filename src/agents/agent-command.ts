@@ -1044,6 +1044,8 @@ async function agentCommandInternal(
           provider,
           model,
           runId,
+          sessionId,
+          sessionAgentId,
           agentDir,
           fallbacksOverride: effectiveFallbacksOverride,
           onFallbackStep: (step) => {

@@ -223,6 +223,7 @@ function resolveModelExhaustionRetryMs(cfg: OpenClawConfig | undefined): number 
 function resolveSessionModelExhaustionState(params: {
   cfg: OpenClawConfig | undefined;
   sessionId?: string;
+  sessionAgentId?: string;
   agentDir?: string;
 }): { sessionKey: string; storePath: string; exhaustedModels: Record<string, number> } | null {
   if (!params.cfg || !params.sessionId) {
@@ -232,7 +233,9 @@ function resolveSessionModelExhaustionState(params: {
   const { sessionKey, sessionStore, storePath } = resolveStoredSessionKeyForSessionId({
     cfg: params.cfg,
     sessionId: params.sessionId,
-    agentId: params.agentDir ? path.basename(path.dirname(params.agentDir)) : undefined,
+    agentId:
+      params.sessionAgentId ??
+      (params.agentDir ? path.basename(path.dirname(params.agentDir)) : undefined),
   });
 
   if (!sessionKey) {
@@ -909,6 +912,7 @@ export async function runWithModelFallback<T>(params: {
   model: string;
   runId?: string;
   sessionId?: string;
+  sessionAgentId?: string;
   lane?: string;
   agentDir?: string;
   /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
@@ -939,6 +943,7 @@ export async function runWithModelFallback<T>(params: {
   const sessionModelExhaustionState = resolveSessionModelExhaustionState({
     cfg: params.cfg,
     sessionId: params.sessionId,
+    sessionAgentId: params.sessionAgentId,
     agentDir: params.agentDir,
   });
   const attempts: FallbackAttempt[] = [];
