@@ -2,7 +2,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProviderSyntheticAuthWithPlugin } from "../plugins/provider-runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
-  isKnownEnvApiKeyMarker,
   isNonSecretApiKeyMarker,
   resolveNonEnvSecretRefApiKeyMarker,
 } from "./model-auth-markers.js";
@@ -41,6 +40,8 @@ export {
 } from "./models-config.providers.secret-helpers.js";
 
 type AuthProfileStoreInput = AuthProfileStore | (() => AuthProfileStore);
+
+const ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
 
 function resolveAuthProfileStoreInput(input: AuthProfileStoreInput) {
   return typeof input === "function" ? input() : input;
@@ -214,7 +215,7 @@ function resolveConfigBackedProviderAuth(params: {
   if (!configuredApiKey) {
     return undefined;
   }
-  if (isKnownEnvApiKeyMarker(configuredApiKey)) {
+  if (ENV_VAR_NAME_RE.test(configuredApiKey)) {
     const envValue = params.env?.[configuredApiKey]?.trim();
     return envValue
       ? {
