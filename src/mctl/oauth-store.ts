@@ -18,6 +18,8 @@ export type MctlConnectionRecord = {
   connectedAt: string;
   updatedAt: string;
   expiresAt: string | null;
+  refreshFailureCount?: number;
+  refreshFailureFirstAt?: string | null;
 };
 
 export type MctlPendingConnectRecord = {
@@ -31,7 +33,7 @@ export type MctlPendingConnectRecord = {
 };
 
 export type MctlConnectStatus = {
-  state: "connected" | "pending" | "expired" | "disconnected";
+  state: "connected" | "pending" | "expired" | "disconnected" | "needs_reauth";
   connected: boolean;
   pending: boolean;
   apiBase: string;
@@ -147,8 +149,9 @@ export function buildMctlConnectStatus(params: {
     };
   }
   if (params.credentials) {
+    const needsReauth = expired && (params.credentials.refreshFailureCount ?? 0) > 0;
     return {
-      state: expired ? "expired" : "connected",
+      state: needsReauth ? "needs_reauth" : expired ? "expired" : "connected",
       connected: !expired,
       pending: false,
       apiBase: params.credentials.apiBase || params.apiBase,
