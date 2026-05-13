@@ -2398,9 +2398,6 @@ describe("config cli", () => {
     });
 
     it("rejects --json without --dry-run", async () => {
-      const resolved: OpenClawConfig = { gateway: { port: 18789 } };
-      setSnapshot(resolved, resolved);
-
       await expect(
         runConfigCommand(["config", "unset", "tools.alsoAllow", "--json"]),
       ).rejects.toThrow("__exit__:1");

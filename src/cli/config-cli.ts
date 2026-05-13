@@ -1830,7 +1830,7 @@ export async function runConfigUnset(opts: {
       if (affectsSecretResolution) {
         let refs: SecretRef[];
         if (isProviderPath) {
-          const providerAlias = parsedPath[2]?.toString();
+          const providerAlias = parsedPath[2];
           // If providerAlias is undefined, we're removing the entire secrets.providers map
           refs = collectAffectedRefsForProviderRemoval(nextConfig, providerAlias);
         } else if (isDefaultsPath) {
