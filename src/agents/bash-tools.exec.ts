@@ -1520,6 +1520,8 @@ export function createExecTool(
       } else {
         if (defaultPathPrepend.length > 0) {
           env.OPENCLAW_PREPEND_PATH = defaultPathPrepend.join(path.delimiter);
+        } else {
+          delete env.OPENCLAW_PREPEND_PATH;
         }
         applyPathPrepend(env, defaultPathPrepend);
       }

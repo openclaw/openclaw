@@ -92,6 +92,7 @@
     "HOSTALIASES"
   ],
   "blockedOverrideOnlyKeys": [
+    "OPENCLAW_PREPEND_PATH",
     "HOME",
     "GRADLE_USER_HOME",
     "ZDOTDIR",
