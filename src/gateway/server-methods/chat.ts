@@ -2579,11 +2579,9 @@ export const chatHandlers: GatewayRequestHandlers = {
                     sessionKey,
                   });
                 } else {
-                  const rawFinalPayloads = appendedWebchatAgentMedia
-                    ? []
-                    : deliveredReplies
-                        .filter((entry) => entry.kind === "final")
-                        .map((entry) => entry.payload);
+                  const rawFinalPayloads = deliveredReplies
+                      .filter((entry) => entry.kind === "final")
+                      .map((entry) => entry.payload);
                   const finalPayloads = await normalizeWebchatReplyMediaPathsForDisplay({
                     cfg,
                     sessionKey,
@@ -2685,6 +2683,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                       sessionFile: latestEntry?.sessionFile,
                       agentId,
                       createIfMissing: true,
+                      idempotencyKey: `${clientRunId}:assistant-media`,
                       cfg,
                     });
                     if (appended.ok) {
