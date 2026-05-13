@@ -31,6 +31,9 @@ export {
 export type { GatewayRequestHandlers } from "../gateway/server-methods/types.js";
 export { ensureGatewayStartupAuth } from "../gateway/startup-auth.js";
 export { resolveGatewayAuth } from "../gateway/auth.js";
+export { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
+export { resolveGatewayConnectionAuth } from "../gateway/connection-auth.js";
+export type { GatewayConnectionAuthOptions } from "../gateway/connection-auth.js";
 export { rawDataToString } from "../infra/ws.js";
 export { GatewayClient } from "../gateway/client.js";
 export { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";

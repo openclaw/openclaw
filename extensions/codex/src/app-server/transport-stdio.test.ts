@@ -134,6 +134,25 @@ describe("resolveCodexAppServerSpawnEnv", () => {
     });
   });
 
+  it("preserves OpenClaw Gateway auth env vars unless explicitly cleared", () => {
+    expect({
+      ...resolveCodexAppServerSpawnEnv(
+        {
+          env: {
+            OPENCLAW_GATEWAY_TOKEN: "configured-token",
+          },
+        },
+        {
+          OPENCLAW_GATEWAY_TOKEN: "parent-token",
+          OPENCLAW_GATEWAY_PASSWORD: "parent-password",
+        },
+      ),
+    }).toEqual({
+      OPENCLAW_GATEWAY_TOKEN: "configured-token",
+      OPENCLAW_GATEWAY_PASSWORD: "parent-password",
+    });
+  });
+
   it("uses a null-prototype env map and ignores prototype-polluting keys", () => {
     const overrides = Object.create(null) as Record<string, string | undefined>;
     Object.defineProperty(overrides, "__proto__", {

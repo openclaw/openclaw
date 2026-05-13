@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   loadAuthProfileStoreForSecretsRuntime,
@@ -147,6 +148,7 @@ async function expectPathMissing(filePath: string): Promise<void> {
 
 type AuthProfileStore = ReturnType<typeof loadAuthProfileStoreForSecretsRuntime>;
 type AuthProfileCredential = AuthProfileStore["profiles"][string];
+type BridgeConfig = NonNullable<Parameters<typeof bridgeCodexAppServerStartOptions>[0]["config"]>;
 
 function expectOAuthProfile(
   profile: AuthProfileCredential | undefined,
@@ -169,6 +171,61 @@ async function writeCodexCliAuthFile(codexHome: string): Promise<void> {
       },
     })}\n`,
   );
+}
+
+async function writeSecureTextFile(filePath: string, content: string): Promise<void> {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const tempPath = `${filePath}.tmp-${process.pid}-${Date.now()}-${Math.random()
+    .toString(16)
+    .slice(2)}`;
+  try {
+    await fs.writeFile(tempPath, content, "utf8");
+    await fs.chmod(tempPath, 0o600);
+    await fs.rename(tempPath, filePath);
+  } catch (error) {
+    await fs.rm(tempPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
+function createFileBackedGatewayTokenConfig(tokenPath: string): BridgeConfig {
+  return {
+    gateway: {
+      auth: {
+        mode: "token",
+        token: { source: "file", provider: "gateway-token-file", id: "value" },
+      },
+    },
+    secrets: {
+      providers: {
+        "gateway-token-file": {
+          source: "file",
+          path: tokenPath,
+          mode: "singleValue",
+        },
+      },
+    },
+  } as BridgeConfig;
+}
+
+function createFileBackedGatewayPasswordConfig(passwordPath: string): BridgeConfig {
+  return {
+    gateway: {
+      auth: {
+        mode: "password",
+        password: { source: "file", provider: "gateway-password-file", id: "value" },
+      },
+    },
+    secrets: {
+      providers: {
+        "gateway-password-file": {
+          source: "file",
+          path: passwordPath,
+          mode: "singleValue",
+        },
+      },
+    },
+  } as BridgeConfig;
 }
 
 describe("bridgeCodexAppServerStartOptions", () => {
@@ -227,6 +284,165 @@ describe("bridgeCodexAppServerStartOptions", () => {
       expect(startOptions.clearEnv).toEqual(["CODEX_HOME", "HOME", "FOO"]);
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not inject Gateway auth env vars without runtime config", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    try {
+      await expect(
+        bridgeCodexAppServerStartOptions({
+          startOptions: createStartOptions(),
+          agentDir,
+          env: {
+            OPENCLAW_GATEWAY_TOKEN: "parent-token",
+            OPENCLAW_GATEWAY_PASSWORD: "parent-password",
+          } as NodeJS.ProcessEnv,
+        }),
+      ).resolves.toEqual({
+        transport: "stdio",
+        command: "codex",
+        args: ["app-server"],
+        headers: { authorization: "Bearer dev-token" },
+        env: {
+          CODEX_HOME: resolveCodexAppServerHomeDir(agentDir),
+          HOME: resolveCodexAppServerNativeHomeDir(agentDir),
+        },
+      });
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("injects resolved local Gateway token into isolated stdio app-server env", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const agentDir = path.join(root, "agent");
+    const isolatedHome = path.join(root, "isolated-home");
+    const tokenPath = path.join(root, "gateway-token.txt");
+    const startOptions = createStartOptions({
+      env: {
+        HOME: isolatedHome,
+        EXISTING: "1",
+      },
+    });
+    try {
+      await writeSecureTextFile(tokenPath, "resolved-gateway-token\n");
+
+      await expect(
+        bridgeCodexAppServerStartOptions({
+          startOptions,
+          agentDir,
+          authProfileId: null,
+          config: createFileBackedGatewayTokenConfig(tokenPath),
+          env: { OPENCLAW_GATEWAY_TOKEN: "stale-env-token" } as NodeJS.ProcessEnv,
+        }),
+      ).resolves.toEqual({
+        ...startOptions,
+        env: {
+          EXISTING: "1",
+          HOME: isolatedHome,
+          CODEX_HOME: resolveCodexAppServerHomeDir(agentDir),
+          OPENCLAW_GATEWAY_TOKEN: "resolved-gateway-token",
+        },
+      });
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("injects resolved local Gateway password into isolated stdio app-server env", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const agentDir = path.join(root, "agent");
+    const passwordPath = path.join(root, "gateway-password.txt");
+    try {
+      await writeSecureTextFile(passwordPath, "resolved-gateway-password\n");
+
+      await expect(
+        bridgeCodexAppServerStartOptions({
+          startOptions: createStartOptions(),
+          agentDir,
+          authProfileId: null,
+          config: createFileBackedGatewayPasswordConfig(passwordPath),
+          env: { OPENCLAW_GATEWAY_PASSWORD: "stale-env-password" } as NodeJS.ProcessEnv,
+        }),
+      ).resolves.toEqual({
+        transport: "stdio",
+        command: "codex",
+        args: ["app-server"],
+        headers: { authorization: "Bearer dev-token" },
+        env: {
+          CODEX_HOME: resolveCodexAppServerHomeDir(agentDir),
+          HOME: resolveCodexAppServerNativeHomeDir(agentDir),
+          OPENCLAW_GATEWAY_PASSWORD: "resolved-gateway-password",
+        },
+      });
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves an explicit app-server Gateway token override", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const agentDir = path.join(root, "agent");
+    const tokenPath = path.join(root, "gateway-token.txt");
+    const startOptions = createStartOptions({
+      env: {
+        OPENCLAW_GATEWAY_TOKEN: "explicit-child-token",
+      },
+    });
+    try {
+      await writeSecureTextFile(tokenPath, "resolved-gateway-token\n");
+
+      await expect(
+        bridgeCodexAppServerStartOptions({
+          startOptions,
+          agentDir,
+          config: createFileBackedGatewayTokenConfig(tokenPath),
+        }),
+      ).resolves.toEqual({
+        ...startOptions,
+        env: {
+          OPENCLAW_GATEWAY_TOKEN: "explicit-child-token",
+          CODEX_HOME: resolveCodexAppServerHomeDir(agentDir),
+          HOME: resolveCodexAppServerNativeHomeDir(agentDir),
+        },
+      });
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("continues without injected Gateway auth when a configured SecretRef is unavailable", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const agentDir = path.join(root, "agent");
+    const missingTokenPath = path.join(root, "missing-gateway-token.txt");
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    try {
+      await expect(
+        bridgeCodexAppServerStartOptions({
+          startOptions: createStartOptions(),
+          agentDir,
+          authProfileId: null,
+          config: createFileBackedGatewayTokenConfig(missingTokenPath),
+          env: { OPENCLAW_GATEWAY_TOKEN: "stale-env-token" } as NodeJS.ProcessEnv,
+        }),
+      ).resolves.toEqual({
+        transport: "stdio",
+        command: "codex",
+        args: ["app-server"],
+        headers: { authorization: "Bearer dev-token" },
+        env: {
+          CODEX_HOME: resolveCodexAppServerHomeDir(agentDir),
+          HOME: resolveCodexAppServerNativeHomeDir(agentDir),
+        },
+      });
+      expect(warn).toHaveBeenCalledWith(
+        "codex app-server Gateway auth SecretRef unavailable; continuing without injected Gateway auth",
+        { path: "gateway.auth.token" },
+      );
+    } finally {
+      warn.mockRestore();
+      await fs.rm(root, { recursive: true, force: true });
     }
   });
 

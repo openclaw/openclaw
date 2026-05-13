@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
@@ -16,6 +17,10 @@ import {
   type AuthProfileStore,
   type OAuthCredential,
 } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  isGatewaySecretRefUnavailableError,
+  resolveGatewayConnectionAuth,
+} from "openclaw/plugin-sdk/gateway-runtime";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import type {
@@ -36,14 +41,19 @@ const CODEX_API_KEY_ENV_VAR = "CODEX_API_KEY";
 const OPENAI_API_KEY_ENV_VAR = "OPENAI_API_KEY";
 const CODEX_APP_SERVER_API_KEY_ENV_VARS = [CODEX_API_KEY_ENV_VAR, OPENAI_API_KEY_ENV_VAR];
 const CODEX_APP_SERVER_ISOLATION_ENV_VARS = [CODEX_HOME_ENV_VAR, HOME_ENV_VAR];
+const OPENCLAW_GATEWAY_TOKEN_ENV_VAR = "OPENCLAW_GATEWAY_TOKEN";
+const OPENCLAW_GATEWAY_PASSWORD_ENV_VAR = "OPENCLAW_GATEWAY_PASSWORD";
 
 type AuthProfileOrderConfig = Parameters<typeof resolveAuthProfileOrder>[0]["cfg"];
+type GatewayAuthResolutionConfig = NonNullable<AuthProfileOrderConfig>;
 
 export async function bridgeCodexAppServerStartOptions(params: {
   startOptions: CodexAppServerStartOptions;
   agentDir: string;
   authProfileId?: string | null;
   config?: AuthProfileOrderConfig;
+  // Injectable parent environment; production callers normally read process.env.
+  env?: NodeJS.ProcessEnv;
 }): Promise<CodexAppServerStartOptions> {
   if (params.startOptions.transport !== "stdio") {
     return params.startOptions;
@@ -52,8 +62,13 @@ export async function bridgeCodexAppServerStartOptions(params: {
     params.startOptions,
     params.agentDir,
   );
+  const startOptionsWithGatewayAuth = await withOpenClawGatewayAuthEnvironment({
+    startOptions: isolatedStartOptions,
+    config: params.config,
+    env: params.env,
+  });
   if (params.authProfileId === null) {
-    return isolatedStartOptions;
+    return startOptionsWithGatewayAuth;
   }
   const store = ensureCodexAppServerAuthProfileStore({
     agentDir: params.agentDir,
@@ -71,8 +86,11 @@ export async function bridgeCodexAppServerStartOptions(params: {
     config: params.config,
   });
   return shouldClearInheritedOpenAiApiKey
-    ? withClearedEnvironmentVariables(isolatedStartOptions, CODEX_APP_SERVER_API_KEY_ENV_VARS)
-    : isolatedStartOptions;
+    ? withClearedEnvironmentVariables(
+        startOptionsWithGatewayAuth,
+        CODEX_APP_SERVER_API_KEY_ENV_VARS,
+      )
+    : startOptionsWithGatewayAuth;
 }
 
 export function resolveCodexAppServerAuthProfileId(params: {
@@ -289,6 +307,70 @@ function withoutClearedCodexIsolationEnv(clearEnv: string[] | undefined): string
   const reserved = new Set(CODEX_APP_SERVER_ISOLATION_ENV_VARS);
   const filtered = clearEnv.filter((envVar) => !reserved.has(envVar.trim().toUpperCase()));
   return filtered.length === clearEnv.length ? clearEnv : filtered;
+}
+
+async function withOpenClawGatewayAuthEnvironment(params: {
+  startOptions: CodexAppServerStartOptions;
+  config?: AuthProfileOrderConfig;
+  env?: NodeJS.ProcessEnv;
+}): Promise<CodexAppServerStartOptions> {
+  if (!params.config) {
+    return params.startOptions;
+  }
+  const auth = await resolveGatewayAuthForCodexAppServer({
+    config: params.config,
+    env: params.env,
+  });
+  if (!auth) {
+    return params.startOptions;
+  }
+  const env: Record<string, string> = {};
+  if (
+    auth.token &&
+    !readNonEmptyString(params.startOptions.env?.[OPENCLAW_GATEWAY_TOKEN_ENV_VAR])
+  ) {
+    env[OPENCLAW_GATEWAY_TOKEN_ENV_VAR] = auth.token;
+  }
+  if (
+    auth.password &&
+    !readNonEmptyString(params.startOptions.env?.[OPENCLAW_GATEWAY_PASSWORD_ENV_VAR])
+  ) {
+    env[OPENCLAW_GATEWAY_PASSWORD_ENV_VAR] = auth.password;
+  }
+  if (Object.keys(env).length === 0) {
+    return params.startOptions;
+  }
+  return {
+    ...params.startOptions,
+    env: {
+      ...params.startOptions.env,
+      ...env,
+    },
+  };
+}
+
+async function resolveGatewayAuthForCodexAppServer(params: {
+  config: GatewayAuthResolutionConfig;
+  env?: NodeJS.ProcessEnv;
+}): Promise<{ token?: string; password?: string } | undefined> {
+  try {
+    return await resolveGatewayConnectionAuth({
+      config: params.config,
+      env: params.env ?? process.env,
+      modeOverride: "local",
+      localTokenPrecedence: "config-first",
+      localPasswordPrecedence: "config-first",
+    });
+  } catch (error) {
+    if (!isGatewaySecretRefUnavailableError(error)) {
+      throw error;
+    }
+    embeddedAgentLog.warn(
+      "codex app-server Gateway auth SecretRef unavailable; continuing without injected Gateway auth",
+      { path: error.path },
+    );
+    return undefined;
+  }
 }
 
 export async function applyCodexAppServerAuthProfile(params: {
@@ -584,6 +666,10 @@ function readFirstNonEmptyEnvEntry(
     }
   }
   return undefined;
+}
+
+function readNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function buildChatgptAuthTokensParams(
