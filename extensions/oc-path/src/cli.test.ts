@@ -152,6 +152,44 @@ describe("openclaw path CLI", () => {
       expect(readFileSync(filePath, "utf-8")).toBe(before);
     });
 
+    it("CLI-S05 --dry-run --diff prints a unified diff", async () => {
+      const filePath = join(workspaceDir, "gateway.jsonc");
+      const before = '{\n  "version": "1.0",\n  "enabled": true\n}\n';
+      writeFileSync(filePath, before, "utf-8");
+      const rt = createTestRuntime();
+      await pathSetCommand(
+        "oc://gateway.jsonc/version",
+        "2.0",
+        { cwd: workspaceDir, human: true, dryRun: true, diff: true },
+        rt,
+      );
+      expect(rt.exitCode).toBe(0);
+      const out = stdoutText(rt);
+      expect(out).toContain("--- ");
+      expect(out).toContain("+++ ");
+      expect(out).toContain('-  "version": "1.0",');
+      expect(out).toContain('+  "version": "2.0",');
+      expect(readFileSync(filePath, "utf-8")).toBe(before);
+    });
+
+    it("CLI-S06 --dry-run --diff includes diff in JSON output", async () => {
+      const filePath = join(workspaceDir, "gateway.jsonc");
+      writeFileSync(filePath, '{ "version": "1.0" }', "utf-8");
+      const rt = createTestRuntime();
+      await pathSetCommand(
+        "oc://gateway.jsonc/version",
+        "2.0",
+        { cwd: workspaceDir, json: true, dryRun: true, diff: true },
+        rt,
+      );
+      expect(rt.exitCode).toBe(0);
+      const out = JSON.parse(stdoutText(rt));
+      expect(out.dryRun).toBe(true);
+      expect(out.bytes).toContain('"2.0"');
+      expect(out.diff).toContain('-{ "version": "1.0" }');
+      expect(out.diff).toContain('+{ "version": "2.0" }');
+    });
+
     it("CLI-S03 sentinel-bearing value is refused at emit", async () => {
       const filePath = join(workspaceDir, "gateway.jsonc");
       writeFileSync(filePath, '{ "token": "x" }', "utf-8");
