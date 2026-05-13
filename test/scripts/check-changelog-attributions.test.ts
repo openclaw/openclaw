@@ -1,6 +1,55 @@
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { findForbiddenChangelogThanks } from "../../scripts/check-changelog-attributions.mjs";
+
+const changelogScriptPath = path.join(process.cwd(), "scripts", "pr-lib", "changelog.sh");
+
+function run(cwd: string, command: string, args: string[], env?: NodeJS.ProcessEnv): string {
+  return execFileSync(command, args, {
+    cwd,
+    encoding: "utf8",
+    env: env ? { ...process.env, ...env } : process.env,
+  }).trim();
+}
+
+function initChangelogRepo(entry: string): string {
+  const repo = mkdtempSync(path.join(os.tmpdir(), "openclaw-changelog-credit-"));
+  run(repo, "git", ["init", "-q", "--initial-branch=main"]);
+  run(repo, "git", ["config", "user.email", "test@example.com"]);
+  run(repo, "git", ["config", "user.name", "Test User"]);
+  writeFileSync(repo + "/CHANGELOG.md", "# Changelog\n\n## Unreleased\n\n### Fixes\n\n", "utf8");
+  run(repo, "git", ["add", "CHANGELOG.md"]);
+  run(repo, "git", ["commit", "-qm", "seed"]);
+  const baseSha = run(repo, "git", ["rev-parse", "HEAD"]);
+  run(repo, "git", ["update-ref", "refs/remotes/origin/main", baseSha]);
+  run(repo, "git", ["checkout", "-qb", "feature"]);
+  writeFileSync(
+    repo + "/CHANGELOG.md",
+    `# Changelog\n\n## Unreleased\n\n### Fixes\n\n${entry}\n`,
+    "utf8",
+  );
+  run(repo, "git", ["add", "CHANGELOG.md"]);
+  run(repo, "git", ["commit", "-qm", "add changelog entry"]);
+  return repo;
+}
+
+function validateChangelogEntry(repo: string, contrib: string): string {
+  return run(
+    repo,
+    "bash",
+    [
+      "-lc",
+      'source "$OPENCLAW_PR_CHANGELOG_SH"; validate_changelog_entry_for_pr 123 "$OPENCLAW_TEST_CONTRIB"',
+    ],
+    {
+      OPENCLAW_PR_CHANGELOG_SH: changelogScriptPath,
+      OPENCLAW_TEST_CONTRIB: contrib,
+    },
+  );
+}
 
 describe("check-changelog-attributions", () => {
   it("flags forbidden bot, org, and maintainer thanks attributions", () => {
@@ -9,6 +58,8 @@ describe("check-changelog-attributions", () => {
       "- Org-owned fix. Thanks @openclaw.",
       "- Maintainer-owned fix. Thanks @steipete.",
       "- Mixed credit. Thanks @contributor and @OpenClaw.",
+      "- Bot repair. Thanks @clawsweeper[bot].",
+      "- App repair. Thanks @app/clawsweeper.",
     ].join("\n");
 
     expect(findForbiddenChangelogThanks(content)).toEqual([
@@ -16,6 +67,8 @@ describe("check-changelog-attributions", () => {
       { line: 2, handle: "openclaw", text: "- Org-owned fix. Thanks @openclaw." },
       { line: 3, handle: "steipete", text: "- Maintainer-owned fix. Thanks @steipete." },
       { line: 4, handle: "openclaw", text: "- Mixed credit. Thanks @contributor and @OpenClaw." },
+      { line: 5, handle: "clawsweeper", text: "- Bot repair. Thanks @clawsweeper[bot]." },
+      { line: 6, handle: "app/clawsweeper", text: "- App repair. Thanks @app/clawsweeper." },
     ]);
   });
 
@@ -25,6 +78,62 @@ describe("check-changelog-attributions", () => {
         "- User-facing fix. Fixes #123. Thanks @external-contributor and @other-user.",
       ),
     ).toStrictEqual([]);
+  });
+
+  it("requires explicit human thanks for bot PR changelog entries", () => {
+    const repo = initChangelogRepo("- Bot repair (#123).");
+    try {
+      let output = "";
+      try {
+        validateChangelogEntry(repo, "clawsweeper[bot]");
+      } catch (error) {
+        output = String((error as { stdout?: unknown }).stdout ?? error);
+      }
+      expect(output).toContain("must include an explicit human Thanks @handle");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects bot thanks as explicit human credit for bot PR changelog entries", () => {
+    const repo = initChangelogRepo("- Bot repair (#123). Thanks @clawsweeper[bot].");
+    try {
+      let output = "";
+      try {
+        validateChangelogEntry(repo, "clawsweeper[bot]");
+      } catch (error) {
+        output = String((error as { stdout?: unknown }).stdout ?? error);
+      }
+      expect(output).toContain("must include an explicit human Thanks @handle");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects app bot thanks as explicit human credit for bot PR changelog entries", () => {
+    const repo = initChangelogRepo(
+      "- Session transcripts: redact sensitive message content in the centralized JSONL append path so CLI turns, gateway transcript injection, transcript mirrors, and guarded tool results use the same configured redaction behavior. Fixes #73565. Refs #73563. (#123) Thanks @app/clawsweeper.",
+    );
+    try {
+      let output = "";
+      try {
+        validateChangelogEntry(repo, "clawsweeper[bot]");
+      } catch (error) {
+        output = String((error as { stdout?: unknown }).stdout ?? error);
+      }
+      expect(output).toContain("must include an explicit human Thanks @handle");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts explicit human thanks for bot PR changelog entries", () => {
+    const repo = initChangelogRepo("- Bot repair (#123). Thanks @Ziy1-Tan.");
+    try {
+      expect(validateChangelogEntry(repo, "clawsweeper[bot]")).toContain("explicit human thanks");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   });
 
   it("keeps PR changelog gates on the same attribution policy", () => {
@@ -38,6 +147,8 @@ describe("check-changelog-attributions", () => {
     expect(commonLib).toContain("resolve_contributor_coauthor_email");
     expect(changelogLib).toContain("node scripts/check-changelog-attributions.mjs CHANGELOG.md");
     expect(changelogLib).toContain("changelog_thanks_required_for_contributor");
+    expect(changelogLib).toContain("changelog_entry_has_explicit_human_thanks");
+    expect(changelogLib).toContain("Choose the credited original contributor");
     expect(changelogLib).toContain('"app/"*');
     expect(changelogLib).toContain('"clawsweeper"');
     expect(gates).toContain("validate_changelog_attribution_policy");

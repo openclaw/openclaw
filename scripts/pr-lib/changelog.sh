@@ -173,6 +173,23 @@ changelog_thanks_required_for_contributor() {
   return 0
 }
 
+changelog_entry_has_explicit_human_thanks() {
+  local lines="$1"
+  local pr_pattern="$2"
+
+  local pr_lines
+  pr_lines=$(printf '%s\n' "$lines" | rg -in "$pr_pattern" || true)
+  if [ -z "$pr_lines" ]; then
+    return 1
+  fi
+
+  if ! printf '%s\n' "$pr_lines" | rg -i '\bthanks[[:space:]]+@[-_A-Za-z0-9]+(\[bot\])?' >/dev/null; then
+    return 1
+  fi
+
+  ! printf '%s\n' "$pr_lines" | rg -i '\bthanks\b[^\n]*@(codex|openclaw|steipete|(app/)?clawsweeper(\[bot\])?|(app/)?openclaw-clawsweeper(\[bot\])?)($|[^-A-Za-z0-9])' >/dev/null
+}
+
 validate_changelog_entry_for_pr() {
   local pr="$1"
   local contrib="$2"
@@ -339,7 +356,13 @@ END {
     return 0
   fi
 
-  echo "changelog validated: found PR #$pr (no eligible human contributor handle, skipping thanks check)"
+  if ! changelog_entry_has_explicit_human_thanks "$added_lines" "$pr_pattern"; then
+    echo "CHANGELOG.md update for bot/app/non-creditable author $contrib must include an explicit human Thanks @handle on the PR #$pr entry line."
+    echo "Choose the credited original contributor, or stop for maintainer input if authorship is unclear."
+    exit 1
+  fi
+
+  echo "changelog validated: found PR #$pr + explicit human thanks for bot/app/non-creditable author $contrib"
 }
 
 validate_changelog_merge_hygiene() {

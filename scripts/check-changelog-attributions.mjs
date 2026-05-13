@@ -4,9 +4,23 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const FORBIDDEN_CHANGELOG_THANKS_HANDLES = ["codex", "openclaw", "steipete"];
+export const FORBIDDEN_CHANGELOG_THANKS_HANDLES = [
+  "codex",
+  "openclaw",
+  "steipete",
+  "clawsweeper",
+  "openclaw-clawsweeper",
+  "app/clawsweeper",
+  "app/openclaw-clawsweeper",
+  "clawsweeper[bot]",
+  "openclaw-clawsweeper[bot]",
+];
 
-const HANDLE_PATTERN = FORBIDDEN_CHANGELOG_THANKS_HANDLES.join("|");
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+const HANDLE_PATTERN = FORBIDDEN_CHANGELOG_THANKS_HANDLES.map(escapeRegExp).join("|");
 const FORBIDDEN_THANKS_PATTERN = new RegExp(
   `\\bThanks\\b[^\\n]*@(${HANDLE_PATTERN})(?=\\b|[^A-Za-z0-9-])`,
   "iu",
