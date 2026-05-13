@@ -49,6 +49,22 @@ describe("OpenAI Codex routing policy", () => {
         authProfileId: "openai-codex:work",
       }),
     ).toBe("openai-codex");
+    expect(
+      resolveOpenAIRuntimeProviderForPi({
+        provider: "openai",
+        harnessRuntime: "pi",
+        authProfileProvider: "codex-cli",
+        authProfileId: "codex-cli:legacy",
+      }),
+    ).toBe("openai-codex");
+    expect(
+      resolveOpenAIRuntimeProviderForPi({
+        provider: "openai",
+        harnessRuntime: "pi",
+        authProfileProvider: "openai-codex-import",
+        authProfileId: "openai-codex-import:legacy",
+      }),
+    ).toBe("openai-codex");
   });
 
   it("ignores session PI pins when validating OpenAI auth profiles", () => {
