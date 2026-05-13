@@ -21,7 +21,8 @@ const invalidConfigRecoveryHint = [
 ].join("\n");
 
 function expectLatestRuntimeJson(payload: unknown) {
-  expect(defaultRuntime.writeJson.mock.calls.at(-1)?.[0]).toEqual(payload);
+  const calls = defaultRuntime.writeJson.mock.calls;
+  expect(calls[calls.length - 1]?.[0]).toEqual(payload);
 }
 
 vi.mock("../../config/config.js", () => ({

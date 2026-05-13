@@ -170,7 +170,10 @@ describe("offerPostInstallMigrations", () => {
     expect(confirm).toHaveBeenCalledOnce();
     expect(confirm).toHaveBeenCalledWith(expect.objectContaining({ initialValue: false }));
     expect(migrateDefaultCommand).toHaveBeenCalledOnce();
-    expect(migrateDefaultCommand).toHaveBeenCalledWith(expect.anything(), { provider: "codex" });
+    expect(migrateDefaultCommand).toHaveBeenCalledWith(expect.anything(), {
+      provider: "codex",
+      suppressPlanLog: true,
+    });
   });
 
   it("does not invoke migrateDefaultCommand when the user declines", async () => {

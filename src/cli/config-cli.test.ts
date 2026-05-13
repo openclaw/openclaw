@@ -479,6 +479,64 @@ describe("config cli", () => {
       ]);
     });
 
+    it("normalizes agent-list model refs before writing config mutations", async () => {
+      const resolved: OpenClawConfig = {
+        agents: {
+          list: [
+            {
+              id: "tester",
+              model: { primary: "google/gemini-3-pro-preview" },
+              models: {
+                "google/gemini-3-pro-preview": { alias: "gemini" },
+              },
+            },
+          ],
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "set", "gateway.port", "18790"]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const agent = firstWrittenConfig().agents?.list?.[0];
+      expect(agent?.model).toEqual({ primary: "google/gemini-3.1-pro-preview" });
+      expect(agent?.models).toEqual({
+        "google/gemini-3.1-pro-preview": { alias: "gemini" },
+      });
+    });
+
+    it("normalizes provider catalog model refs before writing config mutations", async () => {
+      const resolved: OpenClawConfig = {
+        models: {
+          providers: {
+            google: {
+              api: "google-generative-ai",
+              baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+              models: [
+                {
+                  id: "google/gemini-3-pro-preview",
+                  name: "Gemini 3 Pro",
+                  contextWindow: 1_048_576,
+                  maxTokens: 65_536,
+                  input: ["text", "image"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  reasoning: true,
+                },
+              ],
+            },
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "set", "gateway.port", "18790"]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      expect(firstWrittenConfig().models?.providers?.google?.models?.[0]?.id).toBe(
+        "google/gemini-3.1-pro-preview",
+      );
+    });
+
     it("rejects plugin install record config updates", async () => {
       await expect(
         runConfigCommand([
