@@ -23,9 +23,7 @@ jobs:
         with:
           script: |
             const marker = "<!-- openclaw:dependency-change-awareness -->";
-            const labelName = "dependency-change";
-            const labelColor = "D93F0B";
-            const labelDescription = "PR changes dependency-related files";
+            const labelName = "dependencies";
             const maxListedFiles = 25;
             const pullRequest = context.payload.pull_request;
 
@@ -43,7 +41,12 @@ jobs:
               /^packages\/[^/]+\/package\.json$/u.test(filename) ||
               /^extensions\/[^/]+\/package\.json$/u.test(filename);
 
-            const markdownCode = (value) => `\`${String(value).replaceAll("`", "\\`")}\``;
+            const sanitizeDisplayValue = (value) =>
+              String(value)
+                .replace(/[\u0000-\u001f\u007f]/gu, "?")
+                .slice(0, 240);
+            const markdownCode = (value) =>
+              `\`${sanitizeDisplayValue(value).replaceAll("`", "\\`")}\``;
 
             const files = await github.paginate(github.rest.pulls.listFiles, {
               owner: context.repo.owner,
@@ -103,31 +106,18 @@ jobs:
               return;
             }
 
-            try {
-              await github.rest.issues.getLabel({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                name: labelName,
-              });
-            } catch (error) {
-              if (error?.status !== 404) {
-                throw error;
-              }
-              await github.rest.issues.createLabel({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                name: labelName,
-                color: labelColor,
-                description: labelDescription,
-              });
-            }
-
             if (!hasLabel) {
               await github.rest.issues.addLabels({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: pullRequest.number,
                 labels: [labelName],
+              }).catch((error) => {
+                if (error?.status === 404 || error?.status === 422) {
+                  core.warning(`Dependency change label "${labelName}" is missing or unavailable.`);
+                  return;
+                }
+                throw error;
               });
             }
 

@@ -51,6 +51,7 @@ describe("dependency change awareness workflow", () => {
       "actions: write",
       "id-token: write",
       "secrets.",
+      "github.rest.issues.createLabel",
     ];
 
     for (const snippet of forbiddenSnippets) {
@@ -70,12 +71,15 @@ describe("dependency change awareness workflow", () => {
     expect(step.uses).toBe("actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3");
     expect(step.with?.script).toContain("<!-- openclaw:dependency-change-awareness -->");
     expect(step.with?.script).toContain("const maxListedFiles = 25;");
+    expect(step.with?.script).toContain("const sanitizeDisplayValue = (value)");
+    expect(step.with?.script).toContain('.replace(/[\\u0000-\\u001f\\u007f]/gu, "?")');
+    expect(step.with?.script).toContain(".slice(0, 240)");
     expect(step.with?.script).toContain('comment.user?.login === "github-actions[bot]"');
     expect(step.with?.script).toContain("github.rest.pulls.listFiles");
     expect(step.with?.script).toContain("github.rest.issues.createComment");
     expect(step.with?.script).toContain("github.rest.issues.updateComment");
     expect(step.with?.script).toContain("github.rest.issues.deleteComment");
-    expect(workflow).toContain("dependency-change");
+    expect(workflow).toContain('"dependencies"');
   });
 
   it("detects the intended dependency-related file surfaces", () => {
