@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Require explicit browser device pairing [AI]. (#81289) Thanks @pgondhi987.
 - Require Control UI pairing before proxy-scoped access [AI]. (#81288) Thanks @pgondhi987.
 - Harden trusted-proxy source validation [AI]. (#81290) Thanks @pgondhi987.
 - Agents: add permissive item schemas to array tool parameters before provider submission, preventing OpenAI-compatible schema validation from rejecting plugin tools that omit `items`. Fixes #81175. (#81217) Thanks @JARVIS-Glasses.
