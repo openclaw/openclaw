@@ -119,6 +119,32 @@ describe("gateway startup log", () => {
     ).toBe("thinking=off, fast=on");
   });
 
+  it("shows thinking off for configured provider models with reasoning disabled", () => {
+    expect(
+      formatAgentModelStartupDetails({
+        cfg: {
+          models: {
+            providers: {
+              google: {
+                api: "google-generative-ai",
+                baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+                models: [
+                  {
+                    id: "gemma-4-26b-a4b-it",
+                    name: "Gemma 4 26B",
+                    reasoning: false,
+                  },
+                ],
+              },
+            },
+          },
+        },
+        provider: "google",
+        model: "gemma-4-26b-a4b-it",
+      }),
+    ).toBe("thinking=off, fast=off");
+  });
+
   it("uses default agent mode overrides in the startup model details", () => {
     expect(
       formatAgentModelStartupDetails({
