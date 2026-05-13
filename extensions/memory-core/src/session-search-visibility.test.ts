@@ -243,4 +243,31 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
 
     expect(filtered).toStrictEqual([]);
   });
+
+  it("does not keep cross-agent deleted archive hits outside the scoped store when a2a is allowed", async () => {
+    combinedSessionStore = {};
+    const hit: MemorySearchResult = {
+      path: "sessions/peer/deleted-stem.jsonl.deleted.2026-02-16T22-27-33.000Z",
+      source: "sessions",
+      score: 1,
+      snippet: "x",
+      startLine: 1,
+      endLine: 2,
+    };
+    const cfg = asOpenClawConfig({
+      tools: {
+        sessions: { visibility: "all" },
+        agentToAgent: { enabled: true, allow: ["*"] },
+      },
+    });
+
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg,
+      requesterSessionKey: "agent:main:main",
+      sandboxed: false,
+      hits: [hit],
+    });
+
+    expect(filtered).toStrictEqual([]);
+  });
 });

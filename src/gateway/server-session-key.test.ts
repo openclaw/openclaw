@@ -124,7 +124,7 @@ describe("resolveSessionKeyForRun", () => {
     expect(resolveSessionKeyForRun("run-race")).toBeUndefined();
     registerAgentRunContext("run-race", { sessionKey: "agent:main:main" });
 
-    expect(resolveSessionKeyForRun("run-race")).toBe("agent:main:main");
+    expect(resolveSessionKeyForRun("run-race")).toBe("main");
     expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledTimes(1);
   });
 

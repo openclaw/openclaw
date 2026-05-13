@@ -66,8 +66,9 @@ export function resolveSessionKeyForRun(runId: string, opts: { agentId?: string 
   const agentId = normalizeAgentId(opts.agentId ?? resolveDefaultAgentId(cfg));
   const cached = getAgentRunContext(runId)?.sessionKey;
   if (cached && sessionKeyMatchesAgent(cached, agentId)) {
-    setResolvedSessionKeyCache(runId, agentId, cached);
-    return cached;
+    const sessionKey = toAgentRequestSessionKey(cached) ?? cached;
+    setResolvedSessionKeyCache(runId, agentId, sessionKey);
+    return sessionKey;
   }
   const cacheKey = runLookupCacheKey(runId, agentId);
   const cachedLookup = resolvedSessionKeyByRunId.get(cacheKey);

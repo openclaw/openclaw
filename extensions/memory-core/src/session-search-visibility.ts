@@ -12,6 +12,10 @@ import {
   resolveEffectiveSessionToolsVisibility,
 } from "openclaw/plugin-sdk/session-visibility";
 
+function normalizeAgentIdForCompare(value: string | undefined): string | undefined {
+  return value?.trim().toLowerCase() || undefined;
+}
+
 export async function filterMemorySearchHitsBySessionVisibility(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -58,12 +62,18 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
     if (!identity) {
       continue;
     }
+    const archivedOwnerMatchesScope = Boolean(
+      identity.archived &&
+      identity.ownerAgentId &&
+      (!scopedAgentId ||
+        normalizeAgentIdForCompare(identity.ownerAgentId) ===
+          normalizeAgentIdForCompare(scopedAgentId)),
+    );
+    const archivedOwnerAgentId = archivedOwnerMatchesScope ? identity.ownerAgentId : undefined;
     const keys = resolveTranscriptStemToSessionKeys({
       store: combinedSessionStore,
       stem: identity.stem,
-      ...(identity.archived && identity.ownerAgentId
-        ? { archivedOwnerAgentId: identity.ownerAgentId }
-        : {}),
+      ...(archivedOwnerAgentId ? { archivedOwnerAgentId } : {}),
     });
     if (keys.length === 0) {
       continue;
