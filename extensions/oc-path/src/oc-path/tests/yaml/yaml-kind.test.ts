@@ -185,6 +185,24 @@ describe("universal verbs — yaml dispatch", () => {
     expect(m).toMatchObject({ kind: "node", descriptor: "yaml-seq" });
   });
 
+  it("resolveOcPath returns yaml-map insertion for map root", () => {
+    const { ast } = parseYaml("name: inbox\n");
+    const m = resolveOcPath(ast, parseOcPath("oc://workflow.yaml/+owner"));
+    expect(m).toMatchObject({ kind: "insertion-point", container: "yaml-map" });
+  });
+
+  it("resolveOcPath returns yaml-seq insertion for sequence root", () => {
+    const { ast } = parseYaml("- a\n");
+    const m = resolveOcPath(ast, parseOcPath("oc://items.yaml/+"));
+    expect(m).toMatchObject({ kind: "insertion-point", container: "yaml-seq" });
+  });
+
+  it("resolveOcPath rejects insertion under scalar root", () => {
+    const { ast } = parseYaml("hello\n");
+    const m = resolveOcPath(ast, parseOcPath("oc://value.yaml/+"));
+    expect(m).toBeNull();
+  });
+
   it("setOcPath replaces a yaml scalar via universal verb", () => {
     const { ast } = parseYaml(LOBSTER);
     const r = setOcPath(ast, parseOcPath("oc://workflow.lobster/name"), "updated");
