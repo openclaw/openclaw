@@ -155,6 +155,60 @@ describe("install.sh", () => {
     expect(output).toContain("version=v22.22.0");
   });
 
+  it("uses the package engine floor when accepting existing Node runtimes", () => {
+    const pkg = JSON.parse(readFileSync("package.json", "utf8")) as {
+      engines?: { node?: string };
+    };
+    expect(pkg.engines?.node).toBe(">=22.16.0");
+    expect(script).toContain("NODE_MIN_MINOR=16");
+
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-node-floor-"));
+    const bin = join(tmp, "bin");
+    mkdirSync(bin, { recursive: true });
+
+    const nodePath = join(bin, "node");
+    writeFileSync(
+      nodePath,
+      [
+        "#!/bin/sh",
+        'printf "%s\\n" "${FAKE_NODE_VERSION:-v0.0.0}"',
+        "",
+      ].join("\n"),
+    );
+    chmodSync(nodePath, 0o755);
+
+    let result: ReturnType<typeof runInstallShell> | undefined;
+    try {
+      result = runInstallShell(
+        [
+          `cd ${JSON.stringify(process.cwd())}`,
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          "set +e",
+          'FAKE_NODE_VERSION="v22.14.0"',
+          "export FAKE_NODE_VERSION",
+          "node_is_at_least_required",
+          "node_22_14=$?",
+          'FAKE_NODE_VERSION="v22.16.0"',
+          "export FAKE_NODE_VERSION",
+          "node_is_at_least_required",
+          "node_22_16=$?",
+          'printf "node_22_14=%s\\nnode_22_16=%s\\n" "$node_22_14" "$node_22_16"',
+          "exit 0",
+        ].join("\n"),
+        {
+          PATH: `${bin}:/usr/bin:/bin`,
+          TERM: "dumb",
+        },
+      );
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+
+    expect(result?.status).toBe(0);
+    expect(result?.stdout).toContain("node_22_14=1");
+    expect(result?.stdout).toContain("node_22_16=0");
+  });
+
   it("persists a supported Linux Node path before noninteractive shell guards", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-linux-node-path-"));
     const home = join(tmp, "home");
