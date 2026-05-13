@@ -204,4 +204,18 @@ describe("i18n", () => {
       );
     }
   });
+  it("uses localized chat metadata labels for non-English locales", async () => {
+    await translate.i18n.setLocale("de");
+
+    expect(translate.t("chat.toolInput")).toBe("Werkzeugeingabe");
+    expect(translate.t("chat.toolOutput")).toBe("Werkzeugausgabe");
+    expect(translate.t("chat.toolCall")).toBe("Werkzeugaufruf");
+    expect(translate.t("chat.rawDetails")).toBe("Rohdetails");
+    expect(translate.t("chat.openInSidePanel")).toBe("Im Seitenbereich öffnen");
+    expect(translate.t("chat.openToolDetailsInSidePanel")).toBe(
+      "Werkzeugdetails im Seitenbereich öffnen",
+    );
+
+    await translate.i18n.setLocale("en");
+  });
 });
