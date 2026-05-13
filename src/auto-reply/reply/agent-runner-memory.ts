@@ -473,7 +473,7 @@ async function estimatePromptTokensFromSessionTranscript(params: {
         usagePromptTokens >
           estimatedMessageTokens * STALE_USAGE_ESTIMATE_MULTIPLIER +
             STALE_USAGE_ESTIMATE_BUFFER_TOKENS
-          ? estimatedMessageTokens
+          ? estimatedMessageTokens + trailingBytesTokens
           : usagePromptTokens;
       return {
         promptTokens: Math.max(boundedUsagePromptTokens, estimatedMessageTokens ?? 0),
