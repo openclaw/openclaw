@@ -29,6 +29,11 @@ type ManagedNpmRootOpenClawMetadata = {
   [key: string]: unknown;
 };
 
+export type ManagedNpmRootPeerDependencySnapshot = {
+  dependencies: Record<string, string>;
+  managedPeerDependencies: string[];
+};
+
 export type ManagedNpmRootInstalledDependency = {
   version?: string;
   integrity?: string;
@@ -46,6 +51,16 @@ type ManagedNpmRootLogger = {
 };
 
 type ManagedNpmRootRunCommand = typeof runCommandWithTimeout;
+
+type ManagedNpmPeerTraversalLimits = {
+  maxDepth: number;
+  maxDirectories: number;
+};
+
+const DEFAULT_MANAGED_NPM_PEER_TRAVERSAL_LIMITS: ManagedNpmPeerTraversalLimits = {
+  maxDepth: 64,
+  maxDirectories: 10_000,
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -66,6 +81,47 @@ function readDependencyRecord(value: unknown): Record<string, string> {
     }
   }
   return dependencies;
+}
+
+function readPositiveIntegerEnv(name: string, fallback: number): number {
+  const rawValue = process.env[name];
+  if (!rawValue) {
+    return fallback;
+  }
+  const parsedValue = Number.parseInt(rawValue, 10);
+  return Number.isFinite(parsedValue) && parsedValue >= 1 ? parsedValue : fallback;
+}
+
+function resolveManagedNpmPeerTraversalLimits(): ManagedNpmPeerTraversalLimits {
+  return {
+    maxDepth: readPositiveIntegerEnv(
+      "OPENCLAW_INSTALL_SCAN_MAX_DEPTH",
+      DEFAULT_MANAGED_NPM_PEER_TRAVERSAL_LIMITS.maxDepth,
+    ),
+    maxDirectories: readPositiveIntegerEnv(
+      "OPENCLAW_INSTALL_SCAN_MAX_DIRECTORIES",
+      DEFAULT_MANAGED_NPM_PEER_TRAVERSAL_LIMITS.maxDirectories,
+    ),
+  };
+}
+
+function isSamePathOrInside(parentPath: string, candidatePath: string): boolean {
+  const relative = path.relative(parentPath, candidatePath);
+  return (
+    relative === "" || (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative))
+  );
+}
+
+function isSafePackageName(name: string): boolean {
+  if (name.startsWith("@")) {
+    const parts = name.split("/");
+    return (
+      parts.length === 2 && parts.every((part) => part.length > 0 && part !== "." && part !== "..")
+    );
+  }
+  return (
+    name.length > 0 && !name.includes("/") && !name.includes("\\") && name !== "." && name !== ".."
+  );
 }
 
 function readOverrideRecord(value: unknown): Record<string, unknown> {
@@ -301,7 +357,7 @@ async function listNodeModulesPackageDirs(nodeModulesDir: string): Promise<strin
   }
   const packageDirs: string[] = [];
   for (const entry of entries.toSorted((left, right) => left.name.localeCompare(right.name))) {
-    if (entry.name === ".bin" || entry.name.startsWith(".")) {
+    if (entry.name === ".bin" || entry.name === "openclaw" || entry.name.startsWith(".")) {
       continue;
     }
     const entryPath = path.join(nodeModulesDir, entry.name);
@@ -338,12 +394,42 @@ async function collectManagedNpmRootPeerDependencyPins(params: {
   npmRoot: string;
 }): Promise<Record<string, string>> {
   const pins = new Map<string, string>();
-  const queue = await listNodeModulesPackageDirs(path.join(params.npmRoot, "node_modules"));
+  const limits = resolveManagedNpmPeerTraversalLimits();
+  const boundaryRealPath = await fs
+    .realpath(params.npmRoot)
+    .catch(() => path.resolve(params.npmRoot));
+  const queue = (await listNodeModulesPackageDirs(path.join(params.npmRoot, "node_modules"))).map(
+    (packageDir) => ({ depth: 0, packageDir }),
+  );
+  const visitedRealPaths = new Set<string>();
   for (let index = 0; index < queue.length; index += 1) {
-    const packageDir = queue[index];
-    if (!packageDir) {
+    const current = queue[index];
+    if (!current) {
       continue;
     }
+    if (current.depth > limits.maxDepth) {
+      throw new Error(
+        `managed npm peer dependency scan exceeded max depth (${limits.maxDepth}) at ${current.packageDir}`,
+      );
+    }
+    const packageDirRealPath = await fs
+      .realpath(current.packageDir)
+      .catch(() => path.resolve(current.packageDir));
+    if (!isSamePathOrInside(boundaryRealPath, packageDirRealPath)) {
+      throw new Error(
+        `managed npm peer dependency scan found package outside managed npm root at ${current.packageDir}`,
+      );
+    }
+    if (visitedRealPaths.has(packageDirRealPath)) {
+      continue;
+    }
+    visitedRealPaths.add(packageDirRealPath);
+    if (visitedRealPaths.size > limits.maxDirectories) {
+      throw new Error(
+        `managed npm peer dependency scan exceeded max packages (${limits.maxDirectories}) under ${params.npmRoot}`,
+      );
+    }
+    const packageDir = current.packageDir;
     const manifest = await readPackageJsonIfExists(packageDir);
     if (manifest) {
       if (readOptionalString(manifest.name) === "openclaw") {
@@ -351,7 +437,7 @@ async function collectManagedNpmRootPeerDependencyPins(params: {
       }
       const peerDependencies = readDependencyRecord(manifest.peerDependencies);
       for (const [peerName, peerRange] of Object.entries(peerDependencies)) {
-        if (peerName === "openclaw" || pins.has(peerName)) {
+        if (peerName === "openclaw" || pins.has(peerName) || !isSafePackageName(peerName)) {
           continue;
         }
         const installedVersion = await readPackageVersion(
@@ -363,11 +449,67 @@ async function collectManagedNpmRootPeerDependencyPins(params: {
         pins.set(peerName, installedVersion ?? peerRange);
       }
     }
-    queue.push(...(await listNodeModulesPackageDirs(path.join(packageDir, "node_modules"))));
+    queue.push(
+      ...(await listNodeModulesPackageDirs(path.join(packageDir, "node_modules"))).map(
+        (nestedPackageDir) => ({
+          depth: current.depth + 1,
+          packageDir: nestedPackageDir,
+        }),
+      ),
+    );
   }
   return Object.fromEntries(
     [...pins.entries()].toSorted(([left], [right]) => left.localeCompare(right)),
   );
+}
+
+export async function readManagedNpmRootPeerDependencySnapshot(params: {
+  npmRoot: string;
+}): Promise<ManagedNpmRootPeerDependencySnapshot> {
+  const manifest = await readManagedNpmRootManifest(path.join(params.npmRoot, "package.json"));
+  const dependencies = readDependencyRecord(manifest.dependencies);
+  const managedPeerDependencies = readManagedPeerDependencyKeys(manifest.openclaw).toSorted();
+  const dependencySnapshot: Record<string, string> = {};
+  for (const packageName of managedPeerDependencies) {
+    const dependencySpec = dependencies[packageName];
+    if (dependencySpec) {
+      dependencySnapshot[packageName] = dependencySpec;
+    }
+  }
+  return {
+    dependencies: dependencySnapshot,
+    managedPeerDependencies,
+  };
+}
+
+export async function restoreManagedNpmRootPeerDependencySnapshot(params: {
+  npmRoot: string;
+  snapshot: ManagedNpmRootPeerDependencySnapshot;
+}): Promise<void> {
+  const manifestPath = path.join(params.npmRoot, "package.json");
+  const manifest = await readManagedNpmRootManifest(manifestPath);
+  const dependencies = readDependencyRecord(manifest.dependencies);
+  for (const packageName of readManagedPeerDependencyKeys(manifest.openclaw)) {
+    delete dependencies[packageName];
+  }
+  Object.assign(dependencies, params.snapshot.dependencies);
+  const managedOverrideKeys = readManagedOverrideKeys(manifest.openclaw).toSorted();
+  const openclawMetadata = buildManagedOpenClawMetadata({
+    current: manifest.openclaw,
+    managedOverrideKeys,
+    managedPeerDependencyKeys: params.snapshot.managedPeerDependencies.toSorted(),
+  });
+  const next: ManagedNpmRootManifest = {
+    ...manifest,
+    private: true,
+    dependencies,
+  };
+  if (openclawMetadata) {
+    next.openclaw = openclawMetadata;
+  } else {
+    delete next.openclaw;
+  }
+  await writeJson(manifestPath, next, { trailingNewline: true });
 }
 
 export async function syncManagedNpmRootPeerDependencies(params: {

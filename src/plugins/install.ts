@@ -11,12 +11,15 @@ import {
 } from "../infra/install-source-utils.js";
 import { resolveNpmIntegrityDriftWithDefaultMessage } from "../infra/npm-integrity.js";
 import {
+  type ManagedNpmRootPeerDependencySnapshot,
   readManagedNpmRootInstalledDependency,
   readManagedNpmRootPeerDependencyNames,
+  readManagedNpmRootPeerDependencySnapshot,
   readOpenClawManagedNpmRootOverrides,
   repairManagedNpmRootOpenClawPeer,
   removeManagedNpmRootDependency,
   resolveManagedNpmRootDependencySpec,
+  restoreManagedNpmRootPeerDependencySnapshot,
   syncManagedNpmRootPeerDependencies,
   upsertManagedNpmRootDependency,
   type ManagedNpmRootInstalledDependency,
@@ -329,6 +332,7 @@ async function rollbackManagedNpmPluginInstall(params: {
   targetDir: string;
   timeoutMs: number;
   logger: PluginInstallLogger;
+  peerDependencySnapshot?: ManagedNpmRootPeerDependencySnapshot;
 }): Promise<void> {
   try {
     await runCommandWithTimeout(
@@ -373,6 +377,40 @@ async function rollbackManagedNpmPluginInstall(params: {
     params.logger.warn?.(
       `Failed to remove managed npm dependency ${params.packageName}: ${String(error)}`,
     );
+  }
+  if (params.peerDependencySnapshot) {
+    try {
+      await restoreManagedNpmRootPeerDependencySnapshot({
+        npmRoot: params.npmRoot,
+        snapshot: params.peerDependencySnapshot,
+      });
+      await runCommandWithTimeout(
+        [
+          "npm",
+          "install",
+          "--omit=dev",
+          "--omit=peer",
+          "--loglevel=error",
+          "--legacy-peer-deps",
+          "--ignore-scripts",
+          "--no-audit",
+          "--no-fund",
+        ],
+        {
+          cwd: params.npmRoot,
+          timeoutMs: Math.max(params.timeoutMs, 300_000),
+          env: createSafeNpmInstallEnv(process.env, {
+            legacyPeerDeps: true,
+            packageLock: true,
+            quiet: true,
+          }),
+        },
+      );
+    } catch (error) {
+      params.logger.warn?.(
+        `Failed to restore managed npm peer dependencies after rollback for ${params.packageName}: ${String(error)}`,
+      );
+    }
   }
   if (params.packageName !== "openclaw") {
     try {
@@ -571,6 +609,9 @@ async function installPluginFromManagedNpmRoot(
   }
   const preInstallRootPackageNames = await listManagedNpmRootPackageNames(npmRoot);
   const managedOverrides = await readOpenClawManagedNpmRootOverrides();
+  const rollbackPeerDependencySnapshot = await readManagedNpmRootPeerDependencySnapshot({
+    npmRoot,
+  });
   await upsertManagedNpmRootDependency({
     npmRoot,
     packageName: params.packageName,
@@ -624,6 +665,7 @@ async function installPluginFromManagedNpmRoot(
       targetDir: installRoot,
       timeoutMs,
       logger,
+      peerDependencySnapshot: rollbackPeerDependencySnapshot,
     });
     return {
       ok: false,
@@ -649,6 +691,7 @@ async function installPluginFromManagedNpmRoot(
         targetDir: installRoot,
         timeoutMs,
         logger,
+        peerDependencySnapshot: rollbackPeerDependencySnapshot,
       });
       return {
         ok: false,
@@ -671,6 +714,7 @@ async function installPluginFromManagedNpmRoot(
       targetDir: installRoot,
       timeoutMs,
       logger,
+      peerDependencySnapshot: rollbackPeerDependencySnapshot,
     });
     return {
       ok: false,
@@ -700,6 +744,7 @@ async function installPluginFromManagedNpmRoot(
       targetDir: installRoot,
       timeoutMs,
       logger,
+      peerDependencySnapshot: rollbackPeerDependencySnapshot,
     });
     return {
       ok: false,
@@ -713,6 +758,7 @@ async function installPluginFromManagedNpmRoot(
       targetDir: installRoot,
       timeoutMs,
       logger,
+      peerDependencySnapshot: rollbackPeerDependencySnapshot,
     });
     return {
       ok: false,
@@ -733,6 +779,7 @@ async function installPluginFromManagedNpmRoot(
       targetDir: installRoot,
       timeoutMs,
       logger,
+      peerDependencySnapshot: rollbackPeerDependencySnapshot,
     });
     return {
       ok: false,
@@ -751,6 +798,7 @@ async function installPluginFromManagedNpmRoot(
       targetDir: installRoot,
       timeoutMs,
       logger,
+      peerDependencySnapshot: rollbackPeerDependencySnapshot,
     });
     return {
       ok: false,
@@ -781,6 +829,7 @@ async function installPluginFromManagedNpmRoot(
       targetDir: installRoot,
       timeoutMs,
       logger,
+      peerDependencySnapshot: rollbackPeerDependencySnapshot,
     });
     return result;
   }

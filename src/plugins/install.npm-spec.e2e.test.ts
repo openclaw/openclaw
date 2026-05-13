@@ -540,6 +540,146 @@ describe("installPluginFromNpmSpec e2e", () => {
     ).resolves.toBeTruthy();
   });
 
+  it("bounds peer dependency discovery across repeated nested package realpaths", async () => {
+    const rootDir = await makeTempDir("npm-plugin-peer-cycle-e2e");
+    const npmRoot = path.join(rootDir, "managed-npm");
+    const existingPlugin = `existing-plugin-${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+    const laterPlugin = `later-plugin-${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+    const registry = await startStaticRegistry([
+      {
+        packageName: existingPlugin,
+        latest: "1.0.0",
+        versions: [
+          await packPlugin({
+            packageName: existingPlugin,
+            pluginId: existingPlugin,
+            version: "1.0.0",
+            rootDir,
+          }),
+        ],
+      },
+      {
+        packageName: laterPlugin,
+        latest: "1.0.0",
+        versions: [
+          await packPlugin({
+            packageName: laterPlugin,
+            pluginId: laterPlugin,
+            version: "1.0.0",
+            rootDir,
+          }),
+        ],
+      },
+    ]);
+    process.env.NPM_CONFIG_REGISTRY = registry;
+    process.env.npm_config_registry = registry;
+
+    await fs.mkdir(npmRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(npmRoot, "package.json"),
+      `${JSON.stringify(
+        {
+          private: true,
+          dependencies: { [existingPlugin]: "1.0.0" },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    await execFileAsync(
+      "npm",
+      [
+        "install",
+        "--omit=dev",
+        "--omit=peer",
+        "--legacy-peer-deps",
+        "--loglevel=error",
+        "--ignore-scripts",
+        "--no-audit",
+        "--no-fund",
+      ],
+      { cwd: npmRoot },
+    );
+    const existingPluginDir = path.join(npmRoot, "node_modules", existingPlugin);
+    await fs.mkdir(path.join(existingPluginDir, "node_modules"), { recursive: true });
+    await fs.symlink(existingPluginDir, path.join(existingPluginDir, "node_modules", "self"));
+
+    const later = await installPluginFromNpmSpec({
+      spec: `${laterPlugin}@1.0.0`,
+      npmDir: npmRoot,
+      logger: { info: () => {}, warn: () => {} },
+      timeoutMs: 120_000,
+    });
+
+    expect(later.ok).toBe(true);
+    await expect(
+      fs.lstat(path.join(npmRoot, "node_modules", laterPlugin, "package.json")),
+    ).resolves.toBeTruthy();
+  });
+
+  it("rolls back managed peer dependencies added before a failed install scan", async () => {
+    const rootDir = await makeTempDir("npm-plugin-peer-rollback-e2e");
+    const npmRoot = path.join(rootDir, "managed-npm");
+    const blockedPlugin = `blocked-plugin-${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+    const runtimePeer = `runtime-peer-${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+    const registry = await startStaticRegistry([
+      {
+        packageName: blockedPlugin,
+        latest: "1.0.0",
+        versions: [
+          await packPlugin({
+            packageName: blockedPlugin,
+            peerDependencies: { [runtimePeer]: "^1.0.0" },
+            peerDependenciesMeta: {},
+            pluginId: blockedPlugin,
+            version: "1.0.0",
+            rootDir,
+          }),
+        ],
+      },
+      {
+        packageName: runtimePeer,
+        latest: "1.0.0",
+        versions: [
+          await packPlugin({
+            indexJs: "eval('1');\n",
+            packageName: runtimePeer,
+            pluginId: runtimePeer,
+            version: "1.0.0",
+            rootDir,
+          }),
+        ],
+      },
+    ]);
+    process.env.NPM_CONFIG_REGISTRY = registry;
+    process.env.npm_config_registry = registry;
+
+    const result = await installPluginFromNpmSpec({
+      spec: `${blockedPlugin}@1.0.0`,
+      npmDir: npmRoot,
+      logger: { info: () => {}, warn: () => {} },
+      timeoutMs: 120_000,
+    });
+
+    expect(result.ok).toBe(false);
+    const rootManifest = JSON.parse(
+      await fs.readFile(path.join(npmRoot, "package.json"), "utf8"),
+    ) as {
+      dependencies?: Record<string, string>;
+      openclaw?: { managedPeerDependencies?: string[] };
+    };
+    expect(rootManifest.dependencies?.[blockedPlugin]).toBeUndefined();
+    expect(rootManifest.dependencies?.[runtimePeer]).toBeUndefined();
+    expect(rootManifest.openclaw?.managedPeerDependencies ?? []).not.toContain(runtimePeer);
+    await expect(
+      fs.lstat(path.join(npmRoot, "node_modules", blockedPlugin, "package.json")),
+    ).rejects.toHaveProperty("code", "ENOENT");
+    await expect(
+      fs.lstat(path.join(npmRoot, "node_modules", runtimePeer, "package.json")),
+    ).rejects.toHaveProperty("code", "ENOENT");
+  });
+
   it("scrubs host peers when installing beside an existing host-peer plugin", async () => {
     const rootDir = await makeTempDir("npm-plugin-sibling-peer-e2e");
     const npmRoot = path.join(rootDir, "managed-npm");
