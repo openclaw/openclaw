@@ -1115,6 +1115,10 @@ export const vi: TranslationMap = {
   },
   cron: {
     channelLast: "last",
+    presenter: {
+      at: "Vào",
+      every: "Mỗi",
+    },
     newJob: "+ New",
     runIfDue: "Run if due",
     tokens: "{count} tokens",

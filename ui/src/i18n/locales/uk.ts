@@ -1126,6 +1126,10 @@ export const uk: TranslationMap = {
   },
   cron: {
     channelLast: "last",
+    presenter: {
+      at: "О",
+      every: "Кожні",
+    },
     newJob: "+ New",
     runIfDue: "Run if due",
     tokens: "{count} tokens",

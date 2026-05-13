@@ -1,8 +1,15 @@
 import { formatDurationHuman } from "../../../src/infra/format-time/format-duration.ts";
-import { formatRelativeTimestamp } from "../../../src/infra/format-time/format-relative.ts";
+import { formatRelativeTimestamp as formatRelativeTimestampRaw } from "../../../src/infra/format-time/format-relative.ts";
 import { t } from "../i18n/index.ts";
+import { i18n } from "../i18n/lib/translate.ts";
 
-export { formatRelativeTimestamp, formatDurationHuman };
+export function formatRelativeTimestamp(
+  timestampMs: number | null | undefined,
+  options?: Parameters<typeof formatRelativeTimestampRaw>[1],
+): string {
+  return formatRelativeTimestampRaw(timestampMs, { ...options, locale: i18n.getLocale() });
+}
+export { formatDurationHuman };
 export { stripThinkingTags } from "./strip-thinking-tags.ts";
 
 export function formatUnknownText(

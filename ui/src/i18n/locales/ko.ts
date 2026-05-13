@@ -1116,6 +1116,10 @@ export const ko: TranslationMap = {
   },
   cron: {
     channelLast: "last",
+    presenter: {
+      at: "시간",
+      every: "매",
+    },
     newJob: "+ New",
     runIfDue: "Run if due",
     tokens: "{count} tokens",

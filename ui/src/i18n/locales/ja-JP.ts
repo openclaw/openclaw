@@ -1127,6 +1127,10 @@ export const ja_JP: TranslationMap = {
   },
   cron: {
     channelLast: "last",
+    presenter: {
+      at: "時刻",
+      every: "毎",
+    },
     newJob: "+ New",
     runIfDue: "Run if due",
     tokens: "{count} tokens",
