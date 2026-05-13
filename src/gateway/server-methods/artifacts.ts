@@ -17,7 +17,11 @@ import {
   validateArtifactsListParams,
 } from "../protocol/index.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
-import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "../session-store-key.js";
+import {
+  resolveSessionStoreAgentId,
+  resolveSessionStoreKey,
+  resolveStoredSessionKeyForAgentStore,
+} from "../session-store-key.js";
 import { loadSessionEntry, visitSessionMessagesAsync } from "../session-utils.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -80,6 +84,7 @@ function resolveRequesterSessionAgentId(
 function resolveScopedArtifactSessionKey(
   sessionKey: string | undefined,
   agentId: string | undefined,
+  cfg?: OpenClawConfig,
 ): string | undefined {
   const key = asNonEmptyString(sessionKey);
   if (!key) {
@@ -90,10 +95,25 @@ function resolveScopedArtifactSessionKey(
     return key;
   }
   const parsed = parseAgentSessionKey(key);
-  if (parsed && parsed.agentId !== normalizeAgentId(scopedAgentId)) {
+  if (!parsed && key.toLowerCase().startsWith("agent:")) {
     return undefined;
   }
-  if (!parsed && key.toLowerCase().startsWith("agent:")) {
+  if (cfg) {
+    const scopedKey = resolveStoredSessionKeyForAgentStore({
+      cfg,
+      agentId: scopedAgentId,
+      sessionKey: key,
+    });
+    if (
+      scopedKey !== "global" &&
+      scopedKey !== "unknown" &&
+      resolveSessionStoreAgentId(cfg, scopedKey) !== normalizeAgentId(scopedAgentId)
+    ) {
+      return undefined;
+    }
+    return scopedKey;
+  }
+  if (parsed && parsed.agentId !== normalizeAgentId(scopedAgentId)) {
     return undefined;
   }
   return toAgentStoreSessionKey({ agentId: scopedAgentId, requestKey: key });
@@ -336,14 +356,14 @@ function collectArtifactsFromMessage(params: {
 
 function resolveQuerySessionKey(query: ArtifactQuery, cfg?: OpenClawConfig): string | undefined {
   if (query.sessionKey) {
-    return resolveScopedArtifactSessionKey(query.sessionKey, query.agentId);
+    return resolveScopedArtifactSessionKey(query.sessionKey, query.agentId, cfg);
   }
   if (query.runId) {
     const sessionKey = resolveSessionKeyForRun(
       query.runId,
       query.agentId ? { agentId: query.agentId } : {},
     );
-    return resolveScopedArtifactSessionKey(sessionKey, query.agentId);
+    return resolveScopedArtifactSessionKey(sessionKey, query.agentId, cfg);
   }
   if (query.taskId) {
     const task = getTaskSessionLookupByIdForStatus(query.taskId);
@@ -359,13 +379,13 @@ function resolveQuerySessionKey(query: ArtifactQuery, cfg?: OpenClawConfig): str
     }
     const agentId = query.agentId ?? taskAgentId;
     if (requesterSessionKey) {
-      return resolveScopedArtifactSessionKey(requesterSessionKey, agentId);
+      return resolveScopedArtifactSessionKey(requesterSessionKey, agentId, cfg);
     }
     const runId = asNonEmptyString(task?.runId);
     const sessionKey = runId
       ? resolveSessionKeyForRun(runId, agentId ? { agentId } : {})
       : undefined;
-    return resolveScopedArtifactSessionKey(sessionKey, agentId);
+    return resolveScopedArtifactSessionKey(sessionKey, agentId, cfg);
   }
   return undefined;
 }

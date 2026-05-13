@@ -47,11 +47,7 @@ import {
   resolveSessionStoreAgentId,
   resolveStoredSessionKeyForAgentStore,
 } from "../session-store-key.js";
-import {
-  listAgentsForGateway,
-  loadCombinedSessionStoreForGateway,
-  loadSessionEntry,
-} from "../session-utils.js";
+import { loadCombinedSessionStoreForGateway, loadSessionEntry } from "../session-utils.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 const COST_USAGE_CACHE_TTL_MS = 30_000;
@@ -374,21 +370,15 @@ async function discoverAllSessionsForUsage(params: {
   endMs: number;
 }): Promise<DiscoveredSessionWithAgent[]> {
   const scopedAgentId = normalizeAgentId(params.agentId);
-  const agents = listAgentsForGateway(params.config).agents.filter(
-    (agent) => normalizeAgentId(agent.id) === scopedAgentId,
-  );
-  const results = await Promise.all(
-    agents.map(async (agent) => {
-      const sessions = await discoverAllSessions({
-        agentId: agent.id,
-        startMs: params.startMs,
-        endMs: params.endMs,
-        includeFirstUserMessage: false,
-      });
-      return sessions.map((session) => Object.assign({}, session, { agentId: agent.id }));
-    }),
-  );
-  return results.flat().toSorted((a, b) => b.mtime - a.mtime);
+  const sessions = await discoverAllSessions({
+    agentId: scopedAgentId,
+    startMs: params.startMs,
+    endMs: params.endMs,
+    includeFirstUserMessage: false,
+  });
+  return sessions
+    .map((session) => Object.assign({}, session, { agentId: scopedAgentId }))
+    .toSorted((a, b) => b.mtime - a.mtime);
 }
 
 function addUniqueSessionIds(target: string[], ids: Array<string | undefined>): string[] {

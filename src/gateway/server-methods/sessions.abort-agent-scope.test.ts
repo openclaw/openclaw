@@ -100,4 +100,58 @@ describe("sessions.abort agent scope", () => {
       }),
     );
   });
+
+  it("rejects key-based aborts when key agent does not match agentId", async () => {
+    const context = {
+      chatAbortControllers: new Map(),
+      getRuntimeConfig: () => ({
+        agents: { list: [{ id: "main", default: true }, { id: "beta" }] },
+      }),
+    } as unknown as GatewayRequestContext;
+    const respond = vi.fn() as unknown as RespondFn;
+
+    await sessionsHandlers["sessions.abort"]({
+      req: { id: "req-3" } as never,
+      params: { key: "agent:beta:main", agentId: "main" },
+      respond,
+      context,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(chatAbortMock).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: "session key agent does not match agentId",
+      }),
+    );
+  });
+
+  it("applies agentId to legacy key-based abort aliases", async () => {
+    const context = {
+      chatAbortControllers: new Map(),
+      getRuntimeConfig: () => ({
+        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      }),
+    } as unknown as GatewayRequestContext;
+    const respond = vi.fn() as unknown as RespondFn;
+
+    await sessionsHandlers["sessions.abort"]({
+      req: { id: "req-4" } as never,
+      params: { key: "main", agentId: "work" },
+      respond,
+      context,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(chatAbortMock).toHaveBeenCalledTimes(1);
+    expect(chatAbortMock.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        params: { sessionKey: "agent:work:main", runId: undefined },
+      }),
+    );
+  });
 });

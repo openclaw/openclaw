@@ -84,7 +84,12 @@ import {
   getSessionCompactionCheckpoint,
   listSessionCompactionCheckpoints,
 } from "../session-compaction-checkpoints.js";
-import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "../session-store-key.js";
+import {
+  resolveSessionStoreAgentId,
+  resolveSessionStoreKey,
+  resolveStoredSessionKeyForAgentStore,
+  resolveStoredSessionOwnerAgentId,
+} from "../session-store-key.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
   archiveFileOnDisk,
@@ -479,6 +484,35 @@ function sessionKeyBelongsToAgent(
 ): boolean {
   const sessionAgentId = resolveSessionKeyAgentId(sessionKey, cfg);
   return Boolean(sessionAgentId && sessionAgentId === normalizeAgentId(agentId));
+}
+
+function resolveScopedAbortKey(params: {
+  cfg: OpenClawConfig;
+  key: string | undefined;
+  agentId: string | undefined;
+}): string | undefined {
+  const key = normalizeOptionalString(params.key);
+  if (!key) {
+    return undefined;
+  }
+  const requestedAgentId = normalizeOptionalString(params.agentId);
+  if (!requestedAgentId) {
+    return key;
+  }
+  const scopedAgentId = normalizeAgentId(requestedAgentId);
+  const ownerAgentId = resolveStoredSessionOwnerAgentId({
+    cfg: params.cfg,
+    agentId: scopedAgentId,
+    sessionKey: key,
+  });
+  if (ownerAgentId && ownerAgentId !== scopedAgentId) {
+    return undefined;
+  }
+  return resolveStoredSessionKeyForAgentStore({
+    cfg: params.cfg,
+    agentId: scopedAgentId,
+    sessionKey: key,
+  });
 }
 
 function collectTrackedActiveSessionRunKeys(
@@ -1582,13 +1616,25 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const cfg = context.getRuntimeConfig();
     const requestedRunId = readStringValue(p.runId);
     const requestedKey = normalizeOptionalString(p.key);
-    const requestedKeyAgentId = requestedKey
-      ? resolveSessionKeyAgentId(requestedKey, cfg)
+    const requestedParamAgentId = normalizeOptionalString(p.agentId);
+    const scopedRequestedKey = resolveScopedAbortKey({
+      cfg,
+      key: requestedKey,
+      agentId: requestedParamAgentId,
+    });
+    if (requestedKey && requestedParamAgentId && !scopedRequestedKey) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "session key agent does not match agentId"),
+      );
+      return;
+    }
+    const requestedKeyAgentId = scopedRequestedKey
+      ? resolveSessionKeyAgentId(scopedRequestedKey, cfg)
       : undefined;
     const requestedRunAgentId = requestedRunId
-      ? normalizeAgentId(
-          normalizeOptionalString(p.agentId) ?? requestedKeyAgentId ?? resolveDefaultAgentId(cfg),
-        )
+      ? normalizeAgentId(requestedParamAgentId ?? requestedKeyAgentId ?? resolveDefaultAgentId(cfg))
       : undefined;
     const activeRunSessionKey =
       requestedRunId && requestedRunAgentId
@@ -1601,7 +1647,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           : undefined
         : undefined;
     const keyCandidate =
-      p.key ??
+      scopedRequestedKey ??
       scopedActiveRunSessionKey ??
       (requestedRunId && requestedRunAgentId
         ? resolveSessionKeyForRun(requestedRunId, { agentId: requestedRunAgentId })

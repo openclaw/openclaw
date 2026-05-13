@@ -141,6 +141,29 @@ describe("artifacts RPC handlers", () => {
     expectFields(payload.artifacts?.[0], { sessionKey: "agent:work:main" });
   });
 
+  it("canonicalizes scoped sessionKey aliases with runtime config", async () => {
+    const { calls, respond } = createResponder();
+
+    await artifactsHandlers["artifacts.list"]?.({
+      req: { type: "req", id: "session-alias-main-key", method: "artifacts.list", params: {} },
+      params: { sessionKey: "main", agentId: "work" },
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+      context: {
+        getRuntimeConfig: () => ({
+          session: { mainKey: "primary" },
+          agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        }),
+      } as never,
+    });
+
+    expect(calls[0]?.ok).toBe(true);
+    expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("agent:work:primary");
+    const payload = calls[0]?.payload as { artifacts?: Array<Record<string, unknown>> };
+    expectFields(payload.artifacts?.[0], { sessionKey: "agent:work:primary" });
+  });
+
   it("gets and downloads an inline artifact", async () => {
     const listed = collectArtifactsFromMessages({
       sessionKey: "agent:main:main",

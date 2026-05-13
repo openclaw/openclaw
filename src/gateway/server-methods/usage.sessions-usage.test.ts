@@ -50,6 +50,16 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
           },
         ];
       }
+      if (params?.agentId === "codex") {
+        return [
+          {
+            sessionId: "s-codex",
+            sessionFile: "/tmp/agents/codex/sessions/s-codex.jsonl",
+            mtime: 300,
+            firstUserMessage: "disk",
+          },
+        ];
+      }
       return [];
     }),
     loadSessionCostSummaryFromCache: vi.fn(async () => ({
@@ -196,6 +206,24 @@ describe("sessions.usage", () => {
     expect(sessions).toHaveLength(1);
     expect(sessions[0].key).toBe("agent:opus:s-opus");
     expect(sessions[0].agentId).toBe("opus");
+  });
+
+  it("discovers usage for requested disk-only agents not listed in config", async () => {
+    const respond = await runSessionsUsage({ ...BASE_USAGE_RANGE, agentId: "codex" });
+
+    expect(vi.mocked(loadCombinedSessionStoreForGateway)).toHaveBeenCalledWith(
+      TEST_RUNTIME_CONFIG,
+      { agentId: "codex" },
+    );
+    expect(vi.mocked(discoverAllSessions)).toHaveBeenCalledTimes(1);
+    expect((mockArg(vi.mocked(discoverAllSessions), 0, 0) as { agentId?: string }).agentId).toBe(
+      "codex",
+    );
+
+    const sessions = expectSuccessfulSessionsUsage(respond);
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0].key).toBe("agent:codex:s-codex");
+    expect(sessions[0].agentId).toBe("codex");
   });
 
   it("does not attach out-of-scope store entries to list-style usage results", async () => {
