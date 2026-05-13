@@ -1174,6 +1174,46 @@ describe("createCliJsonlStreamingParser", () => {
     });
   });
 
+  it("prefers streamed final-answer phase content over generic item text", () => {
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "codex",
+        output: "jsonl",
+      },
+      providerId: "openai-cli",
+      onAssistantDelta: () => {
+        throw new Error("unexpected streaming delta");
+      },
+    });
+
+    parser.push(
+      [
+        JSON.stringify({
+          item: {
+            type: "message",
+            text: "Generic item text",
+          },
+        }),
+        JSON.stringify({
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "assistant",
+            phase: "final_answer",
+            content: [{ type: "output_text", text: "Final answer text" }],
+          },
+        }),
+      ].join("\n"),
+    );
+    parser.finish();
+
+    expect(parser.getOutput()).toEqual({
+      text: "Final answer text",
+      sessionId: undefined,
+      usage: undefined,
+    });
+  });
+
   it("keeps streamed commentary-only structured output empty instead of null", () => {
     const parser = createCliJsonlStreamingParser({
       backend: {
