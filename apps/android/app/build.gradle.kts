@@ -227,6 +227,9 @@ dependencies {
 
 tasks.withType<Test>().configureEach {
   useJUnitPlatform()
+  // Robolectric's bundled Conscrypt 2.5.2 does not ship a Linux aarch64 native library.
+  // Keep JVM unit tests portable on ARM64 builders such as Raspberry Pi hosts.
+  systemProperty("robolectric.conscryptMode", "OFF")
 }
 
 androidComponents {
