@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const FORBIDDEN_CHANGELOG_THANKS_EXACT_HANDLES = [
+  // Shell metadata can serialize a missing GitHub login as the literal string "null".
   "null",
   "codex",
   "openclaw",
@@ -23,6 +24,7 @@ export function isForbiddenChangelogThanksHandle(handle, options = {}) {
   const { strictBotHandle = false } = options;
   const normalized = handle.toLowerCase();
   if (normalized === "") {
+    // Empty input is not a GitHub handle, but the shell query path may pass it through.
     return true;
   }
   if (
@@ -32,6 +34,7 @@ export function isForbiddenChangelogThanksHandle(handle, options = {}) {
     return true;
   }
   if (strictBotHandle) {
+    // PR-author checks should not reject a real human whose login merely contains a bot keyword.
     return false;
   }
   return false;
@@ -44,6 +47,7 @@ export function findForbiddenChangelogThanks(content) {
       if (!THANKS_PATTERN.test(text)) {
         return null;
       }
+      // A single changelog line may thank multiple handles; scan all of them.
       for (const match of text.matchAll(THANKED_HANDLE_PATTERN)) {
         if (isForbiddenChangelogThanksHandle(match[1])) {
           return { line: index + 1, handle: match[1].toLowerCase(), text };
