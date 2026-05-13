@@ -224,15 +224,23 @@ export function isSilentOverflowProneModel(model: {
  * or an active model that is silent-overflow-prone (openclaw#75799).
  * Default-mode runs against ordinary providers keep Pi's auto-compaction as
  * the existing baseline.
+ *
+ * EXCEPTION: when the engine declares `interceptsCompaction === true`, we MUST
+ * leave Pi's auto-compaction enabled so the threshold check in Pi still fires
+ * the `session_before_compact` event — that event is the hook the engine
+ * registers an extension against to take over compaction losslessly. Disabling
+ * Pi here would silently turn the engine's intercept extension into dead code
+ * (openclaw#81164).
  */
 export function shouldDisablePiAutoCompaction(params: {
   contextEngineInfo?: ContextEngineInfo;
   compactionMode?: AgentCompactionMode;
   silentOverflowProneProvider?: boolean;
 }): boolean {
+  const intercepts = params.contextEngineInfo?.interceptsCompaction === true;
   return (
-    params.contextEngineInfo?.ownsCompaction === true ||
-    params.compactionMode === "safeguard" ||
+    (params.contextEngineInfo?.ownsCompaction === true && !intercepts) ||
+    (params.compactionMode === "safeguard" && !intercepts) ||
     params.silentOverflowProneProvider === true
   );
 }

@@ -615,6 +615,55 @@ describe("shouldDisablePiAutoCompaction", () => {
   it("returns true for silent-overflow-prone providers", () => {
     expect(shouldDisablePiAutoCompaction({ silentOverflowProneProvider: true })).toBe(true);
   });
+
+  // openclaw#81164 — when the engine intercepts compaction via the pi-coding-agent
+  // SDK `session_before_compact` event, Pi's threshold check MUST keep running so
+  // the event still emits. Disabling Pi here would silently turn the engine's
+  // intercept extension into dead code.
+  it("returns false when an engine that owns compaction ALSO declares interceptsCompaction", () => {
+    expect(
+      shouldDisablePiAutoCompaction({
+        contextEngineInfo: {
+          id: "lossless-claw",
+          name: "Lossless Claw",
+          ownsCompaction: true,
+          interceptsCompaction: true,
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false in safeguard mode when the engine declares interceptsCompaction", () => {
+    expect(
+      shouldDisablePiAutoCompaction({
+        contextEngineInfo: {
+          id: "lossless-claw",
+          name: "Lossless Claw",
+          ownsCompaction: true,
+          interceptsCompaction: true,
+        },
+        compactionMode: "safeguard",
+      }),
+    ).toBe(false);
+  });
+
+  it("still returns true for silent-overflow-prone providers even when interceptsCompaction is set", () => {
+    // Silent-overflow protection is a hard safety guarantee — the provider can
+    // truncate the prompt without warning, so Pi's auto-compaction must stay
+    // disabled regardless of the engine's intercept opt-in. The engine's
+    // own preemptive compaction is expected to keep the prompt under the cap.
+    expect(
+      shouldDisablePiAutoCompaction({
+        contextEngineInfo: {
+          id: "lossless-claw",
+          name: "Lossless Claw",
+          ownsCompaction: true,
+          interceptsCompaction: true,
+        },
+        silentOverflowProneProvider: true,
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("applyPiAutoCompactionGuard", () => {
