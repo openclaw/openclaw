@@ -661,7 +661,6 @@ export async function sendMessageTelegram(
       targetMessageThreadId: target.messageThreadId,
       messageThreadId: opts.messageThreadId,
     }),
-    { allowDmThreadFallback: true },
   );
   const requestWithDiag = createTelegramNonIdempotentRequestWithDiag({
     cfg,
@@ -1539,7 +1538,6 @@ export async function sendStickerTelegram(
       targetMessageThreadId: target.messageThreadId,
       messageThreadId: opts.messageThreadId,
     }),
-    { allowDmThreadFallback: true },
   );
 
   const requestWithDiag = createTelegramNonIdempotentRequestWithDiag({
@@ -1671,7 +1669,6 @@ export async function sendPollTelegram(
       targetMessageThreadId: target.messageThreadId,
       messageThreadId: opts.messageThreadId,
     }),
-    { allowDmThreadFallback: true },
   );
 
   const result = await withTelegramThreadFallback(

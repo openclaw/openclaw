@@ -1774,49 +1774,32 @@ describe("sendMessageTelegram", () => {
     }
   });
 
-  it("retries direct sends without message_thread_id on thread-not-found", async () => {
+  it("does not retry direct sends without message_thread_id on thread-not-found", async () => {
     const cases = [
       { name: "private", chatId: "123456789", text: "hello private", messageId: 59 },
     ] as const;
     const threadErr = new Error("400: Bad Request: message thread not found");
 
     for (const testCase of cases) {
-      const sendMessage = vi
-        .fn()
-        .mockRejectedValueOnce(threadErr)
-        .mockResolvedValueOnce({
-          message_id: testCase.messageId,
-          chat: { id: testCase.chatId },
-        });
+      const sendMessage = vi.fn().mockRejectedValueOnce(threadErr);
       const api = { sendMessage } as unknown as {
         sendMessage: typeof sendMessage;
       };
 
-      const res = await sendMessageTelegram(testCase.chatId, testCase.text, {
-        cfg: TELEGRAM_TEST_CFG,
-        token: "tok",
-        api,
-        messageThreadId: 271,
-      });
+      await expect(
+        sendMessageTelegram(testCase.chatId, testCase.text, {
+          cfg: TELEGRAM_TEST_CFG,
+          token: "tok",
+          api,
+          messageThreadId: 271,
+        }),
+      ).rejects.toThrow(/message thread not found/);
 
-      expect(sendMessage, testCase.name).toHaveBeenNthCalledWith(
-        1,
-        testCase.chatId,
-        testCase.text,
-        {
-          parse_mode: "HTML",
-          message_thread_id: 271,
-        },
-      );
-      expect(sendMessage, testCase.name).toHaveBeenNthCalledWith(
-        2,
-        testCase.chatId,
-        testCase.text,
-        {
-          parse_mode: "HTML",
-        },
-      );
-      expect(res.messageId, testCase.name).toBe(String(testCase.messageId));
+      expect(sendMessage, testCase.name).toHaveBeenCalledTimes(1);
+      expect(sendMessage, testCase.name).toHaveBeenCalledWith(testCase.chatId, testCase.text, {
+        parse_mode: "HTML",
+        message_thread_id: 271,
+      });
     }
   });
 
@@ -1844,38 +1827,31 @@ describe("sendMessageTelegram", () => {
     });
   });
 
-  it("retries resolved username DM sends without message_thread_id on thread-not-found", async () => {
+  it("does not retry resolved username DM sends without message_thread_id on thread-not-found", async () => {
     const chatId = "123456789";
     const threadErr = new Error("400: Bad Request: message thread not found");
-    const sendMessage = vi
-      .fn()
-      .mockRejectedValueOnce(threadErr)
-      .mockResolvedValueOnce({
-        message_id: 60,
-        chat: { id: chatId },
-      });
+    const sendMessage = vi.fn().mockRejectedValueOnce(threadErr);
     const getChat = vi.fn().mockResolvedValue({ id: Number(chatId) });
     const api = { sendMessage, getChat } as unknown as {
       sendMessage: typeof sendMessage;
       getChat: typeof getChat;
     };
 
-    const res = await sendMessageTelegram("@alice_user", "hello private", {
-      cfg: TELEGRAM_TEST_CFG,
-      token: "tok",
-      api,
-      messageThreadId: 271,
-    });
+    await expect(
+      sendMessageTelegram("@alice_user", "hello private", {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        api,
+        messageThreadId: 271,
+      }),
+    ).rejects.toThrow(/message thread not found/);
 
     expect(getChat).toHaveBeenCalledWith("@alice_user");
-    expect(sendMessage).toHaveBeenNthCalledWith(1, chatId, "hello private", {
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith(chatId, "hello private", {
       parse_mode: "HTML",
       message_thread_id: 271,
     });
-    expect(sendMessage).toHaveBeenNthCalledWith(2, chatId, "hello private", {
-      parse_mode: "HTML",
-    });
-    expect(res.messageId).toBe("60");
   });
 
   it("does not retry on non-retriable thread/chat errors", async () => {
@@ -2054,16 +2030,10 @@ describe("sendMessageTelegram", () => {
     });
   });
 
-  it("retries direct media sends without message_thread_id when thread is missing", async () => {
+  it("does not retry direct media sends without message_thread_id when thread is missing", async () => {
     const chatId = "123456789";
     const threadErr = new Error("400: Bad Request: message thread not found");
-    const sendPhoto = vi
-      .fn()
-      .mockRejectedValueOnce(threadErr)
-      .mockResolvedValueOnce({
-        message_id: 59,
-        chat: { id: chatId },
-      });
+    const sendPhoto = vi.fn().mockRejectedValueOnce(threadErr);
     const api = { sendPhoto } as unknown as {
       sendPhoto: typeof sendPhoto;
     };
@@ -2074,14 +2044,17 @@ describe("sendMessageTelegram", () => {
       fileName: "photo.jpg",
     });
 
-    const res = await sendMessageTelegram(chatId, "photo", {
-      cfg: TELEGRAM_TEST_CFG,
-      token: "tok",
-      api,
-      mediaUrl: "https://example.com/photo.jpg",
-      messageThreadId: 271,
-    });
+    await expect(
+      sendMessageTelegram(chatId, "photo", {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        api,
+        mediaUrl: "https://example.com/photo.jpg",
+        messageThreadId: 271,
+      }),
+    ).rejects.toThrow(/message thread not found/);
 
+    expect(sendPhoto).toHaveBeenCalledTimes(1);
     expectMediaSendCall(
       firstMockCall(sendPhoto, "first send photo call"),
       "first send photo call",
@@ -2092,16 +2065,6 @@ describe("sendMessageTelegram", () => {
         message_thread_id: 271,
       },
     );
-    expectMediaSendCall(
-      mockCall(sendPhoto, 1, "second send photo call"),
-      "second send photo call",
-      chatId,
-      {
-        caption: "photo",
-        parse_mode: "HTML",
-      },
-    );
-    expect(res.messageId).toBe("59");
   });
 
   it("defaults outbound media uploads to 100MB", async () => {
@@ -2523,32 +2486,27 @@ describe("sendStickerTelegram", () => {
     });
   });
 
-  it("retries direct sticker sends without message_thread_id when thread is missing", async () => {
+  it("does not retry direct sticker sends without message_thread_id when thread is missing", async () => {
     const chatId = "123456789";
     const threadErr = new Error("400: Bad Request: message thread not found");
-    const sendSticker = vi
-      .fn()
-      .mockRejectedValueOnce(threadErr)
-      .mockResolvedValueOnce({
-        message_id: 109,
-        chat: { id: chatId },
-      });
+    const sendSticker = vi.fn().mockRejectedValueOnce(threadErr);
     const api = { sendSticker } as unknown as {
       sendSticker: typeof sendSticker;
     };
 
-    const res = await sendStickerTelegram(chatId, "fileId123", {
-      cfg: TELEGRAM_TEST_CFG,
-      token: "tok",
-      api,
-      messageThreadId: 271,
-    });
+    await expect(
+      sendStickerTelegram(chatId, "fileId123", {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        api,
+        messageThreadId: 271,
+      }),
+    ).rejects.toThrow(/message thread not found/);
 
-    expect(sendSticker).toHaveBeenNthCalledWith(1, chatId, "fileId123", {
+    expect(sendSticker).toHaveBeenCalledTimes(1);
+    expect(sendSticker).toHaveBeenCalledWith(chatId, "fileId123", {
       message_thread_id: 271,
     });
-    expect(sendSticker).toHaveBeenNthCalledWith(2, chatId, "fileId123", undefined);
-    expect(res.messageId).toBe("109");
   });
 
   it("fails when sticker send returns no message_id", async () => {
@@ -2999,7 +2957,7 @@ describe("sendPollTelegram", () => {
     expect(requireRecord(sendPollCall[3], "send poll params").open_period).toBe(60);
   });
 
-  it("retries direct poll sends without message_thread_id on thread-not-found", async () => {
+  it("does not retry direct poll sends without message_thread_id on thread-not-found", async () => {
     const api = {
       sendPoll: vi.fn(
         async (_chatId: string, _question: string, _options: string[], params: unknown) => {
@@ -3012,27 +2970,24 @@ describe("sendPollTelegram", () => {
       ),
     };
 
-    const res = await sendPollTelegram(
-      "123",
-      { question: "Q", options: ["A", "B"] },
-      {
-        cfg: TELEGRAM_TEST_CFG,
-        token: "t",
-        api: api as unknown as Bot["api"],
-        messageThreadId: 99,
-      },
-    );
+    await expect(
+      sendPollTelegram(
+        "123",
+        { question: "Q", options: ["A", "B"] },
+        {
+          cfg: TELEGRAM_TEST_CFG,
+          token: "t",
+          api: api as unknown as Bot["api"],
+          messageThreadId: 99,
+        },
+      ),
+    ).rejects.toThrow(/message thread not found/);
 
-    expect(res).toEqual({ messageId: "1", chatId: "2", pollId: "p2" });
-    expect(api.sendPoll).toHaveBeenCalledTimes(2);
+    expect(api.sendPoll).toHaveBeenCalledTimes(1);
     expect(
       requireRecord(firstMockCall(api.sendPoll, "send poll call")[3], "send poll params")
         .message_thread_id,
     ).toBe(99);
-    expect(
-      (mockCall(api.sendPoll, 1, "second send poll call")[3] as { message_thread_id?: unknown })
-        .message_thread_id,
-    ).toBeUndefined();
   });
 
   it("does not retry forum poll sends without message_thread_id on thread-not-found", async () => {
@@ -3061,7 +3016,7 @@ describe("sendPollTelegram", () => {
     expect(api.sendPoll.mock.calls[0]?.[3]).toMatchObject({ message_thread_id: 99 });
   });
 
-  it("retries resolved username DM poll sends without message_thread_id on thread-not-found", async () => {
+  it("does not retry resolved username DM poll sends without message_thread_id on thread-not-found", async () => {
     const api = {
       getChat: vi.fn(async () => ({ id: 123 })),
       sendPoll: vi.fn(
@@ -3075,25 +3030,22 @@ describe("sendPollTelegram", () => {
       ),
     };
 
-    const res = await sendPollTelegram(
-      "@alice_user",
-      { question: "Q", options: ["A", "B"] },
-      {
-        cfg: TELEGRAM_TEST_CFG,
-        token: "t",
-        api: api as unknown as Bot["api"],
-        messageThreadId: 99,
-      },
-    );
+    await expect(
+      sendPollTelegram(
+        "@alice_user",
+        { question: "Q", options: ["A", "B"] },
+        {
+          cfg: TELEGRAM_TEST_CFG,
+          token: "t",
+          api: api as unknown as Bot["api"],
+          messageThreadId: 99,
+        },
+      ),
+    ).rejects.toThrow(/message thread not found/);
 
-    expect(res).toEqual({ messageId: "1", chatId: "123", pollId: "p2" });
     expect(api.getChat).toHaveBeenCalledWith("@alice_user");
-    expect(api.sendPoll).toHaveBeenCalledTimes(2);
+    expect(api.sendPoll).toHaveBeenCalledTimes(1);
     expect(api.sendPoll.mock.calls[0]?.[3]).toMatchObject({ message_thread_id: 99 });
-    expect(
-      (api.sendPoll.mock.calls[1]?.[3] as { message_thread_id?: unknown } | undefined)
-        ?.message_thread_id,
-    ).toBeUndefined();
   });
 
   it("rejects durationHours for Telegram polls", async () => {
