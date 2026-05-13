@@ -127,6 +127,59 @@ describe("cron service timer regressions", () => {
     timeoutSpy.mockRestore();
   });
 
+  it("persists a completed due-job outcome before later batch jobs finish", async () => {
+    const store = timerRegressionFixtures.makeStorePath();
+    const now = Date.parse("2026-02-06T10:05:00.000Z");
+    const finishedJob = createDueIsolatedJob({
+      id: "finished",
+      nowMs: now,
+      nextRunAtMs: now - 2,
+      deleteAfterRun: true,
+    });
+    const blockingJob = createDueIsolatedJob({
+      id: "blocking",
+      nowMs: now,
+      nextRunAtMs: now - 1,
+      deleteAfterRun: true,
+    });
+    await writeCronJobs(store.storePath, [finishedJob, blockingJob]);
+
+    const blockingStarted = createDeferred<void>();
+    const releaseBlocking = createDeferred<void>();
+    const runIsolatedAgentJob = vi.fn(async ({ job }) => {
+      if (job.id === "finished") {
+        return { status: "ok" as const, summary: "finished" };
+      }
+      blockingStarted.resolve();
+      await releaseBlocking.promise;
+      return { status: "ok" as const, summary: "blocking finished" };
+    });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      cronConfig: { maxConcurrentRuns: 1 },
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    const timerRun = onTimer(state);
+    await blockingStarted.promise;
+
+    try {
+      const persisted = JSON.parse(await fs.readFile(store.storePath, "utf8")) as {
+        jobs: CronJob[];
+      };
+      expect(persisted.jobs.find((job) => job.id === "finished")).toBeUndefined();
+      expect(persisted.jobs.find((job) => job.id === "blocking")).toBeDefined();
+    } finally {
+      releaseBlocking.resolve();
+      await timerRun;
+    }
+  });
+
   it("#24355: one-shot job retries then succeeds", async () => {
     const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");
 
