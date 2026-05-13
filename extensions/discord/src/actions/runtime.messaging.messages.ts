@@ -75,9 +75,9 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
         channelId = parsed.channelId;
         messageId = parsed.messageId;
       }
-      if (!guildId || !channelId || !messageId) {
+      if (!channelId || !messageId) {
         throw new Error(
-          "Discord message fetch requires guildId, channelId, and messageId (or a valid messageLink).",
+          "Discord message fetch requires channelId and messageId (or a valid messageLink with guildId/channelId/messageId).",
         );
       }
       await ctx.assertReadTargetAllowed({ guildId, channelId });
