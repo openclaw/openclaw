@@ -59,13 +59,16 @@ function extractFailure(error: unknown): {
 }
 
 function resolveHomebrewPrefixFromExecPath(execPath: string): string | null {
+  if (Object.hasOwn(process.env, "HOMEBREW_PREFIX")) {
+    const envPrefix = process.env.HOMEBREW_PREFIX?.trim();
+    return envPrefix ? envPrefix : null;
+  }
   const marker = `${path.sep}Cellar${path.sep}`;
   const idx = execPath.indexOf(marker);
   if (idx > 0) {
     return execPath.slice(0, idx);
   }
-  const envPrefix = process.env.HOMEBREW_PREFIX?.trim();
-  return envPrefix ? envPrefix : null;
+  return null;
 }
 
 function resolveCertBundlePath(): string | null {
