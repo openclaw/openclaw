@@ -356,7 +356,22 @@ async function clearPendingFinalDeliveryAfterSuccess(params: {
   });
 }
 
-const LONG_TURN_PROGRESS_ACK_MS = 60_000;
+const PROMISE_ONLY_ACK_MAX_CHARS = 240;
+const PROMISE_ONLY_ACK_FALLBACK_TEXT =
+  "No result was produced. OpenClaw marked this turn as failed instead of sending a holding message.";
+const PROMISE_ONLY_ACK_RE =
+  /(?:\b(?:still\s+)?(?:working|checking|investigating|looking|reviewing|exploring|digging|on\s+it)\b[\s\S]{0,180}\b(?:i['’]?\s*ll|i\s+will|will)\s+(?:post|update|share|reply|come\s+back|let\s+you\s+know|get\s+back)\b|\b(?:i['’]?\s*m|i\s+am)\s+(?:working|checking|investigating|looking|reviewing|exploring|digging)\b[\s\S]{0,180}\b(?:i['’]?\s*ll|i\s+will|will)\s+(?:post|update|share|reply|come\s+back|let\s+you\s+know|get\s+back)\b|\b(?:i['’]?\s*ll|i\s+will)\s+(?:post|update|share|reply|come\s+back|let\s+you\s+know|get\s+back)\s+(?:here|in\s+this\s+(?:chat|topic|thread)|the\s+result)\b)/i;
+
+export function isPromiseOnlyAckReplyPayload(payload: ReplyPayload): boolean {
+  const text = payload.text?.trim() ?? "";
+  if (!text || text.length > PROMISE_ONLY_ACK_MAX_CHARS) {
+    return false;
+  }
+  if (resolveSendableOutboundReplyParts(payload).hasMedia) {
+    return false;
+  }
+  return PROMISE_ONLY_ACK_RE.test(text);
+}
 
 async function updateReplyTurnState(params: {
   storePath?: string;
@@ -825,25 +840,15 @@ export async function dispatchReplyFromConfig(
     sourceReplyDeliveryMode === "message_tool_only"
       ? { ...result, sourceReplyDeliveryMode }
       : result;
-  let visibleOutboundAttempted = false;
-  let longTurnProgressAckSent = false;
-  let longTurnProgressAckTimer: NodeJS.Timeout | undefined;
   const markVisibleOutboundIfContent = (payload: ReplyPayload) => {
     if (resolveSendableOutboundReplyParts(payload).hasContent) {
-      visibleOutboundAttempted = true;
-    }
-  };
-  const clearLongTurnProgressAckTimer = () => {
-    if (longTurnProgressAckTimer) {
-      clearTimeout(longTurnProgressAckTimer);
-      longTurnProgressAckTimer = undefined;
+      markProgress();
     }
   };
   const markReplyTurnClosed = async (
     state: "completed" | "failed" | "aborted",
     error?: string | null,
   ) => {
-    clearLongTurnProgressAckTimer();
     await updateReplyTurnState({
       storePath: sessionStoreEntry.storePath,
       sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
@@ -995,32 +1000,6 @@ export async function dispatchReplyFromConfig(
     state: "running",
     runId: params.replyOptions?.runId,
   });
-  if (!suppressDelivery) {
-    longTurnProgressAckTimer = setTimeout(() => {
-      if (visibleOutboundAttempted || longTurnProgressAckSent) {
-        return;
-      }
-      longTurnProgressAckSent = true;
-      const payload: ReplyPayload = { text: "Still working — I’ll update here." };
-      markVisibleOutboundIfContent(payload);
-      markProgress();
-      const send = async () => {
-        if (shouldRouteToOriginating) {
-          await sendPayloadAsync(payload, undefined, false);
-          return;
-        }
-        markInboundDedupeReplayUnsafe();
-        dispatcher.sendToolResult(payload);
-      };
-      void send().catch((err) => {
-        logVerbose(
-          `dispatch-from-config: long-turn progress ack failed: ${formatErrorMessage(err)}`,
-        );
-      });
-    }, LONG_TURN_PROGRESS_ACK_MS);
-    longTurnProgressAckTimer.unref?.();
-  }
-
   try {
     const abortRuntime = params.fastAbortResolver ? null : await loadAbortRuntime();
     const fastAbortResolver = params.fastAbortResolver ?? abortRuntime?.tryFastAbortFromMessage;
@@ -1075,13 +1054,22 @@ export async function dispatchReplyFromConfig(
     const shouldSendToolStartStatuses = shouldSendVerboseProgressMessages;
     const sendFinalPayload = async (
       payload: ReplyPayload,
-    ): Promise<{ queuedFinal: boolean; routedFinalCount: number }> => {
-      if (resolveSendableOutboundReplyParts(payload).hasContent) {
-        markVisibleOutboundIfContent(payload);
+    ): Promise<{ queuedFinal: boolean; routedFinalCount: number; promiseOnlyAck: boolean }> => {
+      const promiseOnlyAck = isPromiseOnlyAckReplyPayload(payload);
+      const outboundPayload = promiseOnlyAck
+        ? ({ text: PROMISE_ONLY_ACK_FALLBACK_TEXT } satisfies ReplyPayload)
+        : payload;
+      if (promiseOnlyAck) {
+        logVerbose(
+          `dispatch-from-config: promise-only acknowledgement final blocked (session=${sessionKey ?? "unknown"})`,
+        );
+      }
+      if (resolveSendableOutboundReplyParts(outboundPayload).hasContent) {
+        markVisibleOutboundIfContent(outboundPayload);
         markInboundDedupeReplayUnsafe();
       }
       const ttsPayload = await maybeApplyTtsToReplyPayload({
-        payload,
+        payload: outboundPayload,
         cfg,
         channel: deliveryChannel,
         kind: "final",
@@ -1101,12 +1089,14 @@ export async function dispatchReplyFromConfig(
         return {
           queuedFinal: result.ok,
           routedFinalCount: result.ok ? 1 : 0,
+          promiseOnlyAck,
         };
       }
       markInboundDedupeReplayUnsafe();
       return {
         queuedFinal: dispatcher.sendFinalReply(normalizedPayload),
         routedFinalCount: 0,
+        promiseOnlyAck,
       };
     };
 
@@ -1650,6 +1640,7 @@ export async function dispatchReplyFromConfig(
     let routedFinalCount = 0;
     let attemptedFinalDelivery = false;
     let finalDeliveryFailed = false;
+    let promiseOnlyAckBlocked = false;
     const shouldDeliverDespiteSourceReplySuppression = (reply: ReplyPayload) =>
       suppressAutomaticSourceDelivery &&
       !sendPolicyDenied &&
@@ -1667,6 +1658,7 @@ export async function dispatchReplyFromConfig(
       const finalReply = await sendFinalPayload(reply);
       queuedFinal = finalReply.queuedFinal || queuedFinal;
       routedFinalCount += finalReply.routedFinalCount;
+      promiseOnlyAckBlocked = finalReply.promiseOnlyAck || promiseOnlyAckBlocked;
       if (!finalReply.queuedFinal && finalReply.routedFinalCount === 0) {
         finalDeliveryFailed = true;
       }
@@ -1744,11 +1736,18 @@ export async function dispatchReplyFromConfig(
     counts.final += routedFinalCount;
     commitInboundDedupeIfClaimed();
     recordProcessed(
-      "completed",
-      pluginFallbackReason ? { reason: pluginFallbackReason } : undefined,
+      promiseOnlyAckBlocked ? "error" : "completed",
+      promiseOnlyAckBlocked
+        ? { reason: "promise_only_ack" }
+        : pluginFallbackReason
+          ? { reason: pluginFallbackReason }
+          : undefined,
     );
-    markIdle("message_completed");
-    await markReplyTurnClosed("completed");
+    markIdle(promiseOnlyAckBlocked ? "promise_only_ack" : "message_completed");
+    await markReplyTurnClosed(
+      promiseOnlyAckBlocked ? "failed" : "completed",
+      promiseOnlyAckBlocked ? "promise_only_ack" : undefined,
+    );
     return attachSourceReplyDeliveryMode({
       queuedFinal,
       counts,
