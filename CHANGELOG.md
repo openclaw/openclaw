@@ -7,8 +7,10 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - QA Lab/capture: normalize saved capture views from browser storage before loading, saving, or applying them, so malformed local saved-view data cannot pollute the capture inspector UI. (#77722) Thanks @AsaZhou923.
+- Anthropic: reseed Claude CLI fresh-session retries from bounded OpenClaw transcript history after session rotation, preventing conversation amnesia. Fixes #80905. (#80934) Thanks @bitloi.
 - Require explicit browser device pairing [AI]. (#81289) Thanks @pgondhi987.
 - Require Control UI pairing before proxy-scoped access [AI]. (#81288) Thanks @pgondhi987.
+- Installer: honor `--version` for git installs and install from the checked-in lockfile, preventing recent dependency pins from tripping pnpm's minimum-release-age gate during tag installs.
 - Harden trusted-proxy source validation [AI]. (#81290) Thanks @pgondhi987.
 - Agents: add permissive item schemas to array tool parameters before provider submission, preventing OpenAI-compatible schema validation from rejecting plugin tools that omit `items`. Fixes #81175. (#81217) Thanks @JARVIS-Glasses.
 - Agents: escalate LLM idle watchdog timeouts through profile rotation and configured model fallback instead of leaving agent turns stuck after a silent model stream. Fixes #76877. (#80449) Thanks @jimdawdy-hub.
@@ -163,6 +165,7 @@ Docs: https://docs.openclaw.ai
 - CLI/media: render terminal QR codes with full-block characters by default so the bundled `qrcode` terminal renderer does not emit a pathologically dense ANSI final row in compact half-block mode that breaks scanning in some terminals. Fixes #77820. Thanks @KrasimirKralev.
 - Agents/compaction: read post-compaction AGENTS.md refresh context from the queued run workspace instead of the runner process cwd, so CLI-backed follow-up turns re-inject the correct workspace startup rules after compaction. Fixes #70541. (#75532) Thanks @vyctorbrzezowski.
 - Agents/read tool: treat positive offsets beyond EOF as empty ranges instead of surfacing the upstream read error, so stale pagination cursors no longer crash tool calls while unrelated read failures still fail loud. Fixes #62466. (#75536) Thanks @vyctorbrzezowski.
+- Agents/memory-flush: surface non-abort memory-flush failures (provider timeout, transport error, generic agent failure) as visible reply payloads so the outer reply loop short-circuits and isolated cron runs propagate the error into `meta.error` instead of completing silently with `status: "ok"` and an empty payload. Previously only the specific "Memory flush writes are restricted to ..." message was surfaced. Fixes #80755. Thanks @nailujac.
 - Google/Gemini: normalize retired Gemini 3 Pro Preview refs left in Google API-key onboarding model allowlists and fallbacks, so setup-emitted config keeps testing `google/gemini-3.1-pro-preview` instead of `google/gemini-3-pro-preview`.
 - Telegram/context: bound selected topic context to the active session so messages from before `/new` or `/reset` are not replayed into later turns. (#80848) Thanks @VACInc.
 - Google/Gemini: normalize retired nested Gemini 3 Pro Preview ids when resolving exact configured proxy-provider refs, so `kilocode/google/gemini-3-pro-preview` resolves to `kilocode/google/gemini-3.1-pro-preview` for Gemini 3.1 testing.
@@ -283,6 +286,7 @@ Docs: https://docs.openclaw.ai
 - System events: dedupe keyed events across the queue while preserving unkeyed, delivery-route, and trust-boundary event identity. (#73040) Thanks @statxc.
 - Agents/UI: compact exec and tool progress rows by hiding redundant shell tool names, replacing known workspace paths with short context markers, and preserving Discord trace scrubbing for compact command lines.
 - ACPX: run and await the embedded ACP backend startup probe by default so the gateway `ready` signal no longer fires before the acpx runtime has either become usable or reported a probe failure; set `OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE=0` to restore lazy startup. Fixes #79596. Thanks @bzelones.
+- Agents/memory-flush: surface non-abort memory-flush failures (provider timeout, transport error, generic agent failure) as visible reply payloads so the outer reply loop short-circuits and isolated cron runs propagate the error into `meta.error` instead of completing silently with `status: "ok"` and an empty payload. Previously only the specific "Memory flush writes are restricted to ..." message was surfaced. Refs #80755. Thanks @kinjitakabe and @nailujac.
 - Gateway/status: surface model-pricing bootstrap and refresh failures as degraded health/status warnings while keeping Gateway liveness healthy. Fixes #79599. Thanks @bzelones.
 - OpenAI-compatible models: strip prior assistant reasoning fields from replayed Chat Completions history by default, preventing oMLX/vLLM Qwen follow-up turns from rejecting or stalling on stale `reasoning` payloads. Fixes #46637. Thanks @zipzagster and @lexhoefsloot.
 - CLI/onboarding: give non-Azure custom providers a safe generated context window and heal legacy 4k wizard entries without overwriting explicit valid small model limits, preventing first-turn compaction loops. Fixes #79428. (#79911) Thanks @Jefsky.
