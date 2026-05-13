@@ -15,13 +15,17 @@ top-level keys, see [Configuration reference](/gateway/configuration-reference).
 
 ### `agents.defaults.workspace`
 
-Default: `~/.openclaw/workspace`.
+Default: `OPENCLAW_WORKSPACE_DIR` when set, otherwise `~/.openclaw/workspace`.
 
 ```json5
 {
   agents: { defaults: { workspace: "~/.openclaw/workspace" } },
 }
 ```
+
+An explicit `agents.defaults.workspace` value takes precedence over
+`OPENCLAW_WORKSPACE_DIR`. Use the environment variable to point default agents
+at a mounted workspace when you do not want to write that path into config.
 
 ### `agents.defaults.repoRoot`
 
