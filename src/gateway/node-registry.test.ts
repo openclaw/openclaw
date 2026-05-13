@@ -2,7 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 import { NodeRegistry, serializeEventPayload } from "./node-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
-function makeClient(connId: string, nodeId: string, sent: string[] = []): GatewayWsClient {
+function makeClient(
+  connId: string,
+  nodeId: string,
+  sent: string[] = [],
+  opts: { clientId?: string; platform?: string; version?: string } = {},
+): GatewayWsClient {
   return {
     connId,
     usesSharedGatewayAuth: false,
@@ -14,7 +19,12 @@ function makeClient(connId: string, nodeId: string, sent: string[] = []): Gatewa
       },
     } as unknown as GatewayWsClient["socket"],
     connect: {
-      client: { id: "openclaw-macos", version: "1.0.0", platform: "darwin", mode: "node" },
+      client: {
+        id: opts.clientId ?? "openclaw-macos",
+        version: opts.version ?? "1.0.0",
+        platform: opts.platform ?? "darwin",
+        mode: "node",
+      },
       device: {
         id: nodeId,
         publicKey: "public-key",
@@ -58,7 +68,13 @@ describe("gateway/node-registry", () => {
   it("matches pending system.run events to the issuing connection", async () => {
     const registry = new NodeRegistry();
     const frames: string[] = [];
-    registry.register(makeClient("conn-1", "node-1", frames), {});
+    registry.register(
+      makeClient("conn-1", "node-1", frames, {
+        clientId: "openclaw-node-host",
+        platform: "linux",
+      }),
+      {},
+    );
     const invoke = registry.invoke({
       nodeId: "node-1",
       command: "system.run",
@@ -176,6 +192,84 @@ describe("gateway/node-registry", () => {
       registry.authorizeSystemRunEvent({
         nodeId: "node-1",
         connId: "conn-1",
+        sessionKey: "agent:main:main",
+        terminal: true,
+      }),
+    ).toBe(true);
+    registry.unregister("conn-1");
+    void invoke.catch(() => {});
+  });
+
+  it("matches legacy macOS exec events with runtime-generated runId when single pending run matches", () => {
+    const registry = new NodeRegistry();
+    const frames: string[] = [];
+    registry.register(makeClient("conn-1", "node-1", frames), {});
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "system.run",
+      params: { runId: "gateway-run", sessionKey: "agent:main:main" },
+      timeoutMs: 1_000,
+    });
+
+    expect(
+      registry.authorizeSystemRunEvent({
+        nodeId: "node-1",
+        connId: "conn-1",
+        runId: "legacy-runtime-run",
+        sessionKey: "agent:main:main",
+        terminal: true,
+      }),
+    ).toBe(true);
+    registry.unregister("conn-1");
+    void invoke.catch(() => {});
+  });
+
+  it("rejects mismatched runId fallback for non-macOS nodes", () => {
+    const registry = new NodeRegistry();
+    const frames: string[] = [];
+    registry.register(
+      makeClient("conn-1", "node-1", frames, {
+        clientId: "openclaw-node-host",
+        platform: "linux",
+      }),
+      {},
+    );
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "system.run",
+      params: { runId: "gateway-run", sessionKey: "agent:main:main" },
+      timeoutMs: 1_000,
+    });
+
+    expect(
+      registry.authorizeSystemRunEvent({
+        nodeId: "node-1",
+        connId: "conn-1",
+        runId: "runtime-run",
+        sessionKey: "agent:main:main",
+        terminal: true,
+      }),
+    ).toBe(false);
+    registry.unregister("conn-1");
+    void invoke.catch(() => {});
+  });
+
+  it("matches system.run events with emitted session key when invoke omitted sessionKey", () => {
+    const registry = new NodeRegistry();
+    const frames: string[] = [];
+    registry.register(makeClient("conn-1", "node-1", frames), {});
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "system.run",
+      params: { runId: "run-without-session" },
+      timeoutMs: 1_000,
+    });
+
+    expect(
+      registry.authorizeSystemRunEvent({
+        nodeId: "node-1",
+        connId: "conn-1",
+        runId: "run-without-session",
         sessionKey: "agent:main:main",
         terminal: true,
       }),

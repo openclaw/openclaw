@@ -34,7 +34,7 @@ type PendingInvoke = {
 
 type PendingSystemRunEvent = {
   runId: string;
-  sessionKey: string;
+  sessionKey?: string;
   timeoutMs?: number | null;
 };
 
@@ -104,9 +104,10 @@ function resolvePendingSystemRunEvent(params: {
     return undefined;
   }
   const timeoutMs = normalizeSystemRunTimeoutMs(obj.timeoutMs);
+  const sessionKey = normalizeString(obj.sessionKey);
   return {
     runId,
-    sessionKey: normalizeString(obj.sessionKey) || "node",
+    ...(sessionKey ? { sessionKey } : {}),
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
   };
 }
@@ -265,18 +266,28 @@ export class NodeRegistry {
       return false;
     }
     this.pruneAuthorizedSystemRunEvents();
-    const match = params.runId
-      ? this.matchAuthorizedSystemRunEvent({
-          nodeId: params.nodeId,
-          connId: params.connId,
-          runId: params.runId,
-          sessionKey: params.sessionKey,
-        })
-      : this.matchSingleAuthorizedSystemRunEvent({
+    let match: { key: string; event: AuthorizedSystemRunEvent } | null = null;
+    if (params.runId) {
+      match = this.matchAuthorizedSystemRunEvent({
+        nodeId: params.nodeId,
+        connId: params.connId,
+        runId: params.runId,
+        sessionKey: params.sessionKey,
+      });
+      if (!match && this.allowsLegacyMacRunIdFallback(params)) {
+        match = this.matchSingleAuthorizedSystemRunEvent({
           nodeId: params.nodeId,
           connId: params.connId,
           sessionKey: params.sessionKey,
         });
+      }
+    } else {
+      match = this.matchSingleAuthorizedSystemRunEvent({
+        nodeId: params.nodeId,
+        connId: params.connId,
+        sessionKey: params.sessionKey,
+      });
+    }
     if (!match) {
       return false;
     }
@@ -310,9 +321,17 @@ export class NodeRegistry {
     runId: string;
     sessionKey: string;
   }): { key: string; event: AuthorizedSystemRunEvent } | null {
-    const key = this.authorizedSystemRunEventKey(params);
-    const event = this.authorizedSystemRunEvents.get(key);
-    return event ? { key, event } : null;
+    for (const [key, event] of this.authorizedSystemRunEvents) {
+      if (
+        event.nodeId === params.nodeId &&
+        event.connId === params.connId &&
+        event.runId === params.runId &&
+        this.authorizedSystemRunSessionMatches(event, params.sessionKey)
+      ) {
+        return { key, event };
+      }
+    }
+    return null;
   }
 
   private matchSingleAuthorizedSystemRunEvent(params: {
@@ -325,7 +344,7 @@ export class NodeRegistry {
       if (
         event.nodeId !== params.nodeId ||
         event.connId !== params.connId ||
-        event.sessionKey !== params.sessionKey
+        !this.authorizedSystemRunSessionMatches(event, params.sessionKey)
       ) {
         continue;
       }
@@ -335,6 +354,22 @@ export class NodeRegistry {
       match = { key, event };
     }
     return match;
+  }
+
+  private authorizedSystemRunSessionMatches(
+    event: AuthorizedSystemRunEvent,
+    sessionKey: string,
+  ): boolean {
+    return !event.sessionKey || event.sessionKey === sessionKey;
+  }
+
+  private allowsLegacyMacRunIdFallback(params: { nodeId: string; connId: string }): boolean {
+    const node = this.nodesById.get(params.nodeId);
+    return (
+      node?.connId === params.connId &&
+      node.clientId === "openclaw-macos" &&
+      node.platform === "darwin"
+    );
   }
 
   private pruneAuthorizedSystemRunEvents(now = Date.now()): void {
@@ -349,9 +384,9 @@ export class NodeRegistry {
     nodeId: string;
     connId: string;
     runId: string;
-    sessionKey: string;
+    sessionKey?: string;
   }): string {
-    return `${params.nodeId}\0${params.connId}\0${params.sessionKey}\0${params.runId}`;
+    return `${params.nodeId}\0${params.connId}\0${params.sessionKey ?? ""}\0${params.runId}`;
   }
 
   handleInvokeResult(params: {
