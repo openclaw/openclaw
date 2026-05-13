@@ -55,6 +55,7 @@ import {
   type StreamingEvent,
   type Usage,
 } from "./open-responses.schema.js";
+import { resolveOpenAiCompatError } from "./openai-compat-errors.js";
 import { wrapUntrustedFileContent } from "./openresponses-file-content.js";
 import { buildAgentPrompt } from "./openresponses-prompt.js";
 import { createAssistantOutputItem, createFunctionCallOutputItem } from "./openresponses-shape.js";
@@ -810,6 +811,22 @@ export async function handleOpenResponsesHttpRequest(
         output: [],
         error: { code: "api_error", message: "internal error" },
       });
+      const mapped = resolveOpenAiCompatError(err);
+      if (mapped) {
+        const mappedResponse = createResponseResource({
+          id: responseId,
+          model,
+          status: "failed",
+          output: [],
+          error: {
+            code: mapped.error.type,
+            message: mapped.error.message,
+          },
+        });
+        rememberResponseSession();
+        sendJson(res, mapped.status, mappedResponse);
+        return true;
+      }
       rememberResponseSession();
       sendJson(res, 500, response);
     } finally {
@@ -1164,6 +1181,28 @@ export async function handleOpenResponsesHttpRequest(
         usage: finalUsage,
       });
 
+      const mapped = resolveOpenAiCompatError(err);
+      if (mapped) {
+        const mappedResponse = createResponseResource({
+          id: responseId,
+          model,
+          status: "failed",
+          output: [],
+          error: {
+            code: mapped.error.type,
+            message: mapped.error.message,
+          },
+          usage: finalUsage,
+        });
+        rememberResponseSession();
+        writeSseEvent(res, { type: "response.failed", response: mappedResponse });
+        emitAgentEvent({
+          runId: responseId,
+          stream: "lifecycle",
+          data: { phase: "error" },
+        });
+        return;
+      }
       rememberResponseSession();
       writeSseEvent(res, { type: "response.failed", response: errorResponse });
       emitAgentEvent({

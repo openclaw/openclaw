@@ -46,6 +46,7 @@ import {
   resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
+import { resolveOpenAiCompatError, validateOpenAiSamplingParams } from "./openai-compat-errors.js";
 
 type OpenAiHttpOptions = {
   auth: ResolvedGatewayAuth;
@@ -827,6 +828,16 @@ export async function handleOpenAiHttpRequest(
         : undefined;
   const temperature = typeof payload.temperature === "number" ? payload.temperature : undefined;
   const topP = typeof payload.top_p === "number" ? payload.top_p : undefined;
+  const samplingError = validateOpenAiSamplingParams({
+    temperature: payload.temperature,
+    topP: payload.top_p,
+  });
+  if (samplingError) {
+    sendJson(res, 400, {
+      error: { message: samplingError, type: "invalid_request_error" },
+    });
+    return true;
+  }
   const streamParams =
     maxTokens !== undefined || temperature !== undefined || topP !== undefined
       ? {
@@ -986,6 +997,11 @@ export async function handleOpenAiHttpRequest(
         sendJson(res, 400, {
           error: { message: "invalid tool configuration", type: "invalid_request_error" },
         });
+        return true;
+      }
+      const mapped = resolveOpenAiCompatError(err);
+      if (mapped) {
+        sendJson(res, mapped.status, { error: mapped.error });
         return true;
       }
       sendJson(res, 500, {
@@ -1159,6 +1175,16 @@ export async function handleOpenAiHttpRequest(
         writeSse(res, {
           error: { message: "invalid tool configuration", type: "invalid_request_error" },
         });
+        writeDone(res);
+        res.end();
+        return;
+      }
+      const mapped = resolveOpenAiCompatError(err);
+      if (mapped) {
+        closed = true;
+        stopWatchingDisconnect();
+        unsubscribe();
+        writeSse(res, { error: mapped.error });
         writeDone(res);
         res.end();
         return;
