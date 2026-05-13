@@ -58,7 +58,7 @@ import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
 import { hasForwardedRequestHeaders, isLocalDirectRequest } from "../../auth.js";
 import { normalizeDeviceMetadataForAuth } from "../../device-auth.js";
-import { ADMIN_SCOPE } from "../../method-scopes.js";
+import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../../method-scopes.js";
 import {
   isLocalishHost,
   isLoopbackAddress,
@@ -1407,6 +1407,12 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         const sharedGatewaySessionGeneration = usesSharedGatewayAuth
           ? resolveSharedGatewaySessionGeneration(resolvedAuth, trustedProxies)
           : undefined;
+        const isTrustedApprovalRuntime =
+          connectParams.client.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
+          connectParams.client.mode === GATEWAY_CLIENT_MODES.BACKEND &&
+          skipLocalBackendSelfPairing &&
+          Array.isArray(connectParams.scopes) &&
+          connectParams.scopes.includes(APPROVALS_SCOPE);
         clearHandshakeTimer();
         const nextClient: GatewayWsClient = {
           socket,
@@ -1417,6 +1423,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           sharedGatewaySessionGeneration,
           presenceKey,
           clientIp: reportedClientIp,
+          ...(isTrustedApprovalRuntime ? { internal: { approvalRuntime: true } } : {}),
           ...(Object.keys(pluginSurfaceUrls).length > 0 ? { pluginSurfaceUrls } : {}),
           ...(Object.keys(pluginNodeCapabilitySurfaces).length > 0
             ? { pluginNodeCapabilitySurfaces }

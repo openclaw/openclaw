@@ -94,11 +94,10 @@ export function isApprovalRecordVisibleToClient<TPayload>(params: {
 
   const requestedByDeviceId = normalizeApprovalIdentity(params.record.requestedByDeviceId);
   const requestedByClientId = normalizeApprovalIdentity(params.record.requestedByClientId);
-  const clientId = normalizeApprovalIdentity(params.client?.connect?.client?.id);
   const hasApprovalsScope = scopes.includes(APPROVALS_SCOPE);
   if (
     hasApprovalsScope &&
-    (clientId === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT ||
+    (params.client?.internal?.approvalRuntime === true ||
       requestedByClientId === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT)
   ) {
     return true;

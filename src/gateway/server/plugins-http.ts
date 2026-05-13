@@ -5,6 +5,7 @@ import type { PluginRegistry } from "../../plugins/registry.js";
 import { resolveActivePluginHttpRouteRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import type { AuthorizedGatewayHttpRequest } from "../http-utils.js";
+import { APPROVALS_SCOPE } from "../method-scopes.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../protocol/client-info.js";
 import { PROTOCOL_VERSION } from "../protocol/index.js";
 import type { GatewayRequestOptions } from "../server-methods/types.js";
@@ -45,6 +46,7 @@ function createPluginRouteRuntimeClient(
       role: "operator",
       scopes: [...scopes],
     },
+    ...(scopes.includes(APPROVALS_SCOPE) ? { internal: { approvalRuntime: true } } : {}),
   };
 }
 

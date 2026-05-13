@@ -28,6 +28,7 @@ export type GatewayClient = {
   isDeviceTokenAuth?: boolean;
   internal?: {
     allowModelOverride?: boolean;
+    approvalRuntime?: boolean;
     pluginRuntimeOwnerId?: string;
   };
 };

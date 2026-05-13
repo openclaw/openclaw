@@ -21,6 +21,7 @@ function createApprovalClient(params: {
   clientId: string;
   deviceId?: string;
   scopes?: string[];
+  approvalRuntime?: boolean;
 }): GatewayClient {
   return {
     connId: params.connId,
@@ -29,6 +30,7 @@ function createApprovalClient(params: {
       device: params.deviceId ? { id: params.deviceId } : undefined,
       scopes: params.scopes ?? ["operator.approvals"],
     },
+    ...(params.approvalRuntime ? { internal: { approvalRuntime: true } } : {}),
   } as GatewayClient;
 }
 
@@ -148,9 +150,35 @@ describe("handlePendingApprovalRequest", () => {
           connId: "conn-delivery-runtime",
           clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
           scopes: ["operator.approvals"],
+          approvalRuntime: true,
         }),
       }),
     ).toBe(true);
+  });
+
+  it("does not trust gateway-client ids without the approval runtime marker", () => {
+    const manager = new ExecApprovalManager();
+    const record = manager.create(
+      {
+        command: "echo ok",
+      },
+      60_000,
+      "approval-delivery-runtime-spoof-hidden",
+    );
+    record.requestedByDeviceId = "device-owner";
+    record.requestedByConnId = "conn-owner";
+    record.requestedByClientId = "client-owner";
+
+    expect(
+      isApprovalRecordVisibleToClient({
+        record,
+        client: createApprovalClient({
+          connId: "conn-spoofed-runtime",
+          clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+          scopes: ["operator.approvals"],
+        }),
+      }),
+    ).toBe(false);
   });
 
   it("does not widen non-gateway no-device approvals to every approval client", () => {
@@ -313,6 +341,7 @@ describe("handlePendingApprovalRequest", () => {
             createApprovalClient({
               connId: "conn-delivery-runtime",
               clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+              approvalRuntime: true,
             }),
             createApprovalClient({
               connId: "conn-other-approval",
@@ -690,6 +719,7 @@ describe("handlePendingApprovalRequest", () => {
               connId: "conn-delivery-runtime",
               clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
               scopes: ["operator.approvals"],
+              approvalRuntime: true,
             }),
           ]),
         ),
@@ -698,6 +728,7 @@ describe("handlePendingApprovalRequest", () => {
         connId: "conn-delivery-runtime",
         clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
         scopes: ["operator.approvals"],
+        approvalRuntime: true,
       }),
       resolvedEventName: "exec.approval.resolved",
       buildResolvedEvent: ({ approvalId, decision, snapshot }) => ({
