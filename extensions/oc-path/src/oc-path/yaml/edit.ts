@@ -190,6 +190,7 @@ function guardYamlSentinel(value: unknown, ocPath: string): void {
   }
   if (value !== null && typeof value === "object") {
     for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      guardSentinel(key, `${ocPath}/${key}`);
       guardYamlSentinel(child, `${ocPath}/${key}`);
     }
   }
