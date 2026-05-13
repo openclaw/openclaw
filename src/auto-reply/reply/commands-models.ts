@@ -7,6 +7,7 @@ import {
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
 import { resolveVisibleModelCatalog } from "../../agents/model-catalog-visibility.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
+import { createProviderAuthChecker } from "../../agents/model-provider-auth.js";
 import { isModelPickerVisibleProvider } from "../../agents/model-picker-visibility.js";
 import {
   isCliRuntimeProvider,
@@ -183,12 +184,33 @@ export async function buildModelsProviderData(
     add(entry.provider, entry.id);
   }
 
+  // The two CLI-runtime population passes below must respect the existing
+  // unauthenticated-provider hiding contract. `resolveVisibleModelCatalog`
+  // already auth-gates the default view via `createProviderAuthChecker`; the
+  // CLI passes are *additive* on top of that visible catalog (they widen the
+  // per-provider model set for CLI runtimes), so they must apply the same
+  // auth check or they'd surface CLI provider buttons for users with no CLI
+  // auth/config. `view === "all"` matches `resolveVisibleModelCatalog`'s
+  // short-circuit and skips the auth gate.
+  const hasAuth =
+    options.view === "all"
+      ? () => true
+      : createProviderAuthChecker({
+          cfg,
+          workspaceDir:
+            options.workspaceDir ??
+            (agentId ? resolveAgentWorkspaceDir(cfg, agentId) : undefined) ??
+            resolveDefaultAgentWorkspaceDir(),
+          agentDir: agentId ? resolveAgentDir(cfg, agentId) : undefined,
+        });
+
   // For CLI runtime providers, surface every model in the unfiltered catalog —
   // user `agents.defaults.models` only declares per-ref metadata (alias,
   // runtime params, etc.) and must not gate picker discovery for runtimes
-  // whose model set is owned by an external CLI binary.
+  // whose model set is owned by an external CLI binary. Auth gate still
+  // applies so unauthenticated CLI providers stay hidden.
   for (const entry of catalog) {
-    if (isCliRuntimeProvider(entry.provider)) {
+    if (isCliRuntimeProvider(entry.provider) && hasAuth(entry.provider)) {
       add(entry.provider, entry.id);
     }
   }
@@ -199,7 +221,9 @@ export async function buildModelsProviderData(
   // user config (often 2 entries) — so iterating the catalog alone is not
   // sufficient to guarantee the full CLI-supported set surfaces. The
   // allowlist constant is the source of truth for what the claude-cli binary
-  // supports, so we seed directly from it.
+  // supports, so we seed directly from it — but only when the user actually
+  // has claude-cli auth, otherwise picker buttons would lead to a
+  // non-functional runtime.
   //
   // Asymmetry: only `claude-cli` has a corresponding allowlist constant.
   // `codex-cli` (extensions/openai/cli-backend.ts) and `google-gemini-cli`
@@ -207,8 +231,10 @@ export async function buildModelsProviderData(
   // an allowlist, so the catalog-iteration loop above is what we rely on for
   // those runtimes — adequate as long as their plugin manifests contribute
   // models to the catalog.
-  for (const ref of CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS) {
-    addRawModelRef(ref);
+  if (hasAuth("claude-cli")) {
+    for (const ref of CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS) {
+      addRawModelRef(ref);
+    }
   }
 
   for (const raw of visibilityPolicy.exactModelRefs) {

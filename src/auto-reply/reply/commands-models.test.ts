@@ -384,6 +384,36 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).toContain(`of ${CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS.length}`);
   });
 
+  it("hides CLI runtime providers from the picker when the user has no CLI auth", async () => {
+    // Regression: the catalog-iteration and allowlist-seeding passes must
+    // honour the existing unauthenticated-provider hiding contract. A user
+    // without claude-cli / codex-cli / google-gemini-cli auth should not see
+    // those providers in /models — tapping them would lead to a runtime they
+    // can't actually use.
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      { provider: "anthropic", id: "claude-opus-4-7", name: "Claude Opus 4.7" },
+      { provider: "claude-cli", id: "claude-opus-4-7", name: "Claude Opus 4.7 (CLI)" },
+      { provider: "codex-cli", id: "gpt-5.5", name: "GPT-5.5 (CLI)" },
+      { provider: "google-gemini-cli", id: "gemini-2.5-pro", name: "Gemini 2.5 Pro (CLI)" },
+    ]);
+    // Default mock state: only anthropic / google / openai authenticated — no CLI providers.
+    modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic"]);
+
+    const result = await handleModelsCommand(
+      buildParams("/models", {
+        agents: { defaults: { model: { primary: "anthropic/claude-opus-4-7" } } },
+      }),
+      true,
+    );
+
+    // anthropic is authenticated and surfaces.
+    expect(result?.reply?.text).toContain("- anthropic (");
+    // CLI runtime providers are gated by the existing auth contract — should not appear.
+    expect(result?.reply?.text).not.toMatch(/^- claude-cli \(/m);
+    expect(result?.reply?.text).not.toMatch(/^- codex-cli \(/m);
+    expect(result?.reply?.text).not.toMatch(/^- google-gemini-cli \(/m);
+  });
+
   it("labels the default runtime choice as OpenClaw Pi", async () => {
     const data = await buildModelsProviderData({
       agents: {
@@ -401,6 +431,12 @@ describe("handleModelsCommand", () => {
   });
 
   it("keeps the telegram provider picker browse-only", async () => {
+    modelProviderAuthMocks.authenticatedProviders = new Set([
+      "anthropic",
+      "claude-cli",
+      "google",
+      "openai",
+    ]);
     const params = buildParams("/models");
     params.ctx.Surface = "telegram";
     params.command.channel = "telegram";
@@ -422,6 +458,12 @@ describe("handleModelsCommand", () => {
   });
 
   it("keeps plugin menu hook compatibility for provider pickers", async () => {
+    modelProviderAuthMocks.authenticatedProviders = new Set([
+      "anthropic",
+      "claude-cli",
+      "google",
+      "openai",
+    ]);
     const params = buildParams("/models");
     params.ctx.Surface = "menuonly";
     params.command.channel = "menuonly";
