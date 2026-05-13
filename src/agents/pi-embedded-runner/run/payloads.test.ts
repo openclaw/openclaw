@@ -65,6 +65,20 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expectSinglePayloadText(payloads, "Done.");
   });
 
+  it("suppresses assistant text for yielded turns", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Waiting on the subagent."],
+      suppressAssistantReply: true,
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: "Waiting on the subagent." }],
+      } as AssistantMessage,
+    });
+
+    expect(payloads).toEqual([]);
+  });
+
   it("falls back to final-answer assistant text when streamed text only contains blanks", () => {
     const payloads = buildPayloads({
       assistantTexts: ["   "],

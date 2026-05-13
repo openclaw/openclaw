@@ -194,6 +194,13 @@ describe("updateSessionStoreAfterAgentRun", () => {
         [sessionKey]: {
           sessionId,
           updatedAt: 1,
+          agentHarnessId: "codex",
+          authProfileOverride: "openai-codex:work",
+          authProfileOverrideSource: "auto",
+          authProfileOverrideCompactionCount: 0,
+          fallbackNoticeSelectedModel: "openai/gpt-5.5",
+          fallbackNoticeActiveModel: "openai-codex/gpt-5.5",
+          fallbackNoticeReason: "live-session-model-switch",
         },
       };
       await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
@@ -223,6 +230,59 @@ describe("updateSessionStoreAfterAgentRun", () => {
 
       expect(sessionStore[sessionKey]?.contextTokens).toBe(400_000);
       expect(loadSessionStore(storePath)[sessionKey]?.contextTokens).toBe(400_000);
+    });
+  });
+
+  it("persists canonical OpenAI route when Codex auth profile transport handled the run", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-canonical-openai-route";
+      const sessionId = "test-canonical-openai-route-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      const result: EmbeddedPiRunResult = {
+        meta: {
+          durationMs: 1,
+          agentMeta: {
+            sessionId,
+            provider: "openai-codex",
+            model: "gpt-5.5",
+            contextTokens: 272_000,
+            agentHarnessId: "codex",
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.5",
+        result,
+      });
+
+      expect(sessionStore[sessionKey]?.modelProvider).toBe("openai");
+      expect(sessionStore[sessionKey]?.model).toBe("gpt-5.5");
+      expect(sessionStore[sessionKey]?.agentHarnessId).toBeUndefined();
+      expect(sessionStore[sessionKey]?.authProfileOverride).toBeUndefined();
+      expect(sessionStore[sessionKey]?.authProfileOverrideSource).toBeUndefined();
+      expect(sessionStore[sessionKey]?.authProfileOverrideCompactionCount).toBeUndefined();
+      expect(sessionStore[sessionKey]?.fallbackNoticeActiveModel).toBeUndefined();
+      expect(sessionStore[sessionKey]?.fallbackNoticeReason).toBeUndefined();
+      const saved = loadSessionStore(storePath)[sessionKey];
+      expect(saved?.modelProvider).toBe("openai");
+      expect(saved?.agentHarnessId).toBeUndefined();
+      expect(saved?.authProfileOverride).toBeUndefined();
+      expect(saved?.fallbackNoticeActiveModel).toBeUndefined();
     });
   });
 
@@ -444,6 +504,125 @@ describe("updateSessionStoreAfterAgentRun", () => {
       expect(persisted?.modelProvider).toBe("openai");
       expect(persisted?.model).toBe("gpt-5.4");
       expect(staleInMemory[sessionKey]?.status).toBe("done");
+    });
+  });
+
+  it("marks a running session terminal when lifecycle persistence missed the end event", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-lifecycle-fallback";
+      const sessionId = "test-lifecycle-fallback-session";
+      const startedAt = Date.now() - 1_000;
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: startedAt,
+          status: "running",
+          startedAt,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.4",
+        result: {
+          payloads: [],
+          meta: {
+            aborted: false,
+            agentMeta: {
+              provider: "openai",
+              model: "gpt-5.4",
+            },
+          },
+        } as never,
+      });
+
+      const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+      expect(persisted?.status).toBe("done");
+      expect(persisted?.endedAt).toBeGreaterThanOrEqual(startedAt);
+      expect(persisted?.runtimeMs).toBeGreaterThanOrEqual(0);
+      expect(sessionStore[sessionKey]?.status).toBe("done");
+    });
+  });
+
+  it("marks a still-running aborted run timeout when lifecycle persistence missed the end event", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-lifecycle-timeout-fallback";
+      const sessionId = "test-lifecycle-timeout-fallback-session";
+      const startedAt = Date.now() - 1_000;
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: startedAt,
+          status: "running",
+          startedAt,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.4",
+        result: {
+          payloads: [],
+          meta: {
+            aborted: true,
+            agentMeta: {
+              provider: "openai",
+              model: "gpt-5.4",
+            },
+          },
+        } as never,
+      });
+
+      const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+      expect(persisted?.status).toBe("timeout");
+      expect(persisted?.abortedLastRun).toBe(false);
+    });
+  });
+
+  it("does not mark yielded runs as aborted in session metadata", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:cgo:subagent:yielded";
+      const sessionId = "yielded-session";
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore: {},
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.4",
+        result: {
+          payloads: [],
+          meta: {
+            aborted: true,
+            yielded: true,
+            livenessState: "paused",
+            agentMeta: {
+              provider: "openai",
+              model: "gpt-5.4",
+            },
+          },
+        } as never,
+      });
+
+      const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+      expect(persisted?.abortedLastRun).toBe(false);
     });
   });
 

@@ -657,6 +657,9 @@ describe("runCodexAppServerAttempt", () => {
     const params = createParams(sessionFile, workspaceDir);
     params.disableTools = false;
     params.config = {
+      plugins: {
+        enabled: false,
+      },
       tools: {
         toolSearch: true,
       },
@@ -705,6 +708,7 @@ describe("runCodexAppServerAttempt", () => {
     } satisfies EmbeddedRunAttemptParams["authProfileStore"];
     params.disableTools = false;
     params.authProfileStore = authProfileStore;
+    params.runtimePlan = createCodexRuntimePlanFixture();
 
     const factoryOptions: unknown[] = [];
     __testing.setOpenClawCodingToolsFactoryForTests((options) => {
@@ -1073,6 +1077,43 @@ describe("runCodexAppServerAttempt", () => {
     expect(onTimeout).toHaveBeenCalledTimes(1);
   });
 
+  it("gives sessions_spawn batch calls a longer dynamic tool deadline", () => {
+    expect(
+      __testing.resolveDynamicToolTimeoutMs(
+        {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-spawn",
+          namespace: null,
+          tool: "sessions_spawn",
+          arguments: {
+            children: Array.from({ length: 7 }, (_, index) => ({
+              task: `child ${index}`,
+              agentId: "analytics",
+            })),
+          },
+        },
+        __testing.CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
+      ),
+    ).toBe(__testing.CODEX_SESSIONS_SPAWN_DYNAMIC_TOOL_TIMEOUT_MS);
+  });
+
+  it("gives browser calls enough dynamic tool time for managed startup", () => {
+    expect(
+      __testing.resolveDynamicToolTimeoutMs(
+        {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-browser",
+          namespace: null,
+          tool: "browser",
+          arguments: { action: "start" },
+        },
+        __testing.CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
+      ),
+    ).toBe(__testing.CODEX_BROWSER_DYNAMIC_TOOL_TIMEOUT_MS);
+  });
+
   it("logs process poll timeout context separately from session idle", async () => {
     vi.useFakeTimers();
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
@@ -1416,6 +1457,158 @@ describe("runCodexAppServerAttempt", () => {
       | undefined;
     expect(warnData?.timeoutMs).toBe(5);
     expect(warnData?.lastActivityReason).toBe("request:item/tool/call:response");
+  });
+
+  it("lets the default terminal-idle watchdog use the configured run timeout budget", () => {
+    const defaultTimeoutMs = __testing.CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS;
+    expect(defaultTimeoutMs).toBe(30 * 60_000);
+    expect(__testing.resolveCodexTurnTerminalIdleTimeoutMs(undefined, 45 * 60_000)).toBe(
+      45 * 60_000,
+    );
+    expect(__testing.resolveCodexTurnTerminalIdleTimeoutMs(undefined, 60_000)).toBe(
+      defaultTimeoutMs,
+    );
+    expect(__testing.resolveCodexTurnTerminalIdleTimeoutMs(12_345, 45 * 60_000)).toBe(12_345);
+  });
+
+  it("releases the session when Codex goes idle before the first turn event", async () => {
+    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-1");
+      }
+      if (method === "turn/start") {
+        return turnStartResult("turn-1", "inProgress");
+      }
+      return {};
+    });
+    __testing.setCodexAppServerClientFactoryForTests(
+      async () =>
+        ({
+          request,
+          addNotificationHandler: (handler: typeof notify) => {
+            notify = handler;
+            return () => undefined;
+          },
+          addRequestHandler: () => () => undefined,
+        }) as never,
+    );
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 60_000;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnCompletionIdleTimeoutMs: 5,
+      turnTerminalIdleTimeoutMs: 60_000,
+    });
+    await vi.waitFor(
+      () =>
+        expect(request).toHaveBeenCalledWith("turn/start", expect.anything(), expect.anything()),
+      {
+        interval: 1,
+      },
+    );
+    await notify({
+      method: "account/rateLimits/updated",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        rateLimitsByLimitId: {},
+      },
+    });
+
+    await expect(
+      Promise.race([run, new Promise((resolve) => setTimeout(() => resolve("still-running"), 50))]),
+    ).resolves.toMatchObject({
+      aborted: true,
+      timedOut: true,
+      promptError: "codex app-server turn idle timed out waiting for turn/completed",
+    });
+    await vi.waitFor(
+      () =>
+        expect(request).toHaveBeenCalledWith(
+          "turn/interrupt",
+          {
+            threadId: "thread-1",
+            turnId: "turn-1",
+          },
+          expect.objectContaining({ timeoutMs: expect.any(Number) }),
+        ),
+      { interval: 1 },
+    );
+    expect(queueAgentHarnessMessage("session-1", "after timeout")).toBe(false);
+  });
+
+  it("does not let a stuck app-server request suppress the turn idle watchdog forever", async () => {
+    vi.spyOn(elicitationBridge, "handleCodexAppServerElicitationRequest").mockImplementation(
+      async () => await new Promise(() => undefined),
+    );
+    let handleRequest:
+      | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
+      | undefined;
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-1");
+      }
+      if (method === "turn/start") {
+        return turnStartResult("turn-1", "inProgress");
+      }
+      return {};
+    });
+    __testing.setCodexAppServerClientFactoryForTests(
+      async () =>
+        ({
+          request,
+          addNotificationHandler: () => () => undefined,
+          addRequestHandler: (
+            handler: (request: {
+              id: string;
+              method: string;
+              params?: unknown;
+            }) => Promise<unknown>,
+          ) => {
+            handleRequest = handler;
+            return () => undefined;
+          },
+        }) as never,
+    );
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 60_000;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnCompletionIdleTimeoutMs: 5,
+      turnTerminalIdleTimeoutMs: 60_000,
+    });
+    await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"), { interval: 1 });
+
+    void handleRequest?.({
+      id: "request-stuck-elicitation",
+      method: "mcpServer/elicitation/request",
+      params: {},
+    });
+
+    await expect(run).resolves.toMatchObject({
+      aborted: true,
+      timedOut: true,
+      promptError: "codex app-server turn idle timed out waiting for turn/completed",
+    });
+    await vi.waitFor(
+      () =>
+        expect(request).toHaveBeenCalledWith(
+          "turn/interrupt",
+          {
+            threadId: "thread-1",
+            turnId: "turn-1",
+          },
+          expect.objectContaining({ timeoutMs: expect.any(Number) }),
+        ),
+      { interval: 1 },
+    );
   });
 
   it("keeps waiting when Codex emits a raw assistant item after a dynamic tool response", async () => {

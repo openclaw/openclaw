@@ -123,6 +123,8 @@ export type AgentCommandOpts = {
   acpTurnSource?: AcpTurnSource;
   /** Internal handoffs can feed the model without writing the synthetic prompt to transcript. */
   suppressPromptPersistence?: boolean;
+  /** Internal lifecycle hook fired when a queued embedded run actually starts executing. */
+  onExecutionStarted?: () => void;
 };
 
 export type AgentCommandIngressOpts = Omit<

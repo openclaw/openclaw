@@ -46,7 +46,7 @@ vi.mock("../plugins/plugin-registry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/plugin-registry.js")>();
   return {
     ...actual,
-    loadPluginRegistrySnapshot: () => ({ plugins: [] }),
+    loadPluginRegistrySnapshot: () => ({ plugins: [], diagnostics: [] }),
   };
 });
 
@@ -165,7 +165,7 @@ async function runAuthContractAttempt(params: {
   storePath: string;
   providerOverride: string;
   authProfileProvider: string;
-  authProfileOverride: string;
+  authProfileOverride?: string;
   cfg?: OpenClawConfig;
   sessionHasHistory?: boolean;
 }) {
@@ -173,8 +173,12 @@ async function runAuthContractAttempt(params: {
   const sessionEntry: SessionEntry = {
     sessionId: AUTH_PROFILE_RUNTIME_CONTRACT.sessionId,
     updatedAt: Date.now(),
-    authProfileOverride: params.authProfileOverride,
-    authProfileOverrideSource: "user",
+    ...(params.authProfileOverride
+      ? {
+          authProfileOverride: params.authProfileOverride,
+          authProfileOverrideSource: "user" as const,
+        }
+      : {}),
   };
   const sessionStore: Record<string, SessionEntry> = {
     [AUTH_PROFILE_RUNTIME_CONTRACT.sessionKey]: sessionEntry,
@@ -423,6 +427,43 @@ describe("Auth profile runtime contract - Pi and CLI adapter", () => {
     const params = capturedEmbeddedRunParams();
     expect(params.provider).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider);
     expect(params.authProfileId).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId);
+  });
+
+  it("auto-selects OpenAI Codex auth for explicit OpenAI PI runs when no OpenAI API profile exists", async () => {
+    await fs.writeFile(
+      path.join(tmpDir, "auth-profiles.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          profiles: {
+            [AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId]: {
+              type: "oauth",
+              provider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
+              access: "access-token",
+              refresh: "refresh-token",
+              expires: Date.now() + 60_000,
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    await runAuthContractAttempt({
+      tmpDir,
+      storePath,
+      providerOverride: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
+      authProfileProvider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider,
+      cfg: providerRuntimeConfig(AUTH_PROFILE_RUNTIME_CONTRACT.openAiProvider, "pi"),
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
+      provider: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProvider,
+      authProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
+    });
   });
 
   it("preserves OpenAI Codex auth profiles through the real codex/* harness startup path", async () => {

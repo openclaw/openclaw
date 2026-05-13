@@ -17,6 +17,7 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import type { CommandQueueEnqueueOptions } from "../../process/command-queue.types.js";
+import { CommandLane } from "../../process/lanes.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
 import { resolveUserPath } from "../../utils.js";
@@ -183,6 +184,8 @@ type ApiKeyInfo = ResolvedProviderAuth;
 
 const MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES = 1;
 const EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS = 30_000;
+const SUBAGENT_LANE_WARN_AFTER_MIN_MS = 60_000;
+const SUBAGENT_LANE_WARN_AFTER_MAX_MS = 5 * 60_000;
 const MID_TURN_PRECHECK_CONTINUATION_PROMPT =
   "Continue from the current transcript after the latest tool result. Do not repeat the original user request, and do not rerun completed tools unless the transcript shows they are still needed.";
 const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
@@ -214,6 +217,27 @@ function withEmbeddedRunLaneTimeout(
     return opts;
   }
   return { ...opts, taskTimeoutMs: laneTaskTimeoutMs };
+}
+
+function resolveSubagentLaneWarnAfterMs(timeoutMs: number): number {
+  const timeoutBudget = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : undefined;
+  if (timeoutBudget === undefined) {
+    return SUBAGENT_LANE_WARN_AFTER_MAX_MS;
+  }
+  return Math.max(
+    SUBAGENT_LANE_WARN_AFTER_MIN_MS,
+    Math.min(SUBAGENT_LANE_WARN_AFTER_MAX_MS, Math.floor(timeoutBudget / 3)),
+  );
+}
+
+function withSubagentLaneWaitWarningBudget(
+  opts: CommandQueueEnqueueOptions | undefined,
+  params: { lane?: string; timeoutMs: number },
+): CommandQueueEnqueueOptions | undefined {
+  if (opts?.warnAfterMs !== undefined || params.lane?.trim() !== CommandLane.Subagent) {
+    return opts;
+  }
+  return { ...opts, warnAfterMs: resolveSubagentLaneWarnAfterMs(params.timeoutMs) };
 }
 
 function normalizeEmbeddedRunAttemptResult(
@@ -380,14 +404,21 @@ export async function runEmbeddedPiAgent(
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
   const laneTaskTimeoutMs = resolveEmbeddedRunLaneTimeoutMs(params.timeoutMs);
+  const withSubagentWaitWarning = (opts?: CommandQueueEnqueueOptions) =>
+    withSubagentLaneWaitWarningBudget(opts, {
+      lane: params.lane,
+      timeoutMs: params.timeoutMs,
+    });
   const withLaneTimeout = (opts?: CommandQueueEnqueueOptions) =>
-    withEmbeddedRunLaneTimeout(opts, laneTaskTimeoutMs);
+    withEmbeddedRunLaneTimeout(withSubagentWaitWarning(opts), laneTaskTimeoutMs);
   const enqueueGlobal = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) =>
     params.enqueue
       ? params.enqueue(task, withLaneTimeout(opts))
       : enqueueCommandInLane(globalLane, task, withLaneTimeout(opts));
   const enqueueSession = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) =>
-    params.enqueue ? params.enqueue(task, opts) : enqueueCommandInLane(sessionLane, task, opts);
+    params.enqueue
+      ? params.enqueue(task, withSubagentWaitWarning(opts))
+      : enqueueCommandInLane(sessionLane, task, withSubagentWaitWarning(opts));
   const channelHint = params.messageChannel ?? params.messageProvider;
   const resolvedToolResultFormat =
     params.toolResultFormat ??
@@ -2496,6 +2527,7 @@ export async function runEmbeddedPiAgent(
             inlineToolResultsAllowed: false,
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
             didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
+            suppressAssistantReply: attempt.yieldDetected === true,
             heartbeatToolResponse: attempt.heartbeatToolResponse,
           });
           const payloadsWithToolMedia = mergeAttemptToolMediaPayloads({

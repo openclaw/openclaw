@@ -728,6 +728,27 @@ function rewriteUnknownToolLoopMessage(message: unknown, toolName: string): void
   ];
 }
 
+function rewriteUnavailableToolCallMessage(message: unknown, toolName: string): void {
+  if (!message || typeof message !== "object") {
+    return;
+  }
+  (message as { content?: unknown }).content = [
+    {
+      type: "text",
+      text: `I can't use the tool "${toolName}" here because it is not in this session's allowed tool list. I will continue using only the available tools.`,
+    },
+  ];
+}
+
+function blockUnknownToolCallInMessage(message: unknown, allowedToolNames?: Set<string>): boolean {
+  const toolCallState = classifyToolCallMessage(message, allowedToolNames);
+  if (toolCallState.kind !== "unknown") {
+    return false;
+  }
+  rewriteUnavailableToolCallMessage(message, toolCallState.toolName);
+  return true;
+}
+
 function guardUnknownToolLoopInMessage(
   message: unknown,
   state: UnknownToolLoopGuardState,
@@ -805,7 +826,11 @@ function guardUnknownToolLoopInMessage(
 function wrapStreamTrimToolCallNames(
   stream: ReturnType<typeof streamSimple>,
   allowedToolNames?: Set<string>,
-  options?: { unknownToolThreshold?: number; state?: UnknownToolLoopGuardState },
+  options?: {
+    blockUnknownToolCalls?: boolean;
+    unknownToolThreshold?: number;
+    state?: UnknownToolLoopGuardState;
+  },
 ): ReturnType<typeof streamSimple> {
   const unknownToolGuardState = options?.state ?? {
     count: 0,
@@ -816,6 +841,12 @@ function wrapStreamTrimToolCallNames(
   stream.result = async () => {
     const message = await originalResult();
     trimWhitespaceFromToolCallNamesInMessage(message, allowedToolNames);
+    if (
+      options?.blockUnknownToolCalls &&
+      blockUnknownToolCallInMessage(message, allowedToolNames)
+    ) {
+      return message;
+    }
     guardUnknownToolLoopInMessage(message, unknownToolGuardState, {
       allowedToolNames,
       threshold: options?.unknownToolThreshold,
@@ -829,6 +860,15 @@ function wrapStreamTrimToolCallNames(
   wrapStreamObjectEvents(stream, (event) => {
     trimWhitespaceFromToolCallNamesInMessage(event.partial, allowedToolNames);
     trimWhitespaceFromToolCallNamesInMessage(event.message, allowedToolNames);
+    const blockedMessage =
+      options?.blockUnknownToolCalls &&
+      blockUnknownToolCallInMessage(event.message, allowedToolNames);
+    const blockedPartial =
+      options?.blockUnknownToolCalls &&
+      blockUnknownToolCallInMessage(event.partial, allowedToolNames);
+    if (blockedMessage || blockedPartial) {
+      return;
+    }
     if (event.message && typeof event.message === "object") {
       const countedStreamAttempt = guardUnknownToolLoopInMessage(
         event.message,
@@ -856,7 +896,7 @@ function wrapStreamTrimToolCallNames(
 export function wrapStreamFnTrimToolCallNames(
   baseFn: StreamFn,
   allowedToolNames?: Set<string>,
-  guardOptions?: { unknownToolThreshold?: number },
+  guardOptions?: { blockUnknownToolCalls?: boolean; unknownToolThreshold?: number },
 ): StreamFn {
   const unknownToolGuardState: UnknownToolLoopGuardState = {
     count: 0,
@@ -867,12 +907,14 @@ export function wrapStreamFnTrimToolCallNames(
     if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
       return Promise.resolve(maybeStream).then((stream) =>
         wrapStreamTrimToolCallNames(stream, allowedToolNames, {
+          blockUnknownToolCalls: guardOptions?.blockUnknownToolCalls,
           unknownToolThreshold: guardOptions?.unknownToolThreshold,
           state: unknownToolGuardState,
         }),
       );
     }
     return wrapStreamTrimToolCallNames(maybeStream, allowedToolNames, {
+      blockUnknownToolCalls: guardOptions?.blockUnknownToolCalls,
       unknownToolThreshold: guardOptions?.unknownToolThreshold,
       state: unknownToolGuardState,
     });

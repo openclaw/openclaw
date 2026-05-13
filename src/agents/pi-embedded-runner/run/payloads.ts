@@ -188,6 +188,7 @@ export function buildEmbeddedRunPayloads(params: {
   inlineToolResultsAllowed: boolean;
   didSendViaMessagingTool?: boolean;
   didSendDeterministicApprovalPrompt?: boolean;
+  suppressAssistantReply?: boolean;
   heartbeatToolResponse?: HeartbeatToolResponse;
 }): Array<{
   text?: string;
@@ -217,7 +218,8 @@ export function buildEmbeddedRunPayloads(params: {
   }> = [];
 
   const useMarkdown = params.toolResultFormat === "markdown";
-  const suppressAssistantArtifacts = params.didSendDeterministicApprovalPrompt === true;
+  const suppressAssistantArtifacts =
+    params.didSendDeterministicApprovalPrompt === true || params.suppressAssistantReply === true;
   const lastAssistantErrored = params.lastAssistant?.stopReason === "error";
   const errorText =
     params.lastAssistant && lastAssistantErrored

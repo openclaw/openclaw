@@ -54,6 +54,12 @@ const TRAJECTORY_RUNTIME_DATA_STRING_MAX_CHARS = 32_768;
 const TRAJECTORY_RUNTIME_DATA_ARRAY_MAX_ITEMS = 64;
 const TRAJECTORY_RUNTIME_DATA_OBJECT_MAX_KEYS = 64;
 const TRAJECTORY_RUNTIME_DATA_MAX_DEPTH = 6;
+const TRAJECTORY_RUNTIME_MESSAGE_HEAD_ITEMS = 4;
+const TRAJECTORY_RUNTIME_MESSAGE_TAIL_ITEMS = 16;
+const TRAJECTORY_RUNTIME_MESSAGE_STRING_MAX_CHARS = 4096;
+const TRAJECTORY_RUNTIME_MESSAGE_ARRAY_MAX_ITEMS = 24;
+const TRAJECTORY_RUNTIME_MESSAGE_OBJECT_MAX_KEYS = 48;
+const TRAJECTORY_RUNTIME_MESSAGE_MAX_DEPTH = 5;
 
 function writeTrajectoryPointerBestEffort(params: {
   filePath: string;
@@ -144,19 +150,23 @@ function truncatedTrajectoryValue(reason: string, details: Record<string, unknow
   };
 }
 
+function limitTrajectoryString(value: string, maxChars: number): string | unknown {
+  if (value.length <= maxChars) {
+    return value;
+  }
+  return truncatedTrajectoryValue("trajectory-field-size-limit", {
+    originalChars: value.length,
+    limitChars: maxChars,
+  });
+}
+
 function limitTrajectoryPayloadValue(
   value: unknown,
   depth = 0,
   seen: WeakSet<object> = new WeakSet(),
 ): unknown {
   if (typeof value === "string") {
-    if (value.length > TRAJECTORY_RUNTIME_DATA_STRING_MAX_CHARS) {
-      return truncatedTrajectoryValue("trajectory-field-size-limit", {
-        originalChars: value.length,
-        limitChars: TRAJECTORY_RUNTIME_DATA_STRING_MAX_CHARS,
-      });
-    }
-    return value;
+    return limitTrajectoryString(value, TRAJECTORY_RUNTIME_DATA_STRING_MAX_CHARS);
   }
   if (typeof value !== "object" || value === null) {
     return value;
@@ -201,11 +211,112 @@ function limitTrajectoryPayloadValue(
   return limited;
 }
 
-function sanitizeTrajectoryPayload(data: Record<string, unknown>): Record<string, unknown> {
-  return redactSecrets(sanitizeDiagnosticPayload(limitTrajectoryPayloadValue(data))) as Record<
-    string,
-    unknown
-  >;
+function limitTrajectoryMessageValue(
+  value: unknown,
+  depth = 0,
+  seen: WeakSet<object> = new WeakSet(),
+): unknown {
+  if (typeof value === "string") {
+    return limitTrajectoryString(value, TRAJECTORY_RUNTIME_MESSAGE_STRING_MAX_CHARS);
+  }
+  if (typeof value !== "object" || value === null) {
+    return value;
+  }
+  if (seen.has(value)) {
+    return truncatedTrajectoryValue("trajectory-circular-reference");
+  }
+  if (depth >= TRAJECTORY_RUNTIME_MESSAGE_MAX_DEPTH) {
+    return truncatedTrajectoryValue("trajectory-depth-limit", {
+      limitDepth: TRAJECTORY_RUNTIME_MESSAGE_MAX_DEPTH,
+    });
+  }
+  seen.add(value);
+  if (Array.isArray(value)) {
+    const limited = value
+      .slice(0, TRAJECTORY_RUNTIME_MESSAGE_ARRAY_MAX_ITEMS)
+      .map((item) => limitTrajectoryMessageValue(item, depth + 1, seen));
+    if (value.length > TRAJECTORY_RUNTIME_MESSAGE_ARRAY_MAX_ITEMS) {
+      limited.push(
+        truncatedTrajectoryValue("trajectory-array-size-limit", {
+          originalLength: value.length,
+          limitItems: TRAJECTORY_RUNTIME_MESSAGE_ARRAY_MAX_ITEMS,
+        }),
+      );
+    }
+    seen.delete(value);
+    return limited;
+  }
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record);
+  const limited: Record<string, unknown> = {};
+  for (const key of keys.slice(0, TRAJECTORY_RUNTIME_MESSAGE_OBJECT_MAX_KEYS)) {
+    limited[key] = limitTrajectoryMessageValue(record[key], depth + 1, seen);
+  }
+  if (keys.length > TRAJECTORY_RUNTIME_MESSAGE_OBJECT_MAX_KEYS) {
+    limited._truncated = truncatedTrajectoryValue("trajectory-object-size-limit", {
+      originalKeys: keys.length,
+      limitKeys: TRAJECTORY_RUNTIME_MESSAGE_OBJECT_MAX_KEYS,
+    });
+  }
+  seen.delete(value);
+  return limited;
+}
+
+function compactTrajectoryMessages(value: unknown): unknown {
+  if (!Array.isArray(value)) {
+    return limitTrajectoryMessageValue(value);
+  }
+  const maxItems = TRAJECTORY_RUNTIME_MESSAGE_HEAD_ITEMS + TRAJECTORY_RUNTIME_MESSAGE_TAIL_ITEMS;
+  if (value.length <= maxItems) {
+    return value.map((item) => limitTrajectoryMessageValue(item));
+  }
+  const omitted = value.length - maxItems;
+  return [
+    ...value
+      .slice(0, TRAJECTORY_RUNTIME_MESSAGE_HEAD_ITEMS)
+      .map((item) => limitTrajectoryMessageValue(item)),
+    truncatedTrajectoryValue("trajectory-message-history-limit", {
+      omittedMessages: omitted,
+      keptHeadMessages: TRAJECTORY_RUNTIME_MESSAGE_HEAD_ITEMS,
+      keptTailMessages: TRAJECTORY_RUNTIME_MESSAGE_TAIL_ITEMS,
+    }),
+    ...value
+      .slice(-TRAJECTORY_RUNTIME_MESSAGE_TAIL_ITEMS)
+      .map((item) => limitTrajectoryMessageValue(item)),
+  ];
+}
+
+function compactTrajectoryPayloadForEvent(
+  type: string,
+  data: Record<string, unknown>,
+): Record<string, unknown> {
+  if (
+    type !== "context.compiled" &&
+    type !== "prompt.submitted" &&
+    type !== "model.completed" &&
+    type !== "prompt.skipped"
+  ) {
+    return data;
+  }
+  const compacted = { ...data };
+  if ("messages" in compacted) {
+    compacted.messages = compactTrajectoryMessages(compacted.messages);
+  }
+  if ("messagesSnapshot" in compacted) {
+    compacted.messagesSnapshot = compactTrajectoryMessages(compacted.messagesSnapshot);
+  }
+  return compacted;
+}
+
+function sanitizeTrajectoryPayload(
+  type: string,
+  data: Record<string, unknown>,
+): Record<string, unknown> {
+  return redactSecrets(
+    sanitizeDiagnosticPayload(
+      limitTrajectoryPayloadValue(compactTrajectoryPayloadForEvent(type, data)),
+    ),
+  ) as Record<string, unknown>;
 }
 
 export function toTrajectoryToolDefinitions(
@@ -220,7 +331,11 @@ export function toTrajectoryToolDefinitions(
       return [
         {
           name,
-          description: tool.description,
+          description:
+            typeof tool.description === "string" &&
+            tool.description.length > TRAJECTORY_RUNTIME_MESSAGE_STRING_MAX_CHARS
+              ? `${tool.description.slice(0, TRAJECTORY_RUNTIME_MESSAGE_STRING_MAX_CHARS)}...`
+              : tool.description,
           parameters: sanitizeDiagnosticPayload(limitTrajectoryPayloadValue(tool.parameters)),
         },
       ];
@@ -314,7 +429,7 @@ export function createTrajectoryRuntimeRecorder(
       provider: params.provider,
       modelId: params.modelId,
       modelApi: params.modelApi,
-      data: data ? sanitizeTrajectoryPayload(data) : undefined,
+      data: data ? sanitizeTrajectoryPayload(type, data) : undefined,
     };
     const line = safeJsonStringify(event);
     if (!line) {

@@ -2344,6 +2344,7 @@ export async function runEmbeddedAttempt(
         activeSession.agent.streamFn,
         allowedToolNames,
         {
+          blockUnknownToolCalls: true,
           unknownToolThreshold: resolveUnknownToolGuardThreshold(clientToolLoopDetection),
         },
       );
@@ -2777,7 +2778,9 @@ export async function runEmbeddedAttempt(
       if (params.replyOperation) {
         params.replyOperation.attachBackend(queueHandle);
       }
-      setActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
+      setActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey, {
+        timeoutMs: params.timeoutMs,
+      });
 
       let abortWarnTimer: NodeJS.Timeout | undefined;
       const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;

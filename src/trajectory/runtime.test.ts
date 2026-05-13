@@ -132,6 +132,51 @@ describe("trajectory runtime", () => {
     );
   });
 
+  it("compacts large trajectory message histories before event-level truncation", () => {
+    const writes: string[] = [];
+    const recorder = createTrajectoryRuntimeRecorder({
+      sessionId: "session-1",
+      sessionFile: "/tmp/session.jsonl",
+      writer: {
+        filePath: "/tmp/session.trajectory.jsonl",
+        write: (line) => {
+          writes.push(line);
+        },
+        flush: async () => undefined,
+      },
+    });
+
+    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
+    runtimeRecorder.recordEvent("context.compiled", {
+      prompt: "diagnostic prompt",
+      messages: Array.from({ length: 80 }, (_, index) => ({
+        role: index % 2 === 0 ? "user" : "assistant",
+        content: `message-${index} ${"x".repeat(20_000)}`,
+      })),
+    });
+
+    expect(writes).toHaveLength(1);
+    const parsed = JSON.parse(writes[0]);
+    expect(parsed.data).not.toMatchObject({
+      truncated: true,
+      reason: "trajectory-event-size-limit",
+    });
+    expect(parsed.data.messages).toHaveLength(21);
+    expect(parsed.data.messages[4]).toMatchObject({
+      truncated: true,
+      reason: "trajectory-message-history-limit",
+      omittedMessages: 60,
+    });
+    expect(parsed.data.messages.at(-1).content).toMatchObject({
+      truncated: true,
+      reason: "trajectory-field-size-limit",
+      limitChars: 4096,
+    });
+    expect(Buffer.byteLength(writes[0], "utf8")).toBeLessThanOrEqual(
+      TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1,
+    );
+  });
+
   it("stops runtime capture at the file budget and records a truncation event", async () => {
     const writes: string[] = [];
     const recorder = createTrajectoryRuntimeRecorder({

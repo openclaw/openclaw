@@ -1,5 +1,10 @@
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { setDiagnosticsEnabledForProcess } from "../../infra/diagnostic-events.js";
+import {
+  getDiagnosticSessionState,
+  resetDiagnosticSessionStateForTest,
+} from "../../logging/diagnostic-session-state.js";
 import {
   __testing,
   abortAndDrainEmbeddedPiRun,
@@ -9,6 +14,7 @@ import {
   getActiveEmbeddedRunSnapshot,
   isEmbeddedPiRunHandleActive,
   formatEmbeddedPiQueueFailureSummary,
+  queueEmbeddedPiMessage,
   queueEmbeddedPiMessageWithOutcome,
   requestEmbeddedRunModelSwitch,
   resolveActiveEmbeddedRunHandleSessionId,
@@ -34,6 +40,8 @@ function createRunHandle(
 describe("pi-embedded runner run registry", () => {
   afterEach(() => {
     __testing.resetActiveEmbeddedRuns();
+    resetDiagnosticSessionStateForTest();
+    setDiagnosticsEnabledForProcess(false);
     vi.restoreAllMocks();
   });
 
@@ -128,6 +136,23 @@ describe("pi-embedded runner run registry", () => {
       reason: "compacting",
       gatewayHealth: "live",
     });
+  });
+
+  it("drains diagnostic queue depth after active embedded steering is accepted", async () => {
+    setDiagnosticsEnabledForProcess(true);
+    const queueMessage = vi.fn(async () => {});
+    setActiveEmbeddedRun("session-steer-drain", {
+      ...createRunHandle(),
+      queueMessage,
+    });
+
+    expect(queueEmbeddedPiMessage("session-steer-drain", "continue")).toBe(true);
+    expect(getDiagnosticSessionState({ sessionId: "session-steer-drain" }).queueDepth).toBe(1);
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(getDiagnosticSessionState({ sessionId: "session-steer-drain" }).queueDepth).toBe(0);
   });
 
   it("force-clears an aborted run that does not drain", async () => {

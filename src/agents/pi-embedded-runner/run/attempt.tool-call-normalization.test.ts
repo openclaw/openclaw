@@ -1,6 +1,32 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { describe, expect, it } from "vitest";
-import { sanitizeReplayToolCallIdsForStream } from "./attempt.tool-call-normalization.js";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { describe, expect, it, vi } from "vitest";
+import {
+  sanitizeReplayToolCallIdsForStream,
+  wrapStreamFnTrimToolCallNames,
+} from "./attempt.tool-call-normalization.js";
+
+type FakeWrappedStream = {
+  result: () => Promise<unknown>;
+  [Symbol.asyncIterator]: () => AsyncIterator<unknown>;
+};
+
+function createFakeStream(params: {
+  events: unknown[];
+  resultMessage: unknown;
+}): FakeWrappedStream {
+  return {
+    async result() {
+      return params.resultMessage;
+    },
+    [Symbol.asyncIterator]() {
+      return (async function* () {
+        for (const event of params.events) {
+          yield event;
+        }
+      })();
+    },
+  };
+}
 
 type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
 type ToolResultMessage = Extract<AgentMessage, { role: "toolResult" }>;
@@ -209,5 +235,43 @@ describe("sanitizeReplayToolCallIdsForStream", () => {
       toolName: "read",
       isError: false,
     });
+  });
+});
+
+describe("wrapStreamFnTrimToolCallNames", () => {
+  it("immediately rewrites unavailable native tool calls when strict blocking is enabled", async () => {
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              name: " exec_command ",
+              arguments: { cmd: "true" },
+            },
+          ],
+        },
+      }),
+    );
+    const wrappedFn = wrapStreamFnTrimToolCallNames(baseFn as never, new Set(["sessions_yield"]), {
+      blockUnknownToolCalls: true,
+      unknownToolThreshold: 10,
+    });
+
+    const stream = await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
+    const result = (await stream.result()) as {
+      role: string;
+      content: Array<{ type: string; text?: string }>;
+    };
+
+    expect(result.role).toBe("assistant");
+    expect(result.content).toEqual([
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringContaining('"exec_command"'),
+      }),
+    ]);
   });
 });

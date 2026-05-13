@@ -90,6 +90,7 @@ export async function resolveSessionAuthProfileOverride(params: {
   storePath?: string;
   isNewSession: boolean;
   acceptedProviderIds?: string[];
+  persistAuthProfileOverride?: boolean;
 }): Promise<string | undefined> {
   const {
     cfg,
@@ -101,6 +102,7 @@ export async function resolveSessionAuthProfileOverride(params: {
     storePath,
     isNewSession,
   } = params;
+  const persistAuthProfileOverride = params.persistAuthProfileOverride !== false;
   if (!sessionEntry || !sessionStore || !sessionKey) {
     return sessionEntry?.authProfileOverride;
   }
@@ -146,18 +148,24 @@ export async function resolveSessionAuthProfileOverride(params: {
       }),
     )
   ) {
-    await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
+    if (persistAuthProfileOverride) {
+      await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
+    }
     current = undefined;
   }
 
   if (current && !isProfileForProvider({ cfg, providers, profileId: current, store })) {
-    await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
+    if (persistAuthProfileOverride) {
+      await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
+    }
     current = undefined;
   }
 
   // Explicit user picks should survive provider rotation order changes.
   if (current && order.length > 0 && !order.includes(current) && source !== "user") {
-    await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
+    if (persistAuthProfileOverride) {
+      await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
+    }
     current = undefined;
   }
 
@@ -215,7 +223,7 @@ export async function resolveSessionAuthProfileOverride(params: {
     next !== sessionEntry.authProfileOverride ||
     sessionEntry.authProfileOverrideSource !== "auto" ||
     sessionEntry.authProfileOverrideCompactionCount !== compactionCount;
-  if (shouldPersist) {
+  if (shouldPersist && persistAuthProfileOverride) {
     sessionEntry.authProfileOverride = next;
     sessionEntry.authProfileOverrideSource = "auto";
     sessionEntry.authProfileOverrideCompactionCount = compactionCount;

@@ -4,6 +4,7 @@
  * results arrive.
  */
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import type { CommandQueueEnqueueOptions } from "../../process/command-queue.types.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
@@ -125,5 +126,26 @@ describe("sessions_yield orchestration", () => {
     // Neither clientToolCall nor yieldDetected → stopReason is undefined
     expect(result.meta.stopReason).toBeUndefined();
     expect(result.meta.pendingToolCalls).toBeUndefined();
+  });
+
+  it("uses the subagent runtime budget for lane wait warnings", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+    const enqueueOptions: Array<CommandQueueEnqueueOptions | undefined> = [];
+
+    await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      lane: "subagent",
+      timeoutMs: 900_000,
+      runId: "run-subagent-lane-warning-budget",
+      enqueue: async (task, opts) => {
+        enqueueOptions.push(opts);
+        return await task();
+      },
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(enqueueOptions).toHaveLength(2);
+    expect(enqueueOptions.every((opts) => opts?.warnAfterMs === 300_000)).toBe(true);
+    expect(enqueueOptions.some((opts) => opts?.taskTimeoutMs === 930_000)).toBe(true);
   });
 });

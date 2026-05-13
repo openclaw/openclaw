@@ -36,6 +36,63 @@ function resolvePositiveInteger(value: number | undefined): number | undefined {
   return Math.floor(value);
 }
 
+function resolvePersistedRuntimeModel(params: {
+  providerUsed: string;
+  modelUsed: string;
+  defaultProvider: string;
+  defaultModel: string;
+}): { provider: string; model: string } {
+  if (
+    params.providerUsed === "openai-codex" &&
+    params.defaultProvider === "openai" &&
+    params.modelUsed === params.defaultModel
+  ) {
+    return {
+      provider: params.defaultProvider,
+      model: params.defaultModel,
+    };
+  }
+  return {
+    provider: params.providerUsed,
+    model: params.modelUsed,
+  };
+}
+
+function isCanonicalOpenAICodexTransport(params: {
+  providerUsed: string;
+  modelUsed: string;
+  defaultProvider: string;
+  defaultModel: string;
+}): boolean {
+  return (
+    params.providerUsed === "openai-codex" &&
+    params.defaultProvider === "openai" &&
+    params.modelUsed === params.defaultModel
+  );
+}
+
+function clearCanonicalOpenAICodexTransportPins(entry: SessionEntry): void {
+  if (entry.agentHarnessId === "codex") {
+    delete entry.agentHarnessId;
+  }
+  if (
+    entry.authProfileOverrideSource === "auto" &&
+    entry.authProfileOverride?.trim().startsWith("openai-codex:")
+  ) {
+    delete entry.authProfileOverride;
+    delete entry.authProfileOverrideSource;
+    delete entry.authProfileOverrideCompactionCount;
+  }
+  if (entry.fallbackNoticeSelectedModel?.trim().startsWith("openai-codex/")) {
+    delete entry.fallbackNoticeSelectedModel;
+    delete entry.fallbackNoticeReason;
+  }
+  if (entry.fallbackNoticeActiveModel?.trim().startsWith("openai-codex/")) {
+    delete entry.fallbackNoticeActiveModel;
+    delete entry.fallbackNoticeReason;
+  }
+}
+
 function removeLifecycleStateFromMetadataPatch(entry: SessionEntry): SessionEntry {
   const next = { ...entry };
   delete next.status;
@@ -43,6 +100,44 @@ function removeLifecycleStateFromMetadataPatch(entry: SessionEntry): SessionEntr
   delete next.endedAt;
   delete next.runtimeMs;
   return next;
+}
+
+function isTerminalSessionStatus(status: unknown): boolean {
+  return status === "done" || status === "failed" || status === "killed" || status === "timeout";
+}
+
+function deriveLifecycleFallbackPatch(params: {
+  entry?: SessionEntry;
+  result: RunResult;
+  now: number;
+}): Partial<SessionEntry> {
+  const { entry, result, now } = params;
+  if (isTerminalSessionStatus(entry?.status) || typeof entry?.endedAt === "number") {
+    return {};
+  }
+  if (entry?.status !== "running") {
+    return {};
+  }
+
+  const yielded = result.meta.yielded === true || result.meta.livenessState === "paused";
+  const status =
+    result.meta.stopReason === "aborted"
+      ? "killed"
+      : result.meta.aborted === true && !yielded
+        ? "timeout"
+        : "done";
+  const startedAt =
+    typeof entry.startedAt === "number" && Number.isFinite(entry.startedAt) && entry.startedAt > 0
+      ? entry.startedAt
+      : undefined;
+  const runtimeMs = startedAt === undefined ? undefined : Math.max(0, now - startedAt);
+  return {
+    status,
+    startedAt,
+    endedAt: now,
+    runtimeMs,
+    abortedLastRun: status === "killed",
+  };
 }
 
 export async function updateSessionStoreAfterAgentRun(params: {
@@ -93,6 +188,18 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const compactionsThisRun = Math.max(0, result.meta.agentMeta?.compactionCount ?? 0);
   const modelUsed = result.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
   const providerUsed = result.meta.agentMeta?.provider ?? fallbackProvider ?? defaultProvider;
+  const canonicalOpenAICodexTransport = isCanonicalOpenAICodexTransport({
+    providerUsed,
+    modelUsed,
+    defaultProvider,
+    defaultModel,
+  });
+  const persistedRuntimeModel = resolvePersistedRuntimeModel({
+    providerUsed,
+    modelUsed,
+    defaultProvider,
+    defaultModel,
+  });
   const agentHarnessId = normalizeOptionalString(result.meta.agentMeta?.agentHarnessId);
   const runtimeContextTokens = resolvePositiveInteger(result.meta.agentMeta?.contextTokens);
   const contextTokens =
@@ -149,12 +256,12 @@ export async function updateSessionStoreAfterAgentRun(params: {
     // When there is no prior runtime model, do nothing: a heartbeat turn
     // should not establish initial model state on an empty session.
   } else {
-    setSessionRuntimeModel(next, {
-      provider: providerUsed,
-      model: modelUsed,
-    });
+    setSessionRuntimeModel(next, persistedRuntimeModel);
   }
-  if (agentHarnessId) {
+  if (canonicalOpenAICodexTransport) {
+    clearCanonicalOpenAICodexTransportPins(next);
+  }
+  if (agentHarnessId && !(canonicalOpenAICodexTransport && agentHarnessId === "codex")) {
     next.agentHarnessId = agentHarnessId;
   } else if (result.meta.executionTrace?.runner === "cli") {
     next.agentHarnessId = undefined;
@@ -170,7 +277,8 @@ export async function updateSessionStoreAfterAgentRun(params: {
       }
     }
   }
-  next.abortedLastRun = result.meta.aborted ?? false;
+  const yielded = result.meta.yielded === true || result.meta.livenessState === "paused";
+  next.abortedLastRun = result.meta.aborted === true && !yielded;
   if (result.meta.systemPromptReport) {
     next.systemPromptReport = result.meta.systemPromptReport;
   }
@@ -234,7 +342,11 @@ export async function updateSessionStoreAfterAgentRun(params: {
   }
   const metadataPatch = removeLifecycleStateFromMetadataPatch(next);
   const persisted = await updateSessionStore(storePath, (store) => {
-    const merged = mergeSessionEntry(store[sessionKey], metadataPatch);
+    const existing = store[sessionKey];
+    const merged = mergeSessionEntry(existing, {
+      ...metadataPatch,
+      ...deriveLifecycleFallbackPatch({ entry: existing, result, now }),
+    });
     store[sessionKey] = merged;
     return merged;
   });

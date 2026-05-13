@@ -15,6 +15,7 @@ import {
 import {
   diagnosticLogger as diag,
   logMessageQueued,
+  logQueuedMessageDrained,
   logSessionStateChange,
 } from "../../logging/diagnostic.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -140,7 +141,9 @@ export function queueEmbeddedPiMessageWithOutcome(
     return createQueueFailureOutcome(sessionId, "compacting");
   }
   logMessageQueued({ sessionId, source: "pi-embedded-runner" });
-  void handle.queueMessage(text, options ?? { steeringMode: "all" });
+  void handle.queueMessage(text, options ?? { steeringMode: "all" }).finally(() => {
+    logQueuedMessageDrained({ sessionId, source: "pi-embedded-runner" });
+  });
   return {
     queued: true,
     sessionId,
@@ -418,6 +421,7 @@ export function setActiveEmbeddedRun(
   sessionId: string,
   handle: EmbeddedPiQueueHandle,
   sessionKey?: string,
+  options?: { timeoutMs?: number },
 ) {
   const wasActive = ACTIVE_EMBEDDED_RUNS.has(sessionId);
   ACTIVE_EMBEDDED_RUNS.set(sessionId, handle);
@@ -428,7 +432,7 @@ export function setActiveEmbeddedRun(
     state: "processing",
     reason: wasActive ? "run_replaced" : "run_started",
   });
-  markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey });
+  markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey, timeoutMs: options?.timeoutMs });
   if (!sessionId.startsWith("probe-")) {
     diag.debug(`run registered: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
   }

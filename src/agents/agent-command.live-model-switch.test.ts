@@ -772,6 +772,92 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(lifecycleEndCalls.length).toBeGreaterThanOrEqual(1);
   });
 
+  it("propagates yielded paused metadata to lifecycle end events", async () => {
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => ({
+      result: await params.run(params.provider, params.model),
+      provider: params.provider,
+      model: params.model,
+      attempts: [],
+    }));
+    state.runAgentAttemptMock.mockResolvedValue({
+      payloads: [],
+      meta: {
+        durationMs: 100,
+        aborted: true,
+        stopReason: "end_turn",
+        livenessState: "paused",
+        yielded: true,
+        agentMeta: { provider: "openai", model: "gpt-5.5" },
+      },
+    });
+
+    await runBasicAgentCommand();
+
+    const lifecycleEndCall = state.emitAgentEventMock.mock.calls.find((call: unknown[]) => {
+      const arg = call[0] as { stream?: string; data?: { phase?: string } };
+      return arg?.stream === "lifecycle" && arg?.data?.phase === "end";
+    });
+    expect(lifecycleEndCall?.[0]).toMatchObject({
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        aborted: true,
+        stopReason: "end_turn",
+        livenessState: "paused",
+        yielded: true,
+      },
+    });
+  });
+
+  it("emits a corrective yielded lifecycle end when the embedded runner ended first", async () => {
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => ({
+      result: await params.run(params.provider, params.model),
+      provider: params.provider,
+      model: params.model,
+      attempts: [],
+    }));
+    state.runAgentAttemptMock.mockImplementation(async (params: unknown) => {
+      const onAgentEvent = (params as { onAgentEvent?: (event: unknown) => void }).onAgentEvent;
+      onAgentEvent?.({
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          aborted: false,
+          stopReason: "end_turn",
+        },
+      });
+      return {
+        payloads: [],
+        meta: {
+          durationMs: 100,
+          aborted: false,
+          stopReason: "end_turn",
+          livenessState: "paused",
+          yielded: true,
+          agentMeta: { provider: "openai", model: "gpt-5.5" },
+        },
+      };
+    });
+
+    await runBasicAgentCommand();
+
+    const lifecycleEndCalls = state.emitAgentEventMock.mock.calls.filter((call: unknown[]) => {
+      const arg = call[0] as { stream?: string; data?: { phase?: string } };
+      return arg?.stream === "lifecycle" && arg?.data?.phase === "end";
+    });
+    expect(lifecycleEndCalls).toHaveLength(1);
+    expect(lifecycleEndCalls[0]?.[0]).toMatchObject({
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        aborted: false,
+        stopReason: "end_turn",
+        livenessState: "paused",
+        yielded: true,
+      },
+    });
+  });
+
   it("validates explicit thinking against configured model compat without an allowlist", async () => {
     state.runtimeConfigMock = {
       agents: {

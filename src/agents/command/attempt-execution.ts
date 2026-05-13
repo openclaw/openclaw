@@ -24,7 +24,10 @@ import { FailoverError } from "../failover-error.js";
 import { resolveAgentHarnessPolicy } from "../harness/selection.js";
 import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
 import { isCliProvider } from "../model-selection.js";
-import { resolveOpenAIRuntimeProviderForPi } from "../openai-codex-routing.js";
+import {
+  listOpenAIAuthProfileProvidersForAgentRuntime,
+  resolveOpenAIRuntimeProviderForPi,
+} from "../openai-codex-routing.js";
 import { runEmbeddedPiAgent, type EmbeddedPiRunResult } from "../pi-embedded.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import {
@@ -153,26 +156,34 @@ function resolveHarnessAuthProfileSelection(params: {
     allowHarnessAuthProfileForwarding: params.allowHarnessAuthProfileForwarding,
   });
   const harnessAuthProvider = runtimeAuthPlan.harnessAuthProvider;
-  if (!harnessAuthProvider) {
-    return { authProfileProvider: params.authProfileProvider };
-  }
+  const candidateAuthProviders = harnessAuthProvider
+    ? [harnessAuthProvider]
+    : listOpenAIAuthProfileProvidersForAgentRuntime({
+        provider: params.provider,
+        harnessRuntime: params.harnessRuntime,
+        agentHarnessId: params.harnessId,
+      });
 
   const store = ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
   });
-  const authProfileId = resolveAuthProfileOrder({
-    cfg: params.config,
-    store,
-    provider: harnessAuthProvider,
-  })[0];
+  for (const authProfileProvider of candidateAuthProviders) {
+    const authProfileId = resolveAuthProfileOrder({
+      cfg: params.config,
+      store,
+      provider: authProfileProvider,
+    })[0];
 
-  return authProfileId
-    ? {
+    if (authProfileId) {
+      return {
         authProfileId,
         authProfileIdSource: "auto",
-        authProfileProvider: harnessAuthProvider,
-      }
-    : { authProfileProvider: params.authProfileProvider };
+        authProfileProvider,
+      };
+    }
+  }
+
+  return { authProfileProvider: params.authProfileProvider };
 }
 
 function resolveTranscriptUsage(usage: PersistTextTurnTranscriptParams["assistant"]["usage"]) {
@@ -624,6 +635,7 @@ export function runAgentAttempt(params: {
     runId: params.runId,
     lane: params.opts.lane,
     abortSignal: params.opts.abortSignal,
+    onExecutionStarted: params.opts.onExecutionStarted,
     extraSystemPrompt: params.opts.extraSystemPrompt,
     bootstrapContextMode: params.opts.bootstrapContextMode,
     bootstrapContextRunKind: params.opts.bootstrapContextRunKind,

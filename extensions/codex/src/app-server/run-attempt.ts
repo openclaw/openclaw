@@ -83,7 +83,10 @@ import {
   buildCodexNativeHookRelayConfig,
   CODEX_NATIVE_HOOK_RELAY_EVENTS,
 } from "./native-hook-relay.js";
-import { buildCodexPluginAppCacheKey } from "./plugin-app-cache-key.js";
+import {
+  buildCodexPluginAppCacheKey,
+  resolveCodexPluginAppCacheEndpoint,
+} from "./plugin-app-cache-key.js";
 import {
   buildCodexPluginThreadConfig,
   buildCodexPluginThreadConfigInputFingerprint,
@@ -140,6 +143,8 @@ import { filterToolsForVisionInputs } from "./vision-tools.js";
 const CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 30_000;
 const CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS = 600_000;
 const CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 60_000;
+const CODEX_BROWSER_DYNAMIC_TOOL_TIMEOUT_MS = 90_000;
+const CODEX_SESSIONS_SPAWN_DYNAMIC_TOOL_TIMEOUT_MS = 180_000;
 const CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS = 3;
 const CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS = 100;
 const CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS = 5_000;
@@ -862,6 +867,7 @@ export async function runCodexAppServerAttempt(
   );
   const turnTerminalIdleTimeoutMs = resolveCodexTurnTerminalIdleTimeoutMs(
     options.turnTerminalIdleTimeoutMs,
+    params.timeoutMs,
   );
   let turnCompletionIdleTimer: ReturnType<typeof setTimeout> | undefined;
   let turnCompletionIdleWatchArmed = false;
@@ -875,8 +881,18 @@ export async function runCodexAppServerAttempt(
   let turnCompletionLastActivityAt = Date.now();
   let turnCompletionLastActivityReason = "startup";
   let turnCompletionLastActivityDetails: Record<string, unknown> | undefined;
-  let activeAppServerTurnRequests = 0;
+  let nextAppServerTurnRequestId = 0;
+  const activeAppServerTurnRequests = new Map<number, number>();
   const activeTurnItemIds = new Set<string>();
+
+  const activeAppServerTurnRequestBlocksIdleWatch = (timeoutMs: number) => {
+    if (activeAppServerTurnRequests.size === 0) {
+      return false;
+    }
+    const oldestStartedAt = Math.min(...activeAppServerTurnRequests.values());
+    const ageMs = Math.max(0, Date.now() - oldestStartedAt);
+    return ageMs < timeoutMs;
+  };
 
   const clearTurnCompletionIdleTimer = () => {
     if (turnCompletionIdleTimer) {
@@ -903,7 +919,7 @@ export async function runCodexAppServerAttempt(
     if (completed || runAbortController.signal.aborted || !turnAssistantCompletionIdleWatchArmed) {
       return;
     }
-    if (activeAppServerTurnRequests > 0 || activeTurnItemIds.size > 0) {
+    if (activeAppServerTurnRequests.size > 0 || activeTurnItemIds.size > 0) {
       scheduleTurnAssistantCompletionIdleWatch();
       return;
     }
@@ -948,7 +964,7 @@ export async function runCodexAppServerAttempt(
       completed ||
       runAbortController.signal.aborted ||
       !turnCompletionIdleWatchArmed ||
-      activeAppServerTurnRequests > 0
+      activeAppServerTurnRequestBlocksIdleWatch(turnCompletionIdleTimeoutMs)
     ) {
       return;
     }
@@ -986,7 +1002,7 @@ export async function runCodexAppServerAttempt(
       completed ||
       runAbortController.signal.aborted ||
       !turnTerminalIdleWatchArmed ||
-      activeAppServerTurnRequests > 0
+      activeAppServerTurnRequestBlocksIdleWatch(turnTerminalIdleTimeoutMs)
     ) {
       return;
     }
@@ -1025,7 +1041,7 @@ export async function runCodexAppServerAttempt(
       completed ||
       runAbortController.signal.aborted ||
       !turnCompletionIdleWatchArmed ||
-      activeAppServerTurnRequests > 0
+      activeAppServerTurnRequestBlocksIdleWatch(turnCompletionIdleTimeoutMs)
     ) {
       return;
     }
@@ -1052,7 +1068,7 @@ export async function runCodexAppServerAttempt(
       completed ||
       runAbortController.signal.aborted ||
       !turnTerminalIdleWatchArmed ||
-      activeAppServerTurnRequests > 0
+      activeAppServerTurnRequestBlocksIdleWatch(turnTerminalIdleTimeoutMs)
     ) {
       return;
     }
@@ -1173,6 +1189,12 @@ export async function runCodexAppServerAttempt(
   };
 
   const handleNotification = async (notification: CodexServerNotification) => {
+    const notificationCarriesTurnProgress = notification.method !== "account/rateLimits/updated";
+    if ((!projector || !turnId) && notificationCarriesTurnProgress) {
+      touchTurnCompletionActivity(`notification:${notification.method}`, {
+        details: describeNotificationActivity(notification),
+      });
+    }
     userInputBridge?.handleNotification(notification);
     if (!projector || !turnId) {
       pendingNotifications.push(notification);
@@ -1220,6 +1242,7 @@ export async function runCodexAppServerAttempt(
     if (
       turnCompletionIdleWatchArmed &&
       !turnCompletionIdleWatchPinnedByTerminalError &&
+      notificationCarriesTurnProgress &&
       notification.method !== "turn/completed" &&
       isCurrentTurnNotification
     ) {
@@ -1269,7 +1292,8 @@ export async function runCodexAppServerAttempt(
 
   const notificationCleanup = client.addNotificationHandler(enqueueNotification);
   const requestCleanup = client.addRequestHandler(async (request) => {
-    activeAppServerTurnRequests += 1;
+    const requestTrackId = (nextAppServerTurnRequestId += 1);
+    activeAppServerTurnRequests.set(requestTrackId, Date.now());
     clearTurnCompletionIdleTimer();
     disarmTurnAssistantCompletionIdleWatch();
     touchTurnCompletionActivity(`request:${request.method}`);
@@ -1398,7 +1422,7 @@ export async function runCodexAppServerAttempt(
       });
       return response as JsonValue;
     } finally {
-      activeAppServerTurnRequests = Math.max(0, activeAppServerTurnRequests - 1);
+      activeAppServerTurnRequests.delete(requestTrackId);
       touchTurnCompletionActivity(`request:${request.method}:response`, {
         arm: armCompletionWatchOnResponse,
       });
@@ -1573,7 +1597,10 @@ export async function runCodexAppServerAttempt(
   };
   setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
   turnTerminalIdleWatchArmed = true;
-  touchTurnCompletionActivity("turn:start");
+  // Also guard the blind gap before the first model/tool notification. Without
+  // this, a stuck app-server turn can hold an agent lane until the much longer
+  // terminal watchdog fires.
+  touchTurnCompletionActivity("turn:start", { arm: true });
 
   const timeout = setTimeout(
     () => {
@@ -1911,6 +1938,13 @@ async function handleDynamicToolCallWithTimeout(params: {
   }
 }
 
+function resolveDynamicToolTimeoutMs(
+  call: Pick<CodexDynamicToolCallParams, "tool">,
+  timeoutMs: number,
+): number {
+  return clampDynamicToolTimeoutMs(readDefaultDynamicToolTimeoutMs(call.tool) ?? timeoutMs);
+}
+
 function failedDynamicToolResponse(message: string): CodexDynamicToolCallResponse {
   return {
     success: false,
@@ -1925,8 +1959,19 @@ function resolveDynamicToolCallTimeoutMs(params: {
   return clampDynamicToolTimeoutMs(
     readDynamicToolCallTimeoutMs(params.call.arguments) ??
       readConfiguredDynamicToolTimeoutMs(params.call.tool, params.config) ??
+      readDefaultDynamicToolTimeoutMs(params.call.tool) ??
       CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
   );
+}
+
+function readDefaultDynamicToolTimeoutMs(toolName: string): number | undefined {
+  if (toolName === "sessions_spawn") {
+    return CODEX_SESSIONS_SPAWN_DYNAMIC_TOOL_TIMEOUT_MS;
+  }
+  if (toolName === "browser") {
+    return CODEX_BROWSER_DYNAMIC_TOOL_TIMEOUT_MS;
+  }
+  return undefined;
 }
 
 function readDynamicToolCallTimeoutMs(value: JsonValue | undefined): number | undefined {
@@ -2338,9 +2383,16 @@ function resolveCodexTurnAssistantCompletionIdleTimeoutMs(value: number | undefi
   return Math.max(1, Math.floor(value));
 }
 
-function resolveCodexTurnTerminalIdleTimeoutMs(value: number | undefined): number {
+function resolveCodexTurnTerminalIdleTimeoutMs(
+  value: number | undefined,
+  runTimeoutMs?: number,
+): number {
   if (value === undefined) {
-    return CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS;
+    const boundedRunTimeoutMs =
+      typeof runTimeoutMs === "number" && Number.isFinite(runTimeoutMs) && runTimeoutMs > 0
+        ? Math.floor(runTimeoutMs)
+        : undefined;
+    return Math.max(CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS, boundedRunTimeoutMs ?? 0);
   }
   if (!Number.isFinite(value)) {
     return CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS;
@@ -3100,8 +3152,11 @@ export const __testing = {
   CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
   CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS,
   CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS,
+  CODEX_BROWSER_DYNAMIC_TOOL_TIMEOUT_MS,
+  CODEX_SESSIONS_SPAWN_DYNAMIC_TOOL_TIMEOUT_MS,
   CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS,
   CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS,
+  resolveCodexTurnTerminalIdleTimeoutMs,
   buildCodexNativeHookRelayId,
   filterCodexDynamicTools,
   buildDynamicTools,
@@ -3110,6 +3165,8 @@ export const __testing = {
   handleDynamicToolCallWithTimeout,
   resolveDynamicToolCallTimeoutMs,
   restrictCodexAppServerSandboxForOpenClawSandbox,
+  resolveDynamicToolTimeoutMs,
+  resolveCodexPluginAppCacheEndpoint,
   resolveOpenClawCodingToolsSessionKeys,
   shouldForceMessageTool,
   setOpenClawCodingToolsFactoryForTests(factory: OpenClawCodingToolsFactory): void {

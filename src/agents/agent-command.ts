@@ -998,6 +998,7 @@ async function agentCommandInternal(
 
     const startedAt = Date.now();
     let lifecycleEnded = false;
+    let lifecycleEndedWithYield = false;
     const attemptExecutionRuntime = await loadAttemptExecutionRuntime();
     const runContext = resolveAgentRunContext(opts);
     const messageChannel = resolveMessageChannel(
@@ -1102,6 +1103,13 @@ async function agentCommandInternal(
                   (evt.data.phase === "end" || evt.data.phase === "error")
                 ) {
                   lifecycleEnded = true;
+                  if (
+                    evt.data.yielded === true ||
+                    evt.data.livenessState === "paused" ||
+                    (evt.data.aborted === true && evt.data.stopReason === "end_turn")
+                  ) {
+                    lifecycleEndedWithYield = true;
+                  }
                 }
               },
             });
@@ -1122,8 +1130,12 @@ async function agentCommandInternal(
             },
           };
         }
+        const stopReason = result.meta.stopReason;
+        const resultYielded =
+          result.meta.yielded === true ||
+          result.meta.livenessState === "paused" ||
+          (result.meta.aborted === true && stopReason === "end_turn");
         if (!lifecycleEnded) {
-          const stopReason = result.meta.stopReason;
           if (stopReason && stopReason !== "end_turn") {
             console.error(`[agent] run ${runId} ended with stopReason=${stopReason}`);
           }
@@ -1136,6 +1148,22 @@ async function agentCommandInternal(
               endedAt: Date.now(),
               aborted: result.meta.aborted ?? false,
               stopReason,
+              ...(result.meta.livenessState ? { livenessState: result.meta.livenessState } : {}),
+              ...(result.meta.yielded === true ? { yielded: true } : {}),
+            },
+          });
+        } else if (resultYielded && !lifecycleEndedWithYield) {
+          emitAgentEvent({
+            runId,
+            stream: "lifecycle",
+            data: {
+              phase: "end",
+              startedAt,
+              endedAt: Date.now(),
+              aborted: result.meta.aborted ?? false,
+              stopReason,
+              ...(result.meta.livenessState ? { livenessState: result.meta.livenessState } : {}),
+              yielded: true,
             },
           });
         }
@@ -1214,6 +1242,7 @@ async function agentCommandInternal(
             storedModelOverrideSource = "user";
           }
           lifecycleEnded = false;
+          lifecycleEndedWithYield = false;
           log.info(
             `Live session model switch in subagent run ${runId}: switching to ${sanitizeForLog(err.provider)}/${sanitizeForLog(err.model)}`,
           );
@@ -1317,6 +1346,7 @@ async function agentCommandInternal(
     // This ensures that if the process restarts during delivery, the payload is durable.
     if (
       opts.deliver === true &&
+      opts.bootstrapContextRunKind !== "heartbeat" &&
       sessionStore &&
       sessionKey &&
       payloads.length > 0 &&

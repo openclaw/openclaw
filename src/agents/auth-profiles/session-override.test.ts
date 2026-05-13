@@ -507,6 +507,50 @@ describe("resolveSessionAuthProfileOverride", () => {
     });
   });
 
+  it("resolves an auto profile without persisting it when persistence is disabled", async () => {
+    await withAuthState(async (state) => {
+      const agentDir = state.agentDir();
+      await fs.mkdir(agentDir, { recursive: true });
+      authStoreMocks.state.hasSource = true;
+      authStoreMocks.state.store = createAuthStoreWithProfiles({
+        profiles: {
+          [TEST_PRIMARY_PROFILE_ID]: {
+            type: "api_key",
+            provider: "openai-codex",
+            key: "sk-codex",
+          },
+        },
+        order: {
+          "openai-codex": [TEST_PRIMARY_PROFILE_ID],
+        },
+      });
+
+      const sessionEntry: SessionEntry = {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+      };
+      const sessionStore = { "agent:main:main": sessionEntry };
+
+      const resolved = await resolveSessionAuthProfileOverride({
+        cfg: {} as OpenClawConfig,
+        provider: "openai",
+        acceptedProviderIds: ["openai-codex"],
+        agentDir,
+        sessionEntry,
+        sessionStore,
+        sessionKey: "agent:main:main",
+        storePath: undefined,
+        isNewSession: false,
+        persistAuthProfileOverride: false,
+      });
+
+      expect(resolved).toBe(TEST_PRIMARY_PROFILE_ID);
+      expect(sessionEntry.authProfileOverride).toBeUndefined();
+      expect(sessionEntry.authProfileOverrideSource).toBeUndefined();
+      expect(sessionStore["agent:main:main"]?.authProfileOverride).toBeUndefined();
+    });
+  });
+
   it("re-resolves a stale user session override when the selected profile becomes unusable", async () => {
     await withAuthState(async (state) => {
       const agentDir = state.agentDir();
