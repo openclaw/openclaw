@@ -102,6 +102,7 @@ export type ConfigMutationCommitParams = {
 
 export type ConfigMutationCommitResult = {
   config: OpenClawConfig;
+  persistedHash: string | null;
   afterWrite?: ConfigWriteAfterWrite;
 };
 
@@ -423,6 +424,7 @@ async function commitPreparedConfigMutation(
   });
   return {
     config: result.nextConfig,
+    persistedHash: result.persistedHash,
     afterWrite: result.afterWrite,
   };
 }
@@ -460,6 +462,7 @@ async function transformConfigFileAttempt<T>(
     previousHash,
     snapshot,
     nextConfig: committed.config,
+    persistedHash: committed.persistedHash,
     result: transformed.result,
     attempts: attempt + 1,
     afterWrite: committedAfterWrite,

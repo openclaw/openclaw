@@ -58,6 +58,7 @@ export type {
   ConfigMutationCommitResult,
   ConfigMutationContext,
   ConfigMutationIO,
+  ConfigReplaceResult,
   ConfigMutationResult,
   ConfigTransformResult,
   TransformConfigFileParams,
