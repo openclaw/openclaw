@@ -273,7 +273,11 @@ function buildTaskScript({
     }
   }
   const command = programArguments.map(quoteCmdScriptArg).join(" ");
-  lines.push(command);
+  // Use start /b so the launched process runs in the background. Without it,
+  // cmd.exe blocks on the long-running node process and the console window
+  // persists in the taskbar / screen (Windows)
+  const launched = `start "" /b ${command}`;
+  lines.push(launched);
   return `${lines.join("\r\n")}\r\n`;
 }
 
@@ -1071,3 +1075,4 @@ export async function readScheduledTaskRuntime(
     ...(derived.detail ? { detail: derived.detail } : {}),
   };
 }
+
