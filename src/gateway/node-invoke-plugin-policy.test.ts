@@ -249,7 +249,7 @@ describe("applyPluginNodeInvokePolicy", () => {
       { dropIfSlow: true },
     );
 
-    expect(manager.resolve(record!.id, "allow-once")).toBe(true);
+    expect(manager.resolve(record.id, "allow-once")).toBe(true);
     await expect(resultPromise).resolves.toStrictEqual({
       ok: true,
       payload: { id: record?.id, decision: "allow-once" },
