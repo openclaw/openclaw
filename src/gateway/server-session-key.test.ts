@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resetAgentRunContextForTest } from "../infra/agent-events.js";
+import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
 
 const hoisted = vi.hoisted(() => ({
   loadConfigMock: vi.fn<() => OpenClawConfig>(),
@@ -104,6 +104,28 @@ describe("resolveSessionKeyForRun", () => {
         agentId: "main",
       },
     );
+  });
+
+  it("uses active legacy run contexts for the main agent", () => {
+    hoisted.loadConfigMock.mockReturnValue({});
+    registerAgentRunContext("run-live-main", { sessionKey: "main" });
+
+    expect(resolveSessionKeyForRun("run-live-main")).toBe("main");
+    expect(hoisted.loadCombinedSessionStoreForGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("lets active run context override a cached miss", () => {
+    hoisted.loadConfigMock.mockReturnValue({});
+    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+      storePath: "(multiple)",
+      store: {},
+    });
+
+    expect(resolveSessionKeyForRun("run-race")).toBeUndefined();
+    registerAgentRunContext("run-race", { sessionKey: "agent:main:main" });
+
+    expect(resolveSessionKeyForRun("run-race")).toBe("agent:main:main");
+    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledTimes(1);
   });
 
   it("caches misses briefly before re-checking the combined store", () => {
