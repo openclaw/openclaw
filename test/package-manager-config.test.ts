@@ -32,18 +32,18 @@ describe("package manager build policy", () => {
     expect(workspace.onlyBuiltDependencies).toBeUndefined();
   });
 
-  it("allows Baileys' pinned libsignal git subdependency", () => {
+  it("keeps exotic subdependency builds blocked by default", () => {
     const workspace = parse(fs.readFileSync("pnpm-workspace.yaml", "utf8")) as WorkspaceConfig;
 
     expect(workspace.allowBuilds?.["baileys"]).toBe(true);
-    expect(workspace.allowBuilds?.["@whiskeysockets/libsignal-node"]).toBe(true);
-    expect(workspace.blockExoticSubdeps).toBe(false);
+    expect(workspace.allowBuilds?.["@whiskeysockets/libsignal-node"]).toBeUndefined();
+    expect(workspace.blockExoticSubdeps).toBe(true);
   });
 
-  it("keeps release-age installs working with incomplete registry publish metadata", () => {
+  it("does not relax release-age installs for missing registry publish metadata", () => {
     const workspace = parse(fs.readFileSync("pnpm-workspace.yaml", "utf8")) as WorkspaceConfig;
 
-    expect(workspace.minimumReleaseAgeIgnoreMissingTime).toBe(true);
-    expect(workspace.minimumReleaseAgeStrict).toBe(false);
+    expect(workspace.minimumReleaseAgeIgnoreMissingTime).toBeUndefined();
+    expect(workspace.minimumReleaseAgeStrict).toBeUndefined();
   });
 });
