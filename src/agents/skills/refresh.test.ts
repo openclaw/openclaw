@@ -167,4 +167,32 @@ describe("ensureSkillsWatcher", () => {
     refreshModule.ensureSkillsWatcher({ workspaceDir: "/tmp/other" });
     expect(watchMock).toHaveBeenCalledTimes(2);
   });
+
+  it("reconfigures watcher when debounceMs changes", () => {
+    refreshModule.ensureSkillsWatcher({ workspaceDir: "/tmp/workspace" });
+    expect(watchMock).toHaveBeenCalledTimes(1);
+
+    // Same dir, same config — reuses watcher
+    refreshModule.ensureSkillsWatcher({ workspaceDir: "/tmp/workspace" });
+    expect(watchMock).toHaveBeenCalledTimes(1);
+
+    // Same dir, different debounce — recreates watcher
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir: "/tmp/workspace",
+      config: { skills: { load: { watchDebounceMs: 500 } } },
+    });
+    expect(watchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("reconfigures watcher when extraDirs change", () => {
+    refreshModule.ensureSkillsWatcher({ workspaceDir: "/tmp/workspace" });
+    expect(watchMock).toHaveBeenCalledTimes(1);
+
+    // Same dir, different extraDirs — recreates watcher
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir: "/tmp/workspace",
+      config: { skills: { load: { extraDirs: ["/extra/skills"] } } },
+    });
+    expect(watchMock).toHaveBeenCalledTimes(2);
+  });
 });
