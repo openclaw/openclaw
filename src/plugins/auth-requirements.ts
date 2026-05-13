@@ -94,15 +94,23 @@ export function collectPluginAuthRequirements(
     return collected;
   }
 
+  const providerEnvVarEntries = toSortedEntries(plugin.providerAuthEnvVars);
+  const providerEnvVarsById = new Map(providerEnvVarEntries);
+
   for (const provider of plugin.setup?.providers ?? []) {
     const authMethods = normalizeStringList(provider.authMethods);
-    const envVars = normalizeStringList(provider.envVars);
+    const legacyEnvVars = providerEnvVarsById.get(provider.id) ?? [];
+    const envVars = normalizeStringList([...(provider.envVars ?? []), ...legacyEnvVars]);
+    const setupRefs = [`setup.providers:${provider.id}`];
+    if (legacyEnvVars.length > 0) {
+      setupRefs.push(`providerAuthEnvVars:${provider.id}`);
+    }
     setupProviderIds.add(provider.id);
     pushRequirement("setup-provider", {
       id: `provider:${provider.id}`,
       kind: "provider",
       provider: provider.id,
-      setupRefs: [`setup.providers:${provider.id}`],
+      setupRefs,
       ...(authMethods.length > 0 ? { authMethods } : {}),
       ...(envVars.length > 0 ? { envVars } : {}),
     });
@@ -120,7 +128,7 @@ export function collectPluginAuthRequirements(
     });
   }
 
-  for (const [provider, envVars] of toSortedEntries(plugin.providerAuthEnvVars)) {
+  for (const [provider, envVars] of providerEnvVarEntries) {
     if (setupProviderIds.has(provider)) {
       continue;
     }

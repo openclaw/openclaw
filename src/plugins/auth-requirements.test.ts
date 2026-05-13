@@ -113,11 +113,17 @@ describe("collectPluginAuthRequirements", () => {
     ]);
   });
 
-  it("derives provider env vars only when setup providers do not cover the provider", () => {
+  it("merges legacy provider env vars into setup provider requirements", () => {
     const requirements = collectPluginAuthRequirements({
       id: "demo",
       setup: {
-        providers: [{ id: "covered", envVars: ["COVERED_API_KEY"] }],
+        providers: [
+          {
+            id: "covered",
+            authMethods: ["api-key"],
+            envVars: ["COVERED_API_KEY"],
+          },
+        ],
       },
       providerAuthEnvVars: {
         covered: ["LEGACY_COVERED_API_KEY"],
@@ -125,9 +131,30 @@ describe("collectPluginAuthRequirements", () => {
       },
     });
 
-    expect(requirements.map((entry) => entry.requirement.id)).toEqual([
-      "provider:covered",
-      "provider-env:legacy",
+    expect(requirements).toEqual([
+      {
+        pluginId: "demo",
+        source: "setup-provider",
+        requirement: {
+          id: "provider:covered",
+          kind: "provider",
+          provider: "covered",
+          setupRefs: ["setup.providers:covered", "providerAuthEnvVars:covered"],
+          authMethods: ["api-key"],
+          envVars: ["COVERED_API_KEY", "LEGACY_COVERED_API_KEY"],
+        },
+      },
+      {
+        pluginId: "demo",
+        source: "provider-env-vars",
+        requirement: {
+          id: "provider-env:legacy",
+          kind: "provider",
+          provider: "legacy",
+          envVars: ["LEGACY_API_KEY"],
+          setupRefs: ["providerAuthEnvVars:legacy"],
+        },
+      },
     ]);
   });
 });
