@@ -1172,7 +1172,7 @@ describe("runHeartbeatOnce", () => {
       },
     ]),
   )(
-    "sanitizes protocol scaffolding before heartbeat delivery: $name",
+    "sanitizes legacy reply protocol scaffolding before heartbeat delivery: $name",
     async ({ replyText, expectedText }) => {
       const tmpDir = await createCaseDir("hb-protocol-sanitize");
       const storePath = path.join(tmpDir, "sessions.json");
@@ -1233,7 +1233,7 @@ describe("runHeartbeatOnce", () => {
     },
   );
 
-  it("preserves heartbeat media when protocol scaffolding text sanitizes to empty", async () => {
+  it("preserves legacy heartbeat media when protocol scaffolding text sanitizes to empty", async () => {
     const tmpDir = await createCaseDir("hb-protocol-sanitize-media");
     const storePath = path.join(tmpDir, "sessions.json");
     const replySpy = vi.fn();
