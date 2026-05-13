@@ -1143,6 +1143,108 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
+  it.each(
+    typedCases<{
+      name: string;
+      replyText: string;
+      expectedText: string | null;
+    }>([
+      {
+        name: "repeated tool call tags only",
+        replyText: ["<tool_calls>", "<tool_calls>", "<tool_calls>"].join("\n"),
+        expectedText: null,
+      },
+      {
+        name: "file contents block only",
+        replyText: [
+          "<file_contents path='/redacted/workspace/HEARTBEAT.md' isStale=false isFullFile=true>",
+          " 1|# HEARTBEAT.md",
+          " 2|",
+          " 3|# internal scaffold",
+          "</file_contents>",
+        ].join("\n"),
+        expectedText: null,
+      },
+      {
+        name: "mixed visible text and protocol scaffolding",
+        replyText: [
+          "Visible alert",
+          "<tool_calls>",
+          "<file_contents path='/redacted/workspace/HEARTBEAT.md' isStale=false isFullFile=true>",
+          " 1|# HEARTBEAT.md",
+          "</file_contents>",
+          "Done",
+        ].join("\n"),
+        expectedText: "Visible alert\n\nDone",
+      },
+      {
+        name: "heartbeat ok still suppresses delivery",
+        replyText: "HEARTBEAT_OK",
+        expectedText: null,
+      },
+    ]),
+  )(
+    "sanitizes protocol scaffolding before heartbeat delivery: $name",
+    async ({ replyText, expectedText }) => {
+      const tmpDir = await createCaseDir("hb-protocol-sanitize");
+      const storePath = path.join(tmpDir, "sessions.json");
+      const replySpy = vi.fn();
+      try {
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: {
+              workspace: tmpDir,
+              heartbeat: { every: "5m", target: "whatsapp" },
+            },
+          },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+          session: { store: storePath },
+        };
+        const sessionKey = resolveMainSessionKey(cfg);
+
+        await fs.writeFile(
+          storePath,
+          JSON.stringify({
+            [sessionKey]: {
+              sessionId: "sid",
+              updatedAt: Date.now(),
+              lastChannel: "whatsapp",
+              lastTo: "120363401234567890@g.us",
+            },
+          }),
+        );
+
+        replySpy.mockResolvedValue([{ text: replyText }]);
+        const sendWhatsApp = vi
+          .fn<
+            (
+              to: string,
+              text: string,
+              opts?: unknown,
+            ) => Promise<{ messageId: string; toJid: string }>
+          >()
+          .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+        await runHeartbeatOnce({
+          cfg,
+          deps: createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
+        });
+
+        if (expectedText === null) {
+          expect(sendWhatsApp).toHaveBeenCalledTimes(0);
+        } else {
+          expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+          expectWhatsAppSendCall(sendWhatsApp, 0, {
+            to: "120363401234567890@g.us",
+            text: expectedText,
+          });
+        }
+      } finally {
+        replySpy.mockReset();
+      }
+    },
+  );
+
   it("suppresses duplicate heartbeat payloads within 24h", async () => {
     const tmpDir = await createCaseDir("hb-dup-suppress");
     const storePath = path.join(tmpDir, "sessions.json");

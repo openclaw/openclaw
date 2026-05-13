@@ -620,10 +620,21 @@ describe("sanitizeAssistantVisibleText", () => {
     );
   });
 
-  it("keeps unclosed trailing reasoning hidden when visible text already exists", () => {
-    expect(sanitizeAssistantVisibleText("Visible prefix <think>private reasoning tail")).toBe(
-      "Visible prefix",
-    );
+  it("strips heartbeat protocol scaffolding while preserving visible text", () => {
+    const input = [
+      "Visible alert",
+      "<tool_calls>",
+      "<file_contents path='/redacted/workspace/HEARTBEAT.md' isStale=false isFullFile=true>",
+      " 1|# HEARTBEAT.md",
+      "</file_contents>",
+      "Done",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("Visible alert\n\nDone");
+  });
+
+  it("strips repeated bare tool_calls protocol tags", () => {
+    expect(sanitizeAssistantVisibleText(["<tool_calls>", "<tool_calls>"].join("\n"))).toBe("");
   });
 });
 

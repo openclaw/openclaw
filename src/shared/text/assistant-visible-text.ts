@@ -10,6 +10,8 @@ import {
 
 const MEMORY_TAG_RE = /<\s*(\/?)\s*relevant[-_]memories\b[^<>]*>/gi;
 const MEMORY_TAG_QUICK_RE = /<\s*\/?\s*relevant[-_]memories\b/i;
+const FILE_CONTENTS_TAG_RE = /<\s*file_contents\b[^>]*>[\s\S]*?(?:<\s*\/\s*file_contents\s*>|$)/gi;
+const FILE_CONTENTS_TAG_QUICK_RE = /<\s*file_contents\b/i;
 const LEGACY_BRACKET_TOOL_BLOCK_QUICK_RE = /\[\s*\/?\s*TOOL_(?:CALL|RESULT)\s*\]/i;
 
 /**
@@ -623,6 +625,52 @@ function stripRelevantMemoriesTags(text: string): string {
   return result;
 }
 
+function stripFileContentsTags(text: string): string {
+  if (!text || !FILE_CONTENTS_TAG_QUICK_RE.test(text)) {
+    return text;
+  }
+
+  const codeRegions = findCodeRegions(text);
+  let result = "";
+  let cursor = 0;
+  for (const match of text.matchAll(FILE_CONTENTS_TAG_RE)) {
+    const start = match.index ?? 0;
+    if (isInsideCode(start, codeRegions)) {
+      continue;
+    }
+    result += text.slice(cursor, start);
+    cursor = start + match[0].length;
+  }
+  result += text.slice(cursor);
+  return result;
+}
+
+const STANDALONE_TOOL_CALL_TAG_LINE_RE =
+  /^[\t ]*<\s*\/?\s*(?:tool_calls|function_calls|tool_call|tool_result|function_call)\b[^<>]*>[\t ]*(?:\r?\n|$)/gim;
+const STANDALONE_TOOL_CALL_TAG_LINE_QUICK_RE =
+  /^\s*<\s*\/?\s*(?:tool_calls|function_calls|tool_call|tool_result|function_call)\b/im;
+
+function stripStandaloneToolCallTagLines(text: string): string {
+  if (!text || !STANDALONE_TOOL_CALL_TAG_LINE_QUICK_RE.test(text)) {
+    return text;
+  }
+
+  const codeRegions = findCodeRegions(text);
+  let result = "";
+  let cursor = 0;
+  STANDALONE_TOOL_CALL_TAG_LINE_RE.lastIndex = 0;
+  for (const match of text.matchAll(STANDALONE_TOOL_CALL_TAG_LINE_RE)) {
+    const start = match.index ?? 0;
+    if (isInsideCode(start, codeRegions)) {
+      continue;
+    }
+    result += text.slice(cursor, start);
+    cursor = start + match[0].length;
+  }
+  result += text.slice(cursor);
+  return result;
+}
+
 export type AssistantVisibleTextSanitizerProfile = "delivery" | "history" | "internal-scaffolding";
 
 type AssistantVisibleTextPipelineOptions = {
@@ -690,9 +738,11 @@ function applyAssistantVisibleTextStagePipeline(
     }
     cleaned = stripModelSpecialTokens(cleaned);
     cleaned = stripRelevantMemoriesTags(cleaned);
+    cleaned = stripFileContentsTags(cleaned);
     cleaned = stripToolCallXmlTags(cleaned, {
       stripFunctionCallsXmlPayloads: options.stripFunctionCallsXmlPayloads,
     });
+    cleaned = stripStandaloneToolCallTagLines(cleaned);
     cleaned = stripLegacyBracketToolCallBlocks(cleaned);
     cleaned = stripPlainTextToolCallBlocks(cleaned);
     if (!options.preserveDowngradedToolText) {
