@@ -254,10 +254,7 @@ export function normalizeToolParameterSchema(
       return cleanSchemaForGemini(normalizedSchema);
     }
     if (unsupportedToolSchemaKeywords.size > 0) {
-      return stripUnsupportedSchemaKeywords(
-        normalizedSchema,
-        unsupportedToolSchemaKeywords,
-      ) as TSchema;
+      return stripUnsupportedSchemaKeywords(normalizedSchema, unsupportedToolSchemaKeywords) as TSchema;
     }
     return normalizedSchema as TSchema;
   }
