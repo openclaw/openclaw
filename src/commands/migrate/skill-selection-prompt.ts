@@ -11,6 +11,7 @@ import {
   symbolBar,
 } from "@clack/prompts";
 import {
+  MIGRATION_SELECTION_ACCEPT,
   reconcileInteractiveMigrationEnterValues,
   reconcileInteractiveMigrationShortcutValues,
   reconcileInteractiveMigrationSkillToggleValues,
@@ -181,6 +182,15 @@ export function promptMigrationSkillSelectionValues(
       return;
     }
     const activatedValue = prompt.options[prompt.cursor]?.value;
+    // Space on the "Accept recommended" sentinel snaps the visual selection
+    // back to the recommended set so the user can see what would be submitted
+    // by Enter. The sentinel itself is never persisted in the value list.
+    if (activatedValue === MIGRATION_SELECTION_ACCEPT) {
+      prompt.value = [...(opts.initialValues ?? [])];
+      lastSpaceDeselectedValue = undefined;
+      lastSelectedValues = [...(prompt.value ?? [])];
+      return;
+    }
     const previousValues = lastSelectedValues;
     const selectedValuesAfterClack = prompt.value ?? [];
     prompt.value = reconcileInteractiveMigrationSkillToggleValues(
@@ -202,6 +212,14 @@ export function promptMigrationSkillSelectionValues(
     if (info.name === "return") {
       const activatedOption = prompt.options[prompt.cursor];
       const activatedValue = activatedOption?.disabled ? undefined : activatedOption?.value;
+      // Enter on "Accept recommended" submits with the picker's initialValues
+      // (the recommended set) regardless of any toggles the user made.
+      if (activatedValue === MIGRATION_SELECTION_ACCEPT) {
+        prompt.value = [...(opts.initialValues ?? [])];
+        lastSpaceDeselectedValue = undefined;
+        lastSelectedValues = [...(prompt.value ?? [])];
+        return;
+      }
       prompt.value = reconcileInteractiveMigrationEnterValues(
         prompt.value ?? [],
         activatedValue,

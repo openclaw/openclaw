@@ -889,6 +889,14 @@ async function installPluginFromClawHubSpecWithProgress(params: {
             logInstallWarningWithSpacing(params.runtime, message);
           },
         },
+        onClawHubRisk: async (request) => {
+          animated.stop();
+          progress.stop("Review ClawHub warning");
+          return await params.prompter.confirm({
+            message: `Continue installing ClawHub package "${sanitizeTerminalText(request.packageName)}@${sanitizeTerminalText(request.version)}" despite this warning?`,
+            initialValue: false,
+          });
+        },
       }),
       ONBOARDING_PLUGIN_INSTALL_WATCHDOG_TIMEOUT_MS,
     );
