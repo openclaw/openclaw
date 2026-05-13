@@ -167,18 +167,6 @@ function isMediaBearingPayload(payload: ReplyPayload): boolean {
   return false;
 }
 
-function isTtsSupplementPayload(payload: ReplyPayload): boolean {
-  return (
-    typeof payload.spokenText === "string" &&
-    payload.spokenText.trim().length > 0 &&
-    isMediaBearingPayload(payload)
-  );
-}
-
-function stripVisibleTextFromTtsSupplement(payload: ReplyPayload): ReplyPayload {
-  return isTtsSupplementPayload(payload) ? { ...payload, text: undefined } : payload;
-}
-
 function stripVisibleTextFromMediaSupplement(payload: ReplyPayload): ReplyPayload {
   return isMediaBearingPayload(payload) ? { ...payload, text: undefined } : payload;
 }
@@ -2613,9 +2601,6 @@ export const chatHandlers: GatewayRequestHandlers = {
         const persistedContentForAppend = hasAssistantDisplayMediaContent(persistedAssistantContent)
           ? persistedAssistantContent
           : undefined;
-        if (!persistedContentForAppend?.length) {
-          return;
-        }
         const transcriptReply =
           mediaMessage?.transcriptText ??
           extractAssistantDisplayTextFromContent(assistantContent) ??
@@ -2623,11 +2608,16 @@ export const chatHandlers: GatewayRequestHandlers = {
         if (!transcriptReply && !persistedAssistantContent?.length && !assistantContent?.length) {
           return;
         }
+        const textOnlyReplacementContent = transcriptReply
+          ? [{ type: "text", text: transcriptReply }]
+          : undefined;
         const replacementContentForReplay = hasReplaySafeManagedImageReplacementContent(
           persistedContentForAppend,
         )
           ? persistedContentForAppend
-          : undefined;
+          : !persistedContentForAppend?.length
+            ? textOnlyReplacementContent
+            : undefined;
         if (resolvedTranscriptPath && replacementContentForReplay) {
           const replaced = await replaceLatestAssistantMediaDirectiveTranscriptMessage({
             transcriptPath: resolvedTranscriptPath,
@@ -2663,6 +2653,9 @@ export const chatHandlers: GatewayRequestHandlers = {
             return;
           }
         }
+        if (!persistedContentForAppend?.length) {
+          return;
+        }
         const appended = await appendAssistantTranscriptMessage({
           message: transcriptReply,
           ...(persistedContentForAppend?.length ? { content: persistedContentForAppend } : {}),
@@ -2679,14 +2672,6 @@ export const chatHandlers: GatewayRequestHandlers = {
             await attachManagedOutgoingImagesToMessage({
               messageId: appended.messageId,
               blocks: assistantContent,
-            });
-          }
-          if (appended.message && resolvedTranscriptPath) {
-            emitSessionTranscriptUpdate({
-              sessionFile: resolvedTranscriptPath,
-              sessionKey,
-              message: appended.message,
-              messageId: appended.messageId,
             });
           }
           appendedWebchatAgentMedia = true;

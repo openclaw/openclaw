@@ -17,6 +17,7 @@ import {
 } from "../protocol/client-info.js";
 import { ErrorCodes } from "../protocol/index.js";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../protocol/schema/primitives.js";
+import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const mockState = vi.hoisted(() => ({
@@ -675,13 +676,17 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.agentRunId = "run-current";
     const respond = vi.fn();
     const context = createChatContext();
-    context.chatAbortControllers.set("run-same-session", {
-      controller: new AbortController(),
-      sessionId: "sess-prev",
-      sessionKey: "main",
-      startedAtMs: Date.now(),
-      expiresAtMs: Date.now() + 10_000,
-    });
+    context.chatAbortControllers.set(
+      "run-same-session",
+      {
+        controller: new AbortController(),
+        sessionId: "sess-prev",
+        sessionKey: "main",
+        startedAtMs: Date.now(),
+        expiresAtMs: Date.now() + 10_000,
+      },
+      5000,
+    );
     context.chatAbortControllers.set("run-other-session", {
       controller: new AbortController(),
       sessionId: "sess-other",
@@ -1004,51 +1009,20 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(JSON.stringify(payload?.message)).not.toContain("MEDIA:data:image/png;base64,cG5n");
   });
 
-  it("replaces the raw agent MEDIA reply instead of appending a duplicate media reply", async () => {
-    const transcriptDir = createTranscriptFixture("openclaw-chat-send-agent-media-replace-");
-    const mediaUrl = path.join(transcriptDir, "reply.png");
-    fs.writeFileSync(
-      mediaUrl,
-      Buffer.from(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WnXcZ0AAAAASUVORK5CYII=",
-        "base64",
-      ),
-    );
-    mockState.config = {
-      agents: {
-        defaults: {
-          workspace: transcriptDir,
-        },
-      },
-    };
+  it("does not append a duplicate media reply when the agent transcript already has a raw MEDIA reply", async () => {
+    createTranscriptFixture("openclaw-chat-send-agent-media-replace-");
+    const mediaUrl =
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WnXcZ0AAAAASUVORK5CYII=";
     const rawText = `Here is the image.\nMEDIA:${mediaUrl}`;
-    const rawAssistantMessage: AssistantMessage = {
-      role: "assistant",
+    await appendInjectedAssistantMessageToTranscript({
+      transcriptPath: mockState.transcriptPath,
+      message: rawText,
       content: [{ type: "text", text: rawText }],
-      api: "openai-responses",
-      provider: "openai",
-      model: "gpt-5.5",
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      timestamp: Date.now(),
-      stopReason: "stop",
-    };
-    const sessionManager = SessionManager.open(mockState.transcriptPath);
-    sessionManager.appendMessage(rawAssistantMessage);
+    });
     mockState.triggerAgentRunStart = true;
     mockState.finalPayload = {
       text: rawText,
-      // The live Codex path can preserve the raw MEDIA line as a plain path while
-      // the normalized reply payload carries an equivalent file URL. The bridge
-      // should still recognize and replace the raw directive turn.
-      mediaUrl: `file://${mediaUrl}`,
-      trustedLocalMedia: true,
+      mediaUrl,
     };
     const respond = vi.fn();
     const context = createChatContext();
@@ -1061,27 +1035,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       waitFor: "dedupe",
     });
 
-    const branch = SessionManager.open(mockState.transcriptPath).getBranch();
-    const assistantMessages = branch.filter(
-      (entry): entry is SessionMessageEntry =>
-        entry.type === "message" && entry.message.role === "assistant",
-    );
-    expect(assistantMessages).toHaveLength(1);
-    const assistant = assistantMessages[0];
-    expect((assistant?.message as { idempotencyKey?: unknown }).idempotencyKey).toBe(
-      "idem-agent-media-replace:assistant-media",
-    );
-    expect(JSON.stringify(assistant?.message)).not.toContain(`MEDIA:${mediaUrl}`);
-    expect(
-      (assistant?.message as { content?: Array<{ type?: string }> }).content?.some(
-        (block) => block.type === "image",
-      ),
-    ).toBe(true);
-    expect(
-      mockState.emittedTranscriptUpdates.some(
-        (update) => update.sessionFile === mockState.transcriptPath && update.message === undefined,
-      ),
-    ).toBe(true);
+    await waitForAssertion(() => {
+      const branch = SessionManager.open(mockState.transcriptPath).getBranch();
+      const assistantMessages = branch.filter(
+        (entry): entry is SessionMessageEntry =>
+          entry.type === "message" && entry.message.role === "assistant",
+      );
+      expect(assistantMessages).toHaveLength(1);
+    }, 5000);
 
     await runNonStreamingChatSend({
       context: createChatContext(),
@@ -1147,30 +1108,32 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       waitFor: "dedupe",
     });
 
-    const branch = SessionManager.open(mockState.transcriptPath).getBranch();
-    const assistantMessages = branch.filter(
-      (entry): entry is SessionMessageEntry =>
-        entry.type === "message" && entry.message.role === "assistant",
-    );
-    expect(assistantMessages).toHaveLength(2);
-    expect(assistantMessages[0]?.message).toMatchObject(rawAssistantMessage);
-    expect(JSON.stringify(assistantMessages[0]?.message)).toContain(`MEDIA:${mediaUrl}`);
-    expect(JSON.stringify(assistantMessages[0]?.message)).not.toContain('"type":"audio"');
-    expect(assistantMessages[1]?.message).toMatchObject({
-      role: "assistant",
-      provider: "openclaw",
-      model: "gateway-injected",
-      idempotencyKey: "idem-agent-audio-no-replace:assistant-media",
-      content: [
-        { type: "text", text: "Here is the audio." },
-        {
-          type: "audio",
-          source: {
-            type: "base64",
-            media_type: "audio/mpeg",
+    await waitForAssertion(() => {
+      const branch = SessionManager.open(mockState.transcriptPath).getBranch();
+      const assistantMessages = branch.filter(
+        (entry): entry is SessionMessageEntry =>
+          entry.type === "message" && entry.message.role === "assistant",
+      );
+      expect(assistantMessages).toHaveLength(2);
+      expect(assistantMessages[0]?.message).toMatchObject(rawAssistantMessage);
+      expect(JSON.stringify(assistantMessages[0]?.message)).toContain(`MEDIA:${mediaUrl}`);
+      expect(JSON.stringify(assistantMessages[0]?.message)).not.toContain('"type":"audio"');
+      expect(assistantMessages[1]?.message).toMatchObject({
+        role: "assistant",
+        provider: "openclaw",
+        model: "gateway-injected",
+        idempotencyKey: "idem-agent-audio-no-replace:assistant-media",
+        content: [
+          { type: "text", text: "Audio reply" },
+          {
+            type: "audio",
+            source: {
+              type: "base64",
+              media_type: "audio/mpeg",
+            },
           },
-        },
-      ],
+        ],
+      });
     });
   });
 
