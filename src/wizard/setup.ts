@@ -663,6 +663,13 @@ export async function runSetupWizard(
       prompter,
       runtime,
       setDefaultModel: true,
+      // Preserve an existing primary model so that running setup again with a
+      // different provider's auth (e.g. picking Google API-key while an
+      // OpenAI primary is already configured) does not silently promote the
+      // provider's default model. This mirrors the configure.gateway-auth
+      // path which already passes this flag, and stops heartbeat traffic
+      // from falling through to a freshly-promoted paid default (#64129).
+      preserveExistingDefaultModel: true,
       opts: {
         ...opts,
         token: opts.authChoice === "apiKey" && opts.token ? opts.token : undefined,

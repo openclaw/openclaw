@@ -895,6 +895,51 @@ describe("runSetupWizard", () => {
     expect(opts.openaiApiKey).toBe("sk-flag-value");
   });
 
+  it("passes preserveExistingDefaultModel to applyAuthChoice so existing primaries are not silently promoted (#64129)", async () => {
+    promptAuthChoiceGrouped.mockReset();
+    promptAuthChoiceGrouped.mockResolvedValueOnce("demo-provider-one");
+    applyAuthChoice.mockReset();
+    applyAuthChoice.mockResolvedValueOnce({
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "demo-provider-one/model",
+            },
+          },
+        },
+      },
+    });
+
+    const prompter = buildWizardPrompter({});
+    const runtime = createRuntime();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(applyAuthChoice).toHaveBeenCalledTimes(1);
+    expectRecordFields(
+      getMockCallArg(applyAuthChoice, 0, 0, "applyAuthChoice setup invocation"),
+      {
+        setDefaultModel: true,
+        preserveExistingDefaultModel: true,
+      },
+      "preserveExistingDefaultModel must be true so a pre-existing primary model is kept across setup",
+    );
+  });
+
   it("shows plugin compatibility notices for an existing valid config", async () => {
     buildPluginCompatibilitySnapshotNotices.mockReturnValue([
       {
