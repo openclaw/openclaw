@@ -30,6 +30,7 @@ export type SkillScanSummary = {
 export type SkillScanOptions = {
   excludeTestFiles?: boolean;
   includeHiddenDirectories?: boolean;
+  includeNestedNodeModulesTestFiles?: boolean;
   includeNodeModules?: boolean;
   includeFiles?: string[];
   maxFiles?: number;
@@ -432,6 +433,7 @@ function normalizeScanOptions(opts?: SkillScanOptions): Required<SkillScanOption
   return {
     excludeTestFiles: opts?.excludeTestFiles ?? false,
     includeHiddenDirectories: opts?.includeHiddenDirectories ?? false,
+    includeNestedNodeModulesTestFiles: opts?.includeNestedNodeModulesTestFiles ?? false,
     includeNodeModules: opts?.includeNodeModules ?? false,
     includeFiles: opts?.includeFiles ?? [],
     maxFiles: Math.max(1, opts?.maxFiles ?? DEFAULT_MAX_SCAN_FILES),
@@ -447,11 +449,17 @@ function isExcludedTestFileName(name: string): boolean {
   return TEST_FILE_NAME_PATTERN.test(name);
 }
 
+function pathContainsNodeModulesSegment(relativePath: string): boolean {
+  return relativePath.split(/[\\/]+/u).includes("node_modules");
+}
+
 async function walkDirWithLimit(
+  rootDir: string,
   dirPath: string,
   candidateLimit: number,
   excludeTestFiles: boolean,
   includeHiddenDirectories: boolean,
+  includeNestedNodeModulesTestFiles: boolean,
   includeNodeModules: boolean,
 ): Promise<CollectedScannableFiles> {
   const files: string[] = [];
@@ -474,15 +482,21 @@ async function walkDirWithLimit(
       ) {
         continue;
       }
+      const fullPath = path.join(currentDir, entry.name);
+      const isExcludedTestPath =
+        entry.kind === "dir"
+          ? isExcludedTestDirectoryName(entry.name)
+          : isExcludedTestFileName(entry.name);
       if (
         excludeTestFiles &&
-        ((entry.kind === "dir" && isExcludedTestDirectoryName(entry.name)) ||
-          (entry.kind === "file" && isExcludedTestFileName(entry.name)))
+        isExcludedTestPath &&
+        !(
+          includeNestedNodeModulesTestFiles &&
+          pathContainsNodeModulesSegment(path.relative(rootDir, fullPath))
+        )
       ) {
         continue;
       }
-
-      const fullPath = path.join(currentDir, entry.name);
       if (entry.kind === "dir") {
         stack.push(fullPath);
       } else if (entry.kind === "file" && isScannable(entry.name)) {
@@ -586,9 +600,11 @@ async function collectScannableFiles(
 
   const walked = await walkDirWithLimit(
     dirPath,
+    dirPath,
     opts.maxFiles + 1,
     opts.excludeTestFiles,
     opts.includeHiddenDirectories,
+    opts.includeNestedNodeModulesTestFiles,
     opts.includeNodeModules,
   );
   const seen = new Set(forcedFiles.map((f) => path.resolve(f)));

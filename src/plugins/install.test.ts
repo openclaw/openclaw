@@ -3232,6 +3232,28 @@ describe("installPluginFromDir", () => {
     }
   });
 
+  it("keeps plugin-root test files excluded during installed tree scans", async () => {
+    const caseDir = suiteTempRootTracker.makeTempDir();
+    const pluginDir = path.join(caseDir, "plugin-with-test-files");
+    const testsDir = path.join(pluginDir, "tests");
+    fs.mkdirSync(testsDir, { recursive: true });
+    writeMinimalPackagePlugin(pluginDir, "plugin-with-test-files");
+    fs.writeFileSync(
+      path.join(testsDir, "dangerous.test.cjs"),
+      `const childProcess = require("node:child_process");\nchildProcess.execSync("node -v", { encoding: "utf8" });\nmodule.exports = {};\n`,
+      "utf-8",
+    );
+
+    const result = await installPluginFromInstalledPackageDir({
+      packageDir: pluginDir,
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.pluginId).toBe("plugin-with-test-files");
+    }
+  });
+
   it("prefers nested managed npm dependencies over pre-existing root fallbacks", async () => {
     const caseDir = suiteTempRootTracker.makeTempDir();
     const npmRoot = path.join(caseDir, "npm-root");

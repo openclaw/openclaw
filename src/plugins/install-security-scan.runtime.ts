@@ -740,6 +740,7 @@ async function scanDirectoryTarget(params: {
   excludeTestFiles?: boolean;
   failOnTruncated?: boolean;
   includeHiddenDirectories?: boolean;
+  includeNestedNodeModulesTestFiles?: boolean;
   includeNodeModules?: boolean;
   includeFiles?: string[];
   logger: InstallScanLogger;
@@ -754,6 +755,7 @@ async function scanDirectoryTarget(params: {
     const scanSummary = await scanDirectoryWithSummary(params.path, {
       excludeTestFiles: params.excludeTestFiles ?? true,
       includeHiddenDirectories: params.includeHiddenDirectories,
+      includeNestedNodeModulesTestFiles: params.includeNestedNodeModulesTestFiles,
       includeNodeModules: params.includeNodeModules,
       includeFiles: params.includeFiles,
       maxFiles: params.maxFiles,
@@ -1149,6 +1151,9 @@ export async function scanInstalledPackageDependencyTreeRuntime(params: {
   }
 
   let remainingMaxFiles = resolveInstalledPackageCodeScanMaxFiles();
+  const pluginRootRealPath = await fs
+    .realpath(params.packageDir)
+    .catch(() => path.resolve(params.packageDir));
   for (const packageDir of directoryScanRoots) {
     if (remainingMaxFiles <= 0) {
       return resolveBuiltinScanDecision({
@@ -1161,10 +1166,13 @@ export async function scanInstalledPackageDependencyTreeRuntime(params: {
         targetLabel: `Plugin "${params.pluginId}" installation`,
       });
     }
+    const packageRealPath = await fs.realpath(packageDir).catch(() => path.resolve(packageDir));
+    const isPluginRoot = packageRealPath === pluginRootRealPath;
     const builtinScan = await scanDirectoryTarget({
-      excludeTestFiles: false,
+      excludeTestFiles: isPluginRoot,
       failOnTruncated: true,
       includeHiddenDirectories: true,
+      includeNestedNodeModulesTestFiles: isPluginRoot,
       includeNodeModules: true,
       logger: params.logger,
       maxFiles: remainingMaxFiles,
