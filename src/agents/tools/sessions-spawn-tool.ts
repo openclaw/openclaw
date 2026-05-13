@@ -171,9 +171,6 @@ function createSessionsSpawnToolSchema(params: {
     model: Type.Optional(Type.String()),
     thinking: Type.Optional(Type.String()),
     cwd: Type.Optional(Type.String()),
-    runTimeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
-    // Back-compat: older callers used timeoutSeconds for this tool.
-    timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
     ...(params.threadAvailable
       ? {
           thread: Type.Optional(
@@ -344,10 +341,6 @@ export function createSessionsSpawnTool(
       if (runtime === "acp" && context === "fork") {
         throw new Error('context="fork" is only supported for runtime="subagent".');
       }
-      const runTimeoutSeconds =
-        readNonNegativeIntegerParam(params, "runTimeoutSeconds") ??
-        // Back-compat: older callers used timeoutSeconds for this tool.
-        readNonNegativeIntegerParam(params, "timeoutSeconds");
       const thread = params.thread === true;
       const attachments = Array.isArray(params.attachments)
         ? (params.attachments as Array<{
@@ -379,7 +372,6 @@ export function createSessionsSpawnTool(
             resumeSessionId,
             model: modelOverride,
             thinking: thinkingOverrideRaw,
-            runTimeoutSeconds,
             cwd,
             mode: mode === "run" || mode === "session" ? mode : undefined,
             thread,
@@ -441,7 +433,6 @@ export function createSessionsSpawnTool(
               taskName,
               cleanup: trackedCleanup,
               label: label || undefined,
-              runTimeoutSeconds,
               expectsCompletionMessage: shouldExpectCompletionMessage,
               spawnMode: trackedSpawnMode,
             });
@@ -470,7 +461,6 @@ export function createSessionsSpawnTool(
           model: modelOverride,
           thinking: thinkingOverrideRaw,
           cwd,
-          runTimeoutSeconds,
           thread,
           mode,
           cleanup,
