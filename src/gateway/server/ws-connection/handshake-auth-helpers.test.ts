@@ -124,15 +124,6 @@ describe("handshake auth helpers", () => {
     ).toBe(true);
     expect(
       shouldAllowSilentLocalPairing({
-        locality: "browser_container_local",
-        hasBrowserOriginHeader: true,
-        isControlUi: true,
-        isWebchat: true,
-        reason: "not-paired",
-      }),
-    ).toBe(true);
-    expect(
-      shouldAllowSilentLocalPairing({
         locality: "direct_local",
         hasBrowserOriginHeader: false,
         isControlUi: false,
@@ -141,6 +132,28 @@ describe("handshake auth helpers", () => {
       }),
     ).toBe(false);
   });
+
+  it("requires explicit pairing for browser-origin clients even when locality resolves local", () => {
+    expect(
+      shouldAllowSilentLocalPairing({
+        locality: "browser_container_local",
+        hasBrowserOriginHeader: true,
+        isControlUi: true,
+        isWebchat: true,
+        reason: "not-paired",
+      }),
+    ).toBe(false);
+    expect(
+      shouldAllowSilentLocalPairing({
+        locality: "shared_secret_loopback_local",
+        hasBrowserOriginHeader: true,
+        isControlUi: false,
+        isWebchat: true,
+        reason: "scope-upgrade",
+      }),
+    ).toBe(false);
+  });
+
   it("rejects silent role-upgrade for remote clients", () => {
     expect(
       shouldAllowSilentLocalPairing({
@@ -358,7 +371,7 @@ describe("handshake auth helpers", () => {
     ).toBe("shared_secret_loopback_local");
   });
 
-  it("marks backend approval runtimes from local or verified-device trust paths", () => {
+  it("marks backend approval runtimes from the local backend trust path", () => {
     const connectParams = {
       client: {
         id: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
@@ -371,19 +384,11 @@ describe("handshake auth helpers", () => {
       shouldMarkApprovalRuntimeClient({
         connectParams,
         localBackendSelfPairingOk: true,
-        hasVerifiedDeviceIdentity: false,
-      }),
-    ).toBe(true);
-    expect(
-      shouldMarkApprovalRuntimeClient({
-        connectParams,
-        localBackendSelfPairingOk: false,
-        hasVerifiedDeviceIdentity: true,
       }),
     ).toBe(true);
   });
 
-  it("does not mark unverified or non-approval gateway-client connections as approval runtimes", () => {
+  it("does not mark verified-device declarations without local backend trust", () => {
     const connectParams = {
       client: {
         id: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
@@ -396,9 +401,20 @@ describe("handshake auth helpers", () => {
       shouldMarkApprovalRuntimeClient({
         connectParams,
         localBackendSelfPairingOk: false,
-        hasVerifiedDeviceIdentity: false,
+        hasVerifiedDeviceIdentity: true,
       }),
     ).toBe(false);
+  });
+
+  it("does not mark non-approval gateway-client connections as approval runtimes", () => {
+    const connectParams = {
+      client: {
+        id: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+        mode: GATEWAY_CLIENT_MODES.BACKEND,
+      },
+      scopes: ["operator.approvals"],
+    } as ConnectParams;
+
     expect(
       shouldMarkApprovalRuntimeClient({
         connectParams: {
@@ -406,7 +422,6 @@ describe("handshake auth helpers", () => {
           scopes: ["operator.read"],
         },
         localBackendSelfPairingOk: true,
-        hasVerifiedDeviceIdentity: false,
       }),
     ).toBe(false);
   });

@@ -1412,7 +1412,6 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         const isTrustedApprovalRuntime = shouldMarkApprovalRuntimeClient({
           connectParams,
           localBackendSelfPairingOk: skipLocalBackendSelfPairing,
-          hasVerifiedDeviceIdentity: Boolean(device),
         });
         clearHandshakeTimer();
         const nextClient: GatewayWsClient = {

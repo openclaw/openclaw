@@ -84,7 +84,7 @@ export function shouldAllowSilentLocalPairing(params: {
   if (params.locality === "remote") {
     return false;
   }
-  if (params.hasBrowserOriginHeader && !params.isControlUi && !params.isWebchat) {
+  if (params.hasBrowserOriginHeader) {
     return false;
   }
   if (
@@ -281,14 +281,14 @@ export function shouldSkipLocalBackendSelfPairing(params: {
 export function shouldMarkApprovalRuntimeClient(params: {
   connectParams: ConnectParams;
   localBackendSelfPairingOk: boolean;
-  hasVerifiedDeviceIdentity: boolean;
+  hasVerifiedDeviceIdentity?: boolean;
 }): boolean {
   const scopes = Array.isArray(params.connectParams.scopes) ? params.connectParams.scopes : [];
   return (
     params.connectParams.client.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
     params.connectParams.client.mode === GATEWAY_CLIENT_MODES.BACKEND &&
     scopes.includes(APPROVALS_SCOPE) &&
-    (params.localBackendSelfPairingOk || params.hasVerifiedDeviceIdentity)
+    params.localBackendSelfPairingOk
   );
 }
 
