@@ -11,7 +11,7 @@
  * - Release always switches `previous.tgz` then `current.tgz` (mandatory), installs `current.tgz` globally, then restarts the gateway.
  */
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -30,6 +30,79 @@ function shInherit(cmd, args, opts = {}) {
 function fail(msg) {
   console.error(`ERROR: ${msg}`);
   process.exit(1);
+}
+
+function timestampForFilename(d = new Date()) {
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+}
+
+function resolveHome() {
+  return process.env.HOME || "/home/ec2-user";
+}
+
+function defaultLogPath() {
+  const logsDir = path.join(resolveHome(), ".openclaw", "logs");
+  return path.join(logsDir, `polytropos-release-${timestampForFilename()}.log`);
+}
+
+function parseArgs(argv) {
+  // Supported:
+  //   node scripts/polytropos-release.mjs release [--log <path>]
+  const args = argv.slice(2);
+  const cmd = args[0] || "";
+  let logPath = process.env.POLYTROPOS_RELEASE_LOG || defaultLogPath();
+  for (let i = 1; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--log") {
+      const v = args[i + 1];
+      if (!v) {
+        fail("--log requires a path");
+      }
+      logPath = v;
+      i++;
+      continue;
+    }
+    if (a === "--help" || a === "-h") {
+      return { cmd: "--help", logPath };
+    }
+    fail(`unknown argument: ${a}`);
+  }
+  return { cmd, logPath };
+}
+
+function teeWriteStream(logStream, chunk) {
+  try {
+    logStream.write(chunk);
+  } catch {}
+}
+
+async function shTee(logStream, cmd, args, opts = {}) {
+  return await new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"], ...opts });
+    child.stdout.on("data", (chunk) => {
+      process.stdout.write(chunk);
+      teeWriteStream(logStream, chunk);
+    });
+    child.stderr.on("data", (chunk) => {
+      process.stderr.write(chunk);
+      teeWriteStream(logStream, chunk);
+    });
+    child.on("error", (err) => reject(err));
+    child.on("close", (code, signal) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(`command failed: ${cmd} ${args.join(" ")} (code=${code ?? "null"}, signal=${signal ?? "null"})`));
+    });
+  });
+}
+
+function banner(logStream, s) {
+  const line = `\n==> ${s}\n`;
+  process.stdout.write(line);
+  teeWriteStream(logStream, line);
 }
 
 function getRepoRoot() {
@@ -115,10 +188,6 @@ function npmPack(repoRoot, outDir, tarballName) {
   return target;
 }
 
-function resolveHome() {
-  return process.env.HOME || "/home/ec2-user";
-}
-
 function releasesRoot() {
   return path.join(resolveHome(), "polytropos", "releases");
 }
@@ -143,7 +212,7 @@ function usage() {
   console.log(`polytropos-release.mjs
 
 Usage:
-  node scripts/polytropos-release.mjs release
+  node scripts/polytropos-release.mjs release [--log <path>]
 
 Behavior:
   - Requires clean git working tree
@@ -159,8 +228,8 @@ Behavior:
 `);
 }
 
-const cmd = process.argv[2];
-if (!cmd || cmd === "--help" || cmd === "-h") {
+const { cmd, logPath } = parseArgs(process.argv);
+if (!cmd || cmd === "--help") {
   usage();
   process.exit(0);
 }
@@ -168,6 +237,10 @@ if (!cmd || cmd === "--help" || cmd === "-h") {
 if (cmd !== "release") {
   fail(`unknown command: ${cmd}`);
 }
+
+fs.mkdirSync(path.dirname(logPath), { recursive: true });
+const logStream = fs.createWriteStream(logPath, { flags: "a" });
+banner(logStream, `Log file: ${logPath}`);
 
 ensureCleanWorkingTree();
 const repoRoot = getRepoRoot();
@@ -177,17 +250,18 @@ const maxPoly = getMaxPolyBuildNumber();
 const nextPoly = maxPoly + 1;
 const polyTag = `${upstreamVTag}+poly.${nextPoly}`;
 
-console.log(`Upstream base tag (nearest reachable): ${upstreamVTag}`);
-console.log(`Next release tag: ${polyTag}`);
+banner(logStream, `Upstream base tag (nearest reachable): ${upstreamVTag}`);
+banner(logStream, `Next release tag: ${polyTag}`);
 
 // Create annotated tag
-shInherit("git", ["tag", "-a", polyTag, "-m", `Polytropos release ${polyTag}`]);
+banner(logStream, `git tag -a ${polyTag}`);
+await shTee(logStream, "git", ["tag", "-a", polyTag, "-m", `Polytropos release ${polyTag}`]);
 
 // Build dist/
-console.log("Building dist/ ...");
-shInherit("pnpm", ["install"], { cwd: repoRoot });
-shInherit("pnpm", ["ui:build"], { cwd: repoRoot });
-shInherit("pnpm", ["build"], { cwd: repoRoot });
+banner(logStream, "Building dist/");
+await shTee(logStream, "pnpm", ["install"], { cwd: repoRoot });
+await shTee(logStream, "pnpm", ["ui:build"], { cwd: repoRoot });
+await shTee(logStream, "pnpm", ["build"], { cwd: repoRoot });
 
 ensureDistExists(repoRoot);
 
@@ -196,37 +270,48 @@ const relRoot = releasesRoot();
 fs.mkdirSync(relRoot, { recursive: true });
 const tarName = `${polyTag}.tgz`;
 const tarPath = npmPack(repoRoot, relRoot, tarName);
-console.log(`Packed tarball: ${tarPath}`);
+banner(logStream, `Packed tarball: ${tarPath}`);
 
 // Update symlinks: previous.tgz then current.tgz (mandatory)
 const currentTgz = path.join(relRoot, "current.tgz");
 const previousTgz = path.join(relRoot, "previous.tgz");
 const currentTarget = readlinkAbs(currentTgz);
 if (currentTarget) {
-  console.log(`Setting previous.tgz -> ${currentTarget}`);
+  banner(logStream, `Setting previous.tgz -> ${currentTarget}`);
   lnSfn(currentTarget, previousTgz);
 } else {
-  console.log("No existing current.tgz symlink; setting previous.tgz to this tarball as bootstrap");
+  banner(logStream, "No existing current.tgz symlink; setting previous.tgz to this tarball as bootstrap");
   lnSfn(tarPath, previousTgz);
 }
 
-console.log(`Setting current.tgz -> ${tarPath}`);
+banner(logStream, `Setting current.tgz -> ${tarPath}`);
 lnSfn(tarPath, currentTgz);
 
 // Install tarball globally into the prefix used by systemd
 const prefix = getGlobalPrefix();
-console.log(`Installing globally into prefix: ${prefix}`);
-shInherit("npm", ["install", "-g", "--prefix", prefix, currentTgz]);
+banner(logStream, `Installing globally into prefix: ${prefix}`);
+await shTee(logStream, "npm", ["install", "-g", "--prefix", prefix, currentTgz]);
 
-// Run doctor --fix to perform plugin-local installs / optional dependency repairs
-console.log("Running openclaw doctor --fix (non-interactive)...");
-shInherit("openclaw", ["doctor", "--fix", "--non-interactive"]);
+// Run the installed package postinstall helper from the global prefix (not the repo copy).
+banner(logStream, "Running installed package postinstall helper...");
+{
+  const npmRoot = sh("npm", ["root", "-g", "--prefix", prefix]);
+  const pkgName = sh("node", ["-p", "require('./package.json').name"], { cwd: repoRoot });
+  const installedRoot = path.join(npmRoot, pkgName);
+  const helperPath = path.join(installedRoot, "scripts", "postinstall-bundled-plugins.mjs");
+  if (!fs.existsSync(helperPath)) {
+    fail(`postinstall helper not found at ${helperPath} (resolved from installedRoot=${installedRoot})`);
+  }
+  await shTee(logStream, "node", [helperPath]);
+}
 
-console.log("Restarting gateway...");
-shInherit("systemctl", ["--user", "restart", "openclaw-gateway"]);
+banner(logStream, "Restarting gateway...");
+await shTee(logStream, "systemctl", ["--user", "restart", "openclaw-gateway"]);
 
-console.log("Done.");
-console.log(`- Tag: ${polyTag}`);
-console.log(`- Tarball: ${tarPath}`);
-console.log(`- current.tgz -> ${readlinkAbs(currentTgz)}`);
-console.log(`- previous.tgz -> ${readlinkAbs(previousTgz)}`);
+banner(logStream, "Done.");
+banner(logStream, `- Tag: ${polyTag}`);
+banner(logStream, `- Tarball: ${tarPath}`);
+banner(logStream, `- current.tgz -> ${readlinkAbs(currentTgz)}`);
+banner(logStream, `- previous.tgz -> ${readlinkAbs(previousTgz)}`);
+
+logStream.end();
