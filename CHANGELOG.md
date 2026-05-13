@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Sessions: redact persisted tool result detail metadata before writing transcripts so diagnostic secrets do not survive tool output redaction. (#80444) Thanks @nimbleenigma.
 - Codex migration: make Enter activate the highlighted checkbox row before continuing, so `Skip for now` and bulk-selection rows work even when planned items start preselected.
 - fix: harden safe-bin argument validation [AI]. (#80999) Thanks @pgondhi987.
 - fix: scan plugin runtime entries during install [AI]. (#80998) Thanks @pgondhi987.
