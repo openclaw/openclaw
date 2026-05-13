@@ -116,9 +116,7 @@ export function formatMigrationResult(plan: MigrationPlan): string[] {
 }
 
 function formatItemDisplayName(item: MigrationItem): string {
-  const colonIndex = item.id.indexOf(":");
-  const withoutPrefix = colonIndex >= 0 ? item.id.slice(colonIndex + 1) : item.id;
-  return withoutPrefix.replace(/:\d+$/, "");
+  return item.id.replace(/^[^:]+:/, "").replace(/:\d+$/, "");
 }
 
 const REASON_CODE_MESSAGES: Record<string, string> = {
