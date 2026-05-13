@@ -68,10 +68,18 @@ const sessionLlmMetricsLog = createSubsystemLogger("session-llm-metrics");
 // catches the WebSocket transport (createOpenAIWebSocketStreamFn), the
 // Responses HTTP transport, the Anthropic Messages transport, and the
 // streamSimple fallback from pi-ai that previous per-stream emit hooks could
-// not see. Mapping pi-ai Usage → counter shape: input + cacheRead (+ cacheWrite
-// for anthropic, where cache_creation is also prompt-side cost) form `prompt`;
-// `completion` = output; `cached` = cacheRead. Cache-writes are not folded
-// into `cached` because dashboards use it for cache-hit ratios (reads / total).
+// not see.
+//
+// Usage source: state.pendingAssistantUsage, populated by recordAssistantUsage
+// from whichever event carried real numbers. Reading assistantMessage.usage
+// directly under-counts in providers (notably openai-completions) that emit
+// a zero snapshot on message_end and ship real token counts via timings on
+// the preceding message_update.done event.
+//
+// Counter shape mapping: input + cacheRead (+ cacheWrite for anthropic, where
+// cache_creation is also prompt-side cost) form `prompt`; `completion` =
+// output; `cached` = cacheRead. Cache-writes are not folded into `cached`
+// because dashboards use the ratio cacheRead/(prompt) for cache-hit %.
 function recordSessionLlmUsage(
   ctx: EmbeddedPiSubscribeContext,
   assistantMessage: AgentMessage,
@@ -96,14 +104,11 @@ function recordSessionLlmUsage(
   } else {
     return;
   }
-  const usage = (
-    assistantMessage as {
-      usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number };
-    }
-  ).usage;
-  if (!usage) {
-    return;
-  }
+  // Read the already-normalized usage the subscriber pipeline committed for
+  // this turn. Falls back to an empty object so request count still ticks for
+  // turns that produced no usage data at all (matches old per-stream hook
+  // behavior where `requests_total` incremented once per completed stream).
+  const usage = ctx.state.pendingAssistantUsage ?? {};
   const cached = usage.cacheRead ?? 0;
   const prompt =
     (usage.input ?? 0) + cached + (provider === "anthropic" ? (usage.cacheWrite ?? 0) : 0);
