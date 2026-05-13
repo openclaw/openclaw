@@ -890,6 +890,14 @@ export class OpenClawApp extends LitElement {
     this.requestUpdate();
   }
 
+  setTextScale(value: number) {
+    applySettingsInternal(this as unknown as Parameters<typeof applySettingsInternal>[0], {
+      ...this.settings,
+      textScale: value as typeof this.settings.textScale,
+    });
+    this.requestUpdate();
+  }
+
   announceSessionSwitch(sessionKey: string, label: string) {
     const id = ++this.sessionSwitchNoticeSeq;
     if (this.sessionSwitchNoticeTimer !== null) {

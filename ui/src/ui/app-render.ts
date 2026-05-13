@@ -984,6 +984,8 @@ export function renderApp(state: AppViewState) {
     onClearCustomTheme: () => state.clearCustomTheme(),
     borderRadius: state.settings.borderRadius,
     setBorderRadius: (value) => state.setBorderRadius(value),
+    textScale: state.settings.textScale ?? 100,
+    setTextScale: (value) => state.setTextScale(value),
     gatewayUrl: state.settings.gatewayUrl,
     assistantName: state.assistantName,
     configPath: state.configSnapshot?.path ?? null,
@@ -1142,6 +1144,7 @@ export function renderApp(state: AppViewState) {
             hasCustomTheme: Boolean(state.settings.customTheme),
             customThemeLabel: state.settings.customTheme?.label ?? null,
             borderRadius: state.settings.borderRadius,
+            textScale: state.settings.textScale ?? 100,
             setTheme: (theme, context) => state.setTheme(theme, context),
             onOpenCustomThemeImport: () => {
               state.setTab("appearance");
@@ -1154,6 +1157,7 @@ export function renderApp(state: AppViewState) {
             },
             setThemeMode: (mode, context) => state.setThemeMode(mode, context),
             setBorderRadius: (value) => state.setBorderRadius(value),
+            setTextScale: (value) => state.setTextScale(value),
             userAvatar: state.userAvatar ?? null,
             onUserAvatarChange: (avatar) => state.applyLocalUserIdentity?.({ avatar }),
             assistantAvatar: configAssistantAvatar,
