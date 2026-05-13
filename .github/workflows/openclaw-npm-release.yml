@@ -169,12 +169,174 @@ jobs:
       - name: Verify release contents
         run: pnpm release:check
 
+      - name: Generate dependency release evidence
+        id: dependency_evidence
+        env:
+          RELEASE_REF: ${{ inputs.tag }}
+          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+        run: |
+          set -euo pipefail
+          EVIDENCE_DIR="$RUNNER_TEMP/openclaw-dependency-evidence"
+          rm -rf "$EVIDENCE_DIR"
+          mkdir -p "$EVIDENCE_DIR"
+
+          RELEASE_SHA="$(git rev-parse HEAD)"
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          if [[ "${RELEASE_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            RELEASE_TAG="v${PACKAGE_VERSION}"
+          else
+            RELEASE_TAG="${RELEASE_REF}"
+          fi
+
+          BASE_REF="$(git describe --tags --match 'v[0-9]*.[0-9]*.[0-9]*' --abbrev=0 HEAD^ 2>/dev/null || true)"
+          if [[ -z "${BASE_REF}" ]]; then
+            git fetch --tags --force origin
+            BASE_REF="$(git describe --tags --match 'v[0-9]*.[0-9]*.[0-9]*' --abbrev=0 HEAD^ 2>/dev/null || true)"
+          fi
+          if [[ -z "${BASE_REF}" ]]; then
+            echo "Could not resolve a previous reachable release tag for dependency change evidence." >&2
+            exit 1
+          fi
+
+          pnpm deps:vuln:gate -- \
+            --json "$EVIDENCE_DIR/dependency-vulnerability-gate.json" \
+            --markdown "$EVIDENCE_DIR/dependency-vulnerability-gate.md"
+
+          pnpm deps:transitive-risk:report -- \
+            --json "$EVIDENCE_DIR/transitive-manifest-risk-report.json" \
+            --markdown "$EVIDENCE_DIR/transitive-manifest-risk-report.md"
+
+          pnpm deps:sbom-risk -- \
+            --json "$EVIDENCE_DIR/dependency-ownership-surface-report.json" \
+            --markdown "$EVIDENCE_DIR/dependency-ownership-surface-report.md"
+
+          pnpm deps:changes:report -- \
+            --base-ref "$BASE_REF" \
+            --json "$EVIDENCE_DIR/dependency-changes-report.json" \
+            --markdown "$EVIDENCE_DIR/dependency-changes-report.md"
+
+          RELEASE_TAG="$RELEASE_TAG" \
+          RELEASE_SHA="$RELEASE_SHA" \
+          RELEASE_REF="$RELEASE_REF" \
+          RELEASE_NPM_DIST_TAG="$RELEASE_NPM_DIST_TAG" \
+          PACKAGE_VERSION="$PACKAGE_VERSION" \
+          BASE_REF="$BASE_REF" \
+          EVIDENCE_DIR="$EVIDENCE_DIR" \
+          GITHUB_RUN_ID="$GITHUB_RUN_ID" \
+          GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
+          node <<'NODE'
+          const fs = require("node:fs");
+          const path = require("node:path");
+          const evidenceDir = process.env.EVIDENCE_DIR;
+          const manifest = {
+            schemaVersion: 1,
+            generatedAt: new Date().toISOString(),
+            releaseTag: process.env.RELEASE_TAG,
+            releaseRef: process.env.RELEASE_REF,
+            releaseSha: process.env.RELEASE_SHA,
+            npmDistTag: process.env.RELEASE_NPM_DIST_TAG,
+            packageName: "openclaw",
+            packageVersion: process.env.PACKAGE_VERSION,
+            workflowRunId: process.env.GITHUB_RUN_ID,
+            workflowRunAttempt: process.env.GITHUB_RUN_ATTEMPT,
+            dependencyChangeBaseRef: process.env.BASE_REF,
+            reports: [
+              {
+                name: "Known vulnerability gate",
+                command: "pnpm deps:vuln:gate",
+                policy: "hard-blocking",
+                json: "dependency-vulnerability-gate.json",
+                markdown: "dependency-vulnerability-gate.md",
+              },
+              {
+                name: "Transitive manifest risk report",
+                command: "pnpm deps:transitive-risk:report",
+                policy: "report-only",
+                json: "transitive-manifest-risk-report.json",
+                markdown: "transitive-manifest-risk-report.md",
+              },
+              {
+                name: "Dependency ownership and install surface report",
+                command: "pnpm deps:sbom-risk",
+                policy: "report-only",
+                json: "dependency-ownership-surface-report.json",
+                markdown: "dependency-ownership-surface-report.md",
+              },
+              {
+                name: "Dependency change report",
+                command: "pnpm deps:changes:report",
+                policy: "report-only",
+                json: "dependency-changes-report.json",
+                markdown: "dependency-changes-report.md",
+              },
+            ],
+          };
+          fs.writeFileSync(
+            path.join(evidenceDir, "dependency-evidence-manifest.json"),
+            `${JSON.stringify(manifest, null, 2)}\n`,
+          );
+          NODE
+
+          VULN_BLOCKERS="$(jq -r '.blockers | length' "$EVIDENCE_DIR/dependency-vulnerability-gate.json")"
+          VULN_FINDINGS="$(jq -r '.findings | length' "$EVIDENCE_DIR/dependency-vulnerability-gate.json")"
+          TRANSITIVE_SIGNALS="$(jq -r '.findingCount' "$EVIDENCE_DIR/transitive-manifest-risk-report.json")"
+          WORKSPACE_EXCLUDED="$(jq -r '.workspaceExcludedFindingCount' "$EVIDENCE_DIR/transitive-manifest-risk-report.json")"
+          TRANSITIVE_METADATA_FAILURES="$(jq -r '.metadataFailures | length' "$EVIDENCE_DIR/transitive-manifest-risk-report.json")"
+          LOCKFILE_PACKAGES="$(jq -r '.summary.lockfilePackageCount' "$EVIDENCE_DIR/dependency-ownership-surface-report.json")"
+          BUILD_RISK_PACKAGES="$(jq -r '.summary.buildRiskPackageCount' "$EVIDENCE_DIR/dependency-ownership-surface-report.json")"
+          CHANGES_ADDED="$(jq -r '.summary.addedPackages' "$EVIDENCE_DIR/dependency-changes-report.json")"
+          CHANGES_REMOVED="$(jq -r '.summary.removedPackages' "$EVIDENCE_DIR/dependency-changes-report.json")"
+          CHANGES_CHANGED="$(jq -r '.summary.changedPackages' "$EVIDENCE_DIR/dependency-changes-report.json")"
+          CHANGES_FILES="$(jq -r '.summary.dependencyFileChanges' "$EVIDENCE_DIR/dependency-changes-report.json")"
+
+          {
+            echo "# Dependency release evidence"
+            echo
+            echo "Generated for \`${RELEASE_TAG}\` at \`${RELEASE_SHA}\`."
+            echo
+            echo "## Summary"
+            echo
+            echo "- Known vulnerability hard blockers: ${VULN_BLOCKERS}"
+            echo "- Known vulnerability total findings: ${VULN_FINDINGS}"
+            echo "- Transitive manifest reported risk signals: ${TRANSITIVE_SIGNALS}"
+            echo "- Workspace-policy excluded transitive signals: ${WORKSPACE_EXCLUDED}"
+            echo "- Transitive manifest metadata failures: ${TRANSITIVE_METADATA_FAILURES}"
+            echo "- Lockfile packages inspected for ownership/install surface: ${LOCKFILE_PACKAGES}"
+            echo "- Packages with install-time or platform-specific behavior: ${BUILD_RISK_PACKAGES}"
+            echo "- Dependency change baseline: \`${BASE_REF}\`"
+            echo "- Dependency file changes: ${CHANGES_FILES}"
+            echo "- Resolved package changes: +${CHANGES_ADDED} -${CHANGES_REMOVED} changed ${CHANGES_CHANGED}"
+            echo
+            echo "## Reports"
+            echo
+            echo "- \`dependency-vulnerability-gate.md\`"
+            echo "- \`transitive-manifest-risk-report.md\`"
+            echo "- \`dependency-ownership-surface-report.md\`"
+            echo "- \`dependency-changes-report.md\`"
+          } > "$EVIDENCE_DIR/dependency-evidence-summary.md"
+
+          {
+            echo "### Dependency release evidence"
+            echo
+            echo "- Evidence artifact: \`openclaw-dependency-evidence-${RELEASE_REF}\`"
+            echo "- Dependency change baseline: \`${BASE_REF}\`"
+            echo "- Known vulnerability hard blockers: \`${VULN_BLOCKERS}\`"
+            echo "- Transitive manifest reported risk signals: \`${TRANSITIVE_SIGNALS}\`"
+            echo "- Workspace-policy excluded transitive signals: \`${WORKSPACE_EXCLUDED}\`"
+            echo "- Ownership/install surface lockfile packages: \`${LOCKFILE_PACKAGES}\`"
+            echo "- Dependency file changes: \`${CHANGES_FILES}\`"
+            echo "- Resolved package changes: \`+${CHANGES_ADDED} -${CHANGES_REMOVED} changed ${CHANGES_CHANGED}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          echo "dir=$EVIDENCE_DIR" >> "$GITHUB_OUTPUT"
+
       - name: Pack prepared npm tarball
         id: packed_tarball
         env:
           OPENCLAW_PREPACK_PREPARED: "1"
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          DEPENDENCY_EVIDENCE_DIR: ${{ steps.dependency_evidence.outputs.dir }}
         run: |
           set -euo pipefail
           PACK_OUTPUT="$RUNNER_TEMP/npm-pack-output.txt"
@@ -246,6 +408,7 @@ jobs:
           rm -rf "$ARTIFACT_DIR"
           mkdir -p "$ARTIFACT_DIR"
           cp "$PACK_PATH" "$ARTIFACT_DIR/"
+          cp -R "$DEPENDENCY_EVIDENCE_DIR" "$ARTIFACT_DIR/dependency-evidence"
           printf '%s\n' "$RELEASE_TAG" > "$ARTIFACT_DIR/release-tag.txt"
           printf '%s\n' "$RELEASE_SHA" > "$ARTIFACT_DIR/release-sha.txt"
           printf '%s\n' "$RELEASE_NPM_DIST_TAG" > "$ARTIFACT_DIR/release-npm-dist-tag.txt"
@@ -261,6 +424,8 @@ jobs:
             packageVersion: process.env.PACKAGE_VERSION,
             tarballName: process.env.TARBALL_NAME,
             tarballSha256: process.env.TARBALL_SHA256,
+            dependencyEvidenceDir: "dependency-evidence",
+            dependencyEvidenceManifest: "dependency-evidence/dependency-evidence-manifest.json",
           };
           fs.writeFileSync(
             path.join(process.env.ARTIFACT_DIR, "preflight-manifest.json"),
@@ -268,6 +433,13 @@ jobs:
           );
           NODE
           echo "dir=$ARTIFACT_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Upload dependency release evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: openclaw-dependency-evidence-${{ inputs.tag }}
+          path: ${{ steps.dependency_evidence.outputs.dir }}
+          if-no-files-found: error
 
       - name: Upload prepared npm publish bundle
         uses: actions/upload-artifact@v7
