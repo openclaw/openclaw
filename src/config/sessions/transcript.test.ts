@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it, vi } from "vitest";
 import { repairToolUseResultPairing } from "../../agents/session-transcript-repair.js";
 import * as transcriptEvents from "../../sessions/transcript-events.js";
@@ -20,6 +19,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   type ExactAssistantMessage = Parameters<
     typeof appendExactAssistantMessageToSessionTranscript
   >[0]["message"];
+  type TranscriptRepairMessage = Parameters<typeof repairToolUseResultPairing>[0][number];
   type TranscriptUpdateEmitterSpy = {
     mock: {
       calls: [string | SessionTranscriptUpdate][];
@@ -334,7 +334,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       .readFileSync(sessionFile, "utf-8")
       .trim()
       .split("\n")
-      .map((line) => JSON.parse(line) as { message?: AgentMessage })
+      .map((line) => JSON.parse(line) as { message?: TranscriptRepairMessage })
       .flatMap((entry) => (entry.message ? [entry.message] : []));
     const repair = repairToolUseResultPairing(messages, {
       missingToolResultText: "aborted",
