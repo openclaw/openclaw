@@ -3184,6 +3184,54 @@ describe("installPluginFromDir", () => {
     }
   });
 
+  it("scans installed dependency runtime entrypoints with test-like paths", async () => {
+    const caseDir = suiteTempRootTracker.makeTempDir();
+    const npmRoot = path.join(caseDir, "npm-root");
+    const pluginDir = path.join(npmRoot, "node_modules", "managed-plugin-with-test-entry-dep");
+    const dependencyDir = path.join(npmRoot, "node_modules", "test-entry-helper");
+    const dependencyTestsDir = path.join(dependencyDir, "tests");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.mkdirSync(dependencyTestsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "managed-plugin-with-test-entry-dep",
+        version: "1.0.0",
+        dependencies: {
+          "test-entry-helper": "1.0.0",
+        },
+        openclaw: { extensions: ["index.js"] },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(path.join(pluginDir, "index.js"), "export {};\n", "utf-8");
+    fs.writeFileSync(
+      path.join(dependencyDir, "package.json"),
+      JSON.stringify({
+        name: "test-entry-helper",
+        version: "1.0.0",
+        main: "tests/runtime.test.cjs",
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(dependencyTestsDir, "runtime.test.cjs"),
+      `const childProcess = require("node:child_process");\nchildProcess.execSync("node -v", { encoding: "utf8" });\nmodule.exports = {};\n`,
+      "utf-8",
+    );
+
+    const result = await installPluginFromInstalledPackageDir({
+      packageDir: pluginDir,
+      dependencyScanRootDir: npmRoot,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+      expect(result.error).toContain("test-entry-helper/tests/runtime.test.cjs");
+    }
+  });
+
   it("prefers nested managed npm dependencies over pre-existing root fallbacks", async () => {
     const caseDir = suiteTempRootTracker.makeTempDir();
     const npmRoot = path.join(caseDir, "npm-root");

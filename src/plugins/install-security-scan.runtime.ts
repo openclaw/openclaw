@@ -737,6 +737,7 @@ async function scanManifestDependencyDenylist(params: {
 }
 
 async function scanDirectoryTarget(params: {
+  excludeTestFiles?: boolean;
   failOnTruncated?: boolean;
   includeHiddenDirectories?: boolean;
   includeNodeModules?: boolean;
@@ -751,7 +752,7 @@ async function scanDirectoryTarget(params: {
 }): Promise<BuiltinInstallScan> {
   try {
     const scanSummary = await scanDirectoryWithSummary(params.path, {
-      excludeTestFiles: true,
+      excludeTestFiles: params.excludeTestFiles ?? true,
       includeHiddenDirectories: params.includeHiddenDirectories,
       includeNodeModules: params.includeNodeModules,
       includeFiles: params.includeFiles,
@@ -1161,6 +1162,7 @@ export async function scanInstalledPackageDependencyTreeRuntime(params: {
       });
     }
     const builtinScan = await scanDirectoryTarget({
+      excludeTestFiles: false,
       failOnTruncated: true,
       includeHiddenDirectories: true,
       includeNodeModules: true,
