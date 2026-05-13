@@ -36,9 +36,15 @@ export function isSilentReplyText(
   if (!text) {
     return false;
   }
+  // Strip thinking/reasoning blocks that some models prepend before NO_REPLY
+  // Fixes issue where models output "think\n...reasoning...\nNO_REPLY"
+  const stripped = text
+    .replace(/<think>[\s\S]*?<\/think>/gi, "")
+    .replace(/^think\s*[\s\S]*?$/gim, "")
+    .trim();
   // Match only the exact silent token with optional surrounding whitespace.
   // This prevents substantive replies ending with NO_REPLY from being suppressed (#19537).
-  return getSilentExactRegex(token).test(text);
+  return getSilentExactRegex(token).test(stripped);
 }
 
 type SilentReplyActionEnvelope = { action?: unknown };
