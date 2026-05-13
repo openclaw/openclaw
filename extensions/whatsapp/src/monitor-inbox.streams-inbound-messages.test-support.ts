@@ -459,6 +459,112 @@ describe("web monitor inbox", () => {
     }
   });
 
+  it("lets a drained debounced inbound reply before closing the socket", async () => {
+    vi.useFakeTimers();
+    try {
+      const onMessage = vi.fn(async (msg) => {
+        await msg.reply("pong");
+        await msg.sendMedia({ text: "media" });
+      });
+      const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+        debounceMs: 50,
+      });
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: nextMessageId("debounce-close-reply-1"),
+          remoteJid: "999@s.whatsapp.net",
+          text: "first",
+          timestamp: 1_700_000_000,
+          pushName: "Tester",
+        }),
+      );
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: nextMessageId("debounce-close-reply-2"),
+          remoteJid: "999@s.whatsapp.net",
+          text: "second",
+          timestamp: 1_700_000_001,
+          pushName: "Tester",
+        }),
+      );
+
+      await listener.close();
+
+      expect(onMessage).toHaveBeenCalledTimes(1);
+      expect(inboundMessage(onMessage).body).toBe("first\nsecond");
+      expect(sock.sendMessage).toHaveBeenNthCalledWith(1, "999@s.whatsapp.net", {
+        text: "pong",
+      });
+      expect(sock.sendMessage).toHaveBeenNthCalledWith(2, "999@s.whatsapp.net", {
+        text: "media",
+      });
+      expect(sock.end).toHaveBeenCalledTimes(1);
+      expect(sock.sendMessage.mock.invocationCallOrder.at(-1)).toBeLessThan(
+        sock.end.mock.invocationCallOrder.at(0),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits for in-flight inbound handlers before draining on close", async () => {
+    vi.useFakeTimers();
+    try {
+      const onMessage = vi.fn(async (msg) => {
+        await msg.reply("pong");
+      });
+      const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+        debounceMs: 50,
+      });
+      let releaseRead: (() => void) | undefined;
+      const readGate = new Promise<void>((resolve) => {
+        releaseRead = resolve;
+      });
+      const readStarted = new Promise<void>((resolve) => {
+        sock.readMessages.mockImplementationOnce(async () => {
+          resolve();
+          await readGate;
+        });
+      });
+
+      sock.ev.emit(
+        "messages.upsert",
+        buildNotifyMessageUpsert({
+          id: nextMessageId("debounce-close-inflight"),
+          remoteJid: "999@s.whatsapp.net",
+          text: "first",
+          timestamp: 1_700_000_000,
+          pushName: "Tester",
+        }),
+      );
+
+      await readStarted;
+      const closePromise = listener.close();
+      await Promise.resolve();
+
+      expect(sock.end).not.toHaveBeenCalled();
+
+      if (!releaseRead) {
+        throw new Error("Expected read receipt release callback to be initialized");
+      }
+      releaseRead();
+      await closePromise;
+
+      expect(onMessage).toHaveBeenCalledTimes(1);
+      expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
+        text: "pong",
+      });
+      expect(sock.end).toHaveBeenCalledTimes(1);
+      expect(sock.sendMessage.mock.invocationCallOrder.at(0)).toBeLessThan(
+        sock.end.mock.invocationCallOrder.at(0),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("retries timed-out sends on the same socket without clearing the socket ref", async () => {
     const onMessage = vi.fn(async () => undefined);
     const socketRef = createSocketRef();
