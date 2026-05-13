@@ -66,7 +66,7 @@ Docs: https://docs.openclaw.ai
 - fix(gateway): honor minimal discovery mode for wide-area DNS-SD [AI]. (#80903) Thanks @pgondhi987.
 - slack: enforce reaction notification policy [AI]. (#80907) Thanks @pgondhi987.
 - Enforce gateway command scopes by caller context [AI]. (#80891) Thanks @pgondhi987.
-- Telegram/groups: in single-account setups, treat an explicit empty `accounts.<id>.groups: {}` map the same as undefined so the root `channels.telegram.groups` allowlist still applies, instead of silently dropping every group update under the default `groupPolicy: "allowlist"`. Multi-account semantics are unchanged so per-account explicit-empty groups still scope-disable a single account without affecting siblings; the explicit way to block all groups for any account remains `groupPolicy: "disabled"`. Fixes #79427. Thanks @nikolaykazakovvs-ux.
+- Telegram/groups: in single-account setups, treat an explicit empty `accounts.<id>.groups: {}` map the same as undefined so the root `channels.telegram.groups` allowlist still applies, instead of silently dropping every group update under the default `groupPolicy: "allowlist"`. Multi-account semantics are unchanged so per-account explicit-empty groups still scope-disable a single account without affecting siblings; the explicit way to block all groups for any account remains `groupPolicy: "disabled"`. Fixes #79427. (#81030) Thanks @kinjitakabe.
 - Enforce Slack plugin approval button authorization [AI]. (#80899) Thanks @pgondhi987.
 - Recognize PowerShell -ec inline commands [AI]. (#80893) Thanks @pgondhi987.
 - fix(qqbot): authorize approval button callbacks [AI]. (#80892) Thanks @pgondhi987.
