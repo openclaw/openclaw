@@ -23,7 +23,10 @@ import {
 } from "./store-cache.js";
 import { normalizeStoreSessionKey, resolveSessionStoreEntry } from "./store-entry.js";
 import { loadSessionStore, normalizeSessionStore } from "./store-load.js";
-import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
+import {
+  collectSessionMaintenancePreserveKeys,
+  resolveMaintenanceConfig,
+} from "./store-maintenance-runtime.js";
 import {
   capEntryCount,
   getActiveSessionMaintenanceWarning,
@@ -282,9 +285,9 @@ async function saveSessionStoreUnlocked(
         diskBudget,
       });
     } else {
-      const preserveSessionKeys = opts?.activeSessionKey
-        ? new Set([opts.activeSessionKey])
-        : undefined;
+      const preserveSessionKeys = collectSessionMaintenancePreserveKeys(
+        opts?.activeSessionKey ? [opts.activeSessionKey] : undefined,
+      );
       // Prune stale entries and cap total count before serializing.
       const removedSessionFiles = new Map<string, string | undefined>();
       const pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, {

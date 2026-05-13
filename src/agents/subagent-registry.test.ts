@@ -163,9 +163,13 @@ vi.mock("./subagent-orphan-recovery.js", () => ({
 
 describe("subagent registry seam flow", () => {
   let mod: typeof import("./subagent-registry.js");
+  let collectSessionMaintenancePreserveKeys: typeof import("../config/sessions/store-maintenance-runtime.js").collectSessionMaintenancePreserveKeys;
 
   beforeAll(async () => {
-    mod = await import("./subagent-registry.js");
+    [mod, { collectSessionMaintenancePreserveKeys }] = await Promise.all([
+      import("./subagent-registry.js"),
+      import("../config/sessions/store-maintenance-runtime.js"),
+    ]);
   });
 
   beforeEach(() => {
@@ -217,6 +221,48 @@ describe("subagent registry seam flow", () => {
       resolveContextEngine: mocks.resolveContextEngine,
     });
     mod.resetSubagentRegistryForTests({ persist: false });
+  });
+
+  it("preserves active and cleanup-pending child session keys during session maintenance", () => {
+    const now = Date.now();
+    mod.registerSubagentRun({
+      runId: "run-active-preserve",
+      childSessionKey: "agent:main:subagent:active-preserve",
+      requesterSessionKey: "agent:main:slack:dm:u1",
+      requesterDisplayKey: "slack:u1",
+      task: "active preserve",
+      cleanup: "delete",
+      expectsCompletionMessage: true,
+    });
+    mod.addSubagentRunForTests({
+      runId: "run-ended-preserve",
+      childSessionKey: "agent:main:subagent:ended-preserve",
+      requesterSessionKey: "agent:main:slack:dm:u1",
+      requesterDisplayKey: "slack:u1",
+      task: "ended preserve",
+      cleanup: "delete",
+      createdAt: now - 100,
+      endedAt: now,
+      expectsCompletionMessage: true,
+    });
+    mod.addSubagentRunForTests({
+      runId: "run-cleaned-up",
+      childSessionKey: "agent:main:subagent:cleaned-up",
+      requesterSessionKey: "agent:main:slack:dm:u1",
+      requesterDisplayKey: "slack:u1",
+      task: "cleaned up",
+      cleanup: "delete",
+      createdAt: now - 200,
+      endedAt: now - 100,
+      cleanupCompletedAt: now,
+      expectsCompletionMessage: true,
+    });
+
+    const keys = collectSessionMaintenancePreserveKeys();
+
+    expect(keys).toContain("agent:main:subagent:active-preserve");
+    expect(keys).toContain("agent:main:subagent:ended-preserve");
+    expect(keys).not.toContain("agent:main:subagent:cleaned-up");
   });
 
   afterEach(() => {

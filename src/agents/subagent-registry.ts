@@ -6,6 +6,7 @@ import {
   resolveStorePath,
   type SessionEntry,
 } from "../config/sessions.js";
+import { registerSessionMaintenancePreserveKeysProvider } from "../config/sessions/store-maintenance-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ResolveContextEngineOptions } from "../context-engine/registry.js";
 import type { ContextEngine, SubagentEndReason } from "../context-engine/types.js";
@@ -65,6 +66,7 @@ import {
 } from "./subagent-registry-state.js";
 import { configureSubagentRegistrySteerRuntime } from "./subagent-registry-steer-runtime.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { hasSubagentRunEnded, isLiveUnendedSubagentRun } from "./subagent-run-liveness.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 
 export type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -137,6 +139,37 @@ const defaultSubagentRegistryDeps: SubagentRegistryDeps = {
 };
 
 let subagentRegistryDeps: SubagentRegistryDeps = defaultSubagentRegistryDeps;
+
+function shouldPreserveSubagentSessionForMaintenance(
+  entry: SubagentRunRecord,
+  now = Date.now(),
+): boolean {
+  if (typeof entry.cleanupCompletedAt === "number") {
+    return false;
+  }
+  if (isLiveUnendedSubagentRun(entry, now)) {
+    return true;
+  }
+  return hasSubagentRunEnded(entry);
+}
+
+export function collectSubagentSessionMaintenancePreserveKeys(): string[] {
+  const now = Date.now();
+  const preserveKeys = new Set<string>();
+  for (const entry of subagentRuns.values()) {
+    if (!shouldPreserveSubagentSessionForMaintenance(entry, now)) {
+      continue;
+    }
+    const childSessionKey = entry.childSessionKey.trim();
+    if (childSessionKey) {
+      preserveKeys.add(childSessionKey);
+    }
+  }
+  return [...preserveKeys];
+}
+
+registerSessionMaintenancePreserveKeysProvider(collectSubagentSessionMaintenancePreserveKeys);
+
 type ContextEngineInitModule = Pick<
   {
     ensureContextEnginesInitialized: () => void;
