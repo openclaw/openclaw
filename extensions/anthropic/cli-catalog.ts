@@ -1,17 +1,13 @@
-import type {
-  ModelDefinitionConfig,
-  ModelProviderConfig,
-} from "openclaw/plugin-sdk/provider-model-shared";
+import type { ModelCatalogEntry } from "openclaw/plugin-sdk/model-catalog-runtime";
 
 import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS } from "./cli-constants.js";
 
-// Claude CLI runs through the user's local CLI binary which authenticates via
-// Claude.ai subscription OAuth (or an explicit API key); per-token billing
-// metadata is not meaningful for this path — the subscription, not OpenClaw,
-// owns cost. Models are seeded with subscription-appropriate defaults so the
-// picker has consistent entries; runtime config can override per-ref.
+// Claude CLI is externally maintained — the Claude binary owns which models it
+// supports, OpenClaw mirrors that set into the model catalog via the public
+// plugin seam. Subscription auth (OAuth / API key) drives the binary; per-token
+// billing isn't meaningful here, so catalog entries carry only the metadata
+// the picker needs (id, name, provider, context-window-ish hints).
 const CLAUDE_CLI_DEFAULT_CONTEXT_WINDOW = 200_000;
-const CLAUDE_CLI_DEFAULT_MAX_TOKENS = 64_000;
 
 const CLAUDE_CLI_MODEL_LABELS: Record<string, string> = {
   "claude-opus-4-7": "Claude Opus 4.7 (Claude CLI)",
@@ -21,18 +17,6 @@ const CLAUDE_CLI_MODEL_LABELS: Record<string, string> = {
   "claude-sonnet-4-5": "Claude Sonnet 4.5 (Claude CLI)",
   "claude-haiku-4-5": "Claude Haiku 4.5 (Claude CLI)",
 };
-
-function buildClaudeCliModel(id: string): ModelDefinitionConfig {
-  return {
-    id,
-    name: CLAUDE_CLI_MODEL_LABELS[id] ?? `${id} (Claude CLI)`,
-    reasoning: true,
-    input: ["text", "image"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: CLAUDE_CLI_DEFAULT_CONTEXT_WINDOW,
-    maxTokens: CLAUDE_CLI_DEFAULT_MAX_TOKENS,
-  };
-}
 
 function extractClaudeCliModelIds(): string[] {
   const ids: string[] = [];
@@ -51,10 +35,19 @@ function extractClaudeCliModelIds(): string[] {
   return ids;
 }
 
-export function buildClaudeCliProviderCatalog(): ModelProviderConfig {
-  return {
-    baseUrl: "claude-cli://local",
-    api: "anthropic-messages",
-    models: extractClaudeCliModelIds().map(buildClaudeCliModel),
-  };
+/**
+ * Build the catalog entries the Anthropic plugin contributes for the
+ * `claude-cli` provider id. Consumed via `ProviderPlugin.augmentModelCatalog`
+ * so the `/models` picker sees the full CLI-supported set without core
+ * needing to import provider-specific allowlists.
+ */
+export function buildClaudeCliCatalogEntries(): ModelCatalogEntry[] {
+  return extractClaudeCliModelIds().map((id) => ({
+    id,
+    name: CLAUDE_CLI_MODEL_LABELS[id] ?? `${id} (Claude CLI)`,
+    provider: CLAUDE_CLI_BACKEND_ID,
+    reasoning: true,
+    input: ["text", "image"],
+    contextWindow: CLAUDE_CLI_DEFAULT_CONTEXT_WINDOW,
+  }));
 }

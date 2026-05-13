@@ -28,6 +28,7 @@ import { fetchClaudeUsage } from "openclaw/plugin-sdk/provider-usage";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import * as claudeCliAuth from "./cli-auth-seam.js";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
+import { buildClaudeCliCatalogEntries } from "./cli-catalog.js";
 import { buildAnthropicCliMigrationResult } from "./cli-migration.js";
 import {
   CLAUDE_CLI_BACKEND_ID,
@@ -579,6 +580,13 @@ export function buildAnthropicProvider(): ProviderPlugin {
       normalizeLowercaseStringOrEmpty(provider) === CLAUDE_CLI_BACKEND_ID
         ? resolveClaudeCliSyntheticAuth()
         : undefined,
+    // Contribute the Claude CLI binary's supported model set into the
+    // model catalog so the `/models` picker surfaces the full allowlist
+    // without core needing to import provider-specific constants. The
+    // hookAliases above (CLAUDE_CLI_BACKEND_ID) route this plugin's
+    // augmentModelCatalog hook for both `anthropic` and `claude-cli`
+    // provider lookups.
+    augmentModelCatalog: () => buildClaudeCliCatalogEntries(),
     buildReplayPolicy: buildAnthropicReplayPolicy,
     isModernModelRef: ({ modelId }) => matchesAnthropicModernModel(modelId),
     resolveReasoningOutputMode: () => "native",
