@@ -1610,6 +1610,65 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
+  it("suppresses exact NO_REPLY final text after message tool delivery evidence", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const hasRepliedRef = { value: false };
+    const replyResolver = vi.fn(async () => {
+      hasRepliedRef.value = true;
+      return { text: "NO_REPLY" } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        ChatType: "direct",
+        Provider: "telegram",
+        Surface: "telegram",
+        SessionKey: "agent:main:telegram:direct:U1",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: { hasRepliedRef },
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(hasRepliedRef.value).toBe(true);
+    expect(result.queuedFinal).toBe(false);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+  });
+
+  it("keeps non-NO_REPLY final text after message tool delivery evidence", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const hasRepliedRef = { value: false };
+    const replyResolver = vi.fn(async () => {
+      hasRepliedRef.value = true;
+      return { text: "Visible follow-up" } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        ChatType: "direct",
+        Provider: "telegram",
+        Surface: "telegram",
+        SessionKey: "agent:main:telegram:direct:U1",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: { hasRepliedRef },
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(hasRepliedRef.value).toBe(true);
+    expect(result.queuedFinal).toBe(true);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "Visible follow-up" });
+  });
+
   it("renders plain-text plan updates and concise approval progress when verbose is enabled", async () => {
     setNoAbort();
     const cfg = {
