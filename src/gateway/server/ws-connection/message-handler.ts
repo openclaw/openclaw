@@ -58,7 +58,7 @@ import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
 import { hasForwardedRequestHeaders, isLocalDirectRequest } from "../../auth.js";
 import { normalizeDeviceMetadataForAuth } from "../../device-auth.js";
-import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../../method-scopes.js";
+import { ADMIN_SCOPE } from "../../method-scopes.js";
 import {
   isLocalishHost,
   isLoopbackAddress,
@@ -137,6 +137,7 @@ import {
   resolveHandshakeBrowserSecurityContext,
   resolvePairingLocality,
   resolveUnauthorizedHandshakeContext,
+  shouldMarkApprovalRuntimeClient,
   shouldAllowSilentLocalPairing,
   shouldSkipLocalBackendSelfPairing,
 } from "./handshake-auth-helpers.js";
@@ -1285,8 +1286,9 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           }
         }
 
+        const shouldIssueDeviceToken = !trustedProxyAuthOk;
         const deviceToken =
-          device && hasServerApprovedDeviceTokenBaseline
+          shouldIssueDeviceToken && device && hasServerApprovedDeviceTokenBaseline
             ? await ensureDeviceToken({ deviceId: device.id, role, scopes })
             : null;
         const bootstrapDeviceTokens: Array<{
@@ -1407,12 +1409,11 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         const sharedGatewaySessionGeneration = usesSharedGatewayAuth
           ? resolveSharedGatewaySessionGeneration(resolvedAuth, trustedProxies)
           : undefined;
-        const isTrustedApprovalRuntime =
-          connectParams.client.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
-          connectParams.client.mode === GATEWAY_CLIENT_MODES.BACKEND &&
-          skipLocalBackendSelfPairing &&
-          Array.isArray(connectParams.scopes) &&
-          connectParams.scopes.includes(APPROVALS_SCOPE);
+        const isTrustedApprovalRuntime = shouldMarkApprovalRuntimeClient({
+          connectParams,
+          localBackendSelfPairingOk: skipLocalBackendSelfPairing,
+          hasVerifiedDeviceIdentity: Boolean(device),
+        });
         clearHandshakeTimer();
         const nextClient: GatewayWsClient = {
           socket,

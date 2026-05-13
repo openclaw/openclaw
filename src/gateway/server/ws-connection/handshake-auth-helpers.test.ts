@@ -9,6 +9,7 @@ import {
   resolvePairingLocality,
   resolveUnauthorizedHandshakeContext,
   shouldAllowSilentLocalPairing,
+  shouldMarkApprovalRuntimeClient,
   shouldSkipLocalBackendSelfPairing,
 } from "./handshake-auth-helpers.js";
 
@@ -355,6 +356,59 @@ describe("handshake auth helpers", () => {
         authMethod: "token",
       }),
     ).toBe("shared_secret_loopback_local");
+  });
+
+  it("marks backend approval runtimes from local or verified-device trust paths", () => {
+    const connectParams = {
+      client: {
+        id: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+        mode: GATEWAY_CLIENT_MODES.BACKEND,
+      },
+      scopes: ["operator.approvals"],
+    } as ConnectParams;
+
+    expect(
+      shouldMarkApprovalRuntimeClient({
+        connectParams,
+        localBackendSelfPairingOk: true,
+        hasVerifiedDeviceIdentity: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldMarkApprovalRuntimeClient({
+        connectParams,
+        localBackendSelfPairingOk: false,
+        hasVerifiedDeviceIdentity: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not mark unverified or non-approval gateway-client connections as approval runtimes", () => {
+    const connectParams = {
+      client: {
+        id: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+        mode: GATEWAY_CLIENT_MODES.BACKEND,
+      },
+      scopes: ["operator.approvals"],
+    } as ConnectParams;
+
+    expect(
+      shouldMarkApprovalRuntimeClient({
+        connectParams,
+        localBackendSelfPairingOk: false,
+        hasVerifiedDeviceIdentity: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldMarkApprovalRuntimeClient({
+        connectParams: {
+          ...connectParams,
+          scopes: ["operator.read"],
+        },
+        localBackendSelfPairingOk: true,
+        hasVerifiedDeviceIdentity: false,
+      }),
+    ).toBe(false);
   });
 
   it("skips backend self-pairing only for direct-local backend clients", () => {
