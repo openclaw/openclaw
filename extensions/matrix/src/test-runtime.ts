@@ -2,7 +2,6 @@ import {
   implicitMentionKindWhen,
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-mention-gating";
-import { createPluginRuntimeMediaMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { vi } from "vitest";
 import type { PluginRuntime } from "./runtime-api.js";
 import { setMatrixRuntime } from "./runtime.js";
@@ -20,6 +19,31 @@ type MatrixRuntimeStub = {
   logging?: PluginRuntime["logging"];
   state: Pick<NonNullable<PluginRuntime["state"]>, "resolveStateDir">;
 };
+
+function createMatrixRuntimeMediaMock(
+  overrides: Partial<PluginRuntime["channel"]["media"]> = {},
+): PluginRuntime["channel"]["media"] {
+  const readRemoteMediaBuffer =
+    vi.fn() as unknown as PluginRuntime["channel"]["media"]["readRemoteMediaBuffer"];
+  return {
+    readRemoteMediaBuffer,
+    fetchRemoteMedia:
+      readRemoteMediaBuffer as unknown as PluginRuntime["channel"]["media"]["fetchRemoteMedia"],
+    saveRemoteMedia: vi.fn().mockResolvedValue({
+      path: "/tmp/test-media.jpg",
+      contentType: "image/jpeg",
+    }) as unknown as PluginRuntime["channel"]["media"]["saveRemoteMedia"],
+    saveResponseMedia: vi.fn().mockResolvedValue({
+      path: "/tmp/test-media.jpg",
+      contentType: "image/jpeg",
+    }) as unknown as PluginRuntime["channel"]["media"]["saveResponseMedia"],
+    saveMediaBuffer: vi.fn().mockResolvedValue({
+      path: "/tmp/test-media.jpg",
+      contentType: "image/jpeg",
+    }) as unknown as PluginRuntime["channel"]["media"]["saveMediaBuffer"],
+    ...overrides,
+  };
+}
 
 export function installMatrixTestRuntime(options: MatrixTestRuntimeOptions = {}): void {
   const defaultStateDirResolver: NonNullable<PluginRuntime["state"]>["resolveStateDir"] = (
@@ -76,9 +100,9 @@ export function installMatrixMonitorTestRuntime(
         implicitMentionKindWhen,
         resolveInboundMentionDecision,
       },
-      media: createPluginRuntimeMediaMock({
+      media: createMatrixRuntimeMediaMock({
         saveMediaBuffer: options.saveMediaBuffer ?? vi.fn(),
-      }) as unknown as PluginRuntime["channel"]["media"],
+      }),
     },
   });
 }
