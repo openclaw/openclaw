@@ -34,6 +34,10 @@ vi.mock("../runtime.js", () => ({
   defaultRuntime: mocks.defaultRuntime,
 }));
 
+function firstCallOptions(mock: { mock: { calls: unknown[][] } }) {
+  return mock.mock.calls[0]?.[0];
+}
+
 describe("update cli option collisions", () => {
   beforeEach(() => {
     updateCommand.mockClear();
@@ -51,23 +55,19 @@ describe("update cli option collisions", () => {
       name: "forwards parent-captured --json/--timeout to `update status`",
       argv: ["update", "status", "--json", "--timeout", "9"],
       assert: () => {
-        expect(updateStatusCommand).toHaveBeenCalledWith(
-          expect.objectContaining({
-            json: true,
-            timeout: "9",
-          }),
-        );
+        expect(updateStatusCommand).toHaveBeenCalledTimes(1);
+        const opts = firstCallOptions(updateStatusCommand);
+        expect((opts as { json?: boolean; timeout?: string } | undefined)?.json).toBe(true);
+        expect((opts as { json?: boolean; timeout?: string } | undefined)?.timeout).toBe("9");
       },
     },
     {
       name: "forwards parent-captured --timeout to `update wizard`",
       argv: ["update", "wizard", "--timeout", "13"],
       assert: () => {
-        expect(updateWizardCommand).toHaveBeenCalledWith(
-          expect.objectContaining({
-            timeout: "13",
-          }),
-        );
+        expect(updateWizardCommand).toHaveBeenCalledTimes(1);
+        const opts = firstCallOptions(updateWizardCommand);
+        expect((opts as { timeout?: string } | undefined)?.timeout).toBe("13");
       },
     },
   ])("$name", async ({ argv, assert }) => {

@@ -122,7 +122,11 @@ describe("heartbeat runner skips when target session lane is busy", () => {
     });
   });
 
-  it("returns lanes-busy for opt-in broader busy-lane checks", async () => {
+  it("does not return lanes-busy for global subagent-lane work alone", async () => {
+    // The global Subagent lane has no agent identity in its name — a stalled
+    // subagent on any one agent must not silently disable every other
+    // agent's heartbeat. Per-agent attribution comes from the session-keyed
+    // lane variants exercised below.
     await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
       const cfg = createHeartbeatTelegramConfig();
       cfg.agents!.defaults!.heartbeat = { every: "30m", skipWhenBusy: true };
@@ -132,6 +136,28 @@ describe("heartbeat runner skips when target session lane is busy", () => {
         cfg,
         deps: {
           getQueueSize: vi.fn((lane?: string) => (lane === CommandLane.Subagent ? 1 : 0)),
+          getCommandLaneSnapshots: vi.fn(() => []),
+          nowMs: () => Date.now(),
+          getReplyFromConfig: replySpy,
+        } as HeartbeatDeps,
+      });
+
+      expect(result.status).not.toBe("skipped");
+    });
+  });
+
+  it("returns lanes-busy for opt-in work in this agent's nested session lane", async () => {
+    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
+      const cfg = createHeartbeatTelegramConfig();
+      cfg.agents!.defaults!.heartbeat = { every: "30m", skipWhenBusy: true };
+      await seedHeartbeatTelegramSession(storePath, cfg);
+      const nestedSessionLane = resolveNestedAgentLaneForSession("agent:main:telegram:123");
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: {
+          getQueueSize: vi.fn((_lane?: string) => 0),
+          getCommandLaneSnapshots: vi.fn(() => [createBusyLaneSnapshot(nestedSessionLane)]),
           nowMs: () => Date.now(),
           getReplyFromConfig: replySpy,
         } as HeartbeatDeps,
@@ -142,7 +168,9 @@ describe("heartbeat runner skips when target session lane is busy", () => {
     });
   });
 
-  it("returns lanes-busy for opt-in work in any session-scoped nested lane", async () => {
+  it("does not return lanes-busy for another agent's session-scoped nested lane", async () => {
+    // Per-agent scoping: a zombie subagent or nested run belonging to a
+    // different agent must not block this agent's heartbeat.
     await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
       const cfg = createHeartbeatTelegramConfig();
       cfg.agents!.defaults!.heartbeat = { every: "30m", skipWhenBusy: true };
@@ -159,8 +187,7 @@ describe("heartbeat runner skips when target session lane is busy", () => {
         } as HeartbeatDeps,
       });
 
-      expect(result).toEqual({ status: "skipped", reason: HEARTBEAT_SKIP_LANES_BUSY });
-      expect(replySpy).not.toHaveBeenCalled();
+      expect(result.status).not.toBe("skipped");
     });
   });
 
@@ -197,6 +224,63 @@ describe("heartbeat runner skips when target session lane is busy", () => {
       if (result.status === "skipped") {
         expect(result.reason).toBe(HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT);
       }
+      expect(replySpy).not.toHaveBeenCalled();
+    });
+  });
+
+  it("does not defer on a recent heartbeat ack pending final delivery", async () => {
+    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
+      const cfg = createHeartbeatTelegramConfig();
+      cfg.session = { store: storePath };
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "heartbeat",
+        lastTo: "heartbeat",
+        updatedAt: Date.now(),
+        pendingFinalDelivery: true,
+        pendingFinalDeliveryText: "HEARTBEAT_OK",
+      });
+      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: {
+          getQueueSize: vi.fn((_lane?: string) => 0),
+          nowMs: () => Date.now(),
+          getReplyFromConfig: replySpy,
+        } as HeartbeatDeps,
+      });
+
+      expect(result.status).toBe("ran");
+      expect(replySpy).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("keeps deferring recent pending delivery when ackMaxChars makes the remainder real content", async () => {
+    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
+      const cfg = createHeartbeatTelegramConfig();
+      cfg.session = { store: storePath };
+      cfg.agents!.defaults!.heartbeat = { every: "30m", ackMaxChars: 0 };
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "heartbeat",
+        lastTo: "heartbeat",
+        updatedAt: Date.now(),
+        pendingFinalDelivery: true,
+        pendingFinalDeliveryText: "HEARTBEAT_OK short",
+      });
+      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: {
+          getQueueSize: vi.fn((_lane?: string) => 0),
+          nowMs: () => Date.now(),
+          getReplyFromConfig: replySpy,
+        } as HeartbeatDeps,
+      });
+
+      expect(result).toEqual({ status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT });
       expect(replySpy).not.toHaveBeenCalled();
     });
   });

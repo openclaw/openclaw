@@ -170,10 +170,13 @@ const makeAbortRunner = (abort: AbortController, beforeAbort?: () => void): Runn
   makeRunnerStub({ task: createAbortTask(abort, beforeAbort) });
 
 function createSignal() {
-  let resolve!: () => void;
+  let resolve: (() => void) | undefined;
   const promise = new Promise<void>((res) => {
     resolve = res;
   });
+  if (!resolve) {
+    throw new Error("Expected Telegram monitor signal resolver to be initialized");
+  }
   return { promise, resolve };
 }
 
@@ -287,6 +290,14 @@ function expectRecoverableRetryState(
   expect(runSpy).toHaveBeenCalledTimes(expectedRunCalls);
 }
 
+function latestMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+  const call = mock.mock.calls[mock.mock.calls.length - 1];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
 async function monitorWithAutoAbort(opts: Omit<MonitorTelegramOpts, "abortSignal"> = {}) {
   const abort = new AbortController();
   mockRunOnceAndAbort(abort);
@@ -364,6 +375,7 @@ vi.mock("./fetch.js", () => ({
 vi.mock("./update-offset-store.js", () => ({
   readTelegramUpdateOffset: readTelegramUpdateOffsetSpy,
   writeTelegramUpdateOffset: vi.fn(async () => undefined),
+  deleteTelegramUpdateOffset: vi.fn(async () => undefined),
 }));
 
 describe("monitorTelegramProvider (grammY)", () => {
@@ -416,8 +428,10 @@ describe("monitorTelegramProvider (grammY)", () => {
       }
     }
     await monitorWithAutoAbort();
-    expect(handlers.message).toBeDefined();
-    await handlers.message?.({
+    if (!handlers.message) {
+      throw new Error("expected Telegram message handler");
+    }
+    await handlers.message({
       message: {
         message_id: 1,
         chat: { id: 123, type: "private" },
@@ -440,17 +454,16 @@ describe("monitorTelegramProvider (grammY)", () => {
 
     await monitorWithAutoAbort();
 
-    expect(runSpy).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        sink: { concurrency: 3 },
-        runner: expect.objectContaining({
-          silent: true,
-          maxRetryTime: 60 * 60 * 1000,
-          retryInterval: "exponential",
-        }),
-      }),
-    );
+    type RunOptions = {
+      sink?: { concurrency?: number };
+      runner?: { silent?: boolean; maxRetryTime?: number; retryInterval?: string };
+    };
+    const runCall = latestMockCall(runSpy, "run") as [unknown, RunOptions];
+    const runOptions = runCall[1];
+    expect(runOptions?.sink?.concurrency).toBe(3);
+    expect(runOptions?.runner?.silent).toBe(true);
+    expect(runOptions?.runner?.maxRetryTime).toBe(60 * 60 * 1000);
+    expect(runOptions?.runner?.retryInterval).toBe("exponential");
   });
 
   it("requires mention in groups by default", async () => {
@@ -843,12 +856,12 @@ describe("monitorTelegramProvider (grammY)", () => {
       },
     });
 
-    expect(startTelegramWebhookSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        host: "0.0.0.0",
-        setStatus,
-      }),
-    );
+    const webhookCall = latestMockCall(startTelegramWebhookSpy, "startTelegramWebhook") as [
+      { host?: string; setStatus?: unknown },
+    ];
+    const webhookOptions = webhookCall[0];
+    expect(webhookOptions?.host).toBe("0.0.0.0");
+    expect(webhookOptions?.setStatus).toBe(setStatus);
     expect(runSpy).not.toHaveBeenCalled();
   });
 
@@ -1014,11 +1027,10 @@ describe("monitorTelegramProvider (grammY)", () => {
       },
     });
 
-    expect(startTelegramWebhookSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        secret: "secret-from-config",
-      }),
-    );
+    const webhookCall = latestMockCall(startTelegramWebhookSpy, "startTelegramWebhook") as [
+      { secret?: string },
+    ];
+    expect(webhookCall[0].secret).toBe("secret-from-config");
     expect(runSpy).not.toHaveBeenCalled();
   });
 });

@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
 import { Socket, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -19,12 +19,16 @@ async function cleanupTestDirs(): Promise<void> {
 
 async function makeSettings() {
   testRoot = await mkdtemp(join(tmpdir(), "openclaw-debug-proxy-managed-proxy-"));
+  const certDir = join(testRoot, "certs");
+  await mkdir(certDir, { recursive: true });
+  await writeFile(join(certDir, "root-ca.pem"), "test root cert\n", "utf8");
+  await writeFile(join(certDir, "root-ca-key.pem"), "test root key\n", "utf8");
   return {
     enabled: true,
     required: false,
     dbPath: ":memory:",
     blobDir: join(testRoot, "blobs"),
-    certDir: join(testRoot, "certs"),
+    certDir,
     sessionId: "debug-proxy-managed-proxy-test",
     sourceProcess: "test",
   };
@@ -128,7 +132,7 @@ describe("debug proxy managed-proxy direct upstream policy", () => {
   });
 
   it("allows direct upstreams when managed proxy mode is inactive", () => {
-    expect(() => assertDebugProxyDirectUpstreamAllowed()).not.toThrow();
+    expect(assertDebugProxyDirectUpstreamAllowed()).toBeUndefined();
   });
 
   it("rejects direct upstreams while managed proxy mode is active", () => {
@@ -151,7 +155,7 @@ describe("debug proxy managed-proxy direct upstream policy", () => {
     process.env["OPENCLAW_PROXY_ACTIVE"] = "1";
     process.env["OPENCLAW_DEBUG_PROXY_ALLOW_DIRECT_CONNECT_WITH_MANAGED_PROXY"] = "1";
 
-    expect(() => assertDebugProxyDirectUpstreamAllowed()).not.toThrow();
+    expect(assertDebugProxyDirectUpstreamAllowed()).toBeUndefined();
   });
 
   it("rejects CONNECT upstreams before opening direct sockets while managed proxy mode is active", async () => {

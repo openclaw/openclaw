@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { setPluginToolMeta } from "../../plugins/tools.js";
 import { providerAliasCases } from "../test-helpers/provider-alias-cases.js";
@@ -46,6 +49,109 @@ describe("applyFinalEffectiveToolPolicy", () => {
     expect(filtered.map((tool) => tool.name)).toEqual(["mcp__bundle__fs_read"]);
   });
 
+  it("filters bundled tools through inherited subagent allowlists", () => {
+    const agentId = `bundled-inherited-allow-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const sessionKey = `agent:${agentId}:subagent:limited`;
+    const storePath = path.join(os.tmpdir(), `openclaw-bundled-inherited-allow-${agentId}.json`);
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          [sessionKey]: {
+            sessionId: "limited-session",
+            updatedAt: Date.now(),
+            spawnDepth: 1,
+            subagentRole: "orchestrator",
+            subagentControlScope: "children",
+            inheritedToolAllow: ["mcp__bundle__fs_read"],
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const filtered = applyFinalEffectiveToolPolicy({
+      bundledTools: [makeTool("mcp__bundle__fs_delete"), makeTool("mcp__bundle__fs_read")],
+      config: {
+        session: {
+          store: storePath,
+        },
+      },
+      sessionKey,
+      warn: () => {},
+    });
+
+    expect(filtered.map((tool) => tool.name)).toEqual(["mcp__bundle__fs_read"]);
+  });
+
+  it("honors configured plugin allow entries alongside inherited bundled tool allows", () => {
+    const agentId = `bundled-plugin-allow-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const sessionKey = `agent:${agentId}:subagent:limited`;
+    const storePath = path.join(os.tmpdir(), `openclaw-bundled-plugin-allow-${agentId}.json`);
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          [sessionKey]: {
+            sessionId: "limited-session",
+            updatedAt: Date.now(),
+            spawnDepth: 1,
+            subagentRole: "orchestrator",
+            subagentControlScope: "children",
+            inheritedToolAllow: ["mcp__bundle__fs_read"],
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    const deniedTool = makeTool("mcp__bundle__fs_delete");
+    const allowedTool = makeTool("mcp__bundle__fs_read");
+    setPluginToolMeta(deniedTool, { pluginId: "bundle-mcp", optional: false });
+    setPluginToolMeta(allowedTool, { pluginId: "bundle-mcp", optional: false });
+
+    const filtered = applyFinalEffectiveToolPolicy({
+      bundledTools: [deniedTool, allowedTool],
+      config: {
+        session: {
+          store: storePath,
+        },
+        tools: {
+          subagents: {
+            tools: {
+              allow: ["bundle-mcp"],
+            },
+          },
+        },
+      },
+      sessionKey,
+      warn: () => {},
+    });
+
+    expect(filtered.map((tool) => tool.name)).toEqual(["mcp__bundle__fs_read"]);
+  });
+
+  it("applies channel-normalized per-sender policy to bundled tools", () => {
+    const filtered = applyFinalEffectiveToolPolicy({
+      bundledTools: [makeTool("mcp__bundle__exec"), makeTool("mcp__bundle__read")],
+      config: {
+        tools: {
+          toolsBySender: {
+            "channel:msteams:alice": { deny: ["mcp__bundle__exec"] },
+          },
+        },
+      },
+      messageProvider: "teams",
+      senderId: "alice",
+      warn: () => {},
+    });
+
+    expect(filtered.map((tool) => tool.name)).toEqual(["mcp__bundle__read"]);
+  });
+
   it("applies owner-only filtering to bundled tools", () => {
     const filtered = applyFinalEffectiveToolPolicy({
       bundledTools: [makeTool("mcp__bundle__read"), makeTool("mcp__bundle__admin", true)],
@@ -63,7 +169,7 @@ describe("applyFinalEffectiveToolPolicy", () => {
       warn: () => {},
     });
 
-    expect(filtered).toEqual([]);
+    expect(filtered).toStrictEqual([]);
   });
 
   it("drops caller-provided groupId when it disagrees with session-derived group context", () => {
@@ -126,7 +232,7 @@ describe("applyFinalEffectiveToolPolicy", () => {
       warn: (message) => warnings.push(message),
     });
 
-    expect(warnings.some((w) => w.includes("unknown entries"))).toBe(false);
+    expect(warnings.filter((message) => message.includes("unknown entries"))).toStrictEqual([]);
   });
 
   it("still warns on genuinely unknown entries in the bundled pass", () => {
@@ -137,7 +243,7 @@ describe("applyFinalEffectiveToolPolicy", () => {
       warn: (message) => warnings.push(message),
     });
 
-    expect(warnings.some((w) => w.includes("totally-made-up-tool"))).toBe(true);
+    expect(warnings.filter((message) => message.includes("totally-made-up-tool"))).toHaveLength(1);
   });
 
   it("keeps bundle MCP tools in the coding profile via plugin metadata", () => {
@@ -163,6 +269,6 @@ describe("applyFinalEffectiveToolPolicy", () => {
       warn: () => {},
     });
 
-    expect(filtered).toEqual([]);
+    expect(filtered).toStrictEqual([]);
   });
 });

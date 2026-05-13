@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -16,10 +16,24 @@ import {
 type RawToolCallBlock = {
   type?: unknown;
   id?: unknown;
+  call_id?: unknown;
+  toolCallId?: unknown;
+  toolUseId?: unknown;
+  tool_call_id?: unknown;
+  tool_use_id?: unknown;
   name?: unknown;
   input?: unknown;
   arguments?: unknown;
 };
+
+const RAW_TOOL_CALL_BLOCK_TYPES = new Set([
+  "toolCall",
+  "toolUse",
+  "functionCall",
+  "tool_call",
+  "tool_use",
+  "function_call",
+]);
 
 function isThinkingLikeBlock(block: unknown): boolean {
   if (!block || typeof block !== "object") {
@@ -34,10 +48,7 @@ function isRawToolCallBlock(block: unknown): block is RawToolCallBlock {
     return false;
   }
   const type = (block as { type?: unknown }).type;
-  return (
-    typeof type === "string" &&
-    (type === "toolCall" || type === "toolUse" || type === "functionCall")
-  );
+  return typeof type === "string" && RAW_TOOL_CALL_BLOCK_TYPES.has(type);
 }
 
 function hasToolCallInput(block: RawToolCallBlock): boolean {
@@ -52,7 +63,14 @@ function hasNonEmptyStringField(value: unknown): boolean {
 }
 
 function hasToolCallId(block: RawToolCallBlock): boolean {
-  return hasNonEmptyStringField(block.id);
+  return (
+    hasNonEmptyStringField(block.id) ||
+    hasNonEmptyStringField(block.call_id) ||
+    hasNonEmptyStringField(block.toolCallId) ||
+    hasNonEmptyStringField(block.toolUseId) ||
+    hasNonEmptyStringField(block.tool_call_id) ||
+    hasNonEmptyStringField(block.tool_use_id)
+  );
 }
 
 function redactSessionsSpawnAttachmentsArgs(value: unknown): unknown {
@@ -350,11 +368,7 @@ function repairToolCallInputs(
         continue;
       }
       if (isRawToolCallBlock(block)) {
-        if (
-          (block as { type?: unknown }).type === "toolCall" ||
-          (block as { type?: unknown }).type === "toolUse" ||
-          (block as { type?: unknown }).type === "functionCall"
-        ) {
+        if (RAW_TOOL_CALL_BLOCK_TYPES.has((block as { type?: string }).type ?? "")) {
           // Only sanitize (redact) sessions_spawn blocks; all others are passed through
           // unchanged to preserve provider-specific shapes (e.g. toolUse.input for Anthropic).
           const blockName =
@@ -442,6 +456,13 @@ function shouldDropErroredAssistantResults(options?: ToolUseResultPairingOptions
   return options?.erroredAssistantResultPolicy === "drop";
 }
 
+function assistantHasToolCalls(message: AgentMessage): boolean {
+  if (!message || typeof message !== "object" || message.role !== "assistant") {
+    return false;
+  }
+  return extractToolCallsFromAssistant(message).length > 0;
+}
+
 export function repairToolUseResultPairing(
   messages: AgentMessage[],
   options?: ToolUseResultPairingOptions,
@@ -502,8 +523,14 @@ export function repairToolUseResultPairing(
       continue;
     }
 
-    const toolCallIds = new Set(toolCalls.map((t) => t.id));
-    const toolCallNamesById = new Map(toolCalls.map((t) => [t.id, t.name] as const));
+    const toolCallIds = new Set<string>();
+    const toolCallNamesById = new Map<string, string>();
+    for (const toolCall of toolCalls) {
+      toolCallIds.add(toolCall.id);
+      if (typeof toolCall.name === "string") {
+        toolCallNamesById.set(toolCall.id, toolCall.name);
+      }
+    }
 
     const spanResultsById = new Map<string, Extract<AgentMessage, { role: "toolResult" }>>();
     const remainder: AgentMessage[] = [];
@@ -518,7 +545,11 @@ export function repairToolUseResultPairing(
 
       const nextRole = (next as { role?: unknown }).role;
       if (nextRole === "assistant") {
-        break;
+        if (assistantHasToolCalls(next)) {
+          break;
+        }
+        remainder.push(next);
+        continue;
       }
 
       if (nextRole === "toolResult") {

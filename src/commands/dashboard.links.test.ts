@@ -42,6 +42,18 @@ function resetRuntime() {
   runtime.exit.mockClear();
 }
 
+function logMessages(): string[] {
+  return runtime.log.mock.calls.map(([message]) => String(message));
+}
+
+function expectLogWith(text: string): void {
+  expect(logMessages().join("\n")).toContain(text);
+}
+
+function expectNoLogWith(text: string): void {
+  expect(logMessages().join("\n")).not.toContain(text);
+}
+
 function mockSnapshot(token: unknown = "abc") {
   readConfigFileSnapshotMock.mockResolvedValue({
     path: "/tmp/openclaw.json",
@@ -154,9 +166,8 @@ describe("dashboardCommand", () => {
     // hint string is written to runtime.log, which flows into the same
     // console-captured log file readable by operator.read-scoped devices.
     expect(formatControlUiSshHintMock).toHaveBeenCalledWith({ port: 18789, basePath: undefined });
-    expect(formatControlUiSshHintMock).not.toHaveBeenCalledWith(
-      expect.objectContaining({ token: expect.anything() }),
-    );
+    const [sshHintOptions] = formatControlUiSshHintMock.mock.calls[0] ?? [];
+    expect(sshHintOptions).not.toHaveProperty("token");
 
     // Double-check: no logged line contains the secret.
     for (const call of runtime.log.mock.calls) {
@@ -210,7 +221,7 @@ describe("dashboardCommand", () => {
     expect(runtime.log).not.toHaveBeenCalledWith(
       "Browser launch disabled (--no-open). Use the URL above.",
     );
-    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("OPENCLAW_GATEWAY_TOKEN"));
+    expectLogWith("OPENCLAW_GATEWAY_TOKEN");
   });
 
   it("respects --no-open with plain URL hint when clipboard fails and no token is configured", async () => {
@@ -238,15 +249,11 @@ describe("dashboardCommand", () => {
     await dashboardCommand(runtime);
 
     expect(copyToClipboardMock).toHaveBeenCalledWith("http://127.0.0.1:18789/");
-    expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("Token auto-auth unavailable"),
+    expectLogWith("Token auto-auth unavailable");
+    expectLogWith(
+      "gateway.auth.token SecretRef is unresolved (env:default:MISSING_GATEWAY_TOKEN).",
     );
-    expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "gateway.auth.token SecretRef is unresolved (env:default:MISSING_GATEWAY_TOKEN).",
-      ),
-    );
-    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("missing env var"));
+    expectNoLogWith("missing env var");
   });
 
   it("keeps URL non-tokenized when token SecretRef is unresolved but env fallback exists", async () => {
@@ -265,12 +272,8 @@ describe("dashboardCommand", () => {
 
     expect(copyToClipboardMock).toHaveBeenCalledWith("http://127.0.0.1:18789/");
     expect(openUrlMock).toHaveBeenCalledWith("http://127.0.0.1:18789/");
-    expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("Token auto-auth is disabled for SecretRef-managed"),
-    );
-    expect(runtime.log).not.toHaveBeenCalledWith(
-      expect.stringContaining("Token auto-auth unavailable"),
-    );
+    expectLogWith("Token auto-auth is disabled for SecretRef-managed");
+    expectNoLogWith("Token auto-auth unavailable");
   });
 
   it("keeps URL non-tokenized when env-template gateway.auth.token is unresolved", async () => {
@@ -283,13 +286,9 @@ describe("dashboardCommand", () => {
 
     expect(copyToClipboardMock).toHaveBeenCalledWith("http://127.0.0.1:18789/");
     expect(openUrlMock).toHaveBeenCalledWith("http://127.0.0.1:18789/");
-    expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "Token auto-auth unavailable: gateway.auth.token SecretRef is unresolved (env:default:CUSTOM_GATEWAY_TOKEN).",
-      ),
+    expectLogWith(
+      "Token auto-auth unavailable: gateway.auth.token SecretRef is unresolved (env:default:CUSTOM_GATEWAY_TOKEN).",
     );
-    expect(runtime.log).not.toHaveBeenCalledWith(
-      expect.stringContaining("Token auto-auth is disabled for SecretRef-managed"),
-    );
+    expectNoLogWith("Token auto-auth is disabled for SecretRef-managed");
   });
 });

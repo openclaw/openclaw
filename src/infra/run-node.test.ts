@@ -24,17 +24,45 @@ const ROOT_SRC = "src/index.ts";
 const ROOT_TSCONFIG = "tsconfig.json";
 const ROOT_PACKAGE = "package.json";
 const ROOT_TSDOWN = "tsdown.config.ts";
-const GENERATED_A2UI_BUNDLE = "src/canvas-host/a2ui/a2ui.bundle.js";
-const GENERATED_A2UI_BUNDLE_HASH = "src/canvas-host/a2ui/.bundle.hash";
+const GENERATED_PLUGIN_ASSET_BUNDLE = "extensions/demo/src/host/assets/view.bundle.js";
+const GENERATED_PLUGIN_ASSET_BUNDLE_HASH = "extensions/demo/src/host/assets/.bundle.hash";
 const DIST_ENTRY = "dist/entry.js";
 const BUILD_STAMP = `dist/${BUILD_STAMP_FILE}`;
 const RUNTIME_POSTBUILD_STAMP = `dist/${RUNTIME_POSTBUILD_STAMP_FILE}`;
+const DIST_PLUGIN_SDK_INDEX = "dist/plugin-sdk/index.js";
+const DIST_PLUGIN_SDK_ROOT_ALIAS = "dist/plugin-sdk/root-alias.cjs";
+const DIST_CHANNEL_CATALOG = "dist/channel-catalog.json";
+const DIST_LEGACY_CLI_EXIT_COMPAT = "dist/memory-state-CcqRgDZU.js";
+const DIST_LEGACY_CLI_EXIT_COMPAT_ALT = "dist/memory-state-DwGdReW4.js";
+const DIST_STABLE_ROOT_RUNTIME_SOURCE = "dist/model-catalog.runtime-AbCd1234.js";
+const DIST_STABLE_ROOT_RUNTIME_SOURCE_ALT = "dist/model-catalog.runtime-EfGh5678.js";
+const DIST_STABLE_ROOT_RUNTIME_ALIAS = "dist/model-catalog.runtime.js";
+const DIST_LEGACY_ROOT_RUNTIME_TARGET = "dist/abort.runtime.js";
+const DIST_LEGACY_ROOT_RUNTIME_COMPAT = "dist/abort.runtime-DX6vo4yJ.js";
 const QA_LAB_PLUGIN_SDK_ENTRY = "dist/plugin-sdk/qa-lab.js";
 const QA_RUNTIME_PLUGIN_SDK_ENTRY = "dist/plugin-sdk/qa-runtime.js";
+const EXTENSION_INDEX = bundledPluginFile("demo", "index.ts");
 const EXTENSION_SRC = bundledPluginFile("demo", "src/index.ts");
+const EXTENSION_EXTRA_SRC = bundledPluginFile("demo", "src/extra.ts");
+const EXTENSION_SKILL = bundledPluginFile("demo", "skills/SKILL.md");
 const EXTENSION_MANIFEST = bundledPluginFile("demo", "openclaw.plugin.json");
 const EXTENSION_PACKAGE = bundledPluginFile("demo", "package.json");
 const EXTENSION_README = bundledPluginFile("demo", "README.md");
+const DIST_EXTENSION_INDEX = bundledDistPluginFile("demo", "index.js");
+const DIST_EXTENSION_SRC = bundledDistPluginFile("demo", "src/index.js");
+const DIST_EXTENSION_SKILL = bundledDistPluginFile("demo", "skills/SKILL.md");
+const DIST_EXTENSION_RUNTIME_SRC = "dist-runtime/extensions/demo/src/index.js";
+const DIST_RUNTIME_EXTENSION_INDEX = "dist-runtime/extensions/demo/index.js";
+const DIST_RUNTIME_EXTENSION_MANIFEST = "dist-runtime/extensions/demo/openclaw.plugin.json";
+const DIST_RUNTIME_EXTENSION_PACKAGE = "dist-runtime/extensions/demo/package.json";
+const DIST_RUNTIME_EXTENSION_SKILL = "dist-runtime/extensions/demo/skills/SKILL.md";
+const DIST_OPENCLAW_ALIAS_PACKAGE = "dist/extensions/node_modules/openclaw/package.json";
+const DIST_OPENCLAW_ALIAS_PLUGIN_SDK_INDEX =
+  "dist/extensions/node_modules/openclaw/plugin-sdk/index.js";
+const DIFFS_PACKAGE = "extensions/diffs/package.json";
+const DIFFS_VIEWER_RUNTIME_SOURCE = "extensions/diffs/assets/viewer-runtime.js";
+const DIST_DIFFS_VIEWER_RUNTIME = "dist/extensions/diffs/assets/viewer-runtime.js";
+const DIST_RUNTIME_DIFFS_VIEWER_RUNTIME = "dist-runtime/extensions/diffs/assets/viewer-runtime.js";
 const DIST_EXTENSION_MANIFEST = bundledDistPluginFile("demo", "openclaw.plugin.json");
 const DIST_EXTENSION_PACKAGE = bundledDistPluginFile("demo", "package.json");
 
@@ -95,16 +123,43 @@ function createFakeProcess() {
   }) as unknown as NodeJS.Process;
 }
 
+function firstMockCall<T extends unknown[]>(mock: { mock: { calls: T[] } }): T | undefined {
+  return mock.mock.calls[0];
+}
+
 async function writeRuntimePostBuildScaffold(tmp: string): Promise<void> {
   const pluginSdkAliasPath = path.join(tmp, "src", "plugin-sdk", "root-alias.cjs");
   await fs.mkdir(path.dirname(pluginSdkAliasPath), { recursive: true });
   await fs.mkdir(path.join(tmp, "extensions"), { recursive: true });
   await fs.writeFile(pluginSdkAliasPath, "module.exports = {};\n", "utf-8");
   await fs.utimes(pluginSdkAliasPath, BUILD_TIME, BUILD_TIME);
+  await writeProjectFiles(tmp, {
+    [DIST_PLUGIN_SDK_ROOT_ALIAS]: "module.exports = {};\n",
+    [DIST_CHANNEL_CATALOG]: '{"entries":[]}\n',
+    [DIST_LEGACY_CLI_EXIT_COMPAT]: "export function hasMemoryRuntime() { return false; }\n",
+    [DIST_LEGACY_CLI_EXIT_COMPAT_ALT]: "export function hasMemoryRuntime() { return false; }\n",
+    [DIST_OPENCLAW_ALIAS_PACKAGE]:
+      '{"name":"openclaw","type":"module","exports":{"./plugin-sdk":"./plugin-sdk/index.js"}}\n',
+  });
+  await touchProjectFiles(
+    tmp,
+    [
+      DIST_PLUGIN_SDK_ROOT_ALIAS,
+      DIST_CHANNEL_CATALOG,
+      DIST_LEGACY_CLI_EXIT_COMPAT,
+      DIST_LEGACY_CLI_EXIT_COMPAT_ALT,
+      DIST_OPENCLAW_ALIAS_PACKAGE,
+    ],
+    BUILD_TIME,
+  );
 }
 
 function expectedBuildSpawn() {
   return [process.execPath, "scripts/tsdown-build.mjs", "--no-clean"];
+}
+
+function expectedBundledPluginAssetBuildSpawn() {
+  return [process.execPath, "scripts/bundled-plugin-assets.mjs", "--phase", "build"];
 }
 
 function statusCommandSpawn() {
@@ -117,6 +172,16 @@ function gatewayCallStatusCommandSpawn() {
 
 function resolvePath(tmp: string, relativePath: string) {
   return path.join(tmp, relativePath);
+}
+
+async function expectPathMissing(targetPath: string): Promise<void> {
+  let accessError: unknown;
+  try {
+    await fs.access(targetPath);
+  } catch (error) {
+    accessError = error;
+  }
+  expect((accessError as NodeJS.ErrnoException | undefined)?.code).toBe("ENOENT");
 }
 
 async function writeProjectFiles(tmp: string, files: Record<string, string>) {
@@ -291,9 +356,10 @@ async function runQaCommand(params: {
 }
 
 async function expectManifestId(tmp: string, relativePath: string, id: string) {
-  await expect(
-    fs.readFile(resolvePath(tmp, relativePath), "utf-8").then((raw) => JSON.parse(raw)),
-  ).resolves.toMatchObject({ id });
+  const manifest = JSON.parse(await fs.readFile(resolvePath(tmp, relativePath), "utf-8")) as {
+    id?: unknown;
+  };
+  expect(manifest.id).toBe(id);
 }
 
 describe("run-node script", () => {
@@ -341,6 +407,7 @@ describe("run-node script", () => {
         );
         await expect(fs.readFile(indexPath, "utf-8")).resolves.toContain("sentinel");
         expect(nodeCalls).toEqual([
+          [process.execPath, "scripts/bundled-plugin-assets.mjs", "--phase", "build"],
           [process.execPath, "scripts/tsdown-build.mjs", "--no-clean"],
           [process.execPath, "openclaw.mjs", "--version"],
         ]);
@@ -379,16 +446,16 @@ describe("run-node script", () => {
       });
 
       expect(exitCode).toBe(0);
-      expect(spawnCalls).toEqual([expectedBuildSpawn(), statusCommandSpawn()]);
+      expect(spawnCalls).toEqual([
+        expectedBundledPluginAssetBuildSpawn(),
+        expectedBuildSpawn(),
+        statusCommandSpawn(),
+      ]);
 
       await expect(
         fs.readFile(resolvePath(tmp, "dist/plugin-sdk/root-alias.cjs"), "utf-8"),
       ).resolves.toContain("module.exports = {};");
-      await expect(
-        fs
-          .readFile(resolvePath(tmp, DIST_EXTENSION_MANIFEST), "utf-8")
-          .then((raw) => JSON.parse(raw)),
-      ).resolves.toMatchObject({ id: "demo" });
+      await expectManifestId(tmp, DIST_EXTENSION_MANIFEST, "demo");
       await expect(
         fs.readFile(resolvePath(tmp, DIST_EXTENSION_PACKAGE), "utf-8"),
       ).resolves.toContain(
@@ -506,9 +573,21 @@ describe("run-node script", () => {
       await setupTrackedProject(tmp, {
         files: {
           [ROOT_SRC]: "export const value = 1;\n",
+          [DIST_PLUGIN_SDK_ROOT_ALIAS]: "module.exports = {};\n",
+          [DIST_CHANNEL_CATALOG]: '{"entries":[]}\n',
+          [DIST_LEGACY_CLI_EXIT_COMPAT]: "export function hasMemoryRuntime() { return false; }\n",
+          [DIST_LEGACY_CLI_EXIT_COMPAT_ALT]:
+            "export function hasMemoryRuntime() { return false; }\n",
         },
         oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
-        buildPaths: [DIST_ENTRY, BUILD_STAMP],
+        buildPaths: [
+          DIST_ENTRY,
+          DIST_PLUGIN_SDK_ROOT_ALIAS,
+          DIST_CHANNEL_CATALOG,
+          DIST_LEGACY_CLI_EXIT_COMPAT,
+          DIST_LEGACY_CLI_EXIT_COMPAT_ALT,
+          BUILD_STAMP,
+        ],
       });
       const profileDir = path.join(tmp, ".artifacts", "profiles");
       const spawnCalls: Array<{ args: string[]; env: Record<string, string | undefined> }> = [];
@@ -736,6 +815,7 @@ describe("run-node script", () => {
 
       expect(exitCode).toBe(0);
       expect(spawnCalls).toEqual([
+        expectedBundledPluginAssetBuildSpawn(),
         expectedBuildSpawn(),
         [
           process.execPath,
@@ -770,15 +850,13 @@ describe("run-node script", () => {
       const exitCode = await runQaCommand({ tmp, spawn, spawnSync, runRuntimePostBuild });
 
       expect(exitCode).toBe(0);
-      expect(runRuntimePostBuild).toHaveBeenCalledWith(
-        expect.objectContaining({
-          cwd: tmp,
-          env: expect.objectContaining({
-            OPENCLAW_BUILD_PRIVATE_QA: "1",
-            OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
-          }),
-        }),
-      );
+      expect(runRuntimePostBuild).toHaveBeenCalledTimes(1);
+      const postBuildParams = firstMockCall(runRuntimePostBuild)?.[0] as
+        | { cwd?: string; env?: Record<string, string | undefined> }
+        | undefined;
+      expect(postBuildParams?.cwd).toBe(tmp);
+      expect(postBuildParams?.env?.OPENCLAW_BUILD_PRIVATE_QA).toBe("1");
+      expect(postBuildParams?.env?.OPENCLAW_ENABLE_PRIVATE_QA_CLI).toBe("1");
     });
   });
 
@@ -834,6 +912,46 @@ describe("run-node script", () => {
       expect(exitCode).toBe(0);
       expect(spawnCalls).toEqual([statusCommandSpawn()]);
       expect(runRuntimePostBuild).not.toHaveBeenCalled();
+    });
+  });
+
+  it("reruns runtime postbuild in watch mode when required outputs are missing with no runtime stamp", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [DIST_PLUGIN_SDK_ROOT_ALIAS]: "module.exports = {};\n",
+          [DIST_LEGACY_CLI_EXIT_COMPAT]: "export function hasMemoryRuntime() { return false; }\n",
+          [DIST_LEGACY_CLI_EXIT_COMPAT_ALT]:
+            "export function hasMemoryRuntime() { return false; }\n",
+        },
+        oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
+        buildPaths: [
+          DIST_ENTRY,
+          DIST_PLUGIN_SDK_ROOT_ALIAS,
+          DIST_LEGACY_CLI_EXIT_COMPAT,
+          DIST_LEGACY_CLI_EXIT_COMPAT_ALT,
+          BUILD_STAMP,
+        ],
+      });
+      await fs.rm(resolvePath(tmp, DIST_OPENCLAW_ALIAS_PACKAGE));
+
+      const runRuntimePostBuild = vi.fn();
+      const { spawnCalls, spawn, spawnSync } = createSpawnRecorder({
+        gitHead: "abc123\n",
+        gitStatus: "",
+      });
+      const exitCode = await runStatusCommand({
+        tmp,
+        spawn,
+        spawnSync,
+        env: { OPENCLAW_WATCH_MODE: "1" },
+        runRuntimePostBuild,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(spawnCalls).toEqual([statusCommandSpawn()]);
+      expect(runRuntimePostBuild).toHaveBeenCalledOnce();
     });
   });
 
@@ -999,12 +1117,16 @@ describe("run-node script", () => {
       await setupTrackedProject(tmp, {
         files: {
           [ROOT_SRC]: "export const value = 1;\n",
+          [EXTENSION_INDEX]: "export default {};\n",
           [EXTENSION_MANIFEST]: '{"id":"demo","configSchema":{"type":"object"}}\n',
+          [DIST_EXTENSION_INDEX]: "export default {};\n",
           [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
         },
         buildPaths: [
           ROOT_SRC,
+          EXTENSION_INDEX,
           EXTENSION_MANIFEST,
+          DIST_EXTENSION_INDEX,
           ROOT_TSCONFIG,
           ROOT_PACKAGE,
           DIST_ENTRY,
@@ -1043,10 +1165,19 @@ describe("run-node script", () => {
 
       let activePostbuilds = 0;
       let maxActivePostbuilds = 0;
+      let markPostbuildStarted!: () => void;
+      let releasePostbuild!: () => void;
+      const postbuildStarted = new Promise<void>((resolve) => {
+        markPostbuildStarted = resolve;
+      });
+      const postbuildRelease = new Promise<void>((resolve) => {
+        releasePostbuild = resolve;
+      });
       const runRuntimePostBuild = vi.fn(async () => {
         activePostbuilds += 1;
         maxActivePostbuilds = Math.max(maxActivePostbuilds, activePostbuilds);
-        await new Promise((resolve) => setTimeout(resolve, 25));
+        markPostbuildStarted();
+        await postbuildRelease;
         activePostbuilds -= 1;
       });
       const { spawn, spawnSync } = createSpawnRecorder({
@@ -1054,28 +1185,30 @@ describe("run-node script", () => {
         gitStatus: "",
       });
 
-      await expect(
-        Promise.all([
-          runStatusCommand({
-            tmp,
-            spawn,
-            spawnSync,
-            env: {
-              OPENCLAW_RUN_NODE_BUILD_LOCK_POLL_MS: "1",
-            },
-            runRuntimePostBuild,
-          }),
-          runStatusCommand({
-            tmp,
-            spawn,
-            spawnSync,
-            env: {
-              OPENCLAW_RUN_NODE_BUILD_LOCK_POLL_MS: "1",
-            },
-            runRuntimePostBuild,
-          }),
-        ]),
-      ).resolves.toEqual([0, 0]);
+      const runs = Promise.all([
+        runStatusCommand({
+          tmp,
+          spawn,
+          spawnSync,
+          env: {
+            OPENCLAW_RUN_NODE_BUILD_LOCK_POLL_MS: "1",
+          },
+          runRuntimePostBuild,
+        }),
+        runStatusCommand({
+          tmp,
+          spawn,
+          spawnSync,
+          env: {
+            OPENCLAW_RUN_NODE_BUILD_LOCK_POLL_MS: "1",
+          },
+          runRuntimePostBuild,
+        }),
+      ]);
+
+      await postbuildStarted;
+      releasePostbuild();
+      await expect(runs).resolves.toEqual([0, 0]);
 
       expect(runRuntimePostBuild).toHaveBeenCalledTimes(1);
       expect(maxActivePostbuilds).toBe(1);
@@ -1191,18 +1324,18 @@ describe("run-node script", () => {
         execPath: process.execPath,
       });
 
-      while (spawn.mock.calls.length === 0) {
-        await new Promise((resolve) => setTimeout(resolve, 0));
-      }
+      await vi.waitFor(() => {
+        expect(spawn).toHaveBeenCalled();
+      });
       fakeProcess.emit("SIGTERM");
       const exitCode = await exitCodePromise;
 
       expect(exitCode).toBe(143);
-      expect(spawn).toHaveBeenCalledWith(
-        process.execPath,
-        ["openclaw.mjs", "status"],
-        expect.objectContaining({ stdio: "inherit" }),
-      );
+      expect(spawn).toHaveBeenCalledTimes(1);
+      const spawnCall = firstMockCall(spawn) as [string, string[], { stdio?: unknown }] | undefined;
+      expect(spawnCall?.[0]).toBe(process.execPath);
+      expect(spawnCall?.[1]).toEqual(["openclaw.mjs", "status"]);
+      expect(spawnCall?.[2].stdio).toBe("inherit");
       expect(child.kill).toHaveBeenCalledWith("SIGTERM");
       expect(fakeProcess.listenerCount("SIGINT")).toBe(0);
       expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
@@ -1223,7 +1356,11 @@ describe("run-node script", () => {
       const exitCode = await runStatusCommand({ tmp, spawn, spawnSync });
 
       expect(exitCode).toBe(0);
-      expect(spawnCalls).toEqual([expectedBuildSpawn(), statusCommandSpawn()]);
+      expect(spawnCalls).toEqual([
+        expectedBundledPluginAssetBuildSpawn(),
+        expectedBuildSpawn(),
+        statusCommandSpawn(),
+      ]);
     });
   });
 
@@ -1244,7 +1381,11 @@ describe("run-node script", () => {
       const exitCode = await runStatusCommand({ tmp, spawn, spawnSync });
 
       expect(exitCode).toBe(0);
-      expect(spawnCalls).toEqual([expectedBuildSpawn(), statusCommandSpawn()]);
+      expect(spawnCalls).toEqual([
+        expectedBundledPluginAssetBuildSpawn(),
+        expectedBuildSpawn(),
+        statusCommandSpawn(),
+      ]);
     });
   });
 
@@ -1252,13 +1393,15 @@ describe("run-node script", () => {
     await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
       await setupTrackedProject(tmp, {
         files: {
+          [EXTENSION_INDEX]: "export default {};\n",
           [EXTENSION_MANIFEST]: '{"id":"demo","configSchema":{"type":"object"}}\n',
           [EXTENSION_PACKAGE]: '{"name":"demo","openclaw":{"extensions":["./index.ts"]}}\n',
           [ROOT_TSDOWN]: "export default {};\n",
+          [DIST_EXTENSION_INDEX]: "export default {};\n",
           [DIST_EXTENSION_PACKAGE]: '{"name":"demo","openclaw":{"extensions":["./stale.js"]}}\n',
         },
-        oldPaths: [EXTENSION_MANIFEST, ROOT_TSCONFIG, ROOT_PACKAGE, ROOT_TSDOWN],
-        buildPaths: [DIST_ENTRY, BUILD_STAMP, DIST_EXTENSION_PACKAGE],
+        oldPaths: [EXTENSION_INDEX, EXTENSION_MANIFEST, ROOT_TSCONFIG, ROOT_PACKAGE, ROOT_TSDOWN],
+        buildPaths: [DIST_ENTRY, BUILD_STAMP, DIST_EXTENSION_INDEX, DIST_EXTENSION_PACKAGE],
         newPaths: [EXTENSION_PACKAGE],
       });
 
@@ -1308,18 +1451,22 @@ describe("run-node script", () => {
       await setupTrackedProject(tmp, {
         files: {
           [ROOT_SRC]: "export const value = 1;\n",
+          [EXTENSION_INDEX]: "export default {};\n",
           [EXTENSION_MANIFEST]: '{"id":"demo","configSchema":{"type":"object"}}\n',
           [ROOT_TSDOWN]: "export default {};\n",
+          [DIST_EXTENSION_INDEX]: "export default {};\n",
           [DIST_EXTENSION_MANIFEST]: '{"id":"stale","configSchema":{"type":"object"}}\n',
         },
         buildPaths: [
           ROOT_SRC,
+          EXTENSION_INDEX,
           EXTENSION_MANIFEST,
           ROOT_TSCONFIG,
           ROOT_PACKAGE,
           ROOT_TSDOWN,
           DIST_ENTRY,
           BUILD_STAMP,
+          DIST_EXTENSION_INDEX,
           DIST_EXTENSION_MANIFEST,
         ],
       });
@@ -1418,6 +1565,144 @@ describe("run-node script", () => {
     });
   });
 
+  it("reports clean in sparse worktrees without bundled plugin sources", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+        },
+        oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
+        buildPaths: [DIST_ENTRY, BUILD_STAMP],
+      });
+      await fs.rm(resolvePath(tmp, "extensions"), { recursive: true, force: true });
+
+      const requirement = resolveBuildRequirement(
+        createBuildRequirementDeps(tmp, {
+          gitHead: "abc123\n",
+          gitStatus: "",
+        }),
+      );
+
+      expect(requirement).toEqual({
+        shouldBuild: false,
+        reason: "clean",
+      });
+    });
+  });
+
+  it("rebuilds when dirty bundled package entries point at missing dist outputs", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [EXTENSION_SRC]: "export default {};\n",
+          [EXTENSION_EXTRA_SRC]: "export const extra = true;\n",
+          [EXTENSION_MANIFEST]: '{"id":"demo","configSchema":{"type":"object"}}\n',
+          [EXTENSION_PACKAGE]: '{"openclaw":{"extensions":["./src/index.ts","./src/extra.ts"]}}\n',
+          [DIST_EXTENSION_SRC]: "export default {};\n",
+        },
+        buildPaths: [
+          ROOT_SRC,
+          EXTENSION_SRC,
+          EXTENSION_EXTRA_SRC,
+          EXTENSION_MANIFEST,
+          EXTENSION_PACKAGE,
+          ROOT_TSCONFIG,
+          ROOT_PACKAGE,
+          DIST_ENTRY,
+          DIST_EXTENSION_SRC,
+          BUILD_STAMP,
+        ],
+      });
+
+      const requirement = resolveBuildRequirement(
+        createBuildRequirementDeps(tmp, {
+          gitHead: "abc123\n",
+          gitStatus: ` M ${EXTENSION_PACKAGE}\n`,
+        }),
+      );
+
+      expect(requirement).toEqual({
+        shouldBuild: true,
+        reason: "dirty_watched_tree",
+      });
+    });
+  });
+
+  it("rebuilds when clean bundled plugin dist outputs are partially missing", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [EXTENSION_SRC]: "export default {};\n",
+          [EXTENSION_EXTRA_SRC]: "export const extra = true;\n",
+          [EXTENSION_MANIFEST]: '{"id":"demo","configSchema":{"type":"object"}}\n',
+          [EXTENSION_PACKAGE]: '{"openclaw":{"extensions":["./src/index.ts","./src/extra.ts"]}}\n',
+          [DIST_EXTENSION_SRC]: "export default {};\n",
+        },
+        buildPaths: [
+          ROOT_SRC,
+          EXTENSION_SRC,
+          EXTENSION_EXTRA_SRC,
+          EXTENSION_MANIFEST,
+          EXTENSION_PACKAGE,
+          ROOT_TSCONFIG,
+          ROOT_PACKAGE,
+          DIST_ENTRY,
+          DIST_EXTENSION_SRC,
+          BUILD_STAMP,
+        ],
+      });
+
+      const requirement = resolveBuildRequirement(
+        createBuildRequirementDeps(tmp, {
+          gitHead: "abc123\n",
+          gitStatus: "",
+        }),
+      );
+
+      expect(requirement).toEqual({
+        shouldBuild: true,
+        reason: "missing_bundled_plugin_dist_entry",
+      });
+    });
+  });
+
+  it("rebuilds when a clean stamped bundled plugin dist directory is missing", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [EXTENSION_SRC]: "export default {};\n",
+          [EXTENSION_MANIFEST]: '{"id":"demo","configSchema":{"type":"object"}}\n',
+          [EXTENSION_PACKAGE]: '{"openclaw":{"extensions":["./src/index.ts"]}}\n',
+        },
+        buildPaths: [
+          ROOT_SRC,
+          EXTENSION_SRC,
+          EXTENSION_MANIFEST,
+          EXTENSION_PACKAGE,
+          ROOT_TSCONFIG,
+          ROOT_PACKAGE,
+          DIST_ENTRY,
+          BUILD_STAMP,
+        ],
+      });
+
+      const requirement = resolveBuildRequirement(
+        createBuildRequirementDeps(tmp, {
+          gitHead: "abc123\n",
+          gitStatus: "",
+        }),
+      );
+
+      expect(requirement).toEqual({
+        shouldBuild: true,
+        reason: "missing_bundled_plugin_dist_entry",
+      });
+    });
+  });
+
   it("reports clean runtime postbuild artifacts when the runtime stamp matches HEAD", async () => {
     await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
       await setupTrackedProject(tmp, {
@@ -1443,17 +1728,384 @@ describe("run-node script", () => {
     });
   });
 
+  it("reports missing runtime postbuild outputs even when stamps match HEAD", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [EXTENSION_SRC]: "export default {};\n",
+          [EXTENSION_MANIFEST]: '{"id":"demo","configSchema":{"type":"object"}}\n',
+          [EXTENSION_PACKAGE]: '{"openclaw":{"extensions":["./src/index.ts"]}}\n',
+          [DIST_EXTENSION_SRC]: "export default {};\n",
+          [DIST_EXTENSION_MANIFEST]: '{"id":"demo","configSchema":{"type":"object"}}\n',
+          [DIST_EXTENSION_PACKAGE]: '{"openclaw":{"extensions":["./src/index.js"]}}\n',
+          [DIST_EXTENSION_RUNTIME_SRC]: "export default {};\n",
+          [DIST_RUNTIME_EXTENSION_MANIFEST]: '{"id":"demo","configSchema":{"type":"object"}}\n',
+          [DIST_RUNTIME_EXTENSION_PACKAGE]: '{"openclaw":{"extensions":["./src/index.js"]}}\n',
+          [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        },
+        buildPaths: [
+          ROOT_SRC,
+          EXTENSION_SRC,
+          EXTENSION_MANIFEST,
+          EXTENSION_PACKAGE,
+          DIST_ENTRY,
+          DIST_EXTENSION_SRC,
+          DIST_EXTENSION_MANIFEST,
+          DIST_EXTENSION_PACKAGE,
+          DIST_EXTENSION_RUNTIME_SRC,
+          DIST_RUNTIME_EXTENSION_MANIFEST,
+          DIST_RUNTIME_EXTENSION_PACKAGE,
+          BUILD_STAMP,
+          RUNTIME_POSTBUILD_STAMP,
+        ],
+      });
+      await fs.rm(resolvePath(tmp, DIST_EXTENSION_PACKAGE));
+
+      const requirement = resolveRuntimePostBuildRequirement(
+        createBuildRequirementDeps(tmp, {
+          gitHead: "abc123\n",
+          gitStatus: "",
+        }),
+      );
+
+      expect(requirement).toEqual({
+        shouldSync: true,
+        reason: "missing_runtime_postbuild_output",
+      });
+    });
+  });
+
+  it("reports missing runtime overlay outputs from restored dist without plugin sources", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [DIST_EXTENSION_INDEX]: "export default {};\n",
+          [DIST_EXTENSION_MANIFEST]: '{"id":"demo","configSchema":{"type":"object"}}\n',
+          [DIST_EXTENSION_PACKAGE]: '{"openclaw":{"extensions":["./index.js"]}}\n',
+          [DIST_RUNTIME_EXTENSION_INDEX]: "export default {};\n",
+          [DIST_RUNTIME_EXTENSION_MANIFEST]: '{"id":"demo","configSchema":{"type":"object"}}\n',
+          [DIST_RUNTIME_EXTENSION_PACKAGE]: '{"openclaw":{"extensions":["./index.js"]}}\n',
+          [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        },
+        buildPaths: [
+          ROOT_SRC,
+          DIST_ENTRY,
+          DIST_EXTENSION_INDEX,
+          DIST_EXTENSION_MANIFEST,
+          DIST_EXTENSION_PACKAGE,
+          DIST_RUNTIME_EXTENSION_INDEX,
+          DIST_RUNTIME_EXTENSION_MANIFEST,
+          DIST_RUNTIME_EXTENSION_PACKAGE,
+          BUILD_STAMP,
+          RUNTIME_POSTBUILD_STAMP,
+        ],
+      });
+      await fs.rm(resolvePath(tmp, "extensions"), { recursive: true, force: true });
+      await fs.rm(resolvePath(tmp, DIST_RUNTIME_EXTENSION_INDEX));
+
+      const requirement = resolveRuntimePostBuildRequirement(
+        createBuildRequirementDeps(tmp, {
+          gitHead: "abc123\n",
+          gitStatus: "",
+        }),
+      );
+
+      expect(requirement).toEqual({
+        shouldSync: true,
+        reason: "missing_runtime_postbuild_output",
+      });
+    });
+  });
+
+  it("does not require OpenClaw SDK alias outputs when dist extensions are absent", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [DIST_PLUGIN_SDK_INDEX]: "export * from './core.js';\n",
+          [DIST_PLUGIN_SDK_ROOT_ALIAS]: "module.exports = {};\n",
+          [DIST_CHANNEL_CATALOG]: '{"entries":[]}\n',
+          [DIST_LEGACY_CLI_EXIT_COMPAT]: "export function hasMemoryRuntime() { return false; }\n",
+          [DIST_LEGACY_CLI_EXIT_COMPAT_ALT]:
+            "export function hasMemoryRuntime() { return false; }\n",
+          [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        },
+        buildPaths: [
+          ROOT_SRC,
+          DIST_ENTRY,
+          DIST_PLUGIN_SDK_INDEX,
+          DIST_PLUGIN_SDK_ROOT_ALIAS,
+          DIST_CHANNEL_CATALOG,
+          DIST_LEGACY_CLI_EXIT_COMPAT,
+          DIST_LEGACY_CLI_EXIT_COMPAT_ALT,
+          BUILD_STAMP,
+          RUNTIME_POSTBUILD_STAMP,
+        ],
+      });
+      await fs.rm(path.join(tmp, "dist", "extensions"), { recursive: true, force: true });
+
+      const requirement = resolveRuntimePostBuildRequirement(
+        createBuildRequirementDeps(tmp, {
+          gitHead: "abc123\n",
+          gitStatus: "",
+        }),
+      );
+
+      expect(requirement).toEqual({
+        shouldSync: false,
+        reason: "clean",
+      });
+    });
+  });
+
+  it("reports missing OpenClaw SDK alias outputs when runtime stamps match HEAD", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [DIST_PLUGIN_SDK_INDEX]: "export * from './core.js';\n",
+          [DIST_OPENCLAW_ALIAS_PACKAGE]:
+            '{"name":"openclaw","type":"module","exports":{"./plugin-sdk":"./plugin-sdk/index.js"}}\n',
+          [DIST_OPENCLAW_ALIAS_PLUGIN_SDK_INDEX]:
+            "export * from '../../../../plugin-sdk/index.js';\n",
+          [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        },
+        buildPaths: [
+          ROOT_SRC,
+          DIST_ENTRY,
+          DIST_PLUGIN_SDK_INDEX,
+          DIST_OPENCLAW_ALIAS_PACKAGE,
+          DIST_OPENCLAW_ALIAS_PLUGIN_SDK_INDEX,
+          BUILD_STAMP,
+          RUNTIME_POSTBUILD_STAMP,
+        ],
+      });
+      await fs.rm(resolvePath(tmp, DIST_OPENCLAW_ALIAS_PLUGIN_SDK_INDEX));
+
+      const requirement = resolveRuntimePostBuildRequirement(
+        createBuildRequirementDeps(tmp, {
+          gitHead: "abc123\n",
+          gitStatus: "",
+        }),
+      );
+
+      expect(requirement).toEqual({
+        shouldSync: true,
+        reason: "missing_runtime_postbuild_output",
+      });
+    });
+  });
+
+  it("reports missing static runtime postbuild asset outputs when runtime stamps match HEAD", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [DIFFS_PACKAGE]:
+            '{"openclaw":{"build":{"staticAssets":[{"source":"./assets/viewer-runtime.js","output":"assets/viewer-runtime.js"}]}}}\n',
+          [DIFFS_VIEWER_RUNTIME_SOURCE]: "export {};\n",
+          [DIST_DIFFS_VIEWER_RUNTIME]: "export {};\n",
+          [DIST_RUNTIME_DIFFS_VIEWER_RUNTIME]: "export {};\n",
+          [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        },
+        buildPaths: [
+          ROOT_SRC,
+          DIFFS_PACKAGE,
+          DIFFS_VIEWER_RUNTIME_SOURCE,
+          DIST_DIFFS_VIEWER_RUNTIME,
+          DIST_RUNTIME_DIFFS_VIEWER_RUNTIME,
+          DIST_ENTRY,
+          BUILD_STAMP,
+          RUNTIME_POSTBUILD_STAMP,
+        ],
+      });
+      await fs.rm(resolvePath(tmp, DIST_DIFFS_VIEWER_RUNTIME));
+
+      const requirement = resolveRuntimePostBuildRequirement(
+        createBuildRequirementDeps(tmp, {
+          gitHead: "abc123\n",
+          gitStatus: "",
+        }),
+      );
+
+      expect(requirement).toEqual({
+        shouldSync: true,
+        reason: "missing_runtime_postbuild_output",
+      });
+    });
+  });
+
+  it("does not require static asset outputs when the declared source is absent", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [DIFFS_PACKAGE]:
+            '{"openclaw":{"build":{"staticAssets":[{"source":"./assets/viewer-runtime.js","output":"assets/viewer-runtime.js"}]}}}\n',
+          [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        },
+        buildPaths: [ROOT_SRC, DIFFS_PACKAGE, DIST_ENTRY, BUILD_STAMP, RUNTIME_POSTBUILD_STAMP],
+      });
+
+      const requirement = resolveRuntimePostBuildRequirement(
+        createBuildRequirementDeps(tmp, {
+          gitHead: "abc123\n",
+          gitStatus: "",
+        }),
+      );
+
+      expect(requirement).toEqual({
+        shouldSync: false,
+        reason: "clean",
+      });
+    });
+  });
+
+  it("reports missing core runtime postbuild outputs when runtime stamps match HEAD", async () => {
+    for (const missingPath of [
+      DIST_PLUGIN_SDK_ROOT_ALIAS,
+      DIST_CHANNEL_CATALOG,
+      DIST_LEGACY_CLI_EXIT_COMPAT,
+      DIST_STABLE_ROOT_RUNTIME_ALIAS,
+      DIST_LEGACY_ROOT_RUNTIME_COMPAT,
+    ]) {
+      await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+        await setupTrackedProject(tmp, {
+          files: {
+            [ROOT_SRC]: "export const value = 1;\n",
+            [DIST_STABLE_ROOT_RUNTIME_SOURCE]: "export const value = 1;\n",
+            [DIST_STABLE_ROOT_RUNTIME_ALIAS]:
+              "export * from './model-catalog.runtime-AbCd1234.js';\n",
+            [DIST_LEGACY_ROOT_RUNTIME_TARGET]: "export const aborted = true;\n",
+            [DIST_LEGACY_ROOT_RUNTIME_COMPAT]: "export * from './abort.runtime.js';\n",
+            [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+          },
+          buildPaths: [
+            ROOT_SRC,
+            DIST_ENTRY,
+            DIST_STABLE_ROOT_RUNTIME_SOURCE,
+            DIST_STABLE_ROOT_RUNTIME_ALIAS,
+            DIST_LEGACY_ROOT_RUNTIME_TARGET,
+            DIST_LEGACY_ROOT_RUNTIME_COMPAT,
+            BUILD_STAMP,
+            RUNTIME_POSTBUILD_STAMP,
+          ],
+        });
+        await fs.rm(resolvePath(tmp, missingPath));
+
+        const requirement = resolveRuntimePostBuildRequirement(
+          createBuildRequirementDeps(tmp, {
+            gitHead: "abc123\n",
+            gitStatus: "",
+          }),
+        );
+
+        expect(requirement).toEqual({
+          shouldSync: true,
+          reason: "missing_runtime_postbuild_output",
+        });
+      });
+    }
+  });
+
+  it("does not require ambiguous stable runtime aliases that postbuild cannot create", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [DIST_STABLE_ROOT_RUNTIME_SOURCE]: "export const value = 1;\n",
+          [DIST_STABLE_ROOT_RUNTIME_SOURCE_ALT]: "export const value = 2;\n",
+          [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        },
+        buildPaths: [
+          ROOT_SRC,
+          DIST_ENTRY,
+          DIST_STABLE_ROOT_RUNTIME_SOURCE,
+          DIST_STABLE_ROOT_RUNTIME_SOURCE_ALT,
+          BUILD_STAMP,
+          RUNTIME_POSTBUILD_STAMP,
+        ],
+      });
+
+      const requirement = resolveRuntimePostBuildRequirement(
+        createBuildRequirementDeps(tmp, {
+          gitHead: "abc123\n",
+          gitStatus: "",
+        }),
+      );
+
+      expect(requirement).toEqual({
+        shouldSync: false,
+        reason: "clean",
+      });
+    });
+  });
+
+  it("reports missing runtime skill outputs even when stamps match HEAD", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [EXTENSION_INDEX]: "export default {};\n",
+          [EXTENSION_MANIFEST]: '{"id":"demo","skills":["./skills/SKILL.md"]}\n',
+          [EXTENSION_SKILL]: "# Demo\n",
+          [DIST_EXTENSION_INDEX]: "export default {};\n",
+          [DIST_EXTENSION_MANIFEST]: '{"id":"demo","skills":["./skills/SKILL.md"]}\n',
+          [DIST_EXTENSION_SKILL]: "# Demo\n",
+          [DIST_RUNTIME_EXTENSION_INDEX]: "export default {};\n",
+          [DIST_RUNTIME_EXTENSION_MANIFEST]: '{"id":"demo","skills":["./skills/SKILL.md"]}\n',
+          [DIST_RUNTIME_EXTENSION_SKILL]: "# Demo\n",
+          [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        },
+        buildPaths: [
+          ROOT_SRC,
+          EXTENSION_INDEX,
+          EXTENSION_MANIFEST,
+          EXTENSION_SKILL,
+          DIST_ENTRY,
+          DIST_EXTENSION_INDEX,
+          DIST_EXTENSION_MANIFEST,
+          DIST_EXTENSION_SKILL,
+          DIST_RUNTIME_EXTENSION_INDEX,
+          DIST_RUNTIME_EXTENSION_MANIFEST,
+          DIST_RUNTIME_EXTENSION_SKILL,
+          BUILD_STAMP,
+          RUNTIME_POSTBUILD_STAMP,
+        ],
+      });
+      await fs.rm(resolvePath(tmp, DIST_RUNTIME_EXTENSION_SKILL));
+
+      const requirement = resolveRuntimePostBuildRequirement(
+        createBuildRequirementDeps(tmp, {
+          gitHead: "abc123\n",
+          gitStatus: "",
+        }),
+      );
+
+      expect(requirement).toEqual({
+        shouldSync: true,
+        reason: "missing_runtime_postbuild_output",
+      });
+    });
+  });
+
   it("reports dirty runtime postbuild inputs separately from rebuild inputs", async () => {
     await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
       await setupTrackedProject(tmp, {
         files: {
           [ROOT_SRC]: "export const value = 1;\n",
+          [EXTENSION_INDEX]: "export default {};\n",
           [EXTENSION_MANIFEST]: '{"id":"demo","configSchema":{"type":"object"}}\n',
           [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+          [DIST_EXTENSION_INDEX]: "export default {};\n",
         },
         buildPaths: [
           ROOT_SRC,
+          EXTENSION_INDEX,
           EXTENSION_MANIFEST,
+          DIST_EXTENSION_INDEX,
           ROOT_TSCONFIG,
           ROOT_PACKAGE,
           DIST_ENTRY,
@@ -1478,7 +2130,7 @@ describe("run-node script", () => {
     });
   });
 
-  it("ignores dirty generated A2UI bundle artifacts when dist is current", async () => {
+  it("ignores dirty generated plugin bundle artifacts when dist is current", async () => {
     await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
       await setupTrackedProject(tmp, {
         files: {
@@ -1491,7 +2143,7 @@ describe("run-node script", () => {
       const requirement = resolveBuildRequirement(
         createBuildRequirementDeps(tmp, {
           gitHead: "abc123\n",
-          gitStatus: ` M ${GENERATED_A2UI_BUNDLE_HASH}\n M ${GENERATED_A2UI_BUNDLE}\n`,
+          gitStatus: ` M ${GENERATED_PLUGIN_ASSET_BUNDLE_HASH}\n M ${GENERATED_PLUGIN_ASSET_BUNDLE}\n`,
         }),
       );
 
@@ -1502,21 +2154,58 @@ describe("run-node script", () => {
     });
   });
 
+  it("reports bundled skill edits as runtime postbuild inputs", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [EXTENSION_MANIFEST]: '{"id":"demo","skills":["./skills/SKILL.md"]}\n',
+          [EXTENSION_SKILL]: "# Demo\n",
+          [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        },
+        buildPaths: [
+          ROOT_SRC,
+          EXTENSION_MANIFEST,
+          EXTENSION_SKILL,
+          ROOT_TSCONFIG,
+          ROOT_PACKAGE,
+          DIST_ENTRY,
+          BUILD_STAMP,
+          RUNTIME_POSTBUILD_STAMP,
+        ],
+      });
+
+      const deps = createBuildRequirementDeps(tmp, {
+        gitHead: "abc123\n",
+        gitStatus: ` M ${EXTENSION_SKILL}\n`,
+      });
+
+      expect(resolveRuntimePostBuildRequirement(deps)).toEqual({
+        shouldSync: true,
+        reason: "dirty_runtime_postbuild_inputs",
+      });
+    });
+  });
+
   it("repairs missing bundled plugin metadata without rerunning tsdown", async () => {
     await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
       await setupTrackedProject(tmp, {
         files: {
           [ROOT_SRC]: "export const value = 1;\n",
+          [EXTENSION_INDEX]: "export default {};\n",
           [EXTENSION_MANIFEST]: '{"id":"demo","configSchema":{"type":"object"}}\n',
           [ROOT_TSDOWN]: "export default {};\n",
+          [DIST_EXTENSION_INDEX]: "export default {};\n",
         },
         buildPaths: [
           ROOT_SRC,
+          EXTENSION_INDEX,
           EXTENSION_MANIFEST,
           ROOT_TSCONFIG,
           ROOT_PACKAGE,
           ROOT_TSDOWN,
           DIST_ENTRY,
+          DIST_EXTENSION_INDEX,
           BUILD_STAMP,
         ],
       });
@@ -1564,8 +2253,8 @@ describe("run-node script", () => {
 
       expect(exitCode).toBe(0);
       expect(spawnCalls).toEqual([statusCommandSpawn()]);
-      await expect(fs.access(resolvePath(tmp, DIST_EXTENSION_MANIFEST))).rejects.toThrow();
-      await expect(fs.access(resolvePath(tmp, DIST_EXTENSION_PACKAGE))).rejects.toThrow();
+      await expectPathMissing(resolvePath(tmp, DIST_EXTENSION_MANIFEST));
+      await expectPathMissing(resolvePath(tmp, DIST_EXTENSION_PACKAGE));
     });
   });
 
@@ -1609,7 +2298,11 @@ describe("run-node script", () => {
       const exitCode = await runStatusCommand({ tmp, spawn, spawnSync });
 
       expect(exitCode).toBe(0);
-      expect(spawnCalls).toEqual([expectedBuildSpawn(), statusCommandSpawn()]);
+      expect(spawnCalls).toEqual([
+        expectedBundledPluginAssetBuildSpawn(),
+        expectedBuildSpawn(),
+        statusCommandSpawn(),
+      ]);
     });
   });
 
@@ -1634,8 +2327,8 @@ describe("run-node script", () => {
         fakeProcess.emit("SIGINT");
         expect(fsSync.existsSync(lockDir)).toBe(false);
 
-        // Normal release after signal must be a no-op, not throw.
-        expect(() => release()).not.toThrow();
+        // Normal release after signal must be a no-op.
+        expect(release()).toBeUndefined();
         expect(fakeProcess.listenerCount("SIGINT")).toBe(0);
         expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
         expect(fakeProcess.listenerCount("exit")).toBe(0);
@@ -1652,7 +2345,7 @@ describe("run-node script", () => {
 
         fakeProcess.emit("SIGTERM");
         expect(fsSync.existsSync(lockDir)).toBe(false);
-        expect(() => release()).not.toThrow();
+        expect(release()).toBeUndefined();
       });
     });
 
@@ -1666,7 +2359,7 @@ describe("run-node script", () => {
 
         fakeProcess.emit("exit");
         expect(fsSync.existsSync(lockDir)).toBe(false);
-        expect(() => release()).not.toThrow();
+        expect(release()).toBeUndefined();
       });
     });
 

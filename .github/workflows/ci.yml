@@ -26,7 +26,7 @@ permissions:
 
 concurrency:
   group: ${{ github.event_name == 'workflow_dispatch' && format('{0}-manual-v1-{1}', github.workflow, github.run_id) || (github.event_name == 'pull_request' && format('{0}-v7-{1}', github.workflow, github.event.pull_request.number) || (github.repository == 'openclaw/openclaw' && format('{0}-v7-{1}', github.workflow, github.ref) || format('{0}-v7-{1}-{2}', github.workflow, github.ref, github.sha))) }}
-  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -452,7 +452,7 @@ jobs:
       contents: read
     needs: [preflight]
     if: needs.preflight.outputs.run_build_artifacts == 'true'
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 20
     outputs:
       channels-result: ${{ steps.built_artifact_checks.outputs['channels-result'] }}
@@ -520,6 +520,8 @@ jobs:
           install-bun: "false"
 
       - name: Build dist
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build:ci-artifacts
 
       - name: Build Control UI
@@ -547,11 +549,13 @@ jobs:
           path: dist-runtime-build.tar.zst
           retention-days: 1
 
-      - name: Upload A2UI bundle artifact
+      - name: Upload bundled plugin asset artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: canvas-a2ui-bundle
-          path: src/canvas-host/a2ui/
+          name: bundled-plugin-assets
+          path: |
+            extensions/*/src/host/**/.bundle.hash
+            extensions/*/src/host/**/*.bundle.js
           include-hidden-files: true
           retention-days: 1
 
@@ -600,14 +604,14 @@ jobs:
 
           if [ "$RUN_CHANNELS" = "true" ]; then
             start_check "channels" env \
-              NODE_OPTIONS=--max-old-space-size=6144 \
+              NODE_OPTIONS=--max-old-space-size=8192 \
               OPENCLAW_VITEST_MAX_WORKERS=1 \
               pnpm test:channels
           fi
 
           if [ "$RUN_CORE_SUPPORT_BOUNDARY" = "true" ]; then
             start_check "core-support-boundary" env \
-              NODE_OPTIONS=--max-old-space-size=6144 \
+              NODE_OPTIONS=--max-old-space-size=8192 \
               OPENCLAW_VITEST_MAX_WORKERS=2 \
               node scripts/run-vitest.mjs run --config test/vitest/vitest.full-core-support-boundary.config.ts
           fi
@@ -852,7 +856,7 @@ jobs:
     name: ${{ matrix.checkName }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_fast == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -1110,7 +1114,7 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: "22.18.0"
-          cache-key-suffix: "node22"
+          cache-key-suffix: "node22-pnpm11"
           install-bun: "false"
 
       - name: Configure Node test resources
@@ -1118,7 +1122,7 @@ jobs:
 
       - name: Run Node 22 compatibility
         env:
-          NODE_OPTIONS: --max-old-space-size=6144
+          NODE_OPTIONS: --max-old-space-size=8192
         run: |
           pnpm build
           pnpm ui:build
@@ -1190,7 +1194,7 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: "${{ matrix.node_version || '24.x' }}"
-          cache-key-suffix: "${{ matrix.cache_key_suffix || 'node24' }}"
+          cache-key-suffix: "${{ matrix.cache_key_suffix || 'node24-pnpm11' }}"
           install-bun: "false"
 
       - name: Configure Node test resources
@@ -1198,7 +1202,7 @@ jobs:
 
       - name: Run Node test shard
         env:
-          NODE_OPTIONS: --max-old-space-size=6144
+          NODE_OPTIONS: --max-old-space-size=8192
           OPENCLAW_NODE_TEST_CONFIGS_JSON: ${{ toJson(matrix.configs) }}
           OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
           OPENCLAW_VITEST_SHARD_NAME: ${{ matrix.shard_name }}
@@ -1461,7 +1465,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: ${{ !cancelled() && always() && needs.preflight.outputs.run_check_additional == 'true' }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -1740,7 +1744,17 @@ jobs:
         with:
           install-bun: "false"
 
+      - name: Checkout ClawHub docs source
+        uses: actions/checkout@v6
+        with:
+          repository: openclaw/clawhub
+          path: clawhub-source
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Check docs
+        env:
+          OPENCLAW_DOCS_SYNC_CLAWHUB_REPO: ${{ github.workspace }}/clawhub-source
         run: pnpm check:docs
 
   skills-python:
@@ -1783,7 +1797,7 @@ jobs:
     runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-windows-2025' || 'windows-2025' }}
     timeout-minutes: 60
     env:
-      NODE_OPTIONS: --max-old-space-size=6144
+      NODE_OPTIONS: --max-old-space-size=8192
       # Keep total concurrency predictable on the smaller Windows runner.
       OPENCLAW_VITEST_MAX_WORKERS: 1
       OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD: 1
@@ -1830,8 +1844,8 @@ jobs:
         id: pnpm-cache
         uses: ./.github/actions/setup-pnpm-store-cache
         with:
-          pnpm-version: "10.33.0"
-          cache-key-suffix: "node24"
+          pnpm-version: "11.0.8"
+          cache-key-suffix: "node24-pnpm11"
           use-restore-keys: "false"
           use-actions-cache: "true"
 

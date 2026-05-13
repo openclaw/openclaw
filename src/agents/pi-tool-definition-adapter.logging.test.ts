@@ -1,4 +1,4 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -22,6 +22,10 @@ type ToolExecute = ReturnType<
   typeof import("./pi-tool-definition-adapter.js").toToolDefinitions
 >[number]["execute"];
 const extensionContext = {} as Parameters<ToolExecute>[4];
+
+function firstLogErrorMessage(): unknown {
+  return vi.mocked(logError).mock.calls[0]?.[0];
+}
 
 describe("pi tool definition adapter logging", () => {
   beforeAll(async () => {
@@ -64,10 +68,8 @@ describe("pi tool definition adapter logging", () => {
 
     await def.execute("call-edit-1", { path: "notes.txt" }, undefined, undefined, extensionContext);
 
-    expect(logError).toHaveBeenCalledWith(
-      expect.stringContaining(
-        '[tools] edit failed: Missing required parameter: edits (received: path). Supply correct parameters before retrying. raw_params={"path":"notes.txt"}',
-      ),
+    expect(firstLogErrorMessage()).toContain(
+      '[tools] edit failed: Missing required parameter: edits (received: path). Supply correct parameters before retrying. raw_params={"path":"notes.txt"}',
     );
   });
 
@@ -96,15 +98,12 @@ describe("pi tool definition adapter logging", () => {
       extensionContext,
     );
 
-    expect(result).toEqual(
-      expect.objectContaining({
-        details: expect.objectContaining({
-          status: "blocked",
-          deniedReason: "plugin-before-tool-call",
-          reason: "blocked by policy",
-        }),
-      }),
-    );
+    const details = result.details as
+      | { status?: string; deniedReason?: string; reason?: string }
+      | undefined;
+    expect(details?.status).toBe("blocked");
+    expect(details?.deniedReason).toBe("plugin-before-tool-call");
+    expect(details?.reason).toBe("blocked by policy");
     expect(logError).not.toHaveBeenCalled();
     expect(mocks.logDebug).toHaveBeenCalledWith(
       "tools: exec blocked by before_tool_call: blocked by policy",
@@ -138,17 +137,14 @@ describe("pi tool definition adapter logging", () => {
       extensionContext,
     );
 
-    expect(result).toEqual(
-      expect.objectContaining({
-        details: expect.objectContaining({
-          status: "error",
-          tool: "web_search",
-          error: "This operation was aborted",
-        }),
-      }),
-    );
-    expect(logError).toHaveBeenCalledWith(
-      expect.stringContaining("[tools] web_search failed: This operation was aborted"),
+    const details = result.details as
+      | { status?: string; tool?: string; error?: string }
+      | undefined;
+    expect(details?.status).toBe("error");
+    expect(details?.tool).toBe("web_search");
+    expect(details?.error).toBe("This operation was aborted");
+    expect(firstLogErrorMessage()).toContain(
+      "[tools] web_search failed: This operation was aborted",
     );
   });
 
@@ -173,18 +169,21 @@ describe("pi tool definition adapter logging", () => {
     const controller = new AbortController();
     controller.abort();
 
-    await expect(
-      def.execute(
+    let thrown: unknown;
+    try {
+      await def.execute(
         "call-web-search-agent-abort",
         { query: "OpenClaw" },
         controller.signal,
         undefined,
         extensionContext,
-      ),
-    ).rejects.toMatchObject({
-      name: "AbortError",
-      message: "This operation was aborted",
-    });
+      );
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).name).toBe("AbortError");
+    expect((thrown as Error).message).toBe("This operation was aborted");
     expect(logError).not.toHaveBeenCalled();
   });
 

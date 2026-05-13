@@ -1,7 +1,8 @@
+import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
@@ -61,18 +62,15 @@ function expectPathIsolatedToTmpRoot(pathValue: string, key: string): void {
   expect(pathValue).not.toContain(key);
   expect(pathValue).not.toContain("..");
 
-  const tmpRoot = path.resolve(resolvePreferredOpenClawTmpDir());
+  const tmpRoot = realpathSync(resolvePreferredOpenClawTmpDir());
   const resolved = path.resolve(pathValue);
   const rel = path.relative(tmpRoot, resolved);
   expect(rel === ".." || rel.startsWith(`..${path.sep}`)).toBe(false);
 }
 
 function expectMediaTimeoutClientConfigured(): void {
-  expect(createFeishuClientMock).toHaveBeenCalledWith(
-    expect.objectContaining({
-      httpTimeoutMs: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
-    }),
-  );
+  const options = mockCallArg<{ httpTimeoutMs?: number }>(createFeishuClientMock, 0, 0);
+  expect(options.httpTimeoutMs).toBe(FEISHU_MEDIA_HTTP_TIMEOUT_MS);
 }
 
 function mockResolvedFeishuAccount() {
@@ -86,6 +84,31 @@ function mockResolvedFeishuAccount() {
   });
 }
 
+function mockCallArg<T>(
+  mock: { mock: { calls: unknown[][] } },
+  callIndex: number,
+  argIndex: number,
+  _type?: (value: unknown) => value is T,
+): T {
+  const call = mock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`Expected mock call at index ${callIndex}`);
+  }
+  return call[argIndex] as T;
+}
+
+function callData<T>(
+  mock: { mock: { calls: unknown[][] } },
+  callIndex = 0,
+  _type?: (value: unknown) => value is T,
+): T {
+  const arg = mockCallArg<{ data?: unknown }>(mock, callIndex, 0);
+  if (arg.data === undefined) {
+    throw new Error(`Expected mock call data at index ${callIndex}`);
+  }
+  return arg.data as T;
+}
+
 describe("sendMediaFeishu msg_type routing", () => {
   beforeAll(async () => {
     ({
@@ -95,6 +118,15 @@ describe("sendMediaFeishu msg_type routing", () => {
       sendMediaFeishu,
       shouldSuppressFeishuTextForVoiceMedia,
     } = await import("./media.js"));
+  });
+
+  afterAll(() => {
+    vi.doUnmock("./client.js");
+    vi.doUnmock("./accounts.js");
+    vi.doUnmock("./targets.js");
+    vi.doUnmock("./runtime.js");
+    vi.doUnmock("openclaw/plugin-sdk/media-runtime");
+    vi.resetModules();
   });
 
   beforeEach(() => {
@@ -184,17 +216,8 @@ describe("sendMediaFeishu msg_type routing", () => {
       fileName: "clip.mp4",
     });
 
-    expect(fileCreateMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({ file_type: "mp4" }),
-      }),
-    );
-
-    expect(messageCreateMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({ msg_type: "media" }),
-      }),
-    );
+    expect(callData<{ file_type?: string }>(fileCreateMock).file_type).toBe("mp4");
+    expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("media");
   });
 
   it("uses msg_type=audio for opus", async () => {
@@ -205,17 +228,8 @@ describe("sendMediaFeishu msg_type routing", () => {
       fileName: "voice.opus",
     });
 
-    expect(fileCreateMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({ file_type: "opus" }),
-      }),
-    );
-
-    expect(messageCreateMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({ msg_type: "audio" }),
-      }),
-    );
+    expect(callData<{ file_type?: string }>(fileCreateMock).file_type).toBe("opus");
+    expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("audio");
   });
 
   it("uses msg_type=file for documents", async () => {
@@ -226,17 +240,8 @@ describe("sendMediaFeishu msg_type routing", () => {
       fileName: "paper.pdf",
     });
 
-    expect(fileCreateMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({ file_type: "pdf" }),
-      }),
-    );
-
-    expect(messageCreateMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({ msg_type: "file" }),
-      }),
-    );
+    expect(callData<{ file_type?: string }>(fileCreateMock).file_type).toBe("pdf");
+    expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("file");
   });
 
   it("uses msg_type=media for remote mp4 content even when the filename is generic", async () => {
@@ -253,16 +258,8 @@ describe("sendMediaFeishu msg_type routing", () => {
       mediaUrl: "https://example.com/video",
     });
 
-    expect(fileCreateMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({ file_type: "mp4" }),
-      }),
-    );
-    expect(messageCreateMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({ msg_type: "media" }),
-      }),
-    );
+    expect(callData<{ file_type?: string }>(fileCreateMock).file_type).toBe("mp4");
+    expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("media");
   });
 
   it("falls back to generic file for unsupported audio formats", async () => {
@@ -279,16 +276,8 @@ describe("sendMediaFeishu msg_type routing", () => {
       mediaUrl: "https://example.com/song.mp3",
     });
 
-    expect(fileCreateMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({ file_type: "stream" }),
-      }),
-    );
-    expect(messageCreateMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({ msg_type: "file" }),
-      }),
-    );
+    expect(callData<{ file_type?: string }>(fileCreateMock).file_type).toBe("stream");
+    expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("file");
     expect(runFfmpegMock).not.toHaveBeenCalled();
   });
 
@@ -307,23 +296,17 @@ describe("sendMediaFeishu msg_type routing", () => {
       audioAsVoice: true,
     });
 
-    expect(runFfmpegMock).toHaveBeenCalledWith(
-      expect.arrayContaining(["-c:a", "libopus", "-ar", "48000", "-b:a", "64k"]),
+    const ffmpegArgs = mockCallArg<string[]>(runFfmpegMock, 0, 0);
+    for (const arg of ["-c:a", "libopus", "-ar", "48000", "-b:a", "64k"]) {
+      expect(ffmpegArgs).toContain(arg);
+    }
+    const fileData = callData<{ file?: Buffer; file_name?: string; file_type?: string }>(
+      fileCreateMock,
     );
-    expect(fileCreateMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          file_type: "opus",
-          file_name: "voice.ogg",
-          file: Buffer.from("opus-output"),
-        }),
-      }),
-    );
-    expect(messageCreateMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({ msg_type: "audio" }),
-      }),
-    );
+    expect(fileData.file_type).toBe("opus");
+    expect(fileData.file_name).toBe("voice.ogg");
+    expect(fileData.file).toEqual(Buffer.from("opus-output"));
+    expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("audio");
   });
 
   it("leaves native voice audio unchanged when audioAsVoice is true", async () => {
@@ -336,19 +319,10 @@ describe("sendMediaFeishu msg_type routing", () => {
     });
 
     expect(runFfmpegMock).not.toHaveBeenCalled();
-    expect(fileCreateMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          file_type: "opus",
-          file_name: "reply.ogg",
-        }),
-      }),
-    );
-    expect(messageCreateMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({ msg_type: "audio" }),
-      }),
-    );
+    const fileData = callData<{ file_name?: string; file_type?: string }>(fileCreateMock);
+    expect(fileData.file_type).toBe("opus");
+    expect(fileData.file_name).toBe("reply.ogg");
+    expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("audio");
   });
 
   it("falls back to file when voice-intent audio cannot be transcoded", async () => {
@@ -368,25 +342,16 @@ describe("sendMediaFeishu msg_type routing", () => {
       audioAsVoice: true,
     });
 
-    expect(fileCreateMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          file_type: "stream",
-          file_name: "reply.mp3",
-          file: Buffer.from("remote-mp3"),
-        }),
-      }),
+    const fileData = callData<{ file?: Buffer; file_name?: string; file_type?: string }>(
+      fileCreateMock,
     );
-    expect(messageCreateMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({ msg_type: "file" }),
-      }),
-    );
-    expect(result).toEqual(expect.objectContaining({ voiceIntentDegradedToFile: true }));
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("audioAsVoice transcode failed"),
-      expect.any(Error),
-    );
+    expect(fileData.file_type).toBe("stream");
+    expect(fileData.file_name).toBe("reply.mp3");
+    expect(fileData.file).toEqual(Buffer.from("remote-mp3"));
+    expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("file");
+    expect(result.voiceIntentDegradedToFile).toBe(true);
+    expect(mockCallArg<string>(warnSpy, 0, 0)).toContain("audioAsVoice transcode failed");
+    expect(mockCallArg<unknown>(warnSpy, 0, 1)).toBeInstanceOf(Error);
     warnSpy.mockRestore();
   });
 
@@ -399,11 +364,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     });
 
     expectMediaTimeoutClientConfigured();
-    expect(messageCreateMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({ msg_type: "image" }),
-      }),
-    );
+    expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("image");
   });
 
   it("preserves Feishu diagnostics when media sends reject before response checks", async () => {
@@ -443,12 +404,12 @@ describe("sendMediaFeishu msg_type routing", () => {
       replyToMessageId: "om_parent",
     });
 
-    expect(messageReplyMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        path: { message_id: "om_parent" },
-        data: expect.objectContaining({ msg_type: "media" }),
-      }),
-    );
+    const replyRequest = mockCallArg<{
+      data?: { msg_type?: string };
+      path?: { message_id?: string };
+    }>(messageReplyMock, 0, 0);
+    expect(replyRequest.path).toEqual({ message_id: "om_parent" });
+    expect(replyRequest.data?.msg_type).toBe("media");
 
     expect(messageCreateMock).not.toHaveBeenCalled();
   });
@@ -463,15 +424,13 @@ describe("sendMediaFeishu msg_type routing", () => {
       replyInThread: true,
     });
 
-    expect(messageReplyMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        path: { message_id: "om_parent" },
-        data: expect.objectContaining({
-          msg_type: "media",
-          reply_in_thread: true,
-        }),
-      }),
-    );
+    const replyRequest = mockCallArg<{
+      data?: { msg_type?: string; reply_in_thread?: boolean };
+      path?: { message_id?: string };
+    }>(messageReplyMock, 0, 0);
+    expect(replyRequest.path).toEqual({ message_id: "om_parent" });
+    expect(replyRequest.data?.msg_type).toBe("media");
+    expect(replyRequest.data?.reply_in_thread).toBe(true);
   });
 
   it("omits reply_in_thread when replyInThread is false", async () => {
@@ -484,8 +443,9 @@ describe("sendMediaFeishu msg_type routing", () => {
       replyInThread: false,
     });
 
-    const callData = messageReplyMock.mock.calls[0][0].data;
-    expect(callData).not.toHaveProperty("reply_in_thread");
+    expect(callData<Record<string, unknown>>(messageReplyMock)).not.toHaveProperty(
+      "reply_in_thread",
+    );
   });
 
   it("passes mediaLocalRoots as localRoots to loadWebMedia for local paths (#27884)", async () => {
@@ -504,14 +464,15 @@ describe("sendMediaFeishu msg_type routing", () => {
       mediaLocalRoots: roots,
     });
 
-    expect(loadWebMediaMock).toHaveBeenCalledWith(
-      "/allowed/workspace/file.pdf",
-      expect.objectContaining({
-        maxBytes: expect.any(Number),
-        optimizeImages: false,
-        localRoots: roots,
-      }),
-    );
+    expect(mockCallArg(loadWebMediaMock, 0, 0)).toBe("/allowed/workspace/file.pdf");
+    const options = mockCallArg<{
+      localRoots?: string[];
+      maxBytes?: number;
+      optimizeImages?: boolean;
+    }>(loadWebMediaMock, 0, 1);
+    expect(typeof options.maxBytes).toBe("number");
+    expect(options.optimizeImages).toBe(false);
+    expect(options.localRoots).toBe(roots);
   });
 
   it("fails closed when media URL fetch is blocked", async () => {
@@ -549,15 +510,14 @@ describe("sendMediaFeishu msg_type routing", () => {
       imageKey,
     });
 
-    expect(imageGetMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        path: { image_key: imageKey },
-      }),
-    );
+    const request = mockCallArg<{ path?: { image_key?: string } }>(imageGetMock, 0, 0);
+    expect(request.path).toEqual({ image_key: imageKey });
     expectMediaTimeoutClientConfigured();
     expect(result.buffer).toEqual(Buffer.from("image-data"));
-    expect(capturedPath).toBeDefined();
-    expectPathIsolatedToTmpRoot(capturedPath as string, imageKey);
+    if (!capturedPath) {
+      throw new Error("expected Feishu image temp path");
+    }
+    expectPathIsolatedToTmpRoot(capturedPath, imageKey);
   });
 
   it("uses isolated temp paths for message resource downloads", async () => {
@@ -579,8 +539,10 @@ describe("sendMediaFeishu msg_type routing", () => {
     });
 
     expect(result.buffer).toEqual(Buffer.from("resource-data"));
-    expect(capturedPath).toBeDefined();
-    expectPathIsolatedToTmpRoot(capturedPath as string, fileKey);
+    if (!capturedPath) {
+      throw new Error("expected Feishu resource temp path");
+    }
+    expectPathIsolatedToTmpRoot(capturedPath, fileKey);
   });
 
   it("rejects invalid image keys before calling feishu api", async () => {
@@ -615,8 +577,7 @@ describe("sendMediaFeishu msg_type routing", () => {
       fileName: "测试文档.pdf",
     });
 
-    const createCall = fileCreateMock.mock.calls[0][0];
-    expect(createCall.data.file_name).toBe("测试文档.pdf");
+    expect(callData<{ file_name?: string }>(fileCreateMock).file_name).toBe("测试文档.pdf");
   });
 
   it("preserves ASCII filenames unchanged for file uploads", async () => {
@@ -627,8 +588,7 @@ describe("sendMediaFeishu msg_type routing", () => {
       fileName: "report-2026.pdf",
     });
 
-    const createCall = fileCreateMock.mock.calls[0][0];
-    expect(createCall.data.file_name).toBe("report-2026.pdf");
+    expect(callData<{ file_name?: string }>(fileCreateMock).file_name).toBe("report-2026.pdf");
   });
 
   it("preserves special Unicode characters (em-dash, full-width brackets) in filenames", async () => {
@@ -639,8 +599,7 @@ describe("sendMediaFeishu msg_type routing", () => {
       fileName: "报告—详情（2026）.md",
     });
 
-    const createCall = fileCreateMock.mock.calls[0][0];
-    expect(createCall.data.file_name).toBe("报告—详情（2026）.md");
+    expect(callData<{ file_name?: string }>(fileCreateMock).file_name).toBe("报告—详情（2026）.md");
   });
 });
 
@@ -720,12 +679,12 @@ describe("downloadMessageResourceFeishu", () => {
       type: "file",
     });
 
-    expect(messageResourceGetMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        path: { message_id: "om_audio_msg", file_key: "file_key_audio" },
-        params: { type: "file" },
-      }),
-    );
+    const request = mockCallArg<{
+      params?: { type?: string };
+      path?: { file_key?: string; message_id?: string };
+    }>(messageResourceGetMock, 0, 0);
+    expect(request.path).toEqual({ message_id: "om_audio_msg", file_key: "file_key_audio" });
+    expect(request.params).toEqual({ type: "file" });
     expectMediaTimeoutClientConfigured();
     expect(result.buffer).toBeInstanceOf(Buffer);
   });
@@ -740,12 +699,12 @@ describe("downloadMessageResourceFeishu", () => {
       type: "image",
     });
 
-    expect(messageResourceGetMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        path: { message_id: "om_img_msg", file_key: "img_key_1" },
-        params: { type: "image" },
-      }),
-    );
+    const request = mockCallArg<{
+      params?: { type?: string };
+      path?: { file_key?: string; message_id?: string };
+    }>(messageResourceGetMock, 0, 0);
+    expect(request.path).toEqual({ message_id: "om_img_msg", file_key: "img_key_1" });
+    expect(request.params).toEqual({ type: "image" });
     expectMediaTimeoutClientConfigured();
     expect(result.buffer).toBeInstanceOf(Buffer);
   });
@@ -766,11 +725,9 @@ describe("downloadMessageResourceFeishu", () => {
       type: "file",
     });
 
-    expect(result).toMatchObject({
-      buffer: Buffer.from("fake-video-data"),
-      contentType: "video/mp4",
-      fileName: "clip.mp4",
-    });
+    expect(result.buffer).toEqual(Buffer.from("fake-video-data"));
+    expect(result.contentType).toBe("video/mp4");
+    expect(result.fileName).toBe("clip.mp4");
   });
 
   it("retries file resources as media after HTTP 502", async () => {
@@ -790,25 +747,27 @@ describe("downloadMessageResourceFeishu", () => {
       type: "file",
     });
 
-    expect(messageResourceGetMock).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        path: { message_id: "om_ios_video_msg", file_key: "file_key_ios_video" },
-        params: { type: "file" },
-      }),
-    );
-    expect(messageResourceGetMock).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        path: { message_id: "om_ios_video_msg", file_key: "file_key_ios_video" },
-        params: { type: "media" },
-      }),
-    );
-    expect(result).toMatchObject({
-      buffer: Buffer.from("fake-ios-video-data"),
-      contentType: "video/mp4",
-      fileName: "ios-video.mp4",
+    const firstRequest = mockCallArg<{
+      params?: { type?: string };
+      path?: { file_key?: string; message_id?: string };
+    }>(messageResourceGetMock, 0, 0);
+    expect(firstRequest.path).toEqual({
+      message_id: "om_ios_video_msg",
+      file_key: "file_key_ios_video",
     });
+    expect(firstRequest.params).toEqual({ type: "file" });
+    const secondRequest = mockCallArg<{
+      params?: { type?: string };
+      path?: { file_key?: string; message_id?: string };
+    }>(messageResourceGetMock, 1, 0);
+    expect(secondRequest.path).toEqual({
+      message_id: "om_ios_video_msg",
+      file_key: "file_key_ios_video",
+    });
+    expect(secondRequest.params).toEqual({ type: "media" });
+    expect(result.buffer).toEqual(Buffer.from("fake-ios-video-data"));
+    expect(result.contentType).toBe("video/mp4");
+    expect(result.fileName).toBe("ios-video.mp4");
   });
 
   it("rethrows the original HTTP 502 when the media retry fails", async () => {
@@ -826,14 +785,12 @@ describe("downloadMessageResourceFeishu", () => {
       }),
     ).rejects.toBe(originalError);
 
-    expect(messageResourceGetMock).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ params: { type: "file" } }),
-    );
-    expect(messageResourceGetMock).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ params: { type: "media" } }),
-    );
+    expect(
+      mockCallArg<{ params?: { type?: string } }>(messageResourceGetMock, 0, 0).params,
+    ).toEqual({ type: "file" });
+    expect(
+      mockCallArg<{ params?: { type?: string } }>(messageResourceGetMock, 1, 0).params,
+    ).toEqual({ type: "media" });
   });
 
   it("does not retry non-fallback download failures", async () => {
@@ -855,12 +812,12 @@ describe("downloadMessageResourceFeishu", () => {
       ).rejects.toBe(originalError);
 
       expect(messageResourceGetMock).toHaveBeenCalledTimes(1);
-      expect(messageResourceGetMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          path: { message_id: scenario.messageId, file_key: scenario.fileKey },
-          params: { type: scenario.type },
-        }),
-      );
+      const request = mockCallArg<{
+        params?: { type?: string };
+        path?: { file_key?: string; message_id?: string };
+      }>(messageResourceGetMock, 0, 0);
+      expect(request.path).toEqual({ message_id: scenario.messageId, file_key: scenario.fileKey });
+      expect(request.params).toEqual({ type: scenario.type });
     }
   });
 

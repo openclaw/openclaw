@@ -15,7 +15,7 @@
       }
     }
   },
-  "providerDiscoveryEntry": "./provider-discovery.ts",
+  "providerCatalogEntry": "./provider-discovery.ts",
   "syntheticAuthRefs": ["codex"],
   "nonSecretAuthMarkers": ["codex-app-server"],
   "activation": {
@@ -33,10 +33,10 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
-      "codexDynamicToolsProfile": {
+      "codexDynamicToolsLoading": {
         "type": "string",
-        "enum": ["native-first", "openclaw-compat"],
-        "default": "native-first"
+        "enum": ["searchable", "direct"],
+        "default": "searchable"
       },
       "codexDynamicToolsExclude": {
         "type": "array",
@@ -91,6 +91,42 @@
           }
         }
       },
+      "codexPlugins": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false
+          },
+          "allow_destructive_actions": {
+            "type": "boolean",
+            "default": true
+          },
+          "plugins": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                },
+                "marketplaceName": {
+                  "type": "string",
+                  "enum": ["openai-curated"]
+                },
+                "pluginName": {
+                  "type": "string"
+                },
+                "allow_destructive_actions": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        }
+      },
       "appServer": {
         "type": "object",
         "additionalProperties": false,
@@ -130,6 +166,11 @@
             "minimum": 1,
             "default": 60000
           },
+          "turnCompletionIdleTimeoutMs": {
+            "type": "number",
+            "minimum": 1,
+            "default": 60000
+          },
           "approvalPolicy": {
             "type": "string",
             "enum": ["never", "on-request", "on-failure", "untrusted"]
@@ -142,7 +183,7 @@
             "type": "string",
             "enum": ["user", "auto_review", "guardian_subagent"]
           },
-          "serviceTier": { "type": ["string", "null"], "enum": ["fast", "flex", null] },
+          "serviceTier": { "type": ["string", "null"] },
           "defaultWorkspaceDir": {
             "type": "string"
           }
@@ -151,9 +192,9 @@
     }
   },
   "uiHints": {
-    "codexDynamicToolsProfile": {
-      "label": "Dynamic Tools Profile",
-      "help": "Select which OpenClaw dynamic tools are exposed to Codex app-server. native-first omits tools Codex already owns.",
+    "codexDynamicToolsLoading": {
+      "label": "Dynamic Tools Loading",
+      "help": "Use searchable to defer OpenClaw dynamic tools behind Codex tool search, or direct to expose them in the initial context.",
       "advanced": true
     },
     "codexDynamicToolsExclude": {
@@ -219,6 +260,26 @@
       "help": "MCP server name exposed by the Computer Use plugin.",
       "advanced": true
     },
+    "codexPlugins": {
+      "label": "Native Codex Plugins",
+      "help": "Controls native Codex plugin availability for Codex harness turns.",
+      "advanced": true
+    },
+    "codexPlugins.enabled": {
+      "label": "Enable Native Plugins",
+      "help": "Expose explicit migrated Codex plugin entries to Codex harness turns.",
+      "advanced": true
+    },
+    "codexPlugins.allow_destructive_actions": {
+      "label": "Allow Destructive Plugin Actions",
+      "help": "Default policy for plugin app write or destructive action elicitations. Defaults to true.",
+      "advanced": true
+    },
+    "codexPlugins.plugins": {
+      "label": "Migrated Plugin Entries",
+      "help": "Explicit migration-authored plugin entries. The wildcard key * is not supported.",
+      "advanced": true
+    },
     "appServer": {
       "label": "App Server",
       "help": "Runtime controls for connecting to Codex app-server.",
@@ -270,6 +331,11 @@
       "help": "Maximum time to wait for Codex app-server control-plane requests.",
       "advanced": true
     },
+    "appServer.turnCompletionIdleTimeoutMs": {
+      "label": "Turn Completion Idle Timeout",
+      "help": "Maximum quiet time after a turn-scoped Codex app-server request before OpenClaw interrupts the turn while waiting for turn/completed.",
+      "advanced": true
+    },
     "appServer.approvalPolicy": {
       "label": "Approval Policy",
       "help": "Codex native approval policy sent to thread start, resume, and turns.",
@@ -287,7 +353,7 @@
     },
     "appServer.serviceTier": {
       "label": "Service Tier",
-      "help": "Optional Codex app-server service tier. Use fast, flex, or null.",
+      "help": "Optional Codex app-server service tier. Use priority, flex, or null. Legacy fast is accepted as priority.",
       "advanced": true
     },
     "appServer.defaultWorkspaceDir": {

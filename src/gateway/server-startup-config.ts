@@ -1,4 +1,4 @@
-import { formatCliCommand } from "../cli/command-format.js";
+import { formatInvalidConfigRecoveryHint } from "../cli/config-recovery-hints.js";
 import {
   type ReadConfigFileSnapshotWithPluginMetadataResult,
   readConfigFileSnapshotWithPluginMetadata,
@@ -63,14 +63,14 @@ export async function loadGatewayStartupConfigSnapshot(params: {
   initialSnapshotRead?: ReadConfigFileSnapshotWithPluginMetadataResult;
 }): Promise<GatewayStartupConfigSnapshotLoadResult> {
   const measure = params.measure ?? (async (_name, run) => await run());
-  let snapshotRead =
+  const snapshotRead =
     params.initialSnapshotRead ??
     (await measure("config.snapshot.read", () =>
       readConfigFileSnapshotWithPluginMetadata({ measure }),
     ));
-  let configSnapshot = snapshotRead.snapshot;
-  let pluginMetadataSnapshot = snapshotRead.pluginMetadataSnapshot;
-  let wroteConfig = false;
+  const configSnapshot = snapshotRead.snapshot;
+  const pluginMetadataSnapshot = snapshotRead.pluginMetadataSnapshot;
+  const wroteConfig = false;
   if (configSnapshot.legacyIssues.length > 0 && isNixMode) {
     throw new Error(
       "Legacy config entries detected while running in Nix mode. Update your Nix config to the latest schema and restart.",
@@ -99,30 +99,24 @@ export async function loadGatewayStartupConfigSnapshot(params: {
     };
   }
 
-  try {
-    const { replaceConfigFile } = await import("../config/mutate.js");
-    await replaceConfigFile({
-      nextConfig: autoEnable.config,
-      afterWrite: { mode: "auto" },
-    });
-    wroteConfig = true;
-    snapshotRead = await measure("config.snapshot.auto-enable-read", () =>
-      readConfigFileSnapshotWithPluginMetadata({ measure }),
-    );
-    configSnapshot = snapshotRead.snapshot;
-    pluginMetadataSnapshot = snapshotRead.pluginMetadataSnapshot;
-    assertValidGatewayStartupConfigSnapshot(configSnapshot);
-    params.log.info(
-      `gateway: auto-enabled plugins:\n${autoEnable.changes.map((entry) => `- ${entry}`).join("\n")}`,
-    );
-  } catch (err) {
-    params.log.warn(`gateway: failed to persist plugin auto-enable changes: ${String(err)}`);
-  }
-
+  params.log.info(
+    `gateway: auto-enabled plugins for this runtime without writing config:\n${autoEnable.changes.map((entry) => `- ${entry}`).join("\n")}`,
+  );
   return {
-    snapshot: configSnapshot,
+    snapshot: withRuntimeConfig(configSnapshot, autoEnable.config),
     wroteConfig,
     ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+  };
+}
+
+function withRuntimeConfig(
+  snapshot: ConfigFileSnapshot,
+  runtimeConfig: OpenClawConfig,
+): ConfigFileSnapshot {
+  return {
+    ...snapshot,
+    runtimeConfig,
+    config: runtimeConfig,
   };
 }
 
@@ -230,9 +224,7 @@ export function assertValidGatewayStartupConfigSnapshot(
     snapshot.issues.length > 0
       ? formatConfigIssueLines(snapshot.issues, "", { normalizeRoot: true }).join("\n")
       : "Unknown validation issue.";
-  const doctorHint = options.includeDoctorHint
-    ? `\nRun "${formatCliCommand("openclaw doctor --fix")}" to repair, then retry.`
-    : "";
+  const doctorHint = options.includeDoctorHint ? `\n${formatInvalidConfigRecoveryHint()}` : "";
   throw new Error(`Invalid config at ${snapshot.path}.\n${issues}${doctorHint}`);
 }
 
@@ -278,7 +270,7 @@ export async function prepareGatewayStartupConfig(params: {
     env: process.env,
     authOverride: preflightAuthOverride,
     tailscaleOverride: params.tailscaleOverride,
-    persist: params.persistStartupAuth ?? true,
+    persist: params.persistStartupAuth ?? false,
     baseHash: params.configSnapshot.hash,
   });
   const runtimeStartupConfig = applyGatewayAuthOverridesForStartupPreflight(authBootstrap.cfg, {

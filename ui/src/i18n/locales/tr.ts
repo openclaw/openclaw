@@ -206,13 +206,34 @@ export const tr: TranslationMap = {
     autoThreshold: "otomatik eşik",
     overflowRetry: "taşma yeniden denemesi",
     timeoutRetry: "zaman aşımı yeniden denemesi",
-    tokenRange: "{before} → {after} token",
+    tokenRange: "{before} to {after} token",
     tokensBefore: "önce {count} token",
     tokenDeltaUnavailable: "token değişimi kullanılamıyor",
     checkpoints: "{count} kontrol noktası",
     checkpoint: "{count} kontrol noktası",
-    showCheckpoints: "Kontrol noktalarını göster",
-    hideCheckpoints: "Kontrol noktalarını gizle",
+    showSessionDetails: "{count} için oturum ayrıntılarını göster",
+    hideSessionDetails: "{count} için oturum ayrıntılarını gizle",
+    sessionDetails: "Oturum ayrıntıları",
+    compactionHistory: "Sıkıştırma geçmişi",
+    status: "Durum",
+    statusLive: "Canlı",
+    statusIdle: "Boşta",
+    statusUnknown: "Bilinmiyor",
+    statusRunning: "Çalışıyor",
+    statusDone: "Tamamlandı",
+    statusFailed: "Başarısız",
+    statusKilled: "Sonlandırıldı",
+    statusTimeout: "Zaman aşımına uğradı",
+    model: "Model",
+    provider: "Sağlayıcı",
+    runtime: "Çalışma zamanı",
+    surface: "Yüzey",
+    subject: "Konu",
+    room: "Oda",
+    space: "Alan",
+    sessionId: "Oturum kimliği",
+    activeRun: "Etkin çalıştırma",
+    archived: "Arşivlendi",
     loadingCheckpoints: "Kontrol noktaları yükleniyor…",
     noCheckpoints: "Bu oturum için kaydedilmiş sıkıştırma kontrol noktası yok.",
     noSummary: "Özet yakalanmadı.",
@@ -698,6 +719,16 @@ export const tr: TranslationMap = {
       today: "Bugün",
       last7d: "7g",
       last30d: "30g",
+      last90d: "90g",
+      last1y: "1y",
+      all: "Tümü",
+    },
+    scope: {
+      instance: "Geçerli örnek",
+      instanceHint: "Her mantıksal oturum için yalnızca etkin oturum kimliğini göster.",
+      family: "Geçmiş soy hattı",
+      familyHint: "Bilinen döndürülmüş transkript destekli oturum kimliklerini birleştir.",
+      familyIncluded: "Geçmiş soy hattı {count} oturum örneği içerir.",
     },
     filters: {
       title: "Filtreler",
@@ -919,6 +950,97 @@ export const tr: TranslationMap = {
     showPassword: "Parolayı göster",
     hidePassword: "Parolayı gizle",
     togglePasswordVisibility: "Parola görünürlüğünü değiştir",
+    failure: {
+      rawError: "Ham hata",
+      docsAuth: "Control UI kimlik doğrulama belgeleri",
+      docsPairing: "Cihaz eşleştirme belgeleri",
+      docsInsecure: "Güvensiz HTTP belgeleri",
+      authRequired: {
+        title: "Kimlik doğrulama gerekli",
+        summary:
+          "Gateway erişilebilir, ancak bu tarayıcı bağlanmadan önce eşleşen bir token veya parola gerekir.",
+        stepPaste:
+          "openclaw dashboard --no-open çıktısındaki tokenı yapıştırın veya yapılandırılmış parolayı girin.",
+        stepGenerate:
+          "Token yapılandırılmamışsa Gateway ana makinesinde openclaw doctor --generate-gateway-token çalıştırın.",
+        stepConnect: "Kimlik bilgisini güncelledikten sonra Connect düğmesine tekrar tıklayın.",
+      },
+      authFailed: {
+        title: "Kimlik doğrulama eşleşmedi",
+        summary:
+          "Sağlanan kimlik bilgisi reddedildi. En yaygın neden eski bir token veya başka bir Gateway URL’sinden kopyalanmış tokendır.",
+        stepDashboard:
+          "openclaw dashboard --no-open çalıştırın ve yeni URL’yi açın veya tokenını yapıştırın.",
+        stepReplace:
+          "Eski token/parola değerlerini değiştirin; başka bir Gateway URL’sinden tokenı yeniden kullanmayın.",
+        stepMode:
+          "Aynı anda tek bir eşleşen auth modu kullanın: token modu için gateway token, parola modu için parola.",
+      },
+      rateLimited: {
+        title: "Çok fazla başarısız deneme",
+        summary: "Gateway bu istemci için kimlik doğrulama denemelerini geçici olarak sınırlıyor.",
+        stepStop: "Bu sekmeden bir süre yeniden denemeyi bırakın.",
+        stepWait:
+          "Auth sınırlayıcının soğumasını bekleyin, ardından düzeltilmiş kimlik bilgisiyle yeniden bağlanın.",
+        stepCheckClients:
+          "Bu paylaşılan bir host ise diğer istemcilerde yinelenen hatalı denemeleri kontrol edin.",
+      },
+      pairing: {
+        title: "Cihaz eşleştirmesi gerekli",
+        scopeTitle: "Scope yükseltmesi bekliyor",
+        roleTitle: "Rol yükseltmesi bekliyor",
+        metadataTitle: "Cihaz yenilemesi bekliyor",
+        summary:
+          "Bu tarayıcının Control UI kullanabilmesi için Gateway hostundan tek seferlik onay gerekir.",
+        upgradeSummary:
+          "Bu tarayıcı zaten biliniyor, ancak istenen erişim değişti ve yeni onay gerekiyor.",
+        stepList: "Gateway hostunda openclaw devices list çalıştırın.",
+        stepApproveId: "Bu isteği onaylayın: openclaw devices approve {requestId}.",
+        stepApprove: "Bu listedeki bekleyen tarayıcı/cihaz isteğini onaylayın.",
+        stepReconnect: "Onay tamamlandıktan sonra yeniden bağlanın.",
+      },
+      insecure: {
+        title: "Güvenli tarayıcı bağlamı gerekli",
+        summary:
+          "Bu sayfa düz HTTP üzerinden çalışıyor, bu yüzden tarayıcı Gateway’in beklediği cihaz kimliğini oluşturamıyor.",
+        stepHttps:
+          "HTTPS/Tailscale Serve kullanın veya Gateway hostunda http://127.0.0.1:18789 adresini açın.",
+        stepLocalCompat:
+          "Yerel yalnızca-token uyumluluğu için gateway.controlUi.allowInsecureAuth: true ayarlayın.",
+        stepAvoidDisable: "Uzak HTTP erişimi için cihaz authunu devre dışı bırakmaktan kaçının.",
+      },
+      origin: {
+        title: "Tarayıcı originine izin verilmiyor",
+        summary: "Gateway, Control UI bağlantısını kabul etmeden önce bu sayfa originini reddetti.",
+        stepAllowedOrigins: "Bu tarayıcı originini gateway.controlUi.allowedOrigins içine ekleyin.",
+        stepFullOrigin:
+          "http://localhost:5173 gibi tam originler kullanın, wildcard kalıpları kullanmayın.",
+        stepRestart:
+          "İzin verilen originleri değiştirdikten sonra Gateway’i yeniden başlatın veya yeniden yükleyin.",
+      },
+      protocol: {
+        title: "Protokol uyuşmazlığı",
+        summary:
+          "Sunulan Control UI ile çalışan Gateway desteklenen bağlantı protokolü konusunda uyuşmuyor.",
+        stepDashboard:
+          "UI ve Gateway aynı kurulumdan gelsin diye sunulan dashboardı openclaw dashboard ile yeniden açın.",
+        stepDevUi:
+          "pnpm ui:dev kullanıyorsanız geliştirme UI’sini mevcut checkouta göre yeniden derleyin veya yeniden başlatın.",
+        stepRestart:
+          "OpenClaw güncellemesinden sonra Gateway’i yeniden başlatın, böylece güncel protokolü sunsun.",
+      },
+      network: {
+        title: "Bağlanılamadı",
+        summary:
+          "Tarayıcı Gateway bağlantısını tamamlayamadı. Kimlik bilgilerini yeniden denemeden önce hedefi ve taşıma yolunu kontrol edin.",
+        stepGateway:
+          "openclaw status veya openclaw gateway run ile Gateway’in çalıştığını doğrulayın.",
+        stepUrl:
+          "WebSocket URL’sini kontrol edin ve Gateway HTTPS/Tailscale Serve arkasındaysa wss:// kullanın.",
+        stepDashboard:
+          "Geçerli URL ve auth ayrıntılarını yeniden kopyalamak için dashboardı openclaw dashboard --no-open ile yeniden açın.",
+      },
+    },
   },
   chat: {
     disconnected: "Gateway bağlantısı kesildi.",
@@ -941,6 +1063,42 @@ export const tr: TranslationMap = {
     updateNow: "Şimdi güncelle",
     dismissUpdateBanner: "Güncelleme başlığını kapat",
     switchedSession: "{session} oturumuna geçildi",
+    welcome: {
+      ready: "Ready to chat",
+      hintBeforeShortcut: "Type a message below ·",
+      hintAfterShortcut: "for commands",
+      suggestions: {
+        whatCanYouDo: "What can you do?",
+        summarizeRecentSessions: "Summarize my recent sessions",
+        configureChannel: "Help me configure a channel",
+        checkSystemHealth: "Check system health",
+      },
+    },
+    runControls: {
+      newSession: "New session",
+      export: "Dışa aktar",
+      exportChat: "Export chat",
+      queue: "Queue",
+      queueMessage: "Queue message",
+      stop: "Stop",
+      stopGenerating: "Stop generating",
+      send: "Send",
+      sendMessage: "Send message",
+    },
+    composer: {
+      placeholder: "Message {name} (Enter to send)",
+      placeholderWithAttachments: "Add a message or paste more images...",
+      placeholderDisconnected: "Connect to the gateway to start chatting...",
+      attachFile: "Attach file",
+      startTalk: "Start Talk",
+      stopTalk: "Stop Talk",
+    },
+    selectors: {
+      agentFilter: "Oturumları ajana göre filtrele",
+      session: "Chat session",
+      model: "Chat model",
+      thinkingLevel: "Chat thinking level",
+    },
   },
   languages: {
     en: "İngilizce",

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import type { Component, SelectItem, TUI } from "@mariozechner/pi-tui";
+import type { Component, SelectItem, TUI } from "@earendil-works/pi-tui";
+import { modelKey } from "../agents/model-ref-shared.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
   formatThinkingLevels,
@@ -18,6 +19,10 @@ import {
 } from "./components/selectors.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { sanitizeRenderableText } from "./tui-formatters.js";
+import {
+  TUI_RECENT_SESSIONS_ACTIVE_MINUTES,
+  TUI_SESSION_PICKER_LIMIT,
+} from "./tui-session-list-policy.js";
 import { formatStatusSummary } from "./tui-status-summary.js";
 import type {
   AgentSummary,
@@ -120,11 +125,14 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         tui.requestRender();
         return;
       }
-      const items = models.map((model) => ({
-        value: `${model.provider}/${model.id}`,
-        label: `${model.provider}/${model.id}`,
-        description: model.name && model.name !== model.id ? model.name : "",
-      }));
+      const items = models.map((model) => {
+        const ref = modelKey(model.provider, model.id);
+        return {
+          value: ref,
+          label: ref,
+          description: model.name && model.name !== model.id ? model.name : "",
+        };
+      });
       const selector = createSearchableSelectList(items, 9);
       openSelector(selector, async (value) => {
         try {
@@ -190,6 +198,8 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   const openSessionSelector = async () => {
     try {
       const result = await client.listSessions({
+        limit: TUI_SESSION_PICKER_LIMIT,
+        activeMinutes: TUI_RECENT_SESSIONS_ACTIVE_MINUTES,
         includeGlobal: false,
         includeUnknown: false,
         includeDerivedTitles: true,

@@ -26,6 +26,11 @@ const resolveEnvApiKeyMock = vi.hoisted(() =>
 const resolveUsableCustomProviderApiKeyMock = vi.hoisted(() =>
   vi.fn((_params?: { provider?: string }) => null as { apiKey: string; source: string } | null),
 );
+const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
+  configFingerprint: "session-status-test-empty-plugin-metadata",
+  plugins: [],
+}));
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 const createMockConfig = () => ({
   session: { mainKey: "main", scope: "per-sender" },
@@ -175,6 +180,16 @@ function createProviderUsageModuleMock() {
   };
 }
 
+function formatPrimaryModelLabel(provider: string | undefined, model: string): string {
+  return provider ? `${provider}/${model}` : model;
+}
+
+function formatStatusLines(primary: string, taskLineOverride: string | undefined): string {
+  return taskLineOverride
+    ? `OpenClaw\n🧠 Model: ${primary}\n${taskLineOverride}`
+    : `OpenClaw\n🧠 Model: ${primary}`;
+}
+
 function createCommandsStatusRuntimeModuleMock() {
   return {
     buildStatusText: async (params: {
@@ -203,9 +218,7 @@ function createCommandsStatusRuntimeModuleMock() {
           )
         : undefined;
       const primary =
-        params.primaryModelLabelOverride ??
-        [params.provider, params.model].filter(Boolean).join("/") ??
-        params.model;
+        params.primaryModelLabelOverride ?? formatPrimaryModelLabel(params.provider, params.model);
       const customAuth = params.provider
         ? resolveUsableCustomProviderApiKeyMock({ provider: params.provider })
         : null;
@@ -228,9 +241,7 @@ function createCommandsStatusRuntimeModuleMock() {
         includeTranscriptUsage: params.includeTranscriptUsage,
         workspaceDir: params.workspaceDir,
       });
-      return ["OpenClaw", `🧠 Model: ${primary}`, params.taskLineOverride]
-        .filter(Boolean)
-        .join("\n");
+      return formatStatusLines(primary, params.taskLineOverride);
     },
   };
 }
@@ -242,6 +253,9 @@ vi.mock("../config/config.js", createConfigModuleMock);
 vi.mock("../agents/model-catalog.js", createModelCatalogModuleMock);
 vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime: () => undefined,
+}));
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+  getCurrentPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
 }));
 // Keep provider-runtime/plugin activation out of this focused tool test. The
 // session_status surface only needs model selection semantics here, not real
@@ -377,10 +391,38 @@ function expectSpawnedSessionLookupCalls(spawnedBy: string) {
   expect(callGatewayMock).toHaveBeenNthCalledWith(2, expectedCall);
 }
 
-function getSessionStatusTool(agentSessionKey = "main", options?: { sandboxed?: boolean }) {
+function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
+  const actual = record as Record<string, unknown>;
+  for (const [key, value] of Object.entries(expected)) {
+    expect(actual[key]).toEqual(value);
+  }
+  return actual;
+}
+
+function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0) {
+  const call = mock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`Expected mock call ${callIndex}`);
+  }
+  return call[argIndex];
+}
+
+function latestMockCallArg(mock: ReturnType<typeof vi.fn>, argIndex = 0) {
+  return mockCallArg(mock, mock.mock.calls.length - 1, argIndex);
+}
+
+function getSessionStatusTool(
+  agentSessionKey = "main",
+  options?: { sandboxed?: boolean; activeModelProvider?: string; activeModelId?: string },
+) {
   const tool = createSessionStatusTool({
     agentSessionKey,
     sandboxed: options?.sandboxed,
+    activeModelProvider: options?.activeModelProvider,
+    activeModelId: options?.activeModelId,
     config: mockConfig as never,
   });
   expect(tool.name).toBe("session_status");
@@ -422,11 +464,7 @@ describe("session_status tool", () => {
 
     await tool.execute("call-transcript-usage", {});
 
-    expect(buildStatusMessageMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        includeTranscriptUsage: true,
-      }),
-    );
+    expectRecordFields(mockCallArg(buildStatusMessageMock), { includeTranscriptUsage: true });
   });
 
   it("passes spawned workspace to session_status auth labels", async () => {
@@ -444,11 +482,9 @@ describe("session_status tool", () => {
 
     await tool.execute("call-spawned-workspace-status", {});
 
-    expect(buildStatusMessageMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        workspaceDir: "/tmp/openclaw-spawned-workspace",
-      }),
-    );
+    expectRecordFields(mockCallArg(buildStatusMessageMock), {
+      workspaceDir: "/tmp/openclaw-spawned-workspace",
+    });
   });
 
   it("errors for unknown session keys", async () => {
@@ -654,6 +690,42 @@ describe("session_status tool", () => {
     expect(details.sessionKey).toBe("agent:main:current");
   });
 
+  it("does not apply the active run model to a literal current session key", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "s-main",
+        updatedAt: 10,
+      },
+      "agent:main:current": {
+        sessionId: "s-current",
+        updatedAt: 20,
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4-6",
+      },
+    });
+
+    const tool = getSessionStatusTool("main", {
+      activeModelProvider: "openai-codex",
+      activeModelId: "gpt-5.2",
+    });
+
+    const result = await tool.execute("call-current-literal-key-active-model", {
+      sessionKey: "current",
+    });
+    const details = result.details as { ok?: boolean; sessionKey?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("agent:main:current");
+
+    const statusArg = mockCallArg(buildStatusMessageMock) as Record<string, unknown>;
+    expectRecordFields(statusArg.sessionEntry, {
+      providerOverride: "anthropic",
+      modelOverride: "claude-sonnet-4-6",
+    });
+    const agent = statusArg.agent as Record<string, unknown>;
+    const model = agent.model as Record<string, unknown>;
+    expect(model.primary).not.toBe("openai-codex/gpt-5.2");
+  });
+
   it("resolves sessionKey=current for a channel-plugin requester via implicit fallback", async () => {
     resetSessionStore({});
 
@@ -682,12 +754,12 @@ describe("session_status tool", () => {
     expect(details.sessionKey).toBe("agent:main:telegram:group:-5096326138");
     expect(details.statusText).toContain("OpenClaw");
     expect(details.statusText).toContain("🧠 Model:");
-    expect(callGatewayMock).not.toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "sessions.resolve",
-        params: expect.objectContaining({ key: "current" }),
+    expect(
+      callGatewayMock.mock.calls.some(([arg]) => {
+        const request = arg as { method?: string; params?: { key?: string } };
+        return request.method === "sessions.resolve" && request.params?.key === "current";
       }),
-    );
+    ).toBe(false);
   });
 
   it("resolves the default session_status lookup for a channel-plugin requester via implicit fallback", async () => {
@@ -703,6 +775,96 @@ describe("session_status tool", () => {
     expect(details.statusText).toContain("🧠 Model:");
   });
 
+  it("renders the active run model for semantic current lookups", async () => {
+    resetSessionStore({
+      "agent:main:scope:scopy:direct:scopy": {
+        sessionId: "current-active-model",
+        updatedAt: 10,
+      },
+    });
+
+    const tool = getSessionStatusTool("agent:main:scope:scopy:direct:scopy", {
+      activeModelProvider: "openai-codex",
+      activeModelId: "gpt-5.2",
+    });
+
+    await tool.execute("call-current-active-model", { sessionKey: "current" });
+
+    const statusArg = mockCallArg(buildStatusMessageMock) as Record<string, unknown>;
+    const agent = statusArg.agent as Record<string, unknown>;
+    expectRecordFields(agent.model, { primary: "openai-codex/gpt-5.2" });
+  });
+
+  it("renders the active run model for omitted sessionKey lookups", async () => {
+    resetSessionStore({
+      "agent:main:scope:scopy:direct:scopy": {
+        sessionId: "implicit-current-active-model",
+        updatedAt: 10,
+      },
+    });
+
+    const tool = getSessionStatusTool("agent:main:scope:scopy:direct:scopy", {
+      activeModelProvider: "openai-codex",
+      activeModelId: "gpt-5.2",
+    });
+
+    await tool.execute("call-implicit-current-active-model", {});
+
+    const statusArg = mockCallArg(buildStatusMessageMock) as Record<string, unknown>;
+    const agent = statusArg.agent as Record<string, unknown>;
+    expectRecordFields(agent.model, { primary: "openai-codex/gpt-5.2" });
+  });
+
+  it("renders the active run model for current lookups with persisted overrides", async () => {
+    resetSessionStore({
+      "agent:main:scope:scopy:direct:scopy": {
+        sessionId: "current-active-model-with-override",
+        updatedAt: 10,
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4-6",
+      },
+    });
+
+    const tool = getSessionStatusTool("agent:main:scope:scopy:direct:scopy", {
+      activeModelProvider: "openai-codex",
+      activeModelId: "gpt-5.2",
+    });
+
+    await tool.execute("call-current-active-model-with-override", { sessionKey: "current" });
+
+    const statusArg = mockCallArg(buildStatusMessageMock) as Record<string, unknown>;
+    const sessionEntry = statusArg.sessionEntry as Record<string, unknown>;
+    expect(sessionEntry.providerOverride).toBeUndefined();
+    expect(sessionEntry.modelOverride).toBeUndefined();
+    const agent = statusArg.agent as Record<string, unknown>;
+    expectRecordFields(agent.model, { primary: "openai-codex/gpt-5.2" });
+  });
+
+  it("does not reuse the active run model after a semantic current reset", async () => {
+    resetSessionStore({
+      "agent:main:scope:scopy:direct:scopy": {
+        sessionId: "current-reset-model",
+        updatedAt: 10,
+        providerOverride: "openai-codex",
+        modelOverride: "gpt-5.2",
+      },
+    });
+
+    const tool = getSessionStatusTool("agent:main:scope:scopy:direct:scopy", {
+      activeModelProvider: "openai-codex",
+      activeModelId: "gpt-5.2",
+    });
+
+    await tool.execute("call-current-reset-model", {
+      sessionKey: "current",
+      model: "default",
+    });
+
+    const statusArg = mockCallArg(buildStatusMessageMock) as Record<string, unknown>;
+    const agent = statusArg.agent as Record<string, unknown>;
+    expectRecordFields(agent.model, { primary: "openai/gpt-5.4" });
+  });
+
   it("materializes a valid persisted session entry when implicit current fallback mutates model state", async () => {
     resetSessionStore({});
 
@@ -712,24 +874,27 @@ describe("session_status tool", () => {
       sessionKey: "current",
       model: "anthropic/claude-sonnet-4-6",
     });
-    const details = result.details as { ok?: boolean; sessionKey?: string };
+    const details = result.details as {
+      ok?: boolean;
+      sessionKey?: string;
+      model?: string;
+      modelProvider?: string;
+      modelOverride?: string | null;
+    };
     expect(details.ok).toBe(true);
     expect(details.sessionKey).toBe("agent:main:scope:scopy:direct:scopy");
-    expect(updateSessionStoreMock).toHaveBeenCalled();
-    const [, savedStore] = updateSessionStoreMock.mock.calls.at(-1) as [
-      string,
-      Record<string, SessionEntry>,
-    ];
+    expect(details.model).toBe("claude-sonnet-4-6");
+    expect(details.modelProvider).toBe("anthropic");
+    expect(details.modelOverride).toBe("anthropic/claude-sonnet-4-6");
+    expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
+    const savedStore = latestMockCallArg(updateSessionStoreMock, 1) as Record<string, SessionEntry>;
     const saved = savedStore["agent:main:scope:scopy:direct:scopy"];
-    expect(saved).toEqual(
-      expect.objectContaining({
-        providerOverride: "anthropic",
-        modelOverride: "claude-sonnet-4-6",
-        liveModelSwitchPending: true,
-      }),
-    );
-    expect(saved.sessionId).toEqual(expect.any(String));
-    expect(saved.sessionId.trim().length).toBeGreaterThan(0);
+    expectRecordFields(saved, {
+      providerOverride: "anthropic",
+      modelOverride: "claude-sonnet-4-6",
+      liveModelSwitchPending: true,
+    });
+    expect(saved.sessionId).toMatch(UUID_RE);
   });
 
   it("materializes a valid persisted session entry when the default implicit current fallback mutates model state", async () => {
@@ -743,21 +908,15 @@ describe("session_status tool", () => {
     const details = result.details as { ok?: boolean; sessionKey?: string };
     expect(details.ok).toBe(true);
     expect(details.sessionKey).toBe("agent:main:scope:scopy:direct:scopy");
-    expect(updateSessionStoreMock).toHaveBeenCalled();
-    const [, savedStore] = updateSessionStoreMock.mock.calls.at(-1) as [
-      string,
-      Record<string, SessionEntry>,
-    ];
+    expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
+    const savedStore = latestMockCallArg(updateSessionStoreMock, 1) as Record<string, SessionEntry>;
     const saved = savedStore["agent:main:scope:scopy:direct:scopy"];
-    expect(saved).toEqual(
-      expect.objectContaining({
-        providerOverride: "anthropic",
-        modelOverride: "claude-sonnet-4-6",
-        liveModelSwitchPending: true,
-      }),
-    );
-    expect(saved.sessionId).toEqual(expect.any(String));
-    expect(saved.sessionId.trim().length).toBeGreaterThan(0);
+    expectRecordFields(saved, {
+      providerOverride: "anthropic",
+      modelOverride: "claude-sonnet-4-6",
+      liveModelSwitchPending: true,
+    });
+    expect(saved.sessionId).toMatch(UUID_RE);
   });
 
   it("does not synthesize a current fallback for unknown non-literal session keys", async () => {
@@ -1015,15 +1174,12 @@ describe("session_status tool", () => {
     const details = result.details as { ok?: boolean; sessionKey?: string };
     expect(details.ok).toBe(true);
     expect(details.sessionKey).toBe("agent:main:subagent:child");
-    expect(updateSessionStoreMock).toHaveBeenCalledWith(
-      "/tmp/main/sessions.json",
-      expect.objectContaining({
-        "agent:main:subagent:child": expect.objectContaining({
-          liveModelSwitchPending: true,
-          modelOverride: "claude-sonnet-4-6",
-        }),
-      }),
-    );
+    expect(mockCallArg(updateSessionStoreMock)).toBe("/tmp/main/sessions.json");
+    const savedStore = mockCallArg(updateSessionStoreMock, 0, 1) as Record<string, unknown>;
+    expectRecordFields(savedStore["agent:main:subagent:child"], {
+      liveModelSwitchPending: true,
+      modelOverride: "claude-sonnet-4-6",
+    });
   });
 
   it("uses the runtime session model as the selected card model when no override is set", async () => {
@@ -1040,15 +1196,9 @@ describe("session_status tool", () => {
 
     await tool.execute("call-runtime-model", {});
 
-    expect(buildStatusMessageMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agent: expect.objectContaining({
-          model: expect.objectContaining({
-            primary: "anthropic/claude-opus-4-6",
-          }),
-        }),
-      }),
-    );
+    const statusArg = mockCallArg(buildStatusMessageMock) as Record<string, unknown>;
+    const agent = statusArg.agent as Record<string, unknown>;
+    expectRecordFields(agent.model, { primary: "anthropic/claude-opus-4-6" });
   });
 
   it("infers configured custom providers for runtime-only models in session_status", async () => {
@@ -1087,16 +1237,10 @@ describe("session_status tool", () => {
 
     await tool.execute("call-runtime-custom-provider", {});
 
-    expect(buildStatusMessageMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agent: expect.objectContaining({
-          model: expect.objectContaining({
-            primary: "qwen-dashscope/qwen-max",
-          }),
-        }),
-        modelAuth: "api-key (models.json)",
-      }),
-    );
+    const statusArg = mockCallArg(buildStatusMessageMock) as Record<string, unknown>;
+    const agent = statusArg.agent as Record<string, unknown>;
+    expectRecordFields(agent.model, { primary: "qwen-dashscope/qwen-max" });
+    expect(statusArg.modelAuth).toBe("api-key (models.json)");
   });
 
   it("preserves an unknown runtime provider in the selected status card model", async () => {
@@ -1112,20 +1256,14 @@ describe("session_status tool", () => {
 
     await tool.execute("call-legacy-runtime-model", {});
 
-    expect(buildStatusMessageMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agent: expect.objectContaining({
-          model: expect.objectContaining({
-            primary: "legacy-runtime-model",
-          }),
-        }),
-        sessionEntry: expect.objectContaining({
-          model: "legacy-runtime-model",
-          providerOverride: "",
-        }),
-        modelAuth: undefined,
-      }),
-    );
+    const statusArg = mockCallArg(buildStatusMessageMock) as Record<string, unknown>;
+    const agent = statusArg.agent as Record<string, unknown>;
+    expectRecordFields(agent.model, { primary: "legacy-runtime-model" });
+    expectRecordFields(statusArg.sessionEntry, {
+      model: "legacy-runtime-model",
+      providerOverride: "",
+    });
+    expect(statusArg.modelAuth).toBeUndefined();
   });
 
   it("passes per-agent thinkingDefault through to the status card", async () => {
@@ -1161,14 +1299,9 @@ describe("session_status tool", () => {
 
       await tool.execute("call-agent-thinking", {});
 
-      expect(buildStatusMessageMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          agentId: "kira",
-          agent: expect.objectContaining({
-            thinkingDefault: "xhigh",
-          }),
-        }),
-      );
+      const statusArg = mockCallArg(buildStatusMessageMock) as Record<string, unknown>;
+      expect(statusArg.agentId).toBe("kira");
+      expectRecordFields(statusArg.agent, { thinkingDefault: "xhigh" });
     } finally {
       mockConfig = savedConfig;
     }
@@ -1206,14 +1339,9 @@ describe("session_status tool", () => {
 
       await tool.execute("call-agent-thinking-implicit", {});
 
-      expect(buildStatusMessageMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          agentId: "kira",
-          agent: expect.objectContaining({
-            thinkingDefault: "medium",
-          }),
-        }),
-      );
+      const statusArg = mockCallArg(buildStatusMessageMock) as Record<string, unknown>;
+      expect(statusArg.agentId).toBe("kira");
+      expectRecordFields(statusArg.agent, { thinkingDefault: "medium" });
     } finally {
       mockConfig = savedConfig;
     }
@@ -1259,14 +1387,9 @@ describe("session_status tool", () => {
 
       await tool.execute("call-agent-thinking-runtime-hydration", {});
 
-      expect(buildStatusMessageMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          agentId: "kira",
-          agent: expect.objectContaining({
-            thinkingDefault: "medium",
-          }),
-        }),
-      );
+      const statusArg = mockCallArg(buildStatusMessageMock) as Record<string, unknown>;
+      expect(statusArg.agentId).toBe("kira");
+      expectRecordFields(statusArg.agent, { thinkingDefault: "medium" });
     } finally {
       mockConfig = savedConfig;
     }
@@ -1285,14 +1408,9 @@ describe("session_status tool", () => {
 
     await tool.execute("call-origin-provider", {});
 
-    expect(resolveQueueSettingsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "quietchat",
-        sessionEntry: expect.objectContaining({
-          origin: { provider: "quietchat" },
-        }),
-      }),
-    );
+    const queueArg = mockCallArg(resolveQueueSettingsMock) as Record<string, unknown>;
+    expect(queueArg.channel).toBe("quietchat");
+    expectRecordFields(queueArg.sessionEntry, { origin: { provider: "quietchat" } });
   });
 
   it("resolves sessionId inputs", async () => {
@@ -1551,7 +1669,7 @@ describe("session_status tool", () => {
     const details = result.details as { ok?: boolean; sessionKey?: string };
     expect(details.ok).toBe(true);
     expect(details.sessionKey).toBe("agent:main:main");
-    expect(updateSessionStoreMock).toHaveBeenCalled();
+    expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
   });
 
   it("blocks unsandboxed sessionId session_status outside tree visibility before mutation", async () => {
@@ -1718,27 +1836,30 @@ describe("session_status tool", () => {
     expect(loadSessionStoreMock).toHaveBeenCalledWith("/tmp/main/sessions.json");
     expect(updateSessionStoreMock).not.toHaveBeenCalled();
     expect(callGatewayMock).toHaveBeenCalledTimes(3);
-    expect(callGatewayMock.mock.calls).toContainEqual([
-      {
-        method: "sessions.resolve",
-        params: {
-          sessionId: "s-other",
-          spawnedBy: "agent:main:subagent:child",
-          includeGlobal: false,
-          includeUnknown: false,
-        },
+    expect(callGatewayMock).toHaveBeenNthCalledWith(1, {
+      method: "sessions.list",
+      params: {
+        includeGlobal: false,
+        includeUnknown: false,
+        spawnedBy: "agent:main:subagent:child",
       },
-    ]);
-    expect(callGatewayMock.mock.calls).toContainEqual([
-      {
-        method: "sessions.list",
-        params: {
-          includeGlobal: false,
-          includeUnknown: false,
-          spawnedBy: "agent:main:subagent:child",
-        },
+    });
+    expect(callGatewayMock).toHaveBeenNthCalledWith(2, {
+      method: "sessions.resolve",
+      params: {
+        key: "s-other",
+        spawnedBy: "agent:main:subagent:child",
       },
-    ]);
+    });
+    expect(callGatewayMock).toHaveBeenNthCalledWith(3, {
+      method: "sessions.resolve",
+      params: {
+        sessionId: "s-other",
+        spawnedBy: "agent:main:subagent:child",
+        includeGlobal: false,
+        includeUnknown: false,
+      },
+    });
   });
 
   it("blocks sandboxed child session_status parent sessionId access outside its tree", async () => {
@@ -1769,27 +1890,30 @@ describe("session_status tool", () => {
     expect(loadSessionStoreMock).toHaveBeenCalledWith("/tmp/main/sessions.json");
     expect(updateSessionStoreMock).not.toHaveBeenCalled();
     expect(callGatewayMock).toHaveBeenCalledTimes(3);
-    expect(callGatewayMock.mock.calls).toContainEqual([
-      {
-        method: "sessions.resolve",
-        params: {
-          sessionId: "s-parent",
-          spawnedBy: "agent:main:subagent:child",
-          includeGlobal: false,
-          includeUnknown: false,
-        },
+    expect(callGatewayMock).toHaveBeenNthCalledWith(1, {
+      method: "sessions.list",
+      params: {
+        includeGlobal: false,
+        includeUnknown: false,
+        spawnedBy: "agent:main:subagent:child",
       },
-    ]);
-    expect(callGatewayMock.mock.calls).toContainEqual([
-      {
-        method: "sessions.list",
-        params: {
-          includeGlobal: false,
-          includeUnknown: false,
-          spawnedBy: "agent:main:subagent:child",
-        },
+    });
+    expect(callGatewayMock).toHaveBeenNthCalledWith(2, {
+      method: "sessions.resolve",
+      params: {
+        key: "s-parent",
+        spawnedBy: "agent:main:subagent:child",
       },
-    ]);
+    });
+    expect(callGatewayMock).toHaveBeenNthCalledWith(3, {
+      method: "sessions.resolve",
+      params: {
+        sessionId: "s-parent",
+        spawnedBy: "agent:main:subagent:child",
+        includeGlobal: false,
+        includeUnknown: false,
+      },
+    });
   });
 
   it("keeps legacy main requester keys for sandboxed session tree checks", async () => {
@@ -1851,12 +1975,11 @@ describe("session_status tool", () => {
 
     const tool = getSessionStatusTool();
 
-    await tool.execute("call3", { model: "default" });
-    expect(updateSessionStoreMock).toHaveBeenCalled();
-    const [, savedStore] = updateSessionStoreMock.mock.calls.at(-1) as [
-      string,
-      Record<string, unknown>,
-    ];
+    const result = await tool.execute("call3", { model: "default" });
+    const details = result.details as { modelOverride?: string | null };
+    expect(details.modelOverride).toBeNull();
+    expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
+    const savedStore = latestMockCallArg(updateSessionStoreMock, 1) as Record<string, unknown>;
     const saved = savedStore.main as Record<string, unknown>;
     expect(saved.providerOverride).toBeUndefined();
     expect(saved.modelOverride).toBeUndefined();

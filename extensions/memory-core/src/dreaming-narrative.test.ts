@@ -31,6 +31,52 @@ const { createTempWorkspace } = createMemoryCoreTestHarness();
 const DREAMS_FILE_LOCKS_KEY = Symbol.for("openclaw.memoryCore.dreamingNarrative.fileLocks");
 const EXPECTS_POSIX_PRIVATE_FILE_MODE = process.platform !== "win32";
 
+type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
+
+function mockCallArg(source: MockCallSource, label: string, callIndex = 0, argIndex = 0): unknown {
+  const call = source.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`Expected ${label} call ${callIndex} to exist`);
+  }
+  if (!(argIndex in call)) {
+    throw new Error(`Expected ${label} call ${callIndex} argument ${argIndex} to exist`);
+  }
+  return call[argIndex];
+}
+
+function mockObjectArg(
+  source: MockCallSource,
+  label: string,
+  callIndex = 0,
+  argIndex = 0,
+): Record<string, unknown> {
+  const value = mockCallArg(source, label, callIndex, argIndex);
+  if (!value || typeof value !== "object") {
+    throw new Error(`Expected ${label} call ${callIndex} argument ${argIndex} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function logIncludes(source: MockCallSource, text: string): boolean {
+  return source.mock.calls.some((call) => String(call[0]).includes(text));
+}
+
+function expectLogIncludes(source: MockCallSource, text: string): void {
+  expect(logIncludes(source, text), `Expected log to include ${text}`).toBe(true);
+}
+
+function expectLogExcludes(source: MockCallSource, text: string): void {
+  expect(logIncludes(source, text), `Expected log not to include ${text}`).toBe(false);
+}
+
+async function expectPathMissing(targetPath: string): Promise<void> {
+  const accessResult = await fs
+    .access(targetPath)
+    .then(() => "exists")
+    .catch((error: unknown) => (error as { code?: unknown }).code);
+  expect(accessResult).toBe("ENOENT");
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   resolveGlobalMap<string, unknown>(DREAMS_FILE_LOCKS_KEY).clear();
@@ -99,6 +145,16 @@ describe("extractNarrativeText", () => {
       },
     ];
     expect(extractNarrativeText(messages)).toBe("First paragraph.\nSecond paragraph.");
+  });
+
+  it("extracts from OpenAI output_text assistant parts", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "output_text", text: "The light phase found a diary thread." }],
+      },
+    ];
+    expect(extractNarrativeText(messages)).toBe("The light phase found a diary thread.");
   });
 
   it("returns null when no assistant message exists", () => {
@@ -513,8 +569,9 @@ describe("appendNarrativeEntry", () => {
       nowMs: Date.parse("2026-04-11T14:00:00Z"),
       timezone: "UTC",
     });
+    const stableMtime = new Date("2026-04-11T14:00:05Z");
+    await fs.utimes(dreamsPath, stableMtime, stableMtime);
     const before = await fs.stat(dreamsPath);
-    await new Promise((resolve) => setTimeout(resolve, 20));
 
     const result = await dedupeDreamDiaryEntries({ workspaceDir });
     const after = await fs.stat(dreamsPath);
@@ -606,14 +663,13 @@ describe("generateAndAppendDreamNarrative", () => {
     });
 
     expect(subagent.run).toHaveBeenCalledOnce();
-    expect(subagent.run.mock.calls[0][0]).toMatchObject({
-      idempotencyKey: expectedSessionKey,
-      sessionKey: expectedSessionKey,
-      lane: `dreaming-narrative:${expectedSessionKey}`,
-      lightContext: true,
-      deliver: false,
-      model: "anthropic/claude-sonnet-4-6",
-    });
+    const runOptions = mockObjectArg(subagent.run, "subagent run");
+    expect(runOptions.idempotencyKey).toBe(expectedSessionKey);
+    expect(runOptions.sessionKey).toBe(expectedSessionKey);
+    expect(runOptions.lane).toBe(`dreaming-narrative:${expectedSessionKey}`);
+    expect(runOptions.lightContext).toBe(true);
+    expect(runOptions.deliver).toBe(false);
+    expect(runOptions.model).toBe("anthropic/claude-sonnet-4-6");
     expect(subagent.waitForRun).toHaveBeenCalledOnce();
     expect(subagent.deleteSession).toHaveBeenCalledOnce();
 
@@ -646,21 +702,19 @@ describe("generateAndAppendDreamNarrative", () => {
     });
 
     expect(subagent.run).toHaveBeenCalledTimes(2);
-    expect(subagent.run.mock.calls[0]?.[0]).toMatchObject({
-      sessionKey: expectedSessionKey,
-      model: "ollama/missing-model",
-    });
-    expect(subagent.run.mock.calls[1]?.[0]).toMatchObject({
-      sessionKey: retrySessionKey,
-    });
-    expect(subagent.run.mock.calls[1]?.[0]).not.toHaveProperty("model");
+    const configuredRunOptions = mockObjectArg(subagent.run, "subagent run");
+    expect(configuredRunOptions.sessionKey).toBe(expectedSessionKey);
+    expect(configuredRunOptions.model).toBe("ollama/missing-model");
+    const retryRunOptions = mockObjectArg(subagent.run, "subagent run", 1);
+    expect(retryRunOptions.sessionKey).toBe(retrySessionKey);
+    expect(retryRunOptions).not.toHaveProperty("model");
     expect(subagent.getSessionMessages).toHaveBeenCalledWith({
       sessionKey: retrySessionKey,
       limit: 5,
     });
     expect(subagent.deleteSession).toHaveBeenCalledOnce();
     expect(subagent.deleteSession).toHaveBeenCalledWith({ sessionKey: retrySessionKey });
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("session default"));
+    expectLogIncludes(logger.warn, "session default");
   });
 
   it("retries with the session default when the configured model run ends unavailable", async () => {
@@ -697,9 +751,13 @@ describe("generateAndAppendDreamNarrative", () => {
       limit: 5,
     });
     expect(subagent.deleteSession).toHaveBeenCalledTimes(2);
-    expect(subagent.deleteSession.mock.calls[0]?.[0]).toEqual({ sessionKey: expectedSessionKey });
-    expect(subagent.deleteSession.mock.calls[1]?.[0]).toEqual({ sessionKey: retrySessionKey });
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("unknown model"));
+    expect(mockObjectArg(subagent.deleteSession, "delete session")).toEqual({
+      sessionKey: expectedSessionKey,
+    });
+    expect(mockObjectArg(subagent.deleteSession, "delete session", 1)).toEqual({
+      sessionKey: retrySessionKey,
+    });
+    expectLogIncludes(logger.warn, "unknown model");
   });
 
   it("does not hide configured model authorization failures by retrying", async () => {
@@ -724,9 +782,7 @@ describe("generateAndAppendDreamNarrative", () => {
     expect(subagent.run).toHaveBeenCalledOnce();
     expect(subagent.waitForRun).not.toHaveBeenCalled();
     expect(subagent.deleteSession).not.toHaveBeenCalled();
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("narrative generation failed"),
-    );
+    expectLogIncludes(logger.warn, "narrative generation failed");
   });
 
   it("skips narrative when no snippets are available", async () => {
@@ -786,10 +842,8 @@ describe("generateAndAppendDreamNarrative", () => {
     });
 
     expect(subagent.waitForRun).toHaveBeenCalledOnce();
-    expect(subagent.waitForRun.mock.calls[0][0]).toMatchObject({ timeoutMs: 60_000 });
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("narrative session cleanup failed for rem phase"),
-    );
+    expect(mockObjectArg(subagent.waitForRun, "wait for run").timeoutMs).toBe(60_000);
+    expectLogIncludes(logger.warn, "narrative session cleanup failed for rem phase");
   });
 
   it("handles subagent error gracefully", async () => {
@@ -811,9 +865,7 @@ describe("generateAndAppendDreamNarrative", () => {
 
     // Should not throw.
     expect(logger.warn).toHaveBeenCalled();
-    await expect(fs.access(path.join(workspaceDir, "DREAMS.md"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectPathMissing(path.join(workspaceDir, "DREAMS.md"));
   });
 
   it("falls back to a local narrative when subagent runtime is request-scoped", async () => {
@@ -833,12 +885,10 @@ describe("generateAndAppendDreamNarrative", () => {
 
     const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
     expect(content).toContain("API endpoints need authentication");
-    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("request-scoped"));
-    expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining("request-scoped"));
-    expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining(workspaceDir));
-    expect(logger.warn).not.toHaveBeenCalledWith(
-      expect.stringContaining("narrative session cleanup failed"),
-    );
+    expectLogIncludes(logger.info, "request-scoped");
+    expectLogExcludes(logger.warn, "request-scoped");
+    expectLogExcludes(logger.warn, workspaceDir);
+    expectLogExcludes(logger.warn, "narrative session cleanup failed");
     expect(subagent.deleteSession).not.toHaveBeenCalled();
   });
 
@@ -864,8 +914,8 @@ describe("generateAndAppendDreamNarrative", () => {
 
     const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
     expect(content).toContain("A durable candidate surfaced.");
-    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("request-scoped"));
-    expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining("request-scoped"));
+    expectLogIncludes(logger.info, "request-scoped");
+    expectLogExcludes(logger.warn, "request-scoped");
     expect(subagent.deleteSession).not.toHaveBeenCalled();
   });
 
@@ -886,12 +936,8 @@ describe("generateAndAppendDreamNarrative", () => {
       logger,
     });
 
-    await expect(fs.access(path.join(workspaceDir, "DREAMS.md"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("narrative generation failed"),
-    );
+    await expectPathMissing(path.join(workspaceDir, "DREAMS.md"));
+    expectLogIncludes(logger.warn, "narrative generation failed");
   });
 
   it("cleans up session even on failure", async () => {
@@ -969,9 +1015,9 @@ describe("generateAndAppendDreamNarrative", () => {
     expect(updatedStore).toHaveProperty("agent:main:kept-session");
     expect(updatedStore).toHaveProperty("agent:main:telegram:group:dreaming-narrative-room");
     const sessionFiles = await fs.readdir(sessionsDir);
-    expect(sessionFiles.some((name) => name.startsWith("orphan.jsonl.deleted."))).toBe(true);
+    expect(sessionFiles.filter((file) => file.startsWith("orphan.jsonl.deleted."))).not.toEqual([]);
     expect(sessionFiles).toContain("still-live.jsonl");
-    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("dreaming cleanup scrubbed"));
+    expectLogIncludes(logger.info, "dreaming cleanup scrubbed");
   });
 
   it("isolates narrative sessions across workspaces even at the same timestamp", async () => {
@@ -996,25 +1042,32 @@ describe("generateAndAppendDreamNarrative", () => {
       logger,
     });
 
-    const firstSessionKey = subagent.run.mock.calls[0]?.[0]?.sessionKey;
-    const secondSessionKey = subagent.run.mock.calls[1]?.[0]?.sessionKey;
+    const firstSessionKey = mockObjectArg(subagent.run, "subagent run").sessionKey;
+    const secondSessionKey = mockObjectArg(subagent.run, "subagent run", 1).sessionKey;
     expect(firstSessionKey).toBeTypeOf("string");
     expect(secondSessionKey).toBeTypeOf("string");
     expect(firstSessionKey).not.toBe(secondSessionKey);
     expect(firstSessionKey).toContain("dreaming-narrative-light-");
     expect(secondSessionKey).toContain("dreaming-narrative-light-");
-    expect(subagent.deleteSession.mock.calls[0]?.[0]?.sessionKey).toBe(firstSessionKey);
-    expect(subagent.deleteSession.mock.calls[1]?.[0]?.sessionKey).toBe(secondSessionKey);
+    expect(mockObjectArg(subagent.deleteSession, "delete session").sessionKey).toBe(
+      firstSessionKey,
+    );
+    expect(mockObjectArg(subagent.deleteSession, "delete session", 1).sessionKey).toBe(
+      secondSessionKey,
+    );
   });
 });
 
 describe("runDetachedDreamNarrative", () => {
   type Deferred<T> = { promise: Promise<T>; resolve: (v: T) => void };
   function deferred<T>(): Deferred<T> {
-    let resolve!: (v: T) => void;
+    let resolve: ((v: T) => void) | undefined;
     const promise = new Promise<T>((r) => {
       resolve = r;
     });
+    if (!resolve) {
+      throw new Error("Expected dream narrative deferred resolver to be initialized");
+    }
     return { promise, resolve };
   }
 

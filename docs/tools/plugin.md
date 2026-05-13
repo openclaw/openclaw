@@ -13,7 +13,7 @@ agent harnesses, tools, skills, speech, realtime transcription, realtime
 voice, media-understanding, image generation, video generation, web fetch, web
 search, and more. Some plugins are **core** (shipped with OpenClaw), others
 are **external**. Most external plugins are published and discovered through
-[ClawHub](/tools/clawhub). Npm remains supported for direct installs and for a
+[ClawHub](/clawhub). Npm remains supported for direct installs and for a
 temporary set of OpenClaw-owned plugin packages while that migration finishes.
 
 ## Quick start
@@ -38,6 +38,7 @@ For copy-paste install, list, uninstall, update, and publishing examples, see
 
     # From npm
     openclaw plugins install npm:@acme/openclaw-plugin
+    openclaw plugins install npm-pack:./openclaw-plugin-1.2.3.tgz
 
     # From git
     openclaw plugins install git:github.com/acme/openclaw-plugin@v1.0.0
@@ -92,8 +93,8 @@ If you prefer chat-native control, enable `commands.plugins: true` and use:
 ```
 
 The install path uses the same resolver as the CLI: local path/archive, explicit
-`clawhub:<pkg>`, explicit `npm:<pkg>`, explicit `git:<repo>`, or bare package
-spec through npm.
+`clawhub:<pkg>`, explicit `npm:<pkg>`, explicit `npm-pack:<path.tgz>`,
+explicit `git:<repo>`, or bare package spec through npm.
 
 If config is invalid, install normally fails closed and points you at
 `openclaw doctor --fix`. The only recovery exception is a narrow bundled-plugin
@@ -127,12 +128,43 @@ visible plugin without importing runtime code or repairing dependencies.
 See [Plugin dependency resolution](/plugins/dependency-resolution) for the
 install-time lifecycle.
 
+### Blocked plugin path ownership
+
+If plugin diagnostics say
+`blocked plugin candidate: suspicious ownership (... uid=1000, expected uid=0 or root)`
+and config validation follows with `plugin present but blocked`, OpenClaw found
+plugin files owned by a different Unix user than the process that is loading
+them. Keep the plugin config in place; fix the filesystem ownership or run
+OpenClaw as the same user that owns the state directory.
+
+For Docker installs, the official image runs as `node` (uid `1000`), so the
+host bind-mounted OpenClaw config and workspace directories should normally be
+owned by uid `1000`:
+
+```bash
+sudo chown -R 1000:1000 /path/to/openclaw-config /path/to/openclaw-workspace
+```
+
+If you intentionally run OpenClaw as root, repair the managed plugin root to
+root ownership instead:
+
+```bash
+sudo chown -R root:root /path/to/openclaw-config/npm
+```
+
+After fixing ownership, rerun `openclaw doctor --fix` or
+`openclaw plugins registry --refresh` so the persisted plugin registry matches
+the repaired files.
+
 For npm installs, mutable selectors such as `latest` or a dist-tag are resolved
 before installation and then pinned to the exact verified version in OpenClaw's
 managed npm root. After npm finishes, OpenClaw verifies the installed
 `package-lock.json` entry still matches the resolved version and integrity. If
 npm writes different package metadata, the install fails and the managed package
 is rolled back instead of accepting a different plugin artifact.
+Managed npm roots also inherit OpenClaw's package-level npm `overrides`, so
+security pins that protect the packaged host also apply to hoisted external
+plugin dependencies.
 
 Source checkouts are pnpm workspaces. If you clone OpenClaw to hack on bundled
 plugins, run `pnpm install`; OpenClaw then loads bundled plugins from
@@ -163,6 +195,19 @@ peer such as `src/index.ts` to `dist/index.js`.
 Packaged installs must ship that JavaScript runtime output. The TypeScript
 source fallback is for source checkouts and local development paths, not for
 npm packages installed into OpenClaw's managed plugin root.
+
+Untracked directories dropped into the global extension root are treated as
+local source checkouts and may load TypeScript entries directly. Directories
+still named by an install record, including `installPath` or `sourcePath`, stay
+managed and keep the compiled-output requirement even when the global scan sees
+them. If you intentionally convert a managed install into an untracked local
+checkout, remove the stale install record first with uninstall or doctor cleanup.
+
+If a managed package warning says it `requires compiled runtime output for
+TypeScript entry ...`, the package was published without the JavaScript files
+OpenClaw needs at runtime. That is a plugin packaging issue, not a local config
+problem. Update or reinstall the plugin after the publisher republishes compiled
+JavaScript, or disable/uninstall that plugin until a fixed package is available.
 
 Use `openclaw.runtimeExtensions` when published runtime files do not live at the
 same paths as the source entries. When present, `runtimeExtensions` must contain
@@ -197,7 +242,6 @@ current OpenClaw or a local checkout until a newer npm package is published.
 
 | Plugin          | Package                    | Docs                                       |
 | --------------- | -------------------------- | ------------------------------------------ |
-| BlueBubbles     | `@openclaw/bluebubbles`    | [BlueBubbles](/channels/bluebubbles)       |
 | Discord         | `@openclaw/discord`        | [Discord](/channels/discord)               |
 | Feishu          | `@openclaw/feishu`         | [Feishu](/channels/feishu)                 |
 | Matrix          | `@openclaw/matrix`         | [Matrix](/channels/matrix)                 |
@@ -223,8 +267,8 @@ current OpenClaw or a local checkout until a newer npm package is published.
   </Accordion>
 
   <Accordion title="Memory plugins">
-    - `memory-core` — bundled memory search (default via `plugins.slots.memory`)
-    - `memory-lancedb` — LanceDB-backed long-term memory with auto-recall/capture (set `plugins.slots.memory = "memory-lancedb"`)
+    - `memory-core` - bundled memory search (default via `plugins.slots.memory`)
+    - `memory-lancedb` - LanceDB-backed long-term memory with auto-recall/capture (set `plugins.slots.memory = "memory-lancedb"`)
 
     See [Memory LanceDB](/plugins/memory-lancedb) for OpenAI-compatible
     embedding setup, Ollama examples, recall limits, and troubleshooting.
@@ -236,13 +280,13 @@ current OpenClaw or a local checkout until a newer npm package is published.
   </Accordion>
 
   <Accordion title="Other">
-    - `browser` — bundled browser plugin for the browser tool, `openclaw browser` CLI, `browser.request` gateway method, browser runtime, and default browser control service (enabled by default; disable before replacing it)
-    - `copilot-proxy` — VS Code Copilot Proxy bridge (disabled by default)
+    - `browser` - bundled browser plugin for the browser tool, `openclaw browser` CLI, `browser.request` gateway method, browser runtime, and default browser control service (enabled by default; disable before replacing it)
+    - `copilot-proxy` - VS Code Copilot Proxy bridge (disabled by default)
 
   </Accordion>
 </AccordionGroup>
 
-Looking for third-party plugins? See [Community Plugins](/plugins/community).
+Looking for third-party plugins? See [ClawHub](/clawhub).
 
 ## Configuration
 
@@ -310,7 +354,7 @@ OpenClaw scans for plugins in this order (first match wins):
 
 <Steps>
   <Step title="Config paths">
-    `plugins.load.paths` — explicit file or directory paths. Paths that point
+    `plugins.load.paths` - explicit file or directory paths. Paths that point
     back at OpenClaw's own packaged bundled plugin directories are ignored;
     run `openclaw doctor --fix` to remove those stale aliases.
   </Step>
@@ -354,8 +398,8 @@ even when source overlay mounts are present.
   re-enable plugins before running doctor cleanup if you want stale ids removed
 - OpenAI-family Codex routes keep separate plugin boundaries:
   `openai-codex/*` belongs to the OpenAI plugin, while the bundled Codex
-  app-server plugin is selected by `agentRuntime.id: "codex"` or legacy
-  `codex/*` model refs
+  app-server plugin is selected by canonical `openai/*` agent refs, explicit
+  provider/model `agentRuntime.id: "codex"`, or legacy `codex/*` model refs
 
 ## Troubleshooting runtime hooks
 
@@ -368,8 +412,9 @@ do not run in live chat traffic, check these first:
   containers, PID 1 may only be a supervisor; restart or signal the child
   `openclaw gateway run` process.
 - Use `openclaw plugins inspect <id> --runtime --json` to confirm hook registrations and
-  diagnostics. Non-bundled conversation hooks such as `llm_input`,
-  `llm_output`, `before_agent_finalize`, and `agent_end` need
+  diagnostics. Non-bundled conversation hooks such as `before_model_resolve`,
+  `before_agent_reply`, `before_agent_run`, `llm_input`, `llm_output`,
+  `before_agent_finalize`, and `agent_end` need
   `plugins.entries.<id>.hooks.allowConversationAccess=true`.
 - For model switching, prefer `before_model_resolve`. It runs before model
   resolution for agent turns; `llm_output` only runs after a model attempt
@@ -539,6 +584,11 @@ top-level `installRecords` and rebuildable manifest metadata in `plugins`. If
 the registry is missing, stale, or invalid, `openclaw plugins registry
 --refresh` rebuilds its manifest view from install records, config policy, and
 manifest/package metadata without loading plugin runtime modules.
+
+In Nix mode (`OPENCLAW_NIX_MODE=1`), plugin lifecycle mutators are disabled.
+Manage plugin package selection and config through the Nix source for the
+install instead; for nix-openclaw, start with the agent-first
+[Quick Start](https://github.com/openclaw/nix-openclaw#quick-start).
 `openclaw plugins update <id-or-npm-spec>` applies to tracked installs. Passing
 an npm package spec with a dist-tag or exact version resolves the package name
 back to the tracked plugin record and records the new spec for future updates.
@@ -674,15 +724,15 @@ hook surface. Plugins can block native Codex tools through `before_tool_call`,
 observe results through `after_tool_call`, and participate in Codex
 `PermissionRequest` approvals. The bridge does not rewrite Codex-native tool
 arguments yet. The exact Codex runtime support boundary lives in the
-[Codex harness v1 support contract](/plugins/codex-harness#v1-support-contract).
+[Codex harness v1 support contract](/plugins/codex-harness-runtime#v1-support-contract).
 
 For full typed hook behavior, see [SDK overview](/plugins/sdk-overview#hook-decision-semantics).
 
 ## Related
 
-- [Building plugins](/plugins/building-plugins) — create your own plugin
-- [Plugin bundles](/plugins/bundles) — Codex/Claude/Cursor bundle compatibility
-- [Plugin manifest](/plugins/manifest) — manifest schema
-- [Registering tools](/plugins/building-plugins#registering-agent-tools) — add agent tools in a plugin
-- [Plugin internals](/plugins/architecture) — capability model and load pipeline
-- [Community plugins](/plugins/community) — third-party listings
+- [Building plugins](/plugins/building-plugins) - create your own plugin
+- [Plugin bundles](/plugins/bundles) - Codex/Claude/Cursor bundle compatibility
+- [Plugin manifest](/plugins/manifest) - manifest schema
+- [Registering tools](/plugins/building-plugins#registering-agent-tools) - add agent tools in a plugin
+- [Plugin internals](/plugins/architecture) - capability model and load pipeline
+- [ClawHub](/clawhub) - third-party plugin discovery

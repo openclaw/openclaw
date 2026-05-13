@@ -10,6 +10,7 @@ import type {
   PluginAgentEventSubscriptionRegistration,
   PluginControlUiDescriptor,
   PluginRuntimeLifecycleRegistration,
+  PluginSessionActionRegistration,
   PluginSessionSchedulerJobRegistration,
   PluginSessionExtensionRegistration,
   PluginToolMetadataRegistration,
@@ -34,6 +35,7 @@ import type {
   RealtimeTranscriptionProviderPlugin,
   RealtimeVoiceProviderPlugin,
   SpeechProviderPlugin,
+  UnifiedModelCatalogProviderPlugin,
   VideoGenerationProviderPlugin,
   WebFetchProviderPlugin,
   WebSearchProviderPlugin,
@@ -41,6 +43,7 @@ import type {
 
 type CapturedPluginCliRegistration = {
   register: OpenClawPluginCliRegistrar;
+  parentPath: string[];
   commands: string[];
   descriptors: OpenClawPluginCliCommandDescriptor[];
 };
@@ -72,7 +75,9 @@ export type CapturedPluginRegistration = {
   runtimeLifecycles: PluginRuntimeLifecycleRegistration[];
   agentEventSubscriptions: PluginAgentEventSubscriptionRegistration[];
   sessionSchedulerJobs: PluginSessionSchedulerJobRegistration[];
+  sessionActions: PluginSessionActionRegistration[];
   tools: AnyAgentTool[];
+  modelCatalogProviders: UnifiedModelCatalogProviderPlugin[];
 };
 
 export function createCapturedPluginRegistration(params?: {
@@ -107,7 +112,10 @@ export function createCapturedPluginRegistration(params?: {
   const runtimeLifecycles: PluginRuntimeLifecycleRegistration[] = [];
   const agentEventSubscriptions: PluginAgentEventSubscriptionRegistration[] = [];
   const sessionSchedulerJobs: PluginSessionSchedulerJobRegistration[] = [];
+  const sessionActions: PluginSessionActionRegistration[] = [];
+  let capturedSessionTurnCount = 0;
   const tools: AnyAgentTool[] = [];
+  const modelCatalogProviders: UnifiedModelCatalogProviderPlugin[] = [];
   const pluginId = params?.id ?? "captured-plugin-registration";
   const pluginName = params?.name ?? "Captured Plugin Registration";
   const pluginSource = params?.source ?? "captured-plugin-registration";
@@ -144,7 +152,9 @@ export function createCapturedPluginRegistration(params?: {
     runtimeLifecycles,
     agentEventSubscriptions,
     sessionSchedulerJobs,
+    sessionActions,
     tools,
+    modelCatalogProviders,
     api: buildPluginApi({
       id: pluginId,
       name: pluginName,
@@ -156,6 +166,9 @@ export function createCapturedPluginRegistration(params?: {
       resolvePath: (input) => input,
       handlers: {
         registerCli(registrar, opts) {
+          const parentPath = (opts?.parentPath ?? [])
+            .map((segment) => segment.trim())
+            .filter(Boolean);
           const descriptors = (opts?.descriptors ?? [])
             .map((descriptor) => ({
               name: descriptor.name.trim(),
@@ -174,12 +187,16 @@ export function createCapturedPluginRegistration(params?: {
           }
           cliRegistrars.push({
             register: registrar,
+            parentPath,
             commands,
             descriptors,
           });
         },
         registerProvider(provider: ProviderPlugin) {
           providers.push(provider);
+        },
+        registerModelCatalogProvider(provider: UnifiedModelCatalogProviderPlugin) {
+          modelCatalogProviders.push(provider);
         },
         registerAgentHarness(harness: AgentHarness) {
           agentHarnesses.push(harness);
@@ -258,15 +275,30 @@ export function createCapturedPluginRegistration(params?: {
         registerAgentEventSubscription(subscription: PluginAgentEventSubscriptionRegistration) {
           agentEventSubscriptions.push(subscription);
         },
+        emitAgentEvent: () => ({ emitted: false, reason: "captured registration" }),
         registerSessionSchedulerJob(job: PluginSessionSchedulerJobRegistration) {
           sessionSchedulerJobs.push(job);
           return {
             id: job.id,
-            pluginId: "captured-plugin-registration",
+            pluginId,
             sessionKey: job.sessionKey,
             kind: job.kind,
           };
         },
+        registerSessionAction(action: PluginSessionActionRegistration) {
+          sessionActions.push(action);
+        },
+        sendSessionAttachment: async () => ({ ok: false, error: "captured registration" }),
+        scheduleSessionTurn: async (schedule) => {
+          capturedSessionTurnCount += 1;
+          return {
+            id: `captured-session-turn-${capturedSessionTurnCount}`,
+            pluginId,
+            sessionKey: schedule.sessionKey,
+            kind: "session-turn",
+          };
+        },
+        unscheduleSessionTurnsByTag: async () => ({ removed: 0, failed: 0 }),
         registerTool(tool) {
           if (typeof tool !== "function") {
             tools.push(tool);
@@ -277,10 +309,12 @@ export function createCapturedPluginRegistration(params?: {
   };
 }
 
-export function capturePluginRegistration(params: {
-  register(api: OpenClawPluginApi): void;
-}): CapturedPluginRegistration {
-  const captured = createCapturedPluginRegistration();
+export function capturePluginRegistration(
+  params: NonNullable<Parameters<typeof createCapturedPluginRegistration>[0]> & {
+    register(api: OpenClawPluginApi): void;
+  },
+): CapturedPluginRegistration {
+  const captured = createCapturedPluginRegistration(params);
   params.register(captured.api);
   return captured;
 }

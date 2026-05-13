@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/status-helpers";
 import { resolveNextcloudTalkAccount, type ResolvedNextcloudTalkAccount } from "./accounts.js";
 import { nextcloudTalkApprovalAuth } from "./approval-auth.js";
+import { probeNextcloudTalkBotResponseFeature } from "./bot-preflight.js";
 import { buildChannelConfigSchema, DEFAULT_ACCOUNT_ID, type ChannelPlugin } from "./channel-api.js";
 import {
   nextcloudTalkConfigAdapter,
@@ -18,6 +19,7 @@ import {
 import { NextcloudTalkConfigSchema } from "./config-schema.js";
 import { nextcloudTalkDoctor } from "./doctor.js";
 import { nextcloudTalkGatewayAdapter } from "./gateway.js";
+import { nextcloudTalkMessageAdapter } from "./message-adapter.js";
 import {
   looksLikeNextcloudTalkTargetId,
   normalizeNextcloudTalkMessagingTarget,
@@ -25,7 +27,6 @@ import {
 import { resolveNextcloudTalkGroupToolPolicy } from "./policy.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
-import { sendMessageNextcloudTalk } from "./send.js";
 import { resolveNextcloudTalkOutboundSessionRoute } from "./session-route.js";
 import { nextcloudTalkSetupAdapter } from "./setup-core.js";
 import { nextcloudTalkSetupWizard } from "./setup-surface.js";
@@ -138,6 +139,31 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
           buildWebhookChannelStatusSummary(snapshot, {
             secretSource: snapshot.secretSource ?? "none",
           }),
+        collectStatusIssues: (accounts) =>
+          accounts.flatMap((account) => {
+            const probe = account.probe as
+              | { ok?: boolean; code?: string; message?: string }
+              | undefined;
+            if (
+              !probe ||
+              probe.ok !== false ||
+              probe.code !== "missing_response_feature" ||
+              !probe.message
+            ) {
+              return [];
+            }
+            return [
+              {
+                channel: "nextcloud-talk",
+                accountId: account.accountId ?? DEFAULT_ACCOUNT_ID,
+                kind: "config",
+                message: probe.message,
+                fix: "Add --feature response to the Talk bot.",
+              } as const,
+            ];
+          }),
+        probeAccount: async ({ account, timeoutMs }) =>
+          await probeNextcloudTalkBotResponseFeature({ account, timeoutMs }),
         resolveAccountSnapshot: ({ account }) => ({
           accountId: account.accountId,
           name: account.name,
@@ -151,6 +177,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
         }),
       }),
       gateway: nextcloudTalkGatewayAdapter,
+      message: nextcloudTalkMessageAdapter,
     },
     pairing: {
       text: {
@@ -175,21 +202,22 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
       attachedResults: {
         channel: "nextcloud-talk",
         sendText: async ({ cfg, to, text, accountId, replyToId }) =>
-          await sendMessageNextcloudTalk(to, text, {
-            accountId: accountId ?? undefined,
-            replyTo: replyToId ?? undefined,
-            cfg: cfg as CoreConfig,
+          await nextcloudTalkMessageAdapter.send.text({
+            cfg,
+            to,
+            text,
+            accountId,
+            replyToId,
           }),
         sendMedia: async ({ cfg, to, text, mediaUrl, accountId, replyToId }) =>
-          await sendMessageNextcloudTalk(
+          await nextcloudTalkMessageAdapter.send.media({
+            cfg,
             to,
-            mediaUrl ? `${text}\n\nAttachment: ${mediaUrl}` : text,
-            {
-              accountId: accountId ?? undefined,
-              replyTo: replyToId ?? undefined,
-              cfg: cfg as CoreConfig,
-            },
-          ),
+            text,
+            mediaUrl: mediaUrl ?? "",
+            accountId,
+            replyToId,
+          }),
       },
     },
   });

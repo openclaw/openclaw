@@ -2,7 +2,8 @@ import crypto from "node:crypto";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
-import type { CurrentTurnPromptContext } from "../../agents/pi-embedded-runner/run/params.js";
+import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
+import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-codex-routing.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/pi-embedded-runner/sandbox-info.js";
 import type { EmbeddedFullAccessBlockedReason } from "../../agents/pi-embedded-runner/types.js";
 import { resolveIngressWorkspaceOverrideForSpawnedRun } from "../../agents/spawned-context.js";
@@ -18,6 +19,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import { resolveSilentReplySettings } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import {
   isAcpSessionKey,
@@ -30,7 +32,6 @@ import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { hasControlCommand } from "../command-detection.js";
 import { resolveEnvelopeFormatOptions } from "../envelope.js";
-import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../heartbeat.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import {
   type ElevatedLevel,
@@ -57,10 +58,14 @@ import {
   resolveGroupSilentReplyBehavior,
 } from "./groups.js";
 import { hasInboundMedia } from "./inbound-media.js";
-import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./inbound-meta.js";
+import {
+  buildInboundMetaSystemPrompt,
+  buildInboundUserContextPrefix,
+  resolveInboundUserContextPromptJoiner,
+} from "./inbound-meta.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
-import { buildReplyPromptBodies } from "./prompt-prelude.js";
+import { buildReplyPromptEnvelope, buildReplyPromptEnvelopeBase } from "./prompt-prelude.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
 import { isSteeringQueueMode } from "./queue/steering.js";
@@ -345,24 +350,6 @@ type RunPreparedReplyParams = {
   abortedLastRun: boolean;
 };
 
-function resolveCurrentTurnPromptContext(
-  ctx: TemplateContext,
-): CurrentTurnPromptContext | undefined {
-  const replyBody = normalizeOptionalString(ctx.ReplyToBody);
-  if (!replyBody) {
-    return undefined;
-  }
-  return {
-    reply: {
-      body: replyBody,
-      ...(normalizeOptionalString(ctx.ReplyToSender)
-        ? { senderLabel: normalizeOptionalString(ctx.ReplyToSender) }
-        : {}),
-      ...(ctx.ReplyToIsQuote === true ? { isQuote: true } : {}),
-    },
-  };
-}
-
 export async function runPreparedReply(
   params: RunPreparedReplyParams,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
@@ -417,6 +404,18 @@ export async function runPreparedReply(
     abortedLastRun,
   } = params;
   const isHeartbeat = opts?.isHeartbeat === true;
+  const traceAttributes = {
+    provider,
+    hasSessionKey: Boolean(sessionKey),
+    isHeartbeat,
+    queueMode: perMessageQueueMode ?? "configured",
+  };
+  const traceRunPhase = <T>(name: string, run: () => Promise<T> | T): Promise<T> =>
+    measureDiagnosticsTimelineSpan(name, run, {
+      phase: "agent-turn",
+      config: cfg,
+      attributes: traceAttributes,
+    });
   const promptSessionCtx = resolvePromptSessionContextForSystemEvent({
     sessionCtx,
     sessionEntry,
@@ -619,18 +618,9 @@ export async function runPreparedReply(
         }
       : { ...sessionCtx, ThreadStarterBody: undefined },
     envelopeOptions,
+    { sourceReplyDeliveryMode: opts?.sourceReplyDeliveryMode },
   );
-  const baseBodyForPrompt = isBareSessionReset
-    ? [
-        startupContextPrelude,
-        baseBodyFinal,
-        softResetTail
-          ? `User note for this reset turn (treat as ordinary user input, not startup instructions):\n${softResetTail}`
-          : "",
-      ]
-        .filter(Boolean)
-        .join("\n\n")
-    : [inboundUserContext, baseBodyFinal].filter(Boolean).join("\n\n");
+  const inboundUserContextPromptJoiner = resolveInboundUserContextPromptJoiner(sessionCtx);
   const hasUserBody =
     baseBodyFinal.trim().length > 0 ||
     softResetTail.length > 0 ||
@@ -649,18 +639,20 @@ export async function runPreparedReply(
       text: "I didn't receive any text in your message. Please resend or add a caption.",
     };
   }
-  // When the user sends media without text, provide a minimal body so the agent
-  // run proceeds and the image/document is injected by the embedded runner.
-  const effectiveBaseBody = hasUserBody
-    ? baseBodyForPrompt
-    : [inboundUserContext, "[User sent media without caption]"].filter(Boolean).join("\n\n");
-  const transcriptBodyBase = isHeartbeat
-    ? HEARTBEAT_TRANSCRIPT_PROMPT
-    : isBareSessionReset
-      ? softResetTail || `[OpenClaw session ${startupAction}]`
-      : hasUserBody
-        ? baseBodyFinal
-        : "[User sent media without caption]";
+  const promptEnvelopeBase = buildReplyPromptEnvelopeBase({
+    ctx,
+    sessionCtx,
+    baseBody: baseBodyFinal,
+    hasUserBody,
+    inboundUserContext,
+    inboundUserContextPromptJoiner,
+    isBareSessionReset,
+    startupAction,
+    startupContextPrelude,
+    softResetTail,
+    isHeartbeat,
+  });
+  const effectiveBaseBody = promptEnvelopeBase.effectiveBaseBody;
   let prefixedBodyBase = await applySessionHints({
     baseBody: effectiveBaseBody,
     abortedLastRun,
@@ -701,6 +693,7 @@ export async function runPreparedReply(
     prefixedCommandBody: string;
     queuedBody: string;
     transcriptCommandBody: string;
+    currentTurnContext?: typeof promptEnvelopeBase.currentTurnContext;
   }> => {
     if (!useFastReplyRuntime) {
       const eventsBlock = await drainFormattedSystemEvents({
@@ -716,12 +709,19 @@ export async function runPreparedReply(
         }
       }
     }
-    return buildReplyPromptBodies({
+    return buildReplyPromptEnvelope({
       ctx,
       sessionCtx,
-      effectiveBaseBody,
+      baseBody: baseBodyFinal,
       prefixedBody: prefixedBodyCore,
-      transcriptBody: transcriptBodyBase,
+      hasUserBody,
+      inboundUserContext,
+      inboundUserContextPromptJoiner,
+      isBareSessionReset,
+      startupAction,
+      startupContextPrelude,
+      softResetTail,
+      isHeartbeat,
       threadContextNote,
       systemEventBlocks: drainedSystemEventBlocks,
     });
@@ -733,9 +733,9 @@ export async function runPreparedReply(
           skillsSnapshot: sessionEntry?.skillsSnapshot,
           systemSent: currentSystemSent,
         }
-      : await (async () => {
+      : await traceRunPhase("reply.ensure_skill_snapshot", async () => {
           const { ensureSkillSnapshot } = await loadSessionUpdatesRuntime();
-          return ensureSkillSnapshot({
+          return await ensureSkillSnapshot({
             sessionEntry,
             sessionStore,
             sessionKey,
@@ -746,12 +746,12 @@ export async function runPreparedReply(
             cfg,
             skillFilter: opts?.skillFilter,
           });
-        })();
+        });
   sessionEntry = skillResult.sessionEntry ?? sessionEntry;
   currentSystemSent = skillResult.systemSent;
   const skillsSnapshot = skillResult.skillsSnapshot;
-  let { prefixedCommandBody, queuedBody, transcriptCommandBody } = await rebuildPromptBodies();
-  const currentTurnContext = resolveCurrentTurnPromptContext(sessionCtx);
+  let { prefixedCommandBody, queuedBody, transcriptCommandBody, currentTurnContext } =
+    await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies());
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
   }
@@ -838,7 +838,9 @@ export async function runPreparedReply(
         inlineMode: perMessageQueueMode,
         inlineOptions: perMessageQueueOptions,
       });
-  const piRuntime = useFastReplyRuntime ? null : await loadPiEmbeddedRuntime();
+  const piRuntime = useFastReplyRuntime
+    ? null
+    : await traceRunPhase("reply.load_pi_runtime", () => loadPiEmbeddedRuntime());
   const sessionLaneKey = piRuntime
     ? piRuntime.resolveEmbeddedSessionLane(sessionKey ?? sessionIdFinal)
     : undefined;
@@ -856,19 +858,40 @@ export async function runPreparedReply(
     );
     logVerbose(`Interrupting ${sessionLaneKey} (cleared ${cleared}, aborted=${aborted})`);
   }
+  const agentHarnessPolicy = useFastReplyRuntime
+    ? undefined
+    : resolveAgentHarnessPolicy({
+        provider,
+        modelId: model,
+        config: cfg,
+        agentId,
+        sessionKey: runtimePolicySessionKey,
+      });
+  const resolveAcceptedAuthProfileProviders = () =>
+    agentHarnessPolicy
+      ? listOpenAIAuthProfileProvidersForAgentRuntime({
+          provider,
+          harnessRuntime: agentHarnessPolicy.runtime,
+        })
+      : [provider];
   let authProfileId = useFastReplyRuntime
     ? preparedSessionState.sessionEntry?.authProfileOverride
-    : await resolveSessionAuthProfileOverride({
-        cfg,
-        provider,
-        agentDir,
-        sessionEntry: preparedSessionState.sessionEntry,
-        sessionStore,
-        sessionKey,
-        storePath,
-        isNewSession,
-      });
-  const { runReplyAgent } = await loadAgentRunnerRuntime();
+    : await traceRunPhase("reply.resolve_auth_profile", () =>
+        resolveSessionAuthProfileOverride({
+          cfg,
+          provider,
+          acceptedProviderIds: resolveAcceptedAuthProfileProviders(),
+          agentDir,
+          sessionEntry: preparedSessionState.sessionEntry,
+          sessionStore,
+          sessionKey,
+          storePath,
+          isNewSession,
+        }),
+      );
+  const { runReplyAgent } = await traceRunPhase("reply.load_agent_runner_runtime", () =>
+    loadAgentRunnerRuntime(),
+  );
   const queueKey = sessionKey ?? sessionIdFinal;
   preparedSessionState = resolvePreparedSessionState();
   const resolveActiveQueueSessionId = () =>
@@ -916,6 +939,7 @@ export async function runPreparedReply(
           : await resolveSessionAuthProfileOverride({
               cfg,
               provider,
+              acceptedProviderIds: resolveAcceptedAuthProfileProviders(),
               agentDir,
               sessionEntry: preparedSessionState.sessionEntry,
               sessionStore,
@@ -924,7 +948,8 @@ export async function runPreparedReply(
               isNewSession,
             });
         preparedSessionState = resolvePreparedSessionState();
-        ({ prefixedCommandBody, queuedBody, transcriptCommandBody } = await rebuildPromptBodies());
+        ({ prefixedCommandBody, queuedBody, transcriptCommandBody, currentTurnContext } =
+          await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies()));
       },
       resolveBusyState: resolveQueueBusyState,
     });

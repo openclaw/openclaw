@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { QaBusState } from "./bus-state.js";
 import { createQaTransportAdapter, type QaTransportId } from "./qa-transport-registry.js";
 import { renderQaMarkdownReport } from "./report.js";
@@ -29,6 +29,7 @@ export async function runQaSelfCheckAgainstState(params: {
   outputPath?: string;
   repoRoot?: string;
   notes?: string[];
+  waitTimeoutMs?: number;
 }): Promise<QaSelfCheckResult> {
   const startedAt = new Date();
   const transport = createQaTransportAdapter({
@@ -36,16 +37,19 @@ export async function runQaSelfCheckAgainstState(params: {
     state: params.state,
   });
   params.state.reset();
-  const scenarioResult = await runQaScenario(createQaSelfCheckScenario(), {
-    state: params.state,
-    performAction: async (action, args) =>
-      await transport.handleAction({
-        action,
-        args,
-        cfg: params.cfg,
-        accountId: transport.accountId,
-      }),
-  });
+  const scenarioResult = await runQaScenario(
+    createQaSelfCheckScenario({ waitTimeoutMs: params.waitTimeoutMs }),
+    {
+      state: params.state,
+      performAction: async (action, args) =>
+        await transport.handleAction({
+          action,
+          args,
+          cfg: params.cfg,
+          accountId: transport.accountId,
+        }),
+    },
+  );
   const checks = [
     {
       name: "QA self-check scenario",

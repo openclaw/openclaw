@@ -1,10 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { SessionManager } from "@mariozechner/pi-coding-agent";
-import type { SessionWriteLockAcquireTimeoutConfig } from "../../agents/session-write-lock.js";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { SessionManager } from "@earendil-works/pi-coding-agent";
+import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { extractAssistantVisibleText } from "../../shared/chat-message-content.js";
+import type { OpenClawConfig } from "../types.openclaw.js";
 import {
   resolveDefaultSessionStorePath,
   resolveSessionFilePath,
@@ -16,13 +18,19 @@ import { loadSessionStore, normalizeStoreSessionKey } from "./store.js";
 import { parseSessionThreadInfo } from "./thread-info.js";
 import { appendSessionTranscriptMessage } from "./transcript-append.js";
 import { resolveMirroredTranscriptText } from "./transcript-mirror.js";
+import {
+  streamSessionTranscriptLines,
+  streamSessionTranscriptLinesReverse,
+} from "./transcript-stream.js";
 import type { SessionEntry } from "./types.js";
 
-let piCodingAgentModulePromise: Promise<typeof import("@mariozechner/pi-coding-agent")> | null =
+let piCodingAgentModulePromise: Promise<typeof import("@earendil-works/pi-coding-agent")> | null =
   null;
 
-async function loadPiCodingAgentModule(): Promise<typeof import("@mariozechner/pi-coding-agent")> {
-  piCodingAgentModulePromise ??= import("@mariozechner/pi-coding-agent");
+async function loadPiCodingAgentModule(): Promise<
+  typeof import("@earendil-works/pi-coding-agent")
+> {
+  piCodingAgentModulePromise ??= import("@earendil-works/pi-coding-agent");
   return await piCodingAgentModulePromise;
 }
 
@@ -58,11 +66,36 @@ export type SessionTranscriptAssistantMessage = Parameters<SessionManager["appen
   role: "assistant";
 };
 
-export type LatestAssistantTranscriptText = {
+type AssistantTranscriptText = {
   id?: string;
   text: string;
   timestamp?: number;
 };
+
+export type LatestAssistantTranscriptText = AssistantTranscriptText;
+export type TailAssistantTranscriptText = AssistantTranscriptText;
+
+function parseAssistantTranscriptText(line: string): AssistantTranscriptText | undefined {
+  const parsed = JSON.parse(line) as {
+    id?: unknown;
+    message?: unknown;
+  };
+  const message = parsed.message as { role?: unknown; timestamp?: unknown } | undefined;
+  if (!message || message.role !== "assistant") {
+    return undefined;
+  }
+  const text = extractAssistantVisibleText(message)?.trim();
+  if (!text) {
+    return undefined;
+  }
+  return {
+    ...(typeof parsed.id === "string" && parsed.id ? { id: parsed.id } : {}),
+    text,
+    ...(typeof message.timestamp === "number" && Number.isFinite(message.timestamp)
+      ? { timestamp: message.timestamp }
+      : {}),
+  };
+}
 
 export async function resolveSessionTranscriptFile(params: {
   sessionId: string;
@@ -116,41 +149,31 @@ export async function readLatestAssistantTextFromSessionTranscript(
     return undefined;
   }
 
-  let raw: string;
-  try {
-    raw = await fs.promises.readFile(sessionFile, "utf-8");
-  } catch {
+  for await (const line of streamSessionTranscriptLinesReverse(sessionFile)) {
+    try {
+      const assistantText = parseAssistantTranscriptText(line);
+      if (assistantText) {
+        return assistantText;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return undefined;
+}
+
+export async function readTailAssistantTextFromSessionTranscript(
+  sessionFile: string | undefined,
+): Promise<TailAssistantTranscriptText | undefined> {
+  if (!sessionFile?.trim()) {
     return undefined;
   }
 
-  const lines = raw.split(/\r?\n/);
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    const line = lines[index];
-    if (!line.trim()) {
-      continue;
-    }
+  for await (const line of streamSessionTranscriptLinesReverse(sessionFile)) {
     try {
-      const parsed = JSON.parse(line) as {
-        id?: unknown;
-        message?: unknown;
-      };
-      const message = parsed.message as { role?: unknown; timestamp?: unknown } | undefined;
-      if (!message || message.role !== "assistant") {
-        continue;
-      }
-      const text = extractAssistantVisibleText(message)?.trim();
-      if (!text) {
-        continue;
-      }
-      return {
-        ...(typeof parsed.id === "string" && parsed.id ? { id: parsed.id } : {}),
-        text,
-        ...(typeof message.timestamp === "number" && Number.isFinite(message.timestamp)
-          ? { timestamp: message.timestamp }
-          : {}),
-      };
+      return parseAssistantTranscriptText(line);
     } catch {
-      continue;
+      return undefined;
     }
   }
   return undefined;
@@ -165,7 +188,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   /** Optional override for store path (mostly for tests). */
   storePath?: string;
   updateMode?: SessionTranscriptUpdateMode;
-  config?: SessionWriteLockAcquireTimeoutConfig;
+  config?: OpenClawConfig;
 }): Promise<SessionTranscriptAppendResult> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
@@ -220,7 +243,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   idempotencyKey?: string;
   storePath?: string;
   updateMode?: SessionTranscriptUpdateMode;
-  config?: SessionWriteLockAcquireTimeoutConfig;
+  config?: OpenClawConfig;
 }): Promise<SessionTranscriptAppendResult> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
@@ -274,7 +297,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   }
 
   const latestEquivalentAssistantId = isRedundantDeliveryMirror(params.message)
-    ? await findLatestEquivalentAssistantMessageId(sessionFile, params.message)
+    ? await findLatestEquivalentAssistantMessageId(sessionFile, params.message, params.config)
     : undefined;
   if (latestEquivalentAssistantId) {
     return { ok: true, sessionFile, messageId: latestEquivalentAssistantId };
@@ -284,7 +307,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
     ...params.message,
     ...(explicitIdempotencyKey ? { idempotencyKey: explicitIdempotencyKey } : {}),
   } as Parameters<SessionManager["appendMessage"]>[0];
-  const { messageId } = await appendSessionTranscriptMessage({
+  const { messageId, message: appendedMessage } = await appendSessionTranscriptMessage({
     transcriptPath: sessionFile,
     message,
     config: params.config,
@@ -292,7 +315,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
 
   switch (params.updateMode ?? "inline") {
     case "inline":
-      emitSessionTranscriptUpdate({ sessionFile, sessionKey, message, messageId });
+      emitSessionTranscriptUpdate({ sessionFile, sessionKey, message: appendedMessage, messageId });
       break;
     case "file-only":
       emitSessionTranscriptUpdate({ sessionFile, sessionKey });
@@ -308,11 +331,7 @@ async function transcriptHasIdempotencyKey(
   idempotencyKey: string,
 ): Promise<string | true | undefined> {
   try {
-    const raw = await fs.promises.readFile(transcriptPath, "utf-8");
-    for (const line of raw.split(/\r?\n/)) {
-      if (!line.trim()) {
-        continue;
-      }
+    for await (const line of streamSessionTranscriptLines(transcriptPath)) {
       try {
         const parsed = JSON.parse(line) as {
           id?: unknown;
@@ -364,43 +383,41 @@ function extractAssistantMessageText(message: SessionTranscriptAssistantMessage)
 async function findLatestEquivalentAssistantMessageId(
   transcriptPath: string,
   message: SessionTranscriptAssistantMessage,
+  config?: OpenClawConfig,
 ): Promise<string | undefined> {
-  const expectedText = extractAssistantMessageText(message);
+  const expectedText = extractAssistantMessageText(
+    redactTranscriptMessage(message, config) as unknown as SessionTranscriptAssistantMessage,
+  );
   if (!expectedText) {
     return undefined;
   }
 
-  try {
-    const raw = await fs.promises.readFile(transcriptPath, "utf-8");
-    const lines = raw.split(/\r?\n/);
-    for (let index = lines.length - 1; index >= 0; index -= 1) {
-      const line = lines[index];
-      if (!line.trim()) {
+  for await (const line of streamSessionTranscriptLinesReverse(transcriptPath)) {
+    try {
+      const parsed = JSON.parse(line) as {
+        id?: unknown;
+        message?: SessionTranscriptAssistantMessage;
+      };
+      const candidate = parsed.message;
+      if (!candidate || candidate.role !== "assistant") {
         continue;
       }
-      try {
-        const parsed = JSON.parse(line) as {
-          id?: unknown;
-          message?: SessionTranscriptAssistantMessage;
-        };
-        const candidate = parsed.message;
-        if (!candidate || candidate.role !== "assistant") {
-          continue;
-        }
-        const candidateText = extractAssistantMessageText(candidate);
-        if (candidateText !== expectedText) {
-          return undefined;
-        }
-        if (typeof parsed.id === "string" && parsed.id) {
-          return parsed.id;
-        }
+      const candidateText = extractAssistantMessageText(
+        redactTranscriptMessage(
+          candidate as AgentMessage,
+          config,
+        ) as unknown as SessionTranscriptAssistantMessage,
+      );
+      if (candidateText !== expectedText) {
         return undefined;
-      } catch {
-        continue;
       }
+      if (typeof parsed.id === "string" && parsed.id) {
+        return parsed.id;
+      }
+      return undefined;
+    } catch {
+      continue;
     }
-  } catch {
-    return undefined;
   }
 
   return undefined;

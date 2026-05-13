@@ -58,9 +58,15 @@ export type UpdateRunResult = {
   durationMs: number;
   postUpdate?: {
     plugins?: {
-      status: "ok" | "skipped" | "error";
+      status: "ok" | "warning" | "skipped" | "error";
       reason?: string;
       changed: boolean;
+      warnings?: Array<{
+        pluginId?: string;
+        reason: string;
+        message: string;
+        guidance: string[];
+      }>;
       sync: {
         changed: boolean;
         switchedToBundled: string[];
@@ -169,7 +175,13 @@ const PREFLIGHT_TEMP_PREFIX =
 const PREFLIGHT_WORKTREE_DIRNAME = process.platform === "win32" ? "wt" : "worktree";
 const PREFLIGHT_CLEANUP_TIMEOUT_MS = 60_000;
 const WINDOWS_PREFLIGHT_BASE_DIR = "ocu";
-const WINDOWS_BUILD_MAX_OLD_SPACE_MB = 4096;
+const BUILD_MAX_OLD_SPACE_MB = 8192;
+const DEV_PREFLIGHT_LINT_ENV: NodeJS.ProcessEnv = {
+  OPENCLAW_LOCAL_CHECK: "1",
+  OPENCLAW_LOCAL_CHECK_MODE: "throttled",
+  OPENCLAW_OXLINT_SHARDS_SERIAL: "1",
+};
+const DEV_PREFLIGHT_LINT_OPT_IN_ENV = "OPENCLAW_UPDATE_PREFLIGHT_LINT";
 
 function normalizeDir(value?: string | null) {
   if (!value) {
@@ -491,32 +503,44 @@ function shouldPreferIgnoreScriptsForWindowsPreflight(manager: "pnpm" | "bun" | 
   return process.platform === "win32" && manager === "pnpm";
 }
 
-function resolveWindowsBuildNodeOptions(baseOptions: string | undefined): string {
+function resolveBuildNodeOptions(baseOptions: string | undefined): string {
   const current = baseOptions?.trim() ?? "";
-  const desired = `--max-old-space-size=${WINDOWS_BUILD_MAX_OLD_SPACE_MB}`;
+  const desired = `--max-old-space-size=${BUILD_MAX_OLD_SPACE_MB}`;
   const existingMatch = /(?:^|\s)--max-old-space-size=(\d+)(?=\s|$)/.exec(current);
   if (!existingMatch) {
     return current ? `${current} ${desired}` : desired;
   }
   const existingValue = Number(existingMatch[1]);
-  if (Number.isFinite(existingValue) && existingValue >= WINDOWS_BUILD_MAX_OLD_SPACE_MB) {
+  if (Number.isFinite(existingValue) && existingValue >= BUILD_MAX_OLD_SPACE_MB) {
     return current;
   }
   return current.replace(/(?:^|\s)--max-old-space-size=\d+(?=\s|$)/, ` ${desired}`).trim();
 }
 
-function resolveWindowsBuildEnv(env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv | undefined {
-  if (process.platform !== "win32") {
-    return env;
-  }
+function resolveBuildEnv(env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv | undefined {
   const currentNodeOptions = env?.NODE_OPTIONS ?? process.env.NODE_OPTIONS;
-  const nextNodeOptions = resolveWindowsBuildNodeOptions(currentNodeOptions);
+  const nextNodeOptions = resolveBuildNodeOptions(currentNodeOptions);
   if (nextNodeOptions === currentNodeOptions) {
     return env;
   }
   return {
     ...env,
     NODE_OPTIONS: nextNodeOptions,
+  };
+}
+
+function resolveInstallEnv(
+  manager: "pnpm" | "bun" | "npm",
+  env?: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv | undefined {
+  if (manager !== "pnpm") {
+    return env;
+  }
+  return {
+    ...env,
+    PNPM_CONFIG_RESOLUTION_MODE: env?.PNPM_CONFIG_RESOLUTION_MODE ?? "highest",
+    npm_config_resolution_mode: env?.npm_config_resolution_mode ?? "highest",
+    pnpm_config_resolution_mode: env?.pnpm_config_resolution_mode ?? "highest",
   };
 }
 
@@ -560,8 +584,16 @@ function mergeCommandEnvironments(
   };
 }
 
-function shouldRunDevPreflightLint(): boolean {
-  return process.platform !== "win32";
+function shouldRunDevPreflightLint(env: NodeJS.ProcessEnv = process.env): boolean {
+  const value = env[DEV_PREFLIGHT_LINT_OPT_IN_ENV]?.trim().toLowerCase();
+  return value === "1" || value === "true";
+}
+
+function resolveDevPreflightLintEnv(env: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv {
+  return {
+    ...env,
+    ...DEV_PREFLIGHT_LINT_ENV,
+  };
 }
 
 function normalizeFallbackFailureReason(stepName: string): NonNullable<UpdateRunResult["reason"]> {
@@ -737,11 +769,11 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       steps,
       durationMs: Date.now() - startedAt,
     });
-    const runGitCheckoutOrFail = async (name: string, argv: string[]) => {
-      const checkoutStep = await runStep(step(name, argv, gitRoot));
-      steps.push(checkoutStep);
-      if (checkoutStep.exitCode !== 0) {
-        return buildGitErrorResult("checkout-failed");
+    const runRequiredGitStep = async (name: string, argv: string[], reason: string) => {
+      const gitStep = await runStep(step(name, argv, gitRoot));
+      steps.push(gitStep);
+      if (gitStep.exitCode !== 0) {
+        return buildGitErrorResult(reason);
       }
       return null;
     };
@@ -770,22 +802,24 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
 
     if (channel === "dev") {
       if (needsCheckoutMain) {
-        const failure = await runGitCheckoutOrFail(`git checkout ${DEV_BRANCH}`, [
-          "git",
-          "-C",
-          gitRoot,
-          "checkout",
-          DEV_BRANCH,
-        ]);
+        const failure = await runRequiredGitStep(
+          `git checkout ${DEV_BRANCH}`,
+          ["git", "-C", gitRoot, "checkout", DEV_BRANCH],
+          "checkout-failed",
+        );
         if (failure) {
           return failure;
         }
       }
 
-      const fetchStep = await runStep(
-        step("git fetch", ["git", "-C", gitRoot, "fetch", "--all", "--prune", "--tags"], gitRoot),
+      const fetchFailure = await runRequiredGitStep(
+        "git fetch",
+        ["git", "-C", gitRoot, "fetch", "--all", "--prune", "--tags"],
+        "fetch-failed",
       );
-      steps.push(fetchStep);
+      if (fetchFailure) {
+        return fetchFailure;
+      }
       let preflightBaseSha: string | null = null;
       let candidates: string[] = [];
       if (devTargetRef) {
@@ -987,9 +1021,8 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           const depsStepName = preflightIgnoreScripts
             ? `preflight deps install (ignore scripts) (${shortSha})`
             : `preflight deps install (${shortSha})`;
-          const depsStep = await runStep(
-            step(depsStepName, depsStepArgv, worktreeDir, manager.env),
-          );
+          const installEnv = resolveInstallEnv(manager.manager, manager.env);
+          const depsStep = await runStep(step(depsStepName, depsStepArgv, worktreeDir, installEnv));
           steps.push(depsStep);
           let finalDepsStep = depsStep;
           if (
@@ -1004,7 +1037,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
                   `preflight deps install (ignore scripts) (${shortSha})`,
                   retryArgv,
                   worktreeDir,
-                  manager.env,
+                  installEnv,
                 ),
               );
               steps.push(retryStep);
@@ -1020,7 +1053,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
               `preflight build (${shortSha})`,
               managerScriptArgs(manager.manager, "build"),
               worktreeDir,
-              resolveWindowsBuildEnv(manager.env),
+              resolveBuildEnv(manager.env),
             ),
           );
           steps.push(buildStep);
@@ -1034,7 +1067,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
                 `preflight lint (${shortSha})`,
                 managerScriptArgs(manager.manager, "lint"),
                 worktreeDir,
-                manager.env,
+                resolveDevPreflightLintEnv(manager.env),
               ),
             );
             steps.push(lintStep);
@@ -1091,14 +1124,11 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       }
 
       if (devTargetRef) {
-        const failure = await runGitCheckoutOrFail(`git checkout ${selectedSha}`, [
-          "git",
-          "-C",
-          gitRoot,
-          "checkout",
-          "--detach",
-          selectedSha,
-        ]);
+        const failure = await runRequiredGitStep(
+          `git checkout ${selectedSha}`,
+          ["git", "-C", gitRoot, "checkout", "--detach", selectedSha],
+          "checkout-failed",
+        );
         if (failure) {
           return failure;
         }
@@ -1133,20 +1163,13 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         }
       }
     } else {
-      const fetchStep = await runStep(
-        step("git fetch", ["git", "-C", gitRoot, "fetch", "--all", "--prune", "--tags"], gitRoot),
+      const fetchFailure = await runRequiredGitStep(
+        "git fetch",
+        ["git", "-C", gitRoot, "fetch", "--all", "--prune", "--tags"],
+        "fetch-failed",
       );
-      steps.push(fetchStep);
-      if (fetchStep.exitCode !== 0) {
-        return {
-          status: "error",
-          mode: "git",
-          root: gitRoot,
-          reason: "fetch-failed",
-          before: { sha: beforeSha, version: beforeVersion },
-          steps,
-          durationMs: Date.now() - startedAt,
-        };
+      if (fetchFailure) {
+        return fetchFailure;
       }
 
       const tag = await resolveChannelTag(runCommand, gitRoot, timeoutMs, channel);
@@ -1162,14 +1185,11 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         };
       }
 
-      const failure = await runGitCheckoutOrFail(`git checkout ${tag}`, [
-        "git",
-        "-C",
-        gitRoot,
-        "checkout",
-        "--detach",
-        tag,
-      ]);
+      const failure = await runRequiredGitStep(
+        `git checkout ${tag}`,
+        ["git", "-C", gitRoot, "checkout", "--detach", tag],
+        "checkout-failed",
+      );
       if (failure) {
         return failure;
       }
@@ -1194,6 +1214,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       };
     }
     try {
+      const installEnv = resolveInstallEnv(manager.manager, manager.env);
       const depsStep = await runStep(
         step(
           "deps install",
@@ -1201,7 +1222,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
             compatFallback: manager.fallback && manager.manager === "npm",
           }),
           gitRoot,
-          manager.env,
+          installEnv,
         ),
       );
       steps.push(depsStep);
@@ -1210,7 +1231,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         const retryArgv = managerInstallIgnoreScriptsArgs(manager.manager);
         if (retryArgv) {
           const retryStep = await runStep(
-            step("deps install (ignore scripts)", retryArgv, gitRoot, manager.env),
+            step("deps install (ignore scripts)", retryArgv, gitRoot, installEnv),
           );
           steps.push(retryStep);
           finalDepsStep = retryStep;
@@ -1233,7 +1254,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           "build",
           managerScriptArgs(manager.manager, "build"),
           gitRoot,
-          resolveWindowsBuildEnv(manager.env),
+          resolveBuildEnv(manager.env),
         ),
       );
       steps.push(buildStep);

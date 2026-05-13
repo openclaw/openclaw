@@ -1,4 +1,4 @@
-import type { Model } from "@mariozechner/pi-ai";
+import type { Model } from "@earendil-works/pi-ai";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
@@ -13,8 +13,8 @@ const hoisted = vi.hoisted(() => ({
   completeMock: vi.fn(),
 }));
 
-vi.mock("@mariozechner/pi-ai", () => ({
-  complete: hoisted.completeMock,
+vi.mock("@earendil-works/pi-ai", () => ({
+  completeSimple: hoisted.completeMock,
 }));
 
 vi.mock("./pi-embedded-runner/model.js", () => ({
@@ -91,6 +91,23 @@ beforeEach(() => {
   hoisted.prepareProviderRuntimeAuthMock.mockResolvedValue(undefined);
 });
 
+function expectPreparedModelResult(
+  result: Awaited<ReturnType<typeof prepareSimpleCompletionModel>>,
+): asserts result is Exclude<typeof result, { error: string }> {
+  expect(result).not.toHaveProperty("error");
+  if ("error" in result) {
+    throw new Error(result.error);
+  }
+}
+
+function callArg(mock: { mock: { calls: unknown[][] } }, index = 0): unknown {
+  const call = mock.mock.calls[index];
+  if (!call) {
+    throw new Error(`Expected mock call ${index}`);
+  }
+  return call[0];
+}
+
 describe("prepareSimpleCompletionModel", () => {
   it("resolves model auth and sets runtime api key", async () => {
     hoisted.getApiKeyForModelMock.mockResolvedValueOnce({
@@ -106,18 +123,11 @@ describe("prepareSimpleCompletionModel", () => {
       agentDir: "/tmp/openclaw-agent",
     });
 
-    expect(result).toEqual(
-      expect.objectContaining({
-        model: expect.objectContaining({
-          provider: "anthropic",
-          id: "claude-opus-4-6",
-        }),
-        auth: expect.objectContaining({
-          mode: "api-key",
-          source: "env:TEST_API_KEY",
-        }),
-      }),
-    );
+    expectPreparedModelResult(result);
+    expect(result.model.provider).toBe("anthropic");
+    expect(result.model.id).toBe("claude-opus-4-6");
+    expect(result.auth.mode).toBe("api-key");
+    expect(result.auth.source).toBe("env:TEST_API_KEY");
     expect(hoisted.setRuntimeApiKeyMock).toHaveBeenCalledWith("anthropic", "sk-test");
   });
 
@@ -187,18 +197,13 @@ describe("prepareSimpleCompletionModel", () => {
       allowMissingApiKeyModes: ["aws-sdk"],
     });
 
-    expect(result).toEqual(
-      expect.objectContaining({
-        model: expect.objectContaining({
-          provider: "amazon-bedrock",
-          id: "anthropic.claude-sonnet-4-6",
-        }),
-        auth: {
-          source: "aws-sdk default chain",
-          mode: "aws-sdk",
-        },
-      }),
-    );
+    expectPreparedModelResult(result);
+    expect(result.model.provider).toBe("amazon-bedrock");
+    expect(result.model.id).toBe("anthropic.claude-sonnet-4-6");
+    expect(result.auth).toEqual({
+      source: "aws-sdk default chain",
+      mode: "aws-sdk",
+    });
     expect(hoisted.setRuntimeApiKeyMock).not.toHaveBeenCalled();
   });
 
@@ -301,11 +306,7 @@ describe("prepareSimpleCompletionModel", () => {
     if ("error" in result) {
       return;
     }
-    expect(result.model).toEqual(
-      expect.objectContaining({
-        baseUrl: "https://api.copilot.enterprise.example",
-      }),
-    );
+    expect(result.model.baseUrl).toBe("https://api.copilot.enterprise.example");
   });
 
   it("returns error when getApiKeyForModel throws", async () => {
@@ -353,24 +354,24 @@ describe("prepareSimpleCompletionModel", () => {
       modelId: "chat-local",
     });
 
-    expect(hoisted.applyLocalNoAuthHeaderOverrideMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "local-openai",
-        id: "chat-local",
-      }),
-      expect.objectContaining({
-        apiKey: "custom-local",
-        source: "models.providers.local-openai (synthetic local key)",
-        mode: "api-key",
-      }),
+    const overrideCall = hoisted.applyLocalNoAuthHeaderOverrideMock.mock.calls.at(0);
+    expect((overrideCall?.[0] as { provider?: string; id?: string } | undefined)?.provider).toBe(
+      "local-openai",
     );
-    expect(result).toEqual(
-      expect.objectContaining({
-        model: expect.objectContaining({
-          headers: expect.objectContaining({ Authorization: null }),
-        }),
-      }),
+    expect((overrideCall?.[0] as { provider?: string; id?: string } | undefined)?.id).toBe(
+      "chat-local",
     );
+    expect((overrideCall?.[1] as { apiKey?: string; source?: string; mode?: string })?.apiKey).toBe(
+      "custom-local",
+    );
+    expect((overrideCall?.[1] as { apiKey?: string; source?: string; mode?: string })?.source).toBe(
+      "models.providers.local-openai (synthetic local key)",
+    );
+    expect((overrideCall?.[1] as { apiKey?: string; source?: string; mode?: string })?.mode).toBe(
+      "api-key",
+    );
+    expectPreparedModelResult(result);
+    expect(result.model.headers?.Authorization).toBeNull();
   });
 
   it("applies provider runtime auth before storing simple-completion credentials", async () => {
@@ -403,32 +404,29 @@ describe("prepareSimpleCompletionModel", () => {
       agentDir: "/tmp/openclaw-agent",
     });
 
-    expect(hoisted.prepareProviderRuntimeAuthMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "amazon-bedrock-mantle",
-        workspaceDir: "/tmp/openclaw-agent",
-        context: expect.objectContaining({
-          apiKey: "__amazon_bedrock_mantle_iam__",
-          authMode: "api-key",
-          modelId: "anthropic.claude-opus-4-7",
-          profileId: "mantle",
-        }),
-      }),
-    );
+    const runtimeAuthInput = callArg(hoisted.prepareProviderRuntimeAuthMock) as {
+      provider?: string;
+      workspaceDir?: string;
+      context?: {
+        apiKey?: string;
+        authMode?: string;
+        modelId?: string;
+        profileId?: string;
+      };
+    };
+    expect(runtimeAuthInput.provider).toBe("amazon-bedrock-mantle");
+    expect(runtimeAuthInput.workspaceDir).toBe("/tmp/openclaw-agent");
+    expect(runtimeAuthInput.context?.apiKey).toBe("__amazon_bedrock_mantle_iam__");
+    expect(runtimeAuthInput.context?.authMode).toBe("api-key");
+    expect(runtimeAuthInput.context?.modelId).toBe("anthropic.claude-opus-4-7");
+    expect(runtimeAuthInput.context?.profileId).toBe("mantle");
     expect(hoisted.setRuntimeApiKeyMock).toHaveBeenCalledWith(
       "amazon-bedrock-mantle",
       "bedrock-runtime-token",
     );
-    expect(result).toEqual(
-      expect.objectContaining({
-        model: expect.objectContaining({
-          baseUrl: "https://bedrock-mantle.us-east-1.api.aws/anthropic",
-        }),
-        auth: expect.objectContaining({
-          apiKey: "bedrock-runtime-token",
-        }),
-      }),
-    );
+    expectPreparedModelResult(result);
+    expect(result.model.baseUrl).toBe("https://bedrock-mantle.us-east-1.api.aws/anthropic");
+    expect(result.auth.apiKey).toBe("bedrock-runtime-token");
   });
 
   it("can skip Pi model/auth discovery for config-scoped one-shot completions", async () => {
@@ -463,6 +461,39 @@ describe("prepareSimpleCompletionModel", () => {
       undefined,
       undefined,
       {
+        skipPiDiscovery: true,
+      },
+    );
+  });
+
+  it("passes static catalog fallback opt-in to skip-discovery model resolution", async () => {
+    hoisted.resolveModelAsyncMock.mockResolvedValueOnce({
+      model: {
+        provider: "mistral",
+        id: "mistral-medium-3-5",
+      },
+      authStorage: {
+        setRuntimeApiKey: hoisted.setRuntimeApiKeyMock,
+      },
+      modelRegistry: {},
+    });
+
+    const result = await prepareSimpleCompletionModel({
+      cfg: undefined,
+      provider: "mistral",
+      modelId: "mistral-medium-3-5",
+      allowBundledStaticCatalogFallback: true,
+      skipPiDiscovery: true,
+    });
+
+    expect(result).not.toHaveProperty("error");
+    expect(hoisted.resolveModelAsyncMock).toHaveBeenCalledWith(
+      "mistral",
+      "mistral-medium-3-5",
+      undefined,
+      undefined,
+      {
+        allowBundledStaticCatalogFallback: true,
         skipPiDiscovery: true,
       },
     );
@@ -513,6 +544,87 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
       },
       {
         apiKey: "ollama-local",
+      },
+    );
+  });
+
+  it("normalizes OpenClaw-only thinking levels before using pi-ai simple completion", async () => {
+    const model = {
+      provider: "openai",
+      id: "gpt-5.4",
+      name: "gpt-5.4",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 4096,
+    } satisfies Model<"openai-responses">;
+
+    await completeWithPreparedSimpleCompletionModel({
+      model,
+      auth: {
+        apiKey: "sk-test",
+        source: "env:OPENAI_API_KEY",
+        mode: "api-key",
+      },
+      context: {
+        messages: [{ role: "user", content: "pong", timestamp: 1 }],
+      },
+      options: {
+        reasoning: "max",
+      },
+    });
+
+    expect(hoisted.completeMock).toHaveBeenCalledWith(
+      model,
+      {
+        messages: [{ role: "user", content: "pong", timestamp: 1 }],
+      },
+      {
+        reasoning: "xhigh",
+        apiKey: "sk-test",
+      },
+    );
+  });
+
+  it("omits reasoning for local simple completion when thinking is off", async () => {
+    const model = {
+      provider: "openai",
+      id: "gpt-5.4",
+      name: "gpt-5.4",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 4096,
+    } satisfies Model<"openai-responses">;
+
+    await completeWithPreparedSimpleCompletionModel({
+      model,
+      auth: {
+        apiKey: "sk-test",
+        source: "env:OPENAI_API_KEY",
+        mode: "api-key",
+      },
+      context: {
+        messages: [{ role: "user", content: "pong", timestamp: 1 }],
+      },
+      options: {
+        reasoning: "off",
+      },
+    });
+
+    expect(hoisted.completeMock).toHaveBeenCalledWith(
+      model,
+      {
+        messages: [{ role: "user", content: "pong", timestamp: 1 }],
+      },
+      {
+        apiKey: "sk-test",
       },
     );
   });

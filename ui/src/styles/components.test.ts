@@ -1,14 +1,8 @@
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { readStyleSheet } from "../../../test/helpers/ui-style-fixtures.js";
 
 function readComponentsCss(): string {
-  const cssPath = [
-    resolve(process.cwd(), "ui/src/styles/components.css"),
-    resolve(process.cwd(), "..", "ui/src/styles/components.css"),
-  ].find((candidate) => existsSync(candidate));
-  expect(cssPath).toBeTruthy();
-  return readFileSync(cssPath!, "utf8");
+  return readStyleSheet("ui/src/styles/components.css");
 }
 
 describe("agent fallback chip styles", () => {
@@ -32,6 +26,40 @@ describe("sessions filter styles", () => {
     expect(css).toContain(".sessions-filter-bar {\n  display: flex;\n  flex-wrap: wrap;");
     expect(css).toContain("@media (max-width: 760px)");
     expect(css).toContain(".sessions-filter-bar {\n    flex-direction: column;");
+  });
+});
+
+describe("sessions table responsive styles", () => {
+  it("keeps the compaction disclosure and details usable on narrow screens", () => {
+    const componentsCss = readComponentsCss();
+    const mobileCss = readStyleSheet("ui/src/styles/layout.mobile.css");
+
+    expect(componentsCss).toContain(".session-compaction-cell {");
+    expect(componentsCss).toContain(".session-compaction-trigger {");
+    expect(componentsCss).toContain(".session-status-badge {");
+    expect(componentsCss).toContain(".sessions-table tbody tr.session-data-row > td {");
+    expect(componentsCss).toContain(".session-runtime-cell .mono {");
+    expect(componentsCss).toContain("text-overflow: ellipsis;");
+    expect(componentsCss).toContain(".session-details-panel {");
+    expect(componentsCss).not.toContain(".session-checkpoint-toggle {");
+    expect(mobileCss).toContain(".data-table.sessions-table {\n    min-width: 560px;");
+    expect(mobileCss).toContain(
+      ".sessions-table th:nth-child(12),\n  .sessions-table td:nth-child(12),\n  .sessions-table th:nth-child(13),\n  .sessions-table td:nth-child(13)",
+    );
+    expect(mobileCss).toContain(
+      ".sessions-table th:nth-child(4),\n  .sessions-table td:nth-child(4),\n  .sessions-table th:nth-child(11),\n  .sessions-table td:nth-child(11)",
+    );
+    expect(mobileCss).toContain(
+      ".sessions-table th:nth-child(3),\n  .sessions-table td:nth-child(3),\n  .sessions-table th:nth-child(10),\n  .sessions-table td:nth-child(10)",
+    );
+    expect(mobileCss).toContain(
+      ".sessions-table th:nth-child(6),\n  .sessions-table td:nth-child(6),\n  .sessions-table th:nth-child(7),\n  .sessions-table td:nth-child(7)",
+    );
+    expect(mobileCss).toContain(".data-table.sessions-table .data-table-key-col {");
+    expect(mobileCss).toContain(".sessions-table .session-status-col {");
+    expect(mobileCss).not.toContain(
+      ".sessions-table th:nth-child(5),\n  .sessions-table td:nth-child(5)",
+    );
   });
 });
 

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/ids.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
 import { withBundledPluginAllowlistCompat } from "../plugins/bundled-compat.js";
 import {
@@ -1419,8 +1420,8 @@ function validateConfigObjectWithPluginsBase(
       }
       if (
         sourcePath === resolvedLoadPath ||
-        sourcePath.startsWith(`${resolvedLoadPath}${path.sep}`) ||
-        resolvedLoadPath.startsWith(`${sourcePath}${path.sep}`)
+        isPathInside(resolvedLoadPath, sourcePath) ||
+        isPathInside(sourcePath, resolvedLoadPath)
       ) {
         return true;
       }
@@ -1441,7 +1442,7 @@ function validateConfigObjectWithPluginsBase(
   const pushMissingPluginIssue = (
     path: string,
     pluginId: string,
-    opts?: { warnOnly?: boolean },
+    opts?: { warnOnly?: boolean; officialInstallHint?: boolean },
   ) => {
     if (LEGACY_REMOVED_PLUGIN_IDS.has(pluginId)) {
       warnings.push({
@@ -1461,7 +1462,7 @@ function validateConfigObjectWithPluginsBase(
       }
       return;
     }
-    if (opts?.warnOnly) {
+    if (opts?.warnOnly && opts.officialInstallHint !== false) {
       const externalInstallWarning = formatMissingOfficialExternalPluginWarning(pluginId);
       if (externalInstallWarning) {
         warnings.push({
@@ -1525,7 +1526,10 @@ function validateConfigObjectWithPluginsBase(
       continue;
     }
     if (!knownIds.has(pluginId)) {
-      pushMissingPluginIssue("plugins.deny", pluginId);
+      pushMissingPluginIssue("plugins.deny", pluginId, {
+        warnOnly: true,
+        officialInstallHint: false,
+      });
     }
   }
 

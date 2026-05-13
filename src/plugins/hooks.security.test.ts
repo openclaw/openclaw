@@ -62,6 +62,18 @@ function expectTerminalHookState<
   }
 }
 
+function requireLoggerErrorMessage(logger: { error: { mock: { calls: unknown[][] } } }): string {
+  const call = logger.error.mock.calls[0];
+  if (!call) {
+    throw new Error("expected logger error call");
+  }
+  expect(typeof call[0]).toBe("string");
+  if (typeof call[0] !== "string") {
+    throw new Error("expected logger error message to be a string");
+  }
+  return call[0];
+}
+
 describe("before_tool_call terminal block semantics", () => {
   let registry: PluginRegistry;
 
@@ -147,7 +159,7 @@ describe("before_tool_call terminal block semantics", () => {
     expect(second).not.toHaveBeenCalled();
   });
 
-  it("stops before lower-priority throwing hooks when catchErrors is false", async () => {
+  it("stops before lower-priority before-tool-call hooks when catchErrors is false", async () => {
     const low = vi.fn().mockImplementation(() => {
       throw new Error("should not run");
     });
@@ -211,7 +223,7 @@ describe("before_tool_call terminal block semantics", () => {
 
     await runner.runMessageReceived({ from: "user-1", content: "hi" }, { channelId: "whatsapp" });
 
-    const message = String(logger.error.mock.calls[0]?.[0] ?? "");
+    const message = requireLoggerErrorMessage(logger);
     expect(message).toMatch(
       /^\[hooks\] message_received handler from failing failed: boom forged secret/,
     );
@@ -295,7 +307,7 @@ describe("message_sending terminal cancel semantics", () => {
     expect(result?.content).toBe("second");
   });
 
-  it("stops before lower-priority throwing hooks when catchErrors is false", async () => {
+  it("stops before lower-priority message-sending hooks when catchErrors is false", async () => {
     const low = vi.fn().mockImplementation(() => {
       throw new Error("should not run");
     });

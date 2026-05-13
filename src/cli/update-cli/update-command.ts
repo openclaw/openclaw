@@ -10,6 +10,7 @@ import {
 import { doctorCommand } from "../../commands/doctor.js";
 import {
   ConfigMutationConflictError,
+  assertConfigWriteAllowedInCurrentMode,
   readConfigFileSnapshot,
   replaceConfigFile,
   resolveGatewayPort,
@@ -27,6 +28,8 @@ import {
   type GatewayService,
 } from "../../daemon/service.js";
 import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
+import { pathExists } from "../../infra/fs-safe.js";
+import { readJsonIfExists, writeJson } from "../../infra/json-files.js";
 import { runGlobalPackageUpdateSteps } from "../../infra/package-update-steps.js";
 import { getSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
@@ -49,6 +52,7 @@ import {
   globalInstallArgs,
   resolveGlobalInstallTarget,
   resolveGlobalInstallSpec,
+  resolvePnpmGlobalDirFromGlobalRoot,
 } from "../../infra/update-global.js";
 import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../../plugins/config-state.js";
@@ -58,6 +62,8 @@ import {
   withPluginInstallRecords,
 } from "../../plugins/installed-plugin-index-records.js";
 import {
+  resolveTrustedSourceLinkedOfficialClawHubSpec,
+  resolveTrustedSourceLinkedOfficialNpmSpec,
   syncPluginsForUpdateChannel,
   updateNpmInstalledPlugins,
   type PluginUpdateIntegrityDriftParams,
@@ -83,6 +89,10 @@ import {
 import { commitPluginInstallRecordsWithConfig } from "../plugins-install-record-commit.js";
 import { listPersistedBundledPluginLocationBridges } from "../plugins-location-bridges.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../plugins-registry-refresh.js";
+import {
+  convergenceWarningsToOutcomes,
+  runPostCorePluginConvergence,
+} from "./post-core-plugin-convergence.js";
 import { createUpdateProgress, printResult } from "./progress.js";
 import { prepareRestartScript, runRestartScript } from "./restart-helper.js";
 import {
@@ -106,11 +116,14 @@ import { suppressDeprecations } from "./suppress-deprecations.js";
 
 const CLI_NAME = resolveCliName();
 const SERVICE_REFRESH_TIMEOUT_MS = 60_000;
+const POST_REFRESH_ALREADY_HEALTHY_ATTEMPTS = 10;
+const POST_REFRESH_ALREADY_HEALTHY_DELAY_MS = 500;
 const DEFAULT_UPDATE_STEP_TIMEOUT_MS = 30 * 60_000;
 const POST_CORE_UPDATE_ENV = "OPENCLAW_UPDATE_POST_CORE";
 const POST_CORE_UPDATE_CHANNEL_ENV = "OPENCLAW_UPDATE_POST_CORE_CHANNEL";
 const POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV = "OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL";
 const POST_CORE_UPDATE_RESULT_PATH_ENV = "OPENCLAW_UPDATE_POST_CORE_RESULT_PATH";
+const POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV = "OPENCLAW_UPDATE_POST_CORE_INSTALL_RECORDS_PATH";
 const POST_CORE_UPDATE_RESULT_POLL_MS = 100;
 const UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV =
   "OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE";
@@ -123,6 +136,7 @@ const POST_INSTALL_DOCTOR_SERVICE_ENV_KEYS = [
   ...SERVICE_REFRESH_PATH_ENV_KEYS,
   "OPENCLAW_PROFILE",
 ] as const;
+const POST_UPDATE_PLUGIN_REPAIR_GUIDANCE = "Run openclaw doctor --fix to attempt automatic repair.";
 
 const UPDATE_QUIPS = [
   "Leveled up! New skills unlocked. You're welcome.",
@@ -157,6 +171,8 @@ type MissingPluginInstallPayload = {
   reason: "missing-install-path" | "missing-package-dir" | "missing-package-json";
 };
 
+type PostUpdatePluginWarning = NonNullable<PostCorePluginUpdateResult["warnings"]>[number];
+
 function pickUpdateQuip(): string {
   return UPDATE_QUIPS[Math.floor(Math.random() * UPDATE_QUIPS.length)] ?? "Update complete.";
 }
@@ -174,19 +190,30 @@ function isTrackedPackageInstallRecord(record: PluginInstallRecord): boolean {
   );
 }
 
-async function pathExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizePluginInstallRecordMap(value: unknown): Record<string, PluginInstallRecord> {
+  if (!isRecord(value)) {
+    return {};
   }
+  const records: Record<string, PluginInstallRecord> = {};
+  for (const [pluginId, record] of Object.entries(value).toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    if (isRecord(record) && typeof record.source === "string") {
+      records[pluginId] = structuredClone(record) as PluginInstallRecord;
+    }
+  }
+  return records;
 }
 
 export async function collectMissingPluginInstallPayloads(params: {
   records: Record<string, PluginInstallRecord>;
   config?: OpenClawConfig;
   skipDisabledPlugins?: boolean;
+  syncOfficialPluginInstalls?: boolean;
   env?: NodeJS.ProcessEnv;
 }): Promise<MissingPluginInstallPayload[]> {
   const env = params.env ?? process.env;
@@ -201,6 +228,12 @@ export async function collectMissingPluginInstallPayloads(params: {
     if (!isTrackedPackageInstallRecord(record)) {
       continue;
     }
+    const officialNpmSpec = params.syncOfficialPluginInstalls
+      ? resolveTrustedSourceLinkedOfficialNpmSpec({ pluginId, record })
+      : undefined;
+    const officialClawHubSpec = params.syncOfficialPluginInstalls
+      ? resolveTrustedSourceLinkedOfficialClawHubSpec({ pluginId, record })
+      : undefined;
     if (normalizedPluginConfig && params.config) {
       const enableState = resolveEffectiveEnableState({
         id: pluginId,
@@ -208,7 +241,7 @@ export async function collectMissingPluginInstallPayloads(params: {
         config: normalizedPluginConfig,
         rootConfig: params.config,
       });
-      if (!enableState.enabled) {
+      if (!enableState.enabled && !officialNpmSpec && !officialClawHubSpec) {
         continue;
       }
     }
@@ -238,6 +271,98 @@ function formatMissingPluginPayloadReason(entry: MissingPluginInstallPayload): s
     return `package.json is missing under ${entry.installPath}`;
   }
   return `package directory is missing: ${entry.installPath}`;
+}
+
+function formatPostUpdatePluginInspectGuidance(pluginId: string): string {
+  return `Run openclaw plugins inspect ${pluginId} --runtime --json for details.`;
+}
+
+function createPostUpdatePluginWarning(params: {
+  pluginId?: string;
+  reason: string;
+}): PostUpdatePluginWarning {
+  const reason = params.reason.trim() || "unknown plugin post-update failure";
+  const guidance = [
+    POST_UPDATE_PLUGIN_REPAIR_GUIDANCE,
+    ...(params.pluginId ? [formatPostUpdatePluginInspectGuidance(params.pluginId)] : []),
+  ];
+  return {
+    ...(params.pluginId ? { pluginId: params.pluginId } : {}),
+    reason,
+    message: params.pluginId
+      ? `Plugin "${params.pluginId}" could not be processed after the core update: ${reason} ${guidance.join(" ")}`
+      : `Plugin post-update processing could not complete after the core update: ${reason} ${guidance.join(" ")}`,
+    guidance,
+  };
+}
+
+function createGuidedPostUpdatePluginOutcome(outcome: PluginUpdateOutcome): {
+  outcome: PluginUpdateOutcome;
+  warning?: PostUpdatePluginWarning;
+} {
+  if (outcome.status !== "error" && !isDisabledAfterFailureOutcome(outcome)) {
+    return { outcome };
+  }
+  const warning = createPostUpdatePluginWarning({
+    ...(outcome.pluginId && outcome.pluginId !== "unknown" ? { pluginId: outcome.pluginId } : {}),
+    reason: outcome.message,
+  });
+  return {
+    outcome: {
+      ...outcome,
+      message: warning.message,
+    },
+    warning,
+  };
+}
+
+function isDisabledAfterFailureOutcome(outcome: PluginUpdateOutcome): boolean {
+  return outcome.status === "skipped" && outcome.message.includes("after plugin update failure");
+}
+
+/**
+ * Build the post-core-update result we return when the active config cannot
+ * even be parsed. Mandatory post-core convergence requires a parseable
+ * config to know which plugins are configured; if one isn't available, we
+ * refuse to restart the gateway and surface this as a hard error so the
+ * existing `status === "error"` ⇒ `exit 1` pre-restart gate fires.
+ *
+ * Exported for unit testing without having to drive the entire
+ * `updatePluginsAfterCoreUpdate` orchestrator.
+ */
+export function buildInvalidConfigPostCoreUpdateResult(): {
+  message: string;
+  guidance: string[];
+  result: PostCorePluginUpdateResult;
+} {
+  const guidance = [
+    "Run `openclaw doctor` to inspect the config validation errors.",
+    "Once the config parses, rerun `openclaw update`.",
+  ];
+  const message =
+    "Plugin post-update convergence skipped because the config is invalid; refusing to restart the gateway with an unverified plugin set.";
+  return {
+    message,
+    guidance,
+    result: {
+      status: "error",
+      reason: "invalid-config",
+      changed: false,
+      sync: {
+        changed: false,
+        switchedToBundled: [],
+        switchedToNpm: [],
+        warnings: [],
+        errors: [],
+      },
+      npm: {
+        changed: false,
+        outcomes: [],
+      },
+      integrityDrifts: [],
+      warnings: [{ reason: "invalid-config", message, guidance }],
+    },
+  };
 }
 
 export function shouldPrepareUpdatedInstallRestart(params: {
@@ -573,7 +698,7 @@ async function resolvePackageRuntimePreflightError(params: {
   return [
     `Node ${process.versions.node ?? "unknown"} is too old for openclaw@${targetLabel}.`,
     `The requested package requires ${status.nodeEngine}.`,
-    "Upgrade Node to 22.14+ or Node 24, then rerun `openclaw update`.",
+    "Upgrade Node to 22.16+ or Node 24, then rerun `openclaw update`.",
     "Bare `npm i -g openclaw` can silently install an older compatible release.",
     "After upgrading Node, use `npm i -g openclaw@latest`.",
   ].join("\n");
@@ -997,9 +1122,13 @@ async function runGitUpdate(params: {
       timeoutMs: effectiveTimeout,
       pkgRoot: params.root,
     });
+    const installLocation =
+      installTarget.manager === "pnpm"
+        ? resolvePnpmGlobalDirFromGlobalRoot(installTarget.globalRoot)
+        : null;
     const installStep = await runUpdateStep({
       name: "global install",
-      argv: globalInstallArgs(installTarget, updateRoot),
+      argv: globalInstallArgs(installTarget, updateRoot, undefined, installLocation),
       cwd: updateRoot,
       env: installEnv,
       timeoutMs: effectiveTimeout,
@@ -1023,34 +1152,23 @@ async function runGitUpdate(params: {
   };
 }
 
-async function updatePluginsAfterCoreUpdate(params: {
+export async function updatePluginsAfterCoreUpdate(params: {
   root: string;
   channel: "stable" | "beta" | "dev";
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
   opts: UpdateCommandOptions;
   timeoutMs: number;
+  pluginInstallRecords?: Record<string, PluginInstallRecord>;
 }): Promise<PostCorePluginUpdateResult> {
   if (!params.configSnapshot.valid) {
+    const invalid = buildInvalidConfigPostCoreUpdateResult();
     if (!params.opts.json) {
-      defaultRuntime.log(theme.warn("Skipping plugin updates: config is invalid."));
+      defaultRuntime.log(theme.error(invalid.message));
+      for (const line of invalid.guidance) {
+        defaultRuntime.log(theme.muted(`  ${line}`));
+      }
     }
-    return {
-      status: "skipped",
-      reason: "invalid-config",
-      changed: false,
-      sync: {
-        changed: false,
-        switchedToBundled: [],
-        switchedToNpm: [],
-        warnings: [],
-        errors: [],
-      },
-      npm: {
-        changed: false,
-        outcomes: [],
-      },
-      integrityDrifts: [],
-    };
+    return invalid.result;
   }
 
   const pluginLogger = params.opts.json
@@ -1066,9 +1184,15 @@ async function updatePluginsAfterCoreUpdate(params: {
     defaultRuntime.log(theme.heading("Updating plugins..."));
   }
 
-  const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
+  const warnings: PostUpdatePluginWarning[] = [];
+  const pluginInstallRecords =
+    params.pluginInstallRecords ?? (await loadInstalledPluginIndexInstallRecords());
+  const syncConfig = withPluginInstallRecords(
+    params.configSnapshot.sourceConfig,
+    pluginInstallRecords,
+  );
   const syncResult = await syncPluginsForUpdateChannel({
-    config: withPluginInstallRecords(params.configSnapshot.sourceConfig, pluginInstallRecords),
+    config: syncConfig,
     channel: params.channel,
     workspaceDir: params.root,
     externalizedBundledPluginBridges: await listPersistedBundledPluginLocationBridges({
@@ -1076,6 +1200,9 @@ async function updatePluginsAfterCoreUpdate(params: {
     }),
     logger: pluginLogger,
   });
+  for (const error of syncResult.summary.errors) {
+    warnings.push(createPostUpdatePluginWarning({ reason: error }));
+  }
   let pluginConfig = syncResult.config;
   const integrityDrifts: PostCorePluginUpdateResult["integrityDrifts"] = [];
   const pluginUpdateOutcomes: PluginUpdateOutcome[] = [];
@@ -1106,26 +1233,33 @@ async function updatePluginsAfterCoreUpdate(params: {
     return false;
   };
 
-  const repairMissingPayloads = async (
+  const collectMissingPayloadWarnings = async (
     records: Record<string, PluginInstallRecord>,
   ): Promise<readonly string[]> => {
     const missing = await collectMissingPluginInstallPayloads({
       records,
       config: pluginConfig,
       skipDisabledPlugins: true,
+      syncOfficialPluginInstalls: true,
     });
     if (missing.length === 0) {
       return [];
     }
     const missingIds = missing.map((entry) => entry.pluginId);
-    if (!params.opts.json) {
-      defaultRuntime.log(
-        theme.warn(
-          `Recovering missing plugin install payloads: ${missing
-            .map((entry) => `${entry.pluginId} (${formatMissingPluginPayloadReason(entry)})`)
-            .join(", ")}.`,
-        ),
-      );
+    for (const entry of missing) {
+      const warning = createPostUpdatePluginWarning({
+        pluginId: entry.pluginId,
+        reason: `Plugin install payload missing after update: ${formatMissingPluginPayloadReason(entry)}.`,
+      });
+      warnings.push(warning);
+      pluginUpdateOutcomes.push({
+        pluginId: entry.pluginId,
+        status: "error",
+        message: warning.message,
+      });
+      if (!params.opts.json) {
+        defaultRuntime.log(theme.warn(warning.message));
+      }
     }
     const repairResult = await updateNpmInstalledPlugins({
       config: pluginConfig,
@@ -1133,6 +1267,7 @@ async function updatePluginsAfterCoreUpdate(params: {
       timeoutMs: params.timeoutMs,
       updateChannel: params.channel,
       skipDisabledPlugins: true,
+      syncOfficialPluginInstalls: true,
       disableOnFailure: true,
       logger: pluginLogger,
       onIntegrityDrift: onPluginIntegrityDrift,
@@ -1144,16 +1279,15 @@ async function updatePluginsAfterCoreUpdate(params: {
     return missingIds;
   };
 
-  const repairedMissingPayloadIds = await repairMissingPayloads(
-    pluginConfig.plugins?.installs ?? {},
-  );
+  const missingPayloadIds = await collectMissingPayloadWarnings(pluginInstallRecords);
 
   const npmResult = await updateNpmInstalledPlugins({
     config: pluginConfig,
     timeoutMs: params.timeoutMs,
     updateChannel: params.channel,
-    skipIds: new Set([...syncResult.summary.switchedToNpm, ...repairedMissingPayloadIds]),
+    skipIds: new Set([...syncResult.summary.switchedToNpm, ...missingPayloadIds]),
     skipDisabledPlugins: true,
+    syncOfficialPluginInstalls: true,
     disableOnFailure: true,
     logger: pluginLogger,
     onIntegrityDrift: onPluginIntegrityDrift,
@@ -1161,22 +1295,81 @@ async function updatePluginsAfterCoreUpdate(params: {
   pluginConfig = npmResult.config;
   pluginsChanged ||= npmResult.changed;
   npmPluginsChanged ||= npmResult.changed;
-  pluginUpdateOutcomes.push(...npmResult.outcomes);
+  for (const rawOutcome of npmResult.outcomes) {
+    const guided = createGuidedPostUpdatePluginOutcome(rawOutcome);
+    pluginUpdateOutcomes.push(guided.outcome);
+    if (guided.warning) {
+      warnings.push(guided.warning);
+    }
+  }
 
   const remainingMissingPayloads = await collectMissingPluginInstallPayloads({
     records: pluginConfig.plugins?.installs ?? {},
     config: pluginConfig,
     skipDisabledPlugins: true,
+    syncOfficialPluginInstalls: true,
   });
   pluginUpdateOutcomes.push(
-    ...remainingMissingPayloads.map(
-      (entry): PluginUpdateOutcome => ({
-        pluginId: entry.pluginId,
-        status: "error",
-        message: `Plugin install payload missing after update: ${formatMissingPluginPayloadReason(entry)}.`,
+    ...remainingMissingPayloads
+      .filter((entry) => !missingPayloadIds.includes(entry.pluginId))
+      .map((entry): PluginUpdateOutcome => {
+        const warning = createPostUpdatePluginWarning({
+          pluginId: entry.pluginId,
+          reason: `Plugin install payload missing after update: ${formatMissingPluginPayloadReason(entry)}.`,
+        });
+        warnings.push(warning);
+        return {
+          pluginId: entry.pluginId,
+          status: "error",
+          message: warning.message,
+        };
       }),
-    ),
   );
+
+  // Mandatory post-core convergence: repair any configured plugin install
+  // records that are still missing payloads on disk and run a static smoke
+  // check that the repaired payloads are at least loadable. Failures here
+  // escalate `status` to `"error"`, which the caller maps to exit 1 BEFORE
+  // restarting the gateway. See `post-core-plugin-convergence.ts`.
+  //
+  // We pass `baselineInstallRecords: pluginConfig.plugins?.installs ?? {}`
+  // so that convergence layers its mutations on top of the latest
+  // *in-memory* sync/npm record state — not on the stale pre-update disk
+  // snapshot. The merged map convergence returns is the single source of
+  // truth for the subsequent commit block.
+  const convergenceBaselineRecords = pluginConfig.plugins?.installs ?? {};
+  const convergence = await runPostCorePluginConvergence({
+    cfg: pluginConfig,
+    env: process.env,
+    baselineInstallRecords: convergenceBaselineRecords,
+  });
+  for (const change of convergence.changes) {
+    if (!params.opts.json) {
+      defaultRuntime.log(theme.muted(change));
+    }
+  }
+  const convergenceFolded = convergenceWarningsToOutcomes(convergence);
+  for (const warning of convergenceFolded.warnings) {
+    warnings.push(warning);
+    if (!params.opts.json) {
+      defaultRuntime.log(theme.warn(warning.message));
+      for (const guidance of warning.guidance) {
+        defaultRuntime.log(theme.muted(`  ${guidance}`));
+      }
+    }
+  }
+  pluginUpdateOutcomes.push(...convergenceFolded.outcomes);
+  const convergenceErrored = convergenceFolded.errored;
+  // Reseed `pluginConfig` from convergence's authoritative post-merge
+  // record map. This is unconditional because convergence is what
+  // reconciled the baseline (sync/npm in-memory state) with disk and any
+  // new repairs, and convergence already persisted that exact map. If
+  // we did not adopt it here, the commit block below would overwrite the
+  // disk with `convergenceBaselineRecords` (no repairs included).
+  pluginConfig = withPluginInstallRecords(pluginConfig, convergence.installRecords);
+  if (convergence.changes.length > 0) {
+    pluginsChanged = true;
+  }
 
   if (pluginsChanged) {
     const nextInstallRecords = pluginConfig.plugins?.installs ?? {};
@@ -1198,12 +1391,9 @@ async function updatePluginsAfterCoreUpdate(params: {
 
   if (params.opts.json) {
     return {
-      status:
-        syncResult.summary.errors.length > 0 ||
-        pluginUpdateOutcomes.some((outcome) => outcome.status === "error")
-          ? "error"
-          : "ok",
+      status: convergenceErrored ? "error" : warnings.length > 0 ? "warning" : "ok",
       changed: pluginsChanged,
+      warnings,
       sync: {
         changed: syncResult.changed,
         switchedToBundled: syncResult.summary.switchedToBundled,
@@ -1242,7 +1432,7 @@ async function updatePluginsAfterCoreUpdate(params: {
     defaultRuntime.log(theme.warn(warning));
   }
   for (const error of syncResult.summary.errors) {
-    defaultRuntime.log(theme.error(error));
+    defaultRuntime.log(theme.warn(createPostUpdatePluginWarning({ reason: error }).message));
   }
 
   const updated = pluginUpdateOutcomes.filter((entry) => entry.status === "updated").length;
@@ -1267,16 +1457,13 @@ async function updatePluginsAfterCoreUpdate(params: {
     if (outcome.status !== "error") {
       continue;
     }
-    defaultRuntime.log(theme.error(outcome.message));
+    defaultRuntime.log(theme.warn(outcome.message));
   }
 
   return {
-    status:
-      syncResult.summary.errors.length > 0 ||
-      pluginUpdateOutcomes.some((outcome) => outcome.status === "error")
-        ? "error"
-        : "ok",
+    status: convergenceErrored ? "error" : warnings.length > 0 ? "warning" : "ok",
     changed: pluginsChanged,
+    warnings,
     sync: {
       changed: syncResult.changed,
       switchedToBundled: syncResult.summary.switchedToBundled,
@@ -1412,6 +1599,7 @@ async function maybeRestartService(params: {
       const isPackageUpdate = isPackageManagerUpdateMode(params.result.mode);
       let restarted = false;
       let restartInitiated = false;
+      let refreshedGatewayAlreadyHealthy = false;
       if (params.refreshServiceEnv) {
         try {
           await refreshGatewayServiceEnv({
@@ -1434,25 +1622,51 @@ async function maybeRestartService(params: {
             return false;
           }
         }
+        if (isPackageUpdate && expectedGatewayVersion) {
+          const health = await waitForGatewayHealthyRestart({
+            service: resolveGatewayService(),
+            port: params.gatewayPort,
+            expectedVersion: expectedGatewayVersion,
+            env: params.serviceEnv,
+            attempts: POST_REFRESH_ALREADY_HEALTHY_ATTEMPTS,
+            delayMs: POST_REFRESH_ALREADY_HEALTHY_DELAY_MS,
+          });
+          refreshedGatewayAlreadyHealthy = health.healthy;
+          if (refreshedGatewayAlreadyHealthy && !params.opts.json) {
+            defaultRuntime.log(
+              theme.muted(
+                "Gateway already reports the updated version after service refresh; skipped redundant restart.",
+              ),
+            );
+          }
+        }
       }
-      if (params.restartScriptPath) {
+      // Service refresh can bootstrap a RunAtLoad LaunchAgent directly. When
+      // that already produced the expected gateway version, a second kickstart
+      // would only race the healthy supervisor-owned process.
+      if (!refreshedGatewayAlreadyHealthy && params.restartScriptPath) {
         await runRestartScript(params.restartScriptPath);
         restartInitiated = true;
-      } else if (params.refreshServiceEnv && isPackageUpdate) {
+      } else if (!refreshedGatewayAlreadyHealthy && params.refreshServiceEnv && isPackageUpdate) {
         restarted = await runUpdatedInstallGatewayRestart({
           result: params.result,
           jsonMode: Boolean(params.opts.json),
           invocationCwd: params.invocationCwd,
           env: params.serviceEnv,
         });
-      } else if (shouldUseLegacyProcessRestartAfterUpdate({ updateMode: params.result.mode })) {
+      } else if (
+        !refreshedGatewayAlreadyHealthy &&
+        shouldUseLegacyProcessRestartAfterUpdate({ updateMode: params.result.mode })
+      ) {
         restarted = await runDaemonRestart();
-      } else if (!params.opts.json) {
+      } else if (!refreshedGatewayAlreadyHealthy && !params.opts.json) {
         defaultRuntime.log(theme.muted("No installed gateway service found; skipped restart."));
       }
 
       const shouldVerifyRestart =
-        restartInitiated || (restarted && expectedGatewayVersion !== undefined);
+        refreshedGatewayAlreadyHealthy ||
+        restartInitiated ||
+        (restarted && expectedGatewayVersion !== undefined);
       if (shouldVerifyRestart) {
         const restartHealthy = await verifyRestartedGateway(expectedGatewayVersion);
         if (!restartHealthy) {
@@ -1526,6 +1740,7 @@ async function runPostCorePluginUpdate(params: {
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
   opts: UpdateCommandOptions;
   timeoutMs: number;
+  pluginInstallRecords?: Record<string, PluginInstallRecord>;
 }): Promise<PostCorePluginUpdateResult> {
   return await updatePluginsAfterCoreUpdate({
     root: params.root,
@@ -1533,6 +1748,7 @@ async function runPostCorePluginUpdate(params: {
     configSnapshot: params.configSnapshot,
     opts: params.opts,
     timeoutMs: params.timeoutMs,
+    pluginInstallRecords: params.pluginInstallRecords,
   });
 }
 
@@ -1607,6 +1823,23 @@ function createUpdatedChannelSnapshot(
   };
 }
 
+async function maybeRepairLegacyConfigForUpdateChannel(params: {
+  configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
+  jsonMode: boolean;
+}): Promise<Awaited<ReturnType<typeof readConfigFileSnapshot>>> {
+  if (params.configSnapshot.valid || params.configSnapshot.legacyIssues.length === 0) {
+    return params.configSnapshot;
+  }
+
+  const { repairLegacyConfigForUpdateChannel } =
+    await import("../../commands/doctor/legacy-config-repair.js");
+  const { snapshot, repaired } = await repairLegacyConfigForUpdateChannel(params);
+  if (!params.jsonMode && repaired) {
+    defaultRuntime.log(theme.muted("Migrated legacy config before changing update channel."));
+  }
+  return snapshot;
+}
+
 async function writePostCorePluginUpdateResultFile(
   filePath: string | undefined,
   result: PostCorePluginUpdateResult,
@@ -1614,19 +1847,42 @@ async function writePostCorePluginUpdateResultFile(
   if (!filePath) {
     return;
   }
-  await fs.writeFile(filePath, `${JSON.stringify(result)}\n`, "utf-8");
+  await writeJson(filePath, result, { trailingNewline: true });
+}
+
+async function writePostCorePluginInstallRecordsFile(
+  filePath: string,
+  records: Record<string, PluginInstallRecord>,
+): Promise<void> {
+  await fs.writeFile(filePath, `${JSON.stringify(records)}\n`, "utf-8");
+}
+
+async function readPostCorePluginInstallRecordsFile(
+  filePath: string | undefined,
+): Promise<Record<string, PluginInstallRecord> | undefined> {
+  if (!filePath) {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(await fs.readFile(filePath, "utf-8")) as unknown;
+    return normalizePluginInstallRecordMap(parsed);
+  } catch {
+    return undefined;
+  }
 }
 
 async function readPostCorePluginUpdateResultFile(
   filePath: string,
 ): Promise<PostCorePluginUpdateResult | undefined> {
   try {
-    const raw = await fs.readFile(filePath, "utf-8");
-    const parsed = JSON.parse(raw) as PostCorePluginUpdateResult;
+    const parsed = await readJsonIfExists<PostCorePluginUpdateResult>(filePath);
     if (
       parsed &&
       typeof parsed === "object" &&
-      (parsed.status === "ok" || parsed.status === "skipped" || parsed.status === "error")
+      (parsed.status === "ok" ||
+        parsed.status === "warning" ||
+        parsed.status === "skipped" ||
+        parsed.status === "error")
     ) {
       return parsed;
     }
@@ -1655,11 +1911,28 @@ function stopPostCoreUpdateChild(child: ChildProcess): void {
   child.kill();
 }
 
+/**
+ * Returns the stdio mode for the post-core-update child process.
+ *
+ * Windows shells (PowerShell/CMD) wait for all processes that hold inherited console handles to
+ * exit before returning the prompt, even after the immediate child has exited.  Using "pipe" on
+ * Windows prevents the child (and any grandchildren it spawns) from ever receiving a reference to
+ * the parent's console handles, eliminating the terminal hang seen in #78445.
+ *
+ * @internal exported for testing
+ */
+export function resolvePostCoreUpdateChildStdio(
+  platform: NodeJS.Platform = process.platform,
+): "inherit" | "pipe" {
+  return platform === "win32" ? "pipe" : "inherit";
+}
+
 async function continuePostCoreUpdateInFreshProcess(params: {
   root: string;
   channel: "stable" | "beta" | "dev";
   requestedChannel: "stable" | "beta" | "dev" | null;
   opts: UpdateCommandOptions;
+  pluginInstallRecords: Record<string, PluginInstallRecord>;
 }): Promise<{ resumed: boolean; pluginUpdate?: PostCorePluginUpdateResult }> {
   const entryPath = await resolveGatewayInstallEntrypoint(params.root);
   if (!entryPath) {
@@ -1681,10 +1954,13 @@ async function continuePostCoreUpdateInFreshProcess(params: {
   }
   const resultDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-post-core-"));
   const resultPath = path.join(resultDir, "plugins.json");
+  const installRecordsPath = path.join(resultDir, "plugin-install-records.json");
 
   try {
+    await writePostCorePluginInstallRecordsFile(installRecordsPath, params.pluginInstallRecords);
+    const childStdio = resolvePostCoreUpdateChildStdio();
     const child = spawn(resolveNodeRunner(), argv, {
-      stdio: "inherit",
+      stdio: childStdio,
       env: {
         ...stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env)),
         [POST_CORE_UPDATE_ENV]: "1",
@@ -1693,8 +1969,14 @@ async function continuePostCoreUpdateInFreshProcess(params: {
           ? { [POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV]: params.requestedChannel }
           : {}),
         [POST_CORE_UPDATE_RESULT_PATH_ENV]: resultPath,
+        [POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV]: installRecordsPath,
       },
     });
+    // When piped, relay child output to the parent process so terminal output is preserved.
+    if (childStdio === "pipe") {
+      child.stdout?.pipe(process.stdout);
+      child.stderr?.pipe(process.stderr);
+    }
 
     const childResult = await new Promise<
       | { kind: "exit"; exitCode: number }
@@ -1794,11 +2076,15 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   const postCoreUpdateChannel = process.env[POST_CORE_UPDATE_CHANNEL_ENV]?.trim();
   const postCoreRequestedChannelInput =
     process.env[POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV]?.trim() ?? "";
+  const postCoreInstallRecordsPath = process.env[POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV];
 
   const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
   const shouldRestart = opts.restart !== false;
   if (timeoutMs === null) {
     return;
+  }
+  if (opts.dryRun !== true) {
+    assertConfigWriteAllowedInCurrentMode();
   }
   const updateStepTimeoutMs = timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
 
@@ -1834,6 +2120,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       configSnapshot: postCoreConfigSnapshot,
       opts,
       timeoutMs: updateStepTimeoutMs,
+      pluginInstallRecords: await readPostCorePluginInstallRecordsFile(postCoreInstallRecordsPath),
     });
     if (process.env[POST_CORE_UPDATE_RESULT_PATH_ENV]) {
       await writePostCorePluginUpdateResultFile(
@@ -1854,10 +2141,6 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
         defaultRuntime.writeJson(result);
       }
     }
-    if (pluginUpdate.status === "error") {
-      defaultRuntime.exit(1);
-      return;
-    }
     defaultRuntime.exit(0);
     return;
   }
@@ -1869,17 +2152,24 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     includeRegistry: false,
   });
 
-  const configSnapshot = await readConfigFileSnapshot();
-  const storedChannel = configSnapshot.valid
-    ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
-    : null;
-
   const requestedChannel = normalizeUpdateChannel(opts.channel);
   if (opts.channel && !requestedChannel) {
     defaultRuntime.error(`--channel must be "stable", "beta", or "dev" (got "${opts.channel}")`);
     defaultRuntime.exit(1);
     return;
   }
+
+  let configSnapshot = await readConfigFileSnapshot();
+  if (opts.channel && !opts.dryRun && !configSnapshot.valid) {
+    configSnapshot = await maybeRepairLegacyConfigForUpdateChannel({
+      configSnapshot,
+      jsonMode: Boolean(opts.json),
+    });
+  }
+  const storedChannel = configSnapshot.valid
+    ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
+    : null;
+
   if (opts.channel && !configSnapshot.valid) {
     const issues = formatConfigIssueLines(configSnapshot.issues, "-");
     defaultRuntime.error(["Config is invalid; cannot set update channel.", ...issues].join("\n"));
@@ -2065,6 +2355,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
 
   const { progress, stop } = createUpdateProgress(showProgress);
   const startedAt = Date.now();
+  const preUpdatePluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
 
   let prePackageServiceStop: PrePackageServiceStop | undefined;
   if (updateInstallKind === "package") {
@@ -2225,6 +2516,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       channel,
       requestedChannel,
       opts,
+      pluginInstallRecords: preUpdatePluginInstallRecords,
     });
     pluginsUpdatedInFreshProcess = freshProcessResult.resumed;
     postCorePluginUpdate = freshProcessResult.pluginUpdate;
@@ -2243,6 +2535,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       configSnapshot: postUpdateConfigSnapshot,
       opts,
       timeoutMs: updateStepTimeoutMs,
+      pluginInstallRecords: preUpdatePluginInstallRecords,
     });
   }
 
@@ -2264,10 +2557,6 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     } else {
       defaultRuntime.error(theme.error("Update failed during plugin post-update sync."));
     }
-    await maybeRestartServiceAfterFailedPackageUpdate({
-      prePackageServiceStop,
-      jsonMode: Boolean(opts.json),
-    });
     defaultRuntime.exit(1);
     return;
   }

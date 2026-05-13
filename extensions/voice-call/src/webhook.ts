@@ -1,8 +1,9 @@
 import http from "node:http";
 import { URL } from "node:url";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveConfiguredCapabilityProvider } from "openclaw/plugin-sdk/provider-selection-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import type { TalkEvent } from "openclaw/plugin-sdk/realtime-voice";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createWebhookInFlightLimiter,
   WEBHOOK_BODY_READ_DEFAULTS,
@@ -75,6 +76,28 @@ function sanitizeTranscriptForLog(value: string): string {
     return sanitized;
   }
   return `${sanitized.slice(0, TRANSCRIPT_LOG_MAX_CHARS)}...`;
+}
+
+function appendRecentTalkEventMetadata(call: CallRecord, event: TalkEvent): void {
+  const metadata = call.metadata ?? {};
+  const recent = Array.isArray(metadata.recentTalkEvents)
+    ? metadata.recentTalkEvents.filter(
+        (entry): entry is { at: string; type: string; sessionId: string; turnId?: string } =>
+          !!entry && typeof entry === "object" && !Array.isArray(entry),
+      )
+    : [];
+  recent.push({
+    at: event.timestamp,
+    type: event.type,
+    sessionId: event.sessionId,
+    turnId: event.turnId,
+  });
+  call.metadata = {
+    ...metadata,
+    lastTalkEventAt: event.timestamp,
+    lastTalkEventType: event.type,
+    recentTalkEvents: recent.slice(-10),
+  };
 }
 
 function buildRequestUrl(
@@ -323,6 +346,7 @@ export class VoiceCallWebhookServer {
     const streamConfig: MediaStreamConfig = {
       transcriptionProvider: provider,
       providerConfig,
+      cfg: this.fullConfig ?? (this.coreConfig as OpenClawConfig | null) ?? undefined,
       preStartTimeoutMs: streaming.preStartTimeoutMs,
       maxPendingConnections: streaming.maxPendingConnections,
       maxPendingConnectionsPerIp: streaming.maxPendingConnectionsPerIp,
@@ -399,6 +423,12 @@ export class VoiceCallWebhookServer {
       onPartialTranscript: (callId, partial) => {
         const safePartial = sanitizeTranscriptForLog(partial);
         console.log(`[voice-call] Partial for ${callId}: ${safePartial} (chars=${partial.length})`);
+      },
+      onTalkEvent: (providerCallId, _streamSid, event) => {
+        const call = this.manager.getCallByProviderCallId(providerCallId);
+        if (call) {
+          appendRecentTalkEventMetadata(call, event);
+        }
       },
       onConnect: (callId, streamSid) => {
         console.log(`[voice-call] Media stream connected: ${callId} -> ${streamSid}`);

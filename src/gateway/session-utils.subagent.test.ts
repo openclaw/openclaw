@@ -506,7 +506,7 @@ describe("listSessionsFromStore subagent metadata", () => {
       },
     });
 
-    expect(result.sessions.map((session) => session.key)).toEqual([]);
+    expect(result.sessions.map((session) => session.key)).toStrictEqual([]);
   });
 
   test("reports the newest run owner for moved child session rows", () => {
@@ -553,10 +553,8 @@ describe("listSessionsFromStore subagent metadata", () => {
     });
 
     expect(result.sessions).toHaveLength(1);
-    expect(result.sessions[0]).toMatchObject({
-      key: childSessionKey,
-      spawnedBy: "agent:main:subagent:new-parent-owner",
-    });
+    expect(result.sessions[0]?.key).toBe(childSessionKey);
+    expect(result.sessions[0]?.spawnedBy).toBe("agent:main:subagent:new-parent-owner");
   });
 
   test("reports the newest parentSessionKey for moved child session rows", () => {
@@ -603,10 +601,8 @@ describe("listSessionsFromStore subagent metadata", () => {
     });
 
     expect(result.sessions).toHaveLength(1);
-    expect(result.sessions[0]).toMatchObject({
-      key: childSessionKey,
-      parentSessionKey: "agent:main:subagent:new-parent-parent",
-    });
+    expect(result.sessions[0]?.key).toBe(childSessionKey);
+    expect(result.sessions[0]?.parentSessionKey).toBe("agent:main:subagent:new-parent-parent");
   });
 
   test("preserves original session timing across follow-up replacement runs", () => {
@@ -698,15 +694,13 @@ describe("listSessionsFromStore subagent metadata", () => {
     });
 
     expect(result.sessions).toHaveLength(1);
-    expect(result.sessions[0]).toMatchObject({
-      key: childSessionKey,
-      status: "done",
-      startedAt: now - 900,
-      endedAt: now - 200,
-    });
+    expect(result.sessions[0]?.key).toBe(childSessionKey);
+    expect(result.sessions[0]?.status).toBe("done");
+    expect(result.sessions[0]?.startedAt).toBe(now - 900);
+    expect(result.sessions[0]?.endedAt).toBe(now - 200);
   });
 
-  test("prefers persisted terminal session state when only stale active subagent snapshots remain", async () => {
+  test("prefers persisted terminal session state when only stale active subagent snapshots remain", () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-utils-subagent-"));
     const stateDir = path.join(tempRoot, "state");
     fs.mkdirSync(stateDir, { recursive: true });
@@ -904,7 +898,7 @@ describe("listSessionsFromStore subagent metadata", () => {
           }),
       );
 
-      expect(result.sessions).toEqual([]);
+      expect(result.sessions).toStrictEqual([]);
       const registryStatCount = statSpy.mock.calls.filter(
         ([pathname]) => path.normalize(String(pathname)) === path.normalize(registryPath),
       ).length;
@@ -1005,7 +999,7 @@ describe("listSessionsFromStore subagent metadata", () => {
         spawnedBy: "agent:main:main",
       },
     });
-    expect(filtered.sessions.map((session) => session.key)).toEqual([]);
+    expect(filtered.sessions.map((session) => session.key)).toStrictEqual([]);
   });
 
   test("does not reattach stale orphan store-only child links without lifecycle fields", () => {
@@ -1041,7 +1035,7 @@ describe("listSessionsFromStore subagent metadata", () => {
         spawnedBy: "agent:main:main",
       },
     });
-    expect(filtered.sessions.map((session) => session.key)).toEqual([]);
+    expect(filtered.sessions.map((session) => session.key)).toStrictEqual([]);
   });
 
   test("does not keep old ended registry runs attached as child sessions", () => {
@@ -1089,7 +1083,7 @@ describe("listSessionsFromStore subagent metadata", () => {
         spawnedBy: "agent:main:main",
       },
     });
-    expect(filtered.sessions.map((session) => session.key)).toEqual([]);
+    expect(filtered.sessions.map((session) => session.key)).toStrictEqual([]);
   });
 
   test("keeps ended parents attached while live descendants are still running", () => {
@@ -1279,8 +1273,8 @@ describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)"
       } as OpenClawConfig;
 
       const { store } = loadCombinedSessionStoreForGateway(cfg);
-      expect(store["agent:main:main"]).toBeDefined();
-      expect(store["agent:codex:acp-task"]).toBeDefined();
+      expect(store["agent:main:main"]?.sessionId).toBe("s-main");
+      expect(store["agent:codex:acp-task"]?.sessionId).toBe("s-codex");
     });
   });
 
@@ -1325,7 +1319,7 @@ describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)"
       const { store, storePath } = loadCombinedSessionStoreForGateway(cfg, { agentId: "codex" });
 
       expect(storePath).toBe(fs.realpathSync.native(codexStorePath));
-      expect(store["agent:codex:acp-task"]).toBeDefined();
+      expect(store["agent:codex:acp-task"]?.sessionId).toBe("s-codex");
       expect(store["agent:main:main"]).toBeUndefined();
       const readPaths = readSpy.mock.calls
         .map((call) => call[0])

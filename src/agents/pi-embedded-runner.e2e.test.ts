@@ -31,8 +31,9 @@ const ensureOpenClawModelsJsonMock = vi.fn(async () => ({ wrote: false }));
 const loggerWarnMock = vi.fn();
 let refreshRuntimeAuthOnFirstPromptError = false;
 
-vi.mock("@mariozechner/pi-ai", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
+vi.mock("@earendil-works/pi-ai", async () => {
+  const actual =
+    await vi.importActual<typeof import("@earendil-works/pi-ai")>("@earendil-works/pi-ai");
 
   const buildAssistantMessage = (model: { api: string; provider: string; id: string }) => ({
     role: "assistant" as const,
@@ -153,7 +154,7 @@ const installRunEmbeddedMocks = () => {
 };
 
 let runEmbeddedPiAgent: typeof import("./pi-embedded-runner/run.js").runEmbeddedPiAgent;
-let SessionManager: typeof import("@mariozechner/pi-coding-agent").SessionManager;
+let SessionManager: typeof import("@earendil-works/pi-coding-agent").SessionManager;
 let e2eWorkspace: EmbeddedPiRunnerTestWorkspace | undefined;
 let agentDir: string;
 let workspaceDir: string;
@@ -165,7 +166,7 @@ beforeAll(async () => {
   vi.resetModules();
   installRunEmbeddedMocks();
   ({ runEmbeddedPiAgent } = await import("./pi-embedded-runner/run.js"));
-  ({ SessionManager } = await import("@mariozechner/pi-coding-agent"));
+  ({ SessionManager } = await import("@earendil-works/pi-coding-agent"));
   e2eWorkspace = await createEmbeddedPiRunnerTestWorkspace("openclaw-embedded-agent-");
   ({ agentDir, workspaceDir } = e2eWorkspace);
 }, 180_000);
@@ -248,10 +249,13 @@ const textFromContent = (content: unknown) => {
 
 const readSessionEntries = async (sessionFile: string) => {
   const raw = await fs.readFile(sessionFile, "utf-8");
-  return raw
-    .split(/\r?\n/)
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as { type?: string; customType?: string; data?: unknown });
+  const entries: Array<{ type?: string; customType?: string; data?: unknown }> = [];
+  for (const line of raw.split(/\r?\n/)) {
+    if (line.length > 0) {
+      entries.push(JSON.parse(line) as { type?: string; customType?: string; data?: unknown });
+    }
+  }
+  return entries;
 };
 
 const readSessionMessages = async (sessionFile: string) => {
@@ -289,6 +293,18 @@ const runDefaultEmbeddedTurn = async (sessionFile: string, prompt: string, sessi
   });
 };
 
+function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`Expected ${label} to be called`);
+  }
+  return call;
+}
+
+function firstRunEmbeddedAttemptParams(): { sessionKey?: string } {
+  return firstMockCall(runEmbeddedAttemptMock, "embedded attempt")[0] as { sessionKey?: string };
+}
+
 describe("runEmbeddedPiAgent", () => {
   it("skips models.json generation when dynamic model resolution succeeds", async () => {
     const sessionFile = nextSessionFile();
@@ -316,13 +332,14 @@ describe("runEmbeddedPiAgent", () => {
       enqueue: immediateEnqueue,
     });
 
-    expect(resolveModelAsyncMock).toHaveBeenCalledWith(
-      "openrouter",
-      "openrouter/auto",
-      agentDir,
-      cfg,
-      expect.objectContaining({ skipPiDiscovery: true }),
-    );
+    const resolveModelCall = firstMockCall(resolveModelAsyncMock, "model resolution");
+    expect(resolveModelCall?.[0]).toBe("openrouter");
+    expect(resolveModelCall?.[1]).toBe("openrouter/auto");
+    expect(resolveModelCall?.[2]).toBe(agentDir);
+    expect(resolveModelCall?.[3]).toBe(cfg);
+    expect(
+      (resolveModelCall?.[4] as { skipPiDiscovery?: boolean } | undefined)?.skipPiDiscovery,
+    ).toBe(true);
     expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
   });
 
@@ -363,8 +380,7 @@ describe("runEmbeddedPiAgent", () => {
       sessionId: "resume-123",
       agentId: undefined,
     });
-    const firstCall = runEmbeddedAttemptMock.mock.calls[0]?.[0] as { sessionKey?: string };
-    expect(firstCall.sessionKey).toBe("agent:test:resolved");
+    expect(firstRunEmbeddedAttemptParams().sessionKey).toBe("agent:test:resolved");
   });
 
   it("drops whitespace-only session keys when backfill cannot resolve a session key", async () => {
@@ -404,8 +420,7 @@ describe("runEmbeddedPiAgent", () => {
       sessionId: "resume-124",
       agentId: undefined,
     });
-    const firstCall = runEmbeddedAttemptMock.mock.calls[0]?.[0] as { sessionKey?: string };
-    expect(firstCall.sessionKey).toBeUndefined();
+    expect(firstRunEmbeddedAttemptParams().sessionKey).toBeUndefined();
   });
 
   it("logs when embedded session-key backfill resolution fails", async () => {
@@ -558,7 +573,7 @@ describe("runEmbeddedPiAgent", () => {
     });
 
     expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
-    expect(result.payloads?.[0]).toMatchObject({ text: "ok" });
+    expect(result.payloads?.[0]?.text).toBe("ok");
     expect(disposeSessionMcpRuntimeMock).toHaveBeenCalledTimes(1);
     expect(disposeSessionMcpRuntimeMock).toHaveBeenCalledWith("session:test");
   });
@@ -613,7 +628,7 @@ describe("runEmbeddedPiAgent", () => {
     });
 
     expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
-    expect(result.payloads?.[0]).toMatchObject({ text: "done" });
+    expect(result.payloads?.[0]?.text).toBe("done");
   });
 
   it("handles prompt error paths without dropping user state", async () => {
@@ -699,6 +714,6 @@ describe("runEmbeddedPiAgent", () => {
     const result = await runWithOrphanedSingleUserMessage("orphaned user", nextSessionKey());
 
     expect(result.meta.error).toBeUndefined();
-    expect(result.payloads?.length ?? 0).toBeGreaterThan(0);
+    expect(result.payloads?.[0]?.text).toBe("ok");
   });
 });

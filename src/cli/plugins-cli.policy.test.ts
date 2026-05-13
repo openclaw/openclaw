@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   buildPluginRegistrySnapshotReport,
@@ -11,6 +11,8 @@ import {
   writeConfigFile,
 } from "./plugins-cli-test-helpers.js";
 
+const ORIGINAL_OPENCLAW_NIX_MODE = process.env.OPENCLAW_NIX_MODE;
+
 describe("plugins cli policy mutations", () => {
   const compatibilityPluginIds = [
     { alias: "openai-codex", pluginId: "openai" },
@@ -22,6 +24,14 @@ describe("plugins cli policy mutations", () => {
     resetPluginsCliTestState();
   });
 
+  afterEach(() => {
+    if (ORIGINAL_OPENCLAW_NIX_MODE === undefined) {
+      delete process.env.OPENCLAW_NIX_MODE;
+    } else {
+      process.env.OPENCLAW_NIX_MODE = ORIGINAL_OPENCLAW_NIX_MODE;
+    }
+  });
+
   function mockPluginRegistry(ids: string[]) {
     buildPluginRegistrySnapshotReport.mockReturnValue({
       plugins: ids.map((id) => ({ id })),
@@ -29,6 +39,27 @@ describe("plugins cli policy mutations", () => {
       registrySource: "derived",
       registryDiagnostics: [],
     });
+  }
+
+  function requireFirstWrittenConfig(): OpenClawConfig {
+    const call = writeConfigFile.mock.calls[0];
+    if (!call) {
+      throw new Error("expected writeConfigFile to be called");
+    }
+    const [config] = call;
+    if (!config) {
+      throw new Error("expected writeConfigFile to receive a config");
+    }
+    return config;
+  }
+
+  function requirePluginEntries(
+    config: OpenClawConfig,
+  ): NonNullable<NonNullable<OpenClawConfig["plugins"]>["entries"]> {
+    if (!config.plugins?.entries) {
+      throw new Error("expected plugin entries in config");
+    }
+    return config.plugins.entries;
   }
 
   it("refreshes the persisted plugin registry after enabling a plugin", async () => {
@@ -62,6 +93,25 @@ describe("plugins cli policy mutations", () => {
     });
   });
 
+  it("refuses plugin enablement in Nix mode before config mutation", async () => {
+    const previous = process.env.OPENCLAW_NIX_MODE;
+    process.env.OPENCLAW_NIX_MODE = "1";
+    try {
+      await expect(runPluginsCommand(["plugins", "enable", "alpha"])).rejects.toThrow(
+        "OPENCLAW_NIX_MODE=1",
+      );
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_NIX_MODE;
+      } else {
+        process.env.OPENCLAW_NIX_MODE = previous;
+      }
+    }
+
+    expect(enablePluginInConfig).not.toHaveBeenCalled();
+    expect(writeConfigFile).not.toHaveBeenCalled();
+  });
+
   it("refreshes the persisted plugin registry after disabling a plugin", async () => {
     loadConfig.mockReturnValue({
       plugins: {
@@ -74,8 +124,9 @@ describe("plugins cli policy mutations", () => {
 
     await runPluginsCommand(["plugins", "disable", "alpha"]);
 
-    const nextConfig = writeConfigFile.mock.calls[0]?.[0] as OpenClawConfig;
-    expect(nextConfig.plugins?.entries?.alpha?.enabled).toBe(false);
+    const nextConfig = requireFirstWrittenConfig();
+    const entries = requirePluginEntries(nextConfig);
+    expect(entries.alpha).toEqual({ enabled: false });
     expect(refreshPluginRegistry).toHaveBeenCalledWith({
       config: nextConfig,
       installRecords: {},
@@ -125,9 +176,10 @@ describe("plugins cli policy mutations", () => {
 
       await runPluginsCommand(["plugins", "disable", alias]);
 
-      const nextConfig = writeConfigFile.mock.calls[0]?.[0] as OpenClawConfig;
-      expect(nextConfig.plugins?.entries?.[pluginId]?.enabled).toBe(false);
-      expect(nextConfig.plugins?.entries?.[alias]).toBeUndefined();
+      const nextConfig = requireFirstWrittenConfig();
+      const entries = requirePluginEntries(nextConfig);
+      expect(entries[pluginId]).toEqual({ enabled: false });
+      expect(entries[alias]).toBeUndefined();
     },
   );
 
@@ -141,7 +193,7 @@ describe("plugins cli policy mutations", () => {
       );
 
       expect(runtimeErrors).toContain(
-        "Plugin not found: missing-plugin. Run `openclaw plugins list` to see installed plugins.",
+        "Plugin not found: missing-plugin. Run `openclaw plugins list` to see installed plugins, or `openclaw plugins search missing-plugin` to look for installable plugins.",
       );
       expect(enablePluginInConfig).not.toHaveBeenCalled();
       expect(writeConfigFile).not.toHaveBeenCalled();
@@ -155,8 +207,9 @@ describe("plugins cli policy mutations", () => {
 
     await runPluginsCommand(["plugins", "disable", "twitch"]);
 
-    const nextConfig = writeConfigFile.mock.calls[0]?.[0] as OpenClawConfig;
-    expect(nextConfig.plugins?.entries?.twitch?.enabled).toBe(false);
+    const nextConfig = requireFirstWrittenConfig();
+    const entries = requirePluginEntries(nextConfig);
+    expect(entries.twitch).toEqual({ enabled: false });
     expect(nextConfig.channels?.twitch).toBeUndefined();
   });
 });

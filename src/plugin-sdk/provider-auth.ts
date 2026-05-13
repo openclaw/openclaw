@@ -1,7 +1,7 @@
 // Public auth/onboarding helpers for provider plugins.
 
 import path from "node:path";
-import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
+import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { resolveApiKeyForProfile } from "../agents/auth-profiles/oauth.js";
 import { resolveAuthProfileOrder } from "../agents/auth-profiles/order.js";
 import { listProfilesForProvider } from "../agents/auth-profiles/profiles.js";
@@ -72,7 +72,7 @@ export { createProviderApiKeyAuthMethod } from "../plugins/provider-api-key-auth
 export { coerceSecretRef, hasConfiguredSecretInput } from "../config/types.secrets.js";
 export { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
 export { resolveRequiredHomeDir } from "../infra/home-dir.js";
-export { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
+export { resolveOpenClawAgentDir } from "./agent-dir-compat.js";
 export {
   normalizeOptionalSecretInput,
   normalizeSecretInput,
@@ -94,18 +94,28 @@ export {
 
 const COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/token";
 
+/** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
 export const COPILOT_EDITOR_VERSION = "vscode/1.96.2";
+/** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
 export const COPILOT_USER_AGENT = "GitHubCopilotChat/0.26.7";
+/** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
 export const COPILOT_EDITOR_PLUGIN_VERSION = "copilot-chat/0.35.0";
+/** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
 export const COPILOT_GITHUB_API_VERSION = "2025-04-01";
+/** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
+export const COPILOT_INTEGRATION_ID = "vscode-chat";
+/** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
 export const DEFAULT_COPILOT_API_BASE_URL = "https://api.individual.githubcopilot.com";
 
+/** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
 export type CachedCopilotToken = {
   token: string;
   expiresAt: number;
   updatedAt: number;
+  integrationId?: string;
 };
 
+/** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
 export function buildCopilotIdeHeaders(
   params: {
     includeApiVersion?: boolean;
@@ -124,7 +134,7 @@ function resolveCopilotTokenCachePath(env: NodeJS.ProcessEnv = process.env) {
 }
 
 function isCopilotTokenUsable(cache: CachedCopilotToken, now = Date.now()): boolean {
-  return cache.expiresAt - now > 5 * 60 * 1000;
+  return cache.integrationId === COPILOT_INTEGRATION_ID && cache.expiresAt - now > 5 * 60 * 1000;
 }
 
 function parseCopilotTokenResponse(value: unknown): {
@@ -175,6 +185,7 @@ function resolveCopilotProxyHost(proxyEp: string): string | null {
   }
 }
 
+/** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
 export function deriveCopilotApiBaseUrlFromToken(token: string): string | null {
   const trimmed = token.trim();
   if (!trimmed) {
@@ -197,6 +208,7 @@ export function deriveCopilotApiBaseUrlFromToken(token: string): string | null {
   return resolveProviderEndpoint(baseUrl).endpointClass === "invalid" ? null : baseUrl;
 }
 
+/** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
 export async function resolveCopilotApiToken(params: {
   githubToken: string;
   env?: NodeJS.ProcessEnv;
@@ -232,6 +244,7 @@ export async function resolveCopilotApiToken(params: {
     headers: {
       Accept: "application/json",
       Authorization: `Bearer ${params.githubToken}`,
+      "Copilot-Integration-Id": COPILOT_INTEGRATION_ID,
       ...buildCopilotIdeHeaders({ includeApiVersion: true }),
     },
   });
@@ -245,6 +258,7 @@ export async function resolveCopilotApiToken(params: {
     token: json.token,
     expiresAt: json.expiresAt,
     updatedAt: Date.now(),
+    integrationId: COPILOT_INTEGRATION_ID,
   };
   saveJsonFileFn(cachePath, payload);
 
@@ -279,7 +293,7 @@ export function listUsableProviderAuthProfileIds(params: {
   agentDir?: string;
 }): { agentDir: string; profileIds: string[] } {
   try {
-    const agentDir = params.agentDir?.trim() || resolveOpenClawAgentDir();
+    const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.cfg ?? {});
     const store = ensureAuthProfileStore(agentDir, {
       allowKeychainPrompt: false,
     });

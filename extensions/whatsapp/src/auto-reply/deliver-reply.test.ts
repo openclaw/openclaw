@@ -1,6 +1,10 @@
 import fsSync from "node:fs";
+import {
+  createMessageReceiptFromOutboundResults,
+  listMessageReceiptPlatformIds,
+} from "openclaw/plugin-sdk/channel-message";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { sleep } from "openclaw/plugin-sdk/text-runtime";
+import { sleep } from "openclaw/plugin-sdk/text-utility-runtime";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { loadWebMedia } from "../media.js";
 import { cacheInboundMessageMeta } from "../quoted-message.js";
@@ -31,9 +35,9 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/text-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/text-runtime")>(
-    "openclaw/plugin-sdk/text-runtime",
+vi.mock("openclaw/plugin-sdk/text-utility-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/text-utility-runtime")>(
+    "openclaw/plugin-sdk/text-utility-runtime",
   );
   return {
     ...actual,
@@ -52,7 +56,10 @@ function acceptedSendResult(kind: "media" | "text", id: string) {
   return {
     kind,
     messageId: id,
-    messageIds: [id],
+    receipt: createMessageReceiptFromOutboundResults({
+      kind,
+      results: [{ channel: "whatsapp", messageId: id }],
+    }),
     keys: [{ id }],
     providerAccepted: true,
   };
@@ -62,7 +69,10 @@ function unacceptedSendResult(kind: "media" | "text") {
   return {
     kind,
     messageId: "unknown",
-    messageIds: [],
+    receipt: createMessageReceiptFromOutboundResults({
+      kind,
+      results: [],
+    }),
     keys: [],
     providerAccepted: false,
   };
@@ -112,9 +122,62 @@ function mockFirstReplyFailureWithWrappedError(msg: WebInboundMsg, message: stri
 }
 
 function expectFirstSendMediaPayload(msg: WebInboundMsg) {
-  const payload = vi.mocked(msg.sendMedia).mock.calls[0]?.[0];
-  expect(payload).toBeDefined();
+  const payload = mockCallArg(msg.sendMedia, 0, 0, "sendMedia");
+  if (!payload) {
+    throw new Error("expected first WhatsApp sendMedia payload");
+  }
   return payload;
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function mockCallArg(mock: unknown, callIndex: number, argIndex: number, label: string) {
+  const calls = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls;
+  if (!Array.isArray(calls)) {
+    throw new Error(`expected ${label} mock calls`);
+  }
+  const call = calls.at(callIndex);
+  if (!call) {
+    throw new Error(`expected ${label} call ${callIndex + 1}`);
+  }
+  return call[argIndex];
+}
+
+function replyText(msg: WebInboundMsg, callIndex = 0): string {
+  return String(mockCallArg(msg.reply, callIndex, 0, "reply"));
+}
+
+function findLoggerContext(mock: unknown, message: string, label: string) {
+  const calls = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls;
+  if (!Array.isArray(calls)) {
+    throw new Error(`expected ${label} mock calls`);
+  }
+  const call = calls.find((entry) => entry[1] === message);
+  if (!call) {
+    throw new Error(`expected ${label} message ${message}`);
+  }
+  return requireRecord(call[0], `${label} context`);
+}
+
+function expectBuffer(value: unknown, label: string) {
+  expect(Buffer.isBuffer(value), label).toBe(true);
+}
+
+function expectQuotedOptions(
+  options: unknown,
+  expected: { id: string; fromMe: boolean; participant: string; body: string },
+) {
+  const quoted = requireRecord(requireRecord(options, "reply options").quoted, "quoted message");
+  const key = requireRecord(quoted.key, "quoted key");
+  expect(key.id).toBe(expected.id);
+  expect(key.fromMe).toBe(expected.fromMe);
+  expect(key.participant).toBe(expected.participant);
+  expect(quoted.message).toEqual({ conversation: expected.body });
 }
 
 function mockSecondReplySuccess(msg: WebInboundMsg) {
@@ -149,7 +212,7 @@ describe("deliverWebReply", () => {
   });
 
   it("suppresses payloads flagged as reasoning", async () => {
-    await expectReplySuppressed({ text: "Reasoning:\n_hidden_", isReasoning: true });
+    await expectReplySuppressed({ text: "hidden", isReasoning: true });
   });
 
   it("suppresses payloads that start with reasoning prefix text", async () => {
@@ -194,9 +257,14 @@ describe("deliverWebReply", () => {
     expect(msg.reply).toHaveBeenCalledTimes(2);
     expect(msg.reply).toHaveBeenNthCalledWith(1, "aaa", undefined);
     expect(msg.reply).toHaveBeenNthCalledWith(2, "aaa", undefined);
-    expect(replyLogger.info).toHaveBeenCalledWith(expect.any(Object), "auto-reply sent (text)");
+    expect(typeof mockCallArg(replyLogger.info, 0, 0, "replyLogger.info")).toBe("object");
+    expect(mockCallArg(replyLogger.info, 0, 1, "replyLogger.info")).toBe("auto-reply sent (text)");
     expect(delivery.providerAccepted).toBe(true);
-    expect(delivery.messageIds).toEqual(["reply-sent-1"]);
+    expect(listMessageReceiptPlatformIds(delivery.receipt)).toEqual(["reply-sent-1"]);
+    expect(delivery.receipt.primaryPlatformMessageId).toBe("reply-sent-1");
+    expect(delivery.receipt.platformMessageIds).toEqual(["reply-sent-1"]);
+    expect(delivery.receipt.parts[0]?.platformMessageId).toBe("reply-sent-1");
+    expect(delivery.receipt.parts[0]?.kind).toBe("text");
   });
 
   it("reports text replies that Baileys did not accept", async () => {
@@ -213,12 +281,11 @@ describe("deliverWebReply", () => {
     });
 
     expect(msg.reply).toHaveBeenCalledTimes(1);
-    expect(delivery).toMatchObject({
-      messageIds: [],
-      providerAccepted: false,
-    });
-    expect(replyLogger.warn).toHaveBeenCalledWith(
-      expect.any(Object),
+    expect(delivery.receipt.platformMessageIds).toEqual([]);
+    expect(delivery.receipt.parts).toEqual([]);
+    expect(delivery.providerAccepted).toBe(false);
+    expect(typeof mockCallArg(replyLogger.warn, 0, 0, "replyLogger.warn")).toBe("object");
+    expect(mockCallArg(replyLogger.warn, 0, 1, "replyLogger.warn")).toBe(
       "auto-reply text was not accepted by WhatsApp provider",
     );
   });
@@ -238,7 +305,7 @@ describe("deliverWebReply", () => {
     });
 
     expect(msg.reply).toHaveBeenCalledTimes(1);
-    const sentText = vi.mocked(msg.reply).mock.calls[0]?.[0];
+    const sentText = replyText(msg);
     expect(sentText).not.toContain("function_calls");
     expect(sentText).not.toContain("invoke");
     expect(sentText).toContain("Before");
@@ -268,7 +335,7 @@ describe("deliverWebReply", () => {
     });
 
     expect(msg.reply).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(msg.reply).mock.calls[0]?.[0]).toBe("Before\n\nAfter\n");
+    expect(replyText(msg)).toBe("Before\n\nAfter\n");
   });
 
   it("strips legacy uppercase TOOL_CALL text before WhatsApp text delivery", async () => {
@@ -290,7 +357,7 @@ describe("deliverWebReply", () => {
     });
 
     expect(msg.reply).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(msg.reply).mock.calls[0]?.[0]).toBe("Before\n\nAfter");
+    expect(replyText(msg)).toBe("Before\n\nAfter");
   });
 
   it("keeps quote threading on every text chunk for a threaded reply", async () => {
@@ -311,34 +378,20 @@ describe("deliverWebReply", () => {
     });
 
     expect(msg.reply).toHaveBeenCalledTimes(2);
-    expect(msg.reply).toHaveBeenNthCalledWith(
-      1,
-      "aaa",
-      expect.objectContaining({
-        quoted: expect.objectContaining({
-          key: expect.objectContaining({
-            id: "reply-1",
-            fromMe: true,
-            participant: "111@s.whatsapp.net",
-          }),
-          message: { conversation: "quoted body" },
-        }),
-      }),
-    );
-    expect(msg.reply).toHaveBeenNthCalledWith(
-      2,
-      "aaa",
-      expect.objectContaining({
-        quoted: expect.objectContaining({
-          key: expect.objectContaining({
-            id: "reply-1",
-            fromMe: true,
-            participant: "111@s.whatsapp.net",
-          }),
-          message: { conversation: "quoted body" },
-        }),
-      }),
-    );
+    expect(mockCallArg(msg.reply, 0, 0, "reply")).toBe("aaa");
+    expectQuotedOptions(mockCallArg(msg.reply, 0, 1, "reply"), {
+      id: "reply-1",
+      fromMe: true,
+      participant: "111@s.whatsapp.net",
+      body: "quoted body",
+    });
+    expect(mockCallArg(msg.reply, 1, 0, "reply")).toBe("aaa");
+    expectQuotedOptions(mockCallArg(msg.reply, 1, 1, "reply"), {
+      id: "reply-1",
+      fromMe: true,
+      participant: "111@s.whatsapp.net",
+      body: "quoted body",
+    });
   });
 
   it.each(["connection closed", "operation timed out"])(
@@ -400,16 +453,16 @@ describe("deliverWebReply", () => {
       localRoots: mediaLocalRoots,
     });
 
-    expect(msg.sendMedia).toHaveBeenCalledWith(
-      expect.objectContaining({
-        image: expect.any(Buffer),
-        caption: "aaa",
-        mimetype: "image/jpeg",
-      }),
-      undefined,
+    const mediaPayload = requireRecord(
+      mockCallArg(msg.sendMedia, 0, 0, "sendMedia"),
+      "sendMedia payload",
     );
+    expectBuffer(mediaPayload.image, "sendMedia image");
+    expect(mediaPayload.caption).toBe("aaa");
+    expect(mediaPayload.mimetype).toBe("image/jpeg");
+    expect(mockCallArg(msg.sendMedia, 0, 1, "sendMedia")).toBeUndefined();
     expect(msg.reply).toHaveBeenCalledWith("aaa", undefined);
-    expect(replyLogger.info).toHaveBeenCalledWith(expect.any(Object), "auto-reply sent (media)");
+    findLoggerContext(replyLogger.info, "auto-reply sent (media)", "replyLogger.info");
     expect(logVerbose).toHaveBeenCalled();
   });
 
@@ -451,36 +504,26 @@ describe("deliverWebReply", () => {
       skipLog: true,
     });
 
-    expect(msg.sendMedia).toHaveBeenCalledWith(
-      expect.objectContaining({
-        image: expect.any(Buffer),
-        caption: "caption",
-        mimetype: "image/jpeg",
-      }),
-      expect.objectContaining({
-        quoted: expect.objectContaining({
-          key: expect.objectContaining({
-            id: "reply-2",
-            fromMe: true,
-            participant: "111@s.whatsapp.net",
-          }),
-          message: { conversation: "quoted media body" },
-        }),
-      }),
+    const mediaPayload = requireRecord(
+      mockCallArg(msg.sendMedia, 0, 0, "sendMedia"),
+      "sendMedia payload",
     );
-    expect(msg.reply).toHaveBeenCalledWith(
-      "trail",
-      expect.objectContaining({
-        quoted: expect.objectContaining({
-          key: expect.objectContaining({
-            id: "reply-2",
-            fromMe: true,
-            participant: "111@s.whatsapp.net",
-          }),
-          message: { conversation: "quoted media body" },
-        }),
-      }),
-    );
+    expectBuffer(mediaPayload.image, "sendMedia image");
+    expect(mediaPayload.caption).toBe("caption");
+    expect(mediaPayload.mimetype).toBe("image/jpeg");
+    expectQuotedOptions(mockCallArg(msg.sendMedia, 0, 1, "sendMedia"), {
+      id: "reply-2",
+      fromMe: true,
+      participant: "111@s.whatsapp.net",
+      body: "quoted media body",
+    });
+    expect(mockCallArg(msg.reply, 0, 0, "reply")).toBe("trail");
+    expectQuotedOptions(mockCallArg(msg.reply, 0, 1, "reply"), {
+      id: "reply-2",
+      fromMe: true,
+      participant: "111@s.whatsapp.net",
+      body: "quoted media body",
+    });
   });
 
   it("retries media send on transient failure", async () => {
@@ -519,16 +562,14 @@ describe("deliverWebReply", () => {
     });
 
     expect(msg.reply).toHaveBeenCalledTimes(1);
-    expect(
-      String((msg.reply as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]?.[0]),
-    ).toContain("⚠️ Media failed");
-    expect(
-      String((msg.reply as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]?.[0]),
-    ).not.toContain("boom");
-    expect(replyLogger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ mediaUrl: "http://example.com/img.jpg" }),
+    expect(replyText(msg)).toContain("⚠️ Media failed");
+    expect(replyText(msg)).not.toContain("boom");
+    const warnContext = findLoggerContext(
+      replyLogger.warn,
       "failed to send web media reply",
+      "replyLogger.warn",
     );
+    expect(warnContext.mediaUrl).toBe("http://example.com/img.jpg");
   });
 
   it("still attempts later media after the first media fails", async () => {
@@ -575,23 +616,18 @@ describe("deliverWebReply", () => {
       localRoots: undefined,
     });
     expect(msg.sendMedia).toHaveBeenCalledTimes(2);
-    expect(msg.sendMedia).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        document: expect.any(Buffer),
-        fileName: "good.pdf",
-        caption: undefined,
-        mimetype: "application/pdf",
-      }),
-      undefined,
+    const secondPayload = requireRecord(
+      mockCallArg(msg.sendMedia, 1, 0, "sendMedia"),
+      "second sendMedia payload",
     );
+    expectBuffer(secondPayload.document, "second sendMedia document");
+    expect(secondPayload.fileName).toBe("good.pdf");
+    expect(secondPayload.caption).toBeUndefined();
+    expect(secondPayload.mimetype).toBe("application/pdf");
+    expect(mockCallArg(msg.sendMedia, 1, 1, "sendMedia")).toBeUndefined();
     expect(msg.reply).toHaveBeenCalledTimes(1);
-    expect(
-      String((msg.reply as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]?.[0]),
-    ).toContain("⚠️ Media failed");
-    expect(
-      String((msg.reply as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]?.[0]),
-    ).not.toContain("boom");
+    expect(replyText(msg)).toContain("⚠️ Media failed");
+    expect(replyText(msg)).not.toContain("boom");
   });
 
   it("sanitizes XML tool-call blocks for outbound sendPayload delivery", async () => {
@@ -611,7 +647,7 @@ describe("deliverWebReply", () => {
     });
 
     expect(sendWhatsApp).toHaveBeenCalledTimes(1);
-    const sentText = sendWhatsApp.mock.calls[0]?.[1];
+    const sentText = mockCallArg(sendWhatsApp, 0, 1, "sendWhatsApp");
     expect(sentText).not.toContain("function_calls");
     expect(sentText).not.toContain("invoke");
     expect(sentText).toContain("Before");
@@ -665,14 +701,14 @@ describe("deliverWebReply", () => {
       localRoots: undefined,
     });
     expect(msg.sendMedia).toHaveBeenCalledTimes(1);
-    expect(msg.sendMedia).toHaveBeenCalledWith(
-      expect.objectContaining({
-        audio: expect.any(Buffer),
-        ptt: true,
-        mimetype: "audio/ogg; codecs=opus",
-      }),
-      undefined,
+    const mediaPayload = requireRecord(
+      mockCallArg(msg.sendMedia, 0, 0, "sendMedia"),
+      "sendMedia payload",
     );
+    expectBuffer(mediaPayload.audio, "sendMedia audio");
+    expect(mediaPayload.ptt).toBe(true);
+    expect(mediaPayload.mimetype).toBe("audio/ogg; codecs=opus");
+    expect(mockCallArg(msg.sendMedia, 0, 1, "sendMedia")).toBeUndefined();
     expect(expectFirstSendMediaPayload(msg)).not.toHaveProperty("caption");
     expect(msg.reply).toHaveBeenCalledWith("caption", undefined);
   });
@@ -696,14 +732,14 @@ describe("deliverWebReply", () => {
       skipLog: true,
     });
 
-    expect(msg.sendMedia).toHaveBeenCalledWith(
-      expect.objectContaining({
-        audio: expect.any(Buffer),
-        ptt: true,
-        mimetype: "audio/ogg; codecs=opus",
-      }),
-      undefined,
+    const mediaPayload = requireRecord(
+      mockCallArg(msg.sendMedia, 0, 0, "sendMedia"),
+      "sendMedia payload",
     );
+    expectBuffer(mediaPayload.audio, "sendMedia audio");
+    expect(mediaPayload.ptt).toBe(true);
+    expect(mediaPayload.mimetype).toBe("audio/ogg; codecs=opus");
+    expect(mockCallArg(msg.sendMedia, 0, 1, "sendMedia")).toBeUndefined();
     expect(expectFirstSendMediaPayload(msg)).not.toHaveProperty("caption");
     expect(msg.reply).toHaveBeenCalledWith("cap", undefined);
   });
@@ -733,17 +769,23 @@ describe("deliverWebReply", () => {
       skipLog: true,
     });
 
-    expect(hoisted.runFfmpeg).toHaveBeenCalledWith(
-      expect.arrayContaining(["-c:a", "libopus", "-ar", "48000", "-b:a", "64k"]),
+    const ffmpegArgs = mockCallArg(hoisted.runFfmpeg, 0, 0, "runFfmpeg");
+    expect(Array.isArray(ffmpegArgs)).toBe(true);
+    const ffmpegArgList = ffmpegArgs as unknown[];
+    expect(ffmpegArgList).toContain("-c:a");
+    expect(ffmpegArgList).toContain("libopus");
+    expect(ffmpegArgList).toContain("-ar");
+    expect(ffmpegArgList).toContain("48000");
+    expect(ffmpegArgList).toContain("-b:a");
+    expect(ffmpegArgList).toContain("64k");
+    const mediaPayload = requireRecord(
+      mockCallArg(msg.sendMedia, 0, 0, "sendMedia"),
+      "sendMedia payload",
     );
-    expect(msg.sendMedia).toHaveBeenCalledWith(
-      expect.objectContaining({
-        audio: Buffer.from("opus-output"),
-        ptt: true,
-        mimetype: "audio/ogg; codecs=opus",
-      }),
-      undefined,
-    );
+    expect(mediaPayload.audio).toEqual(Buffer.from("opus-output"));
+    expect(mediaPayload.ptt).toBe(true);
+    expect(mediaPayload.mimetype).toBe("audio/ogg; codecs=opus");
+    expect(mockCallArg(msg.sendMedia, 0, 1, "sendMedia")).toBeUndefined();
     expect(expectFirstSendMediaPayload(msg)).not.toHaveProperty("caption");
     expect(msg.reply).toHaveBeenCalledWith("cap", undefined);
   });
@@ -767,14 +809,14 @@ describe("deliverWebReply", () => {
       skipLog: true,
     });
 
-    expect(msg.sendMedia).toHaveBeenCalledWith(
-      expect.objectContaining({
-        video: expect.any(Buffer),
-        caption: "cap",
-        mimetype: "video/mp4",
-      }),
-      undefined,
+    const mediaPayload = requireRecord(
+      mockCallArg(msg.sendMedia, 0, 0, "sendMedia"),
+      "sendMedia payload",
     );
+    expectBuffer(mediaPayload.video, "sendMedia video");
+    expect(mediaPayload.caption).toBe("cap");
+    expect(mediaPayload.mimetype).toBe("video/mp4");
+    expect(mockCallArg(msg.sendMedia, 0, 1, "sendMedia")).toBeUndefined();
   });
 
   it("sends non-audio/image/video media as document", async () => {
@@ -797,15 +839,15 @@ describe("deliverWebReply", () => {
       skipLog: true,
     });
 
-    expect(msg.sendMedia).toHaveBeenCalledWith(
-      expect.objectContaining({
-        document: expect.any(Buffer),
-        fileName: "x.bin",
-        caption: "cap",
-        mimetype: "application/octet-stream",
-      }),
-      undefined,
+    const mediaPayload = requireRecord(
+      mockCallArg(msg.sendMedia, 0, 0, "sendMedia"),
+      "sendMedia payload",
     );
+    expectBuffer(mediaPayload.document, "sendMedia document");
+    expect(mediaPayload.fileName).toBe("x.bin");
+    expect(mediaPayload.caption).toBe("cap");
+    expect(mediaPayload.mimetype).toBe("application/octet-stream");
+    expect(mockCallArg(msg.sendMedia, 0, 1, "sendMedia")).toBeUndefined();
   });
 
   it("strips URL query and fragment data from derived document file names", async () => {
@@ -830,14 +872,14 @@ describe("deliverWebReply", () => {
       skipLog: true,
     });
 
-    expect(msg.sendMedia).toHaveBeenCalledWith(
-      expect.objectContaining({
-        document: expect.any(Buffer),
-        fileName: "report.pdf",
-        caption: "cap",
-        mimetype: "application/pdf",
-      }),
-      undefined,
+    const mediaPayload = requireRecord(
+      mockCallArg(msg.sendMedia, 0, 0, "sendMedia"),
+      "sendMedia payload",
     );
+    expectBuffer(mediaPayload.document, "sendMedia document");
+    expect(mediaPayload.fileName).toBe("report.pdf");
+    expect(mediaPayload.caption).toBe("cap");
+    expect(mediaPayload.mimetype).toBe("application/pdf");
+    expect(mockCallArg(msg.sendMedia, 0, 1, "sendMedia")).toBeUndefined();
   });
 });

@@ -31,55 +31,53 @@ beforeAll(async () => {
 describe("decodeStrictBase64", () => {
   const maxBytes = 1024;
 
-  it("valid base64 returns buffer with correct bytes", async () => {
+  it("valid base64 returns buffer with correct bytes", () => {
     const { decodeStrictBase64 } = subagentSpawnModule;
     const input = "hello world";
     const encoded = Buffer.from(input).toString("base64");
     const result = decodeStrictBase64(encoded, maxBytes);
-    expect(result).not.toBeNull();
     expect(result?.toString("utf8")).toBe(input);
   });
 
-  it("empty string returns null", async () => {
+  it("empty string returns null", () => {
     const { decodeStrictBase64 } = subagentSpawnModule;
     expect(decodeStrictBase64("", maxBytes)).toBeNull();
   });
 
-  it("bad padding (length % 4 !== 0) returns null", async () => {
+  it("bad padding (length % 4 !== 0) returns null", () => {
     const { decodeStrictBase64 } = subagentSpawnModule;
     expect(decodeStrictBase64("abc", maxBytes)).toBeNull();
   });
 
-  it("non-base64 chars returns null", async () => {
+  it("non-base64 chars returns null", () => {
     const { decodeStrictBase64 } = subagentSpawnModule;
     expect(decodeStrictBase64("!@#$", maxBytes)).toBeNull();
   });
 
-  it("whitespace-only returns null (empty after strip)", async () => {
+  it("whitespace-only returns null (empty after strip)", () => {
     const { decodeStrictBase64 } = subagentSpawnModule;
     expect(decodeStrictBase64("   ", maxBytes)).toBeNull();
   });
 
-  it("pre-decode oversize guard: encoded string > maxEncodedBytes * 2 returns null", async () => {
+  it("pre-decode oversize guard: encoded string > maxEncodedBytes * 2 returns null", () => {
     const { decodeStrictBase64 } = subagentSpawnModule;
     // maxEncodedBytes = ceil(1024/3)*4 = 1368; *2 = 2736
     const oversized = "A".repeat(2737);
     expect(decodeStrictBase64(oversized, maxBytes)).toBeNull();
   });
 
-  it("decoded byteLength exceeds maxDecodedBytes returns null", async () => {
+  it("decoded byteLength exceeds maxDecodedBytes returns null", () => {
     const { decodeStrictBase64 } = subagentSpawnModule;
     const bigBuf = Buffer.alloc(1025, 0x42);
     const encoded = bigBuf.toString("base64");
     expect(decodeStrictBase64(encoded, maxBytes)).toBeNull();
   });
 
-  it("valid base64 at exact boundary returns Buffer", async () => {
+  it("valid base64 at exact boundary returns Buffer", () => {
     const { decodeStrictBase64 } = subagentSpawnModule;
     const exactBuf = Buffer.alloc(1024, 0x41);
     const encoded = exactBuf.toString("base64");
     const result = decodeStrictBase64(encoded, maxBytes);
-    expect(result).not.toBeNull();
     expect(result?.byteLength).toBe(1024);
   });
 });
@@ -218,10 +216,15 @@ describe("spawnSubagentDirect filename validation", () => {
       : [];
     expect(retainedDirs).toHaveLength(0);
     const deleteCall = calls.find((entry) => entry.method === "sessions.delete");
-    expect(deleteCall?.params).toMatchObject({
-      key: expect.stringMatching(/^agent:main:subagent:/),
-      deleteTranscript: true,
-      emitLifecycleHooks: false,
-    });
+    const deleteParams = deleteCall?.params as
+      | {
+          key?: string;
+          deleteTranscript?: boolean;
+          emitLifecycleHooks?: boolean;
+        }
+      | undefined;
+    expect(deleteParams?.key).toMatch(/^agent:main:subagent:/);
+    expect(deleteParams?.deleteTranscript).toBe(true);
+    expect(deleteParams?.emitLifecycleHooks).toBe(false);
   });
 });

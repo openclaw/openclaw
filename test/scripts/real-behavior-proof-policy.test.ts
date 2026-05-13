@@ -3,6 +3,7 @@ import {
   MOCK_ONLY_PROOF_LABEL,
   NEEDS_REAL_BEHAVIOR_PROOF_LABEL,
   PROOF_OVERRIDE_LABEL,
+  PROOF_SUPPLIED_LABEL,
   evaluateRealBehaviorProof,
   labelsForRealBehaviorProof,
 } from "../../scripts/github/real-behavior-proof-policy.mjs";
@@ -56,7 +57,29 @@ describe("real-behavior-proof-policy", () => {
     });
 
     expect(evaluation.status).toBe("passed");
-    expect(labelsForRealBehaviorProof(evaluation)).toEqual([]);
+    expect(labelsForRealBehaviorProof(evaluation)).toEqual([PROOF_SUPPLIED_LABEL]);
+  });
+
+  it("passes CRLF-formatted external PRs with screenshot proof", () => {
+    const evaluation = evaluateRealBehaviorProof({
+      pullRequest: externalPr(
+        proofBody("![after](https://github.com/user-attachments/assets/gateway-ready)").replace(
+          /\n/g,
+          "\r\n",
+        ),
+      ),
+    });
+
+    expect(evaluation.status).toBe("passed");
+    expect(evaluation.fields).toStrictEqual({
+      behavior: "Gateway startup no longer drops the configured Discord channel.",
+      evidence: "![after](https://github.com/user-attachments/assets/gateway-ready)",
+      environment: "macOS 15.4, Node 24, local OpenClaw gateway with a redacted Discord token.",
+      notTested: "No known gaps.",
+      observedResult: "The gateway stayed connected and the Discord channel showed ready.",
+      steps: "pnpm openclaw gateway restart, then pnpm openclaw gateway status",
+    });
+    expect(labelsForRealBehaviorProof(evaluation)).toEqual([PROOF_SUPPLIED_LABEL]);
   });
 
   it("fails external PRs without a real behavior proof section", () => {

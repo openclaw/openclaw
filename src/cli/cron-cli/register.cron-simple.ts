@@ -6,6 +6,7 @@ import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import {
   coerceCronDeliveryPreviews,
+  enrichCronJsonWithStatus,
   handleCronCliError,
   printCronJson,
   printCronShow,
@@ -111,6 +112,21 @@ export function registerCronSimpleCommands(cron: Command) {
 
   addGatewayClientOptions(
     cron
+      .command("get")
+      .description("Get a cron job as JSON")
+      .argument("<id>", "Job id")
+      .action(async (id, opts) => {
+        try {
+          const res = await callGatewayFromCli("cron.get", opts, { id: String(id) });
+          printCronJson(res);
+        } catch (err) {
+          handleCronCliError(err);
+        }
+      }),
+  );
+
+  addGatewayClientOptions(
+    cron
       .command("show")
       .description("Show a cron job")
       .argument("<id>", "Job id or exact name")
@@ -122,7 +138,7 @@ export function registerCronSimpleCommands(cron: Command) {
             throw new Error(`cron job not found: ${String(id)}`);
           }
           if (opts.json) {
-            printCronJson(job);
+            printCronJson(enrichCronJsonWithStatus(job));
             return;
           }
           printCronShow(job, defaultRuntime, { deliveryPreview });

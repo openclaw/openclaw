@@ -6,8 +6,6 @@ read_when:
   - Setting up Fly volumes, secrets, and first-run config
 ---
 
-# Fly.io Deployment
-
 **Goal:** OpenClaw Gateway running on a [Fly.io](https://fly.io) machine with persistent storage, automatic HTTPS, and Discord/channel access.
 
 ## What you need
@@ -79,6 +77,8 @@ read_when:
       source = "openclaw_data"
       destination = "/data"
     ```
+
+    The OpenClaw Docker image uses `tini` as its entrypoint. Fly process commands replace Docker `CMD` without replacing `ENTRYPOINT`, so the process still runs under `tini`.
 
     **Key settings:**
 

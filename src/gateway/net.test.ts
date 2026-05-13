@@ -1,10 +1,11 @@
 import os from "node:os";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
 import {
   __resetContainerCacheForTest,
   defaultGatewayBindMode,
   isContainerEnvironment,
+  isLocalInterfaceAddress,
   isLocalishHost,
   isLoopbackHost,
   isPrivateOrLoopbackAddress,
@@ -12,11 +13,46 @@ import {
   isSecureWebSocketUrl,
   isTrustedProxyAddress,
   pickPrimaryLanIPv4,
+  resolveLocalInterfaceAddressMatch,
   resolveClientIp,
   resolveGatewayBindHost,
   resolveGatewayListenHosts,
   resolveHostName,
 } from "./net.js";
+
+const flyMachineEnvKeys = ["FLY_MACHINE_ID", "FLY_APP_NAME"] as const;
+
+function clearFlyMachineEnvForTest(): () => void {
+  const previousEnv = new Map<(typeof flyMachineEnvKeys)[number], string | undefined>();
+  for (const key of flyMachineEnvKeys) {
+    previousEnv.set(key, process.env[key]);
+    delete process.env[key];
+  }
+
+  return () => {
+    for (const key of flyMachineEnvKeys) {
+      const value = previousEnv.get(key);
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  };
+}
+
+function useClearedFlyMachineEnv() {
+  let restoreFlyMachineEnv: (() => void) | undefined;
+
+  beforeEach(() => {
+    restoreFlyMachineEnv = clearFlyMachineEnvForTest();
+  });
+
+  afterEach(() => {
+    restoreFlyMachineEnv?.();
+    restoreFlyMachineEnv = undefined;
+  });
+}
 
 describe("resolveHostName", () => {
   it.each([
@@ -201,6 +237,36 @@ describe("isTrustedProxyAddress", () => {
     },
   ])("$name", ({ ip, trustedProxies, expected }) => {
     expect(isTrustedProxyAddress(ip, trustedProxies)).toBe(expected);
+  });
+});
+
+describe("isLocalInterfaceAddress", () => {
+  const snapshot = makeNetworkInterfacesSnapshot({
+    lo: [
+      { address: "127.0.0.1", family: "IPv4", internal: true },
+      { address: "::1", family: "IPv6", internal: true },
+    ],
+    eth0: [{ address: "10.42.0.59", family: "IPv4" }],
+    tailscale0: [{ address: "fd7a:115c:a1e0::1234", family: "IPv6" }],
+  });
+
+  it.each([
+    { input: "10.42.0.59", expected: true },
+    { input: "::ffff:10.42.0.59", expected: true },
+    { input: "fd7a:115c:a1e0::1234", expected: true },
+    { input: "127.0.0.1", expected: true },
+    { input: "10.42.0.60", expected: false },
+    { input: undefined, expected: false },
+  ] as const)("returns $expected for $input", ({ input, expected }) => {
+    expect(isLocalInterfaceAddress(input, snapshot)).toBe(expected);
+  });
+
+  it("returns false when interface discovery is unavailable", () => {
+    expect(isLocalInterfaceAddress("10.42.0.59", undefined)).toBe(false);
+  });
+
+  it("reports an indeterminate match when interface discovery is unavailable", () => {
+    expect(resolveLocalInterfaceAddressMatch("10.42.0.59", undefined)).toBeUndefined();
   });
 });
 
@@ -417,7 +483,7 @@ describe("isPrivateOrLoopbackAddress", () => {
     }
   });
 
-  it("rejects public addresses", () => {
+  it("rejects public IP addresses", () => {
     const rejected = ["1.1.1.1", "8.8.8.8", "172.32.0.1", "203.0.113.10", "2001:4860:4860::8888"];
     for (const ip of rejected) {
       expect(isPrivateOrLoopbackAddress(ip)).toBe(false);
@@ -470,7 +536,7 @@ describe("isPrivateOrLoopbackHost", () => {
     expect(isPrivateOrLoopbackHost("[ff0e::1]")).toBe(false);
   });
 
-  it("rejects public addresses", () => {
+  it("rejects public host addresses", () => {
     expect(isPrivateOrLoopbackHost("1.1.1.1")).toBe(false);
     expect(isPrivateOrLoopbackHost("8.8.8.8")).toBe(false);
     expect(isPrivateOrLoopbackHost("203.0.113.10")).toBe(false);
@@ -482,6 +548,8 @@ describe("isPrivateOrLoopbackHost", () => {
 });
 
 describe("isContainerEnvironment", () => {
+  useClearedFlyMachineEnv();
+
   afterEach(() => {
     __resetContainerCacheForTest();
     vi.restoreAllMocks();
@@ -512,6 +580,18 @@ describe("isContainerEnvironment", () => {
       }
       throw new Error("ENOENT");
     });
+    expect(isContainerEnvironment()).toBe(true);
+  });
+
+  it("returns true on Fly Machines without Docker sentinel files", () => {
+    const fs = require("node:fs");
+    vi.spyOn(fs, "accessSync").mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    vi.spyOn(fs, "readFileSync").mockReturnValue("10:cpuset:/\n9:perf_event:/\n8:memory:/\n0::/\n");
+
+    process.env.FLY_MACHINE_ID = "3d8d5459a03038";
+    process.env.FLY_APP_NAME = "openclaw-test";
     expect(isContainerEnvironment()).toBe(true);
   });
 
@@ -586,6 +666,8 @@ describe("isContainerEnvironment", () => {
 });
 
 describe("resolveGatewayBindHost", () => {
+  useClearedFlyMachineEnv();
+
   afterEach(() => {
     __resetContainerCacheForTest();
     vi.restoreAllMocks();
@@ -625,6 +707,8 @@ describe("resolveGatewayBindHost", () => {
 });
 
 describe("defaultGatewayBindMode", () => {
+  useClearedFlyMachineEnv();
+
   afterEach(() => {
     __resetContainerCacheForTest();
     vi.restoreAllMocks();

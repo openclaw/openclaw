@@ -57,36 +57,44 @@ describe("createChannelRunQueue", () => {
   });
 
   it("updates run status and routes async errors", async () => {
+    const taskError = new Error("boom");
     const setStatus = vi.fn();
     const onError = vi.fn();
     const queue = createChannelRunQueue({ setStatus, onError });
 
     queue.enqueue("key", async () => {
-      throw new Error("boom");
+      throw taskError;
     });
 
     await flushAsyncWork();
 
-    expect(setStatus).toHaveBeenCalledWith({ activeRuns: 0, busy: false });
-    expect(setStatus).toHaveBeenCalledWith(expect.objectContaining({ activeRuns: 1, busy: true }));
-    expect(setStatus).toHaveBeenLastCalledWith(
-      expect.objectContaining({ activeRuns: 0, busy: false }),
-    );
-    expect(onError).toHaveBeenCalledWith(expect.any(Error));
+    expect(setStatus).toHaveBeenCalledTimes(3);
+    const [initialStatus, busyStatus, finalStatus] = setStatus.mock.calls.map(([status]) => status);
+    expect(initialStatus).toEqual({ activeRuns: 0, busy: false });
+    expect(busyStatus?.activeRuns).toBe(1);
+    expect(busyStatus?.busy).toBe(true);
+    expect(typeof busyStatus?.lastRunActivityAt).toBe("number");
+    expect(finalStatus?.activeRuns).toBe(0);
+    expect(finalStatus?.busy).toBe(false);
+    expect(typeof finalStatus?.lastRunActivityAt).toBe("number");
+    expect(onError).toHaveBeenCalledWith(taskError);
   });
 
   it("contains reporting hook errors", async () => {
+    const taskError = new Error("boom");
+    const onError = vi.fn(() => {
+      throw new Error("report failed");
+    });
     const queue = createChannelRunQueue({
-      onError: () => {
-        throw new Error("report failed");
-      },
+      onError,
     });
 
     queue.enqueue("key", async () => {
-      throw new Error("boom");
+      throw taskError;
     });
 
     await flushAsyncWork();
+    expect(onError).toHaveBeenCalledWith(taskError);
   });
 
   it("skips queued work after deactivation", async () => {

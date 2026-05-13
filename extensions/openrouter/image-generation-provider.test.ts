@@ -12,7 +12,9 @@ const {
 } = vi.hoisted(() => ({
   assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
   postJsonRequestMock: vi.fn(),
-  resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "openrouter-key" })),
+  resolveApiKeyForProviderMock: vi.fn(async (_params: unknown) => ({
+    apiKey: "openrouter-key",
+  })),
   resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
     baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://openrouter.ai/api/v1",
     allowPrivateNetwork: false,
@@ -30,6 +32,57 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   postJsonRequest: postJsonRequestMock,
   resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
 }));
+
+function requireOpenRouterPostBody(): {
+  messages?: Array<{ content?: unknown }>;
+} {
+  const request = requireOpenRouterPostRequest();
+  return request.body as { messages?: Array<{ content?: unknown }> };
+}
+
+function requireOpenRouterPostRequest(): Record<string, unknown> {
+  const [call] = postJsonRequestMock.mock.calls;
+  if (!call) {
+    throw new Error("expected OpenRouter image generation request");
+  }
+  const [request] = call;
+  if (!request || typeof request !== "object" || Array.isArray(request)) {
+    throw new Error("expected OpenRouter image generation request");
+  }
+  return request as Record<string, unknown>;
+}
+
+function requireOpenRouterConfigRequest(): Record<string, unknown> {
+  const [call] = resolveProviderHttpRequestConfigMock.mock.calls;
+  if (!call) {
+    throw new Error("expected OpenRouter image config request");
+  }
+  const [request] = call;
+  if (!request || typeof request !== "object" || Array.isArray(request)) {
+    throw new Error("expected OpenRouter image config request");
+  }
+  return request;
+}
+
+function requireHeaders(value: unknown): Headers {
+  if (!(value instanceof Headers)) {
+    throw new Error("expected OpenRouter image request headers");
+  }
+  return value;
+}
+
+function requireGeneratedImage(
+  result: Awaited<
+    ReturnType<ReturnType<typeof buildOpenRouterImageGenerationProvider>["generateImage"]>
+  >,
+  index: number,
+) {
+  const image = result.images[index];
+  if (!image) {
+    throw new Error(`expected OpenRouter generated image at index ${index}`);
+  }
+  return image;
+}
 
 describe("openrouter image generation provider", () => {
   afterEach(() => {
@@ -83,50 +136,84 @@ describe("openrouter image generation provider", () => {
       resolution: "2K",
       count: 2,
       timeoutMs: 12_345,
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
       cfg: {
         models: {
           providers: {
             openrouter: {
               baseUrl: "https://custom.openrouter.test/api/v1",
+              models: [],
             },
           },
         },
-      } as never,
+      },
     });
 
-    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "openrouter" }),
-    );
-    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openrouter",
-        capability: "image",
-        baseUrl: "https://custom.openrouter.test/api/v1",
-      }),
-    );
-    expect(postJsonRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://custom.openrouter.test/api/v1/chat/completions",
-        timeoutMs: 12_345,
-        body: expect.objectContaining({
-          model: "google/gemini-3.1-flash-image-preview",
-          modalities: ["image", "text"],
-          n: 2,
-          image_config: {
-            aspect_ratio: "16:9",
-            image_size: "2K",
-          },
-          messages: [
-            {
-              role: "user",
-              content: "draw a sticker",
+    expect(resolveApiKeyForProviderMock).toHaveBeenCalledOnce();
+    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith({
+      provider: "openrouter",
+      cfg: {
+        models: {
+          providers: {
+            openrouter: {
+              baseUrl: "https://custom.openrouter.test/api/v1",
+              models: [],
             },
-          ],
-        }),
-      }),
-    );
-    expect(result.images[0]?.buffer.toString()).toBe("png-one");
-    expect(result.images[0]?.mimeType).toBe("image/png");
+          },
+        },
+      },
+      agentDir: undefined,
+      store: undefined,
+    });
+    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledOnce();
+    expect(requireOpenRouterConfigRequest()).toEqual({
+      baseUrl: "https://custom.openrouter.test/api/v1",
+      defaultBaseUrl: "https://openrouter.ai/api/v1",
+      allowPrivateNetwork: false,
+      defaultHeaders: {
+        Authorization: "Bearer openrouter-key",
+        "HTTP-Referer": "https://openclaw.ai",
+        "X-OpenRouter-Title": "OpenClaw",
+      },
+      provider: "openrouter",
+      capability: "image",
+      transport: "http",
+    });
+    expect(postJsonRequestMock).toHaveBeenCalledOnce();
+    const request = requireOpenRouterPostRequest();
+    const headers = requireHeaders(request.headers);
+    expect(Object.fromEntries(headers.entries())).toEqual({
+      authorization: "Bearer openrouter-key",
+      "http-referer": "https://openclaw.ai",
+      "x-openrouter-title": "OpenClaw",
+    });
+    expect(request).toEqual({
+      url: "https://custom.openrouter.test/api/v1/chat/completions",
+      headers,
+      body: {
+        model: "google/gemini-3.1-flash-image-preview",
+        messages: [
+          {
+            role: "user",
+            content: "draw a sticker",
+          },
+        ],
+        modalities: ["image", "text"],
+        n: 2,
+        image_config: {
+          aspect_ratio: "16:9",
+          image_size: "2K",
+        },
+      },
+      timeoutMs: 12_345,
+      fetchFn: fetch,
+      allowPrivateNetwork: false,
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+      dispatcherPolicy: undefined,
+    });
+    const image = requireGeneratedImage(result, 0);
+    expect(image.buffer.toString()).toBe("png-one");
+    expect(image.mimeType).toBe("image/png");
     expect(release).toHaveBeenCalledOnce();
   });
 
@@ -159,12 +246,10 @@ describe("openrouter image generation provider", () => {
       model: "google/gemini-3.1-flash-image-preview",
       prompt: "turn this into watercolor",
       inputImages: [{ buffer: Buffer.from("source-image"), mimeType: "image/png" }],
-      cfg: {} as never,
+      cfg: {},
     });
 
-    const body = postJsonRequestMock.mock.calls[0]?.[0].body as {
-      messages?: Array<{ content?: unknown }>;
-    };
+    const body = requireOpenRouterPostBody();
     expect(body.messages?.[0]?.content).toEqual([
       { type: "text", text: "turn this into watercolor" },
       {
@@ -174,8 +259,9 @@ describe("openrouter image generation provider", () => {
         },
       },
     ]);
-    expect(result.images[0]?.buffer.toString()).toBe("webp-one");
-    expect(result.images[0]?.mimeType).toBe("image/webp");
+    const image = requireGeneratedImage(result, 0);
+    expect(image.buffer.toString()).toBe("webp-one");
+    expect(image.mimeType).toBe("image/webp");
   });
 
   it("extracts image fallbacks from string content and raw b64 parts", () => {

@@ -3,7 +3,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { openRootFileSync } from "../infra/boundary-file-read.js";
+import { shouldRejectHardlinkedPluginFiles } from "../plugins/hardlink-policy.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
@@ -117,16 +118,21 @@ function loadPluginContractModule(modulePath: string): BundledChannelContractApi
 
 function loadExternalChannelSecretContractFromRecord(
   record: PluginManifestRecord,
+  env: NodeJS.ProcessEnv = process.env,
 ): BundledChannelSecretContractApi | undefined {
   const contractPath = resolvePluginContractApiPath(record.rootDir);
   if (!contractPath) {
     return undefined;
   }
-  const opened = openBoundaryFileSync({
+  const opened = openRootFileSync({
     absolutePath: contractPath,
     rootPath: record.rootDir,
     boundaryLabel: "plugin root",
-    rejectHardlinks: record.origin !== "bundled",
+    rejectHardlinks: shouldRejectHardlinkedPluginFiles({
+      origin: record.origin,
+      rootDir: record.rootDir,
+      env,
+    }),
     skipLexicalRootCheck: true,
   });
   if (!opened.ok) {
@@ -209,7 +215,7 @@ export function loadChannelSecretContractApi(params: {
     env,
     loadablePluginOrigins: params.loadablePluginOrigins,
   })) {
-    const contract = loadExternalChannelSecretContractFromRecord(record);
+    const contract = loadExternalChannelSecretContractFromRecord(record, env);
     if (contract) {
       return contract;
     }

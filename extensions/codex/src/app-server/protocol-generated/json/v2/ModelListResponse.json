@@ -2,7 +2,9 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "ModelListResponse",
   "type": "object",
-  "required": ["data"],
+  "required": [
+    "data"
+  ],
   "properties": {
     "data": {
       "type": "array",
@@ -12,7 +14,10 @@
     },
     "nextCursor": {
       "description": "Opaque cursor to pass to the next call to continue after the last item. If None, there are no more items to return.",
-      "type": ["string", "null"]
+      "type": [
+        "string",
+        "null"
+      ]
     }
   },
   "definitions": {
@@ -22,12 +27,16 @@
         {
           "description": "Plain text turns and tool payloads.",
           "type": "string",
-          "enum": ["text"]
+          "enum": [
+            "text"
+          ]
         },
         {
           "description": "Image attachments included in user turns.",
           "type": "string",
-          "enum": ["image"]
+          "enum": [
+            "image"
+          ]
         }
       ]
     },
@@ -45,6 +54,7 @@
       ],
       "properties": {
         "additionalSpeedTiers": {
+          "description": "Deprecated: use `serviceTiers` instead.",
           "default": [],
           "type": "array",
           "items": {
@@ -77,7 +87,10 @@
           "type": "string"
         },
         "inputModalities": {
-          "default": ["text", "image"],
+          "default": [
+            "text",
+            "image"
+          ],
           "type": "array",
           "items": {
             "$ref": "#/definitions/InputModality"
@@ -88,6 +101,13 @@
         },
         "model": {
           "type": "string"
+        },
+        "serviceTiers": {
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ModelServiceTier"
+          }
         },
         "supportedReasoningEfforts": {
           "type": "array",
@@ -100,7 +120,10 @@
           "type": "boolean"
         },
         "upgrade": {
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "upgradeInfo": {
           "anyOf": [
@@ -116,39 +139,81 @@
     },
     "ModelAvailabilityNux": {
       "type": "object",
-      "required": ["message"],
+      "required": [
+        "message"
+      ],
       "properties": {
         "message": {
           "type": "string"
         }
       }
     },
+    "ModelServiceTier": {
+      "type": "object",
+      "required": [
+        "description",
+        "id",
+        "name"
+      ],
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      }
+    },
     "ModelUpgradeInfo": {
       "type": "object",
-      "required": ["model"],
+      "required": [
+        "model"
+      ],
       "properties": {
         "migrationMarkdown": {
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "model": {
           "type": "string"
         },
         "modelLink": {
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "upgradeCopy": {
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     },
     "ReasoningEffort": {
       "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
       "type": "string",
-      "enum": ["none", "minimal", "low", "medium", "high", "xhigh"]
+      "enum": [
+        "none",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ]
     },
     "ReasoningEffortOption": {
       "type": "object",
-      "required": ["description", "reasoningEffort"],
+      "required": [
+        "description",
+        "reasoningEffort"
+      ],
       "properties": {
         "description": {
           "type": "string"

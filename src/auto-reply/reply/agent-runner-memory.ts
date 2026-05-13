@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
@@ -30,7 +30,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
-import type { GetReplyOptions } from "../types.js";
+import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   buildEmbeddedRunExecutionParams,
   resolveModelFallbackOptions,
@@ -44,6 +44,7 @@ import {
 } from "./memory-flush.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
+import { isRenderablePayload } from "./reply-payloads-base.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
@@ -158,9 +159,27 @@ function resolveMemoryFlushModelFallbackOptions(
   };
 }
 
+function resolveVisibleMemoryFlushErrorPayloads(payloads?: ReplyPayload[]): ReplyPayload[] {
+  return (payloads ?? []).filter(
+    (payload) => payload.isError === true && isRenderablePayload(payload),
+  );
+}
+
+function buildRestrictedMemoryFlushErrorPayload(err: unknown): ReplyPayload | undefined {
+  const message = normalizeOptionalString(err instanceof Error ? err.message : String(err));
+  if (!message || !message.includes("Memory flush writes are restricted to ")) {
+    return undefined;
+  }
+  return {
+    text: message.startsWith("⚠️") ? message : `⚠️ ${message}`,
+    isError: true,
+  };
+}
+
 export type SessionTranscriptUsageSnapshot = {
   promptTokens?: number;
   outputTokens?: number;
+  trailingBytesTokens?: number;
 };
 
 // Keep a generous near-threshold window so large assistant outputs still trigger
@@ -223,8 +242,14 @@ function resolveSessionLogPath(
 }
 
 function deriveTranscriptUsageSnapshot(
-  usage: ReturnType<typeof normalizeUsage> | undefined,
+  snapshot:
+    | {
+        usage: ReturnType<typeof normalizeUsage> | undefined;
+        trailingBytes?: number;
+      }
+    | undefined,
 ): SessionTranscriptUsageSnapshot | undefined {
+  const usage = snapshot?.usage;
   if (!usage) {
     return undefined;
   }
@@ -240,6 +265,12 @@ function deriveTranscriptUsageSnapshot(
   return {
     promptTokens,
     outputTokens,
+    trailingBytesTokens:
+      typeof snapshot.trailingBytes === "number" &&
+      Number.isFinite(snapshot.trailingBytes) &&
+      snapshot.trailingBytes > 0
+        ? Math.ceil(snapshot.trailingBytes / FALLBACK_TRANSCRIPT_BYTES_PER_TOKEN)
+        : undefined,
   };
 }
 
@@ -327,18 +358,33 @@ async function readLastNonzeroUsageFromSessionLog(logPath: string) {
         break;
       }
       const chunk = buffer.toString("utf-8", 0, bytesRead);
+      const appendedPartialBytes = Buffer.byteLength(leadingPartial, "utf8");
       const combined = `${chunk}${leadingPartial}`;
       const lines = combined.split(/\n+/);
       leadingPartial = lines.shift() ?? "";
+      const suffixBytesBeforeChunk = stat.size - position;
+      const suffixBytesOutsideCombined = Math.max(0, suffixBytesBeforeChunk - appendedPartialBytes);
       for (let i = lines.length - 1; i >= 0; i -= 1) {
         const usage = parseUsageFromTranscriptLine(lines[i] ?? "");
         if (usage) {
-          return usage;
+          const trailingLines = lines.slice(i + 1);
+          const trailingBytesInChunk =
+            Buffer.byteLength(trailingLines.join("\n"), "utf8") + trailingLines.length;
+          return {
+            usage,
+            trailingBytes: suffixBytesOutsideCombined + trailingBytesInChunk,
+          };
         }
       }
       position = start;
     }
-    return parseUsageFromTranscriptLine(leadingPartial);
+    const usage = parseUsageFromTranscriptLine(leadingPartial);
+    return usage
+      ? {
+          usage,
+          trailingBytes: Math.max(0, stat.size - Buffer.byteLength(leadingPartial, "utf8")),
+        }
+      : undefined;
   } finally {
     await handle.close();
   }
@@ -382,17 +428,7 @@ async function estimatePromptTokensFromSessionTranscript(params: {
         ? Math.ceil(snapshot.byteSize / FALLBACK_TRANSCRIPT_BYTES_PER_TOKEN)
         : undefined;
     const promptTokens = snapshot.usage?.promptTokens;
-    if (typeof promptTokens === "number" && Number.isFinite(promptTokens) && promptTokens > 0) {
-      const outputTokens = snapshot.usage?.outputTokens;
-      return {
-        promptTokens: Math.ceil(promptTokens),
-        outputTokens:
-          typeof outputTokens === "number" && Number.isFinite(outputTokens) && outputTokens > 0
-            ? Math.ceil(outputTokens)
-            : undefined,
-        transcriptBytesTokens,
-      };
-    }
+    const trailingBytesTokens = snapshot.usage?.trailingBytesTokens;
     const messages = (await readSessionMessagesAsync(
       sessionId,
       params.storePath,
@@ -403,11 +439,27 @@ async function estimatePromptTokensFromSessionTranscript(params: {
         maxBytes: 1024 * 1024,
       },
     )) as AgentMessage[];
-    if (messages.length === 0) {
-      return undefined;
+    const estimatedMessageTokens = (() => {
+      if (messages.length === 0) {
+        return undefined;
+      }
+      const tokens = estimateMessagesTokens(messages);
+      return Number.isFinite(tokens) && tokens > 0 ? Math.ceil(tokens) : undefined;
+    })();
+    if (typeof promptTokens === "number" && Number.isFinite(promptTokens) && promptTokens > 0) {
+      const outputTokens = snapshot.usage?.outputTokens;
+      const usagePromptTokens = Math.ceil(promptTokens) + (trailingBytesTokens ?? 0);
+      return {
+        promptTokens: Math.max(usagePromptTokens, estimatedMessageTokens ?? 0),
+        outputTokens:
+          typeof outputTokens === "number" && Number.isFinite(outputTokens) && outputTokens > 0
+            ? Math.ceil(outputTokens)
+            : undefined,
+        transcriptBytesTokens,
+      };
     }
-    const estimatedTokens = estimateMessagesTokens(messages);
-    if (!Number.isFinite(estimatedTokens) || estimatedTokens <= 0) {
+    const estimatedTokens = estimatedMessageTokens ?? transcriptBytesTokens;
+    if (estimatedTokens === undefined) {
       return undefined;
     }
     return {
@@ -509,14 +561,6 @@ export async function runPreflightCompactionIfNeeded(params: {
     : undefined;
   const transcriptPromptTokens = transcriptUsageTokens?.promptTokens;
   const transcriptOutputTokens = transcriptUsageTokens?.outputTokens;
-  const transcriptBytesProjectedTokens =
-    typeof transcriptUsageTokens?.transcriptBytesTokens === "number"
-      ? resolveEffectivePromptTokens(
-          transcriptUsageTokens.transcriptBytesTokens,
-          undefined,
-          promptTokenEstimate,
-        )
-      : undefined;
   const usageProjectedTokenCount =
     typeof transcriptPromptTokens === "number"
       ? resolveEffectivePromptTokens(
@@ -527,7 +571,6 @@ export async function runPreflightCompactionIfNeeded(params: {
       : undefined;
   const projectedTokenCount = Math.max(
     usageProjectedTokenCount ?? 0,
-    transcriptBytesProjectedTokens ?? 0,
     stalePersistedPromptTokens ?? 0,
   );
   const tokenCountForCompaction =
@@ -666,6 +709,7 @@ export async function runMemoryFlushIfNeeded(params: {
   storePath?: string;
   isHeartbeat: boolean;
   replyOperation: ReplyOperation;
+  onVisibleErrorPayloads?: (payloads: ReplyPayload[]) => void;
 }): Promise<SessionEntry | undefined> {
   const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg });
   if (!memoryFlushPlan) {
@@ -931,6 +975,10 @@ export async function runMemoryFlushIfNeeded(params: {
             }
           },
         });
+        const visibleErrorPayloads = resolveVisibleMemoryFlushErrorPayloads(result.payloads);
+        if (visibleErrorPayloads.length > 0) {
+          params.onVisibleErrorPayloads?.(visibleErrorPayloads);
+        }
         if (result.meta?.agentMeta?.sessionId) {
           postCompactionSessionId = result.meta.agentMeta.sessionId;
         }
@@ -943,13 +991,13 @@ export async function runMemoryFlushIfNeeded(params: {
         return result;
       },
     });
-    let memoryFlushCompactionCount =
+    const flushedCompactionCount =
       activeSessionEntry?.compactionCount ??
       (params.sessionKey ? activeSessionStore?.[params.sessionKey]?.compactionCount : 0) ??
       0;
     if (memoryCompactionCompleted) {
       const previousSessionId = activeSessionEntry?.sessionId ?? params.followupRun.run.sessionId;
-      const nextCount = await memoryDeps.incrementCompactionCount({
+      await memoryDeps.incrementCompactionCount({
         cfg: params.cfg,
         sessionEntry: activeSessionEntry,
         sessionStore: activeSessionStore,
@@ -976,9 +1024,6 @@ export async function runMemoryFlushIfNeeded(params: {
           });
         }
       }
-      if (typeof nextCount === "number") {
-        memoryFlushCompactionCount = nextCount;
-      }
     }
     if (params.storePath && params.sessionKey) {
       try {
@@ -987,7 +1032,7 @@ export async function runMemoryFlushIfNeeded(params: {
           sessionKey: params.sessionKey,
           update: async () => ({
             memoryFlushAt: memoryDeps.now(),
-            memoryFlushCompactionCount,
+            memoryFlushCompactionCount: flushedCompactionCount,
           }),
         });
         if (updatedEntry) {
@@ -1004,6 +1049,10 @@ export async function runMemoryFlushIfNeeded(params: {
     }
   } catch (err) {
     logVerbose(`memory flush run failed: ${String(err)}`);
+    const visibleErrorPayload = buildRestrictedMemoryFlushErrorPayload(err);
+    if (visibleErrorPayload) {
+      params.onVisibleErrorPayloads?.([visibleErrorPayload]);
+    }
   }
 
   return activeSessionEntry;

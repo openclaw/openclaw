@@ -1,12 +1,11 @@
 import { expectPairingReplyText } from "openclaw/plugin-sdk/channel-test-helpers";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import { normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   createSignalToolResultConfig,
   config,
-  flush,
   getSignalToolResultTestMocks,
   installSignalToolResultTestHooks,
   setSignalToolResultTestConfig,
@@ -60,8 +59,6 @@ async function receiveSignalPayloads(params: {
     abortSignal: abortController.signal,
     ...params.opts,
   });
-
-  await flush();
 }
 
 function hasQueuedReactionEventFor(sender: string) {
@@ -143,7 +140,7 @@ describe("monitorSignalProvider tool results", () => {
     await vi.waitFor(() => {
       expect(sendMock).toHaveBeenCalledTimes(1);
     });
-    expect(sendMock.mock.calls[0][1]).toBe("PFX final reply");
+    expect(sendMock.mock.calls[0]?.[1]).toBe("PFX final reply");
   });
 
   it("replies with pairing code when dmPolicy is pairing and no allowFrom is set", async () => {

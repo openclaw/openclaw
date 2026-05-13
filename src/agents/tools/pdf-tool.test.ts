@@ -15,8 +15,9 @@ import { resetPdfToolAuthEnv, withTempPdfAgentDir } from "./pdf-tool.test-suppor
 
 const completeMock = vi.hoisted(() => vi.fn());
 
-vi.mock("@mariozechner/pi-ai", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
+vi.mock("@earendil-works/pi-ai", async () => {
+  const actual =
+    await vi.importActual<typeof import("@earendil-works/pi-ai")>("@earendil-works/pi-ai");
   return {
     ...actual,
     complete: completeMock,
@@ -36,6 +37,7 @@ async function loadCreatePdfTool() {
 
 const ANTHROPIC_PDF_MODEL = "anthropic/claude-opus-4-6";
 const OPENAI_PDF_MODEL = "openai/gpt-5.4-mini";
+const CODEX_PDF_MODEL = "openai-codex/gpt-5.4";
 const FAKE_PDF_MEDIA = {
   kind: "document",
   buffer: Buffer.from("%PDF-1.4 fake"),
@@ -48,7 +50,7 @@ function requirePdfTool(
     ? R
     : never,
 ) {
-  expect(tool).not.toBeNull();
+  expect(typeof tool?.execute).toBe("function");
   if (!tool) {
     throw new Error("expected pdf tool");
   }
@@ -79,12 +81,39 @@ function withDefaultModel(primary: string): OpenClawConfig {
   } as OpenClawConfig;
 }
 
+function expectFields(value: unknown, expected: Record<string, unknown>): void {
+  if (!value || typeof value !== "object") {
+    throw new Error("expected fields object");
+  }
+  const record = value as Record<string, unknown>;
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], key).toEqual(expectedValue);
+  }
+}
+
+function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+  const call = mock.mock.calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} to be called`);
+  }
+  return call;
+}
+
+function firstCompletionContext(): { systemPrompt?: string } | undefined {
+  const [, context] = firstMockCall(completeMock, "complete") as [
+    unknown,
+    { systemPrompt?: string } | undefined,
+  ];
+  return context;
+}
+
 async function stubPdfToolInfra(
   agentDir: string,
   params?: {
     mockLoad?: boolean;
     provider?: string;
     input?: string[];
+    api?: string;
     modelFound?: boolean;
   },
 ) {
@@ -102,6 +131,13 @@ async function stubPdfToolInfra(
       : () =>
           ({
             provider: params?.provider ?? "anthropic",
+            api:
+              params?.api ??
+              (params?.provider === "openai-codex"
+                ? "openai-codex-responses"
+                : params?.provider === "openai"
+                  ? "openai-responses"
+                  : "anthropic-messages"),
             maxTokens: 8192,
             input: params?.input ?? ["text", "document"],
           }) as never;
@@ -248,9 +284,7 @@ describe("createPdfTool", () => {
     await withConfiguredPdfTool(async (tool) => {
       const manyPdfs = Array.from({ length: 15 }, (_, i) => `/tmp/doc${i}.pdf`);
       const result = await tool.execute("t1", { prompt: "test", pdfs: manyPdfs });
-      expect(result).toMatchObject({
-        details: { error: "too_many_pdfs" },
-      });
+      expectFields(result.details, { error: "too_many_pdfs" });
     });
   });
 
@@ -288,9 +322,7 @@ describe("createPdfTool", () => {
         prompt: "test",
         pdf: "ftp://example.com/doc.pdf",
       });
-      expect(result).toMatchObject({
-        details: { error: "unsupported_pdf_reference" },
-      });
+      expectFields(result.details, { error: "unsupported_pdf_reference" });
     });
   });
 
@@ -317,15 +349,13 @@ describe("createPdfTool", () => {
           pdf: `media://inbound/${mediaId}`,
         });
 
-        expect(loadSpy).toHaveBeenCalledWith(
-          `media://inbound/${mediaId}`,
-          expect.objectContaining({
-            localRoots: [],
-          }),
-        );
-        expect(result).toMatchObject({
-          content: [{ type: "text", text: "native summary" }],
-          details: { native: true, model: ANTHROPIC_PDF_MODEL },
+        const [loadRef, loadOptions] = firstMockCall(loadSpy, "loadWebMediaRaw");
+        expect(loadRef).toBe(`media://inbound/${mediaId}`);
+        expectFields(loadOptions, { localRoots: [] });
+        expect(result.content).toEqual([{ type: "text", text: "native summary" }]);
+        expectFields(result.details, {
+          native: true,
+          model: ANTHROPIC_PDF_MODEL,
         });
       });
     });
@@ -355,12 +385,11 @@ describe("createPdfTool", () => {
         pdf: "http://198.18.0.153/doc.pdf",
       });
 
-      expect(loadSpy).toHaveBeenCalledWith(
-        "http://198.18.0.153/doc.pdf",
-        expect.objectContaining({
-          ssrfPolicy: { allowRfc2544BenchmarkRange: true },
-        }),
-      );
+      const [loadRef, loadOptions] = firstMockCall(loadSpy, "loadWebMediaRaw");
+      expect(loadRef).toBe("http://198.18.0.153/doc.pdf");
+      expectFields(loadOptions, {
+        ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+      });
     });
   });
 
@@ -387,7 +416,9 @@ describe("createPdfTool", () => {
           pdf: mediaPath,
         });
 
-        expect(loadSpy).toHaveBeenCalledWith(mediaPath, expect.any(Object));
+        const [loadRef, loadOptions] = firstMockCall(loadSpy, "loadWebMediaRaw");
+        expect(loadRef).toBe(mediaPath);
+        expect(loadOptions).toBeTypeOf("object");
       });
     });
   });
@@ -408,21 +439,24 @@ describe("createPdfTool", () => {
         pdf: "/tmp/doc.pdf",
       });
 
-      expect(modelsConfig.ensureOpenClawModelsJson).toHaveBeenCalledWith(
-        expect.objectContaining({
-          agents: expect.objectContaining({
-            defaults: expect.objectContaining({
-              pdfModel: { primary: ANTHROPIC_PDF_MODEL },
-            }),
-          }),
-        }),
-        agentDir,
-        { workspaceDir },
+      const ensureModelsJsonMock = vi.mocked(modelsConfig.ensureOpenClawModelsJson);
+      const [modelsConfigArg, modelsAgentDir, modelsOptions] = firstMockCall(
+        ensureModelsJsonMock,
+        "ensureOpenClawModelsJson",
       );
+      expectFields(
+        (modelsConfigArg as { agents?: { defaults?: unknown } } | undefined)?.agents?.defaults,
+        {
+          pdfModel: { primary: ANTHROPIC_PDF_MODEL },
+        },
+      );
+      expect(modelsAgentDir).toBe(agentDir);
+      expect(modelsOptions).toEqual({ workspaceDir });
       expect(extractSpy).not.toHaveBeenCalled();
-      expect(result).toMatchObject({
-        content: [{ type: "text", text: "native summary" }],
-        details: { native: true, model: ANTHROPIC_PDF_MODEL },
+      expect(result.content).toEqual([{ type: "text", text: "native summary" }]);
+      expectFields(result.details, {
+        native: true,
+        model: ANTHROPIC_PDF_MODEL,
       });
     });
   });
@@ -465,10 +499,86 @@ describe("createPdfTool", () => {
       });
 
       expect(extractSpy).toHaveBeenCalledTimes(1);
-      expect(result).toMatchObject({
-        content: [{ type: "text", text: "fallback summary" }],
-        details: { native: false, model: OPENAI_PDF_MODEL },
+      expect(result.content).toEqual([{ type: "text", text: "fallback summary" }]);
+      expectFields(result.details, {
+        native: false,
+        model: OPENAI_PDF_MODEL,
       });
+      expect(firstCompletionContext()?.systemPrompt).toBeUndefined();
+    });
+  });
+
+  it("adds Codex instructions for PDF extraction fallback requests", async () => {
+    await withTempPdfAgentDir(async (agentDir) => {
+      await stubPdfToolInfra(agentDir, {
+        provider: "openai-codex",
+        api: "openai-codex-responses",
+        input: ["text", "image"],
+      });
+
+      vi.spyOn(pdfExtractModule, "extractPdfContent").mockResolvedValue({
+        text: "Extracted content",
+        images: [],
+      });
+
+      completeMock.mockResolvedValue({
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: "codex summary" }],
+      } as never);
+
+      const cfg = withPdfModel(CODEX_PDF_MODEL);
+      const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
+
+      const result = await tool.execute("t1", {
+        prompt: "summarize",
+        pdf: "/tmp/doc.pdf",
+      });
+
+      expect(result.content).toEqual([{ type: "text", text: "codex summary" }]);
+      expectFields(result.details, {
+        native: false,
+        model: CODEX_PDF_MODEL,
+      });
+      expect(completeMock).toHaveBeenCalledTimes(1);
+      expect(firstCompletionContext()?.systemPrompt).toContain("Analyze the provided PDF content");
+    });
+  });
+
+  it("adds Codex instructions when extraction has images but the model only accepts text", async () => {
+    await withTempPdfAgentDir(async (agentDir) => {
+      await stubPdfToolInfra(agentDir, {
+        provider: "openai-codex",
+        api: "openai-codex-responses",
+        input: ["text"],
+      });
+
+      vi.spyOn(pdfExtractModule, "extractPdfContent").mockResolvedValue({
+        text: "Extracted content",
+        images: [{ type: "image", data: "base64img", mimeType: "image/png" }],
+      });
+
+      completeMock.mockResolvedValue({
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: "codex summary" }],
+      } as never);
+
+      const cfg = withPdfModel(CODEX_PDF_MODEL);
+      const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
+
+      const result = await tool.execute("t1", {
+        prompt: "summarize",
+        pdf: "/tmp/doc.pdf",
+      });
+
+      expect(result.content).toEqual([{ type: "text", text: "codex summary" }]);
+      expectFields(result.details, {
+        native: false,
+        model: CODEX_PDF_MODEL,
+      });
+      expect(completeMock).toHaveBeenCalledTimes(1);
+      expect(firstCompletionContext()?.systemPrompt).toContain("Analyze the provided PDF content");
     });
   });
 
@@ -476,13 +586,13 @@ describe("createPdfTool", () => {
     await loadCreatePdfTool();
     const schema = PdfToolSchema;
     expect(schema.type).toBe("object");
-    expect(schema.properties).toBeDefined();
+    expect(schema).toHaveProperty("properties");
     const props = schema.properties as Record<string, { type?: string }>;
-    expect(props.prompt).toBeDefined();
-    expect(props.pdf).toBeDefined();
-    expect(props.pdfs).toBeDefined();
-    expect(props.pages).toBeDefined();
-    expect(props.model).toBeDefined();
-    expect(props.maxBytesMb).toBeDefined();
+    expect(props).toHaveProperty("prompt");
+    expect(props).toHaveProperty("pdf");
+    expect(props).toHaveProperty("pdfs");
+    expect(props).toHaveProperty("pages");
+    expect(props).toHaveProperty("model");
+    expect(props).toHaveProperty("maxBytesMb");
   });
 });

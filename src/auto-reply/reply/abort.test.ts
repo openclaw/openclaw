@@ -362,8 +362,8 @@ describe("abort detection", () => {
       entry: store["session-1"],
       key: "session-1",
     });
-    expect(resolveSessionEntryForKey(store, "session-2")).toEqual({});
-    expect(resolveSessionEntryForKey(undefined, "session-1")).toEqual({});
+    expect(resolveSessionEntryForKey(store, "session-2")).toStrictEqual({});
+    expect(resolveSessionEntryForKey(undefined, "session-1")).toStrictEqual({});
   });
 
   it("resolves Telegram forum topic session when lookup key has different casing than store", () => {
@@ -674,9 +674,11 @@ describe("abort detection", () => {
     // Should skip killing the ended depth-1 run itself, but still kill depth-2.
     expect(result.stoppedSubagents).toBe(1);
     expectSessionLaneCleared(depth2Key);
-    expect(subagentRegistryMocks.markSubagentRunTerminated).toHaveBeenCalledWith(
-      expect.objectContaining({ runId: "run-2", childSessionKey: depth2Key }),
-    );
+    expect(subagentRegistryMocks.markSubagentRunTerminated).toHaveBeenCalledTimes(1);
+    const [[terminatedRun]] = subagentRegistryMocks.markSubagentRunTerminated.mock
+      .calls as unknown as Array<[{ runId?: string; childSessionKey?: string }]>;
+    expect(terminatedRun.runId).toBe("run-2");
+    expect(terminatedRun.childSessionKey).toBe(depth2Key);
   });
 
   it("cascade stop still traverses an ended current parent when a stale older active row exists", async () => {
@@ -772,12 +774,14 @@ describe("abort detection", () => {
 
     expect(result.stoppedSubagents).toBe(1);
     expectSessionLaneCleared(depth2Key);
-    expect(subagentRegistryMocks.markSubagentRunTerminated).toHaveBeenCalledWith(
-      expect.objectContaining({ runId: "run-active-child", childSessionKey: depth2Key }),
-    );
+    expect(subagentRegistryMocks.markSubagentRunTerminated).toHaveBeenCalledTimes(1);
+    const [[terminatedRun]] = subagentRegistryMocks.markSubagentRunTerminated.mock
+      .calls as unknown as Array<[{ runId?: string; childSessionKey?: string }]>;
+    expect(terminatedRun.runId).toBe("run-active-child");
+    expect(terminatedRun.childSessionKey).toBe(depth2Key);
   });
 
-  it("stopSubagentsForRequester does not traverse a child that moved to a newer parent", async () => {
+  it("stopSubagentsForRequester does not traverse a child that moved to a newer parent", () => {
     subagentRegistryMocks.listSubagentRunsForRequester.mockClear();
     subagentRegistryMocks.markSubagentRunTerminated.mockClear();
     const oldParentKey = "agent:main:subagent:old-parent";

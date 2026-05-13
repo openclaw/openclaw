@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { Api, Model } from "@mariozechner/pi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -113,8 +113,10 @@ const createCompactionHandler = () => {
     }),
   } as unknown as ExtensionAPI;
   compactionSafeguardExtension(mockApi);
-  expect(compactionHandler).toBeDefined();
-  return compactionHandler as CompactionHandler;
+  if (!compactionHandler) {
+    throw new Error("Expected compaction safeguard to register a handler.");
+  }
+  return compactionHandler;
 };
 
 const createCompactionEvent = (params: { messageText: string; tokensBefore: number }) => ({
@@ -193,11 +195,43 @@ function expectCompactionResult(result: {
   };
 }) {
   expect(result.cancel).not.toBe(true);
-  expect(result.compaction).toBeDefined();
   if (!result.compaction) {
     throw new Error("Expected compaction result");
   }
   return result.compaction;
+}
+
+function mockCallArg(
+  mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } },
+  callIndex = 0,
+  argIndex = 0,
+): unknown {
+  const call = mock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected mock call ${callIndex + 1}`);
+  }
+  return call[argIndex];
+}
+
+function latestMockCallArg(
+  mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } },
+  argIndex = 0,
+): unknown {
+  return mockCallArg(mock, mock.mock.calls.length - 1, argIndex);
+}
+
+function requireRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    throw new Error("expected record");
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireArray(value: unknown): unknown[] {
+  if (!Array.isArray(value)) {
+    throw new Error("expected array");
+  }
+  return value;
 }
 
 describe("compaction-safeguard tool failures", () => {
@@ -510,7 +544,7 @@ describe("compaction-safeguard runtime registry", () => {
   it("clears entry when value is null", () => {
     const sm = {};
     setCompactionSafeguardRuntime(sm, { maxHistoryShare: 0.7 });
-    expect(getCompactionSafeguardRuntime(sm)).not.toBeNull();
+    expect(getCompactionSafeguardRuntime(sm)).toEqual({ maxHistoryShare: 0.7 });
     setCompactionSafeguardRuntime(sm, null);
     expect(getCompactionSafeguardRuntime(sm)).toBeNull();
   });
@@ -870,8 +904,12 @@ describe("compaction-safeguard recent-turn preservation", () => {
     const identifiers = extractOpaqueIdentifiers(
       "Track id a1b2c3d4e5f6 plus A1B2C3D4E5F6 and URL https://example.com/a and /tmp/x.log plus port host.local:18789",
     );
-    expect(identifiers.length).toBeGreaterThan(0);
-    expect(identifiers).toContain("A1B2C3D4E5F6"); // pragma: allowlist secret
+    expect(identifiers).toStrictEqual([
+      "A1B2C3D4E5F6", // pragma: allowlist secret
+      "https://example.com/a",
+      "/tmp/x.log",
+      "host.local:18789",
+    ]);
 
     const summary = [
       "## Decisions",
@@ -898,7 +936,9 @@ describe("compaction-safeguard recent-turn preservation", () => {
     const identifiers = extractOpaqueIdentifiers(
       "Track id a1b2c3d4e5f6 plus A1B2C3D4E5F6 and again a1b2c3d4e5f6",
     );
-    expect(identifiers.filter((id) => id === "A1B2C3D4E5F6")).toHaveLength(1); // pragma: allowlist secret
+    expect(
+      identifiers.reduce((count, id) => count + (id === "A1B2C3D4E5F6" ? 1 : 0), 0), // pragma: allowlist secret
+    ).toBe(1);
   });
 
   it("dedupes identifiers before applying the result cap", () => {
@@ -937,7 +977,15 @@ describe("compaction-safeguard recent-turn preservation", () => {
       latestAsk: "Need a status update",
     });
     expect(quality.ok).toBe(false);
-    expect(quality.reasons.length).toBeGreaterThan(0);
+    expect(quality.reasons).toStrictEqual([
+      "missing_section:## Decisions",
+      "missing_section:## Open TODOs",
+      "missing_section:## Constraints/Rules",
+      "missing_section:## Pending user asks",
+      "missing_section:## Exact identifiers",
+      "missing_identifiers:abc12345",
+      "latest_user_ask_not_reflected",
+    ]);
   });
 
   it("requires exact section headings instead of substring matches", () => {
@@ -1292,13 +1340,52 @@ describe("compaction-safeguard recent-turn preservation", () => {
     };
 
     expect(result.cancel).not.toBe(true);
-    expect(mockSummarizeInStages).toHaveBeenCalled();
-    const droppedCall = mockSummarizeInStages.mock.calls[0]?.[0];
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
+    const droppedCall = requireRecord(mockCallArg(mockSummarizeInStages));
     expect(droppedCall?.customInstructions).toContain(
       "Produce a compact, factual summary with these exact section headings:",
     );
     expect(droppedCall?.customInstructions).toContain("## Decisions");
     expect(droppedCall?.customInstructions).toContain("Keep security caveats.");
+  });
+
+  it("caps summarization reserve tokens to the model output limit", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue("mock summary");
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture({
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    });
+    setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
+
+    const compactionHandler = createCompactionHandler();
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock: vi.fn().mockResolvedValue("test-key"),
+    });
+    const event = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: "large history", timestamp: 1 } as AgentMessage,
+        ],
+        turnPrefixMessages: [],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 250_000,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 240_000 },
+        previousSummary: undefined,
+        isSplitTurn: false,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    await compactionHandler(event, mockContext);
+
+    const call = requireRecord(mockCallArg(mockSummarizeInStages));
+    expect(call?.reserveTokens).toBe(128_000);
   });
 
   it("adds Copilot IDE headers to built-in compaction summarization", async () => {
@@ -1336,15 +1423,15 @@ describe("compaction-safeguard recent-turn preservation", () => {
     const result = (await compactionHandler(event, mockContext)) as { cancel?: boolean };
 
     expect(result.cancel).not.toBe(true);
-    const summaryCall = mockSummarizeInStages.mock.calls.at(-1)?.[0];
-    expect(summaryCall?.headers).toMatchObject({
-      "Copilot-Integration-Id": "vscode-chat",
-      "Editor-Plugin-Version": "copilot-chat/0.35.0",
-      "Openai-Organization": "github-copilot",
-      "User-Agent": "GitHubCopilotChat/0.26.7",
-      "X-Test": "1",
-      "x-initiator": "user",
-    });
+    const summaryCall = latestMockCallArg(mockSummarizeInStages) as {
+      headers?: Record<string, string>;
+    };
+    expect(summaryCall.headers?.["Copilot-Integration-Id"]).toBe("vscode-chat");
+    expect(summaryCall.headers?.["Editor-Plugin-Version"]).toBe("copilot-chat/0.35.0");
+    expect(summaryCall.headers?.["Openai-Organization"]).toBe("github-copilot");
+    expect(summaryCall.headers?.["User-Agent"]).toBe("GitHubCopilotChat/0.26.7");
+    expect(summaryCall.headers?.["X-Test"]).toBe("1");
+    expect(summaryCall.headers?.["x-initiator"]).toBe("user");
   });
 
   it("does not retry summaries unless quality guard is explicitly enabled", async () => {
@@ -1487,9 +1574,11 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
     expect(result.cancel).not.toBe(true);
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
-    const secondCall = mockSummarizeInStages.mock.calls[1]?.[0];
-    expect(secondCall?.customInstructions).toContain("Quality check feedback");
-    expect(secondCall?.customInstructions).toContain("missing_section:## Decisions");
+    const secondCall = mockCallArg(mockSummarizeInStages, 1) as {
+      customInstructions?: string;
+    };
+    expect(secondCall.customInstructions).toContain("Quality check feedback");
+    expect(secondCall.customInstructions).toContain("missing_section:## Decisions");
   });
 
   it("does not treat preserved latest asks as satisfying overlap checks", async () => {
@@ -1574,8 +1663,10 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
     expect(result.cancel).not.toBe(true);
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
-    const secondCall = mockSummarizeInStages.mock.calls[1]?.[0];
-    expect(secondCall?.customInstructions).toContain("latest_user_ask_not_reflected");
+    const secondCall = mockCallArg(mockSummarizeInStages, 1) as {
+      customInstructions?: string;
+    };
+    expect(secondCall.customInstructions).toContain("latest_user_ask_not_reflected");
   });
 
   it("preserves split-turn and recent-turn suffixes when retry fallback is capped", async () => {
@@ -1765,10 +1856,11 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
     expect(result.cancel).not.toBe(true);
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
-    const call = mockSummarizeInStages.mock.calls[0]?.[0];
+    const call = requireRecord(mockCallArg(mockSummarizeInStages));
     expect(call?.previousSummary).toBeUndefined();
-    expect(JSON.stringify(call?.messages[0])).toContain("<previous-compaction-summary>");
-    expect(JSON.stringify(call?.messages[0])).toContain("Old duplicated section");
+    const messages = requireArray(call.messages);
+    expect(JSON.stringify(messages[0])).toContain("<previous-compaction-summary>");
+    expect(JSON.stringify(messages[0])).toContain("Old duplicated section");
   });
 
   it("passes compaction instructions to providers and preserves suffix context", async () => {
@@ -1828,17 +1920,14 @@ describe("compaction-safeguard recent-turn preservation", () => {
     const compaction = expectCompactionResult(result);
     expect(getApiKeyAndHeadersMock).not.toHaveBeenCalled();
     expect(mockSummarizeInStages).not.toHaveBeenCalled();
-    expect(providerSummarize).toHaveBeenCalledWith(
-      expect.objectContaining({
-        previousSummary: "previous provider summary",
-        customInstructions: expect.stringContaining("Keep milestone names."),
-        summarizationInstructions: {
-          identifierPolicy: "custom",
-          identifierInstructions: "Preserve ticket IDs exactly.",
-        },
-      }),
-    );
-    const providerMessages = providerSummarize.mock.calls[0]?.[0]?.messages ?? [];
+    const providerInput = requireRecord(mockCallArg(providerSummarize));
+    expect(providerInput?.previousSummary).toBe("previous provider summary");
+    expect(providerInput?.customInstructions).toContain("Keep milestone names.");
+    expect(providerInput?.summarizationInstructions).toEqual({
+      identifierPolicy: "custom",
+      identifierInstructions: "Preserve ticket IDs exactly.",
+    });
+    const providerMessages = providerInput.messages ?? [];
     expect(JSON.stringify(providerMessages)).not.toContain("openclaw.runtime-context");
     expect(JSON.stringify(providerMessages)).not.toContain("secret runtime context");
     expect(compaction.summary).toContain("provider summary body");
@@ -2037,6 +2126,142 @@ describe("compaction-safeguard double-compaction guard", () => {
     expect(result).toEqual({ cancel: true });
   });
 
+  it("does not write boundary when visible custom turn-prefix content is real conversation", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [] as AgentMessage[],
+        turnPrefixMessages: [
+          {
+            role: "custom" as const,
+            customType: "cron-request",
+            content: "prepare the daily report",
+            display: true,
+            timestamp: 1,
+          },
+          {
+            role: "assistant" as const,
+            content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
+            timestamp: 2,
+          },
+          {
+            role: "toolResult" as const,
+            toolCallId: "call-1",
+            toolName: "read",
+            content: [{ type: "text", text: "report source data" }],
+            timestamp: 3,
+          },
+        ] as AgentMessage[],
+        firstKeptEntryId: "entry-5",
+        tokensBefore: 38085,
+        fileOps: { read: [], edited: [], written: [] },
+        isSplitTurn: true,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+    const { result, getApiKeyAndHeadersMock } = await runCompactionScenario({
+      sessionManager,
+      event: mockEvent,
+      apiKey: null,
+    });
+
+    expect(result).toEqual({ cancel: true });
+    expect(getApiKeyAndHeadersMock).toHaveBeenCalledWith(model);
+  });
+
+  it("falls back to visible custom session branch entries before writing an empty boundary", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue("branch summary");
+
+    const now = Date.now();
+    const sessionManager = {
+      ...stubSessionManager(),
+      getBranch: () => [
+        {
+          type: "custom_message",
+          id: "custom-1",
+          parentId: null,
+          timestamp: new Date(now).toISOString(),
+          customType: "cron-request",
+          content: "prepare the daily report",
+          display: true,
+        },
+        {
+          type: "message",
+          id: "assistant-1",
+          parentId: "custom-1",
+          timestamp: new Date(now + 1).toISOString(),
+          message: {
+            role: "assistant",
+            content: [{ type: "toolCall", id: "call-1", name: "read", arguments: {} }],
+            timestamp: now + 1,
+          },
+        },
+        {
+          type: "message",
+          id: "tool-1",
+          parentId: "assistant-1",
+          timestamp: new Date(now + 2).toISOString(),
+          message: {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "read",
+            content: [{ type: "text", text: "report source data" }],
+            timestamp: now + 2,
+          },
+        },
+      ],
+    } as ExtensionContext["sessionManager"];
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model, recentTurnsPreserve: 0 });
+
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-5",
+        tokensBefore: 38085,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4000 },
+        isSplitTurn: true,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+    const { result } = await runCompactionScenario({
+      sessionManager,
+      event: mockEvent,
+      apiKey: "test-key",
+    });
+
+    const compaction = expectCompactionResult(result);
+    expect(compaction.summary).toContain("branch summary");
+    expect(compaction.summary).not.toContain("No prior history.");
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
+    const summarizeCall = requireRecord(mockCallArg(mockSummarizeInStages));
+    const messages = requireArray(summarizeCall.messages);
+    expect(
+      messages.some((message) => {
+        const record = requireRecord(message);
+        return (
+          record.role === "custom" &&
+          record.customType === "cron-request" &&
+          record.content === "prepare the daily report"
+        );
+      }),
+    ).toBe(true);
+    expect(
+      messages.some((message) => {
+        const record = requireRecord(message);
+        return record.role === "toolResult" && record.toolName === "read";
+      }),
+    ).toBe(true);
+  });
+
   it("continues when messages include real conversation content", async () => {
     const sessionManager = stubSessionManager();
     const model = createAnthropicModelFixture();
@@ -2052,10 +2277,10 @@ describe("compaction-safeguard double-compaction guard", () => {
       apiKey: null,
     });
     expect(result).toEqual({ cancel: true });
-    expect(getApiKeyAndHeadersMock).toHaveBeenCalled();
+    expect(getApiKeyAndHeadersMock).toHaveBeenCalledWith(model);
   });
 
-  it("treats tool results as real conversation only when linked to a meaningful user ask", async () => {
+  it("treats tool results as real conversation only when linked to a meaningful user ask", () => {
     expect(
       __testing.isRealConversationMessage(
         {

@@ -14,13 +14,13 @@ const ORIGINAL_PROXY_ENV = Object.fromEntries(
 ) as Record<(typeof PROXY_ENV_KEYS)[number], string | undefined>;
 
 const {
-  ProxyAgent,
   EnvHttpProxyAgent,
   MockUndiciFormData,
   undiciFetch,
   proxyAgentSpy,
   envAgentSpy,
   getLastAgent,
+  loadUndiciRuntimeDeps,
 } = vi.hoisted(() => {
   const undiciFetch = vi.fn();
   const proxyAgentSpy = vi.fn();
@@ -53,6 +53,12 @@ const {
       envAgentSpy(options);
     }
   }
+  const loadUndiciRuntimeDeps = vi.fn(() => ({
+    ProxyAgent,
+    EnvHttpProxyAgent,
+    FormData: MockUndiciFormData,
+    fetch: undiciFetch,
+  }));
 
   return {
     ProxyAgent,
@@ -62,22 +68,55 @@ const {
     proxyAgentSpy,
     envAgentSpy,
     getLastAgent: () => ProxyAgent.lastCreated,
+    loadUndiciRuntimeDeps,
   };
 });
 
-const mockedModuleIds = ["undici"] as const;
+const mockedModuleIds = ["./undici-runtime.js"] as const;
 
-vi.mock("undici", () => ({
-  ProxyAgent,
-  EnvHttpProxyAgent,
-  FormData: MockUndiciFormData,
-  fetch: undiciFetch,
+vi.mock("./undici-runtime.js", () => ({
+  loadUndiciRuntimeDeps,
 }));
 
 let getProxyUrlFromFetch: typeof import("./proxy-fetch.js").getProxyUrlFromFetch;
 let makeProxyFetch: typeof import("./proxy-fetch.js").makeProxyFetch;
 let PROXY_FETCH_PROXY_URL: typeof import("./proxy-fetch.js").PROXY_FETCH_PROXY_URL;
 let resolveProxyFetchFromEnv: typeof import("./proxy-fetch.js").resolveProxyFetchFromEnv;
+
+function requireProxyFetch(
+  fetchFn: ReturnType<typeof resolveProxyFetchFromEnv>,
+): NonNullable<ReturnType<typeof resolveProxyFetchFromEnv>> {
+  if (!fetchFn) {
+    throw new Error("expected proxy env to resolve a fetch function");
+  }
+  return fetchFn;
+}
+
+function requireUndiciFetchCall(index = 0): unknown[] {
+  const call = undiciFetch.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected undici fetch call at index ${index}`);
+  }
+  return call;
+}
+
+function requireUndiciFetchInit(index = 0): Record<string, unknown> {
+  const init = requireUndiciFetchCall(index)[1];
+  if (!init || typeof init !== "object" || Array.isArray(init)) {
+    throw new Error(`expected undici fetch init at index ${index}`);
+  }
+  return init as Record<string, unknown>;
+}
+
+function requireHeadersInit(value: unknown, label: string): HeadersInit {
+  if (value === undefined || value instanceof Headers || Array.isArray(value)) {
+    return value as HeadersInit;
+  }
+  if (value && typeof value === "object") {
+    return value as HeadersInit;
+  }
+  throw new Error(`expected ${label} headers`);
+}
 
 function clearProxyEnv(): void {
   for (const key of PROXY_ENV_KEYS) {
@@ -114,10 +153,11 @@ describe("makeProxyFetch", () => {
     await proxyFetch("https://api.example.com/v1/audio");
 
     expect(proxyAgentSpy).toHaveBeenCalledWith(proxyUrl);
-    expect(undiciFetch).toHaveBeenCalledWith(
-      "https://api.example.com/v1/audio",
-      expect.objectContaining({ dispatcher: getLastAgent() }),
-    );
+    expect(undiciFetch).toHaveBeenCalledOnce();
+    const [input] = requireUndiciFetchCall();
+    const init = requireUndiciFetchInit();
+    expect(input).toBe("https://api.example.com/v1/audio");
+    expect(init.dispatcher).toBe(getLastAgent());
   });
 
   it("reuses the same ProxyAgent across calls", async () => {
@@ -126,9 +166,9 @@ describe("makeProxyFetch", () => {
     const proxyFetch = makeProxyFetch("http://proxy.test:8080");
 
     await proxyFetch("https://api.example.com/one");
-    const firstDispatcher = undiciFetch.mock.calls[0]?.[1]?.dispatcher;
+    const firstDispatcher = requireUndiciFetchInit().dispatcher;
     await proxyFetch("https://api.example.com/two");
-    const secondDispatcher = undiciFetch.mock.calls[1]?.[1]?.dispatcher;
+    const secondDispatcher = requireUndiciFetchInit(1).dispatcher;
 
     expect(proxyAgentSpy).toHaveBeenCalledOnce();
     expect(secondDispatcher).toBe(firstDispatcher);
@@ -151,13 +191,13 @@ describe("makeProxyFetch", () => {
       body: form,
     });
 
-    const passedInit = undiciFetch.mock.calls[0]?.[1];
-    expect(passedInit?.body).toBeInstanceOf(MockUndiciFormData);
-    const passedBody = passedInit?.body as InstanceType<typeof MockUndiciFormData>;
+    const passedInit = requireUndiciFetchInit();
+    expect(passedInit.body).toBeInstanceOf(MockUndiciFormData);
+    const passedBody = passedInit.body as InstanceType<typeof MockUndiciFormData>;
     expect(passedBody.get("model")).toBe("whisper-1");
     expect(passedBody.get("file")).toBeInstanceOf(Blob);
     expect(passedBody.entriesList.find(([key]) => key === "file")?.[2]).toBe("voice.ogg");
-    const sentHeaders = new Headers(passedInit?.headers);
+    const sentHeaders = new Headers(requireHeadersInit(passedInit.headers, "FormData proxy"));
     expect(sentHeaders.has("content-length")).toBe(false);
     expect(sentHeaders.has("content-type")).toBe(false);
   });
@@ -173,7 +213,34 @@ describe("makeProxyFetch", () => {
       body,
     });
 
-    expect(undiciFetch.mock.calls[0]?.[1]?.body).toBe(body);
+    expect(requireUndiciFetchInit().body).toBe(body);
+  });
+
+  it("drops symbol metadata from plain header dictionaries before undici fetch", async () => {
+    undiciFetch.mockResolvedValue({ ok: true });
+
+    const proxyFetch = makeProxyFetch("http://proxy.test:8080");
+    const headers = { "Content-Type": "application/json" } as Record<string, string> & {
+      [key: symbol]: unknown;
+    };
+    Object.defineProperty(headers, Symbol("sensitiveHeaders"), {
+      value: new Set(["content-type"]),
+      enumerable: false,
+    });
+
+    await proxyFetch("https://api.example.com/json", {
+      method: "POST",
+      headers,
+      body: "{}",
+    });
+
+    const passedHeaders = requireUndiciFetchInit().headers;
+    expect(passedHeaders).not.toBe(headers);
+    expect(Object.getOwnPropertySymbols(passedHeaders as object)).toStrictEqual([]);
+    expect(
+      new Headers(requireHeadersInit(passedHeaders, "plain dictionary proxy")).get("content-type"),
+    ).toBe("application/json");
+    expect(Object.getOwnPropertySymbols(headers)).toHaveLength(1);
   });
 
   it("keeps undici FormData instances unchanged", async () => {
@@ -188,7 +255,7 @@ describe("makeProxyFetch", () => {
       body: form as unknown as BodyInit,
     });
 
-    expect(undiciFetch.mock.calls[0]?.[1]?.body).toBe(form);
+    expect(requireUndiciFetchInit().body).toBe(form);
   });
 
   it("converts FormData-like bodies from another implementation", async () => {
@@ -207,9 +274,9 @@ describe("makeProxyFetch", () => {
       body: formLike as unknown as BodyInit,
     });
 
-    const passedInit = undiciFetch.mock.calls[0]?.[1];
-    expect(passedInit?.body).toBeInstanceOf(MockUndiciFormData);
-    expect(passedInit?.body.get("model")).toBe("whisper-1");
+    const passedBody = requireUndiciFetchInit().body;
+    expect(passedBody).toBeInstanceOf(MockUndiciFormData);
+    expect((passedBody as InstanceType<typeof MockUndiciFormData>).get("model")).toBe("whisper-1");
   });
 });
 
@@ -248,55 +315,63 @@ describe("resolveProxyFetchFromEnv", () => {
 
   it("returns undefined when no proxy env vars are set", () => {
     expect(resolveProxyFetchFromEnv({})).toBeUndefined();
+    expect(loadUndiciRuntimeDeps).not.toHaveBeenCalled();
   });
 
   it("returns proxy fetch using EnvHttpProxyAgent when HTTPS_PROXY is set", async () => {
     undiciFetch.mockResolvedValue({ ok: true });
 
-    const fetchFn = resolveProxyFetchFromEnv({
-      HTTP_PROXY: "",
-      HTTPS_PROXY: "http://proxy.test:8080",
-    });
-    expect(fetchFn).toBeDefined();
+    const fetchFn = requireProxyFetch(
+      resolveProxyFetchFromEnv({
+        HTTP_PROXY: "",
+        HTTPS_PROXY: "http://proxy.test:8080",
+      }),
+    );
     expect(envAgentSpy).toHaveBeenCalledWith({ httpsProxy: "http://proxy.test:8080" });
 
-    await fetchFn!("https://api.example.com");
-    expect(undiciFetch).toHaveBeenCalledWith(
-      "https://api.example.com",
-      expect.objectContaining({ dispatcher: EnvHttpProxyAgent.lastCreated }),
-    );
+    await fetchFn("https://api.example.com");
+    expect(undiciFetch).toHaveBeenCalledOnce();
+    const [input] = requireUndiciFetchCall();
+    const init = requireUndiciFetchInit();
+    expect(input).toBe("https://api.example.com");
+    expect(init.dispatcher).toBe(EnvHttpProxyAgent.lastCreated);
   });
 
   it("converts global FormData bodies when using proxy env fetch", async () => {
     undiciFetch.mockResolvedValue({ ok: true });
 
-    const fetchFn = resolveProxyFetchFromEnv({
-      HTTP_PROXY: "",
-      HTTPS_PROXY: "http://proxy.test:8080",
-    });
-    expect(fetchFn).toBeDefined();
+    const fetchFn = requireProxyFetch(
+      resolveProxyFetchFromEnv({
+        HTTP_PROXY: "",
+        HTTPS_PROXY: "http://proxy.test:8080",
+      }),
+    );
 
     const form = new globalThis.FormData();
     form.append("file", new Blob([new Uint8Array(8)], { type: "audio/wav" }), "test.wav");
     form.append("model", "test-model");
 
-    await fetchFn!("https://api.example.com/v1/audio/transcriptions", {
+    await fetchFn("https://api.example.com/v1/audio/transcriptions", {
       method: "POST",
       body: form,
     });
 
-    const passedInit = undiciFetch.mock.calls[0]?.[1];
-    expect(passedInit?.body).toBeInstanceOf(MockUndiciFormData);
-    expect(passedInit?.body.get("model")).toBe("test-model");
-    expect(passedInit?.body.get("file")).toBeInstanceOf(Blob);
+    const passedBody = requireUndiciFetchInit().body;
+    expect(passedBody).toBeInstanceOf(MockUndiciFormData);
+    expect((passedBody as InstanceType<typeof MockUndiciFormData>).get("model")).toBe("test-model");
+    expect((passedBody as InstanceType<typeof MockUndiciFormData>).get("file")).toBeInstanceOf(
+      Blob,
+    );
   });
 
   it("returns proxy fetch when HTTP_PROXY is set", () => {
-    const fetchFn = resolveProxyFetchFromEnv({
-      HTTPS_PROXY: "",
-      HTTP_PROXY: "http://fallback.test:3128",
-    });
-    expect(fetchFn).toBeDefined();
+    const fetchFn = requireProxyFetch(
+      resolveProxyFetchFromEnv({
+        HTTPS_PROXY: "",
+        HTTP_PROXY: "http://fallback.test:3128",
+      }),
+    );
+    expect(fetchFn).toBeTypeOf("function");
     expect(envAgentSpy).toHaveBeenCalledWith({
       httpProxy: "http://fallback.test:3128",
       httpsProxy: "http://fallback.test:3128",
@@ -304,24 +379,28 @@ describe("resolveProxyFetchFromEnv", () => {
   });
 
   it("returns proxy fetch when lowercase https_proxy is set", () => {
-    const fetchFn = resolveProxyFetchFromEnv({
-      HTTPS_PROXY: "",
-      HTTP_PROXY: "",
-      http_proxy: "",
-      https_proxy: "http://lower.test:1080",
-    });
-    expect(fetchFn).toBeDefined();
+    const fetchFn = requireProxyFetch(
+      resolveProxyFetchFromEnv({
+        HTTPS_PROXY: "",
+        HTTP_PROXY: "",
+        http_proxy: "",
+        https_proxy: "http://lower.test:1080",
+      }),
+    );
+    expect(fetchFn).toBeTypeOf("function");
     expect(envAgentSpy).toHaveBeenCalledWith({ httpsProxy: "http://lower.test:1080" });
   });
 
   it("returns proxy fetch when lowercase http_proxy is set", () => {
-    const fetchFn = resolveProxyFetchFromEnv({
-      HTTPS_PROXY: "",
-      HTTP_PROXY: "",
-      https_proxy: "",
-      http_proxy: "http://lower-http.test:1080",
-    });
-    expect(fetchFn).toBeDefined();
+    const fetchFn = requireProxyFetch(
+      resolveProxyFetchFromEnv({
+        HTTPS_PROXY: "",
+        HTTP_PROXY: "",
+        https_proxy: "",
+        http_proxy: "http://lower-http.test:1080",
+      }),
+    );
+    expect(fetchFn).toBeTypeOf("function");
     expect(envAgentSpy).toHaveBeenCalledWith({
       httpProxy: "http://lower-http.test:1080",
       httpsProxy: "http://lower-http.test:1080",
@@ -329,14 +408,16 @@ describe("resolveProxyFetchFromEnv", () => {
   });
 
   it("returns proxy fetch when ALL_PROXY is set", () => {
-    const fetchFn = resolveProxyFetchFromEnv({
-      HTTPS_PROXY: "",
-      HTTP_PROXY: "",
-      https_proxy: "",
-      http_proxy: "",
-      ALL_PROXY: "socks5://all-proxy.test:1080",
-    });
-    expect(fetchFn).toBeDefined();
+    const fetchFn = requireProxyFetch(
+      resolveProxyFetchFromEnv({
+        HTTPS_PROXY: "",
+        HTTP_PROXY: "",
+        https_proxy: "",
+        http_proxy: "",
+        ALL_PROXY: "socks5://all-proxy.test:1080",
+      }),
+    );
+    expect(fetchFn).toBeTypeOf("function");
     expect(envAgentSpy).toHaveBeenCalledWith({
       httpProxy: "socks5://all-proxy.test:1080",
       httpsProxy: "socks5://all-proxy.test:1080",

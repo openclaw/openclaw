@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   GoogleMeetConfig,
   GoogleMeetMode,
@@ -19,7 +20,11 @@ import {
   recoverCurrentMeetTab,
   recoverCurrentMeetTabOnNode,
 } from "./transports/chrome.js";
-import { buildMeetDtmfSequence, normalizeDialInNumber } from "./transports/twilio.js";
+import {
+  buildMeetDtmfSequence,
+  normalizeDialInNumber,
+  prefixDtmfWait,
+} from "./transports/twilio.js";
 import type {
   GoogleMeetChromeHealth,
   GoogleMeetJoinRequest,
@@ -28,6 +33,8 @@ import type {
 } from "./transports/types.js";
 import {
   endMeetVoiceCallGatewayCall,
+  getMeetVoiceCallGatewayCall,
+  isVoiceCallMissingError,
   joinMeetViaVoiceCallGateway,
   speakMeetViaVoiceCallGateway,
 } from "./voice-call-gateway.js";
@@ -39,6 +46,10 @@ type ChromeAudioBridgeResult = NonNullable<
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function buildTwilioVoiceCallSessionKey(meetingSessionId: string): string {
+  return `voice:google-meet:${meetingSessionId}`;
 }
 
 export function normalizeMeetUrl(input: unknown): string {
@@ -117,16 +128,16 @@ function resolveProbeTimeoutMs(input: number | undefined, fallback: number): num
   return Math.min(Math.trunc(input), 120_000);
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 function isManagedChromeBrowserSession(session: GoogleMeetSession): boolean {
   return Boolean(
     (session.transport === "chrome" || session.transport === "chrome-node") &&
     session.chrome &&
     session.chrome.launched,
   );
+}
+
+function noteSession(session: GoogleMeetSession, note: string): void {
+  session.notes = [...session.notes.filter((item) => item !== note), note];
 }
 
 function evaluateSpeechReadiness(session: GoogleMeetSession): {
@@ -361,20 +372,23 @@ export class GoogleMeetRuntime {
     const url = normalizeMeetUrl(request.url);
     const transport = resolveTransport(request.transport, this.params.config);
     const mode = resolveMode(request.mode, this.params.config);
-    const reusable = this.list().find(
+    let reusable = this.list().find(
       (session) =>
         session.state === "active" &&
         isSameMeetUrlForReuse(session.url, url) &&
         session.transport === transport &&
         session.mode === mode,
     );
+    if (reusable?.transport === "twilio") {
+      await this.#refreshTwilioVoiceCallStatus(reusable);
+      if (reusable.state !== "active") {
+        reusable = undefined;
+      }
+    }
     const speechInstructions = request.message ?? this.params.config.realtime.introMessage;
     if (reusable) {
       await this.#refreshBrowserHealthForChromeSession(reusable);
-      reusable.notes = [
-        ...reusable.notes.filter((note) => note !== "Reused existing active Meet session."),
-        "Reused existing active Meet session.",
-      ];
+      noteSession(reusable, "Reused existing active Meet session.");
       reusable.updatedAt = nowIso();
       const spoken =
         isGoogleMeetTalkBackMode(mode) && speechInstructions
@@ -468,16 +482,24 @@ export class GoogleMeetRuntime {
             "Twilio transport requires a Meet dial-in phone number. Google Meet URLs do not include dial-in details; pass dialInNumber with optional pin/dtmfSequence, configure twilio.defaultDialInNumber, or use chrome/chrome-node transport.",
           );
         }
-        const dtmfSequence = buildMeetDtmfSequence({
+        const rawDtmfSequence = buildMeetDtmfSequence({
           pin: request.pin ?? this.params.config.twilio.defaultPin,
           dtmfSequence: request.dtmfSequence ?? this.params.config.twilio.defaultDtmfSequence,
         });
+        const dtmfSequence =
+          request.dtmfSequence || this.params.config.twilio.defaultDtmfSequence
+            ? rawDtmfSequence
+            : prefixDtmfWait(rawDtmfSequence, this.params.config.voiceCall.dtmfDelayMs);
         const voiceCallResult = this.params.config.voiceCall.enabled
           ? await joinMeetViaVoiceCallGateway({
               config: this.params.config,
               dialInNumber,
               dtmfSequence,
               logger: this.params.logger,
+              ...(request.requesterSessionKey
+                ? { requesterSessionKey: request.requesterSessionKey }
+                : {}),
+              sessionKey: buildTwilioVoiceCallSessionKey(session.id),
               message: isGoogleMeetTalkBackMode(mode)
                 ? (request.message ??
                   this.params.config.voiceCall.introMessage ??
@@ -505,7 +527,7 @@ export class GoogleMeetRuntime {
         session.notes.push(
           this.params.config.voiceCall.enabled
             ? dtmfSequence
-              ? "Twilio transport delegated the phone leg to the voice-call plugin, then sent configured DTMF after connect before speaking."
+              ? "Twilio transport delegated the phone leg to the voice-call plugin, then queued configured DTMF before realtime connect."
               : "Twilio transport delegated the call to the voice-call plugin without configured DTMF."
             : "Twilio transport is an explicit dial plan; voice-call delegation is disabled.",
         );
@@ -535,7 +557,12 @@ export class GoogleMeetRuntime {
       this.#sessionStops.delete(sessionId);
       this.#sessionSpeakers.delete(sessionId);
       this.#sessionHealth.delete(sessionId);
-      await stop();
+      try {
+        await stop();
+      } finally {
+        session.state = "ended";
+        session.updatedAt = nowIso();
+      }
     }
     session.state = "ended";
     session.updatedAt = nowIso();
@@ -551,15 +578,23 @@ export class GoogleMeetRuntime {
       return { found: false, spoken: false };
     }
     if (session.transport === "twilio" && session.twilio?.voiceCallId) {
-      await speakMeetViaVoiceCallGateway({
-        config: this.params.config,
-        callId: session.twilio.voiceCallId,
-        message:
-          instructions ||
-          this.params.config.voiceCall.introMessage ||
-          this.params.config.realtime.introMessage ||
-          "",
-      });
+      try {
+        await speakMeetViaVoiceCallGateway({
+          config: this.params.config,
+          callId: session.twilio.voiceCallId,
+          message:
+            instructions ||
+            this.params.config.voiceCall.introMessage ||
+            this.params.config.realtime.introMessage ||
+            "",
+        });
+      } catch (err) {
+        if (!isVoiceCallMissingError(err)) {
+          throw err;
+        }
+        this.#markTwilioSessionEnded(session, "Voice Call is no longer active.");
+        return { found: true, spoken: false, session };
+      }
       session.twilio.introSent = true;
       session.updatedAt = nowIso();
       return { found: true, spoken: true, session };
@@ -596,7 +631,7 @@ export class GoogleMeetRuntime {
     );
     const deadline = Date.now() + waitMs;
     while (Date.now() < deadline) {
-      await sleep(250);
+      await sleep(Math.min(250, Math.max(0, deadline - Date.now())));
       result = await this.speak(session.id, instructions);
       if (result.spoken) {
         return true;
@@ -639,6 +674,13 @@ export class GoogleMeetRuntime {
         "test_speech requires mode: agent or bidi; use join mode: transcribe for observe-only sessions.",
       );
     }
+    const requestedMode = request.mode ? resolveMode(request.mode, this.params.config) : undefined;
+    const mode =
+      requestedMode && isGoogleMeetTalkBackMode(requestedMode)
+        ? requestedMode
+        : isGoogleMeetTalkBackMode(this.params.config.defaultMode)
+          ? this.params.config.defaultMode
+          : "agent";
     const url = normalizeMeetUrl(request.url);
     const transport = resolveTransport(request.transport, this.params.config);
     const beforeSessions = this.list();
@@ -655,7 +697,7 @@ export class GoogleMeetRuntime {
       ...request,
       transport,
       url,
-      mode: "agent",
+      mode,
       message: request.message ?? "Say exactly: Google Meet speech test complete.",
     });
     let health = result.session.chrome?.health;
@@ -786,12 +828,43 @@ export class GoogleMeetRuntime {
 
   async #refreshStatusHealthForSession(session: GoogleMeetSession) {
     if (session.transport === "chrome" || session.transport === "chrome-node") {
-      if (session.chrome?.health?.manualActionRequired) {
-        this.#refreshSpeechReadiness(session);
-        return;
-      }
       await this.#refreshBrowserHealthForChromeSession(session, { force: true, readOnly: true });
       return;
+    }
+    if (session.transport === "twilio") {
+      await this.#refreshTwilioVoiceCallStatus(session);
+      return;
+    }
+    this.#refreshSpeechReadiness(session);
+  }
+
+  #markTwilioSessionEnded(session: GoogleMeetSession, reason: string) {
+    session.state = "ended";
+    session.updatedAt = nowIso();
+    this.#sessionStops.delete(session.id);
+    this.#sessionSpeakers.delete(session.id);
+    this.#sessionHealth.delete(session.id);
+    noteSession(session, reason);
+  }
+
+  async #refreshTwilioVoiceCallStatus(session: GoogleMeetSession) {
+    const callId = session.twilio?.voiceCallId;
+    if (!callId || session.state !== "active") {
+      this.#refreshSpeechReadiness(session);
+      return;
+    }
+    try {
+      const status = await getMeetVoiceCallGatewayCall({
+        config: this.params.config,
+        callId,
+      });
+      if (status.found === false) {
+        this.#markTwilioSessionEnded(session, "Voice Call is no longer active.");
+      }
+    } catch (error) {
+      this.params.logger.debug?.(
+        `[google-meet] voice-call status refresh ignored: ${formatErrorMessage(error)}`,
+      );
     }
     this.#refreshSpeechReadiness(session);
   }

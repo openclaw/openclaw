@@ -6,17 +6,22 @@ import type { OpenClawConfig } from "../api.js";
 import { compileMemoryWikiVault } from "./compile.js";
 import type { MemoryWikiPluginConfig } from "./config.js";
 import { renderWikiMarkdown } from "./markdown.js";
-import { getMemoryWikiPage, searchMemoryWiki } from "./query.js";
+import { getMemoryWikiPage, isSessionMemoryPath, searchMemoryWiki } from "./query.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
-const { getActiveMemorySearchManagerMock, resolveDefaultAgentIdMock, resolveSessionAgentIdMock } =
-  vi.hoisted(() => ({
-    getActiveMemorySearchManagerMock: vi.fn(),
-    resolveDefaultAgentIdMock: vi.fn(() => "main"),
-    resolveSessionAgentIdMock: vi.fn(({ sessionKey }: { sessionKey?: string }) =>
-      sessionKey === "agent:secondary:thread" ? "secondary" : "main",
-    ),
-  }));
+const {
+  getActiveMemorySearchManagerMock,
+  loadCombinedSessionStoreForGatewayMock,
+  resolveDefaultAgentIdMock,
+  resolveSessionAgentIdMock,
+} = vi.hoisted(() => ({
+  getActiveMemorySearchManagerMock: vi.fn(),
+  loadCombinedSessionStoreForGatewayMock: vi.fn(),
+  resolveDefaultAgentIdMock: vi.fn(() => "main"),
+  resolveSessionAgentIdMock: vi.fn(({ sessionKey }: { sessionKey?: string }) =>
+    sessionKey === "agent:secondary:thread" ? "secondary" : "main",
+  ),
+}));
 
 vi.mock("openclaw/plugin-sdk/memory-host-search", () => ({
   getActiveMemorySearchManager: getActiveMemorySearchManagerMock,
@@ -27,13 +32,45 @@ vi.mock("openclaw/plugin-sdk/memory-host-core", () => ({
   resolveSessionAgentId: resolveSessionAgentIdMock,
 }));
 
+vi.mock("openclaw/plugin-sdk/session-transcript-hit", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/session-transcript-hit")>();
+  return {
+    ...actual,
+    loadCombinedSessionStoreForGateway: loadCombinedSessionStoreForGatewayMock,
+  };
+});
+
 const { createVault } = createMemoryWikiTestHarness();
 let suiteRoot = "";
 let caseIndex = 0;
 
+function collectWikiResultPaths(results: readonly { corpus: string; path: string }[]): string[] {
+  const paths: string[] = [];
+  for (const result of results) {
+    if (result.corpus === "wiki") {
+      paths.push(result.path);
+    }
+  }
+  return paths;
+}
+
+function expectFields(value: unknown, expected: Record<string, unknown>): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    throw new Error("Expected object");
+  }
+  const record = value as Record<string, unknown>;
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key]).toBe(expectedValue);
+  }
+  return record;
+}
+
 beforeEach(() => {
   getActiveMemorySearchManagerMock.mockReset();
   getActiveMemorySearchManagerMock.mockResolvedValue({ manager: null, error: "unavailable" });
+  loadCombinedSessionStoreForGatewayMock.mockReset();
+  loadCombinedSessionStoreForGatewayMock.mockReturnValue({ storePath: "(test)", store: {} });
   resolveDefaultAgentIdMock.mockClear();
   resolveSessionAgentIdMock.mockClear();
 });
@@ -68,6 +105,36 @@ function createAppConfig(): OpenClawConfig {
   } as OpenClawConfig;
 }
 
+function createSessionVisibilityAppConfig(): OpenClawConfig {
+  return {
+    agents: {
+      defaults: { sandbox: { sessionToolsVisibility: "all" } },
+      list: [{ id: "main", default: true }],
+    },
+    tools: {
+      sessions: { visibility: "self" },
+    },
+  } as OpenClawConfig;
+}
+
+function mockSessionTranscriptStore() {
+  loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+    storePath: "(test)",
+    store: {
+      "agent:main:child-session": {
+        sessionId: "child-session",
+        updatedAt: 1,
+        sessionFile: "/tmp/openclaw/child-session.jsonl",
+      },
+      "agent:main:sibling-session": {
+        sessionId: "sibling-session",
+        updatedAt: 2,
+        sessionFile: "/tmp/openclaw/sibling-session.jsonl",
+      },
+    },
+  });
+}
+
 function createMemoryManager(overrides?: {
   searchResults?: Array<{
     path: string;
@@ -94,6 +161,29 @@ function createMemoryManager(overrides?: {
     close: vi.fn().mockResolvedValue(undefined),
   };
 }
+
+describe("isSessionMemoryPath", () => {
+  it("classifies all current session storage layouts", () => {
+    for (const relPath of [
+      "sessions/child-session.jsonl",
+      "qmd/sessions/child-session.md",
+      "qmd/sessions-main/child-session.md",
+      "qmd\\sessions-main\\child-session.md",
+      "qmd/sessions",
+    ]) {
+      expect(isSessionMemoryPath(relPath)).toBe(true);
+    }
+
+    for (const relPath of [
+      "sessionsx/child-session.jsonl",
+      "qmd/sessionsxxx",
+      "wiki/sessions/foo.md",
+      "wiki\\sessions\\foo.md",
+    ]) {
+      expect(isSessionMemoryPath(relPath)).toBe(false);
+    }
+  });
+});
 
 describe("searchMemoryWiki", () => {
   it("finds wiki pages by title and body", async () => {
@@ -273,15 +363,11 @@ describe("searchMemoryWiki", () => {
       query: "bgroux",
       mode: "find-person",
     });
-    expect(personResults[0]).toEqual(
-      expect.objectContaining({
-        path: "entities/brad.md",
-        canonicalId: "maintainer.brad-groux",
-        aliases: ["bgroux"],
-        privacyTier: "local-private",
-        searchMode: "find-person",
-      }),
-    );
+    expect(personResults[0]?.path).toBe("entities/brad.md");
+    expect(personResults[0]?.canonicalId).toBe("maintainer.brad-groux");
+    expect(personResults[0]?.aliases).toEqual(["bgroux"]);
+    expect(personResults[0]?.privacyTier).toBe("local-private");
+    expect(personResults[0]?.searchMode).toBe("find-person");
 
     const routeResults = await searchMemoryWiki({
       config,
@@ -295,15 +381,11 @@ describe("searchMemoryWiki", () => {
       query: "strong route Teams",
       mode: "raw-claim",
     });
-    expect(claimResults[0]).toEqual(
-      expect.objectContaining({
-        path: "entities/brad.md",
-        matchedClaimId: "claim.brad.teams",
-        matchedClaimConfidence: 0.88,
-        evidenceKinds: ["maintainer-whois"],
-        evidenceSourceIds: ["source.maintainers"],
-      }),
-    );
+    expect(claimResults[0]?.path).toBe("entities/brad.md");
+    expect(claimResults[0]?.matchedClaimId).toBe("claim.brad.teams");
+    expect(claimResults[0]?.matchedClaimConfidence).toBe(0.88);
+    expect(claimResults[0]?.evidenceKinds).toEqual(["maintainer-whois"]);
+    expect(claimResults[0]?.evidenceSourceIds).toEqual(["source.maintainers"]);
 
     const evidenceResults = await searchMemoryWiki({
       config,
@@ -422,7 +504,7 @@ describe("searchMemoryWiki", () => {
     const results = await searchMemoryWiki({ config, query: "postgresql" });
 
     expect(results).toHaveLength(1);
-    expect(results[0]).toMatchObject({
+    expectFields(results[0], {
       corpus: "wiki",
       path: "entities/alpha.md",
       snippet: "Alpha uses PostgreSQL for production writes.",
@@ -522,7 +604,7 @@ describe("searchMemoryWiki", () => {
     const results = await searchMemoryWiki({ config, query: "alpha" });
 
     expect(results).toHaveLength(1);
-    expect(results[0]).toMatchObject({
+    expectFields(results[0], {
       corpus: "wiki",
       sourceType: "memory-bridge",
       sourcePath: "/tmp/workspace/MEMORY.md",
@@ -569,8 +651,7 @@ describe("searchMemoryWiki", () => {
     });
 
     expect(results).toHaveLength(2);
-    expect(results.some((result) => result.corpus === "wiki")).toBe(true);
-    expect(results.some((result) => result.corpus === "memory")).toBe(true);
+    expect(results.map((result) => result.corpus).toSorted()).toEqual(["memory", "wiki"]);
     expect(manager.search).toHaveBeenCalledWith("alpha", { maxResults: 5 });
     expect(getActiveMemorySearchManagerMock).toHaveBeenCalledWith({
       cfg: createAppConfig(),
@@ -622,16 +703,138 @@ describe("searchMemoryWiki", () => {
     });
 
     expect(results).toHaveLength(5);
-    expect(results.some((result) => result.corpus === "memory")).toBe(true);
-    expect(
-      results.filter((result) => result.corpus === "wiki").map((result) => result.path),
-    ).toEqual([
+    expect(results.map((result) => result.corpus)).toContain("memory");
+    expect(collectWikiResultPaths(results)).toEqual([
       "entities/alpha-1.md",
       "entities/alpha-2.md",
       "entities/alpha-3.md",
       "entities/alpha-4.md",
     ]);
     expect(manager.search).toHaveBeenCalledWith("alpha", { maxResults: 5 });
+  });
+
+  it("filters session memory hits outside the caller visibility policy", async () => {
+    const { config } = await createQueryVault({
+      initialize: true,
+      config: {
+        search: { backend: "shared", corpus: "memory" },
+      },
+    });
+    mockSessionTranscriptStore();
+    const manager = createMemoryManager({
+      searchResults: [
+        {
+          path: "sessions/child-session.jsonl",
+          startLine: 1,
+          endLine: 2,
+          score: 30,
+          snippet: "caller transcript",
+          source: "sessions",
+        },
+        {
+          path: "qmd/sessions-main/sibling-session.md",
+          startLine: 3,
+          endLine: 4,
+          score: 20,
+          snippet: "sibling transcript",
+          source: "sessions",
+        },
+        {
+          path: "MEMORY.md",
+          startLine: 5,
+          endLine: 6,
+          score: 10,
+          snippet: "durable memory",
+          source: "memory",
+        },
+      ],
+    });
+    getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
+
+    const results = await searchMemoryWiki({
+      config,
+      appConfig: createSessionVisibilityAppConfig(),
+      agentSessionKey: "agent:main:child-session",
+      sandboxed: true,
+      query: "transcript",
+      maxResults: 10,
+    });
+
+    expect(results.map((result) => result.path)).toEqual([
+      "sessions/child-session.jsonl",
+      "MEMORY.md",
+    ]);
+  });
+
+  it("filters session memory hits for session-bound non-sandboxed callers", async () => {
+    const { config } = await createQueryVault({
+      initialize: true,
+      config: {
+        search: { backend: "shared", corpus: "memory" },
+      },
+    });
+    mockSessionTranscriptStore();
+    const manager = createMemoryManager({
+      searchResults: [
+        {
+          path: "sessions/child-session.jsonl",
+          startLine: 1,
+          endLine: 2,
+          score: 30,
+          snippet: "caller transcript",
+          source: "sessions",
+        },
+        {
+          path: "qmd/sessions-main/sibling-session.md",
+          startLine: 3,
+          endLine: 4,
+          score: 20,
+          snippet: "sibling transcript",
+          source: "sessions",
+        },
+        {
+          path: "MEMORY.md",
+          startLine: 5,
+          endLine: 6,
+          score: 10,
+          snippet: "durable memory",
+          source: "memory",
+        },
+      ],
+    });
+    getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
+
+    const results = await searchMemoryWiki({
+      config,
+      appConfig: createSessionVisibilityAppConfig(),
+      agentSessionKey: "agent:main:child-session",
+      sandboxed: false,
+      query: "transcript",
+      maxResults: 10,
+    });
+
+    expect(results.map((result) => result.path)).toEqual([
+      "sessions/child-session.jsonl",
+      "MEMORY.md",
+    ]);
+  });
+
+  it("requires appConfig for session-bound shared memory searches", async () => {
+    const { config } = await createQueryVault({
+      initialize: true,
+      config: {
+        search: { backend: "shared", corpus: "memory" },
+      },
+    });
+
+    await expect(
+      searchMemoryWiki({
+        config,
+        agentSessionKey: "agent:main:child-session",
+        sandboxed: true,
+        query: "transcript",
+      }),
+    ).rejects.toThrow(/wiki_search requires appConfig/);
   });
 
   it("uses the active session agent for shared memory search", async () => {
@@ -815,7 +1018,7 @@ describe("getMemoryWikiPage", () => {
       lookup: "claim.alpha.db",
     });
 
-    expect(result).toMatchObject({
+    expectFields(result, {
       corpus: "wiki",
       path: "entities/alpha.md",
       title: "Alpha",
@@ -852,7 +1055,7 @@ describe("getMemoryWikiPage", () => {
       lookup: "sources/unsafe-alpha.md",
     });
 
-    expect(result).toMatchObject({
+    expectFields(result, {
       corpus: "wiki",
       path: "sources/unsafe-alpha.md",
       sourceType: "memory-unsafe-local",
@@ -900,6 +1103,89 @@ describe("getMemoryWikiPage", () => {
       from: 2,
       lines: 2,
     });
+  });
+
+  it("skips session memory reads outside the caller visibility policy", async () => {
+    const { config } = await createQueryVault({
+      initialize: true,
+      config: {
+        search: { backend: "shared", corpus: "memory" },
+      },
+    });
+    mockSessionTranscriptStore();
+    const manager = createMemoryManager({
+      readResult: {
+        path: "qmd/sessions-main/sibling-session.md",
+        text: "sibling transcript content",
+      },
+    });
+    getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
+
+    const result = await getMemoryWikiPage({
+      config,
+      appConfig: createSessionVisibilityAppConfig(),
+      agentSessionKey: "agent:main:child-session",
+      sandboxed: true,
+      lookup: "qmd/sessions-main/sibling-session.md",
+    });
+
+    expect(result).toBeNull();
+    expect(manager.readFile).not.toHaveBeenCalled();
+  });
+
+  it("permits session memory reads inside the caller visibility policy", async () => {
+    const { config } = await createQueryVault({
+      initialize: true,
+      config: {
+        search: { backend: "shared", corpus: "memory" },
+      },
+    });
+    mockSessionTranscriptStore();
+    const manager = createMemoryManager({
+      readResult: {
+        path: "qmd/sessions-main/child-session.md",
+        text: "own transcript content",
+      },
+    });
+    getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
+
+    const result = await getMemoryWikiPage({
+      config,
+      appConfig: createSessionVisibilityAppConfig(),
+      agentSessionKey: "agent:main:child-session",
+      sandboxed: true,
+      lookup: "qmd/sessions-main/child-session.md",
+    });
+
+    expectFields(result, {
+      corpus: "memory",
+      path: "qmd/sessions-main/child-session.md",
+      content: "own transcript content",
+    });
+    expect(manager.readFile).toHaveBeenCalledTimes(1);
+    expect(manager.readFile).toHaveBeenCalledWith({
+      relPath: "qmd/sessions-main/child-session.md",
+      from: 1,
+      lines: 200,
+    });
+  });
+
+  it("requires appConfig for session-bound shared memory reads", async () => {
+    const { config } = await createQueryVault({
+      initialize: true,
+      config: {
+        search: { backend: "shared", corpus: "memory" },
+      },
+    });
+
+    await expect(
+      getMemoryWikiPage({
+        config,
+        agentSessionKey: "agent:main:child-session",
+        sandboxed: true,
+        lookup: "sessions/child-session.jsonl",
+      }),
+    ).rejects.toThrow(/wiki_get requires appConfig/);
   });
 
   it("uses the active session agent for shared memory reads", async () => {

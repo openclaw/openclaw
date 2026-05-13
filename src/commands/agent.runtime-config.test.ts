@@ -63,6 +63,15 @@ async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(fn, { prefix: "openclaw-agent-" });
 }
 
+function requireResolveCommandConfigParams(callIndex = 0): ResolveCommandConfigParams {
+  const call = resolveCommandConfigWithSecretsMock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected command config resolution call ${callIndex}`);
+  }
+  const [params] = call;
+  return params;
+}
+
 function mockConfig(home: string, storePath: string): OpenClawConfig {
   const cfg = {
     agents: {
@@ -150,12 +159,10 @@ describe("agentCommand runtime config", () => {
       expect(resolveCommandConfigWithSecretsMock).toHaveBeenCalledWith({
         config: loadedConfig,
         commandName: "agent",
-        targetIds: expect.objectContaining({
-          has: expect.any(Function),
-        }),
+        targetIds: new Set(["models.providers.*.apiKey"]),
         runtime,
       });
-      const targetIds = resolveCommandConfigWithSecretsMock.mock.calls[0]?.[0].targetIds;
+      const targetIds = requireResolveCommandConfigParams().targetIds;
       expect(targetIds.has("models.providers.*.apiKey")).toBe(true);
       expect(targetIds.has("channels.telegram.botToken")).toBe(false);
       expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(resolvedConfig, sourceConfig);
@@ -182,7 +189,7 @@ describe("agentCommand runtime config", () => {
         runtimeTargetsChannelSecrets: true,
       });
 
-      const targetIds = resolveCommandConfigWithSecretsMock.mock.calls[0]?.[0].targetIds;
+      const targetIds = requireResolveCommandConfigParams().targetIds;
       expect(targetIds.has("channels.telegram.botToken")).toBe(true);
     });
   });
@@ -207,8 +214,14 @@ describe("agentCommand runtime config", () => {
       const resolved = resolveSession({ cfg, to: "+1555" });
 
       expect(resolved.storePath).toBe(store);
-      expect(resolved.sessionKey).toBeTruthy();
-      expect(resolved.sessionId).toBeTruthy();
+      expect(resolved.sessionKey).toBeTypeOf("string");
+      const sessionKey = resolved.sessionKey;
+      if (!sessionKey) {
+        throw new Error("expected session key");
+      }
+      expect(sessionKey.length).toBeGreaterThan(0);
+      expect(resolved.sessionId).toBeTypeOf("string");
+      expect(resolved.sessionId.length).toBeGreaterThan(0);
       expect(resolved.isNewSession).toBe(true);
     });
   });

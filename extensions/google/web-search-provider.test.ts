@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { withEnv, withEnvAsync, withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { __testing, createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";
@@ -24,7 +24,7 @@ function installGeminiFetch() {
         }),
     } as Response),
   );
-  global.fetch = withFetchPreconnect(mockFetch);
+  vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
   return mockFetch;
 }
 
@@ -38,13 +38,23 @@ function createGoogleModelProviderConfig(
   };
 }
 
+function requireFirstGeminiFetchCall(
+  mockFetch: ReturnType<typeof installGeminiFetch>,
+): [RequestInfo | URL | undefined, RequestInit | undefined] {
+  const [call] = mockFetch.mock.calls;
+  if (!call) {
+    throw new Error("expected Gemini web search fetch call");
+  }
+  return call as [RequestInfo | URL | undefined, RequestInit | undefined];
+}
+
 function getFetchHeaders(mockFetch: ReturnType<typeof installGeminiFetch>): Record<string, string> {
-  const init = mockFetch.mock.calls[0]?.[1] as { headers?: Record<string, string> } | undefined;
-  return init?.headers ?? {};
+  const [, init] = requireFirstGeminiFetchCall(mockFetch);
+  return (init?.headers as Record<string, string> | undefined) ?? {};
 }
 
 function getGeminiFetchUrl(mockFetch: ReturnType<typeof installGeminiFetch>): string | undefined {
-  const input = mockFetch.mock.calls[0]?.[0];
+  const [input] = requireFirstGeminiFetchCall(mockFetch);
   if (typeof input === "string") {
     return input;
   }
@@ -57,7 +67,8 @@ function getGeminiFetchUrl(mockFetch: ReturnType<typeof installGeminiFetch>): st
 function parseGeminiFetchBody(mockFetch: ReturnType<typeof installGeminiFetch>): {
   tools?: Array<{ google_search?: { timeRangeFilter?: unknown } }>;
 } {
-  const body = mockFetch.mock.calls[0]?.[1]?.body;
+  const [, init] = requireFirstGeminiFetchCall(mockFetch);
+  const body = init?.body;
   if (typeof body !== "string") {
     throw new Error("Expected Gemini fetch body string");
   }
@@ -69,6 +80,7 @@ function parseGeminiFetchBody(mockFetch: ReturnType<typeof installGeminiFetch>):
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("google web search provider", () => {
@@ -80,9 +92,11 @@ describe("google web search provider", () => {
         throw new Error("Expected tool definition");
       }
 
-      await expect(tool.execute({ query: "OpenClaw docs" })).resolves.toMatchObject({
+      await expect(tool.execute({ query: "OpenClaw docs" })).resolves.toEqual({
+        docs: "https://docs.openclaw.ai/tools/web",
         error: "missing_gemini_api_key",
-        message: expect.stringContaining("use web_fetch for a specific URL or the browser tool"),
+        message:
+          "web_search (gemini) needs an API key. Set GEMINI_API_KEY in the Gateway environment, configure plugins.entries.google.config.webSearch.apiKey, or reuse models.providers.google.apiKey. If you do not want to configure a search API key, use web_fetch for a specific URL or the browser tool for interactive pages.",
       });
     });
   });
@@ -176,7 +190,7 @@ describe("google web search provider", () => {
 
     await tool?.execute({ query: "OpenClaw docs" }, { signal: controller.signal });
 
-    const init = mockFetch.mock.calls[0]?.[1] as { signal?: AbortSignal } | undefined;
+    const [, init] = requireFirstGeminiFetchCall(mockFetch);
     expect(init?.signal?.aborted).toBe(true);
   });
 
@@ -386,8 +400,11 @@ describe("google web search provider", () => {
         freshness: "week",
         date_after: "2026-04-01",
       }),
-    ).resolves.toMatchObject({
+    ).resolves.toEqual({
+      docs: "https://docs.openclaw.ai/tools/web",
       error: "conflicting_time_filters",
+      message:
+        "freshness and date_after/date_before cannot be used together. Use either freshness (day/week/month/year) or a date range (date_after/date_before), not both.",
     });
     expect(mockFetch).not.toHaveBeenCalled();
   });

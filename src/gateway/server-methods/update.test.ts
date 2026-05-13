@@ -155,6 +155,24 @@ async function invokeUpdateRun(
   } as never);
 }
 
+function readCapturedPayload(): RestartSentinelPayload {
+  if (!capturedPayload) {
+    throw new Error("expected restart sentinel payload");
+  }
+  return capturedPayload;
+}
+
+function firstMockCall(
+  mock: { mock: { calls: Array<readonly unknown[]> } },
+  label: string,
+): readonly unknown[] {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
 describe("update.run sentinel deliveryContext", () => {
   it("includes deliveryContext in sentinel payload when sessionKey is provided", async () => {
     capturedPayload = undefined;
@@ -165,13 +183,13 @@ describe("update.run sentinel deliveryContext", () => {
     });
 
     expect(responded).toBe(true);
-    expect(capturedPayload).toBeDefined();
-    expect(capturedPayload!.deliveryContext).toEqual({
+    const payload = readCapturedPayload();
+    expect(payload.deliveryContext).toEqual({
       channel: "webchat",
       to: "webchat:user-123",
       accountId: "default",
     });
-    expect(capturedPayload!.continuation).toEqual({
+    expect(payload.continuation).toEqual({
       kind: "agentTurn",
       message: DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE,
     });
@@ -182,10 +200,10 @@ describe("update.run sentinel deliveryContext", () => {
 
     await invokeUpdateRun({});
 
-    expect(capturedPayload).toBeDefined();
-    expect(capturedPayload!.deliveryContext).toBeUndefined();
-    expect(capturedPayload!.threadId).toBeUndefined();
-    expect(capturedPayload!.continuation).toBeUndefined();
+    const payload = readCapturedPayload();
+    expect(payload.deliveryContext).toBeUndefined();
+    expect(payload.threadId).toBeUndefined();
+    expect(payload.continuation).toBeUndefined();
   });
 
   it("includes threadId in sentinel payload for threaded sessions", async () => {
@@ -193,14 +211,14 @@ describe("update.run sentinel deliveryContext", () => {
 
     await invokeUpdateRun({ sessionKey: "agent:main:slack:dm:C0123ABC:thread:1234567890.123456" });
 
-    expect(capturedPayload).toBeDefined();
-    expect(capturedPayload!.deliveryContext).toEqual({
+    const payload = readCapturedPayload();
+    expect(payload.deliveryContext).toEqual({
       channel: "slack",
       to: "slack:C0123ABC",
       accountId: "workspace-1",
     });
-    expect(capturedPayload!.threadId).toBe("1234567890.123456");
-    expect(capturedPayload!.continuation).toEqual({
+    expect(payload.threadId).toBe("1234567890.123456");
+    expect(payload.continuation).toEqual({
       kind: "agentTurn",
       message: DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE,
     });
@@ -214,8 +232,7 @@ describe("update.run sentinel deliveryContext", () => {
       continuationMessage: "Check the running version and finish the update report.",
     });
 
-    expect(capturedPayload).toBeDefined();
-    expect(capturedPayload!.continuation).toEqual({
+    expect(readCapturedPayload().continuation).toEqual({
       kind: "agentTurn",
       message: "Check the running version and finish the update report.",
     });
@@ -226,11 +243,11 @@ describe("update.run timeout normalization", () => {
   it("enforces a 1000ms minimum timeout for tiny values", async () => {
     await invokeUpdateRun({ timeoutMs: 1 });
 
-    expect(runGatewayUpdateMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        timeoutMs: 1000,
-      }),
-    );
+    expect(runGatewayUpdateMock).toHaveBeenCalledTimes(1);
+    const [updateParams] = firstMockCall(runGatewayUpdateMock, "gateway update") as [
+      { timeoutMs?: number },
+    ];
+    expect(updateParams?.timeoutMs).toBe(1000);
   });
 });
 
@@ -299,12 +316,8 @@ describe("update.run restart scheduling", () => {
     });
 
     expect(payload?.ok).toBe(false);
-    expect(payload?.result).toEqual(
-      expect.objectContaining({
-        status,
-        reason,
-      }),
-    );
+    expect(payload?.result?.status).toBe(status);
+    expect(payload?.result?.reason).toBe(reason);
   });
 
   it("forces an immediate restart after successful package-manager updates", async () => {
@@ -324,14 +337,15 @@ describe("update.run restart scheduling", () => {
     });
 
     expect(runGatewayUpdateMock).toHaveBeenCalledTimes(1);
-    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        delayMs: 0,
-        reason: "update.run",
-        skipCooldown: true,
-        skipDeferral: true,
-      }),
-    );
+    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
+    const [restartParams] = firstMockCall(
+      scheduleGatewaySigusr1RestartMock,
+      "gateway restart schedule",
+    ) as [{ delayMs?: number; reason?: string; skipCooldown?: boolean; skipDeferral?: boolean }];
+    expect(restartParams?.delayMs).toBe(0);
+    expect(restartParams?.reason).toBe("update.run");
+    expect(restartParams?.skipCooldown).toBe(true);
+    expect(restartParams?.skipDeferral).toBe(true);
     expect(payload?.ok).toBe(true);
   });
 
@@ -355,16 +369,10 @@ describe("update.run restart scheduling", () => {
 
     expect(runGatewayUpdateMock).not.toHaveBeenCalled();
     expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
-    expect(payload).toEqual(
-      expect.objectContaining({
-        ok: false,
-        result: expect.objectContaining({
-          status: "skipped",
-          reason: "restart-unavailable",
-          mode: "npm",
-        }),
-      }),
-    );
+    expect(payload?.ok).toBe(false);
+    expect(payload?.result?.status).toBe("skipped");
+    expect(payload?.result?.reason).toBe("restart-unavailable");
+    expect(payload?.result?.mode).toBe("npm");
   });
 });
 
@@ -386,11 +394,13 @@ describe("update.status", () => {
       respond,
     } as never);
 
-    expect(respond).toHaveBeenCalledWith(true, {
-      sentinel: expect.objectContaining({
-        kind: "update",
-        status: "ok",
-      }),
-    });
+    expect(respond).toHaveBeenCalledTimes(1);
+    const [ok, response] = firstMockCall(respond, "update status response") as [
+      boolean,
+      { sentinel?: { kind?: string; status?: string } } | undefined,
+    ];
+    expect(ok).toBe(true);
+    expect(response?.sentinel?.kind).toBe("update");
+    expect(response?.sentinel?.status).toBe("ok");
   });
 });

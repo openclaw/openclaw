@@ -1,10 +1,11 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
   readNumberParam,
   readStringArrayParam,
   readStringParam,
 } from "../../agents/tools/common.js";
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
@@ -19,7 +20,9 @@ import {
   hasInteractiveReplyBlocks,
   hasMessagePresentationBlocks,
   hasReplyPayloadContent,
+  normalizeInteractiveReply,
   normalizeMessagePresentation,
+  type ReplyPayloadDelivery,
 } from "../../interactive/payload.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
@@ -68,6 +71,8 @@ import {
   buildCrossContextDecoration,
   type CrossContextDecoration,
   enforceCrossContextPolicy,
+  enforceMessageActionAllowlist,
+  resolveEffectiveMessageToolsConfig,
   shouldApplyCrossContextMarker,
 } from "./outbound-policy.js";
 import { executePollAction, executeSendAction } from "./outbound-send-service.js";
@@ -251,6 +256,7 @@ async function maybeApplyCrossContextMarker(params: {
   target: string;
   toolContext?: ChannelThreadingToolContext;
   accountId?: string | null;
+  agentId?: string | null;
   args: Record<string, unknown>;
   message: string;
   preferPresentation: boolean;
@@ -264,6 +270,7 @@ async function maybeApplyCrossContextMarker(params: {
     target: params.target,
     toolContext: params.toolContext,
     accountId: params.accountId ?? undefined,
+    agentId: params.agentId ?? undefined,
   });
   if (!decoration) {
     return params.message;
@@ -509,7 +516,9 @@ async function handleBroadcastAction(
   params: Record<string, unknown>,
 ): Promise<MessageActionRunResult> {
   throwIfAborted(input.abortSignal);
-  const broadcastEnabled = input.cfg.tools?.message?.broadcast?.enabled !== false;
+  const broadcastEnabled =
+    resolveEffectiveMessageToolsConfig({ cfg: input.cfg, agentId: input.agentId })?.broadcast
+      ?.enabled !== false;
   if (!broadcastEnabled) {
     throw new Error("Broadcast is disabled. Set tools.message.broadcast.enabled to true.");
   }
@@ -669,6 +678,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     target: to,
     toolContext: input.toolContext,
     accountId,
+    agentId,
     args: params,
     message,
     preferPresentation: true,
@@ -719,6 +729,28 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   });
   const mirrorMediaUrls =
     mergedMediaUrls.length > 0 ? mergedMediaUrls : mediaUrl ? [mediaUrl] : undefined;
+  const rawDelivery = params.delivery;
+  const delivery =
+    rawDelivery && typeof rawDelivery === "object" && !Array.isArray(rawDelivery)
+      ? (rawDelivery as ReplyPayloadDelivery)
+      : undefined;
+  const rawChannelData = params.channelData;
+  const channelData =
+    rawChannelData && typeof rawChannelData === "object" && !Array.isArray(rawChannelData)
+      ? (rawChannelData as Record<string, unknown>)
+      : undefined;
+  const presentation = normalizeMessagePresentation(params.presentation);
+  const interactive = normalizeInteractiveReply(params.interactive);
+  const payload: ReplyPayload = {
+    text: message,
+    ...(mediaUrl ? { mediaUrl } : {}),
+    ...(mergedMediaUrls.length ? { mediaUrls: mergedMediaUrls } : {}),
+    ...(asVoice ? { audioAsVoice: true } : {}),
+    ...(presentation ? { presentation } : {}),
+    ...(interactive ? { interactive } : {}),
+    ...(delivery ? { delivery } : {}),
+    ...(channelData ? { channelData } : {}),
+  };
   throwIfAborted(abortSignal);
 
   const gatewayPluginAction = await runGatewayPluginMessageActionOrNull({
@@ -779,6 +811,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     },
     to,
     message,
+    payload,
     mediaUrl: mediaUrl || undefined,
     mediaUrls: mergedMediaUrls.length ? mergedMediaUrls : undefined,
     asVoice,
@@ -825,6 +858,7 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
     target: to,
     toolContext: input.toolContext,
     accountId,
+    agentId,
     args: params,
     message: base,
     preferPresentation: false,
@@ -1009,6 +1043,11 @@ export async function runMessageAction(
   parseInteractiveParam(params);
 
   const action = input.action;
+  enforceMessageActionAllowlist({
+    cfg,
+    agentId: resolvedAgentId,
+    action,
+  });
   if (action === "broadcast") {
     return handleBroadcastAction(input, params);
   }
@@ -1096,6 +1135,7 @@ export async function runMessageAction(
     args: params,
     toolContext: input.toolContext,
     cfg,
+    agentId: resolvedAgentId,
   });
 
   if (action === "send" && hasPollCreationParams(params)) {

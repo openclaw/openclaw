@@ -64,7 +64,12 @@ const sendModuleMocks = vi.hoisted(() => {
         messageId: eventId ?? "unknown",
         roomId,
         primaryMessageId: eventId ?? "unknown",
-        messageIds: eventId ? [eventId] : [],
+        receipt: {
+          ...(eventId ? { primaryPlatformMessageId: eventId } : {}),
+          platformMessageIds: eventId ? [eventId] : [],
+          parts: eventId ? [{ platformMessageId: eventId, kind: "text" as const, index: 0 }] : [],
+          sentAt: 123,
+        },
       };
     },
   );
@@ -166,6 +171,18 @@ function createMockClient() {
   } as unknown as import("./sdk.js").MatrixClient;
 }
 
+function sentContentAt(callIndex: number): Record<string, unknown> {
+  const content = sendMessageMock.mock.calls[callIndex]?.[1];
+  if (!content || typeof content !== "object") {
+    throw new Error(`Expected sent content at call ${callIndex}`);
+  }
+  return content as Record<string, unknown>;
+}
+
+function expectLogContaining(log: ReturnType<typeof vi.fn>, fragment: string): void {
+  expect(log.mock.calls.map((call) => String(call[0])).join("\n")).toContain(fragment);
+}
+
 beforeAll(async () => {
   const runtimeModule = await import("../runtime.js");
   runtimeModule.setMatrixRuntime(runtimeStub);
@@ -202,9 +219,7 @@ describe("createMatrixDraftStream", () => {
     await stream.flush();
 
     expect(sendMessageMock).toHaveBeenCalledTimes(1);
-    expect(sendMessageMock.mock.calls[0]?.[1]).toMatchObject({
-      msgtype: "m.text",
-    });
+    expect(sentContentAt(0).msgtype).toBe("m.text");
     expect(stream.eventId()).toBe("$evt1");
   });
 
@@ -220,10 +235,8 @@ describe("createMatrixDraftStream", () => {
     await stream.flush();
 
     expect(sendMessageMock).toHaveBeenCalledTimes(1);
-    expect(sendMessageMock.mock.calls[0]?.[1]).toMatchObject({
-      msgtype: "m.notice",
-    });
-    expect(sendMessageMock.mock.calls[0]?.[1]).not.toHaveProperty("m.mentions");
+    expect(sentContentAt(0).msgtype).toBe("m.notice");
+    expect(sentContentAt(0)).not.toHaveProperty("m.mentions");
   });
 
   it("edits the message on subsequent quiet updates", async () => {
@@ -246,9 +259,10 @@ describe("createMatrixDraftStream", () => {
 
     // First call = initial send, second call = edit (both go through sendMessage)
     expect(sendMessageMock).toHaveBeenCalledTimes(2);
-    expect(sendMessageMock.mock.calls[1]?.[1]).toMatchObject({
+    expect(sentContentAt(1).msgtype).toBe("m.notice");
+    expect(sentContentAt(1)["m.new_content"]).toEqual({
       msgtype: "m.notice",
-      "m.new_content": { msgtype: "m.notice" },
+      body: "Hello world",
     });
   });
 
@@ -268,14 +282,12 @@ describe("createMatrixDraftStream", () => {
     // First update fires immediately (fresh throttle window), then AB/ABC
     // coalesce into a single edit with the latest text.
     expect(sendMessageMock).toHaveBeenCalledTimes(2);
-    expect(sendMessageMock.mock.calls[0][1]).toMatchObject({ body: "A" });
+    expect(sentContentAt(0).body).toBe("A");
     // Edit uses "* <text>" prefix per Matrix m.replace spec.
-    expect(sendMessageMock.mock.calls[1][1]).toMatchObject({ body: "* ABC" });
-    expect(sendMessageMock.mock.calls[0][1]).toMatchObject({ msgtype: "m.notice" });
-    expect(sendMessageMock.mock.calls[1][1]).toMatchObject({
-      msgtype: "m.notice",
-      "m.new_content": { msgtype: "m.notice" },
-    });
+    expect(sentContentAt(1).body).toBe("* ABC");
+    expect(sentContentAt(0).msgtype).toBe("m.notice");
+    expect(sentContentAt(1).msgtype).toBe("m.notice");
+    expect(sentContentAt(1)["m.new_content"]).toEqual({ msgtype: "m.notice", body: "ABC" });
   });
 
   it("skips no-op updates", async () => {
@@ -337,7 +349,7 @@ describe("createMatrixDraftStream", () => {
     await stream.stop();
 
     expect(sendMessageMock).toHaveBeenCalledTimes(1);
-    expect(sendMessageMock.mock.calls[0]?.[1]).toHaveProperty("org.matrix.msc4357.live");
+    expect(sendMessageMock.mock.calls.at(0)?.[1]).toHaveProperty("org.matrix.msc4357.live");
   });
 
   it("finalizeLive clears the live marker at most once", async () => {
@@ -355,7 +367,7 @@ describe("createMatrixDraftStream", () => {
     await stream.finalizeLive();
 
     expect(sendMessageMock).toHaveBeenCalledTimes(2);
-    expect(sendMessageMock.mock.calls[1]?.[1]).not.toHaveProperty("org.matrix.msc4357.live");
+    expect(sendMessageMock.mock.calls.at(1)?.[1]).not.toHaveProperty("org.matrix.msc4357.live");
   });
 
   it("marks live finalize failures for normal final delivery fallback", async () => {
@@ -412,7 +424,7 @@ describe("createMatrixDraftStream", () => {
     await stream.flush();
 
     // Should have logged the failure
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("send/edit failed"));
+    expectLogContaining(log, "send/edit failed");
 
     vi.advanceTimersByTime(1000);
 
@@ -459,7 +471,7 @@ describe("createMatrixDraftStream", () => {
 
     stream.update("Hello world");
     await stream.flush();
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("send/edit failed"));
+    expectLogContaining(log, "send/edit failed");
 
     vi.advanceTimersByTime(1000);
 
@@ -483,7 +495,7 @@ describe("createMatrixDraftStream", () => {
     await stream.flush();
 
     expect(sendMessageMock).toHaveBeenCalledTimes(1);
-    expect(sendMessageMock.mock.calls[0]?.[1]).toMatchObject({ body: "line 1\nline 2" });
+    expect(sentContentAt(0).body).toBe("line 1\nline 2");
   });
 
   it("falls back to normal delivery when preview text exceeds one Matrix event", async () => {
@@ -501,9 +513,7 @@ describe("createMatrixDraftStream", () => {
 
     expect(sendMessageMock).not.toHaveBeenCalled();
     expect(stream.eventId()).toBeUndefined();
-    expect(log).toHaveBeenCalledWith(
-      expect.stringContaining("preview exceeded single-event limit"),
-    );
+    expectLogContaining(log, "preview exceeded single-event limit");
   });
 
   it("discardPending cancels pending updates without creating another preview event", async () => {
@@ -539,8 +549,6 @@ describe("createMatrixDraftStream", () => {
     await stream.flush();
 
     expect(sendMessageMock).not.toHaveBeenCalled();
-    expect(log).toHaveBeenCalledWith(
-      expect.stringContaining("preview exceeded single-event limit"),
-    );
+    expectLogContaining(log, "preview exceeded single-event limit");
   });
 });

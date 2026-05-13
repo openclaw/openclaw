@@ -5,7 +5,7 @@ import {
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   isRetryableHeartbeatBusySkipReason,
 } from "../../infra/heartbeat-wake.js";
-import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
+import { DEFAULT_AGENT_ID, isSubagentSessionKey } from "../../routing/session-key.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import {
   completeTaskRunByRunId,
@@ -22,6 +22,7 @@ import {
 import { createCronExecutionId } from "../run-id.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
 import type {
+  CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
   CronDeliveryStatus,
   CronDeliveryTrace,
@@ -46,12 +47,15 @@ import {
 import { locked } from "./locked.js";
 import type { CronEvent, CronServiceState } from "./state.js";
 import { ensureLoaded, persist } from "./store.js";
-import { DEFAULT_JOB_TIMEOUT_MS, resolveCronJobTimeoutMs } from "./timeout-policy.js";
+import { resolveCronJobTimeoutMs } from "./timeout-policy.js";
 
 export { DEFAULT_JOB_TIMEOUT_MS } from "./timeout-policy.js";
 
 const MAX_TIMER_DELAY_MS = 60_000;
 const CRON_TIMEOUT_CLEANUP_GUARD_MS = 20_000;
+const CRON_AGENT_SETUP_WATCHDOG_MS = 60_000;
+const CRON_AGENT_PRE_EXECUTION_WATCHDOG_MS = 60_000;
+const CRON_AGENT_PRE_EXECUTION_MIN_WATCHDOG_MS = 1_000;
 
 /**
  * Minimum gap between consecutive fires of the same cron job.  This is a
@@ -115,7 +119,12 @@ export async function executeJobCoreWithTimeout(
 
   const runAbortController = new AbortController();
   let timeoutId: NodeJS.Timeout | undefined;
+  let setupTimeoutId: NodeJS.Timeout | undefined;
+  let preExecutionTimeoutId: NodeJS.Timeout | undefined;
   let activeExecution: CronAgentExecutionStarted | undefined;
+  let runnerStarted = false;
+  let executionStarted = false;
+  let timeoutReason: string | undefined;
   const timeoutMarker = Symbol("cron-timeout");
   let resolveTimeout: ((value: typeof timeoutMarker) => void) | undefined;
   const timeoutPromise = new Promise<typeof timeoutMarker>((resolve) => {
@@ -124,23 +133,82 @@ export async function executeJobCoreWithTimeout(
 
   const deferTimeoutUntilExecutionStart =
     job.sessionTarget !== "main" && job.payload.kind === "agentTurn";
+  const triggerTimeout = (reason: string) => {
+    if (runAbortController.signal.aborted) {
+      return;
+    }
+    timeoutReason = reason;
+    runAbortController.abort(reason);
+    resolveTimeout?.(timeoutMarker);
+  };
   const startTimeout = () => {
     if (!timeoutId) {
       timeoutId = setTimeout(() => {
-        runAbortController.abort(timeoutErrorMessage());
-        resolveTimeout?.(timeoutMarker);
+        triggerTimeout(timeoutErrorMessage(activeExecution));
       }, jobTimeoutMs);
     }
   };
+  const startSetupTimeout = () => {
+    if (setupTimeoutId || runnerStarted) {
+      return;
+    }
+    setupTimeoutId = setTimeout(() => {
+      if (!runnerStarted) {
+        triggerTimeout(setupTimeoutErrorMessage(activeExecution));
+      }
+    }, CRON_AGENT_SETUP_WATCHDOG_MS);
+  };
+  const clearSetupTimeout = () => {
+    if (!setupTimeoutId) {
+      return;
+    }
+    clearTimeout(setupTimeoutId);
+    setupTimeoutId = undefined;
+  };
+  const startPreExecutionTimeout = () => {
+    if (preExecutionTimeoutId || executionStarted) {
+      return;
+    }
+    preExecutionTimeoutId = setTimeout(() => {
+      if (!executionStarted) {
+        triggerTimeout(preExecutionTimeoutErrorMessage(activeExecution));
+      }
+    }, resolveCronAgentPreExecutionWatchdogMs(jobTimeoutMs));
+  };
+  const clearPreExecutionTimeout = () => {
+    if (!preExecutionTimeoutId) {
+      return;
+    }
+    clearTimeout(preExecutionTimeoutId);
+    preExecutionTimeoutId = undefined;
+  };
+  const noteExecutionProgress = (info?: CronAgentExecutionStarted) => {
+    if (info) {
+      activeExecution = { ...activeExecution, ...info };
+      if (isCronAgentExecutionStarted(info)) {
+        executionStarted = true;
+        clearPreExecutionTimeout();
+      }
+    }
+  };
   const onExecutionStarted = (info?: CronAgentExecutionStarted) => {
-    activeExecution = info ?? activeExecution;
+    runnerStarted = true;
+    noteExecutionProgress(info);
+    clearSetupTimeout();
     startTimeout();
+    startPreExecutionTimeout();
+  };
+  const onExecutionPhase = (info: CronAgentExecutionPhaseUpdate) => {
+    noteExecutionProgress(info);
   };
   const corePromise = executeJobCore(state, job, runAbortController.signal, {
     onExecutionStarted: deferTimeoutUntilExecutionStart ? onExecutionStarted : undefined,
+    onExecutionPhase: deferTimeoutUntilExecutionStart ? onExecutionPhase : undefined,
   });
   if (!deferTimeoutUntilExecutionStart) {
     startTimeout();
+  } else {
+    startSetupTimeout();
   }
   void corePromise.catch((err) => {
     if (runAbortController.signal.aborted) {
@@ -156,10 +224,11 @@ export async function executeJobCoreWithTimeout(
       return first;
     }
     await cleanupTimedOutCronAgentRun(state, job, jobTimeoutMs, activeExecution);
+    const error = timeoutReason ?? timeoutErrorMessage(activeExecution);
     return {
       status: "error",
-      error: timeoutErrorMessage(),
-      diagnostics: createCronRunDiagnosticsFromError("cron-setup", timeoutErrorMessage(), {
+      error,
+      diagnostics: createCronRunDiagnosticsFromError("cron-setup", error, {
         nowMs: state.deps.nowMs,
       }),
     };
@@ -167,6 +236,8 @@ export async function executeJobCoreWithTimeout(
     if (timeoutId) {
       clearTimeout(timeoutId);
     }
+    clearSetupTimeout();
+    clearPreExecutionTimeout();
   }
 }
 
@@ -205,8 +276,63 @@ function resolveRunConcurrency(state: CronServiceState): number {
   }
   return Math.max(1, Math.floor(raw));
 }
-function timeoutErrorMessage(): string {
-  return "cron: job execution timed out";
+function timeoutErrorMessage(execution?: CronAgentExecutionStarted): string {
+  const phase = formatCronAgentExecutionPhase(execution);
+  if (!phase) {
+    return "cron: job execution timed out";
+  }
+  return `cron: job execution timed out (last phase: ${phase})`;
+}
+
+function setupTimeoutErrorMessage(execution?: CronAgentExecutionStarted): string {
+  const phase = formatCronAgentExecutionPhase(execution);
+  if (!phase) {
+    return "cron: isolated agent setup timed out before runner start";
+  }
+  return `cron: isolated agent setup timed out before runner start (last phase: ${phase})`;
+}
+
+function preExecutionTimeoutErrorMessage(execution?: CronAgentExecutionStarted): string {
+  const phase = formatCronAgentExecutionPhase(execution);
+  if (!phase) {
+    return "cron: isolated agent run stalled before execution start";
+  }
+  return `cron: isolated agent run stalled before execution start (last phase: ${phase})`;
+}
+
+function formatCronAgentExecutionPhase(execution?: CronAgentExecutionStarted): string | undefined {
+  return execution?.phase?.replaceAll("_", "-");
+}
+
+function isCronAgentExecutionStarted(info: CronAgentExecutionStarted): boolean {
+  if (info.firstModelCallStarted) {
+    return true;
+  }
+  switch (info.phase) {
+    case "turn_accepted":
+    case "process_spawned":
+    case "tool_execution_started":
+    case "assistant_output_started":
+    case "model_call_started":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function resolveCronAgentPreExecutionWatchdogMs(jobTimeoutMs: number): number {
+  return Math.max(
+    CRON_AGENT_PRE_EXECUTION_MIN_WATCHDOG_MS,
+    Math.min(CRON_AGENT_PRE_EXECUTION_WATCHDOG_MS, Math.floor(jobTimeoutMs / 2)),
+  );
+}
+
+function abortErrorMessage(signal?: AbortSignal): string {
+  const reason = signal?.reason;
+  if (typeof reason === "string" && reason.trim()) {
+    return reason.trim();
+  }
+  return timeoutErrorMessage();
 }
 
 function isAbortError(err: unknown): boolean {
@@ -311,6 +437,10 @@ function isTransientCronError(error: string | undefined, retryOn?: CronRetryOn[]
     return false;
   }
   const keys = retryOn?.length ? retryOn : (Object.keys(TRANSIENT_PATTERNS) as CronRetryOn[]);
+  const classified = resolveFailoverReasonFromError(error);
+  if (classified && keys.includes(classified as CronRetryOn)) {
+    return true;
+  }
   return keys.some((k) => TRANSIENT_PATTERNS[k]?.test(error));
 }
 
@@ -555,6 +685,17 @@ export function applyJobResult(
     result.status === "error" && typeof result.error === "string"
       ? (resolveFailoverReasonFromError(result.error) ?? undefined)
       : undefined;
+  if (result.status === "error") {
+    state.deps.log.warn(
+      {
+        jobId: job.id,
+        jobName: job.name,
+        error: result.error,
+        diagnosticsSummary: job.state.lastDiagnosticSummary,
+      },
+      "cron: job run returned error status",
+    );
+  }
   const deliveryState = resolveDeliveryState({ job, delivered: result.delivered });
   job.state.lastDelivered = deliveryState.delivered;
   job.state.lastDeliveryStatus = deliveryState.status;
@@ -1312,8 +1453,9 @@ async function applyStartupCatchupOutcomes(
 
     // Preserve any new past-due nextRunAtMs values that became due while
     // startup catch-up was running. They should execute on a future tick
-    // instead of being silently advanced.
-    recomputeNextRunsForMaintenance(state);
+    // instead of being silently advanced. Future repair is disabled here so
+    // startup overflow deferrals survive until their staggered catch-up tick.
+    recomputeNextRunsForMaintenance(state, { repairFutureCronNextRunAtMs: false });
     await persist(state);
   });
 }
@@ -1324,6 +1466,7 @@ export async function executeJobCore(
   abortSignal?: AbortSignal,
   options?: {
     onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
+    onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
   },
 ): Promise<
   CronRunOutcome &
@@ -1335,7 +1478,7 @@ export async function executeJobCore(
 > {
   const resolveAbortError = () => ({
     status: "error" as const,
-    error: timeoutErrorMessage(),
+    error: abortErrorMessage(abortSignal),
   });
   const waitWithAbort = async (ms: number) => {
     if (!abortSignal) {
@@ -1486,6 +1629,7 @@ async function executeDetachedCronJob(
   resolveAbortError: () => { status: "error"; error: string },
   options?: {
     onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
+    onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
   },
 ): Promise<
   CronRunOutcome &
@@ -1521,13 +1665,15 @@ async function executeDetachedCronJob(
     message: job.payload.message,
     abortSignal,
     onExecutionStarted: options?.onExecutionStarted,
+    onExecutionPhase: options?.onExecutionPhase,
   });
 
   if (abortSignal?.aborted) {
+    const error = abortErrorMessage(abortSignal);
     return {
       status: "error",
-      error: timeoutErrorMessage(),
-      diagnostics: createCronRunDiagnosticsFromError("cron-setup", timeoutErrorMessage(), {
+      error,
+      diagnostics: createCronRunDiagnosticsFromError("cron-setup", error, {
         nowMs: state.deps.nowMs,
       }),
     };
@@ -1635,15 +1781,43 @@ function emitJobFinished(
 
 export function wake(
   state: CronServiceState,
-  opts: { mode: "now" | "next-heartbeat"; text: string },
+  opts: { mode: "now" | "next-heartbeat"; text: string; sessionKey?: string },
 ) {
   const text = opts.text.trim();
   if (!text) {
     return { ok: false } as const;
   }
-  state.deps.enqueueSystemEvent(text);
+  const sessionKey = opts.sessionKey?.trim() || undefined;
+  if (sessionKey && isSubagentSessionKey(sessionKey)) {
+    return { ok: false, reason: "unwakeable-session-key" } as const;
+  }
+  state.deps.enqueueSystemEvent(text, sessionKey ? { sessionKey } : undefined);
   if (opts.mode === "now") {
-    state.deps.requestHeartbeat({ source: "manual", intent: "immediate", reason: "wake" });
+    state.deps.requestHeartbeat({
+      source: "manual",
+      intent: "immediate",
+      reason: "wake",
+      ...(sessionKey ? { sessionKey } : {}),
+    });
+  } else if (sessionKey) {
+    // next-heartbeat + sessionKey still needs a targeted immediate wake.
+    // Reasons:
+    //   1. The regularly-scheduled heartbeat fires for the agent's main
+    //      session, not the supplied sessionKey, so it never peeks the queue
+    //      we just enqueued — the event would sit stranded indefinitely.
+    //   2. An `intent: "event"` wake gets deferred by heartbeat-runner as
+    //      not-due and is not retried (only busy-skips are), so it cannot
+    //      stand in for the regular cadence either.
+    // Effectively, --session-key collapses --mode now and --mode next-heartbeat
+    // into the same targeted-immediate behavior — this matches the documented
+    // user intent (target a specific session for relay) better than silently
+    // dropping the event.
+    state.deps.requestHeartbeat({
+      source: "manual",
+      intent: "immediate",
+      reason: "wake",
+      sessionKey,
+    });
   }
   return { ok: true } as const;
 }

@@ -14,7 +14,6 @@ const readConfigFileSnapshotForWrite = vi.fn().mockResolvedValue({
   writeOptions: {},
 });
 const setRuntimeConfigSnapshot = vi.fn();
-const resolveOpenClawAgentDir = vi.fn().mockReturnValue("/tmp/openclaw-agent");
 const ensureAuthProfileStore = vi.fn().mockReturnValue({ version: 1, profiles: {} });
 const listProfilesForProvider = vi.fn().mockReturnValue([]);
 const resolveEnvApiKey = vi.fn().mockReturnValue(undefined);
@@ -53,10 +52,6 @@ vi.mock("./models/load-config.js", () => ({
       diagnostics: [],
     };
   }),
-}));
-
-vi.mock("../agents/agent-paths.js", () => ({
-  resolveOpenClawAgentDir,
 }));
 
 vi.mock("../agents/auth-profiles/profile-list.js", () => ({
@@ -164,13 +159,38 @@ function makeRuntime() {
   };
 }
 
+function firstMockArg(mockFn: ReturnType<typeof vi.fn>, label: string): unknown {
+  const call = mockFn.mock.calls[0];
+  if (!call) {
+    throw new Error(`Expected ${label} call`);
+  }
+  return call.at(0);
+}
+
+function runtimeLogText(runtime: ReturnType<typeof makeRuntime>): string {
+  const value = firstMockArg(runtime.log, "runtime.log");
+  if (typeof value !== "string") {
+    throw new Error("Expected runtime.log text");
+  }
+  return value;
+}
+
+function runtimeErrorText(runtime: ReturnType<typeof makeRuntime>): string {
+  const value = firstMockArg(runtime.error, "runtime.error");
+  if (typeof value !== "string") {
+    throw new Error("Expected runtime.error text");
+  }
+  return value;
+}
+
 function expectModelRegistryUnavailable(
   runtime: ReturnType<typeof makeRuntime>,
   expectedDetail: string,
 ) {
   expect(runtime.error).toHaveBeenCalledTimes(1);
-  expect(runtime.error.mock.calls[0]?.[0]).toContain("Model registry unavailable:");
-  expect(runtime.error.mock.calls[0]?.[0]).toContain(expectedDetail);
+  const errorText = runtimeErrorText(runtime);
+  expect(errorText).toContain("Model registry unavailable:");
+  expect(errorText).toContain(expectedDetail);
   expect(runtime.log).not.toHaveBeenCalled();
   expect(process.exitCode).toBe(1);
 }
@@ -190,6 +210,8 @@ async function loadSourceConfigSnapshotForTest(fallback: unknown): Promise<unkno
 beforeEach(() => {
   previousExitCode = process.exitCode;
   process.exitCode = undefined;
+  modelRegistryState.models = [];
+  modelRegistryState.available = [];
   modelRegistryState.getAllError = undefined;
   modelRegistryState.getAvailableError = undefined;
   modelRegistryState.findError = undefined;
@@ -315,7 +337,7 @@ describe("models list/status", () => {
 
   function parseJsonLog(runtime: ReturnType<typeof makeRuntime>) {
     expect(runtime.log).toHaveBeenCalledTimes(1);
-    return JSON.parse(String(runtime.log.mock.calls[0]?.[0]));
+    return JSON.parse(runtimeLogText(runtime));
   }
 
   async function expectZaiProviderFilter(provider: string) {
@@ -400,7 +422,7 @@ describe("models list/status", () => {
     await modelsListCommand({ plain: true }, runtime);
 
     expect(runtime.log).toHaveBeenCalledTimes(1);
-    expect(runtime.log.mock.calls[0]?.[0]).toBe("zai/glm-4.7");
+    expect(runtimeLogText(runtime)).toBe("zai/glm-4.7");
   });
 
   it("models list plain keeps canonical OpenRouter native ids", async () => {
@@ -423,7 +445,7 @@ describe("models list/status", () => {
     await modelsListCommand({ plain: true }, runtime);
 
     expect(runtime.log).toHaveBeenCalledTimes(1);
-    expect(runtime.log.mock.calls[0]?.[0]).toBe("openrouter/hunter-alpha");
+    expect(runtimeLogText(runtime)).toBe("openrouter/hunter-alpha");
   });
 
   it.each(["z.ai", "Z.AI", "z-ai"] as const)(
@@ -496,12 +518,10 @@ describe("models list/status", () => {
     }
 
     const payload = parseJsonLog(runtime);
-    expect(payload.models).toEqual([
-      expect.objectContaining({
-        key: "workspace-cloud/model-a",
-        available: true,
-      }),
-    ]);
+    expect(payload.models).toHaveLength(1);
+    const model = payload.models[0];
+    expect(model.key).toBe("workspace-cloud/model-a");
+    expect(model.available).toBe(true);
   });
 
   it("models list all includes unauthenticated provider catalog rows", async () => {
@@ -510,18 +530,19 @@ describe("models list/status", () => {
     loadProviderCatalogModelsForList.mockResolvedValueOnce([MOONSHOT_MODEL]);
     const runtime = makeRuntime();
 
-    await modelsListCommand({ all: true, provider: "moonshot", json: true }, runtime);
+    await withEnvAsync(
+      { KIMI_API_KEY: undefined, KIMICODE_API_KEY: undefined, MOONSHOT_API_KEY: undefined },
+      () => modelsListCommand({ all: true, provider: "moonshot", json: true }, runtime),
+    );
 
     const payload = parseJsonLog(runtime);
     expect(loadModelCatalog).not.toHaveBeenCalled();
-    expect(payload.models).toEqual([
-      expect.objectContaining({
-        key: "moonshot/kimi-k2.6",
-        name: "Kimi K2.6",
-        available: false,
-        missing: false,
-      }),
-    ]);
+    expect(payload.models).toHaveLength(1);
+    const model = payload.models[0];
+    expect(model.key).toBe("moonshot/kimi-k2.6");
+    expect(model.name).toBe("Kimi K2.6");
+    expect(model.available).toBe(false);
+    expect(model.missing).toBe(false);
   });
 
   it("models list rejects provider display labels", async () => {
@@ -682,16 +703,14 @@ describe("models list/status", () => {
     await modelsListCommand({ all: true, json: true }, runtime);
 
     const payload = parseJsonLog(runtime);
-    expect(payload.models).toEqual([
-      expect.objectContaining({
-        key: "custom-proxy/custom-model",
-        name: "Custom Model",
-        missing: false,
-      }),
-    ]);
+    expect(payload.models).toHaveLength(1);
+    const model = payload.models[0];
+    expect(model.key).toBe("custom-proxy/custom-model");
+    expect(model.name).toBe("Custom Model");
+    expect(model.missing).toBe(false);
   });
 
-  it("toModelRow does not crash without cfg/authStore when availability is undefined", async () => {
+  it("toModelRow marks unavailable when cfg/authStore and availability are undefined", () => {
     const row = toModelRow({
       model: makeGoogleAntigravityTemplate(
         "claude-opus-4-6-thinking",

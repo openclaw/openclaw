@@ -4,6 +4,34 @@
     "target": "OpenClaw"
   },
   {
+    "source": "iMessage",
+    "target": "iMessage"
+  },
+  {
+    "source": "Coming from BlueBubbles",
+    "target": "Coming from BlueBubbles"
+  },
+  {
+    "source": "BlueBubbles removal and the imsg iMessage path",
+    "target": "BlueBubbles removal and the imsg iMessage path"
+  },
+  {
+    "source": "BlueBubbles",
+    "target": "BlueBubbles"
+  },
+  {
+    "source": "Configuration reference - iMessage",
+    "target": "Configuration reference - iMessage"
+  },
+  {
+    "source": "Pairing",
+    "target": "配对"
+  },
+  {
+    "source": "Channel Routing",
+    "target": "频道路由"
+  },
+  {
     "source": "ClawHub",
     "target": "ClawHub"
   },
@@ -26,6 +54,38 @@
   {
     "source": "OpenClaw App SDK API design",
     "target": "OpenClaw 应用 SDK API 设计"
+  },
+  {
+    "source": "Message lifecycle refactor",
+    "target": "消息生命周期重构"
+  },
+  {
+    "source": "ACP lifecycle refactor",
+    "target": "ACP 生命周期重构"
+  },
+  {
+    "source": "Channel message API",
+    "target": "频道消息 API"
+  },
+  {
+    "source": "Channel ingress API",
+    "target": "频道入口 API"
+  },
+  {
+    "source": "Channel access cleanup",
+    "target": "频道访问清理"
+  },
+  {
+    "source": "Ingress core shrink plan",
+    "target": "入口核心精简计划"
+  },
+  {
+    "source": "Ingress core shrink",
+    "target": "入口核心精简"
+  },
+  {
+    "source": "Talk mode",
+    "target": "Talk 模式"
   },
   {
     "source": "Azure Speech",
@@ -52,6 +112,10 @@
     "target": "Gateway RPC 参考"
   },
   {
+    "source": "Secure file operations",
+    "target": "安全文件操作"
+  },
+  {
     "source": "Sessions",
     "target": "会话"
   },
@@ -70,6 +134,26 @@
   {
     "source": "Codex harness",
     "target": "Codex harness"
+  },
+  {
+    "source": "Codex harness reference",
+    "target": "Codex harness reference"
+  },
+  {
+    "source": "Codex harness runtime",
+    "target": "Codex harness runtime"
+  },
+  {
+    "source": "Native Codex plugins",
+    "target": "Native Codex plugins"
+  },
+  {
+    "source": "Codex Computer Use",
+    "target": "Codex Computer Use"
+  },
+  {
+    "source": "Diagnostics export",
+    "target": "诊断导出"
   },
   {
     "source": "Agent harness plugins",
@@ -214,6 +298,50 @@
   {
     "source": "Capability Cookbook",
     "target": "能力扩展手册"
+  },
+  {
+    "source": "WhatsApp group messages",
+    "target": "WhatsApp 群组消息"
+  },
+  {
+    "source": "Oracle Cloud",
+    "target": "Oracle Cloud"
+  },
+  {
+    "source": "Install overview",
+    "target": "安装概览"
+  },
+  {
+    "source": "VPS hosting",
+    "target": "VPS 托管"
+  },
+  {
+    "source": "Linux server",
+    "target": "Linux 服务器"
+  },
+  {
+    "source": "Platforms",
+    "target": "平台"
+  },
+  {
+    "source": "Adding capabilities (redirect)",
+    "target": "添加能力（重定向）"
+  },
+  {
+    "source": "Adding capabilities (contributor guide)",
+    "target": "添加能力（贡献者指南）"
+  },
+  {
+    "source": "Plugin internals",
+    "target": "插件内部机制"
+  },
+  {
+    "source": "SDK overview",
+    "target": "SDK 概览"
+  },
+  {
+    "source": "Creating skills",
+    "target": "创建技能"
   },
   {
     "source": "Setup Wizard Reference",
@@ -524,6 +652,26 @@
     "target": "管理插件"
   },
   {
+    "source": "Plugin path ownership",
+    "target": "插件路径所有权"
+  },
+  {
+    "source": "Path",
+    "target": "路径"
+  },
+  {
+    "source": "OC Path plugin",
+    "target": "OC Path 插件"
+  },
+  {
+    "source": "CLI reference",
+    "target": "CLI 参考"
+  },
+  {
+    "source": "Docker permissions",
+    "target": "Docker 权限"
+  },
+  {
     "source": "Plugin manifest",
     "target": "插件清单"
   },
@@ -586,6 +734,10 @@
   {
     "source": "Migrate",
     "target": "迁移"
+  },
+  {
+    "source": "Migrate CLI",
+    "target": "迁移 CLI"
   },
   {
     "source": "Migrating",
@@ -664,6 +816,10 @@
     "target": "Matrix QA"
   },
   {
+    "source": "Matrix presentation metadata",
+    "target": "Matrix 呈现元数据"
+  },
+  {
     "source": "QA overview",
     "target": "QA overview"
   },
@@ -676,12 +832,28 @@
     "target": "富输出协议"
   },
   {
+    "source": "Trajectory export",
+    "target": "轨迹导出"
+  },
+  {
     "source": "Tencent Cloud (TokenHub)",
     "target": "腾讯云（TokenHub）"
   },
   {
     "source": "Codex Harness Context Engine Port",
     "target": "Codex Harness Context Engine Port"
+  },
+  {
+    "source": "Plugin refactor plan",
+    "target": "插件重构计划"
+  },
+  {
+    "source": "Retry policy",
+    "target": "重试策略"
+  },
+  {
+    "source": "Channel turn kernel",
+    "target": "频道轮次内核"
   },
   {
     "source": "/gateway/configuration#strict-validation",
@@ -694,5 +866,89 @@
   {
     "source": "/cli/config",
     "target": "/cli/config"
+  },
+  {
+    "source": "Automation",
+    "target": "自动化"
+  },
+  {
+    "source": "Tools, skills, and plugins",
+    "target": "工具、技能和插件"
+  },
+  {
+    "source": "Capabilities",
+    "target": "能力"
+  },
+  {
+    "source": "Overview",
+    "target": "概览"
+  },
+  {
+    "source": "Tools, skills, and plugins overview",
+    "target": "工具、技能和插件概览"
+  },
+  {
+    "source": "Tools overview",
+    "target": "工具概览"
+  },
+  {
+    "source": "Automation overview",
+    "target": "自动化概览"
+  },
+  {
+    "source": "Sub-agents",
+    "target": "子智能体"
+  },
+  {
+    "source": "ACP agents",
+    "target": "ACP 智能体"
+  },
+  {
+    "source": "Tools and custom providers",
+    "target": "工具和自定义提供商"
+  },
+  {
+    "source": "Exec approvals",
+    "target": "Exec 审批"
+  },
+  {
+    "source": "Elevated exec",
+    "target": "提升权限的 Exec"
+  },
+  {
+    "source": "Sandbox vs tool policy vs elevated",
+    "target": "沙箱、工具策略和提升权限"
+  },
+  {
+    "source": "Per-agent sandbox and tool restrictions",
+    "target": "按 Agent 配置的沙箱和工具限制"
+  },
+  {
+    "source": "Agents",
+    "target": "智能体"
+  },
+  {
+    "source": "fs-safe Cleanup Plan",
+    "target": "fs-safe Cleanup Plan"
+  },
+  {
+    "source": "Tool Search",
+    "target": "工具搜索"
+  },
+  {
+    "source": "Tools and plugins",
+    "target": "工具和插件"
+  },
+  {
+    "source": "Multi-agent sandbox and tools",
+    "target": "多 Agent 沙盒和工具"
+  },
+  {
+    "source": "Exec tool",
+    "target": "Exec 工具"
+  },
+  {
+    "source": "ACP agents setup",
+    "target": "ACP Agents 设置"
   }
 ]

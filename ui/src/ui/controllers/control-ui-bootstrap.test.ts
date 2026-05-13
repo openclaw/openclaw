@@ -4,6 +4,14 @@ import { describe, expect, it, vi } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../../src/gateway/control-ui-contract.js";
 import { loadControlUiBootstrapConfig } from "./control-ui-bootstrap.ts";
 
+function requireFetchCall(fetchMock: ReturnType<typeof vi.fn>, index = 0) {
+  const call = fetchMock.mock.calls[index] as [string, RequestInit] | undefined;
+  if (!call) {
+    throw new Error(`expected fetch call #${index + 1}`);
+  }
+  return { url: call[0], init: call[1], headers: call[1].headers as Record<string, string> };
+}
+
 describe("loadControlUiBootstrapConfig", () => {
   it("loads assistant identity from the bootstrap endpoint", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
@@ -42,10 +50,9 @@ describe("loadControlUiBootstrapConfig", () => {
 
     await loadControlUiBootstrapConfig(state);
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      `/openclaw${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`,
-      expect.objectContaining({ method: "GET" }),
-    );
+    const fetchCall = requireFetchCall(fetchMock);
+    expect(fetchCall.url).toBe(`/openclaw${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`);
+    expect(fetchCall.init.method).toBe("GET");
     expect(state.assistantName).toBe("Ops");
     expect(state.assistantAvatar).toBe("O");
     expect(state.assistantAvatarSource).toBe("avatars/ops.png");
@@ -213,10 +220,9 @@ describe("loadControlUiBootstrapConfig", () => {
 
     await loadControlUiBootstrapConfig(state);
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
-      expect.objectContaining({ method: "GET" }),
-    );
+    const fetchCall = requireFetchCall(fetchMock);
+    expect(fetchCall.url).toBe(CONTROL_UI_BOOTSTRAP_CONFIG_PATH);
+    expect(fetchCall.init.method).toBe("GET");
     expect(state.assistantName).toBe("Assistant");
     expect(state.embedSandboxMode).toBe("scripts");
     expect(state.allowExternalEmbedUrls).toBe(false);
@@ -241,10 +247,9 @@ describe("loadControlUiBootstrapConfig", () => {
 
     await loadControlUiBootstrapConfig(state);
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      `/openclaw${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`,
-      expect.objectContaining({ method: "GET" }),
-    );
+    const fetchCall = requireFetchCall(fetchMock);
+    expect(fetchCall.url).toBe(`/openclaw${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`);
+    expect(fetchCall.init.method).toBe("GET");
 
     vi.unstubAllGlobals();
   });
@@ -267,16 +272,11 @@ describe("loadControlUiBootstrapConfig", () => {
 
     await loadControlUiBootstrapConfig(state);
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      `/openclaw${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`,
-      expect.objectContaining({
-        method: "GET",
-        headers: expect.objectContaining({
-          Accept: "application/json",
-          Authorization: "Bearer session-token",
-        }),
-      }),
-    );
+    const fetchCall = requireFetchCall(fetchMock);
+    expect(fetchCall.url).toBe(`/openclaw${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`);
+    expect(fetchCall.init.method).toBe("GET");
+    expect(fetchCall.headers.Accept).toBe("application/json");
+    expect(fetchCall.headers.Authorization).toBe("Bearer session-token");
 
     vi.unstubAllGlobals();
   });
@@ -316,14 +316,10 @@ describe("loadControlUiBootstrapConfig", () => {
     await loadControlUiBootstrapConfig(state);
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    const [, firstInit] = fetchMock.mock.calls[0] ?? [];
-    const [, secondInit] = fetchMock.mock.calls[1] ?? [];
-    expect((firstInit?.headers as Record<string, string> | undefined)?.Authorization).toBe(
-      "Bearer stale-token",
-    );
-    expect((secondInit?.headers as Record<string, string> | undefined)?.Authorization).toBe(
-      "Bearer fresh-password",
-    );
+    const firstFetchCall = requireFetchCall(fetchMock, 0);
+    const secondFetchCall = requireFetchCall(fetchMock, 1);
+    expect(firstFetchCall.headers.Authorization).toBe("Bearer stale-token");
+    expect(secondFetchCall.headers.Authorization).toBe("Bearer fresh-password");
     expect(state.assistantName).toBe("Ops");
     expect(state.serverVersion).toBe("2026.4.22");
 
@@ -373,17 +369,11 @@ describe("loadControlUiBootstrapConfig", () => {
 
     await loadControlUiBootstrapConfig(state);
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      `//evil.example${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`,
-      expect.objectContaining({
-        method: "GET",
-        headers: expect.objectContaining({
-          Accept: "application/json",
-        }),
-      }),
-    );
-    const [, init] = fetchMock.mock.calls[0] ?? [];
-    expect((init?.headers as Record<string, string> | undefined)?.Authorization).toBeUndefined();
+    const fetchCall = requireFetchCall(fetchMock);
+    expect(fetchCall.url).toBe(`//evil.example${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`);
+    expect(fetchCall.init.method).toBe("GET");
+    expect(fetchCall.headers.Accept).toBe("application/json");
+    expect(fetchCall.headers.Authorization).toBeUndefined();
 
     vi.unstubAllGlobals();
   });

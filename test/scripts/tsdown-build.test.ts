@@ -7,12 +7,27 @@ import {
   createTsdownOutputScanner,
   pruneSourceCheckoutBundledPluginNodeModules,
   pruneStaleRootChunkFiles,
+  pruneUntrackedGeneratedSourceDeclarations,
   resolveTsdownBuildInvocation,
   runTsdownBuildInvocation,
 } from "../../scripts/tsdown-build.mjs";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
+
+async function expectPathMissing(targetPath: string) {
+  let statError: unknown;
+  try {
+    await fsPromises.stat(targetPath);
+  } catch (error) {
+    statError = error;
+  }
+  expect(statError).toBeInstanceOf(Error);
+  if (!(statError instanceof Error)) {
+    throw new Error("expected missing path error");
+  }
+  expect(Reflect.get(statError, "code")).toBe("ENOENT");
+}
 
 describe("resolveTsdownBuildInvocation", () => {
   it("routes Windows tsdown builds through the pnpm runner instead of shell=true", () => {
@@ -39,9 +54,19 @@ describe("resolveTsdownBuildInvocation", () => {
         stdio: ["ignore", "pipe", "pipe"],
         shell: false,
         windowsVerbatimArguments: undefined,
-        env: {},
+        env: { NODE_OPTIONS: "--max-old-space-size=6144" },
       },
     });
+  });
+
+  it("preserves explicit tsdown heap settings", () => {
+    const result = resolveTsdownBuildInvocation({
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=8192" },
+    });
+
+    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=8192");
   });
 
   it("keeps source-checkout prune best-effort", () => {
@@ -52,11 +77,11 @@ describe("resolveTsdownBuildInvocation", () => {
       throw new Error("locked");
     });
 
-    expect(() =>
+    expect(
       pruneSourceCheckoutBundledPluginNodeModules({
         cwd: process.cwd(),
       }),
-    ).not.toThrow();
+    ).toBeUndefined();
 
     expect(warn).toHaveBeenCalledWith(
       "tsdown: could not prune bundled plugin source node_modules: Error: locked",
@@ -97,13 +122,9 @@ describe("resolveTsdownBuildInvocation", () => {
     await expect(
       fsPromises.readFile(path.join(distRuntimeDir, "heartbeat-runner.runtime.js"), "utf8"),
     ).resolves.toBe("alias\n");
-    await expect(fsPromises.stat(path.join(distDir, "delegate-BPjCe4gC.js"))).rejects.toThrow();
-    await expect(
-      fsPromises.stat(path.join(distDir, "compact.runtime-2DiEmVcA.js")),
-    ).rejects.toThrow();
-    await expect(
-      fsPromises.stat(path.join(distRuntimeDir, "heartbeat-runner.runtime-fspOEj_1.js")),
-    ).rejects.toThrow();
+    await expectPathMissing(path.join(distDir, "delegate-BPjCe4gC.js"));
+    await expectPathMissing(path.join(distDir, "compact.runtime-2DiEmVcA.js"));
+    await expectPathMissing(path.join(distRuntimeDir, "heartbeat-runner.runtime-fspOEj_1.js"));
   });
 
   it("cleans tsdown output roots before using tsdown --no-clean", async () => {
@@ -123,10 +144,41 @@ describe("resolveTsdownBuildInvocation", () => {
 
     cleanTsdownOutputRoots({ cwd: rootDir });
 
-    await expect(fsPromises.stat(distFile)).rejects.toThrow();
-    await expect(fsPromises.stat(pluginGeneratedFile)).rejects.toThrow();
-    await expect(fsPromises.stat(path.join(rootDir, "dist-runtime"))).rejects.toThrow();
+    await expectPathMissing(distFile);
+    await expectPathMissing(pluginGeneratedFile);
+    await expectPathMissing(path.join(rootDir, "dist-runtime"));
     await expect(fsPromises.readFile(unrelatedFile, "utf8")).resolves.toBe("keep\n");
+  });
+
+  it("prunes untracked generated declaration files that shadow source entries", async () => {
+    const rootDir = createTempDir("openclaw-tsdown-source-dts-");
+    const signalDir = path.join(rootDir, "extensions", "signal");
+    const signalSrcDir = path.join(signalDir, "src");
+    await fsPromises.mkdir(signalSrcDir, { recursive: true });
+    await fsPromises.writeFile(path.join(signalDir, "api.ts"), "export {};\n");
+    await fsPromises.writeFile(path.join(signalDir, "api.d.ts"), "export {};\n");
+    await fsPromises.writeFile(path.join(signalSrcDir, "probe.ts"), "export {};\n");
+    await fsPromises.writeFile(path.join(signalSrcDir, "probe.d.ts"), "export {};\n");
+    await fsPromises.writeFile(
+      path.join(signalSrcDir, "ambient.d.ts"),
+      "declare const x: string;\n",
+    );
+
+    const removed = pruneUntrackedGeneratedSourceDeclarations({
+      cwd: rootDir,
+      spawnSync: () => ({
+        status: 0,
+        stdout:
+          "extensions/signal/api.d.ts\nextensions/signal/src/probe.d.ts\nextensions/signal/src/ambient.d.ts\n",
+      }),
+    });
+
+    expect(removed).toBe(2);
+    await expectPathMissing(path.join(signalDir, "api.d.ts"));
+    await expectPathMissing(path.join(signalSrcDir, "probe.d.ts"));
+    await expect(
+      fsPromises.readFile(path.join(signalSrcDir, "ambient.d.ts"), "utf8"),
+    ).resolves.toBe("declare const x: string;\n");
   });
 });
 

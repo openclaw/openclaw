@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { EmbeddedPiQueueMessageOutcome } from "../../agents/pi-embedded-runner/runs.js";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
@@ -10,7 +11,14 @@ const abortEmbeddedPiRunMock = vi.fn();
 const compactEmbeddedPiSessionMock = vi.fn();
 const isEmbeddedPiRunActiveMock = vi.fn(() => false);
 const isEmbeddedPiRunStreamingMock = vi.fn(() => false);
-const queueEmbeddedPiMessageMock = vi.fn(() => false);
+const queueEmbeddedPiMessageWithOutcomeMock = vi.fn(
+  (sessionId: string, _text: string, _options?: unknown): EmbeddedPiQueueMessageOutcome => ({
+    queued: false,
+    sessionId,
+    reason: "not_streaming",
+    gatewayHealth: "live",
+  }),
+);
 const resolveEmbeddedSessionLaneMock = vi.fn();
 const waitForEmbeddedPiRunEndMock = vi.fn();
 const enqueueFollowupRunMock = vi.fn();
@@ -36,14 +44,18 @@ vi.mock("../../agents/pi-embedded.js", () => ({
   compactEmbeddedPiSession: compactEmbeddedPiSessionMock,
   isEmbeddedPiRunActive: isEmbeddedPiRunActiveMock,
   isEmbeddedPiRunStreaming: isEmbeddedPiRunStreamingMock,
-  queueEmbeddedPiMessage: queueEmbeddedPiMessageMock,
+  queueEmbeddedPiMessageWithOutcome: queueEmbeddedPiMessageWithOutcomeMock,
   resolveEmbeddedSessionLane: resolveEmbeddedSessionLaneMock,
   runEmbeddedPiAgent: runEmbeddedPiAgentMock,
   waitForEmbeddedPiRunEnd: waitForEmbeddedPiRunEndMock,
 }));
 
 vi.mock("../../agents/pi-embedded-runner/runs.js", () => ({
-  queueEmbeddedPiMessage: queueEmbeddedPiMessageMock,
+  formatEmbeddedPiQueueFailureSummary: (outcome: { reason?: string; sessionId?: string }) =>
+    outcome.reason && outcome.sessionId
+      ? `queue_message_failed reason=${outcome.reason} sessionId=${outcome.sessionId} gatewayHealth=live`
+      : undefined,
+  queueEmbeddedPiMessageWithOutcome: queueEmbeddedPiMessageWithOutcomeMock,
 }));
 
 vi.mock("./queue.js", () => ({
@@ -135,8 +147,13 @@ describe("runReplyAgent media path normalization", () => {
     isEmbeddedPiRunActiveMock.mockReturnValue(false);
     isEmbeddedPiRunStreamingMock.mockReset();
     isEmbeddedPiRunStreamingMock.mockReturnValue(false);
-    queueEmbeddedPiMessageMock.mockReset();
-    queueEmbeddedPiMessageMock.mockReturnValue(false);
+    queueEmbeddedPiMessageWithOutcomeMock.mockReset();
+    queueEmbeddedPiMessageWithOutcomeMock.mockImplementation((sessionId: string) => ({
+      queued: false,
+      sessionId,
+      reason: "not_streaming",
+      gatewayHealth: "live",
+    }));
     resolveEmbeddedSessionLaneMock.mockReset();
     waitForEmbeddedPiRunEndMock.mockReset();
     enqueueFollowupRunMock.mockReset();
@@ -188,23 +205,28 @@ describe("runReplyAgent media path normalization", () => {
       }),
     );
 
-    expect(result).toMatchObject({
-      mediaUrl: "/tmp/outbound-media/generated.png",
-      mediaUrls: ["/tmp/outbound-media/generated.png"],
-    });
-    expect(resolveOutboundAttachmentFromUrlMock).toHaveBeenCalledWith(
-      path.join("/tmp/workspace", "out", "generated.png"),
-      5 * 1024 * 1024,
-      expect.objectContaining({
-        mediaAccess: expect.objectContaining({
-          workspaceDir: "/tmp/workspace",
-        }),
-      }),
-    );
+    expect(Array.isArray(result)).toBe(false);
+    if (!result || Array.isArray(result)) {
+      throw new Error("expected single reply payload");
+    }
+    expect(result.mediaUrl).toBe("/tmp/outbound-media/generated.png");
+    expect(result.mediaUrls).toEqual(["/tmp/outbound-media/generated.png"]);
+    const outboundAttachmentCall = resolveOutboundAttachmentFromUrlMock.mock.calls.at(0);
+    expect(outboundAttachmentCall?.[0]).toBe(path.join("/tmp/workspace", "out", "generated.png"));
+    expect(outboundAttachmentCall?.[1]).toBe(5 * 1024 * 1024);
+    const outboundAttachmentOptions = outboundAttachmentCall?.[2] as
+      | { mediaAccess?: { workspaceDir?: unknown } }
+      | undefined;
+    expect(outboundAttachmentOptions?.mediaAccess?.workspaceDir).toBe("/tmp/workspace");
   });
 
   it("maps steer queue modes to Pi steering drain modes", async () => {
-    queueEmbeddedPiMessageMock.mockReturnValue(true);
+    queueEmbeddedPiMessageWithOutcomeMock.mockImplementation((sessionId: string) => ({
+      queued: true,
+      sessionId,
+      target: "embedded_run",
+      gatewayHealth: "live",
+    }));
 
     await runReplyAgent(
       makeRunReplyAgentParams({
@@ -214,9 +236,13 @@ describe("runReplyAgent media path normalization", () => {
       }),
     );
 
-    expect(queueEmbeddedPiMessageMock).toHaveBeenLastCalledWith("session", "generate chart", {
-      steeringMode: "all",
-    });
+    expect(queueEmbeddedPiMessageWithOutcomeMock).toHaveBeenLastCalledWith(
+      "session",
+      "generate chart",
+      {
+        steeringMode: "all",
+      },
+    );
 
     await runReplyAgent(
       makeRunReplyAgentParams({
@@ -226,9 +252,13 @@ describe("runReplyAgent media path normalization", () => {
       }),
     );
 
-    expect(queueEmbeddedPiMessageMock).toHaveBeenLastCalledWith("session", "generate chart", {
-      steeringMode: "one-at-a-time",
-    });
+    expect(queueEmbeddedPiMessageWithOutcomeMock).toHaveBeenLastCalledWith(
+      "session",
+      "generate chart",
+      {
+        steeringMode: "one-at-a-time",
+      },
+    );
   });
 
   it("shares one media cache between block accumulation and final payload delivery", async () => {
@@ -268,7 +298,8 @@ describe("runReplyAgent media path normalization", () => {
       }),
     );
 
-    expect(result).toMatchObject({
+    expect(result).toBeUndefined();
+    expect(onBlockReply).toHaveBeenCalledWith({
       text: "here is the chart",
       mediaUrl: "/tmp/outbound-media/1-chart.png",
       mediaUrls: ["/tmp/outbound-media/1-chart.png"],
@@ -277,7 +308,6 @@ describe("runReplyAgent media path normalization", () => {
       audioAsVoice: false,
     });
     expect(resolveOutboundAttachmentFromUrlMock).toHaveBeenCalledTimes(1);
-    expect(onBlockReply).not.toHaveBeenCalled();
   });
 
   it("does not create a second media context inside runAgentTurnWithFallback when onBlockReply is provided", async () => {

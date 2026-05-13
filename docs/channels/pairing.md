@@ -7,7 +7,7 @@ read_when:
 title: "Pairing"
 ---
 
-“Pairing” is OpenClaw’s explicit access approval step.
+"Pairing" is OpenClaw's explicit access approval step.
 It is used in two places:
 
 1. **DM pairing** (who is allowed to talk to the bot)
@@ -45,7 +45,7 @@ That gives first-time setups an explicit owner for privileged commands and exec
 approval prompts. After an owner exists, later pairing approvals only grant DM
 access; they do not add more owners.
 
-Supported channels: `bluebubbles`, `discord`, `feishu`, `googlechat`, `imessage`, `irc`, `line`, `matrix`, `mattermost`, `msteams`, `nextcloud-talk`, `nostr`, `openclaw-weixin`, `signal`, `slack`, `synology-chat`, `telegram`, `twitch`, `whatsapp`, `zalo`, `zalouser`.
+Supported channels: `discord`, `feishu`, `googlechat`, `imessage`, `irc`, `line`, `matrix`, `mattermost`, `msteams`, `nextcloud-talk`, `nostr`, `openclaw-weixin`, `signal`, `slack`, `synology-chat`, `telegram`, `twitch`, `whatsapp`, `zalo`, `zalouser`.
 
 ### Reusable sender groups
 
@@ -134,12 +134,11 @@ That bootstrap token carries the built-in pairing bootstrap profile:
 
 Treat the setup code like a password while it is valid.
 
-For Tailscale, public, or other non-loopback mobile pairing, use Tailscale
-Serve/Funnel or another `wss://` Gateway URL. Direct non-loopback `ws://` setup
-URLs are rejected before QR/setup-code issuance. Plaintext `ws://` setup codes
-are limited to loopback URLs; private-network `ws://` clients still require the explicit
-`OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` break-glass described in the remote
-Gateway guide.
+For Tailscale, public, or other remote mobile pairing, use Tailscale Serve/Funnel
+or another `wss://` Gateway URL. Plaintext `ws://` setup codes are accepted only
+for loopback, private LAN addresses, `.local` Bonjour hosts, and the Android
+emulator host. Tailnet CGNAT addresses, `.ts.net` names, and public hosts still
+fail closed before QR/setup-code issuance.
 
 ### Approve a node device
 
@@ -209,7 +208,6 @@ Stored under `~/.openclaw/devices/`:
   - Telegram: [Telegram](/channels/telegram)
   - WhatsApp: [WhatsApp](/channels/whatsapp)
   - Signal: [Signal](/channels/signal)
-  - BlueBubbles (iMessage): [BlueBubbles](/channels/bluebubbles)
-  - iMessage (legacy): [iMessage](/channels/imessage)
+  - iMessage: [iMessage](/channels/imessage)
   - Discord: [Discord](/channels/discord)
   - Slack: [Slack](/channels/slack)

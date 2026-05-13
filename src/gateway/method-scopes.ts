@@ -7,6 +7,7 @@ import {
   READ_SCOPE,
   TALK_SECRETS_SCOPE,
   WRITE_SCOPE,
+  isOperatorScope,
   type OperatorScope,
 } from "./operator-scopes.js";
 
@@ -32,12 +33,14 @@ export const CLI_DEFAULT_OPERATOR_SCOPES: OperatorScope[] = [
 const NODE_ROLE_METHODS = new Set([
   "node.invoke.result",
   "node.event",
+  "node.pluginSurface.refresh",
   "node.pending.drain",
-  "node.canvas.capability.refresh",
   "node.pending.pull",
   "node.pending.ack",
   "skills.bins",
 ]);
+
+const DYNAMIC_OPERATOR_SCOPE_METHODS = new Set(["plugins.sessionAction"]);
 
 const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
   [APPROVALS_SCOPE]: [
@@ -86,6 +89,8 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "models.authStatus",
     "tools.catalog",
     "tools.effective",
+    "tasks.list",
+    "tasks.get",
     "plugins.uiDescriptors",
     "agents.list",
     "agent.identity.get",
@@ -108,6 +113,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "sessions.usage",
     "sessions.usage.timeseries",
     "sessions.usage.logs",
+    "cron.get",
     "cron.list",
     "cron.status",
     "cron.runs",
@@ -117,9 +123,12 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "last-heartbeat",
     "node.list",
     "node.describe",
+    "environments.list",
+    "environments.status",
     "chat.history",
     "config.get",
     "config.schema.lookup",
+    "talk.catalog",
     "talk.config",
     "agents.files.list",
     "agents.files.get",
@@ -135,11 +144,17 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "agent.wait",
     "wake",
     "talk.mode",
-    "talk.realtime.session",
-    "talk.realtime.relayAudio",
-    "talk.realtime.relayMark",
-    "talk.realtime.relayStop",
-    "talk.realtime.relayToolResult",
+    "talk.client.create",
+    "talk.client.toolCall",
+    "talk.session.create",
+    "talk.session.join",
+    "talk.session.appendAudio",
+    "talk.session.startTurn",
+    "talk.session.endTurn",
+    "talk.session.cancelTurn",
+    "talk.session.cancelOutput",
+    "talk.session.submitToolResult",
+    "talk.session.close",
     "talk.speak",
     "tts.enable",
     "tts.disable",
@@ -156,6 +171,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "sessions.send",
     "sessions.steer",
     "sessions.abort",
+    "tasks.cancel",
     "sessions.compaction.branch",
     "doctor.memory.backfillDreamDiary",
     "doctor.memory.resetDreamDiary",
@@ -176,6 +192,9 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "agents.create",
     "agents.update",
     "agents.delete",
+    "skills.upload.begin",
+    "skills.upload.chunk",
+    "skills.upload.commit",
     "skills.install",
     "skills.update",
     "secrets.reload",
@@ -255,7 +274,65 @@ export function resolveRequiredOperatorScopeForMethod(method: string): OperatorS
   return resolveScopedMethod(method);
 }
 
-export function resolveLeastPrivilegeOperatorScopesForMethod(method: string): OperatorScope[] {
+function normalizeSessionActionParam(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function resolveSessionActionRegisteredScopes(params: unknown): OperatorScope[] | undefined {
+  if (!params || typeof params !== "object" || Array.isArray(params)) {
+    return undefined;
+  }
+  const pluginId = normalizeSessionActionParam((params as { pluginId?: unknown }).pluginId);
+  const actionId = normalizeSessionActionParam((params as { actionId?: unknown }).actionId);
+  if (!pluginId || !actionId) {
+    return undefined;
+  }
+  const registration = getPluginRegistryState()?.activeRegistry?.sessionActions?.find(
+    (entry) => entry.pluginId === pluginId && entry.action.id === actionId,
+  );
+  if (!registration) {
+    return undefined;
+  }
+  const requiredScopes = registration.action.requiredScopes;
+  return requiredScopes && requiredScopes.length > 0 ? [...requiredScopes] : [WRITE_SCOPE];
+}
+
+function resolveSessionActionLeastPrivilegeScopes(params: unknown): OperatorScope[] {
+  const registeredScopes = resolveSessionActionRegisteredScopes(params);
+  if (registeredScopes) {
+    return registeredScopes;
+  }
+  if (params && typeof params === "object" && !Array.isArray(params)) {
+    const pluginId = normalizeSessionActionParam((params as { pluginId?: unknown }).pluginId);
+    const actionId = normalizeSessionActionParam((params as { actionId?: unknown }).actionId);
+    if (pluginId && actionId) {
+      // A standalone CLI/tool caller may be talking to a gateway whose live
+      // plugin registry is not present in this local process. Avoid under-scoping
+      // valid dynamic actions when we cannot determine the exact requirement
+      // locally.
+      return [...CLI_DEFAULT_OPERATOR_SCOPES];
+    }
+  }
+  return [WRITE_SCOPE];
+}
+
+function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
+  method: string,
+  params: unknown,
+): OperatorScope[] {
+  if (method === "plugins.sessionAction") {
+    return resolveSessionActionLeastPrivilegeScopes(params);
+  }
+  return [WRITE_SCOPE];
+}
+
+export function resolveLeastPrivilegeOperatorScopesForMethod(
+  method: string,
+  params?: unknown,
+): OperatorScope[] {
+  if (DYNAMIC_OPERATOR_SCOPE_METHODS.has(method)) {
+    return resolveDynamicLeastPrivilegeOperatorScopesForMethod(method, params);
+  }
   const requiredScope = resolveRequiredOperatorScopeForMethod(method);
   if (requiredScope) {
     return [requiredScope];
@@ -267,9 +344,27 @@ export function resolveLeastPrivilegeOperatorScopesForMethod(method: string): Op
 export function authorizeOperatorScopesForMethod(
   method: string,
   scopes: readonly string[],
+  params?: unknown,
 ): { allowed: true } | { allowed: false; missingScope: OperatorScope } {
   if (scopes.includes(ADMIN_SCOPE)) {
     return { allowed: true };
+  }
+  if (DYNAMIC_OPERATOR_SCOPE_METHODS.has(method)) {
+    const registeredScopes = resolveSessionActionRegisteredScopes(params);
+    if (!registeredScopes && params && typeof params === "object" && !Array.isArray(params)) {
+      const pluginId = normalizeSessionActionParam((params as { pluginId?: unknown }).pluginId);
+      const actionId = normalizeSessionActionParam((params as { actionId?: unknown }).actionId);
+      if (!pluginId || !actionId) {
+        return scopes.some((scope) => isOperatorScope(scope))
+          ? { allowed: true }
+          : { allowed: false, missingScope: WRITE_SCOPE };
+      }
+    }
+    const requiredScopes = registeredScopes ?? [WRITE_SCOPE];
+    const missingScope = requiredScopes.find((scope) => {
+      return !scopes.includes(scope) && !(scope === READ_SCOPE && scopes.includes(WRITE_SCOPE));
+    });
+    return missingScope ? { allowed: false, missingScope } : { allowed: true };
   }
   const requiredScope = resolveRequiredOperatorScopeForMethod(method) ?? ADMIN_SCOPE;
   if (requiredScope === READ_SCOPE) {
@@ -286,6 +381,9 @@ export function authorizeOperatorScopesForMethod(
 
 export function isGatewayMethodClassified(method: string): boolean {
   if (isNodeRoleMethod(method)) {
+    return true;
+  }
+  if (DYNAMIC_OPERATOR_SCOPE_METHODS.has(method)) {
     return true;
   }
   return resolveRequiredOperatorScopeForMethod(method) !== undefined;

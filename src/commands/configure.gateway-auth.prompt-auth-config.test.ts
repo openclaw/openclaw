@@ -9,6 +9,130 @@ const mocks = vi.hoisted(() => ({
   applyAuthChoice: vi.fn(),
   promptModelAllowlist: vi.fn(),
   promptDefaultModel: vi.fn(),
+  applyPrimaryModel: vi.fn((cfg: OpenClawConfig, model: string) => ({
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        model: { primary: model },
+      },
+    },
+  })),
+  applyModelAllowlist: vi.fn(
+    (cfg: OpenClawConfig, models: string[], opts: { scopeKeys?: string[] } = {}) => {
+      const defaults = cfg.agents?.defaults;
+      const normalized = normalizeTestModelKeys(models);
+      const scopeKeys = opts.scopeKeys ? normalizeTestModelKeys(opts.scopeKeys) : [];
+      const scopeKeySet = scopeKeys.length > 0 ? new Set(scopeKeys) : null;
+      if (normalized.length === 0) {
+        if (!defaults?.models) {
+          return cfg;
+        }
+        if (scopeKeySet) {
+          const nextModels = { ...defaults.models };
+          for (const key of scopeKeySet) {
+            delete nextModels[key];
+          }
+          const { models: _ignored, ...restDefaults } = defaults;
+          return {
+            ...cfg,
+            agents: {
+              ...cfg.agents,
+              defaults:
+                Object.keys(nextModels).length > 0
+                  ? { ...defaults, models: nextModels }
+                  : restDefaults,
+            },
+          };
+        }
+        const { models: _ignored, ...restDefaults } = defaults;
+        return { ...cfg, agents: { ...cfg.agents, defaults: restDefaults } };
+      }
+      const existingModels = defaults?.models ?? {};
+      const nextModels = scopeKeySet ? { ...existingModels } : {};
+      if (scopeKeySet) {
+        for (const key of scopeKeySet) {
+          delete nextModels[key];
+        }
+      }
+      for (const key of normalized) {
+        nextModels[key] = existingModels[key] ?? {};
+      }
+      return {
+        ...cfg,
+        agents: {
+          ...cfg.agents,
+          defaults: { ...defaults, models: nextModels },
+        },
+      };
+    },
+  ),
+  applyModelFallbacksFromSelection: vi.fn(
+    (cfg: OpenClawConfig, selection: string[], opts: { scopeKeys?: string[] } = {}) => {
+      const defaults = cfg.agents?.defaults;
+      const existingModel = defaults?.model;
+      const primary =
+        typeof existingModel === "string"
+          ? existingModel
+          : existingModel && typeof existingModel === "object"
+            ? existingModel.primary
+            : undefined;
+      const normalized = normalizeTestModelKeys(selection);
+      const scopeKeys = opts.scopeKeys ? normalizeTestModelKeys(opts.scopeKeys) : [];
+      const scopeKeySet = scopeKeys.length > 0 ? new Set(scopeKeys) : null;
+      if (!primary || (normalized.length === 0 && !scopeKeySet)) {
+        return cfg;
+      }
+      const aliasIndex = new Map<string, string>();
+      for (const [key, value] of Object.entries(defaults?.models ?? {})) {
+        const alias = (value as { alias?: unknown }).alias;
+        if (typeof alias === "string" && alias.trim()) {
+          aliasIndex.set(alias.trim(), key);
+        }
+      }
+      const existingFallbacks =
+        existingModel && typeof existingModel === "object" && Array.isArray(existingModel.fallbacks)
+          ? normalizeTestModelKeys(
+              existingModel.fallbacks.map((fallback) => aliasIndex.get(fallback) ?? fallback),
+            )
+          : [];
+      const selectedFallbacks = normalized.filter((key) => key !== primary);
+      const selected = new Set(
+        scopeKeySet && !normalized.includes(primary)
+          ? selectedFallbacks.filter((key) => existingFallbacks.includes(key))
+          : selectedFallbacks,
+      );
+      const fallbacks: string[] = [];
+      for (const fallback of existingFallbacks) {
+        if (scopeKeySet && !scopeKeySet.has(fallback)) {
+          fallbacks.push(fallback);
+        } else if (selected.delete(fallback)) {
+          fallbacks.push(fallback);
+        }
+      }
+      for (const fallback of selectedFallbacks) {
+        if (selected.has(fallback)) {
+          fallbacks.push(fallback);
+        }
+      }
+      return {
+        ...cfg,
+        agents: {
+          ...cfg.agents,
+          defaults: {
+            ...defaults,
+            model: {
+              ...(existingModel && typeof existingModel === "object"
+                ? (({ fallbacks: _oldFallbacks, ...rest }) => rest)(existingModel)
+                : { primary }),
+              ...(fallbacks.length > 0 ? { fallbacks } : {}),
+            },
+          },
+        },
+      };
+    },
+  ),
   promptCustomApiConfig: vi.fn(),
   resolvePluginProviders: vi.fn(() => []),
   resolveProviderPluginChoice: vi.fn<() => unknown>(() => null),
@@ -17,6 +141,20 @@ const mocks = vi.hoisted(() => ({
     async () => undefined,
   ),
 }));
+
+function normalizeTestModelKeys(values: string[]): string[] {
+  const seen = new Set<string>();
+  const next: string[] = [];
+  for (const raw of values) {
+    const value = raw.trim();
+    if (!value || seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    next.push(value);
+  }
+  return next;
+}
 
 vi.mock("../agents/auth-profiles.js", () => ({
   ensureAuthProfileStore: vi.fn(() => ({
@@ -34,14 +172,13 @@ vi.mock("./auth-choice.js", () => ({
   resolvePreferredProviderForAuthChoice: mocks.resolvePreferredProviderForAuthChoice,
 }));
 
-vi.mock("./model-picker.js", async (importActual) => {
-  const actual = await importActual<typeof import("./model-picker.js")>();
-  return {
-    ...actual,
-    promptModelAllowlist: mocks.promptModelAllowlist,
-    promptDefaultModel: mocks.promptDefaultModel,
-  };
-});
+vi.mock("./model-picker.js", () => ({
+  applyModelAllowlist: mocks.applyModelAllowlist,
+  applyModelFallbacksFromSelection: mocks.applyModelFallbacksFromSelection,
+  applyPrimaryModel: mocks.applyPrimaryModel,
+  promptModelAllowlist: mocks.promptModelAllowlist,
+  promptDefaultModel: mocks.promptDefaultModel,
+}));
 
 vi.mock("./onboard-custom.js", () => ({
   promptCustomApiConfig: mocks.promptCustomApiConfig,
@@ -71,6 +208,18 @@ function makeRuntime(): RuntimeEnv {
     error: vi.fn(),
     exit: vi.fn(),
   };
+}
+
+function promptModelAllowlistOptions(index = 0) {
+  return mocks.promptModelAllowlist.mock.calls[index]?.[0] as
+    | {
+        allowedKeys?: string[];
+        initialSelections?: string[];
+        loadCatalog?: boolean;
+        message?: string;
+        preferredProvider?: string;
+      }
+    | undefined;
 }
 
 const noopPrompter = {} as WizardPrompter;
@@ -181,13 +330,12 @@ describe("promptAuthConfig", () => {
 
     await promptAuthConfig({}, makeRuntime(), noopPrompter);
 
-    expect(mocks.promptModelAllowlist).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allowedKeys: ["anthropic/claude-sonnet-4-6"],
-        initialSelections: ["anthropic/claude-sonnet-4-6"],
-        message: "Anthropic OAuth models",
-      }),
-    );
+    const allowlistOptions = mocks.promptModelAllowlist.mock.calls
+      .map(([options]) => options)
+      .find((options) => options?.message === "Anthropic OAuth models");
+    expect(allowlistOptions?.allowedKeys).toStrictEqual(["anthropic/claude-sonnet-4-6"]);
+    expect(allowlistOptions?.initialSelections).toStrictEqual(["anthropic/claude-sonnet-4-6"]);
+    expect(allowlistOptions?.message).toBe("Anthropic OAuth models");
   });
 
   it("preserves existing model entries outside provider-scoped allowlist updates", async () => {
@@ -294,11 +442,8 @@ describe("promptAuthConfig", () => {
 
     await promptAuthConfig({}, makeRuntime(), noopPrompter);
 
-    expect(mocks.promptModelAllowlist).toHaveBeenCalledWith(
-      expect.objectContaining({
-        preferredProvider: "openai",
-      }),
-    );
+    expect(mocks.promptModelAllowlist).toHaveBeenCalledOnce();
+    expect(promptModelAllowlistOptions()?.preferredProvider).toBe("openai");
   });
 
   it("keeps the selected provider scope when existing config has another provider", async () => {
@@ -327,11 +472,8 @@ describe("promptAuthConfig", () => {
 
     await promptAuthConfig(existingConfig, makeRuntime(), noopPrompter);
 
-    expect(mocks.promptModelAllowlist).toHaveBeenCalledWith(
-      expect.objectContaining({
-        preferredProvider: "github-copilot",
-      }),
-    );
+    expect(mocks.promptModelAllowlist).toHaveBeenCalledOnce();
+    expect(promptModelAllowlistOptions()?.preferredProvider).toBe("github-copilot");
   });
 
   it("loads the selected provider catalog after auth enables that plugin", async () => {
@@ -374,8 +516,8 @@ describe("promptAuthConfig", () => {
 
     await promptAuthConfig(existingConfig, makeRuntime(), noopPrompter);
 
-    expect(mocks.promptModelAllowlist.mock.calls[0]?.[0]?.preferredProvider).toBe("github-copilot");
-    expect(mocks.promptModelAllowlist.mock.calls[0]?.[0]?.loadCatalog).toBe(true);
+    expect(promptModelAllowlistOptions()?.preferredProvider).toBe("github-copilot");
+    expect(promptModelAllowlistOptions()?.loadCatalog).toBe(true);
   });
 
   it("loads configured provider models after Ollama Cloud + Local and Cloud only setup", async () => {
@@ -403,12 +545,10 @@ describe("promptAuthConfig", () => {
 
     await promptAuthConfig({}, makeRuntime(), noopPrompter);
 
-    expect(mocks.promptModelAllowlist).toHaveBeenCalledWith(
-      expect.objectContaining({
-        preferredProvider: "ollama",
-        loadCatalog: true,
-      }),
-    );
+    expect(mocks.promptModelAllowlist).toHaveBeenCalledOnce();
+    const allowlistOptions = promptModelAllowlistOptions();
+    expect(allowlistOptions?.preferredProvider).toBe("ollama");
+    expect(allowlistOptions?.loadCatalog).toBe(true);
   });
 
   it("loads plugin catalog when the selected provider allowlist requires it", async () => {
@@ -446,12 +586,10 @@ describe("promptAuthConfig", () => {
 
     await promptAuthConfig({}, makeRuntime(), noopPrompter);
 
-    expect(mocks.promptModelAllowlist).toHaveBeenCalledWith(
-      expect.objectContaining({
-        preferredProvider: "github-copilot",
-        loadCatalog: true,
-      }),
-    );
+    expect(mocks.promptModelAllowlist).toHaveBeenCalledOnce();
+    const allowlistOptions = promptModelAllowlistOptions();
+    expect(allowlistOptions?.preferredProvider).toBe("github-copilot");
+    expect(allowlistOptions?.loadCatalog).toBe(true);
   });
 
   it("loads catalog when the selected provider has manifest catalog rows", async () => {
@@ -488,7 +626,7 @@ describe("promptAuthConfig", () => {
 
     await promptAuthConfig({}, makeRuntime(), noopPrompter);
 
-    const call = mocks.promptModelAllowlist.mock.calls[0]?.[0];
+    const call = promptModelAllowlistOptions();
     expect(call?.preferredProvider).toBe("github-copilot");
     expect(call?.loadCatalog).toBe(true);
   });

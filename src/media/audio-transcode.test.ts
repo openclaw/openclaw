@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -12,6 +12,16 @@ vi.mock("./ffmpeg-exec.js", () => ({
 
 import { transcodeAudioBufferToOpus } from "./audio-transcode.js";
 
+type MockWithCalls = { mock: { calls: unknown[][] } };
+
+function firstMockCall(mock: MockWithCalls, label: string): unknown[] {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
 describe("transcodeAudioBufferToOpus", () => {
   afterEach(() => {
     runFfmpegMock.mockReset();
@@ -23,12 +33,14 @@ describe("transcodeAudioBufferToOpus", () => {
     runFfmpegMock.mockImplementationOnce(async (args: string[]) => {
       capturedInputPath = args[args.indexOf("-i") + 1];
       capturedOutputPath = args.at(-1);
-      if (!capturedInputPath || !capturedOutputPath) {
+      const inputPath = capturedInputPath;
+      const outputPath = capturedOutputPath;
+      if (!inputPath || !outputPath) {
         throw new Error("missing ffmpeg paths");
       }
-      await expect(readFile(capturedInputPath)).resolves.toEqual(Buffer.from("source-mp3"));
+      await expect(readFile(inputPath)).resolves.toEqual(Buffer.from("source-mp3"));
       await import("node:fs/promises").then((fs) =>
-        fs.writeFile(capturedOutputPath!, Buffer.from("opus-output")),
+        fs.writeFile(outputPath, Buffer.from("opus-output")),
       );
     });
 
@@ -41,13 +53,34 @@ describe("transcodeAudioBufferToOpus", () => {
       }),
     ).resolves.toEqual(Buffer.from("opus-output"));
 
-    expect(runFfmpegMock).toHaveBeenCalledWith(
-      expect.arrayContaining(["-c:a", "libopus", "-b:a", "64k", "-ar", "48000", "-ac", "1"]),
+    expect(runFfmpegMock).toHaveBeenCalledTimes(1);
+    expect(firstMockCall(runFfmpegMock, "runFfmpeg")).toStrictEqual([
+      [
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        capturedInputPath,
+        "-vn",
+        "-sn",
+        "-dn",
+        "-c:a",
+        "libopus",
+        "-b:a",
+        "64k",
+        "-ar",
+        "48000",
+        "-ac",
+        "1",
+        "-f",
+        "opus",
+        capturedOutputPath,
+      ],
       { timeoutMs: 1234 },
-    );
-    expect(
-      capturedInputPath?.startsWith(path.join(resolvePreferredOpenClawTmpDir(), "tts-test-")),
-    ).toBe(true);
+    ]);
+    const tempRoot = realpathSync(resolvePreferredOpenClawTmpDir());
+    expect(capturedInputPath?.startsWith(path.join(tempRoot, "tts-test-"))).toBe(true);
     expect(capturedInputPath ? existsSync(capturedInputPath) : true).toBe(false);
     expect(capturedOutputPath ? existsSync(capturedOutputPath) : true).toBe(false);
   });
@@ -77,12 +110,15 @@ describe("transcodeAudioBufferToOpus", () => {
     runFfmpegMock.mockImplementationOnce(async (args: string[]) => {
       capturedInputPath = args[args.indexOf("-i") + 1];
       capturedOutputPath = args.at(-1);
-      if (!capturedOutputPath) {
+      const outputPath = capturedOutputPath;
+      if (!outputPath) {
         throw new Error("missing ffmpeg output path");
       }
-      expect(path.basename(capturedOutputPath)).toBe("escape.opus");
+      const outputBaseName = path.basename(outputPath);
+      expect(outputBaseName).toContain("escape.opus");
+      expect(outputBaseName).toMatch(/\.part$/);
       await import("node:fs/promises").then((fs) =>
-        fs.writeFile(capturedOutputPath!, Buffer.from("opus-output")),
+        fs.writeFile(outputPath, Buffer.from("opus-output")),
       );
     });
 
@@ -93,8 +129,8 @@ describe("transcodeAudioBufferToOpus", () => {
       tempPrefix: "../bad-prefix",
     });
 
-    const tempRoot = resolvePreferredOpenClawTmpDir();
+    const tempRoot = realpathSync(resolvePreferredOpenClawTmpDir());
     expect(capturedInputPath?.startsWith(tempRoot)).toBe(true);
-    expect(capturedOutputPath?.startsWith(tempRoot)).toBe(true);
+    expect(capturedOutputPath ? existsSync(capturedOutputPath) : true).toBe(false);
   });
 });

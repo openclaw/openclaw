@@ -14,11 +14,20 @@ import {
   createAuthTestLifecycle,
   createExitThrowingRuntime,
   createWizardPrompter,
-  requireOpenClawAgentDir,
   setupAuthTestEnv,
 } from "./test-wizard-helpers.js";
 
-type DetectZaiEndpoint = typeof import("../plugins/provider-zai-endpoint.js").detectZaiEndpoint;
+type DetectZaiEndpoint = (params: {
+  apiKey: string;
+  endpoint?: "global" | "cn" | "coding-global" | "coding-cn";
+  timeoutMs?: number;
+  fetchFn?: typeof fetch;
+}) => Promise<{
+  endpoint: "global" | "cn" | "coding-global" | "coding-cn";
+  baseUrl: string;
+  modelId: string;
+  note: string;
+} | null>;
 
 const GOOGLE_GEMINI_DEFAULT_MODEL = "google/gemini-3.1-pro-preview";
 const ZAI_CODING_GLOBAL_BASE_URL = "https://api.z.ai/api/coding/paas/v4";
@@ -68,17 +77,11 @@ vi.mock("./auth-choice.apply.api-providers.js", () => {
 });
 
 const detectZaiEndpoint = vi.hoisted(() => vi.fn<DetectZaiEndpoint>(async () => null));
-vi.mock("../plugins/provider-zai-endpoint.js", () => ({
-  detectZaiEndpoint,
-}));
-
-vi.mock("../agents/agent-paths.js", () => ({
-  resolveOpenClawAgentDir: () => process.env.OPENCLAW_AGENT_DIR ?? "/tmp/openclaw-agent",
-}));
 
 vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: () => "main",
-  resolveAgentDir: (_config: unknown, agentId: string) => `/tmp/openclaw-agents/${agentId}`,
+  resolveAgentDir: (_config: unknown, agentId: string) =>
+    `${process.env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw-state"}/agents/${agentId}/agent`,
   resolveAgentWorkspaceDir: (_config: unknown, agentId: string) =>
     `/tmp/openclaw-workspaces/${agentId}`,
 }));
@@ -102,7 +105,7 @@ vi.mock("../plugins/provider-auth-helpers.js", () => ({
     params: {
       profileId: string;
       provider: string;
-      mode: "api_key" | "oauth" | "token";
+      mode: "api_key" | "aws-sdk" | "oauth" | "token";
       email?: string;
       displayName?: string;
     },
@@ -606,13 +609,41 @@ describe("applyAuthChoice", () => {
     };
   }
   async function readAuthProfiles() {
-    return readTestAuthProfileStore(requireOpenClawAgentDir());
+    return readTestAuthProfileStore(resolveAgentDir({} as OpenClawConfig, "main"));
   }
   async function readAuthProfilesForAgentDir(agentDir: string) {
     return readTestAuthProfileStore(agentDir);
   }
   async function readAuthProfile(profileId: string) {
     return (await readAuthProfiles()).profiles?.[profileId];
+  }
+  function expectAuthProfileConfig(
+    result: { config: OpenClawConfig },
+    profileId: string,
+    expected: { provider: string; mode: string },
+  ) {
+    const profile = result.config.auth?.profiles?.[profileId];
+    expect(profile?.provider).toBe(expected.provider);
+    expect(profile?.mode).toBe(expected.mode);
+  }
+  function promptMessages(mock: { mock: { calls: unknown[][] } }): string[] {
+    return mock.mock.calls.map((call) => {
+      const message = (call[0] as { message?: unknown }).message;
+      return typeof message === "string" ? message : "";
+    });
+  }
+  function expectPromptMessageContaining(mock: { mock: { calls: unknown[][] } }, expected: string) {
+    expect(promptMessages(mock).join("\n")).toContain(expected);
+  }
+  function expectPromptMessage(mock: { mock: { calls: unknown[][] } }, expected: string) {
+    expect(promptMessages(mock)).toContain(expected);
+  }
+  function firstCallArg(mock: { mock: { calls: unknown[][] } }): unknown {
+    const call = mock.mock.calls[0];
+    if (!call) {
+      throw new Error("Expected first mock call");
+    }
+    return call[0];
   }
 
   let defaultProviderPlugins: ProviderPlugin[] = [];
@@ -692,7 +723,7 @@ describe("applyAuthChoice", () => {
       },
     });
 
-    expect(result.config.auth?.profiles?.["anthropic:default"]).toMatchObject({
+    expectAuthProfileConfig(result, "anthropic:default", {
       provider: "anthropic",
       mode: "token",
     });
@@ -720,7 +751,7 @@ describe("applyAuthChoice", () => {
           setDefaultModel: true,
         }),
       ).rejects.toThrow(
-        'Auth choice "openai-codex-import" is no longer supported. Use "openai-codex" instead.',
+        'Auth choice "openai-codex-import" is no longer supported. Use "openai-codex" instead, or run openclaw onboard to choose interactively.',
       );
     } finally {
       spy.mockRestore();
@@ -743,7 +774,7 @@ describe("applyAuthChoice", () => {
           setDefaultModel: true,
         }),
       ).rejects.toThrow(
-        'Auth choice "legacy\\u001b[31mchoice" is no longer supported. Use "modern\\nchoice" instead.',
+        'Auth choice "legacy\\u001b[31mchoice" is no longer supported. Use "modern\\nchoice" instead, or run openclaw onboard to choose interactively.',
       );
     } finally {
       spy.mockRestore();
@@ -779,10 +810,8 @@ describe("applyAuthChoice", () => {
         setDefaultModel: true,
       });
 
-      expect(text).toHaveBeenCalledWith(
-        expect.objectContaining({ message: expect.stringContaining(scenario.promptContains) }),
-      );
-      expect(result.config.auth?.profiles?.[scenario.profileId]).toMatchObject({
+      expectPromptMessageContaining(text, scenario.promptContains);
+      expectAuthProfileConfig(result, scenario.profileId, {
         provider: scenario.provider,
         mode: "api_key",
       });
@@ -855,15 +884,14 @@ describe("applyAuthChoice", () => {
         expect(detectZaiEndpoint).toHaveBeenCalledWith(scenario.expectedDetectCall);
       }
       if (scenario.shouldPromptForEndpoint) {
-        expect(select).toHaveBeenCalledWith(
-          expect.objectContaining({ message: "Select Z.AI endpoint", initialValue: "global" }),
-        );
+        const endpointPrompt = select.mock.calls
+          .map((call) => call[0] as { message?: string; initialValue?: string })
+          .find((call) => call.message === "Select Z.AI endpoint");
+        expect(endpointPrompt?.initialValue).toBe("global");
       } else {
-        expect(select).not.toHaveBeenCalledWith(
-          expect.objectContaining({ message: "Select Z.AI endpoint" }),
-        );
+        expect(promptMessages(select)).not.toContain("Select Z.AI endpoint");
       }
-      expect(result.config.auth?.profiles?.["zai:default"]).toMatchObject({
+      expectAuthProfileConfig(result, "zai:default", {
         provider: "zai",
         mode: "api_key",
       });
@@ -929,7 +957,7 @@ describe("applyAuthChoice", () => {
 
       expect(text).not.toHaveBeenCalled();
       expect(confirm).not.toHaveBeenCalled();
-      expect(result.config.auth?.profiles?.[scenario.profileId]).toMatchObject({
+      expectAuthProfileConfig(result, scenario.profileId, {
         provider: scenario.provider,
         mode: "api_key",
       });
@@ -993,16 +1021,12 @@ describe("applyAuthChoice", () => {
       });
 
       if (scenario.expectEnvPrompt) {
-        expect(confirm).toHaveBeenCalledWith(
-          expect.objectContaining({
-            message: expect.stringContaining(scenario.envKey),
-          }),
-        );
+        expectPromptMessageContaining(confirm, scenario.envKey);
       } else {
         expect(confirm).not.toHaveBeenCalled();
       }
       expect(text).toHaveBeenCalledTimes(scenario.expectedTextCalls);
-      expect(result.config.auth?.profiles?.[scenario.profileId]).toMatchObject({
+      expectAuthProfileConfig(result, scenario.profileId, {
         provider: scenario.provider,
         mode: "api_key",
       });
@@ -1038,7 +1062,7 @@ describe("applyAuthChoice", () => {
     expect(resolveAgentModelPrimaryValue(result.config.agents?.defaults?.model)).toBe(
       existingPrimary,
     );
-    expect(result.config.agents?.defaults?.models?.["openrouter/auto"]).toEqual({});
+    expect(result.config.agents?.defaults?.models?.["openrouter/auto"]).toStrictEqual({});
     expect(runProviderModelSelectedHook).not.toHaveBeenCalled();
     expect(note).toHaveBeenCalledWith(
       "Kept existing default model anthropic/claude-opus-4-6; openrouter/auto is available.",
@@ -1101,7 +1125,7 @@ describe("applyAuthChoice", () => {
       });
 
       expect(result.config.plugins?.entries?.["github-copilot"]).toEqual({ enabled: true });
-      expect(result.config.auth?.profiles?.["github-copilot:github"]).toMatchObject({
+      expectAuthProfileConfig(result, "github-copilot:github", {
         provider: "github-copilot",
         mode: "token",
       });
@@ -1138,19 +1162,15 @@ describe("applyAuthChoice", () => {
       setDefaultModel: false,
     });
 
-    expect(resolvePluginProviders).toHaveBeenCalledWith(
-      expect.objectContaining({
-        env,
-        mode: "setup",
-      }),
-    );
-    expect(confirm).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: expect.stringContaining("OPENAI_API_KEY"),
-      }),
-    );
+    const providerResolveInput = firstCallArg(resolvePluginProviders) as {
+      env?: NodeJS.ProcessEnv;
+      mode?: string;
+    };
+    expect(providerResolveInput.env).toBe(env);
+    expect(providerResolveInput.mode).toBe("setup");
+    expectPromptMessageContaining(confirm, "OPENAI_API_KEY");
     expect(text).not.toHaveBeenCalled();
-    expect(result.config.auth?.profiles?.["openai:default"]).toMatchObject({
+    expectAuthProfileConfig(result, "openai:default", {
       provider: "openai",
       mode: "api_key",
     });
@@ -1208,15 +1228,13 @@ describe("applyAuthChoice", () => {
         agentId: scenario.agentId,
       });
 
-      expect(text).toHaveBeenCalledWith(
-        expect.objectContaining({ message: scenario.promptMessage }),
-      );
+      expectPromptMessage(text, scenario.promptMessage);
       expect(resolveAgentModelPrimaryValue(result.config.agents?.defaults?.model)).toBe(
         scenario.existingPrimary,
       );
       expect(result.agentModelOverride).toBe(scenario.expectedOverride);
       if (scenario.profileId && scenario.profileProvider) {
-        expect(result.config.auth?.profiles?.[scenario.profileId]).toMatchObject({
+        expectAuthProfileConfig(result, scenario.profileId, {
           provider: scenario.profileProvider,
           mode: "api_key",
         });

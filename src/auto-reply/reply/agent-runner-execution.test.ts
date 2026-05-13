@@ -282,6 +282,78 @@ function createMockReplyOperation(): {
   };
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null) {
+    throw new Error(`${label} was not an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
+  for (const [key, value] of Object.entries(fields)) {
+    expect(record[key]).toEqual(value);
+  }
+}
+
+function requireMockCall(mock: unknown, index: number, label: string): unknown[] {
+  const call = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls?.[index];
+  if (!call) {
+    throw new Error(`missing ${label} call ${index + 1}`);
+  }
+  return call;
+}
+
+function expectMockCallArgFields(
+  mock: unknown,
+  index: number,
+  label: string,
+  fields: Record<string, unknown>,
+) {
+  expectRecordFields(requireRecord(requireMockCall(mock, index, label)[0], label), fields);
+}
+
+function expectNoMockCallWithFields(mock: unknown, fields: Record<string, unknown>) {
+  const calls = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls ?? [];
+  const hasMatchingCall = calls.some((call) => {
+    const value = call[0];
+    if (typeof value !== "object" || value === null) {
+      return false;
+    }
+    const record = value as Record<string, unknown>;
+    return Object.entries(fields).every(([key, expected]) => record[key] === expected);
+  });
+  expect(hasMatchingCall).toBe(false);
+}
+
+function requireMockCallArgWithFields(
+  mock: unknown,
+  fields: Record<string, unknown>,
+  label: string,
+) {
+  const calls = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls ?? [];
+  const found = calls
+    .map((call) => call[0])
+    .find((value) => {
+      if (typeof value !== "object" || value === null) {
+        return false;
+      }
+      const record = value as Record<string, unknown>;
+      return Object.entries(fields).every(([key, expected]) => record[key] === expected);
+    });
+  if (!found) {
+    throw new Error(`missing ${label}`);
+  }
+  return requireRecord(found, label);
+}
+
+function expectBlockReplyCall(
+  onBlockReply: unknown,
+  index: number,
+  fields: Record<string, unknown>,
+) {
+  expectMockCallArgFields(onBlockReply, index, "block reply payload", fields);
+}
+
 function createMinimalRunAgentTurnParams(overrides?: {
   followupRun?: FollowupRun;
   opts?: GetReplyOptions;
@@ -460,15 +532,215 @@ describe("runAgentTurnWithFallback", () => {
     });
 
     expect(result.kind).toBe("success");
-    expect(state.runCliAgentMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        extraSystemPrompt: "dynamic inbound metadata\n\nstable group prompt",
-        extraSystemPromptStatic: "stable group prompt",
-        trigger: "user",
-        messageChannel: "telegram",
-        messageProvider: "telegram",
-      }),
+    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
+      extraSystemPrompt: "dynamic inbound metadata\n\nstable group prompt",
+      extraSystemPromptStatic: "stable group prompt",
+      trigger: "user",
+      messageChannel: "telegram",
+      messageProvider: "telegram",
+    });
+  });
+
+  it("bridges CLI assistant agent events into onPartialReply for live preview (#76869)", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("claude-cli", "claude-opus-4-6"),
+      provider: "claude-cli",
+      model: "claude-opus-4-6",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+        "../../infra/agent-events.js",
+      );
+      realAgentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "assistant",
+        data: { text: "Hello", delta: "Hello" },
+      });
+      realAgentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "assistant",
+        data: { text: "Hello world", delta: " world" },
+      });
+      return { payloads: [{ text: "Hello world" }], meta: {} };
+    });
+
+    const onPartialReply = vi.fn<NonNullable<GetReplyOptions["onPartialReply"]>>(
+      async (_payload) => undefined,
     );
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "claude-cli";
+    followupRun.run.model = "claude-opus-4-6";
+
+    await runAgentTurnWithFallback({
+      commandBody: "hi",
+      followupRun,
+      sessionCtx: {
+        Provider: "telegram",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: { onPartialReply },
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    const partialTexts = onPartialReply.mock.calls.map((call) => call[0].text);
+    expect(partialTexts).toEqual(["Hello", "Hello world"]);
+  });
+
+  it("serializes and drains bridged CLI assistant previews before completing (#76869)", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("claude-cli", "claude-opus-4-6"),
+      provider: "claude-cli",
+      model: "claude-opus-4-6",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+        "../../infra/agent-events.js",
+      );
+      realAgentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "assistant",
+        data: { text: "Hello", delta: "Hello" },
+      });
+      realAgentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "assistant",
+        data: { text: "Hello world", delta: " world" },
+      });
+      return { payloads: [{ text: "Hello world" }], meta: {} };
+    });
+
+    let firstPreviewStarted: (() => void) | undefined;
+    let releaseFirstPreview: (() => void) | undefined;
+    const firstPreviewPromise = new Promise<void>((resolve) => {
+      firstPreviewStarted = resolve;
+    });
+    const previewOrder: string[] = [];
+    const onPartialReply = vi.fn<NonNullable<GetReplyOptions["onPartialReply"]>>(
+      async (payload) => {
+        previewOrder.push(payload.text ?? "");
+        if (payload.text === "Hello") {
+          firstPreviewStarted?.();
+          await new Promise<void>((resolve) => {
+            releaseFirstPreview = resolve;
+          });
+          previewOrder.push("Hello released");
+        }
+      },
+    );
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "claude-cli";
+    followupRun.run.model = "claude-opus-4-6";
+
+    const runPromise = runAgentTurnWithFallback({
+      commandBody: "hi",
+      followupRun,
+      sessionCtx: {
+        Provider: "telegram",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: { onPartialReply },
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    await firstPreviewPromise;
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(previewOrder).toEqual(["Hello"]);
+
+    releaseFirstPreview?.();
+    await runPromise;
+
+    expect(previewOrder).toEqual(["Hello", "Hello released", "Hello world"]);
+  });
+
+  it("does not bridge CLI assistant deltas when silentExpected is set (#76869)", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("claude-cli", "claude-opus-4-6"),
+      provider: "claude-cli",
+      model: "claude-opus-4-6",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+        "../../infra/agent-events.js",
+      );
+      realAgentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "assistant",
+        data: { text: "secret heartbeat output", delta: "secret heartbeat output" },
+      });
+      realAgentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "assistant",
+        data: { text: "NO_REPLY do not preview", delta: " do not preview" },
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const onPartialReply = vi.fn<NonNullable<GetReplyOptions["onPartialReply"]>>(
+      async (_payload) => undefined,
+    );
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "claude-cli";
+    followupRun.run.model = "claude-opus-4-6";
+    followupRun.run.silentExpected = true;
+
+    await runAgentTurnWithFallback({
+      commandBody: "hi",
+      followupRun,
+      sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
+      opts: { onPartialReply },
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(onPartialReply).not.toHaveBeenCalled();
   });
 
   it("resolves CLI messageProvider from the live session surface when no origin channel is set", async () => {
@@ -514,12 +786,10 @@ describe("runAgentTurnWithFallback", () => {
       resolvedVerboseLevel: "off",
     });
 
-    expect(state.runCliAgentMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        messageChannel: undefined,
-        messageProvider: "discord",
-      }),
-    );
+    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
+      messageChannel: undefined,
+      messageProvider: "discord",
+    });
   });
 
   it("does not pass CLI runtime overrides as embedded harness ids for fallback providers", async () => {
@@ -560,10 +830,12 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("success");
     expect(state.runCliAgentMock).not.toHaveBeenCalled();
     expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-    expect(state.runEmbeddedPiAgentMock.mock.calls[0]?.[0]).not.toHaveProperty(
-      "agentHarnessId",
-      "claude-cli",
-    );
+    expect(
+      requireRecord(
+        requireMockCall(state.runEmbeddedPiAgentMock, 0, "embedded run params")[0],
+        "embedded run params",
+      ),
+    ).not.toHaveProperty("agentHarnessId", "claude-cli");
   });
 
   it("forwards media-only tool results without typing text", async () => {
@@ -607,10 +879,15 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("success");
     expect(typingSignals.signalTextDelta).not.toHaveBeenCalled();
     expect(onToolResult).toHaveBeenCalledTimes(1);
-    expect(onToolResult.mock.calls[0]?.[0]).toMatchObject({
+    expectMockCallArgFields(onToolResult, 0, "tool result payload", {
       mediaUrls: ["/tmp/generated.png"],
     });
-    expect(onToolResult.mock.calls[0]?.[0]?.text).toBeUndefined();
+    expect(
+      requireRecord(
+        requireMockCall(onToolResult, 0, "tool result payload")[0],
+        "tool result payload",
+      ).text,
+    ).toBeUndefined();
   });
 
   it("surfaces model capacity errors from no-text mid-turn failures", async () => {
@@ -719,15 +996,14 @@ describe("runAgentTurnWithFallback", () => {
       const first = (await params.run("openai-codex", "gpt-5.4")) as {
         payloads?: Array<{ text?: string; isError?: boolean; isReasoning?: boolean }>;
       };
-      expect(
-        await params.classifyResult?.({
-          result: first,
-          provider: "openai-codex",
-          model: "gpt-5.4",
-          attempt: 1,
-          total: 2,
-        }),
-      ).toMatchObject({
+      const classification = await params.classifyResult?.({
+        result: first,
+        provider: "openai-codex",
+        model: "gpt-5.4",
+        attempt: 1,
+        total: 2,
+      });
+      expectRecordFields(requireRecord(classification, "fallback classification"), {
         reason: "format",
         code: "planning_only_result",
       });
@@ -875,15 +1151,14 @@ describe("runAgentTurnWithFallback", () => {
   it("classifies final GPT-5 terminal-empty results instead of silently succeeding", async () => {
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       const result = { payloads: [], meta: {} };
-      expect(
-        await params.classifyResult?.({
-          result,
-          provider: "openai-codex",
-          model: "gpt-5.4",
-          attempt: 1,
-          total: 1,
-        }),
-      ).toMatchObject({
+      const classification = await params.classifyResult?.({
+        result,
+        provider: "openai-codex",
+        model: "gpt-5.4",
+        attempt: 1,
+        total: 1,
+      });
+      expectRecordFields(requireRecord(classification, "fallback classification"), {
         reason: "format",
         code: "empty_result",
       });
@@ -917,15 +1192,14 @@ describe("runAgentTurnWithFallback", () => {
       const failedResult = await params.run("openai-codex", "gpt-5.4");
       expect(sessionEntry.providerOverride).toBe("openai-codex");
       expect(sessionEntry.modelOverride).toBe("gpt-5.4");
-      expect(
-        await params.classifyResult?.({
-          result: failedResult as { payloads?: [] },
-          provider: "openai-codex",
-          model: "gpt-5.4",
-          attempt: 1,
-          total: 2,
-        }),
-      ).toMatchObject({
+      const classification = await params.classifyResult?.({
+        result: failedResult as { payloads?: [] },
+        provider: "openai-codex",
+        model: "gpt-5.4",
+        attempt: 1,
+        total: 2,
+      });
+      expectRecordFields(requireRecord(classification, "fallback classification"), {
         code: "empty_result",
       });
       expect(sessionEntry.providerOverride).toBeUndefined();
@@ -1145,6 +1419,103 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 
+  it("skips channel item progress when a matching tool event carries the progress", async () => {
+    const onItemEvent = vi.fn();
+    const onToolStart = vi.fn();
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({
+        stream: "item",
+        data: {
+          itemId: "cmd-1",
+          kind: "command",
+          title: "Command",
+          name: "bash",
+          phase: "start",
+          status: "running",
+          suppressChannelProgress: true,
+        },
+      });
+      await params.onAgentEvent?.({
+        stream: "tool",
+        data: {
+          itemId: "cmd-1",
+          toolCallId: "cmd-1",
+          name: "bash",
+          phase: "start",
+          args: { command: "pnpm test" },
+        },
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({
+        opts: {
+          onItemEvent,
+          onToolStart,
+        } satisfies GetReplyOptions,
+      }),
+    });
+
+    expect(result.kind).toBe("success");
+    expect(onItemEvent).not.toHaveBeenCalled();
+    expect(onToolStart).toHaveBeenCalledWith({
+      name: "bash",
+      phase: "start",
+      args: { command: "pnpm test" },
+      detailMode: undefined,
+    });
+  });
+
+  it("preserves suppressed item progress when no tool-start callback is registered", async () => {
+    const onItemEvent = vi.fn();
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({
+        stream: "item",
+        data: {
+          itemId: "cmd-1",
+          kind: "command",
+          title: "Command",
+          name: "bash",
+          phase: "start",
+          status: "running",
+          suppressChannelProgress: true,
+        },
+      });
+      await params.onAgentEvent?.({
+        stream: "tool",
+        data: {
+          itemId: "cmd-1",
+          toolCallId: "cmd-1",
+          name: "bash",
+          phase: "start",
+          args: { command: "pnpm test" },
+        },
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({
+        opts: {
+          onItemEvent,
+        } satisfies GetReplyOptions,
+      }),
+    });
+
+    expect(result.kind).toBe("success");
+    expect(onItemEvent).toHaveBeenCalledWith({
+      itemId: "cmd-1",
+      kind: "command",
+      title: "Command",
+      name: "bash",
+      phase: "start",
+      status: "running",
+    });
+  });
+
   it("forwards raw tool progress detail mode to tool-start reply options", async () => {
     const onToolStart = vi.fn();
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
@@ -1176,6 +1547,54 @@ describe("runAgentTurnWithFallback", () => {
       args: { command: "pnpm test -- --watch=false" },
       detailMode: "raw",
     });
+  });
+
+  it("fires tool-start progress before slow typing signals resolve for best-effort Pi events", async () => {
+    const onToolStart = vi.fn(async () => {});
+    let releaseTyping: (() => void) | undefined;
+    const typingSignals = createMockTypingSignaler();
+    vi.mocked(typingSignals.signalToolStart).mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseTyping = resolve;
+        }),
+    );
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      void params.onAgentEvent?.({
+        stream: "tool",
+        data: {
+          name: "exec",
+          phase: "start",
+          args: { command: "echo hi" },
+        },
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({
+        opts: {
+          onToolStart,
+        } satisfies GetReplyOptions,
+      }),
+      typingSignals,
+    });
+
+    try {
+      expect(result.kind).toBe("success");
+      expect(onToolStart).toHaveBeenCalledWith({
+        name: "exec",
+        phase: "start",
+        args: { command: "echo hi" },
+        detailMode: undefined,
+      });
+    } finally {
+      releaseTyping?.();
+      await Promise.resolve();
+    }
   });
 
   it("leaves Codex app-server telemetry publication to the harness", async () => {
@@ -1219,12 +1638,10 @@ describe("runAgentTurnWithFallback", () => {
     });
 
     expect(result.kind).toBe("success");
-    expect(emitAgentEvent).not.toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: "run-codex",
-        stream: "codex_app_server.guardian",
-      }),
-    );
+    expectNoMockCallWithFields(emitAgentEvent, {
+      runId: "run-codex",
+      stream: "codex_app_server.guardian",
+    });
   });
 
   it("emits an embedded lifecycle terminal backstop when the runner returns without one", async () => {
@@ -1267,19 +1684,28 @@ describe("runAgentTurnWithFallback", () => {
     });
 
     expect(result.kind).toBe("success");
-    expect(emitAgentEvent).toHaveBeenCalledWith({
+    const lifecycleEvent = requireRecord(
+      requireMockCallArgWithFields(
+        emitAgentEvent,
+        { runId: "run-timeout", sessionKey: "main", stream: "lifecycle" },
+        "agent event",
+      ),
+      "agent event",
+    );
+    expectRecordFields(lifecycleEvent, {
       runId: "run-timeout",
       sessionKey: "main",
       stream: "lifecycle",
-      data: {
-        phase: "end",
-        startedAt: 1_000,
-        endedAt: expect.any(Number),
-        aborted: true,
-        livenessState: "blocked",
-        replayInvalid: true,
-      },
     });
+    const lifecycleData = requireRecord(lifecycleEvent.data, "lifecycle data");
+    expectRecordFields(lifecycleData, {
+      phase: "end",
+      startedAt: 1_000,
+      aborted: true,
+      livenessState: "blocked",
+      replayInvalid: true,
+    });
+    expect(typeof lifecycleData.endedAt).toBe("number");
   });
 
   it("does not duplicate embedded lifecycle terminal events already reported by the runner", async () => {
@@ -1323,12 +1749,10 @@ describe("runAgentTurnWithFallback", () => {
     });
 
     expect(result.kind).toBe("success");
-    expect(emitAgentEvent).not.toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: "run-complete",
-        stream: "lifecycle",
-      }),
-    );
+    expectNoMockCallWithFields(emitAgentEvent, {
+      runId: "run-complete",
+      stream: "lifecycle",
+    });
   });
 
   it("trims chatty GPT ack-turn final prose", async () => {
@@ -1700,14 +2124,12 @@ describe("runAgentTurnWithFallback", () => {
 
     expect(result.kind).toBe("success");
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "🧹 Compacting context...",
-        replyToId: "msg",
-        replyToCurrent: true,
-        isCompactionNotice: true,
-      }),
-    );
+    expectBlockReplyCall(onBlockReply, 0, {
+      text: "🧹 Compacting context...",
+      replyToId: "msg",
+      replyToCurrent: true,
+      isCompactionNotice: true,
+    });
   });
 
   it("emits a compaction completion notice when notifyUser is enabled", async () => {
@@ -1758,24 +2180,18 @@ describe("runAgentTurnWithFallback", () => {
     });
 
     expect(result.kind).toBe("success");
-    expect(onBlockReply).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        text: "🧹 Compacting context...",
-        replyToId: "msg",
-        replyToCurrent: true,
-        isCompactionNotice: true,
-      }),
-    );
-    expect(onBlockReply).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        text: "🧹 Compaction complete",
-        replyToId: "msg",
-        replyToCurrent: true,
-        isCompactionNotice: true,
-      }),
-    );
+    expectBlockReplyCall(onBlockReply, 0, {
+      text: "🧹 Compacting context...",
+      replyToId: "msg",
+      replyToCurrent: true,
+      isCompactionNotice: true,
+    });
+    expectBlockReplyCall(onBlockReply, 1, {
+      text: "🧹 Compaction complete",
+      replyToId: "msg",
+      replyToCurrent: true,
+      isCompactionNotice: true,
+    });
   });
 
   it("delivers compaction hook messages without duplicating notifyUser notices", async () => {
@@ -1830,24 +2246,18 @@ describe("runAgentTurnWithFallback", () => {
 
     expect(result.kind).toBe("success");
     expect(onBlockReply).toHaveBeenCalledTimes(2);
-    expect(onBlockReply).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        text: "Hook before",
-        replyToId: "msg",
-        replyToCurrent: true,
-        isCompactionNotice: true,
-      }),
-    );
-    expect(onBlockReply).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        text: "Hook after",
-        replyToId: "msg",
-        replyToCurrent: true,
-        isCompactionNotice: true,
-      }),
-    );
+    expectBlockReplyCall(onBlockReply, 0, {
+      text: "Hook before",
+      replyToId: "msg",
+      replyToCurrent: true,
+      isCompactionNotice: true,
+    });
+    expectBlockReplyCall(onBlockReply, 1, {
+      text: "Hook after",
+      replyToId: "msg",
+      replyToCurrent: true,
+      isCompactionNotice: true,
+    });
   });
 
   it("prefers onCompactionEnd callback over default notice when notifyUser is enabled", async () => {
@@ -1903,12 +2313,10 @@ describe("runAgentTurnWithFallback", () => {
     // The start notice still fires (no onCompactionStart callback provided),
     // but the completion notice is suppressed in favor of the callback.
     expect(onBlockReply).toHaveBeenCalledTimes(1);
-    expect(onBlockReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "🧹 Compacting context...",
-        isCompactionNotice: true,
-      }),
-    );
+    expectBlockReplyCall(onBlockReply, 0, {
+      text: "🧹 Compacting context...",
+      isCompactionNotice: true,
+    });
   });
 
   it("emits an incomplete compaction notice when compaction ends without completing", async () => {
@@ -1959,20 +2367,14 @@ describe("runAgentTurnWithFallback", () => {
     });
 
     expect(result.kind).toBe("success");
-    expect(onBlockReply).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        text: "🧹 Compacting context...",
-        isCompactionNotice: true,
-      }),
-    );
-    expect(onBlockReply).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        text: "🧹 Compaction incomplete",
-        isCompactionNotice: true,
-      }),
-    );
+    expectBlockReplyCall(onBlockReply, 0, {
+      text: "🧹 Compacting context...",
+      isCompactionNotice: true,
+    });
+    expectBlockReplyCall(onBlockReply, 1, {
+      text: "🧹 Compaction incomplete",
+      isCompactionNotice: true,
+    });
   });
 
   it("does not show a rate-limit countdown for mixed-cause fallback exhaustion", async () => {
@@ -2073,7 +2475,7 @@ describe("runAgentTurnWithFallback", () => {
     if (result.kind === "final") {
       expect(result.payload.text).toBe(`⚠️ ${codexMessage}`);
       expect(result.payload.text).not.toContain("All models failed");
-      expect(getReplyPayloadMetadata(result.payload)).toMatchObject({
+      expectRecordFields(requireRecord(getReplyPayloadMetadata(result.payload), "reply metadata"), {
         deliverDespiteSourceReplySuppression: true,
       });
     }
@@ -2112,7 +2514,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(`⚠️ ${codexMessage}`);
-      expect(getReplyPayloadMetadata(result.payload)).toMatchObject({
+      expectRecordFields(requireRecord(getReplyPayloadMetadata(result.payload), "reply metadata"), {
         deliverDespiteSourceReplySuppression: true,
       });
     }
@@ -2225,7 +2627,9 @@ describe("runAgentTurnWithFallback", () => {
         "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
       );
     }
-    expect(failMock).toHaveBeenCalledWith("gateway_draining", expect.any(GatewayDrainingError));
+    const failCall = requireMockCall(failMock, 0, "reply operation fail");
+    expect(failCall[0]).toBe("gateway_draining");
+    expect(failCall[1]).toBeInstanceOf(GatewayDrainingError);
   });
 
   it("surfaces gateway restart text when fallback exhaustion wraps a cleared lane error", async () => {
@@ -2277,10 +2681,9 @@ describe("runAgentTurnWithFallback", () => {
         "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
       );
     }
-    expect(failMock).toHaveBeenCalledWith(
-      "command_lane_cleared",
-      expect.any(CommandLaneClearedError),
-    );
+    const failCall = requireMockCall(failMock, 0, "reply operation fail");
+    expect(failCall[0]).toBe("command_lane_cleared");
+    expect(failCall[1]).toBeInstanceOf(CommandLaneClearedError);
   });
 
   it("surfaces gateway restart text when the reply operation was aborted for restart", async () => {
@@ -2363,6 +2766,55 @@ describe("runAgentTurnWithFallback", () => {
       expect(result.payload.text).toBe(GENERIC_RUN_FAILURE_TEXT);
     }
   });
+
+  it.each([
+    {
+      rejection: new Error("CLI exceeded timeout (300s) and was terminated."),
+      modeLabel: "overall CLI turn budget" as const,
+      routingSubstring: undefined as string | undefined,
+    },
+    {
+      rejection: new Error("CLI produced no output for 120s and was terminated."),
+      modeLabel: "no-output stall" as const,
+      routingSubstring: undefined,
+    },
+    {
+      rejection: new Error(
+        "All models failed (2): anthropic/claude-opus-4-7: CLI exceeded timeout (300s) and was terminated. | anthropic/foo: bar",
+      ),
+      modeLabel: "overall CLI turn budget" as const,
+      routingSubstring: "(routing anthropic/claude-opus-4-7)",
+    },
+    {
+      rejection: new Error("codex-cli/gpt-5.5: CLI exceeded timeout (60s) and was terminated."),
+      modeLabel: "overall CLI turn budget" as const,
+      routingSubstring: "(routing codex-cli/gpt-5.5)",
+    },
+  ])(
+    "surfaces CLI subprocess timeout copy instead of generic failure when verbose is off ($modeLabel)",
+    async ({ rejection, modeLabel, routingSubstring }) => {
+      state.runWithModelFallbackMock.mockRejectedValueOnce(rejection);
+
+      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+      const result = await runAgentTurnWithFallback({
+        ...createMinimalRunAgentTurnParams(),
+      });
+
+      expect(result.kind).toBe("final");
+      if (result.kind !== "final") {
+        throw new Error("expected final reply");
+      }
+      expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
+      expect(result.payload.text).toContain("CLI subprocess");
+      expect(result.payload.text).not.toContain("Claude CLI");
+      expect(result.payload.text).toContain(modeLabel);
+      expect(result.payload.text).toContain("gateway may still be healthy");
+      expect(result.payload.text).toContain("cliBackends.<your-runtime>");
+      if (routingSubstring) {
+        expect(result.payload.text).toContain(routingSubstring);
+      }
+    },
+  );
 
   it("forwards sanitized generic errors on external chat channels when verbose is on", async () => {
     state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
@@ -2561,7 +3013,7 @@ describe("runAgentTurnWithFallback", () => {
   it("surfaces direct provider auth guidance for missing API keys", async () => {
     state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
       new Error(
-        'No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai-codex/gpt-5.5, or set OPENAI_API_KEY for direct OpenAI API access. | No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai-codex/gpt-5.5, or set OPENAI_API_KEY for direct OpenAI API access.',
+        'No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth; OpenAI agent model runs use openai/gpt-* through the Codex runtime. Set OPENAI_API_KEY only for direct OpenAI API-key surfaces. | No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth; OpenAI agent model runs use openai/gpt-* through the Codex runtime. Set OPENAI_API_KEY only for direct OpenAI API-key surfaces.',
       ),
     );
 
@@ -2593,7 +3045,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ Missing API key for OpenAI on the gateway. Use `openai-codex/gpt-5.5`, or set `OPENAI_API_KEY`, then try again.",
+        "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-5.5` with the Codex OAuth profile, or set `OPENAI_API_KEY` for direct OpenAI API-key runs.",
       );
     }
   });
@@ -3079,7 +3531,7 @@ describe("runAgentTurnWithFallback", () => {
 
     expect(result.kind).toBe("success");
     expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    expect(state.runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
+    expectMockCallArgFields(state.runEmbeddedPiAgentMock, 0, "embedded run params", {
       provider: "openai-codex",
       model: "gpt-5.4",
       authProfileId: undefined,
@@ -3251,13 +3703,50 @@ describe("runAgentTurnWithFallback", () => {
     });
 
     expect(updated).toBe(true);
-    expect(entry).toMatchObject({
+    expectRecordFields(entry as unknown as Record<string, unknown>, {
       updatedAt: 123,
       providerOverride: "anthropic",
       modelOverride: "claude-sonnet",
       modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "anthropic",
+      modelOverrideFallbackOriginModel: "claude-opus",
       authProfileOverride: "anthropic:openclaw",
       authProfileOverrideSource: "user",
+    });
+  });
+
+  it("preserves original auto-fallback origin across chained fallbacks", async () => {
+    const applyFallbackCandidateSelectionToEntry =
+      await getApplyFallbackCandidateSelectionToEntry();
+    const entry = {
+      sessionId: "session",
+      updatedAt: 1,
+      providerOverride: "openrouter",
+      modelOverride: "fallback-b",
+      modelOverrideSource: "auto" as const,
+      modelOverrideFallbackOriginProvider: "anthropic",
+      modelOverrideFallbackOriginModel: "claude-opus",
+    } as SessionEntry;
+
+    const { updated } = applyFallbackCandidateSelectionToEntry({
+      entry,
+      run: {
+        provider: "openrouter",
+        model: "fallback-b",
+      } as FollowupRun["run"],
+      provider: "openrouter",
+      model: "fallback-c",
+      now: 123,
+    });
+
+    expect(updated).toBe(true);
+    expectRecordFields(entry as unknown as Record<string, unknown>, {
+      updatedAt: 123,
+      providerOverride: "openrouter",
+      modelOverride: "fallback-c",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "anthropic",
+      modelOverrideFallbackOriginModel: "claude-opus",
     });
   });
 });

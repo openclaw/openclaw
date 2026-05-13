@@ -11,6 +11,17 @@ import {
 type TerminalNote = (message: string, title?: string) => void;
 
 const terminalNoteMock = vi.hoisted(() => vi.fn<TerminalNote>());
+const collectImplicitFallbackClobberWarningsMock = vi.hoisted(() =>
+  vi.fn<(cfg: unknown) => string[]>(() => []),
+);
+const noteImplicitFallbackClobberWarningsMock = vi.hoisted(() =>
+  vi.fn<(cfg: unknown) => void>((cfg) => {
+    const warnings = collectImplicitFallbackClobberWarningsMock(cfg);
+    if (warnings.length > 0) {
+      terminalNoteMock(warnings.join("\n"), "Doctor warnings");
+    }
+  }),
+);
 const legacyConfigMigrationForTest = vi.hoisted(() => {
   function asRecord(value: unknown): Record<string, unknown> | null {
     return value && typeof value === "object" && !Array.isArray(value)
@@ -1311,7 +1322,9 @@ vi.mock("./doctor-config-analysis.js", () => {
   }
 
   return {
+    collectImplicitFallbackClobberWarnings: collectImplicitFallbackClobberWarningsMock,
     formatConfigPath,
+    noteImplicitFallbackClobberWarnings: noteImplicitFallbackClobberWarningsMock,
     noteIncludeConfinementWarning: vi.fn(),
     noteOpencodeProviderOverrides: vi.fn(),
     resolveConfigPathTarget,
@@ -1352,7 +1365,13 @@ async function collectDoctorWarnings(config: Record<string, unknown>): Promise<s
     config,
     run: loadAndMaybeMigrateDoctorConfig,
   });
-  return noteSpy.mock.calls.filter((call) => call[1] === "Doctor warnings").map((call) => call[0]);
+  const warnings: string[] = [];
+  for (const [message, title] of noteSpy.mock.calls) {
+    if (title === "Doctor warnings") {
+      warnings.push(message);
+    }
+  }
+  return warnings;
 }
 
 type DiscordGuildRule = {
@@ -1379,6 +1398,9 @@ type RepairedDiscordPolicy = {
 describe("doctor config flow", () => {
   beforeEach(() => {
     terminalNoteMock.mockClear();
+    collectImplicitFallbackClobberWarningsMock.mockClear();
+    collectImplicitFallbackClobberWarningsMock.mockReturnValue([]);
+    noteImplicitFallbackClobberWarningsMock.mockClear();
   });
 
   it("preserves invalid config for doctor repairs", async () => {
@@ -1409,6 +1431,37 @@ describe("doctor config flow", () => {
       },
     });
     expect(doctorWarnings.some((line) => line.includes("mutable allowlist"))).toBe(false);
+  });
+
+  it("emits implicit fallback clobber warnings from the loaded config", async () => {
+    collectImplicitFallbackClobberWarningsMock.mockReturnValueOnce([
+      '- agents.list[0].model (id=ops) is "openai/gpt-5.3", a bare string with no fallbacks. At runtime this clobbers agents.defaults.model.fallbacks (openai/gpt-5.4), leaving the agent with no fallbacks.',
+    ]);
+    const config = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.5",
+            fallbacks: ["openai/gpt-5.4"],
+          },
+        },
+        list: [{ id: "ops", model: "openai/gpt-5.3" }],
+      },
+    };
+
+    await runDoctorConfigWithInput({
+      config,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(noteImplicitFallbackClobberWarningsMock).toHaveBeenCalledTimes(1);
+    const [[warningParams]] = noteImplicitFallbackClobberWarningsMock.mock
+      .calls as unknown as Array<[{ agents?: unknown }]>;
+    expect(warningParams.agents).toStrictEqual(config.agents);
+    const doctorWarnings = terminalNoteMock.mock.calls
+      .filter(([, title]) => title === "Doctor warnings")
+      .map(([message]) => message);
+    expect(doctorWarnings.join("\n")).toContain("clobbers agents.defaults.model.fallbacks");
   });
 
   it("warns when hooks transformsDir points outside the hook transforms root", async () => {
@@ -2016,8 +2069,8 @@ describe("doctor config flow", () => {
         .filter((call) => call[1] === "Doctor warnings" || call[1] === "Doctor changes")
         .map((call) => call[0]);
       const joinedOutputs = outputs.join("\n");
-      expect(outputs.filter((line) => line.includes("\u001b"))).toEqual([]);
-      expect(outputs.filter((line) => line.includes("\nforged"))).toEqual([]);
+      expect(outputs.some((line) => line.includes("\u001b"))).toBe(false);
+      expect(outputs.some((line) => line.includes("\nforged"))).toBe(false);
       expect(joinedOutputs).toContain('channels.slack.accounts.opsopen.allowFrom: set to ["*"]');
       expect(joinedOutputs).toContain('required by dmPolicy="open"');
       expect(
@@ -2432,28 +2485,18 @@ describe("doctor config flow", () => {
       };
     };
     expect(cfg.heartbeat).toBeUndefined();
-    expect(cfg.agents?.defaults?.heartbeat).toMatchObject({
-      model: "anthropic/claude-3-5-haiku-20241022",
-      every: "30m",
-    });
+    expect(cfg.agents?.defaults?.heartbeat?.model).toBe("anthropic/claude-3-5-haiku-20241022");
+    expect(cfg.agents?.defaults?.heartbeat?.every).toBe("30m");
     expect(cfg.gateway?.bind).toBe("lan");
     expect(cfg.session?.maintenance?.rotateBytes).toBeUndefined();
-    expect(cfg.session?.threadBindings).toMatchObject({
-      idleHours: 24,
-    });
-    expect(cfg.channels?.discord?.threadBindings).toMatchObject({
-      idleHours: 12,
-    });
-    expect(cfg.channels?.discord?.accounts?.alpha?.threadBindings).toMatchObject({
-      idleHours: 6,
-    });
+    expect(cfg.session?.threadBindings?.idleHours).toBe(24);
+    expect(cfg.channels?.discord?.threadBindings?.idleHours).toBe(12);
+    expect(cfg.channels?.discord?.accounts?.alpha?.threadBindings?.idleHours).toBe(6);
     expect(cfg.session?.threadBindings?.ttlHours).toBeUndefined();
     expect(cfg.channels?.discord?.threadBindings?.ttlHours).toBeUndefined();
     expect(cfg.channels?.discord?.accounts?.alpha?.threadBindings?.ttlHours).toBeUndefined();
-    expect(cfg.channels?.defaults?.heartbeat).toMatchObject({
-      showOk: true,
-      showAlerts: false,
-    });
+    expect(cfg.channels?.defaults?.heartbeat?.showOk).toBe(true);
+    expect(cfg.channels?.defaults?.heartbeat?.showAlerts).toBe(false);
   });
 
   it("warns clearly about legacy config surfaces and points to doctor --fix", async () => {
@@ -2569,6 +2612,51 @@ describe("doctor config flow", () => {
     }
   });
 
+  it("titles the legacy migration panel as a preview when --fix is not passed (#80817)", async () => {
+    const noteSpy = resetTerminalNoteMock();
+    try {
+      await runDoctorConfigWithInput({
+        config: {
+          heartbeat: {
+            model: "anthropic/claude-3-5-haiku-20241022",
+            every: "30m",
+          },
+        },
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+      const changeTitles = noteSpy.mock.calls.map(([, title]) => title);
+      expect(changeTitles).toContain("Doctor changes preview");
+      expect(changeTitles).not.toContain("Doctor changes");
+      const previewPanel = noteSpy.mock.calls.find(
+        ([, title]) => title === "Doctor changes preview",
+      );
+      expect(previewPanel?.[0]).toContain("Moved heartbeat to");
+    } finally {
+      noteSpy.mockClear();
+    }
+  });
+
+  it("titles the legacy migration panel as applied when --fix is passed (#80817)", async () => {
+    const noteSpy = resetTerminalNoteMock();
+    try {
+      await runDoctorConfigWithInput({
+        repair: true,
+        config: {
+          heartbeat: {
+            model: "anthropic/claude-3-5-haiku-20241022",
+            every: "30m",
+          },
+        },
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+      const changeTitles = noteSpy.mock.calls.map(([, title]) => title);
+      expect(changeTitles).toContain("Doctor changes");
+      expect(changeTitles).not.toContain("Doctor changes preview");
+    } finally {
+      noteSpy.mockClear();
+    }
+  });
+
   it("recovers from stale googlechat top-level allowFrom by repairing dm.allowFrom", async () => {
     const result = await runDoctorConfigWithInput({
       repair: true,
@@ -2641,7 +2729,7 @@ describe("doctor config flow", () => {
             .filter((call) => call[1] === "Doctor changes")
             .map((call) => call[0])
             .filter((line) => line.includes("Normalized talk.provider/providers shape"));
-          expect(secondRunTalkNormalizationLines).toEqual([]);
+          expect(secondRunTalkNormalizationLines).toStrictEqual([]);
         } finally {
           noteSpy.mockClear();
         }

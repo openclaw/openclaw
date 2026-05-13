@@ -40,6 +40,55 @@ function makeRunSuite(transcriptForModel: (model: string) => string = defaultMod
   );
 }
 
+function createConcurrencyGate(expectedActive: number) {
+  let active = 0;
+  let maxActive = 0;
+  let releaseStartedTasks = false;
+  let resolveExpectedActive: () => void = () => {};
+  const expectedActiveReached = new Promise<void>((resolve) => {
+    resolveExpectedActive = resolve;
+  });
+  const taskReleases: Array<() => void> = [];
+  const releaseQueuedTasks = () => {
+    if (!releaseStartedTasks) {
+      return;
+    }
+    let releaseTask: (() => void) | undefined;
+    while ((releaseTask = taskReleases.shift())) {
+      releaseTask();
+    }
+  };
+
+  return {
+    get maxActive() {
+      return maxActive;
+    },
+    async run<T>(work: () => T | Promise<T>): Promise<T> {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      if (active >= expectedActive) {
+        resolveExpectedActive();
+      }
+      await new Promise<void>((resolve) => {
+        taskReleases.push(resolve);
+        releaseQueuedTasks();
+      });
+      try {
+        return await work();
+      } finally {
+        active -= 1;
+      }
+    },
+    async waitForExpectedActive(): Promise<void> {
+      await expectedActiveReached;
+    },
+    releaseStartedTasks(): void {
+      releaseStartedTasks = true;
+      releaseQueuedTasks();
+    },
+  };
+}
+
 function makeSuiteResult(params: { outputDir: string; model: string; transcript: string }) {
   return {
     outputDir: params.outputDir,
@@ -61,6 +110,32 @@ function makeSuiteResult(params: { outputDir: string; model: string; transcript:
       },
     ],
   } satisfies QaSuiteResult;
+}
+
+function requireRunSuiteParams(runSuite: ReturnType<typeof vi.fn>, index = 0) {
+  const params = runSuite.mock.calls[index]?.[0] as CharacterRunSuiteParams | undefined;
+  if (!params) {
+    throw new Error(`runSuite call ${index} missing`);
+  }
+  return params;
+}
+
+function requireRunJudgeParams(runJudge: ReturnType<typeof vi.fn>, index = 0) {
+  const params = runJudge.mock.calls[index]?.[0] as CharacterRunJudgeParams | undefined;
+  if (!params) {
+    throw new Error(`runJudge call ${index} missing`);
+  }
+  return params;
+}
+
+function expectFirstRunFailure(
+  result: Awaited<ReturnType<typeof runQaCharacterEval>>,
+  expected: { model: string; error: string },
+) {
+  const run = result.runs[0];
+  expect(run?.model).toBe(expected.model);
+  expect(run?.status).toBe("fail");
+  expect(run?.error).toBe(expected.error);
 }
 
 describe("runQaCharacterEval", () => {
@@ -111,24 +186,17 @@ describe("runQaCharacterEval", () => {
     });
 
     expect(runSuite).toHaveBeenCalledTimes(2);
-    expect(runSuite).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        providerMode: "live-frontier",
-        primaryModel: "openai/gpt-5.5",
-        alternateModel: "openai/gpt-5.5",
-        fastMode: true,
-        scenarioIds: ["character-vibes-gollum"],
-      }),
-    );
-    expect(runJudge).toHaveBeenCalledWith(
-      expect.objectContaining({
-        judgeModel: "openai/gpt-5.5",
-        judgeThinkingDefault: "xhigh",
-        judgeFastMode: true,
-        timeoutMs: 300_000,
-      }),
-    );
+    const firstRunParams = requireRunSuiteParams(runSuite);
+    expect(firstRunParams.providerMode).toBe("live-frontier");
+    expect(firstRunParams.primaryModel).toBe("openai/gpt-5.5");
+    expect(firstRunParams.alternateModel).toBe("openai/gpt-5.5");
+    expect(firstRunParams.fastMode).toBe(true);
+    expect(firstRunParams.scenarioIds).toEqual(["character-vibes-gollum"]);
+    const judgeParams = requireRunJudgeParams(runJudge);
+    expect(judgeParams.judgeModel).toBe("openai/gpt-5.5");
+    expect(judgeParams.judgeThinkingDefault).toBe("xhigh");
+    expect(judgeParams.judgeFastMode).toBe(true);
+    expect(judgeParams.timeoutMs).toBe(300_000);
     expect(result.judgments).toHaveLength(1);
     expect(result.judgments[0]?.rankings.map((ranking) => ranking.model)).toEqual([
       "openai/gpt-5.5",
@@ -265,22 +333,17 @@ describe("runQaCharacterEval", () => {
   });
 
   it("runs candidate models with bounded concurrency while preserving result order", async () => {
-    let activeRuns = 0;
-    let maxActiveRuns = 0;
-    const runSuite = vi.fn(async (params: CharacterRunSuiteParams) => {
-      activeRuns += 1;
-      maxActiveRuns = Math.max(maxActiveRuns, activeRuns);
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      activeRuns -= 1;
-      return makeReplySuiteResult(params);
-    });
+    const runGate = createConcurrencyGate(2);
+    const runSuite = vi.fn(async (params: CharacterRunSuiteParams) =>
+      runGate.run(() => makeReplySuiteResult(params)),
+    );
     const runJudge = makeRunJudge([
       { model: "openai/gpt-5.5", rank: 1, score: 8, summary: "ok" },
       { model: "anthropic/claude-sonnet-4-6", rank: 2, score: 7, summary: "ok" },
       { model: "moonshot/kimi-k2.5", rank: 3, score: 6, summary: "ok" },
     ]);
 
-    const result = await runQaCharacterEval({
+    const resultPromise = runQaCharacterEval({
       repoRoot: tempRoot,
       outputDir: path.join(tempRoot, "character"),
       models: ["openai/gpt-5.5", "anthropic/claude-sonnet-4-6", "moonshot/kimi-k2.5"],
@@ -290,7 +353,10 @@ describe("runQaCharacterEval", () => {
       runJudge,
     });
 
-    expect(maxActiveRuns).toBe(2);
+    await runGate.waitForExpectedActive();
+    expect(runGate.maxActive).toBe(2);
+    runGate.releaseStartedTasks();
+    const result = await resultPromise;
     expect(result.runs.map((run) => run.model)).toEqual([
       "openai/gpt-5.5",
       "anthropic/claude-sonnet-4-6",
@@ -299,33 +365,25 @@ describe("runQaCharacterEval", () => {
   });
 
   it("defaults candidate and judge concurrency to sixteen", async () => {
-    let activeRuns = 0;
-    let maxActiveRuns = 0;
-    const runSuite = vi.fn(async (params: CharacterRunSuiteParams) => {
-      activeRuns += 1;
-      maxActiveRuns = Math.max(maxActiveRuns, activeRuns);
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      activeRuns -= 1;
-      return makeReplySuiteResult(params);
-    });
-    let activeJudges = 0;
-    let maxActiveJudges = 0;
+    const runGate = createConcurrencyGate(16);
+    const judgeGate = createConcurrencyGate(16);
+    const runSuite = vi.fn(async (params: CharacterRunSuiteParams) =>
+      runGate.run(() => makeReplySuiteResult(params)),
+    );
     const runJudge = vi.fn(async (_params: CharacterRunJudgeParams) => {
-      activeJudges += 1;
-      maxActiveJudges = Math.max(maxActiveJudges, activeJudges);
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      activeJudges -= 1;
-      return makeJudgeReply(
-        Array.from({ length: 20 }, (_, index) => ({
-          model: `provider/model-${index + 1}`,
-          rank: index + 1,
-          score: 10 - index,
-          summary: "ok",
-        })),
+      return await judgeGate.run(() =>
+        makeJudgeReply(
+          Array.from({ length: 20 }, (_, index) => ({
+            model: `provider/model-${index + 1}`,
+            rank: index + 1,
+            score: 10 - index,
+            summary: "ok",
+          })),
+        ),
       );
     });
 
-    await runQaCharacterEval({
+    const resultPromise = runQaCharacterEval({
       repoRoot: tempRoot,
       outputDir: path.join(tempRoot, "character"),
       models: Array.from({ length: 20 }, (_, index) => `provider/model-${index + 1}`),
@@ -334,8 +392,13 @@ describe("runQaCharacterEval", () => {
       runJudge,
     });
 
-    expect(maxActiveRuns).toBe(16);
-    expect(maxActiveJudges).toBe(16);
+    await runGate.waitForExpectedActive();
+    expect(runGate.maxActive).toBe(16);
+    runGate.releaseStartedTasks();
+    await judgeGate.waitForExpectedActive();
+    expect(judgeGate.maxActive).toBe(16);
+    judgeGate.releaseStartedTasks();
+    await resultPromise;
   });
 
   it("marks raw provider error transcripts as failed output", async () => {
@@ -360,9 +423,8 @@ describe("runQaCharacterEval", () => {
       runJudge,
     });
 
-    expect(result.runs[0]).toMatchObject({
+    expectFirstRunFailure(result, {
       model: "qwen/qwen3.6-plus",
-      status: "fail",
       error: "model unsupported error leaked into transcript",
     });
   });
@@ -388,9 +450,8 @@ describe("runQaCharacterEval", () => {
       runJudge,
     });
 
-    expect(result.runs[0]).toMatchObject({
+    expectFirstRunFailure(result, {
       model: "qwen/qwen3.5-plus",
-      status: "fail",
       error: "tool failure leaked into transcript",
     });
   });
@@ -417,9 +478,8 @@ describe("runQaCharacterEval", () => {
       runJudge,
     });
 
-    expect(result.runs[0]).toMatchObject({
+    expectFirstRunFailure(result, {
       model: "qa/generic-fallback-model",
-      status: "fail",
       error: "generic request failure leaked into transcript",
     });
   });
@@ -446,9 +506,8 @@ describe("runQaCharacterEval", () => {
       runJudge,
     });
 
-    expect(result.runs[0]).toMatchObject({
+    expectFirstRunFailure(result, {
       model: "google/gemini-test",
-      status: "fail",
       error: "LLM timeout leaked into transcript",
     });
   });
@@ -475,9 +534,8 @@ describe("runQaCharacterEval", () => {
       runJudge,
     });
 
-    expect(result.runs[0]).toMatchObject({
+    expectFirstRunFailure(result, {
       model: "codex/gpt-5.5",
-      status: "fail",
       error: "internal harness/meta text leaked into transcript",
     });
   });

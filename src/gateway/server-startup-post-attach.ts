@@ -144,7 +144,18 @@ function schedulePostReadySidecarTask(params: {
   handle.unref?.();
 }
 
-function resolveRestartSentinelPathFast(env: NodeJS.ProcessEnv = process.env): string {
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.promises.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function resolveRestartSentinelPathFast(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<string> {
   const normalizePathEnv = (value: string | undefined) => {
     const trimmed = value?.trim();
     return trimmed && trimmed !== "undefined" && trimmed !== "null" ? trimmed : undefined;
@@ -172,19 +183,19 @@ function resolveRestartSentinelPathFast(env: NodeJS.ProcessEnv = process.env): s
   }
   const home = resolveHome();
   const newStateDir = path.join(home, ".openclaw");
-  if (env.OPENCLAW_TEST_FAST === "1" || fs.existsSync(newStateDir)) {
+  if (env.OPENCLAW_TEST_FAST === "1" || (await pathExists(newStateDir))) {
     return path.join(newStateDir, RESTART_SENTINEL_FILENAME);
   }
   const legacyStateDir = path.join(home, ".clawdbot");
-  if (fs.existsSync(legacyStateDir)) {
+  if (await pathExists(legacyStateDir)) {
     return path.join(legacyStateDir, RESTART_SENTINEL_FILENAME);
   }
   return path.join(newStateDir, RESTART_SENTINEL_FILENAME);
 }
 
-function hasRestartSentinelFileFast(env: NodeJS.ProcessEnv = process.env): boolean {
+async function hasRestartSentinelFileFast(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
   try {
-    return fs.existsSync(resolveRestartSentinelPathFast(env));
+    return await pathExists(await resolveRestartSentinelPathFast(env));
   } catch {
     return false;
   }
@@ -193,7 +204,7 @@ function hasRestartSentinelFileFast(env: NodeJS.ProcessEnv = process.env): boole
 async function refreshLatestUpdateRestartSentinelIfPresent(): Promise<Awaited<
   ReturnType<typeof refreshLatestUpdateRestartSentinel>
 > | null> {
-  if (!hasRestartSentinelFileFast()) {
+  if (!(await hasRestartSentinelFileFast())) {
     return null;
   }
   return await (await import("./server-restart-sentinel.js")).refreshLatestUpdateRestartSentinel();
@@ -271,13 +282,11 @@ async function prewarmConfiguredPrimaryModel(params: {
     return;
   }
   const [
-    { resolveOpenClawAgentDir },
-    { resolveAgentWorkspaceDir, resolveDefaultAgentId },
+    { resolveAgentWorkspaceDir, resolveDefaultAgentDir, resolveDefaultAgentId },
     { DEFAULT_MODEL, DEFAULT_PROVIDER },
     { isCliProvider, resolveConfiguredModelRef },
     { resolveEmbeddedAgentRuntime },
   ] = await Promise.all([
-    import("../agents/agent-paths.js"),
     import("../agents/agent-scope.js"),
     import("../agents/defaults.js"),
     import("../agents/model-selection.js"),
@@ -297,7 +306,7 @@ async function prewarmConfiguredPrimaryModel(params: {
   }
   // Keep startup prewarm metadata-only; resolving models can import provider runtimes and block readiness.
   const { ensureOpenClawModelsJson } = await import("../agents/models-config.js");
-  const agentDir = resolveOpenClawAgentDir();
+  const agentDir = resolveDefaultAgentDir(params.cfg);
   const workspaceDir =
     params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, resolveDefaultAgentId(params.cfg));
   try {
@@ -591,7 +600,7 @@ export async function startGatewaySidecars(params: {
       if (!shouldCheckRestartSentinel()) {
         return;
       }
-      if (!hasRestartSentinelFileFast()) {
+      if (!(await hasRestartSentinelFileFast())) {
         return;
       }
       setTimeout(() => {
@@ -675,6 +684,7 @@ export async function startGatewayPostAttachRuntime(
     broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
     tailscaleMode: GatewayTailscaleMode;
     resetOnExit: boolean;
+    preserveFunnel: boolean;
     controlUiBasePath: string;
     logTailscale: {
       info: (msg: string) => void;
@@ -759,6 +769,7 @@ export async function startGatewayPostAttachRuntime(
           runtimeDeps.startGatewayTailscaleExposure({
             tailscaleMode: params.tailscaleMode,
             resetOnExit: params.resetOnExit,
+            preserveFunnel: params.preserveFunnel,
             port: params.port,
             controlUiBasePath: params.controlUiBasePath,
             logTailscale: params.logTailscale,

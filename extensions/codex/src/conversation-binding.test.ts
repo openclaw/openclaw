@@ -12,7 +12,7 @@ const agentRuntimeMocks = vi.hoisted(() => ({
   loadAuthProfileStoreForSecretsRuntime: vi.fn(),
   resolveApiKeyForProfile: vi.fn(),
   resolveAuthProfileOrder: vi.fn(),
-  resolveOpenClawAgentDir: vi.fn(() => "/agent"),
+  resolveDefaultAgentDir: vi.fn(() => "/agent"),
   resolvePersistedAuthProfileOwnerAgentDir: vi.fn(),
   resolveProviderIdForAuth: vi.fn((provider: string) => provider),
   saveAuthProfileStore: vi.fn(),
@@ -29,6 +29,14 @@ import {
 
 let tempDir: string;
 
+function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
+  const call = mock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`Expected mock call ${callIndex}`);
+  }
+  return call[argIndex];
+}
+
 describe("codex conversation binding", () => {
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-binding-"));
@@ -40,7 +48,7 @@ describe("codex conversation binding", () => {
     agentRuntimeMocks.loadAuthProfileStoreForSecretsRuntime.mockReset();
     agentRuntimeMocks.resolveApiKeyForProfile.mockReset();
     agentRuntimeMocks.resolveAuthProfileOrder.mockReset();
-    agentRuntimeMocks.resolveOpenClawAgentDir.mockClear();
+    agentRuntimeMocks.resolveDefaultAgentDir.mockClear();
     agentRuntimeMocks.resolvePersistedAuthProfileOwnerAgentDir.mockReset();
     agentRuntimeMocks.resolveProviderIdForAuth.mockClear();
     agentRuntimeMocks.saveAuthProfileStore.mockReset();
@@ -53,7 +61,7 @@ describe("codex conversation binding", () => {
       profiles: {},
     });
     agentRuntimeMocks.resolveAuthProfileOrder.mockReturnValue([]);
-    agentRuntimeMocks.resolveOpenClawAgentDir.mockReturnValue("/agent");
+    agentRuntimeMocks.resolveDefaultAgentDir.mockReturnValue("/agent");
     agentRuntimeMocks.resolveProviderIdForAuth.mockImplementation((provider: string) => provider);
   });
 
@@ -78,7 +86,7 @@ describe("codex conversation binding", () => {
       request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
         requests.push({ method, params: requestParams });
         return {
-          thread: { id: "thread-new", cwd: tempDir },
+          thread: { id: "thread-new", sessionId: "session-1", cwd: tempDir },
           model: "gpt-5.4-mini",
         };
       }),
@@ -92,17 +100,19 @@ describe("codex conversation binding", () => {
       modelProvider: "openai",
     });
 
-    expect(agentRuntimeMocks.resolveAuthProfileOrder).toHaveBeenCalledWith(
-      expect.objectContaining({ cfg: config, provider: "openai-codex" }),
-    );
-    expect(sharedClientMocks.getSharedCodexAppServerClient).toHaveBeenCalledWith(
-      expect.objectContaining({ authProfileId: "openai-codex:default" }),
-    );
+    const authOrderParams = mockCallArg(agentRuntimeMocks.resolveAuthProfileOrder) as {
+      cfg?: unknown;
+      provider?: unknown;
+    };
+    expect(authOrderParams?.cfg).toBe(config);
+    expect(authOrderParams?.provider).toBe("openai-codex");
+    const sharedClientParams = mockCallArg(sharedClientMocks.getSharedCodexAppServerClient) as {
+      authProfileId?: unknown;
+    };
+    expect(sharedClientParams?.authProfileId).toBe("openai-codex:default");
     expect(requests).toHaveLength(1);
-    expect(requests[0]).toMatchObject({
-      method: "thread/start",
-      params: expect.objectContaining({ model: "gpt-5.4-mini" }),
-    });
+    expect(requests[0]?.method).toBe("thread/start");
+    expect(requests[0]?.params.model).toBe("gpt-5.4-mini");
     expect(requests[0]?.params).not.toHaveProperty("modelProvider");
     await expect(fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8")).resolves.toContain(
       '"authProfileId": "openai-codex:default"',
@@ -138,7 +148,7 @@ describe("codex conversation binding", () => {
       request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
         requests.push({ method, params: requestParams });
         return {
-          thread: { id: "thread-new", cwd: tempDir },
+          thread: { id: "thread-new", sessionId: "session-1", cwd: tempDir },
           model: "gpt-5.4-mini",
           modelProvider: "openai",
         };
@@ -152,14 +162,13 @@ describe("codex conversation binding", () => {
       modelProvider: "openai",
     });
 
-    expect(sharedClientMocks.getSharedCodexAppServerClient).toHaveBeenCalledWith(
-      expect.objectContaining({ authProfileId: "work" }),
-    );
+    const sharedClientParams = mockCallArg(sharedClientMocks.getSharedCodexAppServerClient) as {
+      authProfileId?: unknown;
+    };
+    expect(sharedClientParams?.authProfileId).toBe("work");
     expect(requests).toHaveLength(1);
-    expect(requests[0]).toMatchObject({
-      method: "thread/start",
-      params: expect.objectContaining({ model: "gpt-5.4-mini" }),
-    });
+    expect(requests[0]?.method).toBe("thread/start");
+    expect(requests[0]?.params.model).toBe("gpt-5.4-mini");
     expect(requests[0]?.params).not.toHaveProperty("modelProvider");
     await expect(fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8")).resolves.toContain(
       '"authProfileId": "work"',
@@ -192,7 +201,7 @@ describe("codex conversation binding", () => {
       },
     });
 
-    await expect(fs.stat(sidecar)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(sidecar)).rejects.toHaveProperty("code", "ENOENT");
   });
 
   it("consumes inbound bound messages when command authorization is absent", async () => {
@@ -261,7 +270,7 @@ describe("codex conversation binding", () => {
         }
         if (method === "thread/start") {
           return {
-            thread: { id: "thread-new", cwd: tempDir },
+            thread: { id: "thread-new", sessionId: "session-1", cwd: tempDir },
             model: "gpt-5.4-mini",
           };
         }
@@ -333,31 +342,26 @@ describe("codex conversation binding", () => {
       "thread/start",
       "turn/start",
     ]);
-    expect(sharedClientMocks.getSharedCodexAppServerClient).toHaveBeenCalledWith(
-      expect.objectContaining({ authProfileId: "work" }),
-    );
-    expect(requests[1]?.params).toMatchObject({
-      model: "gpt-5.4-mini",
-      approvalPolicy: "on-request",
-      sandbox: "workspace-write",
-      serviceTier: "fast",
-    });
+    const sharedClientParams = mockCallArg(sharedClientMocks.getSharedCodexAppServerClient) as {
+      authProfileId?: unknown;
+    };
+    expect(sharedClientParams?.authProfileId).toBe("work");
+    expect(requests[1]?.params.model).toBe("gpt-5.4-mini");
+    expect(requests[1]?.params.approvalPolicy).toBe("on-request");
+    expect(requests[1]?.params.sandbox).toBe("workspace-write");
+    expect(requests[1]?.params.serviceTier).toBe("priority");
     expect(requests[1]?.params).not.toHaveProperty("modelProvider");
-    expect(requests[2]?.params).toMatchObject({
-      threadId: "thread-new",
-      approvalPolicy: "on-request",
-      serviceTier: "fast",
-    });
+    expect(requests[2]?.params.threadId).toBe("thread-new");
+    expect(requests[2]?.params.approvalPolicy).toBe("on-request");
+    expect(requests[2]?.params.serviceTier).toBe("priority");
     const savedBinding = JSON.parse(
       await fs.readFile(`${sessionFile}.codex-app-server.json`, "utf8"),
     );
-    expect(savedBinding).toMatchObject({
-      threadId: "thread-new",
-      authProfileId: "work",
-      approvalPolicy: "on-request",
-      sandbox: "workspace-write",
-      serviceTier: "fast",
-    });
+    expect(savedBinding.threadId).toBe("thread-new");
+    expect(savedBinding.authProfileId).toBe("work");
+    expect(savedBinding.approvalPolicy).toBe("on-request");
+    expect(savedBinding.sandbox).toBe("workspace-write");
+    expect(savedBinding.serviceTier).toBe("priority");
     expect(savedBinding).not.toHaveProperty("modelProvider");
   });
 
@@ -431,7 +435,7 @@ describe("codex conversation binding", () => {
       expect(replyText).not.toContain("<@U123>");
       expect(replyText).not.toContain("[trusted](https://evil)");
       expect(replyText).not.toContain("@here");
-      expect(unhandledRejections).toEqual([]);
+      expect(unhandledRejections).toStrictEqual([]);
     } finally {
       process.off("unhandledRejection", onUnhandledRejection);
     }
@@ -507,8 +511,8 @@ describe("codex conversation binding", () => {
     );
 
     expect(result).toEqual({ handled: true, reply: { text: "done" } });
-    expect(turnStartParams[0]?.input).toMatchObject([
-      { type: "text", text: "use the fallback prompt" },
+    expect(turnStartParams[0]?.input).toEqual([
+      { type: "text", text: "use the fallback prompt", text_elements: [] },
     ]);
   });
 });

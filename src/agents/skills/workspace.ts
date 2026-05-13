@@ -1,7 +1,8 @@
-import fs, { type Dirent } from "node:fs";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { walkDirectorySync } from "../../infra/fs-safe.js";
 import { resolveOsHomeDir } from "../../infra/home-dir.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -76,12 +77,25 @@ function compactSkillPaths(skills: Skill[]): Skill[] {
 
 function compactHomePath(filePath: string, homes: readonly string[]): string {
   for (const home of homes) {
-    const prefix = home.endsWith(path.sep) ? home : home + path.sep;
-    if (filePath.startsWith(prefix)) {
-      return "~/" + filePath.slice(prefix.length);
+    for (const prefix of compactHomePrefixesForHome(home)) {
+      if (filePath.startsWith(prefix)) {
+        return "~/" + normalizeCompactedSkillPath(filePath.slice(prefix.length), prefix);
+      }
     }
   }
   return filePath;
+}
+
+function compactHomePrefixesForHome(home: string): string[] {
+  const prefixes = [home.endsWith(path.sep) ? home : home + path.sep];
+  if (home.includes("\\") && !home.endsWith("\\")) {
+    prefixes.push(home + "\\");
+  }
+  return prefixes;
+}
+
+function normalizeCompactedSkillPath(filePath: string, matchedHomePrefix: string): string {
+  return matchedHomePrefix.includes("\\") ? filePath.replace(/\\/g, "/") : filePath;
 }
 
 function compactPathForConsoleMessage(filePath: string): string {
@@ -181,44 +195,21 @@ function listChildDirectories(
     opts?.maxRawEntriesToScan === undefined
       ? resolveRawEntryScanLimit(opts?.maxCandidateDirs)
       : Math.max(0, opts.maxRawEntriesToScan);
-  try {
-    const dirs: string[] = [];
-    let scannedEntryCount = 0;
-    let truncated = false;
-    const handle = fs.opendirSync(dir);
-    try {
-      let entry: Dirent | null;
-      while ((entry = handle.readSync()) !== null) {
-        if (scannedEntryCount >= maxRawEntriesToScan) {
-          truncated = true;
-          break;
-        }
-        scannedEntryCount += 1;
-
-        if (entry.name.startsWith(".")) continue;
-        if (entry.name === "node_modules") continue;
-        const fullPath = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-          dirs.push(entry.name);
-          continue;
-        }
-        if (entry.isSymbolicLink()) {
-          try {
-            if (fs.statSync(fullPath).isDirectory()) {
-              dirs.push(entry.name);
-            }
-          } catch {
-            // ignore broken symlinks
-          }
-        }
-      }
-    } finally {
-      handle.closeSync();
-    }
-    return { dirs, scannedEntryCount, truncated };
-  } catch {
+  const scan = walkDirectorySync(dir, {
+    maxDepth: 1,
+    maxEntries: maxRawEntriesToScan,
+    symlinks: "follow",
+    include: (entry) =>
+      entry.kind === "directory" && !entry.name.startsWith(".") && entry.name !== "node_modules",
+  });
+  if (scan.scannedEntryCount === 0 && scan.entries.length === 0) {
     return { dirs: [], scannedEntryCount: 0, truncated: false };
   }
+  return {
+    dirs: scan.entries.map((entry) => entry.name),
+    scannedEntryCount: scan.scannedEntryCount,
+    truncated: scan.truncated,
+  };
 }
 
 function resolveRawEntryScanLimit(maxCandidateDirs: number | undefined): number {
@@ -321,12 +312,16 @@ function resolveContainedSkillPath(params: {
   rootDir: string;
   rootRealPath: string;
   candidatePath: string;
+  allowedSymlinkTargetRealPaths?: readonly string[];
 }): string | null {
   const candidateRealPath = tryRealpath(params.candidatePath);
   if (!candidateRealPath) {
     return null;
   }
-  if (isPathInside(params.rootRealPath, candidateRealPath)) {
+  if (
+    isPathInside(params.rootRealPath, candidateRealPath) ||
+    isPathInsideAnyRoot(params.allowedSymlinkTargetRealPaths ?? [], candidateRealPath)
+  ) {
     return candidateRealPath;
   }
   warnEscapedSkillPath({
@@ -412,6 +407,16 @@ function isPathInsideAnyRoot(rootRealPaths: readonly string[], candidateRealPath
 function resolvePluginSkillRootRealPaths(pluginSkillDirs: readonly string[]): string[] {
   return pluginSkillDirs
     .map((dir) => tryRealpath(dir))
+    .filter((dir): dir is string => Boolean(dir))
+    .filter((dir, index, all) => all.indexOf(dir) === index);
+}
+
+function resolveAllowedSymlinkTargetRealPaths(config?: OpenClawConfig): string[] {
+  const rawTargets = config?.skills?.load?.allowSymlinkTargets ?? [];
+  return rawTargets
+    .map((dir) => normalizeOptionalString(dir) ?? "")
+    .filter(Boolean)
+    .map((dir) => tryRealpath(resolveUserPath(dir)))
     .filter((dir): dir is string => Boolean(dir))
     .filter((dir, index, all) => all.indexOf(dir) === index);
 }
@@ -518,6 +523,7 @@ function loadSkillEntries(
   },
 ): SkillEntry[] {
   const limits = resolveSkillsLimits(opts?.config, opts?.agentId);
+  const allowedSymlinkTargetRealPaths = resolveAllowedSymlinkTargetRealPaths(opts?.config);
 
   const loadSkills = (params: { dir: string; source: string }): LoadedSkillRecord[] => {
     const rootDir = path.resolve(params.dir);
@@ -534,6 +540,7 @@ function loadSkillEntries(
       rootDir,
       rootRealPath,
       candidatePath: baseDir,
+      allowedSymlinkTargetRealPaths,
     });
     if (!baseDirRealPath) {
       return [];
@@ -547,6 +554,7 @@ function loadSkillEntries(
         rootDir,
         rootRealPath: baseDirRealPath,
         candidatePath: rootSkillMd,
+        allowedSymlinkTargetRealPaths,
       });
       if (!rootSkillRealPath) {
         return [];
@@ -639,6 +647,7 @@ function loadSkillEntries(
         rootDir,
         rootRealPath: baseDirRealPath,
         candidatePath: skillDir,
+        allowedSymlinkTargetRealPaths,
       });
       if (!skillDirRealPath) {
         continue;
@@ -650,6 +659,7 @@ function loadSkillEntries(
           rootDir,
           rootRealPath: baseDirRealPath,
           candidatePath: skillMd,
+          allowedSymlinkTargetRealPaths,
         });
         if (skillMdRealPath) {
           loadCandidateSkill({ skillDir, name, skillMdRealPath });
@@ -696,12 +706,14 @@ function loadSkillEntries(
               rootDir,
               rootRealPath: baseDirRealPath,
               candidatePath: nestedDir,
+              allowedSymlinkTargetRealPaths,
             });
             const nestedSkillMdRealPath = resolveContainedSkillPath({
               source: params.source,
               rootDir,
               rootRealPath: baseDirRealPath,
               candidatePath: nestedSkillMd,
+              allowedSymlinkTargetRealPaths,
             });
             if (nestedDirRealPath && nestedSkillMdRealPath) {
               loadCandidateSkill({
@@ -952,6 +964,10 @@ export function buildWorkspaceSkillsPrompt(
 ): string {
   return resolveWorkspaceSkillPromptState(workspaceDir, opts).prompt;
 }
+
+export const __testing = {
+  compactHomePath,
+};
 
 type WorkspaceSkillBuildOptions = {
   config?: OpenClawConfig;
