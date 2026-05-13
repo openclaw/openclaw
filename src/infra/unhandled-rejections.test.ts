@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  isAgentBusyError,
   isAbortError,
   isTransientNetworkError,
   isTransientSqliteError,
@@ -266,5 +267,38 @@ describe("isTransientUnhandledRejectionError", () => {
     });
 
     expect(isTransientUnhandledRejectionError(error)).toBe(true);
+  });
+
+  it("returns true for agent busy prompt re-entry errors", () => {
+    expect(
+      isTransientUnhandledRejectionError(
+        new Error(
+          "Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
+        ),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("isAgentBusyError", () => {
+  it("matches known agent busy prompt re-entry messages", () => {
+    expect(
+      isAgentBusyError(
+        new Error(
+          "Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      isAgentBusyError(
+        new Error(
+          "Agent is already processing a prompt. Use steer() or followUp() to queue messages, or wait for completion.",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not match unrelated processing errors", () => {
+    expect(isAgentBusyError(new Error("Agent processing failed"))).toBe(false);
   });
 });

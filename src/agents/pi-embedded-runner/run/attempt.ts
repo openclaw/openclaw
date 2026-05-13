@@ -151,6 +151,7 @@ import {
 import { splitSdkTools } from "../tool-split.js";
 import { describeUnknownError, mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
+import { runWithAgentBusyRetry } from "./attempt.busy-retry.js";
 import {
   assembleAttemptContextEngine,
   finalizeAttemptContextEngineTurn,
@@ -1759,6 +1760,15 @@ export async function runEmbeddedAttempt(
             messages: btwSnapshotMessages,
             inFlightPrompt: effectivePrompt,
           });
+          const promptPreAnalysisFallback = (
+            text: string,
+            options?: Parameters<typeof activeSession.prompt>[1],
+          ) =>
+            runWithAgentBusyRetry({
+              operation: () => abortable(activeSession.prompt(text, options)),
+              isStreaming: () => activeSession.isStreaming,
+              signal: runAbortController.signal,
+            });
 
           // Only pass images option if there are actually images to pass
           // This avoids potential issues with models that don't expect the images parameter
@@ -1788,11 +1798,11 @@ export async function runEmbeddedAttempt(
                     log.debug(
                       `Image pre-analysis: no successful analyses, falling back to main model with images`,
                     );
-                    await abortable(
-                      activeSession.prompt(effectivePrompt, { images: imageResult.images }),
-                    );
+                    await promptPreAnalysisFallback(effectivePrompt, {
+                      images: imageResult.images,
+                    });
                   } else {
-                    await abortable(activeSession.prompt(effectivePrompt));
+                    await promptPreAnalysisFallback(effectivePrompt);
                   }
                 }
               } catch (preAnalysisErr) {
@@ -1802,11 +1812,9 @@ export async function runEmbeddedAttempt(
                 // Fall back to main model with images if supported
                 if (mainModelSupportsImages) {
                   log.debug(`Image pre-analysis: failed, falling back to main model with images`);
-                  await abortable(
-                    activeSession.prompt(effectivePrompt, { images: imageResult.images }),
-                  );
+                  await promptPreAnalysisFallback(effectivePrompt, { images: imageResult.images });
                 } else {
-                  await abortable(activeSession.prompt(effectivePrompt));
+                  await promptPreAnalysisFallback(effectivePrompt);
                 }
               }
             } else {

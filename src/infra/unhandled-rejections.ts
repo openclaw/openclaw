@@ -88,6 +88,11 @@ const TRANSIENT_SQLITE_MESSAGE_SNIPPETS = [
   "disk i/o error",
 ];
 
+const AGENT_BUSY_MESSAGE_SNIPPETS = [
+  "agent is already processing. specify streamingbehavior",
+  "agent is already processing a prompt. use steer() or followup()",
+];
+
 function hasSqliteSignal(err: unknown): boolean {
   if (!err || typeof err !== "object") {
     return false;
@@ -312,8 +317,22 @@ export function isTransientSqliteError(err: unknown): boolean {
   return false;
 }
 
+export function isAgentBusyError(err: unknown): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+
+  const message = "message" in err && typeof err.message === "string" ? err.message : "";
+  if (!message) {
+    return false;
+  }
+
+  const normalized = message.toLowerCase();
+  return AGENT_BUSY_MESSAGE_SNIPPETS.some((snippet) => normalized.includes(snippet));
+}
+
 export function isTransientUnhandledRejectionError(err: unknown): boolean {
-  return isTransientNetworkError(err) || isTransientSqliteError(err);
+  return isTransientNetworkError(err) || isTransientSqliteError(err) || isAgentBusyError(err);
 }
 
 export function registerUnhandledRejectionHandler(handler: UnhandledRejectionHandler): () => void {

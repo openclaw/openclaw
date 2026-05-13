@@ -149,6 +149,18 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
       );
     });
 
+    it("does not exit on known agent busy prompt re-entry errors", () => {
+      const busyErr = new Error(
+        "Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
+      );
+
+      expectExitCodeFromUnhandled(busyErr, []);
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        "[openclaw] Non-fatal unhandled rejection (continuing):",
+        expect.stringContaining("Agent is already processing"),
+      );
+    });
+
     it("exits on generic errors without code", () => {
       const genericErr = new Error("Something went wrong");
 
