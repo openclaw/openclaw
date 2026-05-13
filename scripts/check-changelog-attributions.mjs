@@ -4,9 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const FORBIDDEN_CHANGELOG_THANKS_EXACT_HANDLES = [
-  // Shell metadata can serialize a missing GitHub login as the literal string "null".
-  "null",
+export const FORBIDDEN_CHANGELOG_THANKS_HANDLES = [
   "codex",
   "openclaw",
   "steipete",
@@ -23,12 +21,12 @@ const THANKED_HANDLE_PATTERN = /@([-_/A-Za-z0-9]+(?:\[bot\])?)/giu;
 export function isForbiddenChangelogThanksHandle(handle, options = {}) {
   const { strictBotHandle = false } = options;
   const normalized = handle.toLowerCase();
-  if (normalized === "") {
-    // Empty input is not a GitHub handle, but the shell query path may pass it through.
+  if (normalized === "" || normalized === "null") {
+    // Empty/null input is not a GitHub handle, but the shell query path may pass it through.
     return true;
   }
   if (
-    FORBIDDEN_CHANGELOG_THANKS_EXACT_HANDLES.includes(normalized) ||
+    FORBIDDEN_CHANGELOG_THANKS_HANDLES.includes(normalized) ||
     FORBIDDEN_CHANGELOG_THANKS_HANDLE_PREFIXES.some((prefix) => normalized.startsWith(prefix))
   ) {
     return true;
@@ -82,11 +80,9 @@ export async function main(argv = process.argv.slice(2)) {
     console.error(`- ${relativePath}:${violation.line} uses Thanks @${violation.handle}`);
   }
   console.error(
-    `Use a credited external GitHub username instead of ${FORBIDDEN_CHANGELOG_THANKS_EXACT_HANDLES.filter(
-      Boolean,
-    )
-      .map((handle) => `@${handle}`)
-      .join(", ")}.`,
+    `Use a credited external GitHub username instead of ${FORBIDDEN_CHANGELOG_THANKS_HANDLES.map(
+      (handle) => `@${handle}`,
+    ).join(", ")}.`,
   );
   process.exitCode = 1;
 }
