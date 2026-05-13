@@ -376,6 +376,35 @@ describe("artifacts RPC handlers", () => {
     expectFields(error.details, { type: "artifact_scope_not_found" });
   });
 
+  it("treats legacy task requester session keys as the main agent for artifact scope", async () => {
+    hoisted.getTaskSessionLookupByIdForStatus.mockReturnValue({
+      requesterSessionKey: "main",
+      runId: "run-for-task-1",
+    });
+    const { calls, respond } = createResponder();
+
+    await artifactsHandlers["artifacts.list"]?.({
+      req: {
+        type: "req",
+        id: "task-legacy-requester-agent-mismatch",
+        method: "artifacts.list",
+        params: {},
+      },
+      params: { taskId: "task-1", agentId: "work" },
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+      context: {} as never,
+    });
+
+    expect(calls[0]?.ok).toBe(false);
+    expect(hoisted.getTaskSessionLookupByIdForStatus).toHaveBeenCalledWith("task-1");
+    expect(hoisted.loadSessionEntry).not.toHaveBeenCalled();
+    expect(hoisted.resolveSessionKeyForRun).not.toHaveBeenCalled();
+    const error = calls[0]?.error as { details?: Record<string, unknown> };
+    expectFields(error.details, { type: "artifact_scope_not_found" });
+  });
+
   it("does not return untagged session artifacts for scoped runId queries", async () => {
     hoisted.resolveSessionKeyForRun.mockReturnValue("agent:main:main");
     const { calls, respond } = createResponder();

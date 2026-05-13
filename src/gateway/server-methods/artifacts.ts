@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
-import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import {
+  normalizeAgentId,
+  parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
+} from "../../routing/session-key.js";
 import { getTaskSessionLookupByIdForStatus } from "../../tasks/task-status-access.js";
 import {
   ErrorCodes,
@@ -46,6 +50,21 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function asNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function resolveRequesterSessionAgentId(sessionKey: string | undefined): string | undefined {
+  const key = asNonEmptyString(sessionKey);
+  if (!key) {
+    return undefined;
+  }
+  const parsed = parseAgentSessionKey(key);
+  if (parsed) {
+    return parsed.agentId;
+  }
+  if (key.toLowerCase().startsWith("agent:")) {
+    return undefined;
+  }
+  return resolveAgentIdFromSessionKey(key);
 }
 
 function normalizeArtifactType(value: string): string {
@@ -294,8 +313,7 @@ function resolveQuerySessionKey(query: ArtifactQuery): string | undefined {
     const task = getTaskSessionLookupByIdForStatus(query.taskId);
     const requesterSessionKey = asNonEmptyString(task?.requesterSessionKey);
     const taskAgentId =
-      asNonEmptyString(task?.agentId) ??
-      (requesterSessionKey ? parseAgentSessionKey(requesterSessionKey)?.agentId : undefined);
+      asNonEmptyString(task?.agentId) ?? resolveRequesterSessionAgentId(requesterSessionKey);
     if (
       query.agentId &&
       taskAgentId &&
