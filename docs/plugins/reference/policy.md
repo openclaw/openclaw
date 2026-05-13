@@ -39,6 +39,12 @@ critical or irreversible governed tools. If `expectedAttestationHash` is
 configured, the same gate fails closed when current policy evidence no longer
 matches the accepted clean policy check.
 
+Policy findings do not have to be backed by oc-path. Config and workspace
+findings use `oc://` targets only when the system can point to a resolvable
+document address. Runtime audit findings stay centered on the runtime evidence
+payload; any `target` value is a compact evidence label, not a separate path
+syntax.
+
 ## Related docs
 
 - [Policy CLI](/cli/policy)
