@@ -25,6 +25,14 @@ function expectOkPlan(plan: SubagentModelPlan): OkSubagentModelPlan {
   return plan;
 }
 
+function expectForbiddenPlan(plan: SubagentModelPlan): Extract<SubagentModelPlan, { status: "forbidden" }> {
+  expect(plan.status).toBe("forbidden");
+  if (plan.status !== "forbidden") {
+    throw new Error(`Expected forbidden plan, received ${plan.status}`);
+  }
+  return plan;
+}
+
 describe("subagent spawn model + thinking plan", () => {
   it("includes explicit model overrides in the initial patch", () => {
     const plan = expectOkPlan(
@@ -82,6 +90,60 @@ describe("subagent spawn model + thinking plan", () => {
     );
     expect(plan.resolvedModel).toBe("minimax/MiniMax-M2.7");
     expect(plan.initialSessionPatch.model).toBe("minimax/MiniMax-M2.7");
+    expect(plan.initialSessionPatch.modelOverrideSource).toBe("auto");
+  });
+
+  it("rejects bare gpt overrides when the subagent default is openai-codex", () => {
+    const plan = expectForbiddenPlan(
+      resolveSubagentModelAndThinkingPlan({
+        cfg: createConfig({
+          agents: { defaults: { subagents: { model: "openai-codex/gpt-5.5" } } },
+        }),
+        targetAgentId: "research",
+        modelOverride: "gpt",
+      }),
+    );
+    expect(plan.error).toMatch(/Omit the model parameter/i);
+    expect(plan.error).toContain('model="openai-codex/gpt-5.5"');
+  });
+
+  it("rejects explicit direct OpenAI overrides when the subagent default is openai-codex", () => {
+    const plan = expectForbiddenPlan(
+      resolveSubagentModelAndThinkingPlan({
+        cfg: createConfig({
+          agents: { defaults: { subagents: { model: "openai-codex/gpt-5.5" } } },
+        }),
+        targetAgentId: "research",
+        modelOverride: "openai/gpt-5.4",
+      }),
+    );
+    expect(plan.error).toMatch(/direct OpenAI API route/i);
+  });
+
+  it("allows explicit openai-codex overrides when the subagent default is openai-codex", () => {
+    const plan = expectOkPlan(
+      resolveSubagentModelAndThinkingPlan({
+        cfg: createConfig({
+          agents: { defaults: { subagents: { model: "openai-codex/gpt-5.5" } } },
+        }),
+        targetAgentId: "research",
+        modelOverride: "openai-codex/gpt-5.5",
+      }),
+    );
+    expect(plan.resolvedModel).toBe("openai-codex/gpt-5.5");
+    expect(plan.initialSessionPatch.modelOverrideSource).toBe("user");
+  });
+
+  it("allows omitted model overrides to use the configured openai-codex default", () => {
+    const plan = expectOkPlan(
+      resolveSubagentModelAndThinkingPlan({
+        cfg: createConfig({
+          agents: { defaults: { subagents: { model: "openai-codex/gpt-5.5" } } },
+        }),
+        targetAgentId: "research",
+      }),
+    );
+    expect(plan.resolvedModel).toBe("openai-codex/gpt-5.5");
     expect(plan.initialSessionPatch.modelOverrideSource).toBe("auto");
   });
 
