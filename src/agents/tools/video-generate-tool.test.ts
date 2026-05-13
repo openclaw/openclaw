@@ -163,6 +163,14 @@ function firstMockCallArg(mock: { mock: { calls: unknown[][] } }): unknown {
   return firstCall[0];
 }
 
+function firstMockCall(mock: { mock: { calls: unknown[][] } }): unknown[] {
+  const firstCall = mock.mock.calls[0];
+  if (!firstCall) {
+    throw new Error("Expected first mock call");
+  }
+  return firstCall;
+}
+
 function resetVideoGenerateMocks() {
   vi.restoreAllMocks();
   for (const key of VIDEO_GENERATION_PROVIDER_AUTH_ENV_VARS) {
@@ -399,7 +407,7 @@ describe("createVideoGenerateTool", () => {
     });
 
     expect((firstMockCallArg(generateSpy) as { timeoutMs?: number }).timeoutMs).toBe(180_000);
-    expect((generateSpy.mock.calls[1]?.[0] as { timeoutMs?: number }).timeoutMs).toBe(12_345);
+    expect((generateSpy.mock.calls.at(1)?.[0] as { timeoutMs?: number }).timeoutMs).toBe(12_345);
     expect(resultDetails(defaultResult).timeoutMs).toBe(180_000);
     expect(resultDetails(overrideResult).timeoutMs).toBe(12_345);
   });
@@ -1059,7 +1067,7 @@ describe("createVideoGenerateTool", () => {
     });
 
     expect(generateSpy).toHaveBeenCalledTimes(1);
-    const call = generateSpy.mock.calls[0]?.[0] as {
+    const call = firstMockCallArg(generateSpy) as {
       inputImages?: Array<{ role?: string }>;
     };
     expect(call.inputImages).toHaveLength(2);
@@ -1096,7 +1104,7 @@ describe("createVideoGenerateTool", () => {
       image: "/tmp/reference.png",
     });
 
-    const loadCall = vi.mocked(webMedia.loadWebMedia).mock.calls[0];
+    const loadCall = firstMockCall(vi.mocked(webMedia.loadWebMedia));
     expect(loadCall?.[0]).toBe("/tmp/reference.png");
     const loadOptions = loadCall?.[1] as { ssrfPolicy?: unknown } | undefined;
     expect(loadOptions?.ssrfPolicy).toEqual({ allowRfc2544BenchmarkRange: true });

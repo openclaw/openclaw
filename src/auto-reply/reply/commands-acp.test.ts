@@ -1143,8 +1143,8 @@ describe("/acp command", () => {
     expect(introText).toContain("cwd: /home/bob/clawd");
     expectBoundIntroTextToExclude("session ids: pending (available after the first reply)");
     expectGatewayMethodNotCalled("sessions.patch");
-    expect(hoisted.upsertAcpSessionMetaMock).toHaveBeenCalled();
-    const upsertArgs = hoisted.upsertAcpSessionMetaMock.mock.calls[0]?.[0] as
+    expect(hoisted.upsertAcpSessionMetaMock).toHaveBeenCalledTimes(1);
+    const upsertArgs = mockCallArg(hoisted.upsertAcpSessionMetaMock) as
       | {
           sessionKey: string;
           mutate: (
@@ -1631,7 +1631,15 @@ describe("/acp command", () => {
       targetSessionKey: defaultAcpSessionKey,
       reason: "manual",
     });
-    expect(hoisted.upsertAcpSessionMetaMock).toHaveBeenCalled();
+    expect(hoisted.upsertAcpSessionMetaMock).toHaveBeenCalledTimes(1);
+    const clearMetaArgs = mockCallArg(hoisted.upsertAcpSessionMetaMock) as
+      | {
+          sessionKey: string;
+          mutate: (current: unknown, entry: { sessionId: string; updatedAt: number }) => unknown;
+        }
+      | undefined;
+    expect(clearMetaArgs?.sessionKey).toBe(defaultAcpSessionKey);
+    expect(clearMetaArgs?.mutate(undefined, { sessionId: "session-1", updatedAt: 0 })).toBeNull();
     expect(result?.reply?.text).toContain("Removed 1 binding");
   });
 

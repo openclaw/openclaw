@@ -1012,14 +1012,19 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                 publicKey: devicePublicKey,
               });
             }
-            const allowSilentLocalPairing = shouldAllowSilentLocalPairing({
-              locality: pairingLocality,
-              hasBrowserOriginHeader,
-              isControlUi,
-              isWebchat,
-              isNativeAppUi,
-              reason,
-            });
+            const allowSilentExistingNonOperatorPairing = !(
+              existingPairedDevice && role !== "operator"
+            );
+            const allowSilentLocalPairing =
+              allowSilentExistingNonOperatorPairing &&
+              shouldAllowSilentLocalPairing({
+                locality: pairingLocality,
+                hasBrowserOriginHeader,
+                isControlUi,
+                isWebchat,
+                isNativeAppUi,
+                reason,
+              });
             const allowSilentTrustedCidrsNodePairing = shouldAutoApproveNodePairingFromTrustedCidrs(
               {
                 existingPairedDevice: Boolean(existingPairedDevice),
@@ -1338,11 +1343,26 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           });
           if (reconciliation.pendingPairing?.created) {
             const requestContext = buildRequestContext();
+            const resolvedAt = Date.now();
+            for (const superseded of reconciliation.pendingPairing.superseded ?? []) {
+              requestContext.broadcast(
+                "node.pair.resolved",
+                {
+                  requestId: superseded.requestId,
+                  nodeId: superseded.nodeId,
+                  decision: "rejected",
+                  ts: resolvedAt,
+                },
+                { dropIfSlow: true },
+              );
+            }
             requestContext.broadcast("node.pair.requested", reconciliation.pendingPairing.request, {
               dropIfSlow: true,
             });
           }
+          connectParams.caps = reconciliation.effectiveCaps;
           connectParams.commands = reconciliation.effectiveCommands;
+          connectParams.permissions = reconciliation.effectivePermissions;
         }
 
         const shouldTrackPresence = !isGatewayCliClient(connectParams.client);

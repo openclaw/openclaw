@@ -10,9 +10,9 @@
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.74.0",
     "@openai/codex": "0.130.0",
-    "ajv": "^8.20.0",
-    "ws": "^8.20.0",
-    "zod": "^4.4.3"
+    "ajv": "8.20.0",
+    "ws": "8.20.0",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

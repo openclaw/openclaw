@@ -230,8 +230,8 @@ describe("gateway run option collisions", () => {
       "--force",
     ]);
 
-    expect(forceFreePortAndWait.mock.calls[0]?.[0]).toBe(18789);
-    expect(waitForPortBindable.mock.calls[0]?.[0]).toBe(18789);
+    expect(callArg(forceFreePortAndWait, 0, 0)).toBe(18789);
+    expect(callArg(waitForPortBindable, 0, 0)).toBe(18789);
     expect(
       callArg(waitForPortBindable, 0, 1) as { intervalMs?: number; timeoutMs?: number },
     ).toEqual({ intervalMs: 150, timeoutMs: 3000 });
@@ -319,41 +319,6 @@ describe("gateway run option collisions", () => {
     const secondOptions = gatewayStartOptions(1);
     expect(secondOptions.startupConfigSnapshotRead).toBeUndefined();
     expect(secondOptions.startupStartedAt).toBe(2000);
-  });
-
-  it("uses the startup snapshot only for the first in-process gateway start", async () => {
-    runGatewayLoop.mockImplementationOnce(async ({ start }: { start: GatewayLoopStart }) => {
-      await start({ startupStartedAt: 1000 });
-      await start({ startupStartedAt: 2000 });
-    });
-
-    await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
-
-    expect(startGatewayServer).toHaveBeenCalledTimes(2);
-    expect(startGatewayServer).toHaveBeenNthCalledWith(
-      1,
-      18789,
-      expect.objectContaining({
-        startupStartedAt: 1000,
-        startupConfigSnapshotRead: {
-          snapshot: configState.snapshot,
-        },
-      }),
-    );
-    expect(startGatewayServer).toHaveBeenNthCalledWith(
-      2,
-      18789,
-      expect.not.objectContaining({
-        startupConfigSnapshotRead: expect.anything(),
-      }),
-    );
-    expect(startGatewayServer).toHaveBeenNthCalledWith(
-      2,
-      18789,
-      expect.objectContaining({
-        startupStartedAt: 2000,
-      }),
-    );
   });
 
   it("logs when first startup will build missing Control UI assets", async () => {

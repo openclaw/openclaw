@@ -630,7 +630,7 @@ describe("handleInlineActions", () => {
     expect(
       mockObjectArg(createOpenClawToolsMock, "createOpenClawTools").requesterAgentIdOverride,
     ).toBe("named-worker");
-    expect(toolExecute).toHaveBeenCalled();
+    expect(toolExecute).toHaveBeenCalledTimes(1);
   });
 
   it("passes senderIsOwner into inline tool runtimes before owner-only filtering", async () => {
