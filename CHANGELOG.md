@@ -11,6 +11,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/Feishu/WhatsApp/Line: enforce inbound media size caps while reading download streams, avoiding full buffering of oversized attachments. (#81044, #81050) Thanks @samzong.
 - Config: serialize and retry semantic config mutations centrally, so concurrent commands can rebase safe changes instead of clobbering or hand-rolling command-local retry loops. (#76601)
 - Require approval for setup-code device pairing [AI]. (#81292) Thanks @pgondhi987.
+- Plugins/install: preserve third-party peer dependencies in the managed npm root when later plugin installs or updates recalculate the shared dependency tree. Thanks @shakkernerd.
 - Docker: pin setup-time container paths so stale host `.env` OpenClaw paths cannot leak into Linux containers. Fixes #80381. (#81105) Thanks @brokemac79.
 - Channels/WeCom: refresh the official onboarding install to `@wecom/wecom-openclaw-plugin@2026.5.7` and update existing managed npm installs instead of failing on the package directory. Fixes #79884. (#80390) Thanks @brokemac79.
 - Control UI/WebChat: keep short assistant replies clear of in-bubble copy/open action buttons by applying the existing reserved action spacing in the grouped chat renderer. Fixes #79509. (#81244) Thanks @JARVIS-Glasses.

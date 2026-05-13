@@ -362,7 +362,84 @@ describe("installPluginFromNpmSpec e2e", () => {
     ).resolves.toBe(true);
   });
 
-  it("omits peers when installing beside an existing host-peer plugin", async () => {
+  it("keeps third-party peer dependencies across later managed npm installs", async () => {
+    const rootDir = await makeTempDir("npm-plugin-third-party-peer-e2e");
+    const npmRoot = path.join(rootDir, "managed-npm");
+    const pluginWithRuntimePeer = `runtime-peer-plugin-${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+    const laterPlugin = `later-plugin-${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+    const runtimePeer = `runtime-peer-${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+    const registry = await startStaticRegistry([
+      {
+        packageName: pluginWithRuntimePeer,
+        latest: "1.0.0",
+        versions: [
+          await packPlugin({
+            packageName: pluginWithRuntimePeer,
+            peerDependencies: { [runtimePeer]: "^1.0.0" },
+            peerDependenciesMeta: {},
+            pluginId: pluginWithRuntimePeer,
+            version: "1.0.0",
+            rootDir,
+          }),
+        ],
+      },
+      {
+        packageName: laterPlugin,
+        latest: "1.0.0",
+        versions: [
+          await packPlugin({
+            packageName: laterPlugin,
+            pluginId: laterPlugin,
+            version: "1.0.0",
+            rootDir,
+          }),
+        ],
+      },
+      {
+        packageName: runtimePeer,
+        latest: "1.0.0",
+        versions: [
+          await packPlugin({
+            packageName: runtimePeer,
+            pluginId: runtimePeer,
+            version: "1.0.0",
+            rootDir,
+          }),
+        ],
+      },
+    ]);
+    process.env.NPM_CONFIG_REGISTRY = registry;
+    process.env.npm_config_registry = registry;
+
+    const first = await installPluginFromNpmSpec({
+      spec: `${pluginWithRuntimePeer}@1.0.0`,
+      npmDir: npmRoot,
+      logger: { info: () => {}, warn: () => {} },
+      timeoutMs: 120_000,
+    });
+    if (!first.ok) {
+      throw new Error(first.error);
+    }
+    await expect(
+      fs.lstat(path.join(npmRoot, "node_modules", runtimePeer, "package.json")),
+    ).resolves.toBeTruthy();
+
+    const second = await installPluginFromNpmSpec({
+      spec: `${laterPlugin}@1.0.0`,
+      npmDir: npmRoot,
+      logger: { info: () => {}, warn: () => {} },
+      timeoutMs: 120_000,
+    });
+    if (!second.ok) {
+      throw new Error(second.error);
+    }
+
+    await expect(
+      fs.lstat(path.join(npmRoot, "node_modules", runtimePeer, "package.json")),
+    ).resolves.toBeTruthy();
+  });
+
+  it("scrubs host peers when installing beside an existing host-peer plugin", async () => {
     const rootDir = await makeTempDir("npm-plugin-sibling-peer-e2e");
     const npmRoot = path.join(rootDir, "managed-npm");
     const codexName = `codex-peer-plugin-${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;

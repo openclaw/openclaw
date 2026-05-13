@@ -1,3 +1,4 @@
+import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
@@ -24,6 +25,7 @@ type HostPackageManifest = {
 
 type ManagedNpmRootOpenClawMetadata = {
   managedOverrides?: string[];
+  managedPeerDependencies?: string[];
   [key: string]: unknown;
 };
 
@@ -86,9 +88,17 @@ function readManagedOverrideKeys(value: unknown): string[] {
   return value.managedOverrides.filter((key): key is string => typeof key === "string");
 }
 
+function readManagedPeerDependencyKeys(value: unknown): string[] {
+  if (!isRecord(value) || !Array.isArray(value.managedPeerDependencies)) {
+    return [];
+  }
+  return value.managedPeerDependencies.filter((key): key is string => typeof key === "string");
+}
+
 function buildManagedOpenClawMetadata(params: {
   current: unknown;
   managedOverrideKeys: string[];
+  managedPeerDependencyKeys?: string[];
 }): ManagedNpmRootOpenClawMetadata | undefined {
   const metadata: ManagedNpmRootOpenClawMetadata = isRecord(params.current)
     ? { ...params.current }
@@ -97,6 +107,12 @@ function buildManagedOpenClawMetadata(params: {
     metadata.managedOverrides = params.managedOverrideKeys;
   } else {
     delete metadata.managedOverrides;
+  }
+  const managedPeerDependencyKeys = params.managedPeerDependencyKeys;
+  if (managedPeerDependencyKeys && managedPeerDependencyKeys.length > 0) {
+    metadata.managedPeerDependencies = managedPeerDependencyKeys;
+  } else if (managedPeerDependencyKeys) {
+    delete metadata.managedPeerDependencies;
   }
   return Object.keys(metadata).length > 0 ? metadata : undefined;
 }
@@ -241,6 +257,174 @@ export async function upsertManagedNpmRootDependency(params: {
     delete next.openclaw;
   }
   await writeJson(manifestPath, next, { trailingNewline: true });
+}
+
+async function readPackageJsonIfExists(
+  packageDir: string,
+): Promise<Record<string, unknown> | null> {
+  try {
+    const parsed = JSON.parse(await fs.readFile(path.join(packageDir, "package.json"), "utf8"));
+    return isRecord(parsed) ? parsed : null;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return null;
+    }
+    throw err;
+  }
+}
+
+async function readPackageVersion(packageDir: string): Promise<string | undefined> {
+  const parsed = await readPackageJsonIfExists(packageDir);
+  return parsed ? readOptionalString(parsed.version) : undefined;
+}
+
+function isOptionalPeerDependency(manifest: Record<string, unknown>, peerName: string): boolean {
+  if (!isRecord(manifest.peerDependenciesMeta)) {
+    return false;
+  }
+  const peerMetadata = manifest.peerDependenciesMeta[peerName];
+  return isRecord(peerMetadata) && peerMetadata.optional === true;
+}
+
+async function listNodeModulesPackageDirs(nodeModulesDir: string): Promise<string[]> {
+  let entries: Dirent[];
+  try {
+    entries = await fs.readdir(nodeModulesDir, { withFileTypes: true });
+  } catch (err) {
+    if (
+      (err as NodeJS.ErrnoException).code === "ENOENT" ||
+      (err as NodeJS.ErrnoException).code === "ENOTDIR"
+    ) {
+      return [];
+    }
+    throw err;
+  }
+  const packageDirs: string[] = [];
+  for (const entry of entries.toSorted((left, right) => left.name.localeCompare(right.name))) {
+    if (entry.name === ".bin" || entry.name.startsWith(".")) {
+      continue;
+    }
+    const entryPath = path.join(nodeModulesDir, entry.name);
+    if (entry.name.startsWith("@") && entry.isDirectory()) {
+      let scopedEntries: Dirent[];
+      try {
+        scopedEntries = await fs.readdir(entryPath, { withFileTypes: true });
+      } catch (err) {
+        if (
+          (err as NodeJS.ErrnoException).code === "ENOENT" ||
+          (err as NodeJS.ErrnoException).code === "ENOTDIR"
+        ) {
+          continue;
+        }
+        throw err;
+      }
+      for (const scopedEntry of scopedEntries.toSorted((left, right) =>
+        left.name.localeCompare(right.name),
+      )) {
+        if (scopedEntry.isDirectory() || scopedEntry.isSymbolicLink()) {
+          packageDirs.push(path.join(entryPath, scopedEntry.name));
+        }
+      }
+      continue;
+    }
+    if (entry.isDirectory() || entry.isSymbolicLink()) {
+      packageDirs.push(entryPath);
+    }
+  }
+  return packageDirs;
+}
+
+async function collectManagedNpmRootPeerDependencyPins(params: {
+  npmRoot: string;
+}): Promise<Record<string, string>> {
+  const pins = new Map<string, string>();
+  const queue = await listNodeModulesPackageDirs(path.join(params.npmRoot, "node_modules"));
+  for (let index = 0; index < queue.length; index += 1) {
+    const packageDir = queue[index];
+    if (!packageDir) {
+      continue;
+    }
+    const manifest = await readPackageJsonIfExists(packageDir);
+    if (manifest) {
+      if (readOptionalString(manifest.name) === "openclaw") {
+        continue;
+      }
+      const peerDependencies = readDependencyRecord(manifest.peerDependencies);
+      for (const [peerName, peerRange] of Object.entries(peerDependencies)) {
+        if (peerName === "openclaw" || pins.has(peerName)) {
+          continue;
+        }
+        const installedVersion = await readPackageVersion(
+          path.join(params.npmRoot, "node_modules", ...peerName.split("/")),
+        );
+        if (!installedVersion && isOptionalPeerDependency(manifest, peerName)) {
+          continue;
+        }
+        pins.set(peerName, installedVersion ?? peerRange);
+      }
+    }
+    queue.push(...(await listNodeModulesPackageDirs(path.join(packageDir, "node_modules"))));
+  }
+  return Object.fromEntries(
+    [...pins.entries()].toSorted(([left], [right]) => left.localeCompare(right)),
+  );
+}
+
+export async function syncManagedNpmRootPeerDependencies(params: {
+  npmRoot: string;
+  managedOverrides?: Record<string, unknown>;
+  omitUnsupportedManagedOverrides?: boolean;
+}): Promise<boolean> {
+  const manifestPath = path.join(params.npmRoot, "package.json");
+  const manifest = await readManagedNpmRootManifest(manifestPath);
+  const dependencies = readDependencyRecord(manifest.dependencies);
+  const previousManagedPeerDependencies = readManagedPeerDependencyKeys(manifest.openclaw);
+  const peerPins = await collectManagedNpmRootPeerDependencyPins({ npmRoot: params.npmRoot });
+  const nextDependencies = { ...dependencies };
+  for (const packageName of previousManagedPeerDependencies) {
+    if (!Object.hasOwn(peerPins, packageName)) {
+      delete nextDependencies[packageName];
+    }
+  }
+  for (const [packageName, dependencySpec] of Object.entries(peerPins)) {
+    nextDependencies[packageName] = dependencies[packageName] ?? dependencySpec;
+  }
+
+  const managedOverrides = params.omitUnsupportedManagedOverrides
+    ? filterUnsupportedManagedNpmRootOverrides(params.managedOverrides)
+    : readOverrideRecord(params.managedOverrides);
+  const managedOverrideKeys = Object.keys(managedOverrides).toSorted();
+  const overrides = readOverrideRecord(manifest.overrides);
+  for (const key of readManagedOverrideKeys(manifest.openclaw)) {
+    delete overrides[key];
+  }
+  Object.assign(overrides, managedOverrides);
+  const managedPeerDependencyKeys = Object.keys(peerPins).toSorted();
+  const openclawMetadata = buildManagedOpenClawMetadata({
+    current: manifest.openclaw,
+    managedOverrideKeys,
+    managedPeerDependencyKeys,
+  });
+  const next: ManagedNpmRootManifest = {
+    ...manifest,
+    private: true,
+    dependencies: nextDependencies,
+  };
+  if (Object.keys(overrides).length > 0) {
+    next.overrides = overrides;
+  } else {
+    delete next.overrides;
+  }
+  if (openclawMetadata) {
+    next.openclaw = openclawMetadata;
+  } else {
+    delete next.openclaw;
+  }
+  const changed = JSON.stringify(next) !== JSON.stringify(manifest);
+  if (changed) {
+    await writeJson(manifestPath, next, { trailingNewline: true });
+  }
+  return changed;
 }
 
 export async function repairManagedNpmRootOpenClawPeer(params: {
