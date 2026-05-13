@@ -109,7 +109,7 @@ describe("check-changelog-attributions", () => {
     expect(isForbiddenChangelogThanksHandle("clawsweeper[bot]")).toBe(true);
     expect(isForbiddenChangelogThanksHandle("openclaw-clawsweeper")).toBe(true);
     expect(isForbiddenChangelogThanksHandle("openclaw-clawsweeper[bot]")).toBe(true);
-    expect(isForbiddenChangelogThanksHandle("Ziy1-Tan")).toBe(false);
+    expect(isForbiddenChangelogThanksHandle("alice")).toBe(false);
     expect(isForbiddenChangelogThanksHandle("human-clawsweeper-fan")).toBe(false);
     expect(
       isForbiddenChangelogThanksHandle("human-clawsweeper-fan", { strictBotHandle: true }),
@@ -132,7 +132,7 @@ describe("check-changelog-attributions", () => {
   });
 
   it("accepts explicit human thanks for bot PR changelog entries", () => {
-    const repo = createRepoWithPrChangelogDiff("- Bot repair (#123). Thanks @Ziy1-Tan.");
+    const repo = createRepoWithPrChangelogDiff("- Bot repair (#123). Thanks @alice.");
     try {
       expect(validateChangelogEntry(repo, "clawsweeper[bot]")).toContain("explicit thanks");
     } finally {
