@@ -920,6 +920,8 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
 
     `allowBots` is conservative for channels and private channels: bot-authored room messages are accepted only when the sending bot is explicitly listed in that room's `users` allowlist, or when at least one explicit Slack owner ID from `channels.slack.allowFrom` is currently a room member. Wildcards and display-name owner entries do not satisfy owner presence. Owner presence uses Slack `conversations.members`; make sure the app has the matching read scope for the room type (`channels:read` for public channels, `groups:read` for private channels). If the member lookup fails, OpenClaw drops the bot-authored room message.
 
+    Accepted bot-authored Slack messages use shared [bot loop protection](/channels/bot-loop-protection). Configure `channels.defaults.botLoopProtection` for the default budget, then override with `channels.slack.botLoopProtection` or `channels.slack.channels.<id>.botLoopProtection` when a workspace or channel needs a different limit.
+
   </Tab>
 </Tabs>
 
