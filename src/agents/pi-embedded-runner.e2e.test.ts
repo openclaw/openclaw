@@ -293,6 +293,18 @@ const runDefaultEmbeddedTurn = async (sessionFile: string, prompt: string, sessi
   });
 };
 
+function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`Expected ${label} to be called`);
+  }
+  return call;
+}
+
+function firstRunEmbeddedAttemptParams(): { sessionKey?: string } {
+  return firstMockCall(runEmbeddedAttemptMock, "embedded attempt")[0] as { sessionKey?: string };
+}
+
 describe("runEmbeddedPiAgent", () => {
   it("skips models.json generation when dynamic model resolution succeeds", async () => {
     const sessionFile = nextSessionFile();
@@ -320,8 +332,7 @@ describe("runEmbeddedPiAgent", () => {
       enqueue: immediateEnqueue,
     });
 
-    const resolveModelCall = (resolveModelAsyncMock as unknown as { mock: { calls: unknown[][] } })
-      .mock.calls[0];
+    const resolveModelCall = firstMockCall(resolveModelAsyncMock, "model resolution");
     expect(resolveModelCall?.[0]).toBe("openrouter");
     expect(resolveModelCall?.[1]).toBe("openrouter/auto");
     expect(resolveModelCall?.[2]).toBe(agentDir);
@@ -369,8 +380,7 @@ describe("runEmbeddedPiAgent", () => {
       sessionId: "resume-123",
       agentId: undefined,
     });
-    const firstCall = runEmbeddedAttemptMock.mock.calls[0]?.[0] as { sessionKey?: string };
-    expect(firstCall.sessionKey).toBe("agent:test:resolved");
+    expect(firstRunEmbeddedAttemptParams().sessionKey).toBe("agent:test:resolved");
   });
 
   it("drops whitespace-only session keys when backfill cannot resolve a session key", async () => {
@@ -410,8 +420,7 @@ describe("runEmbeddedPiAgent", () => {
       sessionId: "resume-124",
       agentId: undefined,
     });
-    const firstCall = runEmbeddedAttemptMock.mock.calls[0]?.[0] as { sessionKey?: string };
-    expect(firstCall.sessionKey).toBeUndefined();
+    expect(firstRunEmbeddedAttemptParams().sessionKey).toBeUndefined();
   });
 
   it("logs when embedded session-key backfill resolution fails", async () => {
@@ -705,6 +714,6 @@ describe("runEmbeddedPiAgent", () => {
     const result = await runWithOrphanedSingleUserMessage("orphaned user", nextSessionKey());
 
     expect(result.meta.error).toBeUndefined();
-    expect(result.payloads?.length ?? 0).toBeGreaterThan(0);
+    expect(result.payloads?.[0]?.text).toBe("ok");
   });
 });

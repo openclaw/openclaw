@@ -811,8 +811,11 @@ describe("createMusicGenerateTool", () => {
 
     expect(webMedia.loadWebMedia).toHaveBeenCalledTimes(1);
     const loadCall = vi.mocked(webMedia.loadWebMedia).mock.calls[0];
-    expect(loadCall?.[0]).toBe("http://198.18.0.153/reference.png");
-    const loadOptions = loadCall?.[1] as {
+    if (!loadCall) {
+      throw new Error("expected web media load call");
+    }
+    expect(loadCall[0]).toBe("http://198.18.0.153/reference.png");
+    const loadOptions = loadCall[1] as {
       requestInit?: { signal?: unknown };
       ssrfPolicy?: unknown;
     };

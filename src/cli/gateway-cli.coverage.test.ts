@@ -122,6 +122,14 @@ async function expectGatewayExit(args: string[]) {
   await expect(runGatewayCommand(args)).rejects.toThrow("__exit__:1");
 }
 
+function firstMockArg(mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } }): unknown {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error("expected mock to have at least one call");
+  }
+  return call[0];
+}
+
 describe("gateway-cli coverage", () => {
   beforeEach(() => {
     gatewayProgram = createGatewayProgram();
@@ -132,6 +140,7 @@ describe("gateway-cli coverage", () => {
     defaultRuntime.writeStdout.mockClear();
     defaultRuntime.writeJson.mockClear();
     defaultRuntime.exit.mockClear();
+    startGatewayServer.mockClear();
     inspectPortUsage.mockClear();
     formatPortDiagnostics.mockClear();
   });
@@ -166,9 +175,8 @@ describe("gateway-cli coverage", () => {
       "--json",
     ]);
 
-    const stabilityCall = callGateway.mock.calls[0]?.[0] as
-      | { method?: string; params?: unknown }
-      | undefined;
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    const stabilityCall = firstMockArg(callGateway) as { method?: string; params?: unknown };
     expect(stabilityCall?.method).toBe("diagnostics.stability");
     expect(stabilityCall?.params).toEqual({
       limit: 5,
@@ -265,9 +273,7 @@ describe("gateway-cli coverage", () => {
       );
 
       expect(callGateway).toHaveBeenCalledTimes(1);
-      const healthCall = callGateway.mock.calls[0]?.[0] as
-        | { method?: string; timeoutMs?: number }
-        | undefined;
+      const healthCall = firstMockArg(callGateway) as { method?: string; timeoutMs?: number };
       expect(healthCall?.method).toBe("health");
       expect(healthCall?.timeoutMs).toBe(3000);
       expect(fs.existsSync(outputPath)).toBe(true);
@@ -386,7 +392,7 @@ describe("gateway-cli coverage", () => {
           runGatewayCommand(["gateway", "--token", "test-token", "--allow-unconfigured"]),
         ).rejects.toThrow("__exit__:0");
 
-        expect(startGatewayServer).toHaveBeenCalled();
+        expect(startGatewayServer).toHaveBeenCalledTimes(1);
         expect(runtimeErrors.join("\n")).toContain("Gateway failed to start:");
         expect(runtimeErrors.join("\n")).toContain("gateway stop");
       },

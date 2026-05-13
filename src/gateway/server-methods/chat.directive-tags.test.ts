@@ -389,20 +389,43 @@ function getMessageContent(payload: unknown): Array<Record<string, any>> {
   return Array.isArray(content) ? (content as Array<Record<string, any>>) : [];
 }
 
+function mockCallAt(
+  mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } },
+  index: number,
+): ReadonlyArray<unknown> | undefined {
+  const calls = mock.mock.calls;
+  const normalizedIndex = index < 0 ? calls.length + index : index;
+  return calls[normalizedIndex];
+}
+
 function lastRespondCall(respond: ReturnType<typeof vi.fn>) {
-  return respond.mock.calls.at(-1) as
+  return mockCallAt(respond, -1) as
     | [boolean, Record<string, any> | undefined, Record<string, any> | undefined]
     | undefined;
 }
 
+function responseErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (error && typeof error === "object") {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === "string") {
+      return message;
+    }
+    return JSON.stringify(error);
+  }
+  return String(error);
+}
+
 function lastBroadcastPayload(context: ChatContext): Record<string, any> | undefined {
-  const chatCall = (context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls.at(-1);
+  const chatCall = mockCallAt(context.broadcast as unknown as ReturnType<typeof vi.fn>, -1);
   expect(chatCall?.[0]).toBe("chat");
   return chatCall?.[1] as Record<string, any> | undefined;
 }
 
 function lastNodeSendCall(context: ChatContext) {
-  return (context.nodeSendToSession as unknown as ReturnType<typeof vi.fn>).mock.calls.at(-1) as
+  return mockCallAt(context.nodeSendToSession as unknown as ReturnType<typeof vi.fn>, -1) as
     | [string, string, Record<string, any>]
     | undefined;
 }
@@ -539,7 +562,7 @@ async function runNonStreamingChatSend(params: {
   waitForCompletion?: boolean;
   waitForDedupe?: boolean;
   waitFor?: NonStreamingChatSendWaitFor;
-}) {
+}): Promise<Record<string, any> | undefined> {
   const sendParams: {
     sessionKey: string;
     message: string;
@@ -590,9 +613,9 @@ async function runNonStreamingChatSend(params: {
     ).toBe(1);
   });
 
-  const chatCall = (params.context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+  const chatCall = mockCallAt(params.context.broadcast as unknown as ReturnType<typeof vi.fn>, 0);
   expect(chatCall?.[0]).toBe("chat");
-  return chatCall?.[1];
+  return chatCall?.[1] as Record<string, any> | undefined;
 }
 
 describe("chat directive tag stripping for non-streaming final payloads", () => {
@@ -1080,7 +1103,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
 
     expect(respond).toHaveBeenCalled();
-    const chatCall = (context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls.at(-1);
+    const chatCall = mockCallAt(context.broadcast as unknown as ReturnType<typeof vi.fn>, -1);
     expect(chatCall?.[0]).toBe("chat");
     expect(extractFirstTextBlock(chatCall?.[1])).toBe("hello");
   });
@@ -2957,13 +2980,15 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     // so the client retries instead of treating it as a bad request.
     expect(mockState.lastDispatchCtx).toBeUndefined();
     expect(respond).toHaveBeenCalledTimes(1);
-    const [ok, payload, error] = respond.mock.calls[0] ?? [];
+    const [ok, payload, error] = lastRespondCall(respond) ?? [];
     expect(ok).toBe(false);
     expect(payload).toBeUndefined();
     expect(error?.code).toBe(ErrorCodes.UNAVAILABLE);
-    expect(error?.message ?? String(error)).toMatch(/ENOSPC|non-image attachments/i);
-    const unavailableLogCall = (context.logGateway.error as unknown as ReturnType<typeof vi.fn>)
-      .mock.calls[0] as [string, Record<string, string>] | undefined;
+    expect(responseErrorMessage(error)).toMatch(/ENOSPC|non-image attachments/i);
+    const unavailableLogCall = mockCallAt(
+      context.logGateway.error as unknown as ReturnType<typeof vi.fn>,
+      0,
+    ) as [string, Record<string, string>] | undefined;
     expect(unavailableLogCall?.[0]).toBe("chat.send attachment parse/stage failed");
     expect(unavailableLogCall?.[1].consoleMessage).toContain(
       "chat.send attachment parse/stage failed: MediaOffloadError",
@@ -3067,11 +3092,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     expect(mockState.lastDispatchCtx).toBeUndefined();
     expect(respond).toHaveBeenCalledTimes(1);
-    const [ok, payload, error] = respond.mock.calls[0] ?? [];
+    const [ok, payload, error] = lastRespondCall(respond) ?? [];
     expect(ok).toBe(false);
     expect(payload).toBeUndefined();
     expect(error?.code).toBe(ErrorCodes.UNAVAILABLE);
-    expect(error?.message ?? String(error)).toMatch(/staging incomplete/i);
+    expect(responseErrorMessage(error)).toMatch(/staging incomplete/i);
     // Both media-store entries are cleaned up before the 5xx surfaces.
     expect(mockState.deleteMediaBufferCalls.map((c) => c.id).toSorted()).toEqual([
       "saved-media",
@@ -3127,13 +3152,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     expect(mockState.lastDispatchCtx).toBeUndefined();
     expect(respond).toHaveBeenCalledTimes(1);
-    const [ok, payload, error] = respond.mock.calls[0] ?? [];
+    const [ok, payload, error] = lastRespondCall(respond) ?? [];
     expect(ok).toBe(false);
     expect(payload).toBeUndefined();
     // 4xx, not 5xx — retrying a file that exceeds the staging cap cannot
     // succeed, so the failure must be surfaced as a client-side rejection.
     expect(error?.code).toBe(ErrorCodes.INVALID_REQUEST);
-    expect(error?.message ?? String(error)).toMatch(/sandbox staging limit/i);
+    expect(responseErrorMessage(error)).toMatch(/sandbox staging limit/i);
     // Orphaned media-store entries are cleaned up before the 4xx surfaces.
     expect(mockState.deleteMediaBufferCalls).toEqual([{ id: "saved-media", subdir: "inbound" }]);
   });

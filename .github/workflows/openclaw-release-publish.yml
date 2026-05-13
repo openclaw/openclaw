@@ -288,7 +288,7 @@ jobs:
           wait_for_run() {
             local workflow="$1"
             local run_id="$2"
-            local status conclusion url updated_at last_state
+            local status conclusion url updated_at created_at duration_seconds duration_label last_state
 
             last_state=""
             while true; do
@@ -307,11 +307,26 @@ jobs:
               sleep 30
             done
 
-            conclusion="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json conclusion --jq '.conclusion')"
-            url="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json url --jq '.url')"
-            echo "${workflow} finished with ${conclusion}: ${url}"
+            run_json="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json conclusion,url,createdAt,updatedAt)"
+            conclusion="$(printf '%s' "$run_json" | jq -r '.conclusion')"
+            url="$(printf '%s' "$run_json" | jq -r '.url')"
+            created_at="$(printf '%s' "$run_json" | jq -r '.createdAt')"
+            updated_at="$(printf '%s' "$run_json" | jq -r '.updatedAt')"
+            duration_seconds="$(
+              CREATED_AT="${created_at}" UPDATED_AT="${updated_at}" node --input-type=module -e '
+                const created = Date.parse(process.env.CREATED_AT ?? "");
+                const updated = Date.parse(process.env.UPDATED_AT ?? "");
+                console.log(Number.isFinite(created) && Number.isFinite(updated) ? Math.max(0, Math.round((updated - created) / 1000)) : "");
+              '
+            )"
+            if [[ -n "${duration_seconds}" ]]; then
+              duration_label="$((duration_seconds / 60))m$(printf '%02d' $((duration_seconds % 60)))s"
+            else
+              duration_label="unknown duration"
+            fi
+            echo "${workflow} finished with ${conclusion} in ${duration_label}: ${url}"
             {
-              echo "- ${workflow}: ${conclusion} (${url})"
+              echo "- ${workflow}: ${conclusion} in ${duration_label} (${url})"
             } >> "$GITHUB_STEP_SUMMARY"
             if [[ "$conclusion" != "success" ]]; then
               gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json jobs --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, conclusion, url}' || true
@@ -386,6 +401,33 @@ jobs:
             echo "- GitHub release: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}" >> "$GITHUB_STEP_SUMMARY"
           }
 
+          upload_dependency_evidence_release_asset() {
+            local release_version download_dir asset_path asset_name
+            release_version="${RELEASE_TAG#v}"
+            download_dir="${RUNNER_TEMP}/openclaw-release-dependency-evidence-asset"
+            asset_name="openclaw-${release_version}-dependency-evidence.zip"
+            asset_path="${RUNNER_TEMP}/${asset_name}"
+
+            rm -rf "${download_dir}" "${asset_path}"
+            mkdir -p "${download_dir}"
+            gh run download "${PREFLIGHT_RUN_ID}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --name "openclaw-npm-preflight-${RELEASE_TAG}" \
+              --dir "${download_dir}"
+
+            if [[ ! -d "${download_dir}/dependency-evidence" ]]; then
+              echo "Dependency evidence is missing from OpenClaw npm preflight artifact." >&2
+              find "${download_dir}" -maxdepth 2 -type f -print >&2 || true
+              exit 1
+            fi
+
+            (cd "${download_dir}" && zip -qr "${asset_path}" dependency-evidence)
+            gh release upload "${RELEASE_TAG}" "${asset_path}#${asset_name}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --clobber
+            echo "- Dependency evidence asset: \`${asset_name}\`" >> "$GITHUB_STEP_SUMMARY"
+          }
+
           {
             echo "### Publish sequence"
             echo
@@ -414,6 +456,10 @@ jobs:
 
           plugin_npm_run_id="$(dispatch_workflow plugin-npm-release.yml "${npm_args[@]}")"
           plugin_clawhub_run_id="$(dispatch_workflow plugin-clawhub-release.yml "${clawhub_args[@]}")"
+          {
+            echo "- Plugin npm run ID: \`${plugin_npm_run_id}\`"
+            echo "- Plugin ClawHub run ID: \`${plugin_clawhub_run_id}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
           if ! wait_for_run plugin-npm-release.yml "${plugin_npm_run_id}"; then
             echo "Plugin npm publish failed; cancelling ClawHub publish child ${plugin_clawhub_run_id}." >&2
@@ -428,6 +474,7 @@ jobs:
               -f preflight_only=false \
               -f preflight_run_id="${PREFLIGHT_RUN_ID}" \
               -f npm_dist_tag="${RELEASE_NPM_DIST_TAG}")"
+            echo "- OpenClaw npm run ID: \`${openclaw_npm_run_id}\`" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "- OpenClaw npm publish: skipped by input" >> "$GITHUB_STEP_SUMMARY"
           fi
@@ -471,4 +518,5 @@ jobs:
 
           if [[ -n "${openclaw_npm_run_id}" ]]; then
             create_or_update_github_release
+            upload_dependency_evidence_release_asset
           fi

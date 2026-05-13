@@ -216,6 +216,9 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain(finalWorkspaceCopy);
     expect(dockerfile.indexOf(pruneProd)).toBeLessThan(dockerfile.indexOf(finalWorkspaceCopy));
     expect(dockerfile).toContain(
+      "COPY --from=runtime-assets --chown=node:node /app/pnpm-workspace.yaml .",
+    );
+    expect(dockerfile).toContain(
       "COPY --from=runtime-assets --chown=node:node /app/patches ./patches",
     );
   });
