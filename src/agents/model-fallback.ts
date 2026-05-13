@@ -267,11 +267,11 @@ async function persistSessionModelExhaustion(params: {
   const now = Date.now();
 
   try {
-    await updateSessionStoreEntry({
+    const persisted = await updateSessionStoreEntry({
       storePath: params.state.storePath,
       sessionKey: params.state.sessionKey,
-      update: async () => {
-        const nextExhaustedModels = { ...params.state.exhaustedModels };
+      update: async (entry: SessionEntry) => {
+        const nextExhaustedModels = { ...(entry.exhaustedModels ?? {}) };
         if (params.clear) {
           delete nextExhaustedModels[key];
         } else {
@@ -281,7 +281,9 @@ async function persistSessionModelExhaustion(params: {
       },
     });
 
-    if (params.clear) {
+    if (persisted?.exhaustedModels) {
+      params.state.exhaustedModels = { ...persisted.exhaustedModels };
+    } else if (params.clear) {
       delete params.state.exhaustedModels[key];
     } else {
       params.state.exhaustedModels[key] = now + resolveModelExhaustionRetryMs(params.cfg);
