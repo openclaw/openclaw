@@ -893,6 +893,12 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
     }
     if (repair) {
       lines.push(`${label("Repair")} ${info(formatRepairSummary(repair))}`);
+      if (repair.archivedDreamSessionCorpus) {
+        lines.push(`${label("Dream repair")} ${info("archived session corpus")}`);
+        if (repair.dreamArchiveDir) {
+          lines.push(`${label("Dream archive")} ${info(shortenHomePath(repair.dreamArchiveDir))}`);
+        }
+      }
     }
     if (status.fallback?.reason) {
       lines.push(muted(status.fallback.reason));

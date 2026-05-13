@@ -77,11 +77,27 @@ function writeMatrixSessionMeta(
     typeof existing.origin === "object" && existing.origin !== null
       ? (existing.origin as Record<string, unknown>)
       : {};
+  const nativeDirectUserId =
+    origin.nativeDirectUserId ??
+    (origin.chatType === "direct" && origin.from.startsWith("matrix:")
+      ? origin.from.slice("matrix:".length)
+      : undefined);
   upsertSessionEntry({
     agentId: "ops",
     sessionKey,
     entry: {
       ...existing,
+      chatType: origin.chatType,
+      deliveryContext: {
+        ...(typeof existing.deliveryContext === "object" && existing.deliveryContext !== null
+          ? (existing.deliveryContext as Record<string, unknown>)
+          : {}),
+        channel: "matrix",
+        to: origin.to,
+        accountId: "ops",
+      },
+      ...(origin.nativeChannelId ? { nativeChannelId: origin.nativeChannelId } : {}),
+      ...(nativeDirectUserId ? { nativeDirectUserId } : {}),
       origin: {
         ...existingOrigin,
         provider: "matrix",

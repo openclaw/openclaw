@@ -108,7 +108,7 @@ function normalizeNotifyState(raw: unknown): NotifyStateFile {
     subscribers.push({
       to,
       accountId,
-      messageThreadId,
+      ...(messageThreadId != null ? { messageThreadId } : {}),
       mode,
       addedAtMs,
     });

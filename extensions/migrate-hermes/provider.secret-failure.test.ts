@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolveAuthProfileStoreLocationForDisplay } from "openclaw/plugin-sdk/agent-runtime";
 import type { MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -23,6 +24,10 @@ const logger = {
   error() {},
   debug() {},
 };
+
+function stateEnv(stateDir: string): NodeJS.ProcessEnv {
+  return { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+}
 
 async function makeTempRoot() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hermes-secret-failure-"));
@@ -90,7 +95,10 @@ describe("Hermes migration provider secret write failures", () => {
         kind: "secret",
         action: "create",
         source: path.join(source, ".env"),
-        target: `${path.join(stateDir, "agents", "main", "agent")}/auth-profiles.json#openai:hermes-import`,
+        target: `${resolveAuthProfileStoreLocationForDisplay(
+          path.join(stateDir, "agents", "main", "agent"),
+          stateEnv(stateDir),
+        )}/openai:hermes-import`,
         status: "error",
         sensitive: true,
         reason: HERMES_REASON_AUTH_PROFILE_WRITE_FAILED,

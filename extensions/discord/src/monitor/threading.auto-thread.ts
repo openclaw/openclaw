@@ -230,11 +230,6 @@ function resolveDiscordThreadTitleModelRef(params: {
   if (!channel) {
     return undefined;
   }
-  const parentSessionKey = buildAgentSessionKey({
-    agentId: params.agentId,
-    channel,
-    peer: { kind: "channel", id: params.messageChannelId },
-  });
   const channelLabel = params.channelName?.trim();
   const groupChannel = channelLabel ? `#${channelLabel}` : undefined;
   const channelOverride = resolveChannelModelOverride({
@@ -244,7 +239,7 @@ function resolveDiscordThreadTitleModelRef(params: {
     groupChatType: "channel",
     groupChannel,
     groupSubject: groupChannel,
-    parentSessionKey,
+    parentConversationId: params.messageChannelId,
   });
   return channelOverride?.model;
 }

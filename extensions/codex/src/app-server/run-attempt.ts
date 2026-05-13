@@ -2727,7 +2727,9 @@ function isCodexTurnAbortMarkerNotification(
   const markerBody = readCodexTurnAbortMarkerBody(text);
   return (
     markerBody === CODEX_INTERRUPTED_USER_GUIDANCE ||
-    markerBody === CODEX_INTERRUPTED_DEVELOPER_GUIDANCE
+    markerBody === CODEX_INTERRUPTED_DEVELOPER_GUIDANCE ||
+    markerBody?.startsWith("The user interrupted the previous turn on purpose.") === true ||
+    markerBody?.startsWith("The previous turn was interrupted on purpose.") === true
   );
 }
 

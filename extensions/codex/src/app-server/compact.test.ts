@@ -150,7 +150,10 @@ describe("maybeCompactCodexAppServerSession", () => {
     const fake = createFakeCodexClient();
     __testing.setCodexAppServerClientFactoryForTests(async () => fake.client);
     const sessionId = await writeTestBinding();
-    await expect(readCodexAppServerBinding(sessionId)).resolves.toBeUndefined();
+    await expect(readCodexAppServerBinding(sessionId)).resolves.toMatchObject({
+      sessionKey: "agent:main:session-1",
+      threadId: "thread-1",
+    });
 
     const pendingResult = startCompaction(sessionId);
     await vi.waitFor(() => {
@@ -273,6 +276,7 @@ describe("maybeCompactCodexAppServerSession", () => {
       customInstructions: undefined,
       force: true,
       runtimeContext: { workspaceDir: tempDir, provider: "codex" },
+      transcriptScope: { agentId: "main", sessionId: "session-1" },
     });
     expect(maintain).toHaveBeenCalledTimes(1);
     const [maintainCall] = maintain.mock.calls[0] ?? [];

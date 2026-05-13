@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  closeOpenClawStateDatabaseForTest,
+} from "openclaw/plugin-sdk/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getSessionEntry, upsertSessionEntry } from "../config.runtime.js";
 import { resolveGroupActivationFor } from "./group-activation.js";
@@ -19,6 +23,8 @@ async function makeSessionStore(
   entries: Record<string, unknown> = {},
 ): Promise<{ cleanup: () => Promise<void> }> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-"));
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
   process.env.OPENCLAW_STATE_DIR = dir;
   for (const [sessionKey, entry] of Object.entries(entries)) {
     upsertSessionEntry({
@@ -78,6 +84,8 @@ describe("resolveGroupActivationFor", () => {
   const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 
   afterEach(async () => {
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
     while (cleanups.length > 0) {
       await cleanups.pop()?.();
     }

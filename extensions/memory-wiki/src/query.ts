@@ -17,6 +17,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import type { OpenClawConfig } from "../api.js";
 import { assessClaimFreshness, isClaimContestedStatus } from "./claim-health.js";
 import type { ResolvedMemoryWikiConfig, WikiSearchBackend, WikiSearchCorpus } from "./config.js";
+import { readMemoryWikiCompiledDigestBundle } from "./digest-state.js";
 import {
   parseWikiMarkdown,
   toWikiPageSummary,
@@ -286,10 +287,17 @@ function parseClaimsDigest(raw: string): QueryDigestClaim[] {
 }
 
 async function readQueryDigestBundle(rootDir: string): Promise<QueryDigestBundle | null> {
-  const [agentDigestRaw, claimsDigestRaw] = await Promise.all([
-    fs.readFile(path.join(rootDir, AGENT_DIGEST_PATH), "utf8").catch(() => null),
-    fs.readFile(path.join(rootDir, CLAIMS_DIGEST_PATH), "utf8").catch(() => null),
+  const compiledDigest = await readMemoryWikiCompiledDigestBundle(rootDir);
+  const [legacyAgentDigestRaw, legacyClaimsDigestRaw] = await Promise.all([
+    compiledDigest.agentDigest
+      ? Promise.resolve(null)
+      : fs.readFile(path.join(rootDir, AGENT_DIGEST_PATH), "utf8").catch(() => null),
+    compiledDigest.claimsDigest
+      ? Promise.resolve(null)
+      : fs.readFile(path.join(rootDir, CLAIMS_DIGEST_PATH), "utf8").catch(() => null),
   ]);
+  const agentDigestRaw = compiledDigest.agentDigest ?? legacyAgentDigestRaw;
+  const claimsDigestRaw = compiledDigest.claimsDigest ?? legacyClaimsDigestRaw;
   if (!agentDigestRaw && !claimsDigestRaw) {
     return null;
   }

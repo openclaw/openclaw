@@ -22,8 +22,9 @@ function isActivationOnlyEntry(
 ) {
   return (
     entry?.groupActivation !== undefined &&
-    typeof entry?.sessionId !== "string" &&
-    typeof entry?.updatedAt !== "number"
+    Object.keys(entry).every(
+      (key) => key === "groupActivation" || key === "sessionId" || key === "updatedAt",
+    )
   );
 }
 

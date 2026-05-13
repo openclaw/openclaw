@@ -1055,12 +1055,31 @@ function isEligibleInteractiveSession(ctx: {
 }
 
 function resolveChatType(ctx: {
+  sessionKey?: string;
   messageProvider?: string;
   sessionEntry?: ActiveMemorySessionEntry;
 }): ActiveMemoryChatType | undefined {
   const storedChatType = normalizeActiveMemoryChatType(ctx.sessionEntry?.chatType);
   if (storedChatType) {
     return storedChatType;
+  }
+  const sessionKey = ctx.sessionKey?.trim().toLowerCase();
+  if (sessionKey) {
+    if (sessionKey.includes(":direct:")) {
+      return "direct";
+    }
+    if (sessionKey.includes(":group:")) {
+      return "group";
+    }
+    if (sessionKey.includes(":channel:")) {
+      return "channel";
+    }
+    if (sessionKey.includes(":explicit:")) {
+      return "explicit";
+    }
+    if (/^agent:[^:]+:main:thread:/.test(sessionKey)) {
+      return "direct";
+    }
   }
   const provider = (ctx.messageProvider ?? "").trim().toLowerCase();
   if (provider === "webchat") {
@@ -1072,6 +1091,7 @@ function resolveChatType(ctx: {
 function isAllowedChatType(
   config: ResolvedActiveRecallPluginConfig,
   ctx: {
+    sessionKey?: string;
     messageProvider?: string;
     sessionEntry?: ActiveMemorySessionEntry;
   },
@@ -2850,6 +2870,7 @@ export default definePluginEntry({
               : undefined;
           if (
             !isAllowedChatType(config, {
+              sessionKey: resolvedSessionKey,
               messageProvider: ctx.messageProvider,
               sessionEntry,
             })

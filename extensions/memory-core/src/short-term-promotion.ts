@@ -177,6 +177,8 @@ export type RepairShortTermPromotionArtifactsResult = {
   changed: boolean;
   removedInvalidEntries: number;
   rewroteStore: boolean;
+  archivedDreamSessionCorpus?: boolean;
+  dreamArchiveDir?: string;
 };
 
 type RankShortTermPromotionOptions = {
@@ -1815,6 +1817,8 @@ export async function repairShortTermPromotionArtifacts(params: {
   const workspaceDir = params.workspaceDir.trim();
   const nowIso = new Date().toISOString();
   let rewroteStore = false;
+  let archivedDreamSessionCorpus = false;
+  let dreamArchiveDir: string | undefined;
   const removedInvalidEntries = 0;
 
   await withShortTermLock(workspaceDir, async () => {
@@ -1853,10 +1857,37 @@ export async function repairShortTermPromotionArtifacts(params: {
     }
   });
 
+  const dreamsDir = path.join(workspaceDir, "memory", ".dreams");
+  const sessionCorpusDir = path.join(dreamsDir, "session-corpus");
+  const sessionIngestionPath = path.join(dreamsDir, "session-ingestion.json");
+  const sessionCorpusExists = await fs
+    .stat(sessionCorpusDir)
+    .then((stat) => stat.isDirectory())
+    .catch(() => false);
+  const sessionIngestionExists = await fs
+    .stat(sessionIngestionPath)
+    .then((stat) => stat.isFile())
+    .catch(() => false);
+  if (sessionCorpusExists || sessionIngestionExists) {
+    const archiveRoot = path.join(dreamsDir, "archive");
+    dreamArchiveDir = path.join(archiveRoot, `session-corpus-${nowIso.replace(/[:.]/g, "-")}`);
+    await fs.mkdir(dreamArchiveDir, { recursive: true });
+    if (sessionCorpusExists) {
+      await fs.rename(sessionCorpusDir, path.join(dreamArchiveDir, "session-corpus"));
+      archivedDreamSessionCorpus = true;
+    }
+    if (sessionIngestionExists) {
+      await fs.rename(sessionIngestionPath, path.join(dreamArchiveDir, "session-ingestion.json"));
+      archivedDreamSessionCorpus = true;
+    }
+  }
+
   return {
-    changed: rewroteStore,
+    changed: rewroteStore || archivedDreamSessionCorpus,
     removedInvalidEntries,
     rewroteStore,
+    ...(archivedDreamSessionCorpus ? { archivedDreamSessionCorpus } : {}),
+    ...(dreamArchiveDir ? { dreamArchiveDir } : {}),
   };
 }
 

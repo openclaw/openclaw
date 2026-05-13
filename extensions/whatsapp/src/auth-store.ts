@@ -452,7 +452,7 @@ export async function readWebSelfIdentityForDecision(
 export function getWebAuthAgeMs(authDir: string = resolveDefaultWebAuthDir()): number | null {
   try {
     const stats = fsSync.statSync(resolveWebCredsPath(resolveUserPath(authDir)));
-    return Date.now() - stats.mtimeMs;
+    return Math.max(0, Date.now() - stats.mtimeMs);
   } catch {
     return null;
   }

@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   loadAuthProfileStoreForSecretsRuntime,
+  replaceRuntimeAuthProfileStoreSnapshots,
 } from "openclaw/plugin-sdk/agent-runtime";
 import { upsertAuthProfile } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -835,14 +836,20 @@ describe("bridgeCodexAppServerStartOptions", () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const request = vi.fn(async () => ({ type: "chatgptAuthTokens" }));
     try {
-      upsertAuthProfile({
-        agentDir,
-        profileId: "openai-codex:aws",
-        credential: {
-          type: "aws-sdk",
-          provider: "openai-codex",
-        } as never,
-      });
+      replaceRuntimeAuthProfileStoreSnapshots([
+        {
+          agentDir,
+          store: {
+            version: 1,
+            profiles: {
+              "openai-codex:aws": {
+                type: "aws-sdk",
+                provider: "openai-codex",
+              } as never,
+            },
+          },
+        },
+      ]);
 
       await expect(
         applyCodexAppServerAuthProfile({
@@ -1229,8 +1236,8 @@ describe("bridgeCodexAppServerStartOptions", () => {
       const childProfile = expectOAuthProfile(
         loadAuthProfileStoreForSecretsRuntime(childAgentDir).profiles["openai-codex:work"],
       );
-      expect(childProfile?.access).toBe("child-stale-access-token");
-      expect(childProfile?.refresh).toBe("child-stale-refresh-token");
+      expect(childProfile?.access).toBe("main-refreshed-access-token");
+      expect(childProfile?.refresh).toBe("main-refreshed-refresh-token");
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }

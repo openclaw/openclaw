@@ -3,6 +3,10 @@ import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeMainKey } from "openclaw/plugin-sdk/routing";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  closeOpenClawStateDatabaseForTest,
+} from "openclaw/plugin-sdk/testing";
 import { describe, expect, it, vi } from "vitest";
 import type { WhatsAppSendResult } from "../inbound/send-result.js";
 import {
@@ -262,6 +266,8 @@ describe("getSessionSnapshot", () => {
     try {
       await withTempDir("openclaw-snapshot-", async (root) => {
         const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+        closeOpenClawAgentDatabasesForTest();
+        closeOpenClawStateDatabaseForTest();
         process.env.OPENCLAW_STATE_DIR = root;
         const sessionKey = "agent:main:whatsapp:dm:s1";
 
@@ -272,7 +278,7 @@ describe("getSessionSnapshot", () => {
             entry: {
               sessionId: "snapshot-session",
               updatedAt: new Date(2026, 0, 18, 3, 30, 0).getTime(),
-              lastChannel: "whatsapp",
+              channel: "whatsapp",
             },
           });
 
@@ -294,6 +300,8 @@ describe("getSessionSnapshot", () => {
           expect(snapshot.fresh).toBe(true);
           expect(snapshot.dailyResetAt).toBeUndefined();
         } finally {
+          closeOpenClawAgentDatabasesForTest();
+          closeOpenClawStateDatabaseForTest();
           if (previousStateDir === undefined) {
             delete process.env.OPENCLAW_STATE_DIR;
           } else {
