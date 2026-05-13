@@ -6,7 +6,8 @@ import type {
   ExecApprovalManager,
   ExecApprovalRecord,
 } from "../exec-approval-manager.js";
-import { ADMIN_SCOPE } from "../method-scopes.js";
+import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../method-scopes.js";
+import { GATEWAY_CLIENT_IDS } from "../protocol/client-info.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -92,12 +93,20 @@ export function isApprovalRecordVisibleToClient<TPayload>(params: {
   }
 
   const requestedByDeviceId = normalizeApprovalIdentity(params.record.requestedByDeviceId);
+  const requestedByClientId = normalizeApprovalIdentity(params.record.requestedByClientId);
+  if (
+    !requestedByDeviceId &&
+    requestedByClientId === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
+    scopes.includes(APPROVALS_SCOPE)
+  ) {
+    return true;
+  }
+
   if (requestedByDeviceId) {
     return requestedByDeviceId === normalizeApprovalIdentity(params.client?.connect?.device?.id);
   }
 
   const requestedByConnId = normalizeApprovalIdentity(params.record.requestedByConnId);
-  const requestedByClientId = normalizeApprovalIdentity(params.record.requestedByClientId);
   if (requestedByConnId || requestedByClientId) {
     return (
       (requestedByConnId !== null &&
