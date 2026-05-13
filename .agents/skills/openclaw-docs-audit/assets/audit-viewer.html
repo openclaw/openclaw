@@ -111,11 +111,17 @@
       .mode-toggle {
         display: inline-flex;
         width: fit-content;
-        margin-top: 4px;
         border: 1px solid var(--border-strong);
         border-radius: 999px;
         background: #0b1019;
         overflow: hidden;
+      }
+      .mode-toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        margin-top: 4px;
       }
       .mode-button {
         border: 0;
@@ -131,6 +137,21 @@
         border-right: 0;
       }
       .mode-button.active {
+        background: rgba(116, 183, 255, 0.24);
+        color: #d9ebff;
+      }
+      .wrap-button {
+        border: 1px solid var(--border-strong);
+        border-radius: 999px;
+        background: #0b1019;
+        color: var(--muted);
+        padding: 7px 11px;
+        font-size: 12px;
+        line-height: 1.2;
+        cursor: pointer;
+      }
+      .wrap-button.active {
+        border-color: rgba(116, 183, 255, 0.55);
         background: rgba(116, 183, 255, 0.24);
         color: #d9ebff;
       }
@@ -193,7 +214,7 @@
       .list {
         min-height: 0;
         height: 100%;
-        overflow-x: hidden;
+        overflow-x: auto;
         overflow-y: auto;
         overscroll-behavior: contain;
         -webkit-overflow-scrolling: touch;
@@ -204,6 +225,7 @@
         outline-offset: -2px;
       }
       .page-group {
+        min-width: 100%;
         margin-bottom: 18px;
       }
       .page-title {
@@ -222,7 +244,7 @@
         font-weight: 800;
       }
       .row {
-        width: 100%;
+        min-width: 100%;
         display: grid;
         grid-template-columns: auto 1fr;
         gap: 10px;
@@ -234,6 +256,10 @@
         color: inherit;
         text-align: left;
         cursor: pointer;
+        user-select: text;
+      }
+      .row * {
+        user-select: text;
       }
       .row:hover {
         border-color: var(--border-strong);
@@ -259,15 +285,14 @@
         color: #18140a;
       }
       .row-main {
-        min-width: 0;
+        min-width: max-content;
       }
       .row-label {
-        overflow: hidden;
+        overflow: visible;
         color: var(--text);
         font-size: 13px;
         line-height: 1.25;
         font-weight: 760;
-        text-overflow: ellipsis;
         white-space: nowrap;
       }
       .row-summary {
@@ -275,10 +300,8 @@
         color: var(--muted);
         font-size: 12px;
         line-height: 1.35;
-        display: -webkit-box;
-        -webkit-line-clamp: 2;
-        -webkit-box-orient: vertical;
-        overflow: hidden;
+        overflow: visible;
+        white-space: nowrap;
       }
       .row-tags {
         display: flex;
@@ -287,6 +310,7 @@
         margin-top: 8px;
       }
       .doc-view {
+        min-width: max-content;
         margin: 0;
         border: 1px solid var(--border);
         border-radius: 8px;
@@ -307,7 +331,7 @@
         text-transform: uppercase;
       }
       .doc-line {
-        width: 100%;
+        min-width: 100%;
         display: grid;
         grid-template-columns: 54px minmax(0, 1fr);
         gap: 10px;
@@ -321,10 +345,10 @@
         font-size: 12px;
         line-height: 1.7;
       }
-      button.doc-line {
+      .doc-line[role="button"] {
         cursor: pointer;
       }
-      button.doc-line:hover {
+      .doc-line[role="button"]:hover {
         background: rgba(116, 183, 255, 0.1);
       }
       .doc-line.active {
@@ -336,10 +360,9 @@
         user-select: none;
       }
       .doc-line-text {
-        overflow: hidden;
+        overflow: visible;
         color: #c9d4e4;
         white-space: pre;
-        text-overflow: ellipsis;
       }
       .doc-line.mapped .doc-line-text {
         color: #dce8f6;
@@ -395,7 +418,7 @@
       .preview {
         min-height: 0;
         display: grid;
-        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        grid-template-columns: minmax(280px, 0.85fr) minmax(420px, 1.15fr);
         gap: 14px;
         padding: 14px;
       }
@@ -451,11 +474,12 @@
         font-size: 12px;
       }
       pre {
+        min-width: max-content;
         margin: 0;
         padding: 13px 0 15px;
         background: var(--code-bg);
         color: #d7deeb;
-        overflow: auto;
+        overflow: visible;
         font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
         font-size: 12px;
         line-height: 1.55;
@@ -474,7 +498,98 @@
         user-select: none;
       }
       .line-text {
+        overflow: visible;
         white-space: pre;
+      }
+      .diff-section {
+        border-bottom: 1px solid var(--border);
+      }
+      .diff-section:last-child {
+        border-bottom: 0;
+      }
+      .diff-hunk {
+        min-width: max-content;
+        border-top: 1px solid var(--border);
+        background: var(--code-bg);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 12px;
+        line-height: 1.55;
+      }
+      .diff-hunk-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 18px;
+        padding: 8px 14px;
+        color: var(--muted);
+        background: rgba(116, 183, 255, 0.08);
+        border-bottom: 1px solid var(--border);
+        white-space: nowrap;
+      }
+      .diff-code {
+        min-width: max-content;
+        padding: 0;
+      }
+      .diff-line {
+        display: grid;
+        grid-template-columns: minmax(54px, auto) minmax(54px, auto) 24px minmax(0, 1fr);
+        min-width: max-content;
+        padding: 0 14px 0 0;
+      }
+      .diff-line.diff-add {
+        background: rgba(39, 142, 77, 0.28);
+        color: #adf0bf;
+      }
+      .diff-line.diff-remove {
+        background: rgba(161, 54, 63, 0.28);
+        color: #ffc0c0;
+      }
+      .diff-line.diff-context {
+        color: #d7deeb;
+      }
+      .diff-no {
+        color: #7b879a;
+        padding-right: 10px;
+        text-align: right;
+        user-select: none;
+      }
+      .diff-sign {
+        color: inherit;
+        text-align: center;
+        user-select: none;
+      }
+      .diff-text {
+        overflow: visible;
+        white-space: pre;
+      }
+      .diff-empty {
+        padding: 13px 14px 15px;
+        color: var(--muted);
+        background: var(--code-bg);
+      }
+      body.wrap-text .row-main {
+        min-width: 0;
+      }
+      body.wrap-text .row-label,
+      body.wrap-text .row-summary {
+        overflow-wrap: anywhere;
+        white-space: normal;
+      }
+      body.wrap-text .doc-view,
+      body.wrap-text pre,
+      body.wrap-text .diff-hunk,
+      body.wrap-text .diff-code {
+        min-width: 0;
+      }
+      body.wrap-text .doc-line,
+      body.wrap-text .code-line,
+      body.wrap-text .diff-line {
+        min-width: 0;
+      }
+      body.wrap-text .doc-line-text,
+      body.wrap-text .line-text,
+      body.wrap-text .diff-text {
+        overflow-wrap: anywhere;
+        white-space: pre-wrap;
       }
       .empty {
         height: 100%;
@@ -541,11 +656,14 @@
             <h1 id="viewerTitle">Migration Map</h1>
             <select class="page-select" id="pageSelect" aria-label="Audit page"></select>
           </div>
-          <div class="mode-toggle" role="group" aria-label="Source view mode">
-            <button class="mode-button active" id="blockModeButton" type="button">
-              Block mode
-            </button>
-            <button class="mode-button" id="docModeButton" type="button">Doc mode</button>
+          <div class="mode-toolbar">
+            <div class="mode-toggle" role="group" aria-label="Source view mode">
+              <button class="mode-button active" id="blockModeButton" type="button">
+                Block mode
+              </button>
+              <button class="mode-button" id="docModeButton" type="button">Doc mode</button>
+            </div>
+            <button class="wrap-button" id="wrapTextButton" type="button">Wrap off</button>
           </div>
           <div class="meta" id="datasetMeta"></div>
         </header>
@@ -572,14 +690,14 @@
         <section class="preview" aria-label="Source and destination preview">
           <article class="pane">
             <div class="pane-head">
-              <div class="pane-title">Source block</div>
+              <div class="pane-title">Mapped source ranges</div>
               <div class="ref" id="sourceRef"></div>
             </div>
             <div class="pane-body" id="sourcePane"></div>
           </article>
           <article class="pane">
             <div class="pane-head">
-              <div class="pane-title">Destination content</div>
+              <div class="pane-title">Diff view</div>
               <div class="ref" id="destinationCount"></div>
             </div>
             <div class="pane-body" id="destinationPane"></div>
@@ -613,6 +731,7 @@
           query: "",
           selectedId: units[0] ? units[0].id : null,
           selectedViewId: pageViews[0] ? pageViews[0].id : "",
+          wrapText: false,
         };
         const els = {
           blockModeButton: document.getElementById("blockModeButton"),
@@ -631,6 +750,7 @@
           sourceRef: document.getElementById("sourceRef"),
           unitList: document.getElementById("unitList"),
           viewerTitle: document.getElementById("viewerTitle"),
+          wrapTextButton: document.getElementById("wrapTextButton"),
         };
 
         function escapeHtml(value) {
@@ -775,6 +895,343 @@
           );
         }
 
+        function refsOverlap(left, right) {
+          return (
+            left &&
+            right &&
+            left.path === right.path &&
+            left.start <= right.end &&
+            right.start <= left.end
+          );
+        }
+
+        function refsEqual(left, right) {
+          return Boolean(left && right && refKey(left) === refKey(right));
+        }
+
+        function refKey(ref) {
+          return ref ? ref.path + ":" + ref.start + "-" + ref.end : "";
+        }
+
+        function refLength(ref) {
+          return ref ? Math.max(0, ref.end - ref.start + 1) : 0;
+        }
+
+        function compareRefs(left, right) {
+          const leftPath = left?.path || "";
+          const rightPath = right?.path || "";
+          if (leftPath !== rightPath) return leftPath.localeCompare(rightPath);
+          return (left?.start || 0) - (right?.start || 0);
+        }
+
+        function sortUnitsBySource(sourceUnits) {
+          return sourceUnits.slice().sort(function (left, right) {
+            return (
+              compareRefs(left.source?.ref, right.source?.ref) || left.id.localeCompare(right.id)
+            );
+          });
+        }
+
+        function sourceLinesForUnit(unit) {
+          const path = unit.source?.ref?.path || unit.page;
+          return (unit.source?.lines || []).map(function (line) {
+            return {
+              number: line.number,
+              path,
+              text: line.text,
+              unitId: unit.id,
+            };
+          });
+        }
+
+        function destinationLinesFor(destination) {
+          const path = destination?.ref?.path || "";
+          return (destination?.lines || []).map(function (line) {
+            return {
+              number: line.number,
+              path,
+              text: line.text,
+            };
+          });
+        }
+
+        function comparisonUnitsFor(unit, selectedDestinations) {
+          const refs = selectedDestinations
+            .map(function (destination) {
+              return destination.ref;
+            })
+            .filter(Boolean);
+          if (!refs.length) return [unit];
+          const related = new Map([[unit.id, unit]]);
+          units.forEach(function (candidate) {
+            if (
+              candidate.destinations.some(function (destination) {
+                return refs.some(function (ref) {
+                  return refsEqual(destination.ref, ref);
+                });
+              })
+            ) {
+              related.set(candidate.id, candidate);
+            }
+          });
+          return sortUnitsBySource(Array.from(related.values()));
+        }
+
+        function destinationGroupsFor(comparisonUnits, selectedDestinations) {
+          if (!selectedDestinations.length) {
+            return [
+              {
+                destination: null,
+                units: comparisonUnits,
+              },
+            ];
+          }
+          const selectedRefs = selectedDestinations
+            .map(function (destination) {
+              return destination.ref;
+            })
+            .filter(Boolean);
+          const groups = new Map();
+          comparisonUnits.forEach(function (sourceUnit) {
+            destinationsForView(sourceUnit).forEach(function (destination) {
+              const matches =
+                !selectedRefs.length ||
+                selectedRefs.some(function (ref) {
+                  return refsEqual(destination.ref, ref);
+                });
+              if (!matches) return;
+              const key = destination.ref
+                ? refKey(destination.ref)
+                : "external:" + (destination.note || destination.raw || sourceUnit.id);
+              if (!groups.has(key)) {
+                groups.set(key, {
+                  destination,
+                  units: [],
+                });
+              }
+              const group = groups.get(key);
+              if (
+                !group.units.some(function (existing) {
+                  return existing.id === sourceUnit.id;
+                })
+              ) {
+                group.units.push(sourceUnit);
+              }
+            });
+          });
+          return Array.from(groups.values()).sort(function (left, right) {
+            return compareRefs(left.destination?.ref, right.destination?.ref);
+          });
+        }
+
+        function sourceSummary(sourceUnits) {
+          const pages = new Set(
+            sourceUnits
+              .map(function (unit) {
+                return unit.source?.ref?.path;
+              })
+              .filter(Boolean),
+          );
+          return (
+            sourceUnits.length +
+            " mapped range" +
+            (sourceUnits.length === 1 ? "" : "s") +
+            " from " +
+            pages.size +
+            " source page" +
+            (pages.size === 1 ? "" : "s")
+          );
+        }
+
+        function renderMappedSources(sourceUnits) {
+          if (!sourceUnits.length) {
+            return '<div class="empty"><strong>No source ranges</strong><span>The selected unit has no mapped source lines.</span></div>';
+          }
+          return sourceUnits
+            .map(function (sourceUnit) {
+              return (
+                '<section class="snippet"><div class="snippet-meta"><span>' +
+                escapeHtml(sourceUnit.id + " " + sourceUnit.label) +
+                "</span><span>" +
+                escapeHtml(refLabel(sourceUnit.source?.ref)) +
+                "</span></div>" +
+                renderCode(sourceUnit.source?.lines || []) +
+                "</section>"
+              );
+            })
+            .join("");
+        }
+
+        function diffLineOps(sourceLines, destinationLines) {
+          const oldCount = sourceLines.length;
+          const newCount = destinationLines.length;
+          const dp = Array.from({ length: oldCount + 1 }, function () {
+            return Array(newCount + 1).fill(0);
+          });
+          for (let oldIndex = oldCount - 1; oldIndex >= 0; oldIndex -= 1) {
+            for (let newIndex = newCount - 1; newIndex >= 0; newIndex -= 1) {
+              dp[oldIndex][newIndex] =
+                sourceLines[oldIndex].text === destinationLines[newIndex].text
+                  ? dp[oldIndex + 1][newIndex + 1] + 1
+                  : Math.max(dp[oldIndex + 1][newIndex], dp[oldIndex][newIndex + 1]);
+            }
+          }
+          const operations = [];
+          let oldIndex = 0;
+          let newIndex = 0;
+          while (oldIndex < oldCount || newIndex < newCount) {
+            if (
+              oldIndex < oldCount &&
+              newIndex < newCount &&
+              sourceLines[oldIndex].text === destinationLines[newIndex].text
+            ) {
+              operations.push({
+                destinationLine: destinationLines[newIndex],
+                sourceLine: sourceLines[oldIndex],
+                type: "context",
+              });
+              oldIndex += 1;
+              newIndex += 1;
+              continue;
+            }
+            if (
+              oldIndex < oldCount &&
+              (newIndex >= newCount || dp[oldIndex + 1][newIndex] >= dp[oldIndex][newIndex + 1])
+            ) {
+              operations.push({
+                sourceLine: sourceLines[oldIndex],
+                type: "remove",
+              });
+              oldIndex += 1;
+              continue;
+            }
+            operations.push({
+              destinationLine: destinationLines[newIndex],
+              type: "add",
+            });
+            newIndex += 1;
+          }
+          return operations;
+        }
+
+        function lineNumberLabel(line, usePath) {
+          if (!line) return "";
+          return usePath && line.path ? line.path + ":" + line.number : String(line.number);
+        }
+
+        function renderDiffCode(sourceLines, destinationLines) {
+          if (!sourceLines.length && !destinationLines.length) {
+            return '<div class="diff-empty">No diffable source or destination lines.</div>';
+          }
+          const sourcePages = new Set(
+            sourceLines
+              .map(function (line) {
+                return line.path;
+              })
+              .filter(Boolean),
+          );
+          const destinationPages = new Set(
+            destinationLines
+              .map(function (line) {
+                return line.path;
+              })
+              .filter(Boolean),
+          );
+          const useSourcePath = sourcePages.size > 1;
+          const useDestinationPath = destinationPages.size > 1;
+          return (
+            '<div class="diff-code">' +
+            diffLineOps(sourceLines, destinationLines)
+              .map(function (operation) {
+                const className =
+                  operation.type === "add"
+                    ? "diff-add"
+                    : operation.type === "remove"
+                      ? "diff-remove"
+                      : "diff-context";
+                const sign =
+                  operation.type === "add" ? "+" : operation.type === "remove" ? "-" : " ";
+                const text =
+                  operation.type === "add"
+                    ? operation.destinationLine.text
+                    : operation.sourceLine.text;
+                return (
+                  '<div class="diff-line ' +
+                  className +
+                  '"><span class="diff-no">' +
+                  escapeHtml(lineNumberLabel(operation.sourceLine, useSourcePath)) +
+                  '</span><span class="diff-no">' +
+                  escapeHtml(lineNumberLabel(operation.destinationLine, useDestinationPath)) +
+                  '</span><span class="diff-sign">' +
+                  sign +
+                  '</span><span class="diff-text">' +
+                  escapeHtml(text) +
+                  "</span></div>"
+                );
+              })
+              .join("") +
+            "</div>"
+          );
+        }
+
+        function hunkLabel(sourceUnits, destination) {
+          const sourceRefs = sourceUnits
+            .map(function (unit) {
+              return unit.source?.ref;
+            })
+            .filter(Boolean);
+          const oldPart =
+            sourceRefs.length === 1
+              ? sourceRefs[0].start + "," + refLength(sourceRefs[0])
+              : sourceRefs.length + " ranges";
+          const newPart = destination?.ref
+            ? destination.ref.start + "," + refLength(destination.ref)
+            : "0,0";
+          return "@@ -" + oldPart + " +" + newPart + " @@";
+        }
+
+        function renderDiffView(groups) {
+          return groups
+            .map(function (group, index) {
+              const destination = group.destination;
+              const sourceLines = group.units.flatMap(sourceLinesForUnit);
+              const destinationLines = destinationLinesFor(destination);
+              const destinationTitle = destination?.ref
+                ? refLabel(destination.ref)
+                : destination?.note || "No destination range";
+              const generator =
+                destination?.generator && destination?.generatorLines
+                  ? '<details class="generator"><summary>Generator source: ' +
+                    escapeHtml(refLabel(destination.generator)) +
+                    "</summary>" +
+                    renderCode(destination.generatorLines) +
+                    "</details>"
+                  : "";
+              return (
+                '<section class="diff-section"><div class="snippet-meta"><span>Destination ' +
+                (index + 1) +
+                "</span><span>" +
+                escapeHtml(destinationTitle) +
+                '</span></div><div class="diff-hunk"><div class="diff-hunk-head"><span>' +
+                escapeHtml(hunkLabel(group.units, destination)) +
+                "</span><span>from " +
+                escapeHtml(
+                  group.units
+                    .map(function (sourceUnit) {
+                      return sourceUnit.id;
+                    })
+                    .join(", "),
+                ) +
+                "</span></div>" +
+                renderDiffCode(sourceLines, destinationLines) +
+                "</div>" +
+                generator +
+                "</section>"
+              );
+            })
+            .join("");
+        }
+
         function renderPageSelect() {
           els.pageSelect.innerHTML = pageViews
             .map(function (view) {
@@ -795,6 +1252,9 @@
         function renderModeToggle() {
           els.blockModeButton.classList.toggle("active", state.mode === "block");
           els.docModeButton.classList.toggle("active", state.mode === "doc");
+          document.body.classList.toggle("wrap-text", state.wrapText);
+          els.wrapTextButton.classList.toggle("active", state.wrapText);
+          els.wrapTextButton.textContent = state.wrapText ? "Wrap on" : "Wrap off";
           els.search.placeholder =
             state.mode === "doc"
               ? "Search headings or lines in this doc"
@@ -815,12 +1275,11 @@
                   if (!matchesQuery) return "";
                   const active = unit && unit.id === state.selectedId ? " active" : "";
                   const mapped = unit ? " mapped" : "";
-                  const tag = unit ? "button" : "div";
-                  const attrs = unit ? ' type="button" data-id="' + escapeHtml(unit.id) + '"' : "";
+                  const attrs = unit
+                    ? ' role="button" tabindex="0" data-id="' + escapeHtml(unit.id) + '"'
+                    : "";
                   return (
-                    "<" +
-                    tag +
-                    ' class="doc-line' +
+                    '<div class="doc-line' +
                     active +
                     mapped +
                     lineKind(line.text) +
@@ -832,9 +1291,7 @@
                     "</span>" +
                     '<span class="doc-line-text">' +
                     escapeHtml(line.text) +
-                    "</span></" +
-                    tag +
-                    ">"
+                    "</span></div>"
                   );
                 })
                 .join("");
@@ -850,9 +1307,15 @@
           els.unitList.innerHTML =
             html ||
             '<div class="empty"><strong>No matching source lines</strong><span>Try a different filter.</span></div>';
-          els.unitList.querySelectorAll("button.doc-line").forEach(function (button) {
-            button.addEventListener("click", function () {
-              state.selectedId = button.getAttribute("data-id");
+          els.unitList.querySelectorAll(".doc-line[role='button']").forEach(function (line) {
+            line.addEventListener("click", function () {
+              state.selectedId = line.getAttribute("data-id");
+              render();
+            });
+            line.addEventListener("keydown", function (event) {
+              if (event.key !== "Enter" && event.key !== " ") return;
+              event.preventDefault();
+              state.selectedId = line.getAttribute("data-id");
               render();
             });
           });
@@ -880,9 +1343,9 @@
                   .map(function (unit) {
                     const active = unit.id === state.selectedId ? " active" : "";
                     return (
-                      '<button class="row' +
+                      '<div class="row' +
                       active +
-                      '" data-id="' +
+                      '" role="button" tabindex="0" data-id="' +
                       escapeHtml(unit.id) +
                       '">' +
                       '<span class="id-pill">' +
@@ -898,7 +1361,7 @@
                       chip(unit.status, statusClass(unit.status)) +
                       chip(unit.action, "") +
                       "</span></span>" +
-                      "</button>"
+                      "</div>"
                     );
                   })
                   .join("") +
@@ -906,9 +1369,15 @@
           els.unitList.innerHTML =
             html ||
             '<div class="empty"><strong>No matching units</strong><span>Try a different filter.</span></div>';
-          els.unitList.querySelectorAll(".row").forEach(function (button) {
-            button.addEventListener("click", function () {
-              state.selectedId = button.getAttribute("data-id");
+          els.unitList.querySelectorAll(".row").forEach(function (row) {
+            row.addEventListener("click", function () {
+              state.selectedId = row.getAttribute("data-id");
+              render();
+            });
+            row.addEventListener("keydown", function (event) {
+              if (event.key !== "Enter" && event.key !== " ") return;
+              event.preventDefault();
+              state.selectedId = row.getAttribute("data-id");
               render();
             });
           });
@@ -925,6 +1394,8 @@
           if (!unit) return;
           state.selectedId = unit.id;
           const destinations = destinationsForView(unit);
+          const comparisonUnits = comparisonUnitsFor(unit, destinations);
+          const destinationGroups = destinationGroupsFor(comparisonUnits, destinations);
           els.selectedId.textContent = unit.id + " / " + unit.page;
           els.selectedTitle.textContent = unit.label;
           els.selectedSummary.textContent = unit.summary;
@@ -938,43 +1409,20 @@
                   "",
                 )
               : chip("no destination", "removed"));
-          els.sourceRef.textContent =
-            refLabel(unit.source.ref) + " from " + data.sourceArchive.gitRef;
-          els.sourcePane.innerHTML = renderCode(unit.source.lines);
+          els.sourceRef.textContent = sourceSummary(comparisonUnits);
+          els.sourcePane.innerHTML = renderMappedSources(comparisonUnits);
           els.destinationCount.textContent = destinations.length
-            ? destinations.length + " mapped range" + (destinations.length === 1 ? "" : "s")
+            ? "unified diff · " +
+              destinationGroups.length +
+              " section" +
+              (destinationGroups.length === 1 ? "" : "s")
             : "removed";
-          if (destinations.length === 0) {
-            els.destinationPane.innerHTML =
-              '<div class="empty"><strong>No destination range</strong><span>' +
+          els.destinationPane.innerHTML = destinations.length
+            ? renderDiffView(destinationGroups)
+            : '<div class="empty"><strong>No destination range</strong><span>' +
               escapeHtml(unit.notes || "The audit marks this content as intentionally removed.") +
-              "</span></div>";
-            return;
-          }
-          els.destinationPane.innerHTML = destinations
-            .map(function (dest, index) {
-              const generator = dest.generator
-                ? '<details class="generator"><summary>Generator source: ' +
-                  escapeHtml(refLabel(dest.generator)) +
-                  "</summary>" +
-                  renderCode(dest.generatorLines) +
-                  "</details>"
-                : "";
-              const title = dest.ref
-                ? refLabel(dest.ref)
-                : escapeHtml(dest.note || "external source; no repo line");
-              return (
-                '<section class="snippet"><div class="snippet-meta"><span>Destination ' +
-                (index + 1) +
-                "</span><span>" +
-                title +
-                "</span></div>" +
-                renderCode(dest.lines) +
-                generator +
-                "</section>"
-              );
-            })
-            .join("");
+              "</span></div>" +
+              renderDiffView(destinationGroups);
         }
 
         function renderLegend() {
@@ -1065,6 +1513,11 @@
           state.query = "";
           els.search.value = "";
           els.unitList.scrollTop = 0;
+          render();
+        });
+
+        els.wrapTextButton.addEventListener("click", function () {
+          state.wrapText = !state.wrapText;
           render();
         });
 
