@@ -3184,12 +3184,15 @@ describe("handleFeishuMessage command authorization", () => {
 
     await dispatchMessage({ cfg, event });
 
-    const dispatcherOptions = mockCallArg<{ replyToMessageId?: string; rootId?: string }>(
-      mockCreateFeishuReplyDispatcher,
-      0,
-      0,
-    );
+    const dispatcherOptions = mockCallArg<{
+      replyToMessageId?: string;
+      inboundMessageId?: string;
+      rootId?: string;
+    }>(mockCreateFeishuReplyDispatcher, 0, 0);
     expect(dispatcherOptions.replyToMessageId).toBe("om_root_topic");
+    // Typing reaction must target the user's actual message, not the thread
+    // root — otherwise the Typing emoji lands on the thread's root message.
+    expect(dispatcherOptions.inboundMessageId).toBe("om_child_message");
     expect(dispatcherOptions.rootId).toBe("om_root_topic");
   });
 
@@ -3262,12 +3265,13 @@ describe("handleFeishuMessage command authorization", () => {
 
     await dispatchMessage({ cfg, event });
 
-    const dispatcherOptions = mockCallArg<{ replyToMessageId?: string; rootId?: string }>(
-      mockCreateFeishuReplyDispatcher,
-      0,
-      0,
-    );
+    const dispatcherOptions = mockCallArg<{
+      replyToMessageId?: string;
+      inboundMessageId?: string;
+      rootId?: string;
+    }>(mockCreateFeishuReplyDispatcher, 0, 0);
     expect(dispatcherOptions.replyToMessageId).toBe("om_topic_root");
+    expect(dispatcherOptions.inboundMessageId).toBe("om_topic_reply");
     expect(dispatcherOptions.rootId).toBe("om_topic_root");
   });
 
