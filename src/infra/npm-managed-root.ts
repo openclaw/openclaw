@@ -521,6 +521,7 @@ export async function syncManagedNpmRootPeerDependencies(params: {
   const manifest = await readManagedNpmRootManifest(manifestPath);
   const dependencies = readDependencyRecord(manifest.dependencies);
   const previousManagedPeerDependencies = readManagedPeerDependencyKeys(manifest.openclaw);
+  const previousManagedPeerDependencySet = new Set(previousManagedPeerDependencies);
   const peerPins = await collectManagedNpmRootPeerDependencyPins({ npmRoot: params.npmRoot });
   const nextDependencies = { ...dependencies };
   for (const packageName of previousManagedPeerDependencies) {
@@ -541,7 +542,13 @@ export async function syncManagedNpmRootPeerDependencies(params: {
     delete overrides[key];
   }
   Object.assign(overrides, managedOverrides);
-  const managedPeerDependencyKeys = Object.keys(peerPins).toSorted();
+  const managedPeerDependencyKeys = Object.keys(peerPins)
+    .filter(
+      (packageName) =>
+        previousManagedPeerDependencySet.has(packageName) ||
+        !Object.hasOwn(dependencies, packageName),
+    )
+    .toSorted();
   const openclawMetadata = buildManagedOpenClawMetadata({
     current: manifest.openclaw,
     managedOverrideKeys,
@@ -567,13 +574,6 @@ export async function syncManagedNpmRootPeerDependencies(params: {
     await writeJson(manifestPath, next, { trailingNewline: true });
   }
   return changed;
-}
-
-export async function readManagedNpmRootPeerDependencyNames(params: {
-  npmRoot: string;
-}): Promise<Set<string>> {
-  const manifest = await readManagedNpmRootManifest(path.join(params.npmRoot, "package.json"));
-  return new Set(readManagedPeerDependencyKeys(manifest.openclaw));
 }
 
 export async function repairManagedNpmRootOpenClawPeer(params: {

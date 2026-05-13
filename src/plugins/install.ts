@@ -13,7 +13,6 @@ import { resolveNpmIntegrityDriftWithDefaultMessage } from "../infra/npm-integri
 import {
   type ManagedNpmRootPeerDependencySnapshot,
   readManagedNpmRootInstalledDependency,
-  readManagedNpmRootPeerDependencyNames,
   readManagedNpmRootPeerDependencySnapshot,
   readOpenClawManagedNpmRootOverrides,
   repairManagedNpmRootOpenClawPeer,
@@ -380,11 +379,21 @@ async function rollbackManagedNpmPluginInstall(params: {
   }
   if (params.peerDependencySnapshot) {
     try {
+      const preRestorePeerDependencySnapshot = await readManagedNpmRootPeerDependencySnapshot({
+        npmRoot: params.npmRoot,
+      });
+      const restoredPeerDependencyNames = new Set(
+        params.peerDependencySnapshot.managedPeerDependencies,
+      );
+      const addedPeerDependencyNames =
+        preRestorePeerDependencySnapshot.managedPeerDependencies.filter(
+          (packageName) => !restoredPeerDependencyNames.has(packageName),
+        );
       await restoreManagedNpmRootPeerDependencySnapshot({
         npmRoot: params.npmRoot,
         snapshot: params.peerDependencySnapshot,
       });
-      await runCommandWithTimeout(
+      const cleanupResult = await runCommandWithTimeout(
         [
           "npm",
           "install",
@@ -406,6 +415,25 @@ async function rollbackManagedNpmPluginInstall(params: {
           }),
         },
       );
+      if (cleanupResult.code !== 0) {
+        params.logger.warn?.(
+          `npm install cleanup after rollback for ${params.packageName} exited ${cleanupResult.code}: ${cleanupResult.stderr.trim() || cleanupResult.stdout.trim()}`,
+        );
+        await Promise.all(
+          addedPeerDependencyNames.map(async (packageName) => {
+            try {
+              await fs.rm(resolveManagedNpmRootPackageDir(params.npmRoot, packageName), {
+                recursive: true,
+                force: true,
+              });
+            } catch (error) {
+              params.logger.warn?.(
+                `Failed to remove rolled-back managed peer dependency ${packageName}: ${String(error)}`,
+              );
+            }
+          }),
+        );
+      }
     } catch (error) {
       params.logger.warn?.(
         `Failed to restore managed npm peer dependencies after rollback for ${params.packageName}: ${String(error)}`,
@@ -504,16 +532,11 @@ function resolveManagedNpmRootPackageDir(npmRoot: string, packageName: string): 
 
 async function listNewManagedNpmRootPackageDirs(params: {
   beforeInstallPackageNames: Set<string>;
-  excludePackageNames?: Set<string>;
   npmRoot: string;
 }): Promise<string[]> {
   const afterInstallPackageNames = await listManagedNpmRootPackageNames(params.npmRoot);
   return [...afterInstallPackageNames]
-    .filter(
-      (packageName) =>
-        !params.beforeInstallPackageNames.has(packageName) &&
-        !params.excludePackageNames?.has(packageName),
-    )
+    .filter((packageName) => !params.beforeInstallPackageNames.has(packageName))
     .map((packageName) => resolveManagedNpmRootPackageDir(params.npmRoot, packageName))
     .toSorted((left, right) => left.localeCompare(right));
 }
@@ -619,9 +642,6 @@ async function installPluginFromManagedNpmRoot(
     managedOverrides,
   });
   await syncManagedNpmRootPeerDependencies({ npmRoot, managedOverrides });
-  const preExistingManagedPeerDependencyNames = await readManagedNpmRootPeerDependencyNames({
-    npmRoot,
-  });
   const npmInstallArgs = [
     "npm",
     ...createSafeNpmInstallArgs({
@@ -808,7 +828,6 @@ async function installPluginFromManagedNpmRoot(
 
   const newRootPackageDirs = await listNewManagedNpmRootPackageDirs({
     beforeInstallPackageNames: preInstallRootPackageNames,
-    excludePackageNames: preExistingManagedPeerDependencyNames,
     npmRoot,
   });
   const result = await installPluginFromInstalledPackageDir({
