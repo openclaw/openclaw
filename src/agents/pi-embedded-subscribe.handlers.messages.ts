@@ -727,8 +727,17 @@ export function handleMessageEnd(
   const suppressDeterministicApprovalOutput = shouldSuppressDeterministicApprovalOutput(ctx.state);
   ctx.noteLastAssistant(assistantMessage);
   ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
+  // Mirror commitAssistantUsage's idempotency: emit only on the first
+  // message_end for this assistant turn so duplicate deliveries (covered by
+  // "does not emit duplicate agent events when message_end repeats" in
+  // pi-embedded-subscribe.subscribe-embedded-pi-session.subscribeembeddedpisession.test.ts)
+  // do not inflate the counters. The flag resets in resetAssistantMessageState
+  // when the next turn begins.
+  const isFirstCommit = !ctx.state.assistantUsageCommitted;
   ctx.commitAssistantUsage();
-  recordSessionLlmUsage(ctx, assistantMessage);
+  if (isFirstCommit) {
+    recordSessionLlmUsage(ctx, assistantMessage);
+  }
   if (suppressVisibleAssistantOutput) {
     return;
   }
