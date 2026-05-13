@@ -442,7 +442,11 @@ function renderLifecycleScriptPackages(lines, lifecyclePackages) {
   for (const [packageKey, scripts] of [...lifecyclePackages.entries()].toSorted(([left], [right]) =>
     left.localeCompare(right),
   )) {
-    lines.push(`- ${markdownCode(packageKey)}: ${[...scripts].toSorted().join(", ")}`);
+    lines.push(
+      `- ${markdownCode(packageKey)}: ${[...scripts]
+        .toSorted((left, right) => left.localeCompare(right))
+        .join(", ")}`,
+    );
   }
   lines.push("");
 }
@@ -633,7 +637,8 @@ export async function main(argv = process.argv.slice(2)) {
   });
   await writeArtifact(options.jsonPath, `${JSON.stringify(report, null, 2)}\n`);
   await writeArtifact(options.markdownPath, renderMarkdownReport(report));
-  const artifactHint = options.markdownPath ? ` See ${options.markdownPath}.` : "";
+  const artifactHint =
+    typeof options.markdownPath === "string" ? " See " + options.markdownPath + "." : "";
   process.stdout.write(
     `INFO transitive manifest risk report: inspected ${report.packageVersions} resolved ` +
       `package manifests; ${report.findingCount} reported risk signals, ` +

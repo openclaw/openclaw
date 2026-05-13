@@ -354,7 +354,7 @@ export function renderDependencyOwnershipSurfaceMarkdownReport(report) {
   for (const importer of report.importerClosures) {
     lines.push(
       `- ${markdownCode(importer.importer)}: ${pluralize(importer.closureSize, "package")}; ` +
-        `${pluralize(importer.directDependencyCount, "direct dependency", "direct dependencies")}`,
+        pluralize(importer.directDependencyCount, "direct dependency", "direct dependencies"),
     );
   }
 
@@ -448,7 +448,8 @@ function main(argv = process.argv.slice(2)) {
     return;
   }
   if (options.asJson) {
-    const artifactHint = options.markdownPath ? ` See ${options.markdownPath}.` : "";
+    const artifactHint =
+      typeof options.markdownPath === "string" ? " See " + options.markdownPath + "." : "";
     process.stdout.write(
       `INFO dependency ownership/install surface report: ` +
         `${report.summary.importerCount} workspace package entries, ` +

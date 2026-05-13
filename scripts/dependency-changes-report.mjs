@@ -35,7 +35,7 @@ export function createDependencyChangesReport({
 }) {
   const packageNames = [
     ...new Set([...Object.keys(basePayload), ...Object.keys(headPayload)]),
-  ].sort();
+  ].toSorted((left, right) => left.localeCompare(right));
   const addedPackages = [];
   const removedPackages = [];
   const changedPackages = [];
@@ -44,17 +44,25 @@ export function createDependencyChangesReport({
     const baseVersions = versionsFor(basePayload, packageName);
     const headVersions = versionsFor(headPayload, packageName);
     if (baseVersions.size === 0) {
-      addedPackages.push({ packageName, versions: [...headVersions].sort() });
+      addedPackages.push({
+        packageName,
+        versions: [...headVersions].toSorted((left, right) => left.localeCompare(right)),
+      });
       continue;
     }
     if (headVersions.size === 0) {
-      removedPackages.push({ packageName, versions: [...baseVersions].sort() });
+      removedPackages.push({
+        packageName,
+        versions: [...baseVersions].toSorted((left, right) => left.localeCompare(right)),
+      });
       continue;
     }
-    const addedVersions = [...headVersions].filter((version) => !baseVersions.has(version)).sort();
+    const addedVersions = [...headVersions]
+      .filter((version) => !baseVersions.has(version))
+      .toSorted((left, right) => left.localeCompare(right));
     const removedVersions = [...baseVersions]
       .filter((version) => !headVersions.has(version))
-      .sort();
+      .toSorted((left, right) => left.localeCompare(right));
     if (addedVersions.length > 0 || removedVersions.length > 0) {
       changedPackages.push({ packageName, addedVersions, removedVersions });
     }
@@ -280,7 +288,8 @@ export async function main(argv = process.argv.slice(2)) {
   const report = await runDependencyChangesReport(options);
   await writeArtifact(options.jsonPath, `${JSON.stringify(report, null, 2)}\n`);
   await writeArtifact(options.markdownPath, renderMarkdownReport(report));
-  const artifactHint = options.markdownPath ? ` See ${options.markdownPath}.` : "";
+  const artifactHint =
+    typeof options.markdownPath === "string" ? " See " + options.markdownPath + "." : "";
   process.stdout.write(
     `INFO dependency change report: ${report.summary.addedPackages} added, ` +
       `${report.summary.removedPackages} removed, ${report.summary.changedPackages} changed ` +
