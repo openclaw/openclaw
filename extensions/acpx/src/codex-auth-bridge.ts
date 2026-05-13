@@ -340,6 +340,39 @@ async function readSourceCodexConfig(codexHome: string): Promise<string | undefi
   }
 }
 
+async function bridgeCodexAuthIntoIsolatedHome(params: {
+  sourceCodexHome: string;
+  isolatedCodexHome: string;
+}): Promise<void> {
+  const sourceAuthPath = path.join(params.sourceCodexHome, "auth.json");
+  const isolatedAuthPath = path.join(params.isolatedCodexHome, "auth.json");
+  try {
+    await fs.access(sourceAuthPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
+
+  try {
+    const existing = await fs.lstat(isolatedAuthPath);
+    if (existing.isSymbolicLink()) {
+      const linkTarget = await fs.readlink(isolatedAuthPath);
+      if (path.resolve(params.isolatedCodexHome, linkTarget) === sourceAuthPath) {
+        return;
+      }
+    }
+    await fs.unlink(isolatedAuthPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
+
+  await fs.symlink(sourceAuthPath, isolatedAuthPath);
+}
+
 async function prepareIsolatedCodexHome(params: {
   baseDir: string;
   workspaceDir: string;
@@ -357,6 +390,10 @@ async function prepareIsolatedCodexHome(params: {
     renderIsolatedCodexProjectTrustConfig(trustedProjectPaths),
     "utf8",
   );
+  await bridgeCodexAuthIntoIsolatedHome({
+    sourceCodexHome,
+    isolatedCodexHome: codexHome,
+  });
   return codexHome;
 }
 
