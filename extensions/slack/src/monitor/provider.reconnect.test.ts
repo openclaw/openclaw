@@ -9,7 +9,13 @@ import {
   formatSlackSocketReconnectMessage,
   formatSlackSocketStartRetryMessage,
 } from "./provider.js";
-import { formatUnknownError, waitForSlackSocketDisconnect } from "./reconnect-policy.js";
+import {
+  formatSlackSocketModeSharedConnectionWarning,
+  formatUnknownError,
+  registerSlackSocketModeConnectionDiagnostics,
+  resolveSlackSocketModeConnectionCount,
+  waitForSlackSocketDisconnect,
+} from "./reconnect-policy.js";
 
 class FakeEmitter {
   private listeners = new Map<string, Set<(...args: unknown[]) => void>>();
@@ -140,6 +146,53 @@ describe("slack socket reconnect helpers", () => {
     ).toBe(
       "code: slack_webapi_platform_error; slack error: missing_scope; needed: connections:write; slack message: [ERROR] missing required scope",
     );
+  });
+
+  it("extracts Socket Mode connection counts from raw hello frames", () => {
+    expect(
+      resolveSlackSocketModeConnectionCount(
+        Buffer.from(JSON.stringify({ type: "hello", num_connections: 3 })),
+      ),
+    ).toBe(3);
+    expect(
+      resolveSlackSocketModeConnectionCount(
+        JSON.stringify({ type: "hello", num_connections: "4" }),
+      ),
+    ).toBe(4);
+    expect(resolveSlackSocketModeConnectionCount(JSON.stringify({ type: "events_api" }))).toBe(
+      undefined,
+    );
+    expect(resolveSlackSocketModeConnectionCount("not json")).toBe(undefined);
+  });
+
+  it("formats shared Socket Mode connection warnings with remediation", () => {
+    expect(formatSlackSocketModeSharedConnectionWarning(2)).toContain(
+      "slack socket mode reports 2 active connections for this app token",
+    );
+    expect(formatSlackSocketModeSharedConnectionWarning(2)).toContain(
+      "create a separate Slack app/token for each host",
+    );
+  });
+
+  it("warns once when Slack reports a shared Socket Mode app token", () => {
+    const client = new FakeEmitter();
+    const onSharedConnection = vi.fn();
+    const unregister = registerSlackSocketModeConnectionDiagnostics({
+      app: { receiver: { client } },
+      onSharedConnection,
+    });
+
+    client.emit("ws_message", JSON.stringify({ type: "hello", num_connections: 1 }), false);
+    client.emit("ws_message", JSON.stringify({ type: "hello", num_connections: 2 }), false);
+    client.emit("ws_message", JSON.stringify({ type: "hello", num_connections: 3 }), false);
+
+    expect(onSharedConnection).toHaveBeenCalledTimes(1);
+    expect(onSharedConnection).toHaveBeenCalledWith(2);
+
+    unregister();
+    client.emit("ws_message", JSON.stringify({ type: "hello", num_connections: 2 }), false);
+    expect(onSharedConnection).toHaveBeenCalledTimes(1);
+    expect(client.listenerCount("ws_message")).toBe(0);
   });
 
   it("formats socket start retries with an explicit reason field", () => {

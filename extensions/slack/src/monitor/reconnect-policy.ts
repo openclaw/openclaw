@@ -19,6 +19,9 @@ type EmitterLike = {
   off: (event: string, listener: (...args: unknown[]) => void) => unknown;
 };
 
+const SLACK_SOCKET_SHARED_CONNECTION_DOCS_URL =
+  "https://docs.slack.dev/apis/events-api/using-socket-mode";
+
 export function getSocketEmitter(app: unknown): EmitterLike | null {
   const receiver = (app as { receiver?: unknown }).receiver;
   const client =
@@ -42,6 +45,96 @@ export function getSocketEmitter(app: unknown): EmitterLike | null {
       (
         off as (this: unknown, event: string, listener: (...args: unknown[]) => void) => unknown
       ).call(client, event, listener),
+  };
+}
+
+function socketMessageToString(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (Buffer.isBuffer(value)) {
+    return value.toString("utf8");
+  }
+  if (value instanceof Uint8Array) {
+    return Buffer.from(value).toString("utf8");
+  }
+  if (value instanceof ArrayBuffer) {
+    return Buffer.from(value).toString("utf8");
+  }
+  if (isBufferArray(value)) {
+    return Buffer.concat(value).toString("utf8");
+  }
+  return undefined;
+}
+
+function isBufferArray(value: unknown): value is Buffer[] {
+  return Array.isArray(value) && value.every((entry) => Buffer.isBuffer(entry));
+}
+
+function normalizeSocketConnectionCount(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) {
+    return value;
+  }
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return undefined;
+  }
+  const parsed = Number(trimmed);
+  return Number.isSafeInteger(parsed) ? parsed : undefined;
+}
+
+export function resolveSlackSocketModeConnectionCount(message: unknown): number | undefined {
+  const text = socketMessageToString(message);
+  if (!text) {
+    return undefined;
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(payload) || payload.type !== "hello") {
+    return undefined;
+  }
+  return normalizeSocketConnectionCount(payload.num_connections);
+}
+
+export function formatSlackSocketModeSharedConnectionWarning(activeConnections: number): string {
+  return [
+    `slack socket mode reports ${activeConnections} active connections for this app token`,
+    "Slack may deliver each event to any one connection, so messages can land on another OpenClaw gateway and appear to vanish.",
+    "Run exactly one OpenClaw gateway per Slack app token, create a separate Slack app/token for each host, or use HTTP Request URLs behind a load balancer.",
+    `See ${SLACK_SOCKET_SHARED_CONNECTION_DOCS_URL}`,
+  ].join("; ");
+}
+
+export function registerSlackSocketModeConnectionDiagnostics(params: {
+  app: unknown;
+  onSharedConnection: (activeConnections: number) => void;
+}): () => void {
+  const emitter = getSocketEmitter(params.app);
+  if (!emitter) {
+    return () => {};
+  }
+  let hasWarned = false;
+  const listener = (message: unknown, isBinary?: unknown) => {
+    if (isBinary === true || hasWarned) {
+      return;
+    }
+    const activeConnections = resolveSlackSocketModeConnectionCount(message);
+    if (activeConnections === undefined || activeConnections <= 1) {
+      return;
+    }
+    hasWarned = true;
+    params.onSharedConnection(activeConnections);
+  };
+  emitter.on("ws_message", listener);
+  return () => {
+    emitter.off("ws_message", listener);
   };
 }
 
