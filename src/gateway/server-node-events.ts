@@ -702,6 +702,7 @@ export const handleNodeEvent = async (
           nodeId,
           connId: opts?.connId,
           ...(runId ? { runId } : {}),
+          // Match the key sent in system.run params; canonicalization below is for routing.
           sessionKey: sessionKeyRaw,
           terminal: evt.event === "exec.finished" || evt.event === "exec.denied",
         })

@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { NodeRegistry } from "./node-registry.js";
+import type { GatewayWsClient } from "./server/ws-types.js";
 import type { loadSessionEntry as loadSessionEntryType } from "./session-utils.js";
 
 const buildSessionLookup = (
@@ -189,6 +191,35 @@ function buildExecCtx() {
   return buildCtx({ authorizeNodeSystemRunEvent: () => true });
 }
 
+function makeNodeClient(connId: string, nodeId: string, sent: string[] = []): GatewayWsClient {
+  return {
+    connId,
+    usesSharedGatewayAuth: false,
+    socket: {
+      send(frame: unknown) {
+        if (typeof frame === "string") {
+          sent.push(frame);
+        }
+      },
+    } as unknown as GatewayWsClient["socket"],
+    connect: {
+      client: {
+        id: "openclaw-node-host",
+        version: "1.0.0",
+        platform: "linux",
+        mode: "node",
+      },
+      device: {
+        id: nodeId,
+        publicKey: "public-key",
+        signature: "signature",
+        signedAt: 1,
+        nonce: "nonce",
+      },
+    } as GatewayWsClient["connect"],
+  };
+}
+
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
   if (!value || typeof value !== "object") {
     throw new Error("expected fields object");
@@ -283,6 +314,83 @@ describe("node exec events", () => {
     });
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
     expect(requestHeartbeatMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps a node run authorized from exec.started through exec.finished", async () => {
+    const registry = new NodeRegistry();
+    const frames: string[] = [];
+    registry.register(makeNodeClient("conn-1", "node-1", frames), {});
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "system.run",
+      params: { runId: "run-seq", sessionKey: "agent:main:main" },
+      timeoutMs: 1_000,
+    });
+    const invokeSettled = invoke.catch(() => {});
+    const ctx = buildCtx({
+      authorizeNodeSystemRunEvent: (params) => registry.authorizeSystemRunEvent(params),
+    });
+
+    await handleNodeEvent(
+      ctx,
+      "node-1",
+      {
+        event: "exec.started",
+        payloadJSON: JSON.stringify({
+          sessionKey: "agent:main:main",
+          runId: "run-seq",
+          command: "printf ok",
+        }),
+      },
+      { connId: "conn-1" },
+    );
+    await handleNodeEvent(
+      ctx,
+      "node-1",
+      {
+        event: "exec.finished",
+        payloadJSON: JSON.stringify({
+          sessionKey: "agent:main:main",
+          runId: "run-seq",
+          command: "printf ok",
+          exitCode: 0,
+          timedOut: false,
+          output: "done",
+        }),
+      },
+      { connId: "conn-1" },
+    );
+
+    expect(enqueueSystemEventMock).toHaveBeenNthCalledWith(
+      1,
+      "Exec started (node=node-1 id=run-seq): printf ok",
+      { sessionKey: "agent:main:main", contextKey: "exec:run-seq", trusted: false },
+    );
+    expect(enqueueSystemEventMock).toHaveBeenNthCalledWith(
+      2,
+      "Exec finished (node=node-1 id=run-seq, code 0)\ndone",
+      { sessionKey: "agent:main:main", contextKey: "exec:run-seq", trusted: false },
+    );
+    expect(requestHeartbeatMock).toHaveBeenNthCalledWith(1, {
+      reason: "exec-event",
+      sessionKey: "agent:main:main",
+    });
+    expect(requestHeartbeatMock).toHaveBeenNthCalledWith(2, {
+      reason: "exec-event",
+      sessionKey: "agent:main:main",
+    });
+    expect(
+      registry.authorizeSystemRunEvent({
+        nodeId: "node-1",
+        connId: "conn-1",
+        runId: "run-seq",
+        sessionKey: "agent:main:main",
+        terminal: false,
+      }),
+    ).toBe(false);
+
+    registry.unregister("conn-1");
+    await invokeSettled;
   });
 
   it("enqueues exec.finished events with output", async () => {
