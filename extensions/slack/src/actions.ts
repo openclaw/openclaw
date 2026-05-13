@@ -77,6 +77,65 @@ function normalizeEmoji(raw: string) {
   return trimmed.replace(/^:+|:+$/g, "");
 }
 
+const SLACK_TIMESTAMP_RE = /^\d+(?:\.\d+)?$/;
+const ISO_8601_TIMESTAMP_RE =
+  /^(\d{4})-(\d{2})-(\d{2})T([01]\d|2[0-3]):([0-5]\d):([0-5]\d)(?:\.(\d{1,3}))?(Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/;
+
+function isValidIso8601Timestamp(match: RegExpExecArray): boolean {
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  const millisecond = Number((match[7] ?? "").padEnd(3, "0"));
+  const date = new Date(Date.UTC(year, month - 1, day, hour, minute, second, millisecond));
+
+  return (
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day &&
+    date.getUTCHours() === hour &&
+    date.getUTCMinutes() === minute &&
+    date.getUTCSeconds() === second &&
+    date.getUTCMilliseconds() === millisecond
+  );
+}
+
+function formatEpochSeconds(milliseconds: number): string {
+  const seconds = milliseconds / 1000;
+  if (Number.isInteger(seconds)) {
+    return String(seconds);
+  }
+  return seconds.toFixed(3).replace(/0+$/, "").replace(/\.$/, "");
+}
+
+function normalizeSlackReadTimestamp(
+  raw: string | undefined,
+  field: "before" | "after",
+): string | undefined {
+  const trimmed = raw?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (SLACK_TIMESTAMP_RE.test(trimmed)) {
+    return trimmed;
+  }
+  const isoMatch = ISO_8601_TIMESTAMP_RE.exec(trimmed);
+  if (!isoMatch || !isValidIso8601Timestamp(isoMatch)) {
+    throw new Error(
+      `Invalid Slack read ${field} timestamp "${trimmed}": expected a Slack timestamp or ISO-8601 date string`,
+    );
+  }
+  const parsed = Date.parse(trimmed);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(
+      `Invalid Slack read ${field} timestamp "${trimmed}": expected a Slack timestamp or ISO-8601 date string`,
+    );
+  }
+  return formatEpochSeconds(parsed);
+}
+
 function hasSlackPlatformError(err: unknown, code: string): boolean {
   if (!err || typeof err !== "object") {
     return false;
@@ -268,7 +327,6 @@ export async function readSlackMessages(
     messageId?: string;
   } = {},
 ): Promise<{ messages: SlackMessageSummary[]; hasMore: boolean }> {
-  const client = await getClient(opts);
   const exactMessageId = opts.messageId?.trim();
   const readLimit = exactMessageId ? 1 : opts.limit;
   const exactBounds = exactMessageId
@@ -278,9 +336,10 @@ export async function readSlackMessages(
         oldest: undefined,
       }
     : {
-        latest: opts.before,
-        oldest: opts.after,
+        latest: normalizeSlackReadTimestamp(opts.before, "before"),
+        oldest: normalizeSlackReadTimestamp(opts.after, "after"),
       };
+  const client = await getClient(opts);
 
   // Use conversations.replies for thread messages, conversations.history for channel messages.
   if (opts.threadId) {
