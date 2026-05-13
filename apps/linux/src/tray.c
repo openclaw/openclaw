@@ -1,0 +1,615 @@
+/*
+ * tray.c
+ *
+ * Helper-process management and IPC.
+ *
+ * Spawns and communicates with the private GTK3 tray helper daemon.
+ * Resolves the helper binary deterministically, preferring a local
+ * build-tree sibling before falling back to the configured libexec path.
+ * Dispatches non-blocking async refreshes to the CLI lanes upon user request.
+ *
+ * Author: Thiago Camargo <thiagocmc@proton.me>
+ */
+
+#include <glib.h>
+#include <gio/gio.h>
+#include <gtk/gtk.h>
+#include <stdio.h>
+#include <string.h>
+#include "state.h"
+#include "log.h"
+#include "browser_control_state.h"
+#include "chat_window.h"
+#include "debug_actions.h"
+#include "exec_approval_prompter.h"
+#include "exec_approval_store.h"
+#include "exec_approval_tray_model.h"
+#include "gateway_client.h"
+#include "gateway_config.h"
+#include "display_model.h"
+#include "onboarding.h"
+#include "product_coordinator.h"
+#include "product_state.h"
+#include "section_general.h"
+#include "shell_sections.h"
+#include "test_seams.h"
+#include "tray_protocol.h"
+
+static GSubprocess *helper_process = NULL;
+static GOutputStream *helper_stdin = NULL;
+static GDataInputStream *helper_stdout_stream = NULL;
+static guint helper_seq = 0;
+/*
+ * Subscription id into `browser_control_state`. When the shared
+ * cache changes asynchronously (e.g., a WS-connected refresh lands
+ * while the user is on a non-General section, or another surface
+ * toggles Browser Control) we push a full tray update so the tray
+ * helper re-receives MENU_VISIBLE:BROWSER_CONTROL + CHECK:BROWSER_CONTROL.
+ */
+static guint tray_browser_control_sub = 0;
+
+static void on_helper_process_weak_notify(gpointer data, GObject *where_the_object_was) {
+    (void)data;
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_TRAY, "helper-finalize helper_process=%p", (void *)where_the_object_was);
+}
+
+static void on_helper_stdin_weak_notify(gpointer data, GObject *where_the_object_was) {
+    (void)data;
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_TRAY, "helper-finalize helper_stdin=%p", (void *)where_the_object_was);
+}
+
+static void on_helper_stdout_weak_notify(gpointer data, GObject *where_the_object_was) {
+    (void)data;
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_TRAY, "helper-finalize helper_stdout=%p", (void *)where_the_object_was);
+}
+
+static void on_helper_data_stream_weak_notify(gpointer data, GObject *where_the_object_was) {
+    (void)data;
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_TRAY, "helper-finalize helper_data_stream=%p", (void *)where_the_object_was);
+}
+
+extern void systemd_start_gateway(void);
+extern void systemd_stop_gateway(void);
+extern void systemd_restart_gateway(void);
+extern void gateway_client_refresh(void);
+
+static void handle_helper_action(const gchar *action);
+
+/* ── Debug-action registry hooks (production wiring) ──────────────
+ *
+ * The shared registry (`debug_actions.c`) intentionally avoids GTK
+ * imports so it can link into headless tests. Side effects that need
+ * GTK/GDK at runtime — clipboard writes for the "Copy Journal Command"
+ * action, and URI launches for the "Reveal …" actions — are delegated
+ * to these callbacks. Hooks are installed once during `tray_init` and
+ * never removed.
+ */
+static void tray_debug_uri_launcher(const char *uri, gpointer user_data) {
+    (void)user_data;
+    if (!uri || !uri[0]) return;
+    g_app_info_launch_default_for_uri(uri, NULL, NULL);
+}
+
+static void tray_debug_clipboard_writer(const char *text, gpointer user_data) {
+    (void)user_data;
+    if (!text) return;
+    GdkDisplay *display = gdk_display_get_default();
+    if (!display) {
+        OC_LOG_DEBUG(OPENCLAW_LOG_CAT_TRAY,
+                     "tray_debug_clipboard_writer skipped (no default display)");
+        return;
+    }
+    GdkClipboard *clipboard = gdk_display_get_clipboard(display);
+    if (!clipboard) {
+        OC_LOG_DEBUG(OPENCLAW_LOG_CAT_TRAY,
+                     "tray_debug_clipboard_writer skipped (no clipboard)");
+        return;
+    }
+    gdk_clipboard_set_text(clipboard, text);
+}
+
+static void tray_debug_show_section(OcDebugSectionTarget target, gpointer user_data) {
+    (void)user_data;
+    switch (target) {
+    case OC_DEBUG_SECTION_TARGET_LOGS:
+        product_coordinator_request_show_section(SECTION_LOGS);
+        break;
+    case OC_DEBUG_SECTION_TARGET_DEBUG:
+        product_coordinator_request_show_section(SECTION_DEBUG);
+        break;
+    }
+}
+
+static void handle_open_settings_request(void) {
+    TrayUiAction action = tray_ui_dispatch_decide(TRAY_UI_REQUEST_SETTINGS, onboarding_is_visible());
+    if (action == TRAY_UI_ACTION_SHOW_SETTINGS) {
+        product_coordinator_request_show_section(SECTION_GENERAL);
+    }
+}
+
+static void handle_open_diagnostics_request(void) {
+    TrayUiAction action = tray_ui_dispatch_decide(TRAY_UI_REQUEST_DIAGNOSTICS, onboarding_is_visible());
+    if (action == TRAY_UI_ACTION_SHOW_DIAGNOSTICS) {
+        product_coordinator_request_show_section(SECTION_DIAGNOSTICS);
+    }
+}
+
+void tray_debug_dispatch_action(const gchar *action) {
+    if (!action) return;
+    handle_helper_action(action);
+}
+
+static void handle_helper_action(const gchar *action) {
+    guint seq = ++helper_seq;
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_TRAY, "handle_helper_action entry seq=%u action='%s' process=%p stdin=%p stream=%p",
+              seq, action, (void *)helper_process, (void *)helper_stdin, (void *)helper_stdout_stream);
+    if (g_strcmp0(action, "START") == 0) {
+        systemd_start_gateway();
+    } else if (g_strcmp0(action, "STOP") == 0) {
+        systemd_stop_gateway();
+    } else if (g_strcmp0(action, "RESTART") == 0) {
+        systemd_restart_gateway();
+    } else if (g_strcmp0(action, "REFRESH") == 0) {
+        // Run systemd discovery lane first for install/management context
+        extern void systemd_refresh(void);
+        systemd_refresh();
+        // Trigger an immediate gateway client health check
+        gateway_client_refresh();
+    } else if (g_strcmp0(action, "OPEN_MAIN") == 0) {
+        product_coordinator_request_show_main();
+    } else if (g_strcmp0(action, "OPEN_CHAT") == 0) {
+        /* Standalone chat window — lives independently of the main
+         * settings / diagnostics window (see chat_window.{c,h}). */
+        chat_window_show();
+    } else if (g_strcmp0(action, "OPEN_DASHBOARD") == 0) {
+        GatewayConfig *cfg = gateway_client_get_config();
+        if (cfg) {
+            g_autofree gchar *url = gateway_config_dashboard_url(cfg);
+            if (url) {
+                g_app_info_launch_default_for_uri(url, NULL, NULL);
+            }
+        }
+    } else if (g_strcmp0(action, "OPEN_SETTINGS") == 0) {
+        handle_open_settings_request();
+    } else if (g_strcmp0(action, "OPEN_DIAGNOSTICS") == 0) {
+        handle_open_diagnostics_request();
+    } else if (g_strcmp0(action, "QUIT") == 0) {
+        GApplication *app = g_application_get_default();
+        if (app) g_application_quit(app);
+    } else if (g_str_has_prefix(action, "EXEC_APPROVAL_SET:")) {
+        /* Tranche D Full: tray-driven quick-mode change. The protocol
+         * parser validates the body shape and the exec_approval_tray_model
+         * helper performs the enum mapping; both are shared with the
+         * unit-test surface so this dispatcher stays trivial. */
+        char *mode_str = NULL;
+        if (tray_protocol_parse_exec_approval_action(action, &mode_str)) {
+            OcExecQuickMode mode;
+            if (exec_approval_tray_mode_from_string(mode_str, &mode)) {
+                (void)exec_approval_store_set_quick_mode(mode);
+            }
+        }
+        g_free(mode_str);
+    } else if (g_str_has_prefix(action, "HEARTBEATS_SET:") ||
+               g_str_has_prefix(action, "BROWSER_CONTROL_SET:")) {
+        /* Tranche E binary check toggles. Heartbeats routes through
+         * the section funnel (local persistence + RPC push). Browser
+         * Control routes through the shared `browser_control_state`
+         * mutator so tray-driven toggles do not depend on the General
+         * section being mounted; subscribers (including the tray's
+         * own `on_browser_control_state_changed` below) repaint the
+         * CHECK line when the save lands. */
+        char *key = NULL;
+        gboolean enabled = FALSE;
+        if (tray_protocol_parse_check_action(action, &key, &enabled)) {
+            if (g_strcmp0(key, "HEARTBEATS") == 0) {
+                section_general_request_heartbeats(enabled);
+            } else if (g_strcmp0(key, "BROWSER_CONTROL") == 0) {
+                browser_control_state_request_set(enabled, NULL, NULL);
+            }
+        }
+        g_free(key);
+    } else {
+        /* All remaining tray actions belong to the shared debug-action
+         * registry. Unknown actions are silently ignored — the helper
+         * protocol is one-way with no error channel, and a noisy
+         * g_warning here would just spam the journal if a stale helper
+         * sends a string we don't recognize.
+         */
+        OcDebugAction id;
+        if (oc_debug_action_from_tray_string(action, &id)) {
+            (void)oc_debug_action_dispatch(id);
+        } else {
+            OC_LOG_DEBUG(OPENCLAW_LOG_CAT_TRAY,
+                         "handle_helper_action unknown action='%s'", action);
+        }
+    }
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_TRAY, "handle_helper_action exit seq=%u action='%s'", seq, action);
+}
+
+static void on_helper_line_read(GObject *source_object, GAsyncResult *res, gpointer user_data) {
+    (void)user_data;
+    GDataInputStream *data_stream = G_DATA_INPUT_STREAM(source_object);
+    g_autoptr(GError) error = NULL;
+    gsize length = 0;
+    
+    guint seq = ++helper_seq;
+    OC_LOG_TRACE(OPENCLAW_LOG_CAT_TRAY, "on_helper_line_read entry seq=%u source_object=%p data_stream=%p global_stream=%p match=%d",
+              seq, (void *)source_object, (void *)data_stream, (void *)helper_stdout_stream,
+              (source_object == (GObject *)helper_stdout_stream));
+
+    gchar *line = g_data_input_stream_read_line_finish(data_stream, res, &length, &error);
+    if (line) {
+        OC_LOG_TRACE(OPENCLAW_LOG_CAT_TRAY, "on_helper_line_read line='%s' len=%zu", line, length);
+        if (g_str_has_prefix(line, "ACTION:")) {
+            handle_helper_action(line + 7);
+        }
+        g_free(line);
+        
+        // Only re-arm if the helper stream is still alive (not cleared by on_helper_exited)
+        if (helper_stdout_stream && helper_process) {
+            OC_LOG_TRACE(OPENCLAW_LOG_CAT_TRAY, "on_helper_line_read pre-rearm data_stream=%p", (void *)data_stream);
+            g_data_input_stream_read_line_async(data_stream, G_PRIORITY_DEFAULT, NULL, on_helper_line_read, NULL);
+            OC_LOG_TRACE(OPENCLAW_LOG_CAT_TRAY, "on_helper_line_read post-rearm");
+        } else {
+            OC_LOG_DEBUG(OPENCLAW_LOG_CAT_TRAY, "on_helper_line_read skip-rearm stream=%p helper_process=%p",
+                      (void *)helper_stdout_stream, (void *)helper_process);
+        }
+    } else {
+        OC_LOG_DEBUG(OPENCLAW_LOG_CAT_TRAY, "on_helper_line_read stream-ended data_stream=%p error=%s",
+                  (void *)data_stream, error ? error->message : "(none)");
+        if (error) {
+            OC_LOG_WARN(OPENCLAW_LOG_CAT_TRAY, "Error reading from helper stdout: %s", error->message);
+        }
+        // Stream ended — drop our owned reference via g_clear_object so that
+        // on_helper_exited (which may also clear it) sees NULL and is a no-op.
+        OC_LOG_DEBUG(OPENCLAW_LOG_CAT_TRAY, "helper-clear stdout_stream=%p (from stream-ended)", (void *)helper_stdout_stream);
+        g_clear_object(&helper_stdout_stream);
+    }
+}
+
+static void on_helper_exited(GObject *source_object, GAsyncResult *res, gpointer user_data) {
+    (void)user_data;
+    g_autoptr(GError) error = NULL;
+    g_subprocess_wait_finish(G_SUBPROCESS(source_object), res, &error);
+    guint seq = ++helper_seq;
+    OC_LOG_INFO(OPENCLAW_LOG_CAT_TRAY, "on_helper_exited entry seq=%u source=%p helper_process=%p helper_stdin=%p helper_stdout_stream=%p",
+              seq, (void *)source_object, (void *)helper_process, (void *)helper_stdin, (void *)helper_stdout_stream);
+    if (error) {
+        OC_LOG_WARN(OPENCLAW_LOG_CAT_TRAY, "helper wait_finish error: %s", error->message);
+    }
+    OC_LOG_INFO(OPENCLAW_LOG_CAT_TRAY, "Tray helper exited");
+
+    // Cleanup order: stdout_stream first (may already be NULL if stream-ended
+    // callback ran first — g_clear_object is a no-op on NULL), then stdin
+    // (owned ref), then process last (so streams are released before the
+    // subprocess that backs them).
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_TRAY, "helper-clear stdout_stream=%p (from exited)", (void *)helper_stdout_stream);
+    g_clear_object(&helper_stdout_stream);
+
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_TRAY, "helper-clear stdin=%p (from exited)", (void *)helper_stdin);
+    g_clear_object(&helper_stdin);
+
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_TRAY, "helper-clear process=%p (from exited)", (void *)helper_process);
+    g_clear_object(&helper_process);
+
+    OC_LOG_INFO(OPENCLAW_LOG_CAT_TRAY, "on_helper_exited post-clear process=%p stdin=%p stdout_stream=%p",
+              (void *)helper_process, (void *)helper_stdin, (void *)helper_stdout_stream);
+    
+    GApplication *app = g_application_get_default();
+    if (app) {
+        g_application_quit(app);
+    }
+}
+
+static void on_tray_browser_control_state_changed(gpointer user_data) {
+    (void)user_data;
+    /* The cache flipped (refresh landed, or a save completed). Push a
+     * full tray update so MENU_VISIBLE:BROWSER_CONTROL and
+     * CHECK:BROWSER_CONTROL reflect the new truth. Using the full
+     * update path avoids duplicating line-formatting logic and keeps
+     * all other tray fields in sync. */
+    if (!helper_stdin) return;
+    tray_update_from_state(state_get_current());
+}
+
+void tray_init(void) {
+    g_autoptr(GError) error = NULL;
+    g_autofree gchar *helper_path = NULL;
+
+    /* Install debug-action registry hooks once. The registry default is a
+     * no-op, so installing here means tray clicks for new debug-class
+     * actions come fully alive only after tray_init() runs. Tests link
+     * the registry without these hooks and capture intent instead. */
+    oc_debug_actions_set_uri_launcher(tray_debug_uri_launcher, NULL);
+    oc_debug_actions_set_clipboard_writer(tray_debug_clipboard_writer, NULL);
+    oc_debug_actions_set_show_section_handler(tray_debug_show_section, NULL);
+
+    /* Subscribe once (idempotent) to the shared Browser Control cache
+     * so async refreshes / out-of-band saves reach the tray without
+     * requiring the General section to be mounted. */
+    if (tray_browser_control_sub == 0) {
+        tray_browser_control_sub =
+            browser_control_state_subscribe(on_tray_browser_control_state_changed, NULL);
+    }
+    
+    // 1. Try build-tree sibling path first
+    g_autofree gchar *exe_path = g_file_read_link("/proc/self/exe", NULL);
+    if (exe_path) {
+        gchar *last_slash = strrchr(exe_path, '/');
+        if (last_slash) *last_slash = '\0';
+        g_autofree gchar *sibling_path = g_build_filename(exe_path, "openclaw-tray-helper", NULL);
+        if (g_file_test(sibling_path, G_FILE_TEST_IS_EXECUTABLE)) {
+            helper_path = g_steal_pointer(&sibling_path);
+        }
+    }
+    
+    // 2. Fallback to installed libexec path
+    if (!helper_path) {
+#ifdef OPENCLAW_LIBEXEC_DIR
+        helper_path = g_build_filename(OPENCLAW_LIBEXEC_DIR, "openclaw-tray-helper", NULL);
+#else
+        OC_LOG_ERROR(OPENCLAW_LOG_CAT_TRAY, "OPENCLAW_LIBEXEC_DIR not defined. Falling back to PWD.");
+        helper_path = g_strdup("./openclaw-tray-helper");
+#endif
+    }
+    
+    const gchar *argv[] = { helper_path, NULL };
+    
+    helper_process = g_subprocess_newv(argv,
+                                       G_SUBPROCESS_FLAGS_STDIN_PIPE | G_SUBPROCESS_FLAGS_STDOUT_PIPE,
+                                       &error);
+    if (!helper_process) {
+        OC_LOG_ERROR(OPENCLAW_LOG_CAT_TRAY, "Failed to spawn tray helper (%s): %s", helper_path, error->message);
+        GApplication *app = g_application_get_default();
+        if (app) g_application_quit(app);
+        return;
+    }
+    
+    // Owned reference: g_subprocess_get_stdin_pipe returns a borrowed ref,
+    // so we take our own to guarantee validity across async callbacks.
+    helper_stdin = g_object_ref(g_subprocess_get_stdin_pipe(helper_process));
+    GInputStream *helper_stdout = g_subprocess_get_stdout_pipe(helper_process);
+    
+    // Owned reference: g_data_input_stream_new returns a new object (refcount=1).
+    // Shared cleanup responsibility with on_helper_line_read (stream-ended) and
+    // on_helper_exited — both use g_clear_object to avoid double-unref.
+    helper_stdout_stream = g_data_input_stream_new(helper_stdout);
+
+    helper_seq = 0;
+    OC_LOG_INFO(OPENCLAW_LOG_CAT_TRAY, "tray_init created seq=0 helper_process=%p helper_stdin=%p (owned) helper_stdout=%p (borrowed) helper_data_stream=%p (owned)",
+              (void *)helper_process, (void *)helper_stdin, (void *)helper_stdout, (void *)helper_stdout_stream);
+
+    g_object_weak_ref(G_OBJECT(helper_process), on_helper_process_weak_notify, NULL);
+    if (helper_stdin)
+        g_object_weak_ref(G_OBJECT(helper_stdin), on_helper_stdin_weak_notify, NULL);
+    if (helper_stdout)
+        g_object_weak_ref(G_OBJECT(helper_stdout), on_helper_stdout_weak_notify, NULL);
+    g_object_weak_ref(G_OBJECT(helper_stdout_stream), on_helper_data_stream_weak_notify, NULL);
+
+    // Start reading output asynchronously on the main loop
+    g_data_input_stream_read_line_async(helper_stdout_stream, G_PRIORITY_DEFAULT, NULL, on_helper_line_read, NULL);
+    
+    g_subprocess_wait_async(helper_process, NULL, on_helper_exited, NULL);
+}
+
+static gboolean send_line_to_helper(const gchar *line, const gchar *log_line) {
+    if (!helper_stdin || !line) return FALSE;
+
+    g_autoptr(GError) write_err = NULL;
+    g_autoptr(GError) flush_err = NULL;
+    gsize bytes_written = 0;
+    gboolean write_ok = g_output_stream_write_all(helper_stdin, line, strlen(line), &bytes_written, NULL, &write_err);
+    gboolean flush_ok = g_output_stream_flush(helper_stdin, NULL, &flush_err);
+    if (!write_ok || !flush_ok) {
+        OC_LOG_WARN(OPENCLAW_LOG_CAT_TRAY, "send_line_to_helper error write_ok=%d flush_ok=%d write_err=%s flush_err=%s stdin=%p",
+                  write_ok, flush_ok,
+                  write_err ? write_err->message : "(none)",
+                  flush_err ? flush_err->message : "(none)",
+                  (void *)helper_stdin);
+    } else {
+        const gchar *log_str = log_line ? log_line : line;
+        OC_LOG_TRACE(OPENCLAW_LOG_CAT_TRAY, "send_line_to_helper ok bytes=%zu stdin=%p line='%s'",
+                  bytes_written, (void *)helper_stdin, log_str);
+    }
+    return TRUE;
+}
+
+static gchar* redact_dashboard_line_for_log(const gchar *line) {
+    if (!line) return NULL;
+    
+    /* Look for # fragment in DASHBOARD_URL line */
+    const gchar *hash = strchr(line, '#');
+    if (!hash) return NULL;  /* No fragment to redact - use original line */
+    
+    /* Build redacted version safely with g_strdup_printf */
+    return g_strdup_printf("%.*s#<redacted>\n", (int)(hash - line), line);
+}
+
+void tray_update_from_state(const AppState state) {
+    if (!helper_stdin) return;
+    
+    /* Get systemd state via correct API */
+    SystemdState *sys = state_get_systemd();
+    HealthState *health = state_get_health();
+    
+    /* A1: Compute service controllability - required for correct Stop/Restart gating.
+     * A service is controllable only if:
+     * - The unit is installed (we found a unit file)
+     * - Systemd is available (not in container/no D-Bus scenarios)
+     * - User has permission (implied by unit being in user unit path)
+     */
+    gboolean service_controllable = sys && sys->installed && !sys->systemd_unavailable;
+    
+    /* A2: Single authoritative STATE emission showing human-readable status.
+     * tray_helper.c uses this for the status menu item label.
+     *
+     * Pairing status is owned by the main app footer (see
+     * `refresh_shell_status_footer()` in src/app_window.c); the tray
+     * status label intentionally reflects only the service/app state
+     * and no longer folds in a "Pairing Required" override. */
+    const gchar *status_str = state_get_current_string();
+    g_autofree gchar *status_line = g_strdup_printf("STATE:%s\n", status_str);
+    send_line_to_helper(status_line, NULL);
+    OC_LOG_TRACE(OPENCLAW_LOG_CAT_TRAY, "tray_update_from_state state=%s controllable=%d", 
+                 status_str, service_controllable);
+
+    RuntimeMode rm = state_get_runtime_mode();
+    TrayDisplayModel tdm;
+    tray_display_model_build(state, rm, health, service_controllable, &tdm);
+    
+    /* A4: Send DASHBOARD_URL first (if available) with redacted logging.
+     * Send real URL to helper but redact token fragment in logs.
+     */
+    if (tdm.open_dashboard_sensitive) {
+        GatewayConfig *cfg = gateway_client_get_config();
+        if (cfg) {
+            g_autofree gchar *url = gateway_config_dashboard_url(cfg);
+            if (url) {
+                g_autofree gchar *dashboard_line = g_strdup_printf("DASHBOARD_URL:%s\n", url);
+                gchar *redacted_for_log = redact_dashboard_line_for_log(dashboard_line);
+                send_line_to_helper(dashboard_line, redacted_for_log);
+                g_free(redacted_for_log);
+            }
+        }
+    }
+    
+    /* A5: Send SENSITIVE commands in exact format expected by tray_helper.c.
+     * Format: SENSITIVE:ACTION:0|1 (tray_helper.c parses with g_strsplit(line, ":", 3))
+     * Supported actions: START, STOP, RESTART, OPEN_DASHBOARD, OPEN_CHAT
+     *
+     * Chat sensitivity mirrors the dashboard gate: the standalone chat
+     * window relies on the gateway being reachable for agents.list /
+     * models.list / chat.send to work. Users may still want to open the
+     * window while degraded so the chat surface can display its own
+     * "Chat blocked" state, so we keep OPEN_CHAT sensitive whenever the
+     * dashboard is too.
+     */
+    gboolean can_open_chat = tdm.open_dashboard_sensitive;
+
+    g_autofree gchar *sensitive_start = g_strdup_printf("SENSITIVE:START:%d\n", tdm.start_sensitive ? 1 : 0);
+    g_autofree gchar *sensitive_stop = g_strdup_printf("SENSITIVE:STOP:%d\n", tdm.stop_sensitive ? 1 : 0);
+    g_autofree gchar *sensitive_restart = g_strdup_printf("SENSITIVE:RESTART:%d\n", tdm.restart_sensitive ? 1 : 0);
+    g_autofree gchar *sensitive_dashboard = g_strdup_printf("SENSITIVE:OPEN_DASHBOARD:%d\n", tdm.open_dashboard_sensitive ? 1 : 0);
+    g_autofree gchar *sensitive_chat = g_strdup_printf("SENSITIVE:OPEN_CHAT:%d\n", can_open_chat ? 1 : 0);
+
+    /*
+     * Pairing is intentionally not a tray menu item anymore; no
+     * SENSITIVE:OPEN_PAIRING is emitted. The main app footer owns that
+     * surface and raises the pair approval / bootstrap windows directly.
+     */
+
+    send_line_to_helper(sensitive_start, NULL);
+    send_line_to_helper(sensitive_stop, NULL);
+    send_line_to_helper(sensitive_restart, NULL);
+    send_line_to_helper(sensitive_dashboard, NULL);
+    send_line_to_helper(sensitive_chat, NULL);
+
+    /* A6: Send runtime mode label if available.
+     * tray_helper.c supports RUNTIME:<label> for the runtime menu item.
+     *
+     * Append the effective connection mode as a human-readable suffix
+     * (e.g. "Expected Service Healthy · Local") so the operator can see
+     * at a glance whether the companion is talking to a local or remote
+     * gateway. This stays within the existing RUNTIME line — no new
+     * protocol surface — to keep the tray helper backwards compatible
+     * with older host builds.
+     */
+    if (tdm.runtime_label) {
+        ProductConnectionMode mode = product_state_get_effective_connection_mode();
+        const gchar *mode_suffix = NULL;
+        switch (mode) {
+        case PRODUCT_CONNECTION_MODE_REMOTE: mode_suffix = "Remote"; break;
+        case PRODUCT_CONNECTION_MODE_LOCAL:  mode_suffix = "Local";  break;
+        case PRODUCT_CONNECTION_MODE_UNSPECIFIED:
+        default:                             mode_suffix = NULL;     break;
+        }
+        g_autofree gchar *runtime_line = mode_suffix
+            ? g_strdup_printf("RUNTIME:%s \u00B7 %s\n", tdm.runtime_label, mode_suffix)
+            : g_strdup_printf("RUNTIME:%s\n", tdm.runtime_label);
+        send_line_to_helper(runtime_line, NULL);
+    }
+
+    /* ── Tranche D Full host → helper state lines ──
+     *
+     * MENU_VISIBLE:
+     *   - OPEN_DEBUG: visible only when SECTION_DEBUG is embedded
+     *     (i.e. OPENCLAW_DEBUG_PANE is set on the host process).
+     *   - EXEC_APPROVAL: visible when the exec approval store yields a
+     *     known enum value — `OcExecQuickMode` only has three values, so
+     *     this is effectively always TRUE on a healthy host.
+     *   - APPROVALS_PENDING: visible iff pending count > 0.
+     *   - RESET_REMOTE_TUNNEL: hidden until a real reset API exists; the
+     *     registry's dispatch returns FALSE for this id and the host
+     *     therefore must keep the tray entry hidden. See the TODO in
+     *     debug_actions.c.
+     *   - RESTART_APP: app_restart_request() is built into every Linux
+     *     companion build, so this is always visible.
+     *
+     * RADIO:EXEC_APPROVAL:<mode> — current quick-mode default. Sending
+     * this on every refresh keeps the tray in sync with any
+     * settings-pane edits.
+     *
+     * APPROVALS:<n> — pending exec approval count (queued + presenting).
+     */
+    OcExecQuickMode quick_mode = exec_approval_store_get_quick_mode();
+    const char *mode_token = exec_approval_tray_mode_to_string(quick_mode);
+    gboolean exec_approval_ready = (mode_token != NULL);
+    guint pending = exec_approval_prompter_pending_count();
+
+    g_autofree gchar *menu_open_debug =
+        tray_protocol_format_menu_visible("OPEN_DEBUG",
+                                          shell_sections_is_embedded(SECTION_DEBUG));
+    g_autofree gchar *menu_exec_approval =
+        tray_protocol_format_menu_visible("EXEC_APPROVAL", exec_approval_ready);
+    g_autofree gchar *menu_approvals_pending =
+        tray_protocol_format_menu_visible("APPROVALS_PENDING", pending > 0);
+    g_autofree gchar *menu_reset_tunnel =
+        tray_protocol_format_menu_visible("RESET_REMOTE_TUNNEL", FALSE);
+    g_autofree gchar *menu_restart_app =
+        tray_protocol_format_menu_visible("RESTART_APP", TRUE);
+
+    /*
+     * Tranche E binary toggles. Heartbeats is always visible because
+     * its source-of-truth (product_state) is local and always
+     * populated; Browser Control is only revealed once the shared
+     * `browser_control_state` cache has landed a successful
+     * `config.get` so the displayed state matches the gateway's
+     * current value. The cache lives independently of the General
+     * section, so tray visibility no longer requires the General row
+     * to have ever been mounted. */
+    gboolean browser_known = FALSE;
+    gboolean browser_enabled = FALSE;
+    browser_control_state_get(&browser_enabled, &browser_known);
+
+    g_autofree gchar *menu_heartbeats =
+        tray_protocol_format_menu_visible("HEARTBEATS", TRUE);
+    g_autofree gchar *menu_browser_control =
+        tray_protocol_format_menu_visible("BROWSER_CONTROL", browser_known);
+    g_autofree gchar *check_heartbeats =
+        tray_protocol_format_check("HEARTBEATS",
+                                   section_general_heartbeats_enabled());
+    g_autofree gchar *check_browser_control = browser_known
+        ? tray_protocol_format_check("BROWSER_CONTROL", browser_enabled)
+        : NULL;
+
+    if (menu_open_debug)        send_line_to_helper(menu_open_debug, NULL);
+    if (menu_exec_approval)     send_line_to_helper(menu_exec_approval, NULL);
+    if (menu_approvals_pending) send_line_to_helper(menu_approvals_pending, NULL);
+    if (menu_reset_tunnel)      send_line_to_helper(menu_reset_tunnel, NULL);
+    if (menu_restart_app)       send_line_to_helper(menu_restart_app, NULL);
+    if (menu_heartbeats)        send_line_to_helper(menu_heartbeats, NULL);
+    if (menu_browser_control)   send_line_to_helper(menu_browser_control, NULL);
+    if (check_heartbeats)       send_line_to_helper(check_heartbeats, NULL);
+    if (check_browser_control)  send_line_to_helper(check_browser_control, NULL);
+
+    if (mode_token) {
+        g_autofree gchar *radio_line =
+            tray_protocol_format_radio_exec_approval(mode_token);
+        if (radio_line) send_line_to_helper(radio_line, NULL);
+    }
+
+    g_autofree gchar *approvals_line = tray_protocol_format_approvals(pending);
+    if (approvals_line) send_line_to_helper(approvals_line, NULL);
+
+    OC_LOG_DEBUG(OPENCLAW_LOG_CAT_TRAY, "tray_update_from_state exit");
+}
