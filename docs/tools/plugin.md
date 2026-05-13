@@ -157,10 +157,10 @@ Key policy rules:
 - Bundled plugins follow their built-in default-on/default-off metadata unless
   config explicitly overrides them.
 - `plugins.slots.<slot>` chooses one plugin for exclusive categories such as
-  memory and context engines. Slot selection counts as explicit activation for
-  that slot and can load the selected plugin even when it would otherwise be
-  opt-in; `plugins.deny` and `plugins.entries.<id>.enabled: false` still block
-  it.
+  memory and context engines. Slot selection force-enables the selected plugin
+  for that slot by counting as explicit activation; it can load even when it
+  would otherwise be opt-in. `plugins.deny` and
+  `plugins.entries.<id>.enabled: false` still block it.
 - Bundled opt-in plugins can auto-activate when config names one of their owned
   surfaces, such as a provider/model ref, channel config, CLI backend, or agent
   harness runtime.
@@ -215,6 +215,12 @@ supervisor.
 | Plugin path is blocked for suspicious ownership or permissions | Inspect the diagnostic before the config error                                                                                             | Fix filesystem ownership/permissions, then run `openclaw plugins registry --refresh`                    |
 | `OPENCLAW_NIX_MODE=1` blocks lifecycle commands                | Confirm the install is managed by Nix                                                                                                      | Change plugin selection in the Nix source instead of using plugin mutator commands                      |
 | Dependency import fails at runtime                             | Check whether the plugin was installed through npm/git/ClawHub or loaded from a local path                                                 | Run `openclaw plugins update <id>`, reinstall the source, or install local plugin dependencies yourself |
+
+For intentional channel replacement, the preferred plugin should declare
+`channelConfigs.<channel-id>.preferOver` with the legacy or lower-priority
+plugin id. If both plugins are explicitly enabled, OpenClaw keeps that request
+and reports duplicate channel or tool diagnostics instead of silently choosing
+one owner.
 
 ### Blocked plugin path ownership
 
