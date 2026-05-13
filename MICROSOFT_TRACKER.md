@@ -9,7 +9,7 @@
 > - Priority guide: **P0** = crash/blocker/security, **P1** = significant bug/regression, **P2** = minor bug/enhancement, **P3** = nice-to-have/stale
 > - Items marked _(stale)_ have been flagged by the stale bot due to inactivity
 >
-> **Last updated:** 2026-05-12 (post-purge audit: refreshed from currently open GitHub issues/PRs and rebuilt from PR #49126 format)
+> **Last updated:** 2026-05-13 (post-purge audit: refreshed from currently open GitHub issues/PRs and rebuilt from PR #49126 format)
 
 ---
 
@@ -17,12 +17,12 @@
 
 | Category                  | Issues | PRs    | Total   | Closed | Remaining |
 | ------------------------- | ------ | ------ | ------- | ------ | --------- |
-| MS Teams (channel plugin) | 5      | 41     | 46      | 0      | 46        |
-| Windows platform          | 65     | 34     | 99      | 0      | 99        |
-| WSL                       | 10     | 4      | 14      | 0      | 14        |
+| MS Teams (channel plugin) | 5      | 43     | 48      | 0      | 48        |
+| Windows platform          | 65     | 36     | 101     | 0      | 101       |
+| WSL                       | 11     | 4      | 15      | 0      | 15        |
 | Azure                     | 6      | 6      | 12      | 0      | 12        |
 | SharePoint / M365         | 0      | 0      | 0       | 0      | 0         |
-| **Total**                 | **86** | **85** | **171** | **0**  | **171**   |
+| **Total**                 | **87** | **89** | **176** | **0**  | **176**   |
 
 ---
 
@@ -39,9 +39,9 @@
 
 ### Feature Requests
 
-| Resolved? | Priority | #      | Title                                                                               | Labels | Assignee |
-| --------- | -------- | ------ | ----------------------------------------------------------------------------------- | ------ | -------- |
-| [ ]       | P2       | #71049 | feat(msteams): add option to disable Copilot-style informative stream status in DMs |        |          |
+| Resolved? | Priority | #      | Title                                                                         | Labels | Assignee |
+| --------- | -------- | ------ | ----------------------------------------------------------------------------- | ------ | -------- |
+| [ ]       | P2       | #81084 | [Feature]: MSTeams channel-bound agents need opt-out from per-thread sessions |        |          |
 
 ---
 
@@ -55,10 +55,12 @@
 | [ ]       | P0       | #79934 | feat(sessions): add transcript projections                                                           | XL   |             |
 | [ ]       | P0       | #78595 | Refactor runtime state into SQLite                                                                   | XL   |             |
 | [ ]       | P0       | #63827 | fix(security): preserve dmPolicy settings during wizard runs                                         | XL   |             |
+| [ ]       | P1       | #81106 | fix(msteams): remove debug statements and improve server startup erro…                               | XS   |             |
 | [ ]       | P1       | #77784 | Add Teams delegated auth for plugin tools                                                            | XL   |             |
-| [ ]       | P2       | #80923 | fix(cron): beta blocker - pre-model watchdog kills isolated jobs >60s (#80888)                       | L    |             |
 | [ ]       | P2       | #80645 | feat(wizard): add CLI onboarding i18n                                                                | XL   |             |
-| [ ]       | P2       | #80323 | [qa-lab] Complete Codex vs Pi runtime parity harness phases 2-5                                      | XL   |             |
+| [ ]       | P2       | #80285 | fix: clear cross-run messaging-tool sent-text state after every compaction                           | XL   |             |
+| [ ]       | P2       | #80204 | fix: propagate gateway TLS fingerprints to bootstrap clients                                         | XL   |             |
+| [ ]       | P2       | #80181 | fix: add resilient fallback policy for user model overrides                                          | XL   |             |
 | [ ]       | P2       | #79609 | Show session cleanup dry-run counts by label                                                         | L    |             |
 | [ ]       | P2       | #79510 | fix(gateway): cancel deferred channel reloads during restart                                         | L    |             |
 | [ ]       | P2       | #79185 | fix(tts/xiaomi): support Token Plan TTS endpoint                                                     | S    |             |
@@ -106,10 +108,8 @@
 | [ ]       | P1       | #77443 | [Bug]: WhatsApp event loop blocked (eventLoopDelayMaxMs=12088ms) on first inbound message — 2026.5.3-1 Windows                                            | `bug` `regression`   |             |
 | [ ]       | P1       | #76699 | 2026.5.x: Telegram media download broken - event loop saturation on Windows                                                                               |                      |             |
 | [ ]       | P1       | #74378 | [Bug]: OpenClaw CLI commands remain alive as node.exe processes after execution on Windows                                                                | `bug` `regression`   |             |
-| [ ]       | P1       | #73874 | Gateway HTTP/WS dispatch deadlock on Windows + Docker Desktop bind-mount setups (regression in 2026.4.24, persists in .25 and .26)                        |                      |             |
 | [ ]       | P1       | #71865 | Auth login blocked by size-drop guard when openclaw.json was created by PowerShell (verbose/BOM format)                                                   |                      |             |
 | [ ]       | P1       | #71699 | [Bug]: Gateway hard-crashes with 0xC0000409 (STATUS_STACK_BUFFER_OVERRUN) on Windows during Mattermost streaming reply; auto-respawn frequently wedges    |                      |             |
-| [ ]       | P1       | #70856 | [Bug]: WhatsApp listener repeatedly disconnects/stalls on Windows, causing "No active WhatsApp Web listener" and missed messages                          | `bug` `regression`   |             |
 | [ ]       | P1       | #70788 | fix(windows): suppress startup-folder cmd window flash via wscript silent launcher                                                                        |                      |             |
 | [ ]       | P1       | #68493 | [Bug]: Editing openclaw.json while gateway is running triggers hot-reload crash loop on Windows (stale lock file + EADDRINUSE)                            |                      | @vincentkoc |
 | [ ]       | P1       | #67035 | [Bug]: 2026.4.14 Windows chat UI regression: input text swallowed, streamed replies often invisible until refresh, typing indicator flashes then blanks   |                      |             |
@@ -119,6 +119,8 @@
 | [ ]       | P1       | #59362 | [Bug]: Windows: exec tool causes console window flash when spawning commands                                                                              | `bug` `regression`   |             |
 | [ ]       | P1       | #54669 | [Field Report] Chrome 136+ binds CDP to [::1] (IPv6) on Windows — portproxy v4tov4 breaks silently                                                        |                      |             |
 | [ ]       | P1       | #46378 | [Bug]: 安装配置界面windows会卡死                                                                                                                          | `bug` `regression`   |             |
+| [ ]       | P2       | #81254 | [Bug]: Windows node Scheduled Task opens persistent cmd window at login                                                                                   | `bug` `bug:behavior` |             |
+| [ ]       | P2       | #81020 | [Windows] scheduled task watchdog: repetition Duration=P1D expires after 1 day, loses auto-restart                                                        |                      |             |
 | [ ]       | P2       | #80650 | [Bug]: [Bug] openclaw backup create 在Windows上失败（退出代码255）                                                                                        | `bug`                |             |
 | [ ]       | P2       | #80416 | [Bug] core-plugin-tools ~3.5s overhead on every embedded run persists after #75520 fix — Windows + Node 24 + isolated cron jobs                           |                      |             |
 | [ ]       | P2       | #79899 | DefaultResourceLoader.reload() blocks event loop for 12-15s on Windows due to synchronous filesystem scanning                                             |                      |             |
@@ -179,6 +181,9 @@
 | [ ]       | P0       | #74383 | fix(security): classify broad Windows SIDs as world principals                       | S    |             |
 | [ ]       | P0       | #63074 | fix(security): classify dangerous Windows sandbox binds first                        | XS   |             |
 | [ ]       | P0       | #38846 | security(windows): enhance command argument validation                               | S    |             |
+| [ ]       | P2       | #81330 | fix(windows): suppress persistent cmd window from scheduled-task node launch         | XS   |             |
+| [ ]       | P2       | #81267 | fix(node): hide Windows node task launcher                                           | M    |             |
+| [ ]       | P2       | #81168 | [codex] Add short plugin cache windows                                               | M    |             |
 | [ ]       | P2       | #80683 | fix(memory-lancedb): add retry mechanism for Windows Docker bind mount sync delays   | S    |             |
 | [ ]       | P2       | #79694 | fix(update): hide post-core update and completion cache child windows on Windows     | XS   |             |
 | [ ]       | P2       | #76245 | [codex] Fallback when Windows gateway task exits early                               | S    |             |
@@ -186,9 +191,8 @@
 | [ ]       | P2       | #74425 | fix: ensure CLI processes exit after command completion on Windows                   | S    |             |
 | [ ]       | P2       | #73889 | fix(cli): stabilize Windows scheduled-task restart health after ready                | S    |             |
 | [ ]       | P2       | #73751 | fix(exec): decode Windows command output with codepage-aware streaming               | M    |             |
-| [ ]       | P2       | #73674 | fix(memory): resolve QMD Windows cmd shims                                           | M    |             |
+| [ ]       | P2       | #73674 | fix(memory): resolve QMD Windows cmd shims                                           | L    |             |
 | [ ]       | P2       | #70762 | refactor(agents): share hook history windows                                         | XL   | @vincentkoc |
-| [ ]       | P2       | #70341 | fix(exec): resolve Windows PowerShell cmdlet allowlist miss                          | M    |             |
 | [ ]       | P2       | #69059 | fix: retry sqlite-vec load without .dll suffix on Windows                            | S    |             |
 | [ ]       | P2       | #68819 | fix: resolve Windows .cmd shims to underlying .exe before spawn                      | M    |             |
 | [ ]       | P2       | #68725 | feat(amazon-bedrock-mantle): add known context windows for open-weight Mantle models | S    |             |
@@ -224,6 +228,7 @@
 | [ ]       | P1       | #68966 | [Bug]: [WSL] openclaw browser command terminated by SIGKILL causing timeout                                                                  | `bug` `bug:crash`    |          |
 | [ ]       | P1       | #59209 | Misleading CDP "Empty reply from server" in WSL2 caused by portproxy self-loop (svchost/iphlpsvc), not Chrome                                | `bug` `regression`   |          |
 | [ ]       | P1       | #44051 | [Bug]: [skills] Skipping skill path error triggered on officially installed skills via clawhub (WSL Environment)                             | `bug` `regression`   |          |
+| [ ]       | P2       | #81366 | [Bug]: Active Memory plugin consistently times out on WSL2 — hook handler cuts off before sub-agent completes                                |                      |          |
 | [ ]       | P2       | #80336 | [Bug]: placeholder.openclaw.cloud unreachable on WSL2 with custom gateway port                                                               | `bug` `bug:behavior` |          |
 | [ ]       | P2       | #78222 | OpenClaw 2026.5.4 Gateway status/health inconsistency on WSL2: diagnostics report ok/listener, external checks show no listener and HTTP 000 |                      |          |
 | [ ]       | P2       | #73602 | [Bug]: WhatsApp flaps and Telegram polling stalls on WSL2 in 2026.4.26                                                                       |                      |          |
@@ -320,6 +325,7 @@ _No currently open items found._
 | MS Teams (channel plugin) | issue | P1       | #67177 | [msteams] Inbound file attachments silently fail in DMs — file.download.info downloadUrl not rewritten to Graph shares endpoint                         |
 | MS Teams (channel plugin) | issue | P1       | #65329 | bug(msteams): DM inline images and file attachments silently dropped                                                                                    |
 | MS Teams (channel plugin) | issue | P1       | #62765 | msteams dmPolicy=pairing silently drops unpaired senders with HTTP 200, no log line, no auto-reply                                                      |
+| MS Teams (channel plugin) | pr    | P1       | #81106 | fix(msteams): remove debug statements and improve server startup erro…                                                                                  |
 | MS Teams (channel plugin) | pr    | P1       | #77784 | Add Teams delegated auth for plugin tools                                                                                                               |
 | Windows platform          | issue | P1       | #80344 | [Bug]: Discord voice /vc join fails on Windows with AggregateError + gateway heartbeat timeout / event loop starvation                                  |
 | Windows platform          | issue | P1       | #79437 | Prebuilt `node-llama-cpp` Windows binaries crash (0xC0000005) on Intel Alder Lake-N (N95) — qmd LLM half unusable                                       |
@@ -327,10 +333,8 @@ _No currently open items found._
 | Windows platform          | issue | P1       | #77443 | [Bug]: WhatsApp event loop blocked (eventLoopDelayMaxMs=12088ms) on first inbound message — 2026.5.3-1 Windows                                          |
 | Windows platform          | issue | P1       | #76699 | 2026.5.x: Telegram media download broken - event loop saturation on Windows                                                                             |
 | Windows platform          | issue | P1       | #74378 | [Bug]: OpenClaw CLI commands remain alive as node.exe processes after execution on Windows                                                              |
-| Windows platform          | issue | P1       | #73874 | Gateway HTTP/WS dispatch deadlock on Windows + Docker Desktop bind-mount setups (regression in 2026.4.24, persists in .25 and .26)                      |
 | Windows platform          | issue | P1       | #71865 | Auth login blocked by size-drop guard when openclaw.json was created by PowerShell (verbose/BOM format)                                                 |
 | Windows platform          | issue | P1       | #71699 | [Bug]: Gateway hard-crashes with 0xC0000409 (STATUS_STACK_BUFFER_OVERRUN) on Windows during Mattermost streaming reply; auto-respawn frequently wedges  |
-| Windows platform          | issue | P1       | #70856 | [Bug]: WhatsApp listener repeatedly disconnects/stalls on Windows, causing "No active WhatsApp Web listener" and missed messages                        |
 | Windows platform          | issue | P1       | #70788 | fix(windows): suppress startup-folder cmd window flash via wscript silent launcher                                                                      |
 | Windows platform          | issue | P1       | #68493 | [Bug]: Editing openclaw.json while gateway is running triggers hot-reload crash loop on Windows (stale lock file + EADDRINUSE)                          |
 | Windows platform          | issue | P1       | #67035 | [Bug]: 2026.4.14 Windows chat UI regression: input text swallowed, streamed replies often invisible until refresh, typing indicator flashes then blanks |
