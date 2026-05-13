@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildCodexMcpServersConfig, loadCodexBundleMcpThreadConfig } from "./codex-mcp-config.js";
 
 const mocks = vi.hoisted(() => ({
@@ -13,6 +13,15 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../plugins/bundle-mcp.js", () => ({
   loadEnabledBundleMcpConfig: () => mocks.bundleMcp,
 }));
+
+beforeEach(() => {
+  mocks.bundleMcp = {
+    config: {
+      mcpServers: {},
+    },
+    diagnostics: [],
+  };
+});
 
 describe("buildCodexMcpServersConfig", () => {
   it("normalizes OpenClaw MCP servers into Codex app-server mcp_servers shape", () => {
@@ -47,16 +56,25 @@ describe("buildCodexMcpServersConfig", () => {
 });
 
 describe("loadCodexBundleMcpThreadConfig", () => {
-  it("loads configured OpenClaw MCP servers as a Codex thread config patch", () => {
+  it("loads enabled bundled MCP servers as a Codex thread config patch", () => {
+    mocks.bundleMcp = {
+      config: {
+        mcpServers: {
+          search: {
+            type: "http",
+            url: "https://mcp.example.com/mcp",
+          },
+        },
+      },
+      diagnostics: [],
+    };
+
     const loaded = loadCodexBundleMcpThreadConfig({
       workspaceDir: "/workspace",
       cfg: {
-        mcp: {
-          servers: {
-            search: {
-              transport: "streamable-http",
-              url: "https://mcp.example.com/mcp",
-            },
+        plugins: {
+          entries: {
+            "bundle-probe": { enabled: true },
           },
         },
       },
@@ -70,6 +88,27 @@ describe("loadCodexBundleMcpThreadConfig", () => {
       },
     });
     expect(loaded.fingerprint).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("leaves user mcp.servers to the Codex user MCP projection path", () => {
+    const loaded = loadCodexBundleMcpThreadConfig({
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            search: {
+              transport: "streamable-http",
+              url: "https://mcp.example.com/mcp",
+            },
+          },
+        },
+      },
+      toolsEnabled: true,
+    });
+
+    expect(loaded.configPatch).toBeUndefined();
+    expect(loaded.fingerprint).toBeUndefined();
+    expect(loaded.evaluated).toBe(true);
   });
 
   it("returns an evaluated empty MCP config when Pi would not create a bundle MCP runtime", () => {

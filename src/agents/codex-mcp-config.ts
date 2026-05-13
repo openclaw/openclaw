@@ -1,7 +1,10 @@
 import crypto from "node:crypto";
-import type { BundleMcpConfig, BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
+import {
+  loadEnabledBundleMcpConfig,
+  type BundleMcpConfig,
+  type BundleMcpServerConfig,
+} from "../plugins/bundle-mcp.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import { loadMergedBundleMcpConfig, toCliBundleMcpServerConfig } from "./bundle-mcp-config.js";
 import {
   applyCommonServerConfig,
   decodeHeaderEnvPlaceholder,
@@ -107,15 +110,14 @@ export function loadCodexBundleMcpThreadConfig(
       evaluated: true,
     };
   }
-  const merged = loadMergedBundleMcpConfig({
+  const bundleMcp = loadEnabledBundleMcpConfig({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
-    mapConfiguredServer: toCliBundleMcpServerConfig,
   });
-  const mcpServers = buildCodexMcpServersConfig(merged.config);
+  const mcpServers = buildCodexMcpServersConfig(bundleMcp.config);
   if (Object.keys(mcpServers).length === 0) {
     return {
-      diagnostics: merged.diagnostics,
+      diagnostics: bundleMcp.diagnostics,
       evaluated: true,
     };
   }
@@ -123,7 +125,7 @@ export function loadCodexBundleMcpThreadConfig(
     configPatch: {
       mcp_servers: mcpServers,
     },
-    diagnostics: merged.diagnostics,
+    diagnostics: bundleMcp.diagnostics,
     evaluated: true,
     fingerprint: fingerprintCodexMcpServersConfig(mcpServers),
   };
