@@ -538,6 +538,36 @@ describe("createPluginApprovalHandlers", () => {
       );
     });
 
+    it("returns not found for approvals hidden from the caller", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const record = manager.create({ title: "T", description: "D" }, 60_000);
+      record.requestedByDeviceId = "device-owner";
+      record.requestedByConnId = "conn-owner";
+      record.requestedByClientId = "client-owner";
+      void manager.register(record, 60_000);
+      manager.resolve(record.id, "allow-once");
+
+      const opts = createMockOptions(
+        "plugin.approval.waitDecision",
+        { id: record.id },
+        {
+          client: {
+            connId: "conn-other",
+            connect: {
+              client: { id: "client-other" },
+              device: { id: "device-other" },
+              scopes: ["operator.approvals"],
+            },
+          } as GatewayRequestHandlerOptions["client"],
+        },
+      );
+      await handlers["plugin.approval.waitDecision"](opts);
+      expect(responseCall(opts.respond as unknown as MockCallSource).ok).toBe(false);
+      expect(responseError(opts.respond as unknown as MockCallSource).message).toContain(
+        "expired or not found",
+      );
+    });
+
     it("returns decision when resolved", async () => {
       const handlers = createPluginApprovalHandlers(manager);
       const record = manager.create({ title: "T", description: "D" }, 60_000);

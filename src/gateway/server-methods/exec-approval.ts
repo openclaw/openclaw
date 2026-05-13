@@ -422,10 +422,11 @@ export function createExecApprovalHandlers(
         afterDecisionErrorLabel: "exec approvals: iOS push expire failed",
       });
     },
-    "exec.approval.waitDecision": async ({ params, respond }) => {
+    "exec.approval.waitDecision": async ({ params, respond, client }) => {
       await handleApprovalWaitDecision({
         manager,
         inputId: (params as { id?: string }).id,
+        client,
         respond,
       });
     },

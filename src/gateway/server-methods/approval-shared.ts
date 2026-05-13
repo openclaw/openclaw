@@ -240,11 +240,27 @@ export function respondPendingApprovalLookupError(params: {
 export async function handleApprovalWaitDecision<TPayload>(params: {
   manager: ExecApprovalManager<TPayload>;
   inputId: unknown;
+  client?: GatewayClient | null;
   respond: RespondFn;
 }): Promise<void> {
   const id = normalizeOptionalString(params.inputId) ?? "";
   if (!id) {
     params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "id is required"));
+    return;
+  }
+  const snapshot = params.manager.getSnapshot(id);
+  if (
+    !snapshot ||
+    !isApprovalRecordVisibleToClient({
+      record: snapshot,
+      client: params.client ?? null,
+    })
+  ) {
+    params.respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, "approval expired or not found"),
+    );
     return;
   }
   const decisionPromise = params.manager.awaitDecision(id);
@@ -256,7 +272,6 @@ export async function handleApprovalWaitDecision<TPayload>(params: {
     );
     return;
   }
-  const snapshot = params.manager.getSnapshot(id);
   const decision = await decisionPromise;
   params.respond(
     true,

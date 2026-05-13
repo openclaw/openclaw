@@ -3,6 +3,7 @@ import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { GATEWAY_CLIENT_IDS } from "../protocol/client-info.js";
 import {
   handleApprovalResolve,
+  handleApprovalWaitDecision,
   handlePendingApprovalRequest,
   isApprovalRecordVisibleToClient,
 } from "./approval-shared.js";
@@ -727,6 +728,82 @@ describe("handlePendingApprovalRequest", () => {
       }),
     );
     expect(manager.getSnapshot(record.id)?.decision).toBeUndefined();
+  });
+
+  it("does not wait on decisions for approvals hidden from the caller", async () => {
+    const manager = new ExecApprovalManager();
+    const record = manager.create(
+      {
+        command: "echo ok",
+      },
+      60_000,
+      "approval-wait-hidden",
+    );
+    record.requestedByDeviceId = "device-owner";
+    record.requestedByConnId = "conn-owner";
+    record.requestedByClientId = "client-owner";
+    void manager.register(record, 60_000);
+    expect(manager.resolve(record.id, "allow-once")).toBe(true);
+    const respond = vi.fn();
+
+    await handleApprovalWaitDecision({
+      manager,
+      inputId: record.id,
+      respond,
+      client: createApprovalClient({
+        connId: "conn-other",
+        clientId: "client-other",
+        deviceId: "device-other",
+        scopes: ["operator.approvals"],
+      }),
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: "approval expired or not found",
+      }),
+    );
+  });
+
+  it("allows visible callers to wait for approval decisions", async () => {
+    const manager = new ExecApprovalManager();
+    const record = manager.create(
+      {
+        command: "echo ok",
+      },
+      60_000,
+      "approval-wait-visible",
+    );
+    record.requestedByDeviceId = "device-owner";
+    record.requestedByConnId = "conn-owner";
+    record.requestedByClientId = "client-owner";
+    void manager.register(record, 60_000);
+    expect(manager.resolve(record.id, "deny")).toBe(true);
+    const respond = vi.fn();
+
+    await handleApprovalWaitDecision({
+      manager,
+      inputId: record.id,
+      respond,
+      client: createApprovalClient({
+        connId: "conn-owner-approval",
+        clientId: "client-owner",
+        deviceId: "device-owner",
+        scopes: ["operator.approvals"],
+      }),
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        id: "approval-wait-visible",
+        decision: "deny",
+      }),
+      undefined,
+    );
   });
 
   it("allows approval-scoped clients to resolve no-device gateway-client approvals", async () => {
