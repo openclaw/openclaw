@@ -6,6 +6,7 @@ import {
 import {
   countActiveDescendantRunsMock,
   dispatchCronDeliveryMock,
+  isCliProviderMock,
   isHeartbeatOnlyResponseMock,
   listDescendantRunsForRequesterMock,
   loadRunCronIsolatedAgentTurn,
@@ -13,6 +14,7 @@ import {
   pickLastNonEmptyTextFromPayloadsMock,
   resolveCronDeliveryPlanMock,
   runEmbeddedPiAgentMock,
+  runCliAgentMock,
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
 
@@ -216,6 +218,41 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
     expect(repairCall?.prompt).toContain("[cron:test-job Test Job] test");
     expect(dispatchCronDeliveryMock).toHaveBeenCalledTimes(1);
     expect(requireDeliveryRequest().deliveryPayloads).toEqual([{ text: "Morning report ready." }]);
+  });
+
+  it("uses bundled-MCP-only repair mode for CLI cron empty output", async () => {
+    usePayloadTextExtraction();
+    isCliProviderMock.mockReturnValue(true);
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "messagechat",
+      to: "123",
+    });
+    runCliAgentMock
+      .mockResolvedValueOnce({
+        payloads: [{ text: "   " }],
+        meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+      })
+      .mockResolvedValueOnce({
+        payloads: [{ text: "CLI repair ready." }],
+        meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+      });
+
+    mockRunCronFallbackPassthrough();
+    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentTurnParams());
+
+    expect(result.status).toBe("ok");
+    expect(runCliAgentMock).toHaveBeenCalledTimes(2);
+    const repairCall = runCliAgentMock.mock.calls.at(1)?.[0] as
+      | { disableBundleMcp?: boolean; disableTools?: boolean; prompt?: string }
+      | undefined;
+    expect(repairCall?.disableBundleMcp).toBe(true);
+    expect(repairCall?.disableTools).toBeUndefined();
+    expect(repairCall?.prompt).toContain("produced no deliverable user-visible text");
+    expect(repairCall?.prompt).toContain("Original cron task:");
+    expect(dispatchCronDeliveryMock).toHaveBeenCalledTimes(1);
+    expect(requireDeliveryRequest().deliveryPayloads).toEqual([{ text: "CLI repair ready." }]);
   });
 
   it("fails explicitly when the no-tools repair pass still has no deliverable text", async () => {

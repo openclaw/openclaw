@@ -226,7 +226,7 @@ export function createCronPromptExecutor(params: {
             runId: params.cronSession.sessionEntry.sessionId,
             lane: resolveCronAgentLane(params.lane),
             cliSessionId,
-            disableTools: options?.disableTools,
+            disableBundleMcp: options?.disableTools,
             skillsSnapshot: params.skillsSnapshot,
             messageChannel: params.messageChannel,
             abortSignal: params.abortSignal,

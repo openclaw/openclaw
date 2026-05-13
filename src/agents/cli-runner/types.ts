@@ -64,6 +64,8 @@ export type RunCliAgentParams = {
   /** Runtime tool allow-list. CLI harnesses fail closed when this is set. */
   toolsAllow?: string[];
   disableTools?: boolean;
+  /** Disable OpenClaw-provided bundled MCP wiring without claiming native CLI tools are unavailable. */
+  disableBundleMcp?: boolean;
   abortSignal?: AbortSignal;
   onExecutionStarted?: () => void;
   onExecutionPhase?: (info: {
