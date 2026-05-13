@@ -279,7 +279,10 @@ async function finalizeAcpTurnOutput(params: {
     queuedFinal = queuedFinal || delivered;
   }
 
-  if (params.shouldEmitResolvedIdentityNotice) {
+  if (
+    params.shouldEmitResolvedIdentityNotice &&
+    params.cfg.acp?.stream?.tagVisibility?.session_info_update !== false
+  ) {
     const { readAcpSessionEntry } = await loadDispatchAcpSessionRuntime();
     const currentMeta = readAcpSessionEntry({
       cfg: params.cfg,

@@ -691,7 +691,11 @@ async function sendSubagentAnnounceDirectly(params: {
         directOrigin?.channel,
       sessionEntry: requesterEntry,
     });
-    if (params.expectsCompletionMessage && requesterActivity.sessionId) {
+    if (
+      params.expectsCompletionMessage &&
+      requesterActivity.sessionId &&
+      deliveryTarget.channel !== "discord"
+    ) {
       const wakeOutcome = resolveQueueEmbeddedPiMessageOutcome(
         requesterActivity.sessionId,
         params.triggerMessage,
