@@ -499,6 +499,10 @@
       "types": "./dist/plugin-sdk/host-runtime.d.ts",
       "default": "./dist/plugin-sdk/host-runtime.js"
     },
+    "./plugin-sdk/types": {
+      "types": "./dist/plugin-sdk/types.d.ts",
+      "default": "./dist/plugin-sdk/types.js"
+    },
     "./plugin-sdk/process-runtime": {
       "types": "./dist/plugin-sdk/process-runtime.d.ts",
       "default": "./dist/plugin-sdk/process-runtime.js"
