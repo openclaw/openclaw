@@ -234,6 +234,7 @@ describe("artifacts RPC handlers", () => {
     hoisted.getTaskSessionLookupByIdForStatus.mockReturnValue({
       requesterSessionKey: "agent:main:main",
       runId: "run-for-task-1",
+      agentId: "main",
     });
     mockedMessages([
       {
@@ -316,6 +317,34 @@ describe("artifacts RPC handlers", () => {
       taskId: "task-1",
       title: "task-result.png",
     });
+  });
+
+  it("does not resolve taskId artifact queries when agentId does not match the task", async () => {
+    hoisted.getTaskSessionLookupByIdForStatus.mockReturnValue({
+      requesterSessionKey: "agent:work:main",
+      runId: "run-for-task-1",
+      agentId: "work",
+    });
+    const { calls, respond } = createResponder();
+
+    await artifactsHandlers["artifacts.list"]?.({
+      req: { type: "req", id: "task-agent-mismatch", method: "artifacts.list", params: {} },
+      params: { taskId: "task-1", agentId: "main" },
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+      context: {} as never,
+    });
+
+    expect(calls[0]?.ok).toBe(false);
+    expect(hoisted.getTaskSessionLookupByIdForStatus).toHaveBeenCalledWith("task-1");
+    expect(hoisted.loadSessionEntry).not.toHaveBeenCalled();
+    expect(hoisted.resolveSessionKeyForRun).not.toHaveBeenCalled();
+    expectFields(calls[0]?.error, {
+      message: "no session found for artifact query",
+    });
+    const error = calls[0]?.error as { details?: Record<string, unknown> };
+    expectFields(error.details, { type: "artifact_scope_not_found" });
   });
 
   it("does not return untagged session artifacts for scoped runId queries", async () => {
