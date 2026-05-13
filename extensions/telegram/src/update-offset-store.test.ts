@@ -132,7 +132,6 @@ describe("deleteTelegramUpdateOffset", () => {
         botToken: original,
       });
 
-      // Original token still observes the persisted offset.
       expect(
         await readTelegramUpdateOffset({
           accountId: "default",
@@ -140,8 +139,6 @@ describe("deleteTelegramUpdateOffset", () => {
         }),
       ).toBe(42);
 
-      // After BotFather /revoke the bot id is unchanged but the secret differs;
-      // the persisted offset must not be trusted across that rotation.
       const rotations: Array<Record<string, unknown>> = [];
       const offset = await readTelegramUpdateOffset({
         accountId: "default",
@@ -163,11 +160,8 @@ describe("deleteTelegramUpdateOffset", () => {
     });
   });
 
-  it("preserves v2 bot-id-only offsets when the bot id still matches", async () => {
+  it("treats v2 bot-id-only offsets as stale when token identity cannot be verified", async () => {
     await withStateDirEnv("openclaw-tg-offset-", async ({ stateDir }) => {
-      // Simulate an offset file written by an older version that scoped by
-      // bot id only (no token fingerprint). Upgrading should keep the offset
-      // for the same bot until the next write upgrades the format.
       const legacyPath = path.join(stateDir, "telegram", "update-offset-default.json");
       await fs.mkdir(path.dirname(legacyPath), { recursive: true });
       await fs.writeFile(
@@ -185,8 +179,38 @@ describe("deleteTelegramUpdateOffset", () => {
         },
       });
 
-      expect(offset).toBe(999);
-      expect(rotations).toEqual([]);
+      expect(offset).toBeNull();
+      expect(rotations).toEqual([
+        {
+          reason: "legacy-state",
+          previousBotId: "111111",
+          currentBotId: "111111",
+          staleLastUpdateId: 999,
+        },
+      ]);
+    });
+  });
+
+  it("awaits rotation cleanup before returning", async () => {
+    await withStateDirEnv("openclaw-tg-offset-", async () => {
+      await writeTelegramUpdateOffset({
+        accountId: "default",
+        updateId: 42,
+        botToken: "111111:original",
+      });
+
+      let cleaned = false;
+      const offset = await readTelegramUpdateOffset({
+        accountId: "default",
+        botToken: "111111:rotated",
+        onRotationDetected: async () => {
+          await new Promise<void>((resolve) => setImmediate(resolve));
+          cleaned = true;
+        },
+      });
+
+      expect(offset).toBeNull();
+      expect(cleaned).toBe(true);
     });
   });
 
