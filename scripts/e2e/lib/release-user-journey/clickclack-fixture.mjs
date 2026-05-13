@@ -100,7 +100,7 @@ function readBody(req) {
   });
 }
 
-function createMessage({ body, author = humanUser, parentMessageId = undefined }) {
+function createMessage({ body, author = humanUser, parentMessageId }) {
   messageSeq += 1;
   const id = `msg_${messageSeq}`;
   const message = {

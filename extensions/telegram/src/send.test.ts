@@ -1774,9 +1774,10 @@ describe("sendMessageTelegram", () => {
     }
   });
 
-  it("does not retry direct sends without message_thread_id on thread-not-found", async () => {
+  it("does not retry direct or forum sends without message_thread_id on thread-not-found", async () => {
     const cases = [
-      { name: "private", chatId: "123456789", text: "hello private", messageId: 59 },
+      { name: "private", chatId: "123456789", text: "hello private" },
+      { name: "forum", chatId: "-1001234567890", text: "hello forum" },
     ] as const;
     const threadErr = new Error("400: Bad Request: message thread not found");
 
@@ -1801,30 +1802,6 @@ describe("sendMessageTelegram", () => {
         message_thread_id: 271,
       });
     }
-  });
-
-  it("does not retry explicit forum topic sends without message_thread_id on thread-not-found", async () => {
-    const chatId = "-1001234567890";
-    const threadErr = new Error("400: Bad Request: message thread not found");
-    const sendMessage = vi.fn().mockRejectedValueOnce(threadErr);
-    const api = { sendMessage } as unknown as {
-      sendMessage: typeof sendMessage;
-    };
-
-    await expect(
-      sendMessageTelegram(chatId, "hello forum", {
-        cfg: TELEGRAM_TEST_CFG,
-        token: "tok",
-        api,
-        messageThreadId: 271,
-      }),
-    ).rejects.toThrow(/message thread not found/);
-
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessage).toHaveBeenCalledWith(chatId, "hello forum", {
-      parse_mode: "HTML",
-      message_thread_id: 271,
-    });
   });
 
   it("does not retry resolved username DM sends without message_thread_id on thread-not-found", async () => {
@@ -1998,73 +1975,42 @@ describe("sendMessageTelegram", () => {
     });
   });
 
-  it("does not retry media sends without message_thread_id when forum thread is missing", async () => {
-    const chatId = "-100123";
+  it("does not retry media sends without message_thread_id when thread is missing", async () => {
+    const cases = [
+      { name: "forum", chatId: "-100123" },
+      { name: "direct", chatId: "123456789" },
+    ] as const;
     const threadErr = new Error("400: Bad Request: message thread not found");
-    const sendPhoto = vi.fn().mockRejectedValueOnce(threadErr);
-    const api = { sendPhoto } as unknown as {
-      sendPhoto: typeof sendPhoto;
-    };
 
-    mockLoadedMedia({
-      buffer: Buffer.from("fake-image"),
-      contentType: "image/jpeg",
-      fileName: "photo.jpg",
-    });
+    for (const testCase of cases) {
+      const sendPhoto = vi.fn().mockRejectedValueOnce(threadErr);
+      const api = { sendPhoto } as unknown as {
+        sendPhoto: typeof sendPhoto;
+      };
 
-    await expect(
-      sendMessageTelegram(chatId, "photo", {
-        cfg: TELEGRAM_TEST_CFG,
-        token: "tok",
-        api,
-        mediaUrl: "https://example.com/photo.jpg",
-        messageThreadId: 271,
-      }),
-    ).rejects.toThrow(/message thread not found/);
+      mockLoadedMedia({
+        buffer: Buffer.from("fake-image"),
+        contentType: "image/jpeg",
+        fileName: "photo.jpg",
+      });
 
-    expect(sendPhoto).toHaveBeenCalledTimes(1);
-    expect(sendPhoto).toHaveBeenCalledWith(chatId, expect.anything(), {
-      caption: "photo",
-      parse_mode: "HTML",
-      message_thread_id: 271,
-    });
-  });
+      await expect(
+        sendMessageTelegram(testCase.chatId, "photo", {
+          cfg: TELEGRAM_TEST_CFG,
+          token: "tok",
+          api,
+          mediaUrl: "https://example.com/photo.jpg",
+          messageThreadId: 271,
+        }),
+      ).rejects.toThrow(/message thread not found/);
 
-  it("does not retry direct media sends without message_thread_id when thread is missing", async () => {
-    const chatId = "123456789";
-    const threadErr = new Error("400: Bad Request: message thread not found");
-    const sendPhoto = vi.fn().mockRejectedValueOnce(threadErr);
-    const api = { sendPhoto } as unknown as {
-      sendPhoto: typeof sendPhoto;
-    };
-
-    mockLoadedMedia({
-      buffer: Buffer.from("fake-image"),
-      contentType: "image/jpeg",
-      fileName: "photo.jpg",
-    });
-
-    await expect(
-      sendMessageTelegram(chatId, "photo", {
-        cfg: TELEGRAM_TEST_CFG,
-        token: "tok",
-        api,
-        mediaUrl: "https://example.com/photo.jpg",
-        messageThreadId: 271,
-      }),
-    ).rejects.toThrow(/message thread not found/);
-
-    expect(sendPhoto).toHaveBeenCalledTimes(1);
-    expectMediaSendCall(
-      firstMockCall(sendPhoto, "first send photo call"),
-      "first send photo call",
-      chatId,
-      {
+      expect(sendPhoto, testCase.name).toHaveBeenCalledTimes(1);
+      expectMediaSendCall(firstMockCall(sendPhoto, testCase.name), testCase.name, testCase.chatId, {
         caption: "photo",
         parse_mode: "HTML",
         message_thread_id: 271,
-      },
-    );
+      });
+    }
   });
 
   it("defaults outbound media uploads to 100MB", async () => {

@@ -51,7 +51,6 @@ export type { OutboundTargetResolution } from "./targets-resolve-shared.js";
 export { resolveSessionDeliveryTarget, type SessionDeliveryTarget } from "./targets-session.js";
 import { resolveSessionDeliveryTarget, type SessionDeliveryTarget } from "./targets-session.js";
 
-// Channel docking: prefer plugin.outbound.resolveTarget + allowFrom to normalize destinations.
 export function resolveOutboundTarget(params: {
   channel: GatewayMessageChannel;
   to?: string;
@@ -134,7 +133,6 @@ export function resolveHeartbeatDeliveryTarget(params: {
   });
 
   const heartbeatAccountId = heartbeat?.accountId?.trim();
-  // Use explicit accountId from heartbeat config if provided, otherwise fall back to session
   let effectiveAccountId = heartbeatAccountId || resolvedTarget.accountId;
 
   if (heartbeatAccountId && resolvedTarget.channel) {
@@ -190,11 +188,12 @@ export function resolveHeartbeatDeliveryTarget(params: {
     target === "last" && !heartbeat?.to
       ? (normalizeChatType(entry?.chatType) ?? normalizeChatType(entry?.origin?.chatType))
       : undefined;
-  const deliveryChatType = resolveHeartbeatDeliveryChatType({
-    channel: resolvedTarget.channel,
-    to: resolved.to,
-    sessionChatType: sessionChatTypeHint,
-  });
+  const deliveryChatType =
+    sessionChatTypeHint ??
+    inferChatTypeFromTarget({
+      channel: resolvedTarget.channel,
+      to: resolved.to,
+    });
   if (deliveryChatType === "direct" && heartbeat?.directPolicy === "block") {
     return buildNoHeartbeatDeliveryTarget({
       reason: "dm-blocked",
@@ -239,8 +238,6 @@ export function resolveHeartbeatDeliveryTarget(params: {
     to: resolved.to,
     reason,
     accountId: effectiveAccountId,
-    // Heartbeats normally avoid inheriting session reply-thread IDs, but some
-    // plugins encode thread/topic ids as part of the destination identity.
     threadId: resolvedTarget.threadId ?? inheritedHeartbeatThreadId,
     lastChannel: resolvedTarget.lastChannel,
     lastAccountId: resolvedTarget.lastAccountId,
@@ -285,20 +282,6 @@ function inferChatTypeFromTarget(params: {
       channel: params.channel,
     })?.messaging?.inferTargetChatType?.({ to }) ?? undefined
   );
-}
-
-function resolveHeartbeatDeliveryChatType(params: {
-  channel: DeliverableMessageChannel;
-  to: string;
-  sessionChatType?: ChatType;
-}): ChatType | undefined {
-  if (params.sessionChatType) {
-    return params.sessionChatType;
-  }
-  return inferChatTypeFromTarget({
-    channel: params.channel,
-    to: params.to,
-  });
 }
 
 function shouldReuseHeartbeatRouteThreadId(params: {
