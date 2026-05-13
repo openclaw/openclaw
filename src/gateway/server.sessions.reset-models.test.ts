@@ -93,6 +93,67 @@ test("sessions.reset drops cached skills snapshot so /new rebuilds visible skill
   expect(store["agent:main:main"]?.skillsSnapshot).toBeUndefined();
 });
 
+test("sessions.reset clears compaction checkpoint metadata so /new starts clean", async () => {
+  const { storePath } = await createSessionStoreDir();
+  testState.agentConfig = {
+    model: {
+      primary: "openai/gpt-test-a",
+    },
+  };
+
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-compacted", {
+        compactionCount: 2,
+        compactionCheckpoints: [
+          {
+            checkpointId: "11111111-1111-4111-8111-111111111111",
+            sessionKey: "agent:main:main",
+            sessionId: "sess-compacted",
+            createdAt: Date.now(),
+            reason: "auto-threshold",
+            tokensBefore: 123456,
+            summary: "stale summary",
+            preCompaction: {
+              sessionId: "sess-compacted",
+              sessionFile: path.join(path.dirname(storePath), "sess-compacted.jsonl"),
+            },
+            postCompaction: {
+              sessionId: "sess-compacted",
+              sessionFile: path.join(path.dirname(storePath), "sess-compacted.jsonl"),
+            },
+          },
+        ],
+      }),
+    },
+  });
+
+  const reset = await directSessionReq<{
+    ok: true;
+    key: string;
+    entry: {
+      sessionId: string;
+      compactionCount?: number;
+      compactionCheckpoints?: unknown[];
+    };
+  }>("sessions.reset", { key: "main" });
+
+  expect(reset.ok).toBe(true);
+  expect(reset.payload?.entry.sessionId).not.toBe("sess-compacted");
+  expect(reset.payload?.entry.compactionCount).toBeUndefined();
+  expect(reset.payload?.entry.compactionCheckpoints).toBeUndefined();
+
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    {
+      compactionCount?: number;
+      compactionCheckpoints?: unknown[];
+    }
+  >;
+  expect(store["agent:main:main"]?.compactionCount).toBeUndefined();
+  expect(store["agent:main:main"]?.compactionCheckpoints).toBeUndefined();
+});
+
 test("sessions.reset preserves legacy explicit model overrides without modelOverrideSource", async () => {
   const { storePath } = await createSessionStoreDir();
   testState.agentConfig = {
