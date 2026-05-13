@@ -94,8 +94,12 @@ vi.mock("./device-identity.ts", () => ({
   signDevicePayload: signDevicePayloadMock,
 }));
 
-const { CONTROL_UI_OPERATOR_SCOPES, GatewayBrowserClient, shouldRetryWithDeviceToken } =
-  await import("./gateway.ts");
+const {
+  CONTROL_UI_OPERATOR_SCOPES,
+  GatewayBrowserClient,
+  GatewayRequestTimeoutError,
+  shouldRetryWithDeviceToken,
+} = await import("./gateway.ts");
 
 type ConnectFrame = {
   id?: string;
@@ -533,6 +537,152 @@ describe("GatewayBrowserClient", () => {
       ok: false,
       errorCode: "CONFIG_ERROR",
     });
+  });
+
+  it("times out unanswered gateway requests and records bounded timing", async () => {
+    vi.useFakeTimers();
+    const onRequestTiming = vi.fn();
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+      requestTimeoutMs: 25,
+      onRequestTiming,
+    });
+
+    const { ws, connectFrame } = await startConnect(client);
+    ws.emitMessage({
+      type: "res",
+      id: connectFrame.id,
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        protocol: 3,
+        auth: { role: "operator", scopes: [] },
+      },
+    });
+    onRequestTiming.mockClear();
+
+    const request = client.request("sessions.list", { includeGlobal: true });
+    const caught = request.catch((error: unknown) => error);
+    const frame = JSON.parse(ws.sent.at(-1) ?? "{}") as { id?: string; method?: string };
+
+    await vi.advanceTimersByTimeAsync(24);
+    expect(onRequestTiming).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(caught).resolves.toBeInstanceOf(GatewayRequestTimeoutError);
+    await expect(caught).resolves.toMatchObject({
+      method: "sessions.list",
+      timeoutMs: 25,
+    });
+    expect(onRequestTiming).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: frame.id,
+        method: "sessions.list",
+        ok: false,
+        errorCode: "CLIENT_TIMEOUT",
+      }),
+    );
+
+    ws.emitMessage({
+      type: "res",
+      id: frame.id,
+      ok: true,
+      payload: { sessions: [] },
+    });
+    expect(onRequestTiming).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears request timeout timers when a gateway response arrives", async () => {
+    vi.useFakeTimers();
+    const onRequestTiming = vi.fn();
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+      requestTimeoutMs: 25,
+      onRequestTiming,
+    });
+
+    const { ws, connectFrame } = await startConnect(client);
+    ws.emitMessage({
+      type: "res",
+      id: connectFrame.id,
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        protocol: 3,
+        auth: { role: "operator", scopes: [] },
+      },
+    });
+    onRequestTiming.mockClear();
+
+    const request = client.request("sessions.list", { includeGlobal: true });
+    const frame = JSON.parse(ws.sent.at(-1) ?? "{}") as { id?: string; method?: string };
+    ws.emitMessage({
+      type: "res",
+      id: frame.id,
+      ok: true,
+      payload: { sessions: [] },
+    });
+
+    await expect(request).resolves.toEqual({ sessions: [] });
+    await vi.advanceTimersByTimeAsync(25);
+
+    expect(onRequestTiming).toHaveBeenCalledTimes(1);
+    expect(onRequestTiming).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: frame.id,
+        method: "sessions.list",
+        ok: true,
+      }),
+    );
+  });
+
+  it("lets server-declared timeout requests run past the default client timeout", async () => {
+    vi.useFakeTimers();
+    const onRequestTiming = vi.fn();
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+      requestTimeoutMs: 10,
+      onRequestTiming,
+    });
+
+    const { ws, connectFrame } = await startConnect(client);
+    ws.emitMessage({
+      type: "res",
+      id: connectFrame.id,
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        protocol: 3,
+        auth: { role: "operator", scopes: [] },
+      },
+    });
+    onRequestTiming.mockClear();
+
+    const request = client.request("channels.login", { channel: "whatsapp", timeoutMs: 50 });
+    const frame = JSON.parse(ws.sent.at(-1) ?? "{}") as { id?: string; method?: string };
+
+    await vi.advanceTimersByTimeAsync(10);
+    expect(onRequestTiming).not.toHaveBeenCalled();
+
+    ws.emitMessage({
+      type: "res",
+      id: frame.id,
+      ok: true,
+      payload: { ok: true },
+    });
+
+    await expect(request).resolves.toEqual({ ok: true });
+    expect(onRequestTiming).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: frame.id,
+        method: "channels.login",
+        ok: true,
+      }),
+    );
   });
 
   it("prefers explicit shared auth over cached device tokens", async () => {
