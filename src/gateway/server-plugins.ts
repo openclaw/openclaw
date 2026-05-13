@@ -15,6 +15,7 @@ import { createPluginRuntimeLoaderLogger } from "../plugins/runtime/load-context
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { PluginLogger } from "../plugins/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { ADMIN_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 import type { ErrorShape } from "./protocol/index.js";
@@ -295,26 +296,48 @@ function mergeGatewayClientInternal(
   };
 }
 
+type DispatchGatewayMethodInProcessOptions = {
+  allowSyntheticModelOverride?: boolean;
+  expectFinal?: boolean;
+  forceSyntheticClient?: boolean;
+  pluginRuntimeOwnerId?: string;
+  syntheticScopes?: string[];
+  timeoutMs?: number;
+};
+
+type GatewayMethodDispatchResponse = {
+  ok: boolean;
+  payload?: unknown;
+  error?: ErrorShape;
+};
+
+function unwrapGatewayMethodDispatchResponse(
+  method: string,
+  response: GatewayMethodDispatchResponse,
+): unknown {
+  if (!response.ok) {
+    throw new Error(response.error?.message ?? `Gateway method "${method}" failed.`);
+  }
+  return response.payload;
+}
+
 async function dispatchGatewayMethod<T>(
   method: string,
   params: Record<string, unknown>,
-  options?: {
-    allowSyntheticModelOverride?: boolean;
-    forceSyntheticClient?: boolean;
-    pluginRuntimeOwnerId?: string;
-    syntheticScopes?: string[];
-  },
+  options?: DispatchGatewayMethodInProcessOptions,
 ): Promise<T> {
   const scope = getPluginRuntimeGatewayRequestScope();
   const context = scope?.context ?? getFallbackGatewayContext();
   const isWebchatConnect = scope?.isWebchatConnect ?? (() => false);
   if (!context) {
     throw new Error(
-      `Plugin subagent dispatch requires a gateway request scope (method: ${method}). No scope set and no fallback context available.`,
+      `In-process gateway dispatch requires a gateway request scope (method: ${method}). No scope set and no fallback context available.`,
     );
   }
 
-  let result: { ok: boolean; payload?: unknown; error?: ErrorShape } | undefined;
+  let firstResponse: GatewayMethodDispatchResponse | undefined;
+  let finalResponse: GatewayMethodDispatchResponse | undefined;
+  let resolveFinalResponse: ((response: GatewayMethodDispatchResponse) => void) | undefined;
   const { handleGatewayRequest } = await import("./server-methods.js");
   const pluginRuntimeOwnerId =
     typeof options?.pluginRuntimeOwnerId === "string" && options.pluginRuntimeOwnerId.trim()
@@ -340,20 +363,63 @@ async function dispatchGatewayMethod<T>(
       options?.forceSyntheticClient === true ? syntheticClient : (scopedClient ?? syntheticClient),
     isWebchatConnect,
     respond: (ok, payload, error) => {
-      if (!result) {
-        result = { ok, payload, error };
+      const response = { ok, payload, error };
+      if (!firstResponse) {
+        firstResponse = response;
+        return;
+      }
+      if (!finalResponse) {
+        finalResponse = response;
+        resolveFinalResponse?.(response);
       }
     },
     context,
   });
 
-  if (!result) {
+  if (!firstResponse) {
     throw new Error(`Gateway method "${method}" completed without a response.`);
   }
-  if (!result.ok) {
-    throw new Error(result.error?.message ?? `Gateway method "${method}" failed.`);
+  const firstPayload = firstResponse.payload as { status?: unknown } | undefined;
+  if (options?.expectFinal !== true || firstPayload?.status !== "accepted") {
+    return unwrapGatewayMethodDispatchResponse(method, firstResponse) as T;
   }
-  return result.payload as T;
+  const final =
+    finalResponse ??
+    (await new Promise<GatewayMethodDispatchResponse>((resolve, reject) => {
+      resolveFinalResponse = resolve;
+      const timeoutMs =
+        typeof options.timeoutMs === "number" && Number.isFinite(options.timeoutMs)
+          ? resolveSafeTimeoutDelayMs(options.timeoutMs)
+          : undefined;
+      const timeout =
+        timeoutMs === undefined
+          ? undefined
+          : setTimeout(() => {
+              reject(new Error(`gateway request timeout for ${method}`));
+            }, timeoutMs);
+      if (finalResponse) {
+        if (timeout) {
+          clearTimeout(timeout);
+        }
+        resolve(finalResponse);
+        return;
+      }
+      resolveFinalResponse = (response) => {
+        if (timeout) {
+          clearTimeout(timeout);
+        }
+        resolve(response);
+      };
+    }));
+  return unwrapGatewayMethodDispatchResponse(method, final) as T;
+}
+
+export async function dispatchGatewayMethodInProcess<T>(
+  method: string,
+  params: Record<string, unknown>,
+  options?: DispatchGatewayMethodInProcessOptions,
+): Promise<T> {
+  return await dispatchGatewayMethod<T>(method, params, options);
 }
 
 export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {

@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { callGateway } from "../gateway/call.js";
+import type { dispatchGatewayMethodInProcess } from "../gateway/server-plugins.js";
 import type { EmbeddedPiQueueMessageOptions } from "./pi-embedded-runner/run-state.js";
 import type { EmbeddedPiQueueMessageOutcome } from "./pi-embedded-runner/runs.js";
 
@@ -54,6 +55,17 @@ export function createSubagentAnnounceDeliveryRuntimeMock(options: DeliveryRunti
   return {
     callGateway: (async <T = Record<string, unknown>>(request: Parameters<typeof callGateway>[0]) =>
       (await options.callGateway(request)) as T) as typeof callGateway,
+    dispatchGatewayMethodInProcess: (async <T = Record<string, unknown>>(
+      method: string,
+      params: Record<string, unknown>,
+      callOptions?: { expectFinal?: boolean; timeoutMs?: number },
+    ) =>
+      (await options.callGateway({
+        method,
+        params,
+        expectFinal: callOptions?.expectFinal,
+        timeoutMs: callOptions?.timeoutMs,
+      })) as T) as typeof dispatchGatewayMethodInProcess,
     getRuntimeConfig: options.getRuntimeConfig,
     loadSessionStore: options.loadSessionStore,
     resolveAgentIdFromSessionKey: options.resolveAgentIdFromSessionKey,
