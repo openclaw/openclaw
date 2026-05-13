@@ -77,9 +77,36 @@ function resolvePendingApprovalLookupError(params: {
   };
 }
 
+function normalizeApprovalIdentity(value: string | null | undefined): string | null {
+  return normalizeOptionalString(value) ?? null;
+}
+
+export function isApprovalRecordVisibleToClient<TPayload>(params: {
+  record: ExecApprovalRecord<TPayload>;
+  client: GatewayClient | null;
+}): boolean {
+  const requestedByDeviceId = normalizeApprovalIdentity(params.record.requestedByDeviceId);
+  if (requestedByDeviceId) {
+    return requestedByDeviceId === normalizeApprovalIdentity(params.client?.connect?.device?.id);
+  }
+
+  const requestedByConnId = normalizeApprovalIdentity(params.record.requestedByConnId);
+  if (requestedByConnId) {
+    return requestedByConnId === normalizeApprovalIdentity(params.client?.connId);
+  }
+
+  const requestedByClientId = normalizeApprovalIdentity(params.record.requestedByClientId);
+  if (requestedByClientId) {
+    return requestedByClientId === normalizeApprovalIdentity(params.client?.connect?.client?.id);
+  }
+
+  return true;
+}
+
 export function resolvePendingApprovalRecord<TPayload>(params: {
   manager: ExecApprovalManager<TPayload>;
   inputId: string;
+  client?: GatewayClient | null;
   exposeAmbiguousPrefixError?: boolean;
 }):
   | {
@@ -91,7 +118,13 @@ export function resolvePendingApprovalRecord<TPayload>(params: {
       ok: false;
       response: PendingApprovalLookupError;
     } {
-  const resolvedId = params.manager.lookupPendingId(params.inputId);
+  const resolvedId = params.manager.lookupApprovalId(params.inputId, {
+    filter: (record) =>
+      isApprovalRecordVisibleToClient({
+        record,
+        client: params.client ?? null,
+      }),
+  });
   if (resolvedId.kind !== "exact" && resolvedId.kind !== "prefix") {
     return {
       ok: false,
@@ -111,6 +144,7 @@ export function resolvePendingApprovalRecord<TPayload>(params: {
 function resolveResolvedApprovalRecord<TPayload>(params: {
   manager: ExecApprovalManager<TPayload>;
   inputId: string;
+  client?: GatewayClient | null;
   exposeAmbiguousPrefixError?: boolean;
 }):
   | {
@@ -122,7 +156,14 @@ function resolveResolvedApprovalRecord<TPayload>(params: {
       ok: false;
       response: PendingApprovalLookupError;
     } {
-  const resolvedId = params.manager.lookupApprovalId(params.inputId, { includeResolved: true });
+  const resolvedId = params.manager.lookupApprovalId(params.inputId, {
+    includeResolved: true,
+    filter: (record) =>
+      isApprovalRecordVisibleToClient({
+        record,
+        client: params.client ?? null,
+      }),
+  });
   if (resolvedId.kind !== "exact" && resolvedId.kind !== "prefix") {
     return {
       ok: false,
@@ -298,12 +339,14 @@ export async function handleApprovalResolve<TPayload, TResolvedEvent extends obj
   const resolved = resolvePendingApprovalRecord({
     manager: params.manager,
     inputId: params.inputId,
+    client: params.client,
     exposeAmbiguousPrefixError: params.exposeAmbiguousPrefixError,
   });
   if (!resolved.ok) {
     const resolvedRepeat = resolveResolvedApprovalRecord({
       manager: params.manager,
       inputId: params.inputId,
+      client: params.client,
       exposeAmbiguousPrefixError: params.exposeAmbiguousPrefixError,
     });
     if (resolvedRepeat.ok) {

@@ -35,6 +35,7 @@ import {
   handlePendingApprovalRequest,
   handleApprovalResolve,
   isApprovalDecision,
+  isApprovalRecordVisibleToClient,
   respondPendingApprovalLookupError,
   resolvePendingApprovalRecord,
 } from "./approval-shared.js";
@@ -85,7 +86,7 @@ export function createExecApprovalHandlers(
   opts?: { forwarder?: ExecApprovalForwarder; iosPushDelivery?: ExecApprovalIosPushDelivery },
 ): GatewayRequestHandlers {
   return {
-    "exec.approval.get": async ({ params, respond }) => {
+    "exec.approval.get": async ({ params, respond, client }) => {
       if (!validateExecApprovalGetParams(params)) {
         respond(
           false,
@@ -103,6 +104,7 @@ export function createExecApprovalHandlers(
       const resolved = resolvePendingApprovalRecord({
         manager,
         inputId: p.id,
+        client,
         exposeAmbiguousPrefixError: true,
       });
       if (!resolved.ok) {
@@ -127,15 +129,18 @@ export function createExecApprovalHandlers(
         undefined,
       );
     },
-    "exec.approval.list": async ({ respond }) => {
+    "exec.approval.list": async ({ respond, client }) => {
       respond(
         true,
-        manager.listPendingRecords().map((record) => ({
-          id: record.id,
-          request: record.request,
-          createdAtMs: record.createdAtMs,
-          expiresAtMs: record.expiresAtMs,
-        })),
+        manager
+          .listPendingRecords()
+          .filter((record) => isApprovalRecordVisibleToClient({ record, client }))
+          .map((record) => ({
+            id: record.id,
+            request: record.request,
+            createdAtMs: record.createdAtMs,
+            expiresAtMs: record.expiresAtMs,
+          })),
         undefined,
       );
     },
