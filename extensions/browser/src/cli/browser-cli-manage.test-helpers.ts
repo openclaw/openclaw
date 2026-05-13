@@ -43,6 +43,9 @@ const browserManageMocks = vi.hoisted(() => ({
 vi.spyOn(browserCliSharedModule, "callBrowserRequest").mockImplementation(
   browserManageMocks.callBrowserRequest,
 );
+vi.spyOn(browserCliSharedModule, "callBrowserReadRequest").mockImplementation(
+  browserManageMocks.callBrowserRequest,
+);
 vi.spyOn(parentCoreApiModule, "runCommandWithRuntime").mockImplementation(
   async (_runtime, action, onError) => {
     try {

@@ -83,6 +83,20 @@ function firstRespondCall(respond: ReturnType<typeof vi.fn>): RespondCall {
   return call;
 }
 
+async function runBrowserReadRequest(params: Record<string, unknown>) {
+  const respond = vi.fn();
+  const nodeRegistry = createContext();
+  await browserHandlers["browser.readRequest"]({
+    params,
+    respond: respond as never,
+    context: { nodeRegistry } as never,
+    client: null,
+    req: { type: "req", id: "req-1", method: "browser.readRequest" },
+    isWebchatConnect: () => false,
+  });
+  return { respond, nodeRegistry };
+}
+
 describe("browser.request profile selection", () => {
   beforeEach(() => {
     loadConfigMock.mockReturnValue({
@@ -172,5 +186,43 @@ describe("browser.request profile selection", () => {
     expect(invoke.params?.method).toBe("GET");
     expect(invoke.params?.path).toBe("/profiles");
     expect(firstRespondCall(respond)[0]).toBe(true);
+  });
+
+  it("allows read-only requests through browser.readRequest", async () => {
+    const { respond, nodeRegistry } = await runBrowserReadRequest({
+      method: "GET",
+      path: "/tabs",
+      query: { profile: "openclaw" },
+    });
+
+    expect(nodeRegistry.invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "browser.proxy",
+        params: expect.objectContaining({
+          method: "GET",
+          path: "/tabs",
+          profile: "openclaw",
+        }),
+      }),
+    );
+    const call = respond.mock.calls[0] as RespondCall | undefined;
+    expect(call?.[0]).toBe(true);
+  });
+
+  it("blocks writes through browser.readRequest", async () => {
+    const { respond, nodeRegistry } = await runBrowserReadRequest({
+      method: "POST",
+      path: "/tabs/action",
+      body: { action: "new" },
+    });
+
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: "browser.readRequest only allows read-only GET browser endpoints",
+      }),
+    );
   });
 });

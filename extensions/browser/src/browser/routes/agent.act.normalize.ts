@@ -36,19 +36,44 @@ function countBatchActions(actions: BrowserActRequest[]): number {
 export function validateBatchTargetIds(
   actions: BrowserActRequest[],
   targetId: string,
+  acceptedTargetIds: readonly string[] = [targetId],
 ): string | null {
+  const accepted = new Set(acceptedTargetIds.filter(Boolean));
   for (const action of actions) {
-    if (action.targetId && action.targetId !== targetId) {
+    if (action.targetId && !accepted.has(action.targetId)) {
       return "batched action targetId must match request targetId";
     }
     if (action.kind === "batch") {
-      const nestedError = validateBatchTargetIds(action.actions, targetId);
+      const nestedError = validateBatchTargetIds(action.actions, targetId, acceptedTargetIds);
       if (nestedError) {
         return nestedError;
       }
     }
   }
   return null;
+}
+
+export function canonicalizeActionTargetIds(
+  action: BrowserActRequest,
+  targetId: string,
+  acceptedTargetIds: readonly string[] = [targetId],
+): BrowserActRequest {
+  const accepted = new Set(acceptedTargetIds.filter(Boolean));
+  const canonicalTargetId =
+    action.targetId && accepted.has(action.targetId) ? targetId : action.targetId;
+  const next = {
+    ...action,
+    ...(canonicalTargetId ? { targetId: canonicalTargetId } : {}),
+  } as BrowserActRequest;
+  if (next.kind === "batch") {
+    return {
+      ...next,
+      actions: next.actions.map((child) =>
+        canonicalizeActionTargetIds(child, targetId, acceptedTargetIds),
+      ),
+    };
+  }
+  return next;
 }
 
 function normalizeFields(rawFields: unknown): BrowserFormField[] {

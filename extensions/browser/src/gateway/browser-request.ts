@@ -43,6 +43,18 @@ type BrowserProxyResult = {
   files?: BrowserProxyFile[];
 };
 
+const READ_ONLY_BROWSER_REQUEST_PATHS = new Set([
+  "/",
+  "/doctor",
+  "/profiles",
+  "/snapshot",
+  "/tabs",
+]);
+
+function isReadOnlyBrowserRequest(method: string, path: string): boolean {
+  return method === "GET" && READ_ONLY_BROWSER_REQUEST_PATHS.has(path);
+}
+
 function isBrowserNode(node: NodeSession) {
   const caps = Array.isArray(node.caps) ? node.caps : [];
   const commands = Array.isArray(node.commands) ? node.commands : [];
@@ -134,6 +146,28 @@ export async function handleBrowserGatewayRequest({
   respond,
   context,
 }: Parameters<GatewayRequestHandlers["browser.request"]>[0]) {
+  return await handleBrowserGatewayRequestInternal({ params, respond, context }, false);
+}
+
+export async function handleBrowserGatewayReadRequest({
+  params,
+  respond,
+  context,
+}: Parameters<GatewayRequestHandlers["browser.request"]>[0]) {
+  return await handleBrowserGatewayRequestInternal({ params, respond, context }, true);
+}
+
+async function handleBrowserGatewayRequestInternal(
+  {
+    params,
+    respond,
+    context,
+  }: Pick<
+    Parameters<GatewayRequestHandlers["browser.request"]>[0],
+    "params" | "respond" | "context"
+  >,
+  readOnly: boolean,
+) {
   const typed = params as BrowserRequestParams;
   const methodRaw = (normalizeOptionalString(typed.method) ?? "").toUpperCase();
   const path = normalizeOptionalString(typed.path) ?? "";
@@ -157,6 +191,17 @@ export async function handleBrowserGatewayRequest({
       false,
       undefined,
       errorShape(ErrorCodes.INVALID_REQUEST, "method must be GET, POST, or DELETE"),
+    );
+    return;
+  }
+  if (readOnly && !isReadOnlyBrowserRequest(methodRaw, path)) {
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "browser.readRequest only allows read-only GET browser endpoints",
+      ),
     );
     return;
   }
@@ -289,4 +334,5 @@ export async function handleBrowserGatewayRequest({
 
 export const browserHandlers: GatewayRequestHandlers = {
   "browser.request": handleBrowserGatewayRequest,
+  "browser.readRequest": handleBrowserGatewayReadRequest,
 };

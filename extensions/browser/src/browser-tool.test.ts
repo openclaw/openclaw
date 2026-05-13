@@ -509,6 +509,38 @@ describe("browser tool snapshot maxChars", () => {
     expect(opts.timeoutMs).toBe(60_000);
   });
 
+  it("clamps low top-level timeoutMs for open to the managed browser startup budget", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "open",
+      url: "https://example.com",
+      timeoutMs: 15_000,
+    });
+
+    expect(browserClientMocks.browserOpenTab).toHaveBeenCalledWith(
+      undefined,
+      "https://example.com",
+      expect.objectContaining({ timeoutMs: 60_000 }),
+    );
+  });
+
+  it("uses the managed browser startup budget for start", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "start",
+      timeoutMs: 15_000,
+    });
+
+    expect(browserClientMocks.browserStart).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ timeoutMs: 60_000 }),
+    );
+    expect(browserClientMocks.browserStatus).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ timeoutMs: 60_000 }),
+    );
+  });
+
   it("passes top-level timeoutMs through to close without targetId", async () => {
     setResolvedBrowserProfiles({
       user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
@@ -932,9 +964,13 @@ describe("browser tool url alias support", () => {
     await tool.execute?.("call-1", { action: "open", url: "https://example.com" });
 
     const url = lastMockCallArg<string>(browserClientMocks.browserOpenTab, 1);
-    const opts = lastMockCallArg<{ profile?: string }>(browserClientMocks.browserOpenTab, 2);
+    const opts = lastMockCallArg<{ profile?: string; timeoutMs?: number }>(
+      browserClientMocks.browserOpenTab,
+      2,
+    );
     expect(url).toBe("https://example.com");
     expect(opts.profile).toBeUndefined();
+    expect(opts.timeoutMs).toBe(60_000);
   });
 
   it("tracks opened tabs when session context is available", async () => {

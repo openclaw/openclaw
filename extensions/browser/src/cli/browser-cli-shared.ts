@@ -1,6 +1,9 @@
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { callGatewayFromCli, type GatewayRpcOpts } from "./core-api.js";
 
+const BROWSER_REQUEST_SCOPES = ["operator.admin"] as ["operator.admin"];
+const BROWSER_READ_REQUEST_SCOPES = ["operator.read"] as ["operator.read"];
+
 export type BrowserParentOpts = GatewayRpcOpts & {
   json?: boolean;
   browserProfile?: string;
@@ -11,6 +14,10 @@ type BrowserRequestParams = {
   path: string;
   query?: Record<string, string | number | boolean | undefined>;
   body?: unknown;
+};
+
+type BrowserReadRequestParams = Omit<BrowserRequestParams, "method" | "body"> & {
+  method: "GET";
 };
 
 function normalizeQuery(query: BrowserRequestParams["query"]): Record<string, string> | undefined {
@@ -27,7 +34,8 @@ function normalizeQuery(query: BrowserRequestParams["query"]): Record<string, st
   return Object.keys(out).length ? out : undefined;
 }
 
-export async function callBrowserRequest<T>(
+async function callBrowserGatewayRequest<T>(
+  gatewayMethod: "browser.request" | "browser.readRequest",
   opts: BrowserParentOpts,
   params: BrowserRequestParams,
   extra?: { timeoutMs?: number; progress?: boolean },
@@ -44,7 +52,7 @@ export async function callBrowserRequest<T>(
       : undefined;
   const timeout = typeof resolvedTimeout === "number" ? String(resolvedTimeout) : opts.timeout;
   const payload = await callGatewayFromCli(
-    "browser.request",
+    gatewayMethod,
     { ...opts, timeout },
     {
       method: params.method,
@@ -53,12 +61,34 @@ export async function callBrowserRequest<T>(
       body: params.body,
       timeoutMs: resolvedTimeout,
     },
-    { progress: extra?.progress },
+    {
+      progress: extra?.progress,
+      scopes:
+        gatewayMethod === "browser.readRequest"
+          ? BROWSER_READ_REQUEST_SCOPES
+          : BROWSER_REQUEST_SCOPES,
+    },
   );
   if (payload === undefined) {
     throw new Error("Unexpected browser.request response");
   }
   return payload as T;
+}
+
+export async function callBrowserRequest<T>(
+  opts: BrowserParentOpts,
+  params: BrowserRequestParams,
+  extra?: { timeoutMs?: number; progress?: boolean },
+): Promise<T> {
+  return await callBrowserGatewayRequest<T>("browser.request", opts, params, extra);
+}
+
+export async function callBrowserReadRequest<T>(
+  opts: BrowserParentOpts,
+  params: BrowserReadRequestParams,
+  extra?: { timeoutMs?: number; progress?: boolean },
+): Promise<T> {
+  return await callBrowserGatewayRequest<T>("browser.readRequest", opts, params, extra);
 }
 
 export async function callBrowserResize(

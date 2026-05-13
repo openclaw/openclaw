@@ -28,7 +28,11 @@ import {
   jsonActError,
 } from "./agent.act.errors.js";
 import { registerBrowserAgentActHookRoutes } from "./agent.act.hooks.js";
-import { normalizeActRequest, validateBatchTargetIds } from "./agent.act.normalize.js";
+import {
+  canonicalizeActionTargetIds,
+  normalizeActRequest,
+  validateBatchTargetIds,
+} from "./agent.act.normalize.js";
 import { type ActKind, isActKind } from "./agent.act.shared.js";
 import {
   readBody,
@@ -423,7 +427,10 @@ export function registerBrowserAgentActRoutes(
               ...extra,
             });
           };
-          if (action.targetId && action.targetId !== tab.targetId) {
+          const acceptedActionTargetIds = new Set(
+            [tab.targetId, targetId].filter((value): value is string => Boolean(value)),
+          );
+          if (action.targetId && !acceptedActionTargetIds.has(action.targetId)) {
             return jsonActError(
               res,
               403,
@@ -640,21 +647,26 @@ export function registerBrowserAgentActRoutes(
           if (!pw) {
             return;
           }
-          if (action.kind === "batch") {
-            const targetIdError = validateBatchTargetIds(action.actions, tab.targetId);
+          const canonicalAction = canonicalizeActionTargetIds(action, tab.targetId, [
+            ...acceptedActionTargetIds,
+          ]);
+          if (canonicalAction.kind === "batch") {
+            const targetIdError = validateBatchTargetIds(canonicalAction.actions, tab.targetId, [
+              ...acceptedActionTargetIds,
+            ]);
             if (targetIdError) {
               return jsonActError(res, 403, ACT_ERROR_CODES.targetIdMismatch, targetIdError);
             }
           }
           const result = await pw.executeActViaPlaywright({
             cdpUrl,
-            action,
+            action: canonicalAction,
             targetId: tab.targetId,
             evaluateEnabled,
             ssrfPolicy,
             signal: req.signal,
           });
-          switch (action.kind) {
+          switch (canonicalAction.kind) {
             case "batch":
               return await jsonOk(
                 { results: result.results ?? [] },

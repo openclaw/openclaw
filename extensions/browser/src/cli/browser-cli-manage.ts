@@ -1,6 +1,10 @@
 import type { Command } from "commander";
 import { runCommandWithRuntime } from "../core-api.js";
-import { callBrowserRequest, type BrowserParentOpts } from "./browser-cli-shared.js";
+import {
+  callBrowserReadRequest,
+  callBrowserRequest,
+  type BrowserParentOpts,
+} from "./browser-cli-shared.js";
 import {
   danger,
   defaultRuntime,
@@ -70,7 +74,7 @@ async function fetchBrowserStatus(
   parent: BrowserParentOpts,
   profile?: string,
 ): Promise<BrowserStatus> {
-  return await callBrowserRequest<BrowserStatus>(
+  return await callBrowserReadRequest<BrowserStatus>(
     parent,
     {
       method: "GET",
@@ -174,7 +178,7 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
   });
 
   try {
-    const profiles = await callBrowserRequest<{ profiles: ProfileStatus[] }>(
+    const profiles = await callBrowserReadRequest<{ profiles: ProfileStatus[] }>(
       parent,
       { method: "GET", path: "/profiles" },
       { timeoutMs: BROWSER_MANAGE_REQUEST_TIMEOUT_MS },
@@ -194,7 +198,7 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
 
   if (status.running) {
     try {
-      const result = await callBrowserRequest<{ running: boolean; tabs: BrowserTab[] }>(
+      const result = await callBrowserReadRequest<{ running: boolean; tabs: BrowserTab[] }>(
         parent,
         {
           method: "GET",
@@ -220,7 +224,7 @@ async function runBrowserDoctor(parent: BrowserParentOpts, profile?: string, dee
 
   if (deep && status.running) {
     try {
-      const result = await callBrowserRequest<
+      const result = await callBrowserReadRequest<
         | { ok: true; format: "aria"; nodes?: unknown[] }
         | { ok: true; format: "ai"; snapshot?: string }
       >(

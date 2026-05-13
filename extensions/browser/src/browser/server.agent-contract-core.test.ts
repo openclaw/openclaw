@@ -188,6 +188,55 @@ describe("browser control server", () => {
   );
 
   it(
+    "accepts suggested tab aliases as matching top-level action targetIds",
+    async () => {
+      const base = await startServerAndBase();
+      const response = await postJson<{ ok: boolean; targetId?: string }>(`${base}/act`, {
+        kind: "click",
+        targetId: "t1",
+        ref: "5",
+      });
+
+      expect(response.ok).toBe(true);
+      expect(response.targetId).toBe("abcd1234");
+      expect(pwMocks.clickViaPlaywright).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cdpUrl: state.cdpBaseUrl,
+          targetId: "abcd1234",
+          ref: "5",
+        }),
+      );
+    },
+    slowTimeoutMs,
+  );
+
+  it(
+    "accepts suggested tab aliases as matching batched action targetIds",
+    async () => {
+      const base = await startServerAndBase();
+      const response = await postJson<{ ok: boolean; targetId?: string; results?: unknown[] }>(
+        `${base}/act`,
+        {
+          kind: "batch",
+          targetId: "t1",
+          actions: [{ kind: "click", targetId: "t1", ref: "5" }],
+        },
+      );
+
+      expect(response.ok).toBe(true);
+      expect(response.targetId).toBe("abcd1234");
+      expect(pwMocks.batchViaPlaywright).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cdpUrl: state.cdpBaseUrl,
+          targetId: "abcd1234",
+          actions: [expect.objectContaining({ kind: "click", targetId: "abcd1234", ref: "5" })],
+        }),
+      );
+    },
+    slowTimeoutMs,
+  );
+
+  it(
     "returns the replacement targetId after an action-triggered target swap",
     async () => {
       const base = await startServerAndBase();

@@ -22,6 +22,7 @@ const runtimeApiMocks = vi.hoisted(() => ({
     execute: vi.fn(async () => ({ type: "json", value: { ok: true } })),
   })),
   collectBrowserSecurityAuditFindings: vi.fn(() => []),
+  handleBrowserGatewayReadRequest: vi.fn(),
   handleBrowserGatewayRequest: vi.fn(),
   registerBrowserCli: vi.fn(),
   runBrowserProxyCommand: vi.fn(async () => "ok"),
@@ -35,6 +36,7 @@ vi.mock("./register.runtime.js", async () => {
     collectBrowserSecurityAuditFindings: runtimeApiMocks.collectBrowserSecurityAuditFindings,
     createBrowserPluginService: runtimeApiMocks.createBrowserPluginService,
     createBrowserTool: runtimeApiMocks.createBrowserTool,
+    handleBrowserGatewayReadRequest: runtimeApiMocks.handleBrowserGatewayReadRequest,
     handleBrowserGatewayRequest: runtimeApiMocks.handleBrowserGatewayRequest,
     runBrowserProxyCommand: runtimeApiMocks.runBrowserProxyCommand,
   };
@@ -158,11 +160,11 @@ describe("browser plugin", () => {
     expect(runtimeApiMocks.registerBrowserCli).toHaveBeenCalledWith({});
   });
 
-  it("registers browser.request as an admin gateway method and lazy-loads handler", async () => {
+  it("registers browser gateway methods with least privilege scopes and lazy-loads handlers", async () => {
     const { api, registerGatewayMethod } = createApi();
     registerBrowserPlugin(api);
 
-    expect(registerGatewayMethod).toHaveBeenCalledTimes(1);
+    expect(registerGatewayMethod).toHaveBeenCalledTimes(2);
     expect(mockCallArg(registerGatewayMethod)).toBe("browser.request");
     const handler = mockCallArg(registerGatewayMethod, 0, 1) as (request: {
       method: string;
@@ -171,9 +173,28 @@ describe("browser plugin", () => {
     expect(mockCallArg(registerGatewayMethod, 0, 2)).toEqual({
       scope: "operator.admin",
     });
-    await handler({ method: "browser.request" });
+    expect(registerGatewayMethod).toHaveBeenCalledWith(
+      "browser.readRequest",
+      expect.any(Function),
+      {
+        scope: "operator.read",
+      },
+    );
+
+    const requestHandler = registerGatewayMethod.mock.calls.find(
+      ([method]) => method === "browser.request",
+    )?.[1];
+    await (requestHandler ?? handler)({ method: "browser.request" });
     expect(runtimeApiMocks.handleBrowserGatewayRequest).toHaveBeenCalledWith({
       method: "browser.request",
+    });
+
+    const readHandler = registerGatewayMethod.mock.calls.find(
+      ([method]) => method === "browser.readRequest",
+    )?.[1];
+    await readHandler({ method: "browser.readRequest" });
+    expect(runtimeApiMocks.handleBrowserGatewayReadRequest).toHaveBeenCalledWith({
+      method: "browser.readRequest",
     });
   });
 

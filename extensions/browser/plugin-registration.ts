@@ -116,5 +116,15 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
       scope: "operator.admin",
     },
   );
+  api.registerGatewayMethod(
+    "browser.readRequest",
+    async (opts) => {
+      const { handleBrowserGatewayReadRequest } = await import("./register.runtime.js");
+      return await handleBrowserGatewayReadRequest(opts);
+    },
+    {
+      scope: "operator.read",
+    },
+  );
   api.registerService(createLazyBrowserPluginService());
 }

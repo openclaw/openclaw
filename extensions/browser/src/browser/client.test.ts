@@ -345,6 +345,7 @@ describe("browser client", () => {
     expect(deepDoctor?.init?.timeoutMs).toBe(10_000);
     const open = calls.find((c) => c.url.endsWith("/tabs/open"));
     expect(open?.init?.method).toBe("POST");
+    expect(open?.init?.timeoutMs).toBe(60_000);
 
     const screenshotCalls = calls.filter((c) => c.url.endsWith("/screenshot"));
     const screenshot = screenshotCalls[0];

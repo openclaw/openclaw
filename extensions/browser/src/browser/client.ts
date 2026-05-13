@@ -6,6 +6,7 @@ import type {
   BrowserTransport,
   SnapshotAriaNode,
 } from "./client.types.js";
+import { DEFAULT_BROWSER_OPEN_TIMEOUT_MS } from "./constants.js";
 import type { BrowserDoctorReport } from "./doctor.js";
 
 export type { BrowserStatus, BrowserTab, BrowserTransport } from "./client.types.js";
@@ -243,7 +244,7 @@ export async function browserOpenTab(
     timeoutMs:
       typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
         ? Math.max(1, Math.floor(opts.timeoutMs))
-        : 15000,
+        : DEFAULT_BROWSER_OPEN_TIMEOUT_MS,
   });
 }
 

@@ -44,7 +44,10 @@ import {
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
 } from "./browser-tool.runtime.js";
-import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "./browser/constants.js";
+import {
+  DEFAULT_BROWSER_OPEN_TIMEOUT_MS,
+  DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS,
+} from "./browser/constants.js";
 
 const browserToolDeps = {
   browserAct,
@@ -305,6 +308,7 @@ async function callBrowserProxy(params: {
     {
       nodeId: params.nodeId,
       command: "browser.proxy",
+      timeoutMs: gatewayTimeoutMs,
       params: {
         method: params.method,
         path: params.path,
@@ -380,6 +384,7 @@ function shouldPreferHostForProfile(profileName: string | undefined) {
 }
 
 const DEFAULT_EXISTING_SESSION_MANAGE_TIMEOUT_MS = 45_000;
+const DEFAULT_MANAGED_BROWSER_OPEN_TIMEOUT_MS = DEFAULT_BROWSER_OPEN_TIMEOUT_MS;
 const EXISTING_SESSION_MANAGE_ACTIONS = new Set([
   "status",
   "start",
@@ -413,6 +418,22 @@ function usesExistingSessionManageFlow(params: { action: string; profileName?: s
 function readToolTimeoutMs(params: Record<string, unknown>) {
   return typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
     ? Math.max(1, Math.floor(params.timeoutMs))
+    : undefined;
+}
+
+function resolveToolTimeoutMs(params: {
+  action: string;
+  profileName?: string;
+  requestedTimeoutMs?: number;
+}) {
+  if (params.action === "open" || params.action === "start") {
+    return Math.max(params.requestedTimeoutMs ?? 0, DEFAULT_MANAGED_BROWSER_OPEN_TIMEOUT_MS);
+  }
+  if (params.requestedTimeoutMs !== undefined) {
+    return params.requestedTimeoutMs;
+  }
+  return usesExistingSessionManageFlow(params)
+    ? DEFAULT_EXISTING_SESSION_MANAGE_TIMEOUT_MS
     : undefined;
 }
 
@@ -516,11 +537,11 @@ export function createBrowserTool(opts?: {
             return proxy.result;
           }
         : null;
-      const toolTimeoutMs =
-        requestedTimeoutMs ??
-        (usesExistingSessionManageFlow({ action, profileName: profile })
-          ? DEFAULT_EXISTING_SESSION_MANAGE_TIMEOUT_MS
-          : undefined);
+      const toolTimeoutMs = resolveToolTimeoutMs({
+        action,
+        profileName: profile,
+        requestedTimeoutMs,
+      });
       const touchTrackedTab = (targetId: string | undefined) => {
         if (proxyRequest || !targetId) {
           return;
