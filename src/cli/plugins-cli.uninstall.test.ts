@@ -33,7 +33,7 @@ function expectLatestUninstallPlanParams(expected: {
   deleteFiles: boolean;
   channelIds?: unknown;
 }) {
-  const params = planPluginUninstall.mock.calls.at(-1)?.[0] as
+  const params = planPluginUninstall.mock.calls[planPluginUninstall.mock.calls.length - 1]?.[0] as
     | { pluginId?: string; deleteFiles?: boolean; channelIds?: unknown }
     | undefined;
   if (params === undefined) {
