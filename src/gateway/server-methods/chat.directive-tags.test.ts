@@ -412,8 +412,17 @@ function getMessageContent(payload: unknown): Array<Record<string, any>> {
   return Array.isArray(content) ? (content as Array<Record<string, any>>) : [];
 }
 
+function mockCallAt(
+  mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } },
+  index: number,
+): ReadonlyArray<unknown> | undefined {
+  const calls = mock.mock.calls;
+  const normalizedIndex = index < 0 ? calls.length + index : index;
+  return calls[normalizedIndex];
+}
+
 function lastRespondCall(respond: ReturnType<typeof vi.fn>) {
-  return respond.mock.calls.at(-1) as
+  return mockCallAt(respond, -1) as
     | [boolean, Record<string, any> | undefined, Record<string, any> | undefined]
     | undefined;
 }
@@ -433,13 +442,13 @@ function responseErrorMessage(error: unknown): string {
 }
 
 function lastBroadcastPayload(context: ChatContext): Record<string, any> | undefined {
-  const chatCall = (context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls.at(-1);
+  const chatCall = mockCallAt(context.broadcast as unknown as ReturnType<typeof vi.fn>, -1);
   expect(chatCall?.[0]).toBe("chat");
   return chatCall?.[1] as Record<string, any> | undefined;
 }
 
 function lastNodeSendCall(context: ChatContext) {
-  return (context.nodeSendToSession as unknown as ReturnType<typeof vi.fn>).mock.calls.at(-1) as
+  return mockCallAt(context.nodeSendToSession as unknown as ReturnType<typeof vi.fn>, -1) as
     | [string, string, Record<string, any>]
     | undefined;
 }
@@ -576,7 +585,7 @@ async function runNonStreamingChatSend(params: {
   waitForCompletion?: boolean;
   waitForDedupe?: boolean;
   waitFor?: NonStreamingChatSendWaitFor;
-}) {
+}): Promise<Record<string, any> | undefined> {
   const sendParams: {
     sessionKey: string;
     message: string;
@@ -627,11 +636,9 @@ async function runNonStreamingChatSend(params: {
     ).toBe(1);
   });
 
-  const chatCall = (params.context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls.at(
-    0,
-  );
+  const chatCall = mockCallAt(params.context.broadcast as unknown as ReturnType<typeof vi.fn>, 0);
   expect(chatCall?.[0]).toBe("chat");
-  return chatCall?.[1];
+  return chatCall?.[1] as Record<string, any> | undefined;
 }
 
 describe("chat directive tag stripping for non-streaming final payloads", () => {
@@ -676,17 +683,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.agentRunId = "run-current";
     const respond = vi.fn();
     const context = createChatContext();
-    context.chatAbortControllers.set(
-      "run-same-session",
-      {
-        controller: new AbortController(),
-        sessionId: "sess-prev",
-        sessionKey: "main",
-        startedAtMs: Date.now(),
-        expiresAtMs: Date.now() + 10_000,
-      },
-      5000,
-    );
+    context.chatAbortControllers.set("run-same-session", {
+      controller: new AbortController(),
+      sessionId: "sess-prev",
+      sessionKey: "main",
+      startedAtMs: Date.now(),
+      expiresAtMs: Date.now() + 10_000,
+    });
     context.chatAbortControllers.set("run-other-session", {
       controller: new AbortController(),
       sessionId: "sess-other",
@@ -1251,7 +1254,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
 
     expect(respond).toHaveBeenCalled();
-    const chatCall = (context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls.at(-1);
+    const chatCall = mockCallAt(context.broadcast as unknown as ReturnType<typeof vi.fn>, -1);
     expect(chatCall?.[0]).toBe("chat");
     expect(extractFirstTextBlock(chatCall?.[1])).toBe("hello");
   });
@@ -3133,9 +3136,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(payload).toBeUndefined();
     expect(error?.code).toBe(ErrorCodes.UNAVAILABLE);
     expect(responseErrorMessage(error)).toMatch(/ENOSPC|non-image attachments/i);
-    const unavailableLogCall = (
-      context.logGateway.error as unknown as ReturnType<typeof vi.fn>
-    ).mock.calls.at(0) as [string, Record<string, string>] | undefined;
+    const unavailableLogCall = mockCallAt(
+      context.logGateway.error as unknown as ReturnType<typeof vi.fn>,
+      0,
+    ) as [string, Record<string, string>] | undefined;
     expect(unavailableLogCall?.[0]).toBe("chat.send attachment parse/stage failed");
     expect(unavailableLogCall?.[1].consoleMessage).toContain(
       "chat.send attachment parse/stage failed: MediaOffloadError",

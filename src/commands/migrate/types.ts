@@ -7,6 +7,7 @@ export type MigrateCommonOptions = {
   overwrite?: boolean;
   skills?: string[];
   plugins?: string[];
+  verifyPluginApps?: boolean;
   json?: boolean;
 };
 

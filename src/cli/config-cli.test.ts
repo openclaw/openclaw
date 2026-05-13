@@ -127,9 +127,32 @@ function makeInvalidSnapshot(params: {
   };
 }
 
+function firstMockArg(mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } }): unknown {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error("expected mock to have at least one call");
+  }
+  return call[0];
+}
+
+function lastMockArg(mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } }): unknown {
+  const calls = mock.mock.calls;
+  const call = calls[calls.length - 1];
+  if (!call) {
+    throw new Error("expected mock to have at least one call");
+  }
+  return call[0];
+}
+
+function parseLastLogPayload(): unknown {
+  const raw = lastMockArg(mockLog);
+  expect(typeof raw).toBe("string");
+  return JSON.parse(String(raw)) as unknown;
+}
+
 async function runValidateJsonAndGetPayload() {
   await expect(runConfigCommand(["config", "validate", "--json"])).rejects.toThrow("__exit__:1");
-  const raw = mockLog.mock.calls.at(0)?.[0];
+  const raw = firstMockArg(mockLog);
   expect(typeof raw).toBe("string");
   return JSON.parse(String(raw)) as {
     valid: boolean;
@@ -144,17 +167,17 @@ async function runValidateJsonAndGetPayload() {
 }
 
 function firstWrittenConfig(): OpenClawConfig {
-  const written = mockWriteConfigFile.mock.calls.at(0)?.[0];
+  const written = firstMockArg(mockWriteConfigFile);
   if (!written) {
     throw new Error("expected written config");
   }
-  return written;
+  return written as OpenClawConfig;
 }
 
 function firstWriteConfigOptions():
   | { unsetPaths?: string[][]; explicitSetPaths?: string[][] }
   | undefined {
-  return mockWriteConfigFile.mock.calls.at(0)?.[1];
+  return mockWriteConfigFile.mock.calls[0]?.[1];
 }
 
 function requireWriteOptions(): { unsetPaths?: string[][]; explicitSetPaths?: string[][] } {
@@ -166,15 +189,15 @@ function requireWriteOptions(): { unsetPaths?: string[][]; explicitSetPaths?: st
 }
 
 function expectLogIncludes(text: string) {
-  expect(mockLog.mock.calls.some((call) => String(call[0]).includes(text))).toBe(true);
+  expect(mockLog.mock.calls.map((call) => String(call[0])).join("\n")).toContain(text);
 }
 
 function expectLogExcludes(text: string) {
-  expect(mockLog.mock.calls.some((call) => String(call[0]).includes(text))).toBe(false);
+  expect(mockLog.mock.calls.map((call) => String(call[0])).join("\n")).not.toContain(text);
 }
 
 function expectErrorIncludes(text: string) {
-  expect(mockError.mock.calls.some((call) => String(call[0]).includes(text))).toBe(true);
+  expect(mockError.mock.calls.map((call) => String(call[0])).join("\n")).toContain(text);
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -473,6 +496,116 @@ describe("config cli", () => {
       expectErrorIncludes("openclaw plugins update <plugin-id>");
     });
 
+    it("rejects auto-managed meta.lastTouchedVersion config updates (#80849)", async () => {
+      await expect(
+        runConfigCommand([
+          "config",
+          "set",
+          "meta.lastTouchedVersion",
+          "BOGUS-NOT-A-VERSION",
+          "--dry-run",
+        ]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expectErrorIncludes("meta.lastTouchedVersion");
+      expectErrorIncludes("auto-managed");
+    });
+
+    it("rejects auto-managed meta.lastTouchedAt config updates (#80849)", async () => {
+      await expect(
+        runConfigCommand([
+          "config",
+          "set",
+          "meta.lastTouchedAt",
+          "1999-01-01T00:00:00.000Z",
+          "--dry-run",
+        ]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expectErrorIncludes("meta.lastTouchedAt");
+      expectErrorIncludes("auto-managed");
+    });
+
+    it("rejects auto-managed meta paths via config unset (#80849)", async () => {
+      await expect(runConfigCommand(["config", "unset", "meta.lastTouchedAt"])).rejects.toThrow(
+        "__exit__:1",
+      );
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expectErrorIncludes("meta.lastTouchedAt");
+      expectErrorIncludes("auto-managed");
+    });
+
+    it("rejects parent meta path mutations when payload merges an auto-managed child (#80849)", async () => {
+      await expect(
+        runConfigCommand([
+          "config",
+          "set",
+          "meta",
+          '{"lastTouchedVersion":"BOGUS-NOT-A-VERSION"}',
+          "--strict-json",
+          "--merge",
+          "--dry-run",
+        ]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expectErrorIncludes("meta.lastTouchedVersion");
+      expectErrorIncludes("auto-managed");
+    });
+
+    it("rejects parent meta path replacement that would clobber auto-managed children (#80849)", async () => {
+      await expect(
+        runConfigCommand([
+          "config",
+          "set",
+          "meta",
+          '{"lastTouchedAt":"1999-01-01T00:00:00.000Z"}',
+          "--strict-json",
+          "--replace",
+          "--dry-run",
+        ]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expectErrorIncludes("meta.lastTouchedAt");
+      expectErrorIncludes("auto-managed");
+    });
+
+    it("rejects config unset meta because deleting the parent removes auto-managed children (#80849)", async () => {
+      await expect(runConfigCommand(["config", "unset", "meta"])).rejects.toThrow("__exit__:1");
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expectErrorIncludes("meta.lastTouchedVersion");
+      expectErrorIncludes("auto-managed");
+    });
+
+    it("does not auto-managed-reject parent meta merges that leave the managed children alone (#80849)", async () => {
+      // The merge payload only references a non-auto-managed key; the auto-managed
+      // guard MUST NOT fire — otherwise a future schema-valid sibling of
+      // meta.lastTouched* would be collateral-rejected. Downstream layers (schema
+      // validator, etc.) may still legitimately reject this; we only care that the
+      // rejection was NOT from our auto-managed guard.
+      setSnapshot({}, {});
+      try {
+        await runConfigCommand([
+          "config",
+          "set",
+          "meta",
+          '{"unrelated":"x"}',
+          "--strict-json",
+          "--merge",
+          "--dry-run",
+        ]);
+      } catch {
+        // Tolerated: any downstream rejection. Inspected below.
+      }
+      const errorMessages = mockError.mock.calls.map((call) => String(call[0])).join("\n");
+      expect(errorMessages).not.toContain("auto-managed");
+    });
+
     it("rejects protected model map replacement unless explicitly requested", async () => {
       const resolved: OpenClawConfig = {
         agents: {
@@ -767,9 +900,7 @@ describe("config cli", () => {
       expect(mockExit).not.toHaveBeenCalled();
       expect(mockError).not.toHaveBeenCalled();
       expect(defaultRuntime.writeJson).toHaveBeenCalledTimes(1);
-      const raw = mockLog.mock.calls.at(-1)?.[0];
-      expect(typeof raw).toBe("string");
-      const payload = JSON.parse(String(raw)) as {
+      const payload = parseLastLogPayload() as {
         properties?: Record<string, unknown>;
       };
       const gateway = payload.properties?.gateway as
@@ -818,7 +949,7 @@ describe("config cli", () => {
       await runConfigCommand(["config", "schema"]);
 
       expect(defaultRuntime.writeJson).toHaveBeenCalledTimes(1);
-      const payload = JSON.parse(String(mockLog.mock.calls.at(-1)?.[0])) as {
+      const payload = parseLastLogPayload() as {
         properties?: Record<string, unknown>;
       };
       expect(payload.properties?.$schema).toEqual({ type: "string" });
@@ -1146,9 +1277,7 @@ describe("config cli", () => {
       ).rejects.toThrow("__exit__:1");
 
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
-      const raw = mockLog.mock.calls.at(-1)?.[0];
-      expect(typeof raw).toBe("string");
-      const payload = JSON.parse(String(raw)) as {
+      const payload = parseLastLogPayload() as {
         ok: boolean;
         checks: { schema: boolean; resolvability: boolean; resolvabilityComplete: boolean };
         errors?: Array<{ kind: string; message: string; ref?: string }>;
@@ -1972,9 +2101,7 @@ describe("config cli", () => {
         "--json",
       ]);
 
-      const raw = mockLog.mock.calls.at(-1)?.[0];
-      expect(typeof raw).toBe("string");
-      const payload = JSON.parse(String(raw)) as {
+      const payload = parseLastLogPayload() as {
         ok: boolean;
         checks: { schema: boolean; resolvability: boolean; resolvabilityComplete: boolean };
         refsChecked: number;
@@ -2021,9 +2148,7 @@ describe("config cli", () => {
         "--json",
       ]);
 
-      const raw = mockLog.mock.calls.at(-1)?.[0];
-      expect(typeof raw).toBe("string");
-      const payload = JSON.parse(String(raw)) as {
+      const payload = parseLastLogPayload() as {
         ok: boolean;
         checks: { resolvability: boolean; resolvabilityComplete: boolean };
         refsChecked: number;
@@ -2064,9 +2189,7 @@ describe("config cli", () => {
         ]),
       ).rejects.toThrow("__exit__:1");
 
-      const raw = mockLog.mock.calls.at(-1)?.[0];
-      expect(typeof raw).toBe("string");
-      const payload = JSON.parse(String(raw)) as {
+      const payload = parseLastLogPayload() as {
         ok: boolean;
         errors?: Array<{ kind: string; message: string; ref?: string }>;
       };
@@ -2099,9 +2222,7 @@ describe("config cli", () => {
         ]),
       ).rejects.toThrow("__exit__:1");
 
-      const raw = mockLog.mock.calls.at(-1)?.[0];
-      expect(typeof raw).toBe("string");
-      const payload = JSON.parse(String(raw)) as {
+      const payload = parseLastLogPayload() as {
         ok: boolean;
         errors?: Array<{ kind: string; message: string; ref?: string }>;
       };
@@ -2140,9 +2261,7 @@ describe("config cli", () => {
         ]),
       ).rejects.toThrow("__exit__:1");
 
-      const raw = mockLog.mock.calls.at(-1)?.[0];
-      expect(typeof raw).toBe("string");
-      const payload = JSON.parse(String(raw)) as {
+      const payload = parseLastLogPayload() as {
         ok: boolean;
         errors?: Array<{ kind: string; message: string; ref?: string }>;
       };

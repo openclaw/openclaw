@@ -2,6 +2,7 @@ import fs from "node:fs";
 import type { Command } from "commander";
 import JSON5 from "json5";
 import { readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
+import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
 import {
   normalizeAgentModelMapForConfig,
@@ -1371,6 +1372,106 @@ function formatPluginInstallConfigSetError(): string {
   ].join("\n");
 }
 
+function isAutoManagedMetaPath(path: ReadonlyArray<PathSegment>): boolean {
+  return AUTO_MANAGED_CONFIG_META_PATHS.some((managedPath) => pathStartsWith(path, managedPath));
+}
+
+function valueHasAutoManagedChild(value: unknown, childPath: ReadonlyArray<PathSegment>): boolean {
+  let cursor: unknown = value;
+  for (const segment of childPath) {
+    if (cursor === null || typeof cursor !== "object" || Array.isArray(cursor)) {
+      return false;
+    }
+    if (typeof segment !== "string") {
+      return false;
+    }
+    const record = cursor as Record<string, unknown>;
+    if (!Object.prototype.hasOwnProperty.call(record, segment)) {
+      return false;
+    }
+    cursor = record[segment];
+  }
+  return cursor !== undefined;
+}
+
+function operationClobbersAncestorChild(
+  operation: ConfigSetOperation,
+  managedPath: ReadonlyArray<PathSegment>,
+  options: { merge?: boolean },
+): boolean {
+  if (operation.mutation === "delete") {
+    return true;
+  }
+  const childPath = managedPath.slice(operation.requestedPath.length);
+  const isMerge =
+    operation.mutation === "merge" || (Boolean(options.merge) && operation.mutation !== "replace");
+  if (isMerge) {
+    return valueHasAutoManagedChild(operation.value, childPath);
+  }
+  // Default set/replace at an ancestor path clobbers every descendant including
+  // the auto-managed leaf, even when the payload doesn't name it.
+  return true;
+}
+
+function findAutoManagedMetaTargets(
+  operations: ReadonlyArray<ConfigSetOperation>,
+  options: { merge?: boolean } = {},
+): readonly PathSegment[][] {
+  const matches: PathSegment[][] = [];
+  const seen = new Set<string>();
+  const record = (path: ReadonlyArray<PathSegment>): void => {
+    const segments = [...path];
+    const key = toDotPath(segments);
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    matches.push(segments);
+  };
+  for (const operation of operations) {
+    if (isAutoManagedMetaPath(operation.requestedPath)) {
+      record(operation.requestedPath);
+      continue;
+    }
+    for (const managedPath of AUTO_MANAGED_CONFIG_META_PATHS) {
+      if (operation.requestedPath.length >= managedPath.length) {
+        continue;
+      }
+      if (!pathStartsWith(managedPath, operation.requestedPath)) {
+        continue;
+      }
+      if (operationClobbersAncestorChild(operation, managedPath, options)) {
+        record(managedPath);
+      }
+    }
+  }
+  return matches;
+}
+
+function findAutoManagedMetaUnsetTargets(
+  path: ReadonlyArray<PathSegment>,
+): readonly PathSegment[][] {
+  return findAutoManagedMetaTargets([
+    {
+      inputMode: "json",
+      requestedPath: [...path],
+      setPath: [...path],
+      value: undefined,
+      mutation: "delete",
+    },
+  ]);
+}
+
+function formatAutoManagedMetaError(paths: readonly PathSegment[][]): string {
+  const targets = paths.map((path) => toDotPath(path));
+  const subject = targets.length === 1 ? targets[0] : targets.join(", ");
+  return [
+    `${subject} is auto-managed by OpenClaw and cannot be edited; the value would be overwritten on the next config write.`,
+    "",
+    "These fields are stamped on every config write to record the OpenClaw version and timestamp that produced the file.",
+  ].join("\n");
+}
+
 function collectDryRunSchemaErrors(params: {
   config: OpenClawConfig;
   operations: ReadonlyArray<ConfigSetOperation>;
@@ -1451,6 +1552,12 @@ async function runConfigOperations(params: {
     )
   ) {
     throw new Error(formatPluginInstallConfigSetError());
+  }
+  const autoManagedMetaTargets = findAutoManagedMetaTargets(operations, {
+    merge: options.merge,
+  });
+  if (autoManagedMetaTargets.length > 0) {
+    throw new Error(formatAutoManagedMetaError(autoManagedMetaTargets));
   }
   const snapshot = await loadValidConfig(runtime);
   // Use snapshot.resolved (config after $include and ${ENV} resolution, but BEFORE runtime defaults)
@@ -1767,6 +1874,10 @@ export async function runConfigUnset(opts: { path: string; runtime?: RuntimeEnv 
   const runtime = opts.runtime ?? defaultRuntime;
   try {
     const parsedPath = parseRequiredPath(opts.path);
+    const autoManagedUnsetTargets = findAutoManagedMetaUnsetTargets(parsedPath);
+    if (autoManagedUnsetTargets.length > 0) {
+      throw new Error(formatAutoManagedMetaError(autoManagedUnsetTargets));
+    }
     const snapshot = await loadValidConfig(runtime);
     // Use snapshot.resolved (config after $include and ${ENV} resolution, but BEFORE runtime defaults)
     // instead of snapshot.config (runtime-merged with defaults).

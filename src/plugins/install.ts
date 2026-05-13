@@ -81,6 +81,10 @@ function formatUnresolvedOpenClawPeerLinkError(packageName: string): string {
   return `Installed plugin ${packageName} declares openclaw as a peer dependency, but OpenClaw could not create a plugin-local node_modules/openclaw link. Run from a packaged OpenClaw install or reinstall OpenClaw, then retry.`;
 }
 
+function isNpmAliasOverrideComparatorError(result: { stdout: string; stderr: string }): boolean {
+  return `${result.stderr}\n${result.stdout}`.includes("Invalid comparator: npm:");
+}
+
 const MISSING_EXTENSIONS_ERROR =
   'package.json missing openclaw.extensions; update the plugin package to include openclaw.extensions (for example ["./dist/index.js"]). See https://docs.openclaw.ai/help/troubleshooting#plugin-install-fails-with-missing-openclaw-extensions';
 const PLUGIN_ARCHIVE_ROOT_MARKERS = [
@@ -485,34 +489,47 @@ async function installPluginFromManagedNpmRoot(
       logger.info?.(`Repaired stale openclaw peer dependency in ${npmRoot}`);
     }
   }
+  const managedOverrides = await readOpenClawManagedNpmRootOverrides();
   await upsertManagedNpmRootDependency({
     npmRoot,
     packageName: params.packageName,
     dependencySpec: params.dependencySpec,
-    managedOverrides: await readOpenClawManagedNpmRootOverrides(),
+    managedOverrides,
   });
-  const install = await runCommandWithTimeout(
-    [
-      "npm",
-      ...createSafeNpmInstallArgs({
-        omitDev: true,
-        omitPeer: true,
-        loglevel: "error",
-        legacyPeerDeps: true,
-        noAudit: true,
-        noFund: true,
-      }),
-    ],
-    {
-      cwd: npmRoot,
-      timeoutMs: Math.max(timeoutMs, 300_000),
-      env: createSafeNpmInstallEnv(process.env, {
-        legacyPeerDeps: true,
-        packageLock: true,
-        quiet: true,
-      }),
-    },
-  );
+  const npmInstallArgs = [
+    "npm",
+    ...createSafeNpmInstallArgs({
+      omitDev: true,
+      omitPeer: true,
+      loglevel: "error",
+      legacyPeerDeps: true,
+      noAudit: true,
+      noFund: true,
+    }),
+  ];
+  const npmInstallOptions = {
+    cwd: npmRoot,
+    timeoutMs: Math.max(timeoutMs, 300_000),
+    env: createSafeNpmInstallEnv(process.env, {
+      legacyPeerDeps: true,
+      packageLock: true,
+      quiet: true,
+    }),
+  };
+  let install = await runCommandWithTimeout(npmInstallArgs, npmInstallOptions);
+  if (install.code !== 0 && isNpmAliasOverrideComparatorError(install)) {
+    logger.warn?.(
+      "npm rejected managed npm alias overrides; retrying plugin install without alias overrides for this npm version.",
+    );
+    await upsertManagedNpmRootDependency({
+      npmRoot,
+      packageName: params.packageName,
+      dependencySpec: params.dependencySpec,
+      managedOverrides,
+      omitUnsupportedManagedOverrides: true,
+    });
+    install = await runCommandWithTimeout(npmInstallArgs, npmInstallOptions);
+  }
   if (install.code !== 0) {
     await rollbackManagedNpmPluginInstall({
       npmRoot,

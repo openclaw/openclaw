@@ -162,7 +162,7 @@ function requireSessionKey(value: string | undefined, label: string): string {
 }
 
 function firstAgentOpts(callIndex = 0): Record<string, unknown> {
-  const call = agentCommand.mock.calls.at(callIndex);
+  const call = agentCommand.mock.calls[callIndex];
   if (!call) {
     throw new Error(`expected agentCommand call #${callIndex + 1}`);
   }
@@ -1148,7 +1148,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       input: [{ type: "function_call_output", call_id: "call_1", output: "Sunny, 70F." }],
     });
     expect(secondResponse.status).toBe(200);
-    const secondOpts = agentCommand.mock.calls.at(1)?.[0] as { sessionKey?: string } | undefined;
+    const secondOpts = firstAgentOpts(1) as { sessionKey?: string } | undefined;
     expect(secondOpts?.sessionKey).toBe(firstSessionKey);
     await ensureResponseConsumed(secondResponse);
   });
@@ -1183,7 +1183,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
       input: "hello again",
     });
     expect(secondResponse.status).toBe(200);
-    const secondOpts = agentCommand.mock.calls.at(1)?.[0] as { sessionKey?: string } | undefined;
+    const secondOpts = firstAgentOpts(1) as { sessionKey?: string } | undefined;
     expect(secondOpts?.sessionKey).toBe(firstOpts?.sessionKey);
     await ensureResponseConsumed(secondResponse);
   });

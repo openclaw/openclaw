@@ -210,25 +210,49 @@ function compactText(node: Element | null): string | undefined {
   return node?.textContent?.trim().replace(/\s+/g, " ");
 }
 
+function textItems(container: Element, selector: string): Array<string | undefined> {
+  return [...container.querySelectorAll(selector)].map((node) => node.textContent?.trim());
+}
+
 describe("dreaming view", () => {
   it("renders the active dream scene chrome and status", () => {
     const container = renderInto(buildProps({ dreamingOf: "reindexing old chats\u2026" }));
 
     expectElement(container, ".dreams__lobster svg");
 
-    const zs = container.querySelectorAll(".dreams__z");
-    expect(zs.length).toBe(3);
+    expect(textItems(container, ".dreams__z")).toEqual(["z", "z", "Z"]);
 
-    const stars = container.querySelectorAll(".dreams__star");
-    expect(stars.length).toBe(12);
+    const stars = [...container.querySelectorAll<HTMLElement>(".dreams__star")].map((star) => ({
+      top: star.style.top,
+      left: star.style.left,
+      size: star.style.width,
+    }));
+    expect(stars).toEqual([
+      { top: "8%", left: "15%", size: "3px" },
+      { top: "12%", left: "72%", size: "2px" },
+      { top: "22%", left: "35%", size: "3px" },
+      { top: "18%", left: "88%", size: "2px" },
+      { top: "35%", left: "8%", size: "2px" },
+      { top: "45%", left: "92%", size: "2px" },
+      { top: "55%", left: "25%", size: "3px" },
+      { top: "65%", left: "78%", size: "2px" },
+      { top: "75%", left: "45%", size: "2px" },
+      { top: "82%", left: "60%", size: "3px" },
+      { top: "30%", left: "55%", size: "2px" },
+      { top: "88%", left: "18%", size: "2px" },
+    ]);
 
     expectElement(container, ".dreams__moon");
 
-    const phases = [...container.querySelectorAll(".dreams__phase-name")].map((node) =>
-      node.textContent?.trim(),
-    );
-    expect(phases).toEqual(["Light", "Deep", "Rem"]);
-    expect(container.querySelectorAll(".dreams__phase").length).toBe(3);
+    const phases = [...container.querySelectorAll(".dreams__phase")].map((phase) => ({
+      name: phase.querySelector(".dreams__phase-name")?.textContent?.trim(),
+      off: phase.classList.contains("dreams__phase--off"),
+    }));
+    expect(phases).toEqual([
+      { name: "Light", off: false },
+      { name: "Deep", off: false },
+      { name: "Rem", off: true },
+    ]);
     expect(container.querySelector(".dreams__phase--off .dreams__phase-next")?.textContent).toBe(
       "off",
     );
@@ -236,9 +260,7 @@ describe("dreaming view", () => {
     const buttons = [...container.querySelectorAll("button")].map((node) =>
       node.textContent?.trim(),
     );
-    expect(buttons).not.toContain("Backfill");
-    expect(buttons).not.toContain("Reset");
-    expect(buttons).not.toContain("Clear Replayed");
+    expect(buttons).toEqual(["Scene", "Diary", "Advanced"]);
     expectElement(container, ".dreams__bubble");
     const text = container.querySelector(".dreams__bubble-text");
     expect(text?.textContent).toBe("reindexing old chats\u2026");
@@ -259,11 +281,15 @@ describe("dreaming view", () => {
     expectElement(idleContainer, ".dreams--idle");
 
     const unknownPhaseContainer = renderInto(buildProps({ phases: undefined }));
-    const statuses = [...unknownPhaseContainer.querySelectorAll(".dreams__phase-next")].map(
-      (node) => node.textContent?.trim(),
-    );
-    expect(statuses).toEqual(["—", "—", "—"]);
-    expect(unknownPhaseContainer.querySelectorAll(".dreams__phase--off").length).toBe(0);
+    const statuses = [...unknownPhaseContainer.querySelectorAll(".dreams__phase")].map((phase) => ({
+      status: phase.querySelector(".dreams__phase-next")?.textContent?.trim(),
+      off: phase.classList.contains("dreams__phase--off"),
+    }));
+    expect(statuses).toEqual([
+      { status: "—", off: false },
+      { status: "—", off: false },
+      { status: "—", off: false },
+    ]);
 
     const errorContainer = renderInto(buildProps({ statusError: "patch failed" }));
     expect(errorContainer.querySelector(".dreams__controls-error")?.textContent?.trim()).toBe(
@@ -275,7 +301,15 @@ describe("dreaming view", () => {
     setDreamSubTab("diary");
     setDreamDiarySubTab("insights");
     const container = renderInto(buildProps());
-    expect(container.querySelectorAll(".dreams-diary__subtab").length).toBe(3);
+    const subtabs = [...container.querySelectorAll(".dreams-diary__subtab")].map((tab) => ({
+      label: tab.textContent?.trim(),
+      active: tab.classList.contains("dreams-diary__subtab--active"),
+    }));
+    expect(subtabs).toEqual([
+      { label: "Dreams", active: false },
+      { label: "Imported Insights", active: true },
+      { label: "Memory Palace", active: false },
+    ]);
     expect(compactText(container.querySelector(".dreams-diary__date"))).toBe(
       "Travel · 1 chats · 1 signals",
     );
@@ -485,10 +519,12 @@ describe("dreaming view", () => {
     const prose = [...container.querySelectorAll(".dreams-diary__para")].map((node) =>
       node.textContent?.trim(),
     );
-    expect(prose).toContain("Always use Happy Together for flights.");
-    expect(prose).toContain("Stable preferences were made explicit.");
-    expect(prose).toContain("Happy Together rule");
-    expect(prose).toContain("Use Happy Together for flights.");
+    expect(prose).toEqual([
+      "Always use Happy Together for flights.",
+      "Stable preferences were made explicit.",
+      "Happy Together rule",
+      "Use Happy Together for flights.",
+    ]);
     expect(container.querySelector(".dreams-diary__panel-title")).toBeNull();
     setDreamSubTab("scene");
   });
@@ -524,17 +560,16 @@ describe("dreaming view", () => {
         ].join("\n"),
       }),
     );
-    expect(container.querySelectorAll(".dreams-diary__day-chip").length).toBe(2);
+    const dayChips = [...container.querySelectorAll(".dreams-diary__day-chip")].map((node) => ({
+      label: node.textContent?.replace(/\s+/g, "").trim(),
+      active: node.classList.contains("dreams-diary__day-chip--active"),
+    }));
+    expect(dayChips).toEqual([
+      { label: "1/2", active: true },
+      { label: "1/1", active: false },
+    ]);
     expect(container.querySelector(".dreams-diary__heatmap-cell")).toBeNull();
     expect(container.querySelector(".dreams-diary__timeline-month")).toBeNull();
-    const labels = [...container.querySelectorAll(".dreams-diary__day-chip")].map((node) =>
-      node.textContent?.replace(/\s+/g, "").trim(),
-    );
-    expect(
-      labels
-        .filter((label): label is string => Boolean(label))
-        .some((label) => /^\d+\/\d+$/.test(label)),
-    ).toBe(true);
     setDreamSubTab("scene");
   });
 
