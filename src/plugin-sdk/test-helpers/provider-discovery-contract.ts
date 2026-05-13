@@ -405,7 +405,7 @@ export function describeVllmProviderDiscoveryContract(params: {
                 },
               },
             },
-          } as OpenClawConfig,
+          } as unknown as OpenClawConfig,
           env: {
             VLLM_API_KEY: "env-vllm-key",
           } as NodeJS.ProcessEnv,
@@ -431,6 +431,61 @@ export function describeVllmProviderDiscoveryContract(params: {
       expect(buildVllmProviderMock).toHaveBeenCalledWith({
         apiKey: "env-vllm-key",
         baseUrl: "http://vllm-router.example/v1",
+      });
+    });
+
+    it("uses the provider default transport when wildcard config omits baseUrl", async () => {
+      buildVllmProviderMock.mockResolvedValueOnce({
+        baseUrl: "http://127.0.0.1:8000/v1",
+        api: "openai-completions",
+        models: [{ id: "default-transport-model", name: "Default Transport Model" }],
+      });
+
+      await expect(
+        runCatalog(state, {
+          provider: state.vllmProvider!,
+          config: {
+            agents: {
+              defaults: {
+                models: {
+                  "vllm/*": {},
+                },
+              },
+            },
+            models: {
+              providers: {
+                vllm: {
+                  apiKey: "VLLM_API_KEY",
+                  api: "openai-completions",
+                  models: [],
+                },
+              },
+            },
+          } as unknown as OpenClawConfig,
+          env: {
+            VLLM_API_KEY: "env-vllm-key",
+          } as NodeJS.ProcessEnv,
+          resolveProviderApiKey: () => ({
+            apiKey: "VLLM_API_KEY",
+            discoveryApiKey: "env-vllm-key",
+          }),
+          resolveProviderAuth: () => ({
+            apiKey: "VLLM_API_KEY",
+            discoveryApiKey: "env-vllm-key",
+            mode: "api_key",
+            source: "env",
+          }),
+        }),
+      ).resolves.toEqual({
+        provider: {
+          baseUrl: "http://127.0.0.1:8000/v1",
+          api: "openai-completions",
+          apiKey: "VLLM_API_KEY",
+          models: [{ id: "default-transport-model", name: "Default Transport Model" }],
+        },
+      });
+      expect(buildVllmProviderMock).toHaveBeenCalledWith({
+        apiKey: "env-vllm-key",
       });
     });
 

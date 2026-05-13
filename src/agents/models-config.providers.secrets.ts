@@ -2,11 +2,13 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProviderSyntheticAuthWithPlugin } from "../plugins/provider-runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
+  isKnownEnvApiKeyMarker,
   isNonSecretApiKeyMarker,
   resolveNonEnvSecretRefApiKeyMarker,
 } from "./model-auth-markers.js";
 import {
   listAuthProfilesForProvider,
+  normalizeApiKeyConfig,
   resolveApiKeyFromCredential,
   resolveApiKeyFromProfiles,
   resolveEnvApiKeyVarName,
@@ -61,6 +63,7 @@ export function createProviderApiKeyResolver(
     const fromConfig = resolveConfigBackedProviderAuth({
       provider: authProvider,
       config,
+      env,
     });
     if (fromConfig?.apiKey) {
       return {
@@ -145,6 +148,7 @@ export function createProviderAuthResolver(
     const fromConfig = resolveConfigBackedProviderAuth({
       provider: authProvider,
       config,
+      env,
     });
     if (fromConfig) {
       return {
@@ -163,7 +167,11 @@ export function createProviderAuthResolver(
   };
 }
 
-function resolveConfigBackedProviderAuth(params: { provider: string; config?: OpenClawConfig }):
+function resolveConfigBackedProviderAuth(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}):
   | {
       apiKey: string;
       discoveryApiKey?: string;
@@ -182,19 +190,51 @@ function resolveConfigBackedProviderAuth(params: { provider: string; config?: Op
     },
   });
   const apiKey = synthetic?.apiKey?.trim();
-  if (!apiKey) {
+  if (apiKey) {
+    return isNonSecretApiKeyMarker(apiKey)
+      ? {
+          apiKey,
+          discoveryApiKey: toDiscoveryApiKey(apiKey),
+          mode: "api_key",
+          source: "config",
+        }
+      : {
+          apiKey: resolveNonEnvSecretRefApiKeyMarker("file"),
+          discoveryApiKey: toDiscoveryApiKey(apiKey),
+          mode: "api_key",
+          source: "config",
+        };
+  }
+
+  const configuredProvider = params.config?.models?.providers?.[authProvider];
+  if (typeof configuredProvider?.apiKey !== "string") {
     return undefined;
   }
-  return isNonSecretApiKeyMarker(apiKey)
+  const configuredApiKey = normalizeApiKeyConfig(configuredProvider.apiKey);
+  if (!configuredApiKey) {
+    return undefined;
+  }
+  if (isKnownEnvApiKeyMarker(configuredApiKey)) {
+    const envValue = params.env?.[configuredApiKey]?.trim();
+    return envValue
+      ? {
+          apiKey: configuredApiKey,
+          discoveryApiKey: toDiscoveryApiKey(envValue),
+          mode: "api_key",
+          source: "config",
+        }
+      : undefined;
+  }
+  return isNonSecretApiKeyMarker(configuredApiKey)
     ? {
-        apiKey,
-        discoveryApiKey: toDiscoveryApiKey(apiKey),
+        apiKey: configuredApiKey,
+        discoveryApiKey: toDiscoveryApiKey(configuredApiKey),
         mode: "api_key",
         source: "config",
       }
     : {
-        apiKey: resolveNonEnvSecretRefApiKeyMarker("file"),
-        discoveryApiKey: toDiscoveryApiKey(apiKey),
+        apiKey: configuredApiKey,
+        discoveryApiKey: toDiscoveryApiKey(configuredApiKey),
         mode: "api_key",
         source: "config",
       };

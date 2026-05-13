@@ -408,10 +408,7 @@ export async function discoverOpenAICompatibleSelfHostedProvider<
     : undefined;
   if (configuredProvider) {
     const visibility = parseConfiguredModelVisibilityEntries({ cfg: params.ctx.config });
-    if (
-      !visibility.providerWildcards.has(normalizeProviderId(params.providerId)) ||
-      !configuredBaseUrl
-    ) {
+    if (!visibility.providerWildcards.has(normalizeProviderId(params.providerId))) {
       return null;
     }
   }

@@ -112,6 +112,43 @@ const catalogOnlyProvider = {
   },
 };
 
+const vllmProvider = {
+  id: "vllm",
+  pluginId: "vllm",
+  label: "vLLM",
+  auth: [],
+  catalog: {
+    run: async (ctx: {
+      config: {
+        models?: {
+          providers?: Record<
+            string,
+            {
+              baseUrl?: string;
+            }
+          >;
+        };
+      };
+      resolveProviderApiKey: (providerId?: string) => {
+        apiKey: string | undefined;
+        discoveryApiKey?: string;
+      };
+    }) => ({
+      provider: {
+        baseUrl: ctx.config.models?.providers?.vllm?.baseUrl,
+        api: "openai-completions",
+        models: [
+          {
+            id: "runtime-vllm-model",
+            name: "Runtime vLLM Model",
+          },
+        ],
+        apiKey: "proof-key",
+      },
+    }),
+  },
+};
+
 const defaultProviders = [chutesProvider, moonshotProvider, openaiProvider];
 
 function firstDiscoveryRequest(): {
@@ -204,6 +241,46 @@ describe("loadProviderCatalogModelsForList", () => {
     expect(discoveryRequest?.onlyPluginIds).toStrictEqual(["moonshot"]);
     expect(discoveryRequest?.requireCompleteDiscoveryEntryCoverage).toBe(true);
     expect(discoveryRequest?.discoveryEntriesOnly).toBe(true);
+  });
+
+  it("uses bundled runtime provider catalogs for provider-filtered self-hosted rows", async () => {
+    providerDiscoveryMocks.resolveProviderOwners.mockImplementation(
+      ({ providerId }: { providerId: string }) => (providerId === "vllm" ? ["vllm"] : []),
+    );
+    providerDiscoveryMocks.resolveBundledProviderCompatPluginIds.mockReturnValue(["vllm"]);
+    providerDiscoveryMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([vllmProvider]);
+
+    const rows = await loadProviderCatalogModelsForList({
+      ...baseParams,
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "vllm/*": {},
+            },
+          },
+        },
+        models: {
+          providers: {
+            vllm: {
+              baseUrl: "http://vllm-router.example/v1",
+              apiKey: "proof-key",
+              api: "openai-completions",
+              models: [],
+            },
+          },
+        },
+      },
+      providerFilter: "vllm",
+    });
+
+    expect(rows.map((row) => `${row.provider}/${row.id}`)).toStrictEqual([
+      "vllm/runtime-vllm-model",
+    ]);
+    expect(rows[0]?.baseUrl).toBe("http://vllm-router.example/v1");
+    const discoveryRequest = firstDiscoveryRequest();
+    expect(discoveryRequest?.onlyPluginIds).toStrictEqual(["vllm"]);
+    expect(discoveryRequest?.discoveryEntriesOnly).toBe(false);
   });
 
   it("resolves provider owners from the installed plugin index before manifest fallback", async () => {

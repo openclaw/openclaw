@@ -16,6 +16,7 @@ let NON_ENV_SECRETREF_MARKER: typeof import("./model-auth-markers.js").NON_ENV_S
 let MINIMAX_OAUTH_MARKER: typeof import("./model-auth-markers.js").MINIMAX_OAUTH_MARKER;
 let CUSTOM_LOCAL_AUTH_MARKER: typeof import("./model-auth-markers.js").CUSTOM_LOCAL_AUTH_MARKER;
 let resolveApiKeyFromCredential: typeof import("./models-config.providers.secrets.js").resolveApiKeyFromCredential;
+let createProviderApiKeyResolver: typeof import("./models-config.providers.secrets.js").createProviderApiKeyResolver;
 let createProviderAuthResolver: typeof import("./models-config.providers.secrets.js").createProviderAuthResolver;
 let mockedResolveProviderSyntheticAuthWithPlugin: ReturnType<
   typeof vi.mocked<ProviderRuntimeModule["resolveProviderSyntheticAuthWithPlugin"]>
@@ -36,6 +37,7 @@ async function loadProviderAuthModules() {
   NON_ENV_SECRETREF_MARKER = markersModule.NON_ENV_SECRETREF_MARKER;
   MINIMAX_OAUTH_MARKER = markersModule.MINIMAX_OAUTH_MARKER;
   resolveApiKeyFromCredential = secretsModule.resolveApiKeyFromCredential;
+  createProviderApiKeyResolver = secretsModule.createProviderApiKeyResolver;
   createProviderAuthResolver = secretsModule.createProviderAuthResolver;
 }
 
@@ -167,6 +169,33 @@ describe("models-config provider auth provenance", () => {
       discoveryApiKey: "xai-plugin-key",
       mode: "api_key",
       source: "none",
+    });
+  });
+
+  it("uses literal configured provider api keys for catalog discovery", () => {
+    const auth = createProviderApiKeyResolver(
+      {} as NodeJS.ProcessEnv,
+      {
+        version: 1,
+        profiles: {},
+      },
+      {
+        models: {
+          providers: {
+            vllm: {
+              baseUrl: "http://127.0.0.1:8000/v1",
+              apiKey: "proof-key",
+              api: "openai-completions",
+              models: [],
+            },
+          },
+        },
+      },
+    );
+
+    expect(auth("vllm")).toEqual({
+      apiKey: "proof-key",
+      discoveryApiKey: "proof-key",
     });
   });
 
