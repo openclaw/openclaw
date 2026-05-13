@@ -104,6 +104,7 @@ export function startAcpSpawnParentStreamRelay(params: {
   if (!runId || !parentSessionKey) {
     return {
       dispose: () => {},
+      drain: () => Promise.resolve(),
       notifyStarted: () => {},
     };
   }
@@ -151,6 +152,10 @@ export function startAcpSpawnParentStreamRelay(params: {
       .catch(() => {
         // Best-effort diagnostics; never break relay flow.
       });
+  };
+  const drain = async () => {
+    flushLogBuffer();
+    await logWriteChain;
   };
   const scheduleLogFlush = () => {
     if (!logPath || logFlushScheduled) {
@@ -432,11 +437,13 @@ export function startAcpSpawnParentStreamRelay(params: {
 
   return {
     dispose,
+    drain,
     notifyStarted: emitStartNotice,
   };
 }
 
 export type AcpSpawnParentRelayHandle = {
   dispose: () => void;
+  drain: () => Promise<void>;
   notifyStarted: () => void;
 };

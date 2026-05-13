@@ -1451,6 +1451,8 @@ export async function spawnAcpDirect(
 
   if (effectiveStreamToParent && parentSessionKey) {
     if (parentRelay && childRunId !== childIdem) {
+      // Drain pending log writes before creating a second relay with the same logPath.
+      await parentRelay.drain();
       parentRelay.dispose();
       // Defensive fallback if gateway returns a runId that differs from idempotency key.
       parentRelay = startAcpSpawnParentStreamRelay({

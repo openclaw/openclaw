@@ -6,9 +6,20 @@ const requestHeartbeatMock = vi.fn();
 const readAcpSessionEntryMock = vi.fn();
 const resolveSessionFilePathMock = vi.fn();
 const resolveSessionFilePathOptionsMock = vi.fn();
+const mkdirMock = vi.fn();
+const appendRegularFileMock = vi.fn();
 
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
+}));
+
+vi.mock("node:fs/promises", async () => {
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  return { ...actual, mkdir: (...args: unknown[]) => mkdirMock(...args) };
+});
+
+vi.mock("../infra/regular-file.js", () => ({
+  appendRegularFile: (...args: unknown[]) => appendRegularFileMock(...args),
 }));
 
 vi.mock("../infra/heartbeat-wake.js", async () => {
@@ -89,6 +100,10 @@ describe("startAcpSpawnParentStreamRelay", () => {
     resolveSessionFilePathMock.mockReset();
     resolveSessionFilePathOptionsMock.mockReset();
     resolveSessionFilePathOptionsMock.mockImplementation((value: unknown) => value);
+    mkdirMock.mockReset();
+    mkdirMock.mockResolvedValue(undefined);
+    appendRegularFileMock.mockReset();
+    appendRegularFileMock.mockResolvedValue(undefined);
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-04T01:00:00.000Z"));
   });
@@ -478,5 +493,63 @@ describe("startAcpSpawnParentStreamRelay", () => {
     expect(sessionId).toBe("sess-123");
     expect(entry.sessionId).toBe("sess-123");
     expect(options.storePath).toBe("/tmp/openclaw/agents/codex/sessions/sessions.json");
+  });
+
+  describe("drain", () => {
+    it("resolves immediately when no log writes are pending", async () => {
+      const relay = startAcpSpawnParentStreamRelay({
+        runId: "drain-idle-run",
+        parentSessionKey: "agent:main:main",
+        childSessionKey: "agent:codex:acp:child-drain-idle",
+        agentId: "codex",
+        logPath: "/tmp/drain-idle-test.jsonl",
+      });
+
+      await expect(relay.drain()).resolves.toBeUndefined();
+      relay.dispose();
+    });
+
+    it("does not resolve until pending appendRegularFile calls complete", async () => {
+      let resolveWrite!: () => void;
+      const writeBlock = new Promise<void>((resolve) => {
+        resolveWrite = resolve;
+      });
+      appendRegularFileMock.mockReturnValueOnce(writeBlock);
+
+      const relay = startAcpSpawnParentStreamRelay({
+        runId: "drain-block-run",
+        parentSessionKey: "agent:main:main",
+        childSessionKey: "agent:codex:acp:child-drain-block",
+        agentId: "codex",
+        logPath: "/tmp/drain-block-test.jsonl",
+      });
+
+      emitAgentEvent({
+        runId: "drain-block-run",
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: 0, endedAt: 100 },
+      });
+
+      // 4 hops: queueMicrotask → .then callback → await mkdir → await appendRegularFile
+      for (let i = 0; i < 5; i++) await Promise.resolve();
+
+      // Guard: appendRegularFile must be in-flight before we test drain ordering.
+      expect(appendRegularFileMock).toHaveBeenCalledOnce();
+
+      let drained = false;
+      const drainDone = relay.drain().then(() => {
+        drained = true;
+      });
+
+      // write chain still pending — drain must not resolve before it settles
+      await Promise.resolve();
+      expect(drained).toBe(false);
+
+      resolveWrite();
+      await drainDone;
+      expect(drained).toBe(true);
+
+      relay.dispose();
+    });
   });
 });
