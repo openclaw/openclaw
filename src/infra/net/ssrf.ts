@@ -672,7 +672,10 @@ export function destroyDispatcher(candidate?: ClosableDispatcher | null): void {
     if (typeof candidate.destroy === "function") {
       candidate.destroy();
     } else if (typeof candidate.close === "function") {
-      void candidate.close();
+      const res = candidate.close();
+      if (res && typeof res.catch === "function") {
+        res.catch(() => {});
+      }
     }
   } catch {
     // ignore dispatcher cleanup errors
