@@ -43,7 +43,7 @@ import {
   formatValidationErrors,
   validateSessionsUsageParams,
 } from "../protocol/index.js";
-import { resolveSessionStoreKey } from "../session-store-key.js";
+import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import {
   listAgentsForGateway,
   loadCombinedSessionStoreForGateway,
@@ -863,10 +863,10 @@ export const usageHandlers: GatewayRequestHandlers = {
 
     // Optimization: If a specific key is requested, skip full directory scan
     if (specificKey) {
-      const scopedSpecificKey = resolveSessionStoreKey({
+      const scopedSpecificKey = resolveStoredSessionKeyForAgentStore({
         cfg: config,
+        agentId: effectiveAgentId,
         sessionKey: specificKey,
-        storeAgentId: effectiveAgentId,
       });
       const scopedParsed = parseAgentSessionKey(scopedSpecificKey);
       const agentIdFromKey = scopedParsed?.agentId ?? effectiveAgentId;

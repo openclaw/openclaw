@@ -84,6 +84,7 @@ import {
   getSessionCompactionCheckpoint,
   listSessionCompactionCheckpoints,
 } from "../session-compaction-checkpoints.js";
+import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "../session-store-key.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
   archiveFileOnDisk,
@@ -456,20 +457,28 @@ function resolveAbortSessionKey(params: {
   return params.requestedKey;
 }
 
-function sessionKeyBelongsToAgent(sessionKey: string | undefined, agentId: string): boolean {
+function resolveSessionKeyAgentId(
+  sessionKey: string | undefined,
+  cfg: OpenClawConfig,
+): string | undefined {
   const key = normalizeOptionalString(sessionKey);
   if (!key) {
-    return false;
+    return undefined;
   }
-  const normalizedAgentId = normalizeAgentId(agentId);
-  const parsed = parseAgentSessionKey(key);
-  if (parsed) {
-    return parsed.agentId === normalizedAgentId;
+  if (!parseAgentSessionKey(key) && key.toLowerCase().startsWith("agent:")) {
+    return undefined;
   }
-  if (key.toLowerCase().startsWith("agent:")) {
-    return false;
-  }
-  return resolveAgentIdFromSessionKey(key) === normalizedAgentId;
+  const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey: key });
+  return resolveSessionStoreAgentId(cfg, canonicalKey);
+}
+
+function sessionKeyBelongsToAgent(
+  sessionKey: string | undefined,
+  agentId: string,
+  cfg: OpenClawConfig,
+): boolean {
+  const sessionAgentId = resolveSessionKeyAgentId(sessionKey, cfg);
+  return Boolean(sessionAgentId && sessionAgentId === normalizeAgentId(agentId));
 }
 
 function collectTrackedActiveSessionRunKeys(
@@ -1570,16 +1579,15 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const p = params;
+    const cfg = context.getRuntimeConfig();
     const requestedRunId = readStringValue(p.runId);
     const requestedKey = normalizeOptionalString(p.key);
     const requestedKeyAgentId = requestedKey
-      ? resolveAgentIdFromSessionKey(requestedKey)
+      ? resolveSessionKeyAgentId(requestedKey, cfg)
       : undefined;
     const requestedRunAgentId = requestedRunId
       ? normalizeAgentId(
-          normalizeOptionalString(p.agentId) ??
-            requestedKeyAgentId ??
-            resolveDefaultAgentId(context.getRuntimeConfig()),
+          normalizeOptionalString(p.agentId) ?? requestedKeyAgentId ?? resolveDefaultAgentId(cfg),
         )
       : undefined;
     const activeRunSessionKey =
@@ -1588,7 +1596,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         : undefined;
     const scopedActiveRunSessionKey =
       activeRunSessionKey && requestedRunAgentId
-        ? sessionKeyBelongsToAgent(activeRunSessionKey, requestedRunAgentId)
+        ? sessionKeyBelongsToAgent(activeRunSessionKey, requestedRunAgentId, cfg)
           ? activeRunSessionKey
           : undefined
         : undefined;

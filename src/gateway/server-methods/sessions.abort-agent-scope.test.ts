@@ -14,6 +14,14 @@ vi.mock("./chat.js", () => ({
   },
 }));
 
+vi.mock("../session-utils.js", async () => {
+  const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
+  return {
+    ...actual,
+    loadSessionEntry: (sessionKey: string) => ({ canonicalKey: sessionKey }),
+  };
+});
+
 import { sessionsHandlers } from "./sessions.js";
 
 function createActiveRun(sessionKey: string) {
@@ -39,7 +47,7 @@ describe("sessions.abort agent scope", () => {
     const context = {
       chatAbortControllers: new Map([["run-beta", activeRun]]),
       getRuntimeConfig: () => ({
-        agents: [{ id: "main", default: true }, { id: "beta" }],
+        agents: { list: [{ id: "main", default: true }, { id: "beta" }] },
       }),
     } as unknown as GatewayRequestContext;
     resolveSessionKeyForRunMock.mockReturnValue(undefined);
@@ -62,5 +70,34 @@ describe("sessions.abort agent scope", () => {
       abortedRunId: null,
       status: "no-active-run",
     });
+  });
+
+  it("aborts an active legacy-key run owned by the configured default agent", async () => {
+    const activeRun = createActiveRun("main");
+    const context = {
+      chatAbortControllers: new Map([["run-work", activeRun]]),
+      getRuntimeConfig: () => ({
+        agents: { list: [{ id: "work", default: true }] },
+      }),
+    } as unknown as GatewayRequestContext;
+    resolveSessionKeyForRunMock.mockReturnValue(undefined);
+    const respond = vi.fn() as unknown as RespondFn;
+
+    await sessionsHandlers["sessions.abort"]({
+      req: { id: "req-2" } as never,
+      params: { runId: "run-work" },
+      respond,
+      context,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(resolveSessionKeyForRunMock).not.toHaveBeenCalled();
+    expect(chatAbortMock).toHaveBeenCalledTimes(1);
+    expect(chatAbortMock.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        params: { sessionKey: "main", runId: "run-work" },
+      }),
+    );
   });
 });
