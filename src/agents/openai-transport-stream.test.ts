@@ -1661,6 +1661,68 @@ describe("openai transport stream", () => {
     expect(params).toHaveProperty("tool_choice", "required");
   });
 
+  it("emits prompt_cache_key for openai-completions when supportsPromptCacheKey compat is set", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "local-model",
+        name: "Local Model",
+        api: "openai-completions",
+        provider: "openai-completions",
+        baseUrl: "http://cerebro-mac:8080/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 131072,
+        maxTokens: 8192,
+        compat: { supportsPromptCacheKey: true },
+      } satisfies Model<"openai-completions">,
+      { systemPrompt: "sys", messages: [], tools: [] } as never,
+      { cacheRetention: "long", sessionId: "session-abc" } as never,
+    );
+    expect(params).toHaveProperty("prompt_cache_key", "session-abc");
+  });
+
+  it("omits prompt_cache_key for openai-completions when cacheRetention is none", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "local-model",
+        name: "Local Model",
+        api: "openai-completions",
+        provider: "openai-completions",
+        baseUrl: "http://cerebro-mac:8080/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 131072,
+        maxTokens: 8192,
+        compat: { supportsPromptCacheKey: true },
+      } satisfies Model<"openai-completions">,
+      { systemPrompt: "sys", messages: [], tools: [] } as never,
+      { cacheRetention: "none", sessionId: "session-abc" } as never,
+    );
+    expect(params).not.toHaveProperty("prompt_cache_key");
+  });
+
+  it("omits prompt_cache_key for openai-completions when supportsPromptCacheKey is not set", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-4.1",
+        name: "GPT-4.1",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1047576,
+        maxTokens: 32768,
+      } satisfies Model<"openai-completions">,
+      { systemPrompt: "sys", messages: [], tools: [] } as never,
+      { cacheRetention: "long", sessionId: "session-abc" } as never,
+    );
+    expect(params).not.toHaveProperty("prompt_cache_key");
+  });
+
   it("resets stopReason to stop when finish_reason is tool_calls but tool_calls array is empty", async () => {
     const model = {
       id: "nemotron-3-super",

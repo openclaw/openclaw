@@ -1383,6 +1383,7 @@ function getCompat(model: OpenAIModeModel): {
   openRouterRouting: Record<string, unknown>;
   vercelGatewayRouting: Record<string, unknown>;
   supportsStrictMode: boolean;
+  supportsPromptCacheKey: boolean;
   requiresStringContent: boolean;
   visibleReasoningDetailTypes: string[];
 } {
@@ -1417,6 +1418,7 @@ function getCompat(model: OpenAIModeModel): {
       detected.vercelGatewayRouting,
     supportsStrictMode:
       (compat.supportsStrictMode as boolean | undefined) ?? detected.supportsStrictMode,
+    supportsPromptCacheKey: compat.supportsPromptCacheKey === true,
     requiresStringContent: (compat.requiresStringContent as boolean | undefined) ?? false,
     visibleReasoningDetailTypes:
       (compat.visibleReasoningDetailTypes as string[] | undefined) ??
@@ -1496,6 +1498,7 @@ export function buildOpenAICompletionsParams(
       }
     : context;
   const messages = convertMessages(model as never, completionsContext, compat as never);
+  const cacheRetention = resolveCacheRetention(options?.cacheRetention);
   const params: Record<string, unknown> = {
     model: model.id,
     messages: compat.requiresStringContent
@@ -1506,6 +1509,9 @@ export function buildOpenAICompletionsParams(
   };
   if (compat.supportsStore) {
     params.store = false;
+  }
+  if (compat.supportsPromptCacheKey && cacheRetention !== "none" && options?.sessionId) {
+    params.prompt_cache_key = options.sessionId;
   }
   if (options?.maxTokens) {
     if (compat.maxTokensField === "max_tokens") {
