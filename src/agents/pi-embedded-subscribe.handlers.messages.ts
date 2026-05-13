@@ -76,6 +76,15 @@ function recordSessionLlmUsage(
   ctx: EmbeddedPiSubscribeContext,
   assistantMessage: AgentMessage,
 ): void {
+  // Match the old per-stream hooks: aborted and error turns never bumped the
+  // counters because they fired only after the success path. Without this gate
+  // a transport failure or user abort would inflate the request/token totals.
+  const stopReason = normalizeOptionalString(
+    (assistantMessage as { stopReason?: unknown }).stopReason,
+  );
+  if (stopReason === "aborted" || stopReason === "error") {
+    return;
+  }
   const providerRaw = normalizeOptionalString(
     (assistantMessage as { provider?: unknown }).provider,
   );
@@ -727,16 +736,14 @@ export function handleMessageEnd(
   const suppressDeterministicApprovalOutput = shouldSuppressDeterministicApprovalOutput(ctx.state);
   ctx.noteLastAssistant(assistantMessage);
   ctx.recordAssistantUsage((assistantMessage as { usage?: unknown }).usage);
-  // Mirror commitAssistantUsage's idempotency: emit only on the first
-  // message_end for this assistant turn so duplicate deliveries (covered by
-  // "does not emit duplicate agent events when message_end repeats" in
-  // pi-embedded-subscribe.subscribe-embedded-pi-session.subscribeembeddedpisession.test.ts)
-  // do not inflate the counters. The flag resets in resetAssistantMessageState
-  // when the next turn begins.
-  const isFirstCommit = !ctx.state.assistantUsageCommitted;
   ctx.commitAssistantUsage();
-  if (isFirstCommit) {
+  // Emit once per turn. assistantUsageCommitted can already be true here when
+  // handleMessageUpdate committed usage on the "done" event before message_end
+  // fires, so a dedicated flag is needed instead of piggybacking on it. The
+  // flag resets in resetAssistantMessageState when the next turn begins.
+  if (!ctx.state.llmMetricsEmitted) {
     recordSessionLlmUsage(ctx, assistantMessage);
+    ctx.state.llmMetricsEmitted = true;
   }
   if (suppressVisibleAssistantOutput) {
     return;

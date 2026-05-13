@@ -73,6 +73,7 @@ export type EmbeddedPiSubscribeState = {
   lastReasoningSent?: string;
   pendingAssistantUsage?: NormalizedUsage;
   assistantUsageCommitted: boolean;
+  llmMetricsEmitted: boolean;
 
   compactionInFlight: boolean;
   lastCompactionTokensAfter?: number;
