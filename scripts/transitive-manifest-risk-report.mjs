@@ -389,7 +389,7 @@ function collectMarkdownRollups(findings) {
 function renderCompleteEvidence(lines) {
   lines.push("## Complete Evidence", "");
   lines.push(
-    "The complete actionable finding list is available in the JSON report, including every package, version, dependency, and specifier. Recently published versions covered by pnpm workspace release-age exclusions are listed separately under workspaceExcludedFindings. The sections below summarize the same data by package, dependency target, and finding class for human review.",
+    "The complete reported signal list is available in the JSON report, including every package, version, dependency, and specifier. Recently published versions covered by pnpm workspace release-age exclusions are listed separately under workspaceExcludedFindings. The sections below summarize the same data by package, dependency target, and finding class for human review.",
   );
   lines.push("");
 }
@@ -498,11 +498,11 @@ export function renderTransitiveManifestRiskMarkdownReport(report) {
     "## Summary",
     "",
     `- Resolved package versions inspected: ${report.packageVersions}`,
-    `- Actionable findings: ${report.findingCount}`,
+    `- Reported risk signals: ${report.findingCount}`,
     `- Signals covered by workspace policy exclusions: ${report.workspaceExcludedFindingCount ?? 0}`,
     `- Metadata failures: ${report.metadataFailures.length}`,
     "",
-    "## Actionable Findings By Type",
+    "## Reported Risk Signals By Type",
     "",
   ];
   for (const [type, count] of Object.entries(report.byType).toSorted(([left], [right]) =>
@@ -515,7 +515,7 @@ export function renderTransitiveManifestRiskMarkdownReport(report) {
   if (Object.keys(report.workspaceExcludedByType ?? {}).length > 0) {
     lines.push("## Signals Covered By Workspace Policy Exclusions", "");
     lines.push(
-      "These are not included in the actionable finding totals above. They are tracked separately because the workspace package-manager policy already excludes them.",
+      "These are not included in the reported risk signal totals above. They are tracked separately because the workspace package-manager policy already excludes them.",
     );
     lines.push("");
     for (const [type, count] of Object.entries(report.workspaceExcludedByType ?? {}).toSorted(
@@ -631,7 +631,7 @@ export async function main(argv = process.argv.slice(2)) {
   const artifactHint = options.markdownPath ? ` See ${options.markdownPath}.` : "";
   process.stdout.write(
     `INFO transitive manifest risk report: inspected ${report.packageVersions} resolved ` +
-      `package manifests; ${report.findingCount} report-only awareness findings, ` +
+      `package manifests; ${report.findingCount} reported risk signals, ` +
       `${report.metadataFailures.length} metadata failures; release not blocked.${artifactHint}\n`,
   );
   return 0;

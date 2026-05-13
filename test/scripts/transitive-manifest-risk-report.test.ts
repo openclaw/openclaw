@@ -142,15 +142,13 @@ describe("transitive-manifest-risk-report", () => {
     expect(markdown).toContain("published package manifests for resolved packages");
     expect(markdown).toContain("It is report-only.");
     expect(markdown).toContain("Resolved package versions inspected");
-    expect(markdown).toContain("Actionable findings");
+    expect(markdown).toContain("Reported risk signals");
     expect(markdown).toContain("Signals covered by workspace policy exclusions");
-    expect(markdown).toContain("## Actionable Findings By Type");
+    expect(markdown).toContain("## Reported Risk Signals By Type");
     expect(markdown).toContain("## Signals Covered By Workspace Policy Exclusions");
-    expect(markdown).toContain("not included in the actionable finding totals");
+    expect(markdown).toContain("not included in the reported risk signal totals");
     expect(markdown).toContain("## Complete Evidence");
-    expect(markdown).toContain(
-      "The complete actionable finding list is available in the JSON report",
-    );
+    expect(markdown).toContain("The complete reported signal list is available in the JSON report");
     expect(markdown).toContain("## Published Package Manifests With Risk Findings");
     expect(markdown).toContain("`@earendil-works/pi-ai@0.74.0`: 1 manifest finding");
     expect(markdown).toContain("`aaa-package@1.0.0`: 1 manifest finding");
