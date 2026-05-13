@@ -73,6 +73,7 @@ type SelectedConnectAuth = {
   authBootstrapToken?: string;
   authDeviceToken?: string;
   authPassword?: string;
+  authApprovalRuntimeToken?: string;
   signatureToken?: string;
   resolvedDeviceToken?: string;
   storedToken?: string;
@@ -129,6 +130,7 @@ export type GatewayClientOptions = {
   bootstrapToken?: string;
   deviceToken?: string;
   password?: string;
+  approvalRuntimeToken?: string;
   instanceId?: string;
   clientName?: GatewayClientName;
   clientDisplayName?: string;
@@ -496,6 +498,7 @@ export class GatewayClient {
       authBootstrapToken,
       authDeviceToken,
       authPassword,
+      authApprovalRuntimeToken,
       signatureToken,
       resolvedDeviceToken,
       storedToken,
@@ -506,12 +509,17 @@ export class GatewayClient {
       this.pendingDeviceTokenRetry = false;
     }
     const auth =
-      authToken || authBootstrapToken || authPassword || resolvedDeviceToken
+      authToken ||
+      authBootstrapToken ||
+      authPassword ||
+      resolvedDeviceToken ||
+      authApprovalRuntimeToken
         ? {
             token: authToken,
             bootstrapToken: authBootstrapToken,
             deviceToken: authDeviceToken ?? resolvedDeviceToken,
             password: authPassword,
+            approvalRuntimeToken: authApprovalRuntimeToken,
           }
         : undefined;
     const signedAtMs = Date.now();
@@ -770,6 +778,7 @@ export class GatewayClient {
     const explicitBootstrapToken = normalizeOptionalString(this.opts.bootstrapToken);
     const explicitDeviceToken = normalizeOptionalString(this.opts.deviceToken);
     const authPassword = normalizeOptionalString(this.opts.password);
+    const authApprovalRuntimeToken = normalizeOptionalString(this.opts.approvalRuntimeToken);
     const storedAuth = this.loadStoredDeviceAuth(role);
     const storedToken = storedAuth?.token ?? null;
     const storedScopes = storedAuth?.scopes;
@@ -802,6 +811,7 @@ export class GatewayClient {
       authBootstrapToken,
       authDeviceToken: shouldUseDeviceRetryToken ? (storedToken ?? undefined) : undefined,
       authPassword,
+      authApprovalRuntimeToken,
       signatureToken: authToken ?? authBootstrapToken ?? undefined,
       resolvedDeviceToken,
       storedToken: storedToken ?? undefined,
