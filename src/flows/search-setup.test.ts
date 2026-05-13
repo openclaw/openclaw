@@ -205,6 +205,7 @@ describe("runSearchSetupFlow", () => {
   });
 
   it("shows provider credential notes before SecretRef setup notes", async () => {
+    vi.stubEnv("XAI_API_KEY", "xai-test-key");
     const select = vi.fn().mockResolvedValueOnce("grok").mockResolvedValueOnce("no");
     const note = vi.fn(async () => {});
     const prompter = createWizardPrompter({

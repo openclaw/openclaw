@@ -18,7 +18,7 @@ describe("legacy config migrate validation", () => {
       },
     });
 
-    expect(res.partiallyValid).toBe(true);
+    expect(res.partiallyValid).toBeUndefined();
     const migratedConfig = res.config as Record<string, unknown> | null;
     expect(migratedConfig?.routing).toBeUndefined();
     expect(res.config?.channels?.whatsapp?.allowFrom).toEqual(["+15550001111"]);
@@ -38,7 +38,6 @@ describe("legacy config migrate validation", () => {
       'Moved routing.groupChat.requireMention → channels.telegram.groups."*".requireMention.',
       "Moved routing.groupChat.historyLimit → messages.groupChat.historyLimit.",
       "Moved routing.groupChat.mentionPatterns → messages.groupChat.mentionPatterns.",
-      "Migration applied; other validation issues remain — run doctor to review.",
     ]);
   });
 
