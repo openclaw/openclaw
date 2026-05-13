@@ -19,6 +19,7 @@ internal data class GatewayEndpointConfig(
 internal data class GatewaySetupCode(
   val url: String,
   val token: String?,
+  val bootstrapToken: String?,
   val password: String?,
 )
 
@@ -27,6 +28,7 @@ internal data class GatewayConnectConfig(
   val port: Int,
   val tls: Boolean,
   val token: String,
+  val bootstrapToken: String,
   val password: String,
 )
 
@@ -49,6 +51,7 @@ internal fun resolveGatewayConnectConfig(
       port = parsed.port,
       tls = parsed.tls,
       token = setup.token ?: fallbackToken.trim(),
+      bootstrapToken = setup.bootstrapToken.orEmpty(),
       password = setup.password ?: fallbackPassword.trim(),
     )
   }
@@ -60,6 +63,7 @@ internal fun resolveGatewayConnectConfig(
     port = parsed.port,
     tls = parsed.tls,
     token = fallbackToken.trim(),
+    bootstrapToken = "",
     password = fallbackPassword.trim(),
   )
 }
@@ -105,8 +109,9 @@ internal fun decodeGatewaySetupCode(rawInput: String): GatewaySetupCode? {
     val url = jsonField(obj, "url").orEmpty()
     if (url.isEmpty()) return null
     val token = jsonField(obj, "token")
+    val bootstrapToken = jsonField(obj, "bootstrapToken")
     val password = jsonField(obj, "password")
-    GatewaySetupCode(url = url, token = token, password = password)
+    GatewaySetupCode(url = url, token = token, bootstrapToken = bootstrapToken, password = password)
   } catch (_: IllegalArgumentException) {
     null
   }

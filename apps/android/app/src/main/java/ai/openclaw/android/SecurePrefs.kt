@@ -75,6 +75,10 @@ class SecurePrefs(context: Context) {
     MutableStateFlow(prefs.getString("gateway.manual.token", "") ?: "")
   val gatewayToken: StateFlow<String> = _gatewayToken
 
+  private val _gatewayBootstrapToken =
+    MutableStateFlow(prefs.getString("gateway.manual.bootstrapToken", "") ?: "")
+  val gatewayBootstrapToken: StateFlow<String> = _gatewayBootstrapToken
+
   private val _onboardingCompleted =
     MutableStateFlow(prefs.getBoolean("onboarding.completed", false))
   val onboardingCompleted: StateFlow<Boolean> = _onboardingCompleted
@@ -157,6 +161,12 @@ class SecurePrefs(context: Context) {
     _gatewayToken.value = trimmed
   }
 
+  fun setGatewayBootstrapToken(value: String) {
+    val trimmed = value.trim()
+    prefs.edit(commit = true) { putString("gateway.manual.bootstrapToken", trimmed) }
+    _gatewayBootstrapToken.value = trimmed
+  }
+
   fun setGatewayPassword(value: String) {
     saveGatewayPassword(value)
   }
@@ -182,6 +192,16 @@ class SecurePrefs(context: Context) {
   fun saveGatewayToken(token: String) {
     val key = "gateway.token.${_instanceId.value}"
     prefs.edit { putString(key, token.trim()) }
+  }
+
+  fun loadGatewayBootstrapToken(): String? {
+    val manual = _gatewayBootstrapToken.value.trim()
+    return manual.takeIf { it.isNotEmpty() }
+  }
+
+  fun clearGatewayBootstrapToken() {
+    prefs.edit { remove("gateway.manual.bootstrapToken") }
+    _gatewayBootstrapToken.value = ""
   }
 
   fun loadGatewayPassword(): String? {

@@ -16,6 +16,17 @@ class GatewayConfigResolverTest {
   }
 
   @Test
+  fun decodeGatewaySetupCodeAcceptsCurrentBootstrapTokenPayload() {
+    val setupCode = encodeSetupCode("""{"url":"ws://192.168.0.202:18789","bootstrapToken":"boot-123"}""")
+
+    val decoded = decodeGatewaySetupCode(setupCode)
+
+    assertEquals("ws://192.168.0.202:18789", decoded?.url)
+    assertEquals("boot-123", decoded?.bootstrapToken)
+    assertNull(decoded?.token)
+  }
+
+  @Test
   fun resolveScannedSetupCodeAcceptsQrJsonPayload() {
     val setupCode = encodeSetupCode("""{"url":"wss://gateway.example:18789","password":"pw-1"}""")
     val qrJson =

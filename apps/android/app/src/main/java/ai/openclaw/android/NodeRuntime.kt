@@ -19,6 +19,7 @@ import ai.openclaw.android.gateway.GatewaySession
 import ai.openclaw.android.gateway.probeGatewayTlsFingerprint
 import ai.openclaw.android.node.*
 import ai.openclaw.android.protocol.OpenClawCanvasA2UIAction
+import ai.openclaw.android.system.SystemInfoController
 import ai.openclaw.android.voice.MicCaptureManager
 import ai.openclaw.android.voice.VoiceConversationEntry
 import kotlinx.coroutines.CoroutineScope
@@ -270,6 +271,13 @@ class NodeRuntime(context: Context) {
       json = json,
       supportsChatSubscribe = false,
     )
+
+  private val systemInfo: SystemInfoController =
+    SystemInfoController(
+      scope = scope,
+      session = operatorSession,
+      json = json,
+    )
   private val micCapture: MicCaptureManager by lazy {
     MicCaptureManager(
       context = appContext,
@@ -425,8 +433,10 @@ class NodeRuntime(context: Context) {
   val manualPort: StateFlow<Int> = prefs.manualPort
   val manualTls: StateFlow<Boolean> = prefs.manualTls
   val gatewayToken: StateFlow<String> = prefs.gatewayToken
+  val gatewayBootstrapToken: StateFlow<String> = prefs.gatewayBootstrapToken
   val onboardingCompleted: StateFlow<Boolean> = prefs.onboardingCompleted
   fun setGatewayToken(value: String) = prefs.setGatewayToken(value)
+  fun setGatewayBootstrapToken(value: String) = prefs.setGatewayBootstrapToken(value)
   fun setGatewayPassword(value: String) = prefs.setGatewayPassword(value)
   fun setOnboardingCompleted(value: Boolean) = prefs.setOnboardingCompleted(value)
   val lastDiscoveredStableId: StateFlow<String> = prefs.lastDiscoveredStableId
@@ -444,8 +454,11 @@ class NodeRuntime(context: Context) {
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = chat.pendingToolCalls
   val chatSessions: StateFlow<List<ChatSessionEntry>> = chat.sessions
   val pendingRunCount: StateFlow<Int> = chat.pendingRunCount
+  val systemInfoState = systemInfo.state
 
   init {
+    systemInfo.start()
+
     if (prefs.voiceWakeMode.value != VoiceWakeMode.Off) {
       prefs.setVoiceWakeMode(VoiceWakeMode.Off)
     }
@@ -575,10 +588,11 @@ class NodeRuntime(context: Context) {
     operatorStatusText = "Connecting…"
     updateStatus()
     val token = prefs.loadGatewayToken()
+    val bootstrapToken = prefs.loadGatewayBootstrapToken()
     val password = prefs.loadGatewayPassword()
     val tls = connectionManager.resolveTlsParams(endpoint)
-    operatorSession.connect(endpoint, token, password, connectionManager.buildOperatorConnectOptions(), tls)
-    nodeSession.connect(endpoint, token, password, connectionManager.buildNodeConnectOptions(), tls)
+    operatorSession.connect(endpoint, token, password, connectionManager.buildOperatorConnectOptions(), tls, bootstrapToken)
+    nodeSession.connect(endpoint, token, password, connectionManager.buildNodeConnectOptions(), tls, bootstrapToken)
     operatorSession.reconnect()
     nodeSession.reconnect()
   }
@@ -603,9 +617,10 @@ class NodeRuntime(context: Context) {
     nodeStatusText = "Connecting…"
     updateStatus()
     val token = prefs.loadGatewayToken()
+    val bootstrapToken = prefs.loadGatewayBootstrapToken()
     val password = prefs.loadGatewayPassword()
-    operatorSession.connect(endpoint, token, password, connectionManager.buildOperatorConnectOptions(), tls)
-    nodeSession.connect(endpoint, token, password, connectionManager.buildNodeConnectOptions(), tls)
+    operatorSession.connect(endpoint, token, password, connectionManager.buildOperatorConnectOptions(), tls, bootstrapToken)
+    nodeSession.connect(endpoint, token, password, connectionManager.buildNodeConnectOptions(), tls, bootstrapToken)
   }
 
   fun acceptGatewayTrustPrompt() {
@@ -727,6 +742,10 @@ class NodeRuntime(context: Context) {
 
   fun refreshChatSessions(limit: Int? = null) {
     chat.refreshSessions(limit = limit)
+  }
+
+  fun refreshSystemInfo() {
+    systemInfo.refresh()
   }
 
   fun setChatThinkingLevel(level: String) {

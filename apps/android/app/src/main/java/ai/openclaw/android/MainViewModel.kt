@@ -8,6 +8,7 @@ import ai.openclaw.android.node.CameraCaptureManager
 import ai.openclaw.android.node.CanvasController
 import ai.openclaw.android.node.ScreenRecordManager
 import ai.openclaw.android.node.SmsManager
+import ai.openclaw.android.system.SystemInfoState
 import ai.openclaw.android.voice.VoiceConversationEntry
 import kotlinx.coroutines.flow.StateFlow
 
@@ -59,6 +60,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val manualPort: StateFlow<Int> = runtime.manualPort
   val manualTls: StateFlow<Boolean> = runtime.manualTls
   val gatewayToken: StateFlow<String> = runtime.gatewayToken
+  val gatewayBootstrapToken: StateFlow<String> = runtime.gatewayBootstrapToken
   val onboardingCompleted: StateFlow<Boolean> = runtime.onboardingCompleted
   val canvasDebugStatusEnabled: StateFlow<Boolean> = runtime.canvasDebugStatusEnabled
 
@@ -72,6 +74,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val chatPendingToolCalls = runtime.chatPendingToolCalls
   val chatSessions = runtime.chatSessions
   val pendingRunCount: StateFlow<Int> = runtime.pendingRunCount
+  val systemInfoState: StateFlow<SystemInfoState> = runtime.systemInfoState
 
   fun setForeground(value: Boolean) {
     runtime.setForeground(value)
@@ -115,6 +118,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   fun setGatewayToken(value: String) {
     runtime.setGatewayToken(value)
+  }
+
+  fun setGatewayBootstrapToken(value: String) {
+    runtime.setGatewayBootstrapToken(value)
   }
 
   fun setGatewayPassword(value: String) {
@@ -175,6 +182,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   fun refreshChatSessions(limit: Int? = null) {
     runtime.refreshChatSessions(limit = limit)
+  }
+
+  fun refreshSystemInfo() {
+    runtime.refreshSystemInfo()
   }
 
   fun setChatThinkingLevel(level: String) {

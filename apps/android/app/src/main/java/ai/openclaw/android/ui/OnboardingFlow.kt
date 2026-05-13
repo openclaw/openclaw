@@ -474,7 +474,8 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                     return@Button
                   }
                   gatewayUrl = parsedSetup.url
-                  parsedSetup.token?.let { viewModel.setGatewayToken(it) }
+                  viewModel.setGatewayToken(parsedSetup.token.orEmpty())
+                  viewModel.setGatewayBootstrapToken(parsedSetup.bootstrapToken.orEmpty())
                   gatewayPassword = parsedSetup.password.orEmpty()
                 } else {
                   val manualUrl = composeGatewayManualUrl(manualHost, manualPort, manualTls)
