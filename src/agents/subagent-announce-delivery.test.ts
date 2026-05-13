@@ -425,6 +425,8 @@ describe("resolveSubagentCompletionOrigin", () => {
 
 describe("deliverSubagentAnnouncement queued delivery", () => {
   async function deliverQueuedAnnouncement(params: {
+    mode?: "followup" | "collect";
+    queueEmbeddedPiMessageWithOutcome?: QueueEmbeddedPiMessageWithOutcome;
     requesterOrigin?: {
       channel?: string;
       to?: string;
@@ -444,11 +446,14 @@ describe("deliverSubagentAnnouncement queued delivery", () => {
         ({
           messages: {
             queue: {
-              mode: "followup",
+              mode: params.mode ?? "followup",
               debounceMs: 0,
             },
           },
         }) as never,
+      ...(params.queueEmbeddedPiMessageWithOutcome
+        ? { queueEmbeddedPiMessageWithOutcome: params.queueEmbeddedPiMessageWithOutcome }
+        : {}),
     });
 
     const result = await deliverSubagentAnnouncement({
@@ -534,6 +539,24 @@ describe("deliverSubagentAnnouncement queued delivery", () => {
       threadId: "171.222",
     });
   });
+
+  it.each(["followup", "collect"] as const)(
+    "does not steer active requester announces in %s mode",
+    async (mode) => {
+      const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeMock(true);
+      await deliverQueuedAnnouncement({
+        mode,
+        queueEmbeddedPiMessageWithOutcome,
+        requesterOrigin: {
+          channel: "slack",
+          to: "channel:C123",
+          accountId: "acct-1",
+        },
+      });
+
+      expect(queueEmbeddedPiMessageWithOutcome).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("deliverSubagentAnnouncement completion delivery", () => {

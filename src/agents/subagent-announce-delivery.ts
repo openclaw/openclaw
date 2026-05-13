@@ -502,7 +502,7 @@ async function maybeQueueSubagentAnnounce(params: {
     sessionEntry: entry,
   });
 
-  const shouldSteer = queueSettings.mode !== "interrupt";
+  const shouldSteer = queueSettings.mode === "steer";
   if (shouldSteer) {
     const queueOutcome = resolveQueueEmbeddedPiMessageOutcome(sessionId, params.steerMessage, {
       steeringMode: "all",
