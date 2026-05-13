@@ -50,6 +50,7 @@ const markGatewayDraining = vi.fn();
 const waitForActiveTasks = vi.fn(async (_timeoutMs?: number) => ({ drained: true }));
 const resetAllLanes = vi.fn();
 const reloadTaskRegistryFromStore = vi.fn();
+const runInProcessRestartHooks = vi.fn();
 const restartGatewayProcessWithFreshPid = vi.fn<
   () => { mode: "spawned" | "supervised" | "disabled" | "failed"; pid?: number; detail?: string }
 >(() => ({ mode: "disabled" }));
@@ -131,6 +132,10 @@ vi.mock("../../process/command-queue.js", () => ({
 
 vi.mock("../../tasks/runtime-internal.js", () => ({
   reloadTaskRegistryFromStore: () => reloadTaskRegistryFromStore(),
+}));
+
+vi.mock("../../infra/in-process-restart-hooks.js", () => ({
+  runInProcessRestartHooks: () => runInProcessRestartHooks(),
 }));
 
 vi.mock("../../tasks/task-registry.maintenance.js", () => ({
@@ -532,6 +537,7 @@ describe("runGatewayLoop", () => {
       expect(resetAllLanes).toHaveBeenCalledTimes(1);
       expect(resetGatewayRestartStateForInProcessRestart).toHaveBeenCalledTimes(1);
       expect(reloadTaskRegistryFromStore).toHaveBeenCalledTimes(1);
+      expect(runInProcessRestartHooks).toHaveBeenCalledTimes(1);
 
       sigusr1();
 
@@ -546,6 +552,7 @@ describe("runGatewayLoop", () => {
       expect(resetAllLanes).toHaveBeenCalledTimes(2);
       expect(resetGatewayRestartStateForInProcessRestart).toHaveBeenCalledTimes(2);
       expect(reloadTaskRegistryFromStore).toHaveBeenCalledTimes(2);
+      expect(runInProcessRestartHooks).toHaveBeenCalledTimes(2);
       expect(acquireGatewayLock).toHaveBeenCalledTimes(3);
 
       sigterm();

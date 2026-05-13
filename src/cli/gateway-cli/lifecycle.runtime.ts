@@ -29,5 +29,6 @@ export {
   resetAllLanes,
   waitForActiveTasks,
 } from "../../process/command-queue.js";
+export { runInProcessRestartHooks } from "../../infra/in-process-restart-hooks.js";
 export { getInspectableActiveTaskRestartBlockers } from "../../tasks/task-registry.maintenance.js";
 export { reloadTaskRegistryFromStore } from "../../tasks/runtime-internal.js";

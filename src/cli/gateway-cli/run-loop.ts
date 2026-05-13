@@ -525,10 +525,15 @@ export async function runGatewayLoop(params: {
         reloadTaskRegistryFromStore,
         resetAllLanes,
         resetGatewayRestartStateForInProcessRestart,
+        runInProcessRestartHooks,
       } = await loadGatewayLifecycleRuntimeModule();
       resetAllLanes();
       resetGatewayRestartStateForInProcessRestart();
       reloadTaskRegistryFromStore();
+      // Drain plugin-registered subsystem cleanup (e.g. Telegram polling
+      // leases) at the same boundary so process-global state seeded by the
+      // previous lifecycle does not leak into the next one. (#81507)
+      runInProcessRestartHooks();
     });
 
     // Keep process alive; SIGUSR1 triggers an in-process restart (no supervisor required).

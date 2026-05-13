@@ -1,3 +1,4 @@
+import { registerInProcessRestartHook } from "openclaw/plugin-sdk/lifecycle-restart-hooks";
 import { fingerprintTelegramBotToken } from "./token-fingerprint.js";
 
 const TELEGRAM_POLLING_LEASES_KEY = Symbol.for("openclaw.telegram.pollingLeases");
@@ -186,4 +187,67 @@ export async function acquireTelegramPollingLease(
 
 export function resetTelegramPollingLeasesForTests(): void {
   pollingLeaseRegistry().clear();
+}
+
+/**
+ * Self-register the lifecycle reset hook on first module load. The underlying
+ * registry already de-duplicates by hook identity, but a fresh closure would
+ * be created on every module load, so we guard with a process-symbol flag to
+ * keep the registration idempotent across ESM/CJS interop boundaries.
+ */
+const LIFECYCLE_HOOK_REGISTERED_KEY = Symbol.for(
+  "openclaw.telegram.pollingLeases.lifecycleHookRegistered",
+);
+{
+  const host = process as NodeJS.Process & {
+    [LIFECYCLE_HOOK_REGISTERED_KEY]?: boolean;
+  };
+  if (!host[LIFECYCLE_HOOK_REGISTERED_KEY]) {
+    host[LIFECYCLE_HOOK_REGISTERED_KEY] = true;
+    registerInProcessRestartHook(() => {
+      releaseTelegramPollingLeasesForLifecycleReset();
+    });
+  }
+}
+
+/**
+ * Lifecycle boundary cleanup for in-process gateway restarts.
+ *
+ * The lease registry lives on a process-global symbol so it survives Node-level
+ * restarts that recycle the gateway lifecycle without exiting the process
+ * (SIGUSR1 in-process restart, OPENCLAW_NO_RESPAWN reload, etc.). When the old
+ * lifecycle's monitor task is dropped before its `finally` releases the lease,
+ * the next lifecycle's `acquireTelegramPollingLease()` sees a stale same-token
+ * entry and rejects every Telegram account with the duplicate-poller error.
+ *
+ * The fix is lifecycle-owned: at the restart boundary the gateway clears every
+ * lease this process is holding. We deliberately drop entries even if the
+ * abort signal has not yet observed the abort, because by definition the old
+ * lifecycle is ending and any still-running poller belongs to it. Late
+ * `release()` calls from the dropped tasks are safe — release() is idempotent
+ * and owner-checked, so they will not delete a fresh lease acquired by the new
+ * lifecycle.
+ *
+ * Same-token guard within a single lifecycle is unaffected: this function is
+ * only called from the in-process restart boundary, never from steady-state
+ * acquire/release paths. Two concurrent live pollers within one lifecycle are
+ * still rejected by `acquireTelegramPollingLease()`.
+ *
+ * Issue: openclaw/openclaw#81507
+ */
+export function releaseTelegramPollingLeasesForLifecycleReset(): number {
+  const registry = pollingLeaseRegistry();
+  if (registry.size === 0) {
+    return 0;
+  }
+  const entries = Array.from(registry.values());
+  registry.clear();
+  for (const entry of entries) {
+    try {
+      entry.resolveDone();
+    } catch {
+      // resolveDone is safe to call multiple times; ignore.
+    }
+  }
+  return entries.length;
 }

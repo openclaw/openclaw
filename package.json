@@ -343,6 +343,10 @@
       "types": "./dist/plugin-sdk/heartbeat-runtime.d.ts",
       "default": "./dist/plugin-sdk/heartbeat-runtime.js"
     },
+    "./plugin-sdk/lifecycle-restart-hooks": {
+      "types": "./dist/plugin-sdk/lifecycle-restart-hooks.d.ts",
+      "default": "./dist/plugin-sdk/lifecycle-restart-hooks.js"
+    },
     "./plugin-sdk/number-runtime": {
       "types": "./dist/plugin-sdk/number-runtime.d.ts",
       "default": "./dist/plugin-sdk/number-runtime.js"
