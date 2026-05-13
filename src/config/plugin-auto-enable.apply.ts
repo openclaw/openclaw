@@ -40,7 +40,35 @@ export function materializePluginAutoEnableCandidates(params: {
   });
 }
 
+const autoEnableCache = new WeakMap<object, WeakMap<object, PluginAutoEnableResult>>();
+
 export function applyPluginAutoEnable(params: {
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  manifestRegistry?: PluginManifestRegistry;
+}): PluginAutoEnableResult {
+  const config = params.config;
+  const env = params.env;
+  if (config && env) {
+    let inner = autoEnableCache.get(config);
+    if (inner) {
+      const hit = inner.get(env);
+      if (hit) {
+        return hit;
+      }
+    }
+    const result = computeAutoEnable(params);
+    if (!inner) {
+      inner = new WeakMap();
+      autoEnableCache.set(config, inner);
+    }
+    inner.set(env, result);
+    return result;
+  }
+  return computeAutoEnable(params);
+}
+
+function computeAutoEnable(params: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   manifestRegistry?: PluginManifestRegistry;
