@@ -23,6 +23,8 @@ minimumReleaseAgeExclude:
   - "@mariozechner/*"
   - "@openai/codex"
   - "@openai/codex-*"
+  - "@zed-industries/codex-acp"
+  - "@zed-industries/codex-acp-*"
   - "@typescript/native-preview*"
   - "@types/node"
   - "@rolldown/*"
