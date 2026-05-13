@@ -21,6 +21,7 @@ Text is supported everywhere; media and reactions vary by channel.
 
 ## Supported channels
 
+- [DingTalk](/channels/dingtalk-connector) - DingTalk (钉钉) enterprise internal bot via Stream mode; AI Card streaming + multi-account (bundled plugin).
 - [Discord](/channels/discord) - Discord Bot API + Gateway; supports servers, channels, and DMs.
 - [Feishu](/channels/feishu) - Feishu/Lark bot via WebSocket (bundled plugin).
 - [Google Chat](/channels/googlechat) - Google Chat API app via HTTP webhook (downloadable plugin).

@@ -1089,6 +1089,7 @@
                   "channels/wechat",
                   "channels/qqbot",
                   "channels/feishu",
+                  "channels/dingtalk-connector",
                   "channels/yuanbao",
                   "channels/zalo",
                   "channels/zalouser"
