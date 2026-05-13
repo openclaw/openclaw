@@ -85,6 +85,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import { sanitizeAssistantVisibleText } from "../shared/text/assistant-visible-text.js";
 import { escapeRegExp } from "../utils.js";
 import { MAX_SAFE_TIMEOUT_DELAY_MS, resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { loadOrCreateDeviceIdentity } from "./device-identity.js";
@@ -771,7 +772,9 @@ function normalizeHeartbeatReply(
   ackMaxChars: number,
 ) {
   const rawText = typeof payload.text === "string" ? payload.text : "";
-  const textForStrip = stripLeadingHeartbeatResponsePrefix(rawText, responsePrefix);
+  const textForStrip = sanitizeAssistantVisibleText(
+    stripLeadingHeartbeatResponsePrefix(rawText, responsePrefix),
+  );
   const stripped = stripHeartbeatToken(textForStrip, {
     mode: "heartbeat",
     maxAckChars: ackMaxChars,
@@ -784,7 +787,14 @@ function normalizeHeartbeatReply(
       hasMedia,
     };
   }
-  let finalText = stripped.text;
+  let finalText = sanitizeAssistantVisibleText(stripped.text);
+  if (!finalText && !hasMedia) {
+    return {
+      shouldSkip: true,
+      text: "",
+      hasMedia,
+    };
+  }
   if (responsePrefix && finalText && !finalText.startsWith(responsePrefix)) {
     finalText = `${responsePrefix} ${finalText}`;
   }

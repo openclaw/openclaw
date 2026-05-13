@@ -280,6 +280,24 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(input)).toBe("Before\n\nAfter");
   });
 
+  it("strips Codex file contents scaffolding before user-facing delivery", () => {
+    const input = [
+      "Before",
+      '<file_contents path="/tmp/HEARTBEAT.md" isStale=false isFullFile=true>',
+      " 1|# HEARTBEAT.md",
+      "</file_contents>",
+      "After",
+    ].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe("Before\n\nAfter");
+  });
+
+  it("strips bare tool_calls scaffolding marker lines before user-facing delivery", () => {
+    const input = ["<tool_calls>", "<tool_calls>", "<tool_calls>"].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe("");
+  });
+
   it("preserves literal tool-call tag examples in user-facing prose", () => {
     const input = "Use `<tool_call>` to describe the XML tag in docs.";
     expect(sanitizeUserFacingText(input)).toBe(input);

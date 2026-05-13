@@ -3,7 +3,7 @@ import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.types
 import type { ReplyToMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { stripLegacyBracketToolCallBlocks } from "../../shared/text/assistant-visible-text.js";
+import { sanitizeAssistantVisibleText } from "../../shared/text/assistant-visible-text.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import { copyReplyPayloadMetadata } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
@@ -102,12 +102,12 @@ function sanitizeHeartbeatPayload(payload: ReplyPayload): ReplyPayload {
   if (!text) {
     return payload;
   }
-  const cleaned = stripLegacyBracketToolCallBlocks(text);
+  const cleaned = sanitizeAssistantVisibleText(text);
   if (cleaned === text) {
     return payload;
   }
-  logVerbose("Stripped legacy tool-call block from heartbeat reply");
-  return copyReplyPayloadMetadata(payload, { ...payload, text: cleaned });
+  logVerbose("Stripped internal scaffolding from heartbeat reply");
+  return copyReplyPayloadMetadata(payload, { ...payload, text: cleaned || undefined });
 }
 
 export async function buildReplyPayloads(params: {

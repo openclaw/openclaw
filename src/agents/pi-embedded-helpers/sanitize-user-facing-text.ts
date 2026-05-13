@@ -15,6 +15,7 @@ import {
 } from "../../shared/string-coerce.js";
 import {
   stripLegacyBracketToolCallBlocks,
+  stripAssistantXmlScaffolding,
   stripMinimaxToolCallXml,
   stripToolCallXmlTags,
 } from "../../shared/text/assistant-visible-text.js";
@@ -406,7 +407,8 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
   }
   const errorContext = opts?.errorContext ?? false;
   const stripped = stripInboundMetadata(stripInternalRuntimeContext(stripFinalTagsFromText(raw)));
-  const withoutToolCallXml = stripToolCallXmlTags(stripMinimaxToolCallXml(stripped), {
+  const withoutAssistantXml = stripAssistantXmlScaffolding(stripped);
+  const withoutToolCallXml = stripToolCallXmlTags(stripMinimaxToolCallXml(withoutAssistantXml), {
     stripFunctionCallsXmlPayloads: true,
   });
   // Replay repair may synthesize this placeholder to keep provider transcripts valid.

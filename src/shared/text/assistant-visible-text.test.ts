@@ -608,6 +608,37 @@ describe("sanitizeAssistantVisibleText", () => {
     expect(sanitizeAssistantVisibleText(input)).toBe("Visible answer");
   });
 
+  it("strips Codex file contents scaffolding on the canonical user-visible path", () => {
+    const input = [
+      "Visible intro",
+      '<file_contents path="/tmp/HEARTBEAT.md" isStale=false isFullFile=true>',
+      " 1|# HEARTBEAT.md",
+      "</file_contents>",
+      "Visible outro",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("Visible intro\n\nVisible outro");
+  });
+
+  it("strips bare tool_calls scaffolding marker lines", () => {
+    const input = ["<tool_calls>", "<tool_calls>", "<tool_calls>"].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("");
+  });
+
+  it("keeps file contents examples inside fenced code", () => {
+    const input = [
+      "```xml",
+      '<file_contents path="/tmp/example.md">',
+      "example",
+      "</file_contents>",
+      "```",
+      "Visible answer",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe(input);
+  });
+
   it("drops malformed reasoning before orphan close tags when final text follows", () => {
     expect(sanitizeAssistantVisibleText("private chain of thought </think> Visible answer")).toBe(
       "Visible answer",

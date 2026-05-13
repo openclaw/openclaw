@@ -65,6 +65,38 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads[0]?.text).toBe("Before\n\n\nAfter");
   });
 
+  it("strips Codex XML scaffolding from heartbeat replies", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      isHeartbeat: true,
+      payloads: [
+        {
+          text: [
+            "Before",
+            "<tool_calls>",
+            '<file_contents path="/tmp/HEARTBEAT.md" isStale=false isFullFile=true>',
+            " 1|# HEARTBEAT.md",
+            "</file_contents>",
+            "After",
+          ].join("\n"),
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.text).toBe("Before\n\nAfter");
+  });
+
+  it("drops heartbeat replies that contain only internal scaffolding", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      isHeartbeat: true,
+      payloads: [{ text: ["<tool_calls>", "<tool_calls>", "<tool_calls>"].join("\n") }],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
   it("preserves internal delivery metadata through final payload normalization", async () => {
     const payload = markReplyPayloadForSourceSuppressionDelivery({
       text: "⚠️ API rate limit reached.\n[[reply_to_current]]",

@@ -784,6 +784,134 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
+  it("strips Codex XML scaffolding before heartbeat delivery", async () => {
+    const tmpDir = await createCaseDir("hb-strip-codex-scaffolding");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const replySpy = vi.fn();
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: { every: "5m", target: "whatsapp" },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [sessionKey]: {
+            sessionId: "sid",
+            updatedAt: Date.now(),
+            lastChannel: "whatsapp",
+            lastTo: "120363401234567890@g.us",
+          },
+        }),
+      );
+
+      replySpy.mockResolvedValue({
+        text: [
+          "Visible intro",
+          "<tool_calls>",
+          '<file_contents path="/tmp/HEARTBEAT.md" isStale=false isFullFile=true>',
+          " 1|# HEARTBEAT.md",
+          "</file_contents>",
+          "Visible outro",
+        ].join("\n"),
+      });
+      const sendWhatsApp = vi
+        .fn<
+          (
+            to: string,
+            text: string,
+            opts?: unknown,
+          ) => Promise<{ messageId: string; toJid: string }>
+        >()
+        .mockResolvedValue({
+          messageId: "m1",
+          toJid: "jid",
+        });
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
+      });
+
+      expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+      expectWhatsAppSendCall(sendWhatsApp, 0, {
+        to: "120363401234567890@g.us",
+        text: "Visible intro\n\nVisible outro",
+      });
+    } finally {
+      replySpy.mockReset();
+    }
+  });
+
+  it("suppresses short heartbeat acknowledgements after removing Codex XML scaffolding", async () => {
+    const tmpDir = await createCaseDir("hb-strip-codex-scaffolding-ack");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const replySpy = vi.fn();
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: { every: "5m", target: "whatsapp" },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [sessionKey]: {
+            sessionId: "sid",
+            updatedAt: Date.now(),
+            lastChannel: "whatsapp",
+            lastTo: "120363401234567890@g.us",
+          },
+        }),
+      );
+
+      replySpy.mockResolvedValue({
+        text: [
+          "All clear HEARTBEAT_OK",
+          '<file_contents path="/tmp/HEARTBEAT.md" isStale=false isFullFile=true>',
+          ` 1|${"x".repeat(350)}`,
+          "</file_contents>",
+        ].join("\n"),
+      });
+      const sendWhatsApp = vi
+        .fn<
+          (
+            to: string,
+            text: string,
+            opts?: unknown,
+          ) => Promise<{ messageId: string; toJid: string }>
+        >()
+        .mockResolvedValue({
+          messageId: "m1",
+          toJid: "jid",
+        });
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
+      });
+
+      expect(sendWhatsApp).toHaveBeenCalledTimes(0);
+    } finally {
+      replySpy.mockReset();
+    }
+  });
+
   it("uses per-agent heartbeat overrides and session keys", async () => {
     const tmpDir = await createCaseDir("hb-agent-overrides");
     const storePath = path.join(tmpDir, "sessions.json");

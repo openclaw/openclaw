@@ -11,6 +11,11 @@ import {
 const MEMORY_TAG_RE = /<\s*(\/?)\s*relevant[-_]memories\b[^<>]*>/gi;
 const MEMORY_TAG_QUICK_RE = /<\s*\/?\s*relevant[-_]memories\b/i;
 const LEGACY_BRACKET_TOOL_BLOCK_QUICK_RE = /\[\s*\/?\s*TOOL_(?:CALL|RESULT)\s*\]/i;
+const FILE_CONTENTS_TAG_RE = /<\s*(\/?)\s*file_contents\b[^<>]*>/gi;
+const FILE_CONTENTS_TAG_QUICK_RE = /<\s*\/?\s*file_contents\b/i;
+const TOOL_CALL_SCAFFOLDING_MARKER_LINE_RE =
+  /^[ \t]*<\s*\/?\s*(?:tool_calls|function_calls)\b[^<>]*>[ \t]*(?:\r?\n|$)/gim;
+const TOOL_CALL_SCAFFOLDING_MARKER_QUICK_RE = /<\s*\/?\s*(?:tool_calls|function_calls)\b/i;
 
 /**
  * Strip XML-style tool call tags that models sometimes emit as plain text.
@@ -623,6 +628,68 @@ function stripRelevantMemoriesTags(text: string): string {
   return result;
 }
 
+function stripFileContentsTags(text: string): string {
+  if (!text || !FILE_CONTENTS_TAG_QUICK_RE.test(text)) {
+    return text;
+  }
+  FILE_CONTENTS_TAG_RE.lastIndex = 0;
+
+  const codeRegions = findCodeRegions(text);
+  let result = "";
+  let lastIndex = 0;
+  let inFileContentsBlock = false;
+
+  for (const match of text.matchAll(FILE_CONTENTS_TAG_RE)) {
+    const idx = match.index ?? 0;
+    if (isInsideCode(idx, codeRegions)) {
+      continue;
+    }
+
+    const isClose = match[1] === "/";
+    if (!inFileContentsBlock) {
+      result += text.slice(lastIndex, idx);
+      if (!isClose) {
+        inFileContentsBlock = true;
+      }
+    } else if (isClose) {
+      inFileContentsBlock = false;
+    }
+
+    lastIndex = idx + match[0].length;
+  }
+
+  if (!inFileContentsBlock) {
+    result += text.slice(lastIndex);
+  }
+
+  return result;
+}
+
+function stripToolCallScaffoldingMarkerLines(text: string): string {
+  if (!text || !TOOL_CALL_SCAFFOLDING_MARKER_QUICK_RE.test(text)) {
+    return text;
+  }
+  TOOL_CALL_SCAFFOLDING_MARKER_LINE_RE.lastIndex = 0;
+
+  const codeRegions = findCodeRegions(text);
+  let result = "";
+  let cursor = 0;
+  for (const match of text.matchAll(TOOL_CALL_SCAFFOLDING_MARKER_LINE_RE)) {
+    const idx = match.index ?? 0;
+    if (isInsideCode(idx, codeRegions)) {
+      continue;
+    }
+    result += text.slice(cursor, idx);
+    cursor = idx + match[0].length;
+  }
+  result += text.slice(cursor);
+  return result;
+}
+
+export function stripAssistantXmlScaffolding(text: string): string {
+  return stripToolCallScaffoldingMarkerLines(stripFileContentsTags(text));
+}
+
 export type AssistantVisibleTextSanitizerProfile = "delivery" | "history" | "internal-scaffolding";
 
 type AssistantVisibleTextPipelineOptions = {
@@ -690,6 +757,7 @@ function applyAssistantVisibleTextStagePipeline(
     }
     cleaned = stripModelSpecialTokens(cleaned);
     cleaned = stripRelevantMemoriesTags(cleaned);
+    cleaned = stripAssistantXmlScaffolding(cleaned);
     cleaned = stripToolCallXmlTags(cleaned, {
       stripFunctionCallsXmlPayloads: options.stripFunctionCallsXmlPayloads,
     });
