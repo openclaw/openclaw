@@ -66,7 +66,7 @@ node scripts/polytropos-release.mjs release
 
 What it does (high level):
 
-- finds nearest reachable upstream tag `v<ver>` to determine the base version
+- finds the nearest reachable release tag (`v<ver>` or `v<ver>+poly.<N>`) and derives the base upstream version `v<ver>` from it
 - computes next global build number `poly.N` (always increments)
 - creates tag `v<ver>+poly.<N>`
 - builds prepared artifacts (`pnpm install`, `pnpm build`, `pnpm ui:build` via the pack workflow)
@@ -81,7 +81,7 @@ Dev mode uses `npm link` so the **globally installed** `openclaw` package resolv
 
 High level:
 
-1) In the fork repo:
+1. In the fork repo:
 
 ```bash
 cd ~/polytropos/openclaw-polytropos
@@ -91,7 +91,7 @@ pnpm ui:build
 npm link
 ```
 
-2) Link the global package name to that checkout:
+2. Link the global package name to that checkout:
 
 ```bash
 npm link openclaw

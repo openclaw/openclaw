@@ -23,10 +23,6 @@ function sh(cmd, args, opts = {}) {
   }).trim();
 }
 
-function shInherit(cmd, args, opts = {}) {
-  execFileSync(cmd, args, { stdio: "inherit", ...opts });
-}
-
 function fail(msg) {
   console.error(`ERROR: ${msg}`);
   process.exit(1);
@@ -94,7 +90,11 @@ async function shTee(logStream, cmd, args, opts = {}) {
         resolve();
         return;
       }
-      reject(new Error(`command failed: ${cmd} ${args.join(" ")} (code=${code ?? "null"}, signal=${signal ?? "null"})`));
+      reject(
+        new Error(
+          `command failed: ${cmd} ${args.join(" ")} (code=${code ?? "null"}, signal=${signal ?? "null"})`,
+        ),
+      );
     });
   });
 }
@@ -109,24 +109,36 @@ function getRepoRoot() {
   return sh("git", ["rev-parse", "--show-toplevel"]);
 }
 
-function getMostRecentReachableUpstreamVTag() {
-  // Use nearest reachable tag that looks like an upstream release tag (v2026.5.10 etc).
-  // We intentionally ignore poly tags here.
+function getNearestReachableReleaseTag() {
+  // Use the nearest reachable release tag from HEAD. This can be either:
+  //   - upstream tag: v<ver>
+  //   - polytropos tag: v<ver>+poly.<N>
+  //
+  // We intentionally do not require the nearest tag to be "upstream-only"; HEAD may be based on a prior poly release.
   let tag = "";
   try {
     tag = sh("git", ["describe", "--tags", "--match", "v*", "--abbrev=0"]);
   } catch {
     fail(
-      "no reachable upstream v* tag found from HEAD; fetch upstream tags and ensure history includes a v<ver> tag",
-    );
-  }
-  if (tag.includes("+poly.")) {
-    // If git picked a poly tag, explicitly fail; the base version must come from an upstream v* tag.
-    fail(
-      `nearest reachable v* tag was a poly tag (${tag}); expected an upstream tag like v2026.5.10`,
+      "no reachable v* release tag found from HEAD; fetch tags and ensure history includes a v<ver> or v<ver>+poly.<N> tag",
     );
   }
   return tag;
+}
+
+function parseReleaseTag(tag) {
+  // Accepted forms:
+  //   v<ver>
+  //   v<ver>+poly.<N>
+  //
+  // We treat the base upstream version as the v<ver> prefix (even when the nearest reachable tag is itself a poly tag).
+  const m = tag.match(/^(v[^+]+)(?:\+poly\.(\d+))?$/);
+  if (!m) {
+    fail(
+      `nearest reachable v* tag (${tag}) did not match expected release tag formats (v<ver> or v<ver>+poly.<N>)`,
+    );
+  }
+  return { baseUpstreamTag: m[1], polyBuild: m[2] ? Number(m[2]) : null };
 }
 
 function getMaxPolyBuildNumber() {
@@ -216,7 +228,7 @@ Usage:
 
 Behavior:
   - Requires clean git working tree
-  - Uses the most recent reachable upstream tag (v<ver>) as the base
+  - Uses the nearest reachable release tag (v<ver> or v<ver>+poly.<N>) to derive the base upstream version (v<ver>)
   - Computes next global poly build number N = max(existing poly) + 1
   - Creates tag v<ver>+poly.<N> at HEAD
   - Builds using: pnpm install; pnpm ui:build; pnpm build
@@ -244,13 +256,15 @@ banner(logStream, `Log file: ${logPath}`);
 
 ensureCleanWorkingTree();
 const repoRoot = getRepoRoot();
-const upstreamVTag = getMostRecentReachableUpstreamVTag();
+const nearestReleaseTag = getNearestReachableReleaseTag();
+const { baseUpstreamTag } = parseReleaseTag(nearestReleaseTag);
 
 const maxPoly = getMaxPolyBuildNumber();
 const nextPoly = maxPoly + 1;
-const polyTag = `${upstreamVTag}+poly.${nextPoly}`;
+const polyTag = `${baseUpstreamTag}+poly.${nextPoly}`;
 
-banner(logStream, `Upstream base tag (nearest reachable): ${upstreamVTag}`);
+banner(logStream, `Nearest reachable release tag: ${nearestReleaseTag}`);
+banner(logStream, `Upstream base tag (derived): ${baseUpstreamTag}`);
 banner(logStream, `Next release tag: ${polyTag}`);
 
 // Create annotated tag
@@ -280,7 +294,10 @@ if (currentTarget) {
   banner(logStream, `Setting previous.tgz -> ${currentTarget}`);
   lnSfn(currentTarget, previousTgz);
 } else {
-  banner(logStream, "No existing current.tgz symlink; setting previous.tgz to this tarball as bootstrap");
+  banner(
+    logStream,
+    "No existing current.tgz symlink; setting previous.tgz to this tarball as bootstrap",
+  );
   lnSfn(tarPath, previousTgz);
 }
 
@@ -300,7 +317,9 @@ banner(logStream, "Running installed package postinstall helper...");
   const installedRoot = path.join(npmRoot, pkgName);
   const helperPath = path.join(installedRoot, "scripts", "postinstall-bundled-plugins.mjs");
   if (!fs.existsSync(helperPath)) {
-    fail(`postinstall helper not found at ${helperPath} (resolved from installedRoot=${installedRoot})`);
+    fail(
+      `postinstall helper not found at ${helperPath} (resolved from installedRoot=${installedRoot})`,
+    );
   }
   await shTee(logStream, "node", [helperPath]);
 }
