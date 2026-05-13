@@ -42,7 +42,7 @@ describe("sessions.abort agent scope", () => {
     resolveSessionKeyForRunMock.mockReset();
   });
 
-  it("does not abort an active run whose session key belongs to another agent", async () => {
+  it("does not abort an active run whose session key belongs to another requested agent", async () => {
     const activeRun = createActiveRun("agent:beta:dashboard:target");
     const context = {
       chatAbortControllers: new Map([["run-beta", activeRun]]),
@@ -55,7 +55,7 @@ describe("sessions.abort agent scope", () => {
 
     await sessionsHandlers["sessions.abort"]({
       req: { id: "req-1" } as never,
-      params: { runId: "run-beta" },
+      params: { runId: "run-beta", agentId: "main" },
       respond,
       context,
       client: null,
@@ -72,6 +72,35 @@ describe("sessions.abort agent scope", () => {
     });
   });
 
+  it("aborts runId-only active runs using their non-default agent session key", async () => {
+    const activeRun = createActiveRun("agent:beta:dashboard:target");
+    const context = {
+      chatAbortControllers: new Map([["run-beta", activeRun]]),
+      getRuntimeConfig: () => ({
+        agents: { list: [{ id: "main", default: true }, { id: "beta" }] },
+      }),
+    } as unknown as GatewayRequestContext;
+    resolveSessionKeyForRunMock.mockReturnValue(undefined);
+    const respond = vi.fn() as unknown as RespondFn;
+
+    await sessionsHandlers["sessions.abort"]({
+      req: { id: "req-2" } as never,
+      params: { runId: "run-beta" },
+      respond,
+      context,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(resolveSessionKeyForRunMock).not.toHaveBeenCalled();
+    expect(chatAbortMock).toHaveBeenCalledTimes(1);
+    expect(chatAbortMock.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        params: { sessionKey: "agent:beta:dashboard:target", runId: "run-beta" },
+      }),
+    );
+  });
+
   it("aborts an active legacy-key run owned by the configured default agent", async () => {
     const activeRun = createActiveRun("main");
     const context = {
@@ -84,7 +113,7 @@ describe("sessions.abort agent scope", () => {
     const respond = vi.fn() as unknown as RespondFn;
 
     await sessionsHandlers["sessions.abort"]({
-      req: { id: "req-2" } as never,
+      req: { id: "req-3" } as never,
       params: { runId: "run-work" },
       respond,
       context,
@@ -111,7 +140,7 @@ describe("sessions.abort agent scope", () => {
     const respond = vi.fn() as unknown as RespondFn;
 
     await sessionsHandlers["sessions.abort"]({
-      req: { id: "req-3" } as never,
+      req: { id: "req-4" } as never,
       params: { key: "agent:beta:main", agentId: "main" },
       respond,
       context,
@@ -139,7 +168,7 @@ describe("sessions.abort agent scope", () => {
     const respond = vi.fn() as unknown as RespondFn;
 
     await sessionsHandlers["sessions.abort"]({
-      req: { id: "req-4" } as never,
+      req: { id: "req-5" } as never,
       params: { key: "main", agentId: "work" },
       respond,
       context,

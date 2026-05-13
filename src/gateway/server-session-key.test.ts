@@ -92,7 +92,7 @@ describe("resolveSessionKeyForRun", () => {
       },
     });
 
-    expect(resolveSessionKeyForRun("run-1")).toBe("acp:run-1");
+    expect(resolveSessionKeyForRun("run-1")).toBe("agent:retired:acp:run-1");
     expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(cfg, {});
   });
 
@@ -132,7 +132,7 @@ describe("resolveSessionKeyForRun", () => {
 
     expect(resolveSessionKeyForRun("run-1", { agentId: "retired" })).toBe("acp:run-1");
     expect(resolveSessionKeyForRun("run-1", { agentId: "main" })).toBeUndefined();
-    expect(resolveSessionKeyForRun("run-1")).toBe("acp:run-1");
+    expect(resolveSessionKeyForRun("run-1")).toBe("agent:retired:acp:run-1");
     expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledTimes(2);
     expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenNthCalledWith(
       2,
@@ -158,6 +158,15 @@ describe("resolveSessionKeyForRun", () => {
     registerAgentRunContext("run-live-work", { sessionKey: "main" });
 
     expect(resolveSessionKeyForRun("run-live-work")).toBe("main");
+    expect(hoisted.loadCombinedSessionStoreForGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves active agent-prefixed run contexts without an explicit agent scope", () => {
+    hoisted.loadConfigMock.mockReturnValue({});
+    registerAgentRunContext("run-live-work", { sessionKey: "agent:work:main" });
+
+    expect(resolveSessionKeyForRun("run-live-work")).toBe("agent:work:main");
+    expect(resolveSessionKeyForRun("run-live-work")).toBe("agent:work:main");
     expect(hoisted.loadCombinedSessionStoreForGatewayMock).not.toHaveBeenCalled();
   });
 
@@ -216,8 +225,8 @@ describe("resolveSessionKeyForRun", () => {
     hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
       storePath: "(multiple)",
       store: {
-        "agent:main:other": { sessionId: "run-dup", updatedAt: 999 },
         "agent:main:acp:run-dup": { sessionId: "run-dup", updatedAt: 100 },
+        "agent:main:other": { sessionId: "run-dup", updatedAt: 999 },
       },
     });
 

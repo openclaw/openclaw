@@ -1633,24 +1633,31 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const requestedKeyAgentId = scopedRequestedKey
       ? resolveSessionKeyAgentId(scopedRequestedKey, cfg)
       : undefined;
-    const requestedRunAgentId = requestedRunId
-      ? normalizeAgentId(requestedParamAgentId ?? requestedKeyAgentId ?? resolveDefaultAgentId(cfg))
+    const activeRunSessionKey = requestedRunId
+      ? context.chatAbortControllers.get(requestedRunId)?.sessionKey
       : undefined;
-    const activeRunSessionKey =
-      requestedRunId && requestedRunAgentId
-        ? context.chatAbortControllers.get(requestedRunId)?.sessionKey
-        : undefined;
-    const scopedActiveRunSessionKey =
-      activeRunSessionKey && requestedRunAgentId
+    const activeRunAgentId = resolveSessionKeyAgentId(activeRunSessionKey, cfg);
+    const inferredRunAgentId = requestedParamAgentId ?? requestedKeyAgentId ?? activeRunAgentId;
+    const requestedRunAgentId = requestedRunId
+      ? inferredRunAgentId
+        ? normalizeAgentId(inferredRunAgentId)
+        : undefined
+      : undefined;
+    const scopedActiveRunSessionKey = activeRunSessionKey
+      ? requestedRunAgentId
         ? sessionKeyBelongsToAgent(activeRunSessionKey, requestedRunAgentId, cfg)
           ? activeRunSessionKey
           : undefined
-        : undefined;
+        : activeRunSessionKey
+      : undefined;
     const keyCandidate =
       scopedRequestedKey ??
       scopedActiveRunSessionKey ??
-      (requestedRunId && requestedRunAgentId
-        ? resolveSessionKeyForRun(requestedRunId, { agentId: requestedRunAgentId })
+      (requestedRunId
+        ? resolveSessionKeyForRun(
+            requestedRunId,
+            requestedRunAgentId ? { agentId: requestedRunAgentId } : {},
+          )
         : undefined);
     if (!keyCandidate && requestedRunId) {
       respond(true, { ok: true, abortedRunId: null, status: "no-active-run" });

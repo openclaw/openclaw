@@ -1,3 +1,4 @@
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -59,6 +60,22 @@ function sessionKeyMatchesAgent(sessionKey: string, agentId: string, cfg: OpenCl
   return resolveSessionStoreAgentId(cfg, canonicalKey) === normalizedAgentId;
 }
 
+function resolveRunSessionKeyForCaller(
+  cfg: OpenClawConfig,
+  storeKey: string,
+  requestedAgentId: string | undefined,
+) {
+  const parsed = parseAgentSessionKey(storeKey);
+  if (
+    !requestedAgentId &&
+    parsed &&
+    parsed.agentId !== normalizeAgentId(resolveDefaultAgentId(cfg))
+  ) {
+    return storeKey;
+  }
+  return toAgentRequestSessionKey(storeKey) ?? storeKey;
+}
+
 export function resolveSessionKeyForRun(runId: string, opts: { agentId?: string } = {}) {
   const cfg = getRuntimeConfig();
   const requestedAgentId =
@@ -68,12 +85,12 @@ export function resolveSessionKeyForRun(runId: string, opts: { agentId?: string 
   const cacheAgentId = requestedAgentId ?? "*";
   const cached = getAgentRunContext(runId)?.sessionKey;
   if (!requestedAgentId && cached) {
-    const sessionKey = toAgentRequestSessionKey(cached) ?? cached;
+    const sessionKey = resolveRunSessionKeyForCaller(cfg, cached, requestedAgentId);
     setResolvedSessionKeyCache(runId, cacheAgentId, sessionKey);
     return sessionKey;
   }
   if (cached && requestedAgentId && sessionKeyMatchesAgent(cached, requestedAgentId, cfg)) {
-    const sessionKey = toAgentRequestSessionKey(cached) ?? cached;
+    const sessionKey = resolveRunSessionKeyForCaller(cfg, cached, requestedAgentId);
     setResolvedSessionKeyCache(runId, cacheAgentId, sessionKey);
     return sessionKey;
   }
@@ -99,7 +116,7 @@ export function resolveSessionKeyForRun(runId: string, opts: { agentId?: string 
   );
   const storeKey = resolvePreferredSessionKeyForSessionIdMatches(matches, runId);
   if (storeKey) {
-    const sessionKey = toAgentRequestSessionKey(storeKey) ?? storeKey;
+    const sessionKey = resolveRunSessionKeyForCaller(cfg, storeKey, requestedAgentId);
     registerAgentRunContext(runId, { sessionKey: storeKey });
     setResolvedSessionKeyCache(runId, cacheAgentId, sessionKey);
     return sessionKey;
