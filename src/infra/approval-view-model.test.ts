@@ -51,6 +51,10 @@ describe("buildPendingApprovalView", () => {
             scope: "policy",
             hash: "sha256:workspace",
           },
+          attestation: {
+            hash: "sha256:attestation",
+            expectedHash: "sha256:expected-attestation",
+          },
           target: "oc://TOOLS.md/tools/deploy",
         },
       },
@@ -66,6 +70,8 @@ describe("buildPendingApprovalView", () => {
       expect.arrayContaining([
         { label: "Policy Hash", value: "sha256:policy" },
         { label: "Workspace Hash", value: "sha256:workspace" },
+        { label: "Attestation Hash", value: "sha256:attestation" },
+        { label: "Expected Attestation", value: "sha256:expected-attestation" },
         { label: "Policy Target", value: "oc://TOOLS.md/tools/deploy" },
       ]),
     );
