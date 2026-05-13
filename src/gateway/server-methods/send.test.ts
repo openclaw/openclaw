@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => ({
   getChannelPlugin: vi.fn(),
   loadOpenClawPlugins: vi.fn(),
   applyPluginAutoEnable: vi.fn(),
+  activeSecretsSnapshot: null as { config: Record<string, unknown> } | null,
 }));
 
 vi.mock("../../config/config.js", async () => {
@@ -38,6 +39,10 @@ vi.mock("../../config/config.js", async () => {
     getRuntimeConfig: () => ({}),
   };
 });
+
+vi.mock("../../secrets/runtime.js", () => ({
+  getActiveSecretsRuntimeSnapshot: () => mocks.activeSecretsSnapshot,
+}));
 
 vi.mock("../../channels/plugins/index.js", () => ({
   getLoadedChannelPlugin: mocks.getChannelPlugin,
@@ -273,6 +278,7 @@ describe("gateway send mirroring", () => {
       changes: [],
       autoEnabledReasons: {},
     }));
+    mocks.activeSecretsSnapshot = null;
     mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "resolved" });
     mocks.resolveOutboundSessionRoute.mockImplementation(
       async ({ agentId, channel }: { agentId?: string; channel?: string }) => ({
@@ -352,6 +358,47 @@ describe("gateway send mirroring", () => {
     expect(secondCall?.[2]).toBeUndefined();
     expect(secondCall?.[3]?.channel).toBe("slack");
     expect(secondCall?.[3]?.cached).toBe(true);
+  });
+
+  it("dispatches message actions with the active secrets runtime snapshot config", async () => {
+    const rawSecretRef = { source: "exec", provider: "default", id: "discord-bot-token" };
+    const resolvedConfig = {
+      channels: {
+        discord: {
+          token: "resolved-discord-token",
+        },
+      },
+    };
+    mocks.activeSecretsSnapshot = { config: resolvedConfig };
+    mocks.getChannelPlugin.mockReturnValue({
+      actions: { handleAction: true },
+    });
+
+    const respond = vi.fn();
+    await sendHandlers["message.action"]({
+      params: {
+        channel: "discord",
+        action: "send",
+        params: { channelId: "C1", message: "hello" },
+        idempotencyKey: "idem-message-action-active-secrets",
+      } as never,
+      respond,
+      context: {
+        ...makeContext(),
+        getRuntimeConfig: () => ({ channels: { discord: { token: rawSecretRef } } }),
+      } as never,
+      req: { type: "req", id: "1", method: "message.action" },
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+
+    expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith(
+      expect.objectContaining({ config: resolvedConfig }),
+    );
+    expect(lastDispatchChannelMessageActionCall()?.cfg).toBe(resolvedConfig);
+    expect(respond).toHaveBeenCalledWith(true, { action: "handled" }, undefined, {
+      channel: "discord",
+    });
   });
 
   it("dedupes concurrent send requests while inflight", async () => {

@@ -22,6 +22,7 @@ import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { extractToolPayload } from "../../infra/outbound/tool-payload.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { normalizePollInput } from "../../polls.js";
+import { getActiveSecretsRuntimeSnapshot } from "../../secrets/runtime.js";
 import { parseThreadSessionSuffix } from "../../sessions/session-key-utils.js";
 import {
   normalizeOptionalLowercaseString,
@@ -131,8 +132,9 @@ async function resolveRequestedChannel(params: {
       error: errorShape(ErrorCodes.INVALID_REQUEST, params.unsupportedMessage(channelInput)),
     };
   }
+  const activeSecretsRuntimeConfig = getActiveSecretsRuntimeSnapshot()?.config;
   const cfg = applyPluginAutoEnable({
-    config: params.context.getRuntimeConfig(),
+    config: activeSecretsRuntimeConfig ?? params.context.getRuntimeConfig(),
     env: process.env,
   }).config;
   let channel = normalizedChannel;
