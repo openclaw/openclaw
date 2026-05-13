@@ -6,9 +6,12 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Require explicit browser device pairing [AI]. (#81289) Thanks @pgondhi987.
+- Require Control UI pairing before proxy-scoped access [AI]. (#81288) Thanks @pgondhi987.
 - Harden trusted-proxy source validation [AI]. (#81290) Thanks @pgondhi987.
 - Agents: add permissive item schemas to array tool parameters before provider submission, preventing OpenAI-compatible schema validation from rejecting plugin tools that omit `items`. Fixes #81175. (#81217) Thanks @JARVIS-Glasses.
 - Agents: escalate LLM idle watchdog timeouts through profile rotation and configured model fallback instead of leaving agent turns stuck after a silent model stream. Fixes #76877. (#80449) Thanks @jimdawdy-hub.
+- Discord voice: treat OpenAI Realtime startup auth failures as fatal, suppress duplicate realtime error logs, and stop autoJoin from retrying the same broken voice channel until credentials are fixed.
 - ACPX: stop forwarding unsupported timeout config options to Claude ACP while preserving OpenClaw's own turn timeout. (#80812) Thanks @sxxtony.
 - Session transcripts: redact sensitive message content in the centralized JSONL append path so CLI turns, gateway transcript injection, transcript mirrors, and guarded tool results use the same configured redaction behavior. Fixes #73565. Refs #73563. (#79645) Thanks @Ziy1-Tan.
 - Channels/iMessage: ignore Apple link-preview plugin payload attachments when users paste URLs, keeping the URL text while avoiding phantom media context. (#79374) Thanks @homer-byte.
@@ -21,6 +24,7 @@ Docs: https://docs.openclaw.ai
 - Validate node exec event provenance [AI]. (#81071) Thanks @pgondhi987.
 - Gateway: keep active reply runs visible to stuck-session diagnostics and clear no-active-work recovery state, preventing stale queued lanes after compaction or tool failures. Fixes #80677. (#81302)
 - Gateway/OpenAI HTTP: return OpenAI-compatible 400 errors for invalid sampling params and provider validation failures instead of collapsing them to 500s. (#81275) Thanks @Lellansin.
+- Telegram: publish plugin and skill command description localizations to native command menus while filtering unsupported locale codes and preserving Telegram command limits. (#81351) Thanks @jzakirov.
 - Limit hook CLI tool authority [AI]. (#81065) Thanks @pgondhi987.
 - Require admin scope for node device token management [AI]. (#81067) Thanks @pgondhi987.
 - Restrict chat sender allowlist matching [AI]. (#80898) Thanks @pgondhi987.
@@ -65,10 +69,12 @@ Docs: https://docs.openclaw.ai
 - Agents: rewrite generic provider internal errors with support request IDs into user-friendly transient error copy. (#49401) Thanks @y471823206.
 - WhatsApp: finish handling pending debounced inbound messages before closing the socket. (#81246) Thanks @mcaxtr.
 - CLI/commitments: write `--json` output to stdout instead of diagnostic logs so automation can parse commitment list and dismiss results. (#81215) Thanks @giodl73-repo.
+- Update: allow pnpm GitHub-source OpenClaw updates to approve the OpenClaw package build, so source installs complete their prepare/prepack lifecycle. (#81294) Thanks @fuller-stack-dev.
 
 ### Changes
 
 - Maintainers: add a Clawdtributor skill for Discrawl-backed contributor PR triage, live status checks, and compact review formatting.
+- Telegram: support Mini App `web_app` buttons in generic message presentation payloads, allowing `openclaw message send --presentation` to render Telegram Web App inline buttons for private chats. (#81356) Thanks @jzakirov.
 - Scripts: add `OPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree` so high-capacity local worktrees can use independent heavy-check locks while shared locks remain the default. Fixes #80729. (#80734) Thanks @samzong.
 - Agents/subagents: deliver native `sessions_spawn` tasks in the child session's first visible `[Subagent Task]` message instead of hiding the task in the sub-agent system prompt, keeping delegation auditable without duplicating tokens. Fixes #78592. Thanks @bradestes and @stainlu.
 - Voice Call/Telnyx: add realtime media-streaming call support for conversational voice calls. (#81024) Thanks @dynamite-bud.
