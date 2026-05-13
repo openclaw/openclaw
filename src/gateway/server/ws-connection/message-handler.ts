@@ -137,7 +137,6 @@ import {
   resolveHandshakeBrowserSecurityContext,
   resolvePairingLocality,
   resolveUnauthorizedHandshakeContext,
-  shouldMarkApprovalRuntimeClient,
   shouldAllowSilentLocalPairing,
   shouldSkipLocalBackendSelfPairing,
 } from "./handshake-auth-helpers.js";
@@ -1409,10 +1408,6 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         const sharedGatewaySessionGeneration = usesSharedGatewayAuth
           ? resolveSharedGatewaySessionGeneration(resolvedAuth, trustedProxies)
           : undefined;
-        const isTrustedApprovalRuntime = shouldMarkApprovalRuntimeClient({
-          connectParams,
-          localBackendSelfPairingOk: skipLocalBackendSelfPairing,
-        });
         clearHandshakeTimer();
         const nextClient: GatewayWsClient = {
           socket,
@@ -1423,7 +1418,6 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           sharedGatewaySessionGeneration,
           presenceKey,
           clientIp: reportedClientIp,
-          ...(isTrustedApprovalRuntime ? { internal: { approvalRuntime: true } } : {}),
           ...(Object.keys(pluginSurfaceUrls).length > 0 ? { pluginSurfaceUrls } : {}),
           ...(Object.keys(pluginNodeCapabilitySurfaces).length > 0
             ? { pluginNodeCapabilitySurfaces }

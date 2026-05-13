@@ -10,7 +10,6 @@ import {
   isPrivateOrLoopbackHost,
   resolveHostName,
 } from "../../net.js";
-import { APPROVALS_SCOPE } from "../../operator-scopes.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../protocol/client-info.js";
 import type { ConnectParams } from "../../protocol/index.js";
 import type { AuthProvidedKind } from "./auth-messages.js";
@@ -276,20 +275,6 @@ export function shouldSkipLocalBackendSelfPairing(params: {
   const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
   const usesDeviceTokenAuth = params.authMethod === "device-token";
   return (params.sharedAuthOk && usesSharedSecretAuth) || usesDeviceTokenAuth;
-}
-
-export function shouldMarkApprovalRuntimeClient(params: {
-  connectParams: ConnectParams;
-  localBackendSelfPairingOk: boolean;
-  hasVerifiedDeviceIdentity?: boolean;
-}): boolean {
-  const scopes = Array.isArray(params.connectParams.scopes) ? params.connectParams.scopes : [];
-  return (
-    params.connectParams.client.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
-    params.connectParams.client.mode === GATEWAY_CLIENT_MODES.BACKEND &&
-    scopes.includes(APPROVALS_SCOPE) &&
-    params.localBackendSelfPairingOk
-  );
 }
 
 function resolveSignatureToken(connectParams: ConnectParams): string | null {
