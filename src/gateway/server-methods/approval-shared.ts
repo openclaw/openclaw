@@ -108,13 +108,12 @@ export function isApprovalRecordVisibleToClient<TPayload>(params: {
   }
 
   const requestedByConnId = normalizeApprovalIdentity(params.record.requestedByConnId);
-  if (requestedByConnId || requestedByClientId) {
-    return (
-      (requestedByConnId !== null &&
-        requestedByConnId === normalizeApprovalIdentity(params.client?.connId)) ||
-      (requestedByClientId !== null &&
-        requestedByClientId === normalizeApprovalIdentity(params.client?.connect?.client?.id))
-    );
+  if (requestedByConnId) {
+    return requestedByConnId === normalizeApprovalIdentity(params.client?.connId);
+  }
+
+  if (requestedByClientId) {
+    return false;
   }
 
   return true;

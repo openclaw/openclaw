@@ -181,7 +181,7 @@ describe("handlePendingApprovalRequest", () => {
     ).toBe(false);
   });
 
-  it("does not widen non-gateway no-device approvals to every approval client", () => {
+  it("does not widen non-gateway no-device approvals to matching client ids", () => {
     const manager = new ExecApprovalManager();
     const record = manager.create(
       {
@@ -198,7 +198,7 @@ describe("handlePendingApprovalRequest", () => {
         record,
         client: createApprovalClient({
           connId: "conn-mobile",
-          clientId: GATEWAY_CLIENT_IDS.IOS_APP,
+          clientId: "client-owner",
           scopes: ["operator.approvals"],
         }),
       }),
@@ -514,7 +514,8 @@ describe("handlePendingApprovalRequest", () => {
     await requestPromise;
   });
 
-  it("targets no-device approvals by client id after excluding the requester conn", async () => {
+  it("does not target no-device approvals by self-declared client id", async () => {
+    hasApprovalTurnSourceRouteMock.mockReturnValueOnce(false);
     const manager = new ExecApprovalManager();
     const record = manager.create(
       {
@@ -529,7 +530,7 @@ describe("handlePendingApprovalRequest", () => {
     const respond = vi.fn();
     const broadcast = vi.fn();
     const broadcastToConnIds = vi.fn();
-    const visibleConnIds = new Set(["conn-owner-approval"]);
+    const visibleConnIds = new Set<string>();
     const requestPromise = handlePendingApprovalRequest({
       manager,
       record,
@@ -578,9 +579,60 @@ describe("handlePendingApprovalRequest", () => {
       visibleConnIds,
       { dropIfSlow: true },
     );
-
-    expect(manager.resolve(record.id, "allow-once")).toBe(true);
     await requestPromise;
+    expect(manager.getSnapshot(record.id)?.resolvedBy).toBe("no-approval-route");
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ id: "approval-no-device", decision: null }),
+      undefined,
+    );
+  });
+
+  it("does not resolve no-device approvals by self-declared client id", async () => {
+    const manager = new ExecApprovalManager();
+    const record = manager.create(
+      {
+        command: "echo ok",
+      },
+      60_000,
+      "approval-no-device-resolve",
+    );
+    record.requestedByConnId = "conn-requester";
+    record.requestedByClientId = "client-owner";
+    void manager.register(record, 60_000);
+    const respond = vi.fn();
+
+    await handleApprovalResolve({
+      manager,
+      inputId: record.id,
+      decision: "allow-once",
+      respond,
+      context: {
+        broadcast: vi.fn(),
+        broadcastToConnIds: vi.fn(),
+      } as unknown as GatewayRequestContext,
+      client: createApprovalClient({
+        connId: "conn-other",
+        clientId: "client-owner",
+        scopes: ["operator.approvals"],
+      }),
+      resolvedEventName: "exec.approval.resolved",
+      buildResolvedEvent: ({ approvalId, decision, snapshot }) => ({
+        id: approvalId,
+        decision,
+        request: snapshot.request,
+      }),
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: "unknown or expired approval id",
+      }),
+    );
+    expect(manager.getSnapshot(record.id)?.decision).toBeUndefined();
   });
 
   it("allows approval-scoped clients to resolve no-device gateway-client approvals", async () => {
