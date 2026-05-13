@@ -3,7 +3,9 @@ import "../../agents/test-helpers/fast-coding-tools.js";
 import {
   loadRunCronIsolatedAgentTurn,
   resetRunCronIsolatedAgentTurnHarness,
+  isCliProviderMock,
   resolveDeliveryTargetMock,
+  runCliAgentMock,
   runEmbeddedPiAgentMock,
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
@@ -45,6 +47,22 @@ function makeParamsWithToolsAllow(toolsAllow: string[]) {
   };
 }
 
+function makeExternalHookParams() {
+  const params = makeParams();
+  const job = params.job as Record<string, unknown>;
+  return {
+    ...params,
+    job: {
+      ...job,
+      payload: {
+        kind: "agentTurn",
+        message: "check owner tools",
+        externalContentSource: "webhook",
+      },
+    } as never,
+  };
+}
+
 function requireEmbeddedAgentCall(): {
   senderIsOwner?: boolean;
   jobId?: string;
@@ -61,6 +79,22 @@ function requireEmbeddedAgentCall(): {
     | undefined;
   if (!call) {
     throw new Error("Expected embedded PI agent call for owner auth");
+  }
+  return call;
+}
+
+function requireCliAgentCall(): {
+  senderIsOwner?: boolean;
+  jobId?: string;
+} {
+  const call = runCliAgentMock.mock.calls.at(0)?.[0] as
+    | {
+        senderIsOwner?: boolean;
+        jobId?: string;
+      }
+    | undefined;
+  if (!call) {
+    throw new Error("Expected CLI agent call for owner auth");
   }
   return call;
 }
@@ -101,6 +135,21 @@ describe("runCronIsolatedAgentTurn owner auth", () => {
 
       expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
       expect(requireEmbeddedAgentCall().senderIsOwner).toBe(false);
+    },
+  );
+
+  it(
+    "passes senderIsOwner=false to external-hook CLI cron runs",
+    { timeout: RUN_OWNER_AUTH_TIMEOUT_MS },
+    async () => {
+      isCliProviderMock.mockReturnValue(true);
+
+      await runCronIsolatedAgentTurn(makeExternalHookParams());
+
+      expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+      const call = requireCliAgentCall();
+      expect(call.senderIsOwner).toBe(false);
+      expect(call.jobId).toBe("owner-auth");
     },
   );
 

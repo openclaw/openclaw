@@ -270,6 +270,69 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
     expect(requireDeliveryRequest().deliveryPayloads).toEqual([{ text: "CLI repair ready." }]);
   });
 
+  it("preserves external-hook non-owner scope during CLI empty-output repair", async () => {
+    usePayloadTextExtraction();
+    isCliProviderMock.mockReturnValue(true);
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "messagechat",
+      to: "123",
+    });
+    runCliAgentMock
+      .mockResolvedValueOnce({
+        payloads: [{ text: "   " }],
+        meta: {
+          agentMeta: {
+            sessionId: "external-hook-cli-session",
+            usage: { input: 10, output: 20 },
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        payloads: [{ text: "External hook CLI repair ready." }],
+        meta: {
+          agentMeta: {
+            sessionId: "external-hook-cli-session",
+            usage: { input: 10, output: 20 },
+          },
+        },
+      });
+
+    mockRunCronFallbackPassthrough();
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentTurnParams({
+        job: {
+          payload: {
+            kind: "agentTurn",
+            message: "test",
+            externalContentSource: "webhook",
+          },
+        },
+      }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(runCliAgentMock).toHaveBeenCalledTimes(2);
+    const firstCall = runCliAgentMock.mock.calls.at(0)?.[0] as
+      | { senderIsOwner?: boolean }
+      | undefined;
+    const repairCall = runCliAgentMock.mock.calls.at(1)?.[0] as
+      | {
+          cliSessionId?: string;
+          disableBundleMcp?: boolean;
+          senderIsOwner?: boolean;
+        }
+      | undefined;
+    expect(firstCall?.senderIsOwner).toBe(false);
+    expect(repairCall?.senderIsOwner).toBe(false);
+    expect(repairCall?.cliSessionId).toBe("external-hook-cli-session");
+    expect(repairCall?.disableBundleMcp).toBe(true);
+    expect(requireDeliveryRequest().deliveryPayloads).toEqual([
+      { text: "External hook CLI repair ready." },
+    ]);
+  });
+
   it("fails explicitly when the no-tools repair pass still has no deliverable text", async () => {
     usePayloadTextExtraction();
     runEmbeddedPiAgentMock
