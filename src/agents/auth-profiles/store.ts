@@ -43,6 +43,7 @@ type LoadAuthProfileStoreOptions = {
 type SaveAuthProfileStoreOptions = {
   env?: NodeJS.ProcessEnv;
   filterExternalAuthProfiles?: boolean;
+  forceLocalProfileIds?: Iterable<string>;
   syncExternalCli?: boolean;
 };
 
@@ -218,8 +219,12 @@ function shouldKeepProfileInLocalStore(params: {
   credential: AuthProfileStore["profiles"][string];
   agentDir?: string;
   options?: SaveAuthProfileStoreOptions;
+  forceLocalProfileIds?: Set<string>;
 }): boolean {
   if (params.credential.type !== "oauth") {
+    return true;
+  }
+  if (params.forceLocalProfileIds?.has(params.profileId)) {
     return true;
   }
   if (
@@ -248,6 +253,9 @@ function buildLocalAuthProfileStoreForSave(params: {
   options?: SaveAuthProfileStoreOptions;
 }): AuthProfileStore {
   const localStore = cloneAuthProfileStore(params.store);
+  const forceLocalProfileIds = params.options?.forceLocalProfileIds
+    ? new Set(params.options.forceLocalProfileIds)
+    : undefined;
   localStore.profiles = Object.fromEntries(
     Object.entries(localStore.profiles).filter(([profileId, credential]) =>
       shouldKeepProfileInLocalStore({
@@ -256,6 +264,7 @@ function buildLocalAuthProfileStoreForSave(params: {
         credential,
         agentDir: params.agentDir,
         options: params.options,
+        forceLocalProfileIds,
       }),
     ),
   );
@@ -305,6 +314,7 @@ function saveAuthProfileStoreInTransaction(
 export async function updateAuthProfileStoreWithLock(params: {
   agentDir?: string;
   env?: NodeJS.ProcessEnv;
+  saveOptions?: SaveAuthProfileStoreOptions;
   updater: (store: AuthProfileStore) => boolean;
 }): Promise<AuthProfileStore | null> {
   try {
@@ -324,7 +334,7 @@ export async function updateAuthProfileStoreWithLock(params: {
         const shouldSave = params.updater(store);
         savedStore = store;
         if (shouldSave) {
-          saveAuthProfileStoreInTransaction(database, store, params.agentDir);
+          saveAuthProfileStoreInTransaction(database, store, params.agentDir, params.saveOptions);
         }
       },
       { env: params.env },

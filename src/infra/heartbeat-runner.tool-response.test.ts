@@ -75,7 +75,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
         {
           verbose: false,
           cfg: params.cfg,
-          accountId: undefined,
+          accountId: "default",
         },
       ],
     ]);

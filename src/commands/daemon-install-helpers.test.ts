@@ -2,7 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { writeStateDirDotEnv } from "../config/test-helpers.js";
+import { sourceBundledPluginTestEnv, writeStateDirDotEnv } from "../config/test-helpers.js";
+import { resetSecretTargetRegistryQueryCacheForTest } from "../secrets/target-registry-query.js";
 
 const mocks = vi.hoisted(() => ({
   hasAnyAuthProfileStoreSource: vi.fn(() => true),
@@ -47,6 +48,8 @@ import {
 
 afterEach(() => {
   vi.resetAllMocks();
+  vi.unstubAllEnvs();
+  resetSecretTargetRegistryQueryCacheForTest();
 });
 
 function firstMockArg(mockFn: ReturnType<typeof vi.fn>, label: string): Record<string, any> {
@@ -116,6 +119,10 @@ describe("buildGatewayInstallPlan", () => {
   let isolatedHome: string;
   beforeEach(() => {
     isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), "oc-plan-test-"));
+    for (const [key, value] of Object.entries(sourceBundledPluginTestEnv())) {
+      vi.stubEnv(key, value);
+    }
+    resetSecretTargetRegistryQueryCacheForTest();
   });
   afterEach(() => {
     fs.rmSync(isolatedHome, { recursive: true, force: true });

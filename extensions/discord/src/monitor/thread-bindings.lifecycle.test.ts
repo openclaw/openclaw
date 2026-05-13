@@ -1468,7 +1468,7 @@ describe("thread binding lifecycle", () => {
       sessionKey: "agent:codex:acp:uncertain",
       rowSessionKey: "agent:codex:acp:uncertain",
       cfg: EMPTY_DISCORD_TEST_CONFIG,
-      readFailed: true,
+      storeReadFailed: true,
       entry: undefined,
       acp: undefined,
     });

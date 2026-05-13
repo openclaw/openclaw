@@ -15,7 +15,8 @@ import {
   storeWith,
 } from "./oauth-test-utils.js";
 import { resolveApiKeyForProfile, resetOAuthRefreshQueuesForTest } from "./oauth.js";
-import { loadPersistedAuthProfileStore } from "./persisted.js";
+import { authProfileStoreKey } from "./persisted.js";
+import { readAuthProfileStorePayloadResult } from "./sqlite-storage.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
@@ -43,11 +44,12 @@ function expectPersistedOpenAICodexProfileWithoutInlineTokens(
 }
 
 function readPersistedStore(agentDir: string): AuthProfileStore {
-  const store = loadPersistedAuthProfileStore(agentDir);
+  const result = readAuthProfileStorePayloadResult(authProfileStoreKey(agentDir));
+  const store = result.exists ? result.value : undefined;
   if (!store) {
     throw new Error(`Expected persisted auth store for ${agentDir}`);
   }
-  return store;
+  return store as unknown as AuthProfileStore;
 }
 
 function expectOAuthProfileFields(

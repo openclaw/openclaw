@@ -97,7 +97,7 @@ describe("modelsAuthListCommand", () => {
       {
         agentDir: "/tmp/openclaw/agents/coder",
         agentId: "coder",
-        authStatePath: "/tmp/openclaw/agents/coder/auth-state.json",
+        authStateStore: "sqlite",
         profiles: [
           {
             cooldownUntil: "2027-01-15T08:00:10.000Z",
@@ -167,7 +167,7 @@ describe("modelsAuthListCommand", () => {
       {
         agentDir: "/tmp/openclaw/agents/main",
         agentId: "main",
-        authStatePath: "/tmp/openclaw/agents/main/auth-state.json",
+        authStateStore: "sqlite",
         profiles: [
           {
             id: "openai:api-key-backup",

@@ -125,6 +125,8 @@ describe("agent session resolution", () => {
           sessionId: "typed-channel-reset",
           updatedAt: Date.now() - 30 * 60_000,
           lastChannel: "quietchat",
+          lastTo: "channel:quiet-room",
+          chatType: "channel",
         },
       });
       const cfg = mockConfig(home);

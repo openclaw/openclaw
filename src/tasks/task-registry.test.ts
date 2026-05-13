@@ -924,72 +924,79 @@ describe("task-registry", () => {
     {
       id: "channel",
       name: "room channel",
+      chatType: "channel" as const,
       ownerKey: "agent:main:guildchat:channel:123",
       target: "guildchat:channel:123",
     },
     {
       id: "group",
       name: "group",
+      chatType: "group" as const,
       ownerKey: "agent:main:guildchat:group:123",
       target: "guildchat:group:123",
     },
     {
       id: "topic",
       name: "group topic",
+      chatType: "group" as const,
       ownerKey: "agent:main:guildchat:group:-100123:topic:42",
       target: "guildchat:group:-100123:topic:42",
     },
-  ])("routes $name ACP completion through the parent session", async ({ id, ownerKey, target }) => {
-    await withTaskRegistryTempDir(async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
-      resetTaskRegistryForTests();
-      const runId = `run-group-terminal-${id}`;
-      hoisted.sendMessageMock.mockResolvedValue({
-        channel: "guildchat",
-        to: target,
-        via: "direct",
-      });
-
-      createTaskRecord({
-        runtime: "acp",
-        ownerKey,
-        scopeKind: "session",
-        requesterOrigin: {
+  ])(
+    "routes $name ACP completion through the parent session",
+    async ({ id, chatType, ownerKey, target }) => {
+      await withTaskRegistryTempDir(async (root) => {
+        process.env.OPENCLAW_STATE_DIR = root;
+        resetTaskRegistryForTests();
+        const runId = `run-group-terminal-${id}`;
+        hoisted.sendMessageMock.mockResolvedValue({
           channel: "guildchat",
           to: target,
-        },
-        childSessionKey: "agent:main:acp:child",
-        runId,
-        task: "Investigate issue",
-        status: "running",
-        deliveryStatus: "pending",
-        startedAt: 100,
-      });
+          via: "direct",
+        });
 
-      emitAgentEvent({
-        runId,
-        stream: "lifecycle",
-        data: {
-          phase: "end",
-          endedAt: 250,
-        },
-      });
+        createTaskRecord({
+          runtime: "acp",
+          ownerKey,
+          scopeKind: "session",
+          requesterOrigin: {
+            channel: "guildchat",
+            to: target,
+            chatType,
+          },
+          childSessionKey: "agent:main:acp:child",
+          runId,
+          task: "Investigate issue",
+          status: "running",
+          deliveryStatus: "pending",
+          startedAt: 100,
+        });
 
-      await waitForAssertion(() => {
-        const task = findTaskByRunId(runId);
-        if (!task) {
-          throw new Error(`Expected task for run ${runId}`);
-        }
-        expect(task.status).toBe("succeeded");
-        expect(task.deliveryStatus).toBe("session_queued");
+        emitAgentEvent({
+          runId,
+          stream: "lifecycle",
+          data: {
+            phase: "end",
+            endedAt: 250,
+          },
+        });
+
+        await waitForAssertion(() => {
+          const task = findTaskByRunId(runId);
+          if (!task) {
+            throw new Error(`Expected task for run ${runId}`);
+          }
+          expect(task.status).toBe("succeeded");
+          expect(task.deliveryStatus).toBe("session_queued");
+        });
+        expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+        expect(peekSystemEvents(ownerKey)).toEqual([
+          "Background task done: ACP background task (run run-grou).",
+        ]);
+        expect(hasPendingHeartbeatWake()).toBe(true);
       });
-      expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
-      expect(peekSystemEvents(ownerKey)).toEqual([
-        "Background task done: ACP background task (run run-grou).",
-      ]);
-      expect(hasPendingHeartbeatWake()).toBe(true);
-    });
-  });
+    },
+  );
 
   it("routes typed group ACP completion through the parent session without parsing owner key", async () => {
     await withTaskRegistryTempDir(async (root) => {

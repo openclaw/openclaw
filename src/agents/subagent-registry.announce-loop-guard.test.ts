@@ -60,7 +60,9 @@ vi.mock("../infra/agent-events.js", () => ({
 
 vi.mock("./subagent-registry.store.js", () => ({
   loadSubagentRegistryFromDisk: mocks.loadSubagentRegistryFromDisk,
+  loadSubagentRegistryFromState: mocks.loadSubagentRegistryFromDisk,
   saveSubagentRegistryToDisk: mocks.saveSubagentRegistryToDisk,
+  saveSubagentRegistryToState: mocks.saveSubagentRegistryToDisk,
 }));
 
 vi.mock("./subagent-announce-queue.js", () => ({
@@ -111,6 +113,17 @@ describe("announce loop guard (#18264)", () => {
     registry.__testing.setDepsForTest({
       captureSubagentCompletionReply: mocks.captureSubagentCompletionReply,
       cleanupBrowserSessionsForLifecycleEnd: async () => {},
+      getSubagentRunsSnapshotForRead: (runs) => new Map(runs),
+      persistSubagentRunsToState: (runs) => {
+        mocks.saveSubagentRegistryToDisk(new Map(runs));
+      },
+      restoreSubagentRunsFromState: ({ runs }) => {
+        const restored = mocks.loadSubagentRegistryFromDisk();
+        for (const [runId, entry] of restored) {
+          runs.set(runId, entry);
+        }
+        return restored.size;
+      },
       runSubagentAnnounceFlow: mocks.runSubagentAnnounceFlow,
     });
   });

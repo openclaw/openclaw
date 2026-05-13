@@ -314,6 +314,13 @@ describe("createCacheTrace", () => {
       messageFingerprints: [fingerprint],
       messagesDigest: crypto.createHash("sha256").update(JSON.stringify(fingerprint)).digest("hex"),
       messages: [{ role: "user", content: "hello", child: { ref: "[Circular]" } }],
+      modelApi: undefined,
+      modelId: undefined,
+      provider: undefined,
+      runId: undefined,
+      sessionId: undefined,
+      sessionKey: undefined,
+      workspaceDir: undefined,
     });
   });
 });

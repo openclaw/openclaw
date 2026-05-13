@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { appendSqliteSessionTranscriptEvent } from "../config/sessions/transcript-store.sqlite.js";
-import { saveCronStore } from "../cron/store.js";
+import { resolveCronStoreKey, saveCronStore } from "../cron/store.js";
 import type { CronStoreSnapshot } from "../cron/types.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -37,7 +37,7 @@ async function writeCronJob(id: string, name: string) {
       },
     ],
   };
-  await saveCronStore(path.join(tempDir!, "cron", "jobs.json"), store);
+  await saveCronStore(resolveCronStoreKey(), store);
 }
 
 function appendAssistantEvent(params: { sessionId: string; text: string; id: string }) {

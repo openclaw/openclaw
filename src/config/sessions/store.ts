@@ -18,6 +18,7 @@ import {
   applySqliteSessionEntriesPatch,
   deleteSqliteSessionEntry,
   listSqliteSessionEntries,
+  moveSqliteSessionEntryKey,
   readSqliteSessionEntry,
   replaceSqliteSessionEntry,
 } from "./session-entries.sqlite.js";
@@ -86,6 +87,16 @@ export function deleteSessionEntry(
   options: SessionEntryRowOptions & { sessionKey: string },
 ): boolean {
   return deleteSqliteSessionEntry(options);
+}
+
+export function moveSessionEntryKey(
+  options: SessionEntryRowOptions & {
+    fromSessionKey: string;
+    toSessionKey: string;
+    entry?: SessionEntry;
+  },
+): boolean {
+  return moveSqliteSessionEntryKey(options);
 }
 
 export async function patchSessionEntry(

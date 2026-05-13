@@ -19,6 +19,12 @@ type DeliveryQueueDatabase = Pick<OpenClawStateKyselyDatabase, "delivery_queue_e
 
 type DeliveryQueueEntryRow = {
   entry_json: string;
+  enqueued_at?: number;
+  last_attempt_at?: number | null;
+  last_error?: string | null;
+  platform_send_started_at?: number | null;
+  recovery_state?: string | null;
+  retry_count?: number;
 };
 
 const QUEUE_NAME = "outbound-delivery";
@@ -31,7 +37,37 @@ function parseEntry(row: DeliveryQueueEntryRow | undefined, id: string): Record<
   if (!row) {
     throw new Error(`missing queued delivery test entry: ${id}`);
   }
-  return JSON.parse(row.entry_json) as Record<string, unknown>;
+  const entry = JSON.parse(row.entry_json) as Record<string, unknown>;
+  if (typeof row.enqueued_at === "number") {
+    entry.enqueuedAt = row.enqueued_at;
+  }
+  if (typeof row.retry_count === "number") {
+    entry.retryCount = row.retry_count;
+  }
+  if (typeof row.last_attempt_at === "number") {
+    entry.lastAttemptAt = row.last_attempt_at;
+  } else if (row.last_attempt_at === null) {
+    delete entry.lastAttemptAt;
+  }
+  if (typeof row.last_error === "string") {
+    entry.lastError = row.last_error;
+  } else if (row.last_error === null) {
+    delete entry.lastError;
+  }
+  if (typeof row.platform_send_started_at === "number") {
+    entry.platformSendStartedAt = row.platform_send_started_at;
+  } else if (row.platform_send_started_at === null) {
+    delete entry.platformSendStartedAt;
+  }
+  if (
+    row.recovery_state === "send_attempt_started" ||
+    row.recovery_state === "unknown_after_send"
+  ) {
+    entry.recoveryState = row.recovery_state;
+  } else if (row.recovery_state === null) {
+    delete entry.recoveryState;
+  }
+  return entry;
 }
 
 export function installDeliveryQueueTmpDirHooks(): { readonly tmpDir: () => string } {
@@ -69,7 +105,15 @@ export function readQueuedEntry(tmpDir: string, id: string): Record<string, unkn
     stateDatabase.db,
     db
       .selectFrom("delivery_queue_entries")
-      .select(["entry_json"])
+      .select([
+        "entry_json",
+        "enqueued_at",
+        "last_attempt_at",
+        "last_error",
+        "platform_send_started_at",
+        "recovery_state",
+        "retry_count",
+      ])
       .where("queue_name", "=", QUEUE_NAME)
       .where("id", "=", id)
       .where("status", "=", "pending"),
@@ -111,12 +155,20 @@ export function readFailedQueuedEntry(tmpDir: string, id: string): Record<string
     stateDatabase.db,
     db
       .selectFrom("delivery_queue_entries")
-      .select(["entry_json"])
+      .select([
+        "entry_json",
+        "enqueued_at",
+        "last_attempt_at",
+        "last_error",
+        "platform_send_started_at",
+        "recovery_state",
+        "retry_count",
+      ])
       .where("queue_name", "=", QUEUE_NAME)
       .where("id", "=", id)
       .where("status", "=", "failed"),
   );
-  return row ? (JSON.parse(row.entry_json) as Record<string, unknown>) : null;
+  return row ? parseEntry(row, id) : null;
 }
 
 export function readPendingQueuedEntries(tmpDir: string): Record<string, unknown>[] {
@@ -126,12 +178,20 @@ export function readPendingQueuedEntries(tmpDir: string): Record<string, unknown
     stateDatabase.db,
     db
       .selectFrom("delivery_queue_entries")
-      .select(["entry_json"])
+      .select([
+        "entry_json",
+        "enqueued_at",
+        "last_attempt_at",
+        "last_error",
+        "platform_send_started_at",
+        "recovery_state",
+        "retry_count",
+      ])
       .where("queue_name", "=", QUEUE_NAME)
       .where("status", "=", "pending")
       .orderBy("enqueued_at", "asc")
       .orderBy("id", "asc"),
-  ).rows.map((row) => JSON.parse(row.entry_json) as Record<string, unknown>);
+  ).rows.map((row) => parseEntry(row, "pending-list-entry"));
 }
 
 export function writeQueuedEntryJsonForTest(

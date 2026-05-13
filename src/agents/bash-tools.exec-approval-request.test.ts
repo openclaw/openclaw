@@ -286,10 +286,19 @@ describe("requestExecApprovalDecision", () => {
       ask: "always",
     });
 
-    expect(commandExplainerMock.explainShellCommand).not.toHaveBeenCalled();
-    expect(commandExplainerMock.formatCommandSpans).not.toHaveBeenCalled();
+    expect(commandExplainerMock.explainShellCommand).toHaveBeenCalledWith(
+      'ls | grep "stuff" | python -c \'print("hi")\'',
+    );
+    expect(commandExplainerMock.formatCommandSpans).toHaveBeenCalledWith(
+      'ls | grep "stuff" | python -c \'print("hi")\'',
+    );
     const payload = requireApprovalRequestPayload(0);
-    expect(payload?.commandSpans).toBeUndefined();
+    expect(payload?.commandSpans).toStrictEqual([
+      { startIndex: 0, endIndex: 2 },
+      { startIndex: 0, endIndex: 4 },
+      { startIndex: 5, endIndex: 9 },
+      { startIndex: 20, endIndex: 26 },
+    ]);
   });
 
   it("does not generate command spans when command highlighting is disabled", async () => {

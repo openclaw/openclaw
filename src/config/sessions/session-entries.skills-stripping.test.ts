@@ -28,7 +28,10 @@ vi.mock("../config.js", async () => ({
 }));
 
 const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-skills-strip-" });
-type SessionEntriesTestDatabase = Pick<OpenClawAgentKyselyDatabase, "sessions" | "session_entries">;
+type SessionEntriesTestDatabase = Pick<
+  OpenClawAgentKyselyDatabase,
+  "session_entries" | "session_routes" | "sessions"
+>;
 
 function makeFixtureSkill(name: string, bodySize = 3000): Skill {
   // 3KB body simulates a realistic SKILL.md.
@@ -125,6 +128,14 @@ describe("session entry persistence strips resolvedSkills", () => {
         session_key: sessionKey,
         session_id: entry.sessionId,
         entry_json: JSON.stringify(entry),
+        updated_at: updatedAt,
+      }),
+    );
+    executeSqliteQuerySync(
+      database.db,
+      db.insertInto("session_routes").values({
+        session_key: sessionKey,
+        session_id: entry.sessionId,
         updated_at: updatedAt,
       }),
     );

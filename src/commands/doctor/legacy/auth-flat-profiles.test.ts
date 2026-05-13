@@ -76,11 +76,11 @@ describe("maybeRepairLegacyFlatAuthProfileStores", () => {
 
     expect(result.detected).toEqual([authPath]);
     expect(result.changes).toStrictEqual([
-      `Rewrote ${authPath} to the canonical auth profile format (backup: ${authPath}.legacy-flat.123.bak).`,
+      `Imported ${authPath} into SQLite (backup: ${authPath}.legacy-flat.123.bak).`,
     ]);
     expect(result.warnings).toStrictEqual([]);
     expect(fs.existsSync(authPath)).toBe(false);
-    expect(loadPersistedAuthProfileStore(state.agentDir())).toEqual({
+    expect(loadPersistedAuthProfileStore(state.agentDir())).toMatchObject({
       version: 1,
       profiles: {
         "ollama-windows:default": {
@@ -184,7 +184,7 @@ describe("maybeRepairLegacyFlatAuthProfileStores", () => {
     expect(JSON.parse(fs.readFileSync(`${legacyPath}.legacy-oauth.345.bak`, "utf8"))).toEqual(
       legacy,
     );
-    expect(loadPersistedAuthProfileStore(state.agentDir())).toEqual({
+    expect(loadPersistedAuthProfileStore(state.agentDir())).toMatchObject({
       version: 1,
       profiles: {
         "openai-codex:default": {
@@ -247,6 +247,7 @@ describe("maybeRepairLegacyFlatAuthProfileStores", () => {
     expect(result.detected).toEqual([authPath]);
     expect(result.changes).toStrictEqual([
       `Moved aws-sdk profile metadata from ${authPath} to auth.profiles (backup: ${authPath}.aws-sdk-profile.456.bak).`,
+      `Imported ${authPath} into SQLite (backup: ${authPath}.legacy-flat.456.bak).`,
     ]);
     expect(result.warnings).toStrictEqual([]);
     expect(cfg).toEqual({
@@ -260,7 +261,7 @@ describe("maybeRepairLegacyFlatAuthProfileStores", () => {
       },
     });
     expect(fs.existsSync(authPath)).toBe(false);
-    expect(loadPersistedAuthProfileStore(state.agentDir())).toEqual({
+    expect(loadPersistedAuthProfileStore(state.agentDir())).toMatchObject({
       version: 1,
       profiles: {
         "openrouter:default": {

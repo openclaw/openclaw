@@ -126,7 +126,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
   ): {
     Provider?: string;
     SessionKey?: string;
-    MessageThreadId?: number;
+    MessageThreadId?: string | number;
     Body?: string;
     ForceSenderIsOwnerFalse?: boolean;
   } => {
@@ -137,7 +137,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
     return ctx as {
       Provider?: string;
       SessionKey?: string;
-      MessageThreadId?: number;
+      MessageThreadId?: string | number;
       Body?: string;
       ForceSenderIsOwnerFalse?: boolean;
     };
@@ -148,14 +148,14 @@ describe("Ghost reminder bug (issue #13317)", () => {
     params: {
       to: string;
       text: string;
-      messageThreadId?: number;
+      messageThreadId?: string | number;
     },
   ) => {
     expect(sendTelegram).toHaveBeenCalledTimes(1);
     const [to, text, options] = mockCallAt(sendTelegram, 0, "Telegram send");
     expect(to).toBe(params.to);
     expect(text).toBe(params.text);
-    expect((options as { messageThreadId?: number } | undefined)?.messageThreadId).toBe(
+    expect((options as { messageThreadId?: string | number } | undefined)?.messageThreadId).toBe(
       params.messageThreadId,
     );
   };
@@ -770,7 +770,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
       expect(result.status).toBe("ran");
       const replyCtx = getFirstReplyContext(replySpy);
       expect(replyCtx.SessionKey).toBe(`${sessionKey}:heartbeat`);
-      expect(replyCtx.MessageThreadId).toBe(42);
+      expect(replyCtx.MessageThreadId).toBe("42");
       expectTelegramSend(sendTelegram, {
         to: "-100155462274",
         text: "Topic heartbeat",

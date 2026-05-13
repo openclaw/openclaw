@@ -381,36 +381,38 @@ describe("buildProbeTargets reason codes", () => {
       { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
     ]);
 
-    const plan = await buildProbeTargets({
-      cfg: {
-        models: {
-          providers: {
-            anthropic: {
-              baseUrl: "https://api.anthropic.com/v1",
-              api: "anthropic-messages",
-              apiKey: "sk-ant-test",
-              models: [],
+    const plan = await withClearedAnthropicEnv(() =>
+      buildProbeTargets({
+        cfg: {
+          models: {
+            providers: {
+              anthropic: {
+                baseUrl: "https://api.anthropic.com/v1",
+                api: "anthropic-messages",
+                apiKey: "sk-ant-test",
+                models: [],
+              },
             },
           },
+        } as OpenClawConfig,
+        providers: ["anthropic"],
+        modelCandidates: [],
+        options: {
+          timeoutMs: 5_000,
+          concurrency: 1,
+          maxTokens: 16,
         },
-      } as OpenClawConfig,
-      providers: ["anthropic"],
-      modelCandidates: [],
-      options: {
-        timeoutMs: 5_000,
-        concurrency: 1,
-        maxTokens: 16,
-      },
-    });
+      }),
+    );
 
     expect(plan.results).toStrictEqual([]);
     expect(plan.targets).toStrictEqual([
       {
-        label: "models.json",
+        label: "model catalog",
         mode: "api_key",
         model: { provider: "anthropic", model: "claude-haiku-4-5-20251001" },
         provider: "anthropic",
-        source: "models.json",
+        source: "model_catalog",
       },
     ]);
   });

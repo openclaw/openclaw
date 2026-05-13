@@ -453,7 +453,7 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("write")).toBe(true);
     expect(names.has("edit")).toBe(true);
     expect(names.has("apply_patch")).toBe(false);
-    expect(names.has("exec")).toBe(false);
+    expect(names.has("exec")).toBe(true);
     expect(names.has("process")).toBe(false);
 
     await tools
@@ -549,7 +549,7 @@ describe("createOpenClawCodingTools", () => {
     const names = new Set(tools.map((tool) => tool.name));
 
     expect(names.has("apply_patch")).toBe(true);
-    expect(names.has("exec")).toBe(false);
+    expect(names.has("exec")).toBe(true);
     expect(names.has("process")).toBe(false);
 
     await tools

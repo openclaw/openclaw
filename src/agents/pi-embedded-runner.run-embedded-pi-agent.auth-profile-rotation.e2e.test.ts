@@ -1607,6 +1607,9 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
           "openai:p2": { type: "api_key", provider: "openai", key: "sk-two" },
           "openai:p3": { type: "api_key", provider: "openai", key: "sk-three" },
         },
+      };
+      const statePayload = {
+        version: 1,
         usageStats: {
           "openai:p1": { lastUsed: 1 },
           "openai:p2": { cooldownUntil: p2CooldownUntil }, // p2 in cooldown
@@ -1614,6 +1617,7 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
         },
       };
       savePersistedAuthProfileSecretsStore(payload as AuthProfileSecretsStore, agentDir);
+      savePersistedAuthProfileState(statePayload, agentDir);
 
       mockFailedThenSuccessfulAttempt("rate limit");
       await runAutoPinnedOpenAiTurn({

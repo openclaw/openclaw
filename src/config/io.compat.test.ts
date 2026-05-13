@@ -6,6 +6,7 @@ import { normalizeCompatibilityConfigValues } from "../commands/doctor/legacy-co
 import { VERSION } from "../version.js";
 import { createConfigIO } from "./io.js";
 import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.js";
+import { sourceBundledPluginTestEnv } from "./test-helpers.js";
 
 async function withTempHome(run: (home: string) => Promise<void>): Promise<void> {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-"));
@@ -31,7 +32,10 @@ async function writeConfig(
 
 function createIoForHome(home: string, env: NodeJS.ProcessEnv = {} as NodeJS.ProcessEnv) {
   return createConfigIO({
-    env,
+    env: {
+      ...sourceBundledPluginTestEnv(),
+      ...env,
+    },
     homedir: () => home,
   });
 }
@@ -98,7 +102,7 @@ describe("config io paths", () => {
 
       const io = createConfigIO({
         configPath,
-        env: {} as NodeJS.ProcessEnv,
+        env: sourceBundledPluginTestEnv(),
         homedir: () => home,
         logger,
       });

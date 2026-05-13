@@ -245,7 +245,8 @@ export async function getReplyFromConfig(
   );
   const resolvedOpts =
     mergedSkillFilter !== undefined ? { ...opts, skillFilter: mergedSkillFilter } : opts;
-  const agentCfg = cfg.agents?.defaults;
+  const agentDefaults = cfg.agents?.defaults;
+  const agentCfg = resolveAgentConfig(cfg, agentId) ?? agentDefaults;
   const sessionCfg = cfg.session;
   const { defaultProvider, defaultModel, aliasIndex } = resolveDefaultModel({
     cfg,
@@ -280,7 +281,7 @@ export async function getReplyFromConfig(
   const agentDir = resolveAgentDir(cfg, agentId);
   const timeoutMs = resolveAgentTimeoutMs({ cfg, overrideSeconds: opts?.timeoutOverrideSeconds });
   const configuredTypingSeconds =
-    agentCfg?.typingIntervalSeconds ?? sessionCfg?.typingIntervalSeconds;
+    agentDefaults?.typingIntervalSeconds ?? sessionCfg?.typingIntervalSeconds;
   const typingIntervalSeconds =
     typeof configuredTypingSeconds === "number" ? configuredTypingSeconds : 6;
   const typing = createTypingController({
@@ -323,8 +324,8 @@ export async function getReplyFromConfig(
       ? (await fs.mkdir(workspaceDirRaw, { recursive: true }), { dir: workspaceDirRaw })
       : await ensureAgentWorkspace({
           dir: workspaceDirRaw,
-          ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
-          skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
+          ensureBootstrapFiles: !agentDefaults?.skipBootstrap && !isFastTestEnv,
+          skipOptionalBootstrapFiles: agentDefaults?.skipOptionalBootstrapFiles,
         }),
   );
   const workspaceDir = workspace.dir;

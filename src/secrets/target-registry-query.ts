@@ -1,7 +1,11 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadChannelSecretContractApi } from "./channel-contract-api.js";
 import { getPath } from "./path-utils.js";
-import { getCoreSecretTargetRegistry, getSecretTargetRegistry } from "./target-registry-data.js";
+import {
+  getCoreSecretTargetRegistry,
+  getSecretTargetRegistry,
+  resetSecretTargetRegistryCacheForTest,
+} from "./target-registry-data.js";
 import {
   compileTargetRegistryEntry,
   expandPathTokens,
@@ -33,6 +37,13 @@ let compiledCoreOpenClawTargetState: {
 } | null = null;
 
 const compiledChannelOpenClawTargets = new Map<string, CompiledTargetRegistryEntry[] | null>();
+
+export function resetSecretTargetRegistryQueryCacheForTest(): void {
+  compiledSecretTargetRegistryState = null;
+  compiledCoreOpenClawTargetState = null;
+  compiledChannelOpenClawTargets.clear();
+  resetSecretTargetRegistryCacheForTest();
+}
 
 function buildTargetTypeIndex(
   compiledSecretTargetRegistry: CompiledTargetRegistryEntry[],

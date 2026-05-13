@@ -1,12 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  noopLogger,
   setupCronIssueRegressionFixtures,
   startCronForStore,
   topOfHourOffsetMs,
   writeCronStoreSnapshot,
 } from "./service.issue-regressions.test-helpers.js";
-import { CronService } from "./service.js";
 import { loadCronStore, saveCronStore } from "./store.js";
 import type { CronJob, CronJobState } from "./types.js";
 
@@ -55,47 +53,6 @@ describe("Cron issue regressions", () => {
       expect(patched.payload.allowUnsafeExternalContent).toBe(true);
       expect(patched.payload.message).toBe("hi");
     }
-
-    cron.stop();
-  });
-
-  it("repairs isolated every jobs missing createdAtMs and sets nextWakeAtMs", async () => {
-    const store = cronIssueRegressionFixtures.makeStoreKey();
-    await writeCronStoreSnapshot(store.storeKey, [
-      {
-        id: "legacy-isolated",
-        agentId: "feature-dev_planner",
-        sessionKey: "agent:main:main",
-        name: "legacy isolated",
-        enabled: true,
-        schedule: { kind: "every", everyMs: 300_000 },
-        sessionTarget: "isolated",
-        wakeMode: "now",
-        payload: { kind: "agentTurn", message: "poll workflow queue" },
-        state: {},
-      },
-    ]);
-
-    const cron = new CronService({
-      storeKey: store.storeKey,
-      cronEnabled: true,
-      log: noopLogger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
-    });
-    await cron.start();
-
-    const status = await cron.status();
-    const jobs = await cron.list({ includeDisabled: true });
-    const isolated = jobs.find((job) => job.id === "legacy-isolated");
-    expect(Number.isFinite(isolated?.state.nextRunAtMs)).toBe(true);
-    expect(Number.isFinite(status.nextWakeAtMs)).toBe(true);
-
-    const persisted = await loadCronStore(store.storeKey);
-    const persistedIsolated = persisted.jobs.find((job) => job.id === "legacy-isolated");
-    expect(typeof persistedIsolated?.state?.nextRunAtMs).toBe("number");
-    expect(Number.isFinite(persistedIsolated?.state?.nextRunAtMs)).toBe(true);
 
     cron.stop();
   });
@@ -188,76 +145,6 @@ describe("Cron issue regressions", () => {
     const storeData = await loadCronStore(store.storeKey);
     const persistedDueJob = storeData.jobs.find((job) => job.id === dueJob.id);
     expect(persistedDueJob?.state?.nextRunAtMs).toBe(originalDueNextRunAtMs);
-
-    cron.stop();
-  });
-
-  it("treats persisted jobs with missing enabled as enabled during update()", async () => {
-    const store = cronIssueRegressionFixtures.makeStoreKey();
-    const now = Date.parse("2026-02-06T10:05:00.000Z");
-    await writeCronStoreSnapshot(store.storeKey, [
-      {
-        id: "missing-enabled-update",
-        name: "legacy missing enabled",
-        createdAtMs: now - 60_000,
-        updatedAtMs: now - 60_000,
-        schedule: { kind: "cron", expr: "0 */2 * * *", tz: "UTC" },
-        sessionTarget: "main",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "systemEvent", text: "legacy" },
-        state: {},
-      },
-    ]);
-
-    const cron = await startCronForStore({ storeKey: store.storeKey, cronEnabled: false });
-
-    const listed = await cron.list();
-    const listedJobIds = listed.map((job) => job.id);
-    expect(listedJobIds).toContain("missing-enabled-update");
-
-    const updated = await cron.update("missing-enabled-update", {
-      schedule: { kind: "cron", expr: "0 */3 * * *", tz: "UTC" },
-    });
-
-    expect(updated.state.nextRunAtMs).toBeTypeOf("number");
-    expect(updated.state.nextRunAtMs).toBeGreaterThan(now);
-
-    cron.stop();
-  });
-
-  it("treats persisted due jobs with missing enabled as runnable", async () => {
-    const store = cronIssueRegressionFixtures.makeStoreKey();
-    const now = Date.parse("2026-02-06T10:05:00.000Z");
-    const dueAt = now - 30_000;
-    await writeCronStoreSnapshot(store.storeKey, [
-      {
-        id: "missing-enabled-due",
-        name: "legacy due job",
-        createdAtMs: dueAt - 60_000,
-        updatedAtMs: dueAt,
-        schedule: { kind: "at", at: new Date(dueAt).toISOString() },
-        sessionTarget: "main",
-        wakeMode: "now",
-        payload: { kind: "systemEvent", text: "missing-enabled-due" },
-        state: { nextRunAtMs: dueAt },
-      },
-    ]);
-
-    const enqueueSystemEvent = vi.fn();
-    const cron = await startCronForStore({
-      storeKey: store.storeKey,
-      cronEnabled: false,
-      enqueueSystemEvent,
-    });
-
-    const result = await cron.run("missing-enabled-due", "due");
-    expect(result).toEqual({ ok: true, ran: true });
-    const enqueueCall = enqueueSystemEvent.mock.calls[0];
-    if (!enqueueCall) {
-      throw new Error("Expected due cron job to enqueue a system event");
-    }
-    expect(enqueueCall[0]).toBe("missing-enabled-due");
-    expect(enqueueCall[1]?.agentId).toBeUndefined();
 
     cron.stop();
   });

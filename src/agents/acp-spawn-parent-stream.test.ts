@@ -221,17 +221,16 @@ describe("startAcpSpawnParentStreamRelay", () => {
       expect.stringContaining("codex: hello from child"),
       expect.objectContaining({
         contextKey: "acp-spawn:run-cron:progress",
-        sessionKey: "global",
+        sessionKey: "agent:ops:cron:nightly:run:run-1:subagent:worker",
         trusted: false,
       }),
     );
     expect(requestHeartbeatMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        agentId: "ops",
         reason: "acp:spawn:stream",
+        sessionKey: "agent:ops:main",
       }),
     );
-    expect(requestHeartbeatMock.mock.calls[0]?.[0]).not.toHaveProperty("sessionKey");
     relay.dispose();
   });
 

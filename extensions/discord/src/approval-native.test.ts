@@ -212,7 +212,7 @@ describe("createDiscordNativeApprovalAdapter", () => {
     expect(target).toEqual({ to: "123456789", threadId: undefined });
   });
 
-  it("falls back to extracting the channel id from the session key", async () => {
+  it("does not derive origin delivery from a session key without stored conversation state", async () => {
     const adapter = createDiscordNativeApprovalAdapter();
 
     const target = await adapter.native?.resolveOriginTarget?.({
@@ -231,7 +231,7 @@ describe("createDiscordNativeApprovalAdapter", () => {
       },
     });
 
-    expect(target).toEqual({ to: "987654321", threadId: undefined });
+    expect(target).toBeNull();
   });
 
   it("preserves explicit turn-source thread ids on origin targets", async () => {
@@ -260,7 +260,7 @@ describe("createDiscordNativeApprovalAdapter", () => {
     expect(target).toEqual({ to: "123456789", threadId: "777888999" });
   });
 
-  it("falls back to extracting thread ids from the session key", async () => {
+  it("does not derive thread origin delivery from a session key without stored conversation state", async () => {
     const adapter = createDiscordNativeApprovalAdapter();
 
     const target = await adapter.native?.resolveOriginTarget?.({
@@ -279,7 +279,7 @@ describe("createDiscordNativeApprovalAdapter", () => {
       },
     });
 
-    expect(target).toEqual({ to: "987654321", threadId: "444555666" });
+    expect(target).toBeNull();
   });
 
   it("rejects origin delivery for requests bound to another Discord account", async () => {

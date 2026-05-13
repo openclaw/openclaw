@@ -1,10 +1,6 @@
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
-import {
-  deleteSessionEntry,
-  getSessionEntry,
-  upsertSessionEntry,
-} from "../config/sessions/store.js";
+import { getSessionEntry, moveSessionEntryKey } from "../config/sessions/store.js";
 import { loadSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -235,12 +231,16 @@ export async function repairHeartbeatPoisonedMainSession(params: {
     return;
   }
   const movedEntry = structuredClone(currentEntry);
-  upsertSessionEntry({
+  const moved = moveSessionEntryKey({
     agentId,
-    sessionKey: recoveredKey,
+    fromSessionKey: mainKey,
+    toSessionKey: recoveredKey,
     entry: movedEntry,
   });
-  deleteSessionEntry({ agentId, sessionKey: mainKey });
+  if (!moved) {
+    params.warnings.push(`- Main session ${mainKey} changed before repair could move it.`);
+    return;
+  }
   params.store[recoveredKey] = movedEntry;
   delete params.store[mainKey];
   const clearedPointers = await clearTuiLastSessionPointersFromState({

@@ -104,19 +104,13 @@ export async function commitmentsListCommand(
   ).filter((commitment) => opts.all || status || isActiveCommitment(commitment));
 
   if (opts.json) {
-    runtime.log(
-      JSON.stringify(
-        {
-          count: commitments.length,
-          status: status ?? (opts.all ? null : "pending"),
-          agentId: normalizeOptionalString(opts.agent) ?? null,
-          databasePath: resolveCommitmentDatabasePath(),
-          commitments,
-        },
-        null,
-        2,
-      ),
-    );
+    writeRuntimeJson(runtime, {
+      count: commitments.length,
+      status: status ?? (opts.all ? null : "pending"),
+      agentId: normalizeOptionalString(opts.agent) ?? null,
+      databasePath: resolveCommitmentDatabasePath(),
+      commitments,
+    });
     return;
   }
 

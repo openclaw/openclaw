@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { writePersistedInstalledPluginIndexSync } from "../plugins/installed-plugin-index-store.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { sourceBundledPluginTestEnv } from "./test-helpers.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
 vi.unmock("../version.js");
@@ -133,7 +134,7 @@ describe("config plugin validation", () => {
       HOME: suiteHome,
       OPENCLAW_HOME: undefined,
       OPENCLAW_STATE_DIR: path.join(suiteHome, ".openclaw"),
-      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+      ...sourceBundledPluginTestEnv(),
       OPENCLAW_VERSION: undefined,
       VITEST: "true",
     }) satisfies NodeJS.ProcessEnv;
@@ -648,7 +649,8 @@ describe("config plugin validation", () => {
       {
         env: {
           ...suiteEnv(),
-          OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(suiteHome, "missing-bundled-plugins"),
+          OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
         },
       },
     );

@@ -72,6 +72,7 @@ describe("formatOpenAIOAuthTlsPreflightFix", () => {
         "Fix (Homebrew Node/OpenSSL):",
         "- brew postinstall ca-certificates",
         "- brew postinstall openssl@3",
+        "- Verify cert bundle exists: /opt/homebrew/etc/openssl@3/cert.pem",
         "- Retry the OAuth login flow.",
       ].join("\n"),
     );

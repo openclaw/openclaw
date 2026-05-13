@@ -32,6 +32,12 @@ export type ReplaceSqliteSessionEntryOptions = SqliteSessionEntriesOptions & {
   conversationIdentities?: readonly ConversationIdentity[];
 };
 
+export type MoveSqliteSessionEntryKeyOptions = SqliteSessionEntriesOptions & {
+  fromSessionKey: string;
+  toSessionKey: string;
+  entry?: SessionEntry;
+};
+
 export type ApplySqliteSessionEntriesPatchOptions = SqliteSessionEntriesOptions & {
   upsertEntries?: Readonly<Record<string, SessionEntry>>;
   expectedEntries?: ReadonlyMap<string, SessionEntry | null>;
@@ -89,6 +95,8 @@ type SessionEntryRow = Pick<Selectable<SessionEntriesTable>, "entry_json" | "ses
     typed_conversation_thread_id?: string | null;
     typed_conversation_native_channel_id?: string | null;
     typed_conversation_native_direct_user_id?: string | null;
+    conversation_channel?: string | null;
+    conversation_account_id?: string | null;
   };
 type BoundSessionEntryRow = {
   entry: Insertable<SessionEntriesTable>;
@@ -675,6 +683,50 @@ export function replaceSqliteSessionEntry(options: ReplaceSqliteSessionEntryOpti
   }, options);
 }
 
+export function moveSqliteSessionEntryKey(options: MoveSqliteSessionEntryKeyOptions): boolean {
+  if (options.fromSessionKey === options.toSessionKey) {
+    return false;
+  }
+  const updatedAt = resolveNow(options);
+  return runOpenClawAgentWriteTransaction((database) => {
+    const db = getNodeSqliteKysely<SessionEntriesDatabase>(database.db);
+    const currentEntry =
+      options.entry ?? readProjectedSqliteSessionEntry(database, options.fromSessionKey);
+    if (!currentEntry) {
+      return false;
+    }
+    const existingTarget = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("session_routes")
+        .select("session_id")
+        .where("session_key", "=", options.toSessionKey),
+    );
+    if (existingTarget) {
+      return false;
+    }
+    const entries = { [options.toSessionKey]: currentEntry };
+    normalizeSessionEntries(entries);
+    const nextEntry = entries[options.toSessionKey] ?? currentEntry;
+    upsertSessionEntries(database, [
+      bindSessionEntry({
+        sessionKey: options.toSessionKey,
+        entry: nextEntry,
+        updatedAt,
+      }),
+    ]);
+    executeSqliteQuerySync(
+      database.db,
+      db.deleteFrom("session_entries").where("session_key", "=", options.fromSessionKey),
+    );
+    executeSqliteQuerySync(
+      database.db,
+      db.deleteFrom("session_routes").where("session_key", "=", options.fromSessionKey),
+    );
+    return true;
+  }, options);
+}
+
 export function applySqliteSessionEntriesPatch(
   options: ApplySqliteSessionEntriesPatchOptions,
 ): boolean {
@@ -792,6 +844,8 @@ export function readSqliteSessionRoutingInfo(
         "s.channel as channel",
         "s.account_id as account_id",
         "s.primary_conversation_id as primary_conversation_id",
+        "c.channel as conversation_channel",
+        "c.account_id as conversation_account_id",
         "c.kind as conversation_kind",
         "c.peer_id as conversation_peer_id",
         "c.parent_conversation_id as parent_conversation_id",
@@ -803,8 +857,8 @@ export function readSqliteSessionRoutingInfo(
     ? {
         sessionScope: optionalString(row.session_scope),
         chatType: optionalString(row.chat_type),
-        channel: optionalString(row.channel),
-        accountId: optionalString(row.account_id),
+        channel: optionalString(row.channel) ?? optionalString(row.conversation_channel),
+        accountId: optionalString(row.account_id) ?? optionalString(row.conversation_account_id),
         primaryConversationId: optionalString(row.primary_conversation_id),
         conversationKind: optionalString(row.conversation_kind),
         conversationPeerId: optionalString(row.conversation_peer_id),

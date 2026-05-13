@@ -1,7 +1,7 @@
 import "./isolated-agent.mocks.js";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { setAuthProfileOrder, upsertAuthProfile } from "../agents/auth-profiles.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { createCliDeps } from "./isolated-agent.delivery.test-helpers.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
@@ -41,30 +41,22 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624)", () => {
     await withTempCronHome(async (home) => {
       await seedMainRouteSession(home, { lastChannel: "webchat", lastTo: "" });
 
-      // 2. Write auth-profiles.json in the agent directory
-      //    resolveAgentDir returns <stateDir>/agents/main/agent
-      //    stateDir = <home>/.openclaw
       const agentDir = path.join(home, ".openclaw", "agents", "main", "agent");
-      await fs.mkdir(agentDir, { recursive: true });
-      await fs.writeFile(
-        path.join(agentDir, "auth-profiles.json"),
-        JSON.stringify({
-          version: 1,
-          profiles: {
-            "openrouter:default": {
-              type: "api_key",
-              provider: "openrouter",
-              key: "sk-or-test-key-12345",
-            },
-          },
-          order: {
-            openrouter: ["openrouter:default"],
-          },
-        }),
-        "utf-8",
-      );
+      upsertAuthProfile({
+        agentDir,
+        profileId: "openrouter:default",
+        credential: {
+          type: "api_key",
+          provider: "openrouter",
+          key: "sk-or-test-key-12345",
+        },
+      });
+      await setAuthProfileOrder({
+        agentDir,
+        provider: "openrouter",
+        order: ["openrouter:default"],
+      });
 
-      // 3. Mock runEmbeddedPiAgent to return ok
       vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
         payloads: [{ text: "done" }],
         meta: {
@@ -73,7 +65,6 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624)", () => {
         },
       });
 
-      // 4. Run cron isolated agent turn with openrouter model
       const cfg = makeCfg(home, {
         agents: {
           defaults: {
@@ -98,7 +89,6 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624)", () => {
       expect(res.status).toBe("ok");
       expect(vi.mocked(runEmbeddedPiAgent)).toHaveBeenCalledTimes(1);
 
-      // 5. Check that authProfileId was passed
       const callArgs = getEmbeddedPiAgentParams();
 
       expect(callArgs.authProfileId).toBe("openrouter:default");

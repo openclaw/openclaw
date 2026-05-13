@@ -483,11 +483,16 @@ export function getSecretTargetRegistry(): SecretTargetRegistryEntry[] {
   return cachedSecretTargetRegistry;
 }
 
+export function resetSecretTargetRegistryCacheForTest(): void {
+  cachedSecretTargetRegistry = null;
+}
+
 export function getSourceSecretTargetRegistry(): SecretTargetRegistryEntry[] {
   return loadSecretTargetRegistryFromPluginMetadata({
     env: {
       ...process.env,
       OPENCLAW_BUNDLED_PLUGINS_DIR: process.env.OPENCLAW_BUNDLED_PLUGINS_DIR ?? "extensions",
+      OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
     },
     preferPersisted: false,
   });
