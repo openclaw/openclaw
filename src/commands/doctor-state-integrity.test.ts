@@ -428,7 +428,7 @@ describe("doctor state integrity oauth dir checks", () => {
     const archivePrompt = repairPromptCalls(confirmRuntimeRepair).find((prompt) =>
       prompt.message?.includes("This only renames them to *.deleted.<timestamp>."),
     );
-    expect(archivePrompt?.requiresInteractiveConfirmation).toBe(true);
+    expect(archivePrompt?.requiresInteractiveConfirmation).toBeUndefined();
     const files = fs.readdirSync(sessionsDir);
     const archivedOrphanTranscripts = files.filter((name) =>
       name.startsWith("orphan-session.jsonl.deleted."),
@@ -436,7 +436,7 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(archivedOrphanTranscripts.length).toBeGreaterThan(0);
   });
 
-  it("does not auto-archive orphan transcripts from non-interactive repair mode", async () => {
+  it("auto-archives orphan transcripts from non-interactive repair mode", async () => {
     const cfg: OpenClawConfig = {};
     setupSessionState(cfg, process.env, process.env.HOME ?? "");
     const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
@@ -447,16 +447,16 @@ describe("doctor state integrity oauth dir checks", () => {
     );
     await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
 
-    const archivePrompt = repairPromptCalls(confirmRuntimeRepair).find(
-      (prompt) => prompt.requiresInteractiveConfirmation === true,
+    const archivePrompt = repairPromptCalls(confirmRuntimeRepair).find((prompt) =>
+      prompt.message?.includes("This only renames them to *.deleted.<timestamp>."),
     );
     expect(archivePrompt?.initialValue).toBe(false);
     const files = fs.readdirSync(sessionsDir);
-    expect(files).toContain("orphan-session.jsonl");
     const archivedOrphanTranscripts = files.filter((name) =>
       name.startsWith("orphan-session.jsonl.deleted."),
     );
-    expect(archivedOrphanTranscripts).toStrictEqual([]);
+    expect(archivedOrphanTranscripts.length).toBeGreaterThan(0);
+    expect(files).not.toContain("orphan-session.jsonl");
   });
 
   it.skipIf(process.platform === "win32")(

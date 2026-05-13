@@ -1020,7 +1020,6 @@ export async function noteStateIntegrity(
       const archiveOrphans = await prompter.confirmRuntimeRepair({
         message: `Archive ${orphanCount} in ${displaySessionsDir}? This only renames them to *.deleted.<timestamp>.`,
         initialValue: false,
-        requiresInteractiveConfirmation: true,
       });
       if (archiveOrphans) {
         let archived = 0;
