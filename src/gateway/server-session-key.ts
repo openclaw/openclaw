@@ -83,7 +83,8 @@ export function resolveSessionKeyForRun(runId: string, opts: { agentId?: string 
   }
   const { store } = loadCombinedSessionStoreForGateway(cfg, { agentId });
   const matches = Object.entries(store).filter(
-    (entry): entry is [string, SessionEntry] => entry[1]?.sessionId === runId,
+    (entry): entry is [string, SessionEntry] =>
+      entry[1]?.sessionId === runId && sessionKeyMatchesAgent(entry[0], agentId),
   );
   const storeKey = resolvePreferredSessionKeyForSessionIdMatches(matches, runId);
   if (storeKey) {

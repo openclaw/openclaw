@@ -80,6 +80,26 @@ describe("resolveSessionKeyForRun", () => {
     });
   });
 
+  it("filters same-run matches by requested agent for shared stores", () => {
+    const cfg: OpenClawConfig = {
+      session: {
+        store: "/custom/root/sessions/sessions.json",
+      },
+    };
+    hoisted.loadConfigMock.mockReturnValue(cfg);
+    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+      storePath: "/custom/root/sessions/sessions.json",
+      store: {
+        "agent:work:acp:run-1": { sessionId: "run-1", updatedAt: 123 },
+      },
+    });
+
+    expect(resolveSessionKeyForRun("run-1", { agentId: "main" })).toBeUndefined();
+    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(cfg, {
+      agentId: "main",
+    });
+  });
+
   it("keeps run lookup cache entries scoped by agent", () => {
     hoisted.loadConfigMock.mockReturnValue({});
     hoisted.loadCombinedSessionStoreForGatewayMock.mockImplementation(

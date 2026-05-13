@@ -80,6 +80,13 @@ function resolveScopedArtifactSessionKey(
   if (!scopedAgentId) {
     return key;
   }
+  const parsed = parseAgentSessionKey(key);
+  if (parsed && parsed.agentId !== normalizeAgentId(scopedAgentId)) {
+    return undefined;
+  }
+  if (!parsed && key.toLowerCase().startsWith("agent:")) {
+    return undefined;
+  }
   return toAgentStoreSessionKey({ agentId: scopedAgentId, requestKey: key });
 }
 
@@ -320,7 +327,7 @@ function collectArtifactsFromMessage(params: {
 
 function resolveQuerySessionKey(query: ArtifactQuery): string | undefined {
   if (query.sessionKey) {
-    return query.sessionKey;
+    return resolveScopedArtifactSessionKey(query.sessionKey, query.agentId);
   }
   if (query.runId) {
     const sessionKey = resolveSessionKeyForRun(
