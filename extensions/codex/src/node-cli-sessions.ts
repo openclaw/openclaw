@@ -39,18 +39,6 @@ export type CodexCliSessionResumeResult = {
   text: string;
 };
 
-type ListCodexCliSessionsParams = {
-  limit?: number;
-  filter?: string;
-};
-
-type ResumeCodexCliSessionParams = {
-  sessionId?: string;
-  prompt?: string;
-  timeoutMs?: number;
-  cwd?: string;
-};
-
 type CodexCliSessionNodeInfo = {
   nodeId?: string;
   displayName?: string;
@@ -188,7 +176,7 @@ export function formatCodexCliSessions(params: {
 }
 
 async function listLocalCodexCliSessions(paramsJSON?: string | null): Promise<string> {
-  const params = readRecordParam<ListCodexCliSessionsParams>(paramsJSON);
+  const params = readRecordParam(paramsJSON);
   const limit = normalizeLimit(params.limit);
   const filter = typeof params.filter === "string" ? params.filter.trim().toLowerCase() : "";
   const codexHome = resolveCodexHome();
@@ -204,15 +192,15 @@ async function listLocalCodexCliSessions(paramsJSON?: string | null): Promise<st
         value?.toLowerCase().includes(filter),
       );
     })
-    .sort((a, b) => compareOptionalStringsDesc(a.updatedAt, b.updatedAt))
+    .toSorted((a, b) => compareOptionalStringsDesc(a.updatedAt, b.updatedAt))
     .slice(0, limit);
   return JSON.stringify({ sessions, codexHome } satisfies CodexCliSessionsListResult);
 }
 
 async function resumeLocalCodexCliSession(paramsJSON?: string | null): Promise<string> {
-  const params = readRecordParam<ResumeCodexCliSessionParams>(paramsJSON);
-  const sessionId = params.sessionId?.trim();
-  const prompt = params.prompt?.trim();
+  const params = readRecordParam(paramsJSON);
+  const sessionId = typeof params.sessionId === "string" ? params.sessionId.trim() : "";
+  const prompt = typeof params.prompt === "string" ? params.prompt.trim() : "";
   if (!sessionId || !SESSION_ID_PATTERN.test(sessionId)) {
     throw new Error("Missing or invalid Codex CLI session id.");
   }
@@ -558,7 +546,7 @@ async function resolveCodexCliNode(params: {
   if (usable.length > 1) {
     throw new Error("Multiple Codex CLI-capable nodes connected. Pass --host <node-id>.");
   }
-  return usable[0]!;
+  return usable[0];
 }
 
 function parseCodexCliSessionsListResult(raw: unknown): CodexCliSessionsListResult {
@@ -600,15 +588,15 @@ function unwrapNodeInvokePayload(raw: unknown): unknown {
   return raw;
 }
 
-function readRecordParam<T extends object>(paramsJSON?: string | null): T {
+function readRecordParam(paramsJSON?: string | null): Record<string, unknown> {
   if (!paramsJSON?.trim()) {
-    return {} as T;
+    return {};
   }
   try {
     const parsed = JSON.parse(paramsJSON) as unknown;
-    return isRecord(parsed) ? (parsed as T) : ({} as T);
+    return isRecord(parsed) ? parsed : {};
   } catch {
-    return {} as T;
+    return {};
   }
 }
 
