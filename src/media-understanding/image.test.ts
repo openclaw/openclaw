@@ -752,10 +752,10 @@ describe("describeImageWithModel", () => {
   it("normalizes gemini 3.1 flash-lite ids before lookup and keeps profile auth selection", async () => {
     const findMock = vi.fn((provider: string, modelId: string) => {
       expect(provider).toBe("google");
-      expect(modelId).toBe("gemini-3.1-flash-lite-preview");
+      expect(modelId).toBe("gemini-3.1-flash-lite");
       return {
         provider: "google",
-        id: "gemini-3.1-flash-lite-preview",
+        id: "gemini-3.1-flash-lite",
         input: ["text", "image"],
         baseUrl: "https://generativelanguage.googleapis.com/v1beta",
       };
@@ -765,7 +765,7 @@ describe("describeImageWithModel", () => {
       role: "assistant",
       api: "google-generative-ai",
       provider: "google",
-      model: "gemini-3.1-flash-lite-preview",
+      model: "gemini-3.1-flash-lite",
       stopReason: "stop",
       timestamp: Date.now(),
       content: [{ type: "text", text: "flash lite ok" }],
@@ -786,7 +786,7 @@ describe("describeImageWithModel", () => {
 
     expect(result).toEqual({
       text: "flash lite ok",
-      model: "gemini-3.1-flash-lite-preview",
+      model: "gemini-3.1-flash-lite",
     });
     expect(findMock).toHaveBeenCalledOnce();
     const authRequest = getApiKeyForModelCall();

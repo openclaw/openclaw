@@ -929,7 +929,7 @@ describe("isFailoverErrorMessage", () => {
 
   it("matches google INTERNAL status errors as timeout", () => {
     const sample =
-      "provider=google model=gemini-3.1-flash-lite-preview got status: INTERNAL upstream failure code:500";
+      "provider=google model=gemini-3.1-flash-lite got status: INTERNAL upstream failure code:500";
     expect(isTimeoutErrorMessage(sample)).toBe(true);
     expect(classifyFailoverReason(sample)).toBe("timeout");
     expect(isFailoverErrorMessage(sample)).toBe(true);
@@ -1552,7 +1552,7 @@ describe("classifyProviderRuntimeFailureKind", () => {
   it("classifies google-style INTERNAL status payloads as timeout", () => {
     expect(
       classifyFailoverReason(
-        'ERROR provider=google model=gemini-3.1-flash-lite-preview: got status: INTERNAL, details: {"code":500,"status":"INTERNAL"}',
+        'ERROR provider=google model=gemini-3.1-flash-lite: got status: INTERNAL, details: {"code":500,"status":"INTERNAL"}',
       ),
     ).toBe("timeout");
     expect(

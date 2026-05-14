@@ -94,7 +94,7 @@ const GATEWAY_LIVE_HEARTBEAT_MS = Math.max(
 );
 const GATEWAY_LIVE_STRIP_SCAFFOLDING_MODEL_KEYS = new Set([
   "google/gemini-3-flash-preview",
-  "google/gemini-3.1-flash-lite-preview",
+  "google/gemini-3.1-flash-lite",
   "google/gemini-3.1-pro-preview",
   "google/gemini-3.1-pro-preview-customtools",
   "openai/gpt-5.4-pro",
@@ -104,7 +104,7 @@ const GATEWAY_LIVE_EXEC_READ_NONCE_MISS_SKIP_MODEL_KEYS = new Set([
   "fireworks/accounts/fireworks/models/kimi-k2p5",
   "fireworks/accounts/fireworks/models/kimi-k2p6",
   "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-  "google/gemini-3.1-flash-lite-preview",
+  "google/gemini-3.1-flash-lite",
 ]);
 const GATEWAY_LIVE_TOOL_NONCE_MISS_SKIP_MODEL_KEYS = new Set(["google/gemini-3-flash-preview"]);
 const GATEWAY_LIVE_MAX_MODELS = resolveGatewayLiveMaxModels();
@@ -503,7 +503,7 @@ describe("maybeStripAssistantScaffoldingForLiveModel", () => {
     expect(
       maybeStripAssistantScaffoldingForLiveModel(
         "<think>hidden</think>Visible",
-        "google/gemini-3.1-flash-lite-preview",
+        "google/gemini-3.1-flash-lite",
       ),
     ).toBe("Visible");
     expect(
@@ -573,9 +573,7 @@ describe("maybeStripAssistantScaffoldingForLiveModel", () => {
 
 describe("shouldSkipExecReadNonceMissForLiveModel", () => {
   it("matches the known Gemini lite exec/read isolation case", () => {
-    expect(shouldSkipExecReadNonceMissForLiveModel("google/gemini-3.1-flash-lite-preview")).toBe(
-      true,
-    );
+    expect(shouldSkipExecReadNonceMissForLiveModel("google/gemini-3.1-flash-lite")).toBe(true);
     expect(shouldSkipExecReadNonceMissForLiveModel("google/gemini-3.1-flash-lite")).toBe(true);
     expect(shouldSkipExecReadNonceMissForLiveModel("google/gemini-3.1-flash-preview")).toBe(false);
   });
