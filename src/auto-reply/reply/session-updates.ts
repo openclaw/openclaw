@@ -197,13 +197,20 @@ export async function ensureSkillSnapshot(params: {
     });
   };
 
+  // Redacted fingerprint of the skills config: avoids leaking apiKey values
+  // into the module-level cache key while still differentiating configs that
+  // produce different skill sets.
+  const _skillsCfgFingerprint =
+    cfg.skills === undefined
+      ? ""
+      : crypto.createHash("sha256").update(JSON.stringify(cfg.skills)).digest("hex");
   const _snapshotCacheKey = JSON.stringify([
     workspaceDir,
     snapshotVersion,
     skillFilter,
     sessionAgentId,
     remoteEligibility,
-    cfg.skills,
+    _skillsCfgFingerprint,
   ]);
 
   // For hydrateResolvedSkills callbacks: reuse cached resolvedSkills when available.
