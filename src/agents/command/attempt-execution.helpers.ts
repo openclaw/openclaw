@@ -105,6 +105,177 @@ export async function claudeCliSessionTranscriptHasContent(params: {
   return false;
 }
 
+/**
+ * Walk a JSONL transcript and return whether the most recent assistant
+ * message contains one or more `tool_use` content blocks whose `tool_use_id`
+ * never received a matching `tool_result` later in the file.
+ *
+ * This is the "stuck resume" predicate: claude-cli's protocol requires that
+ * every assistant `tool_use` be answered by a `tool_result` user message
+ * before the conversation can advance. If the gateway dies mid-tool (e.g.
+ * brew upgrade restart, claude-live-session no-output watchdog firing while
+ * a tool is running, OOM, manual kickstart), the transcript is left with an
+ * unanswered tool_use. On the next `claude --resume`, claude-cli sits
+ * waiting for that tool_result, hits its own no-output timeout, and the
+ * runtime kills it with `reason=abort`. The dispatcher then sees an empty
+ * payload and emits NO_REPLY, looking to the user like the agent silently
+ * ignored their message — same end-user symptom as the binding-flush
+ * amnesia bug, different root cause.
+ *
+ * Detection has to look at the *last* assistant message specifically: an
+ * orphan deeper in history might have been answered later by an out-of-
+ * order tool_result, but a trailing orphan blocks all forward progress.
+ */
+async function jsonlFileHasOrphanedTrailingToolUse(filePath: string): Promise<boolean> {
+  try {
+    const stat = await fs.lstat(filePath);
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      return false;
+    }
+
+    const fh = await fs.open(filePath, "r");
+    try {
+      const rl = readline.createInterface({ input: fh.createReadStream({ encoding: "utf-8" }) });
+      // Track tool_use ids emitted by the *most recent* assistant message,
+      // and tool_result ids that have been observed at any point thereafter.
+      // An orphan = a tool_use id from the last assistant message that has
+      // no matching tool_result anywhere later in the file.
+      //
+      // We do NOT cap at SESSION_FILE_MAX_RECORDS here — that cap is a
+      // perf safety belt for the "any assistant message exists?" early-
+      // exit predicate, where we can stop as soon as we see one. The
+      // orphan check needs the *last* assistant message specifically; a
+      // capped walk on a long-lived transcript could miss a trailing
+      // orphan past record 500 (false negative → resume hangs) or miss
+      // the resolution `tool_result` for an earlier orphan (false
+      // positive → unnecessary reset). A claude-cli transcript is
+      // bounded by claude-cli's own session-history retention, typically
+      // O(10k) records; reading that volume of JSONL via streamed
+      // readline is well under 100ms.
+      let lastAssistantToolUseIds: Set<string> = new Set();
+      let answeredToolResultIds: Set<string> = new Set();
+      for await (const line of rl) {
+        if (!line.trim()) {
+          continue;
+        }
+        let obj: unknown;
+        try {
+          obj = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        const rec = obj as Record<string, unknown> | null;
+        // Skip sidechain entries (Task-tool / subagent work) — claude-cli's
+        // own resume path treats them as out-of-band, and the existing
+        // history importer at gateway/cli-session-history.claude.ts:224
+        // explicitly skips `entry.isSidechain === true`. A sidechain
+        // tool_use that lacks a tool_result is NOT a forward-progress
+        // blocker for the main conversation, so flagging it as an orphan
+        // would falsely invalidate a healthy session.
+        if (rec?.isSidechain === true) {
+          continue;
+        }
+        const message = rec?.message as Record<string, unknown> | undefined;
+        const role = message?.role;
+        const content = message?.content;
+        if (!Array.isArray(content)) {
+          continue;
+        }
+        if (role === "assistant") {
+          // Reset: only the LATEST assistant message's tool_use ids matter.
+          // tool_result lookups still consider all later occurrences.
+          const toolUseIds = new Set<string>();
+          for (const item of content) {
+            if (
+              item &&
+              typeof item === "object" &&
+              (item as Record<string, unknown>).type === "tool_use"
+            ) {
+              const id = (item as Record<string, unknown>).id;
+              if (typeof id === "string" && id) {
+                toolUseIds.add(id);
+              }
+            }
+          }
+          lastAssistantToolUseIds = toolUseIds;
+          // Don't reset answeredToolResultIds — a tool_result for a *prior*
+          // tool_use observed before this assistant message doesn't help us,
+          // but we keep the set monotonic to avoid edge cases. (Trailing
+          // orphan is what we care about; older ones are inert.)
+        } else if (role === "user") {
+          // user messages can contain tool_result content blocks answering
+          // earlier tool_use ids.
+          for (const item of content) {
+            if (
+              item &&
+              typeof item === "object" &&
+              (item as Record<string, unknown>).type === "tool_result"
+            ) {
+              const useId = (item as Record<string, unknown>).tool_use_id;
+              if (typeof useId === "string" && useId) {
+                answeredToolResultIds.add(useId);
+              }
+            }
+          }
+        }
+      }
+      // Orphan = at least one id in last-assistant's tool_use set that is
+      // NOT in the answered set.
+      for (const id of lastAssistantToolUseIds) {
+        if (!answeredToolResultIds.has(id)) {
+          return true;
+        }
+      }
+      return false;
+    } finally {
+      await fh.close();
+    }
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Detect whether a candidate session id's on-disk transcript ends with a
+ * trailing assistant `tool_use` that never received a matching `tool_result`.
+ * Such a session can never make forward progress on resume — claude-cli will
+ * sit waiting for the missing tool_result, hit its no-output watchdog, and
+ * abort. See `jsonlFileHasOrphanedTrailingToolUse` for the protocol details.
+ *
+ * Returns false on probe failure (file missing, parse error, etc.) so we
+ * never block resume on a transient I/O issue. The transcript-content
+ * predicate runs first; if THAT fails we already invalidate via
+ * missing-transcript, so a defensive false here only narrows the window
+ * where we'd otherwise refuse a healthy session.
+ */
+export async function claudeCliSessionTranscriptHasOrphanedToolUse(params: {
+  sessionId: string | undefined;
+  homeDir?: string;
+}): Promise<boolean> {
+  const sessionId = normalizeClaudeCliSessionId(params.sessionId);
+  if (!sessionId) {
+    return false;
+  }
+  const homeDir = params.homeDir?.trim() || process.env.HOME || os.homedir();
+  const projectsDir = path.join(homeDir, CLAUDE_PROJECTS_RELATIVE_DIR);
+  let projectEntries: import("node:fs").Dirent[];
+  try {
+    projectEntries = await fs.readdir(projectsDir, { withFileTypes: true });
+  } catch {
+    return false;
+  }
+  for (const entry of projectEntries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    const candidate = path.join(projectsDir, entry.name, `${sessionId}.jsonl`);
+    if (await jsonlFileHasOrphanedTrailingToolUse(candidate)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function resolveFallbackRetryPrompt(params: {
   body: string;
   isFallbackRetry: boolean;

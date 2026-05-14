@@ -29,7 +29,10 @@ import {
 import { CLI_AUTH_EPOCH_VERSION, resolveCliAuthEpoch } from "../cli-auth-epoch.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
 import { hashCliSessionText, resolveCliSessionReuse } from "../cli-session.js";
-import { claudeCliSessionTranscriptHasContent } from "../command/attempt-execution.helpers.js";
+import {
+  claudeCliSessionTranscriptHasContent,
+  claudeCliSessionTranscriptHasOrphanedToolUse,
+} from "../command/attempt-execution.helpers.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import {
   resolveBootstrapMaxChars,
@@ -68,6 +71,7 @@ const prepareDeps = {
   // Surfaced as a dep so tests can stub the on-disk Claude CLI transcript probe
   // without touching ~/.claude/projects.
   claudeCliSessionTranscriptHasContent,
+  claudeCliSessionTranscriptHasOrphanedToolUse,
 };
 
 export function setCliRunnerPrepareTestDeps(overrides: Partial<typeof prepareDeps>): void {
@@ -282,21 +286,39 @@ export async function prepareCliRunContext(
     !(await prepareDeps.claudeCliSessionTranscriptHasContent({
       sessionId: candidateClaudeCliSessionId,
     }));
+  // Second gate: even if the transcript has assistant content, if the most
+  // recent assistant message ends with a `tool_use` that was never answered
+  // by a `tool_result`, claude-cli cannot resume — it will sit waiting for
+  // the missing tool_result, hit its no-output watchdog, and abort. The
+  // user-visible symptom is the agent silently not replying. Probe for
+  // the orphan and invalidate so this turn starts a fresh session instead
+  // of resuming into a dead conversation. We only run this probe for
+  // claude-cli and only when the transcript-content gate passed (so we
+  // skip wasted I/O on already-invalidated sessions).
+  const claudeCliTranscriptOrphanedToolUse =
+    candidateClaudeCliSessionId !== undefined &&
+    isClaudeCliProvider(params.provider) &&
+    !claudeCliTranscriptMissing &&
+    (await prepareDeps.claudeCliSessionTranscriptHasOrphanedToolUse({
+      sessionId: candidateClaudeCliSessionId,
+    }));
   const reusableCliSession: CliReusableSession = claudeCliTranscriptMissing
     ? { invalidatedReason: "missing-transcript" }
-    : params.cliSessionBinding
-      ? resolveCliSessionReuse({
-          binding: params.cliSessionBinding,
-          authProfileId: effectiveAuthProfileId,
-          authEpoch,
-          authEpochVersion: CLI_AUTH_EPOCH_VERSION,
-          extraSystemPromptHash,
-          mcpConfigHash: preparedBackendFinal.mcpConfigHash,
-          mcpResumeHash: preparedBackendFinal.mcpResumeHash,
-        })
-      : params.cliSessionId
-        ? { sessionId: params.cliSessionId }
-        : {};
+    : claudeCliTranscriptOrphanedToolUse
+      ? { invalidatedReason: "orphaned-tool-use" }
+      : params.cliSessionBinding
+        ? resolveCliSessionReuse({
+            binding: params.cliSessionBinding,
+            authProfileId: effectiveAuthProfileId,
+            authEpoch,
+            authEpochVersion: CLI_AUTH_EPOCH_VERSION,
+            extraSystemPromptHash,
+            mcpConfigHash: preparedBackendFinal.mcpConfigHash,
+            mcpResumeHash: preparedBackendFinal.mcpResumeHash,
+          })
+        : params.cliSessionId
+          ? { sessionId: params.cliSessionId }
+          : {};
   if (reusableCliSession.invalidatedReason) {
     cliBackendLog.info(
       `cli session reset: provider=${params.provider} reason=${reusableCliSession.invalidatedReason}`,
