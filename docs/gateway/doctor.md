@@ -117,6 +117,7 @@ Doctor will:
 
 The Gateway also auto-runs doctor migrations on startup when it detects a
 legacy config format, so stale configs are repaired without manual intervention.
+Cron job store migrations are handled by `openclaw doctor --fix`.
 
 Current migrations:
 
@@ -302,6 +303,13 @@ catalog and allowlist and warns when it won’t resolve or is disallowed.
 
 When sandboxing is enabled, doctor checks Docker images and offers to build or
 switch to legacy names if the current image is missing.
+
+### 7b) Bundled plugin runtime deps
+
+Doctor verifies that bundled plugin runtime dependencies (for example the
+Discord plugin runtime packages) are present in the OpenClaw install root.
+If any are missing, doctor reports the packages and installs them in
+`openclaw doctor --fix` / `openclaw doctor --repair` mode.
 
 ### 8) Gateway service migrations and cleanup hints
 

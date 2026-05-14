@@ -238,8 +238,12 @@ export function findJobOrThrow(state: CronServiceState, id: string) {
   return job;
 }
 
+export function isJobEnabled(job: Pick<CronJob, "enabled">): boolean {
+  return job.enabled ?? true;
+}
+
 export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | undefined {
-  if (!job.enabled) {
+  if (!isJobEnabled(job)) {
     return undefined;
   }
   if (job.schedule.kind === "every") {
@@ -295,7 +299,7 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
 }
 
 export function computeJobPreviousRunAtMs(job: CronJob, nowMs: number): number | undefined {
-  if (!job.enabled || job.schedule.kind !== "cron") {
+  if (!isJobEnabled(job) || job.schedule.kind !== "cron") {
     return undefined;
   }
   const previous = computeStaggeredCronPreviousRunAtMs(job, nowMs);
@@ -359,7 +363,21 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
     changed = true;
   }
 
-  if (!job.enabled) {
+  if (job.schedule.kind === "every") {
+    const normalizedAnchorMs = resolveEveryAnchorMs({
+      schedule: job.schedule,
+      fallbackAnchorMs: isFiniteTimestamp(job.createdAtMs) ? job.createdAtMs : nowMs,
+    });
+    if (job.schedule.anchorMs !== normalizedAnchorMs) {
+      job.schedule = {
+        ...job.schedule,
+        anchorMs: normalizedAnchorMs,
+      };
+      changed = true;
+    }
+  }
+
+  if (!isJobEnabled(job)) {
     if (job.state.nextRunAtMs !== undefined) {
       job.state.nextRunAtMs = undefined;
       changed = true;
@@ -612,17 +630,6 @@ export function applyJobPatch(
   if (patch.payload) {
     job.payload = mergeCronPayload(job.payload, patch.payload);
   }
-  if (!patch.delivery && patch.payload?.kind === "agentTurn") {
-    // Back-compat: legacy clients still update delivery via payload fields.
-    const legacyDeliveryPatch = buildLegacyDeliveryPatch(patch.payload);
-    const isIsolatedLike =
-      job.sessionTarget === "isolated" ||
-      job.sessionTarget === "current" ||
-      job.sessionTarget.startsWith("session:");
-    if (legacyDeliveryPatch && isIsolatedLike && job.payload.kind === "agentTurn") {
-      job.delivery = mergeCronDelivery(job.delivery, legacyDeliveryPatch);
-    }
-  }
   if (patch.delivery) {
     job.delivery = mergeCronDelivery(job.delivery, patch.delivery);
   }
@@ -692,60 +699,7 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
   if (typeof patch.allowUnsafeExternalContent === "boolean") {
     next.allowUnsafeExternalContent = patch.allowUnsafeExternalContent;
   }
-  if (typeof patch.deliver === "boolean") {
-    next.deliver = patch.deliver;
-  }
-  if (typeof patch.channel === "string") {
-    next.channel = patch.channel;
-  }
-  if (typeof patch.to === "string") {
-    next.to = patch.to;
-  }
-  if (typeof patch.bestEffortDeliver === "boolean") {
-    next.bestEffortDeliver = patch.bestEffortDeliver;
-  }
   return next;
-}
-
-function buildLegacyDeliveryPatch(
-  payload: Extract<CronPayloadPatch, { kind: "agentTurn" }>,
-): CronDeliveryPatch | null {
-  const deliver = payload.deliver;
-  const toRaw = typeof payload.to === "string" ? payload.to.trim() : "";
-  const hasLegacyHints =
-    typeof deliver === "boolean" ||
-    typeof payload.bestEffortDeliver === "boolean" ||
-    Boolean(toRaw);
-  if (!hasLegacyHints) {
-    return null;
-  }
-
-  const patch: CronDeliveryPatch = {};
-  let hasPatch = false;
-
-  if (deliver === false) {
-    patch.mode = "none";
-    hasPatch = true;
-  } else if (deliver === true || toRaw) {
-    patch.mode = "announce";
-    hasPatch = true;
-  }
-
-  if (typeof payload.channel === "string") {
-    const channel = payload.channel.trim().toLowerCase();
-    patch.channel = channel ? channel : undefined;
-    hasPatch = true;
-  }
-  if (typeof payload.to === "string") {
-    patch.to = payload.to.trim();
-    hasPatch = true;
-  }
-  if (typeof payload.bestEffortDeliver === "boolean") {
-    patch.bestEffort = payload.bestEffortDeliver;
-    hasPatch = true;
-  }
-
-  return hasPatch ? patch : null;
 }
 
 function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
@@ -768,16 +722,19 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     timeoutSeconds: patch.timeoutSeconds,
     lightContext: patch.lightContext,
     allowUnsafeExternalContent: patch.allowUnsafeExternalContent,
-    deliver: patch.deliver,
-    channel: patch.channel,
-    to: patch.to,
-    bestEffortDeliver: patch.bestEffortDeliver,
   };
 }
 
 function normalizeOptionalTrimmedString(value: unknown): string | undefined {
   const trimmed = typeof value === "string" ? value.trim() : "";
   return trimmed ? trimmed : undefined;
+}
+
+function normalizeOptionalThreadId(value: unknown): string | number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  return normalizeOptionalTrimmedString(value);
 }
 
 function mergeCronDelivery(
@@ -788,6 +745,7 @@ function mergeCronDelivery(
     mode: existing?.mode ?? "none",
     channel: existing?.channel,
     to: existing?.to,
+    threadId: existing?.threadId,
     accountId: existing?.accountId,
     bestEffort: existing?.bestEffort,
     failureDestination: existing?.failureDestination,
@@ -801,6 +759,9 @@ function mergeCronDelivery(
   }
   if ("to" in patch) {
     next.to = normalizeOptionalTrimmedString(patch.to);
+  }
+  if ("threadId" in patch) {
+    next.threadId = normalizeOptionalThreadId(patch.threadId);
   }
   if ("accountId" in patch) {
     next.accountId = normalizeOptionalTrimmedString(patch.accountId);
@@ -897,7 +858,9 @@ export function isJobDue(job: CronJob, nowMs: number, opts: { forced: boolean })
   if (opts.forced) {
     return true;
   }
-  return job.enabled && typeof job.state.nextRunAtMs === "number" && nowMs >= job.state.nextRunAtMs;
+  return (
+    isJobEnabled(job) && typeof job.state.nextRunAtMs === "number" && nowMs >= job.state.nextRunAtMs
+  );
 }
 
 export function resolveJobPayloadTextForMain(job: CronJob): string | undefined {

@@ -1,5 +1,10 @@
 import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
+import {
+  comparableChannelTargetsShareRoute,
+  parseExplicitTargetForChannel,
+  resolveComparableTargetForChannel,
+} from "../../channels/plugins/target-parsing.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -75,11 +80,7 @@ function parseExplicitTargetWithPlugin(params: {
   if (!provider) {
     return null;
   }
-  return (
-    resolveOutboundChannelPlugin({ channel: provider })?.messaging?.parseExplicitTarget?.({
-      raw,
-    }) ?? null
-  );
+  return parseExplicitTargetForChannel(provider, raw);
 }
 
 export function resolveSessionDeliveryTarget(params: {
@@ -113,12 +114,26 @@ export function resolveSessionDeliveryTarget(params: {
   const context = deliveryContextFromSession(params.entry);
   const sessionLastChannel =
     context?.channel && isDeliverableMessageChannel(context.channel) ? context.channel : undefined;
+  const parsedSessionTarget = sessionLastChannel
+    ? resolveComparableTargetForChannel({
+        channel: sessionLastChannel,
+        rawTarget: context?.to,
+        fallbackThreadId: context?.threadId,
+      })
+    : null;
 
   // When a turn-source channel is provided, use only turn-scoped metadata.
   // Falling back to mutable session fields would re-introduce routing races.
   const hasTurnSourceChannel = params.turnSourceChannel != null;
-  const hasTurnSourceThreadId =
-    params.turnSourceThreadId != null && params.turnSourceThreadId !== "";
+  const parsedTurnSourceTarget =
+    hasTurnSourceChannel && params.turnSourceChannel
+      ? resolveComparableTargetForChannel({
+          channel: params.turnSourceChannel,
+          rawTarget: params.turnSourceTo,
+          fallbackThreadId: params.turnSourceThreadId,
+        })
+      : null;
+  const hasTurnSourceThreadId = parsedTurnSourceTarget?.threadId != null;
   const lastChannel = hasTurnSourceChannel ? params.turnSourceChannel : sessionLastChannel;
   const lastTo = hasTurnSourceChannel ? params.turnSourceTo : context?.to;
   const lastAccountId = hasTurnSourceChannel ? params.turnSourceAccountId : context?.accountId;
@@ -126,13 +141,19 @@ export function resolveSessionDeliveryTarget(params: {
   // match the session context. This avoids mixing a turn-scoped `to` with a stale session-scoped
   // threadId from a different chat/topic in shared-session scenarios.
   const turnToMatchesSession =
-    !params.turnSourceTo || !context?.to || params.turnSourceTo === context.to;
+    !params.turnSourceTo ||
+    !context?.to ||
+    (params.turnSourceChannel === sessionLastChannel &&
+      comparableChannelTargetsShareRoute({
+        left: parsedTurnSourceTarget,
+        right: parsedSessionTarget,
+      }));
   const lastThreadId = hasTurnSourceThreadId
-    ? params.turnSourceThreadId
+    ? parsedTurnSourceTarget?.threadId
     : hasTurnSourceChannel &&
         (params.turnSourceChannel !== sessionLastChannel || !turnToMatchesSession)
       ? undefined
-      : context?.threadId;
+      : parsedSessionTarget?.threadId;
 
   const rawRequested = params.requestedChannel ?? "last";
   const requested = rawRequested === "last" ? "last" : normalizeMessageChannel(rawRequested);

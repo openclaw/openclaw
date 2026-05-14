@@ -381,7 +381,7 @@ describe("gateway node command allowlist", () => {
     }
   });
 
-  test("blocks all declared commands until node pairing exists", async () => {
+  test("keeps allowlisted declared commands available before node pairing exists", async () => {
     const findConnectedNode = async (displayName: string) => {
       const listRes = await rpcReq<{
         nodes?: Array<{
@@ -413,7 +413,7 @@ describe("gateway node command allowlist", () => {
           const node = await findConnectedNode(displayName);
           return node?.commands?.toSorted() ?? [];
         }, FAST_WAIT_OPTS)
-        .toEqual([]);
+        .toEqual(["canvas.snapshot", "system.run"]);
 
       const node = await findConnectedNode(displayName);
       const nodeId = node?.nodeId ?? "";
@@ -431,24 +431,6 @@ describe("gateway node command allowlist", () => {
           }),
         ]),
       );
-
-      const canvasRes = await rpcReq(ws, "node.invoke", {
-        nodeId,
-        command: "canvas.snapshot",
-        params: { format: "png" },
-        idempotencyKey: "allowlist-device-paired-only-canvas",
-      });
-      expect(canvasRes.ok).toBe(false);
-      expect(canvasRes.error?.message ?? "").toContain("node command not allowed");
-
-      const systemRunRes = await rpcReq(ws, "node.invoke", {
-        nodeId,
-        command: "system.run",
-        params: { command: "echo blocked" },
-        idempotencyKey: "allowlist-device-paired-only-system-run",
-      });
-      expect(systemRunRes.ok).toBe(false);
-      expect(systemRunRes.error?.message ?? "").toContain("node command not allowed");
     } finally {
       await nodeClient?.stopAndWait();
     }

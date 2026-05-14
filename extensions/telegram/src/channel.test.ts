@@ -220,6 +220,42 @@ describe("telegramPlugin messaging", () => {
   });
 });
 
+describe("telegramPlugin threading", () => {
+  it("keeps topic thread state in plugin-owned tool context", () => {
+    expect(
+      telegramPlugin.threading?.buildToolContext?.({
+        cfg: {} as OpenClawConfig,
+        accountId: "default",
+        context: {
+          To: "telegram:-1001:topic:77",
+          MessageThreadId: 77,
+          CurrentMessageId: "msg-1",
+        },
+        hasRepliedRef: { value: false },
+      }),
+    ).toMatchObject({
+      currentChannelId: "telegram:-1001:topic:77",
+      currentThreadTs: "77",
+    });
+  });
+
+  it("parses topic thread state from target grammar when MessageThreadId is absent", () => {
+    expect(
+      telegramPlugin.threading?.buildToolContext?.({
+        cfg: {} as OpenClawConfig,
+        accountId: "default",
+        context: {
+          To: "telegram:-1001:topic:77",
+          CurrentMessageId: "msg-1",
+        },
+      }),
+    ).toMatchObject({
+      currentChannelId: "telegram:-1001:topic:77",
+      currentThreadTs: "77",
+    });
+  });
+});
+
 describe("telegramPlugin duplicate token guard", () => {
   it("marks secondary account as not configured when token is shared", async () => {
     const cfg = createCfg();

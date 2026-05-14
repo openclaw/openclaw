@@ -1,4 +1,5 @@
 import { resolveQueueSettings } from "../auto-reply/reply/queue.js";
+import { parseExplicitTargetForChannel } from "../channels/plugins/target-parsing.js";
 import { loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
@@ -89,6 +90,52 @@ function summarizeDeliveryError(error: unknown): string {
     return JSON.stringify(error);
   } catch {
     return "error";
+  }
+}
+
+function parseTelegramAnnounceTarget(to: string): {
+  chatId: string;
+  chatType: "direct" | "group" | "unknown";
+} {
+  const parsed = parseExplicitTargetForChannel("telegram", to);
+  const chatId = parsed?.to?.trim() ?? to.trim();
+  const chatType =
+    parsed?.chatType === "direct" || parsed?.chatType === "group" ? parsed.chatType : "unknown";
+  return { chatId, chatType };
+}
+
+function shouldStripThreadFromAnnounceEntry(
+  normalizedRequester?: DeliveryContext,
+  normalizedEntry?: DeliveryContext,
+): boolean {
+  if (
+    !normalizedRequester?.to ||
+    normalizedRequester.threadId != null ||
+    normalizedEntry?.threadId == null
+  ) {
+    return false;
+  }
+  const requesterChannel = normalizedRequester.channel?.trim().toLowerCase();
+  if (requesterChannel && requesterChannel !== "telegram") {
+    return true;
+  }
+  if (!requesterChannel && !normalizedRequester.to.startsWith("telegram:")) {
+    return true;
+  }
+  try {
+    const requesterTarget = parseTelegramAnnounceTarget(normalizedRequester.to);
+    if (requesterTarget.chatType !== "group") {
+      return true;
+    }
+    const entryTarget = normalizedEntry.to
+      ? parseTelegramAnnounceTarget(normalizedEntry.to)
+      : undefined;
+    if (entryTarget && entryTarget.chatId !== requesterTarget.chatId) {
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
   }
 }
 
@@ -196,9 +243,7 @@ export function resolveAnnounceOrigin(
     );
   }
   const entryForMerge =
-    normalizedRequester?.to &&
-    normalizedRequester.threadId == null &&
-    normalizedEntry?.threadId != null
+    normalizedEntry && shouldStripThreadFromAnnounceEntry(normalizedRequester, normalizedEntry)
       ? (() => {
           const { threadId: _ignore, ...rest } = normalizedEntry;
           return rest;

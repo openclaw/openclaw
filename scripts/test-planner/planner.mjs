@@ -1319,14 +1319,13 @@ export function buildCIExecutionManifest(scopeInput = {}, options = {}) {
     minShards: 1,
     maxShards: 9,
   });
-  const bunShardCount = windowsShardCount;
   const extensionFastShardCount = resolveDynamicShardCount({
     estimatedDurationMs: sumKnownManifestDurationsMs(context.extensionTimingManifest),
     fileCount: extensionCandidateFiles.length,
     targetDurationMs: 120_000,
     targetFilesPerShard: 140,
     minShards: 4,
-    maxShards: 5,
+    maxShards: 6,
   });
 
   const checksFastInclude = nodeEligible
@@ -1424,13 +1423,6 @@ export function buildCIExecutionManifest(scopeInput = {}, options = {}) {
         },
       ]
     : [];
-  const bunChecksInclude = createShardMatrixEntries({
-    checkNamePrefix: "bun-checks",
-    runtime: "bun",
-    task: "test",
-    command: "bunx vitest run --config vitest.unit.config.ts",
-    shardCount: bunShardCount,
-  });
   const extensionFastInclude = extensionFastEligible
     ? scope.changedExtensionsMatrix.include.map((entry) => ({
         check_name: `extension-fast-${entry.extension}`,
@@ -1458,7 +1450,6 @@ export function buildCIExecutionManifest(scopeInput = {}, options = {}) {
     macosNode: { enabled: macosNodeInclude.length > 0, matrix: { include: macosNodeInclude } },
     macosSwift: { enabled: macosEligible },
     android: { enabled: androidInclude.length > 0, matrix: { include: androidInclude } },
-    bunChecks: { enabled: bunChecksInclude.length > 0, matrix: { include: bunChecksInclude } },
     installSmoke: { enabled: !scope.docsOnly && scope.runChangedSmoke },
   };
 
@@ -1471,7 +1462,6 @@ export function buildCIExecutionManifest(scopeInput = {}, options = {}) {
       extensionFast: extensionFastShardCount,
       windows: windowsShardCount,
       macosNode: macosNodeShardCount,
-      bun: bunShardCount,
     },
     jobs,
     requiredCheckNames: [
@@ -1482,7 +1472,6 @@ export function buildCIExecutionManifest(scopeInput = {}, options = {}) {
       ...(macosEligible ? ["macos-swift"] : []),
       ...androidInclude.map((entry) => entry.check_name),
       ...extensionFastInclude.map((entry) => entry.check_name),
-      ...bunChecksInclude.map((entry) => entry.check_name),
       "check",
       "check-additional",
       "build-smoke",

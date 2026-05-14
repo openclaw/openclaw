@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 let page: { evaluate: ReturnType<typeof vi.fn> } | null = null;
 let locator: { evaluate: ReturnType<typeof vi.fn> } | null = null;
@@ -43,12 +43,14 @@ function createPendingEval() {
 }
 
 describe("evaluateViaPlaywright (abort)", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
+    ({ evaluateViaPlaywright } = await import("./pw-tools-core.interactions.js"));
+  });
+
+  beforeEach(() => {
     vi.clearAllMocks();
     page = null;
     locator = null;
-    ({ evaluateViaPlaywright } = await import("./pw-tools-core.interactions.js"));
   });
 
   it.each([

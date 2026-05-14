@@ -14,9 +14,10 @@ export type CronDeliveryPlan = {
   mode: CronDeliveryMode;
   channel?: CronMessageChannel;
   to?: string;
+  threadId?: string | number;
   /** Explicit channel account id from the delivery config, if set. */
   accountId?: string;
-  source: "delivery" | "payload";
+  source: "delivery";
   requested: boolean;
 };
 
@@ -47,8 +48,18 @@ function normalizeAccountId(value: unknown): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+function normalizeThreadId(value: unknown): string | number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
 export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
-  const payload = job.payload.kind === "agentTurn" ? job.payload : null;
   const delivery = job.delivery;
   const hasDelivery = delivery && typeof delivery === "object";
   const rawMode = hasDelivery ? (delivery as { mode?: unknown }).mode : undefined;
@@ -64,14 +75,15 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
             ? "announce"
             : undefined;
 
-  const payloadChannel = normalizeChannel(payload?.channel);
-  const payloadTo = normalizeTo(payload?.to);
   const deliveryChannel = normalizeChannel(
     (delivery as { channel?: unknown } | undefined)?.channel,
   );
   const deliveryTo = normalizeTo((delivery as { to?: unknown } | undefined)?.to);
-  const channel = deliveryChannel ?? payloadChannel ?? "last";
-  const to = deliveryTo ?? payloadTo;
+  const deliveryThreadId = normalizeThreadId(
+    (delivery as { threadId?: unknown } | undefined)?.threadId,
+  );
+  const channel = deliveryChannel ?? "last";
+  const to = deliveryTo;
   const deliveryAccountId = normalizeAccountId(
     (delivery as { accountId?: unknown } | undefined)?.accountId,
   );
@@ -81,23 +93,27 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
       mode: resolvedMode,
       channel: resolvedMode === "announce" ? channel : undefined,
       to,
+      threadId: resolvedMode === "announce" ? deliveryThreadId : undefined,
       accountId: deliveryAccountId,
       source: "delivery",
       requested: resolvedMode === "announce",
     };
   }
 
-  const legacyMode =
-    payload?.deliver === true ? "explicit" : payload?.deliver === false ? "off" : "auto";
-  const hasExplicitTarget = Boolean(to);
-  const requested = legacyMode === "explicit" || (legacyMode === "auto" && hasExplicitTarget);
+  const isIsolatedAgentTurn =
+    job.payload.kind === "agentTurn" &&
+    (job.sessionTarget === "isolated" ||
+      job.sessionTarget === "current" ||
+      job.sessionTarget.startsWith("session:"));
+  const resolvedMode = isIsolatedAgentTurn ? "announce" : "none";
 
   return {
-    mode: requested ? "announce" : "none",
-    channel,
-    to,
-    source: "payload",
-    requested,
+    mode: resolvedMode,
+    channel: resolvedMode === "announce" ? "last" : undefined,
+    to: undefined,
+    threadId: undefined,
+    source: "delivery",
+    requested: resolvedMode === "announce",
   };
 }
 

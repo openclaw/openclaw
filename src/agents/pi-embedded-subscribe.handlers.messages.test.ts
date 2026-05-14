@@ -69,11 +69,13 @@ describe("buildAssistantStreamData", () => {
       buildAssistantStreamData({
         text: "hello",
         delta: "he",
+        replace: true,
         mediaUrl: "https://example.com/a.png",
       }),
     ).toEqual({
       text: "hello",
       delta: "he",
+      replace: true,
       mediaUrls: ["https://example.com/a.png"],
     });
   });

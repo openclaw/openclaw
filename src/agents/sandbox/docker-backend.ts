@@ -13,6 +13,22 @@ import {
   execDockerRaw,
 } from "./docker.js";
 
+function resolveConfiguredDockerRuntimeImage(params: {
+  config: CreateSandboxBackendParams["cfg"] | import("../../config/config.js").OpenClawConfig;
+  agentId?: string;
+  configLabelKind?: string;
+}): string {
+  const sandboxCfg = resolveSandboxConfigForAgent(params.config, params.agentId);
+  switch (params.configLabelKind) {
+    case "BrowserImage":
+      return sandboxCfg.browser.image;
+    case "Image":
+    case undefined:
+    default:
+      return sandboxCfg.docker.image;
+  }
+}
+
 export async function createDockerSandboxBackend(
   params: CreateSandboxBackendParams,
 ): Promise<SandboxBackendHandle> {
@@ -113,7 +129,11 @@ export const dockerSandboxBackendManager: SandboxBackendManager = {
         // ignore inspect failures
       }
     }
-    const configuredImage = resolveSandboxConfigForAgent(config, agentId).docker.image;
+    const configuredImage = resolveConfiguredDockerRuntimeImage({
+      config,
+      agentId,
+      configLabelKind: entry.configLabelKind,
+    });
     return {
       running: state.running,
       actualConfigLabel,

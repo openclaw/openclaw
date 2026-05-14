@@ -20,7 +20,15 @@ const TASK_RECONCILE_GRACE_MS = 5 * 60_000;
 const TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
 const TASK_SWEEP_INTERVAL_MS = 60_000;
 
+/**
+ * Number of tasks to process before yielding to the event loop.
+ * Keeps the main thread responsive during large sweeps.
+ */
+const SWEEP_YIELD_BATCH_SIZE = 25;
+
 let sweeper: NodeJS.Timeout | null = null;
+let deferredSweep: NodeJS.Timeout | null = null;
+let sweepInProgress = false;
 
 export type TaskRegistryMaintenanceSummary = {
   reconciled: number;
@@ -188,59 +196,102 @@ export function previewTaskRegistryMaintenance(): TaskRegistryMaintenanceSummary
   return { reconciled, cleanupStamped, pruned };
 }
 
-export function runTaskRegistryMaintenance(): TaskRegistryMaintenanceSummary {
+/**
+ * Yield control back to the event loop so that pending I/O callbacks,
+ * timers, and incoming requests can be processed between batches of
+ * synchronous task-registry maintenance work.
+ */
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+function startScheduledSweep() {
+  if (sweepInProgress) {
+    return;
+  }
+  sweepInProgress = true;
+  void sweepTaskRegistry().finally(() => {
+    sweepInProgress = false;
+  });
+}
+
+export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintenanceSummary> {
   ensureTaskRegistryReady();
   const now = Date.now();
   let reconciled = 0;
   let cleanupStamped = 0;
   let pruned = 0;
-  for (const task of listTaskRecords()) {
-    if (shouldMarkLost(task, now)) {
-      const next = markTaskLost(task, now);
+  const tasks = listTaskRecords();
+  let processed = 0;
+  for (const task of tasks) {
+    const current = getTaskById(task.taskId);
+    if (!current) {
+      continue;
+    }
+    if (shouldMarkLost(current, now)) {
+      const next = markTaskLost(current, now);
       if (next.status === "lost") {
         reconciled += 1;
       }
+      processed += 1;
+      if (processed % SWEEP_YIELD_BATCH_SIZE === 0) {
+        await yieldToEventLoop();
+      }
       continue;
     }
-    if (shouldPruneTerminalTask(task, now) && deleteTaskRecordById(task.taskId)) {
+    if (shouldPruneTerminalTask(current, now) && deleteTaskRecordById(current.taskId)) {
       pruned += 1;
+      processed += 1;
+      if (processed % SWEEP_YIELD_BATCH_SIZE === 0) {
+        await yieldToEventLoop();
+      }
       continue;
     }
     if (
-      shouldStampCleanupAfter(task) &&
+      shouldStampCleanupAfter(current) &&
       setTaskCleanupAfterById({
-        taskId: task.taskId,
-        cleanupAfter: resolveCleanupAfter(task),
+        taskId: current.taskId,
+        cleanupAfter: resolveCleanupAfter(current),
       })
     ) {
       cleanupStamped += 1;
+    }
+    processed += 1;
+    if (processed % SWEEP_YIELD_BATCH_SIZE === 0) {
+      await yieldToEventLoop();
     }
   }
   return { reconciled, cleanupStamped, pruned };
 }
 
-export function sweepTaskRegistry(): TaskRegistryMaintenanceSummary {
+export async function sweepTaskRegistry(): Promise<TaskRegistryMaintenanceSummary> {
   return runTaskRegistryMaintenance();
 }
 
 export function startTaskRegistryMaintenance() {
   ensureTaskRegistryReady();
-  void sweepTaskRegistry();
+  deferredSweep = setTimeout(() => {
+    deferredSweep = null;
+    startScheduledSweep();
+  }, 5_000);
+  deferredSweep.unref?.();
   if (sweeper) {
     return;
   }
-  sweeper = setInterval(() => {
-    void sweepTaskRegistry();
-  }, TASK_SWEEP_INTERVAL_MS);
+  sweeper = setInterval(startScheduledSweep, TASK_SWEEP_INTERVAL_MS);
   sweeper.unref?.();
 }
 
 export function stopTaskRegistryMaintenanceForTests() {
-  if (!sweeper) {
-    return;
+  if (deferredSweep) {
+    clearTimeout(deferredSweep);
+    deferredSweep = null;
   }
-  clearInterval(sweeper);
-  sweeper = null;
+  if (sweeper) {
+    clearInterval(sweeper);
+    sweeper = null;
+  }
+  sweepInProgress = false;
 }
 
 export function getReconciledTaskById(taskId: string): TaskRecord | undefined {

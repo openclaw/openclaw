@@ -15,6 +15,35 @@ let PortInUseError: typeof import("./ports.js").PortInUseError;
 
 const describeUnix = process.platform === "win32" ? describe.skip : describe;
 
+async function listenServer(
+  server: net.Server,
+  port: number,
+  host?: string,
+): Promise<net.AddressInfo | null> {
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      if (host) {
+        server.listen(port, host, resolve);
+        return;
+      }
+      server.listen(port, resolve);
+    });
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "EPERM" || code === "EACCES") {
+      return null;
+    }
+    throw err;
+  }
+
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("expected tcp address");
+  }
+  return address;
+}
+
 beforeAll(async () => {
   ({ inspectPortUsage } = await import("./ports-inspect.js"));
   ({ ensurePortAvailable, handlePortError, PortInUseError } = await import("./ports.js"));
@@ -27,8 +56,11 @@ beforeEach(() => {
 describe("ports helpers", () => {
   it("ensurePortAvailable rejects when port busy", async () => {
     const server = net.createServer();
-    await new Promise<void>((resolve) => server.listen(0, () => resolve()));
-    const port = (server.address() as net.AddressInfo).port;
+    const address = await listenServer(server, 0);
+    if (!address) {
+      return;
+    }
+    const port = address.port;
     await expect(ensurePortAvailable(port)).rejects.toBeInstanceOf(PortInUseError);
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
@@ -71,8 +103,11 @@ describe("ports helpers", () => {
 describeUnix("inspectPortUsage", () => {
   it("reports busy when lsof is missing but loopback listener exists", async () => {
     const server = net.createServer();
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-    const port = (server.address() as net.AddressInfo).port;
+    const address = await listenServer(server, 0, "127.0.0.1");
+    if (!address) {
+      return;
+    }
+    const port = address.port;
 
     runCommandWithTimeoutMock.mockRejectedValueOnce(
       Object.assign(new Error("spawn lsof ENOENT"), { code: "ENOENT" }),
@@ -89,8 +124,11 @@ describeUnix("inspectPortUsage", () => {
 
   it("falls back to ss when lsof is unavailable", async () => {
     const server = net.createServer();
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-    const port = (server.address() as net.AddressInfo).port;
+    const address = await listenServer(server, 0, "127.0.0.1");
+    if (!address) {
+      return;
+    }
+    const port = address.port;
 
     runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
       const command = argv[0];

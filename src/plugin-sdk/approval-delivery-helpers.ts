@@ -88,7 +88,8 @@ export function createApproverRestrictedNativeApprovalAdapter(params: {
         accountId?: string | null;
         action: "approve";
       }) =>
-        params.hasApprovers({ cfg, accountId })
+        params.hasApprovers({ cfg, accountId }) &&
+        params.isNativeDeliveryEnabled({ cfg, accountId })
           ? ({ kind: "enabled" } as const)
           : ({ kind: "disabled" } as const),
     },

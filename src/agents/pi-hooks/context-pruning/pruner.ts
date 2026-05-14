@@ -2,6 +2,7 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ImageContent, TextContent, ToolResultMessage } from "@mariozechner/pi-ai";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../../../utils/cjk-chars.js";
+import { dropThinkingBlocks } from "../../pi-embedded-runner/thinking.js";
 import type { EffectiveContextPruningSettings } from "./settings.js";
 import { makeToolPrunablePredicate } from "./tools.js";
 
@@ -146,8 +147,20 @@ function estimateMessageChars(message: AgentMessage): number {
       if (b.type === "text" && typeof b.text === "string") {
         chars += estimateWeightedTextChars(b.text);
       }
-      if (b.type === "thinking" && typeof b.thinking === "string") {
-        chars += estimateWeightedTextChars(b.thinking);
+      const blockType = (b as { type?: unknown }).type;
+      if (blockType === "thinking" || blockType === "redacted_thinking") {
+        const thinking = (b as { thinking?: unknown }).thinking;
+        if (typeof thinking === "string") {
+          chars += estimateWeightedTextChars(thinking);
+        }
+        const data = (b as { data?: unknown }).data;
+        if (blockType === "redacted_thinking" && typeof data === "string") {
+          chars += estimateWeightedTextChars(data);
+        }
+        const signature = (b as { thinkingSignature?: unknown }).thinkingSignature;
+        if (typeof signature === "string") {
+          chars += estimateWeightedTextChars(signature);
+        }
       }
       if (b.type === "toolCall") {
         try {
@@ -249,6 +262,7 @@ export function pruneContextMessages(params: {
   ctx: Pick<ExtensionContext, "model">;
   isToolPrunable?: (toolName: string) => boolean;
   contextWindowTokensOverride?: number;
+  dropThinkingBlocksForEstimate?: boolean;
 }): AgentMessage[] {
   const { messages, settings, ctx } = params;
   const contextWindowTokens =
@@ -278,8 +292,11 @@ export function pruneContextMessages(params: {
   const pruneStartIndex = firstUserIndex === null ? messages.length : firstUserIndex;
 
   const isToolPrunable = params.isToolPrunable ?? makeToolPrunablePredicate(settings.tools);
+  const estimatedMessages = params.dropThinkingBlocksForEstimate
+    ? dropThinkingBlocks(messages)
+    : messages;
 
-  const totalCharsBefore = estimateContextChars(messages);
+  const totalCharsBefore = estimateContextChars(estimatedMessages);
   let totalChars = totalCharsBefore;
   let ratio = totalChars / charWindow;
   if (ratio < settings.softTrimRatio) {

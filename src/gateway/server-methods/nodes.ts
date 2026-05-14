@@ -657,9 +657,13 @@ export const nodeHandlers: GatewayRequestHandlers = {
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
-      const list = await listDevicePairing();
+      const [devicePairing, nodePairing] = await Promise.all([
+        listDevicePairing(),
+        listNodePairing(),
+      ]);
       const catalog = createKnownNodeCatalog({
-        pairedDevices: list.paired,
+        pairedDevices: devicePairing.paired,
+        pairedNodes: nodePairing.paired,
         connectedNodes: context.nodeRegistry.listConnected(),
       });
       const nodes = listKnownNodes(catalog);
@@ -682,9 +686,13 @@ export const nodeHandlers: GatewayRequestHandlers = {
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
-      const list = await listDevicePairing();
+      const [devicePairing, nodePairing] = await Promise.all([
+        listDevicePairing(),
+        listNodePairing(),
+      ]);
       const catalog = createKnownNodeCatalog({
-        pairedDevices: list.paired,
+        pairedDevices: devicePairing.paired,
+        pairedNodes: nodePairing.paired,
         connectedNodes: context.nodeRegistry.listConnected(),
       });
       const node = getKnownNode(catalog, id);

@@ -182,9 +182,7 @@ describe("CronService interval/cron jobs fire on time", () => {
     const sfJob = jobs.find((job) => job.id === "legacy-every");
     expect(sfJob?.state.lastStatus).toBe("ok");
     expect(sfJob?.schedule.kind).toBe("every");
-    if (sfJob?.schedule.kind === "every") {
-      expect(sfJob.schedule.anchorMs).toBe(nowMs);
-    }
+    expect(sfJob?.state.nextRunAtMs).toBe(nowMs + 8 * 60_000);
 
     cron.stop();
     await store.cleanup();

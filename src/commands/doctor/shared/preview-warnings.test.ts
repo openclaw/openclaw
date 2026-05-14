@@ -20,6 +20,13 @@ function manifest(id: string): PluginManifestRecord {
   };
 }
 
+function channelManifest(id: string, channelId: string): PluginManifestRecord {
+  return {
+    ...manifest(id),
+    channels: [channelId],
+  };
+}
+
 describe("doctor preview warnings", () => {
   beforeEach(() => {
     vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
@@ -160,5 +167,67 @@ describe("doctor preview warnings", () => {
     ]);
     expect(warnings[0]).toContain("Auto-removal is paused");
     expect(warnings[0]).toContain('rerun "openclaw doctor --fix"');
+  });
+
+  it("warns when a configured channel plugin is disabled explicitly", () => {
+    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
+      plugins: [channelManifest("telegram", "telegram")],
+      diagnostics: [],
+    });
+
+    const warnings = collectDoctorPreviewWarnings({
+      cfg: {
+        channels: {
+          telegram: {
+            botToken: "123:abc",
+            groupPolicy: "allowlist",
+          },
+        },
+        plugins: {
+          entries: {
+            telegram: {
+              enabled: false,
+            },
+          },
+        },
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(warnings).toEqual([
+      expect.stringContaining(
+        'channels.telegram: channel is configured, but plugin "telegram" is disabled by plugins.entries.telegram.enabled=false.',
+      ),
+    ]);
+    expect(warnings[0]).not.toContain("first-time setup mode");
+  });
+
+  it("warns when channel plugins are blocked globally", () => {
+    vi.spyOn(manifestRegistry, "loadPluginManifestRegistry").mockReturnValue({
+      plugins: [channelManifest("telegram", "telegram")],
+      diagnostics: [],
+    });
+
+    const warnings = collectDoctorPreviewWarnings({
+      cfg: {
+        channels: {
+          telegram: {
+            botToken: "123:abc",
+            groupPolicy: "allowlist",
+          },
+        },
+        plugins: {
+          enabled: false,
+        },
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(warnings).toEqual([
+      expect.stringContaining(
+        "channels.telegram: channel is configured, but plugins.enabled=false blocks channel plugins globally.",
+      ),
+    ]);
+    expect(warnings[0]).not.toContain("first-time setup mode");
   });
 });

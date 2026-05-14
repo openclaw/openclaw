@@ -3,6 +3,25 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_GEMINI_EMBEDDING_MODEL } from "./embeddings-gemini.js";
 import { mockPublicPinnedHostname } from "./test-helpers/ssrf.js";
 
+vi.mock("../../../../src/infra/net/fetch-guard.js", () => ({
+  fetchWithSsrFGuard: async (params: {
+    url: string;
+    init?: RequestInit;
+    fetchImpl?: typeof fetch;
+  }) => {
+    const fetchImpl = params.fetchImpl ?? globalThis.fetch;
+    if (!fetchImpl) {
+      throw new Error("fetch is not available");
+    }
+    const response = await fetchImpl(params.url, params.init);
+    return {
+      response,
+      finalUrl: params.url,
+      release: async () => {},
+    };
+  },
+}));
+
 const createFetchMock = () =>
   vi.fn(async (_input?: unknown, _init?: unknown) => ({
     ok: true,
@@ -16,6 +35,10 @@ const createGeminiFetchMock = () =>
     status: 200,
     json: async () => ({ embedding: { values: [1, 2, 3] } }),
   }));
+
+function installFetchMock(fetchMock: typeof globalThis.fetch) {
+  vi.stubGlobal("fetch", fetchMock);
+}
 
 function readFirstFetchRequest(fetchMock: { mock: { calls: unknown[][] } }) {
   const [url, init] = fetchMock.mock.calls[0] ?? [];
@@ -99,7 +122,7 @@ function createAutoProvider(model = "") {
 describe("embedding provider remote overrides", () => {
   it("uses remote baseUrl/apiKey and merges headers", async () => {
     const fetchMock = createFetchMock();
-    vi.stubGlobal("fetch", fetchMock);
+    installFetchMock(fetchMock as unknown as typeof globalThis.fetch);
     mockPublicPinnedHostname();
     mockResolvedProviderKey("provider-key");
 
@@ -149,7 +172,7 @@ describe("embedding provider remote overrides", () => {
 
   it("falls back to resolved api key when remote apiKey is blank", async () => {
     const fetchMock = createFetchMock();
-    vi.stubGlobal("fetch", fetchMock);
+    installFetchMock(fetchMock as unknown as typeof globalThis.fetch);
     mockPublicPinnedHostname();
     mockResolvedProviderKey("provider-key");
 
@@ -185,7 +208,7 @@ describe("embedding provider remote overrides", () => {
 
   it("builds Gemini embeddings requests with api key header", async () => {
     const fetchMock = createGeminiFetchMock();
-    vi.stubGlobal("fetch", fetchMock);
+    installFetchMock(fetchMock as unknown as typeof globalThis.fetch);
     mockPublicPinnedHostname();
     mockResolvedProviderKey("provider-key");
 
@@ -237,7 +260,7 @@ describe("embedding provider remote overrides", () => {
 
   it("uses GEMINI_API_KEY env indirection for Gemini remote apiKey", async () => {
     const fetchMock = createGeminiFetchMock();
-    vi.stubGlobal("fetch", fetchMock);
+    installFetchMock(fetchMock as unknown as typeof globalThis.fetch);
     mockPublicPinnedHostname();
     vi.stubEnv("GEMINI_API_KEY", "env-gemini-key");
 
@@ -261,7 +284,7 @@ describe("embedding provider remote overrides", () => {
 
   it("builds Mistral embeddings requests with bearer auth", async () => {
     const fetchMock = createFetchMock();
-    vi.stubGlobal("fetch", fetchMock);
+    installFetchMock(fetchMock as unknown as typeof globalThis.fetch);
     mockPublicPinnedHostname();
     mockResolvedProviderKey("provider-key");
 
@@ -304,7 +327,7 @@ describe("embedding provider auto selection", () => {
       status: 200,
       json: async () => ({ data: [{ embedding: [1, 2, 3] }] }),
     }));
-    vi.stubGlobal("fetch", fetchMock);
+    installFetchMock(fetchMock as unknown as typeof globalThis.fetch);
     mockPublicPinnedHostname();
     vi.mocked(authModule.resolveApiKeyForProvider).mockImplementation(async ({ provider }) => {
       if (provider === "openai") {
@@ -392,7 +415,7 @@ describe("embedding provider auto selection", () => {
       vi.resetAllMocks();
       vi.unstubAllGlobals();
       const fetchMock = testCase.fetchMockFactory();
-      vi.stubGlobal("fetch", fetchMock);
+      installFetchMock(fetchMock as unknown as typeof globalThis.fetch);
       mockPublicPinnedHostname();
       vi.mocked(authModule.resolveApiKeyForProvider).mockImplementation(async ({ provider }) =>
         testCase.resolveApiKey(provider),
@@ -412,7 +435,7 @@ describe("embedding provider local fallback", () => {
     mockMissingLocalEmbeddingDependency();
 
     const fetchMock = createFetchMock();
-    vi.stubGlobal("fetch", fetchMock);
+    installFetchMock(fetchMock as unknown as typeof globalThis.fetch);
 
     mockResolvedProviderKey("provider-key");
 

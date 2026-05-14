@@ -144,6 +144,7 @@ async function resolveCronDeliveryContext(params: {
   const resolvedDelivery = await resolveDeliveryTarget(params.cfg, params.agentId, {
     channel: deliveryPlan.channel ?? "last",
     to: deliveryPlan.to,
+    threadId: deliveryPlan.threadId,
     accountId: deliveryPlan.accountId,
     sessionKey: params.job.sessionKey,
   });

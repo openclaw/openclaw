@@ -12,7 +12,7 @@ import {
   isTelegramExecApprovalClientEnabled,
   resolveTelegramExecApprovalTarget,
 } from "./exec-approvals.js";
-import { normalizeTelegramChatId } from "./targets.js";
+import { normalizeTelegramChatId, parseTelegramTarget } from "./targets.js";
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
 type TelegramOriginTarget = { to: string; threadId?: number };
@@ -22,15 +22,18 @@ function resolveTurnSourceTelegramOriginTarget(
 ): TelegramOriginTarget | null {
   const turnSourceChannel = request.request.turnSourceChannel?.trim().toLowerCase() || "";
   const rawTurnSourceTo = request.request.turnSourceTo?.trim() || "";
-  const turnSourceTo = normalizeTelegramChatId(rawTurnSourceTo) ?? rawTurnSourceTo;
+  const parsedTurnSourceTarget = rawTurnSourceTo ? parseTelegramTarget(rawTurnSourceTo) : null;
+  const turnSourceTo = normalizeTelegramChatId(parsedTurnSourceTarget?.chatId ?? rawTurnSourceTo);
   if (turnSourceChannel !== "telegram" || !turnSourceTo) {
     return null;
   }
+  const rawThreadId =
+    request.request.turnSourceThreadId ?? parsedTurnSourceTarget?.messageThreadId ?? undefined;
   const threadId =
-    typeof request.request.turnSourceThreadId === "number"
-      ? request.request.turnSourceThreadId
-      : typeof request.request.turnSourceThreadId === "string"
-        ? Number.parseInt(request.request.turnSourceThreadId, 10)
+    typeof rawThreadId === "number"
+      ? rawThreadId
+      : typeof rawThreadId === "string"
+        ? Number.parseInt(rawThreadId, 10)
         : undefined;
   return {
     to: turnSourceTo,

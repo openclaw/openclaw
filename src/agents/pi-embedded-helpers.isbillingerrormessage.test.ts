@@ -548,6 +548,24 @@ describe("classifyFailoverReasonFromHttpStatus", () => {
     expect(classifyFailoverReasonFromHttpStatus(400, INSUFFICIENT_QUOTA_PAYLOAD)).toBe("billing");
   });
 
+  it("keeps HTTP 400 provider-specific rate limits out of the generic format bucket", () => {
+    expect(
+      classifyFailoverReasonFromHttpStatus(
+        400,
+        "ThrottlingException: Too many concurrent requests",
+      ),
+    ).toBe("rate_limit");
+  });
+
+  it("does not force HTTP 400 context-overflow payloads into format", () => {
+    expect(
+      classifyFailoverReasonFromHttpStatus(
+        400,
+        "INVALID_ARGUMENT: input exceeds the maximum number of tokens",
+      ),
+    ).toBeNull();
+  });
+
   it("treats HTTP 499 as transient for structured errors", () => {
     expect(classifyFailoverReasonFromHttpStatus(499)).toBe("timeout");
     expect(classifyFailoverReasonFromHttpStatus(499, "499 Client Closed Request")).toBe("timeout");
@@ -598,6 +616,17 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("HTTP 410: invalid_api_key")).toBe("auth_permanent");
     expect(classifyFailoverReason("HTTP 410: authentication failed")).toBe("auth");
     expect(classifyFailoverReason("HTTP 410: insufficient credits")).toBe("billing");
+  });
+
+  it("keeps raw HTTP 400 wrappers aligned with structured provider classification", () => {
+    expect(
+      classifyFailoverReason("HTTP 400: ThrottlingException: Too many concurrent requests"),
+    ).toBe("rate_limit");
+    expect(
+      classifyFailoverReason(
+        "HTTP 400: INVALID_ARGUMENT: input exceeds the maximum number of tokens",
+      ),
+    ).toBeNull();
   });
 });
 

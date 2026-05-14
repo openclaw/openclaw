@@ -2,6 +2,8 @@ const MAX_DISCORD_TIMEOUT_MS = 2_147_483_647;
 
 export const DISCORD_DEFAULT_LISTENER_TIMEOUT_MS = 120_000;
 export const DISCORD_DEFAULT_INBOUND_WORKER_TIMEOUT_MS = 30 * 60_000;
+export const DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS = 60_000;
+export const DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS = 120_000;
 
 function clampDiscordTimeoutMs(timeoutMs: number, minimumMs: number): number {
   return Math.max(minimumMs, Math.min(Math.floor(timeoutMs), MAX_DISCORD_TIMEOUT_MS));

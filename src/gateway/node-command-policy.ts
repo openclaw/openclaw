@@ -191,6 +191,32 @@ export function resolveNodeCommandAllowlist(
   return allow;
 }
 
+function normalizeDeclaredCommands(commands?: readonly string[]): string[] {
+  if (!Array.isArray(commands)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const value of commands) {
+    const trimmed = value.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    normalized.push(trimmed);
+  }
+  return normalized;
+}
+
+export function normalizeDeclaredNodeCommands(params: {
+  declaredCommands?: readonly string[];
+  allowlist: Set<string>;
+}): string[] {
+  return normalizeDeclaredCommands(params.declaredCommands).filter((command) =>
+    params.allowlist.has(command),
+  );
+}
+
 export function isNodeCommandAllowed(params: {
   command: string;
   declaredCommands?: string[];

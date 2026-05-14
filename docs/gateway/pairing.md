@@ -65,9 +65,42 @@ Notes:
 
 - `node.pair.request` is idempotent per node: repeated calls return the same
   pending request.
+- Repeated requests for the same pending node also refresh the stored node
+  metadata and the latest allowlisted declared command snapshot for operator visibility.
 - Approval **always** generates a fresh token; no token is ever returned from
   `node.pair.request`.
 - Requests may include `silent: true` as a hint for auto-approval flows.
+
+Important:
+
+- Node pairing is a trust/identity flow plus token issuance.
+- It does **not** pin the live node command surface per node.
+- Live node commands come from what the node declares on connect after the
+  gateway's global node command policy (`gateway.nodes.allowCommands` /
+  `denyCommands`) is applied.
+- Per-node `system.run` allow/ask policy lives on the node in
+  `exec.approvals.node.*`, not in the pairing record.
+
+## Node command gating (2026.3.31+)
+
+<Warning>
+**Breaking change:** Starting with `2026.3.31`, node commands are disabled until node pairing is approved. Device pairing alone is no longer enough to expose declared node commands.
+</Warning>
+
+When a node connects for the first time, pairing is requested automatically. Until the pairing request is approved, all pending node commands from that node are filtered and will not execute. Once trust is established through pairing approval, the node's declared commands become available subject to the normal command policy.
+
+This means:
+
+- Nodes that were previously relying on device pairing alone to expose commands must now complete node pairing.
+- Commands queued before pairing approval are dropped, not deferred.
+
+## Node event trust boundaries (2026.3.31+)
+
+<Warning>
+**Breaking change:** Node-originated runs now stay on a reduced trusted surface.
+</Warning>
+
+Node-originated summaries and related session events are restricted to the intended trusted surface. Notification-driven or node-triggered flows that previously relied on broader host or session tool access may need adjustment. This hardening ensures that node events cannot escalate into host-level tool access beyond what the node's trust boundary permits.
 
 ## Auto-approval (macOS app)
 
