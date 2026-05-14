@@ -24,7 +24,7 @@ import {
 } from "../config/types.secrets.js";
 import {
   collectUnsupportedSecretRefPolicyIssues,
-  validateConfigObjectRaw,
+  validateConfigObjectRawWithPlugins,
 } from "../config/validation.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
 import { danger, info, success } from "../globals.js";
@@ -1579,14 +1579,8 @@ function formatAutoManagedMetaError(paths: readonly PathSegment[][]): string {
   ].join("\n");
 }
 
-function collectDryRunSchemaErrors(params: {
-  config: OpenClawConfig;
-  operations: ReadonlyArray<ConfigSetOperation>;
-}): ConfigSetDryRunError[] {
-  const validated = validateConfigObjectRaw(params.config, {
-    touchedPaths: params.operations.map((operation) => operation.setPath),
-    validateBundledChannels: true,
-  });
+function collectDryRunSchemaErrors(params: { config: OpenClawConfig }): ConfigSetDryRunError[] {
+  const validated = validateConfigObjectRawWithPlugins(params.config);
   if (validated.ok) {
     return [];
   }
@@ -1733,7 +1727,6 @@ async function runConfigOperations(params: {
       errors.push(
         ...collectDryRunSchemaErrors({
           config: nextConfig,
-          operations,
         }),
       );
     }
