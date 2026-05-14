@@ -124,12 +124,6 @@ export function resolveLlmIdleTimeoutMs(params?: {
     clampTimeoutMs(Math.min(valueMs, DEFAULT_LLM_IDLE_TIMEOUT_MS));
 
   const runTimeoutMs = params?.runTimeoutMs;
-  if (typeof runTimeoutMs === "number" && Number.isFinite(runTimeoutMs) && runTimeoutMs > 0) {
-    if (runTimeoutMs >= MAX_TIMER_TIMEOUT_MS) {
-      return 0;
-    }
-  }
-
   const agentTimeoutSeconds = params?.cfg?.agents?.defaults?.timeoutSeconds;
   const agentTimeoutMs = finiteSecondsToTimerSafeMilliseconds(agentTimeoutSeconds);
   const timeoutBounds = [runTimeoutMs, agentTimeoutMs].filter(
@@ -140,6 +134,10 @@ export function resolveLlmIdleTimeoutMs(params?: {
       value < MAX_TIMER_TIMEOUT_MS,
   );
 
+  // Explicit per-model idle timeout (`models.providers.<id>.timeoutSeconds`) wins
+  // over the NO_TIMEOUT_MS sentinel that runTimeoutMs may carry when the caller
+  // declared "run is unlimited". The two are independent: an unlimited run does
+  // not imply opting out of chunk-level hang detection.
   const modelRequestTimeoutMs = params?.modelRequestTimeoutMs;
   if (
     typeof modelRequestTimeoutMs === "number" &&
@@ -161,6 +159,9 @@ export function resolveLlmIdleTimeoutMs(params?: {
   }
 
   if (typeof runTimeoutMs === "number" && Number.isFinite(runTimeoutMs) && runTimeoutMs > 0) {
+    if (runTimeoutMs >= MAX_TIMER_TIMEOUT_MS) {
+      return 0;
+    }
     if (params?.trigger === "cron") {
       return clampTimeoutMs(runTimeoutMs);
     }
