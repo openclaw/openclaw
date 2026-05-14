@@ -124,8 +124,16 @@ function listKnownNodeCommands(cfg: OpenClawConfig): Set<string> {
     },
   };
   const out = new Set<string>();
-  for (const platform of ["ios", "android", "macos", "linux", "windows", "unknown"]) {
-    const allow = resolveNodeCommandAllowlist(baseCfg, { platform });
+  const platformNodes = [
+    { platform: "ios", deviceFamily: "iPhone" },
+    { platform: "android", deviceFamily: "Android" },
+    { platform: "macos", deviceFamily: "Mac" },
+    { platform: "linux", deviceFamily: "Linux" },
+    { platform: "windows", deviceFamily: "Windows" },
+    { platform: "unknown" },
+  ];
+  for (const node of platformNodes) {
+    const allow = resolveNodeCommandAllowlist(baseCfg, node);
     for (const cmd of allow) {
       const normalized = normalizeNodeCommand(cmd);
       if (normalized) {
