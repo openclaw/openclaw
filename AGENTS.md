@@ -85,6 +85,7 @@ Skills own workflows; root owns hard policy and routing.
 - PR verification: before merge, post exact local commands, CI/Testbox run IDs, before/after proof when used, and known proof gaps.
 - Issue fixed on `main` with proof: comment proof + commit/PR, then close.
 - After landing or requested close/sweep: search duplicates; comment proof + canonical commit/PR/release before closing.
+- After landing/ship final: include 2-5 sentence recap of what landed: behavior change, key files/surface, proof run, issue/PR state. Do not answer with only status/links.
 - `ship` that fixes an issue: after push, comment proof + commit link, then close the issue.
 - GH comments with backticks, `$`, or shell snippets: use heredoc/body file, not inline double-quoted `--body`.
 - PR create: real body required. Include Summary + Verification; mention refs, behavior, and proof.
