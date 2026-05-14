@@ -232,9 +232,8 @@ async function writeUsageCostCacheLockAtomically(
 ): Promise<void> {
   // Write directly to lockPath with O_EXCL (flag: "wx") instead of using
   // temp file + hard link. The hard-link approach (fs.promises.link) fails
-  // with ENOTSUP on SMB/NFS/virtiofs/9p/FUSE filesystems. O_EXCL is
-  // POSIX-standard and guarantees atomic create-if-not-exists on all
-  // local and network filesystems that support file creation.
+  // with ENOTSUP on SMB/NFS/virtiofs/9p/FUSE filesystems. O_EXCL is a
+  // POSIX-standard portability improvement over hard links; see #81089.
   await fs.promises.writeFile(lockPath, `${JSON.stringify(lock)}\n`, { flag: "wx" });
 }
 
