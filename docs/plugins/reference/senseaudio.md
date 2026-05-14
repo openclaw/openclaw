@@ -1,5 +1,5 @@
 ---
-summary: "Adds media understanding provider support."
+summary: "Adds media understanding provider support. Adds text-to-speech provider support."
 read_when:
   - You are installing, configuring, or auditing the senseaudio plugin
 title: "Senseaudio plugin"
@@ -7,7 +7,7 @@ title: "Senseaudio plugin"
 
 # Senseaudio plugin
 
-Adds media understanding provider support.
+Adds media understanding provider support. Adds text-to-speech provider support.
 
 ## Distribution
 
@@ -16,7 +16,7 @@ Adds media understanding provider support.
 
 ## Surface
 
-contracts: mediaUnderstandingProviders
+contracts: mediaUnderstandingProviders, speechProviders
 
 ## Related docs
 
