@@ -71,7 +71,10 @@ import {
   formatMattermostNoVisibleReplyLog,
 } from "./no-visible-reply-diagnostic.js";
 import { runWithReconnect } from "./reconnect.js";
-import { deliverMattermostReplyPayload } from "./reply-delivery.js";
+import {
+  deliverMattermostReplyPayload,
+  type MattermostReplyDeliveryOutcome,
+} from "./reply-delivery.js";
 import type {
   ChannelAccountSnapshot,
   ChatType,
@@ -381,6 +384,31 @@ export async function deliverMattermostReplyWithDraftPreview(
       await params.deliverFinal();
     },
   });
+}
+
+export function formatMattermostFinalDeliveryOutcomeLog(params: {
+  outcome: MattermostReplyDeliveryOutcome;
+  payload: ReplyPayload;
+  to: string;
+  accountId: string;
+  agentId: string | undefined;
+}): string | undefined {
+  const violation = evaluateMattermostNoVisibleReply({
+    outcome: params.outcome,
+    payload: params.payload,
+  });
+  if (violation) {
+    return formatMattermostNoVisibleReplyLog({
+      violation,
+      to: params.to,
+      accountId: params.accountId,
+      agentId: params.agentId,
+    });
+  }
+  if (params.outcome === "text" || params.outcome === "media") {
+    return `delivered reply to ${params.to}`;
+  }
+  return undefined;
 }
 
 export function resolveMattermostEffectiveReplyToId(params: {
@@ -1700,18 +1728,15 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                     tableMode,
                     sendMessage: sendMessageMattermost,
                   });
-                  const violation = evaluateMattermostNoVisibleReply({ outcome, payload });
-                  if (violation) {
-                    runtime.log?.(
-                      formatMattermostNoVisibleReplyLog({
-                        violation,
-                        to,
-                        accountId: account.accountId,
-                        agentId: route.agentId,
-                      }),
-                    );
-                  } else if (outcome !== "reasoning_skipped") {
-                    runtime.log?.(`delivered reply to ${to}`);
+                  const deliveryLog = formatMattermostFinalDeliveryOutcomeLog({
+                    outcome,
+                    payload,
+                    to,
+                    accountId: account.accountId,
+                    agentId: route.agentId,
+                  });
+                  if (deliveryLog) {
+                    runtime.log?.(deliveryLog);
                   }
                 },
               });

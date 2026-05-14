@@ -1,3 +1,4 @@
+import { countOutboundMedia } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { MattermostReplyDeliveryOutcome } from "./reply-delivery.js";
 
@@ -7,14 +8,6 @@ export type MattermostNoVisibleReplyViolation = {
   finalTextLength: number;
   mediaUrlCount: number;
 };
-
-function countMediaUrls(payload: ReplyPayload): number {
-  const single = typeof payload.mediaUrl === "string" && payload.mediaUrl.length > 0 ? 1 : 0;
-  const list = Array.isArray(payload.mediaUrls)
-    ? payload.mediaUrls.filter((url) => typeof url === "string" && url.length > 0).length
-    : 0;
-  return single + list;
-}
 
 /**
  * Detects the #80501 symptom: `deliverMattermostReplyPayload` accepted a
@@ -38,7 +31,7 @@ export function evaluateMattermostNoVisibleReply(params: {
     return null;
   }
   const finalText = typeof params.payload.text === "string" ? params.payload.text.trim() : "";
-  const mediaUrlCount = countMediaUrls(params.payload);
+  const mediaUrlCount = countOutboundMedia(params.payload);
   // If the payload had no text and no media even nominally, the run had
   // nothing to send and "empty" is the correct outcome — do not flag.
   if (finalText.length === 0 && mediaUrlCount === 0) {

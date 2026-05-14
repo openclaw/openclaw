@@ -31,7 +31,7 @@ describe("evaluateMattermostNoVisibleReply", () => {
     });
   });
 
-  it("counts entries from mediaUrls[] alongside the singular mediaUrl", () => {
+  it("follows the SDK legacy media fallback when counting media URLs", () => {
     const violation = evaluateMattermostNoVisibleReply({
       outcome: "empty",
       payload: {
@@ -39,7 +39,7 @@ describe("evaluateMattermostNoVisibleReply", () => {
         mediaUrls: ["https://example.org/b.png", "https://example.org/c.png"],
       },
     });
-    expect(violation?.mediaUrlCount).toBe(3);
+    expect(violation?.mediaUrlCount).toBe(2);
   });
 
   it("does not flag reasoning_skipped outcome (intentional suppression)", () => {
