@@ -310,10 +310,20 @@ describe("exec host env validation", () => {
     }
   });
 
-  it("routes implicit auto host to gateway when sandbox runtime is unavailable", async () => {
+  it("fails closed for the implicit sandbox default when sandbox runtime is unavailable", async () => {
     const tool = createExecTool({ security: "full", ask: "off" });
 
-    const result = await tool.execute("call1", {
+    await expect(
+      tool.execute("call1", {
+        command: "echo ok",
+      }),
+    ).rejects.toThrow(/requires a sandbox runtime/);
+  });
+
+  it("routes explicit auto host to gateway when sandbox runtime is unavailable", async () => {
+    const tool = createExecTool({ host: "auto", security: "full", ask: "off" });
+
+    const result = await tool.execute("call-explicit-auto", {
       command: "echo ok",
       yieldMs: FOREGROUND_TEST_YIELD_MS,
     });

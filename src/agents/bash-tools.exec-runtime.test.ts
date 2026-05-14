@@ -108,6 +108,21 @@ describe("detectCursorKeyMode", () => {
 });
 
 describe("resolveExecTarget", () => {
+  it("defaults omitted host config to sandbox", () => {
+    expectExecTarget(
+      resolveExecTarget({
+        elevatedRequested: false,
+        sandboxAvailable: false,
+      }),
+      {
+        configuredTarget: "sandbox",
+        requestedTarget: null,
+        selectedTarget: "sandbox",
+        effectiveHost: "sandbox",
+      },
+    );
+  });
+
   it("keeps implicit auto on sandbox when a sandbox runtime is available", () => {
     expectExecTarget(
       resolveExecTarget({
