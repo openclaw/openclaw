@@ -188,8 +188,22 @@ export async function offerPostInstallMigrations(
       logMigrationHint(params.runtime, candidate);
       continue;
     }
+    let preparation: Awaited<ReturnType<NonNullable<MigrationProviderPlugin["prepareApply"]>>> =
+      undefined;
     try {
-      const { migrateDefaultCommand } = await import("../commands/migrate.js");
+      const [{ migrateDefaultCommand }, { createMigrationLogger }, { resolveStateDir }] =
+        await Promise.all([
+          import("../commands/migrate.js"),
+          import("../commands/migrate/context.js"),
+          import("../config/paths.js"),
+        ]);
+      preparation = await candidate.provider.prepareApply?.({
+        config: nextConfig,
+        stateDir: resolveStateDir(),
+        logger: createMigrationLogger(params.runtime),
+        ...(candidate.source ? { source: candidate.source } : {}),
+        providerOptions: { configPatchMode: "return" },
+      });
       const result = await migrateDefaultCommand(params.runtime, {
         provider: candidate.provider.id,
         configOverride: nextConfig,
@@ -202,6 +216,8 @@ export async function offerPostInstallMigrations(
         `${candidate.provider.label} migration failed: ${formatErrorMessage(error)}. ` +
           `Re-run with ${formatCliCommand(`openclaw migrate ${candidate.provider.id} --dry-run`)} to inspect.`,
       );
+    } finally {
+      await preparation?.dispose?.();
     }
   }
   return { config: nextConfig };
