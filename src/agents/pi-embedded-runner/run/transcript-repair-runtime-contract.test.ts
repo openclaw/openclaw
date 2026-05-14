@@ -48,6 +48,23 @@ describe("Pi transcript repair runtime contract", () => {
     });
   });
 
+  it("drops stale inter-session orphan leaves instead of shadowing fresh prompts", () => {
+    const result = mergeOrphanedTrailingUserPrompt({
+      prompt: "newest inbound message",
+      trigger: "user",
+      leafMessage: {
+        content: "[Inter-session message]\nAction: reply NO_REPLY",
+        provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+      },
+    });
+
+    expect(result).toEqual({
+      merged: false,
+      removeLeaf: true,
+      prompt: "newest inbound message",
+    });
+  });
+
   it("preserves structured text and media references before removing the leaf", () => {
     const result = mergeOrphanedTrailingUserPrompt({
       prompt: "newest inbound message",
