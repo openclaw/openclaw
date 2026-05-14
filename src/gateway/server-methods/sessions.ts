@@ -1644,7 +1644,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const inferredRunAgentId =
       requestedParamAgentId ??
       requestedKeyAgentId ??
-      (requestedRunId ? resolveDefaultAgentId(cfg) : undefined);
+      (requestedRunId && !activeRunSessionKey ? resolveDefaultAgentId(cfg) : undefined);
     const requestedRunAgentId = requestedRunId
       ? inferredRunAgentId
         ? normalizeAgentId(inferredRunAgentId)

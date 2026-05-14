@@ -87,6 +87,15 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
     if (!identity) {
       continue;
     }
+    const normalizedScopedAgentId = normalizeAgentIdForCompare(scopedAgentId);
+    const normalizedOwnerAgentId = normalizeAgentIdForCompare(identity.ownerAgentId);
+    if (
+      normalizedScopedAgentId &&
+      normalizedOwnerAgentId &&
+      normalizedOwnerAgentId !== normalizedScopedAgentId
+    ) {
+      continue;
+    }
     const archivedOwnerMatchesScope = Boolean(
       identity.archived &&
       identity.ownerAgentId &&

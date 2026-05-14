@@ -990,6 +990,56 @@ describe("searchMemoryWiki", () => {
     ]);
   });
 
+  it("drops gateway-style owner-qualified session hits that collide with the scoped store", async () => {
+    const { config } = await createQueryVault({
+      initialize: true,
+      config: {
+        search: { backend: "shared", corpus: "memory" },
+      },
+    });
+    loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+      storePath: "(test)",
+      store: {
+        "agent:secondary:main": {
+          sessionId: "main",
+          updatedAt: 1,
+          sessionFile: "/tmp/openclaw/main.jsonl",
+        },
+      },
+    });
+    const manager = createMemoryManager({
+      searchResults: [
+        {
+          path: "sessions/other/main.jsonl",
+          startLine: 1,
+          endLine: 2,
+          score: 30,
+          snippet: "other transcript",
+          source: "sessions",
+        },
+        {
+          path: "MEMORY.md",
+          startLine: 5,
+          endLine: 6,
+          score: 10,
+          snippet: "durable memory",
+          source: "memory",
+        },
+      ],
+    });
+    getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
+
+    const results = await searchMemoryWiki({
+      config,
+      appConfig: createAppConfig(),
+      agentId: "secondary",
+      query: "transcript",
+      maxResults: 10,
+    });
+
+    expect(results.map((result) => result.path)).toEqual(["MEMORY.md"]);
+  });
+
   it("drops gateway-style session memory hits when shared store keys belong to another agent", async () => {
     const { config } = await createQueryVault({
       initialize: true,

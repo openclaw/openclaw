@@ -1291,10 +1291,19 @@ async function createSessionMemoryPathVisibilityChecker(params: {
     if (!identity) {
       return false;
     }
+    const normalizedScopedAgentId = normalizeLowercaseStringOrEmpty(scopedAgentId);
+    const normalizedOwnerAgentId = normalizeLowercaseStringOrEmpty(identity.ownerAgentId);
+    if (
+      normalizedScopedAgentId &&
+      normalizedOwnerAgentId &&
+      normalizedOwnerAgentId !== normalizedScopedAgentId
+    ) {
+      return false;
+    }
     const archivedOwnerMatchesScope = Boolean(
       identity.archived &&
       identity.ownerAgentId &&
-      (!scopedAgentId || normalizeLowercaseStringOrEmpty(identity.ownerAgentId) === scopedAgentId),
+      (!normalizedScopedAgentId || normalizedOwnerAgentId === normalizedScopedAgentId),
     );
     const archivedOwnerAgentId = archivedOwnerMatchesScope ? identity.ownerAgentId : undefined;
     const keys = filterSessionKeysByScopedAgent({
