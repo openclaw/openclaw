@@ -613,6 +613,25 @@ describe("devices cli local fallback", () => {
     ).rejects.toThrow("pairing required");
     expect(listDevicePairing).not.toHaveBeenCalled();
   });
+
+  it("does not use local list fallback when an explicit --token is provided", async () => {
+    rejectGatewayForLocalFallback();
+
+    await expect(runDevicesCommand(["list", "--json", "--token", "token-1"])).rejects.toThrow(
+      "pairing required",
+    );
+    expect(listDevicePairing).not.toHaveBeenCalled();
+  });
+
+  it("does not use local approve fallback when an explicit --password is provided", async () => {
+    callGateway.mockRejectedValue(new Error("gateway closed (1008): pairing required"));
+
+    await expect(runDevicesApprove(["req-password", "--password", "secret"])).rejects.toThrow(
+      "pairing required",
+    );
+    expect(listDevicePairing).not.toHaveBeenCalled();
+    expect(approveDevicePairing).not.toHaveBeenCalled();
+  });
 });
 
 describe("devices cli list", () => {

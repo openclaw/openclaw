@@ -163,6 +163,9 @@ function resolveLocalPairingFallback(
     // switch to local pairing files in that case.
     return null;
   }
+  if (normalizeOptionalString(opts.token) || normalizeOptionalString(opts.password)) {
+    return null;
+  }
   const connection = buildGatewayConnectionDetails();
   if (connection.urlSource !== "local loopback") {
     return null;
