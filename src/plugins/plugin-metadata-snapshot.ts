@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { resolveIsNixMode } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -10,6 +11,7 @@ import { resolveCompatibilityHostVersion } from "../version.js";
 import { resolveDefaultPluginNpmDir } from "./install-paths.js";
 import { hashJson, safeFileSignature } from "./installed-plugin-index-hash.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
+import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import { resolveInstalledPluginIndexStorePath } from "./installed-plugin-index-store-path.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import {
@@ -71,6 +73,193 @@ function fileFingerprint(filePath: string): unknown {
     return [filePath, "missing"];
   }
   return [filePath, signature.size, signature.mtimeMs, signature.ctimeMs];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function readJsonObject(filePath: string): Record<string, unknown> | undefined {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    return isRecord(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function sortedRecordEntries(value: unknown): [string, unknown][] {
+  if (!isRecord(value)) {
+    return [];
+  }
+  return Object.entries(value).toSorted(([left], [right]) => left.localeCompare(right));
+}
+
+function installRecordMemoFingerprint(record: unknown): Record<string, unknown> | unknown {
+  if (!isRecord(record)) {
+    return record;
+  }
+  const source = normalizeString(record.source);
+  return {
+    source,
+    installPath: normalizeString(record.installPath),
+    sourcePath: normalizeString(record.sourcePath),
+    version: normalizeString(record.version),
+    resolvedName: normalizeString(record.resolvedName),
+    resolvedVersion: normalizeString(record.resolvedVersion),
+    spec: source === "git" ? undefined : normalizeString(record.spec),
+    resolvedSpec: source === "git" ? undefined : normalizeString(record.resolvedSpec),
+    integrity: normalizeString(record.integrity),
+    shasum: normalizeString(record.shasum),
+    clawhubPackage: normalizeString(record.clawhubPackage),
+    clawhubFamily: normalizeString(record.clawhubFamily),
+    clawhubChannel: normalizeString(record.clawhubChannel),
+    artifactKind: normalizeString(record.artifactKind),
+    artifactFormat: normalizeString(record.artifactFormat),
+    npmTarballName: normalizeString(record.npmTarballName),
+    clawpackSha256: normalizeString(record.clawpackSha256),
+    clawpackManifestSha256: normalizeString(record.clawpackManifestSha256),
+    clawpackSize: typeof record.clawpackSize === "number" ? record.clawpackSize : undefined,
+    gitRef: normalizeString(record.gitRef),
+    gitCommit: normalizeString(record.gitCommit),
+    marketplaceName: normalizeString(record.marketplaceName),
+    marketplaceSource: normalizeString(record.marketplaceSource),
+    marketplacePlugin: normalizeString(record.marketplacePlugin),
+  };
+}
+
+function installRecordsMemoFingerprint(records: unknown): Record<string, unknown> {
+  return Object.fromEntries(
+    sortedRecordEntries(records).map(([pluginId, record]) => [
+      pluginId,
+      installRecordMemoFingerprint(record),
+    ]),
+  );
+}
+
+function installedIndexMemoFingerprint(index: Record<string, unknown> | undefined): unknown {
+  if (!index) {
+    return null;
+  }
+  const plugins = Array.isArray(index.plugins) ? index.plugins : [];
+  const diagnostics = Array.isArray(index.diagnostics) ? index.diagnostics : [];
+  return {
+    version: index.version,
+    warning: index.warning,
+    hostContractVersion: index.hostContractVersion,
+    compatRegistryVersion: index.compatRegistryVersion,
+    migrationVersion: index.migrationVersion,
+    policyHash: index.policyHash,
+    generatedAtMs: index.generatedAtMs,
+    refreshReason: index.refreshReason,
+    installRecords: installRecordsMemoFingerprint(index.installRecords),
+    plugins: plugins.map((rawPlugin) => {
+      if (!isRecord(rawPlugin)) {
+        return rawPlugin;
+      }
+      return {
+        pluginId: normalizeString(rawPlugin.pluginId),
+        packageName: normalizeString(rawPlugin.packageName),
+        packageVersion: normalizeString(rawPlugin.packageVersion),
+        installRecord: installRecordMemoFingerprint(rawPlugin.installRecord),
+        packageInstall: rawPlugin.packageInstall,
+        packageChannel: rawPlugin.packageChannel,
+        manifestPath: normalizeString(rawPlugin.manifestPath),
+        manifestHash: normalizeString(rawPlugin.manifestHash),
+        format: normalizeString(rawPlugin.format),
+        bundleFormat: normalizeString(rawPlugin.bundleFormat),
+        source: normalizeString(rawPlugin.source),
+        setupSource: normalizeString(rawPlugin.setupSource),
+        packageJson: rawPlugin.packageJson,
+        rootDir: normalizeString(rawPlugin.rootDir),
+        origin: normalizeString(rawPlugin.origin),
+        enabled: rawPlugin.enabled === true,
+        enabledByDefault: rawPlugin.enabledByDefault === true,
+        enabledByDefaultOnPlatforms: rawPlugin.enabledByDefaultOnPlatforms,
+        syntheticAuthRefs: rawPlugin.syntheticAuthRefs,
+        startup: rawPlugin.startup,
+        compat: rawPlugin.compat,
+      };
+    }),
+    diagnostics: diagnostics.map((rawDiagnostic) => {
+      if (!isRecord(rawDiagnostic)) {
+        return rawDiagnostic;
+      }
+      return {
+        level: normalizeString(rawDiagnostic.level),
+        pluginId: normalizeString(rawDiagnostic.pluginId),
+        source: normalizeString(rawDiagnostic.source),
+        message: normalizeString(rawDiagnostic.message),
+      };
+    }),
+  };
+}
+
+function isPathInsideOrEqual(childPath: string, parentPath: string): boolean {
+  const relative = path.relative(parentPath, childPath);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function tryRealpath(filePath: string): string | null {
+  try {
+    return fs.realpathSync(filePath);
+  } catch {
+    return null;
+  }
+}
+
+function resolvePluginFilePath(
+  pluginDir: string,
+  filePath: string | undefined,
+):
+  | { status: "ok"; path: string }
+  | { status: "outside-root"; path: string }
+  | { status: "missing-root"; path: string } {
+  if (!filePath) {
+    return { status: "missing-root", path: "" };
+  }
+  const rootDir = path.resolve(pluginDir);
+  const resolved = path.isAbsolute(filePath)
+    ? path.resolve(filePath)
+    : path.resolve(rootDir, filePath);
+  if (!isPathInsideOrEqual(resolved, rootDir)) {
+    return { status: "outside-root", path: resolved };
+  }
+  const rootRealPath = tryRealpath(rootDir);
+  const targetRealPath = tryRealpath(resolved);
+  if (rootRealPath && targetRealPath && !isPathInsideOrEqual(targetRealPath, rootRealPath)) {
+    return { status: "outside-root", path: resolved };
+  }
+  return { status: "ok", path: resolved };
+}
+
+function persistedPluginFileFingerprint(
+  rootDir: string | undefined,
+  filePath: string | undefined,
+): unknown {
+  if (!filePath) {
+    return null;
+  }
+  if (!rootDir) {
+    return [filePath, "missing-root"];
+  }
+  const resolved = resolvePluginFilePath(rootDir, filePath);
+  if (resolved.status !== "ok") {
+    return [filePath, resolved.status];
+  }
+  return fileFingerprint(resolved.path);
+}
+
+function resolveRecordPackageJsonPath(record: Record<string, unknown>): string | undefined {
+  const packageJson = record.packageJson;
+  if (!isRecord(packageJson)) {
+    return undefined;
+  }
+  return normalizeString(packageJson.path);
 }
 
 function pickMemoRelevantEnv(env: NodeJS.ProcessEnv): Record<string, string> {
@@ -139,6 +328,16 @@ function resolvePersistedRegistryMemoFingerprint(params: {
   preferPersisted?: boolean;
   stateDir?: string;
 }): unknown {
+  const disabledByEnv = params.env.OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY?.trim().toLowerCase();
+  const disabled =
+    params.preferPersisted === false ||
+    (Boolean(disabledByEnv) &&
+      disabledByEnv !== "0" &&
+      disabledByEnv !== "false" &&
+      disabledByEnv !== "no");
+  if (disabled) {
+    return { disabled: true };
+  }
   const indexPath = resolveInstalledPluginIndexStorePath({
     env: params.env,
     ...(params.stateDir ? { stateDir: params.stateDir } : {}),
@@ -146,11 +345,64 @@ function resolvePersistedRegistryMemoFingerprint(params: {
   const npmRoot = params.stateDir
     ? path.join(params.stateDir, "npm")
     : resolveDefaultPluginNpmDir(params.env);
+  const index = readJsonObject(indexPath);
+  const plugins = Array.isArray(index?.plugins) ? index.plugins : [];
+  const diagnostics = Array.isArray(index?.diagnostics) ? index.diagnostics : [];
+  const pluginRootById = new Map<string, string>();
+  for (const rawPlugin of plugins) {
+    if (!isRecord(rawPlugin)) {
+      continue;
+    }
+    const pluginId = normalizeString(rawPlugin.pluginId);
+    const rootDir = normalizeString(rawPlugin.rootDir);
+    if (pluginId && rootDir) {
+      pluginRootById.set(pluginId, rootDir);
+    }
+  }
+  const installRecords = loadInstalledPluginIndexInstallRecordsSync({
+    env: params.env,
+    ...(params.stateDir ? { stateDir: params.stateDir } : {}),
+  });
   return {
-    disabled:
-      params.preferPersisted === false || params.env.OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY,
     index: fileFingerprint(indexPath),
+    indexHash: hashJson(installedIndexMemoFingerprint(index)),
+    installRecords: hashJson(installRecordsMemoFingerprint(installRecords)),
     npmPackageJson: fileFingerprint(path.join(npmRoot, "package.json")),
+    plugins: plugins.map((rawPlugin) => {
+      if (!isRecord(rawPlugin)) {
+        return rawPlugin;
+      }
+      const rootDir = normalizeString(rawPlugin.rootDir);
+      const manifestPath = normalizeString(rawPlugin.manifestPath);
+      const packageJsonPath = resolveRecordPackageJsonPath(rawPlugin);
+      const source = normalizeString(rawPlugin.source);
+      const setupSource = normalizeString(rawPlugin.setupSource);
+      return [
+        normalizeString(rawPlugin.pluginId),
+        rootDir,
+        rootDir ? fileFingerprint(rootDir) : null,
+        manifestPath,
+        persistedPluginFileFingerprint(rootDir, manifestPath),
+        source,
+        persistedPluginFileFingerprint(rootDir, source),
+        setupSource,
+        persistedPluginFileFingerprint(rootDir, setupSource),
+        packageJsonPath,
+        persistedPluginFileFingerprint(rootDir, packageJsonPath),
+      ];
+    }),
+    diagnostics: diagnostics.map((rawDiagnostic) => {
+      if (!isRecord(rawDiagnostic)) {
+        return rawDiagnostic;
+      }
+      const pluginId = normalizeString(rawDiagnostic.pluginId);
+      const source = normalizeString(rawDiagnostic.source);
+      return [
+        pluginId,
+        source,
+        persistedPluginFileFingerprint(pluginId ? pluginRootById.get(pluginId) : undefined, source),
+      ];
+    }),
   };
 }
 
