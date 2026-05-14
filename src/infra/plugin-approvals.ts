@@ -301,6 +301,19 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
       }
     : null;
 
+  if (hasShellExecutionExpansion(segment)) {
+    return withSudo(
+      {
+        text: "run shell expansion or nested command",
+        risk: "high",
+        kind: "unknown",
+        reason:
+          "Shell expansions can run nested commands that are not fully visible in the approval summary.",
+      },
+      sudoPrefix,
+    );
+  }
+
   switch (command) {
     case "cd":
       return withSudo(
@@ -774,6 +787,48 @@ function resolveCommandWords(segment: string): { words: string[]; usedSudo: bool
 function splitShellWords(input: string): string[] {
   const matches = input.match(/"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|\S+/g) ?? [];
   return matches.map((word) => word.replace(/^(["'])(.*)\1$/, "$2"));
+}
+
+function hasShellExecutionExpansion(segment: string): boolean {
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+  for (let index = 0; index < segment.length; index += 1) {
+    const char = segment[index] ?? "";
+    const next = segment[index + 1] ?? "";
+
+    if (quote) {
+      if (quote === '"' && char === "\\" && !escaped) {
+        escaped = true;
+        continue;
+      }
+      if (char === quote && !escaped) {
+        quote = null;
+      }
+      if (quote !== "'" && ((char === "$" && next === "(") || char === "`")) {
+        return true;
+      }
+      escaped = false;
+      continue;
+    }
+
+    if (char === "'" || char === '"') {
+      quote = char;
+      escaped = false;
+      continue;
+    }
+    if (char === "\\" && !escaped) {
+      escaped = true;
+      continue;
+    }
+    if ((char === "$" && next === "(") || char === "`") {
+      return true;
+    }
+    if ((char === "<" || char === ">") && next === "(") {
+      return true;
+    }
+    escaped = false;
+  }
+  return false;
 }
 
 function withSudo(
