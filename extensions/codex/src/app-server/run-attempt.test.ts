@@ -5899,7 +5899,7 @@ describe("runCodexAppServerAttempt", () => {
       "If it asks you to run an exact command, run that command before doing any investigation",
     );
     expect(cronCollaborationMode.settings.developer_instructions).toContain(
-      "Do not read AGENTS.md, SOUL.md, USER.md, PROJECTS.md, MEMORY.md",
+      "Use context already provided by the runtime",
     );
   });
 

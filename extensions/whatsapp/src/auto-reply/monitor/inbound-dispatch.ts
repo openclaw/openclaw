@@ -1,5 +1,8 @@
+import {
+  DEFAULT_TIMING,
+  type StatusReactionController,
+} from "openclaw/plugin-sdk/channel-feedback";
 import { deliverInboundReplyWithMessageSendContext } from "openclaw/plugin-sdk/channel-message";
-import { DEFAULT_TIMING, type StatusReactionController } from "openclaw/plugin-sdk/channel-feedback";
 import { hasVisibleInboundReplyDispatch } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import {

@@ -669,11 +669,13 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     expect(plugin?.meta.label).toBe("@example/openclaw-external-chat");
     expect(plugin?.meta.blurb).toBe("");
     expect(plugin?.configSchema).toBeUndefined();
-    expect(plugin?.config.listAccountIds({
-      channels: {
-        "external-chat": { token: "configured" },
-      },
-    } as never)).toEqual(["default"]);
+    expect(
+      plugin?.config.listAccountIds({
+        channels: {
+          "external-chat": { token: "configured" },
+        },
+      } as never),
+    ).toEqual(["default"]);
     expect(fs.existsSync(setupMarker)).toBe(false);
     expect(fs.existsSync(fullMarker)).toBe(false);
   });

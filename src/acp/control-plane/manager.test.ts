@@ -1566,10 +1566,12 @@ describe("AcpSessionManager", () => {
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(1);
   });
 
-  function setupFailoverBackends(params: {
-    initialBackend?: "primary-backend" | "fallback-backend";
-    primaryUnavailableError?: Error;
-  } = {}) {
+  function setupFailoverBackends(
+    params: {
+      initialBackend?: "primary-backend" | "fallback-backend";
+      primaryUnavailableError?: Error;
+    } = {},
+  ) {
     const primaryRuntime = createRuntime();
     const fallbackRuntime = createRuntime();
     const sessionKey = "agent:codex:acp:session-1";
