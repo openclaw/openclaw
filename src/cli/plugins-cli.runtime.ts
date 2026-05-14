@@ -1,3 +1,4 @@
+import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtimes.js";
 import {
   assertConfigWriteAllowedInCurrentMode,
   getRuntimeConfig,
@@ -5,6 +6,7 @@ import {
   replaceConfigFile,
 } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveConfiguredRuntimePluginInstallCandidate } from "../commands/doctor/shared/configured-runtime-plugin-installs.js";
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
@@ -65,6 +67,45 @@ function isErroredConfigSelectedShadowDiagnostic(params: {
       plugin.origin === "config" &&
       plugin.status === "error",
   );
+}
+
+function formatConfiguredRuntimePluginInstallSpec(params: {
+  clawhubSpec?: string;
+  defaultChoice?: string;
+  npmSpec?: string;
+  pluginId: string;
+}): string {
+  const clawhubSpec = params.clawhubSpec?.trim();
+  const npmSpec = params.npmSpec?.trim();
+  if (clawhubSpec && params.defaultChoice !== "npm") {
+    return clawhubSpec;
+  }
+  return npmSpec ?? clawhubSpec ?? params.pluginId;
+}
+
+function collectConfiguredRuntimePluginWarnings(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  plugins: readonly { enabled?: boolean; id: string; status?: string }[];
+}): string[] {
+  const enabledPluginIds = new Set(
+    params.plugins
+      .filter((plugin) => plugin.enabled !== false && plugin.status !== "disabled")
+      .map((plugin) => plugin.id),
+  );
+  return collectConfiguredAgentHarnessRuntimes(params.cfg, params.env, {
+    includeEnvRuntime: false,
+    includeLegacyAgentRuntimes: false,
+  }).flatMap((runtimeId) => {
+    const candidate = resolveConfiguredRuntimePluginInstallCandidate(runtimeId);
+    if (!candidate || enabledPluginIds.has(runtimeId)) {
+      return [];
+    }
+    const installSpec = formatConfiguredRuntimePluginInstallSpec(candidate);
+    return [
+      `- Configured agentRuntime.id="${runtimeId}" requires the ${candidate.label} plugin, but no enabled "${runtimeId}" plugin was found. Run "openclaw doctor --fix" to install ${installSpec}, or install it manually with "openclaw plugins install ${installSpec}".`,
+    ];
+  });
 }
 
 export async function runPluginsEnableCommand(id: string): Promise<void> {
@@ -240,10 +281,16 @@ export async function runPluginsDoctorCommand(): Promise<void> {
     doctorFixCommand: "openclaw doctor --fix",
     autoRepairBlocked: isStalePluginAutoRepairBlocked(sourceCfg ?? cfg, process.env),
   });
+  const configuredRuntimePluginWarnings = collectConfiguredRuntimePluginWarnings({
+    cfg: sourceCfg ?? cfg,
+    env: process.env,
+    plugins: report.plugins,
+  });
   const hasInstallTreeIssues =
     errors.length > 0 || diags.length > 0 || shadowed.length > 0 || compatibility.length > 0;
+  const pluginConfigWarnings = [...stalePluginConfigWarnings, ...configuredRuntimePluginWarnings];
 
-  if (!hasInstallTreeIssues && stalePluginConfigWarnings.length === 0) {
+  if (!hasInstallTreeIssues && pluginConfigWarnings.length === 0) {
     defaultRuntime.log("No plugin issues detected.");
     return;
   }
@@ -301,14 +348,14 @@ export async function runPluginsDoctorCommand(): Promise<void> {
       lines.push(`- ${formatPluginCompatibilityNotice(notice)} [${marker}]`);
     }
   }
-  if (stalePluginConfigWarnings.length > 0) {
+  if (pluginConfigWarnings.length > 0) {
     if (lines.length > 0) {
       lines.push("");
     }
     lines.push(theme.warn("Plugin configuration:"));
-    lines.push(...stalePluginConfigWarnings);
+    lines.push(...pluginConfigWarnings);
   }
-  if (!hasInstallTreeIssues && stalePluginConfigWarnings.length > 0) {
+  if (!hasInstallTreeIssues && pluginConfigWarnings.length > 0) {
     if (lines.length > 0) {
       lines.push("");
     }

@@ -138,6 +138,100 @@ describe("plugins cli list", () => {
     expect(output).not.toContain("No plugin issues detected.");
   });
 
+  it("reports missing configured Codex runtime plugin in doctor output", async () => {
+    const sourceConfig = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.5": {
+              agentRuntime: { id: "codex" },
+            },
+          },
+        },
+      },
+    };
+    loadConfig.mockReturnValue(sourceConfig);
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/openclaw-config.json5",
+      exists: true,
+      raw: "{}",
+      parsed: sourceConfig,
+      resolved: sourceConfig,
+      sourceConfig,
+      runtimeConfig: sourceConfig,
+      config: sourceConfig,
+      valid: true,
+      hash: "mock",
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+    buildPluginDiagnosticsReport.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
+
+    await runPluginsCommand(["plugins", "doctor"]);
+
+    const output = runtimeLogs.join("\n");
+    expect(output).toContain("Plugin configuration:");
+    expect(output).toContain('Configured agentRuntime.id="codex" requires the Codex plugin');
+    expect(output).toContain("openclaw doctor --fix");
+    expect(output).toContain("openclaw plugins install @openclaw/codex");
+    expect(output).toContain(
+      "No plugin install-tree issues detected; configuration warnings remain.",
+    );
+    expect(output).not.toContain("No plugin issues detected.");
+  });
+
+  it("does not report configured Codex runtime when the plugin is enabled", async () => {
+    const sourceConfig = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.5": {
+              agentRuntime: { id: "codex" },
+            },
+          },
+        },
+      },
+    };
+    loadConfig.mockReturnValue(sourceConfig);
+    buildPluginDiagnosticsReport.mockReturnValue({
+      plugins: [createPluginRecord({ id: "codex" })],
+      diagnostics: [],
+    });
+
+    await runPluginsCommand(["plugins", "doctor"]);
+
+    expect(runtimeLogs).toContain("No plugin issues detected.");
+  });
+
+  it("reports configured Codex runtime when the plugin record is disabled", async () => {
+    const sourceConfig = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.5": {
+              agentRuntime: { id: "codex" },
+            },
+          },
+        },
+      },
+    };
+    loadConfig.mockReturnValue(sourceConfig);
+    buildPluginDiagnosticsReport.mockReturnValue({
+      plugins: [createPluginRecord({ id: "codex", enabled: false, status: "disabled" })],
+      diagnostics: [],
+    });
+
+    await runPluginsCommand(["plugins", "doctor"]);
+
+    const output = runtimeLogs.join("\n");
+    expect(output).toContain('Configured agentRuntime.id="codex" requires the Codex plugin');
+    expect(output).not.toContain("No plugin issues detected.");
+  });
+
   it("reports config-selected plugin source shadowing in doctor output", async () => {
     buildPluginDiagnosticsReport.mockReturnValue({
       plugins: [

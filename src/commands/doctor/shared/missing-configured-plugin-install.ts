@@ -49,6 +49,7 @@ import { resolveWebSearchInstallCatalogEntry } from "../../../plugins/web-search
 import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 import { resolveUserPath } from "../../../utils.js";
 import { VERSION } from "../../../version.js";
+import { CONFIGURED_RUNTIME_PLUGIN_INSTALL_CANDIDATES } from "./configured-runtime-plugin-installs.js";
 import { asObjectRecord } from "./object.js";
 import {
   isLegacyPackageUpdateDoctorPass,
@@ -69,22 +70,6 @@ type BundledPluginPackageDescriptor = {
   name?: string;
   packageName?: string;
 };
-
-const RUNTIME_PLUGIN_INSTALL_CANDIDATES: readonly DownloadableInstallCandidate[] = [
-  {
-    pluginId: "acpx",
-    label: "ACPX Runtime",
-    npmSpec: "@openclaw/acpx",
-    trustedSourceLinkedOfficialInstall: true,
-  },
-  // Runtime-only configs do not have a provider/channel integration catalog entry.
-  {
-    pluginId: "codex",
-    label: "Codex",
-    npmSpec: "@openclaw/codex",
-    trustedSourceLinkedOfficialInstall: true,
-  },
-];
 
 const MISSING_CHANNEL_CONFIG_DESCRIPTOR_DIAGNOSTIC = "without channelConfigs metadata";
 const REPAIRABLE_PACKAGE_ENTRY_DIAGNOSTIC_MARKERS = [
@@ -364,7 +349,7 @@ function collectDownloadableInstallCandidates(params: {
     });
   }
 
-  for (const entry of RUNTIME_PLUGIN_INSTALL_CANDIDATES) {
+  for (const entry of CONFIGURED_RUNTIME_PLUGIN_INSTALL_CANDIDATES) {
     if (!configuredPluginIds.has(entry.pluginId) && !params.missingPluginIds.has(entry.pluginId)) {
       continue;
     }
