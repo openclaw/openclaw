@@ -1,6 +1,6 @@
 # Polytropos Core Update Procedure (Upstream → Fork)
 
-**Definition:** An **update** means merging in a newer upstream OpenClaw release tag into `openclaw-polytropos`, then performing the standard **release** procedure.
+**Definition:** An **update** means merging in a newer upstream OpenClaw release tag into `openclaw-polytropos`, then following the standard core **release + activation** procedure.
 
 See also:
 
@@ -27,13 +27,9 @@ Output of this step: `openclaw-polytropos` `main` contains upstream `<upstreamTa
 
 ### 3) Release
 
-After the merge is successfully completed, run the standard release script (this stages the new code by tagging, building prepared artifacts, producing a `.tgz` via `npm pack`, updating `current.tgz`/`previous.tgz`, installing globally, and running the bundled deps helper):
+After the merge is successfully completed, follow the standard **release + activation** procedure:
 
 - [`docs/polytropos/CORE-RELEASES.md`](./CORE-RELEASES.md)
-
-### 4) Activation (separate step)
-
-After the **release** step completes successfully, activate the staged release by restarting/reloading the gateway using the appropriate procedure for your environment (service manager, container/orchestrator, supervisor, etc.).
 
 ## Notes
 
