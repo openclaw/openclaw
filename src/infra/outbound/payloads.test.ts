@@ -216,8 +216,7 @@ describe("normalizeReplyPayloadsForDelivery", () => {
     if (!reply?.text) {
       throw new Error("expected direct silent reply rewrite to produce visible text");
     }
-    expect(reply.text.trim().length).toBeGreaterThan(0);
-    expect(reply.text.trim()).not.toBe("NO_REPLY");
+    expect(reply.text).toBe("Nothing additional from me.");
   });
 
   it("drops bare silent replies for groups when policy allows silence", () => {
@@ -257,19 +256,15 @@ describe("normalizeReplyPayloadsForDelivery", () => {
       },
     };
 
-    expect(
-      projectOutboundPayloadPlanForDelivery(
-        createOutboundPayloadPlan([{ text: "NO_REPLY" }, { text: "visible reply" }], {
-          cfg,
-          sessionKey: "agent:main:telegram:direct:123",
-          surface: "telegram",
-        }),
-      ),
-    ).toEqual([
-      expect.objectContaining({
-        text: "visible reply",
+    const delivery = projectOutboundPayloadPlanForDelivery(
+      createOutboundPayloadPlan([{ text: "NO_REPLY" }, { text: "visible reply" }], {
+        cfg,
+        sessionKey: "agent:main:telegram:direct:123",
+        surface: "telegram",
       }),
-    ]);
+    );
+    expect(delivery).toHaveLength(1);
+    expect(delivery[0]?.text).toBe("visible reply");
   });
 
   describe("pending spawned subagent children", () => {
@@ -315,8 +310,7 @@ describe("normalizeReplyPayloadsForDelivery", () => {
         if (!reply?.text) {
           throw new Error("expected visible silent-reply fallback text");
         }
-        expect(reply.text.length).toBeGreaterThan(0);
-        expect(reply.text).not.toBe("NO_REPLY");
+        expect(reply.text).toBe("No extra notes from me.");
       } finally {
         registerPendingSpawnedChildrenQuery(previousQuery);
       }
@@ -339,19 +333,15 @@ describe("normalizeReplyPayloadsForDelivery", () => {
       },
     };
 
-    expect(
-      projectOutboundPayloadPlanForDelivery(
-        createOutboundPayloadPlan([{ text: "NO_REPLY" }], {
-          cfg,
-          sessionKey: "agent:main:telegram:direct:123",
-          surface: "telegram",
-        }),
-      ),
-    ).toEqual([
-      expect.objectContaining({
-        text: "NO_REPLY",
+    const delivery = projectOutboundPayloadPlanForDelivery(
+      createOutboundPayloadPlan([{ text: "NO_REPLY" }], {
+        cfg,
+        sessionKey: "agent:main:telegram:direct:123",
+        surface: "telegram",
       }),
-    ]);
+    );
+    expect(delivery).toHaveLength(1);
+    expect(delivery[0]?.text).toBe("NO_REPLY");
   });
 
   it("is idempotent for already-normalized delivery payloads", () => {

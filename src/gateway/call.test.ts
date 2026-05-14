@@ -4,6 +4,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { captureEnv } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
@@ -569,6 +571,28 @@ describe("callGateway url resolution", () => {
     ]);
   });
 
+  it("falls back to broad operator scopes for unresolved plugin session actions", async () => {
+    setLocalLoopbackGatewayConfig();
+    setActivePluginRegistry(createEmptyPluginRegistry());
+
+    await callGatewayCli({
+      method: "plugins.sessionAction",
+      params: {
+        pluginId: "remote-plugin",
+        actionId: "approve",
+      },
+    });
+
+    expect(lastClientOptions?.scopes).toEqual([
+      "operator.admin",
+      "operator.read",
+      "operator.write",
+      "operator.approvals",
+      "operator.pairing",
+      "operator.talk.secrets",
+    ]);
+  });
+
   it("passes explicit scopes through, including empty arrays", async () => {
     setLocalLoopbackGatewayConfig();
 
@@ -870,12 +894,16 @@ describe("callGateway error details", () => {
     expect(err?.message).toContain("Source: local loopback");
     expect(err?.message).toContain("Bind: loopback");
     expect(isGatewayTransportError(err)).toBe(true);
-    expect(err).toMatchObject({
-      name: "GatewayTransportError",
-      kind: "closed",
-      code: 1006,
-      reason: "no close reason",
-    });
+    const transportError = err as {
+      name?: string;
+      kind?: string;
+      code?: number;
+      reason?: string;
+    };
+    expect(transportError.name).toBe("GatewayTransportError");
+    expect(transportError.kind).toBe("closed");
+    expect(transportError.code).toBe(1006);
+    expect(transportError.reason).toBe("no close reason");
   });
 
   it("keeps the request alive through internally retried startup-unavailable handshakes", async () => {
@@ -920,11 +948,10 @@ describe("callGateway error details", () => {
     await promise;
 
     expect(isGatewayTransportError(err)).toBe(true);
-    expect(err).toMatchObject({
-      name: "GatewayTransportError",
-      kind: "timeout",
-      timeoutMs: 5,
-    });
+    const transportError = err as { name?: string; kind?: string; timeoutMs?: number };
+    expect(transportError.name).toBe("GatewayTransportError");
+    expect(transportError.kind).toBe("timeout");
+    expect(transportError.timeoutMs).toBe(5);
   });
 
   it("charges event-loop readiness against the wrapper timeout", async () => {
@@ -961,11 +988,15 @@ describe("callGateway error details", () => {
       aborted: false,
     };
 
-    await expect(callGateway({ method: "health", timeoutMs: 5 })).rejects.toMatchObject({
-      name: "GatewayTransportError",
-      kind: "timeout",
-      timeoutMs: 5,
+    let err: unknown;
+    await callGateway({ method: "health", timeoutMs: 5 }).catch((caught) => {
+      err = caught;
     });
+    expect(isGatewayTransportError(err)).toBe(true);
+    const transportError = err as { name?: string; kind?: string; timeoutMs?: number };
+    expect(transportError.name).toBe("GatewayTransportError");
+    expect(transportError.kind).toBe("timeout");
+    expect(transportError.timeoutMs).toBe(5);
     expect(eventLoopReadyState.calls).toHaveLength(1);
     expect(eventLoopReadyState.calls[0]?.maxWaitMs).toBe(5);
     expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18789");

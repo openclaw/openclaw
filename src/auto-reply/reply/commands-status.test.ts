@@ -26,6 +26,24 @@ import {
   configureInMemoryTaskRegistryStoreForTests,
 } from "./commands.test-harness.js";
 
+type LoadProviderUsageSummary =
+  typeof import("../../infra/provider-usage.js").loadProviderUsageSummary;
+
+const providerUsageMock = vi.hoisted(() => ({
+  loadProviderUsageSummary: vi.fn<LoadProviderUsageSummary>(async () => ({
+    updatedAt: Date.now(),
+    providers: [],
+  })),
+}));
+
+vi.mock("../../infra/provider-usage.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/provider-usage.js")>();
+  return {
+    ...actual,
+    loadProviderUsageSummary: providerUsageMock.loadProviderUsageSummary,
+  };
+});
+
 vi.mock("../../agents/harness/builtin-pi.js", () => ({
   createPiAgentHarness: () => ({
     id: "pi",
@@ -91,6 +109,11 @@ function registerStatusCodexHarness(): void {
 
 afterEach(() => {
   clearAgentHarnesses();
+  providerUsageMock.loadProviderUsageSummary.mockReset();
+  providerUsageMock.loadProviderUsageSummary.mockResolvedValue({
+    updatedAt: Date.now(),
+    providers: [],
+  });
 });
 
 function writeTranscriptUsageLog(params: {
@@ -607,78 +630,82 @@ describe("buildStatusReply subagent summary", () => {
           "utf8",
         );
         const usageResetBase = Math.floor(Date.now() / 1000);
-        const usageFetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
-          return new Response(
-            JSON.stringify({
-              rate_limit: {
-                primary_window: {
-                  limit_window_seconds: 18_000,
-                  used_percent: 9,
-                  reset_at: usageResetBase + 60 * 60,
+        providerUsageMock.loadProviderUsageSummary.mockResolvedValue({
+          updatedAt: Date.now(),
+          providers: [
+            {
+              provider: "openai-codex",
+              displayName: "Codex",
+              windows: [
+                {
+                  label: "5h",
+                  usedPercent: 9,
+                  resetAt: (usageResetBase + 60 * 60) * 1000,
                 },
-                secondary_window: {
-                  limit_window_seconds: 604_800,
-                  used_percent: 30,
-                  reset_at: usageResetBase + 3 * 24 * 60 * 60,
+                {
+                  label: "Week",
+                  usedPercent: 30,
+                  resetAt: (usageResetBase + 3 * 24 * 60 * 60) * 1000,
                 },
-              },
-            }),
-            { status: 200, headers: { "content-type": "application/json" } },
-          );
+              ],
+            },
+          ],
         });
 
-        try {
-          const commonParams = {
-            sessionEntry: {
-              sessionId: "sess-status-codex-oauth",
-              updatedAt: 0,
-            },
-            sessionKey: "agent:main:main",
-            parentSessionKey: "agent:main:main",
-            sessionScope: "per-sender" as const,
-            statusChannel: "mobilechat",
-            provider: "openai",
-            model: "gpt-5.5",
-            contextTokens: 32_000,
-            resolvedFastMode: false,
-            resolvedVerboseLevel: "off" as const,
-            resolvedReasoningLevel: "off" as const,
-            resolveDefaultThinkingLevel: async () => undefined,
-            isGroup: false,
-            defaultGroupActivation: () => "mention" as const,
-          };
+        const commonParams = {
+          sessionEntry: {
+            sessionId: "sess-status-codex-oauth",
+            updatedAt: 0,
+          },
+          sessionKey: "agent:main:main",
+          parentSessionKey: "agent:main:main",
+          sessionScope: "per-sender" as const,
+          statusChannel: "mobilechat",
+          provider: "openai",
+          model: "gpt-5.5",
+          contextTokens: 32_000,
+          resolvedFastMode: false,
+          resolvedVerboseLevel: "off" as const,
+          resolvedReasoningLevel: "off" as const,
+          resolveDefaultThinkingLevel: async () => undefined,
+          isGroup: false,
+          defaultGroupActivation: () => "mention" as const,
+        };
 
-          const codexText = await buildStatusText({
-            cfg: {
-              ...baseCfg,
-              agents: {
-                defaults: {
-                  agentRuntime: { id: "codex" },
-                },
+        const codexText = await buildStatusText({
+          cfg: {
+            ...baseCfg,
+            agents: {
+              defaults: {
+                agentRuntime: { id: "codex" },
               },
             },
-            ...commonParams,
-          });
-          const implicitCodexText = await buildStatusText({
-            cfg: baseCfg,
-            ...commonParams,
-          });
+          },
+          ...commonParams,
+        });
+        const implicitCodexText = await buildStatusText({
+          cfg: baseCfg,
+          ...commonParams,
+        });
 
-          const normalizedCodex = normalizeTestText(codexText);
-          const normalizedImplicitCodex = normalizeTestText(implicitCodexText);
-          expect(normalizedCodex).toContain("Model: openai/gpt-5.5");
-          expect(normalizedCodex).toContain("oauth (openai-codex:status)");
-          expect(normalizedCodex).toContain("openai-codex:status");
-          expect(normalizedCodex).toContain("Usage: 5h 91% left");
-          expect(normalizedCodex).toContain("Week 70% left");
-          expect(normalizedImplicitCodex).toContain("Model: openai/gpt-5.5");
-          expect(normalizedImplicitCodex).toContain("oauth (openai-codex:status)");
-          expect(normalizedImplicitCodex).toContain("Runtime: OpenAI Codex");
-          expect(normalizedImplicitCodex).toContain("Usage: 5h 91% left");
-          expect(usageFetch).toHaveBeenCalled();
-        } finally {
-          usageFetch.mockRestore();
+        const normalizedCodex = normalizeTestText(codexText);
+        const normalizedImplicitCodex = normalizeTestText(implicitCodexText);
+        expect(normalizedCodex).toContain("Model: openai/gpt-5.5");
+        expect(normalizedCodex).toContain("oauth (openai-codex:status)");
+        expect(normalizedCodex).toContain("openai-codex:status");
+        expect(normalizedCodex).toContain("Usage: 5h 91% left");
+        expect(normalizedCodex).toContain("Week 70% left");
+        expect(normalizedImplicitCodex).toContain("Model: openai/gpt-5.5");
+        expect(normalizedImplicitCodex).toContain("oauth (openai-codex:status)");
+        expect(normalizedImplicitCodex).toContain("Runtime: OpenAI Codex");
+        expect(normalizedImplicitCodex).toContain("Usage: 5h 91% left");
+        const providerUsageCall = providerUsageMock.loadProviderUsageSummary.mock.calls.find(
+          ([params]) => params?.providers?.includes("openai-codex"),
+        );
+        if (!providerUsageCall) {
+          throw new Error("expected provider usage summary call for openai-codex");
         }
+        expect(providerUsageCall[0]?.providers).toEqual(["openai-codex"]);
       },
       {
         env: {

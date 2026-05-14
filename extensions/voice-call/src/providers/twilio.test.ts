@@ -58,6 +58,26 @@ function createApiRequestMock(impl?: TwilioApiRequest) {
   return vi.fn<TwilioApiRequest>(impl ?? (async () => ({})));
 }
 
+function requireApiRequestCall(
+  apiRequest: ReturnType<typeof createApiRequestMock>,
+  index = 0,
+): Parameters<TwilioApiRequest> {
+  const call = apiRequest.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected Twilio API request call ${index}`);
+  }
+  return call;
+}
+
+function expectApiRequestEndpoint(
+  apiRequest: ReturnType<typeof createApiRequestMock>,
+  index: number,
+  endpoint: string,
+): void {
+  const [actualEndpoint] = requireApiRequestCall(apiRequest, index);
+  expect(actualEndpoint).toBe(endpoint);
+}
+
 function createTwilioCallStateRaceError(): TwilioApiError {
   return new TwilioApiError(
     400,
@@ -106,17 +126,17 @@ describe("TwilioProvider", () => {
     });
 
     expect(result).toEqual({ providerCallId: "CA123", status: "queued" });
-    expect(apiRequest).toHaveBeenCalledWith(
-      "/Calls.json",
-      expect.objectContaining({
-        To: "+14155550123",
-        From: "+14155550100",
-        Twiml: "<Response><Say>Hello</Say></Response>",
-        StatusCallback: "https://example.ngrok.app/voice/webhook?callId=call-1&type=status",
-        StatusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
-      }),
+    expect(apiRequest).toHaveBeenCalledTimes(1);
+    const [endpoint, params] = requireApiRequestCall(apiRequest);
+    expect(endpoint).toBe("/Calls.json");
+    expect(params.To).toBe("+14155550123");
+    expect(params.From).toBe("+14155550100");
+    expect(params.Twiml).toBe("<Response><Say>Hello</Say></Response>");
+    expect(params.StatusCallback).toBe(
+      "https://example.ngrok.app/voice/webhook?callId=call-1&type=status",
     );
-    expect(apiRequest.mock.calls[0]?.[1]).not.toHaveProperty("Url");
+    expect(params.StatusCallbackEvent).toEqual(["initiated", "ringing", "answered", "completed"]);
+    expect(params).not.toHaveProperty("Url");
   });
 
   it("uses the webhook URL for conversation outbound calls", async () => {
@@ -135,14 +155,14 @@ describe("TwilioProvider", () => {
       webhookUrl: "https://example.ngrok.app/voice/webhook",
     });
 
-    expect(apiRequest).toHaveBeenCalledWith(
-      "/Calls.json",
-      expect.objectContaining({
-        Url: "https://example.ngrok.app/voice/webhook?callId=call-1",
-        StatusCallback: "https://example.ngrok.app/voice/webhook?callId=call-1&type=status",
-      }),
+    expect(apiRequest).toHaveBeenCalledTimes(1);
+    const [endpoint, params] = requireApiRequestCall(apiRequest);
+    expect(endpoint).toBe("/Calls.json");
+    expect(params.Url).toBe("https://example.ngrok.app/voice/webhook?callId=call-1");
+    expect(params.StatusCallback).toBe(
+      "https://example.ngrok.app/voice/webhook?callId=call-1&type=status",
     );
-    expect(apiRequest.mock.calls[0]?.[1]).not.toHaveProperty("Twiml");
+    expect(params).not.toHaveProperty("Twiml");
   });
 
   it("returns streaming TwiML for outbound conversation calls before in-progress", () => {
@@ -376,9 +396,7 @@ describe("TwilioProvider", () => {
       }),
     ).resolves.toBeUndefined();
     expect(apiRequest).toHaveBeenCalledTimes(1);
-    const call = apiRequest.mock.calls[0];
-    const endpoint = call[0];
-    const params = call[1] as { Twiml?: string };
+    const [endpoint, params] = requireApiRequestCall(apiRequest) as [string, { Twiml?: string }];
     expect(endpoint).toBe("/Calls/CA-nostream.json");
     expect(params.Twiml).toContain("<Say");
   });
@@ -404,8 +422,8 @@ describe("TwilioProvider", () => {
       await expect(playback).resolves.toBeUndefined();
 
       expect(apiRequest).toHaveBeenCalledTimes(2);
-      expect(apiRequest.mock.calls[0]?.[0]).toBe("/Calls/CA-race-play.json");
-      expect(apiRequest.mock.calls[1]?.[0]).toBe("/Calls/CA-race-play.json");
+      expectApiRequestEndpoint(apiRequest, 0, "/Calls/CA-race-play.json");
+      expectApiRequestEndpoint(apiRequest, 1, "/Calls/CA-race-play.json");
       expect(warn).toHaveBeenCalledWith(
         "[voice-call] Twilio playTts update hit call state race (21220); retrying in 250ms",
       );
@@ -429,9 +447,7 @@ describe("TwilioProvider", () => {
     ).resolves.toBeUndefined();
 
     expect(apiRequest).toHaveBeenCalledTimes(1);
-    const call = apiRequest.mock.calls[0];
-    const endpoint = call[0];
-    const params = call[1] as { Twiml?: string };
+    const [endpoint, params] = requireApiRequestCall(apiRequest) as [string, { Twiml?: string }];
     expect(endpoint).toBe("/Calls/CA-dtmf.json");
     expect(params.Twiml).toContain('<Play digits="ww123#"');
     expect(params.Twiml).toContain("<Redirect");
@@ -458,8 +474,8 @@ describe("TwilioProvider", () => {
       await expect(listening).resolves.toBeUndefined();
 
       expect(apiRequest).toHaveBeenCalledTimes(2);
-      expect(apiRequest.mock.calls[0]?.[0]).toBe("/Calls/CA-race-listen.json");
-      expect(apiRequest.mock.calls[1]?.[0]).toBe("/Calls/CA-race-listen.json");
+      expectApiRequestEndpoint(apiRequest, 0, "/Calls/CA-race-listen.json");
+      expectApiRequestEndpoint(apiRequest, 1, "/Calls/CA-race-listen.json");
       expect(warn).toHaveBeenCalledWith(
         "[voice-call] Twilio startListening update hit call state race (21220); retrying in 250ms",
       );

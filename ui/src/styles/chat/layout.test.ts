@@ -22,4 +22,12 @@ describe("chat layout styles", () => {
     expect(css).toContain("font-size: 20px;");
     expect(css).toContain("place-items: center;");
   });
+
+  it("keeps composer text scale-driven while preserving mobile input zoom safety", () => {
+    const css = readLayoutCss();
+
+    expect(css).toContain("font-size: var(--control-ui-input-text-size);");
+    expect(css).toContain(".agent-chat__composer-combobox > textarea");
+    expect(css).toContain(".chat-compose .chat-compose__field textarea");
+  });
 });

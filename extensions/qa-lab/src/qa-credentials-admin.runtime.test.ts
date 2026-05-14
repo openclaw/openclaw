@@ -16,12 +16,39 @@ function jsonResponse(payload: unknown, status = 200) {
   });
 }
 
+function requireFirstFetchCall(fetchImpl: ReturnType<typeof vi.fn>) {
+  const [call] = fetchImpl.mock.calls as unknown[][];
+  if (!call) {
+    throw new Error("expected fetch call");
+  }
+  return call;
+}
+
 function requireFirstFetchInput(fetchImpl: ReturnType<typeof vi.fn>): RequestInfo | URL {
-  const input = fetchImpl.mock.calls[0]?.[0] as RequestInfo | URL | undefined;
+  const input = requireFirstFetchCall(fetchImpl)[0] as RequestInfo | URL | undefined;
   if (!input) {
     throw new Error("expected fetch input");
   }
   return input;
+}
+
+function requireFirstFetchInit(fetchImpl: ReturnType<typeof vi.fn>): RequestInit {
+  const init = requireFirstFetchCall(fetchImpl)[1];
+  if (!init || typeof init !== "object" || Array.isArray(init)) {
+    throw new Error("expected fetch init");
+  }
+  return init as RequestInit;
+}
+
+async function expectQaCredentialAdminError(promise: Promise<unknown>, code: string) {
+  const error = await promise.then(
+    () => undefined,
+    (err: unknown) => err,
+  );
+  expect(error).toBeInstanceOf(QaCredentialAdminError);
+  const adminError = error as QaCredentialAdminError;
+  expect(adminError.name).toBe("QaCredentialAdminError");
+  expect(adminError.code).toBe(code);
 }
 
 describe("qa credential admin runtime", () => {
@@ -58,8 +85,10 @@ describe("qa credential admin runtime", () => {
     });
 
     expect(result.credential.credentialId).toBe("cred-1");
-    const [url, init] = fetchImpl.mock.calls[0] ?? [];
-    expect(url).toBe("https://first-schnauzer-821.convex.site/qa-credentials/v1/admin/add");
+    expect(requireFirstFetchInput(fetchImpl)).toBe(
+      "https://first-schnauzer-821.convex.site/qa-credentials/v1/admin/add",
+    );
+    const init = requireFirstFetchInit(fetchImpl);
     const headers = init?.headers as Record<string, string>;
     expect(headers.authorization).toBe("Bearer maint-secret");
     const bodyText = init?.body;
@@ -75,20 +104,18 @@ describe("qa credential admin runtime", () => {
   });
 
   it("rejects admin commands when maintainer secret is missing", async () => {
-    await expect(
+    await expectQaCredentialAdminError(
       listQaCredentialSets({
         siteUrl: "https://first-schnauzer-821.convex.site",
         env: {},
         fetchImpl: vi.fn(),
       }),
-    ).rejects.toMatchObject({
-      name: "QaCredentialAdminError",
-      code: "MISSING_MAINTAINER_SECRET",
-    } satisfies Partial<QaCredentialAdminError>);
+      "MISSING_MAINTAINER_SECRET",
+    );
   });
 
   it("rejects non-https admin site URLs unless local insecure opt-in is enabled", async () => {
-    await expect(
+    await expectQaCredentialAdminError(
       listQaCredentialSets({
         siteUrl: "http://qa-cred.example.convex.site",
         env: {
@@ -96,10 +123,8 @@ describe("qa credential admin runtime", () => {
         },
         fetchImpl: vi.fn(),
       }),
-    ).rejects.toMatchObject({
-      name: "QaCredentialAdminError",
-      code: "INVALID_SITE_URL",
-    } satisfies Partial<QaCredentialAdminError>);
+      "INVALID_SITE_URL",
+    );
   });
 
   it("allows loopback http admin site URLs when OPENCLAW_QA_ALLOW_INSECURE_HTTP is enabled", async () => {
@@ -126,7 +151,7 @@ describe("qa credential admin runtime", () => {
   });
 
   it("rejects unsafe endpoint-prefix overrides", async () => {
-    await expect(
+    await expectQaCredentialAdminError(
       listQaCredentialSets({
         siteUrl: "https://first-schnauzer-821.convex.site",
         endpointPrefix: "//evil.example",
@@ -135,10 +160,8 @@ describe("qa credential admin runtime", () => {
         },
         fetchImpl: vi.fn(),
       }),
-    ).rejects.toMatchObject({
-      name: "QaCredentialAdminError",
-      code: "INVALID_ARGUMENT",
-    } satisfies Partial<QaCredentialAdminError>);
+      "INVALID_ARGUMENT",
+    );
   });
 
   it("surfaces broker error codes for remove", async () => {
@@ -153,7 +176,7 @@ describe("qa credential admin runtime", () => {
       ),
     );
 
-    await expect(
+    await expectQaCredentialAdminError(
       removeQaCredentialSet({
         credentialId: "cred-1",
         siteUrl: "https://first-schnauzer-821.convex.site",
@@ -162,10 +185,8 @@ describe("qa credential admin runtime", () => {
         },
         fetchImpl,
       }),
-    ).rejects.toMatchObject({
-      name: "QaCredentialAdminError",
-      code: "LEASE_ACTIVE",
-    } satisfies Partial<QaCredentialAdminError>);
+      "LEASE_ACTIVE",
+    );
   });
 
   it("lists credentials and forwards includePayload/status filters", async () => {
@@ -204,8 +225,7 @@ describe("qa credential admin runtime", () => {
     });
 
     expect(result.credentials).toHaveLength(1);
-    const [, init] = fetchImpl.mock.calls[0] ?? [];
-    const bodyText = init?.body;
+    const bodyText = requireFirstFetchInit(fetchImpl).body;
     expect(typeof bodyText).toBe("string");
     const body = JSON.parse(bodyText as string) as Record<string, unknown>;
     expect(body).toEqual({
@@ -246,11 +266,7 @@ describe("qa credential admin runtime", () => {
     expect(result.status).toBe("pass");
     expect(JSON.stringify(result)).not.toContain("ci-secret");
     expect(JSON.stringify(result)).not.toContain("maint-secret");
-    expect(result.checks).toContainEqual(
-      expect.objectContaining({
-        name: "broker admin/list",
-        status: "pass",
-      }),
-    );
+    const brokerCheck = result.checks.find((check) => check.name === "broker admin/list");
+    expect(brokerCheck?.status).toBe("pass");
   });
 });

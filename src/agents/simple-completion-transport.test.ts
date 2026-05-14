@@ -1,4 +1,4 @@
-import type { Model } from "@mariozechner/pi-ai";
+import type { Model } from "@earendil-works/pi-ai";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 
@@ -81,7 +81,7 @@ describe("prepareModelForSimpleCompletion", () => {
     });
 
     expect(resolveProviderStreamFn).toHaveBeenCalledTimes(1);
-    const [request] = resolveProviderStreamFn.mock.calls[0] as [
+    const [request] = resolveProviderStreamFn.mock.calls.at(0) as [
       {
         provider?: unknown;
         config?: unknown;

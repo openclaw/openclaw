@@ -78,6 +78,17 @@ function createMonitorHarness(params?: { cpuMsPerWallMs?: number; utilization?: 
   };
 }
 
+function expectSnapshotFields(snapshot: unknown, expected: Record<string, unknown>) {
+  if (!snapshot || typeof snapshot !== "object") {
+    throw new Error("expected event loop health snapshot");
+  }
+  const actual = snapshot as Record<string, unknown>;
+  for (const [key, value] of Object.entries(expected)) {
+    expect(actual[key]).toEqual(value);
+  }
+  return actual;
+}
+
 describe("classifyGatewayEventLoopHealthReasons", () => {
   it("does not degrade on utilization or CPU from a sub-second sample", () => {
     expect(
@@ -172,7 +183,7 @@ describe("createGatewayEventLoopHealthMonitor", () => {
     expect(harness.eventLoopUtilization).toHaveBeenCalledTimes(1);
 
     harness.setNow(1_000);
-    expect(harness.monitor.snapshot()).toMatchObject({
+    expectSnapshotFields(harness.monitor.snapshot(), {
       degraded: false,
       reasons: [],
       intervalMs: 1_000,
@@ -188,7 +199,7 @@ describe("createGatewayEventLoopHealthMonitor", () => {
     harness.setDelay({ p99Ms: 30 });
     harness.setNow(1_000);
 
-    expect(harness.monitor.snapshot()).toMatchObject({
+    expectSnapshotFields(harness.monitor.snapshot(), {
       degraded: true,
       reasons: ["event_loop_utilization", "cpu"],
       intervalMs: 1_000,
@@ -204,7 +215,7 @@ describe("createGatewayEventLoopHealthMonitor", () => {
     harness.setDelay({ maxMs: 1_500 });
     harness.setNow(42);
 
-    expect(harness.monitor.snapshot()).toMatchObject({
+    expectSnapshotFields(harness.monitor.snapshot(), {
       degraded: true,
       reasons: ["event_loop_delay"],
       intervalMs: 42,
@@ -217,7 +228,7 @@ describe("createGatewayEventLoopHealthMonitor", () => {
     const harness = createMonitorHarness({ cpuMsPerWallMs: 0.1, utilization: 0.2 });
     harness.setNow(1_000);
 
-    expect(harness.monitor.snapshot()).toMatchObject({
+    expectSnapshotFields(harness.monitor.snapshot(), {
       degraded: false,
       reasons: [],
       intervalMs: 1_000,
@@ -231,7 +242,7 @@ describe("createGatewayEventLoopHealthMonitor", () => {
     harness.setNow(1_000);
     const first = harness.monitor.snapshot();
 
-    expect(first).toEqual(expect.objectContaining({ intervalMs: 1_000 }));
+    expectSnapshotFields(first, { intervalMs: 1_000 });
     expect(harness.cpuUsage).toHaveBeenCalledTimes(3);
     expect(harness.eventLoopUtilization).toHaveBeenCalledTimes(3);
 
@@ -243,7 +254,7 @@ describe("createGatewayEventLoopHealthMonitor", () => {
     harness.setNow(2_000);
     const second = harness.monitor.snapshot();
 
-    expect(second).toEqual(expect.objectContaining({ intervalMs: 1_000 }));
+    expectSnapshotFields(second, { intervalMs: 1_000 });
     expect(second).not.toBe(first);
   });
 
@@ -257,7 +268,7 @@ describe("createGatewayEventLoopHealthMonitor", () => {
     expect(harness.monitor.snapshot()).toBe(first);
 
     harness.setNow(2_000);
-    expect(harness.monitor.snapshot()).toMatchObject({
+    expectSnapshotFields(harness.monitor.snapshot(), {
       degraded: true,
       reasons: ["event_loop_utilization", "cpu"],
       intervalMs: 1_000,
@@ -272,9 +283,7 @@ describe("createGatewayEventLoopHealthMonitor", () => {
     const harness = createMonitorHarness({ cpuMsPerWallMs: 0.1, utilization: 0.2 });
     harness.setNow(1_000);
 
-    expect(harness.monitor.snapshot()).toEqual(
-      expect.objectContaining({ degraded: false, intervalMs: 1_000 }),
-    );
+    expectSnapshotFields(harness.monitor.snapshot(), { degraded: false, intervalMs: 1_000 });
 
     harness.setNow(1_250);
     harness.monitor.stop();

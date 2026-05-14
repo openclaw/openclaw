@@ -420,7 +420,7 @@ if [ "$provider" = "codex-cli" ] && [ "${OPENCLAW_LIVE_CLI_BACKEND_AUTH:-auto}" 
     --sandbox \
     danger-full-access \
     -c \
-    'service_tier="priority"' \
+    'service_tier="fast"' \
     --skip-git-repo-check \
     --model \
     "$codex_probe_model" \
@@ -439,7 +439,7 @@ if [ "$provider" = "codex-cli" ] && [ "${OPENCLAW_LIVE_CLI_BACKEND_AUTH:-auto}" 
   fi
   echo "==> Direct Codex CLI probe ok"
 fi
-pnpm test:live src/gateway/gateway-cli-backend.live.test.ts
+node scripts/test-live.mjs -- src/gateway/gateway-cli-backend.live.test.ts
 EOF
 
 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$ROOT_DIR" "$TRUSTED_HARNESS_DIR/scripts/test-live-build-docker.sh"

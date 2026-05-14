@@ -1,4 +1,4 @@
-import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import { formatBillingErrorMessage } from "../../pi-embedded-helpers.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
@@ -38,6 +38,13 @@ describe("buildEmbeddedRunPayloads", () => {
   const expectOverloadedFallback = (payloads: ReturnType<typeof buildPayloads>) => {
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.text).toBe(OVERLOADED_FALLBACK_TEXT);
+  };
+
+  const expectNoPayloadTextContaining = (
+    payloads: ReturnType<typeof buildPayloads>,
+    needle: string,
+  ) => {
+    expect(payloads.map((payload) => payload.text ?? "").join("\n")).not.toContain(needle);
   };
 
   function expectSinglePayloadSummary(
@@ -90,12 +97,8 @@ describe("buildEmbeddedRunPayloads", () => {
 
     expectOverloadedFallback(payloads);
     expect(payloads[0]?.isError).toBe(true);
-    expect(payloads.map((payload) => payload.text ?? "")).not.toEqual(
-      expect.arrayContaining([expect.stringContaining("Edit")]),
-    );
-    expect(payloads.map((payload) => payload.text ?? "")).not.toEqual(
-      expect.arrayContaining([expect.stringContaining("missing")]),
-    );
+    expectNoPayloadTextContaining(payloads, "Edit");
+    expectNoPayloadTextContaining(payloads, "missing");
   });
 
   it("keeps mutating tool warnings when assistant error artifacts are not user-facing", () => {
@@ -131,9 +134,25 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectOverloadedFallback(payloads);
-    expect(payloads.map((payload) => payload.text ?? "")).not.toEqual(
-      expect.arrayContaining([expect.stringContaining("request_id")]),
-    );
+    expectNoPayloadTextContaining(payloads, "request_id");
+  });
+
+  it("does not expose provider request ids from generic internal errors", () => {
+    const rawError =
+      "An error occurred while processing your request. Please include request ID req_synthetic_provider_request_001 in your message.";
+    const payloads = buildPayloads({
+      lastAssistant: makeAssistant({
+        errorMessage: rawError,
+        content: [{ type: "text", text: rawError }],
+      }),
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "The AI service returned an internal error. Please try again in a moment.",
+      isError: true,
+    });
+    expectNoPayloadTextContaining(payloads, "request ID");
+    expectNoPayloadTextContaining(payloads, "req_synthetic_provider_request_001");
   });
 
   it("surfaces OpenAI model capacity errors instead of generic empty-response copy", () => {
@@ -187,9 +206,7 @@ describe("buildEmbeddedRunPayloads", () => {
 
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.isError).toBe(true);
-    expect(payloads.map((payload) => payload.text ?? "")).not.toEqual(
-      expect.arrayContaining([expect.stringContaining("request_id")]),
-    );
+    expectNoPayloadTextContaining(payloads, "request_id");
   });
 
   it("does not suppress error-shaped JSON when the assistant did not error", () => {
@@ -379,6 +396,23 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[1]?.text).not.toContain("missing");
   });
 
+  it("shows exec tool errors when assistant output claims success", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["The script is ready to use and saved in your workspace."],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastToolError: {
+        toolName: "exec",
+        error: "/bin/bash: line 1: python: command not found",
+      },
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]?.text).toBe("The script is ready to use and saved in your workspace.");
+    expect(payloads[1]?.isError).toBe(true);
+    expect(payloads[1]?.text).toContain("Exec");
+    expect(payloads[1]?.text).not.toContain("python: command not found");
+  });
+
   it("shows mutating tool errors when assistant output does not acknowledge the failure", () => {
     const payloads = buildPayloads({
       assistantTexts: ["No issues found. The update is complete."],
@@ -431,6 +465,17 @@ describe("buildEmbeddedRunPayloads", () => {
       assistantTexts: [text],
       lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
       lastToolError: { toolName: "edit", error: "file missing" },
+    });
+
+    expectSinglePayloadSummary(payloads, { text });
+  });
+
+  it("suppresses exec warnings when assistant output explicitly acknowledges the command failure", () => {
+    const text = "I couldn't run the command because python was not found.";
+    const payloads = buildPayloads({
+      assistantTexts: [text],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastToolError: { toolName: "exec", error: "/bin/bash: line 1: python: command not found" },
     });
 
     expectSinglePayloadSummary(payloads, { text });

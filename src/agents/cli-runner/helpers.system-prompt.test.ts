@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildCliAgentSystemPrompt } from "./helpers.js";
+
+vi.mock("../../tts/tts.js", () => ({
+  buildTtsSystemPromptHint: vi.fn(() => undefined),
+}));
 
 describe("buildCliAgentSystemPrompt", () => {
   it("uses config-backed sub-agent delegation mode", () => {

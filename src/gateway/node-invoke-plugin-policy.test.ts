@@ -18,7 +18,9 @@ function createNodeSession(): NodeSession {
     nodeId: "node-1",
     connId: "conn-1",
     client: {} as NodeSession["client"],
+    declaredCaps: [],
     caps: [],
+    declaredCommands: ["demo.read"],
     commands: ["demo.read"],
     connectedAtMs: 0,
   };
@@ -71,7 +73,6 @@ describe("applyPluginNodeInvokePolicy", () => {
       params: { path: "/tmp/x" },
     });
 
-    expect(result).not.toBeNull();
     if (result === null) {
       throw new Error("expected plugin policy failure");
     }

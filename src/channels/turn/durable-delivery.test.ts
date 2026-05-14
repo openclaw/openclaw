@@ -26,6 +26,36 @@ import {
   resolveDurableInboundReplyToId,
 } from "./durable-delivery.js";
 
+type SendDurableMessageBatchRequest = {
+  cfg?: unknown;
+  channel?: string;
+  to?: string;
+  threadId?: string | number | null;
+  durability?: string;
+};
+
+type DeliverySupportRequest = {
+  requirements?: Record<string, boolean>;
+};
+
+function latestSendDurableMessageBatchRequest(): SendDurableMessageBatchRequest {
+  const calls = mocks.sendDurableMessageBatch.mock.calls;
+  const request = calls[calls.length - 1]?.[0];
+  if (!request || typeof request !== "object") {
+    throw new Error("expected sendDurableMessageBatch request");
+  }
+  return request as SendDurableMessageBatchRequest;
+}
+
+function latestDeliverySupportRequest(): DeliverySupportRequest {
+  const calls = mocks.resolveOutboundDurableFinalDeliverySupport.mock.calls;
+  const request = calls[calls.length - 1]?.[0];
+  if (!request || typeof request !== "object") {
+    throw new Error("expected delivery support request");
+  }
+  return request as DeliverySupportRequest;
+}
+
 describe("durable inbound reply delivery", () => {
   beforeEach(() => {
     mocks.resolveOutboundDurableFinalDeliverySupport.mockReset();
@@ -95,15 +125,13 @@ describe("durable inbound reply delivery", () => {
       },
     });
 
-    expect(mocks.sendDurableMessageBatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg: {},
-        channel: "telegram",
-        to: "chat-1",
-        threadId: null,
-        durability: "best_effort",
-      }),
-    );
+    expect(mocks.sendDurableMessageBatch).toHaveBeenCalledTimes(1);
+    const request = latestSendDurableMessageBatchRequest();
+    expect(request.cfg).toEqual({});
+    expect(request.channel).toBe("telegram");
+    expect(request.to).toBe("chat-1");
+    expect(request.threadId).toBeNull();
+    expect(request.durability).toBe("best_effort");
   });
 
   it("does not require unknown-send reconciliation for the default best-effort final path", async () => {
@@ -119,19 +147,13 @@ describe("durable inbound reply delivery", () => {
       },
     });
 
-    expect(mocks.resolveOutboundDurableFinalDeliverySupport).toHaveBeenCalledWith(
-      expect.objectContaining({
-        requirements: {
-          text: true,
-          messageSendingHooks: true,
-        },
-      }),
-    );
-    expect(mocks.sendDurableMessageBatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        durability: "best_effort",
-      }),
-    );
+    expect(mocks.resolveOutboundDurableFinalDeliverySupport).toHaveBeenCalledTimes(1);
+    expect(latestDeliverySupportRequest().requirements).toEqual({
+      text: true,
+      messageSendingHooks: true,
+    });
+    expect(mocks.sendDurableMessageBatch).toHaveBeenCalledTimes(1);
+    expect(latestSendDurableMessageBatchRequest().durability).toBe("best_effort");
   });
 
   it("uses required durability when a caller explicitly requires unknown-send reconciliation", async () => {
@@ -151,19 +173,13 @@ describe("durable inbound reply delivery", () => {
       },
     });
 
-    expect(mocks.resolveOutboundDurableFinalDeliverySupport).toHaveBeenCalledWith(
-      expect.objectContaining({
-        requirements: {
-          text: true,
-          reconcileUnknownSend: true,
-        },
-      }),
-    );
-    expect(mocks.sendDurableMessageBatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        durability: "required",
-      }),
-    );
+    expect(mocks.resolveOutboundDurableFinalDeliverySupport).toHaveBeenCalledTimes(1);
+    expect(latestDeliverySupportRequest().requirements).toEqual({
+      text: true,
+      reconcileUnknownSend: true,
+    });
+    expect(mocks.sendDurableMessageBatch).toHaveBeenCalledTimes(1);
+    expect(latestSendDurableMessageBatchRequest().durability).toBe("required");
   });
 
   it("reports durable partial send failures as failed delivery", async () => {

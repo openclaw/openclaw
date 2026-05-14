@@ -517,7 +517,7 @@
   resize: none;
   white-space: pre-wrap;
   font-family: var(--font-body);
-  font-size: 14px;
+  font-size: var(--control-ui-input-text-size);
   line-height: 1.45;
 }
 
@@ -597,7 +597,7 @@
   border: none;
   background: transparent;
   color: var(--text);
-  font-size: 0.92rem;
+  font-size: var(--control-ui-input-text-size);
   font-family: inherit;
   line-height: 1.4;
   outline: none;
@@ -615,7 +615,7 @@
 .agent-chat__stt-interim {
   padding: 10px 14px 0;
   color: var(--muted);
-  font-size: 0.82rem;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.35;
   overflow-wrap: anywhere;
 }
@@ -688,6 +688,38 @@
 
 .agent-chat__talk-status {
   color: var(--text);
+}
+
+.agent-chat__talk-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  gap: 8px;
+  padding: 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+  background: color-mix(in srgb, var(--bg-elevated) 72%, transparent);
+}
+
+.agent-chat__talk-options label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  font-size: 0.68rem;
+  color: var(--muted);
+}
+
+.agent-chat__talk-options input,
+.agent-chat__talk-options select {
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.75rem;
+  padding: 0 8px;
 }
 
 .agent-chat__input-divider {

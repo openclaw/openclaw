@@ -1024,6 +1024,7 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
           provider: resolvedModel.provider,
           model: resolvedModel.model,
           sessionKey: resolveAgentMainSessionKey({ cfg, agentId: id }),
+          acpRuntime: false,
         }),
       },
       model ? { model } : {},
@@ -1735,6 +1736,8 @@ export function buildGatewaySessionRow(params: {
     provider: rowModelProvider,
     model: rowModel,
     sessionKey: key,
+    acpRuntime: entry?.acp != null,
+    acpBackend: entry?.acp?.backend,
   });
   const estimatedCostUsd = lightweight
     ? resolveNonNegativeNumber(entry?.estimatedCostUsd)

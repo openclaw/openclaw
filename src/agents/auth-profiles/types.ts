@@ -16,6 +16,12 @@ export type OAuthCredentials = {
   idToken?: string;
 };
 
+export type OAuthCredentialRef = {
+  source: "openclaw-credentials";
+  provider: "openai-codex";
+  id: string;
+};
+
 export type ApiKeyCredential = {
   type: "api_key";
   provider: string;
@@ -57,6 +63,7 @@ export type OAuthCredential = OAuthCredentials & {
   copyToAgents?: boolean;
   email?: string;
   displayName?: string;
+  oauthRef?: OAuthCredentialRef;
 };
 
 export type AuthProfileCredential = ApiKeyCredential | TokenCredential | OAuthCredential;
@@ -76,9 +83,16 @@ export type AuthProfileFailureReason =
   | "unclassified"
   | "unknown";
 
+export type AuthProfileBlockedReason = "subscription_limit";
+export type AuthProfileBlockedSource = "codex_rate_limits" | "wham";
+
 /** Per-profile usage statistics for round-robin and cooldown tracking */
 export type ProfileUsageStats = {
   lastUsed?: number;
+  blockedUntil?: number;
+  blockedReason?: AuthProfileBlockedReason;
+  blockedSource?: AuthProfileBlockedSource;
+  blockedModel?: string;
   cooldownUntil?: number;
   cooldownReason?: AuthProfileFailureReason;
   cooldownModel?: string;

@@ -62,6 +62,16 @@ function collectMatching<T>(items: readonly T[], predicate: (item: T) => boolean
   return matches;
 }
 
+async function expectMissingPath(pathToCheck: string) {
+  let thrown: unknown;
+  try {
+    await fs.lstat(pathToCheck);
+  } catch (error) {
+    thrown = error;
+  }
+  expect((thrown as NodeJS.ErrnoException | undefined)?.code).toBe("ENOENT");
+}
+
 async function createTempWorkspaceDir() {
   const workspaceDir = path.join(tempRoot, `workspace-${++workspaceCaseIndex}`);
   await fs.mkdir(workspaceDir, { recursive: true });
@@ -78,6 +88,11 @@ function captureWarningLogger() {
     error: vi.fn(),
   };
   return warn;
+}
+
+function firstWarningLine(warn: ReturnType<typeof vi.fn>): string {
+  const [line] = warn.mock.calls[0] ?? [];
+  return String(line);
 }
 
 function loadTestWorkspaceSkillEntries(
@@ -228,9 +243,7 @@ describe("loadWorkspaceSkillEntries", () => {
     });
 
     expect(blockedEntries.map((entry) => entry.skill.name)).not.toContain("browser-automation");
-    await expect(
-      fs.lstat(path.join(workspaceDir, ".plugin-skills", "browser-automation")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expectMissingPath(path.join(workspaceDir, ".plugin-skills", "browser-automation"));
   });
 
   it("loads frontmatter edge cases in one workspace", async () => {
@@ -360,8 +373,7 @@ describe("loadWorkspaceSkillEntries", () => {
       expect(entries.map((entry) => entry.skill.name)).not.toContain("outside-skill");
       expect(entries.map((entry) => entry.skill.name)).not.toContain("outside-file-skill");
       expect(entries.map((entry) => entry.skill.name)).not.toContain("symlink-target");
-      const [line] = warn.mock.calls[0] ?? [];
-      const warningLine = String(line);
+      const warningLine = firstWarningLine(warn);
       expect(warningLine).toContain("Skipping escaped skill path outside its configured root:");
       expect(warningLine).toContain("reason=symlink-escape");
       expect(warningLine).toContain("source=openclaw-workspace");
@@ -419,8 +431,7 @@ describe("loadWorkspaceSkillEntries", () => {
       });
 
       expect(entries.map((entry) => entry.skill.name)).not.toContain("outside-bundled-skill");
-      const [line] = warn.mock.calls[0] ?? [];
-      const warningLine = String(line);
+      const warningLine = firstWarningLine(warn);
       expect(warningLine).toContain("Skipping escaped skill path outside its configured root:");
       expect(warningLine).toContain("source=openclaw-bundled");
       expect(warningLine).toContain("reason=bundled-symlink-escape");
@@ -443,8 +454,7 @@ describe("loadWorkspaceSkillEntries", () => {
         bundledSkillsDir: bundledDir,
       });
 
-      const [line] = warn.mock.calls[0] ?? [];
-      const warningLine = String(line);
+      const warningLine = firstWarningLine(warn);
       expect(warningLine).toContain("root=~/workspace/.bundled");
       expect(warningLine).toContain("requested=~/workspace/.bundled/escaped-bundled-skill");
       expect(warningLine).toContain("resolved=~/outside/outside-bundled-skill");
@@ -467,10 +477,8 @@ describe("loadWorkspaceSkillEntries", () => {
         filePath: path.join(skillDir, "SKILL.md"),
       });
 
-      expect(frontmatter).toMatchObject({
-        name: "root-allowed",
-        description: "Readable from filesystem root",
-      });
+      expect(frontmatter?.name).toBe("root-allowed");
+      expect(frontmatter?.description).toBe("Readable from filesystem root");
     },
   );
 
@@ -504,7 +512,8 @@ describe("loadWorkspaceSkillEntries", () => {
       });
 
       const names = loadTestWorkspaceSkillEntries(workspaceDir).map((entry) => entry.skill.name);
-      expect(names).toEqual(expect.arrayContaining(["direct-skill", "grouped-skill"]));
+      expect(names).toContain("direct-skill");
+      expect(names).toContain("grouped-skill");
     });
 
     it("does not count invalid grouped candidates against the loaded skill cap", async () => {

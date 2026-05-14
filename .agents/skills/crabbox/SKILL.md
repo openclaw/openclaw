@@ -1,6 +1,6 @@
 ---
 name: crabbox
-description: Use Crabbox for OpenClaw remote Linux validation. Default to Blacksmith Testbox; includes direct Blacksmith and owned AWS/Hetzner fallback notes when Crabbox fails.
+description: Use Crabbox for OpenClaw remote validation across Linux, macOS, Windows, and WSL2. Default to Blacksmith Testbox for broad Linux proof; includes direct Blacksmith and owned AWS/Hetzner fallback notes when Crabbox fails.
 ---
 
 # Crabbox
@@ -31,13 +31,16 @@ pnpm crabbox:run -- --help | sed -n '1,120p'
 - Check `.crabbox.yaml` for repo defaults, but override provider explicitly.
   Even if config still says AWS, maintainer validation should normally pass
   `--provider blacksmith-testbox`.
-- For live/provider bugs, check keys on the local Mac before downgrading to
-  mocks: source local `~/.profile` and test only presence/length. If Crabbox
-  does not already have the key, copy only the exact needed key into the remote
-  process environment for that one command. Do not print it, do not sync it as a
-  repo file, and do not leave it in remote shell history or logs. If no
-  secret-safe injection path is available, say true live provider auth is
-  blocked instead of silently using a fake key.
+- If a warm direct-provider lease smells stale, retry with `--full-resync`
+  (alias `--fresh-sync`) before replacing the lease. This resets the remote
+  workdir, skips the fingerprint fast path, reseeds Git when possible, and
+  uploads the checkout from scratch.
+- For live/provider bugs, use the configured secret workflow before downgrading
+  to mocks. Copy only the exact needed key into the remote process environment
+  for that one command. Do not print it, do not sync it as a repo file, and do
+  not leave it in remote shell history or logs. If no secret-safe injection path
+  is available, say true live provider auth is blocked instead of silently using
+  a fake key.
 - Prefer local targeted tests for tight edit loops. Broad gates belong remote.
 - Do not treat inherited shell env as operator intent. In particular,
   `OPENCLAW_LOCAL_CHECK_MODE=throttled` from the local shell is not permission
@@ -64,7 +67,8 @@ Crabbox supports static SSH targets:
 - `target=macos` and `target=windows --windows-mode wsl2` use the POSIX SSH,
   bash, Git, rsync, and tar contract.
 - Native Windows uses OpenSSH, PowerShell, Git, and tar; sync is manifest tar
-  archive transfer into `static.workRoot`.
+  archive transfer into `static.workRoot`. Direct native Windows runs support
+  `--script*`, `--env-from-profile`, `--preflight`, and PowerShell `--shell`.
 - `crabbox actions hydrate/register` are Linux-only today; use plain
   `crabbox run` loops for static macOS and Windows hosts.
 - Live proof needs a reachable, operator-managed SSH host. Without one, verify
@@ -127,6 +131,7 @@ Read the JSON summary. Useful fields:
 - `provider`: should be `blacksmith-testbox`
 - `leaseId`: `tbx_...`
 - `syncDelegated`: should be `true`
+- `commandPhases`: populated when the command prints `CRABBOX_PHASE:<name>`
 - `commandMs` / `totalMs`
 - `exitCode`
 
@@ -137,6 +142,85 @@ unclear:
 ```sh
 blacksmith testbox list
 ```
+
+## Observability Flags
+
+Use these on debugging runs before inventing ad hoc logging:
+
+- `--preflight`: prints run context, workspace mode, SSH target, remote user/cwd,
+  and target-specific tool probes. Defaults cover `git`, `tar`, `node`, `npm`,
+  `corepack`, `pnpm`, `yarn`, `bun`, `docker`, plus POSIX
+  `sudo`/`apt`/`bubblewrap` and native Windows
+  `powershell`/`execution_policy`/`longpaths`/`temp`/`pwsh`. Add
+  `--preflight-tools node,bun,docker`, `CRABBOX_PREFLIGHT_TOOLS`, or repo
+  `run.preflightTools` to replace the list. `default` expands built-ins; `none`
+  prints only the workspace summary. Preflight is diagnostic only; install
+  toolchains through Actions hydration, images, devcontainer/Nix/mise/asdf, or
+  the run script. On `blacksmith-testbox`, this prints a delegated-unsupported
+  note because the workflow owns setup.
+- `CRABBOX_ENV_ALLOW=NAME,...`: forwards only listed local env vars for direct
+  providers and prints `set len=N secret=true` style summaries. On
+  `blacksmith-testbox`, env forwarding is unsupported; put secrets in the
+  Testbox workflow instead.
+- `--env-from-profile <file>` plus `--allow-env NAME`: loads simple
+  `export NAME=value` / `NAME=value` lines from a local profile without
+  executing it, then forwards only allowlisted names. `--allow-env` is
+  repeatable and comma-separated. Profile values override ambient allowlisted
+  env values for that run. Direct POSIX, WSL2, and native Windows runs are
+  supported; delegated providers are not. Crabbox probes the uploaded profile
+  remotely and prints redacted presence/length metadata before the command.
+- `--env-helper <name>`: with `--env-from-profile` on POSIX SSH targets,
+  persists `.crabbox/env/<name>` and `.crabbox/env/<name>.env` so follow-up
+  commands on the same lease can run through `./.crabbox/env/<name> <command>`.
+  Use only on leases you control; the profile stays until cleanup, lease reset,
+  or `--full-resync`.
+- `--script <file>` / `--script-stdin`: upload a local script into
+  `.crabbox/scripts/` and execute it on the remote box. Shebang scripts execute
+  directly on POSIX; scripts without a shebang run through `bash`. Native
+  Windows uploads run through Windows PowerShell, and Crabbox appends `.ps1`
+  when needed. Arguments after `--` become script args.
+- `--fresh-pr owner/repo#123|URL|number`: skip dirty local sync and create a
+  fresh remote checkout of the GitHub PR. Bare numbers use the current repo's
+  GitHub origin. Add `--apply-local-patch` only when the current local
+  `git diff --binary HEAD` should be applied on top of that PR checkout.
+- `--full-resync` / `--fresh-sync`: reset a stale direct-provider workdir
+  before syncing. Use after sync fingerprints look wrong, SSH times out before
+  sync, or rsync watchdog output suggests it. It is redundant with
+  `--fresh-pr`, incompatible with `--no-sync`, and unsupported by delegated
+  providers.
+- `--capture-stdout <path>` / `--capture-stderr <path>`: write remote streams to
+  local files and keep binary/noisy output out of retained logs. Parent
+  directories must already exist. These are direct-provider only.
+- `--capture-on-fail`: on non-zero direct-provider exits, downloads
+  `.crabbox/captures/*.tar.gz` with `test-results`, `playwright-report`,
+  `coverage`, JUnit XML, and nearby logs. Treat as secret-bearing until reviewed.
+- `--keep-on-failure`: leave a failed one-shot lease alive for live debugging
+  until idle/TTL expiry. Useful on direct providers and delegated one-shots.
+- `--timing-json`: final machine-readable timing. Add
+  `echo CRABBOX_PHASE:install`, `CRABBOX_PHASE:test`, etc. in long shell
+  commands; direct providers and Blacksmith Testbox both report them as
+  `commandPhases`.
+
+Live-provider debug template for direct AWS/Hetzner leases:
+
+```sh
+mkdir -p .crabbox/logs
+pnpm crabbox:run -- --provider aws \
+  --preflight \
+  --allow-env OPENAI_API_KEY,OPENAI_BASE_URL \
+  --timing-json \
+  --capture-stdout .crabbox/logs/live-provider.stdout.log \
+  --capture-stderr .crabbox/logs/live-provider.stderr.log \
+  --capture-on-fail \
+  --shell -- \
+  "echo CRABBOX_PHASE:install; pnpm install --frozen-lockfile; echo CRABBOX_PHASE:test; pnpm test:live"
+```
+
+Do not pass `--capture-*`, `--download`, `--checksum`, `--force-sync-large`, or
+`--sync-only` to delegated providers. Also do not pass `--script*`,
+`--fresh-pr`, `--full-resync`, or `--env-helper` there. Crabbox rejects these
+because the provider owns sync or command transport. `--keep-on-failure` is OK
+for delegated one-shots when you need to inspect a failed lease.
 
 ## Efficient Bug E2E Verification
 
@@ -149,8 +233,8 @@ Pick the lane by symptom:
 - Docker/setup/install bug: build a package tarball and run the matching
   `scripts/e2e/*-docker.sh` or package script. This proves npm packaging,
   install paths, runtime deps, config writes, and container behavior.
-- Provider/model/auth bug: prefer true live E2E. First source local Mac
-  `~/.profile`, then inject the single needed key into Crabbox if needed. Scrub
+- Provider/model/auth bug: prefer true live E2E. Use the configured secret
+  workflow, then inject the single needed key into Crabbox if needed. Scrub
   unrelated provider env vars in the child command so interactive defaults do
   not drift to another provider. If only a dummy key is used, label the proof
   narrowly, e.g. "UI/install path only; live provider auth not exercised."
@@ -179,6 +263,13 @@ Efficient flow:
 Keep it efficient:
 
 - Reuse existing E2E scripts and helper assertions before writing ad hoc shell.
+- Use `--script <file>` or `--script-stdin` for multi-line E2E commands instead
+  of quote-heavy `--shell` strings on direct SSH providers.
+- Use `--fresh-pr <pr>` when validating an upstream PR in isolation from the
+  local dirty tree. Add `--apply-local-patch` only when testing a local fixup on
+  top of that PR.
+- Use `--full-resync` before replacing a warmed direct-provider lease when the
+  remote workdir or sync fingerprint appears stale.
 - Use one-shot Crabbox for a single proof; use a reusable Testbox only when
   several commands must share built images, installed packages, or live state.
 - Prefer `OPENCLAW_CURRENT_PACKAGE_TGZ` with Docker/package lanes when testing a
@@ -188,6 +279,31 @@ Keep it efficient:
   never print secret values.
 - Include `--timing-json` on broad or flaky runs when command duration or sync
   behavior matters.
+
+Before/after PR proof on delegated Testbox:
+
+- For PRs that should prove "broken before, fixed after", compare base and PR
+  on the same Testbox when practical. Fetch both refs, create detached temp
+  worktrees under `/tmp`, install in each, then run the same harness twice.
+- Do not checkout base/PR refs in the synced repo root. Delegated Testbox sync
+  may leave the root dirty with local files; `git checkout` can abort or mix
+  proof state.
+- Temp harness files under `/tmp` do not resolve repo packages by default. Put
+  the harness inside the worktree, or in ESM use
+  `createRequire(path.join(process.cwd(), "package.json"))` before requiring
+  workspace deps such as `@lydell/node-pty`.
+- For full-screen TUI/CLI bugs, a PTY harness is stronger than helper-only
+  assertions. Use a real PTY, wait for visible lifecycle markers, send input,
+  then send control keys and assert process exit/stuck behavior.
+- When validating a rebased local branch before push, remember delegated sync
+  usually validates synced file content on a detached dirty checkout, not a
+  remote commit object. Record the local head SHA, changed files, Testbox id,
+  and final success markers; after pushing, ensure the pushed SHA has the same
+  file content.
+- If GitHub CI is still queued but the exact changed content passed Testbox
+  `pnpm check:changed`, `pnpm check:test-types`, and the real E2E proof, it is
+  reasonable to merge once required checks allow it. Note any still-running
+  unrelated shards in the proof comment instead of waiting forever.
 
 Interactive CLI/onboarding:
 
@@ -249,10 +365,17 @@ Useful WebVNC commands:
 
 ```sh
 ../crabbox/bin/crabbox webvnc --provider hetzner --id <cbx_id-or-slug> --open
-../crabbox/bin/crabbox webvnc --provider hetzner --id <cbx_id-or-slug> --daemon --open
-../crabbox/bin/crabbox webvnc --provider hetzner --id <cbx_id-or-slug> --status
-../crabbox/bin/crabbox webvnc --provider hetzner --id <cbx_id-or-slug> --stop
-../crabbox/bin/crabbox screenshot --provider hetzner --id <cbx_id-or-slug> --output desktop.png
+../crabbox/bin/crabbox webvnc daemon start --provider hetzner --id <cbx_id-or-slug> --open
+../crabbox/bin/crabbox webvnc daemon status --provider hetzner --id <cbx_id-or-slug>
+../crabbox/bin/crabbox webvnc daemon stop --provider hetzner --id <cbx_id-or-slug>
+../crabbox/bin/crabbox webvnc status --provider hetzner --id <cbx_id-or-slug>
+../crabbox/bin/crabbox webvnc reset --provider hetzner --id <cbx_id-or-slug> --open
+../crabbox/bin/crabbox desktop doctor --provider hetzner --id <cbx_id-or-slug>
+../crabbox/bin/crabbox desktop click --provider hetzner --id <cbx_id-or-slug> --x 640 --y 420
+../crabbox/bin/crabbox desktop paste --provider hetzner --id <cbx_id-or-slug> --text "user@example.com"
+../crabbox/bin/crabbox desktop key --provider hetzner --id <cbx_id-or-slug> ctrl+l
+../crabbox/bin/crabbox artifacts collect --id <cbx_id-or-slug> --all --output artifacts/<slug>
+../crabbox/bin/crabbox artifacts publish --dir artifacts/<slug> --pr <number>
 ```
 
 `desktop launch --webvnc --open` is usually the nicest one-shot: it starts the
@@ -285,7 +408,11 @@ Common Crabbox-only failures:
 - Slug/claim confusion: use the raw `tbx_...` id, or run one-shot without
   `--id`.
 - Sync/timing bug: add `--debug --timing-json`; capture the final JSON and the
-  printed Actions URL.
+  printed Actions URL. Large sync warnings now include top source directories
+  by file count and a hint to update `.crabboxignore` / `sync.exclude`; inspect
+  those before reaching for `--force-sync-large`. Quiet rsync watchdogs and SSH
+  timeouts now print `next_action=` hints; follow them, usually `--full-resync`
+  first and a fresh lease second.
 - Cleanup uncertainty: run `blacksmith testbox list` and stop only boxes you
   created.
 - Testbox queued/capacity pressure: do not convert a broad changed gate or full
@@ -294,18 +421,19 @@ Common Crabbox-only failures:
   report the capacity blocker.
 
 If Crabbox cannot dispatch, sync, attach, or stop but Blacksmith itself works,
-use direct Blacksmith from the repo root:
+first try the same command through the repo wrapper with `--debug` and
+`--timing-json`:
 
 ```sh
-blacksmith testbox warmup ci-check-testbox.yml --ref main --idle-timeout 90
-blacksmith testbox run --id <tbx_id> "env CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 pnpm test:changed"
-blacksmith testbox stop --id <tbx_id>
+pnpm crabbox:run -- --provider blacksmith-testbox --debug --timing-json -- \
+  CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 pnpm test:changed
 ```
 
-Direct full suite:
+Full suite:
 
 ```sh
-blacksmith testbox run --id <tbx_id> "env CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 pnpm test"
+pnpm crabbox:run -- --provider blacksmith-testbox --debug --timing-json -- \
+  CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 pnpm test
 ```
 
 Auth fallback, only when `blacksmith` says auth is missing:
@@ -340,16 +468,15 @@ The hydration workflow owns checkout, Node/pnpm setup, dependency install,
 secrets, ready marker, and keepalive. Crabbox owns dispatch, sync, SSH command
 execution, timing, logs/results, and cleanup.
 
-Minimal direct Blacksmith fallback, from repo root:
+Minimal Blacksmith-backed Crabbox run, from repo root:
 
 ```sh
-blacksmith testbox warmup ci-check-testbox.yml --ref main --idle-timeout 90
-blacksmith testbox run --id <tbx_id> "env CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test:changed"
-blacksmith testbox stop --id <tbx_id>
+pnpm crabbox:run -- --provider blacksmith-testbox --timing-json -- \
+  CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test:changed
 ```
 
-Use direct Blacksmith only when Crabbox is the broken layer and Blacksmith
-itself still works. Prefer direct `blacksmith testbox list` for cleanup
+Use direct Blacksmith only when Crabbox is the broken layer and you are
+isolating a Crabbox bug. Prefer direct `blacksmith testbox list` for cleanup
 diagnostics, not as a reusable work queue.
 
 Important Blacksmith footguns:
@@ -427,7 +554,10 @@ crabbox run --id <lease> --shell -- 'DISPLAY=:99 xdotool search --onlyvisible --
 crabbox status --id <id-or-slug> --wait
 crabbox inspect --id <id-or-slug> --json
 crabbox sync-plan
+crabbox history --limit 20
 crabbox history --lease <id-or-slug>
+crabbox attach <run_id>
+crabbox events <run_id> --json
 crabbox logs <run_id>
 crabbox results <run_id>
 crabbox cache stats --id <id-or-slug>

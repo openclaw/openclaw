@@ -64,14 +64,11 @@ function expectTargetsToContainStores(
   targets: Array<{ agentId: string; storePath: string }>,
   stores: Record<string, string>,
 ): void {
-  expect(targets).toEqual(
-    expect.arrayContaining(
-      Object.entries(stores).map(([agentId, storePath]) => ({
-        agentId,
-        storePath,
-      })),
-    ),
-  );
+  for (const [agentId, storePath] of Object.entries(stores)) {
+    expect(
+      targets.some((target) => target.agentId === agentId && target.storePath === storePath),
+    ).toBe(true);
+  }
 }
 
 const discoveryResolvers = [
@@ -173,10 +170,12 @@ describe("resolveAgentSessionStoreTargetsSync", () => {
 
       expect(
         resolveAgentSessionStoreTargetsSync(cfg, "retired-agent", { env: process.env }),
-      ).toContainEqual({
-        agentId: "retired-agent",
-        storePath: storePaths["Retired Agent"],
-      });
+      ).toEqual([
+        {
+          agentId: "retired-agent",
+          storePath: storePaths["Retired Agent"],
+        },
+      ]);
     });
   });
 });
@@ -216,14 +215,12 @@ describe("resolveAllAgentSessionStoreTargets", () => {
         "Retired Agent",
       ]);
 
-      expect(targets).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            agentId: "retired-agent",
-            storePath: storePaths["Retired Agent"],
-          }),
-        ]),
-      );
+      expect(
+        targets.some(
+          (target) =>
+            target.agentId === "retired-agent" && target.storePath === storePaths["Retired Agent"],
+        ),
+      ).toBe(true);
     });
   });
 
@@ -247,18 +244,14 @@ describe("resolveAllAgentSessionStoreTargets", () => {
 
       const targets = await resolveAllAgentSessionStoreTargets(cfg, { env });
 
-      expect(targets).toEqual(
-        expect.arrayContaining([
-          {
-            agentId: "main",
-            storePath: mainStorePath,
-          },
-          {
-            agentId: "retired",
-            storePath: retiredStorePath,
-          },
-        ]),
-      );
+      expect(
+        targets.some((target) => target.agentId === "main" && target.storePath === mainStorePath),
+      ).toBe(true);
+      expect(
+        targets.some(
+          (target) => target.agentId === "retired" && target.storePath === retiredStorePath,
+        ),
+      ).toBe(true);
     });
   });
 
@@ -277,14 +270,12 @@ describe("resolveAllAgentSessionStoreTargets", () => {
           OPENCLAW_STATE_DIR: envStateDir,
         };
 
-        await expect(resolver.resolve(cfg, env)).resolves.toEqual(
-          expect.arrayContaining([
-            {
-              agentId: "retired",
-              storePath: storePaths.retired,
-            },
-          ]),
-        );
+        const targets = await resolver.resolve(cfg, env);
+        expect(
+          targets.some(
+            (target) => target.agentId === "retired" && target.storePath === storePaths.retired,
+          ),
+        ).toBe(true);
       });
     });
 
@@ -301,10 +292,12 @@ describe("resolveAllAgentSessionStoreTargets", () => {
         await fs.symlink(leakedFile, path.join(opsSessionsDir, "sessions.json"));
 
         const targets = await resolver.resolve(createCustomRootCfg(customRoot), process.env);
-        expect(targets).not.toContainEqual({
-          agentId: "ops",
-          storePath: expect.stringContaining(path.join("ops", "sessions", "sessions.json")),
-        });
+        const symlinkStoreSuffix = path.join("ops", "sessions", "sessions.json");
+        expect(
+          targets.some(
+            (target) => target.agentId === "ops" && target.storePath.includes(symlinkStoreSuffix),
+          ),
+        ).toBe(false);
       });
     });
   }
@@ -323,10 +316,12 @@ describe("resolveAllAgentSessionStoreTargets", () => {
       const mainStorePath = await resolveRealStorePath(mainSessionsDir);
       const targets = await resolveAllAgentSessionStoreTargets(cfg, { env: process.env });
 
-      expect(targets).toContainEqual({
-        agentId: "main",
-        storePath: mainStorePath,
-      });
+      expect(targets).toEqual([
+        {
+          agentId: "main",
+          storePath: mainStorePath,
+        },
+      ]);
       expect(
         targets.some((target) => target.storePath === path.join(junkSessionsDir, "sessions.json")),
       ).toBe(false);

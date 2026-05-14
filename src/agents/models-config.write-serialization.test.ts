@@ -66,6 +66,34 @@ function createPluginMetadataSnapshot(workspaceDir: string): PluginMetadataSnaps
   };
 }
 
+async function expectMissingPath(operation: Promise<unknown>) {
+  let error: NodeJS.ErrnoException | undefined;
+  try {
+    await operation;
+  } catch (caught) {
+    error = caught as NodeJS.ErrnoException;
+  }
+  expect(error?.code).toBe("ENOENT");
+}
+
+function planParamsAt(callIndex: number): {
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  providerDiscoveryProviderIds?: string[];
+  providerDiscoveryTimeoutMs?: number;
+  workspaceDir?: string;
+} {
+  const call = planOpenClawModelsJsonMock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected models planner call #${callIndex + 1}`);
+  }
+  return call[0] as {
+    pluginMetadataSnapshot?: PluginMetadataSnapshot;
+    providerDiscoveryProviderIds?: string[];
+    providerDiscoveryTimeoutMs?: number;
+    workspaceDir?: string;
+  };
+}
+
 beforeAll(async () => {
   vi.doMock("./models-config.plan.js", () => ({
     planOpenClawModelsJson: (...args: unknown[]) => planOpenClawModelsJsonMock(...args),
@@ -128,9 +156,8 @@ describe("models-config write serialization", () => {
 
       await ensureOpenClawModelsJson({}, agentDir);
 
-      expect(planOpenClawModelsJsonMock).toHaveBeenCalledWith(
-        expect.not.objectContaining({ pluginMetadataSnapshot: snapshot }),
-      );
+      const params = planParamsAt(0);
+      expect(params.pluginMetadataSnapshot).not.toBe(snapshot);
     });
   });
 
@@ -143,12 +170,9 @@ describe("models-config write serialization", () => {
 
       await ensureOpenClawModelsJson({}, agentDir, { workspaceDir });
 
-      expect(planOpenClawModelsJsonMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          workspaceDir,
-          pluginMetadataSnapshot: snapshot,
-        }),
-      );
+      const params = planParamsAt(0);
+      expect(params.workspaceDir).toBe(workspaceDir);
+      expect(params.pluginMetadataSnapshot).toBe(snapshot);
     });
   });
 
@@ -164,9 +188,9 @@ describe("models-config write serialization", () => {
 
       expect(result.agentDir).toBe(path.join(home, ".openclaw", "agents", "ops", "agent"));
       await expect(fs.access(path.join(result.agentDir, "models.json"))).resolves.toBeUndefined();
-      await expect(
+      await expectMissingPath(
         fs.access(path.join(home, ".openclaw", "agents", "main", "agent", "models.json")),
-      ).rejects.toMatchObject({ code: "ENOENT" });
+      );
     });
   });
 
@@ -184,12 +208,9 @@ describe("models-config write serialization", () => {
       });
 
       expect(planOpenClawModelsJsonMock).toHaveBeenCalledTimes(2);
-      expect(planOpenClawModelsJsonMock).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          providerDiscoveryProviderIds: ["anthropic"],
-          providerDiscoveryTimeoutMs: 5000,
-        }),
-      );
+      const params = planParamsAt(1);
+      expect(params.providerDiscoveryProviderIds).toEqual(["anthropic"]);
+      expect(params.providerDiscoveryTimeoutMs).toBe(5000);
     });
   });
 

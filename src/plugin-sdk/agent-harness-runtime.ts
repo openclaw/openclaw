@@ -3,13 +3,21 @@
 // register quickly inside gateway startup and Docker e2e runs.
 
 import type { EmbeddedRunAttemptResult } from "../agents/pi-embedded-runner/run/types.js";
+import {
+  abortEmbeddedPiRun,
+  clearActiveEmbeddedRun,
+  queueEmbeddedPiMessageWithOutcome,
+  resolveActiveEmbeddedRunSessionId,
+  setActiveEmbeddedRun,
+  type EmbeddedPiQueueMessageOptions,
+} from "../agents/pi-embedded-runner/runs.js";
 import { formatToolDetail, resolveToolDisplay } from "../agents/tool-display.js";
 import { redactToolDetail } from "../logging/redact.js";
 import { truncateUtf16Safe } from "../utils.js";
 
 export const TOOL_PROGRESS_OUTPUT_MAX_CHARS = 8_000;
 
-export type { AgentMessage } from "@mariozechner/pi-agent-core";
+export type { AgentMessage } from "@earendil-works/pi-agent-core";
 export type {
   AgentHarness,
   AgentHarnessAttemptParams,
@@ -18,6 +26,8 @@ export type {
   AgentHarnessCompactResult,
   AgentHarnessDeliveryDefaults,
   AgentHarnessResultClassification,
+  AgentHarnessSideQuestionParams,
+  AgentHarnessSideQuestionResult,
   AgentHarnessResetParams,
   AgentHarnessSupport,
   AgentHarnessSupportContext,
@@ -99,9 +109,23 @@ export { buildEmbeddedAttemptToolRunContext } from "../agents/pi-embedded-runner
 export {
   abortEmbeddedPiRun as abortAgentHarnessRun,
   clearActiveEmbeddedRun,
-  queueEmbeddedPiMessage as queueAgentHarnessMessage,
+  resolveActiveEmbeddedRunSessionId,
   setActiveEmbeddedRun,
-} from "../agents/pi-embedded-runner/runs.js";
+};
+
+/**
+ * @deprecated Active-run queueing is an internal runtime concern. This legacy
+ * boolean API only reports immediate queue eligibility and cannot observe async
+ * runtime rejection; runtime-owned delivery paths should use acceptance-aware
+ * steering instead of public SDK queueing.
+ */
+export function queueAgentHarnessMessage(
+  sessionId: string,
+  text: string,
+  options?: EmbeddedPiQueueMessageOptions,
+): boolean {
+  return queueEmbeddedPiMessageWithOutcome(sessionId, text, options).queued;
+}
 export { disposeRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 export {
   logAgentRuntimeToolDiagnostics,

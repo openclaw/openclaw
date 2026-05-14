@@ -532,6 +532,7 @@ export async function startGatewayServer(
   });
   const startupTrace = createGatewayStartupTrace();
   const startupConfigModulePromise = import("./server-startup-config.js");
+  const reloadHandlersModulePromise = import("./server-reload-handlers.js");
   let startupPluginsModulePromise: Promise<typeof import("./server-startup-plugins.js")> | null =
     null;
   const loadStartupPluginsModule = () => {
@@ -881,6 +882,11 @@ export async function startGatewayServer(
     gatewayMethods: listActiveGatewayMethods(baseGatewayMethods),
   });
   deps.cron = runtimeState.cronState.cron;
+  const pluginHostServices = {
+    get cron() {
+      return runtimeState.cronState.cron;
+    },
+  };
 
   let closePreludeStarted = false;
   let postReadyMaintenanceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -929,7 +935,8 @@ export async function startGatewayServer(
   const createCloseHandler =
     () => async (opts?: { reason?: string; restartExpectedMs?: number | null }) => {
       const channelIds = listLoadedChannelPlugins().map((plugin) => plugin.id as ChannelId);
-      const { createGatewayCloseHandler } = await loadGatewayCloseModule();
+      const { createGatewayCloseHandler, drainActiveSessionsForShutdown } =
+        await loadGatewayCloseModule();
       await createGatewayCloseHandler({
         bonjourStop: runtimeState.bonjourStop,
         tailscaleCleanup: runtimeState.tailscaleCleanup,
@@ -957,6 +964,7 @@ export async function startGatewayServer(
         wss,
         httpServer,
         httpServers,
+        drainActiveSessionsForShutdown,
       })(opts);
     };
   let clearFallbackGatewayContextForServer = () => {};
@@ -1176,6 +1184,7 @@ export async function startGatewayServer(
         workspaceDir: defaultWorkspaceDir,
         log,
         coreGatewayMethodNames: baseMethods,
+        hostServices: pluginHostServices,
         baseMethods,
         pluginLookUpTable: nextPluginLookUpTable,
       });
@@ -1260,6 +1269,7 @@ export async function startGatewayServer(
       chatRunBuffers: chatRunState.buffers,
       chatDeltaSentAt: chatRunState.deltaSentAt,
       chatDeltaLastBroadcastLen: chatRunState.deltaLastBroadcastLen,
+      chatDeltaLastBroadcastText: chatRunState.deltaLastBroadcastText,
       addChatRun,
       removeChatRun,
       subscribeSessionEvents: sessionEventSubscribers.subscribe,
@@ -1306,6 +1316,7 @@ export async function startGatewayServer(
           workspaceDir: defaultWorkspaceDir,
           log,
           coreGatewayMethodNames: baseMethods,
+          hostServices: pluginHostServices,
           baseMethods,
           pluginIds: startupPluginIds,
           pluginLookUpTable,
@@ -1414,6 +1425,7 @@ export async function startGatewayServer(
                   workspaceDir: defaultWorkspaceDir,
                   log,
                   baseMethods,
+                  hostServices: pluginHostServices,
                   startupPluginIds,
                   pluginLookUpTable,
                   startupTrace,
@@ -1446,7 +1458,7 @@ export async function startGatewayServer(
     postAttachRuntimeReturned = true;
     activateScheduledServicesWhenReady();
 
-    const { startManagedGatewayConfigReloader } = await import("./server-reload-handlers.js");
+    const { startManagedGatewayConfigReloader } = await reloadHandlersModulePromise;
     runtimeState.configReloader = startManagedGatewayConfigReloader({
       minimalTestGateway,
       initialConfig: cfgAtStart,

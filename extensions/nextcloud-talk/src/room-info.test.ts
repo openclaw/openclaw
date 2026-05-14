@@ -26,6 +26,18 @@ afterEach(() => {
   __testing.resetRoomCache();
 });
 
+function requireFirstFetchParams(): { auditContext?: string; url?: string } {
+  const [call] = fetchWithSsrFGuard.mock.calls;
+  if (!call) {
+    throw new Error("expected Nextcloud Talk room info fetch call");
+  }
+  const [fetchParams] = call;
+  if (!fetchParams || typeof fetchParams !== "object" || Array.isArray(fetchParams)) {
+    throw new Error("expected Nextcloud Talk room info fetch call");
+  }
+  return fetchParams as { auditContext?: string; url?: string };
+}
+
 describe("nextcloud talk room info", () => {
   it("resolves direct rooms from the room info endpoint", async () => {
     const release = vi.fn(async () => {});
@@ -56,12 +68,11 @@ describe("nextcloud talk room info", () => {
     });
 
     expect(kind).toBe("direct");
-    expect(fetchWithSsrFGuard).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://nc.example.com/ocs/v2.php/apps/spreed/api/v4/room/room-direct",
-        auditContext: "nextcloud-talk.room-info",
-      }),
+    const fetchParams = requireFirstFetchParams();
+    expect(fetchParams.url).toBe(
+      "https://nc.example.com/ocs/v2.php/apps/spreed/api/v4/room/room-direct",
     );
+    expect(fetchParams.auditContext).toBe("nextcloud-talk.room-info");
     expect(release).toHaveBeenCalledTimes(1);
   });
 

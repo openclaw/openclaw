@@ -1,3 +1,4 @@
+import { danger } from "openclaw/plugin-sdk/runtime-env";
 import { typedCases } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType, type Guild } from "./internal/discord.js";
@@ -201,7 +202,7 @@ describe("DiscordMessageListener", () => {
       {} as unknown as import("./internal/discord.js").Client,
     );
     await flushAsyncWork();
-    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("discord handler failed"));
+    expect(logger.error).toHaveBeenCalledWith(danger("discord handler failed: Error: boom"));
   });
 
   it("does not apply its own slow-listener logging", async () => {
@@ -943,6 +944,27 @@ vi.spyOn(routingModule, "resolveAgentRoute").mockImplementation(resolveAgentRout
 const { DiscordMessageListener, DiscordReactionListener, registerDiscordListener } =
   await import("./monitor/listeners.js");
 
+type MockWithCalls = { mock: { calls: unknown[][] } };
+
+function firstMockCall(mock: MockWithCalls, label: string): unknown[] {
+  const call = mock.mock.calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
+function firstMockArg(mock: MockWithCalls, label: string) {
+  return firstMockCall(mock, label)[0];
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null) {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
 function makeReactionEvent(overrides?: {
   guildId?: string;
   channelId?: string;
@@ -1024,7 +1046,7 @@ function makeReactionListenerParams(overrides?: {
   guildEntries?: Record<string, DiscordGuildEntryResolved>;
 }) {
   return {
-    cfg: {} as import("openclaw/plugin-sdk/config-types").OpenClawConfig,
+    cfg: {} as import("openclaw/plugin-sdk/config-contracts").OpenClawConfig,
     accountId: "acc-1",
     runtime: {} as import("openclaw/plugin-sdk/runtime-env").RuntimeEnv,
     botUserId: overrides?.botUserId ?? "bot-1",
@@ -1078,12 +1100,14 @@ describe("discord DM reaction handling", () => {
       await listener.handle(data, client);
 
       expect(enqueueSystemEventSpy, testCase.name).toHaveBeenCalledOnce();
-      const [text, opts] = enqueueSystemEventSpy.mock.calls[0];
+      const [text, opts] = firstMockCall(enqueueSystemEventSpy, "enqueueSystemEvent");
       expect(text, testCase.name).toContain("Discord reaction added");
       expect(text, testCase.name).toContain("👍");
       expect(text, testCase.name).toContain("dm");
       expect(text, testCase.name).not.toContain("undefined");
-      expect(opts.sessionKey, testCase.name).toBe("discord:acc-1:dm:user-1");
+      expect(requireRecord(opts, "system event options").sessionKey, testCase.name).toBe(
+        "discord:acc-1:dm:user-1",
+      );
     }
   });
 
@@ -1221,7 +1245,7 @@ describe("discord DM reaction handling", () => {
 
     expect(getReactionClientFetchChannelMock(client)).toHaveBeenCalled();
     expect(enqueueSystemEventSpy).toHaveBeenCalledOnce();
-    const [text] = enqueueSystemEventSpy.mock.calls[0];
+    const text = firstMockArg(enqueueSystemEventSpy, "enqueueSystemEvent");
     expect(text).toContain("Discord reaction added");
   });
 
@@ -1236,12 +1260,9 @@ describe("discord DM reaction handling", () => {
     await listener.handle(data, client);
 
     expect(resolveAgentRouteMock).toHaveBeenCalledOnce();
-    const routeArgs = (resolveAgentRouteMock.mock.calls[0]?.[0] ?? {}) as {
+    const routeArgs = firstMockArg(resolveAgentRouteMock, "resolveAgentRoute") as {
       peer?: unknown;
     };
-    if (!routeArgs) {
-      throw new Error("expected route arguments");
-    }
     expect(routeArgs.peer).toEqual({ kind: "direct", id: "user-42" });
   });
 
@@ -1256,12 +1277,9 @@ describe("discord DM reaction handling", () => {
     await listener.handle(data, client);
 
     expect(resolveAgentRouteMock).toHaveBeenCalledOnce();
-    const routeArgs = (resolveAgentRouteMock.mock.calls[0]?.[0] ?? {}) as {
+    const routeArgs = firstMockArg(resolveAgentRouteMock, "resolveAgentRoute") as {
       peer?: unknown;
     };
-    if (!routeArgs) {
-      throw new Error("expected route arguments");
-    }
     expect(routeArgs.peer).toEqual({ kind: "group", id: "channel-1" });
   });
 });
