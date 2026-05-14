@@ -287,6 +287,8 @@ function mergeManifestContracts(
   for (const key of [
     "embeddedExtensionFactories",
     "agentToolResultMiddleware",
+    "agentStreamingLlmMiddleware",
+    "agentToolCallMiddleware",
     "externalAuthProviders",
     "memoryEmbeddingProviders",
     "speechProviders",

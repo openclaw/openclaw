@@ -81,6 +81,14 @@ import type {
 import type { VideoGenerationProvider } from "../video-generation/types.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type {
+  AgentStreamingLlmMiddleware,
+  AgentStreamingLlmMiddlewareOptions,
+} from "./agent-streaming-llm-middleware-types.js";
+import type {
+  AgentToolCallMiddleware,
+  AgentToolCallMiddlewareOptions,
+} from "./agent-tool-call-middleware-types.js";
+import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareOptions,
 } from "./agent-tool-result-middleware-types.js";
@@ -177,6 +185,18 @@ export type {
   AgentToolResultMiddlewareRuntime,
   OpenClawAgentToolResult,
 } from "./agent-tool-result-middleware-types.js";
+export type {
+  AgentStreamingLlmMiddleware,
+  AgentStreamingLlmMiddlewareContext,
+  AgentStreamingLlmMiddlewareOptions,
+  AgentStreamingLlmMiddlewareRuntime,
+} from "./agent-streaming-llm-middleware-types.js";
+export type {
+  AgentToolCallMiddleware,
+  AgentToolCallMiddlewareContext,
+  AgentToolCallMiddlewareOptions,
+  AgentToolCallMiddlewareRuntime,
+} from "./agent-tool-call-middleware-types.js";
 export type {
   PluginConversationBinding,
   PluginConversationBindingRequestParams,
@@ -2693,6 +2713,22 @@ export type OpenClawPluginApi = {
   registerAgentToolResultMiddleware: (
     handler: AgentToolResultMiddleware,
     options?: AgentToolResultMiddlewareOptions,
+  ) => void;
+  /**
+   * Register runtime-neutral streaming LLM middleware. Declare
+   * `contracts.agentStreamingLlmMiddleware` for every targeted runtime.
+   */
+  registerAgentStreamingLlmMiddleware: (
+    handler: AgentStreamingLlmMiddleware,
+    options?: AgentStreamingLlmMiddlewareOptions,
+  ) => void;
+  /**
+   * Register runtime-neutral tool-call middleware. Declare
+   * `contracts.agentToolCallMiddleware` for every targeted runtime.
+   */
+  registerAgentToolCallMiddleware: (
+    handler: AgentToolCallMiddleware,
+    options?: AgentToolCallMiddlewareOptions,
   ) => void;
   /**
    * Register plugin-owned session state that can be projected into Gateway session rows.

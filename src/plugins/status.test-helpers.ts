@@ -144,6 +144,8 @@ export function createPluginLoadResult(
     webSearchProviders: [],
     migrationProviders: [],
     codexAppServerExtensionFactories: [],
+    agentStreamingLlmMiddlewares: [],
+    agentToolCallMiddlewares: [],
     agentToolResultMiddlewares: [],
     memoryEmbeddingProviders: [],
     textTransforms: [],

@@ -85,6 +85,14 @@ describe("captured plugin registration", () => {
         api.registerAgentToolResultMiddleware(() => undefined, {
           runtimes: ["codex"],
         });
+        api.registerAgentStreamingLlmMiddleware((ctx) => ctx.streamFn, {
+          runtimes: ["pi"],
+          priority: 10,
+        });
+        api.registerAgentToolCallMiddleware(async (ctx) => await ctx.execute(ctx.params), {
+          runtimes: ["pi"],
+          priority: 20,
+        });
       },
     });
 
@@ -103,6 +111,12 @@ describe("captured plugin registration", () => {
     expect(captured.textTransforms[0]?.input).toHaveLength(1);
     expect(captured.agentToolResultMiddlewares).toHaveLength(1);
     expect(captured.agentToolResultMiddlewares[0]?.runtimes).toEqual(["codex"]);
+    expect(captured.agentStreamingLlmMiddlewares).toHaveLength(1);
+    expect(captured.agentStreamingLlmMiddlewares[0]?.runtimes).toEqual(["pi"]);
+    expect(captured.agentStreamingLlmMiddlewares[0]?.priority).toBe(10);
+    expect(captured.agentToolCallMiddlewares).toHaveLength(1);
+    expect(captured.agentToolCallMiddlewares[0]?.runtimes).toEqual(["pi"]);
+    expect(captured.agentToolCallMiddlewares[0]?.priority).toBe(20);
     expect(captured.api.registerMemoryEmbeddingProvider).toBeTypeOf("function");
   });
 

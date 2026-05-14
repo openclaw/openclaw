@@ -26,6 +26,7 @@ import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summary.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
+import { wrapStreamFnWithAgentStreamingLlmMiddlewares } from "../../../plugins/agent-streaming-llm-middleware.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../../plugins/command-registry-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../../../plugins/current-plugin-metadata-snapshot.js";
 import { buildAgentHookContextChannelFields } from "../../../plugins/hook-agent-context.js";
@@ -2436,6 +2437,16 @@ export async function runEmbeddedAttempt(
           (error) => idleTimeoutTrigger?.(error),
         );
       }
+      activeSession.agent.streamFn = wrapStreamFnWithAgentStreamingLlmMiddlewares({
+        provider: params.provider,
+        modelId: params.modelId,
+        model: params.model,
+        agentId: sessionAgentId,
+        ...(params.sessionKey && { sessionKey: params.sessionKey }),
+        ...(params.sessionId && { sessionId: params.sessionId }),
+        runId: params.runId,
+        streamFn: activeSession.agent.streamFn,
+      });
       let diagnosticModelCallSeq = 0;
       activeSession.agent.streamFn = wrapStreamFnWithDiagnosticModelCallEvents(
         activeSession.agent.streamFn,

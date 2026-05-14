@@ -15,6 +15,7 @@ import {
 } from "../infra/diagnostic-trace-context.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { executeToolWithAgentToolCallMiddlewares } from "../plugins/agent-tool-call-middleware.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { deriveToolParams } from "../plugins/host-tool-param-parsers.js";
 import { copyPluginToolMeta } from "../plugins/tools.js";
@@ -743,7 +744,16 @@ export function wrapToolWithBeforeToolCallHook(
       });
       const startedAt = Date.now();
       try {
-        const result = await execute(toolCallId, outcome.params, signal, onUpdate);
+        const result = (await executeToolWithAgentToolCallMiddlewares({
+          agentId: ctx?.agentId,
+          ...(ctx?.sessionKey && { sessionKey: ctx.sessionKey }),
+          ...(ctx?.sessionId && { sessionId: ctx.sessionId }),
+          ...(ctx?.runId && { runId: ctx.runId }),
+          toolName: normalizedToolName,
+          ...(toolCallId && { toolCallId }),
+          params: outcome.params,
+          execute: async (nextParams) => await execute(toolCallId, nextParams, signal, onUpdate),
+        })) as Awaited<ReturnType<AnyAgentTool["execute"]>>;
         const durationMs = Date.now() - startedAt;
         await recordLoopOutcome({
           ctx,

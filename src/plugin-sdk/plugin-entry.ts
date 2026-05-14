@@ -2,7 +2,15 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 import type {
   AnyAgentTool,
+  AgentStreamingLlmMiddleware,
+  AgentStreamingLlmMiddlewareContext,
+  AgentStreamingLlmMiddlewareOptions,
+  AgentStreamingLlmMiddlewareRuntime,
   AgentHarness,
+  AgentToolCallMiddleware,
+  AgentToolCallMiddlewareContext,
+  AgentToolCallMiddlewareOptions,
+  AgentToolCallMiddlewareRuntime,
   MediaUnderstandingProviderPlugin,
   MigrationApplyResult,
   MigrationDetection,
@@ -119,7 +127,15 @@ import { createCachedLazyValueGetter } from "./lazy-value.js";
 
 export type {
   AnyAgentTool,
+  AgentStreamingLlmMiddleware,
+  AgentStreamingLlmMiddlewareContext,
+  AgentStreamingLlmMiddlewareOptions,
+  AgentStreamingLlmMiddlewareRuntime,
   AgentHarness,
+  AgentToolCallMiddleware,
+  AgentToolCallMiddlewareContext,
+  AgentToolCallMiddlewareOptions,
+  AgentToolCallMiddlewareRuntime,
   MediaUnderstandingProviderPlugin,
   MigrationApplyResult,
   MigrationDetection,

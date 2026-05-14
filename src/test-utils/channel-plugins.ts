@@ -38,6 +38,8 @@ export const createTestRegistry = (channels: TestChannelRegistration[] = []): Pl
   webSearchProviders: [],
   migrationProviders: [],
   codexAppServerExtensionFactories: [],
+  agentStreamingLlmMiddlewares: [],
+  agentToolCallMiddlewares: [],
   agentToolResultMiddlewares: [],
   memoryEmbeddingProviders: [],
   textTransforms: [],
