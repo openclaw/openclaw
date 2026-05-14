@@ -2068,7 +2068,7 @@ public struct SessionsAbortParams: Codable, Sendable {
     public init(
         key: String?,
         runid: String?,
-        agentid: String?)
+        agentid: String? = nil)
     {
         self.key = key
         self.runid = runid
@@ -2309,7 +2309,7 @@ public struct SessionsUsageParams: Codable, Sendable {
 
     public init(
         key: String?,
-        agentid: String?,
+        agentid: String? = nil,
         startdate: String?,
         enddate: String?,
         mode: AnyCodable?,
@@ -4238,7 +4238,7 @@ public struct ArtifactsListParams: Codable, Sendable {
         sessionkey: String?,
         runid: String?,
         taskid: String?,
-        agentid: String?)
+        agentid: String? = nil)
     {
         self.sessionkey = sessionkey
         self.runid = runid
@@ -4279,7 +4279,7 @@ public struct ArtifactsGetParams: Codable, Sendable {
         sessionkey: String?,
         runid: String?,
         taskid: String?,
-        agentid: String?,
+        agentid: String? = nil,
         artifactid: String)
     {
         self.sessionkey = sessionkey
@@ -4323,7 +4323,7 @@ public struct ArtifactsDownloadParams: Codable, Sendable {
         sessionkey: String?,
         runid: String?,
         taskid: String?,
-        agentid: String?,
+        agentid: String? = nil,
         artifactid: String)
     {
         self.sessionkey = sessionkey
