@@ -41,6 +41,11 @@ describe("stripMarkdown", () => {
     expect(result).not.toContain("`");
     expect(result).toBe("hello");
   });
+  it("preserves inline triple-backtick spans", () => {
+    expect(stripMarkdown("Use ```/approve abc allow-once``` when ready.")).toBe(
+      "Use /approve abc allow-once when ready.",
+    );
+  });
 });
 
 it("does not insert extra blank line when fence is adjacent to surrounding text", () => {

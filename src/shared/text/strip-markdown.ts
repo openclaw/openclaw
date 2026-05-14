@@ -5,11 +5,15 @@
 export function stripMarkdown(text: string): string {
   let result = text;
 
+  // Remove inline triple-backtick spans first so ```value``` keeps its content
+  // instead of being misread as an empty fenced block with `value` as language.
+  result = result.replace(/```([^`\n]+)```/g, "$1");
+
   // Remove fenced code blocks: ```lang\ncode\n``` — must run before inline-code
   // stripping so triple-backtick fences don't get partially consumed.
   // The trailing \n? before the closing fence prevents capturing the final newline
   // so fences embedded in surrounding text don't insert an extra blank line.
-  result = result.replace(/```(?:[^\n]*)\n?([\s\S]*?)\n?```/g, "$1");
+  result = result.replace(/```[^\n`]*\n([\s\S]*?)\n?```/g, "$1");
 
   result = result.replace(/\*\*(.+?)\*\*/g, "$1");
   result = result.replace(/__(.+?)__/g, "$1");
