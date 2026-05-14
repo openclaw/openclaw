@@ -1,6 +1,8 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
 import type {
   ChannelId,
   ChannelMessageActionContext,
@@ -18,6 +20,8 @@ import type { MessagePollResult, MessageSendResult } from "./message.js";
 import { sendMessage, sendPoll } from "./message.js";
 import type { OutboundMirror } from "./mirror.js";
 import { extractToolPayload } from "./tool-payload.js";
+
+const ttsRuntimeLoader = createLazyImportLoader(() => import("../../tts/tts.runtime.js"));
 
 export type OutboundGatewayContext = {
   url?: string;
@@ -250,12 +254,30 @@ export async function executeSendAction(params: {
   sendResult?: MessageSendResult;
 }> {
   throwIfAborted(params.ctx.abortSignal);
-  const defaultPayload: ReplyPayload = params.payload ?? {
+  let defaultPayload: ReplyPayload = params.payload ?? {
     text: params.message,
     mediaUrl: params.mediaUrl,
     mediaUrls: params.mediaUrls,
     audioAsVoice: params.asVoice === true,
   };
+  if (
+    shouldAttemptTtsPayload({
+      cfg: params.ctx.cfg,
+      agentId: params.ctx.agentId,
+      channelId: params.ctx.channel,
+      accountId: params.ctx.requesterAccountId ?? params.ctx.accountId ?? undefined,
+    })
+  ) {
+    const { maybeApplyTtsToPayload } = await ttsRuntimeLoader.load();
+    defaultPayload = await maybeApplyTtsToPayload({
+      payload: defaultPayload,
+      cfg: params.ctx.cfg,
+      channel: params.ctx.channel,
+      kind: "tool",
+      agentId: params.ctx.agentId,
+      accountId: params.ctx.requesterAccountId ?? params.ctx.accountId ?? undefined,
+    });
+  }
   const queuePolicy = params.bestEffort === false ? "required" : "best_effort";
   const preparedPayload = await tryPreparePluginSendPayload({
     ctx: params.ctx,
