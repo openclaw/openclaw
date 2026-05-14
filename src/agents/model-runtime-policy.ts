@@ -6,7 +6,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { listAgentEntries, resolveSessionAgentIds } from "./agent-scope.js";
 import { normalizeProviderId } from "./provider-id.js";
 
-export type ModelRuntimePolicySource = "model" | "provider" | "defaults";
+export type ModelRuntimePolicySource = "model" | "provider" | "agent" | "defaults";
 
 export type ResolvedModelRuntimePolicy = {
   policy?: AgentRuntimePolicyConfig;
@@ -125,6 +125,28 @@ function resolveAgentModelEntryRuntimePolicy(params: {
   return {};
 }
 
+function resolveAgentEntryRuntimePolicy(params: {
+  config?: OpenClawConfig;
+  agentId?: string;
+  sessionKey?: string;
+}): ResolvedModelRuntimePolicy {
+  if (!params.config) {
+    return {};
+  }
+  const { sessionAgentId } = resolveSessionAgentIds({
+    config: params.config,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+  });
+  const agentEntry = listAgentEntries(params.config).find(
+    (entry) => normalizeAgentId(entry.id) === sessionAgentId,
+  );
+  if (hasRuntimePolicy(agentEntry?.agentRuntime)) {
+    return { policy: agentEntry?.agentRuntime, source: "agent" };
+  }
+  return {};
+}
+
 function resolveModelConfig(params: {
   providerConfig?: ModelProviderConfig;
   provider?: string;
@@ -161,6 +183,10 @@ export function resolveModelRuntimePolicy(params: {
   }
   if (hasRuntimePolicy(providerConfig?.agentRuntime)) {
     return { policy: providerConfig?.agentRuntime, source: "provider" };
+  }
+  const agentPolicy = resolveAgentEntryRuntimePolicy(params);
+  if (agentPolicy.policy) {
+    return agentPolicy;
   }
   if (hasRuntimePolicy(params.config?.agents?.defaults?.agentRuntime)) {
     return { policy: params.config?.agents?.defaults?.agentRuntime, source: "defaults" };

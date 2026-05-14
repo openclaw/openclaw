@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
 
@@ -26,12 +27,33 @@ describe("resolveAgentHarnessPolicy", () => {
     ).toStrictEqual({ runtime: "claude-cli", runtimeSource: "defaults" });
   });
 
-  it("keeps provider runtime policy ahead of the default agent runtime", () => {
+  it("uses agents.list[].agentRuntime before the default agent runtime", () => {
     const config = {
       agents: {
         defaults: {
           agentRuntime: { id: "claude-cli" },
         },
+        list: [{ id: "worker", agentRuntime: { id: "codex" } }],
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      resolveAgentHarnessPolicy({
+        provider: "anthropic",
+        modelId: "claude-sonnet-4-6",
+        config,
+        agentId: "worker",
+      }),
+    ).toStrictEqual({ runtime: "codex", runtimeSource: "agent" });
+  });
+
+  it("keeps provider runtime policy ahead of whole-agent fallback runtimes", () => {
+    const config = {
+      agents: {
+        defaults: {
+          agentRuntime: { id: "claude-cli" },
+        },
+        list: [{ id: "worker", agentRuntime: { id: "codex" } }],
       },
       models: {
         providers: {
@@ -49,8 +71,39 @@ describe("resolveAgentHarnessPolicy", () => {
         provider: "anthropic",
         modelId: "claude-sonnet-4-6",
         config,
+        agentId: "worker",
       }),
     ).toStrictEqual({ runtime: "pi", runtimeSource: "provider" });
+  });
+
+  it("keeps provider model runtime policy ahead of whole-agent fallback runtimes", () => {
+    const config = {
+      agents: {
+        defaults: {
+          agentRuntime: { id: "claude-cli" },
+        },
+        list: [{ id: "worker", agentRuntime: { id: "codex" } }],
+      },
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://api.anthropic.com",
+            models: [
+              { id: "claude-sonnet-4-6", agentRuntime: { id: "pi" } } as ModelDefinitionConfig,
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      resolveAgentHarnessPolicy({
+        provider: "anthropic",
+        modelId: "claude-sonnet-4-6",
+        config,
+        agentId: "worker",
+      }),
+    ).toStrictEqual({ runtime: "pi", runtimeSource: "model" });
   });
 
   it("keeps model runtime policy ahead of the default agent runtime", () => {

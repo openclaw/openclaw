@@ -135,7 +135,7 @@ describe("agents_list tool", () => {
     });
   });
 
-  it("honors default agent runtimes while ignoring legacy per-agent runtime overrides", async () => {
+  it("reports per-agent runtime overrides ahead of default agent runtimes", async () => {
     loadConfigMock.mockReturnValue({
       agents: {
         defaults: {
@@ -164,7 +164,7 @@ describe("agents_list tool", () => {
           name: undefined,
           configured: true,
           model: undefined,
-          agentRuntime: { id: "codex", source: "defaults" },
+          agentRuntime: { id: "codex", source: "agent" },
         },
       ],
     });
