@@ -863,12 +863,60 @@ describe("runAgentTurnWithFallback", () => {
     expect(onReasoningStream).not.toHaveBeenCalled();
   });
 
+  it("does not bridge non-Claude CLI assistant events to onReasoningStream", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("codex-cli", "gpt-5.5"),
+      provider: "codex-cli",
+      model: "gpt-5.5",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+        "../../infra/agent-events.js",
+      );
+      realAgentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "assistant",
+        data: { text: "final answer", delta: "final answer" },
+      });
+      return { payloads: [{ text: "final answer" }], meta: {} };
+    });
+
+    const onReasoningStream = vi.fn<NonNullable<GetReplyOptions["onReasoningStream"]>>(
+      async (_payload) => undefined,
+    );
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "codex-cli";
+    followupRun.run.model = "gpt-5.5";
+
+    await runAgentTurnWithFallback({
+      commandBody: "hi",
+      followupRun,
+      sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
+      opts: { onReasoningStream },
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(onReasoningStream).not.toHaveBeenCalled();
+  });
+
   it("does not double-fire onReasoningStream from the bridge when the API/native runtime path is active", async () => {
-    // API/native runtimes get reasoning content from real thinking_delta events
-    // already wired through the embedded harness. The CLI text_delta → reasoning
-    // bridge must be isCliProvider-gated so non-CLI runs don't see assistant
-    // text_delta forwarded as reasoning content (which would duplicate or
-    // pollute the reasoning lane).
     state.isCliProviderMock.mockReturnValue(false);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       result: await params.run("anthropic", "claude-sonnet-4-7"),
@@ -877,9 +925,6 @@ describe("runAgentTurnWithFallback", () => {
       attempts: [],
     }));
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-      // Embedded harness emits assistant agent-events (the same bus the CLI
-      // bridge listens to). On the API path, those must NOT be re-emitted as
-      // reasoning content.
       const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
         "../../infra/agent-events.js",
       );
@@ -925,8 +970,6 @@ describe("runAgentTurnWithFallback", () => {
     });
     await new Promise((resolve) => setImmediate(resolve));
 
-    // The bridge only runs in the CLI gate; the embedded API path does not
-    // call onReasoningStream from assistant text_delta.
     expect(onReasoningStream).not.toHaveBeenCalled();
   });
 
