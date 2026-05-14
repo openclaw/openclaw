@@ -117,13 +117,21 @@ export async function runCliAgent(params: RunCliAgentParams): Promise<EmbeddedPi
     return await runPreparedCliAgent(context);
   } finally {
     if (params.cleanupCliLiveSessionOnRunEnd === true) {
-      const { closeClaudeLiveSessionForContext } =
-        await import("./cli-runner/claude-live-session.js");
-      await closeClaudeLiveSessionForContext(context);
+      try {
+        const { closeClaudeLiveSessionForContext } =
+          await import("./cli-runner/claude-live-session.js");
+        await closeClaudeLiveSessionForContext(context);
+      } catch (err) {
+        log.warn(`CLI live session cleanup failed after run: ${formatErrorMessage(err)}`);
+      }
     }
     if (params.cleanupBundleMcpOnRunEnd === true) {
-      const { closeMcpLoopbackServer } = await import("../gateway/mcp-http.js");
-      await closeMcpLoopbackServer();
+      try {
+        const { closeMcpLoopbackServer } = await import("../gateway/mcp-http.js");
+        await closeMcpLoopbackServer();
+      } catch (err) {
+        log.warn(`bundle MCP loopback cleanup failed after run: ${formatErrorMessage(err)}`);
+      }
     }
   }
 }
