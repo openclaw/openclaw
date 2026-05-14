@@ -15,6 +15,7 @@ import type {
   SessionsListResult,
   SessionsUsageResult,
   SkillStatusReport,
+  WorkspaceBoundaryStatus,
 } from "../types.ts";
 import { renderConnectCommand } from "./connect-command.ts";
 import { renderOverviewAttention } from "./overview-attention.ts";
@@ -41,6 +42,7 @@ export type OverviewProps = {
   cronNext: number | null;
   lastChannelsRefresh: number | null;
   warnQueryToken: boolean;
+  workspaceBoundaryStatus: WorkspaceBoundaryStatus | null;
   // New dashboard data
   modelAuthStatus: ModelAuthStatusResult | null;
   usageResult: SessionsUsageResult | null;
@@ -457,6 +459,7 @@ export function renderOverview(props: OverviewProps) {
       skillsReport: props.skillsReport,
       cronJobs: props.cronJobs,
       cronStatus: props.cronStatus,
+      workspaceBoundaryStatus: props.workspaceBoundaryStatus,
       modelAuthStatus: props.modelAuthStatus,
       presenceCount: props.presenceCount,
       onNavigate: props.onNavigate,

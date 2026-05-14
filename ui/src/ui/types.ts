@@ -765,6 +765,8 @@ export type ModelAuthStatusProvider =
   import("../../../src/gateway/server-methods/models-auth-status.js").ModelAuthStatusProvider;
 export type ModelAuthStatusResult =
   import("../../../src/gateway/server-methods/models-auth-status.js").ModelAuthStatusResult;
+export type WorkspaceBoundaryStatus =
+  import("../../../src/gateway/server-methods/system.js").WorkspaceBoundaryStatus;
 
 export type LogLevel = "trace" | "debug" | "info" | "warn" | "error" | "fatal";
 

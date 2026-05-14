@@ -7,6 +7,7 @@ import { getSafeLocalStorage } from "../../local-storage.ts";
 import { renderOverview, type OverviewProps } from "./overview.ts";
 
 function createOverviewProps(overrides: Partial<OverviewProps> = {}): OverviewProps {
+  const { workspaceBoundaryStatus, ...restOverrides } = overrides;
   return {
     warnQueryToken: false,
     connected: false,
@@ -56,7 +57,8 @@ function createOverviewProps(overrides: Partial<OverviewProps> = {}): OverviewPr
     onRefresh: () => undefined,
     onNavigate: () => undefined,
     onRefreshLogs: () => undefined,
-    ...overrides,
+    ...restOverrides,
+    workspaceBoundaryStatus: workspaceBoundaryStatus ?? null,
   };
 }
 

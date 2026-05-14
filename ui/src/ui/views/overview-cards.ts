@@ -11,6 +11,7 @@ import type {
   CronJob,
   CronStatus,
   ModelAuthStatusResult,
+  WorkspaceBoundaryStatus,
 } from "../types.ts";
 
 export type OverviewCardsProps = {
@@ -19,6 +20,7 @@ export type OverviewCardsProps = {
   skillsReport: SkillStatusReport | null;
   cronJobs: CronJob[];
   cronStatus: CronStatus | null;
+  workspaceBoundaryStatus: WorkspaceBoundaryStatus | null;
   modelAuthStatus: ModelAuthStatusResult | null;
   presenceCount: number;
   onNavigate: (tab: string) => void;
@@ -51,14 +53,14 @@ function renderStatCard(card: StatCard, onNavigate: (tab: string) => void) {
 }
 
 function renderSkeletonCards() {
-  // Render 4 skeletons — matching the always-present cards (cost, sessions,
-  // skills, cron). The Model Auth card is conditional on OAuth providers
+  // Render 5 skeletons — matching the always-present cards (cost, sessions,
+  // skills, cron, workspace boundary). The Model Auth card is conditional on OAuth providers
   // existing, so rendering it in the skeleton would cause a layout shift
   // when real data arrives for a setup without OAuth. Accept a brief empty
   // slot instead for setups that DO have OAuth.
   return html`
     <section class="ov-cards">
-      ${[0, 1, 2, 3].map(
+      ${[0, 1, 2, 3, 4].map(
         (i) => html`
           <div class="ov-card" style="cursor:default;animation-delay:${i * 50}ms">
             <span class="skeleton skeleton-line" style="width:60px;height:10px"></span>
@@ -108,6 +110,31 @@ export function renderOverviewCards(props: OverviewCardsProps) {
         ? t("overview.stats.cronNext", { time: formatNextRun(cronNext) })
         : "";
 
+  const boundaryState = props.workspaceBoundaryStatus?.state ?? "unavailable";
+  const boundaryValueByState: Record<WorkspaceBoundaryStatus["state"], string> = {
+    healthy: "Workspace boundary intact",
+    warning: "Workspace boundary needs review",
+    failed: "Workspace boundary violation detected",
+    unavailable: "Workspace boundary status unavailable",
+  };
+  const boundaryHintByState: Record<WorkspaceBoundaryStatus["state"], string> = {
+    healthy:
+      "Workspace material remains supporting source material and does not outrank canon.",
+    warning:
+      "Boundary posture appears degraded or partially confirmed. Review canonical boundary rules before acting.",
+    failed:
+      "A signal indicates workspace material may be treated outside approved boundary rules. Do not infer authority from workspace state.",
+    unavailable:
+      "Current approved signals are not sufficient to safely determine workspace boundary posture.",
+  };
+
+  const boundaryValue =
+    boundaryState === "failed"
+      ? html`<span class="danger">${boundaryValueByState[boundaryState]}</span>`
+      : boundaryState === "warning"
+        ? html`<span class="warn">${boundaryValueByState[boundaryState]}</span>`
+        : boundaryValueByState[boundaryState];
+
   const cards: StatCard[] = [
     {
       kind: "cost",
@@ -136,6 +163,13 @@ export function renderOverviewCards(props: OverviewCardsProps) {
       label: t("overview.stats.cron"),
       value: cronValue,
       hint: cronHint,
+    },
+    {
+      kind: "workspace-boundary",
+      tab: "overview",
+      label: "Workspace boundary",
+      value: boundaryValue,
+      hint: boundaryHintByState[boundaryState],
     },
   ];
 

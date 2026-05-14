@@ -50,6 +50,10 @@ import {
   type ModelAuthStatusState,
 } from "./controllers/model-auth-status.ts";
 import { loadNodes, type NodesState } from "./controllers/nodes.ts";
+import {
+  loadWorkspaceBoundaryStatusState,
+  type WorkspaceBoundaryStatusState,
+} from "./controllers/workspace-boundary-status.ts";
 import { loadPresence, type PresenceState } from "./controllers/presence.ts";
 import { loadSessions, type SessionsState } from "./controllers/sessions.ts";
 import { loadSkills, type SkillsState } from "./controllers/skills.ts";
@@ -143,6 +147,7 @@ type SettingsAppHost = SettingsHost &
   SessionsState &
   SkillsState &
   ModelAuthStatusState &
+  WorkspaceBoundaryStatusState &
   UsageState & {
     overviewLogCursor: number | null;
     overviewLogLines: string[];
@@ -680,6 +685,7 @@ export async function loadOverview(host: SettingsHost, opts?: { refresh?: boolea
     loadSkills(app),
     loadUsage(app),
     loadOverviewLogs(app),
+    loadWorkspaceBoundaryStatusState(app),
     // `refresh: true` bypasses the gateway's 60s auth-status cache so a
     // user-initiated refresh surfaces post-re-auth state immediately.
     loadModelAuthStatusState(app, { refresh: opts?.refresh }),

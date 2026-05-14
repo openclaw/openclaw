@@ -122,6 +122,7 @@ import type {
   NostrProfile,
   ToolsCatalogResult,
   ToolsEffectiveResult,
+  WorkspaceBoundaryStatus,
 } from "./types.ts";
 import { type ChatAttachment, type ChatQueueItem, type CronFormState } from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
@@ -550,6 +551,10 @@ export class OpenClawApp extends LitElement {
   @state() healthLoading = false;
   @state() healthResult: HealthSummary | null = null;
   @state() healthError: string | null = null;
+
+  @state() workspaceBoundaryStatusLoading = false;
+  @state() workspaceBoundaryStatusResult: WorkspaceBoundaryStatus | null = null;
+  @state() workspaceBoundaryStatusError: string | null = null;
 
   @state() modelAuthStatusLoading = false;
   @state() modelAuthStatusResult: ModelAuthStatusResult | null = null;

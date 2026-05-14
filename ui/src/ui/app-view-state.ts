@@ -44,6 +44,7 @@ import type {
   SkillStatusReport,
   StatusSummary,
   ToolsCatalogResult,
+  WorkspaceBoundaryStatus,
 } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
 import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
@@ -389,6 +390,9 @@ export type AppViewState = {
     healthLoading: boolean;
     healthResult: HealthSummary | null;
     healthError: string | null;
+    workspaceBoundaryStatusLoading: boolean;
+    workspaceBoundaryStatusResult: WorkspaceBoundaryStatus | null;
+    workspaceBoundaryStatusError: string | null;
     modelAuthStatusLoading: boolean;
     modelAuthStatusResult: ModelAuthStatusResult | null;
     modelAuthStatusError: string | null;
