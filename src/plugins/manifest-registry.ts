@@ -55,11 +55,6 @@ import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import type { PluginDependencySpecMap } from "./status-dependencies.js";
 
-/**
- * Resolve a plugin source path, falling back from .ts to .js when the
- * .ts file doesn't exist on disk (e.g. in dist builds where only .js
- * is emitted but the manifest still references the .ts entry).
- */
 function resolvePluginSourcePath(sourcePath: string): string {
   if (fs.existsSync(sourcePath)) {
     return sourcePath;
@@ -71,6 +66,76 @@ function resolvePluginSourcePath(sourcePath: string): string {
     }
   }
   return sourcePath;
+}
+
+function isPluginRootPath(params: {
+  rootPath: string;
+  targetPath: string;
+  rootRealPath: string;
+  targetMustExist?: boolean;
+}): boolean {
+  const resolvedTargetPath = path.resolve(params.targetPath);
+  const resolvedRootPath = path.resolve(params.rootPath);
+  if (!isPathInside(resolvedRootPath, resolvedTargetPath)) {
+    return false;
+  }
+  const targetRealPath = safeRealpathSync(resolvedTargetPath);
+  if (!targetRealPath) {
+    return params.targetMustExist !== true;
+  }
+  return isPathInside(params.rootRealPath, targetRealPath);
+}
+
+function resolveManifestPluginSourcePath(params: {
+  rootDir: string;
+  manifestPath: string;
+  pluginId: string;
+  entryName: "providerCatalogEntry" | "providerDiscoveryEntry";
+  entry: string;
+  diagnostics: PluginDiagnostic[];
+}): string | undefined {
+  const pushDiagnostic = () => {
+    params.diagnostics.push({
+      level: "warn",
+      pluginId: sanitizeForLog(params.pluginId),
+      source: sanitizeForLog(params.manifestPath),
+      message: `plugin manifest ${params.entryName} must resolve inside the plugin root; ignoring entry`,
+    });
+  };
+
+  if (path.isAbsolute(params.entry)) {
+    pushDiagnostic();
+    return undefined;
+  }
+
+  const rootPath = path.resolve(params.rootDir);
+  const rootRealPath = safeRealpathSync(rootPath) ?? rootPath;
+  const sourcePath = path.resolve(rootPath, params.entry);
+  if (
+    !isPluginRootPath({
+      rootPath,
+      targetPath: sourcePath,
+      rootRealPath,
+      targetMustExist: fs.existsSync(sourcePath),
+    })
+  ) {
+    pushDiagnostic();
+    return undefined;
+  }
+
+  const resolvedSourcePath = resolvePluginSourcePath(sourcePath);
+  if (
+    !isPluginRootPath({
+      rootPath,
+      targetPath: resolvedSourcePath,
+      rootRealPath,
+      targetMustExist: fs.existsSync(resolvedSourcePath),
+    })
+  ) {
+    pushDiagnostic();
+    return undefined;
+  }
+  return resolvedSourcePath;
 }
 
 export type PluginManifestContractListKey =
@@ -366,11 +431,24 @@ function buildRecord(params: {
   manifest: PluginManifest;
   candidate: PluginCandidate;
   manifestPath: string;
+  diagnostics: PluginDiagnostic[];
   schemaCacheKey?: string;
   configSchema?: Record<string, unknown>;
   bundledChannelConfigCollector?: BundledChannelConfigCollector;
   trustedOfficialInstall?: boolean;
 }): PluginManifestRecord {
+  const providerSourceEntry =
+    params.manifest.providerCatalogEntry !== undefined
+      ? {
+          entryName: "providerCatalogEntry" as const,
+          entry: params.manifest.providerCatalogEntry,
+        }
+      : params.manifest.providerDiscoveryEntry !== undefined
+        ? {
+            entryName: "providerDiscoveryEntry" as const,
+            entry: params.manifest.providerDiscoveryEntry,
+          }
+        : undefined;
   const manifestChannelConfigs =
     params.candidate.origin === "bundled" && params.bundledChannelConfigCollector
       ? params.bundledChannelConfigCollector({
@@ -413,15 +491,16 @@ function buildRecord(params: {
     kind: params.manifest.kind,
     channels: params.manifest.channels ?? [],
     providers: params.manifest.providers ?? [],
-    providerDiscoverySource:
-      (params.manifest.providerCatalogEntry ?? params.manifest.providerDiscoveryEntry)
-        ? resolvePluginSourcePath(
-            path.resolve(
-              params.candidate.rootDir,
-              params.manifest.providerCatalogEntry ?? params.manifest.providerDiscoveryEntry!,
-            ),
-          )
-        : undefined,
+    providerDiscoverySource: providerSourceEntry
+      ? resolveManifestPluginSourcePath({
+          rootDir: params.candidate.rootDir,
+          manifestPath: params.manifestPath,
+          pluginId: params.manifest.id,
+          entryName: providerSourceEntry.entryName,
+          entry: providerSourceEntry.entry,
+          diagnostics: params.diagnostics,
+        })
+      : undefined,
     modelSupport: params.manifest.modelSupport,
     modelCatalog: params.manifest.modelCatalog,
     modelPricing: params.manifest.modelPricing,
@@ -941,6 +1020,7 @@ export function loadPluginManifestRegistry(
           manifest: manifest as PluginManifest,
           candidate,
           manifestPath: manifestRes.manifestPath,
+          diagnostics,
           schemaCacheKey,
           configSchema,
           trustedOfficialInstall: isTrustedOfficialPluginInstall({
