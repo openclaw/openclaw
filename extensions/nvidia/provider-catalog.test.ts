@@ -40,8 +40,8 @@ describe("nvidia provider catalog", () => {
     expect(provider.models.map((model) => model.id)).toEqual([
       "nvidia/nemotron-3-super-120b-a12b",
       "moonshotai/kimi-k2.5",
-      "minimaxai/minimax-m2.5",
-      "z-ai/glm5",
+      "minimaxai/minimax-m2.7",
+      "z-ai/glm-5.1",
     ]);
     expect(provider.models.filter((model) => model.compat?.requiresStringContent !== true)).toEqual(
       [],
@@ -72,8 +72,7 @@ describe("nvidia provider catalog", () => {
       "z-ai/glm-5.1",
       "nvidia/nemotron-3-super-120b-a12b",
       "moonshotai/kimi-k2.5",
-      "minimaxai/minimax-m2.5",
-      "z-ai/glm5",
+      "minimaxai/minimax-m2.7",
     ]);
     expect(provider.models[0]).toMatchObject({
       name: "GLM 5.1",
@@ -100,8 +99,8 @@ describe("nvidia provider catalog", () => {
     expect(provider.models.map((model) => model.id)).toEqual([
       "nvidia/nemotron-3-super-120b-a12b",
       "moonshotai/kimi-k2.5",
-      "minimaxai/minimax-m2.5",
-      "z-ai/glm5",
+      "minimaxai/minimax-m2.7",
+      "z-ai/glm-5.1",
     ]);
   });
 
@@ -135,8 +134,7 @@ describe("nvidia provider catalog", () => {
       "minimaxai/minimax-m2.7",
       "nvidia/nemotron-3-super-120b-a12b",
       "moonshotai/kimi-k2.5",
-      "minimaxai/minimax-m2.5",
-      "z-ai/glm5",
+      "z-ai/glm-5.1",
     ]);
   });
 

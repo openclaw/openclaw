@@ -203,8 +203,8 @@ describe("nvidia provider hooks", () => {
     expect(entries?.map((entry) => entry.id)).toEqual([
       "nvidia/nemotron-3-super-120b-a12b",
       "moonshotai/kimi-k2.5",
-      "minimaxai/minimax-m2.5",
-      "z-ai/glm5",
+      "minimaxai/minimax-m2.7",
+      "z-ai/glm-5.1",
     ]);
     expect(entries?.every((entry) => entry.provider === "nvidia")).toBe(true);
     expect(ssrfRuntimeMocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
@@ -219,8 +219,8 @@ describe("nvidia provider hooks", () => {
     expect(entries?.map((entry) => entry.id)).toEqual([
       "nvidia/nemotron-3-super-120b-a12b",
       "moonshotai/kimi-k2.5",
-      "minimaxai/minimax-m2.5",
-      "z-ai/glm5",
+      "minimaxai/minimax-m2.7",
+      "z-ai/glm-5.1",
     ]);
     expect(entries?.every((entry) => entry.provider === "nvidia")).toBe(true);
     expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
@@ -245,8 +245,7 @@ describe("nvidia provider hooks", () => {
       "minimaxai/minimax-m2.7",
       "nvidia/nemotron-3-super-120b-a12b",
       "moonshotai/kimi-k2.5",
-      "minimaxai/minimax-m2.5",
-      "z-ai/glm5",
+      "z-ai/glm-5.1",
     ]);
   });
 
@@ -291,8 +290,8 @@ describe("nvidia provider hooks", () => {
     expect(staticRows?.map((entry) => `${entry.source}:${entry.provider}/${entry.model}`)).toEqual([
       "static:nvidia/nvidia/nemotron-3-super-120b-a12b",
       "static:nvidia/moonshotai/kimi-k2.5",
-      "static:nvidia/minimaxai/minimax-m2.5",
-      "static:nvidia/z-ai/glm5",
+      "static:nvidia/minimaxai/minimax-m2.7",
+      "static:nvidia/z-ai/glm-5.1",
     ]);
 
     await expect(catalogProvider?.liveCatalog?.(buildCatalogContext())).resolves.toEqual([]);
@@ -302,8 +301,7 @@ describe("nvidia provider hooks", () => {
       "live:nvidia/minimaxai/minimax-m2.7",
       "live:nvidia/nvidia/nemotron-3-super-120b-a12b",
       "live:nvidia/moonshotai/kimi-k2.5",
-      "live:nvidia/minimaxai/minimax-m2.5",
-      "live:nvidia/z-ai/glm5",
+      "live:nvidia/z-ai/glm-5.1",
     ]);
   });
 });

@@ -58,8 +58,8 @@
             }
           },
           {
-            "id": "minimaxai/minimax-m2.5",
-            "name": "MiniMax M2.5",
+            "id": "minimaxai/minimax-m2.7",
+            "name": "Minimax M2.7",
             "input": ["text"],
             "contextWindow": 196608,
             "maxTokens": 8192,
@@ -74,8 +74,8 @@
             }
           },
           {
-            "id": "z-ai/glm5",
-            "name": "GLM-5",
+            "id": "z-ai/glm-5.1",
+            "name": "GLM 5.1",
             "input": ["text"],
             "contextWindow": 202752,
             "maxTokens": 8192,

@@ -80,8 +80,8 @@ bundled catalog below.
 | ------------------------------------------ | ---------------------------- | ------- | ---------- |
 | `nvidia/nvidia/nemotron-3-super-120b-a12b` | NVIDIA Nemotron 3 Super 120B | 262,144 | 8,192      |
 | `nvidia/moonshotai/kimi-k2.5`              | Kimi K2.5                    | 262,144 | 8,192      |
-| `nvidia/minimaxai/minimax-m2.5`            | Minimax M2.5                 | 196,608 | 8,192      |
-| `nvidia/z-ai/glm5`                         | GLM 5                        | 202,752 | 8,192      |
+| `nvidia/minimaxai/minimax-m2.7`            | Minimax M2.7                 | 196,608 | 8,192      |
+| `nvidia/z-ai/glm-5.1`                      | GLM 5.1                      | 202,752 | 8,192      |
 
 ## Advanced configuration
 
