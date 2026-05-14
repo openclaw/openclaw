@@ -331,6 +331,7 @@ export async function executeSendAction(params: {
   const result = await sendCoreMessage({
     ...params,
     queuePolicy,
+    payloads: [defaultPayload],
   });
 
   return {
