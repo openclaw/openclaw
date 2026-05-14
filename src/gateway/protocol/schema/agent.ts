@@ -182,6 +182,9 @@ export const AgentParamsSchema = Type.Object(
     voiceWakeTrigger: Type.Optional(Type.String()),
     idempotencyKey: NonEmptyString,
     label: Type.Optional(SessionLabelString),
+    // Forward-compat: external clients (e.g. Paperclip's openclaw-gateway adapter)
+    // attach an opaque integration payload here. Gateway ignores its content.
+    paperclip: Type.Optional(Type.Unknown()),
   },
   { additionalProperties: false },
 );
