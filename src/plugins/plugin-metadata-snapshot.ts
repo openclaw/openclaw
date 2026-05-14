@@ -336,7 +336,7 @@ function resolvePersistedRegistryFastMemoFingerprint(params: {
   env: NodeJS.ProcessEnv;
   preferPersisted?: boolean;
   stateDir?: string;
-}): unknown {
+}): Record<string, unknown> {
   const disabledByEnv = params.env.OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY?.trim().toLowerCase();
   const disabled =
     params.preferPersisted === false ||
