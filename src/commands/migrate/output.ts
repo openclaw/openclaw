@@ -39,7 +39,7 @@ const ITEM_GROUPS: ItemGroup[] = [
   { kind: "memory", heading: "Memory:" },
   { kind: "secret", heading: "Secrets:" },
   { kind: "archive", heading: "Archive:" },
-  { kind: "manual", heading: "Manual review:" },
+  { kind: "manual", heading: "🔍 Manual review:" },
 ];
 
 const HIDDEN_KINDS = new Set(["config"]);
