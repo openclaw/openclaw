@@ -9,6 +9,10 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import {
+  materializeWindowsSpawnProgram,
+  resolveWindowsSpawnProgram,
+} from "openclaw/plugin-sdk/windows-spawn";
 import { formatCodexDisplayText } from "./command-formatters.js";
 
 export const CODEX_CLI_SESSIONS_LIST_COMMAND = "codex.cli.sessions.list";
@@ -46,6 +50,18 @@ type CodexCliSessionNodeInfo = {
   remoteIp?: string;
   connected?: boolean;
   commands?: string[];
+};
+
+type CodexCliResumeSpawnRuntime = {
+  platform: NodeJS.Platform;
+  env: NodeJS.ProcessEnv;
+  execPath: string;
+};
+
+const DEFAULT_RESUME_SPAWN_RUNTIME: CodexCliResumeSpawnRuntime = {
+  platform: process.platform,
+  env: process.env,
+  execPath: process.execPath,
 };
 
 export function createCodexCliSessionNodeHostCommands(): OpenClawPluginNodeHostCommand[] {
@@ -249,10 +265,17 @@ async function runCodexExecResume(params: {
       params.sessionId,
       "-",
     ];
-    const child = spawn("codex", args, {
+    const invocation = resolveCodexCliResumeSpawnInvocation(args, {
+      platform: process.platform,
+      env: process.env,
+      execPath: process.execPath,
+    });
+    const child = spawn(invocation.command, invocation.args, {
       cwd: params.cwd || process.cwd(),
       stdio: ["pipe", "pipe", "pipe"],
       env: process.env,
+      shell: invocation.shell,
+      windowsHide: invocation.windowsHide,
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
@@ -290,6 +313,26 @@ async function runCodexExecResume(params: {
   } finally {
     await fs.rm(path.dirname(outputPath), { recursive: true, force: true });
   }
+}
+
+export function resolveCodexCliResumeSpawnInvocation(
+  args: string[],
+  runtime: CodexCliResumeSpawnRuntime = DEFAULT_RESUME_SPAWN_RUNTIME,
+): { command: string; args: string[]; shell?: boolean; windowsHide?: boolean } {
+  const program = resolveWindowsSpawnProgram({
+    command: "codex",
+    platform: runtime.platform,
+    env: runtime.env,
+    execPath: runtime.execPath,
+    packageName: "@openai/codex",
+  });
+  const resolved = materializeWindowsSpawnProgram(program, args);
+  return {
+    command: resolved.command,
+    args: resolved.argv,
+    shell: resolved.shell,
+    windowsHide: resolved.windowsHide,
+  };
 }
 
 async function readHistorySessions(
