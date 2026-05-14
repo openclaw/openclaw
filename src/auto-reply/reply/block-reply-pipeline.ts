@@ -1,4 +1,7 @@
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import {
+  hasOutboundReplyContent,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "../../globals.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
@@ -233,8 +236,12 @@ export function createBlockReplyPipeline(params: {
     if (bufferPayload(payload)) {
       return;
     }
-    const hasMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
-    if (hasMedia) {
+    const reply = resolveSendableOutboundReplyParts(payload);
+    const hasNonTextContent = hasOutboundReplyContent(
+      { ...payload, text: undefined },
+      { trimText: true },
+    );
+    if (reply.hasMedia || hasNonTextContent) {
       void coalescer?.flush({ force: true });
       sendPayload(payload, /* bypassSeenCheck */ false);
       return;

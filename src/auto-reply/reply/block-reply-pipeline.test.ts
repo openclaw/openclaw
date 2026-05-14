@@ -167,6 +167,31 @@ describe("createBlockReplyPipeline dedup with threading", () => {
     expect(sent).toHaveLength(2);
   });
 
+  it("bypasses text coalescing for rich-only payloads", async () => {
+    const sent: Array<{ presentation?: unknown }> = [];
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async (payload) => {
+        sent.push({ presentation: payload.presentation });
+      },
+      timeoutMs: 5000,
+      coalescing: {
+        minChars: 1,
+        maxChars: 200,
+        idleMs: 0,
+        joiner: "\n\n",
+      },
+    });
+
+    const presentation = {
+      blocks: [{ type: "buttons" as const, buttons: [{ label: "Open", value: "open" }] }],
+    };
+
+    pipeline.enqueue({ presentation });
+    await pipeline.flush({ force: true });
+
+    expect(sent).toEqual([{ presentation }]);
+  });
+
   it("does not track media when text-only blocks are delivered", async () => {
     const pipeline = createBlockReplyPipeline({
       onBlockReply: async () => {},
