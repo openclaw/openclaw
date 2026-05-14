@@ -142,6 +142,7 @@ import {
 import {
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
   DEFAULT_REASONING_ONLY_RETRY_LIMIT,
+  EMPTY_RESPONSE_RETRY_INSTRUCTION,
   resolveAckExecutionFastPathInstruction,
   resolveAttemptReplayMetadata,
   extractPlanningOnlyPlanDetails,
@@ -2872,8 +2873,8 @@ export async function runEmbeddedPiAgent(
           // and zero output tokens AND empty content after a successful
           // tool-call sequence, producing no user-visible text at all. This
           // path is narrower than the empty-response continuation retry:
-          // same prompt, same session transcript (tool results already
-          // captured), no instruction injection. Placed before the
+          // same session transcript (tool results already captured) with an
+          // explicit visible-answer continuation instruction. Placed before the
           // incompleteTurnText return so it actually gets a chance to fire.
           //
           // Content-empty guard: a reasoning-only error (content has thinking
@@ -2899,6 +2900,7 @@ export async function runEmbeddedPiAgent(
             emptyErrorRetries < MAX_EMPTY_ERROR_RETRIES
           ) {
             emptyErrorRetries += 1;
+            emptyResponseRetryInstruction = EMPTY_RESPONSE_RETRY_INSTRUCTION;
             log.warn(
               `[empty-error-retry] stopReason=error output=0; resubmitting ` +
                 `attempt=${emptyErrorRetries}/${MAX_EMPTY_ERROR_RETRIES} ` +

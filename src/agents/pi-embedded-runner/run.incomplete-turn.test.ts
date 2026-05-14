@@ -450,7 +450,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expectWarnMessageWith("reasoning-only assistant turn detected");
   });
 
-  it("returns NO_REPLY without retrying reasoning-only assistant turns when silence is allowed", async () => {
+  it("retries reasoning-only assistant turns with an instruction even when silence is allowed", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
@@ -471,7 +471,20 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
       }),
     );
 
-    const result = await runEmbeddedPiAgent({
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Visible answer after reasoning-only retry."],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          content: [{ type: "text", text: "Visible answer after reasoning-only retry." }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    await runEmbeddedPiAgent({
       ...overflowBaseRunParams,
       allowEmptyAssistantReplyAsSilent: true,
       provider: "openai-codex",
@@ -479,14 +492,11 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
       runId: "run-reasoning-only-silent",
     });
 
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-    const onlyCall = runAttemptCall(0);
-    expect(onlyCall.prompt).not.toContain(REASONING_ONLY_RETRY_INSTRUCTION);
-    expect(onlyCall.prompt).not.toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
-    expectNoWarnMessageWith("reasoning-only assistant turn detected");
-    expect(result.payloads).toEqual([{ text: "NO_REPLY" }]);
-    expect(result.meta.terminalReplyKind).toBe("silent-empty");
-    expect(result.meta.livenessState).toBe("working");
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    const secondCall = runAttemptCall(1);
+    expect(secondCall.prompt).toContain(REASONING_ONLY_RETRY_INSTRUCTION);
+    expect(secondCall.prompt).not.toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+    expectWarnMessageWith("reasoning-only assistant turn detected");
   });
 
   it("does not retry or warn on reasoning-only turns when a messaging tool already delivered", async () => {
@@ -815,6 +825,60 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     const secondCall = runAttemptCall(1);
     expect(secondCall.prompt).toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
     expectWarnMessageWith("empty response detected");
+  });
+
+  it("retries zero-output empty error turns with a visible-answer instruction", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "error",
+          provider: "ollama",
+          model: "glm-5.1",
+          content: [],
+          usage: {
+            input: 2048,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 2048,
+          },
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Visible answer after empty error retry."],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "ollama",
+          model: "glm-5.1",
+          content: [{ type: "text", text: "Visible answer after empty error retry." }],
+          usage: {
+            input: 2300,
+            output: 8,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 2308,
+          },
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "ollama",
+      model: "glm-5.1",
+      runId: "run-empty-error-continuation",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    const secondCall = runAttemptCall(1);
+    expect(secondCall.prompt).toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+    expectWarnMessageWith("[empty-error-retry]");
   });
 
   it("surfaces an error after exhausting empty-response retries", async () => {
@@ -1825,7 +1889,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     ).toBe(false);
   });
 
-  it("treats reasoning-only assistant turns as silent only when the caller allows it", () => {
+  it("does not treat reasoning-only assistant turns as silent even when the caller allows it", () => {
     const attempt = makeAttemptResult({
       assistantTexts: [],
       lastAssistant: {
@@ -1851,7 +1915,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
         timedOut: false,
         attempt,
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       shouldTreatEmptyAssistantReplyAsSilent({
         allowEmptyAssistantReplyAsSilent: false,

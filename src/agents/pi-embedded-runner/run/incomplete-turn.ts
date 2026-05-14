@@ -470,7 +470,16 @@ function isNonVisibleAssistantTurnEligibleForSilentReply(params: {
   ) {
     return false;
   }
-  return isReasoningOnlyAssistantTurn(assistant);
+
+  // A signed-thinking-only assistant message means the model produced hidden
+  // reasoning but failed to emit visible text. Treating that as silent drops the
+  // only model-visible recovery signal and can make the next attempt look like
+  // a byte-identical retry/discard. Let the reasoning-only retry guard inject
+  // REASONING_ONLY_RETRY_INSTRUCTION instead.
+  if (isReasoningOnlyAssistantTurn(assistant)) {
+    return false;
+  }
+  return false;
 }
 
 function shouldSkipPlanningOnlyRetry(params: {
