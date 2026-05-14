@@ -232,6 +232,45 @@ describe("web search runtime", () => {
     });
   });
 
+  it("auto-detects a provider from legacy top-level search credentials", async () => {
+    const legacyApiKey = "legacy-config-key"; // pragma: allowlist secret
+    const provider = createWebSearchTestProvider({
+      pluginId: "legacy-search",
+      id: "legacy",
+      credentialPath: "tools.web.search.apiKey",
+      autoDetectOrder: 1,
+      getCredentialValue: (searchConfig) => searchConfig?.apiKey,
+      createTool: ({ searchConfig }) => ({
+        description: "legacy",
+        parameters: {},
+        execute: async (args) => ({
+          ...args,
+          apiKey: searchConfig?.apiKey,
+        }),
+      }),
+    });
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([provider]);
+    resolvePluginWebSearchProvidersMock.mockReturnValue([provider]);
+
+    await expect(
+      runWebSearch({
+        config: {
+          tools: {
+            web: {
+              search: {
+                apiKey: legacyApiKey,
+              },
+            },
+          },
+        },
+        args: { query: "legacy" },
+      }),
+    ).resolves.toEqual({
+      provider: "legacy",
+      result: { query: "legacy", apiKey: legacyApiKey },
+    });
+  });
+
   it("auto-detects a provider from a configured credential fallback", async () => {
     const provider = createCustomSearchProvider({
       getConfiguredCredentialFallback: (config) => {

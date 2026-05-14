@@ -1094,8 +1094,8 @@ describe("runtime web tools resolution", () => {
     expect(resolvePluginWebSearchProvidersMock).not.toHaveBeenCalled();
   });
 
-  it("does not auto-detect from legacy top-level web search apiKey", async () => {
-    const { metadata } = await runRuntimeWebTools({
+  it("auto-detects from legacy top-level web search apiKey", async () => {
+    const { metadata, resolvedConfig } = await runRuntimeWebTools({
       config: asConfig({
         tools: {
           web: {
@@ -1106,13 +1106,17 @@ describe("runtime web tools resolution", () => {
         },
       }),
       env: {
-        LEGACY_WEB_SEARCH_REF: "legacy-web-search-key",
+        LEGACY_WEB_SEARCH_REF: "legacy-web-search-key", // pragma: allowlist secret
       },
     });
 
-    expect(metadata.search.selectedProvider).toBe("duckduckgo");
+    expect(metadata.search.selectedProvider).toBe("brave");
+    expect(metadata.search.selectedProviderKeySource).toBe("secretRef");
+    expect(metadata.search.providerSource).toBe("auto-detect");
+    expect(readProviderKey(resolvedConfig, "brave")).toBe("legacy-web-search-key");
     expect(resolveManifestContractPluginIdsByCompatibilityRuntimePathMock).not.toHaveBeenCalled();
     expect(resolveBundledExplicitWebSearchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
+    expect(resolveBundledWebSearchProvidersFromPublicArtifactsMock).toHaveBeenCalled();
     expect(resolvePluginWebSearchProvidersMock).not.toHaveBeenCalled();
   });
 

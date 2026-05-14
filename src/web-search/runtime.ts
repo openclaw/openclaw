@@ -88,8 +88,9 @@ function hasEntryCredential(
     provider,
     config,
     toolConfig: search as Record<string, unknown> | undefined,
-    resolveRawValue: ({ provider: currentProvider, config: currentConfig }) =>
-      currentProvider.getConfiguredCredentialValue?.(currentConfig),
+    resolveRawValue: ({ provider: currentProvider, config: currentConfig, toolConfig }) =>
+      currentProvider.getConfiguredCredentialValue?.(currentConfig) ??
+      currentProvider.getCredentialValue(toolConfig),
     resolveFallbackRawValue: ({ provider: currentProvider, config: currentConfig }) =>
       currentProvider.getConfiguredCredentialFallback?.(currentConfig)?.value,
     resolveEnvValue: ({ provider: currentProvider, configuredEnvVarId }) =>
