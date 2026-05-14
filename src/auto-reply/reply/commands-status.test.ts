@@ -830,7 +830,8 @@ describe("buildStatusReply subagent summary", () => {
         models: {
           providers: {
             openai: {
-              models: [{ id: "gpt-5.5", contextWindow: 400_000 }],
+              baseUrl: "https://api.openai.com/v1",
+              models: [{ ...codexStatusModel, contextWindow: 400_000 }],
             },
             "openai-codex": {
               baseUrl: "https://chatgpt.com/backend-api/codex",
