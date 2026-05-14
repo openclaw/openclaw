@@ -201,7 +201,7 @@ If the same package is available on both ClawHub and npm, use the explicit
 
 - [Plugins](/tools/plugin) - install, configure, restart, and troubleshoot
 - [`openclaw plugins`](/cli/plugins) - full CLI reference
-- [Community plugins](/plugins/community) - public discovery and submission rules
+- [Community plugins](/plugins/community) - public discovery and ClawHub publishing
 - [ClawHub](/clawhub/cli) - registry CLI operations
 - [Building plugins](/plugins/building-plugins) - create a plugin package
 - [Plugin manifest](/plugins/manifest) - manifest and package metadata
