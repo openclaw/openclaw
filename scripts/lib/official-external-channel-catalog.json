@@ -122,6 +122,43 @@
       }
     },
     {
+      "name": "@dingtalk-real-ai/dingtalk-connector",
+      "description": "Official OpenClaw DingTalk channel plugin by the DingTalk team.",
+      "source": "external",
+      "kind": "channel",
+      "openclaw": {
+        "plugin": {
+          "id": "dingtalk-connector",
+          "label": "DingTalk"
+        },
+        "channel": {
+          "id": "dingtalk-connector",
+          "label": "DingTalk",
+          "selectionLabel": "DingTalk (钉钉)",
+          "detailLabel": "DingTalk",
+          "docsPath": "/plugins/community#dingtalk",
+          "docsLabel": "dingtalk-connector",
+          "blurb": "Enterprise DingTalk bot via Stream mode with AI Card streaming.",
+          "aliases": ["dd", "ding", "dingtalk"],
+          "order": 36
+        },
+        "channelConfigs": {
+          "dingtalk-connector": {
+            "label": "DingTalk",
+            "description": "DingTalk enterprise bot conversation channel.",
+            "schema": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        },
+        "install": {
+          "npmSpec": "@dingtalk-real-ai/dingtalk-connector",
+          "defaultChoice": "npm"
+        }
+      }
+    },
+    {
       "name": "@openclaw/discord",
       "description": "OpenClaw Discord channel plugin",
       "source": "official",
