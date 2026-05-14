@@ -294,6 +294,7 @@ You can wait on more than just time/text:
   - `openclaw browser wait --url "**/dash"`
 - Wait for load state:
   - `openclaw browser wait --load networkidle`
+  - `--load networkidle` is supported on managed and remote-CDP profiles. Existing-session profiles only support `load` and `domcontentloaded` for `--load`.
 - Wait for a JS predicate:
   - `openclaw browser wait --fn "window.ready===true"`
 - Wait for a selector to become visible:
