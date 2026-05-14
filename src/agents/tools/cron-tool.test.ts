@@ -12,6 +12,7 @@ vi.mock("../agent-scope.js", async () => {
   };
 });
 
+import { buildAgentPeerSessionKey } from "../../routing/session-key.js";
 import { createCronTool } from "./cron-tool.js";
 
 describe("cron tool", () => {
@@ -821,6 +822,53 @@ describe("cron tool", () => {
       accountId: "bot-a",
       threadId: "$RootEvent:Example.Org",
     });
+  });
+
+  it("does not surface lowercased LINE recipients when current delivery context is unavailable (#81628)", async () => {
+    // Reproduces openclaw/openclaw#81628. LINE chat IDs are case-sensitive — push
+    // requires capital C/U/R; lowercased recipients return HTTP 400. The runtime
+    // already lowercases LINE peer IDs when canonicalizing the session key, and
+    // when the delivery-recovery / post-reply-token-expiry push path is missing
+    // currentDeliveryContext, inferDeliveryFromSessionKey lifts the lowercased
+    // fragment straight into delivery.to.
+    const sessionKey = buildAgentPeerSessionKey({
+      agentId: "main",
+      channel: "line",
+      peerKind: "group",
+      peerId: "Cabcdef0123456789abcdef0123456789",
+    });
+    expect(sessionKey).toBe("agent:main:line:group:cabcdef0123456789abcdef0123456789");
+
+    const delivery = await executeAddAndReadDelivery({
+      callId: "call-line-group-no-context-81628",
+      agentSessionKey: sessionKey,
+      // Intentionally no currentDeliveryContext — emulates the delivery-recovery
+      // boundary that reloads queued entries from disk after the reply token has
+      // expired.
+    });
+
+    expect(delivery?.to).toBeUndefined();
+  });
+
+  it("does not surface lowercased LINE DM recipients with per-account-channel-peer scope (#81628)", async () => {
+    const sessionKey = buildAgentPeerSessionKey({
+      agentId: "main",
+      channel: "line",
+      peerKind: "direct",
+      accountId: "primary",
+      dmScope: "per-account-channel-peer",
+      peerId: "Uabcdef0123456789abcdef0123456789",
+    });
+    expect(sessionKey).toBe(
+      "agent:main:line:primary:direct:uabcdef0123456789abcdef0123456789",
+    );
+
+    const delivery = await executeAddAndReadDelivery({
+      callId: "call-line-direct-no-context-81628",
+      agentSessionKey: sessionKey,
+    });
+
+    expect(delivery?.to).toBeUndefined();
   });
 
   it("does not let current delivery context override explicit delivery targets", async () => {
