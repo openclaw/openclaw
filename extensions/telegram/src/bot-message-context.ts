@@ -1,4 +1,4 @@
-import type { ReactionTypeEmoji } from "@grammyjs/types";
+import type { ReactionType, ReactionTypeEmoji } from "@grammyjs/types";
 import {
   resolveAckReaction,
   shouldAckReaction as shouldAckReactionGate,
@@ -146,10 +146,23 @@ export const buildTelegramMessageContext = async ({
   const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
   const senderId = msg.from?.id ? String(msg.from.id) : "";
   const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
-  const reactionApi =
+  const rawReactionApi =
     typeof bot.api.setMessageReaction === "function"
       ? bot.api.setMessageReaction.bind(bot.api)
       : null;
+  const reactionApi = rawReactionApi
+    ? async (chatId: number | string, messageId: number, reactions: ReactionType[]) => {
+        try {
+          await rawReactionApi(chatId, messageId, reactions);
+        } catch (err: unknown) {
+          const msg = String(err);
+          if (/REACTION_INVALID/i.test(msg)) {
+            return;
+          }
+          throw err;
+        }
+      }
+    : null;
   const getChatApi =
     typeof bot.api.getChat === "function"
       ? (bot.api.getChat.bind(bot.api) as TelegramGetChat)
