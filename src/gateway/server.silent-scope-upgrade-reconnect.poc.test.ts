@@ -250,15 +250,14 @@ describe("gateway silent scope-upgrade reconnect", () => {
     });
 
     try {
-      await expect(
-        callGateway({
-          url: `ws://127.0.0.1:${started.port}`,
-          token: "secret",
-          method: "health",
-          scopes: ["operator.admin"],
-          timeoutMs: 2_000,
-        }),
-      ).resolves.toMatchObject({ ok: true });
+      const health = await callGateway({
+        url: `ws://127.0.0.1:${started.port}`,
+        token: "secret",
+        method: "health",
+        scopes: ["operator.admin"],
+        timeoutMs: 2_000,
+      });
+      expect(health.ok).toBe(true);
 
       const paired = await getPairedDevice(identity.deviceId);
       expect(paired?.approvedScopes).toEqual(["operator.read"]);
@@ -402,7 +401,7 @@ describe("gateway silent scope-upgrade reconnect", () => {
       expect((requested.error as Error).message).toContain("timeout");
 
       const pending = await devicePairingModule.listDevicePairing();
-      expect(pending.pending).toEqual([]);
+      expect(pending.pending).toStrictEqual([]);
     } finally {
       approveSpy.mockRestore();
       ws?.close();
@@ -443,7 +442,7 @@ describe("gateway silent scope-upgrade reconnect", () => {
 
       expect(res.ok).toBe(false);
       expect(res.error?.message).toBe("pairing required: device is not approved yet");
-      expect(replacementRequestId).toEqual(expect.any(String));
+      expect(replacementRequestId).toBeTypeOf("string");
       expect(replacementRequestId.length).toBeGreaterThan(0);
       expect(
         (res.error?.details as { requestId?: unknown; code?: string } | undefined)?.requestId,

@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -53,6 +53,16 @@ function installCompactRuntimeSpy() {
       details: undefined,
     },
   });
+}
+
+function requireCompactRuntimeParams(callIndex: number): Record<string, unknown> {
+  const params = compactEmbeddedPiSessionDirectMock.mock.calls[callIndex]?.[0] as
+    | Record<string, unknown>
+    | undefined;
+  if (!params) {
+    throw new Error(`missing compact runtime call ${callIndex}`);
+  }
+  return params;
 }
 
 // ---------------------------------------------------------------------------
@@ -398,11 +408,8 @@ describe("Engine contract tests", () => {
       },
     });
 
-    expect(compactRuntimeSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        currentTokenCount: 277403,
-      }),
-    );
+    expect(compactRuntimeSpy).toHaveBeenCalledTimes(1);
+    expect(requireCompactRuntimeParams(0).currentTokenCount).toBe(277403);
   });
 
   it("delegateCompactionToRuntime reuses the legacy runtime bridge", async () => {
@@ -417,15 +424,13 @@ describe("Engine contract tests", () => {
       },
     });
 
-    expect(compactRuntimeSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: "s2",
-        sessionFile: "/tmp/session.json",
-        tokenBudget: 4096,
-        currentTokenCount: 12345,
-        workspaceDir: "/tmp/workspace",
-      }),
-    );
+    expect(compactRuntimeSpy).toHaveBeenCalledTimes(1);
+    const compactRuntimeParams = requireCompactRuntimeParams(0);
+    expect(compactRuntimeParams.sessionId).toBe("s2");
+    expect(compactRuntimeParams.sessionFile).toBe("/tmp/session.json");
+    expect(compactRuntimeParams.tokenBudget).toBe(4096);
+    expect(compactRuntimeParams.currentTokenCount).toBe(12345);
+    expect(compactRuntimeParams.workspaceDir).toBe("/tmp/workspace");
     expect(result).toEqual({
       ok: true,
       compacted: false,
@@ -849,7 +854,8 @@ describe("Invalid engine fallback", () => {
         name: "missing registration",
         engineId: uniqueEngineId("does-not-exist"),
         register: () => undefined,
-        expectedError: "does-not-exist",
+        expectedError: (engineId: string) =>
+          `[context-engine] Context engine "${engineId}" is not registered; falling back to default engine "legacy".`,
       },
       {
         name: "factory throws",
@@ -859,7 +865,8 @@ describe("Invalid engine fallback", () => {
             throw new Error("plugin version mismatch");
           });
         },
-        expectedError: "plugin version mismatch",
+        expectedError: (engineId: string) =>
+          `[context-engine] Context engine "${engineId}" factory threw during resolution: plugin version mismatch; falling back to default engine "legacy".`,
       },
       {
         name: "missing info metadata",
@@ -881,7 +888,8 @@ describe("Invalid engine fallback", () => {
               }) as unknown as ContextEngine,
           );
         },
-        expectedError: "missing info",
+        expectedError: (engineId: string) =>
+          `[context-engine] Context engine "${engineId}" factory returned an invalid ContextEngine: missing info.; falling back to default engine "legacy".`,
       },
       {
         name: "missing lifecycle methods",
@@ -898,7 +906,8 @@ describe("Invalid engine fallback", () => {
               }) as unknown as ContextEngine,
           );
         },
-        expectedError: "missing assemble(), missing compact()",
+        expectedError: (engineId: string) =>
+          `[context-engine] Context engine "${engineId}" factory returned an invalid ContextEngine: missing assemble(), missing compact().; falling back to default engine "legacy".`,
       },
       {
         name: "contract validation throws",
@@ -906,7 +915,8 @@ describe("Invalid engine fallback", () => {
         register: (engineId: string) => {
           registerContextEngine(engineId, () => 42n as unknown as ContextEngine);
         },
-        expectedError: "contract validation threw",
+        expectedError: (engineId: string) =>
+          `[context-engine] Context engine "${engineId}" contract validation threw: Do not know how to serialize a BigInt; falling back to default engine "legacy".`,
       },
     ] as const;
 
@@ -918,7 +928,7 @@ describe("Invalid engine fallback", () => {
 
       expect(engine.info.id, testCase.name).toBe("legacy");
       expect(console.error, testCase.name).toHaveBeenCalledWith(
-        expect.stringContaining(testCase.expectedError),
+        testCase.expectedError(testCase.engineId),
       );
     }
   });
@@ -1127,8 +1137,8 @@ describe("Initialization guard", () => {
   it("ensureContextEnginesInitialized() is idempotent and registers legacy", async () => {
     const { ensureContextEnginesInitialized } = await import("./init.js");
 
-    expect(() => ensureContextEnginesInitialized()).not.toThrow();
-    expect(() => ensureContextEnginesInitialized()).not.toThrow();
+    expect(ensureContextEnginesInitialized()).toBeUndefined();
+    expect(ensureContextEnginesInitialized()).toBeUndefined();
 
     const ids = listContextEngineIds();
     expect(ids).toContain("legacy");

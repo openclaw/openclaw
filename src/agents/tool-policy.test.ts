@@ -139,7 +139,7 @@ describe("tool-policy", () => {
         execute: async () => ({ content: [], details: {} }) as any,
       },
     ] as unknown as AnyAgentTool[];
-    expect(applyOwnerOnlyToolPolicy(tools, false)).toEqual([]);
+    expect(applyOwnerOnlyToolPolicy(tools, false)).toStrictEqual([]);
     expect(applyOwnerOnlyToolPolicy(tools, true)).toHaveLength(1);
   });
 
@@ -197,9 +197,7 @@ describe("TOOL_POLICY_CONFORMANCE", () => {
 
   it("is JSON-serializable", () => {
     const serialized = JSON.stringify(TOOL_POLICY_CONFORMANCE);
-    expect(JSON.parse(serialized)).toMatchObject({
-      toolGroups: TOOL_GROUPS,
-    });
+    expect(JSON.parse(serialized)).toEqual({ toolGroups: TOOL_GROUPS });
   });
 });
 
@@ -259,7 +257,7 @@ describe("resolveSandboxToolPolicyForAgent", () => {
       source: "global",
       key: "tools.sandbox.tools.allow",
     });
-    expect(resolved.allow).toEqual([]);
+    expect(resolved.allow).toStrictEqual([]);
     expect(resolved.deny).toEqual(["browser"]);
 
     const policy: SandboxToolPolicy = { allow: resolved.allow, deny: resolved.deny };

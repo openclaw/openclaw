@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { describe, expect, it } from "vitest";
 import {
   createMessageCharEstimateCache,
@@ -26,7 +26,7 @@ describe("tool-result-char-estimator", () => {
 
     const cache = createMessageCharEstimateCache();
     const chars = estimateMessageCharsCached(malformed, cache);
-    expect(chars).toBeGreaterThan(0);
+    expect(chars).toBe(30);
   });
 
   it("estimates text content when toolResult content includes null entries", () => {
@@ -39,7 +39,7 @@ describe("tool-result-char-estimator", () => {
 
     const cache = createMessageCharEstimateCache();
     const chars = estimateMessageCharsCached(malformed, cache);
-    expect(chars).toBeGreaterThanOrEqual(2);
+    expect(chars).toBe(12);
   });
 
   it("getToolResultText skips malformed text blocks", () => {
@@ -63,6 +63,6 @@ describe("tool-result-char-estimator", () => {
 
     const cache = createMessageCharEstimateCache();
     const chars = estimateMessageCharsCached(msg, cache);
-    expect(chars).toBeGreaterThanOrEqual(11); // "hello world".length
+    expect(chars).toBe(22);
   });
 });

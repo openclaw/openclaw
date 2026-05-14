@@ -15,6 +15,16 @@ const baseParams = {
   replyToMode: "off" as const,
 };
 
+function expectFields(value: unknown, expected: Record<string, unknown>): void {
+  if (!value || typeof value !== "object") {
+    throw new Error("expected fields object");
+  }
+  const record = value as Record<string, unknown>;
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], key).toEqual(expectedValue);
+  }
+}
+
 async function expectSameTargetRepliesDelivered(params: { provider: string; to: string }) {
   const { replyPayloads } = await buildReplyPayloads({
     ...baseParams,
@@ -68,11 +78,11 @@ describe("buildReplyPayloads media filter integration", () => {
     });
 
     expect(replyPayloads).toHaveLength(1);
-    expect(replyPayloads[0]).toMatchObject({
+    expectFields(replyPayloads[0], {
       text: "⚠️ API rate limit reached.",
       replyToId: "msg-1",
     });
-    expect(getReplyPayloadMetadata(replyPayloads[0])).toMatchObject({
+    expectFields(getReplyPayloadMetadata(replyPayloads[0]), {
       deliverDespiteSourceReplySuppression: true,
     });
   });
@@ -118,7 +128,7 @@ describe("buildReplyPayloads media filter integration", () => {
     });
 
     expect(replyPayloads).toHaveLength(1);
-    expect(replyPayloads[0]).toMatchObject({
+    expectFields(replyPayloads[0], {
       text: "hello",
       mediaUrl: undefined,
       mediaUrls: undefined,
@@ -143,13 +153,13 @@ describe("buildReplyPayloads media filter integration", () => {
     });
 
     expect(replyPayloads).toHaveLength(2);
-    expect(replyPayloads[0]).toMatchObject({
+    expectFields(replyPayloads[0], {
       text: "keep text",
       mediaUrl: undefined,
       mediaUrls: undefined,
       audioAsVoice: false,
     });
-    expect(replyPayloads[1]).toMatchObject({
+    expectFields(replyPayloads[1], {
       text: "keep second",
     });
   });
@@ -174,7 +184,7 @@ describe("buildReplyPayloads media filter integration", () => {
     });
 
     expect(replyPayloads).toHaveLength(1);
-    expect(replyPayloads[0]).toMatchObject({
+    expectFields(replyPayloads[0], {
       text: "hello world!",
       mediaUrl: "file:///tmp/photo.jpg",
     });
@@ -287,7 +297,7 @@ describe("buildReplyPayloads media filter integration", () => {
     });
 
     expect(replyPayloads).toHaveLength(1);
-    expect(replyPayloads[0]).toMatchObject({
+    expectFields(replyPayloads[0], {
       text: "photo",
       mediaUrl: undefined,
       mediaUrls: undefined,
@@ -407,7 +417,7 @@ describe("buildReplyPayloads media filter integration", () => {
     });
 
     expect(replyPayloads).toHaveLength(1);
-    expect(replyPayloads[0]).toMatchObject({
+    expectFields(replyPayloads[0], {
       text: "caption",
       mediaUrl: undefined,
       mediaUrls: undefined,
@@ -492,7 +502,7 @@ describe("buildReplyPayloads media filter integration", () => {
     });
 
     expect(replyPayloads).toHaveLength(1);
-    expect(replyPayloads[0]).toMatchObject({
+    expectFields(replyPayloads[0], {
       mediaUrl: "/tmp/generated.png",
       text: undefined,
     });
@@ -541,7 +551,7 @@ describe("buildReplyPayloads media filter integration", () => {
     });
 
     expect(replyPayloads).toHaveLength(1);
-    expect(replyPayloads[0]).toMatchObject({
+    expectFields(replyPayloads[0], {
       text: "Agent couldn't generate a response. Please try again.",
       isError: true,
     });
@@ -557,6 +567,26 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
+  it("keeps error payloads during silent turns", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      silentExpected: true,
+      payloads: [
+        { text: "normal maintenance reply" },
+        {
+          text: "⚠️ write failed: Memory flush writes are restricted to memory/2026-05-05.md; use that path only.",
+          isError: true,
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expectFields(replyPayloads[0], {
+      text: "⚠️ write failed: Memory flush writes are restricted to memory/2026-05-05.md; use that path only.",
+      isError: true,
+    });
+  });
+
   it("keeps voice media payloads during silent turns", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
@@ -565,7 +595,7 @@ describe("buildReplyPayloads media filter integration", () => {
     });
 
     expect(replyPayloads).toHaveLength(1);
-    expect(replyPayloads[0]).toMatchObject({
+    expectFields(replyPayloads[0], {
       text: undefined,
       mediaUrl: "file:///tmp/voice.opus",
       audioAsVoice: true,
@@ -604,7 +634,7 @@ describe("buildReplyPayloads media filter integration", () => {
     });
 
     expect(replyPayloads).toHaveLength(1);
-    expect(replyPayloads[0]).toMatchObject({
+    expectFields(replyPayloads[0], {
       text: "Here you go",
       mediaUrl: "https://example.com/chart.png",
       mediaUrls: ["https://example.com/chart.png"],
@@ -619,7 +649,7 @@ describe("buildReplyPayloads media filter integration", () => {
     });
 
     expect(replyPayloads).toHaveLength(1);
-    expect(replyPayloads[0]).toMatchObject({
+    expectFields(replyPayloads[0], {
       text: "Look now",
       mediaUrl: "https://example.com/chart.png",
       mediaUrls: ["https://example.com/chart.png"],
@@ -635,7 +665,7 @@ describe("buildReplyPayloads media filter integration", () => {
     });
 
     expect(replyPayloads).toHaveLength(1);
-    expect(replyPayloads[0]).toMatchObject({
+    expectFields(replyPayloads[0], {
       text,
     });
     expect(replyPayloads[0]?.mediaUrl).toBeUndefined();

@@ -156,7 +156,7 @@ or npm install metadata. Those belong in your plugin code and `package.json`.
 | `kind`                               | No       | `"memory"` \| `"context-engine"` | Declares an exclusive plugin kind used by `plugins.slots.*`.                                                                                                                                                                        |
 | `channels`                           | No       | `string[]`                       | Channel ids owned by this plugin. Used for discovery and config validation.                                                                                                                                                         |
 | `providers`                          | No       | `string[]`                       | Provider ids owned by this plugin.                                                                                                                                                                                                  |
-| `providerDiscoveryEntry`             | No       | `string`                         | Lightweight provider-discovery module path, relative to the plugin root, for manifest-scoped provider catalog metadata that can be loaded without activating the full plugin runtime.                                               |
+| `providerCatalogEntry`               | No       | `string`                         | Lightweight provider-catalog module path, relative to the plugin root, for manifest-scoped provider catalog metadata that can be loaded without activating the full plugin runtime.                                                 |
 | `modelSupport`                       | No       | `object`                         | Manifest-owned shorthand model-family metadata used to auto-load the plugin before runtime.                                                                                                                                         |
 | `modelCatalog`                       | No       | `object`                         | Declarative model catalog metadata for providers owned by this plugin. This is the control-plane contract for future read-only listing, onboarding, model pickers, aliases, and suppression without loading plugin runtime.         |
 | `modelPricing`                       | No       | `object`                         | Provider-owned external pricing lookup policy. Use it to opt local/self-hosted providers out of remote pricing catalogs or map provider refs to OpenRouter/LiteLLM catalog ids without hardcoding provider ids in core.             |
@@ -388,7 +388,7 @@ Prefer the narrowest metadata that already describes ownership. Use
 when those fields express the relationship. Use `activation` for extra planner
 hints that cannot be represented by those ownership fields.
 Use top-level `cliBackends` for CLI runtime aliases such as `claude-cli`,
-`codex-cli`, or `google-gemini-cli`; `activation.onAgentHarnesses` is only for
+`my-cli`, or `google-gemini-cli`; `activation.onAgentHarnesses` is only for
 embedded agent harness ids that do not already have an ownership field.
 
 This block is metadata only. It does not register runtime behavior, and it does
@@ -1266,7 +1266,11 @@ hook instead.
 
 ## Discovery precedence (duplicate plugin ids)
 
-OpenClaw discovers plugins from several roots (bundled, global install, workspace, explicit config-selected paths). If two discoveries share the same `id`, only the **highest-precedence** manifest is kept; lower-precedence duplicates are dropped instead of loading beside it.
+OpenClaw discovers plugins from several roots. For the raw filesystem scan
+order, see [Plugin scan
+order](/gateway/configuration-reference#plugin-scan-order). If two discoveries
+share the same `id`, only the **highest-precedence** manifest is kept;
+lower-precedence duplicates are dropped instead of loading beside it.
 
 Precedence, highest to lowest:
 
@@ -1324,7 +1328,7 @@ See [Configuration reference](/gateway/configuration) for the full `plugins.*` s
 - Native manifests are parsed with JSON5, so comments, trailing commas, and unquoted keys are accepted as long as the final value is still an object.
 - Only documented manifest fields are read by the manifest loader. Avoid custom top-level keys.
 - `channels`, `providers`, `cliBackends`, and `skills` can all be omitted when a plugin does not need them.
-- `providerDiscoveryEntry` must stay lightweight and should not import broad runtime code; use it for static provider catalog metadata or narrow discovery descriptors, not request-time execution.
+- `providerCatalogEntry` must stay lightweight and should not import broad runtime code; use it for static provider catalog metadata or narrow discovery descriptors, not request-time execution. `providerDiscoveryEntry` is the legacy spelling and still works for existing plugins.
 - Exclusive plugin kinds are selected through `plugins.slots.*`: `kind: "memory"` via `plugins.slots.memory`, `kind: "context-engine"` via `plugins.slots.contextEngine` (default `legacy`).
 - Declare exclusive plugin kind in this manifest. Runtime-entry `OpenClawPluginDefinition.kind` is deprecated and remains only as a compatibility fallback for older plugins.
 - Env-var metadata (`setup.providers[].envVars`, deprecated `providerAuthEnvVars`, and `channelEnvVars`) is declarative only. Status, audit, cron delivery validation, and other read-only surfaces still apply plugin trust and effective activation policy before treating an env var as configured.

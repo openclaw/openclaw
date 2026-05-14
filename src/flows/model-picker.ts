@@ -21,12 +21,12 @@ import {
 import { loadStaticManifestCatalogRowsForList } from "../commands/models/list.manifest-catalog.js";
 import { formatTokenK } from "../commands/models/shared.js";
 import {
+  normalizeAgentModelMapForConfig,
   normalizeAgentModelRefForConfig,
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { applyPrimaryModel } from "../plugins/provider-model-primary.js";
 import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -1158,7 +1158,7 @@ export function applyModelAllowlist(
     };
   }
 
-  const existingModels = defaults?.models ?? {};
+  const existingModels = normalizeAgentModelMapForConfig(defaults?.models ?? {});
   if (scopeKeySet) {
     const nextModels = { ...existingModels };
     for (const key of scopeKeySet) {
@@ -1227,6 +1227,8 @@ export function applyModelFallbacksFromSelection(
       : existingModel && typeof existingModel === "object"
         ? existingModel.primary
         : undefined;
+  const normalizedExistingPrimary =
+    existingPrimary != null ? normalizeAgentModelRefForConfig(existingPrimary) : undefined;
   const preservedModelFields =
     existingModel && typeof existingModel === "object"
       ? (({ fallbacks: _oldFallbacks, ...rest }) => rest)(existingModel)
@@ -1261,7 +1263,7 @@ export function applyModelFallbacksFromSelection(
   });
   const nextModel = {
     ...preservedModelFields,
-    ...(existingPrimary != null ? { primary: existingPrimary } : {}),
+    ...(normalizedExistingPrimary != null ? { primary: normalizedExistingPrimary } : {}),
     ...(fallbacks.length > 0 ? { fallbacks } : {}),
   };
   if (Object.keys(nextModel).length === 0) {

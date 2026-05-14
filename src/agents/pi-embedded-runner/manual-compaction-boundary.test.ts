@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { AssistantMessage } from "@mariozechner/pi-ai";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { hardenManualCompactionBoundary } from "./manual-compaction-boundary.js";
 
@@ -58,14 +58,13 @@ function messageText(message: AgentMessage): string {
   if (!Array.isArray(content)) {
     return "";
   }
-  return content
-    .map((block) =>
-      block && typeof block === "object" && "text" in block && typeof block.text === "string"
-        ? block.text
-        : "",
-    )
-    .filter(Boolean)
-    .join(" ");
+  const textBlocks: string[] = [];
+  for (const block of content) {
+    if (block && typeof block === "object" && "text" in block && typeof block.text === "string") {
+      textBlocks.push(block.text);
+    }
+  }
+  return textBlocks.join(" ");
 }
 
 function requireString(value: string | undefined, label: string): string {
@@ -155,6 +154,67 @@ describe("hardenManualCompactionBoundary", () => {
       "compactionSummary",
       "assistant",
     ]);
+  });
+
+  it("keeps the recent tail when manual compaction produced an empty summary", async () => {
+    const dir = await makeTmpDir();
+    const session = SessionManager.create(dir, dir);
+
+    session.appendMessage({ role: "user", content: "old question", timestamp: 1 });
+    session.appendMessage(createAssistantTextMessage("old answer", 2));
+    session.appendMessage({ role: "user", content: "fresh question", timestamp: 3 });
+    const keepId = requireString(session.getBranch().at(-1)?.id, "keep id");
+    session.appendMessage(createAssistantTextMessage("fresh answer", 4));
+    session.appendCompaction("", keepId, 200);
+    const sessionFile = requireString(session.getSessionFile(), "session file");
+
+    const hardened = await hardenManualCompactionBoundary({ sessionFile });
+    expect(hardened.applied).toBe(false);
+    expect(hardened.firstKeptEntryId).toBe(keepId);
+    expect(hardened.messages.map((message) => message.role)).toEqual([
+      "compactionSummary",
+      "user",
+      "assistant",
+    ]);
+    expect(hardened.messages.map((message) => messageText(message)).join("\n")).toContain(
+      "fresh question",
+    );
+
+    const reopened = SessionManager.open(sessionFile);
+    const latest = reopened.getLeafEntry();
+    expect(latest?.type).toBe("compaction");
+    if (!latest || latest.type !== "compaction") {
+      throw new Error("expected latest leaf to be a compaction entry");
+    }
+    expect(latest.firstKeptEntryId).toBe(keepId);
+  });
+
+  it("keeps the recent tail when manual compaction had no messages to summarize", async () => {
+    const dir = await makeTmpDir();
+    const session = SessionManager.create(dir, dir);
+
+    session.appendMessage({ role: "user", content: "fresh question", timestamp: 1 });
+    const keepId = requireString(session.getBranch().at(-1)?.id, "keep id");
+    session.appendMessage(createAssistantTextMessage("fresh answer", 2));
+    session.appendCompaction("No prior history.", keepId, 200);
+    const sessionFile = requireString(session.getSessionFile(), "session file");
+
+    const hardened = await hardenManualCompactionBoundary({ sessionFile });
+    expect(hardened.applied).toBe(false);
+    expect(hardened.firstKeptEntryId).toBe(keepId);
+    expect(hardened.messages.map((message) => message.role)).toEqual([
+      "compactionSummary",
+      "user",
+      "assistant",
+    ]);
+
+    const reopened = SessionManager.open(sessionFile);
+    const latest = reopened.getLeafEntry();
+    expect(latest?.type).toBe("compaction");
+    if (!latest || latest.type !== "compaction") {
+      throw new Error("expected latest leaf to be a compaction entry");
+    }
+    expect(latest.firstKeptEntryId).toBe(keepId);
   });
 
   it("is a no-op when the latest leaf is not a compaction entry", async () => {

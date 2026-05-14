@@ -26,11 +26,61 @@ const readChannelAllowFromStoreMock = vi.hoisted(() => vi.fn());
 const addChannelAllowFromStoreEntryMock = vi.hoisted(() => vi.fn());
 const removeChannelAllowFromStoreEntryMock = vi.hoisted(() => vi.fn());
 
+type ConfigSnapshotMock = {
+  path?: string;
+  hash?: string | null;
+  parsed?: OpenClawConfig | null;
+  sourceConfig?: OpenClawConfig;
+  resolved?: OpenClawConfig;
+  runtimeConfig?: OpenClawConfig;
+};
+
+type TransformConfigFileWithRetryMockParams<T = unknown> = {
+  afterWrite?: unknown;
+  transform: (
+    currentConfig: OpenClawConfig,
+    context: { snapshot: ConfigSnapshotMock; previousHash: string | null; attempt: number },
+  ) =>
+    | Promise<{ nextConfig: OpenClawConfig; result?: T }>
+    | { nextConfig: OpenClawConfig; result?: T };
+};
+
+function configFromSnapshot(snapshot: ConfigSnapshotMock): OpenClawConfig {
+  return structuredClone(
+    snapshot.sourceConfig ?? snapshot.resolved ?? snapshot.runtimeConfig ?? snapshot.parsed ?? {},
+  );
+}
+
+async function transformConfigFileWithRetryMock<T = unknown>(
+  params: TransformConfigFileWithRetryMockParams<T>,
+) {
+  const snapshot = (await readConfigFileSnapshotMock()) as ConfigSnapshotMock;
+  const previousHash = snapshot.hash ?? null;
+  const transformed = await params.transform(configFromSnapshot(snapshot), {
+    snapshot,
+    previousHash,
+    attempt: 0,
+  });
+  const afterWrite = params.afterWrite ?? { mode: "auto" };
+  await replaceConfigFileMock({ nextConfig: transformed.nextConfig, afterWrite });
+  return {
+    path: snapshot.path ?? "/tmp/openclaw.json",
+    previousHash,
+    snapshot,
+    nextConfig: transformed.nextConfig,
+    result: transformed.result,
+    attempts: 1,
+    afterWrite,
+    followUp: { action: "none" },
+  };
+}
+
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: () => ({}),
   readConfigFileSnapshot: readConfigFileSnapshotMock,
   validateConfigObjectWithPlugins: validateConfigObjectWithPluginsMock,
   replaceConfigFile: replaceConfigFileMock,
+  transformConfigFileWithRetry: transformConfigFileWithRetryMock,
 }));
 
 vi.mock("../../pairing/pairing-store.js", () => ({
@@ -57,6 +107,17 @@ type DmGroupAllowlistTestSectionConfig = {
 
 function normalizeTelegramAllowFromEntries(values: Array<string | number>): string[] {
   return formatAllowFromLowercase({ allowFrom: values, stripPrefixRe: /^(telegram|tg):/i });
+}
+
+function normalizeAllowlistValues(values: Array<string | number>): string[] {
+  const normalized: string[] = [];
+  for (const value of values) {
+    const entry = String(value).trim();
+    if (entry) {
+      normalized.push(entry);
+    }
+  }
+  return normalized;
 }
 
 function resolveTelegramTestAccount(
@@ -128,7 +189,7 @@ const whatsappAllowlistTestPlugin: ChannelPlugin = {
     channelId: "whatsapp",
     resolveAccount: ({ cfg }) =>
       (cfg.channels?.whatsapp as DmGroupAllowlistTestSectionConfig | undefined) ?? {},
-    normalize: ({ values }) => values.map((value) => String(value).trim()).filter(Boolean),
+    normalize: ({ values }) => normalizeAllowlistValues(values),
     resolveDmAllowFrom: (account) => account.allowFrom,
     resolveGroupAllowFrom: (account) => account.groupAllowFrom,
     resolveDmPolicy: () => undefined,
@@ -154,7 +215,7 @@ function createLegacyAllowlistPlugin(channelId: "discord" | "slack"): ChannelPlu
       channelId,
       resolveAccount: ({ cfg }) =>
         (cfg.channels?.[channelId] as DmGroupAllowlistTestSectionConfig | undefined) ?? {},
-      normalize: ({ values }) => values.map((value) => String(value).trim()).filter(Boolean),
+      normalize: ({ values }) => normalizeAllowlistValues(values),
       resolveDmAllowFrom: (account) => account.allowFrom ?? account.dm?.allowFrom,
       resolveGroupPolicy: () => undefined,
       resolveGroupOverrides: () => undefined,

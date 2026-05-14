@@ -12,7 +12,11 @@ function expectNoPrefixMatches(values: string[], prefix: string) {
 }
 
 function expectSomePrefixMatch(values: string[], prefix: string) {
-  expect(values.filter((value) => value.startsWith(prefix)).length).toBeGreaterThan(0);
+  expect(values.filter((value) => value.startsWith(prefix))).not.toEqual([]);
+}
+
+function pickEntries(entries: Record<string, string>, keys: readonly string[]) {
+  return Object.fromEntries(keys.map((key) => [key, entries[key]]));
 }
 
 describe("bundled plugin build entries", () => {
@@ -41,8 +45,7 @@ describe("bundled plugin build entries", () => {
 
   it("includes manifest-less runtime core support packages in dist build entries", () => {
     const entries = listBundledPluginBuildEntries();
-
-    expect(entries).toMatchObject({
+    const expectedEntries = {
       "extensions/image-generation-core/api": "extensions/image-generation-core/api.ts",
       "extensions/image-generation-core/runtime-api":
         "extensions/image-generation-core/runtime-api.ts",
@@ -50,16 +53,25 @@ describe("bundled plugin build entries", () => {
         "extensions/media-understanding-core/runtime-api.ts",
       "extensions/speech-core/api": "extensions/speech-core/api.ts",
       "extensions/speech-core/runtime-api": "extensions/speech-core/runtime-api.ts",
-    });
+    };
+
+    expect(pickEntries(entries, Object.keys(expectedEntries))).toStrictEqual(expectedEntries);
   });
 
   it("keeps the Matrix packaged runtime shim in bundled plugin build entries", () => {
     const entries = listBundledPluginBuildEntries();
-
-    expect(entries).toMatchObject({
+    const expectedEntries = {
       "extensions/matrix/plugin-entry.handlers.runtime":
         "extensions/matrix/plugin-entry.handlers.runtime.ts",
-    });
+    };
+
+    expect(pickEntries(entries, Object.keys(expectedEntries))).toStrictEqual(expectedEntries);
+  });
+
+  it("keeps the Telegram ingress worker out of bundled plugin public-surface entries", () => {
+    const entries = listBundledPluginBuildEntries();
+
+    expect(entries["extensions/telegram/telegram-ingress-worker.runtime"]).toBeUndefined();
   });
 
   it("packs runtime core support packages without requiring plugin manifests", () => {
@@ -98,8 +110,30 @@ describe("bundled plugin build entries", () => {
       expectSomePrefixMatch(Object.keys(entries), `extensions/${pluginId}/`);
       expectNoPrefixMatches(artifacts, `dist/extensions/${pluginId}/`);
     }
-    expectNoPrefixMatches(Object.keys(entries), "extensions/qqbot/");
-    expectNoPrefixMatches(artifacts, "dist/extensions/qqbot/");
+    for (const pluginId of ["qqbot", "whatsapp"]) {
+      expectNoPrefixMatches(Object.keys(entries), `extensions/${pluginId}/`);
+      expectNoPrefixMatches(artifacts, `dist/extensions/${pluginId}/`);
+    }
+  });
+
+  it("keeps external-only providers out of bundled dist entries", () => {
+    const entries = listBundledPluginBuildEntries();
+    const artifacts = listBundledPluginPackArtifacts();
+
+    for (const pluginId of ["amazon-bedrock", "amazon-bedrock-mantle", "anthropic-vertex"]) {
+      expectNoPrefixMatches(Object.keys(entries), `extensions/${pluginId}/`);
+      expectNoPrefixMatches(artifacts, `dist/extensions/${pluginId}/`);
+    }
+  });
+
+  it("keeps externalized runtime-dependency plugins out of bundled dist entries", () => {
+    const entries = listBundledPluginBuildEntries();
+    const artifacts = listBundledPluginPackArtifacts();
+
+    for (const pluginId of ["openshell", "slack"]) {
+      expectNoPrefixMatches(Object.keys(entries), `extensions/${pluginId}/`);
+      expectNoPrefixMatches(artifacts, `dist/extensions/${pluginId}/`);
+    }
   });
 
   it("keeps bundled channel secret contracts on packed top-level sidecars", () => {
@@ -119,7 +153,7 @@ describe("bundled plugin build entries", () => {
       expect(entry).toContain('specifier: "./secret-contract-api.js"');
     });
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
 
     for (const pluginId of [...secretBackedPluginIds].toSorted()) {
       if (excludedPackageDirs.has(pluginId)) {
@@ -146,6 +180,6 @@ describe("bundled plugin build entries", () => {
       }
     });
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 });

@@ -1,5 +1,5 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { Context, Model } from "@mariozechner/pi-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { Context, Model } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import { createQwenThinkingWrapper, wrapQwenProviderStream } from "./stream.js";
 
@@ -57,8 +57,8 @@ describe("createQwenThinkingWrapper", () => {
   });
 
   it("skips non-reasoning and non-completions models", () => {
-    expect(capturePayload({ model: { reasoning: false } })).toEqual({});
-    expect(capturePayload({ model: { api: "openai-responses" as never } })).toEqual({});
+    expect(capturePayload({ model: { reasoning: false } })).toStrictEqual({});
+    expect(capturePayload({ model: { api: "openai-responses" as never } })).toStrictEqual({});
   });
 });
 

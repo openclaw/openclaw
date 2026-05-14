@@ -1,9 +1,10 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { Model } from "@mariozechner/pi-ai";
-import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { Model } from "@earendil-works/pi-ai";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
   createOpenAIAttributionHeadersWrapper,
+  createOpenAICompletionsStrictMessageKeysWrapper,
   createOpenAICompletionsToolsCompatWrapper,
   createOpenAIThinkingLevelWrapper,
 } from "./openai-stream-wrappers.js";
@@ -92,6 +93,52 @@ describe("createOpenAICompletionsToolsCompatWrapper", () => {
     );
 
     expect(payloads[0]).toHaveProperty("tools");
+  });
+});
+
+describe("createOpenAICompletionsStrictMessageKeysWrapper", () => {
+  it("strips message keys to role and content for strict OpenAI-compatible endpoints", () => {
+    const payloads: Array<Record<string, unknown>> = [];
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        model: model.id,
+        messages: [
+          {
+            role: "assistant",
+            content: "calling tool",
+            name: "agent",
+            tool_calls: [{ id: "call_1", type: "function", function: { name: "noop" } }],
+            cache_control: { type: "ephemeral" },
+          },
+          {
+            role: "tool",
+            content: "tool result",
+            tool_call_id: "call_1",
+          },
+        ],
+      };
+      options?.onPayload?.(payload, model);
+      payloads.push(structuredClone(payload));
+      return createAssistantMessageEventStream();
+    };
+
+    const wrapped = createOpenAICompletionsStrictMessageKeysWrapper(baseStreamFn);
+    void wrapped(
+      {
+        api: "openai-completions",
+        provider: "infomaniak",
+        id: "mistral3",
+        baseUrl: "https://api.infomaniak.com/1/ai/example/openai",
+        compat: { strictMessageKeys: true },
+      } as unknown as Model<"openai-completions">,
+      { messages: [] },
+      {},
+    );
+
+    expect(payloads[0]?.messages).toEqual([
+      { role: "assistant", content: "calling tool" },
+      { role: "tool", content: "tool result" },
+    ]);
   });
 });
 
@@ -300,10 +347,8 @@ describe("createOpenAIAttributionHeadersWrapper", () => {
     );
 
     expect(codexCalls).toBe(1);
-    expect(capturedHeaders).toMatchObject({
-      originator: "openclaw",
-      "User-Agent": expect.stringMatching(/^openclaw\//),
-    });
+    expect(capturedHeaders?.originator).toBe("openclaw");
+    expect(capturedHeaders?.["User-Agent"]).toMatch(/^openclaw\//);
   });
 
   it("keeps existing wrapped Codex streams so runtime OAuth injection is preserved", () => {
@@ -345,12 +390,8 @@ describe("createOpenAIAttributionHeadersWrapper", () => {
 
     expect(upstreamCalls).toBe(1);
     expect(codexCalls).toBe(0);
-    expect(capturedOptions).toMatchObject({
-      apiKey: "oauth-bearer-token",
-      headers: {
-        originator: "openclaw",
-        "User-Agent": expect.stringMatching(/^openclaw\//),
-      },
-    });
+    expect(capturedOptions?.apiKey).toBe("oauth-bearer-token");
+    expect(capturedOptions?.headers?.originator).toBe("openclaw");
+    expect(capturedOptions?.headers?.["User-Agent"]).toMatch(/^openclaw\//);
   });
 });

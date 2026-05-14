@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
 import { REDACTED_SENTINEL } from "../../config/redact-snapshot.js";
 
 let writtenConfig: unknown = null;
@@ -18,10 +19,49 @@ vi.mock("../../config/config.js", () => {
     replaceConfigFile: async ({ nextConfig }: { nextConfig: unknown }) => {
       writtenConfig = nextConfig;
     },
+    mutateConfigFileWithRetry: async (params: {
+      mutate: (
+        draft: OpenClawConfig,
+        context: { snapshot: { path: string }; previousHash: string; attempt: number },
+      ) => unknown;
+    }) => {
+      const draft = structuredClone(loadedConfig) as OpenClawConfig;
+      const snapshot = { path: "/tmp/openclaw/config.json" };
+      const result = await params.mutate(draft, {
+        snapshot,
+        previousHash: "test-hash",
+        attempt: 0,
+      });
+      writtenConfig = draft;
+      return {
+        path: snapshot.path,
+        previousHash: "test-hash",
+        snapshot,
+        nextConfig: draft,
+        result,
+        attempts: 1,
+        afterWrite: { mode: "auto" },
+        followUp: { action: "none" },
+      };
+    },
   };
 });
 
 const { skillsHandlers } = await import("./skills.js");
+
+function expectWrittenSkillEntry(skillKey: string, entry: unknown) {
+  if (!writtenConfig) {
+    throw new Error("Expected written config");
+  }
+  const config = writtenConfig as {
+    skills?: {
+      entries?: Record<string, unknown>;
+    };
+  };
+  expect(Object.keys(config).toSorted()).toEqual(["skills"]);
+  expect(Object.keys(config.skills ?? {}).toSorted()).toEqual(["entries"]);
+  expect(config.skills?.entries?.[skillKey]).toEqual(entry);
+}
 
 describe("skills.update", () => {
   it("strips embedded CR/LF from apiKey", async () => {
@@ -51,14 +91,8 @@ describe("skills.update", () => {
 
     expect(ok).toBe(true);
     expect(error).toBeUndefined();
-    expect(writtenConfig).toMatchObject({
-      skills: {
-        entries: {
-          "brave-search": {
-            apiKey: "abcdef",
-          },
-        },
-      },
+    expectWrittenSkillEntry("brave-search", {
+      apiKey: "abcdef",
     });
   });
 
@@ -90,17 +124,11 @@ describe("skills.update", () => {
     });
 
     // Full values must be persisted to config
-    expect(writtenConfig).toMatchObject({
-      skills: {
-        entries: {
-          "demo-skill": {
-            apiKey: "secret-api-key-123",
-            env: {
-              GEMINI_API_KEY: "secret-env-key-456",
-              BRAVE_REGION: "us",
-            },
-          },
-        },
+    expectWrittenSkillEntry("demo-skill", {
+      apiKey: "secret-api-key-123",
+      env: {
+        GEMINI_API_KEY: "secret-env-key-456",
+        BRAVE_REGION: "us",
       },
     });
 
@@ -145,17 +173,11 @@ describe("skills.update", () => {
       respond: () => {},
     });
 
-    expect(writtenConfig).toMatchObject({
-      skills: {
-        entries: {
-          "demo-skill": {
-            apiKey: "secret-api-key-123",
-            env: {
-              GEMINI_API_KEY: "secret-env-key-456",
-              BRAVE_REGION: "eu",
-            },
-          },
-        },
+    expectWrittenSkillEntry("demo-skill", {
+      apiKey: "secret-api-key-123",
+      env: {
+        GEMINI_API_KEY: "secret-env-key-456",
+        BRAVE_REGION: "eu",
       },
     });
   });

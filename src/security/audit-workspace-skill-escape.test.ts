@@ -47,11 +47,9 @@ describe("security audit workspace skill path escape findings", () => {
             const findings = await collectWorkspaceSkillSymlinkEscapeFindings({
               cfg: { agents: { defaults: { workspace: workspaceDir } } } satisfies OpenClawConfig,
             });
-            const finding = findings.find(
-              (entry) => entry.checkId === "skills.workspace.symlink_escape",
-            );
-            expect(finding?.severity).toBe("warn");
-            expect(finding?.detail).toContain(outsideSkillPath);
+            const finding = requireFinding(findings, "skills.workspace.symlink_escape");
+            expect(finding.severity).toBe("warn");
+            expect(finding.detail).toContain(outsideSkillPath);
           })()
         : Promise.resolve(),
       (async () => {
@@ -66,8 +64,8 @@ describe("security audit workspace skill path escape findings", () => {
         const findings = await collectWorkspaceSkillSymlinkEscapeFindings({
           cfg: { agents: { defaults: { workspace: workspaceDir } } } satisfies OpenClawConfig,
         });
-        expect(findings.some((entry) => entry.checkId === "skills.workspace.symlink_escape")).toBe(
-          false,
+        expect(findings.map((entry) => entry.checkId)).not.toContain(
+          "skills.workspace.symlink_escape",
         );
       })(),
     ];

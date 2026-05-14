@@ -56,6 +56,8 @@ type MessagePresentationButton = {
   label: string;
   value?: string;
   url?: string;
+  webApp?: { url: string };
+  web_app?: { url: string };
   style?: "primary" | "secondary" | "success" | "danger";
 };
 
@@ -80,6 +82,8 @@ Button semantics:
 - `value` is an application action value routed back through the channel's
   existing interaction path when the channel supports clickable controls.
 - `url` is a link button. It can exist without `value`.
+- `webApp` and `web_app` describe a channel-native web app button. Telegram
+  renders this as `web_app` and only supports it in private chats.
 - `label` is required and is also used in text fallback.
 - `style` is advisory. Renderers should map unsupported styles to a safe
   default, not fail the send.
@@ -122,6 +126,19 @@ URL-only link button:
     {
       "type": "buttons",
       "buttons": [{ "label": "Open notes", "url": "https://example.com/release" }]
+    }
+  ]
+}
+```
+
+Telegram Mini App button:
+
+```json
+{
+  "blocks": [
+    {
+      "type": "buttons",
+      "buttons": [{ "label": "Launch", "web_app": { "url": "https://example.com/app" } }]
     }
   ]
 }
@@ -288,12 +305,26 @@ code:
 import {
   interactiveReplyToPresentation,
   normalizeMessagePresentation,
+  presentationToInteractiveControlsReply,
   presentationToInteractiveReply,
   renderMessagePresentationFallbackText,
 } from "openclaw/plugin-sdk/interactive-runtime";
 ```
 
 New code should accept or produce `MessagePresentation` directly.
+
+`presentationToInteractiveReply(...)` preserves visible presentation text by
+mapping the title, text, context, buttons, and selects into the older
+`InteractiveReply` shape. Component renderers that already draw title, text,
+context, and divider blocks natively should use
+`presentationToInteractiveControlsReply(...)` instead, then append only the
+button and select controls.
+
+`renderMessagePresentationFallbackText(...)` returns an empty string for
+presentation blocks that have no text fallback, such as a divider-only
+presentation. Transports that require a non-empty send body can pass
+`emptyFallback` to opt into a minimal body without changing the default fallback
+contract.
 
 ## Delivery pin
 

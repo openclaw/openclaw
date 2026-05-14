@@ -12,7 +12,7 @@ import {
   type KnownProvider,
   type Model,
   type ModelThinkingLevel,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import {
@@ -94,7 +94,6 @@ const GATEWAY_LIVE_HEARTBEAT_MS = Math.max(
 );
 const GATEWAY_LIVE_STRIP_SCAFFOLDING_MODEL_KEYS = new Set([
   "google/gemini-3-flash-preview",
-  "google/gemini-3-pro-preview",
   "google/gemini-3.1-flash-lite-preview",
   "google/gemini-3.1-pro-preview",
   "google/gemini-3.1-pro-preview-customtools",
@@ -119,10 +118,13 @@ function parseFilter(raw?: string): Set<string> | null {
   if (!trimmed || trimmed === "all") {
     return null;
   }
-  const ids = trimmed
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const ids: string[] = [];
+  for (const rawId of trimmed.split(",")) {
+    const id = rawId.trim();
+    if (id.length > 0) {
+      ids.push(id);
+    }
+  }
   return ids.length ? new Set(ids) : null;
 }
 
@@ -395,7 +397,7 @@ function isMeaningful(text: string): boolean {
   if (trimmed.length < 60) {
     return false;
   }
-  const words = trimmed.split(/\s+/g).filter(Boolean);
+  const words = trimmed.split(/\s+/g);
   if (words.length < 12) {
     return false;
   }
@@ -703,6 +705,32 @@ describe("resolveExplicitLiveModelCandidates", () => {
     expect(candidates).toEqual([model]);
   });
 
+  it("normalizes retired Google Gemini refs before targeted lookup", () => {
+    const model = createGatewayLiveTestModel("google", "gemini-3.1-pro-preview");
+    const matcher = createLiveTargetMatcher({
+      providerFilter: new Set(["google"]),
+      modelFilter: new Set(["google/gemini-3-pro-preview"]),
+      env: {},
+    });
+    const candidates = resolveExplicitLiveModelCandidates({
+      modelRegistry: {
+        find(provider, modelId) {
+          expect(provider).toBe("google");
+          expect(modelId).toBe("gemini-3.1-pro-preview");
+          return model;
+        },
+        getAll() {
+          throw new Error("explicit model lookup should not enumerate registry");
+        },
+      },
+      modelFilter: new Set(["google/gemini-3-pro-preview"]),
+      providerFilter: new Set(["google"]),
+      targetMatcher: matcher,
+    });
+
+    expect(candidates).toEqual([model]);
+  });
+
   it("falls back to enumeration for ambiguous model-only filters", () => {
     const matcher = createLiveTargetMatcher({
       providerFilter: null,
@@ -769,7 +797,7 @@ describe("resolveGatewayLiveModelThinkingLevel", () => {
       resolveGatewayLiveModelThinkingLevel({
         cfg: {},
         model: {
-          ...createGatewayLiveTestModel("xai", "grok-4.3"),
+          ...createGatewayLiveTestModel("example", "reasoning-model"),
           reasoning: true,
           thinkingLevelMap: {
             off: null,
@@ -1330,10 +1358,8 @@ describe("sanitizeAuthProfileStoreForLiveGateway", () => {
     try {
       const sanitized = sanitizeAuthProfileStoreForLiveGateway(store);
       expect(sanitized.profiles.openaiProfile).toBeUndefined();
-      expect(sanitized.profiles.codexProfile).toMatchObject({
-        type: "oauth",
-        provider: "openai-codex",
-      });
+      expect(sanitized.profiles.codexProfile?.type).toBe("oauth");
+      expect(sanitized.profiles.codexProfile?.provider).toBe("openai-codex");
       expect(sanitized.order).toEqual({ "openai-codex": ["codexProfile"] });
       expect(sanitized.lastGood).toEqual({ "openai-codex": "codexProfile" });
       expect(sanitized.usageStats).toEqual({ codexProfile: { lastUsed: 2 } });
@@ -1363,17 +1389,17 @@ function extractTranscriptMessageText(message: unknown): string {
   if (!Array.isArray(record.content)) {
     return "";
   }
-  return record.content
-    .map((entry) => {
-      if (!entry || typeof entry !== "object") {
-        return "";
-      }
+  const textParts: string[] = [];
+  for (const entry of record.content) {
+    if (entry && typeof entry === "object") {
       const text = (entry as { text?: unknown }).text;
-      return typeof text === "string" && text.trim() ? text.trim() : "";
-    })
-    .filter(Boolean)
-    .join("\n")
-    .trim();
+      const trimmed = typeof text === "string" ? text.trim() : "";
+      if (trimmed.length > 0) {
+        textParts.push(trimmed);
+      }
+    }
+  }
+  return textParts.join("\n").trim();
 }
 
 async function readSessionAssistantTexts(sessionKey: string, modelKey?: string): Promise<string[]> {
@@ -1632,7 +1658,11 @@ function parseExplicitLiveModelRef(
   const slash = trimmed.indexOf("/");
   if (slash !== -1) {
     const provider = normalizeProviderId(trimmed.slice(0, slash));
-    const modelId = trimmed.slice(slash + 1).trim();
+    const rawModelId = trimmed.slice(slash + 1).trim();
+    const modelId =
+      provider === "google" || provider === "google-gemini-cli" || provider === "google-vertex"
+        ? normalizeGoogleModelId(rawModelId)
+        : rawModelId;
     return provider && modelId ? { provider, modelId } : null;
   }
   if (!providerFilter || providerFilter.size !== 1) {

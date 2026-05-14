@@ -1,4 +1,8 @@
-import { resolveAckReaction, resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  formatReasoningMessage,
+  resolveAckReaction,
+  resolveHumanDelayConfig,
+} from "openclaw/plugin-sdk/agent-runtime";
 import {
   createStatusReactionController,
   DEFAULT_TIMING,
@@ -20,6 +24,7 @@ import {
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   hasFinalInboundReplyDispatch,
+  recordChannelBotPairLoopAndCheckSuppression,
   runInboundReplyTurn,
 } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
@@ -136,9 +141,19 @@ export async function processDiscordMessage(
     route,
     discordRestFetch,
     abortSignal,
+    botLoopProtection,
   } = ctx;
   if (isProcessAborted(abortSignal)) {
     return;
+  }
+  if (botLoopProtection) {
+    const botLoopResult = recordChannelBotPairLoopAndCheckSuppression(botLoopProtection);
+    if (botLoopResult.suppressed) {
+      logVerbose(
+        `discord: bot-to-bot loop detected before dispatch setup, suppressing for ${Math.max(0, Math.ceil((botLoopResult.cooldownUntilMs - Date.now()) / 1000))}s`,
+      );
+      return;
+    }
   }
 
   const ssrfPolicy = cfg.browser?.ssrfPolicy;
@@ -665,7 +680,10 @@ export async function processDiscordMessage(
                   draftPreview.suppressDefaultToolProgressMessages ? true : undefined,
                 onReasoningStream: async (payload) => {
                   await statusReactions.setThinking();
-                  await draftPreview.pushReasoningProgress(payload?.text);
+                  const formattedText = payload?.text
+                    ? formatReasoningMessage(payload.text)
+                    : undefined;
+                  await draftPreview.pushReasoningProgress(formattedText);
                 },
                 onToolStart: async (payload) => {
                   if (isProcessAborted(abortSignal)) {

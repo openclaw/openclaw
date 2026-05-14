@@ -1,4 +1,4 @@
-import type { AgentEvent } from "@mariozechner/pi-agent-core";
+import type { AgentEvent } from "@earendil-works/pi-agent-core";
 import {
   HEARTBEAT_RESPONSE_TOOL_NAME,
   normalizeHeartbeatToolResponse,
@@ -120,6 +120,7 @@ function buildToolCallSummary(toolName: string, args: unknown, meta?: string): T
     meta,
     mutatingAction: mutation.mutatingAction,
     actionFingerprint: mutation.actionFingerprint,
+    fileTarget: mutation.fileTarget,
   };
 }
 
@@ -657,6 +658,13 @@ export function handleToolExecutionStart(
     const toolCallId = evt.toolCallId;
     const args = evt.args;
     const runId = ctx.params.runId;
+    ctx.state.toolExecutionSinceLastBlockReply = true;
+    ctx.params.onExecutionPhase?.({
+      phase: "tool_execution_started",
+      tool: toolName,
+      toolCallId,
+      source: "pi-embedded",
+    });
 
     // Track start time and args for after_tool_call hook.
     const startedAt = Date.now();
@@ -914,6 +922,7 @@ export async function handleToolExecutionEnd(
       timedOut: isToolResultTimedOut(sanitizedResult) || undefined,
       mutatingAction: callSummary?.mutatingAction,
       actionFingerprint: callSummary?.actionFingerprint,
+      fileTarget: callSummary?.fileTarget,
     };
   } else if (ctx.state.lastToolError) {
     // Keep unresolved mutating failures until the same action succeeds.
@@ -923,6 +932,7 @@ export async function handleToolExecutionEnd(
           toolName,
           meta,
           actionFingerprint: callSummary?.actionFingerprint,
+          fileTarget: callSummary?.fileTarget,
         })
       ) {
         ctx.state.lastToolError = undefined;
