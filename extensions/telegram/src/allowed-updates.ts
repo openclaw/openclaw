@@ -14,5 +14,8 @@ export function resolveTelegramAllowedUpdates(): ReadonlyArray<TelegramUpdateTyp
   if (!updates.includes("channel_post")) {
     updates.push("channel_post");
   }
+  if (!updates.includes("poll_answer")) {
+    updates.push("poll_answer");
+  }
   return updates;
 }
