@@ -409,6 +409,52 @@ describe("LINE send helpers", () => {
     );
   });
 
+  it("restores capital-letter prefix for lowercased LINE chat ids (issue #81628)", async () => {
+    // Simulates the cron / session-key fallback path that lowercases peer ids
+    // before they reach the channel boundary. The LINE push API rejects
+    // lowercased ids with HTTP 400, so the channel-owned send helper must
+    // canonicalize the leading letter back to U/C/R.
+    const lowercasedGroupId = `c${"a".repeat(32)}`;
+    const expectedGroupId = `C${"a".repeat(32)}`;
+
+    await sendModule.sendMessageLine(lowercasedGroupId, "hello", { cfg: LINE_TEST_CFG });
+
+    expect(pushMessageMock).toHaveBeenCalledWith({
+      to: expectedGroupId,
+      messages: [{ type: "text", text: "hello" }],
+    });
+  });
+
+  it("strips line:* prefix and uppercases first char on durable replay (issue #81628)", async () => {
+    // Simulates a queued/durable delivery target that survived as a raw
+    // session-key fragment such as "line:group:c<hex>". The plugin must strip
+    // the prefix and restore canonical casing before calling pushMessage.
+    const lowercasedUserId = `u${"b".repeat(32)}`;
+    const expectedUserId = `U${"b".repeat(32)}`;
+
+    await sendModule.pushMessagesLine(
+      `line:user:${lowercasedUserId}`,
+      [{ type: "text", text: "replay" }],
+      { cfg: LINE_TEST_CFG },
+    );
+
+    expect(pushMessageMock).toHaveBeenCalledWith({
+      to: expectedUserId,
+      messages: [{ type: "text", text: "replay" }],
+    });
+  });
+
+  it("leaves non-LINE-id-shaped recipients untouched", async () => {
+    // Custom test harness ids (not 33-char U/C/R + 32 hex) should pass through
+    // unchanged so existing test fixtures keep working.
+    await sendModule.sendMessageLine("U-quick", "hi", { cfg: LINE_TEST_CFG });
+
+    expect(pushMessageMock).toHaveBeenCalledWith({
+      to: "U-quick",
+      messages: [{ type: "text", text: "hi" }],
+    });
+  });
+
   it("pushes quick-reply text and caps to 13 buttons", async () => {
     await sendModule.pushTextMessageWithQuickReplies(
       "U-quick",

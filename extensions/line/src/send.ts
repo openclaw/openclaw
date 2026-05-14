@@ -52,23 +52,41 @@ interface LineReplyBehavior {
   verboseMessage?: (messageCount: number) => string;
 }
 
+// LINE chat IDs (userId / groupId / roomId) are case-sensitive: per the
+// Messaging API spec they are 33 chars total, starting with a capital U / C / R
+// followed by 32 lowercase hex digits. The LINE push API rejects ids whose
+// first character is lowercased (HTTP 400 "The property, 'to', in the request
+// body is invalid"). Some core paths (e.g. session-key fallback in cron and
+// durable delivery recovery) can resurface a lowercased id, so the
+// channel-owned delivery boundary canonicalizes the leading letter here
+// instead of relying on every caller. See issue #81628.
+const LINE_CHAT_ID_PATTERN = /^[curCUR][0-9a-f]{32}$/;
+
 function normalizeTarget(to: string): string {
   const trimmed = to.trim();
   if (!trimmed) {
     throw new Error("Recipient is required for LINE sends");
   }
 
-  const normalized = trimmed
+  const stripped = trimmed
     .replace(/^line:group:/i, "")
     .replace(/^line:room:/i, "")
     .replace(/^line:user:/i, "")
     .replace(/^line:/i, "");
 
-  if (!normalized) {
+  if (!stripped) {
     throw new Error("Recipient is required for LINE sends");
   }
 
-  return normalized;
+  if (LINE_CHAT_ID_PATTERN.test(stripped)) {
+    const head = stripped.charAt(0);
+    const upperHead = head.toUpperCase();
+    if (head !== upperHead) {
+      return `${upperHead}${stripped.slice(1)}`;
+    }
+  }
+
+  return stripped;
 }
 
 function isLineUserChatId(chatId: string): boolean {
