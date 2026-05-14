@@ -17,6 +17,7 @@ import {
   handleStatusCommand,
   handleToolsCommand,
 } from "./commands-info.js";
+import { handleLongCommand } from "./commands-long.js";
 import { handleMcpCommand } from "./commands-mcp.js";
 import { handleModelsCommand } from "./commands-models.js";
 import { handlePluginCommand } from "./commands-plugin.js";
@@ -66,6 +67,7 @@ export function loadCommandHandlers(): CommandHandler[] {
     handleWhoamiCommand,
     handleCrestodianCommand,
     handleSubagentsCommand,
+    handleLongCommand,
     handleAcpCommand,
     handleMcpCommand,
     handlePluginsCommand,
