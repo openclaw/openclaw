@@ -12,6 +12,7 @@ import {
   bridgeCodexAppServerStartOptions,
   refreshCodexAppServerAuthTokens,
   resolveCodexAppServerAuthAccountCacheKey,
+  resolveCodexAppServerAuthProfileId,
   resolveCodexAppServerHomeDir,
   resolveCodexAppServerNativeHomeDir,
 } from "./auth-bridge.js";
@@ -649,6 +650,30 @@ describe("bridgeCodexAppServerStartOptions", () => {
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
+  });
+
+  it("selects an oauthRef-backed Codex profile for app-server login", () => {
+    expect(
+      resolveCodexAppServerAuthProfileId({
+        store: {
+          version: 1,
+          profiles: {
+            "openai-codex:default": {
+              type: "oauth",
+              provider: "openai-codex",
+              access: "",
+              refresh: "",
+              expires: Date.now() + 60_000,
+              oauthRef: {
+                source: "openclaw-credentials",
+                provider: "openai-codex",
+                id: "0123456789abcdef0123456789abcdef",
+              },
+            },
+          },
+        },
+      }),
+    ).toBe("openai-codex:default");
   });
 
   it("applies native Codex CLI OAuth when no OpenClaw auth profile exists", async () => {
