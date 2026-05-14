@@ -10,6 +10,8 @@ const ensurePathMock = vi.hoisted(() => vi.fn());
 const assertRuntimeMock = vi.hoisted(() => vi.fn());
 const closeActiveMemorySearchManagersMock = vi.hoisted(() => vi.fn(async () => {}));
 const hasMemoryRuntimeMock = vi.hoisted(() => vi.fn(() => false));
+const listAgentHarnessIdsMock = vi.hoisted(() => vi.fn((): string[] => []));
+const disposeRegisteredAgentHarnessesMock = vi.hoisted(() => vi.fn(async () => {}));
 const ensureTaskRegistryReadyMock = vi.hoisted(() => vi.fn());
 const startTaskRegistryMaintenanceMock = vi.hoisted(() => vi.fn());
 const outputRootHelpMock = vi.hoisted(() => vi.fn());
@@ -20,13 +22,20 @@ const getProgramContextMock = vi.hoisted(() => vi.fn(() => null));
 const registerCoreCliByNameMock = vi.hoisted(() => vi.fn());
 const registerSubCliByNameMock = vi.hoisted(() => vi.fn());
 const registerPluginCliCommandsFromValidatedConfigMock = vi.hoisted(() => vi.fn(async () => ({})));
+const resolvePluginCliRootOwnerIdsMock = vi.hoisted(() => vi.fn());
+const resolveManifestCommandAliasOwnerMock = vi.hoisted(() => vi.fn());
+const resolveManifestToolOwnerMock = vi.hoisted(() => vi.fn());
+const resolveManifestCliCommandSurfaceOwnerMock = vi.hoisted(() => vi.fn());
 const restoreTerminalStateMock = vi.hoisted(() => vi.fn());
 const hasEnvHttpProxyAgentConfiguredMock = vi.hoisted(() => vi.fn(() => false));
 const ensureGlobalUndiciEnvProxyDispatcherMock = vi.hoisted(() => vi.fn());
-const runCrestodianMock = vi.hoisted(() => vi.fn(async () => {}));
+const runCrestodianMock = vi.hoisted(() =>
+  vi.fn<(options?: unknown) => Promise<void>>(async () => {}),
+);
 const commanderParseAsyncMock = vi.hoisted(() => vi.fn(async () => {}));
 const addGatewayRunCommandMock = vi.hoisted(() => vi.fn((command: unknown) => command));
 const emitCliBannerMock = vi.hoisted(() => vi.fn());
+const enableConsoleCaptureMock = vi.hoisted(() => vi.fn());
 const progressDoneMock = vi.hoisted(() => vi.fn());
 const createCliProgressMock = vi.hoisted(() =>
   vi.fn(() => ({
@@ -43,6 +52,18 @@ const maybeRunCliInContainerMock = vi.hoisted(() =>
     (argv: string[]) => { handled: true; exitCode: number } | { handled: false; argv: string[] }
   >((argv: string[]) => ({ handled: false, argv })),
 );
+
+function requireRunCrestodianOptions(index = 0): { onReady?: unknown } {
+  const call = runCrestodianMock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected runCrestodian call ${index}`);
+  }
+  expect(typeof call[0]).toBe("object");
+  if (typeof call[0] !== "object" || call[0] === null) {
+    throw new Error(`expected runCrestodian call ${index} to receive options`);
+  }
+  return call[0] as { onReady?: unknown };
+}
 
 vi.mock("commander", () => {
   class MockCommanderError extends Error {
@@ -88,6 +109,11 @@ vi.mock("./banner.js", () => ({
   emitCliBanner: emitCliBannerMock,
 }));
 
+vi.mock("../logging.js", async () => ({
+  ...(await vi.importActual<typeof import("../logging.js")>("../logging.js")),
+  enableConsoleCapture: enableConsoleCaptureMock,
+}));
+
 vi.mock("./container-target.js", () => ({
   maybeRunCliInContainer: maybeRunCliInContainerMock,
   parseCliContainerArgs: (argv: string[]) => ({ ok: true, container: null, argv }),
@@ -117,6 +143,11 @@ vi.mock("../plugins/memory-runtime.js", () => ({
 
 vi.mock("../plugins/memory-state.js", () => ({
   hasMemoryRuntime: hasMemoryRuntimeMock,
+}));
+
+vi.mock("../agents/harness/registry.js", () => ({
+  listAgentHarnessIds: listAgentHarnessIdsMock,
+  disposeRegisteredAgentHarnesses: disposeRegisteredAgentHarnessesMock,
 }));
 
 vi.mock("../tasks/task-registry.js", () => ({
@@ -154,6 +185,16 @@ vi.mock("./program/register.subclis.js", () => ({
 
 vi.mock("../plugins/cli.js", () => ({
   registerPluginCliCommandsFromValidatedConfig: registerPluginCliCommandsFromValidatedConfigMock,
+}));
+
+vi.mock("../plugins/cli-registry-loader.js", () => ({
+  resolvePluginCliRootOwnerIds: resolvePluginCliRootOwnerIdsMock,
+}));
+
+vi.mock("../plugins/manifest-command-aliases.runtime.js", () => ({
+  resolveManifestCliCommandSurfaceOwner: resolveManifestCliCommandSurfaceOwnerMock,
+  resolveManifestCommandAliasOwner: resolveManifestCommandAliasOwnerMock,
+  resolveManifestToolOwner: resolveManifestToolOwnerMock,
 }));
 
 vi.mock("../terminal/restore.js", () => ({
@@ -211,6 +252,7 @@ describe("runCli exit behavior", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     hasMemoryRuntimeMock.mockReturnValue(false);
+    listAgentHarnessIdsMock.mockReturnValue([]);
     outputPrecomputedBrowserHelpTextMock.mockReturnValue(false);
     outputPrecomputedRootHelpTextMock.mockReturnValue(false);
     hasEnvHttpProxyAgentConfiguredMock.mockReturnValue(false);
@@ -218,6 +260,13 @@ describe("runCli exit behavior", () => {
     startProxyMock.mockResolvedValue(null);
     stopProxyMock.mockResolvedValue(undefined);
     getProgramContextMock.mockReturnValue(null);
+    resolvePluginCliRootOwnerIdsMock.mockImplementation(
+      ({ primaryCommand }: { primaryCommand?: string }) =>
+        primaryCommand === "googlemeet" ? ["google-meet"] : [],
+    );
+    resolveManifestCommandAliasOwnerMock.mockReturnValue(undefined);
+    resolveManifestToolOwnerMock.mockReturnValue(undefined);
+    resolveManifestCliCommandSurfaceOwnerMock.mockReturnValue(undefined);
     delete process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH;
     delete process.env.OPENCLAW_HIDE_BANNER;
   });
@@ -233,10 +282,52 @@ describe("runCli exit behavior", () => {
     expect(maybeRunCliInContainerMock).toHaveBeenCalledWith(["node", "openclaw", "status"]);
     expect(tryRouteCliMock).toHaveBeenCalledWith(["node", "openclaw", "status"]);
     expect(closeActiveMemorySearchManagersMock).not.toHaveBeenCalled();
+    expect(disposeRegisteredAgentHarnessesMock).not.toHaveBeenCalled();
     expect(ensureTaskRegistryReadyMock).not.toHaveBeenCalled();
     expect(startTaskRegistryMaintenanceMock).not.toHaveBeenCalled();
     expect(exitSpy).not.toHaveBeenCalled();
     exitSpy.mockRestore();
+  });
+
+  it("disposes registered harnesses after full CLI command completion", async () => {
+    listAgentHarnessIdsMock.mockReturnValueOnce(["codex"]);
+    tryRouteCliMock.mockResolvedValueOnce(false);
+    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    buildProgramMock.mockReturnValueOnce({
+      commands: [{ name: () => "agent", aliases: () => [] }],
+      parseAsync,
+    });
+
+    await runCli(["node", "openclaw", "agent", "--local"]);
+
+    expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "agent", "--local"]);
+    expect(disposeRegisteredAgentHarnessesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("pauses non-tty stdin after full CLI command completion", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(false);
+    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    buildProgramMock.mockReturnValueOnce({
+      commands: [{ name: () => "channels", aliases: () => [] }],
+      parseAsync,
+    });
+    const stdinTty = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: false });
+    const pauseSpy = vi.spyOn(process.stdin, "pause").mockImplementation(() => process.stdin);
+
+    try {
+      await runCli(["node", "openclaw", "channels"]);
+
+      expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "channels"]);
+      expect(pauseSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      pauseSpy.mockRestore();
+      if (stdinTty) {
+        Object.defineProperty(process.stdin, "isTTY", stdinTty);
+      } else {
+        Reflect.deleteProperty(process.stdin, "isTTY");
+      }
+    }
   });
 
   it("emits the startup banner before gateway foreground fast-path startup", async () => {
@@ -253,6 +344,17 @@ describe("runCli exit behavior", () => {
       "gateway",
       "--force",
     ]);
+  });
+
+  it("installs console capture before parsing the gateway foreground fast path", async () => {
+    await runCli(["node", "openclaw", "gateway", "--force"]);
+
+    expect(enableConsoleCaptureMock).toHaveBeenCalledTimes(1);
+    expect(commanderParseAsyncMock).toHaveBeenCalledTimes(1);
+    const captureOrder = enableConsoleCaptureMock.mock.invocationCallOrder[0] ?? 0;
+    const parseOrder = commanderParseAsyncMock.mock.invocationCallOrder[0] ?? 0;
+    expect(captureOrder).toBeGreaterThan(0);
+    expect(parseOrder).toBeGreaterThan(captureOrder);
   });
 
   it("honors banner suppression on the gateway foreground fast path", async () => {
@@ -339,7 +441,7 @@ describe("runCli exit behavior", () => {
     ["channel capabilities probe", ["node", "openclaw", "channels", "capabilities"]],
     ["directory plugin command", ["node", "openclaw", "directory", "peers", "list"]],
     ["message plugin command", ["node", "openclaw", "message", "send", "--to", "demo"]],
-    ["unknown plugin command", ["node", "openclaw", "googlemeet", "login"]],
+    ["metadata-owned plugin command", ["node", "openclaw", "googlemeet", "login"]],
   ])("starts managed proxy routing for %s", (_name, argv) => {
     expect(shouldStartProxyForCli(argv)).toBe(true);
   });
@@ -357,11 +459,15 @@ describe("runCli exit behavior", () => {
     ["chat control-plane", ["node", "openclaw", "chat"]],
     ["terminal control-plane", ["node", "openclaw", "terminal"]],
     ["config", ["node", "openclaw", "config", "get", "proxy.enabled"]],
+    ["channels parent help", ["node", "openclaw", "channels"]],
     ["completion", ["node", "openclaw", "completion", "zsh"]],
     ["debug proxy cli", ["node", "openclaw", "proxy", "start"]],
     ["agents list", ["node", "openclaw", "agents", "list"]],
     ["models list", ["node", "openclaw", "models", "list"]],
     ["models status without live probe", ["node", "openclaw", "models", "status"]],
+    ["skills check", ["node", "openclaw", "skills", "check"]],
+    ["skills info", ["node", "openclaw", "skills", "info", "weather"]],
+    ["skills list", ["node", "openclaw", "skills", "list"]],
     ["tasks list", ["node", "openclaw", "tasks", "list"]],
     ["legacy singular tool namespace", ["node", "openclaw", "tool", "image_generate"]],
     ["gateway tools namespace typo", ["node", "openclaw", "tools", "effective"]],
@@ -378,7 +484,7 @@ describe("runCli exit behavior", () => {
     expect(startProxyMock).toHaveBeenCalledWith(undefined);
   });
 
-  it("starts the managed proxy for unknown plugin commands by default", async () => {
+  it("starts the managed proxy for metadata-owned plugin commands by default", async () => {
     tryRouteCliMock.mockResolvedValueOnce(true);
 
     await runCli(["node", "openclaw", "googlemeet", "login"]);
@@ -386,20 +492,106 @@ describe("runCli exit behavior", () => {
     expect(startProxyMock).toHaveBeenCalledWith(undefined);
   });
 
+  it("rejects unowned command roots before proxy and plugin runtime registration", async () => {
+    await expect(runCli(["node", "openclaw", "foo"])).rejects.toThrow(
+      'No built-in command or plugin CLI metadata owns "foo"',
+    );
+
+    expect(startProxyMock).not.toHaveBeenCalled();
+    expect(tryRouteCliMock).not.toHaveBeenCalled();
+    expect(buildProgramMock).not.toHaveBeenCalled();
+    expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
+  });
+
+  it("does not suggest plugins.allow for unknown command roots before proxy startup", async () => {
+    loadConfigMock.mockReturnValueOnce({
+      plugins: {
+        allow: ["browser"],
+      },
+    });
+
+    let error: unknown;
+    try {
+      await runCli(["node", "openclaw", "totally-unknown"]);
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain(
+      'No built-in command or plugin CLI metadata owns "totally-unknown"',
+    );
+    expect((error as Error).message).not.toContain("plugins.allow");
+    expect(startProxyMock).not.toHaveBeenCalled();
+    expect(tryRouteCliMock).not.toHaveBeenCalled();
+    expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves plugins.allow diagnostics for roots owned only by CLI metadata", async () => {
+    loadConfigMock.mockReturnValueOnce({
+      plugins: {
+        allow: ["browser"],
+      },
+    });
+    resolvePluginCliRootOwnerIdsMock.mockImplementation(
+      ({
+        cfg,
+        primaryCommand,
+      }: {
+        cfg?: { plugins?: { allow?: string[] } };
+        primaryCommand?: string;
+      }) => (primaryCommand === "qa" && cfg?.plugins?.allow?.length === 0 ? ["qa-lab"] : []),
+    );
+
+    await expect(runCli(["node", "openclaw", "qa"])).rejects.toThrow(
+      'Add "qa-lab" to `plugins.allow` instead of "qa"',
+    );
+    expect(startProxyMock).not.toHaveBeenCalled();
+    expect(tryRouteCliMock).not.toHaveBeenCalled();
+    expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
+  });
+
+  it("reports plugin tool command mistakes before proxy startup", async () => {
+    resolveManifestToolOwnerMock.mockReturnValueOnce({
+      toolName: "lcm_recent",
+      pluginId: "lossless-claw",
+      availability: "loaded",
+    });
+
+    await expect(runCli(["node", "openclaw", "lcm_recent"])).rejects.toThrow(
+      '"lcm_recent" is an agent tool available from the "lossless-claw" plugin',
+    );
+
+    expect(startProxyMock).not.toHaveBeenCalled();
+    expect(tryRouteCliMock).not.toHaveBeenCalled();
+    expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
+  });
+
+  it("does not install the env proxy dispatcher for bypassed skills inspection commands", async () => {
+    hasEnvHttpProxyAgentConfiguredMock.mockReturnValue(true);
+    tryRouteCliMock.mockResolvedValueOnce(true);
+
+    await runCli(["node", "openclaw", "skills", "check"]);
+
+    expect(hasEnvHttpProxyAgentConfiguredMock).not.toHaveBeenCalled();
+    expect(ensureGlobalUndiciEnvProxyDispatcherMock).not.toHaveBeenCalled();
+  });
+
   it.each([
+    ["auth", ["node", "openclaw", "auth", "--help"]],
     ["tool", ["node", "openclaw", "tool", "image_generate"]],
     ["tools", ["node", "openclaw", "tools", "effective"]],
   ])("keeps reserved %s command roots out of plugin command discovery", async (_name, argv) => {
     const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
-    buildProgramMock.mockReturnValueOnce({
+    const program = {
       commands: [],
       parseAsync,
-    });
+    };
+    buildProgramMock.mockReturnValueOnce(program);
 
     await runCli(argv);
 
     expect(startProxyMock).not.toHaveBeenCalled();
-    expect(registerSubCliByNameMock).toHaveBeenCalledWith(expect.anything(), argv[2], argv);
+    expect(registerSubCliByNameMock.mock.calls).toEqual([[program, argv[2], argv]]);
     expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
     expect(parseAsync).toHaveBeenCalledWith(argv);
   });
@@ -458,7 +650,11 @@ describe("runCli exit behavior", () => {
     try {
       const runPromise = runCli(["node", "openclaw", "plugins", "marketplace", "list"]);
       await vi.waitFor(() => {
-        expect(processOnceSpy).toHaveBeenCalledWith("SIGINT", expect.any(Function));
+        expect(
+          processOnceSpy.mock.calls.some(
+            ([event, listener]) => event === "SIGINT" && typeof listener === "function",
+          ),
+        ).toBe(true);
       });
 
       const sigintHandler = processOnceSpy.mock.calls.find(([event]) => event === "SIGINT")?.[1];
@@ -497,7 +693,12 @@ describe("runCli exit behavior", () => {
     try {
       const runPromise = runCli(["node", "openclaw", "plugins", "marketplace", "list"]);
       await vi.waitFor(() => {
-        expect(processOnceSpy.mock.calls.filter(([event]) => event === "exit")).toHaveLength(2);
+        expect(
+          processOnceSpy.mock.calls.reduce(
+            (count, [event]) => count + (event === "exit" ? 1 : 0),
+            0,
+          ),
+        ).toBe(2);
       });
 
       const exitHandler = processOnceSpy.mock.calls.find(([event]) => event === "exit")?.[1];
@@ -538,7 +739,10 @@ describe("runCli exit behavior", () => {
     }
 
     expect(ensureGlobalUndiciEnvProxyDispatcherMock).toHaveBeenCalledTimes(1);
-    expect(runCrestodianMock).toHaveBeenCalledWith({ onReady: expect.any(Function) });
+    expect(runCrestodianMock).toHaveBeenCalledOnce();
+    const crestodianOptions = requireRunCrestodianOptions();
+    expect(crestodianOptions).toEqual({ onReady: crestodianOptions.onReady });
+    expect(crestodianOptions.onReady).toBeTypeOf("function");
     expect(ensureGlobalUndiciEnvProxyDispatcherMock.mock.invocationCallOrder[0]).toBeLessThan(
       runCrestodianMock.mock.invocationCallOrder[0],
     );
@@ -610,47 +814,41 @@ describe("runCli exit behavior", () => {
 
   it("swallows Commander parse exits after recording the exit code", async () => {
     const exitCode = process.exitCode;
-    buildProgramMock.mockReturnValueOnce({
+    const program = {
       commands: [{ name: () => "status" }],
       parseAsync: vi
         .fn()
         .mockRejectedValueOnce(
           new CommanderError(1, "commander.excessArguments", "too many arguments for 'status'"),
         ),
-    });
+    };
+    buildProgramMock.mockReturnValueOnce(program);
 
     await expect(runCli(["node", "openclaw", "status"])).resolves.toBeUndefined();
 
-    expect(registerSubCliByNameMock).toHaveBeenCalledWith(expect.anything(), "status", [
-      "node",
-      "openclaw",
-      "status",
+    expect(registerSubCliByNameMock.mock.calls).toEqual([
+      [program, "status", ["node", "openclaw", "status"]],
     ]);
     expect(process.exitCode).toBe(1);
     process.exitCode = exitCode;
   });
 
   it("loads the real primary command before rendering command help", async () => {
-    buildProgramMock.mockReturnValueOnce({
+    const program = {
       commands: [{ name: () => "doctor" }],
       parseAsync: vi.fn().mockResolvedValueOnce(undefined),
-    });
+    };
+    buildProgramMock.mockReturnValueOnce(program);
     const ctx = { programVersion: "0.0.0-test" };
     getProgramContextMock.mockReturnValueOnce(ctx as never);
 
     await runCli(["node", "openclaw", "doctor", "--help"]);
 
-    expect(registerCoreCliByNameMock).toHaveBeenCalledWith(expect.anything(), ctx, "doctor", [
-      "node",
-      "openclaw",
-      "doctor",
-      "--help",
+    expect(registerCoreCliByNameMock.mock.calls).toEqual([
+      [program, ctx, "doctor", ["node", "openclaw", "doctor", "--help"]],
     ]);
-    expect(registerSubCliByNameMock).toHaveBeenCalledWith(expect.anything(), "doctor", [
-      "node",
-      "openclaw",
-      "doctor",
-      "--help",
+    expect(registerSubCliByNameMock.mock.calls).toEqual([
+      [program, "doctor", ["node", "openclaw", "doctor", "--help"]],
     ]);
   });
 
@@ -669,16 +867,16 @@ describe("runCli exit behavior", () => {
     await runCli(["node", "openclaw", "status"]);
 
     const handler = processOnSpy.mock.calls.find(([event]) => event === "uncaughtException")?.[1];
-    expect(typeof handler).toBe("function");
+    if (typeof handler !== "function") {
+      throw new Error("uncaughtException handler was not registered");
+    }
 
     try {
-      expect(() => (handler as (error: unknown) => void)(new Error("boom"))).toThrow(
-        "process.exit(1)",
-      );
+      expect(() => handler(new Error("boom"))).toThrow("process.exit(1)");
       expect(consoleErrorSpy).toHaveBeenCalledWith(
-        "[openclaw] Uncaught exception:",
-        expect.stringContaining("boom"),
+        "[openclaw] OpenClaw hit an unexpected runtime error.",
       );
+      expect(consoleErrorSpy).toHaveBeenCalledWith("[openclaw] Reason: boom");
       expect(restoreTerminalStateMock).toHaveBeenCalledWith("uncaught exception", {
         resumeStdinIfPaused: false,
       });
@@ -707,17 +905,18 @@ describe("runCli exit behavior", () => {
     await runCli(["node", "openclaw", "status"]);
 
     const handler = processOnSpy.mock.calls.find(([event]) => event === "uncaughtException")?.[1];
-    expect(typeof handler).toBe("function");
+    if (typeof handler !== "function") {
+      throw new Error("uncaughtException handler was not registered");
+    }
 
     try {
       const hostUnreachable = Object.assign(new Error("connect EHOSTUNREACH 149.154.167.220:443"), {
         code: "EHOSTUNREACH",
       });
-      expect(() => (handler as (error: unknown) => void)(hostUnreachable)).not.toThrow();
-      expect(consoleWarnSpy).toHaveBeenCalledWith(
-        "[openclaw] Non-fatal uncaught exception (continuing):",
-        expect.stringContaining("EHOSTUNREACH"),
-      );
+      expect(handler(hostUnreachable)).toBeUndefined();
+      expect(consoleWarnSpy.mock.calls).toEqual([
+        ["[openclaw] Non-fatal uncaught exception (continuing):", hostUnreachable.stack],
+      ]);
       expect(restoreTerminalStateMock).not.toHaveBeenCalled();
       expect(exitSpy).not.toHaveBeenCalled();
     } finally {

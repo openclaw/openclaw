@@ -14,6 +14,7 @@ import {
   withoutPluginInstallRecords,
   writePersistedInstalledPluginIndexInstallRecords,
 } from "./installed-plugin-index-records.js";
+import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 
 const tempDirs: string[] = [];
 
@@ -44,6 +45,17 @@ function createPluginCandidate(stateDir: string, pluginId: string): PluginCandid
   };
 }
 
+function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
+  const actual = record as Record<string, unknown>;
+  for (const [key, value] of Object.entries(expected)) {
+    expect(actual[key]).toEqual(value);
+  }
+  return actual;
+}
+
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -72,23 +84,22 @@ describe("plugin index install records store", () => {
 
     const indexPath = resolveInstalledPluginIndexRecordsStorePath({ stateDir });
     expect(indexPath).toBe(path.join(stateDir, "plugins", "installs.json"));
-    expect(JSON.parse(fs.readFileSync(indexPath, "utf8"))).toMatchObject({
-      version: 1,
-      generatedAtMs: 1777118400000,
-      installRecords: {
-        twitch: {
-          source: "npm",
-          spec: "@openclaw/plugin-twitch@1.0.0",
-          installPath: "plugins/npm/@openclaw/plugin-twitch",
-        },
-      },
-      plugins: [
-        {
-          pluginId: "twitch",
-          installRecordHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
-        },
-      ],
+    const persisted = JSON.parse(fs.readFileSync(indexPath, "utf8")) as {
+      version?: number;
+      generatedAtMs?: number;
+      installRecords?: Record<string, unknown>;
+      plugins?: Array<{ pluginId?: string; installRecordHash?: string }>;
+    };
+    expect(persisted.version).toBe(1);
+    expect(persisted.generatedAtMs).toBe(1777118400000);
+    expectRecordFields(persisted.installRecords?.twitch, {
+      source: "npm",
+      spec: "@openclaw/plugin-twitch@1.0.0",
+      installPath: "plugins/npm/@openclaw/plugin-twitch",
     });
+    expect(persisted.plugins).toHaveLength(1);
+    expect(persisted.plugins?.[0]?.pluginId).toBe("twitch");
+    expect(persisted.plugins?.[0]?.installRecordHash).toMatch(/^[a-f0-9]{64}$/u);
     await expect(readPersistedInstalledPluginIndexInstallRecords({ stateDir })).resolves.toEqual({
       twitch: {
         source: "npm",
@@ -116,20 +127,15 @@ describe("plugin index install records store", () => {
       },
     );
 
-    expect(
-      JSON.parse(
-        fs.readFileSync(resolveInstalledPluginIndexRecordsStorePath({ stateDir }), "utf8"),
-      ),
-    ).toMatchObject({
-      installRecords: {
-        missing: {
-          source: "npm",
-          spec: "missing-plugin@1.0.0",
-          installPath: path.join(stateDir, "plugins", "missing"),
-        },
-      },
-      plugins: [],
+    const persisted = JSON.parse(
+      fs.readFileSync(resolveInstalledPluginIndexRecordsStorePath({ stateDir }), "utf8"),
+    ) as { installRecords?: Record<string, unknown>; plugins?: unknown[] };
+    expectRecordFields(persisted.installRecords?.missing, {
+      source: "npm",
+      spec: "missing-plugin@1.0.0",
+      installPath: path.join(stateDir, "plugins", "missing"),
     });
+    expect(persisted.plugins).toEqual([]);
     await expect(loadInstalledPluginIndexInstallRecords({ stateDir })).resolves.toEqual({
       missing: {
         source: "npm",
@@ -164,6 +170,105 @@ describe("plugin index install records store", () => {
     });
   });
 
+  it("reads legacy persisted records when the plugin index has no plugin list", async () => {
+    const stateDir = makeStateDir();
+    const indexPath = resolveInstalledPluginIndexRecordsStorePath({ stateDir });
+    fs.mkdirSync(path.dirname(indexPath), { recursive: true });
+    fs.writeFileSync(
+      indexPath,
+      JSON.stringify({
+        installRecords: {
+          legacy: {
+            source: "npm",
+            spec: "legacy@1.0.0",
+            installPath: path.join(stateDir, "plugins", "legacy"),
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    await expect(loadInstalledPluginIndexInstallRecords({ stateDir })).resolves.toEqual({
+      legacy: {
+        source: "npm",
+        spec: "legacy@1.0.0",
+        installPath: path.join(stateDir, "plugins", "legacy"),
+      },
+    });
+  });
+
+  it("recovers managed npm plugin records when the persisted ledger is empty", async () => {
+    const stateDir = makeStateDir();
+    const discordDir = writeManagedNpmPlugin({
+      stateDir,
+      packageName: "@openclaw/discord",
+      pluginId: "discord",
+      version: "2026.5.2",
+    });
+    const codexDir = writeManagedNpmPlugin({
+      stateDir,
+      packageName: "@openclaw/codex",
+      pluginId: "codex",
+      version: "2026.5.2",
+    });
+    const indexPath = resolveInstalledPluginIndexRecordsStorePath({ stateDir });
+    fs.mkdirSync(path.dirname(indexPath), { recursive: true });
+    fs.writeFileSync(indexPath, JSON.stringify({ installRecords: {}, plugins: [] }), "utf8");
+
+    const loaded = await loadInstalledPluginIndexInstallRecords({ stateDir });
+    expectRecordFields(loaded.codex, {
+      source: "npm",
+      spec: "@openclaw/codex@2026.5.2",
+      installPath: codexDir,
+      version: "2026.5.2",
+      resolvedName: "@openclaw/codex",
+      resolvedVersion: "2026.5.2",
+      resolvedSpec: "@openclaw/codex@2026.5.2",
+    });
+    expectRecordFields(loaded.discord, {
+      source: "npm",
+      spec: "@openclaw/discord@2026.5.2",
+      installPath: discordDir,
+      version: "2026.5.2",
+      resolvedName: "@openclaw/discord",
+      resolvedVersion: "2026.5.2",
+      resolvedSpec: "@openclaw/discord@2026.5.2",
+    });
+    const loadedSync = loadInstalledPluginIndexInstallRecordsSync({ stateDir });
+    expectRecordFields(loadedSync.codex, { source: "npm", installPath: codexDir });
+    expectRecordFields(loadedSync.discord, { source: "npm", installPath: discordDir });
+  });
+
+  it("keeps persisted install record metadata over recovered npm records", async () => {
+    const stateDir = makeStateDir();
+    writeManagedNpmPlugin({
+      stateDir,
+      packageName: "@openclaw/discord",
+      pluginId: "discord",
+      version: "2026.5.2",
+    });
+    const candidate = createPluginCandidate(stateDir, "discord");
+    await writePersistedInstalledPluginIndexInstallRecords(
+      {
+        discord: {
+          source: "npm",
+          spec: "@openclaw/discord@beta",
+          installPath: path.join(stateDir, "custom", "discord"),
+          integrity: "sha512-persisted",
+        },
+      },
+      { stateDir, candidates: [candidate] },
+    );
+
+    const loaded = await loadInstalledPluginIndexInstallRecords({ stateDir });
+    expectRecordFields(loaded.discord, {
+      source: "npm",
+      spec: "@openclaw/discord@beta",
+      installPath: path.join(stateDir, "custom", "discord"),
+      integrity: "sha512-persisted",
+    });
+  });
+
   it("preserves git install resolution fields in persisted records", async () => {
     const stateDir = makeStateDir();
     const candidate = createPluginCandidate(stateDir, "git-demo");
@@ -181,14 +286,13 @@ describe("plugin index install records store", () => {
       { stateDir, candidates: [candidate] },
     );
 
-    await expect(loadInstalledPluginIndexInstallRecords({ stateDir })).resolves.toMatchObject({
-      "git-demo": {
-        source: "git",
-        spec: "git:file:///tmp/git-demo@abc123",
-        gitUrl: "file:///tmp/git-demo",
-        gitRef: "abc123",
-        gitCommit: "abc123",
-      },
+    const loaded = await loadInstalledPluginIndexInstallRecords({ stateDir });
+    expectRecordFields(loaded["git-demo"], {
+      source: "git",
+      spec: "git:file:///tmp/git-demo@abc123",
+      gitUrl: "file:///tmp/git-demo",
+      gitRef: "abc123",
+      gitCommit: "abc123",
     });
   });
 
@@ -205,6 +309,11 @@ describe("plugin index install records store", () => {
           clawhubPackage: "clawpack-demo",
           clawhubFamily: "code-plugin",
           clawhubChannel: "official",
+          artifactKind: "npm-pack",
+          artifactFormat: "tgz",
+          npmIntegrity: "sha512-clawpack",
+          npmShasum: "1".repeat(40),
+          npmTarballName: "clawpack-demo-2026.5.1-beta.2.tgz",
           clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           clawpackSpecVersion: 1,
           clawpackManifestSha256:
@@ -215,15 +324,19 @@ describe("plugin index install records store", () => {
       { stateDir, candidates: [candidate] },
     );
 
-    await expect(loadInstalledPluginIndexInstallRecords({ stateDir })).resolves.toMatchObject({
-      "clawpack-demo": {
-        source: "clawhub",
-        spec: "clawhub:clawpack-demo",
-        clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        clawpackSpecVersion: 1,
-        clawpackManifestSha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        clawpackSize: 4096,
-      },
+    const loaded = await loadInstalledPluginIndexInstallRecords({ stateDir });
+    expectRecordFields(loaded["clawpack-demo"], {
+      source: "clawhub",
+      spec: "clawhub:clawpack-demo",
+      artifactKind: "npm-pack",
+      artifactFormat: "tgz",
+      npmIntegrity: "sha512-clawpack",
+      npmShasum: "1".repeat(40),
+      npmTarballName: "clawpack-demo-2026.5.1-beta.2.tgz",
+      clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      clawpackSpecVersion: 1,
+      clawpackManifestSha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      clawpackSize: 4096,
     });
   });
 
@@ -234,10 +347,10 @@ describe("plugin index install records store", () => {
       loadInstalledPluginIndexInstallRecordsSync({
         stateDir,
       }),
-    ).toEqual({});
+    ).toStrictEqual({});
   });
 
-  it("updates and removes records without mutating caller state", async () => {
+  it("updates and removes records without mutating caller state", () => {
     const records: Record<string, PluginInstallRecord> = {
       keep: {
         source: "npm" as const,
@@ -257,7 +370,7 @@ describe("plugin index install records store", () => {
         spec: "keep@1.0.0",
       },
     });
-    expect(withInstall.demo).toMatchObject({
+    expectRecordFields(withInstall.demo, {
       source: "npm",
       spec: "demo@latest",
       installedAt: "2026-04-25T00:00:00.000Z",
@@ -299,6 +412,6 @@ describe("plugin index install records store", () => {
       loadInstalledPluginIndexInstallRecords({
         stateDir,
       }),
-    ).resolves.toEqual({});
+    ).resolves.toStrictEqual({});
   });
 });

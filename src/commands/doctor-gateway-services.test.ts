@@ -38,6 +38,9 @@ const mocks = vi.hoisted(() => ({
   resolveIsNixMode: vi.fn(() => false),
   findExtraGatewayServices: vi.fn().mockResolvedValue([]),
   renderGatewayServiceCleanupHints: vi.fn().mockReturnValue([]),
+  needsNodeRuntimeMigration: vi.fn(() => false),
+  renderSystemNodeWarning: vi.fn().mockReturnValue(undefined),
+  resolveSystemNodeInfo: vi.fn().mockResolvedValue(null),
   isSystemdUnitActive: vi.fn().mockResolvedValue(false),
   uninstallLegacySystemdUnits: vi.fn().mockResolvedValue([]),
   note: vi.fn(),
@@ -62,13 +65,13 @@ vi.mock("../daemon/inspect.js", () => ({
 }));
 
 vi.mock("../daemon/runtime-paths.js", () => ({
-  renderSystemNodeWarning: vi.fn().mockReturnValue(undefined),
-  resolveSystemNodeInfo: vi.fn().mockResolvedValue(null),
+  renderSystemNodeWarning: mocks.renderSystemNodeWarning,
+  resolveSystemNodeInfo: mocks.resolveSystemNodeInfo,
 }));
 
 vi.mock("../daemon/service-audit.js", () => ({
   auditGatewayServiceConfig: mocks.auditGatewayServiceConfig,
-  needsNodeRuntimeMigration: vi.fn(() => false),
+  needsNodeRuntimeMigration: mocks.needsNodeRuntimeMigration,
   readEmbeddedGatewayToken: readEmbeddedGatewayTokenForTest,
   SERVICE_AUDIT_CODES: {
     gatewayCommandMissing: testServiceAuditCodes.gatewayCommandMissing,
@@ -191,6 +194,79 @@ function createGatewayCommand(entrypoint: string) {
   };
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function callArg(mock: { mock: { calls: Array<Array<unknown>> } }, index: number, label: string) {
+  const call = mock.mock.calls[index];
+  if (!call) {
+    throw new Error(`Expected mock call: ${label}`);
+  }
+  return call[0];
+}
+
+function expectCallField(
+  mock: { mock: { calls: Array<Array<unknown>> } },
+  field: string,
+  expected: unknown,
+) {
+  const options = requireRecord(callArg(mock, 0, `first ${field} call`), field);
+  expect(options[field]).toEqual(expected);
+  return options;
+}
+
+function expectGatewayAuthToken(value: unknown, expected: string) {
+  const root = requireRecord(value, "config root");
+  const gateway = requireRecord(root.gateway, "config.gateway");
+  const auth = requireRecord(gateway.auth, "config.gateway.auth");
+  expect(auth.token).toBe(expected);
+}
+
+function readGatewayAuthToken(value: unknown) {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const root = value as Record<string, unknown>;
+  const gateway = root.gateway;
+  if (!gateway || typeof gateway !== "object") {
+    return undefined;
+  }
+  const auth = (gateway as Record<string, unknown>).auth;
+  if (!auth || typeof auth !== "object") {
+    return undefined;
+  }
+  return (auth as Record<string, unknown>).token;
+}
+
+function expectCallConfigGatewayAuthToken(
+  mock: { mock: { calls: Array<Array<unknown>> } },
+  expected: string,
+) {
+  const matchingCalls = mock.mock.calls.filter(([value]) => {
+    const options = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+    return readGatewayAuthToken(options.config) === expected;
+  });
+  expect(matchingCalls).not.toEqual([]);
+}
+
+function expectNoteContaining(messagePart: string, title: string) {
+  const messages = mocks.note.mock.calls
+    .filter(([, callTitle]) => callTitle === title)
+    .map(([message]) => String(message));
+  expect(messages.join("\n")).toContain(messagePart);
+}
+
+function expectNoNoteContaining(messagePart: string, title: string) {
+  const messages = mocks.note.mock.calls
+    .filter(([, callTitle]) => callTitle === title)
+    .map(([message]) => String(message));
+  expect(messages.join("\n")).not.toContain(messagePart);
+}
+
 function setupGatewayEntrypointRepairScenario(params: {
   currentEntrypoint: string;
   installEntrypoint: string;
@@ -246,6 +322,9 @@ describe("maybeRepairGatewayServiceConfig", () => {
     vi.clearAllMocks();
     fsMocks.realpath.mockImplementation(async (value: string) => value);
     mocks.resolveGatewayPort.mockReturnValue(18789);
+    mocks.needsNodeRuntimeMigration.mockReturnValue(false);
+    mocks.renderSystemNodeWarning.mockReturnValue(undefined);
+    mocks.resolveSystemNodeInfo.mockResolvedValue(null);
     mocks.isSystemdUnitActive.mockResolvedValue(false);
     mocks.resolveGatewayAuthTokenForService.mockImplementation(async (cfg: OpenClawConfig, env) => {
       const configToken =
@@ -282,25 +361,51 @@ describe("maybeRepairGatewayServiceConfig", () => {
 
     await runRepair(cfg);
 
-    expect(mocks.auditGatewayServiceConfig).toHaveBeenCalledWith(
-      expect.objectContaining({
-        expectedGatewayToken: "config-token",
-      }),
-    );
-    expect(mocks.buildGatewayInstallPlan).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: expect.objectContaining({
-          gateway: expect.objectContaining({
-            auth: expect.objectContaining({
-              token: "config-token",
-            }),
-          }),
-        }),
-      }),
-    );
+    expectCallField(mocks.auditGatewayServiceConfig, "expectedGatewayToken", "config-token");
+    expectCallConfigGatewayAuthToken(mocks.buildGatewayInstallPlan, "config-token");
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
     expect(mocks.stage).not.toHaveBeenCalled();
     expect(mocks.install).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not duplicate gateway runtime warnings already emitted by the node install plan", async () => {
+    const nvmNode = "/home/orin/.nvm/versions/node/v22.22.2/bin/node";
+    mocks.readCommand.mockResolvedValue({
+      programArguments: [nvmNode, "/usr/local/bin/openclaw", "gateway", "--port", "18789"],
+      environment: {},
+    });
+    mocks.buildGatewayInstallPlan.mockImplementation(async ({ warn }) => {
+      warn?.(
+        "System Node 20.20.2 at /usr/bin/node is below the required Node 22.16+. Using /home/orin/.nvm/versions/node/v22.22.2/bin/node for the daemon.",
+        "Gateway runtime",
+      );
+      return {
+        programArguments: [nvmNode, "/usr/local/bin/openclaw", "gateway", "--port", "18789"],
+        workingDirectory: "/tmp",
+        environment: {},
+      };
+    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: true,
+      issues: [{ code: "runtime", message: "runtime migration", level: "recommended" }],
+    });
+    mocks.needsNodeRuntimeMigration.mockReturnValue(true);
+    mocks.resolveSystemNodeInfo.mockResolvedValue({
+      path: "/usr/bin/node",
+      version: "20.20.2",
+      supported: false,
+    });
+    mocks.renderSystemNodeWarning.mockReturnValue("duplicate doctor runtime warning");
+
+    await runRepair({ gateway: {} });
+
+    const runtimeNotes = mocks.note.mock.calls.filter(([, title]) => title === "Gateway runtime");
+    const runtimeMessages = runtimeNotes.map(([message]) => message);
+    expect(runtimeMessages).not.toContain("duplicate doctor runtime warning");
+    expect(runtimeMessages.map((message) => String(message)).join("\n")).not.toContain("not found");
+    expect(runtimeMessages.map((message) => String(message)).join("\n")).toContain(
+      "Using /home/orin/.nvm/versions/node/v22.22.2/bin/node",
+    );
   });
 
   it("passes planned managed env keys into service audit for legacy inline secret detection", async () => {
@@ -332,10 +437,10 @@ describe("maybeRepairGatewayServiceConfig", () => {
 
     await runRepair({ gateway: {} });
 
-    expect(mocks.auditGatewayServiceConfig).toHaveBeenCalledWith(
-      expect.objectContaining({
-        expectedManagedServiceEnvKeys: new Set(["TAVILY_API_KEY"]),
-      }),
+    expectCallField(
+      mocks.auditGatewayServiceConfig,
+      "expectedManagedServiceEnvKeys",
+      new Set(["TAVILY_API_KEY"]),
     );
     expect(mocks.install).toHaveBeenCalledTimes(1);
   });
@@ -366,16 +471,12 @@ describe("maybeRepairGatewayServiceConfig", () => {
 
     await runRepair({ gateway: { port: 18888 } });
 
-    expect(mocks.auditGatewayServiceConfig).toHaveBeenCalledWith(
-      expect.objectContaining({
-        expectedPort: 18888,
-      }),
+    expectCallField(mocks.auditGatewayServiceConfig, "expectedPort", 18888);
+    const installOptions = requireRecord(
+      callArg(mocks.install, 0, "install call"),
+      "install options",
     );
-    expect(mocks.install).toHaveBeenCalledWith(
-      expect.objectContaining({
-        programArguments: expect.arrayContaining(["18888"]),
-      }),
-    );
+    expect(installOptions.programArguments).toContain("18888");
   });
 
   it("repairs gateway services with embedded proxy environment values", async () => {
@@ -406,14 +507,12 @@ describe("maybeRepairGatewayServiceConfig", () => {
 
     await runRepair({ gateway: {} });
 
-    expect(mocks.install).toHaveBeenCalledWith(
-      expect.objectContaining({
-        environment: expect.not.objectContaining({
-          HTTP_PROXY: expect.any(String),
-          HTTPS_PROXY: expect.any(String),
-        }),
-      }),
-    );
+    expect(mocks.install).toHaveBeenCalledOnce();
+    const installOptions = requireRecord(callArg(mocks.install, 0, "gateway install"), "install");
+    const environment = requireRecord(installOptions.environment, "install environment");
+    expect(environment).toStrictEqual({});
+    expect(Object.hasOwn(environment, "HTTP_PROXY")).toBe(false);
+    expect(Object.hasOwn(environment, "HTTPS_PROXY")).toBe(false);
   });
 
   it("uses OPENCLAW_GATEWAY_TOKEN when config token is missing", async () => {
@@ -426,34 +525,14 @@ describe("maybeRepairGatewayServiceConfig", () => {
 
       await runRepair(cfg);
 
-      expect(mocks.auditGatewayServiceConfig).toHaveBeenCalledWith(
-        expect.objectContaining({
-          expectedGatewayToken: "env-token",
-        }),
+      expectCallField(mocks.auditGatewayServiceConfig, "expectedGatewayToken", "env-token");
+      expectCallConfigGatewayAuthToken(mocks.buildGatewayInstallPlan, "env-token");
+      const replaceOptions = requireRecord(
+        callArg(mocks.replaceConfigFile, 0, "replaceConfigFile call"),
+        "replaceConfigFile options",
       );
-      expect(mocks.buildGatewayInstallPlan).toHaveBeenCalledWith(
-        expect.objectContaining({
-          config: expect.objectContaining({
-            gateway: expect.objectContaining({
-              auth: expect.objectContaining({
-                token: "env-token",
-              }),
-            }),
-          }),
-        }),
-      );
-      expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
-        expect.objectContaining({
-          nextConfig: expect.objectContaining({
-            gateway: expect.objectContaining({
-              auth: expect.objectContaining({
-                token: "env-token",
-              }),
-            }),
-          }),
-          afterWrite: { mode: "auto" },
-        }),
-      );
+      expectGatewayAuthToken(replaceOptions.nextConfig, "env-token");
+      expect(replaceOptions.afterWrite).toEqual({ mode: "auto" });
       expect(mocks.stage).not.toHaveBeenCalled();
       expect(mocks.install).toHaveBeenCalledTimes(1);
     });
@@ -477,8 +556,8 @@ describe("maybeRepairGatewayServiceConfig", () => {
 
     await runRepair({ gateway: {} });
 
-    expect(mocks.note).not.toHaveBeenCalledWith(
-      expect.stringContaining("Gateway service entrypoint does not match the current install."),
+    expectNoNoteContaining(
+      "Gateway service entrypoint does not match the current install.",
       "Gateway service config",
     );
     expect(mocks.stage).not.toHaveBeenCalled();
@@ -494,8 +573,8 @@ describe("maybeRepairGatewayServiceConfig", () => {
 
     await runRepair({ gateway: {} });
 
-    expect(mocks.note).not.toHaveBeenCalledWith(
-      expect.stringContaining("Gateway service entrypoint does not match the current install."),
+    expectNoNoteContaining(
+      "Gateway service entrypoint does not match the current install.",
       "Gateway service config",
     );
     expect(mocks.stage).not.toHaveBeenCalled();
@@ -523,18 +602,17 @@ describe("maybeRepairGatewayServiceConfig", () => {
 
     await runRepair({ gateway: {} });
 
-    expect(mocks.buildGatewayInstallPlan).toHaveBeenCalledWith(
-      expect.objectContaining({
-        env: expect.objectContaining({
-          OPENCLAW_WRAPPER: wrapperPath,
-        }),
-        existingEnvironment: expect.objectContaining({
-          OPENCLAW_WRAPPER: wrapperPath,
-        }),
-      }),
+    const installPlanOptions = requireRecord(
+      callArg(mocks.buildGatewayInstallPlan, 0, "buildGatewayInstallPlan call"),
+      "buildGatewayInstallPlan options",
     );
-    expect(mocks.note).not.toHaveBeenCalledWith(
-      expect.stringContaining("Gateway service entrypoint does not match the current install."),
+    expect(requireRecord(installPlanOptions.env, "install env").OPENCLAW_WRAPPER).toBe(wrapperPath);
+    expect(
+      requireRecord(installPlanOptions.existingEnvironment, "install existing environment")
+        .OPENCLAW_WRAPPER,
+    ).toBe(wrapperPath);
+    expectNoNoteContaining(
+      "Gateway service entrypoint does not match the current install.",
       "Gateway service config",
     );
     expect(mocks.note).toHaveBeenCalledWith(
@@ -554,8 +632,8 @@ describe("maybeRepairGatewayServiceConfig", () => {
 
     await runRepair({ gateway: {} });
 
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("Gateway service entrypoint does not match the current install."),
+    expectNoteContaining(
+      "Gateway service entrypoint does not match the current install.",
       "Gateway service config",
     );
     expect(mocks.stage).not.toHaveBeenCalled();
@@ -585,10 +663,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
       "custom-gateway.service",
       "system",
     );
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("skipped command/entrypoint rewrites"),
-      "Gateway service config",
-    );
+    expectNoteContaining("skipped command/entrypoint rewrites", "Gateway service config");
     expect(mocks.install).not.toHaveBeenCalled();
     expect(mocks.stage).not.toHaveBeenCalled();
   });
@@ -652,14 +727,11 @@ describe("maybeRepairGatewayServiceConfig", () => {
 
     await runRepair({ gateway: { port: 18888 } });
 
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("Gateway service port does not match current gateway config."),
+    expectNoteContaining(
+      "Gateway service port does not match current gateway config.",
       "Gateway service config",
     );
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("leaving supervisor metadata unchanged"),
-      "Gateway service config",
-    );
+    expectNoteContaining("leaving supervisor metadata unchanged", "Gateway service config");
     expect(mocks.install).not.toHaveBeenCalled();
     expect(mocks.stage).not.toHaveBeenCalled();
   });
@@ -676,19 +748,17 @@ describe("maybeRepairGatewayServiceConfig", () => {
       updateInProgress: false,
     });
 
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("Gateway service entrypoint does not match the current install."),
+    expectNoteContaining(
+      "Gateway service entrypoint does not match the current install.",
       "Gateway service config",
     );
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("openclaw gateway install --force"),
-      "Gateway service config",
-    );
+    expectNoteContaining("openclaw gateway install --force", "Gateway service config");
     expect(mocks.stage).not.toHaveBeenCalled();
     expect(mocks.install).not.toHaveBeenCalled();
   });
 
-  it("stages service config repairs during non-interactive update repairs", async () => {
+  it("defers systemd service config rewrites during non-interactive update repairs", async () => {
+    mockProcessPlatform("linux");
     setupGatewayEntrypointRepairScenario({
       currentEntrypoint: "/Users/test/Library/npm/node_modules/openclaw/dist/entry.js",
       installEntrypoint: "/Users/test/Library/npm/node_modules/openclaw/dist/index.js",
@@ -700,10 +770,33 @@ describe("maybeRepairGatewayServiceConfig", () => {
       updateInProgress: true,
     });
 
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("Gateway service entrypoint does not match the current install."),
+    expectNoteContaining(
+      "Gateway service entrypoint does not match the current install.",
       "Gateway service config",
     );
+    expectNoteContaining("left the live systemd unit unchanged", "Gateway service config");
+    expect(mocks.stage).not.toHaveBeenCalled();
+    expect(mocks.install).not.toHaveBeenCalled();
+  });
+
+  it("keeps staging non-systemd service config repairs during non-interactive update repairs", async () => {
+    mockProcessPlatform("darwin");
+    setupGatewayEntrypointRepairScenario({
+      currentEntrypoint: "/Users/test/Library/npm/node_modules/openclaw/dist/entry.js",
+      installEntrypoint: "/Users/test/Library/npm/node_modules/openclaw/dist/index.js",
+      installWorkingDirectory: "/tmp",
+    });
+
+    await runNonInteractiveRepair({
+      cfg: { gateway: {} },
+      updateInProgress: true,
+    });
+
+    expectNoteContaining(
+      "Gateway service entrypoint does not match the current install.",
+      "Gateway service config",
+    );
+    expectNoNoteContaining("left the live systemd unit unchanged", "Gateway service config");
     expect(mocks.stage).toHaveBeenCalledTimes(1);
     expect(mocks.install).not.toHaveBeenCalled();
   });
@@ -741,16 +834,8 @@ describe("maybeRepairGatewayServiceConfig", () => {
 
     await runRepair(cfg);
 
-    expect(mocks.auditGatewayServiceConfig).toHaveBeenCalledWith(
-      expect.objectContaining({
-        expectedGatewayToken: undefined,
-      }),
-    );
-    expect(mocks.buildGatewayInstallPlan).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: cfg,
-      }),
-    );
+    expectCallField(mocks.auditGatewayServiceConfig, "expectedGatewayToken", undefined);
+    expectCallField(mocks.buildGatewayInstallPlan, "config", cfg);
     expect(mocks.stage).not.toHaveBeenCalled();
     expect(mocks.install).toHaveBeenCalledTimes(1);
   });
@@ -769,41 +854,22 @@ describe("maybeRepairGatewayServiceConfig", () => {
 
         await runRepair(cfg);
 
-        expect(mocks.auditGatewayServiceConfig).toHaveBeenCalledWith(
-          expect.objectContaining({
-            expectedGatewayToken: undefined,
-          }),
+        expectCallField(mocks.auditGatewayServiceConfig, "expectedGatewayToken", undefined);
+        const replaceOptions = requireRecord(
+          callArg(mocks.replaceConfigFile, 0, "replaceConfigFile call"),
+          "replaceConfigFile options",
         );
-        expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
-          expect.objectContaining({
-            nextConfig: expect.objectContaining({
-              gateway: expect.objectContaining({
-                auth: expect.objectContaining({
-                  token: "stale-token",
-                }),
-              }),
-            }),
-            afterWrite: { mode: "auto" },
-          }),
-        );
-        expect(mocks.buildGatewayInstallPlan).toHaveBeenCalledWith(
-          expect.objectContaining({
-            config: expect.objectContaining({
-              gateway: expect.objectContaining({
-                auth: expect.objectContaining({
-                  token: "stale-token",
-                }),
-              }),
-            }),
-          }),
-        );
+        expectGatewayAuthToken(replaceOptions.nextConfig, "stale-token");
+        expect(replaceOptions.afterWrite).toEqual({ mode: "auto" });
+        expectCallConfigGatewayAuthToken(mocks.buildGatewayInstallPlan, "stale-token");
         expect(mocks.stage).not.toHaveBeenCalled();
         expect(mocks.install).toHaveBeenCalledTimes(1);
       },
     );
   });
 
-  it("does not persist embedded service tokens during non-interactive update repairs", async () => {
+  it("does not persist or stage embedded service tokens during systemd update repairs", async () => {
+    mockProcessPlatform("linux");
     Object.defineProperty(process.stdin, "isTTY", {
       value: false,
       configurable: true,
@@ -835,7 +901,8 @@ describe("maybeRepairGatewayServiceConfig", () => {
         );
 
         expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
-        expect(mocks.stage).toHaveBeenCalledTimes(1);
+        expectNoteContaining("left the live systemd unit unchanged", "Gateway service config");
+        expect(mocks.stage).not.toHaveBeenCalled();
         expect(mocks.install).not.toHaveBeenCalled();
       },
     );
@@ -874,11 +941,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
         await runRepair(cfg);
 
         expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
-        expect(mocks.buildGatewayInstallPlan).toHaveBeenCalledWith(
-          expect.objectContaining({
-            config: cfg,
-          }),
-        );
+        expectCallField(mocks.buildGatewayInstallPlan, "config", cfg);
         expect(mocks.stage).not.toHaveBeenCalled();
       },
     );
@@ -895,8 +958,8 @@ describe("maybeRepairGatewayServiceConfig", () => {
       await runRepair({ gateway: {} });
 
       expect(mocks.auditGatewayServiceConfig).toHaveBeenCalledTimes(1);
-      expect(mocks.note).toHaveBeenCalledWith(
-        expect.stringContaining("Gateway service entrypoint does not match the current install."),
+      expectNoteContaining(
+        "Gateway service entrypoint does not match the current install.",
         "Gateway service config",
       );
       expect(mocks.note).toHaveBeenCalledWith(
@@ -930,11 +993,104 @@ describe("maybeRepairGatewayServiceConfig", () => {
 
         await runRepair({ gateway: {} });
 
-        expect(mocks.note).toHaveBeenCalledWith(
-          expect.stringContaining("resolves to a source checkout"),
-          "Gateway service config",
-        );
+        expectNoteContaining("resolves to a source checkout", "Gateway service config");
         expect(mocks.install).not.toHaveBeenCalled();
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
+  });
+
+  it("does not duplicate Gateway service config panels for a source-checkout entrypoint with audit findings", async () => {
+    await withEnvAsync({}, async () => {
+      const root = await fs.mkdtemp(
+        path.join(os.tmpdir(), "openclaw-doctor-service-config-dedup-"),
+      );
+      try {
+        await fs.mkdir(path.join(root, ".git"), { recursive: true });
+        await fs.mkdir(path.join(root, "src"), { recursive: true });
+        await fs.mkdir(path.join(root, "extensions"), { recursive: true });
+        await fs.mkdir(path.join(root, "dist"), { recursive: true });
+        await fs.writeFile(
+          path.join(root, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "0.0.0-test" }),
+          "utf8",
+        );
+        const sourceCheckoutEntrypoint = path.join(root, "dist", "index.js");
+        await fs.writeFile(sourceCheckoutEntrypoint, "export {};\n", "utf8");
+        const installEntrypoint = "/usr/local/lib/node_modules/openclaw/dist/index.js";
+        setupGatewayEntrypointRepairScenario({
+          currentEntrypoint: sourceCheckoutEntrypoint,
+          installEntrypoint,
+          installWorkingDirectory: "/tmp",
+        });
+
+        await runRepair({ gateway: {} });
+
+        const gatewayServiceConfigNotes = mocks.note.mock.calls.filter(
+          ([, title]) => title === "Gateway service config",
+        );
+        expect(gatewayServiceConfigNotes).toHaveLength(1);
+        const consolidated = gatewayServiceConfigNotes[0]?.[0] ?? "";
+        expect(consolidated).toContain(
+          "Gateway service entrypoint does not match the current install.",
+        );
+        expect(consolidated).not.toContain("resolves to a source checkout");
+        const forceMatches = consolidated.match(/openclaw gateway install --force/g) ?? [];
+        expect(forceMatches).toHaveLength(0);
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
+  });
+
+  it("keeps the gateway install force hint when a source-checkout warning is suppressed and repair is declined", async () => {
+    await withEnvAsync({}, async () => {
+      const root = await fs.mkdtemp(
+        path.join(os.tmpdir(), "openclaw-doctor-service-config-force-hint-"),
+      );
+      try {
+        await fs.mkdir(path.join(root, ".git"), { recursive: true });
+        await fs.mkdir(path.join(root, "src"), { recursive: true });
+        await fs.mkdir(path.join(root, "extensions"), { recursive: true });
+        await fs.mkdir(path.join(root, "dist"), { recursive: true });
+        await fs.writeFile(
+          path.join(root, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "0.0.0-test" }),
+          "utf8",
+        );
+        const sourceCheckoutEntrypoint = path.join(root, "dist", "index.js");
+        await fs.writeFile(sourceCheckoutEntrypoint, "export {};\n", "utf8");
+        const installEntrypoint = "/usr/local/lib/node_modules/openclaw/dist/index.js";
+        setupGatewayEntrypointRepairScenario({
+          currentEntrypoint: sourceCheckoutEntrypoint,
+          installEntrypoint,
+          installWorkingDirectory: "/tmp",
+        });
+
+        const declinePrompts = {
+          ...makeDoctorPrompts(),
+          confirmAutoFix: vi.fn().mockResolvedValue(false),
+          confirmAggressiveAutoFix: vi.fn().mockResolvedValue(false),
+          confirmRuntimeRepair: vi.fn().mockResolvedValue(false),
+        };
+        await maybeRepairGatewayServiceConfig(
+          { gateway: {} },
+          "local",
+          makeDoctorIo(),
+          declinePrompts,
+        );
+
+        const gatewayServiceConfigNotes = mocks.note.mock.calls.filter(
+          ([, title]) => title === "Gateway service config",
+        );
+        expect(gatewayServiceConfigNotes).toHaveLength(2);
+        const auditNote = gatewayServiceConfigNotes[0]?.[0] ?? "";
+        expect(auditNote).toContain(
+          "Gateway service entrypoint does not match the current install.",
+        );
+        expect(auditNote).not.toContain("resolves to a source checkout");
+        expect(gatewayServiceConfigNotes[1]?.[0]).toContain("openclaw gateway install --force");
       } finally {
         await fs.rm(root, { recursive: true, force: true });
       }
@@ -975,10 +1131,7 @@ describe("maybeScanExtraGatewayServices", () => {
       "custom-gateway.service",
       "user",
     );
-    expect(mocks.note).not.toHaveBeenCalledWith(
-      expect.stringContaining("custom-gateway.service"),
-      "Other gateway-like services detected",
-    );
+    expectNoNoteContaining("custom-gateway.service", "Other gateway-like services detected");
   });
 
   it("reports active non-legacy Linux gateway-like services", async () => {
@@ -1001,10 +1154,7 @@ describe("maybeScanExtraGatewayServices", () => {
       "custom-gateway.service",
       "system",
     );
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("custom-gateway.service"),
-      "Other gateway-like services detected",
-    );
+    expectNoteContaining("custom-gateway.service", "Other gateway-like services detected");
   });
 
   it("removes legacy Linux user systemd services", async () => {
@@ -1052,10 +1202,7 @@ describe("maybeScanExtraGatewayServices", () => {
       env: process.env,
       stdout: process.stdout,
     });
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("clawdbot-gateway.service"),
-      "Legacy gateway removed",
-    );
+    expectNoteContaining("clawdbot-gateway.service", "Legacy gateway removed");
     expect(runtime.log).toHaveBeenCalledWith(
       "Legacy gateway services removed. Installing OpenClaw gateway next.",
     );
@@ -1076,10 +1223,7 @@ describe("maybeScanExtraGatewayServices", () => {
       const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
       await maybeScanExtraGatewayServices({ deep: false }, runtime, makeDoctorPrompts());
 
-      expect(mocks.note).toHaveBeenCalledWith(
-        expect.stringContaining("clawdbot-gateway.service"),
-        "Other gateway-like services detected",
-      );
+      expectNoteContaining("clawdbot-gateway.service", "Other gateway-like services detected");
       expect(mocks.note).toHaveBeenCalledWith(
         EXTERNAL_SERVICE_REPAIR_NOTE,
         "Legacy gateway cleanup skipped",

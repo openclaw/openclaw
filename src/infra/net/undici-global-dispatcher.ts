@@ -1,7 +1,12 @@
-import * as net from "node:net";
-import { Agent, EnvHttpProxyAgent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
-import { isWSL2Sync } from "../wsl.js";
 import { hasEnvHttpProxyAgentConfigured, resolveEnvHttpProxyAgentOptions } from "./proxy-env.js";
+import {
+  createUndiciAutoSelectFamilyConnectOptions,
+  resolveUndiciAutoSelectFamily,
+} from "./undici-family-policy.js";
+import {
+  loadUndiciGlobalDispatcherDeps,
+  type UndiciGlobalDispatcherDeps,
+} from "./undici-runtime.js";
 
 export const DEFAULT_UNDICI_STREAM_TIMEOUT_MS = 30 * 60 * 1000;
 
@@ -11,8 +16,6 @@ export const DEFAULT_UNDICI_STREAM_TIMEOUT_MS = 30 * 60 * 1000;
  * non-public `.options` field.
  */
 export let _globalUndiciStreamTimeoutMs: number | undefined;
-
-const AUTO_SELECT_FAMILY_ATTEMPT_TIMEOUT_MS = 300;
 
 let lastAppliedTimeoutKey: string | null = null;
 let lastAppliedProxyBootstrap = false;
@@ -36,36 +39,6 @@ function resolveDispatcherKind(dispatcher: unknown): DispatcherKind {
   return "unsupported";
 }
 
-function resolveAutoSelectFamily(): boolean | undefined {
-  if (typeof net.getDefaultAutoSelectFamily !== "function") {
-    return undefined;
-  }
-  try {
-    const systemDefault = net.getDefaultAutoSelectFamily();
-    // WSL2 has unstable IPv6 connectivity; disable autoSelectFamily to
-    // force IPv4 connections and avoid "fetch failed" errors when reaching
-    // Windows-host services (e.g. Ollama) from inside WSL2.
-    if (systemDefault && isWSL2Sync()) {
-      return false;
-    }
-    return systemDefault;
-  } catch {
-    return undefined;
-  }
-}
-
-function resolveConnectOptions(
-  autoSelectFamily: boolean | undefined,
-): { autoSelectFamily: boolean; autoSelectFamilyAttemptTimeout: number } | undefined {
-  if (autoSelectFamily === undefined) {
-    return undefined;
-  }
-  return {
-    autoSelectFamily,
-    autoSelectFamilyAttemptTimeout: AUTO_SELECT_FAMILY_ATTEMPT_TIMEOUT_MS,
-  };
-}
-
 function resolveDispatcherKey(params: {
   kind: DispatcherKind;
   timeoutMs: number;
@@ -76,10 +49,20 @@ function resolveDispatcherKey(params: {
   return `${params.kind}:${params.timeoutMs}:${autoSelectToken}`;
 }
 
-function resolveCurrentDispatcherKind(): DispatcherKind | null {
+function resolveStreamTimeoutMs(opts?: { timeoutMs?: number }): number | null {
+  const timeoutMsRaw = opts?.timeoutMs ?? DEFAULT_UNDICI_STREAM_TIMEOUT_MS;
+  if (!Number.isFinite(timeoutMsRaw)) {
+    return null;
+  }
+  return Math.max(DEFAULT_UNDICI_STREAM_TIMEOUT_MS, Math.floor(timeoutMsRaw));
+}
+
+function resolveCurrentDispatcherKind(
+  runtime: Pick<UndiciGlobalDispatcherDeps, "getGlobalDispatcher">,
+): Exclude<DispatcherKind, "unsupported"> | null {
   let dispatcher: unknown;
   try {
-    dispatcher = getGlobalDispatcher();
+    dispatcher = runtime.getGlobalDispatcher();
   } catch {
     return null;
   }
@@ -93,13 +76,15 @@ export function ensureGlobalUndiciEnvProxyDispatcher(): void {
   if (!shouldUseEnvProxy) {
     return;
   }
+  const runtime = loadUndiciGlobalDispatcherDeps();
+  const { EnvHttpProxyAgent, setGlobalDispatcher } = runtime;
   if (lastAppliedProxyBootstrap) {
-    if (resolveCurrentDispatcherKind() === "env-proxy") {
+    if (resolveCurrentDispatcherKind(runtime) === "env-proxy") {
       return;
     }
     lastAppliedProxyBootstrap = false;
   }
-  const currentKind = resolveCurrentDispatcherKind();
+  const currentKind = resolveCurrentDispatcherKind(runtime);
   if (currentKind === null) {
     return;
   }
@@ -115,25 +100,19 @@ export function ensureGlobalUndiciEnvProxyDispatcher(): void {
   }
 }
 
-export function ensureGlobalUndiciStreamTimeouts(opts?: { timeoutMs?: number }): void {
-  const timeoutMsRaw = opts?.timeoutMs ?? DEFAULT_UNDICI_STREAM_TIMEOUT_MS;
-  if (!Number.isFinite(timeoutMsRaw)) {
-    return;
-  }
-  const timeoutMs = Math.max(DEFAULT_UNDICI_STREAM_TIMEOUT_MS, Math.floor(timeoutMsRaw));
-  _globalUndiciStreamTimeoutMs = timeoutMs;
-  const kind = resolveCurrentDispatcherKind();
-  if (kind === null) {
-    return;
-  }
-
-  const autoSelectFamily = resolveAutoSelectFamily();
+function applyGlobalDispatcherStreamTimeouts(params: {
+  runtime: UndiciGlobalDispatcherDeps;
+  kind: Exclude<DispatcherKind, "unsupported">;
+  timeoutMs: number;
+}): void {
+  const { runtime, kind, timeoutMs } = params;
+  const autoSelectFamily = resolveUndiciAutoSelectFamily();
   const nextKey = resolveDispatcherKey({ kind, timeoutMs, autoSelectFamily });
   if (lastAppliedTimeoutKey === nextKey) {
     return;
   }
 
-  const connect = resolveConnectOptions(autoSelectFamily);
+  const connect = createUndiciAutoSelectFamilyConnectOptions(autoSelectFamily);
   try {
     if (kind === "env-proxy") {
       const proxyOptions = {
@@ -141,11 +120,11 @@ export function ensureGlobalUndiciStreamTimeouts(opts?: { timeoutMs?: number }):
         bodyTimeout: timeoutMs,
         headersTimeout: timeoutMs,
         ...(connect ? { connect } : {}),
-      } as ConstructorParameters<typeof EnvHttpProxyAgent>[0];
-      setGlobalDispatcher(new EnvHttpProxyAgent(proxyOptions));
+      } as ConstructorParameters<UndiciGlobalDispatcherDeps["EnvHttpProxyAgent"]>[0];
+      runtime.setGlobalDispatcher(new runtime.EnvHttpProxyAgent(proxyOptions));
     } else {
-      setGlobalDispatcher(
-        new Agent({
+      runtime.setGlobalDispatcher(
+        new runtime.Agent({
           bodyTimeout: timeoutMs,
           headersTimeout: timeoutMs,
           ...(connect ? { connect } : {}),
@@ -156,6 +135,42 @@ export function ensureGlobalUndiciStreamTimeouts(opts?: { timeoutMs?: number }):
   } catch {
     // Best-effort hardening only.
   }
+}
+
+export function ensureGlobalUndiciStreamTimeouts(opts?: { timeoutMs?: number }): void {
+  const timeoutMs = resolveStreamTimeoutMs(opts);
+  if (timeoutMs === null) {
+    return;
+  }
+  _globalUndiciStreamTimeoutMs = timeoutMs;
+  if (!hasEnvHttpProxyAgentConfigured()) {
+    lastAppliedTimeoutKey = null;
+    return;
+  }
+  const runtime = loadUndiciGlobalDispatcherDeps();
+  const kind = resolveCurrentDispatcherKind(runtime);
+  if (kind === null) {
+    return;
+  }
+  if (kind !== "env-proxy") {
+    return;
+  }
+
+  applyGlobalDispatcherStreamTimeouts({ runtime, kind, timeoutMs });
+}
+
+export function ensureGlobalUndiciDispatcherStreamTimeouts(opts?: { timeoutMs?: number }): void {
+  const timeoutMs = resolveStreamTimeoutMs(opts);
+  if (timeoutMs === null) {
+    return;
+  }
+  _globalUndiciStreamTimeoutMs = timeoutMs;
+  const runtime = loadUndiciGlobalDispatcherDeps();
+  const kind = resolveCurrentDispatcherKind(runtime);
+  if (kind === null) {
+    return;
+  }
+  applyGlobalDispatcherStreamTimeouts({ runtime, kind, timeoutMs });
 }
 
 export function resetGlobalUndiciStreamTimeoutsForTests(): void {
@@ -170,17 +185,29 @@ export function resetGlobalUndiciStreamTimeoutsForTests(): void {
  */
 export function forceResetGlobalDispatcher(): void {
   lastAppliedTimeoutKey = null;
+  if (!hasEnvHttpProxyAgentConfigured()) {
+    if (!lastAppliedProxyBootstrap) {
+      return;
+    }
+    lastAppliedProxyBootstrap = false;
+    try {
+      const { Agent, setGlobalDispatcher } = loadUndiciGlobalDispatcherDeps();
+      setGlobalDispatcher(new Agent());
+    } catch {
+      // Best-effort reset only.
+    }
+    return;
+  }
   lastAppliedProxyBootstrap = false;
   try {
+    const { EnvHttpProxyAgent, setGlobalDispatcher } = loadUndiciGlobalDispatcherDeps();
     const proxyOptions = resolveEnvHttpProxyAgentOptions();
-    if (hasEnvHttpProxyAgentConfigured()) {
-      setGlobalDispatcher(
-        new EnvHttpProxyAgent(proxyOptions as ConstructorParameters<typeof EnvHttpProxyAgent>[0]),
-      );
-      lastAppliedProxyBootstrap = true;
-    } else {
-      setGlobalDispatcher(new Agent());
-    }
+    setGlobalDispatcher(
+      new EnvHttpProxyAgent(
+        proxyOptions as ConstructorParameters<UndiciGlobalDispatcherDeps["EnvHttpProxyAgent"]>[0],
+      ),
+    );
+    lastAppliedProxyBootstrap = true;
   } catch {
     // Best-effort reset only.
   }

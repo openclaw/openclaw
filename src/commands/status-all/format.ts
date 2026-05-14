@@ -8,6 +8,7 @@ import {
 } from "../../infra/update-channels.js";
 import { formatGitInstallLabel, type UpdateCheckResult } from "../../infra/update-check.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { VERSION } from "../../version.js";
 import { formatUpdateOneLiner, resolveUpdateAvailability } from "../status.update.js";
 
 export { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
@@ -68,6 +69,7 @@ export function resolveStatusUpdateChannelInfo(params: {
 }) {
   return resolveUpdateChannelDisplay({
     configChannel: normalizeUpdateChannel(params.updateConfigChannel),
+    currentVersion: VERSION,
     installKind: params.update.installKind ?? "unknown",
     gitTag: params.update.git?.tag ?? null,
     gitBranch: params.update.git?.branch ?? null,
@@ -462,6 +464,7 @@ export function buildGatewayStatusJsonPayload(params: {
     | {
         connectLatencyMs?: number | null;
         error?: string | null;
+        health?: unknown;
       }
     | null
     | undefined;
@@ -486,6 +489,13 @@ export function buildGatewayStatusJsonPayload(params: {
     self: params.gatewaySelf ?? null,
     error: params.gatewayProbe?.error ?? null,
     authWarning: params.gatewayProbeAuthWarning ?? null,
+    ...(params.gatewayProbe?.health &&
+    typeof params.gatewayProbe.health === "object" &&
+    "modelPricing" in params.gatewayProbe.health
+      ? {
+          modelPricing: (params.gatewayProbe.health as { modelPricing?: unknown }).modelPricing,
+        }
+      : {}),
   };
 }
 

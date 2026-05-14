@@ -231,12 +231,44 @@ async function createPluginDirFixture(baseDir: string, pluginId = "my-plugin") {
 }
 
 async function expectPathAccessState(pathToCheck: string, expected: "exists" | "missing") {
-  const accessExpectation = fs.access(pathToCheck);
   if (expected === "exists") {
-    await expect(accessExpectation).resolves.toBeUndefined();
+    await fs.access(pathToCheck);
     return;
   }
-  await expect(accessExpectation).rejects.toThrow();
+  try {
+    await fs.access(pathToCheck);
+  } catch (error) {
+    expect((error as { code?: unknown }).code).toBe("ENOENT");
+    return;
+  }
+  throw new Error(`expected ${pathToCheck} to be missing`);
+}
+
+function expectNpmUninstallCommand(params: { packageName: string; npmRoot: string }) {
+  const command = runCommandWithTimeoutMock.mock.calls[0];
+  if (!command) {
+    throw new Error("Expected npm uninstall command");
+  }
+  expect(command[0]).toEqual([
+    "npm",
+    "uninstall",
+    "--loglevel=error",
+    "--legacy-peer-deps",
+    "--ignore-scripts",
+    "--no-audit",
+    "--no-fund",
+    params.packageName,
+  ]);
+  const options = command[1] as {
+    cwd?: string;
+    timeoutMs?: number;
+    env?: Record<string, string>;
+  };
+  expect(options.cwd).toBe(params.npmRoot);
+  expect(options.timeoutMs).toBe(300_000);
+  expect(options.env?.NPM_CONFIG_IGNORE_SCRIPTS).toBe("true");
+  expect(options.env?.npm_config_legacy_peer_deps).toBe("true");
+  expect(options.env?.npm_config_package_lock).toBe("true");
 }
 
 describe("resolveUninstallChannelConfigKeys", () => {
@@ -245,7 +277,7 @@ describe("resolveUninstallChannelConfigKeys", () => {
   });
 
   it("keeps explicit empty channelIds as remove-nothing", () => {
-    expect(resolveUninstallChannelConfigKeys("telegram", { channelIds: [] })).toEqual([]);
+    expect(resolveUninstallChannelConfigKeys("telegram", { channelIds: [] })).toStrictEqual([]);
   });
 
   it("filters shared keys and duplicate channel ids", () => {
@@ -704,6 +736,169 @@ describe("uninstallPlugin", () => {
     }
   });
 
+  it("cleans stale policy references even when plugin code and install records are gone", async () => {
+    const result = await uninstallPlugin({
+      config: createPluginConfig({
+        allow: ["missing-plugin", "other-plugin"],
+        deny: ["missing-plugin"],
+        slots: {
+          memory: "missing-plugin",
+        },
+      }),
+      pluginId: "missing-plugin",
+      deleteFiles: true,
+    });
+
+    const successfulResult = expectSuccessfulUninstall(result);
+    expect(successfulResult.actions).toEqual({
+      entry: false,
+      install: false,
+      allowlist: true,
+      denylist: true,
+      loadPath: false,
+      memorySlot: true,
+      contextEngineSlot: false,
+      channelConfig: false,
+      directory: false,
+    });
+    expect(successfulResult.config.plugins?.allow).toEqual(["other-plugin"]);
+    expect(successfulResult.config.plugins?.deny).toBeUndefined();
+    expect(successfulResult.config.plugins?.slots?.memory).toBe("memory-core");
+    expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "enabled entry only, no installed code",
+      pluginId: "missing-entry-plugin",
+      config: createPluginConfig({
+        entries: {
+          "missing-entry-plugin": { enabled: true },
+        },
+      }),
+      expectedActions: {
+        entry: true,
+        install: false,
+        allowlist: false,
+        denylist: false,
+        loadPath: false,
+        memorySlot: false,
+        contextEngineSlot: false,
+        channelConfig: false,
+        directory: false,
+      },
+      expectedConfig: {},
+    },
+    {
+      name: "install record and channel config, no runtime plugin",
+      pluginId: "missing-channel-plugin",
+      config: createPluginConfig({
+        installs: {
+          "missing-channel-plugin": createNpmInstallRecord("missing-channel-plugin"),
+        },
+        channels: {
+          "missing-channel-plugin": { enabled: true, token: "stale" },
+          discord: { enabled: true },
+        },
+      }),
+      expectedActions: {
+        entry: false,
+        install: true,
+        allowlist: false,
+        denylist: false,
+        loadPath: false,
+        memorySlot: false,
+        contextEngineSlot: false,
+        channelConfig: true,
+        directory: false,
+      },
+      expectedConfig: {
+        channels: {
+          discord: { enabled: true },
+        },
+      },
+    },
+    {
+      name: "linked path record, missing source directory",
+      pluginId: "missing-linked-plugin",
+      config: createPluginConfig({
+        installs: {
+          "missing-linked-plugin": createPathInstallRecord(
+            "/missing/openclaw/plugin",
+            "/missing/openclaw/plugin",
+          ),
+        },
+        loadPaths: ["/missing/openclaw/plugin", "/keep/this/plugin"],
+      }),
+      expectedActions: {
+        entry: false,
+        install: true,
+        allowlist: false,
+        denylist: false,
+        loadPath: true,
+        memorySlot: false,
+        contextEngineSlot: false,
+        channelConfig: false,
+        directory: false,
+      },
+      expectedConfig: {
+        plugins: {
+          load: {
+            paths: ["/keep/this/plugin"],
+          },
+        },
+      },
+    },
+    {
+      name: "policy and slots only, no entry or install record",
+      pluginId: "missing-policy-plugin",
+      config: createPluginConfig({
+        allow: ["missing-policy-plugin", "other-plugin"],
+        deny: ["missing-policy-plugin"],
+        slots: {
+          memory: "missing-policy-plugin",
+          contextEngine: "missing-policy-plugin",
+        },
+      }),
+      expectedActions: {
+        entry: false,
+        install: false,
+        allowlist: true,
+        denylist: true,
+        loadPath: false,
+        memorySlot: true,
+        contextEngineSlot: true,
+        channelConfig: false,
+        directory: false,
+      },
+      expectedConfig: {
+        plugins: {
+          allow: ["other-plugin"],
+          slots: {
+            memory: "memory-core",
+            contextEngine: "legacy",
+          },
+        },
+      },
+    },
+  ] as const)(
+    "uninstall teardown matrix: $name",
+    async ({ pluginId, config, expectedActions, expectedConfig }) => {
+      const result = await uninstallPlugin({
+        config,
+        pluginId,
+        deleteFiles: true,
+        extensionsDir: path.join(tempDir, "extensions"),
+      });
+
+      const successfulResult = expectSuccessfulUninstall(result);
+      expect(successfulResult.actions).toEqual(expectedActions);
+      expect(successfulResult.config).toEqual(expectedConfig);
+      expect(successfulResult.warnings).toStrictEqual([]);
+      expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("removes config entries", async () => {
     const config = createPluginConfig({
       entries: createSinglePluginEntries(),
@@ -732,7 +927,7 @@ describe("uninstallPlugin", () => {
       expectSuccessfulUninstallActions(result, {
         directory: true,
       });
-      await expect(fs.access(pluginDir)).rejects.toThrow();
+      await expectPathAccessState(pluginDir, "missing");
     } finally {
       await fs.rm(pluginDir, { recursive: true, force: true });
     }
@@ -760,7 +955,7 @@ describe("uninstallPlugin", () => {
 
     const applied = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
     expect(applied).toEqual({ directoryRemoved: true, warnings: [] });
-    await expect(fs.access(pluginDir)).rejects.toThrow();
+    await expectPathAccessState(pluginDir, "missing");
   });
 
   it("uninstalls npm-managed packages through npm before deleting the package directory", async () => {
@@ -771,6 +966,20 @@ describe("uninstallPlugin", () => {
     const hoistedDir = path.join(npmRoot, "node_modules", "is-number");
     await fs.mkdir(pluginDir, { recursive: true });
     await fs.mkdir(hoistedDir, { recursive: true });
+    await fs.writeFile(
+      path.join(npmRoot, "package.json"),
+      `${JSON.stringify(
+        {
+          private: true,
+          dependencies: {
+            "@openclaw/kitchen-sink": "1.0.0",
+            "is-number": "7.0.0",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
     await fs.writeFile(path.join(pluginDir, "package.json"), "{}");
     await fs.writeFile(path.join(hoistedDir, "package.json"), "{}");
 
@@ -806,27 +1015,250 @@ describe("uninstallPlugin", () => {
     const applied = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
 
     expect(applied).toEqual({ directoryRemoved: true, warnings: [] });
-    expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
-      [
-        "npm",
-        "uninstall",
-        "--loglevel=error",
-        "--ignore-scripts",
-        "--no-audit",
-        "--no-fund",
-        "--prefix",
-        npmRoot,
-        "@openclaw/kitchen-sink",
-      ],
-      expect.objectContaining({
-        timeoutMs: 300_000,
-        env: expect.objectContaining({
-          NPM_CONFIG_IGNORE_SCRIPTS: "true",
-          npm_config_package_lock: "true",
-        }),
-      }),
+    expectNpmUninstallCommand({ packageName: "@openclaw/kitchen-sink", npmRoot });
+    await expectPathAccessState(pluginDir, "missing");
+  });
+
+  it("repairs remaining npm plugin openclaw peer links after npm uninstall prunes them", async () => {
+    const stateDir = path.join(tempDir, "state");
+    const npmRoot = path.join(stateDir, "npm");
+    const removedPluginDir = path.join(npmRoot, "node_modules", "removed-plugin");
+    const peerPluginDir = path.join(npmRoot, "node_modules", "peer-plugin");
+    const peerLink = path.join(peerPluginDir, "node_modules", "openclaw");
+    await fs.mkdir(removedPluginDir, { recursive: true });
+    await fs.mkdir(path.dirname(peerLink), { recursive: true });
+    await fs.writeFile(
+      path.join(npmRoot, "package.json"),
+      `${JSON.stringify(
+        {
+          private: true,
+          dependencies: {
+            "removed-plugin": "1.0.0",
+            "peer-plugin": "1.0.0",
+          },
+        },
+        null,
+        2,
+      )}\n`,
     );
-    await expect(fs.access(pluginDir)).rejects.toThrow();
+    await fs.writeFile(path.join(removedPluginDir, "package.json"), "{}\n");
+    await fs.writeFile(
+      path.join(peerPluginDir, "package.json"),
+      `${JSON.stringify(
+        {
+          name: "peer-plugin",
+          version: "1.0.0",
+          peerDependencies: { openclaw: ">=2026.0.0" },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await fs.symlink(tempDir, peerLink, "junction");
+    runCommandWithTimeoutMock.mockImplementationOnce(async (argv: string[]) => {
+      await fs.rm(peerLink, { recursive: true, force: true });
+      if (!argv.includes("--legacy-peer-deps")) {
+        await fs.mkdir(path.join(npmRoot, "node_modules", "openclaw"), { recursive: true });
+      }
+      return {
+        code: 0,
+        stdout: "",
+        stderr: "",
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
+    });
+
+    const applied = await applyPluginUninstallDirectoryRemoval({
+      target: removedPluginDir,
+      cleanup: {
+        kind: "npm",
+        npmRoot,
+        packageName: "removed-plugin",
+      },
+    });
+
+    expect(applied).toEqual({ directoryRemoved: true, warnings: [] });
+    await expectPathAccessState(removedPluginDir, "missing");
+    await expectPathAccessState(path.join(npmRoot, "node_modules", "openclaw"), "missing");
+    await expect(fs.lstat(peerLink).then((stat) => stat.isSymbolicLink())).resolves.toBe(true);
+  });
+
+  it("prunes managed peer dependencies after their owning npm plugin is uninstalled", async () => {
+    const stateDir = path.join(tempDir, "state");
+    const npmRoot = path.join(stateDir, "npm");
+    const removedPluginDir = path.join(npmRoot, "node_modules", "removed-plugin");
+    const runtimePeerDir = path.join(npmRoot, "node_modules", "runtime-peer");
+    await fs.mkdir(removedPluginDir, { recursive: true });
+    await fs.mkdir(runtimePeerDir, { recursive: true });
+    await fs.writeFile(
+      path.join(npmRoot, "package.json"),
+      `${JSON.stringify(
+        {
+          private: true,
+          dependencies: {
+            "removed-plugin": "1.0.0",
+            "runtime-peer": "1.0.0",
+          },
+          openclaw: {
+            managedPeerDependencies: ["runtime-peer"],
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await fs.writeFile(
+      path.join(removedPluginDir, "package.json"),
+      `${JSON.stringify(
+        {
+          name: "removed-plugin",
+          version: "1.0.0",
+          peerDependencies: { "runtime-peer": "^1.0.0" },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await fs.writeFile(
+      path.join(runtimePeerDir, "package.json"),
+      `${JSON.stringify({ name: "runtime-peer", version: "1.0.0" }, null, 2)}\n`,
+    );
+    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
+      if (argv[1] === "uninstall") {
+        expect(argv).toContain("--legacy-peer-deps");
+        await fs.rm(removedPluginDir, { recursive: true, force: true });
+        const rootManifest = JSON.parse(
+          await fs.readFile(path.join(npmRoot, "package.json"), "utf8"),
+        ) as { dependencies?: Record<string, string> };
+        delete rootManifest.dependencies?.["removed-plugin"];
+        await fs.writeFile(
+          path.join(npmRoot, "package.json"),
+          `${JSON.stringify(rootManifest, null, 2)}\n`,
+        );
+        return {
+          code: 0,
+          stdout: "",
+          stderr: "",
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      }
+      if (argv[1] === "install") {
+        expect(argv).toContain("--legacy-peer-deps");
+        expect(argv).toContain("--omit=peer");
+        await fs.rm(runtimePeerDir, { recursive: true, force: true });
+        return {
+          code: 0,
+          stdout: "",
+          stderr: "",
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      }
+      throw new Error(`unexpected command: ${argv.join(" ")}`);
+    });
+
+    const applied = await applyPluginUninstallDirectoryRemoval({
+      target: removedPluginDir,
+      cleanup: {
+        kind: "npm",
+        npmRoot,
+        packageName: "removed-plugin",
+      },
+    });
+
+    expect(applied).toEqual({ directoryRemoved: true, warnings: [] });
+    await expectPathAccessState(removedPluginDir, "missing");
+    await expectPathAccessState(runtimePeerDir, "missing");
+    const rootManifest = JSON.parse(
+      await fs.readFile(path.join(npmRoot, "package.json"), "utf8"),
+    ) as {
+      dependencies?: Record<string, string>;
+      openclaw?: { managedPeerDependencies?: string[] };
+    };
+    expect(rootManifest.dependencies?.["removed-plugin"]).toBeUndefined();
+    expect(rootManifest.dependencies?.["runtime-peer"]).toBeUndefined();
+    expect(rootManifest.openclaw?.managedPeerDependencies ?? []).not.toContain("runtime-peer");
+    expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("runs npm cleanup when the managed package directory is already absent", async () => {
+    const stateDir = path.join(tempDir, "state");
+    const npmRoot = path.join(stateDir, "npm");
+    const pluginDir = path.join(npmRoot, "node_modules", "missing-plugin");
+    const peerPluginDir = path.join(npmRoot, "node_modules", "peer-plugin");
+    const peerLink = path.join(peerPluginDir, "node_modules", "openclaw");
+    await fs.mkdir(peerLink, { recursive: true });
+    await fs.writeFile(
+      path.join(npmRoot, "package.json"),
+      `${JSON.stringify(
+        {
+          private: true,
+          dependencies: {
+            "missing-plugin": "1.0.0",
+            "peer-plugin": "1.0.0",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await fs.writeFile(
+      path.join(peerPluginDir, "package.json"),
+      `${JSON.stringify(
+        {
+          name: "peer-plugin",
+          version: "1.0.0",
+          peerDependencies: { openclaw: ">=2026.0.0" },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const applied = await applyPluginUninstallDirectoryRemoval({
+      target: pluginDir,
+      cleanup: {
+        kind: "npm",
+        npmRoot,
+        packageName: "missing-plugin",
+      },
+    });
+
+    expect(applied).toEqual({ directoryRemoved: false, warnings: [] });
+    expectNpmUninstallCommand({ packageName: "missing-plugin", npmRoot });
+    await expect(fs.lstat(peerLink).then((stat) => stat.isSymbolicLink())).resolves.toBe(true);
+  });
+
+  it("removes stale npm install config when the managed npm root is already absent", async () => {
+    const stateDir = path.join(tempDir, "state");
+    const extensionsDir = path.join(stateDir, "extensions");
+    const npmRoot = path.join(stateDir, "npm");
+    const pluginDir = path.join(npmRoot, "node_modules", "missing-plugin");
+
+    const result = await uninstallPlugin({
+      config: createPluginConfig({
+        entries: createSinglePluginEntries("missing-plugin"),
+        installs: {
+          "missing-plugin": createNpmInstallRecord("missing-plugin", pluginDir),
+        },
+      }),
+      pluginId: "missing-plugin",
+      deleteFiles: true,
+      extensionsDir,
+    });
+
+    const successfulResult = expectSuccessfulUninstall(result);
+    expect(successfulResult.config.plugins).toBeUndefined();
+    expect(successfulResult.actions.entry).toBe(true);
+    expect(successfulResult.actions.install).toBe(true);
+    expect(successfulResult.actions.directory).toBe(false);
+    expect(successfulResult.warnings).toStrictEqual([]);
+    expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
   });
 
   it("warns and still removes npm package dirs when npm prune cleanup fails", async () => {
@@ -843,6 +1275,19 @@ describe("uninstallPlugin", () => {
     const npmRoot = path.join(stateDir, "npm");
     const pluginDir = path.join(npmRoot, "node_modules", "demo-plugin");
     await fs.mkdir(pluginDir, { recursive: true });
+    await fs.writeFile(
+      path.join(npmRoot, "package.json"),
+      `${JSON.stringify(
+        {
+          private: true,
+          dependencies: {
+            "demo-plugin": "1.0.0",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
 
     const result = await uninstallPlugin({
       config: createPluginConfig({
@@ -866,7 +1311,7 @@ describe("uninstallPlugin", () => {
     expect(successfulResult.warnings).toEqual([
       "Failed to prune npm dependencies for plugin package demo-plugin: registry unavailable",
     ]);
-    await expect(fs.access(pluginDir)).rejects.toThrow();
+    await expectPathAccessState(pluginDir, "missing");
   });
 
   it.each([
@@ -1014,7 +1459,7 @@ describe("uninstallPlugin", () => {
     expectSuccessfulUninstallActions(result, {
       directory: true,
     });
-    await expect(fs.access(managedDir)).rejects.toThrow();
+    await expectPathAccessState(managedDir, "missing");
   });
 
   it("deletes tracked installs from a recorded managed extensions root", async () => {
@@ -1034,7 +1479,7 @@ describe("uninstallPlugin", () => {
     expectSuccessfulUninstallActions(result, {
       directory: true,
     });
-    await expect(fs.access(installPath)).rejects.toThrow();
+    await expectPathAccessState(installPath, "missing");
   });
 
   it("deletes managed ClawHub install directories", async () => {
@@ -1056,6 +1501,11 @@ describe("uninstallPlugin", () => {
             clawhubPackage: "clawpack-demo",
             clawhubFamily: "code-plugin",
             clawhubChannel: "official",
+            artifactKind: "npm-pack",
+            artifactFormat: "tgz",
+            npmIntegrity: "sha512-clawpack",
+            npmShasum: "1".repeat(40),
+            npmTarballName: "clawpack-demo-2026.5.1-beta.2.tgz",
             clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             clawpackSpecVersion: 1,
             clawpackManifestSha256:
@@ -1072,13 +1522,14 @@ describe("uninstallPlugin", () => {
     expectSuccessfulUninstallActions(result, {
       directory: true,
     });
-    await expect(fs.access(installPath)).rejects.toThrow();
+    await expectPathAccessState(installPath, "missing");
   });
 
   it("deletes managed git install repos outside the extensions directory", async () => {
     const stateDir = path.join(tempDir, "state");
     const extensionsDir = path.join(stateDir, "extensions");
-    const installPath = path.join(stateDir, "git", "git-abc123", "repo");
+    const installParent = path.join(stateDir, "git", "git-abc123");
+    const installPath = path.join(installParent, "repo");
     await fs.mkdir(installPath, { recursive: true });
     await fs.writeFile(path.join(installPath, "index.js"), "// git plugin");
 
@@ -1097,7 +1548,36 @@ describe("uninstallPlugin", () => {
     expectSuccessfulUninstallActions(result, {
       directory: true,
     });
-    await expect(fs.access(installPath)).rejects.toThrow();
+    await expectPathAccessState(installPath, "missing");
+    await expectPathAccessState(installParent, "missing");
+  });
+
+  it("keeps non-empty managed git install parents after deleting the repo", async () => {
+    const stateDir = path.join(tempDir, "state");
+    const extensionsDir = path.join(stateDir, "extensions");
+    const installParent = path.join(stateDir, "git", "git-abc123");
+    const installPath = path.join(installParent, "repo");
+    await fs.mkdir(installPath, { recursive: true });
+    await fs.writeFile(path.join(installPath, "index.js"), "// git plugin");
+    await fs.writeFile(path.join(installParent, "keep.txt"), "keep");
+
+    const result = await uninstallPlugin({
+      config: createPluginConfig({
+        entries: createSinglePluginEntries(),
+        installs: {
+          "my-plugin": createGitInstallRecord("my-plugin", installPath),
+        },
+      }),
+      pluginId: "my-plugin",
+      deleteFiles: true,
+      extensionsDir,
+    });
+
+    expectSuccessfulUninstallActions(result, {
+      directory: true,
+    });
+    await expectPathAccessState(installPath, "missing");
+    await expect(fs.access(path.join(installParent, "keep.txt"))).resolves.toBeUndefined();
   });
 
   it("does not delete symlinked git install targets that resolve outside the managed git root", async () => {
@@ -1250,6 +1730,11 @@ describe("resolveUninstallDirectoryTarget", () => {
           clawhubPackage: "clawpack-demo",
           clawhubFamily: "code-plugin",
           clawhubChannel: "official",
+          artifactKind: "npm-pack",
+          artifactFormat: "tgz",
+          npmIntegrity: "sha512-clawpack",
+          npmShasum: "1".repeat(40),
+          npmTarballName: "clawpack-demo-2026.5.1-beta.2.tgz",
           clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           clawpackSpecVersion: 1,
           clawpackManifestSha256:

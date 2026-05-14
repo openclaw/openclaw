@@ -17,6 +17,38 @@ const createOutput = () => {
   };
 };
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function spawnCall(mock: unknown, callIndex: number) {
+  const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
+  const call = calls[callIndex];
+  if (!call) {
+    throw new Error(`Expected spawn call ${callIndex + 1}`);
+  }
+  return call;
+}
+
+function spawnShellCommand(mock: unknown, callIndex: number): string {
+  const call = spawnCall(mock, callIndex);
+  const args = call[1];
+  if (!Array.isArray(args) || typeof args[6] !== "string") {
+    throw new Error(`Expected spawn call ${callIndex + 1} shell command`);
+  }
+  return args[6];
+}
+
+function expectSpawn(mock: unknown, callIndex: number, command: string, args: Array<unknown>) {
+  const call = spawnCall(mock, callIndex);
+  expect(call[0]).toBe(command);
+  expect(call[1]).toEqual(args);
+  return requireRecord(call[2], "spawn options");
+}
+
 describe("gateway-watch tmux wrapper", () => {
   it("derives stable session names from profile and port", () => {
     expect(resolveGatewayWatchTmuxSessionName({ args: ["gateway", "--force"], env: {} })).toBe(
@@ -43,6 +75,7 @@ describe("gateway-watch tmux wrapper", () => {
       env: {
         OPENCLAW_GATEWAY_PORT: "19001",
         OPENCLAW_PROFILE: "Dev Profile",
+        OPENCLAW_TRACE_SYNC_IO: "0",
         SHELL: "/bin/zsh",
       },
       nodePath: "/opt/node",
@@ -57,11 +90,105 @@ describe("gateway-watch tmux wrapper", () => {
     expect(command).toContain("'FORCE_COLOR=1'");
     expect(command).toContain("'OPENCLAW_GATEWAY_PORT=19001'");
     expect(command).toContain("'OPENCLAW_PROFILE=Dev Profile'");
+    expect(command).toContain("'OPENCLAW_TRACE_SYNC_IO=0'");
     expect(command).toContain("/opt/node");
     expect(command).toContain("scripts/watch-node.mjs");
     expect(command).toContain("gateway");
     expect(command).toContain("--force");
     expect(command).toContain("'a b.jsonl'");
+  });
+
+  it("consumes benchmark flags and passes the CPU profile dir to the watched child", () => {
+    const stdout = createOutput();
+    const stderr = createOutput();
+    const spawnSync = vi
+      .fn()
+      .mockReturnValueOnce({ status: 1, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" });
+
+    const code = runGatewayWatchTmuxMain({
+      args: ["gateway", "--force", "--benchmark"],
+      cwd: "/repo",
+      env: { SHELL: "/bin/zsh" },
+      nodePath: "/node",
+      spawnSync,
+      stderr: stderr.stream,
+      stdout: stdout.stream,
+    });
+
+    expect(code).toBe(0);
+    const command = spawnShellCommand(spawnSync, 1);
+    expect(command).toContain("'OPENCLAW_RUN_NODE_CPU_PROF_DIR=.artifacts/gateway-watch-profiles'");
+    expect(command).toContain("'OPENCLAW_TRACE_SYNC_IO=0'");
+    expect(command).not.toContain("--benchmark");
+    expect(command).toContain("'gateway'");
+    expect(command).toContain("'--force'");
+    expect(stderr.chunks.join("")).toContain(
+      "gateway:watch benchmark CPU profiles: .artifacts/gateway-watch-profiles",
+    );
+  });
+
+  it("preserves explicit sync I/O tracing in benchmark mode", () => {
+    const stdout = createOutput();
+    const stderr = createOutput();
+    const spawnSync = vi
+      .fn()
+      .mockReturnValueOnce({ status: 1, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" });
+
+    const code = runGatewayWatchTmuxMain({
+      args: ["gateway", "--force", "--benchmark"],
+      cwd: "/repo",
+      env: { OPENCLAW_TRACE_SYNC_IO: "1", SHELL: "/bin/zsh" },
+      nodePath: "/node",
+      spawnSync,
+      stderr: stderr.stream,
+      stdout: stdout.stream,
+    });
+
+    expect(code).toBe(0);
+    const command = spawnShellCommand(spawnSync, 1);
+    expect(command).toContain("'OPENCLAW_TRACE_SYNC_IO=1'");
+    expect(command).toContain(
+      "'OPENCLAW_RUN_NODE_OUTPUT_LOG=.artifacts/gateway-watch-profiles/gateway-watch-output.log'",
+    );
+    expect(command).toContain("'OPENCLAW_RUN_NODE_FILTER_SYNC_IO_STDERR=1'");
+    expect(stderr.chunks.join("")).toContain(
+      "gateway:watch benchmark trace output: .artifacts/gateway-watch-profiles/gateway-watch-output.log",
+    );
+  });
+
+  it("can remove --force from benchmarked watch runs", () => {
+    const stdout = createOutput();
+    const stderr = createOutput();
+    const spawnSync = vi
+      .fn()
+      .mockReturnValueOnce({ status: 1, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" });
+
+    const code = runGatewayWatchTmuxMain({
+      args: ["gateway", "--force", "--benchmark-no-force"],
+      cwd: "/repo",
+      env: { SHELL: "/bin/zsh" },
+      nodePath: "/node",
+      spawnSync,
+      stderr: stderr.stream,
+      stdout: stdout.stream,
+    });
+
+    expect(code).toBe(0);
+    const command = spawnShellCommand(spawnSync, 1);
+    expect(command).toContain("'OPENCLAW_RUN_NODE_CPU_PROF_DIR=.artifacts/gateway-watch-profiles'");
+    expect(command).not.toContain("--benchmark-no-force");
+    expect(command).toContain("'gateway'");
+    expect(command).not.toContain("'--force'");
+    expect(stderr.chunks.join("")).toContain("gateway:watch benchmark running without --force");
   });
 
   it("preserves an explicit color override for the tmux child", () => {
@@ -103,51 +230,42 @@ describe("gateway-watch tmux wrapper", () => {
     });
 
     expect(code).toBe(0);
-    expect(spawnSync).toHaveBeenNthCalledWith(
-      1,
-      "tmux",
-      ["has-session", "-t", "openclaw-gateway-watch-main"],
-      expect.objectContaining({ encoding: "utf8" }),
-    );
-    expect(spawnSync).toHaveBeenNthCalledWith(
-      2,
-      "tmux",
-      [
-        "new-session",
-        "-d",
-        "-s",
-        "openclaw-gateway-watch-main",
-        "-c",
-        "/repo",
-        expect.stringContaining("scripts/watch-node.mjs"),
-      ],
-      expect.objectContaining({ encoding: "utf8" }),
-    );
-    expect(spawnSync).toHaveBeenNthCalledWith(
-      3,
-      "tmux",
-      [
+    expect(
+      expectSpawn(spawnSync, 0, "tmux", ["has-session", "-t", "openclaw-gateway-watch-main"])
+        .encoding,
+    ).toBe("utf8");
+    const newSessionCall = spawnCall(spawnSync, 1);
+    expect(newSessionCall[0]).toBe("tmux");
+    const newSessionArgs = newSessionCall[1] as Array<unknown>;
+    expect(newSessionArgs.slice(0, 6)).toEqual([
+      "new-session",
+      "-d",
+      "-s",
+      "openclaw-gateway-watch-main",
+      "-c",
+      "/repo",
+    ]);
+    expect(String(newSessionArgs[6])).toContain("scripts/watch-node.mjs");
+    expect(requireRecord(newSessionCall[2], "spawn options").encoding).toBe("utf8");
+    expect(
+      expectSpawn(spawnSync, 2, "tmux", [
         "set-option",
         "-q",
         "-t",
         "openclaw-gateway-watch-main",
         "@openclaw.gateway_watch.cwd",
         "/repo",
-      ],
-      expect.objectContaining({ encoding: "utf8" }),
-    );
-    expect(spawnSync).toHaveBeenNthCalledWith(
-      4,
-      "tmux",
-      [
+      ]).encoding,
+    ).toBe("utf8");
+    expect(
+      expectSpawn(spawnSync, 3, "tmux", [
         "set-environment",
         "-t",
         "openclaw-gateway-watch-main",
         "OPENCLAW_GATEWAY_WATCH_CWD",
         "/repo",
-      ],
-      expect.objectContaining({ encoding: "utf8" }),
-    );
+      ]).encoding,
+    ).toBe("utf8");
     expect(stderr.chunks.join("")).toContain(
       "gateway:watch started in tmux session openclaw-gateway-watch-main",
     );
@@ -181,12 +299,10 @@ describe("gateway-watch tmux wrapper", () => {
     });
 
     expect(code).toBe(0);
-    expect(spawnSync).toHaveBeenNthCalledWith(
-      5,
-      "tmux",
-      ["attach-session", "-t", "openclaw-gateway-watch-main"],
-      expect.objectContaining({ stdio: "inherit" }),
-    );
+    expect(
+      expectSpawn(spawnSync, 4, "tmux", ["attach-session", "-t", "openclaw-gateway-watch-main"])
+        .stdio,
+    ).toBe("inherit");
     expect(stdout.chunks.join("")).not.toContain("tmux attach -t");
   });
 
@@ -214,12 +330,10 @@ describe("gateway-watch tmux wrapper", () => {
     });
 
     expect(code).toBe(0);
-    expect(spawnSync).toHaveBeenNthCalledWith(
-      5,
-      "tmux",
-      ["switch-client", "-t", "openclaw-gateway-watch-main"],
-      expect.objectContaining({ stdio: "inherit" }),
-    );
+    expect(
+      expectSpawn(spawnSync, 4, "tmux", ["switch-client", "-t", "openclaw-gateway-watch-main"])
+        .stdio,
+    ).toBe("inherit");
   });
 
   it("keeps detached output in CI unless attach is forced", () => {
@@ -270,20 +384,19 @@ describe("gateway-watch tmux wrapper", () => {
     });
 
     expect(code).toBe(0);
-    expect(spawnSync).toHaveBeenNthCalledWith(
-      2,
-      "tmux",
-      [
-        "respawn-pane",
-        "-k",
-        "-t",
-        "openclaw-gateway-watch-dev-19001",
-        "-c",
-        "/repo",
-        expect.stringContaining("scripts/watch-node.mjs"),
-      ],
-      expect.objectContaining({ encoding: "utf8" }),
-    );
+    const respawnCall = spawnCall(spawnSync, 1);
+    expect(respawnCall[0]).toBe("tmux");
+    const respawnArgs = respawnCall[1] as Array<unknown>;
+    expect(respawnArgs.slice(0, 6)).toEqual([
+      "respawn-pane",
+      "-k",
+      "-t",
+      "openclaw-gateway-watch-dev-19001",
+      "-c",
+      "/repo",
+    ]);
+    expect(String(respawnArgs[6])).toContain("scripts/watch-node.mjs");
+    expect(requireRecord(respawnCall[2], "spawn options").encoding).toBe("utf8");
     expect(stderr.chunks.join("")).toContain(
       "gateway:watch restarted in tmux session openclaw-gateway-watch-dev-19001",
     );
@@ -312,40 +425,36 @@ describe("gateway-watch tmux wrapper", () => {
     });
 
     expect(code).toBe(0);
-    expect(spawnSync).toHaveBeenNthCalledWith(
-      2,
-      "tmux",
-      [
-        "respawn-pane",
-        "-k",
-        "-t",
-        "openclaw-gateway-watch-main",
-        "-c",
-        "/repo",
-        expect.stringContaining("scripts/watch-node.mjs"),
-      ],
-      expect.objectContaining({ encoding: "utf8" }),
-    );
-    expect(spawnSync).toHaveBeenNthCalledWith(
-      3,
-      "tmux",
-      ["kill-session", "-t", "openclaw-gateway-watch-main"],
-      expect.objectContaining({ encoding: "utf8" }),
-    );
-    expect(spawnSync).toHaveBeenNthCalledWith(
-      4,
-      "tmux",
-      [
-        "new-session",
-        "-d",
-        "-s",
-        "openclaw-gateway-watch-main",
-        "-c",
-        "/repo",
-        expect.stringContaining("scripts/watch-node.mjs"),
-      ],
-      expect.objectContaining({ encoding: "utf8" }),
-    );
+    const staleRespawnCall = spawnCall(spawnSync, 1);
+    expect(staleRespawnCall[0]).toBe("tmux");
+    const staleRespawnArgs = staleRespawnCall[1] as Array<unknown>;
+    expect(staleRespawnArgs.slice(0, 6)).toEqual([
+      "respawn-pane",
+      "-k",
+      "-t",
+      "openclaw-gateway-watch-main",
+      "-c",
+      "/repo",
+    ]);
+    expect(String(staleRespawnArgs[6])).toContain("scripts/watch-node.mjs");
+    expect(requireRecord(staleRespawnCall[2], "spawn options").encoding).toBe("utf8");
+    expect(
+      expectSpawn(spawnSync, 2, "tmux", ["kill-session", "-t", "openclaw-gateway-watch-main"])
+        .encoding,
+    ).toBe("utf8");
+    const recreatedCall = spawnCall(spawnSync, 3);
+    expect(recreatedCall[0]).toBe("tmux");
+    const recreatedArgs = recreatedCall[1] as Array<unknown>;
+    expect(recreatedArgs.slice(0, 6)).toEqual([
+      "new-session",
+      "-d",
+      "-s",
+      "openclaw-gateway-watch-main",
+      "-c",
+      "/repo",
+    ]);
+    expect(String(recreatedArgs[6])).toContain("scripts/watch-node.mjs");
+    expect(requireRecord(recreatedCall[2], "spawn options").encoding).toBe("utf8");
   });
 
   it("runs the raw foreground watcher when tmux mode is disabled", () => {

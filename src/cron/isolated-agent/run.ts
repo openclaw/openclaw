@@ -1,4 +1,6 @@
 import { hasAnyAuthProfileStoreSource } from "../../agents/auth-profiles/source-check.js";
+import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
+import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-codex-routing.js";
 import { retireSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
 import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.types.js";
 import type { SkillSnapshot } from "../../agents/skills.js";
@@ -7,10 +9,18 @@ import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
+import { isCommandLaneTaskTimeoutError } from "../../process/command-queue.js";
+import { CommandLane } from "../../process/lanes.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { resolveCronDeliveryPlan, type CronDeliveryPlan } from "../delivery-plan.js";
+import {
+  createCronRunDiagnosticsFromAgentResult,
+  createCronRunDiagnosticsFromError,
+  mergeCronRunDiagnostics,
+} from "../run-diagnostics.js";
 import type {
+  CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
   CronDeliveryTrace,
   CronDeliveryTraceMessageTarget,
@@ -123,6 +133,10 @@ function hasConfiguredAuthProfiles(cfg: OpenClawConfig): boolean {
 
 function resolveNonNegativeNumber(value: number | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function isCronNestedLaneTaskTimeoutError(err: unknown): boolean {
+  return isCommandLaneTaskTimeoutError(err, CommandLane.CronNested);
 }
 
 async function retireRolledCronSessionMcpRuntime(params: {
@@ -419,6 +433,7 @@ type RunCronAgentTurnParams = {
   abortSignal?: AbortSignal;
   signal?: AbortSignal;
   onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
+  onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
   sessionKey: string;
   agentId?: string;
   lane?: string;
@@ -447,11 +462,19 @@ type PreparedCronRunContext = {
   resolvedDelivery: ResolvedCronDeliveryTarget;
   deliveryRequested: boolean;
   suppressExecNotifyOnExit: boolean;
+  senderIsOwner: boolean;
   toolPolicy: ReturnType<typeof resolveCronToolPolicy>;
   skillsSnapshot: SkillSnapshot;
   liveSelection: CronLiveSelection;
   thinkLevel: ThinkLevel | undefined;
   timeoutMs: number;
+  /**
+   * Set when the cron payload's `timeoutSeconds` was explicitly configured
+   * for this run (independent of whether its numeric value happens to equal
+   * `agents.defaults.timeoutSeconds`). Forwarded to the embedded runner so
+   * the LLM idle watchdog can honor the cron's per-run choice.
+   */
+  runTimeoutOverrideMs?: number;
 };
 
 type CronPreparationResult =
@@ -561,11 +584,19 @@ async function prepareCronRunContext(params: {
     sessionEntry: cronSession.sessionEntry,
     payload: input.job.payload,
     isGmailHook,
+    agentId,
   });
   if (!resolvedModelSelection.ok) {
     return {
       ok: false,
-      result: withRunSession({ status: "error", error: resolvedModelSelection.error }),
+      result: withRunSession({
+        status: "error",
+        error: resolvedModelSelection.error,
+        diagnostics: createCronRunDiagnosticsFromError(
+          "cron-preflight",
+          resolvedModelSelection.error,
+        ),
+      }),
     };
   }
   let provider = resolvedModelSelection.provider;
@@ -585,6 +616,9 @@ async function prepareCronRunContext(params: {
       result: withRunSession({
         status: "skipped",
         error: preflight.reason,
+        diagnostics: createCronRunDiagnosticsFromError("model-preflight", preflight.reason, {
+          severity: "warn",
+        }),
         provider,
         model,
       }),
@@ -623,11 +657,24 @@ async function prepareCronRunContext(params: {
     }
   }
 
+  const explicitTimeoutSeconds =
+    input.job.payload.kind === "agentTurn" ? input.job.payload.timeoutSeconds : undefined;
   const timeoutMs = resolveAgentTimeoutMs({
     cfg: cfgWithAgentDefaults,
-    overrideSeconds:
-      input.job.payload.kind === "agentTurn" ? input.job.payload.timeoutSeconds : undefined,
+    overrideSeconds: explicitTimeoutSeconds,
   });
+  // Carry the "this run had an explicit per-run timeout" signal forward.
+  // `resolveAgentTimeoutMs` collapses overrideSeconds + the agent default into
+  // one number; the LLM idle watchdog at the embedded-runner attempt loses the
+  // explicit-vs-default distinction without this companion field, which would
+  // otherwise force the implicit 120 s cap whenever the cron payload's
+  // `timeoutSeconds` happens to numerically equal `agents.defaults.timeoutSeconds`.
+  const runTimeoutOverrideMs =
+    typeof explicitTimeoutSeconds === "number" &&
+    Number.isFinite(explicitTimeoutSeconds) &&
+    explicitTimeoutSeconds > 0
+      ? explicitTimeoutSeconds * 1000
+      : undefined;
   const agentPayload = input.job.payload.kind === "agentTurn" ? input.job.payload : null;
   const { deliveryPlan, deliveryRequested, resolvedDelivery, toolPolicy } =
     await resolveCronDeliveryContext({
@@ -719,6 +766,16 @@ async function prepareCronRunContext(params: {
         ).resolveSessionAuthProfileOverride({
           cfg: cfgWithAgentDefaults,
           provider,
+          acceptedProviderIds: listOpenAIAuthProfileProvidersForAgentRuntime({
+            provider,
+            harnessRuntime: resolveAgentHarnessPolicy({
+              provider,
+              modelId: model,
+              config: cfgWithAgentDefaults,
+              agentId,
+              sessionKey: agentSessionKey,
+            }).runtime,
+          }),
           agentDir,
           sessionEntry: cronSession.sessionEntry,
           sessionStore: cronSession.store,
@@ -756,11 +813,13 @@ async function prepareCronRunContext(params: {
       resolvedDelivery,
       deliveryRequested,
       suppressExecNotifyOnExit: deliveryPlan.mode === "none",
+      senderIsOwner: !isExternalHook,
       toolPolicy,
       skillsSnapshot,
       liveSelection,
       thinkLevel,
       timeoutMs,
+      runTimeoutOverrideMs,
     },
   };
 }
@@ -861,7 +920,15 @@ async function finalizeCronRun(params: {
   await prepared.persistSessionEntry();
 
   if (params.isAborted()) {
-    return prepared.withRunSession({ status: "error", error: params.abortReason(), ...telemetry });
+    return prepared.withRunSession({
+      status: "error",
+      error: params.abortReason(),
+      diagnostics: mergeCronRunDiagnostics(
+        createCronRunDiagnosticsFromAgentResult(finalRunResult, { finalStatus: "error" }),
+        createCronRunDiagnosticsFromError("cron-setup", params.abortReason()),
+      ),
+      ...telemetry,
+    });
   }
   let {
     summary,
@@ -881,6 +948,9 @@ async function finalizeCronRun(params: {
       await resolveCronChannelOutputPolicy(prepared.resolvedDelivery.channel)
     ).preferFinalAssistantVisibleText,
   });
+  const agentDiagnostics = createCronRunDiagnosticsFromAgentResult(finalRunResult, {
+    finalStatus: hasFatalErrorPayload ? "error" : "ok",
+  });
   const resolveRunOutcome = (result?: {
     delivered?: boolean;
     deliveryAttempted?: boolean;
@@ -896,6 +966,15 @@ async function finalizeCronRun(params: {
       delivered: result?.delivered,
       deliveryAttempted: result?.deliveryAttempted,
       delivery: result?.delivery,
+      diagnostics: hasFatalErrorPayload
+        ? mergeCronRunDiagnostics(
+            agentDiagnostics,
+            createCronRunDiagnosticsFromError(
+              "agent-run",
+              embeddedRunError ?? "cron isolated run returned an error payload",
+            ),
+          )
+        : agentDiagnostics,
       ...telemetry,
     });
   const failPendingPresentationWarningUnlessDelivered = (delivered?: boolean) => {
@@ -974,6 +1053,13 @@ async function finalizeCronRun(params: {
       deliveryAttempted:
         deliveryResult.result.deliveryAttempted ?? deliveryResult.deliveryAttempted,
       delivery: deliveryTrace,
+      diagnostics: mergeCronRunDiagnostics(
+        agentDiagnostics,
+        deliveryResult.result.diagnostics,
+        deliveryResult.result.status === "error" && deliveryResult.result.error
+          ? createCronRunDiagnosticsFromError("delivery", deliveryResult.result.error)
+          : undefined,
+      ),
     };
     failPendingPresentationWarningUnlessDelivered(
       resultWithDeliveryMeta.delivered ?? deliveryResult.delivered,
@@ -1005,6 +1091,7 @@ export async function runCronIsolatedAgentTurn(params: {
   abortSignal?: AbortSignal;
   signal?: AbortSignal;
   onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
+  onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
   sessionKey: string;
   agentId?: string;
   lane?: string;
@@ -1028,7 +1115,24 @@ export async function runCronIsolatedAgentTurn(params: {
       agentId: prepared.context.agentId,
       sessionId: prepared.context.runSessionId,
       sessionKey: prepared.context.runSessionKey,
+      phase: "runner_entered",
+      provider: prepared.context.liveSelection.provider,
+      model: prepared.context.liveSelection.model,
     });
+  const notifyExecutionPhase = (
+    info: Pick<CronAgentExecutionPhaseUpdate, "phase"> &
+      Partial<Omit<CronAgentExecutionPhaseUpdate, "jobId" | "phase">>,
+  ) => {
+    params.onExecutionPhase?.({
+      jobId: params.job.id,
+      agentId: prepared.context.agentId,
+      sessionId: prepared.context.runSessionId,
+      sessionKey: prepared.context.runSessionKey,
+      provider: prepared.context.liveSelection.provider,
+      model: prepared.context.liveSelection.model,
+      ...info,
+    });
+  };
 
   try {
     const { executeCronRun } = await loadCronExecutorRuntime();
@@ -1058,14 +1162,21 @@ export async function runCronIsolatedAgentTurn(params: {
       persistSessionEntry: prepared.context.persistSessionEntry,
       abortSignal,
       onExecutionStarted: notifyExecutionStarted,
+      onExecutionPhase: notifyExecutionPhase,
       abortReason,
       isAborted,
       thinkLevel: prepared.context.thinkLevel,
       timeoutMs: prepared.context.timeoutMs,
+      runTimeoutOverrideMs: prepared.context.runTimeoutOverrideMs,
       suppressExecNotifyOnExit: prepared.context.suppressExecNotifyOnExit,
+      senderIsOwner: prepared.context.senderIsOwner,
     });
     if (isAborted()) {
-      return prepared.context.withRunSession({ status: "error", error: abortReason() });
+      return prepared.context.withRunSession({
+        status: "error",
+        error: abortReason(),
+        diagnostics: createCronRunDiagnosticsFromError("cron-setup", abortReason()),
+      });
     }
     return await finalizeCronRun({
       prepared: prepared.context,
@@ -1074,6 +1185,15 @@ export async function runCronIsolatedAgentTurn(params: {
       isAborted,
     });
   } catch (err) {
-    return prepared.context.withRunSession({ status: "error", error: String(err) });
+    const isCronLaneTimeout = isAborted() || isCronNestedLaneTaskTimeoutError(err);
+    const error = isCronLaneTimeout ? abortReason() : String(err);
+    return prepared.context.withRunSession({
+      status: "error",
+      error,
+      diagnostics: createCronRunDiagnosticsFromError(
+        isCronLaneTimeout ? "cron-setup" : "agent-run",
+        isCronLaneTimeout ? error : err,
+      ),
+    });
   }
 }

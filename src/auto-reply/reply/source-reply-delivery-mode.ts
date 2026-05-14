@@ -5,10 +5,19 @@ import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 
 export type SourceReplyDeliveryModeContext = {
   ChatType?: string;
+  CommandAuthorized?: boolean;
+  CommandBody?: string;
   CommandSource?: "text" | "native";
   /** Whether the bot was directly @mentioned (set by channel monitors for group/channel messages). */
   WasMentioned?: boolean;
 };
+
+export function isExplicitSourceReplyCommand(ctx: SourceReplyDeliveryModeContext): boolean {
+  if (ctx.CommandSource === "native") {
+    return true;
+  }
+  return ctx.CommandSource === "text" && ctx.CommandAuthorized === true;
+}
 
 export function resolveSourceReplyDeliveryMode(params: {
   cfg: OpenClawConfig;
@@ -18,10 +27,6 @@ export function resolveSourceReplyDeliveryMode(params: {
   defaultVisibleReplies?: "automatic" | "message_tool";
 }): SourceReplyDeliveryMode {
   if (params.requested) {
-    // When the bot was directly @mentioned, override message_tool_only
-    // to automatic even when an explicit requested mode is provided.
-    // This covers channel monitors (Discord, Slack) that pre-resolve
-    // delivery mode without WasMentioned context.
     const overrideMentioned =
       params.ctx.WasMentioned === true && params.requested === "message_tool_only";
     if (overrideMentioned) {
@@ -31,7 +36,7 @@ export function resolveSourceReplyDeliveryMode(params: {
       ? "automatic"
       : params.requested;
   }
-  if (params.ctx.CommandSource === "native") {
+  if (isExplicitSourceReplyCommand(params.ctx)) {
     return "automatic";
   }
   const chatType = normalizeChatType(params.ctx.ChatType);
@@ -44,10 +49,6 @@ export function resolveSourceReplyDeliveryMode(params: {
     const configuredMode = params.cfg.messages?.visibleReplies ?? params.defaultVisibleReplies;
     mode = configuredMode === "message_tool" ? "message_tool_only" : "automatic";
   }
-  // When the bot is directly @mentioned, always deliver replies automatically
-  // so users get a visible response to their mention. This override applies
-  // regardless of how "message_tool_only" was arrived at: config defaults,
-  // channel pre-resolution (Discord, Slack), or explicit requested modes.
   if (params.ctx.WasMentioned === true && mode === "message_tool_only") {
     mode = "automatic";
   }

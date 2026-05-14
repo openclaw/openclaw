@@ -15,6 +15,7 @@ import type {
   PluginAgentEventSubscriptionRegistration,
   PluginControlUiDescriptor,
   PluginRuntimeLifecycleRegistration,
+  PluginSessionActionRegistration,
   PluginSessionSchedulerJobRegistration,
   PluginSessionExtensionRegistration,
   PluginToolMetadataRegistration,
@@ -30,6 +31,7 @@ import type { PluginManifestContracts } from "./manifest.js";
 import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import type { PluginDependencyStatus } from "./status-dependencies.js";
 import type {
   CliBackendPlugin,
   ImageGenerationProviderPlugin,
@@ -43,7 +45,9 @@ import type {
   OpenClawGatewayDiscoveryService,
   OpenClawPluginHttpRouteAuth,
   OpenClawPluginHttpRouteHandler,
+  OpenClawPluginHttpRouteUpgradeHandler,
   OpenClawPluginHttpRouteMatch,
+  OpenClawPluginHostedMediaResolver,
   OpenClawPluginReloadRegistration,
   OpenClawPluginSecurityAuditCollector,
   OpenClawPluginService,
@@ -61,6 +65,7 @@ import type {
   VideoGenerationProviderPlugin,
   WebFetchProviderPlugin,
   WebSearchProviderPlugin,
+  UnifiedModelCatalogProviderPlugin,
 } from "./types.js";
 
 export type PluginToolRegistration = {
@@ -78,6 +83,7 @@ export type PluginCliRegistration = {
   pluginId: string;
   pluginName?: string;
   register: OpenClawPluginCliRegistrar;
+  parentPath: string[];
   commands: string[];
   descriptors: OpenClawPluginCliCommandDescriptor[];
   source: string;
@@ -88,10 +94,23 @@ export type PluginHttpRouteRegistration = {
   pluginId?: string;
   path: string;
   handler: OpenClawPluginHttpRouteHandler;
+  handleUpgrade?: OpenClawPluginHttpRouteUpgradeHandler;
   auth: OpenClawPluginHttpRouteAuth;
   match: OpenClawPluginHttpRouteMatch;
   gatewayRuntimeScopeSurface?: OpenClawPluginGatewayRuntimeScopeSurface;
+  nodeCapability?: {
+    surface: string;
+    ttlMs?: number;
+  };
   source?: string;
+};
+
+export type PluginHostedMediaResolverRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  resolver: OpenClawPluginHostedMediaResolver;
+  source: string;
+  rootDir?: string;
 };
 
 export type PluginChannelRegistration = {
@@ -115,6 +134,14 @@ export type PluginProviderRegistration = {
   pluginId: string;
   pluginName?: string;
   provider: ProviderPlugin;
+  source: string;
+  rootDir?: string;
+};
+
+export type PluginModelCatalogProviderRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  provider: UnifiedModelCatalogProviderPlugin;
   source: string;
   rootDir?: string;
 };
@@ -204,6 +231,7 @@ export type PluginServiceRegistration = {
   service: OpenClawPluginService;
   source: string;
   origin: PluginOrigin;
+  trustedOfficialInstall?: boolean;
   rootDir?: string;
 };
 
@@ -313,6 +341,14 @@ export type PluginSessionSchedulerJobRegistryRegistration = {
   rootDir?: string;
 };
 
+export type PluginSessionActionRegistryRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  action: PluginSessionActionRegistration;
+  source: string;
+  rootDir?: string;
+};
+
 export type PluginConversationBindingResolvedHandlerRegistration = {
   pluginId: string;
   pluginName?: string;
@@ -326,6 +362,7 @@ export type PluginRecord = {
   id: string;
   name: string;
   version?: string;
+  packageName?: string;
   description?: string;
   format?: PluginFormat;
   bundleFormat?: PluginBundleFormat;
@@ -335,6 +372,7 @@ export type PluginRecord = {
   rootDir?: string;
   origin: PluginOrigin;
   workspaceDir?: string;
+  trustedOfficialInstall?: boolean;
   enabled: boolean;
   explicitlyEnabled?: boolean;
   activated?: boolean;
@@ -377,6 +415,7 @@ export type PluginRecord = {
   configJsonSchema?: JsonSchemaObject;
   contracts?: PluginManifestContracts;
   memorySlotSelected?: boolean;
+  dependencyStatus?: PluginDependencyStatus;
 };
 
 export type PluginRegistry = {
@@ -387,6 +426,7 @@ export type PluginRegistry = {
   channels: PluginChannelRegistration[];
   channelSetups: PluginChannelSetupRegistration[];
   providers: PluginProviderRegistration[];
+  modelCatalogProviders: PluginModelCatalogProviderRegistration[];
   cliBackends?: PluginCliBackendRegistration[];
   textTransforms: PluginTextTransformsRegistration[];
   speechProviders: PluginSpeechProviderRegistration[];
@@ -407,6 +447,7 @@ export type PluginRegistry = {
   coreGatewayMethodNames?: string[];
   gatewayMethodScopes?: Partial<Record<string, OperatorScope>>;
   httpRoutes: PluginHttpRouteRegistration[];
+  hostedMediaResolvers?: PluginHostedMediaResolverRegistration[];
   cliRegistrars: PluginCliRegistration[];
   reloads?: PluginReloadRegistration[];
   nodeHostCommands?: PluginNodeHostCommandRegistration[];
@@ -422,6 +463,7 @@ export type PluginRegistry = {
   runtimeLifecycles?: PluginRuntimeLifecycleRegistryRegistration[];
   agentEventSubscriptions?: PluginAgentEventSubscriptionRegistryRegistration[];
   sessionSchedulerJobs?: PluginSessionSchedulerJobRegistryRegistration[];
+  sessionActions?: PluginSessionActionRegistryRegistration[];
   conversationBindingResolvedHandlers: PluginConversationBindingResolvedHandlerRegistration[];
   diagnostics: PluginDiagnostic[];
 };
@@ -431,6 +473,10 @@ export type PluginRegistryParams = {
   coreGatewayHandlers?: GatewayRequestHandlers;
   coreGatewayMethodNames?: readonly string[];
   runtime: PluginRuntime;
+  hostServices?: {
+    /** May be a live accessor; plugin APIs must read it at call time. */
+    cron?: import("../cron/service-contract.js").CronServiceContract;
+  };
   activateGlobalSideEffects?: boolean;
 };
 

@@ -1,11 +1,13 @@
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
-import { findLegacyConfigIssues } from "../config/legacy.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
-import { noteOpencodeProviderOverrides } from "./doctor-config-analysis.js";
+import {
+  noteImplicitFallbackClobberWarnings,
+  noteOpencodeProviderOverrides,
+} from "./doctor-config-analysis.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
@@ -62,6 +64,22 @@ function collectConfiguredChannelIds(cfg: OpenClawConfig): string[] {
   return Object.keys(channels).filter((channelId) => channelId !== "defaults");
 }
 
+// Past-tense "Removed X" lines must not appear under a "Doctor changes" panel
+// when the run did not write to disk; retitle to signal the preview state.
+function emitDoctorChangesPanel(
+  changeLines: ReadonlyArray<string>,
+  shouldRepair: boolean,
+  options: { sanitize?: boolean } = {},
+): void {
+  if (changeLines.length === 0) {
+    return;
+  }
+  const body = changeLines.join("\n");
+  const message = options.sanitize ? sanitizeDoctorNote(body) : body;
+  const title = shouldRepair ? "Doctor changes" : "Doctor changes preview";
+  note(message, title);
+}
+
 export async function loadAndMaybeMigrateDoctorConfig(params: {
   options: DoctorOptions;
   confirm: (p: { message: string; initialValue: boolean }) => Promise<boolean>;
@@ -77,6 +95,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   let pendingChanges = false;
   let fixHints: string[] = [];
   const doctorFixCommand = formatCliCommand("openclaw doctor --fix");
+  const sourceMeta = (snapshot.sourceConfig as { meta?: { lastTouchedVersion?: unknown } })?.meta;
+  const sourceLastTouchedVersion =
+    typeof sourceMeta?.lastTouchedVersion === "string" ? sourceMeta.lastTouchedVersion : undefined;
 
   const legacyStep = applyLegacyCompatibilityStep({
     snapshot,
@@ -85,19 +106,14 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     doctorFixCommand,
   });
   ({ cfg, candidate, pendingChanges, fixHints } = legacyStep.state);
+  const legacyMigrationPartiallyValid = legacyStep.partiallyValid === true;
   const pluginLegacyIssues = await (async () => {
     if (snapshot.parsed === snapshot.sourceConfig) {
       return [];
     }
-    const { collectRelevantDoctorPluginIds, listPluginDoctorLegacyConfigRules } =
-      await import("../plugins/doctor-contract-registry.js");
-    return findLegacyConfigIssues(
-      snapshot.parsed,
-      snapshot.parsed,
-      listPluginDoctorLegacyConfigRules({
-        pluginIds: collectRelevantDoctorPluginIds(snapshot.parsed),
-      }),
-    );
+    const { findDoctorLegacyConfigIssues } =
+      await import("./doctor/shared/legacy-config-issues.js");
+    return findDoctorLegacyConfigIssues(snapshot.parsed, snapshot.parsed);
   })();
   const seenLegacyIssues = new Set(
     snapshot.legacyIssues.map((issue) => `${issue.path}:${issue.message}`),
@@ -123,9 +139,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   if (legacyIssueLines.length > 0) {
     note(legacyIssueLines.join("\n"), "Legacy config keys detected");
   }
-  if (legacyStep.changeLines.length > 0) {
-    note(legacyStep.changeLines.join("\n"), "Doctor changes");
-  }
+  emitDoctorChangesPanel(legacyStep.changeLines, shouldRepair);
   if (hasLegacyInternalHookHandlers(snapshot.parsed)) {
     note(
       [
@@ -143,7 +157,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
   const normalized = normalizeCompatibilityConfigValues(candidate);
   if (normalized.changes.length > 0) {
-    note(normalized.changes.join("\n"), "Doctor changes");
+    emitDoctorChangesPanel(normalized.changes, shouldRepair);
     ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
       state: { cfg, candidate, pendingChanges, fixHints },
       mutation: normalized,
@@ -155,7 +169,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const { applyPluginAutoEnable } = await import("../config/plugin-auto-enable.js");
   const autoEnable = applyPluginAutoEnable({ config: candidate, env: process.env });
   if (autoEnable.changes.length > 0) {
-    note(autoEnable.changes.join("\n"), "Doctor changes");
+    emitDoctorChangesPanel(autoEnable.changes, shouldRepair);
     ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
       state: { cfg, candidate, pendingChanges, fixHints },
       mutation: autoEnable,
@@ -164,12 +178,15 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     }));
   }
 
-  const { collectPluginToolAllowlistWarnings } =
+  const { collectBundledProviderAllowlistPolicyWarnings, collectPluginToolAllowlistWarnings } =
     await import("./doctor/shared/plugin-tool-allowlist-warnings.js");
-  const pluginToolAllowlistWarnings = collectPluginToolAllowlistWarnings({
-    cfg: candidate,
-    env: process.env,
-  });
+  const pluginToolAllowlistWarnings = [
+    ...collectPluginToolAllowlistWarnings({
+      cfg: candidate,
+      env: process.env,
+    }),
+    ...collectBundledProviderAllowlistPolicyWarnings({ cfg: candidate }),
+  ];
   if (pluginToolAllowlistWarnings.length > 0) {
     note(sanitizeDoctorNote(pluginToolAllowlistWarnings.join("\n")), "Doctor warnings");
   }
@@ -199,7 +216,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       if (staleCleanup.changes.length === 0) {
         continue;
       }
-      note(sanitizeDoctorNote(staleCleanup.changes.join("\n")), "Doctor changes");
+      emitDoctorChangesPanel(staleCleanup.changes, shouldRepair, { sanitize: true });
       ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
         state: { cfg, candidate, pendingChanges, fixHints },
         mutation: staleCleanup,
@@ -260,9 +277,15 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     doctorFixCommand,
   });
   ({ cfg, candidate, pendingChanges, fixHints } = unknownStep.state);
-  if (unknownStep.removed.length > 0) {
-    const lines = unknownStep.removed.map((path) => `- ${path}`).join("\n");
+  if (unknownStep.removed.length > 0 || unknownStep.repairs.length > 0) {
+    const lines = [
+      ...unknownStep.removed.map((path) => `- ${path}`),
+      ...unknownStep.repairs.map((change) => `- ${change}`),
+    ].join("\n");
     note(lines, shouldRepair ? "Doctor changes" : "Unknown config keys");
+  }
+  if (unknownStep.warnings.length > 0) {
+    note(unknownStep.warnings.join("\n"), "Doctor warnings");
   }
 
   const finalized = await finalizeDoctorConfigFlow({
@@ -277,11 +300,14 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   cfg = finalized.cfg;
 
   noteOpencodeProviderOverrides(cfg);
+  noteImplicitFallbackClobberWarnings(cfg);
 
   return {
     cfg,
     path: snapshot.path ?? CONFIG_PATH,
     shouldWriteConfig: finalized.shouldWriteConfig,
     sourceConfigValid: snapshot.valid,
+    ...(sourceLastTouchedVersion ? { sourceLastTouchedVersion } : {}),
+    ...(legacyMigrationPartiallyValid ? { skipPluginValidationOnWrite: true } : {}),
   };
 }

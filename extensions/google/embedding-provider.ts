@@ -1,4 +1,3 @@
-import { parseGeminiAuth } from "openclaw/plugin-sdk/image-generation-core";
 import {
   buildRemoteBaseUrlPolicy,
   debugEmbeddingsLog,
@@ -15,9 +14,12 @@ import {
   requireApiKey,
   resolveApiKeyForProvider,
 } from "openclaw/plugin-sdk/provider-auth-runtime";
-import { createProviderHttpError } from "openclaw/plugin-sdk/provider-http";
+import {
+  createProviderHttpError,
+  providerOperationRetryConfig,
+} from "openclaw/plugin-sdk/provider-http";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type GeminiEmbeddingClient = {
   baseUrl: string;
@@ -37,6 +39,31 @@ const GEMINI_MAX_INPUT_TOKENS: Record<string, number> = {
   "gemini-embedding-2-preview": 8192,
 };
 
+function parseGeminiAuth(apiKey: string): { headers: Record<string, string> } {
+  if (apiKey.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(apiKey) as { token?: string };
+      if (typeof parsed.token === "string" && parsed.token) {
+        return {
+          headers: {
+            Authorization: `Bearer ${parsed.token}`,
+            "Content-Type": "application/json",
+          },
+        };
+      }
+    } catch {
+      // Fall back to API-key auth below.
+    }
+  }
+
+  return {
+    headers: {
+      "x-goog-api-key": apiKey,
+      "Content-Type": "application/json",
+    },
+  };
+}
+
 type GeminiTaskType = NonNullable<MemoryEmbeddingProviderCreateOptions["taskType"]>;
 
 // --- gemini-embedding-2-preview support ---
@@ -54,6 +81,7 @@ type GeminiInlinePart = {
   inlineData: { mimeType: string; data: string };
 };
 type GeminiPart = GeminiTextPart | GeminiInlinePart;
+type GeminiEmbeddingInputPart = NonNullable<EmbeddingInput["parts"]>[number];
 type GeminiEmbeddingRequest = {
   content: { parts: GeminiPart[] };
   taskType: GeminiTaskType;
@@ -85,7 +113,7 @@ export function buildGeminiEmbeddingRequest(params: {
 }): GeminiEmbeddingRequest {
   const request: GeminiEmbeddingRequest = {
     content: {
-      parts: params.input.parts?.map((part) =>
+      parts: params.input.parts?.map((part: GeminiEmbeddingInputPart) =>
         part.type === "text"
           ? ({ text: part.text } satisfies GeminiTextPart)
           : ({
@@ -174,6 +202,7 @@ async function fetchGeminiEmbeddingPayload(params: {
   return await executeWithApiKeyRotation({
     provider: "google",
     apiKeys: params.client.apiKeys,
+    transientRetry: providerOperationRetryConfig("read"),
     execute: async (apiKey) => {
       const authHeaders = parseGeminiAuth(apiKey);
       const headers = {

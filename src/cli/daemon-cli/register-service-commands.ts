@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { inheritOptionFromParent } from "../command-options.js";
-import type { DaemonInstallOptions, GatewayRpcOpts } from "./types.js";
+import type { DaemonInstallOptions, DaemonLifecycleOptions, GatewayRpcOpts } from "./types.js";
 
 const daemonInstallModuleLoader = createLazyImportLoader(() => import("./install.runtime.js"));
 const daemonLifecycleModuleLoader = createLazyImportLoader(() => import("./lifecycle.runtime.js"));
@@ -41,6 +41,15 @@ function resolveRpcOptions(cmdOpts: GatewayRpcOpts, command?: Command): GatewayR
     ...cmdOpts,
     token: cmdOpts.token ?? parentToken,
     password: cmdOpts.password ?? parentPassword,
+  };
+}
+
+function resolveRestartOptions(cmdOpts: DaemonLifecycleOptions, command?: Command) {
+  const parentForce = inheritOptionFromParent<boolean>(command, "force");
+  return {
+    ...cmdOpts,
+    force: Boolean(cmdOpts.force || parentForce),
+    safe: Boolean(cmdOpts.safe),
   };
 }
 
@@ -105,6 +114,11 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .command("stop")
     .description("Stop the Gateway service (launchd/systemd/schtasks)")
     .option("--json", "Output JSON", false)
+    .option(
+      "--disable",
+      "Persistently suppress KeepAlive/RunAtLoad so the gateway does not respawn until next start (launchd only)",
+      false,
+    )
     .action(async (cmdOpts) => {
       const { runDaemonStop } = await loadDaemonLifecycleModule();
       await runDaemonStop(cmdOpts);
@@ -113,9 +127,16 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
   parent
     .command("restart")
     .description("Restart the Gateway service (launchd/systemd/schtasks)")
+    .option("--force", "Restart immediately without waiting for active gateway work", false)
+    .option("--safe", "Request an OpenClaw-aware restart after active work drains", false)
+    .option("--skip-deferral", "Bypass the safe-restart deferral gate; requires --safe", false)
+    .option(
+      "--wait <duration>",
+      "Wait duration before forcing restart (ms, 10s, 5m; 0 waits indefinitely)",
+    )
     .option("--json", "Output JSON", false)
-    .action(async (cmdOpts) => {
+    .action(async (cmdOpts, command) => {
       const { runDaemonRestart } = await loadDaemonLifecycleModule();
-      await runDaemonRestart(cmdOpts);
+      await runDaemonRestart(resolveRestartOptions(cmdOpts, command));
     });
 }

@@ -22,6 +22,7 @@ import {
   createPackedCliSmokeEnv,
   createPackedBundledPluginPostinstallEnv,
   MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES,
+  PACKED_BUNDLED_RUNTIME_DEPS_REPAIR_ARGS,
   PACKED_CLI_SMOKE_COMMANDS,
   PACKED_COMPLETION_SMOKE_ARGS,
   packageNameFromSpecifier,
@@ -48,7 +49,7 @@ describe("collectAppcastSparkleVersionErrors", () => {
   it("accepts legacy 9-digit calver builds before lane-floor cutover", () => {
     const xml = `<rss><channel>${makeItem("2026.2.26", "202602260")}</channel></rss>`;
 
-    expect(collectAppcastSparkleVersionErrors(xml)).toEqual([]);
+    expect(collectAppcastSparkleVersionErrors(xml)).toStrictEqual([]);
   });
 
   it("requires lane-floor builds on and after lane-floor cutover", () => {
@@ -62,7 +63,7 @@ describe("collectAppcastSparkleVersionErrors", () => {
   it("accepts canonical stable lane builds on and after lane-floor cutover", () => {
     const xml = `<rss><channel>${makeItem("2026.3.1", "2026030190")}</channel></rss>`;
 
-    expect(collectAppcastSparkleVersionErrors(xml)).toEqual([]);
+    expect(collectAppcastSparkleVersionErrors(xml)).toStrictEqual([]);
   });
 });
 
@@ -78,7 +79,15 @@ describe("packed CLI smoke", () => {
       ["doctor", "--help"],
       ["status", "--json", "--timeout", "1"],
       ["config", "schema"],
-      ["models", "list", "--provider", "amazon-bedrock"],
+      ["models", "list", "--provider", "openai"],
+    ]);
+  });
+
+  it("repairs bundled runtime deps before the read-only plugin doctor smoke", () => {
+    expect(PACKED_BUNDLED_RUNTIME_DEPS_REPAIR_ARGS).toEqual([
+      "doctor",
+      "--fix",
+      "--non-interactive",
     ]);
   });
 
@@ -118,6 +127,7 @@ describe("packed CLI smoke", () => {
       SystemRoot: "C:\\Windows",
       OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
       OPENCLAW_NO_ONBOARD: "1",
+      OPENCLAW_SERVICE_REPAIR_POLICY: "external",
       OPENCLAW_SUPPRESS_NOTES: "1",
       OPENCLAW_STATE_DIR: "/tmp/smoke-state",
     });
@@ -135,7 +145,7 @@ describe("packed CLI smoke", () => {
           OPENCLAW_STATE_DIR: "/tmp/smoke-state",
         },
       ),
-    ).toMatchObject({
+    ).toEqual({
       PATH: "/usr/bin",
       HOME: "/tmp/smoke-home",
       OPENCLAW_STATE_DIR: "/tmp/smoke-state",
@@ -227,7 +237,7 @@ describe("collectBundledExtensionManifestErrors", () => {
           },
         },
       ]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("flags non-object install metadata instead of throwing", () => {
@@ -282,16 +292,16 @@ describe("bundled plugin package dependency checks", () => {
       );
       writeFileSync(
         join(tempRoot, "dist", "extensions", "memory-lancedb", "package.json"),
-        `{"name":"@openclaw/memory-lancedb","dependencies":{"@lancedb/lancedb":"^0.27.2"}}\n`,
+        `{"name":"@openclaw/memory-lancedb","dependencies":{"root-owned-test-dep":"^1.0.0"}}\n`,
         "utf8",
       );
       writeFileSync(
         join(tempRoot, "dist", "lancedb-runtime-7TYK-Pto.js"),
-        `//#region extensions/memory-lancedb/lancedb-runtime.ts\nimport("@lancedb/lancedb");\n`,
+        `//#region extensions/memory-lancedb/lancedb-runtime.ts\nimport("root-owned-test-dep");\n`,
         "utf8",
       );
 
-      expect(collectInstalledRootDependencyManifestErrors(tempRoot)).toEqual([]);
+      expect(collectInstalledRootDependencyManifestErrors(tempRoot)).toStrictEqual([]);
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
     }
@@ -309,17 +319,17 @@ describe("bundled plugin package dependency checks", () => {
       );
       writeFileSync(
         join(tempRoot, "dist", "extensions", "memory-lancedb", "package.json"),
-        `{"name":"@openclaw/memory-lancedb","dependencies":{"@lancedb/lancedb":"^0.27.2"}}\n`,
+        `{"name":"@openclaw/memory-lancedb","dependencies":{"root-owned-test-dep":"^1.0.0"}}\n`,
         "utf8",
       );
       writeFileSync(
         join(tempRoot, "dist", "root-runtime.js"),
-        `import("@lancedb/lancedb");\n`,
+        `import("root-owned-test-dep");\n`,
         "utf8",
       );
 
       expect(collectInstalledRootDependencyManifestErrors(tempRoot)).toEqual([
-        "installed package root is missing declared runtime dependency '@lancedb/lancedb' for dist importers: root-runtime.js. Add it to package.json dependencies/optionalDependencies.",
+        "installed package root is missing declared runtime dependency 'root-owned-test-dep' for dist importers: root-runtime.js. Add it to package.json dependencies/optionalDependencies.",
       ]);
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
@@ -370,9 +380,9 @@ describe("collectForbiddenPackPaths", () => {
 
   it("keeps local build metadata excluded by package files", () => {
     const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { files?: string[] };
-    expect(pkg.files).toEqual(
-      expect.arrayContaining(LOCAL_BUILD_METADATA_DIST_PATHS.map((entry) => `!${entry}`)),
-    );
+    for (const entry of LOCAL_BUILD_METADATA_DIST_PATHS) {
+      expect(pkg.files).toContain(`!${entry}`);
+    }
   });
 
   it("blocks legacy runtime dependency stamps from npm pack output", () => {
@@ -473,28 +483,25 @@ describe("collectMissingPackPaths", () => {
       "dist/build-info.json",
     ]);
 
-    expect(missing).toEqual(
-      expect.arrayContaining([
-        "dist/channel-catalog.json",
-        PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
-        "dist/control-ui/index.html",
-        "scripts/npm-runner.mjs",
-        "scripts/preinstall-package-manager-warning.mjs",
-        "scripts/lib/package-dist-imports.mjs",
-        "scripts/postinstall-bundled-plugins.mjs",
-        "dist/task-registry-control.runtime.js",
-        bundledDistPluginFile("diffs", "assets/viewer-runtime.js"),
-        bundledDistPluginFile("matrix", "helper-api.js"),
-        bundledDistPluginFile("matrix", "runtime-api.js"),
-        bundledDistPluginFile("matrix", "thread-bindings-runtime.js"),
-        bundledDistPluginFile("matrix", "openclaw.plugin.json"),
-        bundledDistPluginFile("matrix", "package.json"),
-        bundledDistPluginFile("whatsapp", "light-runtime-api.js"),
-        bundledDistPluginFile("whatsapp", "runtime-api.js"),
-        bundledDistPluginFile("whatsapp", "openclaw.plugin.json"),
-        bundledDistPluginFile("whatsapp", "package.json"),
-      ]),
-    );
+    for (const path of [
+      "dist/channel-catalog.json",
+      PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+      "dist/control-ui/index.html",
+      "scripts/npm-runner.mjs",
+      "scripts/preinstall-package-manager-warning.mjs",
+      "scripts/lib/official-external-channel-catalog.json",
+      "scripts/lib/official-external-plugin-catalog.json",
+      "scripts/lib/official-external-provider-catalog.json",
+      "scripts/lib/package-dist-imports.mjs",
+      "scripts/postinstall-bundled-plugins.mjs",
+      "dist/task-registry-control.runtime.js",
+      "dist/telegram-ingress-worker.runtime.js",
+      bundledDistPluginFile("telegram", "runtime-api.js"),
+      bundledDistPluginFile("telegram", "openclaw.plugin.json"),
+      bundledDistPluginFile("telegram", "package.json"),
+    ]) {
+      expect(missing).toContain(path);
+    }
   });
 
   it("accepts the shipped upgrade surface when optional bundled metadata is present", () => {
@@ -506,32 +513,32 @@ describe("collectMissingPackPaths", () => {
         "dist/extensions/acpx/error-format.mjs",
         "dist/extensions/acpx/mcp-command-line.mjs",
         "dist/extensions/acpx/mcp-proxy.mjs",
-        bundledDistPluginFile("diffs", "assets/viewer-runtime.js"),
         ...requiredBundledPluginPackPaths,
         ...requiredPluginSdkPackPaths,
         ...WORKSPACE_TEMPLATE_PACK_PATHS,
         "scripts/npm-runner.mjs",
         "scripts/preinstall-package-manager-warning.mjs",
+        "scripts/lib/official-external-channel-catalog.json",
+        "scripts/lib/official-external-plugin-catalog.json",
+        "scripts/lib/official-external-provider-catalog.json",
         "scripts/lib/package-dist-imports.mjs",
         "scripts/postinstall-bundled-plugins.mjs",
         "dist/plugin-sdk/root-alias.cjs",
         "dist/task-registry-control.runtime.js",
+        "dist/telegram-ingress-worker.runtime.js",
         "dist/build-info.json",
         "dist/channel-catalog.json",
         PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
       ]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("requires bundled plugin runtime sidecars that dynamic plugin boundaries resolve at runtime", () => {
-    expect(requiredBundledPluginPackPaths).toEqual(
-      expect.arrayContaining([
-        bundledDistPluginFile("matrix", "helper-api.js"),
-        bundledDistPluginFile("matrix", "runtime-api.js"),
-        bundledDistPluginFile("matrix", "thread-bindings-runtime.js"),
-        bundledDistPluginFile("whatsapp", "light-runtime-api.js"),
-        bundledDistPluginFile("whatsapp", "runtime-api.js"),
-      ]),
+    expect(requiredBundledPluginPackPaths).not.toContain(
+      bundledDistPluginFile("slack", "runtime-api.js"),
+    );
+    expect(requiredBundledPluginPackPaths).toContain(
+      bundledDistPluginFile("telegram", "runtime-api.js"),
     );
   });
 });
@@ -566,7 +573,7 @@ describe("collectPackUnpackedSizeErrors", () => {
   it("accepts pack results within the unpacked size budget", () => {
     expect(
       collectPackUnpackedSizeErrors([makePackResult("openclaw-2026.3.14.tgz", 120_354_302)]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("flags oversized pack results that risk low-memory startup failures", () => {

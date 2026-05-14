@@ -27,7 +27,8 @@ export { MIN_CODEX_APP_SERVER_VERSION } from "./version.js";
 const CODEX_APP_SERVER_PARSE_LOG_MAX = 500;
 const CODEX_APP_SERVER_PARSE_BUFFER_MAX = 1_000_000;
 const CODEX_APP_SERVER_PARSE_BUFFER_MAX_LINES = 1_000;
-const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 30_000;
+const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 600_000;
+const CODEX_APP_SERVER_STDERR_TAIL_MAX = 2_000;
 
 type PendingRequest = {
   method: string;
@@ -41,11 +42,37 @@ export class CodexAppServerRpcError extends Error {
   readonly data?: JsonValue;
 
   constructor(error: { code?: number; message: string; data?: JsonValue }, method: string) {
-    super(error.message || `${method} failed`);
+    super(formatCodexAppServerRpcErrorMessage(error, method));
     this.name = "CodexAppServerRpcError";
     this.code = error.code;
     this.data = error.data;
   }
+}
+
+function formatCodexAppServerRpcErrorMessage(
+  error: { message: string; data?: JsonValue },
+  method: string,
+): string {
+  const message = error.message || `${method} failed`;
+  const detail = readCodexAppServerRpcReloginDetail(error.data);
+  return detail && !message.includes(detail) ? `${message}: ${detail}` : message;
+}
+
+function readCodexAppServerRpcReloginDetail(data: JsonValue | undefined): string | undefined {
+  const record = isJsonObject(data) ? data : undefined;
+  const nested = isJsonObject(record?.error) ? record.error : record;
+  if (!nested) {
+    return undefined;
+  }
+  const isRelogin =
+    nested.action === "relogin" ||
+    (nested.reason === "cloudRequirements" && nested.errorCode === "Auth");
+  const detail = typeof nested.detail === "string" ? nested.detail.trim() : "";
+  return isRelogin && detail ? detail : undefined;
+}
+
+function isJsonObject(value: unknown): value is { [key: string]: JsonValue } {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 export function isCodexAppServerConnectionClosedError(error: unknown): boolean {
@@ -76,6 +103,8 @@ export class CodexAppServerClient {
   private nextId = 1;
   private initialized = false;
   private closed = false;
+  private closeError: Error | undefined;
+  private stderrTail = "";
   private pendingParse:
     | {
         text: string;
@@ -89,20 +118,18 @@ export class CodexAppServerClient {
     this.lines = createInterface({ input: child.stdout });
     this.lines.on("line", (line) => this.handleLine(line));
     child.stderr.on("data", (chunk: Buffer | string) => {
-      const text = chunk.toString("utf8").trim();
-      if (text) {
-        embeddedAgentLog.debug(`codex app-server stderr: ${text}`);
+      const text = chunk.toString("utf8");
+      this.stderrTail = appendBoundedTail(this.stderrTail, text, CODEX_APP_SERVER_STDERR_TAIL_MAX);
+      const trimmed = text.trim();
+      if (trimmed) {
+        embeddedAgentLog.debug(`codex app-server stderr: ${trimmed}`);
       }
     });
     child.once("error", (error) =>
       this.closeWithError(error instanceof Error ? error : new Error(String(error))),
     );
     child.once("exit", (code, signal) => {
-      this.closeWithError(
-        new Error(
-          `codex app-server exited: code=${formatExitValue(code)} signal=${formatExitValue(signal)}`,
-        ),
-      );
+      this.closeWithError(buildCodexAppServerExitError(code, signal, this.stderrTail));
     });
     // Guard against unhandled EPIPE / write-after-close errors on the stdin
     // stream. When the child process terminates abruptly the pipe can break
@@ -171,7 +198,7 @@ export class CodexAppServerClient {
   ): Promise<T> {
     options ??= {};
     if (this.closed) {
-      return Promise.reject(new Error("codex app-server client is closed"));
+      return Promise.reject(this.closeError ?? new Error("codex app-server client is closed"));
     }
     if (options.signal?.aborted) {
       return Promise.reject(new Error(`${method} aborted`));
@@ -451,6 +478,7 @@ export class CodexAppServerClient {
       return false;
     }
     this.closed = true;
+    this.closeError = error;
     this.lines.close();
     this.rejectPendingRequests(error);
     return true;
@@ -596,10 +624,29 @@ function redactCodexAppServerLinePreview(value: string): string {
     .replace(
       /("(?:api_?key|authorization|token|access_token|refresh_token)"\s*:\s*")([^"]+)(")/gi,
       "$1<redacted>$3",
+    )
+    .replace(
+      /\b([a-z0-9_]*(?:api_?key|authorization|access_token|refresh_token|token))(\s*=\s*)(["']?)[^\s"']+(\3)/gi,
+      "$1$2$3<redacted>$4",
     );
   return redacted.length > CODEX_APP_SERVER_PARSE_LOG_MAX
     ? `${redacted.slice(0, CODEX_APP_SERVER_PARSE_LOG_MAX)}...`
     : redacted;
+}
+
+function appendBoundedTail(current: string, next: string, maxLength: number): string {
+  const combined = `${current}${next}`;
+  return combined.length > maxLength ? combined.slice(combined.length - maxLength) : combined;
+}
+
+function buildCodexAppServerExitError(code: unknown, signal: unknown, stderrTail: string): Error {
+  const stderrPreview = redactCodexAppServerLinePreview(stderrTail);
+  const suffix = stderrPreview ? ` stderr=${JSON.stringify(stderrPreview)}` : "";
+  return new Error(
+    `codex app-server exited: code=${formatExitValue(code)} signal=${formatExitValue(
+      signal,
+    )}${suffix}`,
+  );
 }
 
 function shouldBufferCodexAppServerParseFailure(value: string, error: unknown): boolean {

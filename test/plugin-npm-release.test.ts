@@ -25,9 +25,9 @@ afterEach(() => {
 
 describe("parsePluginReleaseSelection", () => {
   it("returns an empty list for blank input", () => {
-    expect(parsePluginReleaseSelection("")).toEqual([]);
-    expect(parsePluginReleaseSelection("   ")).toEqual([]);
-    expect(parsePluginReleaseSelection(undefined)).toEqual([]);
+    expect(parsePluginReleaseSelection("")).toStrictEqual([]);
+    expect(parsePluginReleaseSelection("   ")).toStrictEqual([]);
+    expect(parsePluginReleaseSelection(undefined)).toStrictEqual([]);
   });
 
   it("dedupes and sorts comma or whitespace separated package names", () => {
@@ -75,7 +75,9 @@ describe("parsePluginReleaseArgs", () => {
   });
 
   it("parses explicit all-publishable mode", () => {
-    expect(parsePluginReleaseArgs(["--selection-mode", "all-publishable"])).toMatchObject({
+    expect(parsePluginReleaseArgs(["--selection-mode", "all-publishable"])).toEqual({
+      baseRef: undefined,
+      headRef: undefined,
       selectionMode: "all-publishable",
       selection: [],
       pluginsFlagProvided: false,
@@ -107,7 +109,7 @@ describe("collectPublishablePluginPackageErrors", () => {
           },
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("flags invalid publishable plugin metadata", () => {
@@ -134,7 +136,7 @@ describe("collectPublishablePluginPackageErrors", () => {
       'package name must start with "@openclaw/"; found "broken".',
       "package.json private must not be true.",
       `package.json repository.url must be "${OPENCLAW_PLUGIN_NPM_REPOSITORY_URL}" so npm provenance can validate GitHub trusted publishing; found "<missing>".`,
-      'package.json version must match YYYY.M.D, YYYY.M.D-N, or YYYY.M.D-beta.N; found "latest".',
+      'package.json version must match YYYY.M.D, YYYY.M.D-N, YYYY.M.D-alpha.N, or YYYY.M.D-beta.N; found "latest".',
       "openclaw.extensions must contain only non-empty strings.",
       "openclaw.install.npmSpec must be a non-empty string for publishable plugins.",
     ]);
@@ -207,7 +209,7 @@ describe("collectPublishablePluginPackages", () => {
       ),
     ).filter((entry) => !packageFiles.has(entry));
 
-    expect(missingExclusions).toEqual([]);
+    expect(missingExclusions).toStrictEqual([]);
   });
 
   it("collects publishable npm plugins from extension package manifests", () => {
@@ -285,11 +287,15 @@ describe("collectPublishablePluginPackages", () => {
         packageNames: ["@openclaw/demo-plugin"],
       }),
     ).toEqual([
-      expect.objectContaining({
+      {
         extensionId: "demo-plugin",
+        packageDir: "extensions/demo-plugin",
+        installNpmSpec: "@openclaw/demo-plugin",
+        channel: "beta",
         packageName: "@openclaw/demo-plugin",
         publishTag: "beta",
-      }),
+        version: "2026.4.10-beta.1",
+      },
     ]);
   });
 
@@ -312,7 +318,41 @@ describe("collectPublishablePluginPackages", () => {
       collectPublishablePluginPackages(repoDir, {
         extensionIds: [],
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
+  });
+
+  it("publishes alpha plugin packages to the alpha dist-tag", () => {
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
+    mkdirSync(join(repoDir, "extensions", "demo-plugin"), { recursive: true });
+    writeJsonFile(join(repoDir, "extensions", "demo-plugin", "package.json"), {
+      name: "@openclaw/demo-plugin",
+      version: "2026.4.10-alpha.1",
+      repository: {
+        type: "git",
+        url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
+      },
+      openclaw: {
+        extensions: ["./index.ts"],
+        install: {
+          npmSpec: "@openclaw/demo-plugin",
+        },
+        release: {
+          publishToNpm: true,
+        },
+      },
+    });
+
+    expect(collectPublishablePluginPackages(repoDir)).toEqual([
+      {
+        extensionId: "demo-plugin",
+        packageDir: "extensions/demo-plugin",
+        installNpmSpec: "@openclaw/demo-plugin",
+        packageName: "@openclaw/demo-plugin",
+        channel: "alpha",
+        publishTag: "alpha",
+        version: "2026.4.10-alpha.1",
+      },
+    ]);
   });
 });
 
@@ -412,6 +452,6 @@ describe("resolveChangedPublishablePluginPackages", () => {
         plugins: publishablePlugins,
         changedExtensionIds: [],
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 });

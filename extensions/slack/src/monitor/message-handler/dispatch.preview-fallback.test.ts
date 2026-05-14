@@ -8,6 +8,8 @@ const createSlackDraftStreamMock = vi.fn();
 const deliverRepliesMock = vi.fn(async () => {});
 const finalizeSlackPreviewEditMock = vi.fn(async () => {});
 const postMessageMock = vi.fn(async () => ({ ok: true, ts: "171234.999" }));
+const recordInboundSessionMock = vi.fn(async () => undefined);
+const updateLastRouteMock = vi.fn(async () => {});
 const appendSlackStreamMock = vi.fn(async () => {});
 const startSlackStreamMock = vi.fn(async () => ({
   channel: "C123",
@@ -31,7 +33,25 @@ class TestSlackStreamNotDeliveredError extends Error {
 }
 let mockedNativeStreaming = false;
 let mockedBlockStreamingEnabled: boolean | undefined = false;
-let capturedReplyOptions: { disableBlockStreaming?: boolean } | undefined;
+let mockedSlackStreamingMode: "off" | "partial" | "block" | "progress" = "partial";
+let mockedSlackDraftMode: "replace" | "status_final" | "append" = "append";
+let capturedReplyOptions:
+  | {
+      disableBlockStreaming?: boolean;
+      suppressDefaultToolProgressMessages?: boolean;
+      onItemEvent?: (payload: {
+        kind?: string;
+        progressText?: string;
+        summary?: string;
+        title?: string;
+        name?: string;
+        phase?: string;
+        status?: string;
+        meta?: string;
+      }) => Promise<void> | void;
+      onPartialReply?: (payload: { text: string }) => Promise<void> | void;
+    }
+  | undefined;
 let capturedStatusReactionOptions: { enabled?: boolean; initialEmoji?: string } | undefined;
 const statusReactionControllerMock = {
   setQueued: vi.fn(async () => {}),
@@ -62,7 +82,86 @@ let mockedDispatchSequence: Array<{
     mediaUrls?: string[];
   };
 }> = [];
+
+function countFinalDispatches(): number {
+  let count = 0;
+  for (const entry of mockedDispatchSequence) {
+    if (entry.kind === "final") {
+      count++;
+    }
+  }
+  return count;
+}
+
 let mockedProgressEvents: string[] = [];
+let mockedReplyOptionEvents: Array<
+  | {
+      kind: "item";
+      itemKind?: string;
+      progressText?: string;
+      summary?: string;
+      title?: string;
+      name?: string;
+      phase?: string;
+      status?: string;
+      meta?: string;
+    }
+  | { kind: "partial"; text: string }
+> = [];
+
+function requireCapturedTyping() {
+  if (!capturedTyping) {
+    throw new Error("expected Slack typing callback");
+  }
+  return capturedTyping;
+}
+
+function requireCapturedItemEventHandler() {
+  const handler = capturedReplyOptions?.onItemEvent;
+  if (!handler) {
+    throw new Error("expected Slack reply item event handler");
+  }
+  return handler;
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null) {
+    throw new Error(`${label} was not an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
+  for (const [key, value] of Object.entries(fields)) {
+    expect(record[key]).toEqual(value);
+  }
+}
+
+function requireMockCall(mock: unknown, index: number, label: string): unknown[] {
+  const call = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls?.[index];
+  if (!call) {
+    throw new Error(`missing ${label} call ${index + 1}`);
+  }
+  return call;
+}
+
+function expectMockCallArgFields(
+  mock: unknown,
+  index: number,
+  label: string,
+  fields: Record<string, unknown>,
+) {
+  expectRecordFields(requireRecord(requireMockCall(mock, index, label)[0], label), fields);
+}
+
+function expectDeliverReplyCall(index: number, text: string, fields?: Record<string, unknown>) {
+  const params = requireRecord(
+    requireMockCall(deliverRepliesMock, index, "deliver replies")[0],
+    "deliver replies params",
+  );
+  expectRecordFields(params, { replyThreadTs: THREAD_TS, ...fields });
+  expect(params.replies).toEqual([{ text }]);
+}
 
 const noop = () => {};
 const noopAsync = async () => {};
@@ -83,14 +182,26 @@ function createDraftStreamStub() {
 
 function createPreparedSlackMessage(params?: {
   cfg?: Record<string, unknown>;
+  accountConfig?: Record<string, unknown>;
   ctxPayload?: Record<string, unknown>;
   message?: Partial<{
     channel: string;
     ts: string;
     thread_ts?: string;
     user: string;
+    bot_id: string;
+    event_ts: string;
   }>;
+  channelConfig?: Record<string, unknown> | null;
   replyToMode?: "off" | "first" | "all" | "batched";
+  isDirectMessage?: boolean;
+  route?: Partial<{
+    agentId: string;
+    accountId: string;
+    mainSessionKey: string;
+    sessionKey: string;
+    lastRoutePolicy: "main" | "session";
+  }>;
   setSlackThreadStatus?: (params: {
     channelId: string;
     threadTs?: string;
@@ -100,6 +211,11 @@ function createPreparedSlackMessage(params?: {
   ackReactionMessageTs?: string;
   ackReactionPromise?: Promise<boolean> | null;
 }) {
+  const routeSessionKey = params?.route?.sessionKey ?? "agent:agent-1:slack:C123";
+  const mainSessionKey = params?.route?.mainSessionKey ?? "main";
+  const lastRoutePolicy =
+    params?.route?.lastRoutePolicy ?? (routeSessionKey === mainSessionKey ? "main" : "session");
+
   return {
     ctx: {
       cfg: params?.cfg ?? {},
@@ -107,6 +223,8 @@ function createPreparedSlackMessage(params?: {
       botToken: "xoxb-test",
       app: { client: { chat: { postMessage: postMessageMock } } },
       teamId: "T1",
+      botUserId: "U_OPENCLAW",
+      botId: "B_OPENCLAW",
       textLimit: 4000,
       typingReaction: params?.typingReaction ?? "",
       removeAckAfterReply: false,
@@ -117,7 +235,7 @@ function createPreparedSlackMessage(params?: {
     },
     account: {
       accountId: "default",
-      config: {},
+      config: params?.accountConfig ?? {},
     },
     message: {
       channel: "C123",
@@ -129,10 +247,12 @@ function createPreparedSlackMessage(params?: {
     route: {
       agentId: "agent-1",
       accountId: "default",
-      mainSessionKey: "main",
-      sessionKey: "agent:agent-1:slack:C123",
+      mainSessionKey,
+      sessionKey: routeSessionKey,
+      lastRoutePolicy,
+      ...params?.route,
     },
-    channelConfig: null,
+    channelConfig: params?.channelConfig ?? null,
     replyTarget: "channel:C123",
     ctxPayload: {
       MessageThreadId: THREAD_TS,
@@ -143,7 +263,7 @@ function createPreparedSlackMessage(params?: {
       record: {},
     },
     replyToMode: params?.replyToMode ?? "all",
-    isDirectMessage: false,
+    isDirectMessage: params?.isDirectMessage ?? false,
     isRoomish: false,
     historyKey: "history-key",
     preview: "",
@@ -172,55 +292,212 @@ vi.mock("openclaw/plugin-sdk/channel-feedback", () => ({
 }));
 
 vi.mock("../conversation.runtime.js", () => ({
-  recordInboundSession: vi.fn(async () => undefined),
+  recordInboundSession: recordInboundSessionMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/channel-reply-pipeline", () => ({
-  createChannelReplyPipeline: (params: {
-    typing?: {
-      start: () => Promise<void>;
-      stop?: () => Promise<void>;
-      onStartError: (err: unknown) => void;
-      onStopError?: (err: unknown) => void;
-    };
-  }) => {
-    capturedTyping = params.typing;
-    return {
-      ...(params.typing
-        ? {
-            typingCallbacks: {
-              onReplyStart: params.typing.start,
-              onIdle: () => {
-                void params.typing?.stop?.();
+vi.mock("openclaw/plugin-sdk/channel-message", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-message")>();
+  return {
+    ...actual,
+    createChannelMessageReplyPipeline: (params: {
+      typing?: {
+        start: () => Promise<void>;
+        stop?: () => Promise<void>;
+        onStartError: (err: unknown) => void;
+        onStopError?: (err: unknown) => void;
+      };
+    }) => {
+      capturedTyping = params.typing;
+      return {
+        ...(params.typing
+          ? {
+              typingCallbacks: {
+                onReplyStart: params.typing.start,
+                onIdle: () => {
+                  void params.typing?.stop?.();
+                },
               },
-            },
-          }
-        : {}),
-      onModelSelected: undefined,
-    };
-  },
-  resolveChannelSourceReplyDeliveryMode: (params: {
-    cfg?: { messages?: { groupChat?: { visibleReplies?: string } } };
-    ctx?: { ChatType?: string };
-    requested?: "automatic" | "message_tool_only";
-  }) => {
-    if (params.requested) {
-      return params.requested;
-    }
-    const chatType = params.ctx?.ChatType;
-    if (chatType === "group" || chatType === "channel") {
-      return params.cfg?.messages?.groupChat?.visibleReplies === "automatic"
-        ? "automatic"
-        : "message_tool_only";
-    }
-    return "automatic";
-  },
-}));
+            }
+          : {}),
+        onModelSelected: undefined,
+      };
+    },
+    resolveChannelMessageSourceReplyDeliveryMode: (params: {
+      cfg?: { messages?: { groupChat?: { visibleReplies?: string } } };
+      ctx?: { ChatType?: string };
+      requested?: "automatic" | "message_tool_only";
+    }) => {
+      if (params.requested) {
+        return params.requested;
+      }
+      const chatType = params.ctx?.ChatType;
+      if (chatType === "group" || chatType === "channel") {
+        return params.cfg?.messages?.groupChat?.visibleReplies === "automatic"
+          ? "automatic"
+          : "message_tool_only";
+      }
+      return "automatic";
+    },
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/channel-streaming", () => ({
+  buildChannelProgressDraftLine: (params: {
+    progressText?: string;
+    summary?: string;
+    title?: string;
+    name?: string;
+  }) => {
+    const text = params.progressText ?? params.summary ?? params.title ?? params.name;
+    return text
+      ? {
+          kind: "item",
+          text,
+          label: params.title ?? params.name ?? "Update",
+        }
+      : undefined;
+  },
+  buildChannelProgressDraftLineForEntry: (
+    entry: {
+      streaming?: {
+        progress?: { commandText?: "raw" | "status" };
+        preview?: { commandText?: "raw" | "status" };
+      };
+    },
+    params: {
+      itemKind?: string;
+      progressText?: string;
+      summary?: string;
+      title?: string;
+      name?: string;
+    },
+  ) => {
+    if (
+      (entry.streaming?.progress?.commandText ?? entry.streaming?.preview?.commandText) ===
+        "status" &&
+      (params.itemKind === "command" || params.name === "exec")
+    ) {
+      return {
+        kind: "item",
+        text: "🛠️ Exec",
+        label: "Exec",
+      };
+    }
+    const text = params.progressText ?? params.summary ?? params.title ?? params.name;
+    return text
+      ? {
+          kind: "item",
+          text,
+          label: params.title ?? params.name ?? "Update",
+        }
+      : undefined;
+  },
+  createChannelProgressDraftGate: (params: { onStart: () => void | Promise<void> }) => {
+    let started = false;
+    let workEvents = 0;
+    return {
+      get hasStarted() {
+        return started;
+      },
+      async noteWork() {
+        workEvents += 1;
+        if (!started && workEvents > 1) {
+          started = true;
+          await params.onStart();
+        }
+        return started;
+      },
+      async startNow() {
+        if (!started) {
+          started = true;
+          await params.onStart();
+        }
+      },
+      cancel() {},
+    };
+  },
+  formatChannelProgressDraftText: (params: {
+    entry?: { streaming?: { progress?: { label?: string | false; maxLines?: number } } };
+    lines: Array<
+      string | { text: string; icon?: string; detail?: string; status?: string; label: string }
+    >;
+    formatLine?: (line: string) => string;
+  }) => {
+    const label = params.entry?.streaming?.progress?.label;
+    const maxLines = params.entry?.streaming?.progress?.maxLines ?? 8;
+    const formatLine = params.formatLine ?? ((line: string) => line);
+    const lines = [
+      label === false ? undefined : (label ?? "Thinking"),
+      ...params.lines.map((line) => {
+        const text =
+          typeof line === "string"
+            ? line
+            : line.detail
+              ? `${line.icon ?? ""} ${line.detail}`.trim()
+              : line.status
+                ? `${line.icon ?? ""} ${line.status}`.trim()
+                : line.text;
+        const formatted = formatLine(text);
+        return /^\p{Extended_Pictographic}/u.test(text) ? formatted : `• ${formatted}`;
+      }),
+    ]
+      .filter((line): line is string => Boolean(line))
+      .slice(-maxLines);
+    return lines.join("\n");
+  },
+  formatChannelProgressDraftLine: (params: {
+    progressText?: string;
+    summary?: string;
+    title?: string;
+    name?: string;
+  }) => params.progressText ?? params.summary ?? params.title ?? params.name,
+  formatChannelProgressDraftLineForEntry: (
+    _entry: unknown,
+    params: {
+      progressText?: string;
+      summary?: string;
+      title?: string;
+      name?: string;
+    },
+  ) => params.progressText ?? params.summary ?? params.title ?? params.name,
+  resolveChannelProgressDraftMaxLines: (entry?: {
+    streaming?: { progress?: { maxLines?: number } };
+  }) => entry?.streaming?.progress?.maxLines ?? 8,
+  resolveChannelProgressDraftRender: (entry?: {
+    streaming?: { progress?: { render?: "text" | "rich" } };
+  }) => entry?.streaming?.progress?.render ?? "text",
   resolveChannelStreamingBlockEnabled: () => mockedBlockStreamingEnabled,
   resolveChannelStreamingNativeTransport: () => mockedNativeStreaming,
-  resolveChannelStreamingPreviewToolProgress: () => true,
+  resolveChannelStreamingPreviewToolProgress: (entry?: {
+    streaming?: { progress?: { toolProgress?: boolean }; preview?: { toolProgress?: boolean } };
+  }) => entry?.streaming?.progress?.toolProgress ?? entry?.streaming?.preview?.toolProgress ?? true,
+  resolveChannelStreamingSuppressDefaultToolProgressMessages: (
+    entry?: {
+      streaming?: {
+        mode?: string;
+        progress?: { toolProgress?: boolean };
+        preview?: { toolProgress?: boolean };
+      };
+    },
+    options?: {
+      draftStreamActive?: boolean;
+      previewStreamingEnabled?: boolean;
+      previewToolProgressEnabled?: boolean;
+    },
+  ) => {
+    if (options?.draftStreamActive === false || options?.previewStreamingEnabled === false) {
+      return false;
+    }
+    if (entry?.streaming?.mode === "progress") {
+      return true;
+    }
+    if (options?.draftStreamActive === true) {
+      return true;
+    }
+    return options?.previewToolProgressEnabled ?? true;
+  },
+  isChannelProgressDraftWorkToolName: (name?: string) =>
+    Boolean(name && !["message", "react", "reaction"].includes(name.toLowerCase())),
 }));
 
 vi.mock("openclaw/plugin-sdk/outbound-runtime", () => ({
@@ -259,7 +536,7 @@ vi.mock("openclaw/plugin-sdk/security-runtime", () => ({
   resolvePinnedMainDmOwnerFromAllowlist: () => undefined,
 }));
 
-vi.mock("openclaw/plugin-sdk/text-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/string-coerce-runtime", () => ({
   normalizeOptionalLowercaseString: (value?: string) => value?.toLowerCase(),
 }));
 
@@ -292,9 +569,9 @@ vi.mock("../../stream-mode.js", () => ({
   }),
   buildStatusFinalPreviewText: () => "status",
   resolveSlackStreamingConfig: () => ({
-    mode: "partial",
+    mode: mockedSlackStreamingMode,
     nativeStreaming: mockedNativeStreaming,
-    draftMode: "append",
+    draftMode: mockedSlackDraftMode,
   }),
 }));
 
@@ -330,7 +607,7 @@ vi.mock("../allow-list.js", () => ({
 
 vi.mock("../config.runtime.js", () => ({
   resolveStorePath: () => "/tmp/openclaw-store.json",
-  updateLastRoute: async () => {},
+  updateLastRoute: updateLastRouteMock,
 }));
 
 vi.mock("../replies.js", () => ({
@@ -364,7 +641,18 @@ vi.mock("../reply.runtime.js", () => ({
   dispatchInboundMessage: async (params: {
     replyOptions?: {
       disableBlockStreaming?: boolean;
-      onItemEvent?: (payload: { progressText: string }) => Promise<void> | void;
+      suppressDefaultToolProgressMessages?: boolean;
+      onItemEvent?: (payload: {
+        kind?: string;
+        progressText?: string;
+        summary?: string;
+        title?: string;
+        name?: string;
+        phase?: string;
+        status?: string;
+        meta?: string;
+      }) => Promise<void> | void;
+      onPartialReply?: (payload: { text: string }) => Promise<void> | void;
     };
     dispatcher: {
       deliver: (
@@ -380,8 +668,27 @@ vi.mock("../reply.runtime.js", () => ({
     };
   }) => {
     capturedReplyOptions = params.replyOptions;
-    for (const progressText of mockedProgressEvents) {
-      await params.replyOptions?.onItemEvent?.({ progressText });
+    if (mockedReplyOptionEvents.length > 0) {
+      for (const entry of mockedReplyOptionEvents) {
+        if (entry.kind === "item") {
+          await params.replyOptions?.onItemEvent?.({
+            kind: entry.itemKind,
+            progressText: entry.progressText,
+            summary: entry.summary,
+            title: entry.title,
+            name: entry.name,
+            phase: entry.phase,
+            status: entry.status,
+            meta: entry.meta,
+          });
+        } else {
+          await params.replyOptions?.onPartialReply?.({ text: entry.text });
+        }
+      }
+    } else {
+      for (const progressText of mockedProgressEvents) {
+        await params.replyOptions?.onItemEvent?.({ progressText });
+      }
     }
     for (const entry of mockedDispatchSequence) {
       await params.dispatcher.deliver(entry.payload, { kind: entry.kind });
@@ -389,7 +696,7 @@ vi.mock("../reply.runtime.js", () => ({
     return {
       queuedFinal: false,
       counts: {
-        final: mockedDispatchSequence.filter((entry) => entry.kind === "final").length,
+        final: countFinalDispatches(),
       },
     };
   },
@@ -411,6 +718,8 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     deliverRepliesMock.mockReset();
     finalizeSlackPreviewEditMock.mockReset();
     postMessageMock.mockClear();
+    recordInboundSessionMock.mockReset();
+    updateLastRouteMock.mockReset();
     appendSlackStreamMock.mockReset();
     startSlackStreamMock.mockReset();
     stopSlackStreamMock.mockReset();
@@ -421,6 +730,8 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     }
     mockedNativeStreaming = false;
     mockedBlockStreamingEnabled = false;
+    mockedSlackStreamingMode = "partial";
+    mockedSlackDraftMode = "append";
     capturedReplyOptions = undefined;
     capturedStatusReactionOptions = undefined;
     capturedTyping = undefined;
@@ -428,6 +739,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     mockedReplyThreadTsSequence = undefined;
     mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
     mockedProgressEvents = [];
+    mockedReplyOptionEvents = [];
 
     createSlackDraftStreamMock.mockReturnValue(createDraftStreamStub());
     finalizeSlackPreviewEditMock.mockRejectedValue(new Error("socket closed"));
@@ -447,12 +759,248 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
     expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
-    expect(deliverRepliesMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replyThreadTs: THREAD_TS,
-        replies: [expect.objectContaining({ text: FINAL_REPLY_TEXT })],
+    expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+  });
+
+  it("passes accepted Slack bot messages through the shared bot loop guard", async () => {
+    const base = {
+      cfg: {
+        channels: {
+          defaults: {
+            botLoopProtection: {
+              maxEventsPerWindow: 1,
+              windowSeconds: 60,
+              cooldownSeconds: 60,
+            },
+          },
+        },
+      },
+      accountConfig: { allowBots: true },
+      message: {
+        channel: "C_LOOP_SLACK",
+        bot_id: "B_OTHER",
+        user: undefined,
+      },
+    };
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        ...base,
+        message: {
+          ...base.message,
+          ts: "900.001",
+          event_ts: "900.001",
+        },
       }),
     );
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        ...base,
+        message: {
+          ...base.message,
+          ts: "900.002",
+          event_ts: "900.002",
+        },
+      }),
+    );
+
+    expect(recordInboundSessionMock).toHaveBeenCalledTimes(1);
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("restores Slack status reactions when bot loop protection drops a turn", async () => {
+    const base = {
+      cfg: {
+        messages: {
+          statusReactions: { enabled: true },
+        },
+        channels: {
+          defaults: {
+            botLoopProtection: {
+              maxEventsPerWindow: 1,
+              windowSeconds: 60,
+              cooldownSeconds: 60,
+            },
+          },
+        },
+      },
+      accountConfig: { allowBots: true },
+      message: {
+        channel: "C_LOOP_SLACK_STATUS",
+        bot_id: "B_OTHER",
+        user: undefined,
+      },
+    };
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        ...base,
+        message: {
+          ...base.message,
+          ts: "910.001",
+          event_ts: "910.001",
+        },
+      }),
+    );
+
+    for (const value of Object.values(statusReactionControllerMock)) {
+      value.mockClear();
+    }
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        ...base,
+        ackReactionMessageTs: "910.002",
+        ackReactionPromise: Promise.resolve(true),
+        message: {
+          ...base.message,
+          ts: "910.002",
+          event_ts: "910.002",
+        },
+      }),
+    );
+
+    expect(recordInboundSessionMock).toHaveBeenCalledTimes(1);
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expect(statusReactionControllerMock.setQueued).toHaveBeenCalledTimes(1);
+    expect(statusReactionControllerMock.restoreInitial).toHaveBeenCalledTimes(1);
+    expect(statusReactionControllerMock.setDone).not.toHaveBeenCalled();
+  });
+
+  it("layers Slack channel bot loop overrides over account settings field-by-field", async () => {
+    const base = {
+      cfg: {
+        channels: {
+          defaults: {
+            botLoopProtection: {
+              maxEventsPerWindow: 20,
+              windowSeconds: 1,
+              cooldownSeconds: 60,
+            },
+          },
+        },
+      },
+      accountConfig: {
+        allowBots: true,
+        botLoopProtection: {
+          windowSeconds: 120,
+          cooldownSeconds: 240,
+        },
+      },
+      channelConfig: {
+        botLoopProtection: {
+          maxEventsPerWindow: 1,
+        },
+      },
+      message: {
+        channel: "C_LOOP_SLACK_LAYERED",
+        bot_id: "B_OTHER_LAYERED",
+        user: undefined,
+      },
+    };
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        ...base,
+        message: {
+          ...base.message,
+          ts: "900.001",
+          event_ts: "900.001",
+        },
+      }),
+    );
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        ...base,
+        message: {
+          ...base.message,
+          ts: "961.001",
+          event_ts: "961.001",
+        },
+      }),
+    );
+
+    expect(recordInboundSessionMock).toHaveBeenCalledTimes(1);
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("updates non-main DM last-route metadata on the prepared thread session", async () => {
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        cfg: { session: { dmScope: "per-channel-peer" } },
+        isDirectMessage: true,
+        message: {
+          channel: "D123",
+          user: "U1",
+          ts: "501.000",
+          thread_ts: "500.000",
+        },
+        route: {
+          agentId: "main",
+          mainSessionKey: "agent:main:main",
+          sessionKey: "agent:main:slack:direct:u1",
+          lastRoutePolicy: "session",
+        },
+        ctxPayload: {
+          MessageThreadId: "500.000",
+          SessionKey: "agent:main:slack:direct:u1:thread:500.000",
+        },
+      }),
+    );
+
+    expect(updateLastRouteMock).toHaveBeenCalledWith({
+      storePath: "/tmp/openclaw-store.json",
+      sessionKey: "agent:main:slack:direct:u1:thread:500.000",
+      deliveryContext: {
+        channel: "slack",
+        to: "user:U1",
+        accountId: "default",
+        threadId: "500.000",
+      },
+      ctx: {
+        MessageThreadId: "500.000",
+        SessionKey: "agent:main:slack:direct:u1:thread:500.000",
+      },
+    });
+  });
+
+  it("keeps default main-scope DM last-route metadata on the main session", async () => {
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        isDirectMessage: true,
+        message: {
+          channel: "D123",
+          user: "U1",
+          ts: "601.000",
+          thread_ts: "600.000",
+        },
+        route: {
+          agentId: "main",
+          mainSessionKey: "agent:main:main",
+          sessionKey: "agent:main:main",
+          lastRoutePolicy: "main",
+        },
+        ctxPayload: {
+          MessageThreadId: "600.000",
+          SessionKey: "agent:main:main:thread:600.000",
+        },
+      }),
+    );
+
+    expect(updateLastRouteMock).toHaveBeenCalledWith({
+      storePath: "/tmp/openclaw-store.json",
+      sessionKey: "agent:main:main",
+      deliveryContext: {
+        channel: "slack",
+        to: "user:U1",
+        accountId: "default",
+        threadId: "600.000",
+      },
+      ctx: {
+        MessageThreadId: "600.000",
+        SessionKey: "agent:main:main:thread:600.000",
+      },
+    });
   });
 
   it("finalizes fast draft preview text without sending a duplicate normal reply", async () => {
@@ -471,13 +1019,11 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
     expect(draftStream.flush).toHaveBeenCalledTimes(1);
     expect(draftStream.seal).toHaveBeenCalledTimes(1);
-    expect(finalizeSlackPreviewEditMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channelId: "C123",
-        messageId: "171234.567",
-        text: "✅",
-      }),
-    );
+    expectMockCallArgFields(finalizeSlackPreviewEditMock, 0, "preview edit params", {
+      channelId: "C123",
+      messageId: "171234.567",
+      text: "✅",
+    });
     expect(deliverRepliesMock).not.toHaveBeenCalled();
     expect(draftStream.clear).not.toHaveBeenCalled();
   });
@@ -502,11 +1048,11 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       }),
     );
 
-    expect(capturedTyping).toBeDefined();
+    const typing = requireCapturedTyping();
     expect(capturedReplyOptions?.disableBlockStreaming).toBe(true);
 
-    await capturedTyping?.start();
-    await capturedTyping?.stop?.();
+    await typing.start();
+    await typing.stop?.();
 
     expect(setSlackThreadStatus).toHaveBeenCalledWith({
       channelId: "C123",
@@ -518,17 +1064,17 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       threadTs: THREAD_TS,
       status: "",
     });
-    expect(reactSlackMessageMock).toHaveBeenCalledWith(
-      "C123",
-      "171234.111",
-      "hourglass_flowing_sand",
-      expect.objectContaining({ token: "xoxb-test" }),
-    );
-    expect(removeSlackReactionMock).toHaveBeenCalledWith(
-      "C123",
-      "171234.111",
-      "hourglass_flowing_sand",
-      expect.objectContaining({ token: "xoxb-test" }),
+    const reactCall = requireMockCall(reactSlackMessageMock, 0, "react Slack message");
+    expect(reactCall[0]).toBe("C123");
+    expect(reactCall[1]).toBe("171234.111");
+    expect(reactCall[2]).toBe("hourglass_flowing_sand");
+    expect(requireRecord(reactCall[3], "react Slack message options").token).toBe("xoxb-test");
+    const removeReactionCall = requireMockCall(removeSlackReactionMock, 0, "remove Slack reaction");
+    expect(removeReactionCall[0]).toBe("C123");
+    expect(removeReactionCall[1]).toBe("171234.111");
+    expect(removeReactionCall[2]).toBe("hourglass_flowing_sand");
+    expect(requireRecord(removeReactionCall[3], "remove Slack reaction options").token).toBe(
+      "xoxb-test",
     );
   });
 
@@ -548,12 +1094,10 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     );
 
     expect(capturedReplyOptions?.disableBlockStreaming).toBe(true);
-    expect(capturedStatusReactionOptions).toEqual(
-      expect.objectContaining({
-        enabled: true,
-        initialEmoji: "eyes",
-      }),
-    );
+    expectRecordFields(requireRecord(capturedStatusReactionOptions, "status reaction options"), {
+      enabled: true,
+      initialEmoji: "eyes",
+    });
     expect(statusReactionControllerMock.setQueued).toHaveBeenCalledTimes(1);
     expect(statusReactionControllerMock.setDone).toHaveBeenCalledTimes(1);
   });
@@ -564,11 +1108,148 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     mockedDispatchSequence = [];
     mockedProgressEvents = ["ran <!here> <@U123> *bold* `code` & done"];
 
-    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: { streaming: { progress: { label: "Shelling" } } },
+      }),
+    );
 
     expect(draftStream.update).toHaveBeenCalledWith(
-      "Working…\n• ran &lt;!here&gt; &lt;@U123&gt; \\*bold\\* \\`code\\` &amp; done",
+      "Shelling\n• ran &lt;!here&gt; &lt;@U123&gt; \\*bold\\* \\`code\\` &amp; done",
     );
+  });
+
+  it("honors Slack progress maxLines above the legacy eight-line cap", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedDispatchSequence = [];
+    mockedProgressEvents = Array.from({ length: 10 }, (_value, index) => `step ${index + 1}`);
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: { streaming: { progress: { label: "Shelling", maxLines: 10 } } },
+      }),
+    );
+
+    expect(draftStream.update).toHaveBeenLastCalledWith(
+      [
+        "• step 1",
+        "• step 2",
+        "• step 3",
+        "• step 4",
+        "• step 5",
+        "• step 6",
+        "• step 7",
+        "• step 8",
+        "• step 9",
+        "• step 10",
+      ].join("\n"),
+    );
+  });
+
+  it("preserves Slack progress lines across status-final answer partials", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedSlackStreamingMode = "progress";
+    mockedSlackDraftMode = "status_final";
+    mockedDispatchSequence = [];
+    mockedReplyOptionEvents = [
+      { kind: "item", progressText: "tool one" },
+      { kind: "partial", text: "partial answer" },
+      { kind: "item", progressText: "tool two" },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: { streaming: { progress: { label: "Shelling" } } },
+      }),
+    );
+
+    expect(draftStream.update).toHaveBeenLastCalledWith(
+      ["Shelling", "• tool one", "• tool two"].join("\n"),
+    );
+  });
+
+  it("can hide raw Slack command progress text by config", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedSlackStreamingMode = "progress";
+    mockedSlackDraftMode = "status_final";
+    mockedDispatchSequence = [];
+    mockedReplyOptionEvents = [
+      {
+        kind: "item",
+        itemKind: "command",
+        name: "exec",
+        progressText: "exec pnpm test -- --watch=false",
+      },
+      { kind: "item", progressText: "done" },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: {
+          streaming: { mode: "progress", progress: { label: "Shelling", commandText: "status" } },
+        },
+      }),
+    );
+
+    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n🛠️ Exec\n• done");
+    expect(draftStream.update.mock.calls.flat().join("\n")).not.toContain("pnpm test");
+  });
+
+  it("suppresses standalone Slack tool progress when progress lines are disabled", async () => {
+    mockedSlackStreamingMode = "progress";
+    mockedSlackDraftMode = "status_final";
+    mockedDispatchSequence = [];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: { streaming: { mode: "progress", progress: { toolProgress: false } } },
+      }),
+    );
+
+    expect(capturedReplyOptions?.suppressDefaultToolProgressMessages).toBe(true);
+    await requireCapturedItemEventHandler()({ progressText: "hidden progress" });
+  });
+
+  it("does not create a blank Slack progress draft when label and lines are disabled", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedSlackStreamingMode = "progress";
+    mockedSlackDraftMode = "status_final";
+    mockedDispatchSequence = [];
+    mockedReplyOptionEvents = [
+      { kind: "item", progressText: "tool one" },
+      { kind: "item", progressText: "tool two" },
+      { kind: "partial", text: "partial answer" },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: {
+          streaming: { mode: "progress", progress: { label: false, toolProgress: false } },
+        },
+      }),
+    );
+
+    expect(capturedReplyOptions?.suppressDefaultToolProgressMessages).toBe(true);
+    expect(draftStream.update).not.toHaveBeenCalled();
+  });
+
+  it("suppresses standalone Slack tool progress when partial preview lines are disabled", async () => {
+    mockedSlackStreamingMode = "partial";
+    mockedSlackDraftMode = "replace";
+    mockedDispatchSequence = [];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: { streaming: { mode: "partial", preview: { toolProgress: false } } },
+      }),
+    );
+
+    expect(capturedReplyOptions?.suppressDefaultToolProgressMessages).toBe(true);
+    await requireCapturedItemEventHandler()({ progressText: "hidden partial progress" });
   });
 
   it("starts native streams in the first-reply thread for top-level channel messages", async () => {
@@ -583,31 +1264,27 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       }),
     );
 
-    expect(startSlackStreamMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "C123",
-        threadTs: "171234.111",
-        text: FINAL_REPLY_TEXT,
-      }),
-    );
+    expectMockCallArgFields(startSlackStreamMock, 0, "Slack stream start params", {
+      channel: "C123",
+      threadTs: "171234.111",
+      text: FINAL_REPLY_TEXT,
+    });
     expect(deliverRepliesMock).not.toHaveBeenCalled();
   });
 
   it("suppresses reasoning payloads before Slack native streaming delivery", async () => {
     mockedNativeStreaming = true;
     mockedDispatchSequence = [
-      { kind: "block", payload: { text: "Reasoning:\n_hidden_", isReasoning: true } },
+      { kind: "block", payload: { text: "hidden", isReasoning: true } },
       { kind: "final", payload: { text: FINAL_REPLY_TEXT } },
     ];
 
     await dispatchPreparedSlackMessage(createPreparedSlackMessage());
 
     expect(startSlackStreamMock).toHaveBeenCalledTimes(1);
-    expect(startSlackStreamMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: FINAL_REPLY_TEXT,
-      }),
-    );
+    expectMockCallArgFields(startSlackStreamMock, 0, "Slack stream start params", {
+      text: FINAL_REPLY_TEXT,
+    });
     expect(appendSlackStreamMock).not.toHaveBeenCalled();
     expect(deliverRepliesMock).not.toHaveBeenCalled();
   });
@@ -622,20 +1299,8 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
     expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
     expect(deliverRepliesMock).toHaveBeenCalledTimes(2);
-    expect(deliverRepliesMock).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        replyThreadTs: THREAD_TS,
-        replies: [expect.objectContaining({ text: SAME_TEXT })],
-      }),
-    );
-    expect(deliverRepliesMock).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        replyThreadTs: THREAD_TS,
-        replies: [expect.objectContaining({ text: SAME_TEXT })],
-      }),
-    );
+    expectDeliverReplyCall(0, SAME_TEXT);
+    expectDeliverReplyCall(1, SAME_TEXT);
   });
 
   it("keeps multi-part block replies in the first reply thread after the plan is consumed", async () => {
@@ -652,20 +1317,8 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     );
 
     expect(deliverRepliesMock).toHaveBeenCalledTimes(2);
-    expect(deliverRepliesMock).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        replyThreadTs: THREAD_TS,
-        replies: [expect.objectContaining({ text: "first block" })],
-      }),
-    );
-    expect(deliverRepliesMock).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        replyThreadTs: THREAD_TS,
-        replies: [expect.objectContaining({ text: "second block" })],
-      }),
-    );
+    expectDeliverReplyCall(0, "first block");
+    expectDeliverReplyCall(1, "second block");
   });
 
   it("does not flush draft previews for media finals before normal delivery", async () => {
@@ -736,12 +1389,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
     expect(postMessageMock).not.toHaveBeenCalled();
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
-    expect(deliverRepliesMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replyThreadTs: THREAD_TS,
-        replies: [expect.objectContaining({ text: FINAL_REPLY_TEXT })],
-      }),
-    );
+    expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
     expect(session.stopped).toBe(true);
   });
 
@@ -768,12 +1416,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
     expect(postMessageMock).not.toHaveBeenCalled();
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
-    expect(deliverRepliesMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replyThreadTs: THREAD_TS,
-        replies: [expect.objectContaining({ text: "first buffered\nsecond flushes" })],
-      }),
-    );
+    expectDeliverReplyCall(0, "first buffered\nsecond flushes");
     expect(stopSlackStreamMock).not.toHaveBeenCalled();
   });
 
@@ -797,13 +1440,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
     expect(postMessageMock).not.toHaveBeenCalled();
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
-    expect(deliverRepliesMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replyThreadTs: THREAD_TS,
-        textLimit: 4000,
-        replies: [expect.objectContaining({ text: oversized })],
-      }),
-    );
+    expectDeliverReplyCall(0, oversized, { textLimit: 4000 });
     expect(session.stopped).toBe(true);
   });
 
@@ -835,12 +1472,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     // Chunked fallback sent the FULL pendingText, not just the failing
     // payload (so the earlier buffered chunk is not dropped).
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
-    expect(deliverRepliesMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replyThreadTs: THREAD_TS,
-        replies: [expect.objectContaining({ text: "first buffered\nsecond payload" })],
-      }),
-    );
+    expectDeliverReplyCall(0, "first buffered\nsecond payload");
     // Session was marked fallback-delivered by deliverPendingStreamFallback,
     // so finalize skips stopSlackStream.
     expect(session.pendingText).toBe("");

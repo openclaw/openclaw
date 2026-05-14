@@ -98,6 +98,7 @@ If you deploy the OpenClaw Gateway itself as a Docker container, it orchestrates
 
 - **Config requires host paths**: The `openclaw.json` `workspace` configuration MUST contain the **Host's absolute path** (e.g. `/home/user/.openclaw/workspaces`), not the internal Gateway container path. When OpenClaw asks the Docker daemon to spawn a sandbox, the daemon evaluates paths relative to the Host OS namespace, not the Gateway namespace.
 - **FS bridge parity (identical volume map)**: The OpenClaw Gateway native process also writes heartbeat and bridge files to the `workspace` directory. Because the Gateway evaluates the exact same string (the host path) from within its own containerized environment, the Gateway deployment MUST include an identical volume map linking the host namespace natively (`-v /home/user/.openclaw:/home/user/.openclaw`).
+- **Codex code mode**: When an OpenClaw sandbox is active, OpenClaw constrains Codex app-server turns to Codex `workspace-write` sandboxing even if the Codex plugin default is `danger-full-access`. Do not mount the host Docker socket into agent sandbox containers or custom Codex sandboxes.
 
 If you map paths internally without absolute host parity, OpenClaw natively throws an `EACCES` permission error attempting to write its heartbeat inside the container environment because the fully qualified path string doesn't exist natively.
 </Warning>
@@ -409,7 +410,7 @@ If you installed OpenClaw via `npm install -g openclaw`, use the inline `docker 
     scripts/sandbox-common-setup.sh
     ```
 
-    From an npm install, build the default image first (see above), then build the common image on top using the [`Dockerfile.sandbox-common`](https://github.com/openclaw/openclaw/blob/main/Dockerfile.sandbox-common) from the repository.
+    From an npm install, build the default image first (see above), then build the common image on top using the [`scripts/docker/sandbox/Dockerfile.common`](https://github.com/openclaw/openclaw/blob/main/scripts/docker/sandbox/Dockerfile.common) from the repository.
 
     Then set `agents.defaults.sandbox.docker.image` to `openclaw-sandbox-common:bookworm-slim`.
 
@@ -421,7 +422,7 @@ If you installed OpenClaw via `npm install -g openclaw`, use the inline `docker 
     scripts/sandbox-browser-setup.sh
     ```
 
-    From an npm install, build using the [`Dockerfile.sandbox-browser`](https://github.com/openclaw/openclaw/blob/main/Dockerfile.sandbox-browser) from the repository.
+    From an npm install, build using the [`scripts/docker/sandbox/Dockerfile.browser`](https://github.com/openclaw/openclaw/blob/main/scripts/docker/sandbox/Dockerfile.browser) from the repository.
 
   </Step>
 </Steps>

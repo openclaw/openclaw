@@ -1,13 +1,18 @@
 {
   "name": "@openclaw/amazon-bedrock-provider",
-  "version": "2026.5.2",
-  "private": true,
+  "version": "2026.5.12-beta.1",
   "description": "OpenClaw Amazon Bedrock provider plugin",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
   "type": "module",
   "dependencies": {
-    "@aws-sdk/client-bedrock": "3.1041.0",
-    "@aws-sdk/client-bedrock-runtime": "3.1041.0",
-    "@aws-sdk/credential-provider-node": "3.972.39"
+    "@aws-sdk/client-bedrock": "3.1045.0",
+    "@aws-sdk/client-bedrock-runtime": "3.1045.0",
+    "@aws-sdk/credential-provider-node": "3.972.39",
+    "@earendil-works/pi-ai": "0.74.0",
+    "@smithy/shared-ini-file-loader": "4.5.1"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
@@ -15,6 +20,21 @@
   "openclaw": {
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "install": {
+      "npmSpec": "@openclaw/amazon-bedrock-provider",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.5.12-beta.1"
+    },
+    "compat": {
+      "pluginApi": ">=2026.5.12-beta.1"
+    },
+    "build": {
+      "openclawVersion": "2026.5.12-beta.1",
+      "bundledDist": false
+    },
+    "release": {
+      "publishToNpm": true
+    }
   }
 }

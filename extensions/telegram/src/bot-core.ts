@@ -22,7 +22,8 @@ import { createNonExitingRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/ru
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { getOrCreateAccountThrottler } from "./account-throttler.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { normalizeTelegramApiRoot } from "./api-root.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
@@ -58,6 +59,7 @@ const DEFAULT_TELEGRAM_BOT_RUNTIME: TelegramBotRuntime = {
   sequentialize,
   apiThrottler,
 };
+const TELEGRAM_TYPING_COALESCE_MS = 4_000;
 
 let telegramBotRuntimeForTest: TelegramBotRuntime | undefined;
 
@@ -348,8 +350,12 @@ export function createTelegramBotCore(
         }
       : undefined;
 
-  const bot = new botRuntime.Bot(opts.token, client ? { client } : undefined);
-  bot.api.config.use(botRuntime.apiThrottler());
+  const botConfig =
+    client || opts.botInfo
+      ? { ...(client ? { client } : {}), ...(opts.botInfo ? { botInfo: opts.botInfo } : {}) }
+      : undefined;
+  const bot = new botRuntime.Bot(opts.token, botConfig);
+  bot.api.config.use(getOrCreateAccountThrottler(opts.token, botRuntime.apiThrottler));
   // Catch all errors from bot middleware to prevent unhandled rejections
   bot.catch((err) => {
     runtime.error?.(danger(`telegram bot error: ${formatUncaughtError(err)}`));
@@ -364,6 +370,7 @@ export function createTelegramBotCore(
   };
   const updateTracker = createTelegramUpdateTracker({
     initialUpdateId,
+    ackPolicy: "after_agent_dispatch",
     ...(typeof opts.updateOffset?.onUpdateId === "function"
       ? { onAcceptedUpdateId: opts.updateOffset.onUpdateId }
       : {}),
@@ -397,7 +404,7 @@ export function createTelegramBotCore(
   const MAX_RAW_UPDATE_ARRAY = 20;
   const stringifyUpdate = (update: unknown) => {
     const seen = new WeakSet();
-    return JSON.stringify(update ?? null, (key, value) => {
+    return JSON.stringify(update ?? null, (_key, value) => {
       if (typeof value === "string" && value.length > MAX_RAW_UPDATE_STRING) {
         return `${value.slice(0, MAX_RAW_UPDATE_STRING)}...`;
       }
@@ -556,6 +563,7 @@ export function createTelegramBotCore(
     sendChatActionFn: (chatId, action, threadParams) =>
       bot.api.sendChatAction(chatId, action, threadParams),
     logger: (message) => logVerbose(`telegram: ${message}`),
+    minIntervalMs: TELEGRAM_TYPING_COALESCE_MS,
   });
 
   const processMessage = createTelegramMessageProcessor({
@@ -616,6 +624,8 @@ export function createTelegramBotCore(
     allowFrom,
     groupAllowFrom,
     resolveGroupPolicy,
+    resolveGroupActivation,
+    resolveGroupRequireMention,
     resolveTelegramGroupConfig,
     shouldSkipUpdate,
     processMessage,

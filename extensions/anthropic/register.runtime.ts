@@ -21,14 +21,14 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import {
   cloneFirstTemplateModel,
-  isClaudeOpus47ModelId,
   type ProviderPlugin,
   resolveClaudeThinkingProfile,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { fetchClaudeUsage } from "openclaw/plugin-sdk/provider-usage";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import * as claudeCliAuth from "./cli-auth-seam.js";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
+import { buildClaudeCliCatalogEntries } from "./cli-catalog.js";
 import { buildAnthropicCliMigrationResult } from "./cli-migration.js";
 import {
   CLAUDE_CLI_BACKEND_ID,
@@ -214,6 +214,9 @@ function resolveAnthropic46ForwardCompatModel(params: {
 }): ProviderRuntimeModel | undefined {
   const trimmedModelId = params.ctx.modelId.trim();
   const lower = normalizeLowercaseStringOrEmpty(trimmedModelId);
+  if (trimmedModelId !== lower) {
+    return undefined;
+  }
   const is46Model =
     lower === params.dashModelId ||
     lower === params.dotModelId ||
@@ -276,7 +279,11 @@ function resolveAnthropicForwardCompatModel(
 }
 
 function isAnthropicOpus47Model(modelId: string): boolean {
-  return isClaudeOpus47ModelId(modelId);
+  const normalized = normalizeLowercaseStringOrEmpty(modelId);
+  return (
+    normalized.startsWith(ANTHROPIC_OPUS_47_MODEL_ID) ||
+    normalized.startsWith(ANTHROPIC_OPUS_47_DOT_MODEL_ID)
+  );
 }
 
 function hasConfiguredModelContextOverride(
@@ -573,6 +580,8 @@ export function buildAnthropicProvider(): ProviderPlugin {
       normalizeLowercaseStringOrEmpty(provider) === CLAUDE_CLI_BACKEND_ID
         ? resolveClaudeCliSyntheticAuth()
         : undefined,
+    // Publish Claude CLI rows through the provider catalog hook.
+    augmentModelCatalog: () => buildClaudeCliCatalogEntries(),
     buildReplayPolicy: buildAnthropicReplayPolicy,
     isModernModelRef: ({ modelId }) => matchesAnthropicModernModel(modelId),
     resolveReasoningOutputMode: () => "native",

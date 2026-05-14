@@ -75,6 +75,22 @@ beforeEach(() => {
   fetchWithSsrFGuardMock.mockReset();
 });
 
+function requireAsset(asset: ReleaseAsset | undefined, label: string): ReleaseAsset {
+  if (!asset) {
+    throw new Error(`expected release asset for ${label}`);
+  }
+  return asset;
+}
+
+async function expectPathMissing(targetPath: string): Promise<void> {
+  try {
+    await fs.access(targetPath);
+    throw new Error(`expected ${targetPath} to be missing`);
+  } catch (error) {
+    expect((error as { code?: string }).code).toBe("ENOENT");
+  }
+}
+
 describe("looksLikeArchive", () => {
   it("recognises .tar.gz", () => {
     expect(looksLikeArchive("foo.tar.gz")).toBe(true);
@@ -100,10 +116,9 @@ describe("looksLikeArchive", () => {
 describe("pickAsset", () => {
   describe("linux", () => {
     it("selects the Linux-native asset on x64", () => {
-      const result = pickAsset(SAMPLE_ASSETS, "linux", "x64");
-      expect(result).toBeDefined();
-      expect(result!.name).toContain("Linux-native");
-      expect(result!.name).toMatch(/\.tar\.gz$/);
+      const result = requireAsset(pickAsset(SAMPLE_ASSETS, "linux", "x64"), "linux x64");
+      expect(result.name).toContain("Linux-native");
+      expect(result.name).toMatch(/\.tar\.gz$/);
     });
 
     it("returns undefined on arm64 (triggers brew fallback)", () => {
@@ -119,24 +134,21 @@ describe("pickAsset", () => {
 
   describe("darwin", () => {
     it("selects the macOS-native asset", () => {
-      const result = pickAsset(SAMPLE_ASSETS, "darwin", "arm64");
-      expect(result).toBeDefined();
-      expect(result!.name).toContain("macOS-native");
+      const result = requireAsset(pickAsset(SAMPLE_ASSETS, "darwin", "arm64"), "darwin arm64");
+      expect(result.name).toContain("macOS-native");
     });
 
     it("selects the macOS-native asset on x64", () => {
-      const result = pickAsset(SAMPLE_ASSETS, "darwin", "x64");
-      expect(result).toBeDefined();
-      expect(result!.name).toContain("macOS-native");
+      const result = requireAsset(pickAsset(SAMPLE_ASSETS, "darwin", "x64"), "darwin x64");
+      expect(result.name).toContain("macOS-native");
     });
   });
 
   describe("win32", () => {
     it("selects the Windows-native asset", () => {
-      const result = pickAsset(SAMPLE_ASSETS, "win32", "x64");
-      expect(result).toBeDefined();
-      expect(result!.name).toContain("Windows-native");
-      expect(result!.name).toMatch(/\.zip$/);
+      const result = requireAsset(pickAsset(SAMPLE_ASSETS, "win32", "x64"), "win32 x64");
+      expect(result.name).toContain("Windows-native");
+      expect(result.name).toMatch(/\.zip$/);
     });
   });
 
@@ -154,15 +166,16 @@ describe("pickAsset", () => {
     });
 
     it("falls back to first archive for unknown platform", () => {
-      const result = pickAsset(SAMPLE_ASSETS, "freebsd" as NodeJS.Platform, "x64");
-      expect(result).toBeDefined();
-      expect(result!.name).toMatch(/\.tar\.gz$/);
+      const result = requireAsset(
+        pickAsset(SAMPLE_ASSETS, "freebsd" as NodeJS.Platform, "x64"),
+        "unknown platform",
+      );
+      expect(result.name).toMatch(/\.tar\.gz$/);
     });
 
     it("never selects .asc signature files", () => {
-      const result = pickAsset(SAMPLE_ASSETS, "linux", "x64");
-      expect(result).toBeDefined();
-      expect(result!.name).not.toMatch(/\.asc$/);
+      const result = requireAsset(pickAsset(SAMPLE_ASSETS, "linux", "x64"), "linux x64");
+      expect(result.name).not.toMatch(/\.asc$/);
     });
   });
 });
@@ -178,14 +191,14 @@ describe("downloadToFile", () => {
       await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("archive");
     });
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://example.com/signal-cli.tgz",
-        requireHttps: true,
-        timeoutMs: 5 * 60_000,
-        auditContext: "signal-cli-install-archive",
-      }),
-    );
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
+      url: "https://example.com/signal-cli.tgz",
+      maxRedirects: 5,
+      requireHttps: true,
+      timeoutMs: 5 * 60_000,
+      capture: false,
+      auditContext: "signal-cli-install-archive",
+    });
     expect(fetchResult.release).toHaveBeenCalledTimes(1);
   });
 
@@ -200,7 +213,7 @@ describe("downloadToFile", () => {
         downloadToFile("https://example.com/signal-cli.tgz", filePath, 5, 8),
       ).rejects.toThrow("declared 12");
 
-      await expect(fs.access(filePath)).rejects.toThrow();
+      await expectPathMissing(filePath);
     });
 
     expect(fetchResult.release).toHaveBeenCalledTimes(1);
@@ -222,7 +235,7 @@ describe("downloadToFile", () => {
         downloadToFile("https://example.com/signal-cli.tgz", filePath, 5, 8),
       ).rejects.toThrow("8-byte download cap");
 
-      await expect(fs.access(filePath)).rejects.toThrow();
+      await expectPathMissing(filePath);
     });
 
     expect(fetchResult.release).toHaveBeenCalledTimes(1);
@@ -236,21 +249,24 @@ describe("installSignalCliFromRelease", () => {
     });
     fetchWithSsrFGuardMock.mockResolvedValue(fetchResult);
 
-    await expect(
-      installSignalCliFromRelease({ log: vi.fn() } as unknown as RuntimeEnv),
-    ).resolves.toMatchObject({
-      ok: false,
-      error: "No compatible release asset found for this platform.",
-    });
+    const result = await installSignalCliFromRelease({ log: vi.fn() } as unknown as RuntimeEnv);
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("No compatible release asset found for this platform.");
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://api.github.com/repos/AsamK/signal-cli/releases/latest",
-        requireHttps: true,
-        timeoutMs: 30_000,
-        auditContext: "signal-cli-release-info",
-      }),
-    );
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
+      url: "https://api.github.com/repos/AsamK/signal-cli/releases/latest",
+      maxRedirects: 5,
+      requireHttps: true,
+      timeoutMs: 30_000,
+      capture: false,
+      auditContext: "signal-cli-release-info",
+      init: {
+        headers: {
+          "User-Agent": "openclaw",
+          Accept: "application/vnd.github+json",
+        },
+      },
+    });
     expect(fetchResult.release).toHaveBeenCalledTimes(1);
   });
 });

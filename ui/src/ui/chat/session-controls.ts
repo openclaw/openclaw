@@ -1,5 +1,7 @@
 import { html } from "lit";
 import { repeat } from "lit/directives/repeat.js";
+import { t } from "../../i18n/index.ts";
+import { CHAT_SESSIONS_ACTIVE_MINUTES, CHAT_SESSIONS_REFRESH_LIMIT } from "../app-chat.ts";
 import type { AppViewState } from "../app-view-state.ts";
 import { createChatModelOverride } from "../chat-model-ref.ts";
 import {
@@ -9,8 +11,18 @@ import {
 import { refreshVisibleToolsEffectiveForCurrentSession } from "../controllers/agents.ts";
 import { loadSessions } from "../controllers/sessions.ts";
 import { pushUniqueTrimmedSelectOption } from "../select-options.ts";
-import { parseAgentSessionKey } from "../session-key.ts";
+import {
+  buildAgentMainSessionKey,
+  isSubagentSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../session-key.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
+import {
+  formatInheritedThinkingLabel,
+  formatThinkingOverrideLabel,
+  normalizeThinkingOptionValue,
+} from "../thinking-labels.ts";
 import {
   listThinkingLevelLabels,
   normalizeThinkLevel,
@@ -25,15 +37,29 @@ export function renderChatSessionSelect(
   onSwitchSession: ChatSessionSwitchHandler = () => undefined,
 ) {
   const sessionGroups = resolveSessionOptionGroups(state, state.sessionKey, state.sessionsResult);
+  const agentOptions = resolveChatAgentFilterOptions(state);
+  const hasAgentSelect = agentOptions.length > 1;
+  const agentSelect = renderChatAgentSelect(state, onSwitchSession, agentOptions);
   const modelSelect = renderChatModelSelect(state);
   const thinkingSelect = renderChatThinkingSelect(state);
   const selectedSessionLabel =
     sessionGroups.flatMap((group) => group.options).find((entry) => entry.key === state.sessionKey)
       ?.label ?? state.sessionKey;
+  const flashSession = state.sessionSwitchFlashKey === state.sessionKey;
+  const rowClass = [
+    "chat-controls__session-row",
+    hasAgentSelect ? "" : "chat-controls__session-row--single-agent",
+    flashSession ? "chat-controls__session-row--flash" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
   return html`
-    <div class="chat-controls__session-row">
-      <label class="field chat-controls__session">
+    <div class=${rowClass}>
+      ${agentSelect}
+      <label class="field chat-controls__session chat-controls__session-picker">
         <select
+          data-chat-session-select="true"
+          aria-label=${t("chat.selectors.session")}
           .value=${state.sessionKey}
           title=${selectedSessionLabel}
           ?disabled=${!state.connected || sessionGroups.length === 0}
@@ -68,16 +94,66 @@ export function renderChatSessionSelect(
       </label>
       ${modelSelect} ${thinkingSelect}
     </div>
+    <div class="chat-controls__session-notice" role="status" aria-live="polite">
+      ${state.sessionSwitchNotice?.text ?? ""}
+    </div>
+  `;
+}
+
+function renderChatAgentSelect(
+  state: AppViewState,
+  onSwitchSession: ChatSessionSwitchHandler,
+  options = resolveChatAgentFilterOptions(state),
+) {
+  if (options.length <= 1) {
+    return "";
+  }
+  const activeAgentId = resolveChatAgentFilterId(state, state.sessionKey);
+  const selectedLabel = options.find((entry) => entry.id === activeAgentId)?.label ?? activeAgentId;
+  return html`
+    <label class="field chat-controls__session chat-controls__agent">
+      <select
+        data-chat-agent-filter="true"
+        aria-label=${t("chat.selectors.agentFilter")}
+        title=${selectedLabel}
+        .value=${activeAgentId}
+        ?disabled=${!state.connected}
+        @change=${(e: Event) => {
+          const nextAgentId = normalizeAgentId((e.target as HTMLSelectElement).value);
+          if (nextAgentId === activeAgentId) {
+            return;
+          }
+          onSwitchSession(state, resolvePreferredSessionForAgent(state, nextAgentId));
+        }}
+      >
+        ${repeat(
+          options,
+          (entry) => entry.id,
+          (entry) =>
+            html`<option value=${entry.id} ?selected=${entry.id === activeAgentId}>
+              ${entry.label}
+            </option>`,
+        )}
+      </select>
+    </label>
   `;
 }
 
 async function refreshSessionOptions(state: AppViewState) {
   await loadSessions(state as unknown as Parameters<typeof loadSessions>[0], {
-    activeMinutes: 0,
-    limit: 0,
+    activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
+    limit: CHAT_SESSIONS_REFRESH_LIMIT,
     includeGlobal: true,
     includeUnknown: true,
+    showArchived: state.sessionsShowArchived,
+    agentId: resolveSessionOptionsAgentId(state),
   });
+}
+
+function resolveSessionOptionsAgentId(state: AppViewState): string {
+  return (
+    parseAgentSessionKey(state.sessionKey)?.agentId ?? normalizeAgentId(state.agentsList?.defaultId)
+  );
 }
 
 async function refreshVisibleToolsEffectiveForCurrentSessionLazy(state: AppViewState) {
@@ -89,7 +165,11 @@ function renderChatModelSelect(state: AppViewState) {
   const busy =
     state.chatLoading || state.chatSending || Boolean(state.chatRunId) || state.chatStream !== null;
   const disabled =
-    !state.connected || busy || (state.chatModelsLoading && options.length === 0) || !state.client;
+    !state.connected ||
+    busy ||
+    Boolean(state.chatModelSwitchPromises?.[state.sessionKey]) ||
+    (state.chatModelsLoading && options.length === 0) ||
+    !state.client;
   const selectedLabel =
     currentOverride === ""
       ? defaultLabel
@@ -98,7 +178,7 @@ function renderChatModelSelect(state: AppViewState) {
     <label class="field chat-controls__session chat-controls__model">
       <select
         data-chat-model-select="true"
-        aria-label="Chat model"
+        aria-label=${t("chat.selectors.model")}
         title=${selectedLabel}
         ?disabled=${disabled}
         @change=${async (e: Event) => {
@@ -150,22 +230,14 @@ function buildThinkingOptions(
   const options: ChatThinkingSelectOption[] = [];
 
   const addOption = (value: string, label?: string) => {
-    pushUniqueTrimmedSelectOption(
-      options,
-      seen,
-      value,
-      (trimmed) =>
-        label ??
-        trimmed
-          .split(/[-_]/g)
-          .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : part))
-          .join(" "),
+    const normalizedValue = normalizeThinkingOptionValue(value);
+    pushUniqueTrimmedSelectOption(options, seen, normalizedValue, () =>
+      formatThinkingOverrideLabel(normalizedValue, label),
     );
   };
 
   for (const level of levels) {
-    const normalized = normalizeThinkLevel(level.id) ?? normalizeLowercaseStringOrEmpty(level.id);
-    addOption(normalized, level.label);
+    addOption(level.id, level.label);
   }
   if (currentOverride) {
     addOption(currentOverride);
@@ -182,12 +254,17 @@ function resolveThinkingLevelOptions(
   if (activeRow?.thinkingLevels?.length) {
     return activeRow.thinkingLevels;
   }
-  if (defaults?.thinkingLevels?.length) {
+  const sessionModelMatchesDefaults =
+    (!activeRow?.modelProvider || activeRow.modelProvider === defaults?.modelProvider) &&
+    (!activeRow?.model || activeRow.model === defaults?.model);
+  if (sessionModelMatchesDefaults && defaults?.thinkingLevels?.length) {
     return defaults.thinkingLevels;
   }
   const labels =
-    activeRow?.thinkingOptions ??
-    defaults?.thinkingOptions ??
+    (activeRow?.thinkingOptions?.length ? activeRow.thinkingOptions : null) ??
+    (sessionModelMatchesDefaults && defaults?.thinkingOptions?.length
+      ? defaults.thinkingOptions
+      : null) ??
     (provider && model ? listThinkingLevelLabels(provider, model) : listThinkingLevelLabels());
   return labels.map((label) => ({
     id: normalizeThinkLevel(label) ?? normalizeLowercaseStringOrEmpty(label),
@@ -195,7 +272,7 @@ function resolveThinkingLevelOptions(
   }));
 }
 
-function resolveChatThinkingSelectState(state: AppViewState): ChatThinkingSelectState {
+export function resolveChatThinkingSelectState(state: AppViewState): ChatThinkingSelectState {
   const activeRow = state.sessionsResult?.sessions?.find((row) => row.key === state.sessionKey);
   const persisted = activeRow?.thinkingLevel;
   const currentOverride =
@@ -221,7 +298,7 @@ function resolveChatThinkingSelectState(state: AppViewState): ChatThinkingSelect
       : "off");
   return {
     currentOverride,
-    defaultLabel: `Default (${defaultLevel})`,
+    defaultLabel: formatInheritedThinkingLabel(defaultLevel),
     options: buildThinkingOptions(levels, currentOverride),
   };
 }
@@ -235,17 +312,19 @@ export function renderChatThinkingSelect(state: AppViewState) {
     currentOverride === ""
       ? defaultLabel
       : (options.find((entry) => entry.value === currentOverride)?.label ?? currentOverride);
+  const onChange = async (e: Event) => {
+    const next = (e.target as HTMLSelectElement).value.trim();
+    await switchChatThinkingLevel(state, next);
+  };
   return html`
     <label class="field chat-controls__session chat-controls__thinking-select">
       <select
+        class="chat-controls__thinking-select-full"
         data-chat-thinking-select="true"
-        aria-label="Chat thinking level"
+        aria-label=${t("chat.selectors.thinkingLevel")}
         title=${selectedLabel}
         ?disabled=${disabled}
-        @change=${async (e: Event) => {
-          const next = (e.target as HTMLSelectElement).value.trim();
-          await switchChatThinkingLevel(state, next);
-        }}
+        @change=${onChange}
       >
         <option value="" ?selected=${currentOverride === ""}>${defaultLabel}</option>
         ${repeat(
@@ -261,13 +340,13 @@ export function renderChatThinkingSelect(state: AppViewState) {
   `;
 }
 
-async function switchChatModel(state: AppViewState, nextModel: string) {
+async function switchChatModel(state: AppViewState, nextModel: string): Promise<boolean> {
   if (!state.client || !state.connected) {
-    return;
+    return false;
   }
   const currentOverride = resolveChatModelOverrideValue(state);
   if (currentOverride === nextModel) {
-    return;
+    return true;
   }
   const targetSessionKey = state.sessionKey;
   const prevOverride = state.chatModelOverrides[targetSessionKey];
@@ -277,18 +356,38 @@ async function switchChatModel(state: AppViewState, nextModel: string) {
     ...state.chatModelOverrides,
     [targetSessionKey]: createChatModelOverride(nextModel),
   };
-  try {
-    await state.client.request("sessions.patch", {
-      key: targetSessionKey,
-      model: nextModel || null,
-    });
-    void refreshVisibleToolsEffectiveForCurrentSessionLazy(state);
-    await refreshSessionOptions(state);
-  } catch (err) {
-    // Roll back so the picker reflects the actual server model.
-    state.chatModelOverrides = { ...state.chatModelOverrides, [targetSessionKey]: prevOverride };
-    state.lastError = `Failed to set model: ${String(err)}`;
-  }
+  const client = state.client;
+  let switchPromise: Promise<boolean>;
+  const clearPendingSwitch = () => {
+    if (state.chatModelSwitchPromises?.[targetSessionKey] === switchPromise) {
+      const nextSwitches = { ...state.chatModelSwitchPromises };
+      delete nextSwitches[targetSessionKey];
+      state.chatModelSwitchPromises = nextSwitches;
+    }
+  };
+  switchPromise = (async () => {
+    try {
+      await client.request("sessions.patch", {
+        key: targetSessionKey,
+        model: nextModel || null,
+      });
+      void refreshVisibleToolsEffectiveForCurrentSessionLazy(state);
+      await refreshSessionOptions(state);
+      return true;
+    } catch (err) {
+      // Roll back so the picker reflects the actual server model.
+      state.chatModelOverrides = { ...state.chatModelOverrides, [targetSessionKey]: prevOverride };
+      state.lastError = `Failed to set model: ${String(err)}`;
+      return false;
+    } finally {
+      clearPendingSwitch();
+    }
+  })();
+  state.chatModelSwitchPromises = {
+    ...state.chatModelSwitchPromises,
+    [targetSessionKey]: switchPromise,
+  };
+  return switchPromise;
 }
 
 function patchSessionThinkingLevel(
@@ -342,7 +441,7 @@ async function switchChatThinkingLevel(state: AppViewState, nextThinkingLevel: s
 
 /* Channel display labels. */
 const CHANNEL_LABELS: Record<string, string> = {
-  bluebubbles: "iMessage",
+  imessage: "iMessage",
   telegram: "Telegram",
   discord: "Discord",
   signal: "Signal",
@@ -406,7 +505,7 @@ export function parseSessionKey(key: string): SessionKeyInfo {
     return { prefix: "", fallbackName: `${channelLabel} Group` };
   }
 
-  // Channel-prefixed legacy keys, for example "bluebubbles:g-...".
+  // Channel-prefixed legacy keys, for example "imessage:g-...".
   for (const ch of KNOWN_CHANNEL_KEYS) {
     if (key === ch || key.startsWith(`${ch}:`)) {
       return { prefix: "", fallbackName: `${CHANNEL_LABELS[ch]} Session` };
@@ -466,6 +565,7 @@ type SessionOptionEntry = {
   label: string;
   scopeLabel: string;
   title: string;
+  parentKey?: string;
 };
 
 export type SessionOptionGroup = {
@@ -474,6 +574,78 @@ export type SessionOptionGroup = {
   options: SessionOptionEntry[];
 };
 
+type ChatAgentFilterOption = {
+  id: string;
+  label: string;
+};
+
+function resolveChatAgentFilterId(state: AppViewState, sessionKey: string): string {
+  const parsed = parseAgentSessionKey(sessionKey);
+  return normalizeAgentId(parsed?.agentId ?? state.agentsList?.defaultId ?? "main");
+}
+
+function isSessionKeyTiedToAgent(key: string, agentId: string, defaultAgentId: string): boolean {
+  const parsed = parseAgentSessionKey(key);
+  if (parsed) {
+    return normalizeAgentId(parsed.agentId) === agentId;
+  }
+  return agentId === defaultAgentId;
+}
+
+function isAgentMainSessionKey(key: string): boolean {
+  return parseAgentSessionKey(key)?.rest === "main";
+}
+
+function resolvePreferredSessionForAgent(state: AppViewState, agentId: string): string {
+  const normalizedAgentId = normalizeAgentId(agentId);
+  const defaultAgentId = normalizeAgentId(state.agentsList?.defaultId ?? "main");
+  const currentParsed = parseAgentSessionKey(state.sessionKey);
+  if (normalizeAgentId(currentParsed?.agentId ?? defaultAgentId) === normalizedAgentId) {
+    return state.sessionKey;
+  }
+  const rows = state.sessionsResult?.sessions ?? [];
+  let row: (typeof rows)[number] | undefined;
+  for (const entry of rows) {
+    if (!isSessionKeyTiedToAgent(entry.key, normalizedAgentId, defaultAgentId)) {
+      continue;
+    }
+    if (!row || (entry.updatedAt ?? 0) > (row.updatedAt ?? 0)) {
+      row = entry;
+    }
+  }
+  return row?.key ?? buildAgentMainSessionKey({ agentId: normalizedAgentId });
+}
+
+function resolveChatAgentFilterOptions(state: AppViewState): ChatAgentFilterOption[] {
+  const seen = new Set<string>();
+  const options: ChatAgentFilterOption[] = [];
+  const add = (agentId: string) => {
+    const normalized = normalizeAgentId(agentId);
+    if (seen.has(normalized)) {
+      return;
+    }
+    seen.add(normalized);
+    options.push({
+      id: normalized,
+      label: resolveAgentGroupLabel(state, normalized),
+    });
+  };
+
+  add(resolveChatAgentFilterId(state, state.sessionKey));
+  add(state.agentsList?.defaultId ?? "main");
+  for (const agent of state.agentsList?.agents ?? []) {
+    add(agent.id);
+  }
+  for (const row of state.sessionsResult?.sessions ?? []) {
+    const parsed = parseAgentSessionKey(row.key);
+    if (parsed) {
+      add(parsed.agentId);
+    }
+  }
+
+  return options;
+}
+
 export function resolveSessionOptionGroups(
   state: AppViewState,
   sessionKey: string,
@@ -481,6 +653,8 @@ export function resolveSessionOptionGroups(
 ): SessionOptionGroup[] {
   const rows = sessions?.sessions ?? [];
   const hideCron = state.sessionsHideCron ?? true;
+  const activeAgentId = resolveChatAgentFilterId(state, sessionKey);
+  const defaultAgentId = normalizeAgentId(state.agentsList?.defaultId ?? "main");
   const byKey = new Map<string, SessionsListResult["sessions"][number]>();
   for (const row of rows) {
     byKey.set(row.key, row);
@@ -502,7 +676,7 @@ export function resolveSessionOptionGroups(
     return created;
   };
 
-  const addOption = (key: string) => {
+  const addOption = (key: string, parentKey?: string, isChild?: boolean) => {
     if (!key || seenKeys.has(key)) {
       return;
     }
@@ -516,25 +690,74 @@ export function resolveSessionOptionGroups(
         )
       : ensureGroup("other", "Other Sessions");
     const scopeLabel = normalizeOptionalString(parsed?.rest) ?? key;
-    const label = resolveSessionScopedOptionLabel(key, row, parsed?.rest);
+    let label = resolveSessionScopedOptionLabel(key, row, parsed?.rest);
+    if (isChild) {
+      label = `└─ ${label.replace(/^Subagent:\s*/i, "")}`;
+    }
     group.options.push({
       key,
       label,
       scopeLabel,
       title: key,
+      ...(parentKey ? { parentKey } : {}),
     });
   };
 
   for (const row of rows) {
+    if (
+      !isSessionKeyTiedToAgent(row.key, activeAgentId, defaultAgentId) &&
+      row.key !== sessionKey
+    ) {
+      continue;
+    }
     if (row.key !== sessionKey && (row.kind === "global" || row.kind === "unknown")) {
       continue;
     }
     if (hideCron && row.key !== sessionKey && isCronSessionKey(row.key)) {
       continue;
     }
-    addOption(row.key);
+    const isSubagent = isSubagentSessionKey(row.key) || !!row.spawnedBy;
+    if (isSubagent && row.spawnedBy && byKey.has(row.spawnedBy)) {
+      addOption(row.key, row.spawnedBy, true);
+    } else {
+      addOption(row.key);
+    }
   }
-  addOption(sessionKey);
+  if (byKey.has(sessionKey)) {
+    addOption(sessionKey);
+  } else if (isAgentMainSessionKey(sessionKey)) {
+    addOption(sessionKey);
+  }
+
+  for (const group of groups.values()) {
+    const options = group.options;
+    const optionKeys = new Set(options.map((option) => option.key));
+    const childrenByParent = new Map<string, SessionOptionEntry[]>();
+    for (const option of options) {
+      if (option.parentKey && optionKeys.has(option.parentKey)) {
+        const siblings = childrenByParent.get(option.parentKey);
+        if (siblings) {
+          siblings.push(option);
+        } else {
+          childrenByParent.set(option.parentKey, [option]);
+        }
+      }
+    }
+    if (childrenByParent.size > 0) {
+      const reordered: SessionOptionEntry[] = [];
+      for (const option of options) {
+        if (option.parentKey && optionKeys.has(option.parentKey)) {
+          continue;
+        }
+        reordered.push(option);
+        const children = childrenByParent.get(option.key);
+        if (children) {
+          reordered.push(...children);
+        }
+      }
+      options.splice(0, options.length, ...reordered);
+    }
+  }
 
   for (const group of groups.values()) {
     const counts = new Map<string, number>();

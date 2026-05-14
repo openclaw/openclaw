@@ -6,6 +6,7 @@ import {
   resolveConfiguredChannelPluginIds,
   resolveDiscoverableScopedChannelPluginIds,
 } from "../channel-plugin-ids.js";
+import { resolveEffectivePluginIds } from "../effective-plugin-ids.js";
 import { loadOpenClawPlugins } from "../loader.js";
 import {
   hasExplicitPluginIdScope,
@@ -75,6 +76,35 @@ function shouldForwardChannelScope(params: {
   return !params.scopedLoad && params.scope === "configured-channels";
 }
 
+function resolveScopePluginIds(params: {
+  scope: PluginRegistryScope;
+  context: ReturnType<typeof resolvePluginRuntimeLoadContext>;
+}): string[] {
+  switch (params.scope) {
+    case "configured-channels":
+      return resolveConfiguredChannelPluginIds({
+        config: params.context.config,
+        activationSourceConfig: params.context.activationSourceConfig,
+        workspaceDir: params.context.workspaceDir,
+        env: params.context.env,
+      });
+    case "channels":
+      return resolveChannelPluginIds({
+        config: params.context.config,
+        workspaceDir: params.context.workspaceDir,
+        env: params.context.env,
+      });
+    case "all":
+      return resolveEffectivePluginIds({
+        config: params.context.rawConfig,
+        workspaceDir: params.context.workspaceDir,
+        env: params.context.env,
+      });
+  }
+  const unreachableScope: never = params.scope;
+  return unreachableScope;
+}
+
 function resolveOrLoadRuntimePluginRegistry(
   loadOptions: NonNullable<Parameters<typeof loadOpenClawPlugins>[0]>,
 ): void {
@@ -121,33 +151,21 @@ export function ensurePluginRegistryLoaded(options?: {
           ...requestedChannelOwnerPluginIds,
         ]);
   const scopedLoad = hasExplicitPluginIdScope(requestedPluginIds);
-  const expectedChannelPluginIds = scopedLoad
+  const expectedPluginIds = scopedLoad
     ? (requestedPluginIds ?? [])
-    : scope === "configured-channels"
-      ? resolveConfiguredChannelPluginIds({
-          config: context.config,
-          activationSourceConfig: context.activationSourceConfig,
-          workspaceDir: context.workspaceDir,
-          env: context.env,
-        })
-      : scope === "channels"
-        ? resolveChannelPluginIds({
-            config: context.config,
-            workspaceDir: context.workspaceDir,
-            env: context.env,
-          })
-        : [];
+    : resolveScopePluginIds({ scope, context });
   const active = getActivePluginRegistry();
+  const requestedPluginIdsForScope = scope === "all" ? expectedPluginIds : undefined;
   if (
     !scopedLoad &&
     scopeRank(pluginRegistryLoaded) >= scopeRank(scope) &&
-    activeRegistrySatisfiesScope(scope, active, expectedChannelPluginIds, undefined)
+    activeRegistrySatisfiesScope(scope, active, expectedPluginIds, requestedPluginIdsForScope)
   ) {
     return;
   }
   if (
     (pluginRegistryLoaded === "none" || scopedLoad) &&
-    activeRegistrySatisfiesScope(scope, active, expectedChannelPluginIds, requestedPluginIds)
+    activeRegistrySatisfiesScope(scope, active, expectedPluginIds, requestedPluginIds)
   ) {
     if (!scopedLoad) {
       pluginRegistryLoaded = scope;
@@ -156,20 +174,20 @@ export function ensurePluginRegistryLoaded(options?: {
   }
   const scopedConfig =
     scope === "configured-channels" &&
-    expectedChannelPluginIds.length > 0 &&
+    expectedPluginIds.length > 0 &&
     (!scopedLoad || requestedChannelOwnerPluginIds !== undefined)
       ? (withActivatedPluginIds({
           config: context.config,
-          pluginIds: expectedChannelPluginIds,
+          pluginIds: expectedPluginIds,
         }) ?? context.config)
       : context.config;
   const scopedActivationSourceConfig =
     scope === "configured-channels" &&
-    expectedChannelPluginIds.length > 0 &&
+    expectedPluginIds.length > 0 &&
     (!scopedLoad || requestedChannelOwnerPluginIds !== undefined)
       ? (withActivatedPluginIds({
           config: context.activationSourceConfig,
-          pluginIds: expectedChannelPluginIds,
+          pluginIds: expectedPluginIds,
         }) ?? context.activationSourceConfig)
       : context.activationSourceConfig;
   const loadOptions = buildPluginRuntimeLoadOptionsFromValues(
@@ -182,8 +200,9 @@ export function ensurePluginRegistryLoaded(options?: {
       throwOnLoadError: true,
       ...(hasExplicitPluginIdScope(requestedPluginIds) ||
       shouldForwardChannelScope({ scope, scopedLoad }) ||
-      hasNonEmptyPluginIdScope(expectedChannelPluginIds)
-        ? { onlyPluginIds: expectedChannelPluginIds }
+      hasNonEmptyPluginIdScope(expectedPluginIds) ||
+      scope === "all"
+        ? { onlyPluginIds: expectedPluginIds }
         : {}),
     },
   );

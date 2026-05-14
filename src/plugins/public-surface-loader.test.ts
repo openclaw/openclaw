@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const tempDirs: string[] = [];
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+const originalTrustBundledPluginsDir = process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
 
 function createTempDir(): string {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-public-surface-loader-"));
@@ -27,6 +28,11 @@ afterEach(() => {
   } else {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledPluginsDir;
   }
+  if (originalTrustBundledPluginsDir === undefined) {
+    delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
+  } else {
+    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = originalTrustBundledPluginsDir;
+  }
 });
 
 describe("bundled plugin public surface loader", () => {
@@ -42,7 +48,6 @@ describe("bundled plugin public surface loader", () => {
       }),
     }));
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    vi.resetModules();
 
     try {
       const publicSurfaceLoader = await importFreshModule<
@@ -87,7 +92,6 @@ describe("bundled plugin public surface loader", () => {
         createRequire: vi.fn(() => requireLoader),
       });
     });
-    vi.resetModules();
 
     const publicSurfaceLoader = await importFreshModule<
       typeof import("./public-surface-loader.js")
@@ -121,14 +125,15 @@ describe("bundled plugin public surface loader", () => {
         moduleExport: { marker: path.basename(path.dirname(modulePath)) },
       }),
     }));
-    vi.resetModules();
 
     const publicSurfaceLoader = await importFreshModule<
       typeof import("./public-surface-loader.js")
     >(import.meta.url, "./public-surface-loader.js?scope=bundled-native-public-artifacts");
     const tempRoot = createTempDir();
     const bundledPluginsDir = path.join(tempRoot, "dist");
+    fs.mkdirSync(bundledPluginsDir, { recursive: true });
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
+    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
 
     const firstPath = path.join(bundledPluginsDir, "demo-a", "api.js");
     const secondPath = path.join(bundledPluginsDir, "demo-b", "api.js");
@@ -160,14 +165,15 @@ describe("bundled plugin public surface loader", () => {
         moduleExport: { marker: path.basename(path.dirname(modulePath)) },
       }),
     }));
-    vi.resetModules();
 
+    const tempRoot = createTempDir();
+    const bundledPluginsDir = path.join(tempRoot, "dist");
+    fs.mkdirSync(bundledPluginsDir, { recursive: true });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
+    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
     const publicSurfaceLoader = await importFreshModule<
       typeof import("./public-surface-loader.js")
     >(import.meta.url, "./public-surface-loader.js?scope=missing-location-retry");
-    const tempRoot = createTempDir();
-    const bundledPluginsDir = path.join(tempRoot, "dist");
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
 
     expect(
       publicSurfaceLoader.resolveBundledPluginPublicArtifactPath({
@@ -193,7 +199,6 @@ describe("bundled plugin public surface loader", () => {
     vi.doMock("jiti", () => ({
       createJiti,
     }));
-    vi.resetModules();
 
     const publicSurfaceLoader = await importFreshModule<
       typeof import("./public-surface-loader.js")
@@ -210,6 +215,9 @@ describe("bundled plugin public surface loader", () => {
     const moduleRealPath = fs.realpathSync(modulePath);
     vi.spyOn(fs, "statSync").mockImplementation((target, options) => {
       const stat = realStatSync(target, options);
+      if (stat === undefined) {
+        return stat;
+      }
       if (fs.realpathSync(target) !== moduleRealPath) {
         return stat;
       }

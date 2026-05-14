@@ -52,6 +52,10 @@ async function cleanupOffloadedRefs(refs: { id: string }[]) {
   await Promise.allSettled(refs.map((ref) => deleteMediaBufferMock(ref.id, "inbound")));
 }
 
+function savedMime() {
+  return saveMediaBufferMock.mock.calls[0]?.[1];
+}
+
 beforeEach(() => {
   saveMediaBufferMock.mockClear();
   deleteMediaBufferMock.mockClear();
@@ -142,7 +146,7 @@ describe("parseMessageWithAttachments", () => {
     // ctx.MediaPaths so the workspace stage surfaces a real path.
     expect(parsed.message).toBe("read this");
     expect(saveMediaBufferMock).toHaveBeenCalledOnce();
-    expect(saveMediaBufferMock.mock.calls[0]?.[1]).toBe("application/pdf");
+    expect(savedMime()).toBe("application/pdf");
     expect(logs).toHaveLength(0);
   });
 
@@ -155,7 +159,7 @@ describe("parseMessageWithAttachments", () => {
     ]);
     expect(parsed.offloadedRefs).toHaveLength(1);
     expect(parsed.offloadedRefs[0]?.mimeType).toBe("application/octet-stream");
-    expect(saveMediaBufferMock.mock.calls[0]?.[1]).toBe("application/octet-stream");
+    expect(savedMime()).toBe("application/octet-stream");
     expect(parsed.message).toBe("take a look");
     expect(logs).toHaveLength(0);
   });
@@ -295,16 +299,19 @@ describe("parseMessageWithAttachments", () => {
 
 describe("parseMessageWithAttachments validation errors", () => {
   it("throws UnsupportedAttachmentError on empty payload", async () => {
-    await expect(
-      parseMessageWithAttachments(
+    let caught: unknown;
+    try {
+      await parseMessageWithAttachments(
         "x",
         [{ type: "file", mimeType: "application/pdf", fileName: "empty.pdf", content: "" }],
         { log: { warn: () => {} } },
-      ),
-    ).rejects.toMatchObject({
-      name: "UnsupportedAttachmentError",
-      reason: "empty-payload",
-    });
+      );
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(UnsupportedAttachmentError);
+    expect((caught as UnsupportedAttachmentError).name).toBe("UnsupportedAttachmentError");
+    expect((caught as UnsupportedAttachmentError).reason).toBe("empty-payload");
     expect(saveMediaBufferMock).not.toHaveBeenCalled();
   });
 
@@ -394,12 +401,10 @@ describe("parseMessageWithAttachments validation errors", () => {
 
     try {
       expect(parsed.images).toHaveLength(0);
-      expect(parsed.imageOrder).toEqual([]);
+      expect(parsed.imageOrder).toStrictEqual([]);
       expect(parsed.offloadedRefs).toHaveLength(1);
-      expect(parsed.offloadedRefs[0]).toMatchObject({
-        mimeType: "application/pdf",
-        label: "brief.pdf",
-      });
+      expect(parsed.offloadedRefs[0]?.mimeType).toBe("application/pdf");
+      expect(parsed.offloadedRefs[0]?.label).toBe("brief.pdf");
       expect(parsed.message).toBe("read this");
     } finally {
       await cleanupOffloadedRefs(parsed.offloadedRefs);
@@ -477,7 +482,9 @@ describe("parseMessageWithAttachments validation errors", () => {
       expect(parsed.message).toContain(
         "[image attachment omitted: text-only attachment limit reached]",
       );
-      expect(logs.some((line) => /offload limit 10/i.test(line))).toBe(true);
+      expect(logs).toEqual([
+        "attachment dot-10.png: dropping image because text-only offload limit 10 was reached",
+      ]);
     } finally {
       await cleanupOffloadedRefs(parsed.offloadedRefs);
     }

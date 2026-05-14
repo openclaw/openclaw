@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
 
@@ -50,6 +50,16 @@ function createConfig(params: {
   } as OpenClawPluginApi["config"];
 }
 
+function clientAppIdAt(index: number): string | undefined {
+  const calls = createFeishuClientMock.mock.calls;
+  const resolvedIndex = index < 0 ? calls.length + index : index;
+  return calls[resolvedIndex]?.[0]?.appId;
+}
+
+function lastClientAppId(): string | undefined {
+  return clientAppIdAt(-1);
+}
+
 describe("feishu tool account routing", () => {
   beforeAll(async () => {
     ({ registerFeishuBitableTools, registerFeishuDriveTools, registerFeishuPermTools } =
@@ -60,6 +70,11 @@ describe("feishu tool account routing", () => {
         ...(await import("./wiki.js")),
       })));
     ({ registerFeishuWikiTools } = await import("./wiki.js"));
+  });
+
+  afterAll(() => {
+    vi.doUnmock("./client.js");
+    vi.resetModules();
   });
 
   beforeEach(() => {
@@ -78,7 +93,7 @@ describe("feishu tool account routing", () => {
     const tool = resolveTool("feishu_wiki", { agentAccountId: "b" });
     await tool.execute("call", { action: "search" });
 
-    expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-b");
+    expect(lastClientAppId()).toBe("app-b");
   });
 
   test("wiki tool prefers the active contextual account over configured defaultAccount", async () => {
@@ -94,7 +109,7 @@ describe("feishu tool account routing", () => {
     const tool = resolveTool("feishu_wiki", { agentAccountId: "a" });
     await tool.execute("call", { action: "search" });
 
-    expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-a");
+    expect(lastClientAppId()).toBe("app-a");
   });
 
   test("drive tool registers when first account disables it and routes to agentAccountId", async () => {
@@ -109,7 +124,7 @@ describe("feishu tool account routing", () => {
     const tool = resolveTool("feishu_drive", { agentAccountId: "b" });
     await tool.execute("call", { action: "unknown_action" });
 
-    expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-b");
+    expect(lastClientAppId()).toBe("app-b");
   });
 
   test("perm tool registers when only second account enables it and routes to agentAccountId", async () => {
@@ -124,7 +139,7 @@ describe("feishu tool account routing", () => {
     const tool = resolveTool("feishu_perm", { agentAccountId: "b" });
     await tool.execute("call", { action: "unknown_action" });
 
-    expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-b");
+    expect(lastClientAppId()).toBe("app-b");
   });
 
   test("bitable tool routes to agentAccountId and allows explicit accountId override", async () => {
@@ -135,8 +150,8 @@ describe("feishu tool account routing", () => {
     await tool.execute("call-ctx", { url: "invalid-url" });
     await tool.execute("call-override", { url: "invalid-url", accountId: "a" });
 
-    expect(createFeishuClientMock.mock.calls[0]?.[0]?.appId).toBe("app-b");
-    expect(createFeishuClientMock.mock.calls[1]?.[0]?.appId).toBe("app-a");
+    expect(clientAppIdAt(0)).toBe("app-b");
+    expect(clientAppIdAt(1)).toBe("app-a");
   });
 
   test("falls back to the configured Feishu default selection when agentAccountId is not a real account", async () => {
@@ -151,7 +166,7 @@ describe("feishu tool account routing", () => {
     const tool = resolveTool("feishu_wiki", { agentAccountId: "agent-spawner" });
     await tool.execute("call", { action: "search" });
 
-    expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-a");
+    expect(lastClientAppId()).toBe("app-a");
   });
 
   test("does not silently fall back when the contextual account is real but uses non-env SecretRefs", async () => {

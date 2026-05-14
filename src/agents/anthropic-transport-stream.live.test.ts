@@ -1,5 +1,5 @@
 import http from "node:http";
-import type { Model } from "@mariozechner/pi-ai";
+import type { Model } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import { createAnthropicMessagesTransportStreamFn } from "./anthropic-transport-stream.js";
 import { isLiveTestEnabled } from "./live-test-helpers.js";
@@ -62,6 +62,10 @@ describeLive("anthropic transport stream live", () => {
     const abortReason = new Error("live anthropic stream abort");
     let requestBody = "";
     let requestBodyPromise: Promise<string> | undefined;
+    let resolveResponseStarted: (() => void) | undefined;
+    const responseStartedPromise = new Promise<void>((resolve) => {
+      resolveResponseStarted = resolve;
+    });
 
     const server = http.createServer((request, response) => {
       requestBodyPromise = readRequestBody(request).then((body) => {
@@ -73,13 +77,13 @@ describeLive("anthropic transport stream live", () => {
         response.write(
           'data: {"type":"message_start","message":{"id":"msg_live","usage":{"input_tokens":1,"output_tokens":0}}}\n\n',
         );
+        resolveResponseStarted?.();
         return body;
       });
     });
 
     const port = await waitForServerListening(server);
     try {
-      setTimeout(() => controller.abort(abortReason), 50);
       const model: AnthropicMessagesModel = {
         id: "claude-sonnet-4-6",
         name: "Claude Sonnet 4.6",
@@ -104,6 +108,13 @@ describeLive("anthropic transport stream live", () => {
         ),
       );
 
+      const responseStarted = await Promise.race([
+        responseStartedPromise.then(() => true),
+        delay(1_000, false),
+      ]);
+      expect(responseStarted).toBe(true);
+      controller.abort(abortReason);
+
       const timedOut = Symbol("timed out");
       const result = await Promise.race([stream.result(), delay(1_000, timedOut)]);
       if (result === timedOut) {
@@ -116,12 +127,14 @@ describeLive("anthropic transport stream live", () => {
         ? await Promise.race([requestBodyPromise, delay(500, requestBody)])
         : requestBody;
       if (capturedRequestBody.trim().length > 0) {
-        expect(JSON.parse(capturedRequestBody)).toMatchObject({
-          model: "claude-sonnet-4-6",
-          stream: true,
-        });
+        const body = JSON.parse(capturedRequestBody) as { model?: unknown; stream?: unknown };
+        expect(body.model).toBe("claude-sonnet-4-6");
+        expect(body.stream).toBe(true);
       }
     } finally {
+      if (!controller.signal.aborted) {
+        controller.abort(abortReason);
+      }
       await closeServer(server);
     }
   }, 10_000);

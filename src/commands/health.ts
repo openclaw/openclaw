@@ -14,6 +14,13 @@ import { getRuntimeConfig } from "../config/config.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
+import {
+  DEFAULT_CHANNEL_CONNECT_GRACE_MS,
+  DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
+  evaluateChannelHealth,
+} from "../gateway/channel-health-policy.js";
+import { getGatewayModelPricingHealth } from "../gateway/model-pricing-cache-state.js";
+import { isGatewayModelPricingEnabled } from "../gateway/model-pricing-config.js";
 import type { ChannelRuntimeSnapshot } from "../gateway/server-channel-runtime.types.js";
 import { info } from "../globals.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -63,6 +70,43 @@ const debugHealth = (...args: unknown[]) => {
   }
 };
 
+const PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR =
+  "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.";
+
+const redactIMessageProbeErrorMessage = (message: string): string => {
+  const trimmed = message.trim();
+  if (!trimmed) {
+    return "";
+  }
+  return trimmed.replaceAll(
+    /\/Users\/[^/\s]+\/Library\/Messages\/chat\.db/g,
+    "~/Library/Messages/chat.db",
+  );
+};
+
+const buildNonSensitiveProbeFailure = (
+  channelId: string,
+  probe: unknown,
+): Record<string, unknown> | undefined => {
+  const record = asNullableRecord(probe);
+  if (channelId !== "imessage" || !record || record.ok !== false) {
+    return undefined;
+  }
+  if (typeof record.error !== "string") {
+    return undefined;
+  }
+
+  const error = redactIMessageProbeErrorMessage(record.error);
+  if (
+    !/\bimsg\b/i.test(error) ||
+    !error.includes("~/Library/Messages/chat.db") ||
+    !/\bFull Disk Access\b/i.test(error)
+  ) {
+    return undefined;
+  }
+  return { ok: false, error: PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR };
+};
+
 const formatDurationParts = (ms: number): string => {
   if (!Number.isFinite(ms)) {
     return "unknown";
@@ -91,6 +135,32 @@ const formatDurationParts = (ms: number): string => {
   }
   return parts.join(" ");
 };
+
+function formatEventLoopHealthLine(summary: HealthSummary): string | null {
+  const eventLoop = summary.eventLoop;
+  if (!eventLoop) {
+    return null;
+  }
+  const state = eventLoop.degraded ? "degraded" : "ok";
+  const reasons = eventLoop.reasons.length > 0 ? ` reasons=${eventLoop.reasons.join(",")}` : "";
+  return `Gateway event loop: ${state}${reasons} max=${Math.round(
+    eventLoop.delayMaxMs,
+  )}ms p99=${Math.round(eventLoop.delayP99Ms)}ms util=${eventLoop.utilization} cpu=${
+    eventLoop.cpuCoreRatio
+  }`;
+}
+
+function formatModelPricingHealthLine(summary: HealthSummary): string | null {
+  const modelPricing = summary.modelPricing;
+  if (!modelPricing || modelPricing.state === "disabled") {
+    return null;
+  }
+  if (modelPricing.state === "ok") {
+    return null;
+  }
+  const detail = modelPricing.detail ? ` (${modelPricing.detail})` : "";
+  return `Model pricing: warning (optional pricing refresh degraded)${detail}`;
+}
 
 const resolveHeartbeatSummary = (cfg: OpenClawConfig, agentId: string) =>
   resolveHeartbeatSummaryForAgent(cfg, agentId);
@@ -307,6 +377,7 @@ export async function getHealthSnapshot(params?: {
   probe?: boolean;
   includeSensitive?: boolean;
   runtimeSnapshot?: ChannelRuntimeSnapshot;
+  eventLoop?: HealthSummary["eventLoop"];
 }): Promise<HealthSummary> {
   const timeoutMs = params?.timeoutMs;
   const cfg = getRuntimeConfig();
@@ -419,18 +490,29 @@ export async function getHealthSnapshot(params?: {
       const runtimeSnapshot =
         params?.runtimeSnapshot?.channelAccounts[plugin.id]?.[accountId] ??
         (accountId === defaultAccountId ? params?.runtimeSnapshot?.channels[plugin.id] : undefined);
+      const nonSensitiveProbeFailure = buildNonSensitiveProbeFailure(plugin.id, probe);
+      const snapshotProbe = includeSensitive ? probe : nonSensitiveProbeFailure;
       const snapshot: ChannelAccountSnapshot = await buildChannelAccountSnapshotFromAccount({
         plugin,
         cfg,
         accountId,
         account: snapshotAccount,
         runtime: runtimeSnapshot,
-        probe: includeSensitive ? probe : undefined,
+        probe: snapshotProbe,
         enabledFallback: enabled,
         configuredFallback: configured,
       });
       if (lastProbeAt) {
         snapshot.lastProbeAt = lastProbeAt;
+      }
+      const health = evaluateChannelHealth(snapshot, {
+        channelId: plugin.id,
+        now: Date.now(),
+        staleEventThresholdMs: DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
+        channelConnectGraceMs: DEFAULT_CHANNEL_CONNECT_GRACE_MS,
+      });
+      if (!health.healthy) {
+        snapshot.healthState = health.reason;
       }
 
       const summary = plugin.status?.buildChannelSummary
@@ -456,7 +538,13 @@ export async function getHealthSnapshot(params?: {
         record.probe = probe;
       }
       if (!includeSensitive) {
-        delete record.probe;
+        const summaryProbeFailure = buildNonSensitiveProbeFailure(plugin.id, record.probe);
+        const safeProbeFailure = summaryProbeFailure ?? nonSensitiveProbeFailure;
+        if (safeProbeFailure) {
+          record.probe = safeProbeFailure;
+        } else {
+          delete record.probe;
+        }
       }
       if (record.lastProbeAt === undefined && lastProbeAt) {
         record.lastProbeAt = lastProbeAt;
@@ -483,7 +571,9 @@ export async function getHealthSnapshot(params?: {
     ok: true,
     ts: Date.now(),
     durationMs: Date.now() - start,
+    ...(params?.eventLoop ? { eventLoop: params.eventLoop } : {}),
     ...(pluginHealth ? { plugins: pluginHealth } : {}),
+    modelPricing: getGatewayModelPricingHealth({ enabled: isGatewayModelPricingEnabled(cfg) }),
     channels,
     channelOrder,
     channelLabels,
@@ -666,6 +756,14 @@ export async function healthCommand(
           });
     for (const line of channelLines) {
       runtime.log(styleHealthChannelLine(line, rich));
+    }
+    const eventLoopLine = formatEventLoopHealthLine(summary);
+    if (eventLoopLine) {
+      runtime.log(styleHealthChannelLine(eventLoopLine, rich));
+    }
+    const modelPricingLine = formatModelPricingHealthLine(summary);
+    if (modelPricingLine) {
+      runtime.log(styleHealthChannelLine(modelPricingLine, rich));
     }
     for (const plugin of displayPlugins) {
       const channelSummary = summary.channels?.[plugin.id];

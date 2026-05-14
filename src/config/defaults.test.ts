@@ -77,8 +77,12 @@ describe("config defaults", () => {
     };
     mocks.applyProviderConfigDefaultsForConfig.mockReturnValue(nextCfg);
 
-    expect(applyContextPruningDefaults(cfg as never)).toBe(nextCfg);
+    const manifestRegistry = { plugins: [] };
+    expect(applyContextPruningDefaults(cfg as never, { manifestRegistry })).toBe(nextCfg);
     expect(mocks.applyProviderConfigDefaultsForConfig).toHaveBeenCalledTimes(1);
+    const [[defaultsParams]] = mocks.applyProviderConfigDefaultsForConfig.mock
+      .calls as unknown as Array<[{ manifestRegistry?: unknown }]>;
+    expect(defaultsParams.manifestRegistry).toBe(manifestRegistry);
   });
 
   it("defaults ackReactionScope without deriving other message fields", () => {

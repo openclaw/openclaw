@@ -35,7 +35,7 @@ describe("command-registration-policy", () => {
         primary: "voicecall",
         hasBuiltinPrimary: false,
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       shouldSkipPluginCommandRegistration({
         argv: ["node", "openclaw", "help", "--help"],
@@ -50,6 +50,13 @@ describe("command-registration-policy", () => {
         hasBuiltinPrimary: false,
       }),
     ).toBe(false);
+    expect(
+      shouldSkipPluginCommandRegistration({
+        argv: ["node", "openclaw", "auth", "login"],
+        primary: "auth",
+        hasBuiltinPrimary: false,
+      }),
+    ).toBe(true);
     expect(
       shouldSkipPluginCommandRegistration({
         argv: ["node", "openclaw", "tool", "image_generate"],

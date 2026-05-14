@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import { handleFeishuCommentEvent } from "./comment-handler.js";
 import { setFeishuRuntime } from "./runtime.js";
@@ -29,6 +29,15 @@ vi.mock("./drive.js", () => ({
   deliverCommentThreadText: deliverCommentThreadTextMock,
 }));
 
+async function raceWithNextMacrotask<T>(promise: Promise<T>): Promise<T | "pending"> {
+  return await Promise.race([
+    promise,
+    new Promise<"pending">((resolve) => {
+      setImmediate(() => resolve("pending"));
+    }),
+  ]);
+}
+
 function buildConfig(overrides?: Partial<ClawdbotConfig>): ClawdbotConfig {
   return {
     channels: {
@@ -52,6 +61,17 @@ function buildResolvedRoute(matchedBy: "binding.channel" | "default" = "binding.
     lastRoutePolicy: "session" as const,
     matchedBy,
   };
+}
+
+function mockCallArg(mockFn: ReturnType<typeof vi.fn>, label: string, callIndex = 0, argIndex = 0) {
+  const call = mockFn.mock.calls.at(callIndex);
+  if (!call) {
+    throw new Error(`expected ${label} call ${callIndex}`);
+  }
+  if (!(argIndex in call)) {
+    throw new Error(`expected ${label} call ${callIndex} argument ${argIndex}`);
+  }
+  return call[argIndex];
 }
 
 function createTestRuntime(overrides?: {
@@ -172,6 +192,15 @@ function createTestRuntime(overrides?: {
 }
 
 describe("handleFeishuCommentEvent", () => {
+  afterAll(() => {
+    vi.doUnmock("./monitor.comment.js");
+    vi.doUnmock("./comment-dispatcher.js");
+    vi.doUnmock("./dynamic-agent.js");
+    vi.doUnmock("./client.js");
+    vi.doUnmock("./drive.js");
+    vi.resetModules();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     maybeCreateDynamicAgentMock.mockResolvedValue({ created: false });
@@ -238,23 +267,32 @@ describe("handleFeishuCommentEvent", () => {
       typeof vi.fn
     >;
 
-    expect(finalizeInboundContext).toHaveBeenCalledWith(
-      expect.objectContaining({
-        From: "feishu:ou_sender",
-        To: "comment:docx:doc_token_1:comment_1",
-        Surface: "feishu-comment",
-        OriginatingChannel: "feishu",
-        OriginatingTo: "comment:docx:doc_token_1:comment_1",
-        MessageSid: "drive-comment:evt_1",
-        MessageThreadId: "reply_1",
-      }),
-    );
+    expect(finalizeInboundContext).toHaveBeenCalledTimes(1);
+    const finalizedContext = mockCallArg(finalizeInboundContext, "finalizeInboundContext") as
+      | Record<string, unknown>
+      | undefined;
+    expect({
+      from: finalizedContext?.From,
+      to: finalizedContext?.To,
+      surface: finalizedContext?.Surface,
+      originatingChannel: finalizedContext?.OriginatingChannel,
+      originatingTo: finalizedContext?.OriginatingTo,
+      messageSid: finalizedContext?.MessageSid,
+      messageThreadId: finalizedContext?.MessageThreadId,
+    }).toEqual({
+      from: "feishu:ou_sender",
+      to: "comment:docx:doc_token_1:comment_1",
+      surface: "feishu-comment",
+      originatingChannel: "feishu",
+      originatingTo: "comment:docx:doc_token_1:comment_1",
+      messageSid: "drive-comment:evt_1",
+      messageThreadId: "reply_1",
+    });
     expect(recordInboundSession).toHaveBeenCalledTimes(1);
-    expect(recordInboundSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:feishu:direct:comment-doc:docx:doc_token_1",
-      }),
-    );
+    const recordArgs = mockCallArg(recordInboundSession, "recordInboundSession") as
+      | { sessionKey?: string }
+      | undefined;
+    expect(recordArgs?.sessionKey).toBe("agent:main:feishu:direct:comment-doc:docx:doc_token_1");
     expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
   });
 
@@ -288,6 +326,47 @@ describe("handleFeishuCommentEvent", () => {
     expect(deliverCommentThreadTextMock).not.toHaveBeenCalled();
   });
 
+  it("passes disabled config-write policy to dynamic agent creation", async () => {
+    const runtime = createTestRuntime({
+      resolveAgentRoute: () => buildResolvedRoute("default"),
+    });
+    setFeishuRuntime(runtime);
+
+    await handleFeishuCommentEvent({
+      cfg: buildConfig({
+        channels: {
+          feishu: {
+            enabled: true,
+            dmPolicy: "open",
+            allowFrom: ["*"],
+            configWrites: false,
+            dynamicAgentCreation: {
+              enabled: true,
+            },
+          },
+        },
+      }),
+      accountId: "default",
+      event: { event_id: "evt_1" },
+      botOpenId: "ou_bot",
+      runtime: {
+        log: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+
+    expect(maybeCreateDynamicAgentMock).toHaveBeenCalledTimes(1);
+    const dynamicAgentArgs = mockCallArg(maybeCreateDynamicAgentMock, "maybeCreateDynamicAgent") as
+      | { configWritesAllowed?: boolean; senderOpenId?: string }
+      | undefined;
+    expect(dynamicAgentArgs?.senderOpenId).toBe("ou_sender");
+    expect(dynamicAgentArgs?.configWritesAllowed).toBe(false);
+    const dispatchReplyFromConfig = runtime.channel.reply.dispatchReplyFromConfig as ReturnType<
+      typeof vi.fn
+    >;
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+
   it("issues a pairing challenge in the comment thread when dmPolicy=pairing", async () => {
     const runtime = createTestRuntime();
     setFeishuRuntime(runtime);
@@ -311,15 +390,36 @@ describe("handleFeishuCommentEvent", () => {
       } as never,
     });
 
-    expect(deliverCommentThreadTextMock).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        file_token: "doc_token_1",
-        file_type: "docx",
-        comment_id: "comment_1",
-        is_whole_comment: false,
-      }),
+    expect(deliverCommentThreadTextMock).toHaveBeenCalledTimes(1);
+    const pairingClient = mockCallArg(deliverCommentThreadTextMock, "deliverCommentThreadText");
+    const pairingReply = mockCallArg(
+      deliverCommentThreadTextMock,
+      "deliverCommentThreadText",
+      0,
+      1,
     );
+    expect(pairingClient).toBe(createFeishuClientMock.mock.results[0]?.value);
+    expect(pairingReply).toEqual({
+      file_token: "doc_token_1",
+      file_type: "docx",
+      comment_id: "comment_1",
+      content: [
+        "OpenClaw: access not configured.",
+        "",
+        "Your Feishu user id: ou_sender",
+        "Pairing code:",
+        "```",
+        "TESTCODE",
+        "```",
+        "",
+        "Ask the bot owner to approve with:",
+        "openclaw pairing approve feishu TESTCODE",
+        "```",
+        "openclaw pairing approve feishu TESTCODE",
+        "```",
+      ].join("\n"),
+      is_whole_comment: false,
+    });
     const dispatchReplyFromConfig = runtime.channel.reply.dispatchReplyFromConfig as ReturnType<
       typeof vi.fn
     >;
@@ -358,15 +458,24 @@ describe("handleFeishuCommentEvent", () => {
       } as never,
     });
 
-    expect(createFeishuCommentReplyDispatcherMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        commentId: "comment_whole",
-        fileToken: "doc_token_1",
-        fileType: "docx",
-        replyId: "reply_whole",
-        isWholeComment: true,
-      }),
-    );
+    expect(createFeishuCommentReplyDispatcherMock).toHaveBeenCalledTimes(1);
+    const dispatcherArgs = mockCallArg(
+      createFeishuCommentReplyDispatcherMock,
+      "createFeishuCommentReplyDispatcher",
+    ) as
+      | {
+          commentId?: string;
+          fileToken?: string;
+          fileType?: string;
+          isWholeComment?: boolean;
+          replyId?: string;
+        }
+      | undefined;
+    expect(dispatcherArgs?.commentId).toBe("comment_whole");
+    expect(dispatcherArgs?.fileToken).toBe("doc_token_1");
+    expect(dispatcherArgs?.fileType).toBe("docx");
+    expect(dispatcherArgs?.replyId).toBe("reply_whole");
+    expect(dispatcherArgs?.isWholeComment).toBe(true);
   });
 
   it("always finalizes comment typing cleanup even when dispatch fails", async () => {
@@ -439,10 +548,7 @@ describe("handleFeishuCommentEvent", () => {
       } as never,
     });
 
-    const status = await Promise.race([
-      eventPromise.then(() => "done"),
-      new Promise<string>((resolve) => setTimeout(() => resolve("pending"), 0)),
-    ]);
+    const status = await raceWithNextMacrotask(eventPromise.then(() => "done"));
 
     expect(status).toBe("done");
     expect(cleanupTypingReaction).toHaveBeenCalledTimes(1);

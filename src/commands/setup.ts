@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import JSON5 from "json5";
 import { z } from "zod";
+import { formatCliCommand } from "../cli/command-format.js";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -206,4 +207,11 @@ export async function setupCommand(
   )();
   await (deps.mkdir ?? fs.mkdir)(sessionsDir, { recursive: true });
   runtime.log(`Sessions OK: ${shortenHomePath(sessionsDir)}`);
+  runtime.log("");
+  runtime.log("Setup complete: config, workspace, and session directories are ready.");
+  runtime.log(`Next guided path: ${formatCliCommand("openclaw onboard")}.`);
+  runtime.log(
+    `Next targeted changes: ${formatCliCommand("openclaw configure")} for models, channels, Gateway, plugins, skills, and health checks.`,
+  );
+  runtime.log(`Add a chat channel later: ${formatCliCommand("openclaw channels add")}.`);
 }

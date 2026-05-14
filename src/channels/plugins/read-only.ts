@@ -10,6 +10,7 @@ import {
   listConfiguredChannelIdsForReadOnlyScope,
   resolveDiscoverableScopedChannelPluginIds,
 } from "../../plugins/channel-plugin-ids.js";
+import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import {
   channelPluginIdBelongsToManifest,
   resolveSetupChannelRegistration,
@@ -288,7 +289,8 @@ function buildManifestChannelPlugin(params: {
     !catalogMeta &&
     (!channelConfigValue ||
       typeof channelConfigValue !== "object" ||
-      Array.isArray(channelConfigValue))
+      Array.isArray(channelConfigValue)) &&
+    !params.record.channels.includes(params.channelId)
   ) {
     return undefined;
   }
@@ -368,7 +370,7 @@ function canUseManifestChannelPlugin(record: PluginManifestRecord, channelId: st
   if (hasChannelConfig) {
     return record.setup?.requiresRuntime === false || !record.setupSource;
   }
-  return record.channelCatalogMeta?.id === channelId;
+  return record.channelCatalogMeta?.id === channelId || !record.setupSource;
 }
 
 export { resolveReadOnlyChannelCommandDefaults };
@@ -697,12 +699,22 @@ export function resolveReadOnlyChannelPluginsForConfig(
 ): ReadOnlyChannelPluginResolution {
   const env = options.env ?? process.env;
   const workspaceDir = resolveReadOnlyWorkspaceDir(cfg, options);
-  const manifestRecords = loadPluginMetadataSnapshot({
-    config: cfg,
-    stateDir: options.stateDir,
-    workspaceDir,
-    env,
-  }).plugins;
+  const metadataSnapshot =
+    options.stateDir === undefined
+      ? getCurrentPluginMetadataSnapshot({
+          config: cfg,
+          env,
+          workspaceDir,
+        })
+      : undefined;
+  const manifestRecords =
+    metadataSnapshot?.plugins ??
+    loadPluginMetadataSnapshot({
+      config: cfg,
+      stateDir: options.stateDir,
+      workspaceDir,
+      env,
+    }).plugins;
   const bundledManifestRecords = listBundledChannelManifestRecords(manifestRecords);
   const externalManifestRecords = listExternalChannelManifestRecords(manifestRecords);
   const configuredChannelIds = [

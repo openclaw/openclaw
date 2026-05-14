@@ -174,6 +174,10 @@ function buildParams(
   } as unknown as HandleCommandsParams;
 }
 
+function firstAuthCheckerParams() {
+  return modelProviderAuthMocks.createProviderAuthChecker.mock.calls[0]?.[0];
+}
+
 describe("handleModelsCommand", () => {
   it("shows a simple providers menu on text surfaces", async () => {
     const result = await handleModelsCommand(buildParams("/models"), true);
@@ -186,9 +190,8 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).toContain("Use: /models <provider>");
     expect(result?.reply?.text).toContain("Switch: /model <provider/model>");
     expect(result?.reply?.text).not.toContain("Add: /models add");
-    expect(modelProviderAuthMocks.createProviderAuthChecker).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceDir: "/tmp" }),
-    );
+    const authCheckerParams = firstAuthCheckerParams();
+    expect(authCheckerParams?.workspaceDir).toBe("/tmp");
   });
 
   it("hides unauthenticated providers by default and keeps all as explicit browse", async () => {
@@ -208,15 +211,51 @@ describe("handleModelsCommand", () => {
     expect(allListResult?.reply?.text).toContain("- openai/gpt-4.1-mini");
   });
 
-  it("hides legacy runtime providers from /models provider lists", async () => {
+  it("does not re-add the default provider when provider visibility is restricted", async () => {
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
+      { provider: "openai-codex", id: "gpt-5.4-codex", name: "GPT-5.4 Codex" },
+      { provider: "openai-codex", id: "gpt-5.5-codex", name: "GPT-5.5 Codex" },
+      { provider: "vllm", id: "llama-local", name: "Llama Local" },
+      { provider: "vllm", id: "qwen3-local", name: "Qwen3 Local" },
+    ]);
+    modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic", "openai-codex", "vllm"]);
+
+    const result = await handleModelsCommand(
+      buildParams("/models", {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-5" },
+            models: {
+              "openai-codex/*": {},
+              "vllm/*": {},
+            },
+          },
+        },
+      }),
+      true,
+    );
+
+    expect(result?.reply?.text).toContain("- openai-codex (2)");
+    expect(result?.reply?.text).toContain("- vllm (2)");
+    expect(result?.reply?.text).not.toContain("- anthropic");
+  });
+
+  it("hides bare backwards-compat aliases but surfaces supported CLI runtime providers in /models lists", async () => {
     modelCatalogMocks.loadModelCatalog.mockResolvedValueOnce([
       { provider: "codex", id: "gpt-5.5", name: "GPT-5.5" },
-      { provider: "codex-cli", id: "gpt-5.5", name: "GPT-5.5" },
       { provider: "claude-cli", id: "claude-opus-4-7", name: "Claude Opus" },
       { provider: "google-gemini-cli", id: "gemini-3.1-pro-preview", name: "Gemini Pro" },
       { provider: "anthropic", id: "claude-opus-4-7", name: "Claude Opus" },
       { provider: "google", id: "gemini-3.1-pro-preview", name: "Gemini Pro" },
       { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
+    ]);
+    modelProviderAuthMocks.authenticatedProviders = new Set([
+      "anthropic",
+      "google",
+      "openai",
+      "claude-cli",
+      "google-gemini-cli",
     ]);
 
     const result = await handleModelsCommand(
@@ -229,10 +268,115 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).toContain("- anthropic (1)");
     expect(result?.reply?.text).toContain("- google (1)");
     expect(result?.reply?.text).toContain("- openai (1)");
-    expect(result?.reply?.text).not.toContain("- codex");
-    expect(result?.reply?.text).not.toContain("- codex-cli");
-    expect(result?.reply?.text).not.toContain("- claude-cli");
-    expect(result?.reply?.text).not.toContain("- google-gemini-cli");
+    expect(result?.reply?.text).toContain("- claude-cli (1)");
+    expect(result?.reply?.text).toContain("- google-gemini-cli (1)");
+    expect(result?.reply?.text).not.toMatch(/^- codex \(/m);
+    expect(result?.reply?.text).not.toMatch(/^- codex-cli \(/m);
+  });
+
+  it("sources CLI runtime provider model lists from the catalog, not user agents.defaults.models", async () => {
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      { provider: "claude-cli", id: "claude-opus-4-7", name: "Claude Opus 4.7" },
+      { provider: "claude-cli", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+      { provider: "claude-cli", id: "claude-opus-4-6", name: "Claude Opus 4.6" },
+      { provider: "claude-cli", id: "claude-opus-4-5", name: "Claude Opus 4.5" },
+      { provider: "claude-cli", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" },
+      { provider: "claude-cli", id: "claude-haiku-4-5", name: "Claude Haiku 4.5" },
+      { provider: "anthropic", id: "claude-opus-4-7", name: "Claude Opus 4.7" },
+      // A non-CLI configured provider — its narrowing IS respected.
+      { provider: "minimax", id: "abab-7", name: "Abab 7" },
+      { provider: "minimax", id: "abab-6.5", name: "Abab 6.5" },
+    ]);
+    modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic", "claude-cli", "minimax"]);
+
+    const result = await handleModelsCommand(
+      buildParams("/models claude-cli", {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-7" },
+            // User only declared 2 of claude-cli's 6 supported models, plus 1
+            // of minimax's 2. For claude-cli this narrowing must be ignored;
+            // for minimax it must still gate.
+            models: {
+              "claude-cli/claude-opus-4-6": {},
+              "claude-cli/claude-sonnet-4-6": {},
+              "minimax/abab-7": {},
+            },
+          },
+        },
+      }),
+      true,
+    );
+
+    expect(result?.reply?.text).toContain("- claude-cli/claude-opus-4-7");
+    expect(result?.reply?.text).toContain("- claude-cli/claude-sonnet-4-6");
+    expect(result?.reply?.text).toContain("- claude-cli/claude-opus-4-6");
+    expect(result?.reply?.text).toContain("- claude-cli/claude-opus-4-5");
+    expect(result?.reply?.text).toContain("- claude-cli/claude-sonnet-4-5");
+    expect(result?.reply?.text).toContain("- claude-cli/claude-haiku-4-5");
+    expect(result?.reply?.text).toContain("of 6");
+
+    // For non-CLI configured providers (e.g. Minimax / LM Studio / custom
+    // OpenAI-compatible endpoints), user config is still the source of truth.
+    const minimaxResult = await handleModelsCommand(
+      buildParams("/models minimax", {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-7" },
+            models: {
+              "claude-cli/claude-opus-4-6": {},
+              "minimax/abab-7": {},
+            },
+          },
+        },
+      }),
+      true,
+    );
+    expect(minimaxResult?.reply?.text).toContain("- minimax/abab-7");
+    expect(minimaxResult?.reply?.text).not.toContain("- minimax/abab-6.5");
+  });
+
+  it("does not synthesize claude-cli models when the catalog has no claude-cli entries", async () => {
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      { provider: "anthropic", id: "claude-opus-4-7", name: "Claude Opus 4.7" },
+    ]);
+    modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic", "claude-cli"]);
+
+    const result = await handleModelsCommand(
+      buildParams("/models claude-cli", {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-7" },
+          },
+        },
+      }),
+      true,
+    );
+
+    expect(result?.reply?.text).not.toMatch(/^- claude-cli\//m);
+  });
+
+  it("hides CLI runtime providers from the picker when the user has no CLI auth", async () => {
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      { provider: "anthropic", id: "claude-opus-4-7", name: "Claude Opus 4.7" },
+      { provider: "claude-cli", id: "claude-opus-4-7", name: "Claude Opus 4.7 (CLI)" },
+      { provider: "codex-cli", id: "gpt-5.5", name: "GPT-5.5 (CLI)" },
+      { provider: "google-gemini-cli", id: "gemini-2.5-pro", name: "Gemini 2.5 Pro (CLI)" },
+    ]);
+    // Default mock state: only anthropic / google / openai authenticated — no CLI providers.
+    modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic"]);
+
+    const result = await handleModelsCommand(
+      buildParams("/models", {
+        agents: { defaults: { model: { primary: "anthropic/claude-opus-4-7" } } },
+      }),
+      true,
+    );
+
+    expect(result?.reply?.text).toContain("- anthropic (");
+    expect(result?.reply?.text).not.toMatch(/^- claude-cli \(/m);
+    expect(result?.reply?.text).not.toMatch(/^- codex-cli \(/m);
+    expect(result?.reply?.text).not.toMatch(/^- google-gemini-cli \(/m);
   });
 
   it("labels the default runtime choice as OpenClaw Pi", async () => {
@@ -252,6 +396,20 @@ describe("handleModelsCommand", () => {
   });
 
   it("keeps the telegram provider picker browse-only", async () => {
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
+      { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet" },
+      { provider: "claude-cli", id: "claude-opus-4-7", name: "Claude Opus (CLI)" },
+      { provider: "openai", id: "gpt-4.1", name: "GPT-4.1" },
+      { provider: "openai", id: "gpt-4.1-mini", name: "GPT-4.1 Mini" },
+      { provider: "google", id: "gemini-2.0-flash", name: "Gemini Flash" },
+    ]);
+    modelProviderAuthMocks.authenticatedProviders = new Set([
+      "anthropic",
+      "claude-cli",
+      "google",
+      "openai",
+    ]);
     const params = buildParams("/models");
     params.ctx.Surface = "telegram";
     params.command.channel = "telegram";
@@ -264,6 +422,7 @@ describe("handleModelsCommand", () => {
       telegram: {
         buttons: [
           [{ text: "anthropic", callback_data: "models:anthropic" }],
+          [{ text: "claude-cli", callback_data: "models:claude-cli" }],
           [{ text: "google", callback_data: "models:google" }],
           [{ text: "openai", callback_data: "models:openai" }],
         ],
@@ -272,6 +431,20 @@ describe("handleModelsCommand", () => {
   });
 
   it("keeps plugin menu hook compatibility for provider pickers", async () => {
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
+      { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet" },
+      { provider: "claude-cli", id: "claude-opus-4-7", name: "Claude Opus (CLI)" },
+      { provider: "openai", id: "gpt-4.1", name: "GPT-4.1" },
+      { provider: "openai", id: "gpt-4.1-mini", name: "GPT-4.1 Mini" },
+      { provider: "google", id: "gemini-2.0-flash", name: "Gemini Flash" },
+    ]);
+    modelProviderAuthMocks.authenticatedProviders = new Set([
+      "anthropic",
+      "claude-cli",
+      "google",
+      "openai",
+    ]);
     const params = buildParams("/models");
     params.ctx.Surface = "menuonly";
     params.command.channel = "menuonly";
@@ -282,8 +455,8 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).toBe("Select a provider:");
     expect(result?.reply?.channelData).toEqual({
       menuonly: {
-        providerIds: ["anthropic", "google", "openai"],
-        labels: ["anthropic:2", "google:1", "openai:2"],
+        providerIds: ["anthropic", "claude-cli", "google", "openai"],
+        labels: ["anthropic:2", "claude-cli:1", "google:1", "openai:2"],
       },
     });
   });
@@ -361,12 +534,10 @@ describe("handleModelsCommand", () => {
     const result = await handleModelsCommand(params, true);
 
     expect(result?.reply?.text).toContain("Models (anthropic · 🔑 target-auth) — showing 1-2 of 2");
-    expect(modelAuthLabelMocks.resolveModelAuthLabel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "anthropic",
-        workspaceDir: "/tmp",
-      }),
-    );
+    const [[authLabelParams]] = modelAuthLabelMocks.resolveModelAuthLabel.mock
+      .calls as unknown as Array<[{ provider?: string; workspaceDir?: string }]>;
+    expect(authLabelParams.provider).toBe("anthropic");
+    expect(authLabelParams.workspaceDir).toBe("/tmp");
   });
 
   it("uses spawned workspace for direct /models provider visibility", async () => {
@@ -384,9 +555,8 @@ describe("handleModelsCommand", () => {
     const result = await handleModelsCommand(params, true);
 
     expect(result?.reply?.text).toContain("- anthropic (2)");
-    expect(modelProviderAuthMocks.createProviderAuthChecker).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceDir: "/tmp/spawned-workspace" }),
-    );
+    const authCheckerParams = firstAuthCheckerParams();
+    expect(authCheckerParams?.workspaceDir).toBe("/tmp/spawned-workspace");
   });
 
   it("returns a deprecation message for /models add when no provider is given", async () => {

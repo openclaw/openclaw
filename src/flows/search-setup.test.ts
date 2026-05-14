@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { createNonExitingRuntime } from "../runtime.js";
 import { runSearchSetupFlow } from "./search-setup.js";
@@ -97,7 +97,68 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: () => [mockGrokProvider],
 }));
 
+const ensureOnboardingPluginInstalled = vi.hoisted(() =>
+  vi.fn(
+    async ({
+      cfg,
+      entry,
+    }: {
+      cfg: { plugins?: { installs?: Record<string, unknown> } };
+      entry: { pluginId: string; install: { npmSpec?: string } };
+    }) => ({
+      cfg: {
+        ...cfg,
+        plugins: {
+          ...cfg.plugins,
+          installs: {
+            ...cfg.plugins?.installs,
+            [entry.pluginId]: {
+              source: "npm",
+              spec: entry.install.npmSpec,
+              installPath: `/tmp/openclaw-plugins/${entry.pluginId}`,
+            },
+          },
+        },
+      },
+      installed: true,
+      pluginId: entry.pluginId,
+      status: "installed",
+    }),
+  ),
+);
+
+vi.mock("../commands/onboarding-plugin-install.js", () => ({
+  ensureOnboardingPluginInstalled,
+}));
+
+function latestPluginInstallRequest(): {
+  autoConfirmSingleSource?: boolean;
+  entry?: {
+    install?: { npmSpec?: string };
+    label?: string;
+    pluginId?: string;
+    trustedSourceLinkedOfficialInstall?: boolean;
+  };
+} {
+  const [request] = ensureOnboardingPluginInstalled.mock.calls.at(-1) as unknown as [
+    {
+      autoConfirmSingleSource?: boolean;
+      entry?: {
+        install?: { npmSpec?: string };
+        label?: string;
+        pluginId?: string;
+        trustedSourceLinkedOfficialInstall?: boolean;
+      };
+    },
+  ];
+  return request;
+}
+
 describe("runSearchSetupFlow", () => {
+  beforeEach(() => {
+    ensureOnboardingPluginInstalled.mockClear();
+  });
+
   it("runs provider-owned setup after selecting Grok web search", async () => {
     const select = vi
       .fn()
@@ -116,17 +177,14 @@ describe("runSearchSetupFlow", () => {
       prompter,
     );
 
-    expect(next.plugins?.entries?.xai?.config?.webSearch).toMatchObject({
-      apiKey: "xai-test-key",
-    });
-    expect(next.tools?.web?.search).toMatchObject({
-      provider: "grok",
-      enabled: true,
-    });
-    expect(next.plugins?.entries?.xai?.config?.xSearch).toMatchObject({
-      enabled: true,
-      model: "grok-4-1-fast",
-    });
+    const xaiConfig = next.plugins?.entries?.xai?.config as
+      | { webSearch?: { apiKey?: string }; xSearch?: { enabled?: boolean; model?: string } }
+      | undefined;
+    expect(xaiConfig?.webSearch?.apiKey).toBe("xai-test-key");
+    expect(next.tools?.web?.search?.provider).toBe("grok");
+    expect(next.tools?.web?.search?.enabled).toBe(true);
+    expect(xaiConfig?.xSearch?.enabled).toBe(true);
+    expect(xaiConfig?.xSearch?.model).toBe("grok-4-1-fast");
   });
 
   it("shows provider credential notes before plaintext credential prompts", async () => {
@@ -165,7 +223,12 @@ describe("runSearchSetupFlow", () => {
     );
     expect(note).toHaveBeenNthCalledWith(
       3,
-      expect.stringContaining("Secret references enabled"),
+      [
+        "Secret references enabled — OpenClaw will store a reference instead of the API key.",
+        "Env var: XAI_API_KEY.",
+        "Set XAI_API_KEY in the Gateway environment.",
+        "Docs: https://docs.openclaw.ai/tools/web",
+      ].join("\n"),
       "Web search",
     );
   });
@@ -240,13 +303,80 @@ describe("runSearchSetupFlow", () => {
       prompter,
     );
 
-    expect(next.tools?.web?.search).toMatchObject({
-      provider: "grok",
-      enabled: false,
+    const xaiConfig = next.plugins?.entries?.xai?.config as
+      | { xSearch?: { enabled?: boolean; model?: string } }
+      | undefined;
+    expect(next.tools?.web?.search?.provider).toBe("grok");
+    expect(next.tools?.web?.search?.enabled).toBe(false);
+    expect(xaiConfig?.xSearch?.enabled).toBe(true);
+    expect(xaiConfig?.xSearch?.model).toBe("grok-4-1-fast");
+  });
+
+  it("installs an external catalog search provider before enabling it", async () => {
+    const select = vi.fn().mockResolvedValueOnce("brave");
+    const text = vi.fn().mockResolvedValue("brave-test-key");
+    const prompter = createWizardPrompter({
+      select: select as never,
+      text: text as never,
     });
-    expect(next.plugins?.entries?.xai?.config?.xSearch).toMatchObject({
-      enabled: true,
-      model: "grok-4-1-fast",
+
+    const next = await runSearchSetupFlow({}, createNonExitingRuntime(), prompter);
+
+    expect(ensureOnboardingPluginInstalled).toHaveBeenCalledTimes(1);
+    const installRequest = latestPluginInstallRequest();
+    expect(installRequest.entry?.pluginId).toBe("brave");
+    expect(installRequest.entry?.label).toBe("Brave");
+    expect(installRequest.entry?.trustedSourceLinkedOfficialInstall).toBe(true);
+    expect(installRequest.entry?.install?.npmSpec).toBe("@openclaw/brave-plugin");
+    expect(installRequest.autoConfirmSingleSource).toBe(true);
+    expect(next.tools?.web?.search?.provider).toBe("brave");
+    expect(next.tools?.web?.search?.enabled).toBe(true);
+    const braveConfig = next.plugins?.entries?.brave?.config as
+      | { webSearch?: { apiKey?: string } }
+      | undefined;
+    expect(braveConfig?.webSearch?.apiKey).toBe("brave-test-key");
+    expect(next.plugins?.installs?.brave?.source).toBe("npm");
+    expect(next.plugins?.installs?.brave?.spec).toBe("@openclaw/brave-plugin");
+  });
+
+  it("installs an external catalog search provider when web search stays disabled", async () => {
+    const select = vi.fn().mockResolvedValueOnce("brave");
+    const text = vi.fn().mockResolvedValue("brave-disabled-key");
+    const prompter = createWizardPrompter({
+      select: select as never,
+      text: text as never,
     });
+
+    const next = await runSearchSetupFlow(
+      {
+        tools: {
+          web: {
+            search: {
+              provider: "brave",
+              enabled: false,
+            },
+          },
+        },
+      },
+      createNonExitingRuntime(),
+      prompter,
+    );
+
+    expect(ensureOnboardingPluginInstalled).toHaveBeenCalledTimes(1);
+    const installRequest = latestPluginInstallRequest();
+    expect(installRequest.entry?.pluginId).toBe("brave");
+    expect(installRequest.entry?.label).toBe("Brave");
+    expect(installRequest.entry?.trustedSourceLinkedOfficialInstall).toBe(true);
+    expect(installRequest.entry?.install?.npmSpec).toBe("@openclaw/brave-plugin");
+    expect(installRequest.autoConfirmSingleSource).toBe(true);
+    expect(next.tools?.web?.search?.provider).toBe("brave");
+    expect(next.tools?.web?.search?.enabled).toBe(false);
+    const braveConfig = next.plugins?.entries?.brave?.config as
+      | { webSearch?: { apiKey?: string } }
+      | undefined;
+    expect(braveConfig?.webSearch?.apiKey).toBe("brave-disabled-key");
+    expect(next.plugins?.entries?.brave?.enabled).toBeUndefined();
+    expect(next.plugins?.installs?.brave?.source).toBe("npm");
+    expect(next.plugins?.installs?.brave?.spec).toBe("@openclaw/brave-plugin");
   });
 });

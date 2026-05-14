@@ -17,10 +17,12 @@ import type {
   MediaUnderstandingModelConfig,
 } from "../config/types.tools.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
 import { resolveProxyFetchFromEnv } from "../infra/net/proxy-fetch.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runFfmpeg } from "../media/ffmpeg-exec.js";
 import { runExec } from "../process/exec.js";
+import { providerOperationRetryConfig } from "../provider-runtime/operation-retry.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { MediaAttachmentCache } from "./attachments.js";
 import {
@@ -252,18 +254,25 @@ async function resolveCliMediaPath(params: {
   }
 
   const wavPath = path.join(params.outputDir, `${path.parse(params.mediaPath).name}.wav`);
-  await runFfmpeg([
-    "-y",
-    "-i",
-    params.mediaPath,
-    "-ac",
-    "1",
-    "-ar",
-    "16000",
-    "-c:a",
-    "pcm_s16le",
-    wavPath,
-  ]);
+  await fs.mkdir(params.outputDir, { recursive: true });
+  await writeExternalFileWithinRoot({
+    rootDir: params.outputDir,
+    path: path.basename(wavPath),
+    write: async (outputPath) => {
+      await runFfmpeg([
+        "-y",
+        "-i",
+        params.mediaPath,
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-c:a",
+        "pcm_s16le",
+        outputPath,
+      ]);
+    },
+  });
   return wavPath;
 }
 
@@ -640,6 +649,7 @@ export async function runProviderEntry(params: {
     const result = await executeWithApiKeyRotation({
       provider: providerId,
       apiKeys,
+      transientRetry: providerOperationRetryConfig("read"),
       execute: async (apiKey) =>
         transcribeAudio({
           buffer: media.buffer,
@@ -697,6 +707,7 @@ export async function runProviderEntry(params: {
   const result = await executeWithApiKeyRotation({
     provider: providerId,
     apiKeys,
+    transientRetry: providerOperationRetryConfig("read"),
     execute: (apiKey) =>
       describeVideo({
         buffer: media.buffer,

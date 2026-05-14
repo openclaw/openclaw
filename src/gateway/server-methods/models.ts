@@ -1,7 +1,9 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { resolveVisibleModelCatalog } from "../../agents/model-catalog-visibility.js";
+import { parseConfiguredModelVisibilityEntries } from "../../agents/model-selection-shared.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   ErrorCodes,
   errorShape,
@@ -24,13 +26,17 @@ function resolveModelsListView(params: Record<string, unknown>): ModelsListView 
 async function loadModelsListCatalog(
   context: GatewayRequestContext,
   view: ModelsListView,
+  cfg: OpenClawConfig,
 ): Promise<GatewayModelCatalog> {
   if (view === "all") {
-    return await context.loadGatewayModelCatalog();
+    return await context.loadGatewayModelCatalog({ readOnly: false });
+  }
+  if (parseConfiguredModelVisibilityEntries({ cfg }).providerWildcards.size > 0) {
+    return await context.loadGatewayModelCatalog({ readOnly: false });
   }
   let timeout: NodeJS.Timeout | undefined;
   const timedOut = Symbol("models-list-catalog-timeout");
-  const catalogPromise = context.loadGatewayModelCatalog();
+  const catalogPromise = context.loadGatewayModelCatalog({ readOnly: true });
   const timeoutPromise = new Promise<typeof timedOut>((resolve) => {
     timeout = setTimeout(() => resolve(timedOut), MODELS_LIST_CATALOG_TIMEOUT_MS);
     timeout.unref?.();
@@ -74,7 +80,7 @@ export const modelsHandlers: GatewayRequestHandlers = {
         resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)) ??
         resolveDefaultAgentWorkspaceDir();
       const view = resolveModelsListView(params);
-      const catalog = await loadModelsListCatalog(context, view);
+      const catalog = await loadModelsListCatalog(context, view, cfg);
       if (view === "all") {
         respond(true, { models: catalog }, undefined);
         return;
@@ -85,6 +91,7 @@ export const modelsHandlers: GatewayRequestHandlers = {
         defaultProvider: DEFAULT_PROVIDER,
         workspaceDir,
         view,
+        runtimeAuthDiscovery: false,
       });
       respond(true, { models }, undefined);
     } catch (err) {

@@ -1,4 +1,4 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const providerRuntimeMocks = vi.hoisted(() => ({
@@ -16,6 +16,8 @@ import {
   DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT,
   isHighSignalLiveModelRef,
   isModernModelRef,
+  isPrioritizedHighSignalLiveModelRef,
+  listPrioritizedHighSignalLiveModelRefs,
   resolveHighSignalLiveModelLimit,
   selectHighSignalLiveItems,
 } from "./live-model-filter.js";
@@ -592,6 +594,23 @@ describe("isHighSignalLiveModelRef", () => {
     ).toBe(false);
   });
 
+  it("drops Fireworks Kimi routes from the default high-thinking live matrix", () => {
+    providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(true);
+
+    expect(
+      isHighSignalLiveModelRef({
+        provider: "fireworks",
+        id: "accounts/fireworks/models/kimi-k2p6",
+      }),
+    ).toBe(false);
+    expect(
+      isHighSignalLiveModelRef({
+        provider: "fireworks",
+        id: "accounts/fireworks/routers/kimi-k2p5-turbo",
+      }),
+    ).toBe(false);
+  });
+
   it("keeps only curated xAI routes in the default live matrix", () => {
     providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(true);
 
@@ -614,6 +633,48 @@ describe("isHighSignalLiveModelRef", () => {
     expect(isHighSignalLiveModelRef({ provider: "deepseek", id: "deepseek-v4-flash" })).toBe(true);
     expect(isHighSignalLiveModelRef({ provider: "deepseek", id: "deepseek-v4-pro" })).toBe(true);
     expect(isHighSignalLiveModelRef({ provider: "deepseek", id: "deepseek-chat" })).toBe(false);
+  });
+});
+
+describe("isPrioritizedHighSignalLiveModelRef", () => {
+  it("matches only curated priority entries without invoking provider runtime checks", () => {
+    expect(
+      isPrioritizedHighSignalLiveModelRef({
+        provider: "anthropic",
+        id: "claude-sonnet-4-6",
+      }),
+    ).toBe(true);
+    expect(
+      isPrioritizedHighSignalLiveModelRef({
+        provider: "openrouter",
+        id: "amazon/nova-lite-v1",
+      }),
+    ).toBe(false);
+    expect(providerRuntimeMocks.resolveProviderModernModelRef).not.toHaveBeenCalled();
+  });
+
+  it("lists priority refs as provider/id pairs", () => {
+    expect(listPrioritizedHighSignalLiveModelRefs()).toStrictEqual([
+      { provider: "anthropic", id: "claude-opus-4-7" },
+      { provider: "anthropic", id: "claude-opus-4-6" },
+      { provider: "anthropic", id: "claude-sonnet-4-6" },
+      { provider: "google", id: "gemini-3.1-pro-preview" },
+      { provider: "google", id: "gemini-3-flash-preview" },
+      { provider: "deepseek", id: "deepseek-v4-flash" },
+      { provider: "deepseek", id: "deepseek-v4-pro" },
+      { provider: "minimax", id: "minimax-m2.7" },
+      { provider: "openai", id: "gpt-5.2" },
+      { provider: "openai-codex", id: "gpt-5.2" },
+      { provider: "openrouter", id: "openai/gpt-5.2-chat" },
+      { provider: "openrouter", id: "minimax/minimax-m2.7" },
+      { provider: "opencode-go", id: "glm-5" },
+      { provider: "openrouter", id: "ai21/jamba-large-1.7" },
+      { provider: "xai", id: "grok-4.3" },
+      { provider: "zai", id: "glm-5.1" },
+      { provider: "fireworks", id: "accounts/fireworks/models/glm-5" },
+      { provider: "fireworks", id: "accounts/fireworks/models/glm-5p1" },
+      { provider: "minimax-portal", id: "minimax-m2.7" },
+    ]);
   });
 });
 

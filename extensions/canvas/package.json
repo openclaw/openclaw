@@ -1,0 +1,27 @@
+{
+  "name": "@openclaw/canvas-plugin",
+  "version": "2026.5.12-beta.1",
+  "private": true,
+  "description": "OpenClaw Canvas plugin",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "dependencies": {
+    "@a2ui/lit": "0.9.3",
+    "@lit/context": "1.1.6",
+    "chokidar": "5.0.0",
+    "lit": "3.3.2",
+    "typebox": "1.1.38",
+    "ws": "8.20.0"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "assetScripts": {
+      "build": "node scripts/bundle-a2ui.mjs",
+      "copy": "node scripts/copy-a2ui.mjs"
+    }
+  }
+}

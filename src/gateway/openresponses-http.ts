@@ -55,6 +55,7 @@ import {
   type StreamingEvent,
   type Usage,
 } from "./open-responses.schema.js";
+import { resolveOpenAiCompatError } from "./openai-compat-errors.js";
 import { wrapUntrustedFileContent } from "./openresponses-file-content.js";
 import { buildAgentPrompt } from "./openresponses-prompt.js";
 import { createAssistantOutputItem, createFunctionCallOutputItem } from "./openresponses-shape.js";
@@ -396,7 +397,7 @@ async function runResponsesAgentCommand(params: {
   clientTools: ClientToolDefinition[];
   extraSystemPrompt: string;
   modelOverride?: string;
-  streamParams: { maxTokens: number } | undefined;
+  streamParams: { maxTokens?: number; temperature?: number; topP?: number } | undefined;
   sessionKey: string;
   runId: string;
   messageChannel: string;
@@ -673,9 +674,18 @@ export async function handleOpenResponsesHttpRequest(
   const outputItemId = `msg_${randomUUID()}`;
   const deps = createDefaultDeps();
   const abortController = new AbortController();
+  const streamMaxTokens =
+    typeof payload.max_output_tokens === "number" ? payload.max_output_tokens : undefined;
+  const streamTemperature =
+    typeof payload.temperature === "number" ? payload.temperature : undefined;
+  const streamTopP = typeof payload.top_p === "number" ? payload.top_p : undefined;
   const streamParams =
-    typeof payload.max_output_tokens === "number"
-      ? { maxTokens: payload.max_output_tokens }
+    streamMaxTokens !== undefined || streamTemperature !== undefined || streamTopP !== undefined
+      ? {
+          ...(streamMaxTokens !== undefined ? { maxTokens: streamMaxTokens } : {}),
+          ...(streamTemperature !== undefined ? { temperature: streamTemperature } : {}),
+          ...(streamTopP !== undefined ? { topP: streamTopP } : {}),
+        }
       : undefined;
 
   if (!stream) {
@@ -705,11 +715,12 @@ export async function handleOpenResponsesHttpRequest(
       const meta = (result as { meta?: unknown } | null)?.meta;
       const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
 
-      // If agent called a client tool, return function_call (and any assistant text) to caller
+      // If the agent invoked client tools, return one `function_call`
+      // output item per call (in arrival order) plus any assistant text the
+      // model produced before the tool calls. Pre-#52288 only the first
+      // pending call was emitted, so multi-tool turns lost every call but
+      // the leading one.
       if (stopReason === "tool_calls" && pendingToolCalls && pendingToolCalls.length > 0) {
-        const functionCall = pendingToolCalls[0];
-        const functionCallItemId = `call_${randomUUID()}`;
-
         const assistantText =
           Array.isArray(payloads) && payloads.length > 0
             ? payloads
@@ -729,14 +740,16 @@ export async function handleOpenResponsesHttpRequest(
             }),
           );
         }
-        output.push(
-          createFunctionCallOutputItem({
-            id: functionCallItemId,
-            callId: functionCall.id,
-            name: functionCall.name,
-            arguments: functionCall.arguments,
-          }),
-        );
+        for (const functionCall of pendingToolCalls) {
+          output.push(
+            createFunctionCallOutputItem({
+              id: `call_${randomUUID()}`,
+              callId: functionCall.id,
+              name: functionCall.name,
+              arguments: functionCall.arguments,
+            }),
+          );
+        }
 
         const response = createResponseResource({
           id: responseId,
@@ -798,6 +811,22 @@ export async function handleOpenResponsesHttpRequest(
         output: [],
         error: { code: "api_error", message: "internal error" },
       });
+      const mapped = resolveOpenAiCompatError(err);
+      if (mapped) {
+        const mappedResponse = createResponseResource({
+          id: responseId,
+          model,
+          status: "failed",
+          output: [],
+          error: {
+            code: mapped.error.type,
+            message: mapped.error.message,
+          },
+        });
+        rememberResponseSession();
+        sendJson(res, mapped.status, mappedResponse);
+        return true;
+      }
       rememberResponseSession();
       sendJson(res, 500, response);
     } finally {
@@ -998,7 +1027,6 @@ export async function handleOpenResponsesHttpRequest(
         pendingToolCalls &&
         pendingToolCalls.length > 0
       ) {
-        const functionCall = pendingToolCalls[0];
         const usage = finalUsage ?? createEmptyUsage();
         const finalText =
           accumulatedText ||
@@ -1036,36 +1064,49 @@ export async function handleOpenResponsesHttpRequest(
           item: completedItem,
         });
 
-        const functionCallItemId = `call_${randomUUID()}`;
-        const functionCallItem = createFunctionCallOutputItem({
-          id: functionCallItemId,
-          callId: functionCall.id,
-          name: functionCall.name,
-          arguments: functionCall.arguments,
-        });
-        writeSseEvent(res, {
-          type: "response.output_item.added",
-          output_index: 1,
-          item: functionCallItem,
-        });
-        const completedFunctionCallItem = createFunctionCallOutputItem({
-          id: functionCallItemId,
-          callId: functionCall.id,
-          name: functionCall.name,
-          arguments: functionCall.arguments,
-          status: "completed",
-        });
-        writeSseEvent(res, {
-          type: "response.output_item.done",
-          output_index: 1,
-          item: completedFunctionCallItem,
-        });
+        // Emit one `function_call` output item per pending call, preserving
+        // arrival order. `output_index` continues past the assistant
+        // message at index 0 so the SSE stream keeps a single, monotonic
+        // index per response. Pre-#52288 the streaming path read only
+        // `pendingToolCalls[0]` and hard-coded `output_index: 1`, so a turn
+        // with multiple client tool calls dropped every call past the
+        // first.
+        const functionCallItems: OutputItem[] = [];
+        let nextStreamOutputIndex = 1;
+        for (const functionCall of pendingToolCalls) {
+          const functionCallItemId = `call_${randomUUID()}`;
+          const functionCallItem = createFunctionCallOutputItem({
+            id: functionCallItemId,
+            callId: functionCall.id,
+            name: functionCall.name,
+            arguments: functionCall.arguments,
+          });
+          writeSseEvent(res, {
+            type: "response.output_item.added",
+            output_index: nextStreamOutputIndex,
+            item: functionCallItem,
+          });
+          const completedFunctionCallItem = createFunctionCallOutputItem({
+            id: functionCallItemId,
+            callId: functionCall.id,
+            name: functionCall.name,
+            arguments: functionCall.arguments,
+            status: "completed",
+          });
+          writeSseEvent(res, {
+            type: "response.output_item.done",
+            output_index: nextStreamOutputIndex,
+            item: completedFunctionCallItem,
+          });
+          functionCallItems.push(functionCallItem);
+          nextStreamOutputIndex += 1;
+        }
 
         const incompleteResponse = createResponseResource({
           id: responseId,
           model,
           status: "incomplete",
-          output: [completedItem, functionCallItem],
+          output: [completedItem, ...functionCallItems],
           usage,
         });
         closed = true;
@@ -1140,6 +1181,28 @@ export async function handleOpenResponsesHttpRequest(
         usage: finalUsage,
       });
 
+      const mapped = resolveOpenAiCompatError(err);
+      if (mapped) {
+        const mappedResponse = createResponseResource({
+          id: responseId,
+          model,
+          status: "failed",
+          output: [],
+          error: {
+            code: mapped.error.type,
+            message: mapped.error.message,
+          },
+          usage: finalUsage,
+        });
+        rememberResponseSession();
+        writeSseEvent(res, { type: "response.failed", response: mappedResponse });
+        emitAgentEvent({
+          runId: responseId,
+          stream: "lifecycle",
+          data: { phase: "error" },
+        });
+        return;
+      }
       rememberResponseSession();
       writeSseEvent(res, { type: "response.failed", response: errorResponse });
       emitAgentEvent({

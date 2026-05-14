@@ -2,7 +2,10 @@ import type { HeartbeatToolResponse } from "../../auto-reply/heartbeat-tool-resp
 import type { CliSessionBinding, SessionSystemPromptReport } from "../../config/sessions/types.js";
 import type { DiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import type { FallbackAttempt } from "../model-fallback.types.js";
-import type { MessagingToolSend } from "../pi-embedded-messaging.types.js";
+import type {
+  MessagingToolSend,
+  MessagingToolSourceReplyPayload,
+} from "../pi-embedded-messaging.types.js";
 
 export type EmbeddedPiAgentMeta = {
   sessionId: string;
@@ -140,7 +143,8 @@ export type EmbeddedPiRunMeta = {
       | "compaction_failure"
       | "role_ordering"
       | "image_size"
-      | "retry_limit";
+      | "retry_limit"
+      | "hook_block";
     message: string;
   };
   failureSignal?: EmbeddedRunFailureSignal;
@@ -176,12 +180,16 @@ export type EmbeddedPiRunResult = {
   // True if a messaging tool successfully sent a message.
   // Used to suppress agent's confirmation text.
   didSendViaMessagingTool?: boolean;
+  // True if a deterministic approval prompt was sent through the tool-result channel.
+  didSendDeterministicApprovalPrompt?: boolean;
   // Texts successfully sent via messaging tools during the run.
   messagingToolSentTexts?: string[];
   // Media URLs successfully sent via messaging tools during the run.
   messagingToolSentMediaUrls?: string[];
   // Messaging tool targets that successfully sent a message during the run.
   messagingToolSentTargets?: MessagingToolSend[];
+  // Message-tool replies delivered to the active internal UI source.
+  messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
   // Structured heartbeat outcome recorded by the heartbeat response tool.
   heartbeatToolResponse?: HeartbeatToolResponse;
   // Count of successful cron.add tool calls in this run.

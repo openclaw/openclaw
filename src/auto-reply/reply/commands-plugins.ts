@@ -1,27 +1,29 @@
 import fs from "node:fs";
 import { buildNpmInstallRecordFields } from "../../cli/npm-resolution.js";
+import { resolveOfficialExternalNpmPackageTrust } from "../../cli/plugin-install-plan.js";
 import {
-  buildPreferredClawHubSpec,
   createPluginInstallLogger,
-  decidePreferredClawHubFallback,
   resolveFileNpmSpecToLocalPath,
 } from "../../cli/plugins-command-helpers.js";
 import { persistPluginInstall } from "../../cli/plugins-install-persist.js";
 import type { ConfigSnapshotForInstallPersist } from "../../cli/plugins-install-persist.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
-import {
-  readConfigFileSnapshot,
-  replaceConfigFile,
-  validateConfigObjectWithPlugins,
-} from "../../config/config.js";
+import { readConfigFileSnapshot } from "../../config/config.js";
+import { assertConfigWriteAllowedInCurrentMode } from "../../config/nix-mode-write-guard.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { resolveArchiveKind } from "../../infra/archive.js";
 import { parseClawHubPluginSpec } from "../../infra/clawhub.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { installPluginFromClawHub } from "../../plugins/clawhub.js";
 import { installPluginFromGitSpec, parseGitPluginSpec } from "../../plugins/git-install.js";
 import { installPluginFromNpmSpec, installPluginFromPath } from "../../plugins/install.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
+import {
+  getOfficialExternalPluginCatalogEntryForPackage,
+  resolveOfficialExternalPluginId,
+  resolveOfficialExternalPluginInstall,
+} from "../../plugins/official-external-plugin-catalog.js";
 import type { PluginRecord } from "../../plugins/registry.js";
 import {
   buildAllPluginInspectReports,
@@ -31,7 +33,6 @@ import {
   formatPluginCompatibilityNotice,
   type PluginStatusReport,
 } from "../../plugins/status.js";
-import { setPluginEnabledInConfig } from "../../plugins/toggle-config.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
@@ -39,9 +40,10 @@ import {
   rejectNonOwnerCommand,
   rejectUnauthorizedCommand,
   requireCommandFlagEnabled,
-  requireGatewayClientScopeForInternalChannel,
+  requireGatewayClientScope,
 } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
+import { AutoReplyConfigMutationError, setPluginEnabledFromCommand } from "./config-mutations.js";
 import { parsePluginsCommand } from "./plugins-commands.js";
 
 function renderJsonBlock(label: string, value: unknown): string {
@@ -133,6 +135,25 @@ function formatPluginsList(report: PluginStatusReport): string {
   return lines.join("\n");
 }
 
+function isPluginsWriteAction(action: string): boolean {
+  return action === "install" || action === "enable" || action === "disable";
+}
+
+function rejectNixModePluginWrite(): {
+  shouldContinue: false;
+  reply: { text: string };
+} | null {
+  try {
+    assertConfigWriteAllowedInCurrentMode();
+    return null;
+  } catch (error) {
+    return {
+      shouldContinue: false,
+      reply: { text: `⚠️ ${formatErrorMessage(error)}` },
+    };
+  }
+}
+
 function findPlugin(report: PluginStatusReport, rawName: string): PluginRecord | undefined {
   const target = normalizeOptionalLowercaseString(rawName);
   if (!target) {
@@ -159,6 +180,29 @@ function looksLikeLocalPluginInstallSpec(raw: string): boolean {
     raw.endsWith(".tar") ||
     raw.endsWith(".zip")
   );
+}
+
+function findTrustedCatalogPackageInstall(packageName: string):
+  | {
+      pluginId: string;
+      npmSpec?: string;
+      expectedIntegrity?: string;
+    }
+  | undefined {
+  const entry = getOfficialExternalPluginCatalogEntryForPackage(packageName);
+  if (!entry) {
+    return undefined;
+  }
+  const pluginId = resolveOfficialExternalPluginId(entry);
+  if (!pluginId) {
+    return undefined;
+  }
+  const install = resolveOfficialExternalPluginInstall(entry);
+  return {
+    pluginId,
+    ...(install?.npmSpec ? { npmSpec: install.npmSpec } : {}),
+    ...(install?.expectedIntegrity ? { expectedIntegrity: install.expectedIntegrity } : {}),
+  };
 }
 
 async function installPluginFromPluginsCommand(params: {
@@ -256,38 +300,21 @@ async function installPluginFromPluginsCommand(params: {
     return { ok: true, pluginId: result.pluginId };
   }
 
-  const preferredClawHubSpec = buildPreferredClawHubSpec(params.raw);
-  if (preferredClawHubSpec) {
-    const clawhubResult = await installPluginFromClawHub({
-      spec: preferredClawHubSpec,
-      logger: createPluginInstallLogger(),
-    });
-    if (clawhubResult.ok) {
-      await persistPluginInstall({
-        snapshot: params.snapshot,
-        pluginId: clawhubResult.pluginId,
-        install: {
-          source: "clawhub",
-          spec: preferredClawHubSpec,
-          installPath: clawhubResult.targetDir,
-          version: clawhubResult.version,
-          integrity: clawhubResult.clawhub.integrity,
-          resolvedAt: clawhubResult.clawhub.resolvedAt,
-          clawhubUrl: clawhubResult.clawhub.clawhubUrl,
-          clawhubPackage: clawhubResult.clawhub.clawhubPackage,
-          clawhubFamily: clawhubResult.clawhub.clawhubFamily,
-          clawhubChannel: clawhubResult.clawhub.clawhubChannel,
-        },
-      });
-      return { ok: true, pluginId: clawhubResult.pluginId };
-    }
-    if (decidePreferredClawHubFallback(clawhubResult) !== "fallback_to_npm") {
-      return { ok: false, error: clawhubResult.error };
-    }
-  }
-
+  const officialNpmTrust = resolveOfficialExternalNpmPackageTrust({
+    npmSpec: params.raw,
+    findOfficialExternalPackage: findTrustedCatalogPackageInstall,
+  });
   const result = await installPluginFromNpmSpec({
     spec: params.raw,
+    ...(officialNpmTrust
+      ? {
+          expectedPluginId: officialNpmTrust.pluginId,
+          ...(officialNpmTrust.expectedIntegrity
+            ? { expectedIntegrity: officialNpmTrust.expectedIntegrity }
+            : {}),
+          trustedSourceLinkedOfficialInstall: true,
+        }
+      : {}),
     logger: createPluginInstallLogger(),
   });
   if (!result.ok) {
@@ -394,13 +421,20 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
     };
   }
 
-  const missingAdminScope = requireGatewayClientScopeForInternalChannel(params, {
-    label: "/plugins write",
-    allowedScopes: ["operator.admin"],
-    missingText: "❌ /plugins install|enable|disable requires operator.admin for gateway clients.",
-  });
-  if (missingAdminScope) {
-    return missingAdminScope;
+  if (isPluginsWriteAction(pluginsCommand.action)) {
+    const missingAdminScope = requireGatewayClientScope(params, {
+      label: "/plugins write",
+      allowedScopes: ["operator.admin"],
+      missingText:
+        "❌ /plugins install|enable|disable requires operator.admin for gateway clients.",
+    });
+    if (missingAdminScope) {
+      return missingAdminScope;
+    }
+    const nixModeWrite = rejectNixModePluginWrite();
+    if (nixModeWrite) {
+      return nixModeWrite;
+    }
   }
 
   if (pluginsCommand.action === "install") {
@@ -497,28 +531,22 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
     };
   }
 
-  const next = setPluginEnabledInConfig(
-    structuredClone(loaded.config),
-    plugin.id,
-    pluginsCommand.action === "enable",
-  );
-  const validated = validateConfigObjectWithPlugins(next);
-  if (!validated.ok) {
-    const issue = validated.issues[0];
-    return {
-      shouldContinue: false,
-      reply: {
-        text: `⚠️ Config invalid after /plugins ${pluginsCommand.action} (${issue.path}: ${issue.message}).`,
-      },
-    };
+  let committedConfig: OpenClawConfig;
+  try {
+    committedConfig = await setPluginEnabledFromCommand({
+      pluginId: plugin.id,
+      enabled: pluginsCommand.action === "enable",
+      action: pluginsCommand.action,
+    });
+  } catch (error) {
+    if (error instanceof AutoReplyConfigMutationError) {
+      return { shouldContinue: false, reply: { text: `⚠️ ${error.message}` } };
+    }
+    throw error;
   }
-  await replaceConfigFile({
-    nextConfig: validated.config,
-    afterWrite: { mode: "auto" },
-  });
   let registryWarning: string | undefined;
   await refreshPluginRegistryAfterConfigMutation({
-    config: validated.config,
+    config: committedConfig,
     reason: "policy-changed",
     logger: {
       warn: (message) => {

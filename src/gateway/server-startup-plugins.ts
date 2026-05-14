@@ -1,22 +1,24 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { initSubagentRegistry } from "../agents/subagent-registry.js";
-import { runChannelPluginStartupMaintenance } from "../channels/plugins/lifecycle-startup.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginRegistryParams } from "../plugins/registry-types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { mergeActivationSectionsIntoRuntimeConfig } from "./plugin-activation-runtime-config.js";
 import { listGatewayMethods } from "./server-methods-list.js";
-import { loadGatewayStartupPlugins } from "./server-plugin-bootstrap.js";
-import { runStartupSessionMigration } from "./server-startup-session-migration.js";
 
 type GatewayPluginBootstrapLog = {
   info: (message: string) => void;
   warn: (message: string) => void;
   error: (message: string) => void;
   debug: (message: string) => void;
+};
+
+type GatewayStartupTrace = {
+  detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
 };
 
 export function resolveGatewayStartupMaintenanceConfig(params: {
@@ -50,6 +52,8 @@ export async function prepareGatewayPluginBootstrap(params: {
   const shouldRunStartupMaintenance =
     !params.minimalTestGateway || startupMaintenanceConfig.channels !== undefined;
   if (shouldRunStartupMaintenance) {
+    const { runChannelPluginStartupMaintenance } =
+      await import("../channels/plugins/lifecycle-startup.js");
     const startupTasks = [
       runChannelPluginStartupMaintenance({
         cfg: startupMaintenanceConfig,
@@ -58,6 +62,7 @@ export async function prepareGatewayPluginBootstrap(params: {
       }),
     ];
     if (!params.minimalTestGateway) {
+      const { runStartupSessionMigration } = await import("./server-startup-session-migration.js");
       startupTasks.push(
         runStartupSessionMigration({
           cfg: params.cfgAtStart,
@@ -147,11 +152,14 @@ export async function loadGatewayStartupPluginRuntime(params: {
   workspaceDir: string;
   log: GatewayPluginBootstrapLog;
   baseMethods: string[];
+  hostServices?: PluginRegistryParams["hostServices"];
   startupPluginIds: string[];
   pluginLookUpTable?: ReturnType<typeof loadPluginLookUpTable>;
   preferSetupRuntimeForChannelPlugins?: boolean;
   suppressPluginInfoLogs?: boolean;
+  startupTrace?: GatewayStartupTrace;
 }) {
+  const { loadGatewayStartupPlugins } = await import("./server-plugin-bootstrap.js");
   return loadGatewayStartupPlugins({
     cfg: params.cfg,
     activationSourceConfig: params.activationSourceConfig,
@@ -159,9 +167,13 @@ export async function loadGatewayStartupPluginRuntime(params: {
     log: params.log,
     coreGatewayMethodNames: params.baseMethods,
     baseMethods: params.baseMethods,
+    ...(params.hostServices !== undefined && {
+      hostServices: params.hostServices,
+    }),
     pluginIds: params.startupPluginIds,
     pluginLookUpTable: params.pluginLookUpTable,
     preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
     suppressPluginInfoLogs: params.suppressPluginInfoLogs,
+    startupTrace: params.startupTrace,
   });
 }

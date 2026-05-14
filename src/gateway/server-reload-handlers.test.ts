@@ -1,54 +1,160 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  __testing as embeddedRunTesting,
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-  type EmbeddedPiQueueHandle,
-} from "../agents/pi-embedded-runner/runs.js";
 import type { ChannelKind } from "./config-reload-plan.js";
 import type { GatewayPluginReloadResult } from "./server-reload-handlers.js";
-import { __testing, createGatewayReloadHandlers } from "./server-reload-handlers.js";
+import { createGatewayReloadHandlers } from "./server-reload-handlers.js";
 
-describe("gateway reload recovery handlers", () => {
-  afterEach(() => {
-    embeddedRunTesting.resetActiveEmbeddedRuns();
-  });
+const hoisted = vi.hoisted(() => ({
+  activeTaskCount: { value: 0 },
+  activeTaskBlockers: [] as Array<{
+    taskId: string;
+    status: "queued" | "running";
+    runtime: "subagent" | "acp" | "cli" | "cron";
+    runId?: string;
+    label?: string;
+    title?: string;
+  }>,
+}));
 
-  it("aborts active agent runs after last-known-good config recovery", () => {
-    const sessionId = "config-recovery-session";
-    const sessionKey = "agent:main:telegram:direct:123";
-    let handle!: EmbeddedPiQueueHandle;
-    handle = {
-      abort: vi.fn(() => {
-        clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+vi.mock("../tasks/task-registry.maintenance.js", async () => {
+  const actual = await vi.importActual<typeof import("../tasks/task-registry.maintenance.js")>(
+    "../tasks/task-registry.maintenance.js",
+  );
+  return {
+    ...actual,
+    getInspectableActiveTaskRestartBlockers: () => hoisted.activeTaskBlockers,
+    getInspectableTaskRegistrySummary: () => ({
+      total: hoisted.activeTaskCount.value,
+      active: hoisted.activeTaskCount.value,
+      terminal: 0,
+      failures: 0,
+      byStatus: {
+        queued: 0,
+        running: hoisted.activeTaskCount.value,
+        succeeded: 0,
+        failed: 0,
+        timed_out: 0,
+        cancelled: 0,
+        lost: 0,
+      },
+      byRuntime: {
+        subagent: hoisted.activeTaskCount.value,
+        acp: 0,
+        cli: 0,
+        cron: 0,
+      },
+    }),
+  };
+});
+
+function createReloadHandlersForTest(logReload = { info: vi.fn(), warn: vi.fn() }) {
+  const cron = { start: vi.fn(async () => {}), stop: vi.fn() };
+  const heartbeatRunner = {
+    stop: vi.fn(),
+    updateConfig: vi.fn(),
+  };
+  return createGatewayReloadHandlers({
+    deps: {} as never,
+    broadcast: vi.fn(),
+    getState: () => ({
+      hooksConfig: {} as never,
+      hookClientIpConfig: {} as never,
+      heartbeatRunner: heartbeatRunner as never,
+      cronState: { cron, storePath: "/tmp/cron.json", cronEnabled: false } as never,
+      channelHealthMonitor: null,
+    }),
+    setState: vi.fn(),
+    startChannel: vi.fn(async () => {}),
+    stopChannel: vi.fn(async () => {}),
+    reloadPlugins: vi.fn(
+      async (): Promise<GatewayPluginReloadResult> => ({
+        restartChannels: new Set(),
+        activeChannels: new Set(),
       }),
-      isCompacting: () => false,
-      isStreaming: () => false,
-      queueMessage: async () => {},
-    };
-    const logReload = { info: vi.fn(), warn: vi.fn() };
-    setActiveEmbeddedRun(sessionId, handle, sessionKey);
-
-    __testing.abortActiveAgentRunsAfterConfigRecovery({
-      reason: "invalid-config",
-      logReload,
-    });
-
-    expect(handle.abort).toHaveBeenCalledOnce();
-    expect(logReload.warn).toHaveBeenCalledWith(
-      "config recovery aborted active agent run(s) after reload-invalid-config",
-    );
+    ),
+    logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    logChannels: { info: vi.fn(), error: vi.fn() },
+    logCron: { error: vi.fn() },
+    logReload,
+    createHealthMonitor: () => null,
   });
+}
 
-  it("does not warn when config recovery has no active agent runs to abort", () => {
+afterEach(() => {
+  hoisted.activeTaskCount.value = 0;
+  hoisted.activeTaskBlockers.length = 0;
+});
+
+describe("gateway restart deferral preflight", () => {
+  it("logs active task run ids before waiting and when forcing after timeout", async () => {
+    const restartTesting = (await import("../infra/restart.js")).__testing;
+    restartTesting.resetSigusr1State();
     const logReload = { info: vi.fn(), warn: vi.fn() };
-
-    __testing.abortActiveAgentRunsAfterConfigRecovery({
-      reason: "invalid-config",
-      logReload,
+    const { requestGatewayRestart } = createReloadHandlersForTest(logReload);
+    hoisted.activeTaskCount.value = 1;
+    hoisted.activeTaskBlockers.push({
+      taskId: "task-nightly",
+      runId: "run-nightly",
+      status: "running",
+      runtime: "cron",
+      label: "nightly sync",
+      title: "refresh all accounts",
     });
+    const signalSpy = vi.fn();
+    process.once("SIGUSR1", signalSpy);
+    vi.useFakeTimers();
 
-    expect(logReload.warn).not.toHaveBeenCalled();
+    try {
+      requestGatewayRestart(
+        {
+          changedPaths: ["gateway.port"],
+          restartGateway: true,
+          restartReasons: ["gateway.port"],
+          hotReasons: [],
+          reloadHooks: false,
+          restartGmailWatcher: false,
+          restartCron: false,
+          restartHeartbeat: false,
+          restartHealthMonitor: false,
+          reloadPlugins: false,
+          restartChannels: new Set(),
+          disposeMcpRuntimes: false,
+          noopPaths: [],
+        },
+        {
+          gateway: { reload: { deferralTimeoutMs: 1_000 } },
+        },
+      );
+
+      expect(logReload.warn.mock.calls).toEqual([
+        [
+          "config change requires gateway restart (gateway.port) — deferring until 1 background task run(s) complete",
+        ],
+        [
+          "restart blocked by active background task run(s): taskId=task-nightly runId=run-nightly status=running runtime=cron label=nightly sync title=refresh all accounts",
+        ],
+      ]);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await Promise.resolve();
+
+      expect(signalSpy).toHaveBeenCalledTimes(1);
+      expect(logReload.warn.mock.calls).toEqual([
+        [
+          "config change requires gateway restart (gateway.port) — deferring until 1 background task run(s) complete",
+        ],
+        [
+          "restart blocked by active background task run(s): taskId=task-nightly runId=run-nightly status=running runtime=cron label=nightly sync title=refresh all accounts",
+        ],
+        [
+          "restart timeout after 1000ms with 1 background task run(s) still active (taskId=task-nightly runId=run-nightly status=running runtime=cron label=nightly sync title=refresh all accounts); forcing restart",
+        ],
+      ]);
+    } finally {
+      hoisted.activeTaskCount.value = 0;
+      vi.useRealTimers();
+      process.removeListener("SIGUSR1", signalSpy);
+      restartTesting.resetSigusr1State();
+    }
   });
 });
 
@@ -139,16 +245,16 @@ describe("gateway plugin hot reload handlers", () => {
       }
     }
 
-    expect(reloadPlugins).toHaveBeenCalledWith(
-      expect.objectContaining({
-        nextConfig: {
-          plugins: {
-            enabled: false,
-          },
-        },
-        changedPaths: ["plugins.enabled"],
-      }),
-    );
+    const [reloadParams] = reloadPlugins.mock.calls.at(-1) ?? [];
+    const reloadParamsRecord = reloadParams as
+      | { nextConfig?: unknown; changedPaths?: unknown }
+      | undefined;
+    expect(reloadParamsRecord?.nextConfig).toEqual({
+      plugins: {
+        enabled: false,
+      },
+    });
+    expect(reloadParamsRecord?.changedPaths).toEqual(["plugins.enabled"]);
     expect(stopChannel).toHaveBeenCalledWith("discord");
     expect(startChannel).not.toHaveBeenCalled();
     expect(events).toEqual(["reload:start", "stop", "registry:replace"]);

@@ -3,6 +3,7 @@ import { createOpenClawTools } from "../agents/openclaw-tools.js";
 import {
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
+  resolveInheritedToolPolicyForSession,
   resolveSubagentToolPolicyForSession,
 } from "../agents/pi-tools.policy.js";
 import {
@@ -15,7 +16,10 @@ import {
 } from "../agents/tool-policy-pipeline.js";
 import {
   collectExplicitAllowlist,
+  collectExplicitDenylist,
+  hasRestrictiveAllowPolicy,
   mergeAlsoAllowPolicy,
+  replaceWithEffectiveToolAllowlist,
   resolveToolProfilePolicy,
 } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
@@ -39,6 +43,7 @@ export function resolveGatewayScopedTools(params: {
   excludeToolNames?: Iterable<string>;
   disablePluginTools?: boolean;
   senderIsOwner?: boolean;
+  gatewayRequestedTools?: string[];
 }) {
   const {
     agentId,
@@ -53,11 +58,15 @@ export function resolveGatewayScopedTools(params: {
   } = resolveEffectiveToolPolicy({ config: params.cfg, sessionKey: params.sessionKey });
   const profilePolicy = resolveToolProfilePolicy(profile);
   const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
-  const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(profilePolicy, profileAlsoAllow);
-  const providerProfilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(
-    providerProfilePolicy,
-    providerProfileAlsoAllow,
-  );
+  const gatewayRequestedTools = params.gatewayRequestedTools ?? [];
+  const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(profilePolicy, [
+    ...(profileAlsoAllow ?? []),
+    ...gatewayRequestedTools,
+  ]);
+  const providerProfilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(providerProfilePolicy, [
+    ...(providerProfileAlsoAllow ?? []),
+    ...gatewayRequestedTools,
+  ]);
   const groupPolicy = resolveGroupToolPolicy({
     config: params.cfg,
     sessionKey: params.sessionKey,
@@ -75,10 +84,50 @@ export function resolveGatewayScopedTools(params: {
         store: subagentStore,
       })
     : undefined;
+  const inheritedToolPolicy = resolveInheritedToolPolicyForSession(params.cfg, params.sessionKey, {
+    store: subagentStore,
+  });
+  const excludedToolNames = params.excludeToolNames ? Array.from(params.excludeToolNames) : [];
+  const surface = params.surface ?? "http";
+  const gatewayToolsCfg = params.cfg.gateway?.tools;
+  const defaultGatewayDeny =
+    surface === "http"
+      ? DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter((name) => !gatewayToolsCfg?.allow?.includes(name))
+      : [];
   const workspaceDir = resolveAgentWorkspaceDir(
     params.cfg,
     agentId ?? resolveDefaultAgentId(params.cfg),
   );
+  const explicitDenylist = collectExplicitDenylist([
+    profilePolicy,
+    providerProfilePolicy,
+    globalPolicy,
+    globalProviderPolicy,
+    agentPolicy,
+    agentProviderPolicy,
+    groupPolicy,
+    subagentPolicy,
+    inheritedToolPolicy,
+    defaultGatewayDeny.length > 0 ? { deny: defaultGatewayDeny } : undefined,
+    Array.isArray(gatewayToolsCfg?.deny) ? { deny: gatewayToolsCfg.deny } : undefined,
+    excludedToolNames.length > 0 ? { deny: excludedToolNames } : undefined,
+  ]);
+  const inheritedToolDenylist = [...explicitDenylist];
+  // Passed by reference to sessions_spawn and populated after the final policy
+  // pass so child sessions inherit the actual parent tool surface.
+  const inheritedToolAllowlist: string[] = [];
+  const shouldInheritEffectiveToolAllowlist = [
+    profilePolicy,
+    providerProfilePolicy,
+    globalPolicy,
+    globalProviderPolicy,
+    agentPolicy,
+    agentProviderPolicy,
+    groupPolicy,
+    subagentPolicy,
+    inheritedToolPolicy,
+    gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
+  ].some(hasRestrictiveAllowPolicy);
 
   const allTools = createOpenClawTools({
     agentSessionKey: params.sessionKey,
@@ -89,6 +138,7 @@ export function resolveGatewayScopedTools(params: {
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     allowMediaInvokeCommands: params.allowMediaInvokeCommands,
     disablePluginTools: params.disablePluginTools,
+    wrapBeforeToolCallHook: false,
     senderIsOwner: params.senderIsOwner,
     config: params.cfg,
     workspaceDir,
@@ -101,7 +151,12 @@ export function resolveGatewayScopedTools(params: {
       agentProviderPolicy,
       groupPolicy,
       subagentPolicy,
+      inheritedToolPolicy,
+      gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
     ]),
+    pluginToolDenylist: explicitDenylist,
+    inheritedToolAllowlist,
+    inheritedToolDenylist,
   });
 
   const policyFiltered = applyToolPolicyPipeline({
@@ -124,23 +179,22 @@ export function resolveGatewayScopedTools(params: {
         agentId,
       }),
       { policy: subagentPolicy, label: "subagent tools.allow" },
+      { policy: inheritedToolPolicy, label: "inherited tools" },
     ],
   });
 
-  const surface = params.surface ?? "http";
-  const gatewayToolsCfg = params.cfg.gateway?.tools;
-  const defaultGatewayDeny =
-    surface === "http"
-      ? DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter((name) => !gatewayToolsCfg?.allow?.includes(name))
-      : [];
   const gatewayDenySet = new Set([
     ...defaultGatewayDeny,
     ...(Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : []),
-    ...(params.excludeToolNames ? Array.from(params.excludeToolNames) : []),
+    ...excludedToolNames,
   ]);
+  const tools = policyFiltered.filter((tool) => !gatewayDenySet.has(tool.name));
+  if (shouldInheritEffectiveToolAllowlist) {
+    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, tools);
+  }
 
   return {
     agentId,
-    tools: policyFiltered.filter((tool) => !gatewayDenySet.has(tool.name)),
+    tools,
   };
 }

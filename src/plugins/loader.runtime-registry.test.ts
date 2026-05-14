@@ -16,11 +16,9 @@ import {
   buildMemoryPromptSection,
   getMemoryRuntime,
   listMemoryCorpusSupplements,
+  registerMemoryCapability,
   registerMemoryCorpusSupplement,
-  registerMemoryFlushPlanResolver,
   registerMemoryPromptSupplement,
-  registerMemoryPromptSection,
-  registerMemoryRuntime,
   resolveMemoryFlushPlan,
 } from "./memory-state.js";
 import type { PluginRecord } from "./registry-types.js";
@@ -66,6 +64,22 @@ function createLoadedPluginRecord(id: string): PluginRecord {
     hookCount: 0,
     configSchema: false,
   };
+}
+
+function requireMemoryRuntime() {
+  const runtime = getMemoryRuntime();
+  if (!runtime) {
+    throw new Error("expected memory runtime registration");
+  }
+  return runtime;
+}
+
+function requireMemoryEmbeddingProvider(providerId: string) {
+  const provider = getMemoryEmbeddingProvider(providerId);
+  if (!provider) {
+    throw new Error(`expected ${providerId} memory embedding provider`);
+  }
+  return provider;
 }
 
 describe("getCompatibleActivePluginRegistry", () => {
@@ -554,7 +568,7 @@ describe("resolveRuntimePluginRegistry", () => {
 
     const scopedEmpty = resolveRuntimePluginRegistry({ ...loadOptions, onlyPluginIds: [] });
     expect(scopedEmpty).not.toBe(registry);
-    expect(scopedEmpty?.plugins).toEqual([]);
+    expect(scopedEmpty?.plugins).toStrictEqual([]);
   });
 
   it("keeps the full workspace registry warm when scoped cron registries churn", () => {
@@ -590,22 +604,24 @@ describe("clearPluginLoaderCache", () => {
       search: async () => [],
       get: async () => null,
     });
-    registerMemoryPromptSection(() => ["stale memory section"]);
     registerMemoryPromptSupplement("memory-wiki", () => ["stale wiki supplement"]);
-    registerMemoryFlushPlanResolver(() => ({
-      softThresholdTokens: 1,
-      forceFlushTranscriptBytes: 2,
-      reserveTokensFloor: 3,
-      prompt: "stale",
-      systemPrompt: "stale",
-      relativePath: "memory/stale.md",
-    }));
-    registerMemoryRuntime({
-      async getMemorySearchManager() {
-        return { manager: null };
-      },
-      resolveMemoryBackendConfig() {
-        return { backend: "builtin" as const };
+    registerMemoryCapability("memory-core", {
+      promptBuilder: () => ["stale memory section"],
+      flushPlanResolver: () => ({
+        softThresholdTokens: 1,
+        forceFlushTranscriptBytes: 2,
+        reserveTokensFloor: 3,
+        prompt: "stale",
+        systemPrompt: "stale",
+        relativePath: "memory/stale.md",
+      }),
+      runtime: {
+        async getMemorySearchManager() {
+          return { manager: null };
+        },
+        resolveMemoryBackendConfig() {
+          return { backend: "builtin" as const };
+        },
       },
     });
     expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([
@@ -614,13 +630,15 @@ describe("clearPluginLoaderCache", () => {
     ]);
     expect(listMemoryCorpusSupplements()).toHaveLength(1);
     expect(resolveMemoryFlushPlan({})?.relativePath).toBe("memory/stale.md");
-    expect(getMemoryRuntime()).toBeDefined();
-    expect(getMemoryEmbeddingProvider("stale")).toBeDefined();
+    expect(
+      requireMemoryRuntime().resolveMemoryBackendConfig({ cfg: {} as never, agentId: "main" }),
+    ).toEqual({ backend: "builtin" });
+    expect(requireMemoryEmbeddingProvider("stale").id).toBe("stale");
 
     clearPluginLoaderCache();
 
-    expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([]);
-    expect(listMemoryCorpusSupplements()).toEqual([]);
+    expect(buildMemoryPromptSection({ availableTools: new Set() })).toStrictEqual([]);
+    expect(listMemoryCorpusSupplements()).toStrictEqual([]);
     expect(resolveMemoryFlushPlan({})).toBeNull();
     expect(getMemoryRuntime()).toBeUndefined();
     expect(getMemoryEmbeddingProvider("stale")).toBeUndefined();
@@ -652,12 +670,14 @@ describe("clearPluginRegistryLoadCache", () => {
       id: "still-live",
       create: async () => ({ provider: null }),
     });
-    registerMemoryPromptSection(() => ["still live"]);
+    registerMemoryCapability("memory-core", {
+      promptBuilder: () => ["still live"],
+    });
 
     clearPluginRegistryLoadCache();
 
     expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual(["still live"]);
-    expect(getMemoryEmbeddingProvider("still-live")).toBeDefined();
+    expect(requireMemoryEmbeddingProvider("still-live").id).toBe("still-live");
   });
 
   it("invalidates full-workspace load snapshots", () => {

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const runtimeModule = await import("./runtime.js");
@@ -7,12 +7,47 @@ const handleDiscordActionMock = vi
   .mockResolvedValue({ content: [], details: { ok: true } });
 const { handleDiscordMessageAction } = await import("./handle-action.js");
 
+function discordConfig(actions?: Record<string, boolean>): OpenClawConfig {
+  return {
+    channels: { discord: { token: "tok", ...(actions ? { actions } : {}) } },
+  } as OpenClawConfig;
+}
+
+function defaultActionOptions() {
+  return {
+    mediaAccess: undefined,
+    mediaLocalRoots: undefined,
+    mediaReadFile: undefined,
+  };
+}
+
+function expectDiscordActionCall(params: {
+  payload: unknown;
+  cfg: OpenClawConfig;
+  options?: unknown;
+}) {
+  expect(handleDiscordActionMock).toHaveBeenCalledTimes(1);
+  const [call] = handleDiscordActionMock.mock.calls;
+  if (!call) {
+    throw new Error("expected Discord action call");
+  }
+  const [payload, cfg, options] = call;
+  expect(payload).toEqual(params.payload);
+  expect(cfg).toBe(params.cfg);
+  if ("options" in params) {
+    expect(options).toEqual(params.options);
+  } else {
+    expect(options).toBeUndefined();
+  }
+}
+
 describe("handleDiscordMessageAction", () => {
   beforeEach(() => {
     handleDiscordActionMock.mockClear();
   });
 
   it("uses trusted requesterSenderId for moderation and ignores params senderUserId", async () => {
+    const cfg = discordConfig({ moderation: true });
     await handleDiscordMessageAction({
       action: "timeout",
       params: {
@@ -21,65 +56,61 @@ describe("handleDiscordMessageAction", () => {
         durationMin: 5,
         senderUserId: "spoofed-admin-id",
       },
-      cfg: {
-        channels: { discord: { token: "tok", actions: { moderation: true } } },
-      } as OpenClawConfig,
+      cfg,
       requesterSenderId: "trusted-sender-id",
       toolContext: { currentChannelProvider: "discord" },
     });
 
-    expect(handleDiscordActionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expectDiscordActionCall({
+      payload: {
         action: "timeout",
+        accountId: undefined,
         guildId: "guild-1",
         userId: "user-2",
         durationMinutes: 5,
+        until: undefined,
+        reason: undefined,
+        deleteMessageDays: undefined,
         senderUserId: "trusted-sender-id",
-      }),
-      expect.objectContaining({
-        channels: {
-          discord: expect.objectContaining({
-            token: "tok",
-          }),
-        },
-      }),
-    );
+      },
+      cfg,
+    });
   });
 
   it("falls back to toolContext.currentMessageId for reactions", async () => {
+    const cfg = discordConfig();
     await handleDiscordMessageAction({
       action: "react",
       params: {
         channelId: "123",
         emoji: "ok",
       },
-      cfg: {
-        channels: { discord: { token: "tok" } },
-      } as OpenClawConfig,
+      cfg,
       toolContext: { currentMessageId: "9001" },
     });
 
-    expect(handleDiscordActionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expectDiscordActionCall({
+      payload: {
         action: "react",
+        accountId: undefined,
         channelId: "123",
         messageId: "9001",
         emoji: "ok",
-      }),
-      expect.any(Object),
-      expect.any(Object),
-    );
+        remove: undefined,
+      },
+      cfg,
+      options: defaultActionOptions(),
+    });
   });
 
   it("falls back to Discord toolContext.currentChannelId for reaction targets", async () => {
+    const cfg = discordConfig();
     await handleDiscordMessageAction({
       action: "react",
       params: {
         emoji: "ok",
       },
-      cfg: {
-        channels: { discord: { token: "tok" } },
-      } as OpenClawConfig,
+      cfg,
       toolContext: {
         currentChannelProvider: "discord",
         currentChannelId: "user:U1",
@@ -87,42 +118,53 @@ describe("handleDiscordMessageAction", () => {
       },
     });
 
-    expect(handleDiscordActionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expectDiscordActionCall({
+      payload: {
         action: "react",
+        accountId: undefined,
         channelId: "user:U1",
         messageId: "9001",
         emoji: "ok",
-      }),
-      expect.any(Object),
-      expect.any(Object),
-    );
+        remove: undefined,
+      },
+      cfg,
+      options: defaultActionOptions(),
+    });
   });
 
   it("falls back to Discord toolContext.currentChannelId for sends", async () => {
+    const cfg = discordConfig();
     await handleDiscordMessageAction({
       action: "send",
       params: {
         message: "hello",
       },
-      cfg: {
-        channels: { discord: { token: "tok" } },
-      } as OpenClawConfig,
+      cfg,
       toolContext: {
         currentChannelProvider: "discord",
         currentChannelId: "channel:123",
       },
     });
 
-    expect(handleDiscordActionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expectDiscordActionCall({
+      payload: {
         action: "sendMessage",
+        accountId: undefined,
         to: "channel:123",
         content: "hello",
-      }),
-      expect.any(Object),
-      expect.any(Object),
-    );
+        mediaUrl: undefined,
+        filename: undefined,
+        replyTo: undefined,
+        components: undefined,
+        embeds: undefined,
+        asVoice: false,
+        silent: false,
+        __sessionKey: undefined,
+        __agentId: undefined,
+      },
+      cfg,
+      options: defaultActionOptions(),
+    });
   });
 
   it("maps upload-file to Discord sendMessage with media read context", async () => {
@@ -131,6 +173,7 @@ describe("handleDiscordMessageAction", () => {
       localRoots: ["/tmp/agent-root"],
       readFile: mediaReadFile,
     };
+    const cfg = discordConfig();
 
     await handleDiscordMessageAction({
       action: "upload-file",
@@ -144,17 +187,16 @@ describe("handleDiscordMessageAction", () => {
         __sessionKey: "session-1",
         __agentId: "agent-1",
       },
-      cfg: {
-        channels: { discord: { token: "tok" } },
-      } as OpenClawConfig,
+      cfg,
       mediaAccess,
       mediaLocalRoots: ["/tmp/agent-root"],
       mediaReadFile,
     });
 
-    expect(handleDiscordActionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expectDiscordActionCall({
+      payload: {
         action: "sendMessage",
+        accountId: undefined,
         to: "channel:123",
         content: "caption",
         mediaUrl: "/tmp/agent-root/image.png",
@@ -163,41 +205,46 @@ describe("handleDiscordMessageAction", () => {
         silent: true,
         __sessionKey: "session-1",
         __agentId: "agent-1",
-      }),
-      expect.any(Object),
-      {
+      },
+      cfg,
+      options: {
         mediaAccess,
         mediaLocalRoots: ["/tmp/agent-root"],
         mediaReadFile,
       },
-    );
+    });
   });
 
   it("falls back to Discord toolContext.currentChannelId for upload-file", async () => {
+    const cfg = discordConfig();
     await handleDiscordMessageAction({
       action: "upload-file",
       params: {
         path: "/tmp/agent-root/image.png",
       },
-      cfg: {
-        channels: { discord: { token: "tok" } },
-      } as OpenClawConfig,
+      cfg,
       toolContext: {
         currentChannelProvider: "discord",
         currentChannelId: "channel:123",
       },
     });
 
-    expect(handleDiscordActionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expectDiscordActionCall({
+      payload: {
         action: "sendMessage",
+        accountId: undefined,
         to: "channel:123",
         content: "",
         mediaUrl: "/tmp/agent-root/image.png",
-      }),
-      expect.any(Object),
-      expect.any(Object),
-    );
+        filename: undefined,
+        replyTo: undefined,
+        silent: false,
+        __sessionKey: undefined,
+        __agentId: undefined,
+      },
+      cfg,
+      options: defaultActionOptions(),
+    });
   });
 
   it("requires a file path for upload-file", async () => {
@@ -207,17 +254,49 @@ describe("handleDiscordMessageAction", () => {
         params: {
           to: "channel:123",
         },
-        cfg: {
-          channels: { discord: { token: "tok" } },
-        } as OpenClawConfig,
+        cfg: discordConfig(),
       }),
     ).rejects.toThrow(/upload-file requires filePath, path, or media/i);
 
     expect(handleDiscordActionMock).not.toHaveBeenCalled();
   });
 
+  it("maps thread-reply filePath to Discord threadReply with media read context", async () => {
+    const mediaReadFile = vi.fn(async () => Buffer.from("report"));
+    const cfg = discordConfig({ threads: true });
+
+    await handleDiscordMessageAction({
+      action: "thread-reply",
+      params: {
+        threadId: "thread-123",
+        message: "thread update",
+        filePath: "/tmp/agent-root/report.md",
+      },
+      cfg,
+      mediaLocalRoots: ["/tmp/agent-root"],
+      mediaReadFile,
+    });
+
+    expectDiscordActionCall({
+      payload: {
+        action: "threadReply",
+        accountId: undefined,
+        channelId: "thread-123",
+        content: "thread update",
+        mediaUrl: "/tmp/agent-root/report.md",
+        replyTo: undefined,
+      },
+      cfg,
+      options: {
+        mediaLocalRoots: ["/tmp/agent-root"],
+        mediaReadFile,
+      },
+    });
+  });
+
   it("forwards top-level components on sends", async () => {
     const components = { blocks: [{ type: "text", text: "Pick one" }] };
+    const cfg = discordConfig();
 
     await handleDiscordMessageAction({
       action: "send",
@@ -225,25 +304,32 @@ describe("handleDiscordMessageAction", () => {
         message: "hello",
         components,
       },
-      cfg: {
-        channels: { discord: { token: "tok" } },
-      } as OpenClawConfig,
+      cfg,
       toolContext: {
         currentChannelProvider: "discord",
         currentChannelId: "channel:123",
       },
     });
 
-    expect(handleDiscordActionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expectDiscordActionCall({
+      payload: {
         action: "sendMessage",
+        accountId: undefined,
         to: "channel:123",
         content: "hello",
+        mediaUrl: undefined,
+        filename: undefined,
+        replyTo: undefined,
         components,
-      }),
-      expect.any(Object),
-      expect.any(Object),
-    );
+        embeds: undefined,
+        asVoice: false,
+        silent: false,
+        __sessionKey: undefined,
+        __agentId: undefined,
+      },
+      cfg,
+      options: defaultActionOptions(),
+    });
   });
 
   it("does not use another provider's current target for Discord sends", async () => {
@@ -253,9 +339,7 @@ describe("handleDiscordMessageAction", () => {
         params: {
           message: "hello",
         },
-        cfg: {
-          channels: { discord: { token: "tok" } },
-        } as OpenClawConfig,
+        cfg: discordConfig(),
         toolContext: {
           currentChannelProvider: "telegram",
           currentChannelId: "channel:123",
@@ -273,9 +357,7 @@ describe("handleDiscordMessageAction", () => {
         params: {
           emoji: "ok",
         },
-        cfg: {
-          channels: { discord: { token: "tok" } },
-        } as OpenClawConfig,
+        cfg: discordConfig(),
         toolContext: {
           currentChannelProvider: "telegram",
           currentChannelId: "user:U1",
@@ -295,9 +377,7 @@ describe("handleDiscordMessageAction", () => {
           channelId: "123",
           emoji: "ok",
         },
-        cfg: {
-          channels: { discord: { token: "tok" } },
-        } as OpenClawConfig,
+        cfg: discordConfig(),
       }),
     ).rejects.toThrow(/messageId required/i);
 

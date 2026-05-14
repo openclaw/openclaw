@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { splitSandboxBindSpec } from "../agents/sandbox/bind-spec.js";
+import { isSandboxHostPathAbsolute } from "../agents/sandbox/host-paths.js";
 import { getBlockedNetworkModeReason } from "../agents/sandbox/network-mode.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import {
@@ -16,6 +18,24 @@ import {
   TtsConfigSchema,
 } from "./zod-schema.core.js";
 import { sensitive } from "./zod-schema.sensitive.js";
+
+export const AgentRunRetriesConfigSchema = z
+  .object({
+    base: z.number().int().positive().optional(),
+    perProfile: z.number().int().nonnegative().optional(),
+    min: z.number().int().positive().optional(),
+    max: z.number().int().positive().optional(),
+  })
+  .strict()
+  .refine(
+    (data) => {
+      if (data.min !== undefined && data.max !== undefined) {
+        return data.max >= data.min;
+      }
+      return true;
+    },
+    { message: "max must be greater than or equal to min", path: ["max"] },
+  );
 
 export const HeartbeatSchema = z
   .object({
@@ -158,15 +178,16 @@ const SandboxDockerSchema = z
           });
           continue;
         }
-        const firstColon = bind.indexOf(":");
-        const source = (firstColon <= 0 ? bind : bind.slice(0, firstColon)).trim();
-        if (!source.startsWith("/")) {
+
+        const parsed = splitSandboxBindSpec(bind);
+        const source = (parsed ? parsed.host : bind).trim();
+        if (!isSandboxHostPathAbsolute(source)) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: ["binds", i],
             message:
               `Sandbox security: bind mount "${bind}" uses a non-absolute source path "${source}". ` +
-              "Only absolute POSIX paths are supported for sandbox binds.",
+              "Only absolute POSIX or Windows drive-letter paths are supported for sandbox binds.",
           });
         }
       }
@@ -286,6 +307,8 @@ export const ToolPolicySchema = ToolPolicyBaseSchema.superRefine((value, ctx) =>
   }
 }).optional();
 
+const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
+
 const TrimmedOptionalConfigStringSchema = z
   .string()
   .transform((value) => {
@@ -351,6 +374,7 @@ const ToolsWebFetchSchema = z
     maxRedirects: z.number().int().nonnegative().optional(),
     userAgent: z.string().optional(),
     readability: z.boolean().optional(),
+    useTrustedEnvProxy: z.boolean().optional(),
     ssrfPolicy: z
       .object({
         allowRfc2544BenchmarkRange: z.boolean().optional(),
@@ -465,6 +489,7 @@ const ToolExecBaseShape = {
   pathPrepend: z.array(z.string()).optional(),
   safeBins: z.array(z.string()).optional(),
   strictInlineEval: z.boolean().optional(),
+  commandHighlighting: z.boolean().optional(),
   safeBinTrustedDirs: z.array(z.string()).optional(),
   safeBinProfiles: z.record(z.string(), ToolExecSafeBinProfileSchema).optional(),
   backgroundMs: z.number().int().positive().optional(),
@@ -501,6 +526,13 @@ const ToolLoopDetectionDetectorSchema = z
   .strict()
   .optional();
 
+const ToolLoopPostCompactionGuardSchema = z
+  .object({
+    windowSize: z.number().int().positive().optional(),
+  })
+  .strict()
+  .optional();
+
 const ToolLoopDetectionSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -510,6 +542,7 @@ const ToolLoopDetectionSchema = z
     criticalThreshold: z.number().int().positive().optional(),
     globalCircuitBreakerThreshold: z.number().int().positive().optional(),
     detectors: ToolLoopDetectionDetectorSchema,
+    postCompactionGuard: ToolLoopPostCompactionGuardSchema,
   })
   .strict()
   .superRefine((value, ctx) => {
@@ -537,6 +570,21 @@ const ToolLoopDetectionSchema = z
       });
     }
   })
+  .optional();
+
+const ToolSearchSchema = z
+  .union([
+    z.boolean(),
+    z
+      .object({
+        enabled: z.boolean().optional(),
+        mode: z.enum(["code", "tools"]).optional(),
+        codeTimeoutMs: z.number().int().positive().optional(),
+        searchDefaultLimit: z.number().int().positive().optional(),
+        maxSearchLimit: z.number().int().positive().optional(),
+      })
+      .strict(),
+  ])
   .optional();
 
 const SandboxSshSchema = z
@@ -593,7 +641,42 @@ const CommonToolPolicyFields = {
   alsoAllow: z.array(z.string()).optional(),
   deny: z.array(z.string()).optional(),
   byProvider: z.record(z.string(), ToolPolicyWithProfileSchema).optional(),
+  toolsBySender: ToolPolicyBySenderSchema,
 };
+
+const MessageToolConfigSchema = z
+  .object({
+    allowCrossContextSend: z.boolean().optional(),
+    crossContext: z
+      .object({
+        allowWithinProvider: z.boolean().optional(),
+        allowAcrossProviders: z.boolean().optional(),
+        marker: z
+          .object({
+            enabled: z.boolean().optional(),
+            prefix: z.string().optional(),
+            suffix: z.string().optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
+    actions: z
+      .object({
+        allow: z.array(z.string()).optional(),
+      })
+      .strict()
+      .optional(),
+    broadcast: z
+      .object({
+        enabled: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .optional();
 
 const AgentToolsSchema = z
   .object({
@@ -608,6 +691,7 @@ const AgentToolsSchema = z
     exec: AgentToolExecSchema,
     fs: ToolFsSchema,
     loopDetection: ToolLoopDetectionSchema,
+    message: MessageToolConfigSchema,
     sandbox: z
       .object({
         tools: ToolPolicySchema,
@@ -813,7 +897,6 @@ const AgentRuntimeSchema = z
 export const AgentEmbeddedHarnessSchema = z
   .object({
     runtime: z.string().optional(),
-    fallback: z.enum(["pi", "none"]).optional(),
   })
   .strict()
   .optional();
@@ -821,7 +904,6 @@ export const AgentEmbeddedHarnessSchema = z
 export const AgentRuntimePolicySchema = z
   .object({
     id: z.string().optional(),
-    fallback: z.enum(["pi", "none"]).optional(),
   })
   .strict()
   .optional();
@@ -837,9 +919,24 @@ export const AgentEntrySchema = z
     agentRuntime: AgentRuntimePolicySchema,
     embeddedHarness: AgentEmbeddedHarnessSchema,
     model: AgentModelSchema.optional(),
+    models: z
+      .record(
+        z.string(),
+        z
+          .object({
+            alias: z.string().optional(),
+            params: z.record(z.string(), z.unknown()).optional(),
+            agentRuntime: AgentRuntimePolicySchema,
+            streaming: z.boolean().optional(),
+          })
+          .strict(),
+      )
+      .optional(),
     thinkingDefault: z
       .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"])
       .optional(),
+    verboseDefault: z.enum(["off", "on", "full"]).optional(),
+    toolProgressDetail: z.enum(["explain", "raw"]).optional(),
     reasoningDefault: z.enum(["on", "off", "stream"]).optional(),
     fastModeDefault: z.boolean().optional(),
     skills: z.array(z.string()).optional(),
@@ -854,6 +951,7 @@ export const AgentEntrySchema = z
     groupChat: GroupChatSchema,
     subagents: z
       .object({
+        delegationMode: z.enum(["suggest", "prefer"]).optional(),
         allowAgents: z.array(z.string()).optional(),
         model: z
           .union([
@@ -871,6 +969,7 @@ export const AgentEntrySchema = z
       })
       .strict()
       .optional(),
+    runRetries: AgentRunRetriesConfigSchema.optional(),
     embeddedPi: z
       .object({
         executionContract: z.union([z.literal("default"), z.literal("strict-agentic")]).optional(),
@@ -897,33 +996,8 @@ export const ToolsSchema = z
       .strict()
       .optional(),
     loopDetection: ToolLoopDetectionSchema,
-    message: z
-      .object({
-        allowCrossContextSend: z.boolean().optional(),
-        crossContext: z
-          .object({
-            allowWithinProvider: z.boolean().optional(),
-            allowAcrossProviders: z.boolean().optional(),
-            marker: z
-              .object({
-                enabled: z.boolean().optional(),
-                prefix: z.string().optional(),
-                suffix: z.string().optional(),
-              })
-              .strict()
-              .optional(),
-          })
-          .strict()
-          .optional(),
-        broadcast: z
-          .object({
-            enabled: z.boolean().optional(),
-          })
-          .strict()
-          .optional(),
-      })
-      .strict()
-      .optional(),
+    toolSearch: ToolSearchSchema,
+    message: MessageToolConfigSchema,
     agentToAgent: z
       .object({
         enabled: z.boolean().optional(),

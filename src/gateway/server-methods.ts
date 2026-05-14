@@ -20,6 +20,7 @@ import { cronHandlers } from "./server-methods/cron.js";
 import { deviceHandlers } from "./server-methods/devices.js";
 import { diagnosticsHandlers } from "./server-methods/diagnostics.js";
 import { doctorHandlers } from "./server-methods/doctor.js";
+import { environmentsHandlers } from "./server-methods/environments.js";
 import { execApprovalsHandlers } from "./server-methods/exec-approvals.js";
 import { healthHandlers } from "./server-methods/health.js";
 import { logsHandlers } from "./server-methods/logs.js";
@@ -30,11 +31,13 @@ import { nodePendingHandlers } from "./server-methods/nodes-pending.js";
 import { nodeHandlers } from "./server-methods/nodes.js";
 import { pluginHostHookHandlers } from "./server-methods/plugin-host-hooks.js";
 import { pushHandlers } from "./server-methods/push.js";
+import { restartHandlers } from "./server-methods/restart.js";
 import { sendHandlers } from "./server-methods/send.js";
 import { sessionsHandlers } from "./server-methods/sessions.js";
 import { skillsHandlers } from "./server-methods/skills.js";
 import { systemHandlers } from "./server-methods/system.js";
 import { talkHandlers } from "./server-methods/talk.js";
+import { tasksHandlers } from "./server-methods/tasks.js";
 import { toolsCatalogHandlers } from "./server-methods/tools-catalog.js";
 import { toolsEffectiveHandlers } from "./server-methods/tools-effective.js";
 import { toolsInvokeHandlers } from "./server-methods/tools-invoke.js";
@@ -47,8 +50,17 @@ import { voicewakeHandlers } from "./server-methods/voicewake.js";
 import { webHandlers } from "./server-methods/web.js";
 import { wizardHandlers } from "./server-methods/wizard.js";
 
-const CONTROL_PLANE_WRITE_METHODS = new Set(["config.apply", "config.patch", "update.run"]);
-function authorizeGatewayMethod(method: string, client: GatewayRequestOptions["client"]) {
+const CONTROL_PLANE_WRITE_METHODS = new Set([
+  "config.apply",
+  "config.patch",
+  "gateway.restart.request",
+  "update.run",
+]);
+function authorizeGatewayMethod(
+  method: string,
+  client: GatewayRequestOptions["client"],
+  params: unknown,
+) {
   if (!client?.connect) {
     return null;
   }
@@ -70,7 +82,7 @@ function authorizeGatewayMethod(method: string, client: GatewayRequestOptions["c
   if (scopes.includes(ADMIN_SCOPE)) {
     return null;
   }
-  const scopeAuth = authorizeOperatorScopesForMethod(method, scopes);
+  const scopeAuth = authorizeOperatorScopesForMethod(method, scopes, params);
   if (!scopeAuth.allowed) {
     return errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${scopeAuth.missingScope}`);
   }
@@ -90,6 +102,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...deviceHandlers,
   ...diagnosticsHandlers,
   ...doctorHandlers,
+  ...environmentsHandlers,
   ...execApprovalsHandlers,
   ...webHandlers,
   ...modelsHandlers,
@@ -99,6 +112,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...configHandlers,
   ...wizardHandlers,
   ...talkHandlers,
+  ...tasksHandlers,
   ...toolsCatalogHandlers,
   ...toolsEffectiveHandlers,
   ...toolsInvokeHandlers,
@@ -110,6 +124,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...nodeHandlers,
   ...nodePendingHandlers,
   ...pushHandlers,
+  ...restartHandlers,
   ...sendHandlers,
   ...usageHandlers,
   ...agentHandlers,
@@ -121,7 +136,7 @@ export async function handleGatewayRequest(
   opts: GatewayRequestOptions & { extraHandlers?: GatewayRequestHandlers },
 ): Promise<void> {
   const { req, respond, client, isWebchatConnect, context } = opts;
-  const authError = authorizeGatewayMethod(req.method, client);
+  const authError = authorizeGatewayMethod(req.method, client, req.params);
   if (authError) {
     respond(false, undefined, authError);
     return;

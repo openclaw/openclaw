@@ -7,6 +7,10 @@ const TMUX_DISABLE_VALUES = new Set(["0", "false", "no", "off"]);
 const TMUX_ATTACH_DISABLE_VALUES = new Set(["0", "false", "no", "off"]);
 const TMUX_ATTACH_FORCE_VALUES = new Set(["1", "true", "yes", "on"]);
 const DEFAULT_PROFILE_NAME = "main";
+const DEFAULT_BENCHMARK_PROFILE_DIR = ".artifacts/gateway-watch-profiles";
+const RUN_NODE_CPU_PROF_DIR_ENV = "OPENCLAW_RUN_NODE_CPU_PROF_DIR";
+const RUN_NODE_OUTPUT_LOG_ENV = "OPENCLAW_RUN_NODE_OUTPUT_LOG";
+const RUN_NODE_FILTER_SYNC_IO_STDERR_ENV = "OPENCLAW_RUN_NODE_FILTER_SYNC_IO_STDERR";
 const RAW_WATCH_SCRIPT = "scripts/watch-node.mjs";
 const TMUX_CWD_ENV_KEY = "OPENCLAW_GATEWAY_WATCH_CWD";
 const TMUX_CWD_OPTION_KEY = "@openclaw.gateway_watch.cwd";
@@ -16,8 +20,12 @@ const TMUX_CHILD_ENV_KEYS = [
   "OPENCLAW_GATEWAY_PORT",
   "OPENCLAW_HOME",
   "OPENCLAW_PROFILE",
+  RUN_NODE_CPU_PROF_DIR_ENV,
+  RUN_NODE_FILTER_SYNC_IO_STDERR_ENV,
+  RUN_NODE_OUTPUT_LOG_ENV,
   "OPENCLAW_SKIP_CHANNELS",
   "OPENCLAW_STATE_DIR",
+  "OPENCLAW_TRACE_SYNC_IO",
 ];
 
 const sanitizeSessionPart = (value) => {
@@ -44,6 +52,81 @@ const readArgValue = (args, flag) => {
     }
   }
   return null;
+};
+
+const joinArtifactPath = (dir, basename) => {
+  const normalizedDir = String(dir || DEFAULT_BENCHMARK_PROFILE_DIR).replace(/[\\/]+$/g, "");
+  return `${normalizedDir || "."}/${basename}`;
+};
+
+const resolveGatewayWatchBenchmarkArgs = ({ args = [], env = process.env } = {}) => {
+  const passthroughArgs = [];
+  let benchmarkDir = null;
+  let benchmarkFlagSeen = false;
+  let benchmarkNoForceSeen = false;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--benchmark") {
+      benchmarkFlagSeen = true;
+      benchmarkDir ??= DEFAULT_BENCHMARK_PROFILE_DIR;
+      continue;
+    }
+    if (arg === "--benchmark-no-force") {
+      benchmarkFlagSeen = true;
+      benchmarkNoForceSeen = true;
+      benchmarkDir ??= DEFAULT_BENCHMARK_PROFILE_DIR;
+      continue;
+    }
+    if (typeof arg === "string" && arg.startsWith("--benchmark=")) {
+      benchmarkFlagSeen = true;
+      benchmarkDir = arg.slice("--benchmark=".length) || DEFAULT_BENCHMARK_PROFILE_DIR;
+      continue;
+    }
+    if (arg === "--benchmark-dir") {
+      benchmarkFlagSeen = true;
+      const next = args[index + 1];
+      if (typeof next === "string" && !next.startsWith("-")) {
+        benchmarkDir = next;
+        index += 1;
+      } else {
+        benchmarkDir ??= DEFAULT_BENCHMARK_PROFILE_DIR;
+      }
+      continue;
+    }
+    if (typeof arg === "string" && arg.startsWith("--benchmark-dir=")) {
+      benchmarkFlagSeen = true;
+      benchmarkDir = arg.slice("--benchmark-dir=".length) || DEFAULT_BENCHMARK_PROFILE_DIR;
+      continue;
+    }
+    passthroughArgs.push(arg);
+  }
+
+  const nextEnv = { ...env };
+  if (benchmarkFlagSeen) {
+    nextEnv[RUN_NODE_CPU_PROF_DIR_ENV] =
+      benchmarkDir || nextEnv[RUN_NODE_CPU_PROF_DIR_ENV] || DEFAULT_BENCHMARK_PROFILE_DIR;
+    nextEnv.OPENCLAW_TRACE_SYNC_IO ??= "0";
+    if (nextEnv.OPENCLAW_TRACE_SYNC_IO === "1") {
+      nextEnv[RUN_NODE_OUTPUT_LOG_ENV] ??= joinArtifactPath(
+        nextEnv[RUN_NODE_CPU_PROF_DIR_ENV],
+        "gateway-watch-output.log",
+      );
+      nextEnv[RUN_NODE_FILTER_SYNC_IO_STDERR_ENV] ??= "1";
+    }
+  }
+  return {
+    args: benchmarkNoForceSeen
+      ? passthroughArgs.filter((arg) => arg !== "--force")
+      : passthroughArgs,
+    benchmarkNoForce: benchmarkNoForceSeen,
+    benchmarkProfileDir: nextEnv[RUN_NODE_CPU_PROF_DIR_ENV] || null,
+    benchmarkTraceOutputLog:
+      nextEnv[RUN_NODE_FILTER_SYNC_IO_STDERR_ENV] === "1"
+        ? nextEnv[RUN_NODE_OUTPUT_LOG_ENV] || null
+        : null,
+    env: nextEnv,
+  };
 };
 
 export const resolveGatewayWatchTmuxSessionName = ({ args = [], env = process.env } = {}) => {
@@ -168,10 +251,14 @@ const setTmuxSessionMetadata = ({ cwd, sessionName, spawnSyncImpl, stderr }) => 
 };
 
 export const runGatewayWatchTmuxMain = (params = {}) => {
-  const deps = {
+  const resolvedArgs = resolveGatewayWatchBenchmarkArgs({
     args: params.args ?? process.argv.slice(2),
-    cwd: params.cwd ?? process.cwd(),
     env: params.env ? { ...params.env } : { ...process.env },
+  });
+  const deps = {
+    args: resolvedArgs.args,
+    cwd: params.cwd ?? process.cwd(),
+    env: resolvedArgs.env,
     nodePath: params.nodePath ?? process.execPath,
     spawnSync: params.spawnSync ?? spawnSync,
     stderr: params.stderr ?? process.stderr,
@@ -180,7 +267,20 @@ export const runGatewayWatchTmuxMain = (params = {}) => {
     stdoutIsTTY: params.stdoutIsTTY ?? process.stdout.isTTY,
   };
 
-  if (TMUX_DISABLE_VALUES.has(String(deps.env.OPENCLAW_GATEWAY_WATCH_TMUX ?? "").toLowerCase())) {
+  if (resolvedArgs.benchmarkProfileDir) {
+    log(deps.stderr, `gateway:watch benchmark CPU profiles: ${resolvedArgs.benchmarkProfileDir}`);
+  }
+  if (resolvedArgs.benchmarkTraceOutputLog) {
+    log(
+      deps.stderr,
+      `gateway:watch benchmark trace output: ${resolvedArgs.benchmarkTraceOutputLog}`,
+    );
+  }
+  if (resolvedArgs.benchmarkNoForce) {
+    log(deps.stderr, "gateway:watch benchmark running without --force");
+  }
+
+  if (TMUX_DISABLE_VALUES.has((deps.env.OPENCLAW_GATEWAY_WATCH_TMUX ?? "").toLowerCase())) {
     return runForegroundWatcher({
       args: deps.args,
       cwd: deps.cwd,

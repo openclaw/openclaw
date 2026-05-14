@@ -13,6 +13,14 @@ vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: vi.fn(() => loggerMocks),
 }));
 
+function requireFirstWarnCall(): [unknown, unknown] {
+  const [call] = loggerMocks.warn.mock.calls;
+  if (!call) {
+    throw new Error("expected logger warning");
+  }
+  return call as [unknown, unknown];
+}
+
 const CREDENTIAL_AND_GATEWAY_ENV_KEYS = [
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_API_KEY_SECONDARY",
@@ -44,6 +52,8 @@ const BUNDLED_TRUST_ROOT_ENV_KEYS = BUNDLED_TRUST_ROOT_ENV_LINES.map(
 const WINDOWS_SHELL_TRUST_ROOT_ENV_KEYS = [
   "ComSpec",
   "COMSPEC",
+  "LocalAppData",
+  "LOCALAPPDATA",
   "ProgramFiles",
   "PROGRAMFILES",
   "ProgramW6432",
@@ -179,11 +189,11 @@ describe("loadDotEnv", () => {
 
         expect(process.env.FOO).toBe("from-global");
         expect(process.env.BAR).toBe("from-gateway");
-        expect(loggerMocks.warn).toHaveBeenCalledWith(
-          expect.stringContaining("Conflicting values in"),
-          expect.objectContaining({
-            ignoredPath: expect.stringContaining("gateway.env"),
-          }),
+        expect(loggerMocks.warn).toHaveBeenCalledOnce();
+        const [message, metadata] = requireFirstWarnCall();
+        expect(String(message)).toContain("Conflicting values in");
+        expect(String((metadata as { ignoredPath?: unknown } | undefined)?.ignoredPath)).toContain(
+          "gateway.env",
         );
       });
     });
@@ -228,8 +238,10 @@ describe("loadDotEnv", () => {
             "HTTP_PROXY=http://evil-proxy:8080",
             "HOMEBREW_BREW_FILE=./evil-brew/bin/brew",
             "HOMEBREW_PREFIX=./evil-brew",
+            "SystemRoot=.\\fake-root",
             "UV_PYTHON=./attacker-python",
             "uv_python=./attacker-python-lower",
+            "WINDIR=.\\fake-windir",
           ].join("\n"),
         );
         await writeEnvFile(path.join(stateDir, ".env"), "BAR=from-global\n");
@@ -245,8 +257,10 @@ describe("loadDotEnv", () => {
         delete process.env.HTTP_PROXY;
         delete process.env.HOMEBREW_BREW_FILE;
         delete process.env.HOMEBREW_PREFIX;
+        delete process.env.SystemRoot;
         delete process.env.UV_PYTHON;
         delete process.env.uv_python;
+        delete process.env.WINDIR;
 
         loadDotEnv({ quiet: true });
 
@@ -262,8 +276,10 @@ describe("loadDotEnv", () => {
         expect(process.env.HTTP_PROXY).toBeUndefined();
         expect(process.env.HOMEBREW_BREW_FILE).toBeUndefined();
         expect(process.env.HOMEBREW_PREFIX).toBeUndefined();
+        expect(process.env.SystemRoot).toBeUndefined();
         expect(process.env.UV_PYTHON).toBeUndefined();
         expect(process.env.uv_python).toBeUndefined();
+        expect(process.env.WINDIR).toBeUndefined();
       });
     });
   });
@@ -332,6 +348,8 @@ describe("loadDotEnv", () => {
           [
             "ComSpec=.\\evil-comspec",
             "COMSPEC=.\\evil-comspec-upper",
+            "LocalAppData=.\\evil-local-app-data",
+            "LOCALAPPDATA=.\\evil-local-app-data-upper",
             "ProgramFiles=.\\evil-pfiles",
             "PROGRAMFILES=.\\evil-pfiles-upper",
             "ProgramW6432=.\\evil-pw6432",
@@ -394,6 +412,28 @@ describe("loadDotEnv", () => {
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
 
         expect(process.env.OPENCLAW_TEST_TAILSCALE_BINARY).toBeUndefined();
+      });
+    });
+  });
+
+  it("blocks plugin install override vars from workspace .env", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir }) => {
+        await writeEnvFile(
+          path.join(cwdDir, ".env"),
+          [
+            "OPENCLAW_ALLOW_PLUGIN_INSTALL_OVERRIDES=1",
+            'OPENCLAW_PLUGIN_INSTALL_OVERRIDES={"codex":"npm-pack:/tmp/codex.tgz"}',
+          ].join("\n"),
+        );
+
+        delete process.env.OPENCLAW_ALLOW_PLUGIN_INSTALL_OVERRIDES;
+        delete process.env.OPENCLAW_PLUGIN_INSTALL_OVERRIDES;
+
+        loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
+
+        expect(process.env.OPENCLAW_ALLOW_PLUGIN_INSTALL_OVERRIDES).toBeUndefined();
+        expect(process.env.OPENCLAW_PLUGIN_INSTALL_OVERRIDES).toBeUndefined();
       });
     });
   });
@@ -709,6 +749,7 @@ describe("workspace .env blocklist completeness", () => {
           "HOMEBREW_BREW_FILE",
           "HOMEBREW_PREFIX",
           "IRC_HOST",
+          "LOCALAPPDATA",
           "MATTERMOST_URL",
           "MATRIX_HOMESERVER",
           "MINIMAX_API_HOST",

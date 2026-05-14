@@ -21,6 +21,7 @@ const LIVE_DOCKER_AUTH_SHELL_TARGETS = [
   "scripts/test-live-codex-harness-docker.sh",
   "scripts/test-live-gateway-models-docker.sh",
   "scripts/test-live-models-docker.sh",
+  "scripts/test-live-subagent-announce-docker.sh",
 ];
 
 export function createChangedCheckChildEnv(baseEnv = process.env) {
@@ -31,6 +32,73 @@ export function createChangedCheckChildEnv(baseEnv = process.env) {
     OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: "1",
     OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1",
   };
+}
+
+function isTruthyEnvFlag(value) {
+  const normalized = String(value ?? "")
+    .trim()
+    .toLowerCase();
+  return normalized !== "" && normalized !== "0" && normalized !== "false" && normalized !== "no";
+}
+
+export function shouldDelegateChangedCheckToCrabbox(argv = [], env = process.env) {
+  if (!isTruthyEnvFlag(env.OPENCLAW_TESTBOX)) {
+    return false;
+  }
+  if (isTruthyEnvFlag(env.OPENCLAW_TESTBOX_REMOTE_RUN)) {
+    return false;
+  }
+  if (isTruthyEnvFlag(env.CI) || isTruthyEnvFlag(env.GITHUB_ACTIONS)) {
+    return false;
+  }
+  if (argv.includes("--dry-run")) {
+    return false;
+  }
+  return true;
+}
+
+export function buildChangedCheckCrabboxArgs(argv = []) {
+  return [
+    "crabbox:run",
+    "--",
+    "--provider",
+    "blacksmith-testbox",
+    "--blacksmith-org",
+    "openclaw",
+    "--blacksmith-workflow",
+    ".github/workflows/ci-check-testbox.yml",
+    "--blacksmith-job",
+    "check",
+    "--blacksmith-ref",
+    "main",
+    "--idle-timeout",
+    "90m",
+    "--ttl",
+    "240m",
+    "--timing-json",
+    "--",
+    "CI=1",
+    "NODE_OPTIONS=--max-old-space-size=4096",
+    "OPENCLAW_TEST_PROJECTS_PARALLEL=6",
+    "OPENCLAW_VITEST_MAX_WORKERS=1",
+    "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000",
+    "OPENCLAW_TESTBOX=1",
+    "OPENCLAW_TESTBOX_REMOTE_RUN=1",
+    "pnpm",
+    "check:changed",
+    ...argv,
+  ];
+}
+
+export async function runChangedCheckViaCrabbox(argv = [], env = process.env) {
+  console.error(
+    "[check:changed] OPENCLAW_TESTBOX=1 set; delegating to Blacksmith Testbox via `pnpm crabbox:run`.",
+  );
+  return await runManagedCommand({
+    bin: "pnpm",
+    args: buildChangedCheckCrabboxArgs(argv),
+    env,
+  });
 }
 
 export function createChangedCheckPlan(result, options = {}) {
@@ -58,6 +126,8 @@ export function createChangedCheckPlan(result, options = {}) {
   add("guarded extension wildcard re-exports", ["lint:extensions:no-guarded-wildcard-reexports"]);
   add("plugin-sdk wildcard re-exports", ["lint:extensions:no-plugin-sdk-wildcard-reexports"]);
   add("duplicate scan target coverage", ["dup:check:coverage"]);
+  add("dependency pin guard", ["deps:pins:check"]);
+  add("package patch guard", ["deps:patches:check"]);
 
   if (result.docsOnly) {
     return {
@@ -88,6 +158,7 @@ export function createChangedCheckPlan(result, options = {}) {
   }
 
   if (runAll) {
+    add("media download helper guard", ["check:media-download-helpers"]);
     add("runtime sidecar loader guard", ["check:runtime-sidecar-loaders"]);
     addTypecheck("typecheck all", ["tsgo:all"]);
     addLint("lint", ["lint"]);
@@ -132,6 +203,7 @@ export function createChangedCheckPlan(result, options = {}) {
   }
 
   if (lanes.core || lanes.extensions) {
+    add("media download helper guard", ["check:media-download-helpers"]);
     add("runtime sidecar loader guard", ["check:runtime-sidecar-loaders"]);
     add("runtime import cycles", ["check:import-cycles"]);
   }
@@ -283,21 +355,26 @@ function isDirectRun() {
 }
 
 if (isDirectRun()) {
-  const args = parseArgs(process.argv.slice(2));
-  const paths =
-    args.paths.length > 0
-      ? args.paths
-      : args.staged
-        ? listStagedChangedPaths()
-        : listChangedPathsFromGit({ base: args.base, head: args.head });
-  const result = detectChangedLanesForPaths({
-    paths,
-    base: args.base,
-    head: args.head,
-    staged: args.staged,
-  });
-  process.exitCode = await runChangedCheck(result, {
-    ...args,
-    explicitPaths: args.paths.length > 0,
-  });
+  const argv = process.argv.slice(2);
+  if (shouldDelegateChangedCheckToCrabbox(argv, process.env)) {
+    process.exitCode = await runChangedCheckViaCrabbox(argv, process.env);
+  } else {
+    const args = parseArgs(argv);
+    const paths =
+      args.paths.length > 0
+        ? args.paths
+        : args.staged
+          ? listStagedChangedPaths()
+          : listChangedPathsFromGit({ base: args.base, head: args.head });
+    const result = detectChangedLanesForPaths({
+      paths,
+      base: args.base,
+      head: args.head,
+      staged: args.staged,
+    });
+    process.exitCode = await runChangedCheck(result, {
+      ...args,
+      explicitPaths: args.paths.length > 0,
+    });
+  }
 }

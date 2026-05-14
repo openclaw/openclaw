@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { tryReadJsonSync } from "../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
-import { listChannelCatalogEntries } from "../plugins/channel-catalog-registry.js";
+import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import type { PluginPackageChannel } from "../plugins/manifest.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
@@ -19,6 +20,8 @@ type BundledChannelCatalogEntry = {
 };
 
 const OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH = path.join("dist", "channel-catalog.json");
+const officialCatalogFileCache = new Map<string, ChannelCatalogEntryLike[] | null>();
+const bundledPackageCatalogCache = new Map<string, ChannelCatalogEntryLike[] | null>();
 
 function listPackageRoots(): string[] {
   return [
@@ -27,10 +30,28 @@ function listPackageRoots(): string[] {
   ].filter((entry, index, all): entry is string => Boolean(entry) && all.indexOf(entry) === index);
 }
 
-function readBundledExtensionCatalogEntriesSync(): PluginPackageChannel[] {
+function readBundledExtensionCatalogEntriesSync(): ChannelCatalogEntryLike[] {
+  const pluginsDir = resolveBundledPluginsDir();
+  if (!pluginsDir) {
+    return [];
+  }
+  const cached = bundledPackageCatalogCache.get(pluginsDir);
+  if (cached !== undefined) {
+    return cached ?? [];
+  }
   try {
-    return listChannelCatalogEntries({ origin: "bundled" }).map((entry) => entry.channel);
+    const entries = fs
+      .readdirSync(pluginsDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .flatMap((entry): ChannelCatalogEntryLike[] => {
+        const packageJsonPath = path.join(pluginsDir, entry.name, "package.json");
+        const parsed = tryReadJsonSync<ChannelCatalogEntryLike>(packageJsonPath);
+        return parsed ? [parsed] : [];
+      });
+    bundledPackageCatalogCache.set(pluginsDir, entries);
+    return entries;
   } catch {
+    bundledPackageCatalogCache.set(pluginsDir, null);
     return [];
   }
 }
@@ -38,17 +59,26 @@ function readBundledExtensionCatalogEntriesSync(): PluginPackageChannel[] {
 function readOfficialCatalogFileSync(): ChannelCatalogEntryLike[] {
   for (const packageRoot of listPackageRoots()) {
     const candidate = path.join(packageRoot, OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH);
+    const cached = officialCatalogFileCache.get(candidate);
+    if (cached !== undefined) {
+      if (cached) {
+        return cached;
+      }
+      continue;
+    }
     if (!fs.existsSync(candidate)) {
+      officialCatalogFileCache.set(candidate, null);
       continue;
     }
-    try {
-      const payload = JSON.parse(fs.readFileSync(candidate, "utf8")) as {
-        entries?: unknown;
-      };
-      return Array.isArray(payload.entries) ? (payload.entries as ChannelCatalogEntryLike[]) : [];
-    } catch {
-      continue;
+    const payload = tryReadJsonSync<{ entries?: unknown }>(candidate);
+    if (payload) {
+      const entries = Array.isArray(payload.entries)
+        ? (payload.entries as ChannelCatalogEntryLike[])
+        : [];
+      officialCatalogFileCache.set(candidate, entries);
+      return entries;
     }
+    officialCatalogFileCache.set(candidate, null);
   }
   return [];
 }

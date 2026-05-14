@@ -1,6 +1,6 @@
 import type { webhook } from "@line/bot-sdk";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LineAccountConfig } from "./types.js";
 
 type MessageEvent = webhook.MessageEvent;
@@ -11,76 +11,6 @@ type PostbackEvent = webhook.PostbackEvent;
 vi.mock("openclaw/plugin-sdk/channel-inbound", () => ({
   buildMentionRegexes: () => [],
   matchesMentionPatterns: () => false,
-  resolveInboundMentionDecision: (params: {
-    facts?: {
-      canDetectMention: boolean;
-      wasMentioned: boolean;
-      hasAnyMention?: boolean;
-    };
-    policy?: {
-      isGroup: boolean;
-      requireMention: boolean;
-      allowTextCommands: boolean;
-      hasControlCommand: boolean;
-      commandAuthorized: boolean;
-    };
-    isGroup?: boolean;
-    requireMention?: boolean;
-    canDetectMention?: boolean;
-    wasMentioned?: boolean;
-    hasAnyMention?: boolean;
-    allowTextCommands?: boolean;
-    hasControlCommand?: boolean;
-    commandAuthorized?: boolean;
-  }) => {
-    const facts =
-      "facts" in params && params.facts
-        ? params.facts
-        : {
-            canDetectMention: Boolean(params.canDetectMention),
-            wasMentioned: Boolean(params.wasMentioned),
-            hasAnyMention: params.hasAnyMention,
-          };
-    const policy =
-      "policy" in params && params.policy
-        ? params.policy
-        : {
-            isGroup: Boolean(params.isGroup),
-            requireMention: Boolean(params.requireMention),
-            allowTextCommands: Boolean(params.allowTextCommands),
-            hasControlCommand: Boolean(params.hasControlCommand),
-            commandAuthorized: Boolean(params.commandAuthorized),
-          };
-    return {
-      effectiveWasMentioned:
-        facts.wasMentioned ||
-        (policy.allowTextCommands &&
-          policy.hasControlCommand &&
-          policy.commandAuthorized &&
-          !facts.hasAnyMention),
-      shouldSkip:
-        policy.isGroup &&
-        policy.requireMention &&
-        facts.canDetectMention &&
-        !facts.wasMentioned &&
-        !(
-          policy.allowTextCommands &&
-          policy.hasControlCommand &&
-          policy.commandAuthorized &&
-          !facts.hasAnyMention
-        ),
-      shouldBypassMention:
-        policy.isGroup &&
-        policy.requireMention &&
-        !facts.wasMentioned &&
-        !facts.hasAnyMention &&
-        policy.allowTextCommands &&
-        policy.hasControlCommand &&
-        policy.commandAuthorized,
-      implicitMention: false,
-      matchedImplicitMentionKinds: [],
-    };
-  },
 }));
 vi.mock("openclaw/plugin-sdk/channel-pairing", () => ({
   createChannelPairingChallengeIssuer:
@@ -122,36 +52,6 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   danger: (text: string) => text,
   logVerbose: () => {},
 }));
-vi.mock("openclaw/plugin-sdk/group-access", () => ({
-  evaluateMatchedGroupAccessForPolicy: ({
-    groupPolicy,
-    hasMatchInput,
-    allowlistConfigured,
-    allowlistMatched,
-  }: {
-    groupPolicy: string;
-    hasMatchInput: boolean;
-    allowlistConfigured: boolean;
-    allowlistMatched: boolean;
-  }) => {
-    if (groupPolicy === "disabled") {
-      return { allowed: false, reason: "disabled" };
-    }
-    if (groupPolicy !== "allowlist") {
-      return { allowed: true, reason: null };
-    }
-    if (!hasMatchInput) {
-      return { allowed: false, reason: "missing_match_input" };
-    }
-    if (!allowlistConfigured) {
-      return { allowed: false, reason: "empty_allowlist" };
-    }
-    if (!allowlistMatched) {
-      return { allowed: false, reason: "not_allowlisted" };
-    }
-    return { allowed: true, reason: null };
-  },
-}));
 vi.mock("openclaw/plugin-sdk/reply-history", () => ({
   DEFAULT_GROUP_HISTORY_LIMIT: 20,
   clearHistoryEntriesIfEnabled: ({
@@ -184,7 +84,7 @@ vi.mock("openclaw/plugin-sdk/routing", () => ({
 
 const { readAllowFromStoreMock, upsertPairingRequestMock } = vi.hoisted(() => ({
   readAllowFromStoreMock: vi.fn(async () => [] as string[]),
-  upsertPairingRequestMock: vi.fn(async () => ({ code: "CODE", created: true })),
+  upsertPairingRequestMock: vi.fn(async (_args: unknown) => ({ code: "CODE", created: true })),
 }));
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
@@ -285,17 +185,25 @@ function createLineWebhookTestContext(params: {
   processMessage: LineWebhookContext["processMessage"];
   groupPolicy?: LineAccountConfig["groupPolicy"];
   dmPolicy?: LineAccountConfig["dmPolicy"];
+  allowFrom?: LineAccountConfig["allowFrom"];
+  groupAllowFrom?: LineAccountConfig["groupAllowFrom"];
   requireMention?: boolean;
   groupHistories?: Map<string, HistoryEntry[]>;
   replayCache?: ReturnType<typeof createLineWebhookReplayCache>;
+  accessGroups?: Record<string, { type: "message.senders"; members: Record<string, string[]> }>;
 }): Parameters<typeof handleLineWebhookEvents>[1] {
+  const allowFrom = params.allowFrom ?? (params.dmPolicy === "open" ? ["*"] : undefined);
   const lineConfig = {
     ...(params.groupPolicy ? { groupPolicy: params.groupPolicy } : {}),
     ...(params.dmPolicy ? { dmPolicy: params.dmPolicy } : {}),
-    ...(params.dmPolicy === "open" ? { allowFrom: ["*"] } : {}),
+    ...(allowFrom ? { allowFrom } : {}),
+    ...(params.groupAllowFrom ? { groupAllowFrom: params.groupAllowFrom } : {}),
   };
   return {
-    cfg: { channels: { line: lineConfig } },
+    cfg: {
+      ...(params.accessGroups ? { accessGroups: params.accessGroups } : {}),
+      channels: { line: lineConfig },
+    },
     account: {
       accountId: "default",
       enabled: true,
@@ -371,6 +279,21 @@ describe("handleLineWebhookEvents", () => {
   beforeAll(async () => {
     ({ handleLineWebhookEvents, createLineWebhookReplayCache, LineRetryableWebhookError } =
       await import("./bot-handlers.js"));
+  });
+
+  afterAll(() => {
+    vi.doUnmock("openclaw/plugin-sdk/channel-inbound");
+    vi.doUnmock("openclaw/plugin-sdk/channel-pairing");
+    vi.doUnmock("openclaw/plugin-sdk/command-auth");
+    vi.doUnmock("openclaw/plugin-sdk/runtime-group-policy");
+    vi.doUnmock("openclaw/plugin-sdk/runtime-env");
+    vi.doUnmock("openclaw/plugin-sdk/reply-history");
+    vi.doUnmock("openclaw/plugin-sdk/routing");
+    vi.doUnmock("openclaw/plugin-sdk/conversation-runtime");
+    vi.doUnmock("./download.js");
+    vi.doUnmock("./send.js");
+    vi.doUnmock("./bot-message-context.js");
+    vi.resetModules();
   });
 
   beforeEach(() => {
@@ -475,8 +398,56 @@ describe("handleLineWebhookEvents", () => {
     expect(processMessage).toHaveBeenCalledTimes(1);
   });
 
-  it("blocks group sender not in groupAllowFrom even when sender is paired in DM store", async () => {
-    readAllowFromStoreMock.mockResolvedValueOnce(["user-store"]);
+  it("authorizes group control commands through shared access groups", async () => {
+    const processMessage = vi.fn();
+    await handleLineWebhookEvents(
+      [
+        createTestMessageEvent({
+          message: { id: "m3a", type: "text", text: "!status", quoteToken: "quote-token" },
+          source: { type: "group", groupId: "group-1", userId: "user-ag" },
+          webhookEventId: "evt-3a",
+        }),
+      ],
+      createLineWebhookTestContext({
+        processMessage,
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["accessGroup:line-operators"],
+        requireMention: true,
+        accessGroups: {
+          "line-operators": {
+            type: "message.senders",
+            members: { line: ["user-ag"] },
+          },
+        },
+      }),
+    );
+
+    expect(buildLineMessageContextMock).toHaveBeenCalledTimes(1);
+    expect(processMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks unauthorized group control commands even when an open group sender is allowed", async () => {
+    const processMessage = vi.fn();
+    await handleLineWebhookEvents(
+      [
+        createTestMessageEvent({
+          message: { id: "m3b", type: "text", text: "!status", quoteToken: "quote-token" },
+          source: { type: "group", groupId: "group-1", userId: "user-open" },
+          webhookEventId: "evt-3b",
+        }),
+      ],
+      createLineWebhookTestContext({
+        processMessage,
+        groupPolicy: "open",
+        requireMention: true,
+      }),
+    );
+
+    expect(buildLineMessageContextMock).not.toHaveBeenCalled();
+    expect(processMessage).not.toHaveBeenCalled();
+  });
+
+  it("blocks group sender not in groupAllowFrom without consulting the DM pairing store", async () => {
     const processMessage = vi.fn();
     const event = {
       type: "message",
@@ -508,7 +479,7 @@ describe("handleLineWebhookEvents", () => {
 
     expect(processMessage).not.toHaveBeenCalled();
     expect(buildLineMessageContextMock).not.toHaveBeenCalled();
-    expect(readAllowFromStoreMock).toHaveBeenCalledWith("line", undefined, "default");
+    expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
 
   it("blocks group messages without sender id when groupPolicy is allowlist", async () => {
@@ -546,7 +517,6 @@ describe("handleLineWebhookEvents", () => {
   });
 
   it("does not authorize group messages from DM pairing-store entries when group allowlist is empty", async () => {
-    readAllowFromStoreMock.mockResolvedValueOnce(["user-5"]);
     const processMessage = vi.fn();
     await expectGroupMessageBlocked({
       processMessage,
@@ -575,6 +545,7 @@ describe("handleLineWebhookEvents", () => {
         processMessage,
       },
     });
+    expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
 
   it("blocks group messages when wildcard group config disables groups", async () => {
@@ -638,13 +609,12 @@ describe("handleLineWebhookEvents", () => {
     });
 
     expect(processMessage).not.toHaveBeenCalled();
-    expect(upsertPairingRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "line",
-        id: "user-5",
-        accountId: "default",
-      }),
-    );
+    const pairingRequest = (upsertPairingRequestMock.mock.calls as unknown[][])[0]?.[0] as
+      | { accountId?: string; channel?: string; id?: string }
+      | undefined;
+    expect(pairingRequest?.channel).toBe("line");
+    expect(pairingRequest?.id).toBe("user-5");
+    expect(pairingRequest?.accountId).toBe("default");
   });
 
   it("does not authorize DM senders from another account's pairing-store entries", async () => {
@@ -686,13 +656,12 @@ describe("handleLineWebhookEvents", () => {
 
     expect(readAllowFromStoreMock).toHaveBeenCalledWith("line", undefined, "work");
     expect(processMessage).not.toHaveBeenCalled();
-    expect(upsertPairingRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "line",
-        id: "cross-account-user",
-        accountId: "work",
-      }),
-    );
+    const pairingRequest = (upsertPairingRequestMock.mock.calls as unknown[][])[0]?.[0] as
+      | { accountId?: string; channel?: string; id?: string }
+      | undefined;
+    expect(pairingRequest?.channel).toBe("line");
+    expect(pairingRequest?.id).toBe("cross-account-user");
+    expect(pairingRequest?.accountId).toBe("work");
   });
 
   it("deduplicates replayed webhook events by webhookEventId before processing", async () => {
@@ -904,11 +873,10 @@ describe("handleLineWebhookEvents", () => {
     expect(processMessage).not.toHaveBeenCalled();
     const entries = groupHistories.get("group-hist-1");
     expect(entries).toHaveLength(1);
-    expect(entries?.[0]).toMatchObject({
-      sender: "user:user-hist",
-      body: "hello history",
-      timestamp: 1700000000000,
-    });
+    const entry = entries?.[0];
+    expect(entry?.sender).toBe("user:user-hist");
+    expect(entry?.body).toBe("hello history");
+    expect(entry?.timestamp).toBe(1700000000000);
   });
 
   it("skips group messages without mention when requireMention is set", async () => {
@@ -1062,7 +1030,7 @@ describe("handleLineWebhookEvents", () => {
     expect(buildLineMessageContextMock).toHaveBeenCalledTimes(1);
     expect(processMessage).toHaveBeenCalledTimes(1);
     expect(context.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("line: event handler failed: Error: transient failure"),
+      "line: event handler failed: Error: transient failure",
     );
   });
 

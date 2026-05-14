@@ -1,9 +1,10 @@
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
 import type { PluginCandidate } from "./discovery.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
-import { isPathInside, safeStatSync } from "./path-safety.js";
+import { isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
 import type { PluginLogger } from "./types.js";
 
@@ -44,15 +45,16 @@ function addPathToMatcher(
   if (!resolved) {
     return;
   }
-  if (matcher.exact.has(resolved) || matcher.dirs.includes(resolved)) {
+  const canonical = safeRealpathSync(resolved) ?? resolved;
+  if (matcher.exact.has(canonical) || matcher.dirs.includes(canonical)) {
     return;
   }
-  const stat = safeStatSync(resolved);
+  const stat = safeStatSync(canonical);
   if (stat?.isDirectory()) {
-    matcher.dirs.push(resolved);
+    matcher.dirs.push(canonical);
     return;
   }
-  matcher.exact.add(resolved);
+  matcher.exact.add(canonical);
 }
 
 function matchesPathMatcher(matcher: PathMatcher, sourcePath: string): boolean {
@@ -65,6 +67,7 @@ function matchesPathMatcher(matcher: PathMatcher, sourcePath: string): boolean {
 export function buildProvenanceIndex(params: {
   normalizedLoadPaths: string[];
   env: NodeJS.ProcessEnv;
+  installRecords?: Record<string, PluginInstallRecord>;
 }): PluginProvenanceIndex {
   const loadPathMatcher = createPathMatcher();
   for (const loadPath of params.normalizedLoadPaths) {
@@ -72,7 +75,10 @@ export function buildProvenanceIndex(params: {
   }
 
   const installRules = new Map<string, InstallTrackingRule>();
-  const installs = loadInstalledPluginIndexInstallRecordsSync({ env: params.env });
+  const installs = {
+    ...loadInstalledPluginIndexInstallRecordsSync({ env: params.env }),
+    ...params.installRecords,
+  };
   for (const [pluginId, install] of Object.entries(installs)) {
     const rule: InstallTrackingRule = {
       trackedWithoutPaths: false,
@@ -101,16 +107,17 @@ function isTrackedByProvenance(params: {
   env: NodeJS.ProcessEnv;
 }): boolean {
   const sourcePath = resolveUserPath(params.source, params.env);
+  const canonicalSourcePath = safeRealpathSync(sourcePath) ?? sourcePath;
   const installRule = params.index.installRules.get(params.pluginId);
   if (installRule) {
     if (installRule.trackedWithoutPaths) {
       return true;
     }
-    if (matchesPathMatcher(installRule.matcher, sourcePath)) {
+    if (matchesPathMatcher(installRule.matcher, canonicalSourcePath)) {
       return true;
     }
   }
-  return matchesPathMatcher(params.index.loadPathMatcher, sourcePath);
+  return matchesPathMatcher(params.index.loadPathMatcher, canonicalSourcePath);
 }
 
 function matchesExplicitInstallRule(params: {
@@ -120,11 +127,12 @@ function matchesExplicitInstallRule(params: {
   env: NodeJS.ProcessEnv;
 }): boolean {
   const sourcePath = resolveUserPath(params.source, params.env);
+  const canonicalSourcePath = safeRealpathSync(sourcePath) ?? sourcePath;
   const installRule = params.index.installRules.get(params.pluginId);
   if (!installRule || installRule.trackedWithoutPaths) {
     return false;
   }
-  return matchesPathMatcher(installRule.matcher, sourcePath);
+  return matchesPathMatcher(installRule.matcher, canonicalSourcePath);
 }
 
 function resolveCandidateDuplicateRank(params: {

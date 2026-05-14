@@ -14,6 +14,7 @@ import { resolveCronCreateSchedule } from "./schedule-options.js";
 import {
   getCronChannelOptions,
   coerceCronDeliveryPreviews,
+  enrichCronJsonWithStatus,
   handleCronCliError,
   parseCronToolsAllow,
   printCronJson,
@@ -45,14 +46,20 @@ export function registerCronListCommand(cron: Command) {
       .command("list")
       .description("List cron jobs")
       .option("--all", "Include disabled jobs", false)
+      .option("--agent <id>", "Filter by agent id")
       .option("--json", "Output JSON", false)
       .action(async (opts) => {
         try {
-          const res = await callGatewayFromCli("cron.list", opts, {
+          const listParams: Record<string, unknown> = {
             includeDisabled: Boolean(opts.all),
-          });
+          };
+          const agentId = normalizeOptionalString(opts.agent);
+          if (agentId) {
+            listParams.agentId = sanitizeAgentId(agentId);
+          }
+          const res = await callGatewayFromCli("cron.list", opts, listParams);
           if (opts.json) {
-            printCronJson(res);
+            printCronJson(enrichCronJsonWithStatus(res));
             return;
           }
           const jobs = (res as { jobs?: CronJob[] } | null)?.jobs ?? [];
@@ -225,7 +232,7 @@ export function registerCronAddCommand(cron: Command) {
 
           const name = normalizeOptionalString(opts.name) ?? "";
           if (!name) {
-            throw new Error("--name is required");
+            throw new Error("Cron job name is required. Pass --name <name>.");
           }
 
           const description = normalizeOptionalString(opts.description);

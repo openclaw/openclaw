@@ -23,7 +23,7 @@ describe("package dist inventory", () => {
       await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
         "dist/current-BR6xv1a1.js",
       ]);
-      await expect(collectPackageDistInventoryErrors(packageRoot)).resolves.toEqual([]);
+      await expect(collectPackageDistInventoryErrors(packageRoot)).resolves.toStrictEqual([]);
 
       await fs.rm(currentFile);
       await fs.writeFile(
@@ -109,7 +109,7 @@ describe("package dist inventory", () => {
       await fs.writeFile(omittedRuntimePostBuildStamp, "{}\n", "utf8");
       await fs.writeFile(omittedMap, "{}", "utf8");
 
-      await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([]);
+      await expect(writePackageDistInventory(packageRoot)).resolves.toStrictEqual([]);
     });
   });
 
@@ -215,6 +215,7 @@ describe("package dist inventory", () => {
         "bundled-chat",
         "package.json",
       );
+      const rootPackageJson = path.join(packageRoot, "package.json");
 
       await fs.mkdir(path.dirname(externalizedRuntime), { recursive: true });
       await fs.mkdir(path.dirname(bundledRuntime), { recursive: true });
@@ -222,6 +223,13 @@ describe("package dist inventory", () => {
       await fs.mkdir(path.dirname(bundledPackageJson), { recursive: true });
       await fs.writeFile(externalizedRuntime, "export {};\n", "utf8");
       await fs.writeFile(bundledRuntime, "export {};\n", "utf8");
+      await fs.writeFile(
+        rootPackageJson,
+        JSON.stringify({
+          files: ["dist/", "!dist/extensions/external-chat/**"],
+        }),
+        "utf8",
+      );
       await fs.writeFile(
         externalizedPackageJson,
         JSON.stringify({
@@ -263,9 +271,6 @@ describe("package dist inventory", () => {
         JSON.stringify({
           name: "@openclaw/core-chat",
           openclaw: {
-            bundle: {
-              includeInCore: true,
-            },
             release: {
               publishToClawHub: true,
               publishToNpm: true,

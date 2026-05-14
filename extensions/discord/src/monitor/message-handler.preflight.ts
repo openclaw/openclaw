@@ -5,24 +5,23 @@ import {
   logInboundDrop,
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth-native";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
+import { logDebug } from "openclaw/plugin-sdk/logging-core";
 import { recordPendingHistoryEntryIfEnabled } from "openclaw/plugin-sdk/reply-history";
 import { getChildLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
-import { logDebug } from "openclaw/plugin-sdk/text-runtime";
 import { resolveDefaultDiscordAccountId } from "../accounts.js";
 import { ChannelType, MessageType, type User } from "../internal/discord.js";
 import {
   resolveDiscordGuildEntry,
   resolveDiscordMemberAccessState,
-  resolveDiscordOwnerAccess,
   resolveDiscordShouldRequireMention,
 } from "./allow-list.js";
 import { resolveDiscordChannelInfoSafe, resolveDiscordChannelNameSafe } from "./channel-access.js";
-import { resolveDiscordSystemLocation } from "./format.js";
+import { resolveDiscordTextCommandAccess } from "./dm-command-auth.js";
+import { resolveDiscordSystemLocation, resolveTimestampMs } from "./format.js";
 import { resolveDiscordDmPreflightAccess } from "./message-handler.dm-preflight.js";
 import { hydrateDiscordMessageIfNeeded } from "./message-handler.hydration.js";
 import { resolveDiscordPreflightChannelAccess } from "./message-handler.preflight-channel-access.js";
@@ -202,7 +201,6 @@ export async function preflightDiscordMessage(
   }
 
   const dmPolicy = params.dmPolicy;
-  const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
   const resolvedAccountId = params.accountId ?? resolveDefaultDiscordAccountId(params.cfg);
   const allowNameMatching = isDangerousNameMatchingEnabled(params.discordConfig);
   let commandAuthorized = true;
@@ -214,7 +212,6 @@ export async function preflightDiscordMessage(
       dmPolicy,
       resolvedAccountId,
       allowNameMatching,
-      useAccessGroups,
     });
     if (isPreflightAborted(params.abortSignal)) {
       return null;
@@ -229,13 +226,6 @@ export async function preflightDiscordMessage(
   const baseText = resolveDiscordMessageText(message, {
     includeForwarded: false,
   });
-
-  // Intercept text-only slash commands (e.g. user typing "/reset" instead of using Discord's slash command picker)
-  // These should not be forwarded to the agent; proper slash command interactions are handled elsewhere
-  if (!isDirectMessage && baseText && hasControlCommand(baseText, params.cfg)) {
-    logVerbose(`discord: drop text-based slash command ${message.id} (intercepted at gateway)`);
-    return null;
-  }
 
   recordChannelActivity({
     channel: "discord",
@@ -487,28 +477,24 @@ export async function preflightDiscordMessage(
   const hasControlCommandInMessage = hasControlCommand(baseText, params.cfg);
 
   if (!isDirectMessage) {
-    const { ownerAllowList, ownerAllowed: ownerOk } = resolveDiscordOwnerAccess({
-      allowFrom: params.allowFrom,
+    const commandAccess = await resolveDiscordTextCommandAccess({
+      accountId: params.accountId,
+      cfg: params.cfg,
+      ownerAllowFrom: params.allowFrom,
       sender: {
         id: sender.id,
         name: sender.name,
         tag: sender.tag,
       },
+      memberAccessConfigured: hasAccessRestrictions,
+      memberAllowed,
       allowNameMatching,
-    });
-    const commandGate = resolveControlCommandGate({
-      useAccessGroups,
-      authorizers: [
-        { configured: ownerAllowList != null, allowed: ownerOk },
-        { configured: hasAccessRestrictions, allowed: memberAllowed },
-      ],
-      modeWhenAccessGroupsOff: "configured",
       allowTextCommands,
       hasControlCommand: hasControlCommandInMessage,
     });
-    commandAuthorized = commandGate.commandAuthorized;
+    commandAuthorized = commandAccess.authorized;
 
-    if (commandGate.shouldBlock) {
+    if (commandAccess.shouldBlockControlCommand) {
       logInboundDrop({
         log: logVerbose,
         channel: "discord",
@@ -568,7 +554,6 @@ export async function preflightDiscordMessage(
       return null;
     }
   }
-
   const ignoreOtherMentions =
     channelConfig?.ignoreOtherMentions ?? guildInfo?.ignoreOtherMentions ?? false;
   if (
@@ -604,6 +589,7 @@ export async function preflightDiscordMessage(
     enqueueSystemEvent(systemText, {
       sessionKey: effectiveRoute.sessionKey,
       contextKey: `discord:system:${messageChannelId}:${message.id}`,
+      trusted: false,
     });
     return null;
   }
@@ -625,6 +611,24 @@ export async function preflightDiscordMessage(
       return null;
     }
   }
+
+  const botLoopProtection =
+    author.bot &&
+    !sender.isPluralKit &&
+    allowBotsMode !== "off" &&
+    params.botUserId &&
+    author.id !== params.botUserId
+      ? {
+          scopeId: params.accountId,
+          conversationId: messageChannelId,
+          senderId: author.id,
+          receiverId: params.botUserId,
+          config: params.discordConfig?.botLoopProtection,
+          defaultsConfig: params.cfg.channels?.defaults?.botLoopProtection,
+          defaultEnabled: true,
+          nowMs: resolveTimestampMs(message.timestamp),
+        }
+      : undefined;
 
   logDebug(
     `[discord-preflight] success: route=${effectiveRoute.agentId} sessionKey=${effectiveRoute.sessionKey}`,
@@ -675,5 +679,6 @@ export async function preflightDiscordMessage(
     effectiveWasMentioned,
     canDetectMention,
     historyEntry,
+    botLoopProtection,
   });
 }

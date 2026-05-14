@@ -130,6 +130,7 @@ const mocks = vi.hoisted(() => ({
   ]),
   registerBuiltInMemoryEmbeddingProviders: vi.fn(),
   buildMediaUnderstandingRegistry: vi.fn(() => new Map()),
+  convertHeicToJpeg: vi.fn(async () => Buffer.from("jpeg-normalized")),
   isWebSearchProviderConfigured: vi.fn(() => false),
   isWebFetchProviderConfigured: vi.fn(() => false),
   modelsStatusCommand: vi.fn(
@@ -153,6 +154,9 @@ vi.mock("../config/config.js", () => ({
 vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: () => "main",
   resolveAgentDir: () => "/tmp/agent",
+  resolveAgentConfig: () => ({}),
+  resolveAgentEffectiveModelPrimary: () => undefined,
+  resolveAgentModelFallbacksOverride: () => [],
 }));
 
 vi.mock("../agents/model-catalog.js", () => ({
@@ -220,6 +224,15 @@ vi.mock("../media-understanding/provider-registry.js", () => ({
   buildMediaUnderstandingRegistry:
     mocks.buildMediaUnderstandingRegistry as typeof import("../media-understanding/provider-registry.js").buildMediaUnderstandingRegistry,
 }));
+
+vi.mock("../media/image-ops.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../media/image-ops.js")>();
+  return {
+    ...actual,
+    convertHeicToJpeg:
+      mocks.convertHeicToJpeg as typeof import("../media/image-ops.js").convertHeicToJpeg,
+  };
+});
 
 vi.mock("../plugins/memory-embedding-providers.js", () => ({
   listMemoryEmbeddingProviders:
@@ -333,6 +346,7 @@ describe("capability cli", () => {
     mocks.setTtsProvider.mockClear();
     mocks.resolveExplicitTtsOverrides.mockClear();
     mocks.buildMediaUnderstandingRegistry.mockReset().mockReturnValue(new Map());
+    mocks.convertHeicToJpeg.mockClear();
     mocks.createEmbeddingProvider.mockClear();
     mocks.registerMemoryEmbeddingProvider.mockClear();
     mocks.registerBuiltInMemoryEmbeddingProviders.mockClear();
@@ -363,15 +377,147 @@ describe("capability cli", () => {
     }) as never);
   });
 
+  async function runModelRunWithModel(model: string, transport: "local" | "gateway") {
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "model",
+        "run",
+        "--model",
+        model,
+        "--prompt",
+        "hello",
+        ...(transport === "gateway" ? ["--gateway"] : []),
+        "--json",
+      ],
+    });
+  }
+
+  type GatewayCall = {
+    clientName?: unknown;
+    method?: unknown;
+    mode?: unknown;
+    params?: Record<string, unknown>;
+    scopes?: unknown;
+  };
+  type CompletionCall = {
+    context?: {
+      messages?: Array<{ content?: unknown; role?: unknown }>;
+      systemPrompt?: unknown;
+    };
+    options?: { reasoning?: unknown };
+  };
+  type ImageDescribeParams = {
+    filePath?: string;
+    model?: unknown;
+    prompt?: unknown;
+    provider?: unknown;
+    timeoutMs?: unknown;
+  };
+
+  function firstGatewayCall() {
+    const calls = mocks.callGateway.mock.calls as unknown as Array<[GatewayCall]>;
+    return calls[0]?.[0];
+  }
+
+  function firstCompletionCall() {
+    const calls = mocks.completeWithPreparedSimpleCompletionModel.mock.calls as unknown as Array<
+      [CompletionCall]
+    >;
+    return calls[0]?.[0];
+  }
+
+  function firstPreparedModelParams() {
+    const calls = mocks.prepareSimpleCompletionModelForAgent.mock.calls as unknown as Array<
+      [Record<string, unknown>]
+    >;
+    return calls[0]?.[0];
+  }
+
+  function firstJsonOutput() {
+    const calls = mocks.runtime.writeJson.mock.calls as unknown as Array<[Record<string, unknown>]>;
+    return calls[0]?.[0];
+  }
+
+  function firstRegisteredEmbeddingBootstrapArg() {
+    const calls = mocks.registerBuiltInMemoryEmbeddingProviders.mock.calls as unknown as Array<
+      [{ registerMemoryEmbeddingProvider?: unknown }]
+    >;
+    return calls[0]?.[0];
+  }
+
+  function imageDescribeCall(index = 0) {
+    const calls = mocks.describeImageFile.mock.calls as unknown as Array<[ImageDescribeParams]>;
+    return calls[index]?.[0];
+  }
+
+  function firstImageDescribeWithModelCall() {
+    const calls = mocks.describeImageFileWithModel.mock.calls as unknown as Array<
+      [ImageDescribeParams]
+    >;
+    return calls[0]?.[0];
+  }
+
+  function firstImageGenerationCall() {
+    const calls = mocks.generateImage.mock.calls as unknown as Array<[Record<string, unknown>]>;
+    return calls[0]?.[0];
+  }
+
+  function firstVideoGenerationCall() {
+    const calls = mocks.generateVideo.mock.calls as unknown as Array<[Record<string, unknown>]>;
+    return calls[0]?.[0];
+  }
+
+  function firstAudioTranscriptionCall() {
+    const calls = mocks.transcribeAudioFile.mock.calls as unknown as Array<
+      [{ filePath?: string; language?: unknown; prompt?: unknown }]
+    >;
+    return calls[0]?.[0];
+  }
+
+  function firstTextToSpeechCall() {
+    const calls = mocks.textToSpeech.mock.calls as unknown as Array<[Record<string, unknown>]>;
+    return calls[0]?.[0];
+  }
+
+  function firstEmbeddingProviderCall() {
+    const calls = mocks.createEmbeddingProvider.mock.calls as unknown as Array<
+      [Record<string, unknown>]
+    >;
+    return calls[0]?.[0];
+  }
+
+  function expectModelRunDispatch(transport: "local" | "gateway", modelRef: string) {
+    if (transport === "gateway") {
+      const slash = modelRef.indexOf("/");
+      const gatewayCall = firstGatewayCall();
+      expect(gatewayCall?.method).toBe("agent");
+      expect(gatewayCall?.params?.provider).toBe(modelRef.slice(0, slash));
+      expect(gatewayCall?.params?.model).toBe(modelRef.slice(slash + 1));
+      return;
+    }
+    expect(firstPreparedModelParams()?.modelRef).toBe(modelRef);
+  }
+
+  function runtimeErrorMessages(): string[] {
+    return mocks.runtime.error.mock.calls.map((call) => String(call[0] ?? ""));
+  }
+
+  function expectRuntimeErrorContains(expected: string): void {
+    expect(runtimeErrorMessages().join("\n")).toContain(expected);
+  }
+
   it("lists canonical capabilities", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
       argv: ["capability", "list", "--json"],
     });
 
-    const payload = mocks.runtime.writeJson.mock.calls[0]?.[0] as Array<{ id: string }>;
-    expect(payload.some((entry) => entry.id === "model.run")).toBe(true);
-    expect(payload.some((entry) => entry.id === "image.describe")).toBe(true);
+    const payload = (firstJsonOutput() as unknown as Array<{ id: string }> | undefined) ?? [];
+    const ids = payload.map((entry) => entry.id);
+    expect(ids).toContain("model.run");
+    expect(ids).toContain("image.describe");
   });
 
   it("defaults model run to local transport", async () => {
@@ -383,12 +529,8 @@ describe("capability cli", () => {
     expect(mocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledTimes(1);
     expect(mocks.completeWithPreparedSimpleCompletionModel).toHaveBeenCalledTimes(1);
     expect(mocks.callGateway).not.toHaveBeenCalled();
-    expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        capability: "model.run",
-        transport: "local",
-      }),
-    );
+    expect(firstJsonOutput()?.capability).toBe("model.run");
+    expect(firstJsonOutput()?.transport).toBe("local");
   });
 
   it("runs local model probes through the lean completion path", async () => {
@@ -397,25 +539,39 @@ describe("capability cli", () => {
       argv: ["capability", "model", "run", "--prompt", "hello", "--json"],
     });
 
-    expect(mocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "main",
-        allowMissingApiKeyModes: ["aws-sdk"],
-        skipPiDiscovery: true,
-      }),
-    );
-    expect(mocks.completeWithPreparedSimpleCompletionModel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        context: {
-          messages: [
-            expect.objectContaining({
-              role: "user",
-              content: "hello",
-            }),
-          ],
-        },
-      }),
-    );
+    const preparedParams = firstPreparedModelParams();
+    expect(preparedParams?.agentId).toBe("main");
+    expect(preparedParams?.allowMissingApiKeyModes).toEqual(["aws-sdk"]);
+    expect(preparedParams?.skipPiDiscovery).toBe(true);
+    const call = firstCompletionCall();
+    expect(call?.context?.messages?.[0]?.role).toBe("user");
+    expect(call?.context?.messages?.[0]?.content).toBe("hello");
+    expect(call?.context).not.toHaveProperty("systemPrompt");
+  });
+
+  it("opts explicit local provider/model probes into bundled static catalog fallback", async () => {
+    await runModelRunWithModel("mistral/mistral-medium-3-5", "local");
+
+    const params = firstPreparedModelParams();
+    expect(params?.modelRef).toBe("mistral/mistral-medium-3-5");
+    expect(params?.allowBundledStaticCatalogFallback).toBe(true);
+    expect(params?.skipPiDiscovery).toBe(true);
+  });
+
+  it("does not enable bundled static catalog fallback without an explicit provider/model override", async () => {
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "model", "run", "--prompt", "hello", "--json"],
+    });
+
+    const calls = mocks.prepareSimpleCompletionModelForAgent.mock.calls as unknown as Array<
+      [Record<string, unknown>]
+    >;
+    const params = calls[0]?.[0];
+    if (!params) {
+      throw new Error("Expected simple completion model params");
+    }
+    expect(params).not.toHaveProperty("allowBundledStaticCatalogFallback");
   });
 
   it("passes image files to local model probes", async () => {
@@ -436,31 +592,68 @@ describe("capability cli", () => {
       ],
     });
 
-    expect(mocks.completeWithPreparedSimpleCompletionModel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        context: {
-          messages: [
-            expect.objectContaining({
-              role: "user",
-              content: [
-                { type: "text", text: "describe this" },
-                { type: "image", data: PNG_1X1_BASE64, mimeType: "image/png" },
-              ],
-            }),
-          ],
-        },
-      }),
+    const call = firstCompletionCall();
+    expect(call?.context?.messages?.[0]?.role).toBe("user");
+    expect(call?.context?.messages?.[0]?.content).toEqual([
+      { type: "text", text: "describe this" },
+      { type: "image", data: PNG_1X1_BASE64, mimeType: "image/png" },
+    ]);
+    expect(call?.context).not.toHaveProperty("systemPrompt");
+    const inputs = firstJsonOutput()?.inputs as Array<{ mimeType?: unknown; path?: unknown }>;
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0]?.path).toBe(tempInput);
+    expect(inputs[0]?.mimeType).toBe("image/png");
+  });
+
+  it("adds minimal instructions only for openai-codex local model probes", async () => {
+    mocks.prepareSimpleCompletionModelForAgent.mockResolvedValueOnce({
+      selection: {
+        provider: "openai-codex",
+        modelId: "gpt-5.5",
+        agentDir: "/tmp/agent",
+      },
+      model: {
+        provider: "openai-codex",
+        id: "gpt-5.5",
+        api: "openai-codex-responses",
+        maxTokens: 128,
+      },
+      auth: {
+        apiKey: "codex-app-server",
+        source: "codex-app-server",
+        mode: "token",
+      },
+    } as never);
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "model",
+        "run",
+        "--model",
+        "openai-codex/gpt-5.5",
+        "--prompt",
+        "hello",
+        "--json",
+      ],
+    });
+
+    const call = firstCompletionCall();
+    expect(call?.context?.systemPrompt).toBe(
+      "You are a personal assistant running inside OpenClaw.",
     );
-    expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        inputs: [
-          expect.objectContaining({
-            path: tempInput,
-            mimeType: "image/png",
-          }),
-        ],
-      }),
-    );
+    expect(call?.context?.messages?.[0]?.role).toBe("user");
+    expect(call?.context?.messages?.[0]?.content).toBe("hello");
+  });
+
+  it("passes thinking overrides to local model probes", async () => {
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "model", "run", "--prompt", "hello", "--thinking", "high", "--json"],
+    });
+
+    expect(firstCompletionCall()?.options?.reasoning).toBe("high");
   });
 
   it("passes image files to gateway model probes as attachments", async () => {
@@ -482,24 +675,54 @@ describe("capability cli", () => {
       ],
     });
 
-    expect(mocks.callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "agent",
-        params: expect.objectContaining({
-          message: "describe this",
-          attachments: [
-            {
-              type: "image",
-              fileName: path.basename(tempInput),
-              mimeType: "image/png",
-              content: PNG_1X1_BASE64,
-            },
-          ],
-          modelRun: true,
-          promptMode: "none",
-        }),
-      }),
-    );
+    const gatewayCall = firstGatewayCall();
+    expect(gatewayCall?.method).toBe("agent");
+    expect(gatewayCall?.params?.message).toBe("describe this");
+    expect(gatewayCall?.params?.attachments).toEqual([
+      {
+        type: "image",
+        fileName: path.basename(tempInput),
+        mimeType: "image/png",
+        content: PNG_1X1_BASE64,
+      },
+    ]);
+    expect(gatewayCall?.params?.modelRun).toBe(true);
+    expect(gatewayCall?.params?.promptMode).toBe("none");
+  });
+
+  it("normalizes HEIC files to JPEG before local model probes", async () => {
+    const tempInput = path.join(os.tmpdir(), `openclaw-model-run-image-${Date.now()}.heic`);
+    await fs.writeFile(tempInput, Buffer.from("heic-like"));
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "model",
+        "run",
+        "--prompt",
+        "describe this",
+        "--file",
+        tempInput,
+        "--json",
+      ],
+    });
+
+    expect(mocks.convertHeicToJpeg).toHaveBeenCalledWith(Buffer.from("heic-like"));
+    const call = firstCompletionCall();
+    expect(call?.context?.messages?.[0]?.role).toBe("user");
+    expect(call?.context?.messages?.[0]?.content).toEqual([
+      { type: "text", text: "describe this" },
+      {
+        type: "image",
+        data: Buffer.from("jpeg-normalized").toString("base64"),
+        mimeType: "image/jpeg",
+      },
+    ]);
+    const inputs = firstJsonOutput()?.inputs as Array<{ mimeType?: unknown; path?: unknown }>;
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0]?.path).toBe(tempInput);
+    expect(inputs[0]?.mimeType).toBe("image/jpeg");
   });
 
   it("rejects non-image files for model probes", async () => {
@@ -522,9 +745,7 @@ describe("capability cli", () => {
       }),
     ).rejects.toThrow("exit 1");
 
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Only image files are supported"),
-    );
+    expectRuntimeErrorContains("Only image files are supported");
     expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
     expect(mocks.callGateway).not.toHaveBeenCalled();
   });
@@ -541,9 +762,65 @@ describe("capability cli", () => {
       }),
     ).rejects.toThrow("exit 1");
 
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining('No text output returned for provider "openai" model "gpt-5.4"'),
-    );
+    expectRuntimeErrorContains('No text output returned for provider "openai" model "gpt-5.4"');
+    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+  });
+
+  it("surfaces provider errors when local model probes return no text output", async () => {
+    mocks.completeWithPreparedSimpleCompletionModel.mockResolvedValueOnce({
+      content: [],
+      stopReason: "error",
+      errorMessage: '{"detail":"Instructions are required"}',
+    } as never);
+
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "model", "run", "--prompt", "hello", "--json"],
+      }),
+    ).rejects.toThrow("exit 1");
+
+    expectRuntimeErrorContains('{"detail":"Instructions are required"}');
+    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+  });
+
+  it("rejects local Codex provider probes before simple-completion dispatch", async () => {
+    mocks.prepareSimpleCompletionModelForAgent.mockResolvedValueOnce({
+      selection: {
+        provider: "codex",
+        modelId: "gpt-5.4",
+        agentDir: "/tmp/agent",
+      },
+      model: {
+        provider: "codex",
+        id: "gpt-5.4",
+        api: "openai-codex-responses",
+      },
+      auth: {
+        apiKey: "codex-app-server",
+        source: "codex-app-server",
+        mode: "token",
+      },
+    } as never);
+
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: [
+          "capability",
+          "model",
+          "run",
+          "--model",
+          "codex/gpt-5.4",
+          "--prompt",
+          "hello",
+          "--json",
+        ],
+      }),
+    ).rejects.toThrow("exit 1");
+
+    expectRuntimeErrorContains("Codex app-server agent runtime");
+    expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
     expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
   });
 
@@ -557,9 +834,7 @@ describe("capability cli", () => {
         }),
       ).rejects.toThrow("exit 1");
 
-      expect(mocks.runtime.error).toHaveBeenCalledWith(
-        expect.stringContaining("--prompt cannot be empty or whitespace-only."),
-      );
+      expectRuntimeErrorContains("--prompt cannot be empty or whitespace-only.");
       expect(mocks.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
       expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
       expect(mocks.callGateway).not.toHaveBeenCalled();
@@ -573,16 +848,11 @@ describe("capability cli", () => {
       argv: ["capability", "model", "run", "--prompt", "hello", "--gateway", "--json"],
     });
 
-    expect(mocks.callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "agent",
-        params: expect.objectContaining({
-          cleanupBundleMcpOnRunEnd: true,
-          modelRun: true,
-          promptMode: "none",
-        }),
-      }),
-    );
+    const gatewayCall = firstGatewayCall();
+    expect(gatewayCall?.method).toBe("agent");
+    expect(gatewayCall?.params?.cleanupBundleMcpOnRunEnd).toBe(true);
+    expect(gatewayCall?.params?.modelRun).toBe(true);
+    expect(gatewayCall?.params?.promptMode).toBe("none");
   });
 
   it("surfaces gateway model fallback attempts in model probe JSON", async () => {
@@ -611,19 +881,14 @@ describe("capability cli", () => {
       argv: ["capability", "model", "run", "--prompt", "hello", "--gateway", "--json"],
     });
 
-    expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai",
-        model: "gpt-4.1-mini",
-        attempts: [
-          expect.objectContaining({
-            provider: "openrouter",
-            model: "openrouter/auto",
-            reason: "model_not_found",
-          }),
-        ],
-      }),
-    );
+    const payload = firstJsonOutput();
+    const attempts = payload?.attempts as Array<Record<string, unknown>>;
+    expect(payload?.provider).toBe("openai");
+    expect(payload?.model).toBe("gpt-4.1-mini");
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]?.provider).toBe("openrouter");
+    expect(attempts[0]?.model).toBe("openrouter/auto");
+    expect(attempts[0]?.reason).toBe("model_not_found");
   });
 
   it("requests admin scope for gateway model probes with provider/model overrides", async () => {
@@ -642,20 +907,108 @@ describe("capability cli", () => {
       ],
     });
 
-    expect(mocks.callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        clientName: "gateway-client",
-        method: "agent",
-        mode: "backend",
-        scopes: ["operator.admin"],
-        params: expect.objectContaining({
-          provider: "anthropic",
-          model: "claude-haiku-4-5",
-          modelRun: true,
-          promptMode: "none",
-        }),
+    const gatewayCall = firstGatewayCall();
+    expect(gatewayCall?.clientName).toBe("gateway-client");
+    expect(gatewayCall?.method).toBe("agent");
+    expect(gatewayCall?.mode).toBe("backend");
+    expect(gatewayCall?.scopes).toEqual(["operator.admin"]);
+    expect(gatewayCall?.params?.provider).toBe("anthropic");
+    expect(gatewayCall?.params?.model).toBe("claude-haiku-4-5");
+    expect(gatewayCall?.params?.modelRun).toBe(true);
+    expect(gatewayCall?.params?.promptMode).toBe("none");
+  });
+
+  it.each(["local", "gateway"] as const)(
+    "canonicalizes case-only catalog model refs before %s dispatch",
+    async (transport) => {
+      mocks.loadModelCatalog.mockResolvedValueOnce([
+        { id: "claude-opus-4-7", provider: "anthropic", name: "Claude Opus 4.7" },
+      ] as never);
+
+      await runModelRunWithModel("Anthropic/CLAUDE-OPUS-4-7", transport);
+
+      const catalogCalls = mocks.loadModelCatalog.mock.calls as unknown as Array<
+        [{ readOnly?: unknown }]
+      >;
+      const catalogParams = catalogCalls[0]?.[0];
+      expect(catalogParams?.readOnly).toBe(true);
+      expectModelRunDispatch(transport, "anthropic/claude-opus-4-7");
+    },
+  );
+
+  it("canonicalizes case-only catalog refs and preserves auth profiles before local dispatch", async () => {
+    mocks.loadModelCatalog.mockResolvedValueOnce([
+      { id: "claude-opus-4-7", provider: "anthropic", name: "Claude Opus 4.7" },
+    ] as never);
+
+    await runModelRunWithModel("Anthropic/CLAUDE-OPUS-4-7@work", "local");
+
+    expectModelRunDispatch("local", "anthropic/claude-opus-4-7@work");
+  });
+
+  it("leaves auth profile refs unchanged before gateway dispatch", async () => {
+    mocks.loadModelCatalog.mockResolvedValueOnce([
+      { id: "claude-opus-4-7", provider: "anthropic", name: "Claude Opus 4.7" },
+    ] as never);
+
+    await runModelRunWithModel("Anthropic/CLAUDE-OPUS-4-7@work", "gateway");
+
+    expectModelRunDispatch("gateway", "Anthropic/CLAUDE-OPUS-4-7@work");
+  });
+
+  it("preserves custom mixed-case profile refs before local dispatch when the catalog has no match", async () => {
+    mocks.loadModelCatalog.mockResolvedValueOnce([] as never);
+
+    await runModelRunWithModel("custom/MyModel@work", "local");
+
+    expectModelRunDispatch("local", "custom/MyModel@work");
+  });
+
+  it("passes thinking overrides to gateway model probes", async () => {
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "model",
+        "run",
+        "--prompt",
+        "hello",
+        "--gateway",
+        "--thinking",
+        "high",
+        "--json",
+      ],
+    });
+
+    const gatewayCall = firstGatewayCall();
+    expect(gatewayCall?.method).toBe("agent");
+    expect(gatewayCall?.params?.thinking).toBe("high");
+    expect(gatewayCall?.params?.modelRun).toBe(true);
+    expect(gatewayCall?.params?.promptMode).toBe("none");
+  });
+
+  it("rejects invalid model run thinking overrides before dispatch", async () => {
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: [
+          "capability",
+          "model",
+          "run",
+          "--prompt",
+          "hello",
+          "--thinking",
+          "turbo-mode",
+          "--json",
+        ],
       }),
-    );
+    ).rejects.toThrow("exit 1");
+
+    expectRuntimeErrorContains("Invalid thinking level.");
+    expect(mocks.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+    expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
   });
 
   it("rejects empty model run prompts before gateway dispatch", async () => {
@@ -666,9 +1019,7 @@ describe("capability cli", () => {
       }),
     ).rejects.toThrow("exit 1");
 
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("--prompt cannot be empty or whitespace-only."),
-    );
+    expectRuntimeErrorContains("--prompt cannot be empty or whitespace-only.");
     expect(mocks.callGateway).not.toHaveBeenCalled();
     expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
   });
@@ -679,12 +1030,8 @@ describe("capability cli", () => {
       argv: ["capability", "tts", "status", "--json"],
     });
 
-    expect(mocks.callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({ method: "tts.status" }),
-    );
-    expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({ transport: "gateway" }),
-    );
+    expect(firstGatewayCall()?.method).toBe("tts.status");
+    expect(firstJsonOutput()?.transport).toBe("gateway");
   });
 
   it("routes image describe through media understanding, not generation", async () => {
@@ -693,15 +1040,13 @@ describe("capability cli", () => {
       argv: ["capability", "image", "describe", "--file", "photo.jpg", "--json"],
     });
 
-    expect(mocks.describeImageFile).toHaveBeenCalledWith(
-      expect.objectContaining({ filePath: expect.stringMatching(/photo\.jpg$/) }),
-    );
-    expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        capability: "image.describe",
-        outputs: [expect.objectContaining({ kind: "image.description" })],
-      }),
-    );
+    const describeCall = imageDescribeCall();
+    expect(path.basename(describeCall?.filePath ?? "")).toBe("photo.jpg");
+    const output = firstJsonOutput();
+    const outputs = output?.outputs as Array<Record<string, unknown>>;
+    expect(output?.capability).toBe("image.describe");
+    expect(outputs).toHaveLength(1);
+    expect(outputs[0]?.kind).toBe("image.description");
   });
 
   it("passes image describe prompts through media understanding", async () => {
@@ -721,13 +1066,10 @@ describe("capability cli", () => {
       ],
     });
 
-    expect(mocks.describeImageFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        filePath: expect.stringMatching(/photo\.jpg$/),
-        prompt: "Read the menu text",
-        timeoutMs: 90000,
-      }),
-    );
+    const describeCall = imageDescribeCall();
+    expect(path.basename(describeCall?.filePath ?? "")).toBe("photo.jpg");
+    expect(describeCall?.prompt).toBe("Read the menu text");
+    expect(describeCall?.timeoutMs).toBe(90000);
   });
 
   it("uses the explicit media-understanding provider for image describe model overrides", async () => {
@@ -749,22 +1091,15 @@ describe("capability cli", () => {
       ],
     });
 
-    expect(mocks.describeImageFileWithModel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        filePath: expect.stringMatching(/photo\.jpg$/),
-        provider: "ollama",
-        model: "qwen2.5vl:7b",
-        prompt: "Count visible buttons",
-        timeoutMs: 120000,
-      }),
-    );
+    const describeCall = firstImageDescribeWithModelCall();
+    expect(path.basename(describeCall?.filePath ?? "")).toBe("photo.jpg");
+    expect(describeCall?.provider).toBe("ollama");
+    expect(describeCall?.model).toBe("qwen2.5vl:7b");
+    expect(describeCall?.prompt).toBe("Count visible buttons");
+    expect(describeCall?.timeoutMs).toBe(120000);
     expect(mocks.describeImageFile).not.toHaveBeenCalled();
-    expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "ollama",
-        model: "gpt-4.1-mini",
-      }),
-    );
+    expect(firstJsonOutput()?.provider).toBe("ollama");
+    expect(firstJsonOutput()?.model).toBe("gpt-4.1-mini");
   });
 
   it("passes describe-many prompts to each image", async () => {
@@ -787,22 +1122,14 @@ describe("capability cli", () => {
     });
 
     expect(mocks.describeImageFile).toHaveBeenCalledTimes(2);
-    expect(mocks.describeImageFile).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        filePath: expect.stringMatching(/a\.jpg$/),
-        prompt: "Extract all visible labels",
-        timeoutMs: 45000,
-      }),
-    );
-    expect(mocks.describeImageFile).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        filePath: expect.stringMatching(/b\.jpg$/),
-        prompt: "Extract all visible labels",
-        timeoutMs: 45000,
-      }),
-    );
+    const firstDescribe = imageDescribeCall(0);
+    const secondDescribe = imageDescribeCall(1);
+    expect(path.basename(firstDescribe?.filePath ?? "")).toBe("a.jpg");
+    expect(firstDescribe?.prompt).toBe("Extract all visible labels");
+    expect(firstDescribe?.timeoutMs).toBe(45000);
+    expect(path.basename(secondDescribe?.filePath ?? "")).toBe("b.jpg");
+    expect(secondDescribe?.prompt).toBe("Extract all visible labels");
+    expect(secondDescribe?.timeoutMs).toBe(45000);
   });
 
   it("fails image describe when no description text is returned", async () => {
@@ -818,9 +1145,9 @@ describe("capability cli", () => {
         argv: ["capability", "image", "describe", "--file", "photo.jpg", "--json"],
       }),
     ).rejects.toThrow("exit 1");
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringMatching(/No description returned for image/),
-    );
+    expect(runtimeErrorMessages()).toEqual([
+      `Error: No description returned for image: ${path.resolve("photo.jpg")}`,
+    ]);
   });
 
   it("reports missing image understanding configuration for image describe", async () => {
@@ -839,12 +1166,8 @@ describe("capability cli", () => {
         argv: ["capability", "image", "describe", "--file", "photo.jpg", "--json"],
       }),
     ).rejects.toThrow("exit 1");
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("No image understanding provider is configured or ready"),
-    );
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("agents.defaults.imageModel.primary"),
-    );
+    expectRuntimeErrorContains("No image understanding provider is configured or ready");
+    expectRuntimeErrorContains("agents.defaults.imageModel.primary");
   });
 
   it("reports missing image understanding configuration for image describe-many", async () => {
@@ -863,9 +1186,7 @@ describe("capability cli", () => {
         argv: ["capability", "image", "describe-many", "--file", "photo.jpg", "--json"],
       }),
     ).rejects.toThrow("exit 1");
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("No image understanding provider is configured or ready"),
-    );
+    expectRuntimeErrorContains("No image understanding provider is configured or ready");
   });
 
   it("rewrites mismatched explicit image output extensions to the detected file type", async () => {
@@ -902,16 +1223,10 @@ describe("capability cli", () => {
       ],
     });
 
-    expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        outputs: [
-          expect.objectContaining({
-            path: tempOutput.replace(/\.png$/, ".jpg"),
-            mimeType: "image/jpeg",
-          }),
-        ],
-      }),
-    );
+    const outputs = firstJsonOutput()?.outputs as Array<Record<string, unknown>>;
+    expect(outputs).toHaveLength(1);
+    expect(outputs[0]?.path).toBe(tempOutput.replace(/\.png$/, ".jpg"));
+    expect(outputs[0]?.mimeType).toBe("image/jpeg");
   });
 
   it("passes image generation timeout through to runtime", async () => {
@@ -942,12 +1257,8 @@ describe("capability cli", () => {
       ],
     });
 
-    expect(mocks.generateImage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        prompt: "friendly lobster",
-        timeoutMs: 180000,
-      }),
-    );
+    expect(firstImageGenerationCall()?.prompt).toBe("friendly lobster");
+    expect(firstImageGenerationCall()?.timeoutMs).toBe(180000);
   });
 
   it("passes image output format and generic background hints through to generation runtime", async () => {
@@ -982,15 +1293,12 @@ describe("capability cli", () => {
       ],
     });
 
-    expect(mocks.generateImage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        prompt: "transparent sticker",
-        modelOverride: "openai/gpt-image-1.5",
-        outputFormat: "png",
-        background: "transparent",
-        providerOptions: undefined,
-      }),
-    );
+    const generationCall = firstImageGenerationCall();
+    expect(generationCall?.prompt).toBe("transparent sticker");
+    expect(generationCall?.modelOverride).toBe("openai/gpt-image-1.5");
+    expect(generationCall?.outputFormat).toBe("png");
+    expect(generationCall?.background).toBe("transparent");
+    expect(generationCall?.providerOptions).toBeUndefined();
   });
 
   it("passes image output format and OpenAI background hints through to edit runtime", async () => {
@@ -1029,24 +1337,19 @@ describe("capability cli", () => {
       ],
     });
 
-    expect(mocks.generateImage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        prompt: "make background transparent",
-        modelOverride: "openai/gpt-image-1.5",
-        outputFormat: "png",
-        background: undefined,
-        providerOptions: {
-          openai: {
-            background: "transparent",
-          },
-        },
-        inputImages: [
-          expect.objectContaining({
-            fileName: path.basename(inputPath),
-          }),
-        ],
-      }),
-    );
+    const generationCall = firstImageGenerationCall();
+    const inputImages = generationCall?.inputImages as Array<Record<string, unknown>>;
+    expect(generationCall?.prompt).toBe("make background transparent");
+    expect(generationCall?.modelOverride).toBe("openai/gpt-image-1.5");
+    expect(generationCall?.outputFormat).toBe("png");
+    expect(generationCall?.background).toBeUndefined();
+    expect(generationCall?.providerOptions).toEqual({
+      openai: {
+        background: "transparent",
+      },
+    });
+    expect(inputImages).toHaveLength(1);
+    expect(inputImages[0]?.fileName).toBe(path.basename(inputPath));
   });
 
   it("rejects unsupported image output format and background hints", async () => {
@@ -1155,21 +1458,16 @@ describe("capability cli", () => {
       ],
     });
 
-    expect(mocks.generateImage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        prompt: "remove the background object",
-        modelOverride: "openai/gpt-image-2",
-        size: "2160x3840",
-        aspectRatio: "9:16",
-        resolution: "4K",
-        inputImages: [
-          expect.objectContaining({
-            fileName: path.basename(tempInput),
-            mimeType: "image/png",
-          }),
-        ],
-      }),
-    );
+    const generationCall = firstImageGenerationCall();
+    const inputImages = generationCall?.inputImages as Array<Record<string, unknown>>;
+    expect(generationCall?.prompt).toBe("remove the background object");
+    expect(generationCall?.modelOverride).toBe("openai/gpt-image-2");
+    expect(generationCall?.size).toBe("2160x3840");
+    expect(generationCall?.aspectRatio).toBe("9:16");
+    expect(generationCall?.resolution).toBe("4K");
+    expect(inputImages).toHaveLength(1);
+    expect(inputImages[0]?.fileName).toBe(path.basename(tempInput));
+    expect(inputImages[0]?.mimeType).toBe("image/png");
   });
 
   it("reports the expanded image.edit flags in capability inspect", async () => {
@@ -1178,25 +1476,21 @@ describe("capability cli", () => {
       argv: ["capability", "inspect", "--name", "image.edit", "--json"],
     });
 
-    expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: "image.edit",
-        flags: [
-          "--file",
-          "--prompt",
-          "--model",
-          "--size",
-          "--aspect-ratio",
-          "--resolution",
-          "--output-format",
-          "--background",
-          "--openai-background",
-          "--timeout-ms",
-          "--output",
-          "--json",
-        ],
-      }),
-    );
+    expect(firstJsonOutput()?.id).toBe("image.edit");
+    expect(firstJsonOutput()?.flags).toEqual([
+      "--file",
+      "--prompt",
+      "--model",
+      "--size",
+      "--aspect-ratio",
+      "--resolution",
+      "--output-format",
+      "--background",
+      "--openai-background",
+      "--timeout-ms",
+      "--output",
+      "--json",
+    ]);
   });
 
   it("streams url-only generated videos to --output paths", async () => {
@@ -1239,24 +1533,19 @@ describe("capability cli", () => {
     });
 
     const outputPath = `${outputBase}.mp4`;
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://example.com/generated-video.mp4",
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
-    );
+    const fetchCalls = fetchMock.mock.calls as unknown as Array<[string, { signal?: unknown }]>;
+    const fetchCall = fetchCalls[0];
+    expect(fetchCall?.[0]).toBe("https://example.com/generated-video.mp4");
+    expect(fetchCall?.[1]?.signal).toBeInstanceOf(AbortSignal);
     expect(await fs.readFile(outputPath, "utf8")).toBe("video-bytes");
-    expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        capability: "video.generate",
-        provider: "vydra",
-        outputs: [
-          expect.objectContaining({
-            path: outputPath,
-            mimeType: "video/mp4",
-            size: 11,
-          }),
-        ],
-      }),
-    );
+    const output = firstJsonOutput();
+    const outputs = output?.outputs as Array<Record<string, unknown>>;
+    expect(output?.capability).toBe("video.generate");
+    expect(output?.provider).toBe("vydra");
+    expect(outputs).toHaveLength(1);
+    expect(outputs[0]?.path).toBe(outputPath);
+    expect(outputs[0]?.mimeType).toBe("video/mp4");
+    expect(outputs[0]?.size).toBe(11);
   });
 
   it("passes video generation parameters through to runtime", async () => {
@@ -1299,19 +1588,16 @@ describe("capability cli", () => {
       ],
     });
 
-    expect(mocks.generateVideo).toHaveBeenCalledWith(
-      expect.objectContaining({
-        prompt: "friendly lobster",
-        modelOverride: "minimax/MiniMax-Hailuo-2.3",
-        size: "1280x768",
-        aspectRatio: "16:9",
-        resolution: "768P",
-        durationSeconds: 6,
-        audio: true,
-        watermark: true,
-        timeoutMs: 300000,
-      }),
-    );
+    const videoCall = firstVideoGenerationCall();
+    expect(videoCall?.prompt).toBe("friendly lobster");
+    expect(videoCall?.modelOverride).toBe("minimax/MiniMax-Hailuo-2.3");
+    expect(videoCall?.size).toBe("1280x768");
+    expect(videoCall?.aspectRatio).toBe("16:9");
+    expect(videoCall?.resolution).toBe("768P");
+    expect(videoCall?.durationSeconds).toBe(6);
+    expect(videoCall?.audio).toBe(true);
+    expect(videoCall?.watermark).toBe(true);
+    expect(videoCall?.timeoutMs).toBe(300000);
   });
 
   it("fails video generate when a provider returns an undeliverable asset", async () => {
@@ -1328,9 +1614,7 @@ describe("capability cli", () => {
         argv: ["capability", "video", "generate", "--prompt", "friendly lobster", "--json"],
       }),
     ).rejects.toThrow("exit 1");
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Video asset at index 0 has neither buffer nor url"),
-    );
+    expectRuntimeErrorContains("Video asset at index 0 has neither buffer nor url");
   });
 
   it("routes audio transcribe through transcription, not realtime", async () => {
@@ -1339,15 +1623,12 @@ describe("capability cli", () => {
       argv: ["capability", "audio", "transcribe", "--file", "memo.m4a", "--json"],
     });
 
-    expect(mocks.transcribeAudioFile).toHaveBeenCalledWith(
-      expect.objectContaining({ filePath: expect.stringMatching(/memo\.m4a$/) }),
-    );
-    expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        capability: "audio.transcribe",
-        outputs: [expect.objectContaining({ kind: "audio.transcription" })],
-      }),
-    );
+    expect(path.basename(firstAudioTranscriptionCall()?.filePath ?? "")).toBe("memo.m4a");
+    const output = firstJsonOutput();
+    const outputs = output?.outputs as Array<Record<string, unknown>>;
+    expect(output?.capability).toBe("audio.transcribe");
+    expect(outputs).toHaveLength(1);
+    expect(outputs[0]?.kind).toBe("audio.transcription");
   });
 
   it("fails audio transcribe when no transcript text is returned", async () => {
@@ -1359,9 +1640,9 @@ describe("capability cli", () => {
         argv: ["capability", "audio", "transcribe", "--file", "memo.m4a", "--json"],
       }),
     ).rejects.toThrow("exit 1");
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringMatching(/No transcript returned for audio/),
-    );
+    expect(runtimeErrorMessages()).toEqual([
+      `Error: No transcript returned for audio: ${path.resolve("memo.m4a")}`,
+    ]);
   });
 
   it("reports missing audio transcription configuration for audio transcribe", async () => {
@@ -1380,12 +1661,8 @@ describe("capability cli", () => {
         argv: ["capability", "audio", "transcribe", "--file", "memo.m4a", "--json"],
       }),
     ).rejects.toThrow("exit 1");
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("No audio transcription provider is configured or ready"),
-    );
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("tools.media.audio.models"),
-    );
+    expectRuntimeErrorContains("No audio transcription provider is configured or ready");
+    expectRuntimeErrorContains("tools.media.audio.models");
   });
 
   it("surfaces the underlying transcription failure for audio transcribe", async () => {
@@ -1399,9 +1676,7 @@ describe("capability cli", () => {
         argv: ["capability", "audio", "transcribe", "--file", "memo.m4a", "--json"],
       }),
     ).rejects.toThrow("exit 1");
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringMatching(/Audio transcription response missing text/),
-    );
+    expect(runtimeErrorMessages()).toEqual(["Error: Audio transcription response missing text"]);
   });
 
   it("forwards transcription prompt and language hints", async () => {
@@ -1421,13 +1696,10 @@ describe("capability cli", () => {
       ],
     });
 
-    expect(mocks.transcribeAudioFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        filePath: expect.stringMatching(/memo\.m4a$/),
-        language: "en",
-        prompt: "Focus on names",
-      }),
-    );
+    const transcribeCall = firstAudioTranscriptionCall();
+    expect(path.basename(transcribeCall?.filePath ?? "")).toBe("memo.m4a");
+    expect(transcribeCall?.language).toBe("en");
+    expect(transcribeCall?.prompt).toBe("Focus on names");
   });
 
   it("uses request-scoped TTS overrides without mutating prefs", async () => {
@@ -1447,19 +1719,16 @@ describe("capability cli", () => {
       ],
     });
 
-    expect(mocks.textToSpeech).toHaveBeenCalledWith(
-      expect.objectContaining({
-        overrides: expect.objectContaining({
-          provider: "openai",
-          providerOverrides: expect.objectContaining({
-            openai: expect.objectContaining({
-              modelId: "gpt-4o-mini-tts",
-              voiceId: "alloy",
-            }),
-          }),
-        }),
-      }),
-    );
+    const ttsCall = firstTextToSpeechCall();
+    const overrides = ttsCall?.overrides as
+      | {
+          provider?: unknown;
+          providerOverrides?: { openai?: { modelId?: unknown; voiceId?: unknown } };
+        }
+      | undefined;
+    expect(overrides?.provider).toBe("openai");
+    expect(overrides?.providerOverrides?.openai?.modelId).toBe("gpt-4o-mini-tts");
+    expect(overrides?.providerOverrides?.openai?.voiceId).toBe("alloy");
     expect(mocks.setTtsProvider).not.toHaveBeenCalled();
   });
 
@@ -1480,11 +1749,7 @@ describe("capability cli", () => {
       ],
     });
 
-    expect(mocks.textToSpeech).toHaveBeenCalledWith(
-      expect.objectContaining({
-        disableFallback: true,
-      }),
-    );
+    expect(firstTextToSpeechCall()?.disableFallback).toBe(true);
   });
 
   it("does not infer and forward a local provider guess for gateway TTS overrides", async () => {
@@ -1503,15 +1768,9 @@ describe("capability cli", () => {
       ],
     });
 
-    expect(mocks.callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "tts.convert",
-        params: expect.objectContaining({
-          provider: undefined,
-          voiceId: "alloy",
-        }),
-      }),
-    );
+    expect(firstGatewayCall()?.method).toBe("tts.convert");
+    expect(firstGatewayCall()?.params?.provider).toBeUndefined();
+    expect(firstGatewayCall()?.params?.voiceId).toBe("alloy");
   });
 
   it("fails clearly when gateway TTS output is requested against a remote gateway", async () => {
@@ -1539,9 +1798,7 @@ describe("capability cli", () => {
       }),
     ).rejects.toThrow("exit 1");
 
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("--output is not supported for remote gateway TTS yet"),
-    );
+    expectRuntimeErrorContains("--output is not supported for remote gateway TTS yet");
   });
 
   it("uses only embedding providers for embedding creation", async () => {
@@ -1550,19 +1807,11 @@ describe("capability cli", () => {
       argv: ["capability", "embedding", "create", "--text", "hello", "--json"],
     });
 
-    expect(mocks.createEmbeddingProvider).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "auto",
-        fallback: "none",
-      }),
-    );
-    expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        capability: "embedding.create",
-        provider: "openai",
-        model: "text-embedding-3-small",
-      }),
-    );
+    expect(firstEmbeddingProviderCall()?.provider).toBe("auto");
+    expect(firstEmbeddingProviderCall()?.fallback).toBe("none");
+    expect(firstJsonOutput()?.capability).toBe("embedding.create");
+    expect(firstJsonOutput()?.provider).toBe("openai");
+    expect(firstJsonOutput()?.model).toBe("text-embedding-3-small");
   });
 
   it("derives the embedding provider from a provider/model override", async () => {
@@ -1580,13 +1829,9 @@ describe("capability cli", () => {
       ],
     });
 
-    expect(mocks.createEmbeddingProvider).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai",
-        fallback: "none",
-        model: "text-embedding-3-large",
-      }),
-    );
+    expect(firstEmbeddingProviderCall()?.provider).toBe("openai");
+    expect(firstEmbeddingProviderCall()?.fallback).toBe("none");
+    expect(firstEmbeddingProviderCall()?.model).toBe("text-embedding-3-large");
   });
 
   it("cleans provider auth profiles and usage stats on logout", async () => {
@@ -1635,15 +1880,17 @@ describe("capability cli", () => {
       argv: ["capability", "model", "auth", "logout", "--provider", "openai", "--json"],
     });
 
-    expect(updatedStore).toMatchObject({
-      profiles: {
-        "anthropic:default": { id: "anthropic:default" },
-      },
-      order: {},
-      lastGood: {},
-      usageStats: {
-        "anthropic:default": { errorCount: 3 },
-      },
+    if (updatedStore === null) {
+      throw new Error("expected updated auth store");
+    }
+    const storeSnapshot = updatedStore as unknown as Record<string, any>;
+    expect(storeSnapshot.profiles).toEqual({
+      "anthropic:default": { id: "anthropic:default" },
+    });
+    expect(storeSnapshot.order).toEqual({});
+    expect(storeSnapshot.lastGood).toEqual({});
+    expect(storeSnapshot.usageStats).toEqual({
+      "anthropic:default": { errorCount: 3 },
     });
     expect(mocks.runtime.writeJson).toHaveBeenCalledWith({
       provider: "openai",
@@ -1662,9 +1909,7 @@ describe("capability cli", () => {
       }),
     ).rejects.toThrow("exit 1");
 
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Failed to remove saved auth profiles for provider openai."),
-    );
+    expectRuntimeErrorContains("Failed to remove saved auth profiles for provider openai.");
   });
 
   it("rejects providerless audio model overrides", async () => {
@@ -1684,9 +1929,7 @@ describe("capability cli", () => {
       }),
     ).rejects.toThrow("exit 1");
 
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Model overrides must use the form <provider/model>."),
-    );
+    expectRuntimeErrorContains("Model overrides must use the form <provider/model>.");
     expect(mocks.transcribeAudioFile).not.toHaveBeenCalled();
   });
 
@@ -1707,9 +1950,7 @@ describe("capability cli", () => {
       }),
     ).rejects.toThrow("exit 1");
 
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Model overrides must use the form <provider/model>."),
-    );
+    expectRuntimeErrorContains("Model overrides must use the form <provider/model>.");
     expect(mocks.describeImageFile).not.toHaveBeenCalled();
   });
 
@@ -1737,9 +1978,7 @@ describe("capability cli", () => {
       }),
     ).rejects.toThrow("exit 1");
 
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Model overrides must use the form <provider/model>."),
-    );
+    expectRuntimeErrorContains("Model overrides must use the form <provider/model>.");
     expect(vi.mocked(mediaRuntime.describeVideoFile)).not.toHaveBeenCalled();
   });
 
@@ -1751,11 +1990,8 @@ describe("capability cli", () => {
       argv: ["capability", "embedding", "providers", "--json"],
     });
 
-    expect(mocks.registerBuiltInMemoryEmbeddingProviders).toHaveBeenCalledWith(
-      expect.objectContaining({
-        registerMemoryEmbeddingProvider: expect.any(Function),
-      }),
-    );
+    const bootstrapArg = firstRegisteredEmbeddingBootstrapArg();
+    expect(typeof bootstrapArg?.registerMemoryEmbeddingProvider).toBe("function");
   });
 
   it("marks env-backed audio providers as configured", async () => {

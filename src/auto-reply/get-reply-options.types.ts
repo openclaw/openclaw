@@ -1,4 +1,4 @@
-import type { ImageContent } from "@mariozechner/pi-ai";
+import type { ImageContent } from "@earendil-works/pi-ai";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import type { ReplyPayload } from "./reply-payload.js";
 import type { TypingController } from "./reply/typing.js";
@@ -31,6 +31,11 @@ export type ReplyThreadingPolicy = {
 
 export type SourceReplyDeliveryMode = "automatic" | "message_tool_only";
 
+export type PartialReplyPayload = Pick<ReplyPayload, "text" | "mediaUrls"> & {
+  delta?: string;
+  replace?: true;
+};
+
 export type GetReplyOptions = {
   /** Override run id for agent events (defaults to random UUID). */
   runId?: string;
@@ -53,18 +58,26 @@ export type GetReplyOptions = {
   suppressTyping?: boolean;
   /** Resolved heartbeat model override (provider/model string from merged per-agent config). */
   heartbeatModelOverride?: string;
+  /** One-shot thinking level override for this run; does not persist to the session. */
+  thinkingLevelOverride?: string;
+  /** One-shot fast-mode override for this run; does not persist to the session. */
+  fastModeOverride?: boolean;
   /** Controls bootstrap workspace context injection (default: full). */
   bootstrapContextMode?: "full" | "lightweight";
   /** If true, suppress tool error warning payloads for this run. */
   suppressToolErrorWarnings?: boolean;
   /** If true, run the model without OpenClaw tools for this turn. */
   disableTools?: boolean;
+  /** If true, include the heartbeat response tool for structured heartbeat outcomes. */
+  enableHeartbeatTool?: boolean;
+  /** If true, keep the heartbeat response tool available even under narrow tool profiles. */
+  forceHeartbeatTool?: boolean;
   /**
    * If true, dispatch skips default tool/progress text messages and expects the
    * channel to surface progress via its own streaming/edit UX.
    */
   suppressDefaultToolProgressMessages?: boolean;
-  onPartialReply?: (payload: ReplyPayload) => Promise<void> | void;
+  onPartialReply?: (payload: PartialReplyPayload) => Promise<void> | void;
   onReasoningStream?: (payload: ReplyPayload) => Promise<void> | void;
   /** Called when a thinking/reasoning block ends. */
   onReasoningEnd?: () => Promise<void> | void;
@@ -77,7 +90,12 @@ export type GetReplyOptions = {
   onBlockReply?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
   onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
   /** Called when a tool phase starts/updates, before summary payloads are emitted. */
-  onToolStart?: (payload: { name?: string; phase?: string }) => Promise<void> | void;
+  onToolStart?: (payload: {
+    name?: string;
+    phase?: string;
+    args?: Record<string, unknown>;
+    detailMode?: "explain" | "raw";
+  }) => Promise<void> | void;
   /** Called when a concrete work item starts, updates, or completes. */
   onItemEvent?: (payload: {
     itemId?: string;
@@ -88,6 +106,7 @@ export type GetReplyOptions = {
     status?: string;
     summary?: string;
     progressText?: string;
+    meta?: string;
     approvalId?: string;
     approvalSlug?: string;
   }) => Promise<void> | void;
@@ -153,6 +172,8 @@ export type GetReplyOptions = {
    * output private; visible channel output must come from the message tool.
    */
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /** Allow channel-owned progress UI while final/source reply delivery remains message-tool-only. */
+  allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
   disableBlockStreaming?: boolean;
   /** Timeout for block reply delivery (ms). */
   blockReplyTimeoutMs?: number;

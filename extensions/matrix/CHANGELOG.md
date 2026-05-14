@@ -1,5 +1,41 @@
 # Changelog
 
+## 2026.5.12
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.10
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.8
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.6
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.4
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
+## 2026.5.3
+
+### Changes
+
+- Version alignment with core OpenClaw release numbers.
+
 ## 2026.5.2
 
 ### Changes
@@ -99,7 +135,7 @@ collapsed here.
 
 ### Fixes
 
-- Bundled channels/setup: load shared secret contracts through packaged top-level sidecars across BlueBubbles, Feishu, Google Chat, IRC, Matrix, Mattermost, Microsoft Teams, Nextcloud Talk, Slack, and Zalo so installed npm builds no longer rely on missing `dist/extensions/*/src/*` files during gateway startup.
+- Bundled channels/setup: load shared secret contracts through packaged top-level sidecars across Feishu, Google Chat, IRC, Matrix, Mattermost, Microsoft Teams, Nextcloud Talk, Slack, and Zalo so installed npm builds no longer rely on missing `dist/extensions/*/src/*` files during gateway startup.
 
 ## 2026.4.7
 

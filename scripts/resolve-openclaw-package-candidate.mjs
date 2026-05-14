@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_OUTPUT_NAME = "openclaw-current.tgz";
 export const OPENCLAW_PACKAGE_SPEC_RE =
-  /^openclaw@(beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-beta\.[1-9][0-9]*)?)$/u;
+  /^openclaw@(alpha|beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-(alpha|beta)\.[1-9][0-9]*)?)$/u;
 
 function usage() {
   return `Usage: node scripts/resolve-openclaw-package-candidate.mjs --source <ref|npm|url|artifact> --output-dir <dir> [options]
@@ -82,7 +82,7 @@ export function parseArgs(argv) {
 export function validateOpenClawPackageSpec(spec) {
   if (!OPENCLAW_PACKAGE_SPEC_RE.test(spec)) {
     throw new Error(
-      `package_spec must be openclaw@beta, openclaw@latest, or an exact OpenClaw release version; got: ${spec}`,
+      `package_spec must be openclaw@alpha, openclaw@beta, openclaw@latest, or an exact OpenClaw release version; got: ${spec}`,
     );
   }
 }
@@ -361,6 +361,21 @@ async function readPackageJson(tarball) {
   };
 }
 
+export async function readPackageBuildSourceSha(tarball) {
+  const raw = await run("tar", ["-xOf", tarball, "package/dist/build-info.json"], {
+    capture: true,
+  }).then(
+    (value) => value,
+    () => "",
+  );
+  if (!raw.trim()) {
+    return "";
+  }
+  const buildInfo = JSON.parse(raw);
+  const commit = typeof buildInfo.commit === "string" ? buildInfo.commit.trim() : "";
+  return /^[0-9a-f]{40}$/iu.test(commit) ? commit.toLowerCase() : "";
+}
+
 async function appendGithubOutputs(file, outputs) {
   if (!file) {
     return;
@@ -463,6 +478,12 @@ async function resolveCandidate(options) {
     `OpenClaw package tarball check finished in ${Math.round((Date.now() - checkStartedAt) / 1000)}s`,
   );
   const pkg = await readPackageJson(target);
+  if (!packageSourceSha) {
+    packageSourceSha = await readPackageBuildSourceSha(target);
+    if (packageSourceSha && !packageTrustedReason) {
+      packageTrustedReason = "package-build-info";
+    }
+  }
   const metadata = {
     name: pkg.name,
     packageRef,

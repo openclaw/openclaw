@@ -144,12 +144,17 @@ export function parseSessionsRouteArgs(argv: string[]) {
   if (!active.ok) {
     return null;
   }
+  const limit = parseOptionalFlagValue(argv, "--limit");
+  if (!limit.ok) {
+    return null;
+  }
   return {
     json: hasFlag(argv, "--json"),
     allAgents: hasFlag(argv, "--all-agents"),
     agent: agent.value,
     store: store.value,
     active: active.value,
+    limit: limit.value,
   };
 }
 
@@ -246,19 +251,42 @@ export function parseModelsStatusRouteArgs(argv: string[]) {
 export function parseChannelsListRouteArgs(argv: string[]) {
   return {
     json: hasFlag(argv, "--json"),
-    usage: !hasFlag(argv, "--no-usage"),
+    all: hasFlag(argv, "--all"),
   };
 }
 
 export function parseChannelsStatusRouteArgs(argv: string[]) {
   const timeout = parseOptionalFlagValue(argv, "--timeout");
+  const channel = parseOptionalFlagValue(argv, "--channel");
   if (!timeout.ok) {
     return null;
   }
+  if (!channel.ok) {
+    return null;
+  }
   return {
+    channel: channel.value,
     json: hasFlag(argv, "--json"),
     probe: hasFlag(argv, "--probe"),
     timeout: timeout.value,
+  };
+}
+
+export function parsePluginsListRouteArgs(argv: string[]) {
+  if (!hasFlag(argv, "--json")) {
+    return null;
+  }
+  const positionals = getCommandPositionalsWithRootOptions(argv, {
+    commandPath: ["plugins", "list"],
+    booleanFlags: ["--json", "--enabled", "--verbose"],
+  });
+  if (!positionals || positionals.length !== 0) {
+    return null;
+  }
+  return {
+    json: true as const,
+    enabled: hasFlag(argv, "--enabled"),
+    verbose: hasFlag(argv, "--verbose"),
   };
 }
 

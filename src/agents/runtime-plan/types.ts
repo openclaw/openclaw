@@ -1,4 +1,4 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { TSchema } from "typebox";
 
 export type AgentRuntimeTransport = "sse" | "websocket" | "auto";
@@ -14,6 +14,13 @@ export type AgentRuntimeThinkLevel =
   | "max";
 
 export type AgentRuntimePromptMode = "full" | "minimal" | "none";
+export type AgentRuntimePromptTrigger =
+  | "cron"
+  | "heartbeat"
+  | "manual"
+  | "memory"
+  | "overflow"
+  | "user";
 
 export type AgentRuntimeFailoverReason =
   | "auth"
@@ -22,6 +29,7 @@ export type AgentRuntimeFailoverReason =
   | "rate_limit"
   | "overloaded"
   | "billing"
+  | "server_error"
   | "timeout"
   | "model_not_found"
   | "session_expired"
@@ -39,7 +47,7 @@ export type AgentRuntimeModel = {
   provider?: string;
   baseUrl?: string;
   reasoning?: boolean;
-  input?: string[];
+  input?: readonly string[];
   cost?: {
     input: number;
     output: number;
@@ -50,6 +58,26 @@ export type AgentRuntimeModel = {
   maxTokens?: number;
   contextTokens?: number;
   compat?: unknown;
+};
+
+export type AgentRuntimeTextReplacement = {
+  from: string | RegExp;
+  to: string;
+};
+
+export type AgentRuntimeTextTransforms = {
+  input?: AgentRuntimeTextReplacement[];
+  output?: AgentRuntimeTextReplacement[];
+};
+
+export type AgentRuntimeProviderHandle = {
+  provider: string;
+  config?: AgentRuntimeConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  applyAutoEnable?: boolean;
+  bundledProviderAllowlistCompat?: boolean;
+  bundledProviderVitestCompat?: boolean;
 };
 
 export type AgentRuntimeInteractiveButtonStyle = "primary" | "secondary" | "success" | "danger";
@@ -174,6 +202,7 @@ export type AgentRuntimeSystemPromptContributionContext = {
   runtimeChannel?: string;
   runtimeCapabilities?: string[];
   agentId?: string;
+  trigger?: AgentRuntimePromptTrigger;
 };
 
 export type AgentRuntimeFollowupFallbackRouteResult = {
@@ -238,17 +267,33 @@ export type AgentRuntimeAuthPlan = {
   authProfileProviderForAuth: string;
   harnessAuthProvider?: string;
   forwardedAuthProfileId?: string;
+  forwardedAuthProfileCandidateIds?: string[];
 };
 
 export type AgentRuntimePromptPlan = {
   provider: string;
   modelId: string;
+  textTransforms?: AgentRuntimeTextTransforms;
   resolveSystemPromptContribution(
     context: AgentRuntimeSystemPromptContributionContext,
   ): AgentRuntimeSystemPromptContribution | undefined;
+  transformSystemPrompt(
+    context: AgentRuntimeSystemPromptContributionContext & {
+      systemPrompt: string;
+    },
+  ): string;
+};
+
+// Keep the leaf runtime-plan contract decoupled from plugin metadata internals.
+export type AgentRuntimePreparedMetadataSnapshot = object;
+
+export type PreparedOpenClawToolPlanning = {
+  metadataSnapshot?: AgentRuntimePreparedMetadataSnapshot;
+  loadMetadataSnapshot?: () => AgentRuntimePreparedMetadataSnapshot;
 };
 
 export type AgentRuntimeToolPlan = {
+  preparedPlanning?: PreparedOpenClawToolPlanning;
   normalize<TSchemaType extends TSchema = TSchema, TResult = unknown>(
     tools: AgentTool<TSchemaType, TResult>[],
     params?: {
@@ -269,7 +314,10 @@ export type AgentRuntimeToolPlan = {
 
 export type AgentRuntimeDeliveryPlan = {
   isSilentPayload(
-    payload: Pick<AgentRuntimeReplyPayload, "text" | "mediaUrl" | "mediaUrls">,
+    payload: Pick<
+      AgentRuntimeReplyPayload,
+      "text" | "mediaUrl" | "mediaUrls" | "presentation" | "interactive" | "channelData"
+    >,
   ): boolean;
   resolveFollowupRoute(params: {
     payload: AgentRuntimeReplyPayload;
@@ -298,6 +346,7 @@ export type AgentRuntimeTransportPlan = {
 
 export type AgentRuntimePlan = {
   resolvedRef: AgentRuntimeResolvedRef;
+  providerRuntimeHandle?: AgentRuntimeProviderHandle;
   auth: AgentRuntimeAuthPlan;
   prompt: AgentRuntimePromptPlan;
   tools: AgentRuntimeToolPlan;
@@ -329,6 +378,7 @@ export type BuildAgentRuntimeDeliveryPlanParams = {
   agentDir?: string;
   provider: string;
   modelId: string;
+  providerRuntimeHandle?: AgentRuntimeProviderHandle;
 };
 
 export type BuildAgentRuntimePlanParams = {
@@ -343,9 +393,12 @@ export type BuildAgentRuntimePlanParams = {
   harnessRuntime?: string;
   allowHarnessAuthProfileForwarding?: boolean;
   authProfileProvider?: string;
+  authProfileMode?: string;
   sessionAuthProfileId?: string;
+  sessionAuthProfileCandidateIds?: string[];
   agentId?: string;
   thinkingLevel?: AgentRuntimeThinkLevel;
   extraParamsOverride?: Record<string, unknown>;
   resolvedTransport?: AgentRuntimeTransport;
+  providerRuntimeHandle?: AgentRuntimeProviderHandle;
 };

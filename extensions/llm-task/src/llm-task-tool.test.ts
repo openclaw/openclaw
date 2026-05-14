@@ -1,40 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-
-vi.mock("typebox", () => ({
-  Type: {
-    Object: (schema: unknown) => schema,
-    String: (schema?: unknown) => schema,
-    Optional: (schema: unknown) => schema,
-    Unknown: (schema?: unknown) => schema,
-    Number: (schema?: unknown) => schema,
-  },
-}));
-
-vi.mock("ajv", () => ({
-  default: class MockAjv {
-    compile(schema: unknown) {
-      return (value: unknown) => {
-        if (
-          schema &&
-          typeof schema === "object" &&
-          !Array.isArray(schema) &&
-          (schema as { properties?: Record<string, { type?: string }> }).properties?.foo?.type ===
-            "string"
-        ) {
-          const ok = typeof (value as { foo?: unknown })?.foo === "string";
-          (this as { errors?: Array<{ instancePath: string; message: string }> }).errors = ok
-            ? undefined
-            : [{ instancePath: "/foo", message: "must be string" }];
-          return ok;
-        }
-        (this as { errors?: Array<{ instancePath: string; message: string }> }).errors = undefined;
-        return true;
-      };
-    }
-
-    errors?: Array<{ instancePath: string; message: string }>;
-  },
-}));
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../api.js", async () => {
   const actual = await vi.importActual<typeof import("../api.js")>("../api.js");
@@ -42,6 +6,11 @@ vi.mock("../api.js", async () => {
     ...actual,
     resolvePreferredOpenClawTmpDir: () => "/tmp",
   };
+});
+
+afterAll(() => {
+  vi.doUnmock("../api.js");
+  vi.resetModules();
 });
 
 import { createLlmTaskTool } from "./llm-task-tool.js";
@@ -87,6 +56,7 @@ function fakeApi(overrides: any = {}) {
     runtime: {
       version: "test",
       agent: {
+        defaults: { provider: "openai-codex", model: "gpt-5.2" },
         runEmbeddedPiAgent,
         resolveThinkingPolicy,
         normalizeThinkingLevel,
@@ -105,6 +75,16 @@ function mockEmbeddedRunJson(payload: unknown) {
   });
 }
 
+function resetRunnerMocks() {
+  runEmbeddedPiAgent.mockReset();
+  runEmbeddedPiAgent.mockImplementation(async () => ({
+    meta: { startedAt: Date.now() },
+    payloads: [{ text: "{}" }],
+  }));
+  resolveThinkingPolicy.mockClear();
+  normalizeThinkingLevel.mockClear();
+}
+
 async function executeEmbeddedRun(input: Record<string, unknown>) {
   const tool = createLlmTaskTool(fakeApi());
   await tool.execute("id", input);
@@ -112,7 +92,9 @@ async function executeEmbeddedRun(input: Record<string, unknown>) {
 }
 
 describe("llm-task tool (json-only)", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    resetRunnerMocks();
+  });
 
   it("returns parsed json", async () => {
     (runEmbeddedPiAgent as any).mockResolvedValueOnce({
@@ -148,6 +130,51 @@ describe("llm-task tool (json-only)", () => {
     };
     const res = await tool.execute("id", { prompt: "return foo", schema });
     expect((res as any).details.json).toEqual({ foo: "bar" });
+  });
+
+  it("validates caller schemas with repeated $id independently across calls", async () => {
+    const tool = createLlmTaskTool(fakeApi());
+    (runEmbeddedPiAgent as any)
+      .mockResolvedValueOnce({
+        meta: {},
+        payloads: [{ text: JSON.stringify({ foo: "bar" }) }],
+      })
+      .mockResolvedValueOnce({
+        meta: {},
+        payloads: [{ text: JSON.stringify({ count: 1 }) }],
+      });
+
+    await expect(
+      tool.execute("id", {
+        prompt: "return foo",
+        schema: {
+          $id: "https://example.test/llm-task-result",
+          type: "object",
+          properties: { foo: { type: "string" } },
+          required: ["foo"],
+          additionalProperties: false,
+        },
+      }),
+    ).resolves.toEqual({
+      content: [{ type: "text", text: '{\n  "foo": "bar"\n}' }],
+      details: { json: { foo: "bar" }, provider: "openai-codex", model: "gpt-5.2" },
+    });
+
+    await expect(
+      tool.execute("id", {
+        prompt: "return count",
+        schema: {
+          $id: "https://example.test/llm-task-result",
+          type: "object",
+          properties: { count: { type: "number" } },
+          required: ["count"],
+          additionalProperties: false,
+        },
+      }),
+    ).resolves.toEqual({
+      content: [{ type: "text", text: '{\n  "count": 1\n}' }],
+      details: { json: { count: 1 }, provider: "openai-codex", model: "gpt-5.2" },
+    });
   });
 
   it("throws on invalid json", async () => {
@@ -189,6 +216,31 @@ describe("llm-task tool (json-only)", () => {
     });
     expect(call.provider).toBe("anthropic");
     expect(call.model).toBe("claude-4-sonnet");
+  });
+
+  it("resolves configured model aliases before dispatching the embedded run", async () => {
+    mockEmbeddedRunJson({ ok: true });
+    const tool = createLlmTaskTool(
+      fakeApi({
+        config: {
+          agents: {
+            defaults: {
+              workspace: "/tmp",
+              model: { primary: "anthropic/claude-sonnet-4-6" },
+              models: {
+                "google/gemini-3-flash-preview": { alias: "gemini-flash" },
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    await tool.execute("id", { prompt: "x", model: "gemini-flash" });
+
+    const call = (runEmbeddedPiAgent as any).mock.calls[0]?.[0];
+    expect(call.provider).toBe("google");
+    expect(call.model).toBe("gemini-3-flash-preview");
   });
 
   it("passes thinking override to embedded runner", async () => {

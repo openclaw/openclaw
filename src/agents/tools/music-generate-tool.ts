@@ -44,7 +44,11 @@ import {
   resolveRemoteMediaSsrfPolicy,
   resolveSelectedCapabilityProvider,
 } from "./media-tool-shared.js";
-import { type ToolModelConfig } from "./model-config.helpers.js";
+import {
+  coerceToolModelConfig,
+  hasToolModelConfig,
+  type ToolModelConfig,
+} from "./model-config.helpers.js";
 import {
   completeMusicGenerationTaskRun,
   createMusicGenerationTaskRun,
@@ -141,8 +145,12 @@ function resolveMusicGenerationModelConfigForTool(params: {
     agentDir: params.agentDir,
     authStore: params.authStore,
     modelConfig: params.cfg?.agents?.defaults?.musicGenerationModel,
-    providers: listRuntimeMusicGenerationProviders({ config: params.cfg }),
+    providers: () => listRuntimeMusicGenerationProviders({ config: params.cfg }),
   });
+}
+
+function hasExplicitMusicGenerationModelConfig(cfg?: OpenClawConfig): boolean {
+  return hasToolModelConfig(coerceToolModelConfig(cfg?.agents?.defaults?.musicGenerationModel));
 }
 
 function resolveSelectedMusicGenerationProvider(params: {
@@ -351,8 +359,12 @@ async function loadReferenceImages(params: {
             readFile: createSandboxBridgeReadFile({ sandbox: params.sandboxConfig }),
           })
         : await (async () => {
+            const referenceTarget = resolvedPath ?? resolvedInput;
+            const isRemoteReference = /^https?:\/\//i.test(referenceTarget);
             const { signal, cleanup } = buildTimeoutAbortSignal({
               timeoutMs: params.timeoutMs ?? DEFAULT_REFERENCE_FETCH_TIMEOUT_MS,
+              operation: "music-generate.reference-fetch",
+              ...(isRemoteReference ? { url: referenceTarget } : {}),
             });
             try {
               return await loadWebMedia(resolvedPath ?? resolvedInput, {
@@ -406,6 +418,7 @@ async function executeMusicGenerationJob(params: {
   filename?: string;
   loadedReferenceImages: LoadedReferenceImage[];
   taskHandle?: MusicGenerationTaskHandle | null;
+  autoProviderFallback?: boolean;
   timeoutMs?: number;
   timeoutNormalization?: MusicGenerationTimeoutNormalization;
 }): Promise<ExecutedMusicGeneration> {
@@ -425,6 +438,7 @@ async function executeMusicGenerationJob(params: {
     durationSeconds: params.durationSeconds,
     format: params.format,
     inputImages: params.loadedReferenceImages.map((entry) => entry.sourceImage),
+    autoProviderFallback: params.autoProviderFallback,
     timeoutMs: params.timeoutMs,
   });
   if (params.taskHandle) {
@@ -585,7 +599,10 @@ export function createMusicGenerateTool(options?: {
       const action = resolveAction(args);
 
       if (action === "list") {
-        return createMusicGenerateListActionResult(cfg);
+        return createMusicGenerateListActionResult(cfg, {
+          agentDir: options?.agentDir,
+          authStore: options?.authProfileStore,
+        });
       }
 
       if (action === "status") {
@@ -600,6 +617,7 @@ export function createMusicGenerateTool(options?: {
       if (!musicGenerationModelConfig) {
         throw new ToolInputError("No music-generation model configured.");
       }
+      const explicitModelConfig = hasExplicitMusicGenerationModelConfig(cfg);
       const effectiveCfg =
         applyMusicGenerationModelConfigDefaults(cfg, musicGenerationModelConfig) ?? cfg;
 
@@ -621,26 +639,34 @@ export function createMusicGenerateTool(options?: {
       const format = normalizeOutputFormat(readStringParam(args, "format"));
       const filename = readStringParam(args, "filename");
       const requestedTimeoutMs = readGenerationTimeoutMs(args);
-      const timeout = normalizeMusicGenerationTimeoutMs(requestedTimeoutMs);
+      const requestedGenerationTimeoutMs =
+        requestedTimeoutMs ?? musicGenerationModelConfig.timeoutMs;
+      const timeout = normalizeMusicGenerationTimeoutMs(requestedGenerationTimeoutMs);
       const timeoutMs = timeout.timeoutMs;
+      const referenceFetchTimeoutMs = requestedTimeoutMs === undefined ? undefined : timeoutMs;
       const imageInputs = normalizeReferenceImageInputs(args);
-      const selectedProvider = resolveSelectedMusicGenerationProvider({
-        config: effectiveCfg,
-        musicGenerationModelConfig,
-        modelOverride: model,
-      });
+      const selectedModelRef =
+        parseMusicGenerationModelRef(model) ??
+        parseMusicGenerationModelRef(musicGenerationModelConfig.primary);
+      const selectedProvider =
+        imageInputs.length > 0
+          ? resolveSelectedMusicGenerationProvider({
+              config: effectiveCfg,
+              musicGenerationModelConfig,
+              modelOverride: model,
+            })
+          : undefined;
       const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
       const loadedReferenceImages = await loadReferenceImages({
         inputs: imageInputs,
         workspaceDir: options?.workspaceDir,
         sandboxConfig,
         ssrfPolicy: remoteMediaSsrfPolicy,
-        timeoutMs,
+        timeoutMs: referenceFetchTimeoutMs,
       });
       validateMusicGenerationCapabilities({
         provider: selectedProvider,
-        model:
-          parseMusicGenerationModelRef(model)?.model ?? model ?? selectedProvider?.defaultModel,
+        model: selectedModelRef?.model ?? model ?? selectedProvider?.defaultModel,
         inputImageCount: loadedReferenceImages.length,
         lyrics,
         instrumental,
@@ -651,7 +677,7 @@ export function createMusicGenerateTool(options?: {
         sessionKey: options?.agentSessionKey,
         requesterOrigin: options?.requesterOrigin,
         prompt,
-        providerId: selectedProvider?.id,
+        providerId: selectedProvider?.id ?? selectedModelRef?.provider,
       });
       const shouldDetach = Boolean(taskHandle && options?.agentSessionKey?.trim());
 
@@ -674,6 +700,7 @@ export function createMusicGenerateTool(options?: {
                   filename,
                   loadedReferenceImages,
                   taskHandle,
+                  autoProviderFallback: explicitModelConfig ? false : undefined,
                   timeoutMs,
                   timeoutNormalization: timeout.normalization,
                 }),
@@ -770,6 +797,7 @@ export function createMusicGenerateTool(options?: {
           filename,
           loadedReferenceImages,
           taskHandle,
+          autoProviderFallback: explicitModelConfig ? false : undefined,
           timeoutMs,
           timeoutNormalization: timeout.normalization,
         });

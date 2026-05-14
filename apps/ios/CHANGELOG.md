@@ -1,5 +1,37 @@
 # OpenClaw iOS Changelog
 
+## 2026.5.12 - 2026-05-12
+
+Maintenance update for the current OpenClaw beta release.
+
+## 2026.5.10 - 2026-05-10
+
+Maintenance update for the current OpenClaw beta release.
+
+- Gateway connections now recover after a trusted Gateway certificate changes by refreshing the stored certificate pin during reconnect.
+
+## 2026.5.8 - 2026-05-08
+
+Maintenance update for the current OpenClaw development release.
+
+## 2026.5.6 - 2026-05-06
+
+Maintenance update for the current OpenClaw development release.
+
+## 2026.5.5 - 2026-05-05
+
+Maintenance update for the current OpenClaw development release.
+
+## 2026.5.4 - 2026-05-04
+
+Maintenance update for the current OpenClaw development release.
+
+- Gateway pairing now supports scanning QR codes from Settings and accepts full copied setup-code messages while keeping non-loopback `ws://` setup links blocked.
+
+## 2026.5.3 - 2026-05-03
+
+Maintenance update for the current OpenClaw development release.
+
 ## 2026.5.2 - 2026-05-02
 
 Maintenance update for the current OpenClaw development release.

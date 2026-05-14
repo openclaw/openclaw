@@ -22,6 +22,9 @@ tool with the `react` action. Reaction behavior varies by channel and transport.
 - `emoji` is required when adding a reaction.
 - Set `emoji` to an empty string (`""`) to remove the bot's reaction(s).
 - Set `remove: true` to remove a specific emoji (requires non-empty `emoji`).
+- On channels that support status reactions, `trackToolCalls: true` on a
+  reaction lets the runtime use that reacted message for subsequent tool
+  progress reactions during the same turn.
 
 ## Channel behavior
 
@@ -64,6 +67,12 @@ tool with the `react` action. Reaction behavior varies by channel and transport.
 
   <Accordion title="Signal">
     - Inbound reaction notifications are controlled by `channels.signal.reactionNotifications`: `"off"` disables them, `"own"` (default) emits events when users react to bot messages, and `"all"` emits events for all reactions.
+
+  </Accordion>
+
+  <Accordion title="iMessage">
+    - Outbound reactions are iMessage tapbacks (`love`, `like`, `dislike`, `laugh`, `emphasize`, and `question`).
+    - Inbound tapback notifications are controlled by `channels.imessage.reactionNotifications`: `"off"` disables them, `"own"` (default) emits events when users react to bot-authored messages, and `"all"` emits events for all tapbacks from authorized senders.
 
   </Accordion>
 </AccordionGroup>
