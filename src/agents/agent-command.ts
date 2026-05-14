@@ -1284,11 +1284,13 @@ async function agentCommandInternal(
           const pendingToolCalls = Array.isArray(result.meta.pendingToolCalls)
             ? result.meta.pendingToolCalls
             : [];
+          const clientToolCallsPending = result.meta.clientToolCallsPending === true;
           const endedWithUnresolvedToolBoundary =
-            pendingToolCalls.length > 0 ||
-            stopReason === "tool_calls" ||
-            stopReason === "toolUse" ||
-            stopReason === "tool_use";
+            !clientToolCallsPending &&
+            (pendingToolCalls.length > 0 ||
+              stopReason === "tool_calls" ||
+              stopReason === "toolUse" ||
+              stopReason === "tool_use");
           if (endedWithUnresolvedToolBoundary) {
             const error =
               pendingToolCalls.length > 0

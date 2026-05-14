@@ -37,6 +37,7 @@ function createContext(
       replayState: { replayInvalid: false, hadPotentialSideEffects: false },
       terminalStopReason: undefined,
       yielded: false,
+      clientToolCallsPending: false,
       blockState: {
         thinking: true,
         final: true,
@@ -346,6 +347,25 @@ describe("handleAgentEnd", () => {
       data: {
         phase: "error",
         error: "Agent run ended at unresolved tool boundary (tool_calls).",
+        stopReason: "tool_calls",
+        livenessState: "working",
+      },
+    });
+  });
+
+  it("keeps hosted client tool handoff as lifecycle end for terminal tool-call stop reasons", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(undefined, { onAgentEvent });
+    ctx.state.terminalStopReason = "tool_calls";
+    ctx.state.clientToolCallsPending = true;
+    ctx.state.livenessState = "working";
+
+    await handleAgentEnd(ctx);
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "end",
         stopReason: "tool_calls",
         livenessState: "working",
       },

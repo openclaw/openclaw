@@ -156,6 +156,8 @@ export type EmbeddedPiRunMeta = {
     name: string;
     arguments: string;
   }>;
+  /** True when pendingToolCalls came from hosted/client tools awaiting external resolution. */
+  clientToolCallsPending?: boolean;
   executionTrace?: ExecutionTrace;
   requestShaping?: RequestShapingTrace;
   promptSegments?: PromptSegmentTrace[];

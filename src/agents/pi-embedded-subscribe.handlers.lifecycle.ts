@@ -62,6 +62,7 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
   const unresolvedToolBoundaryError = unresolvedToolBoundary
     ? `Agent run ended at unresolved tool boundary (${ctx.state.terminalStopReason ?? "unknown"}).`
     : undefined;
+  const clientToolCallsPending = ctx.state.clientToolCallsPending === true;
   // Tool-use terminal guard: when the last assistant message ended with a
   // tool-call stop reason, the turn is incomplete even when pre-tool text
   // exists — mark as abandoned so lifecycle consumers do not see a working
@@ -129,7 +130,7 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
       ...(ctx.state.terminalStopReason ? { stopReason: ctx.state.terminalStopReason } : {}),
       ...(ctx.state.yielded === true ? { yielded: true } : {}),
     };
-    if (isError || unresolvedToolBoundary) {
+    if (isError || (unresolvedToolBoundary && !clientToolCallsPending)) {
       emitAgentEvent({
         runId: ctx.params.runId,
         stream: "lifecycle",

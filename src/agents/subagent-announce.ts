@@ -508,7 +508,6 @@ export async function runSubagentAnnounceFlow(params: {
     const replyInstruction = buildAnnounceReplyInstruction({
       requesterIsSubagent,
       announceType,
-      expectsCompletionMessage,
     });
     const statsLine = await buildCompactAnnounceStatsLine({
       sessionKey: params.childSessionKey,

@@ -1090,6 +1090,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       livenessState?: EmbeddedRunLivenessState;
       stopReason?: string;
       yielded?: boolean;
+      clientToolCallsPending?: boolean;
     }) => {
       if (typeof meta.replayInvalid === "boolean") {
         state.replayState = { ...state.replayState, replayInvalid: meta.replayInvalid };
@@ -1102,6 +1103,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       }
       if (typeof meta.yielded === "boolean") {
         state.yielded = meta.yielded;
+      }
+      if (typeof meta.clientToolCallsPending === "boolean") {
+        state.clientToolCallsPending = meta.clientToolCallsPending;
       }
     },
     isCompacting: () => state.compactionInFlight || state.pendingCompactionRetry > 0,
