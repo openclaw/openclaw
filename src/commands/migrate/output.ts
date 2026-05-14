@@ -39,7 +39,7 @@ const ITEM_GROUPS: ItemGroup[] = [
   { kind: "memory", heading: "Memory:" },
   { kind: "secret", heading: "Secrets:" },
   { kind: "archive", heading: "Archive:" },
-  { kind: "manual", heading: "🔍 Manual review:" },
+  { kind: "manual", heading: "Manual review:" },
 ];
 
 const HIDDEN_KINDS = new Set(["config"]);
@@ -178,6 +178,12 @@ const RESULT_STATUS_GLYPHS: Record<string, string> = {
 };
 
 function formatItemPrefix(item: MigrationItem, mode: FormatMode): string {
+  // Manual-review items are technically status:"skipped", but rendering them
+  // with the skip glyph reads like "done, ignored". Use a magnifying glass to
+  // signal "look closer here" instead.
+  if (item.kind === "manual") {
+    return "🔍 ";
+  }
   if (mode === "result") {
     const glyph = RESULT_STATUS_GLYPHS[item.status];
     if (glyph) {
