@@ -536,6 +536,50 @@ describe("publishPluginSkills", () => {
     expect(fsSync.existsSync(path.join(managedDir, "broken-skill"))).toBe(false);
   });
 
+  it("replaces a non-symlink directory entry without emitting an EINVAL warning (regression #81432)", async () => {
+    const skillParent = await tempDirs.make("plugin-skills-");
+    const managedDir = await tempDirs.make("managed-skills-");
+
+    const dir = await writeSkillDir(skillParent, "my-skill");
+
+    // Simulate an existing real directory at the publish path (e.g. a
+    // Windows junction that was replaced with a regular directory, or a
+    // stale dir left over from a manual edit). Previously the publish
+    // path called fs.readlinkSync directly which threw EINVAL on real
+    // directories and triggered a noisy warning + skipped replacement.
+    const linkPath = path.join(managedDir, "my-skill");
+    await fs.mkdir(linkPath, { recursive: true });
+    // Add a sentinel file so we can prove the directory was actually
+    // removed and replaced rather than left in place.
+    const sentinel = path.join(linkPath, "STALE_SENTINEL");
+    await fs.writeFile(sentinel, "stale");
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      publishPluginSkills([dir], { pluginSkillsDir: managedDir });
+    } finally {
+      warnSpy.mockRestore();
+    }
+
+    // The stale directory must have been removed and replaced with a
+    // proper plugin-skill entry that points at the target.
+    expect(fsSync.existsSync(sentinel)).toBe(false);
+    const replacedStat = fsSync.lstatSync(linkPath);
+    if (process.platform === "win32") {
+      // On Windows publishPluginSkills uses junctions, which appear as
+      // directories rather than symbolic links.
+      expect(replacedStat.isDirectory()).toBe(true);
+    } else {
+      expect(replacedStat.isSymbolicLink()).toBe(true);
+      expect(fsSync.readlinkSync(linkPath)).toBe(dir);
+    }
+    // No EINVAL-shaped warning should have been emitted.
+    const einvalWarnings = warnSpy.mock.calls
+      .map((args) => args.join(" "))
+      .filter((line) => /EINVAL/i.test(line));
+    expect(einvalWarnings).toEqual([]);
+  });
+
   it.runIf(process.platform !== "win32")(
     "skips child skill directories whose SKILL.md symlinks outside the declared root",
     async () => {

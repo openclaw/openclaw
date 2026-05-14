@@ -220,9 +220,17 @@ function publishPluginSkills(skillDirs: string[], opts?: { pluginSkillsDir?: str
       // best-effort; symlink will fail below if dir is truly unusable
     }
     try {
-      const existingTarget = fs.readlinkSync(linkPath);
-      if (existingTarget === target) {
-        continue;
+      // Inspect the existing entry without calling readlinkSync on a
+      // non-symlink: readlinkSync throws EINVAL on regular directories
+      // (e.g. when a junction has been replaced with a real directory on
+      // Windows), which used to surface as a noisy warning and skip the
+      // replacement entirely. Use lstat to branch on the entry kind.
+      const existingStat = fs.lstatSync(linkPath);
+      if (existingStat.isSymbolicLink()) {
+        const existingTarget = fs.readlinkSync(linkPath);
+        if (existingTarget === target) {
+          continue;
+        }
       }
       removeGeneratedPluginSkillEntry(linkPath);
     } catch (err) {
