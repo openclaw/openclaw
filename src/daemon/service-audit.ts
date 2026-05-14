@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isGatewayArgv } from "../infra/gateway-process-argv.js";
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveLaunchAgentPlistPath } from "./launchd.js";
@@ -70,8 +71,115 @@ export function needsNodeRuntimeMigration(issues: ServiceConfigIssue[]): boolean
   );
 }
 
+const SUPPORTED_SHELL_COMMANDS = new Set(["bash", "dash", "ksh", "sh", "zsh"]);
+
+function getShellCommandName(command: string | undefined): string {
+  const executable = (command ?? "").trim().replaceAll("\\", "/").split("/").pop() ?? "";
+  return executable.replace(/\.(?:exe|cmd|bat)$/i, "").toLowerCase();
+}
+
+function isShellCommandFlag(arg: string | undefined): boolean {
+  return /^-[A-Za-z]*c[A-Za-z]*$/.test((arg ?? "").trim());
+}
+
+function readSupportedShellPayload(programArguments: string[]): string | undefined {
+  if (!SUPPORTED_SHELL_COMMANDS.has(getShellCommandName(programArguments[0]))) {
+    return undefined;
+  }
+  for (let index = 1; index < programArguments.length - 1; index += 1) {
+    if (isShellCommandFlag(programArguments[index])) {
+      return programArguments[index + 1];
+    }
+  }
+  return undefined;
+}
+
+function splitShellPayloadIntoCommandSegments(payload: string): string[][] {
+  const segments: string[][] = [];
+  let segment: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | null = null;
+  let escapeNext = false;
+
+  const pushToken = () => {
+    if (current) {
+      segment.push(current);
+      current = "";
+    }
+  };
+  const pushSegment = () => {
+    pushToken();
+    if (segment.length > 0) {
+      segments.push(segment);
+      segment = [];
+    }
+  };
+
+  for (let index = 0; index < payload.length; index += 1) {
+    const char = payload[index] ?? "";
+    if (escapeNext) {
+      current += char;
+      escapeNext = false;
+      continue;
+    }
+    if (char === "\\" && quote !== "'") {
+      escapeNext = true;
+      continue;
+    }
+    if ((char === "'" || char === '"') && quote === null) {
+      quote = char;
+      continue;
+    }
+    if (char === quote) {
+      quote = null;
+      continue;
+    }
+    if (quote === null) {
+      if (char === ";" || char === "\n" || char === "\r") {
+        pushSegment();
+        continue;
+      }
+      if ((char === "&" || char === "|") && payload[index + 1] === char) {
+        pushSegment();
+        index += 1;
+        continue;
+      }
+      if (/\s/.test(char)) {
+        pushToken();
+        continue;
+      }
+    }
+    current += char;
+  }
+  if (escapeNext) {
+    current += "\\";
+  }
+  pushSegment();
+  return segments;
+}
+
+function stripShellCommandPrefix(segment: string[]): string[] {
+  const command = segment[0]?.toLowerCase();
+  if (command === "exec" || command === "command") {
+    return segment.slice(1);
+  }
+  return segment;
+}
+
 function hasGatewaySubcommand(programArguments?: string[]): boolean {
-  return Boolean(programArguments?.some((arg) => arg === "gateway"));
+  if (programArguments?.some((arg) => arg === "gateway")) {
+    return true;
+  }
+  if (!programArguments || programArguments.length === 0) {
+    return false;
+  }
+  const payload = readSupportedShellPayload(programArguments);
+  if (!payload) {
+    return false;
+  }
+  return splitShellPayloadIntoCommandSegments(payload).some((segment) =>
+    isGatewayArgv(stripShellCommandPrefix(segment), { allowGatewayBinary: true }),
+  );
 }
 
 function parseSystemdUnit(content: string): {

@@ -256,6 +256,40 @@ describe("auditGatewayServiceConfig", () => {
     ).toBe(false);
   });
 
+  it("accepts shell-wrapped LaunchAgent commands that exec the OpenClaw gateway", async () => {
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp/openclaw-testuser" },
+      platform: "darwin",
+      command: {
+        programArguments: [
+          "/bin/zsh",
+          "-lc",
+          'set -a; [ -f "$HOME/.config/openclaw.env" ] && . "$HOME/.config/openclaw.env"; set +a; exec /opt/homebrew/opt/node/bin/node /opt/openclaw/dist/index.js gateway --port 18890',
+        ],
+        environment: { PATH: "/usr/bin:/bin" },
+      },
+    });
+
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayCommandMissing)).toBe(false);
+  });
+
+  it("does not accept shell payloads that only mention gateway outside OpenClaw argv", async () => {
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp/openclaw-testuser" },
+      platform: "darwin",
+      command: {
+        programArguments: [
+          "/bin/zsh",
+          "-lc",
+          "echo gateway; exec /usr/bin/node /opt/openclaw/dist/index.js node --port 18890",
+        ],
+        environment: { PATH: "/usr/bin:/bin" },
+      },
+    });
+
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayCommandMissing)).toBe(true);
+  });
+
   it("reads gateway service ports from split and equals-form arguments", () => {
     expect(
       readGatewayServiceCommandPort(["/usr/bin/node", "entry.js", "gateway", "--port", "18888"]),
