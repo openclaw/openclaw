@@ -13,7 +13,10 @@ import {
   requireValidExecTarget,
 } from "../infra/exec-approvals.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
-import { sanitizeHostExecEnvWithDiagnostics } from "../infra/host-env-security.js";
+import {
+  isDangerousHostEnvOverrideVarName,
+  sanitizeHostExecEnvWithDiagnostics,
+} from "../infra/host-env-security.js";
 import {
   getShellPathFromLoginShell,
   resolveShellEnvFallbackTimeoutMs,
@@ -1522,12 +1525,14 @@ export function createExecTool(
         applyPathPrepend(env, defaultPathPrepend);
       }
 
-      // Let plugins contribute channel-specific env vars. Plugins are responsible
-      // for the values they inject — do not return secrets, tokens, or credentials
-      // unless the exec context explicitly requires them.
+      // Let plugins contribute channel-specific env vars. Filter out keys that
+      // the host env security policy marks as dangerous overrides (e.g. LD_PRELOAD,
+      // proxy/TLS pivots) so plugin hooks cannot silently bypass the sanitizer.
+      // PATH overrides are intentionally allowed — plugins may prepend custom tool dirs.
+      let pluginEnv: Record<string, string> | undefined;
       const hookRunner = getGlobalHookRunner();
       if (hookRunner?.hasHooks("resolve_exec_env")) {
-        const pluginEnv = await hookRunner.runResolveExecEnv(
+        const rawPluginEnv = await hookRunner.runResolveExecEnv(
           {
             sessionKey: defaults?.sessionKey,
             toolName: "exec",
@@ -1540,6 +1545,12 @@ export function createExecTool(
             channelId: defaults?.currentChannelId,
           },
         );
+        pluginEnv = {};
+        for (const [key, value] of Object.entries(rawPluginEnv)) {
+          if (!isDangerousHostEnvOverrideVarName(key)) {
+            pluginEnv[key] = value;
+          }
+        }
         Object.assign(env, pluginEnv);
       }
 
@@ -1548,7 +1559,7 @@ export function createExecTool(
           command: params.command,
           workdir,
           env,
-          requestedEnv: params.env,
+          requestedEnv: { ...params.env, ...pluginEnv },
           requestedNode: params.node?.trim(),
           boundNode: defaults?.node?.trim(),
           sessionKey: defaults?.sessionKey,
