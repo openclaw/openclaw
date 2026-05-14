@@ -30,6 +30,7 @@ vi.mock("../infra/env.js", () => ({
 
 vi.mock("../infra/outbound/deliver.js", () => ({
   deliverOutboundPayloads: hoisted.deliverOutboundPayloads,
+  deliverOutboundPayloadsInternal: hoisted.deliverOutboundPayloads,
 }));
 
 vi.mock("../infra/outbound/delivery-queue.js", () => ({
@@ -184,18 +185,23 @@ describe("server-runtime-services", () => {
     expect(services.heartbeatRunner).toBe(hoisted.heartbeatRunner);
     await vi.advanceTimersByTimeAsync(1_250);
     await vi.dynamicImportSettled();
-    expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledWith(
-      expect.objectContaining({
-        deliver: hoisted.deliverOutboundPayloads,
-        cfg: {},
-      }),
-    );
-    expect(hoisted.recoverPendingRestartContinuationDeliveries).toHaveBeenCalledWith(
-      expect.objectContaining({
-        deps: {},
-        maxEnqueuedAt: 123,
-      }),
-    );
+    expect(log.child).toHaveBeenNthCalledWith(1, "delivery-recovery");
+    expect(log.child).toHaveBeenNthCalledWith(2, "session-delivery-recovery");
+    const deliveryLog = log.child.mock.results[0]?.value;
+    const sessionDeliveryLog = log.child.mock.results[1]?.value;
+    if (!deliveryLog || !sessionDeliveryLog) {
+      throw new Error("Expected delivery recovery log children");
+    }
+    expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledWith({
+      deliver: hoisted.deliverOutboundPayloads,
+      cfg: {},
+      log: deliveryLog,
+    });
+    expect(hoisted.recoverPendingRestartContinuationDeliveries).toHaveBeenCalledWith({
+      deps: {},
+      maxEnqueuedAt: 123,
+      log: sessionDeliveryLog,
+    });
   });
 
   it("can defer cron startup while activating other scheduled services", async () => {
@@ -268,7 +274,9 @@ describe("server-runtime-services", () => {
   it("clears delayed maintenance handles when close starts during maintenance startup", async () => {
     vi.useFakeTimers();
     let closing = false;
-    let resolveMaintenance!: (maintenance: ReturnType<typeof createMaintenanceHandles>) => void;
+    let resolveMaintenance:
+      | ((maintenance: ReturnType<typeof createMaintenanceHandles>) => void)
+      | undefined;
     const startMaintenance = vi.fn(
       () =>
         new Promise<ReturnType<typeof createMaintenanceHandles>>((resolve) => {
@@ -294,6 +302,9 @@ describe("server-runtime-services", () => {
     expect(startMaintenance).toHaveBeenCalledTimes(1);
 
     closing = true;
+    if (!resolveMaintenance) {
+      throw new Error("Expected gateway maintenance resolver to be initialized");
+    }
     resolveMaintenance(createMaintenanceHandles());
     await Promise.resolve();
     await Promise.resolve();

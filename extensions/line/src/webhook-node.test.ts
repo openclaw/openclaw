@@ -30,6 +30,28 @@ function createRes() {
 
 const SECRET = "secret";
 
+type ParsedLineWebhookPayload = {
+  events: unknown;
+};
+
+function firstMockCall(
+  mock: { mock: { calls: Array<readonly unknown[]> } },
+  label: string,
+): readonly unknown[] {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
+function firstParsedPayload(
+  mock: { mock: { calls: Array<readonly unknown[]> } },
+  label: string,
+): ParsedLineWebhookPayload {
+  return firstMockCall(mock, label)[0] as ParsedLineWebhookPayload;
+}
+
 type RuntimeEnvMock = RuntimeEnv & {
   error: ReturnType<typeof vi.fn<(...args: unknown[]) => void>>;
   exit: ReturnType<typeof vi.fn<(code: number) => void>>;
@@ -230,9 +252,9 @@ async function expectSignedRawBodyWins(params: { rawBody: string | Buffer; signe
 
   expect(res.status).toHaveBeenCalledWith(200);
   expect(onEvents).toHaveBeenCalledTimes(1);
-  const processedBody = (
-    onEvents.mock.calls[0] as unknown as [{ events?: Array<{ source?: { userId?: string } }> }]
-  )?.[0];
+  const processedBody = firstMockCall(onEvents, "LINE webhook events")[0] as {
+    events?: Array<{ source?: { userId?: string } }>;
+  };
   expect(processedBody?.events?.[0]?.source?.userId).toBe(params.signedUserId);
   expect(processedBody?.events?.[0]?.source?.userId).not.toBe("tampered-user");
 }
@@ -409,14 +431,14 @@ describe("createLineNodeWebhookHandler", () => {
     await runSignedPost({ handler, rawBody, secret, res });
 
     expect(res.statusCode).toBe(200);
-    expect(bot.handleWebhook).toHaveBeenCalledWith(
-      expect.objectContaining({ events: expect.any(Array) }),
-    );
+    expect(bot.handleWebhook).toHaveBeenCalledTimes(1);
+    const payload = firstParsedPayload(bot.handleWebhook, "LINE node webhook payload");
+    expect(payload.events).toEqual([{ type: "message" }]);
   });
 
   it("releases authenticated requests before event processing completes", async () => {
     const rawBody = JSON.stringify({ events: [{ type: "message" }] });
-    let releaseAuthenticated!: () => void;
+    let releaseAuthenticated: (() => void) | undefined;
     const bot = {
       handleWebhook: vi.fn(
         async () =>
@@ -444,6 +466,9 @@ describe("createLineNodeWebhookHandler", () => {
     });
 
     expect(res.headersSent).toBe(false);
+    if (!releaseAuthenticated) {
+      throw new Error("Expected LINE authenticated request release callback to be initialized");
+    }
     releaseAuthenticated();
     await request;
 
@@ -477,12 +502,18 @@ describe("readLineWebhookRequestBody", () => {
 
 describe("createLineWebhookMiddleware", () => {
   it.each([
-    ["raw string body", JSON.stringify({ events: [{ type: "message" }] })],
-    ["raw buffer body", Buffer.from(JSON.stringify({ events: [{ type: "follow" }] }), "utf-8")],
-  ])("parses JSON from %s", async (_label, body) => {
+    ["raw string body", JSON.stringify({ events: [{ type: "message" }] }), [{ type: "message" }]],
+    [
+      "raw buffer body",
+      Buffer.from(JSON.stringify({ events: [{ type: "follow" }] }), "utf-8"),
+      [{ type: "follow" }],
+    ],
+  ])("parses JSON from %s", async (_label, body, expectedEvents) => {
     const { res, onEvents } = await invokeWebhook({ body });
     expect(res.status).toHaveBeenCalledWith(200);
-    expect(onEvents).toHaveBeenCalledWith(expect.objectContaining({ events: expect.any(Array) }));
+    expect(onEvents).toHaveBeenCalledTimes(1);
+    const payload = firstParsedPayload(onEvents, "LINE middleware payload");
+    expect(payload.events).toEqual(expectedEvents);
   });
 
   it("rejects invalid JSON payloads", async () => {

@@ -1,61 +1,55 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeAgentId } from "../routing/session-key.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { resolveAgentRuntimePolicy } from "./agent-runtime-policy.js";
-import { listAgentEntries } from "./agent-scope.js";
-import {
-  normalizeEmbeddedAgentRuntime,
-  type EmbeddedAgentRuntime,
-} from "./pi-embedded-runner/runtime.js";
+import { applyAcpRuntimeOverlay, type AgentRuntimeMetadata } from "./acp-runtime-overlay.js";
+import { resolveAgentHarnessPolicy } from "./harness/policy.js";
+import { resolveDefaultModelForAgent } from "./model-selection.js";
 
-type AgentRuntimeMetadata = {
-  id: string;
-  source: "env" | "agent" | "defaults" | "implicit";
-};
-
-function normalizeRuntimeValue(value: unknown): EmbeddedAgentRuntime | undefined {
-  const normalized = typeof value === "string" ? normalizeLowercaseStringOrEmpty(value) : "";
-  return normalized ? normalizeEmbeddedAgentRuntime(normalized) : undefined;
-}
+export type { AgentRuntimeMetadata };
 
 export function resolveAgentRuntimeMetadata(
-  cfg: OpenClawConfig,
-  agentId: string,
-  env: NodeJS.ProcessEnv = process.env,
+  _cfg: OpenClawConfig,
+  _agentId: string,
+  _env: NodeJS.ProcessEnv = process.env,
 ): AgentRuntimeMetadata {
-  const envRuntime = normalizeRuntimeValue(env.OPENCLAW_AGENT_RUNTIME);
-  const normalizedAgentId = normalizeAgentId(agentId);
-  const agentEntry = listAgentEntries(cfg).find(
-    (entry) => normalizeAgentId(entry.id) === normalizedAgentId,
-  );
-  const agentPolicy = resolveAgentRuntimePolicy(agentEntry);
-  const defaultsPolicy = resolveAgentRuntimePolicy(cfg.agents?.defaults);
-
-  if (envRuntime) {
-    return {
-      id: envRuntime,
-      source: "env",
-    };
-  }
-
-  const agentRuntime = normalizeRuntimeValue(agentPolicy?.id);
-  if (agentRuntime) {
-    return {
-      id: agentRuntime,
-      source: "agent",
-    };
-  }
-
-  const defaultsRuntime = normalizeRuntimeValue(defaultsPolicy?.id);
-  if (defaultsRuntime) {
-    return {
-      id: defaultsRuntime,
-      source: "defaults",
-    };
-  }
-
   return {
-    id: "pi",
+    id: "auto",
     source: "implicit",
   };
+}
+
+export function resolveModelAgentRuntimeMetadata(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  provider?: string;
+  model?: string;
+  sessionKey?: string;
+  /**
+   * True when the loaded session entry has persisted ACP metadata. ACP-shaped
+   * keys without this marker can be bridge sessions that use the configured
+   * model/runtime.
+   */
+  acpRuntime?: boolean;
+  /**
+   * The ACP backend identifier stored on the session entry (`entry.acp.backend`).
+   * When provided for an ACP-keyed session, the overlay reports this value as the
+   * runtime id instead of the generic fallback "acpx", so sessions backed by a
+   * non-default registered ACP backend are classified correctly.
+   */
+  acpBackend?: string;
+}): AgentRuntimeMetadata {
+  const resolved =
+    params.provider && params.model
+      ? { provider: params.provider, model: params.model }
+      : resolveDefaultModelForAgent({ cfg: params.cfg, agentId: params.agentId });
+  const policy = resolveAgentHarnessPolicy({
+    provider: resolved.provider,
+    modelId: resolved.model,
+    config: params.cfg,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+  });
+  const meta: AgentRuntimeMetadata = {
+    id: policy.runtime,
+    source: policy.runtimeSource ?? "implicit",
+  };
+  return applyAcpRuntimeOverlay(meta, params.sessionKey, params.acpRuntime, params.acpBackend);
 }

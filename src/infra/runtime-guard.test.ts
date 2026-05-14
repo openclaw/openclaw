@@ -86,8 +86,17 @@ describe("runtime-guard", () => {
       pathEnv: "/usr/bin",
     };
     expect(() => assertSupportedRuntime(runtime, details)).toThrow("exit");
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("requires Node"));
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Detected: node 20.0.0"));
+    expect(runtime.error).toHaveBeenCalledOnce();
+    expect(runtime.error).toHaveBeenCalledWith(
+      [
+        "openclaw requires Node >=22.16.0.",
+        "Detected: node 20.0.0 (exec: /usr/bin/node).",
+        "PATH searched: /usr/bin",
+        "Install Node: https://nodejs.org/en/download",
+        "Upgrade Node and re-run openclaw.",
+      ].join("\n"),
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
   it("returns silently when runtime meets requirements", () => {
@@ -102,7 +111,7 @@ describe("runtime-guard", () => {
       version: "22.16.0",
       execPath: "/usr/bin/node",
     };
-    expect(() => assertSupportedRuntime(runtime, details)).not.toThrow();
+    expect(assertSupportedRuntime(runtime, details)).toBeUndefined();
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
@@ -122,8 +131,16 @@ describe("runtime-guard", () => {
     };
 
     expect(() => assertSupportedRuntime(runtime, details)).toThrow("exit");
+    expect(runtime.error).toHaveBeenCalledOnce();
     expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Detected: unknown runtime (exec: unknown)."),
+      [
+        "openclaw requires Node >=22.16.0.",
+        "Detected: unknown runtime (exec: unknown).",
+        "PATH searched: (not set)",
+        "Install Node: https://nodejs.org/en/download",
+        "Upgrade Node and re-run openclaw.",
+      ].join("\n"),
     );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 });

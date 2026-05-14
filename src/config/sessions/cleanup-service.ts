@@ -21,6 +21,7 @@ import {
   resolveStorePath,
 } from "./paths.js";
 import { cloneSessionStoreRecord } from "./store-cache.js";
+import { collectSessionMaintenancePreserveKeys } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   capEntryCount,
@@ -447,14 +448,17 @@ async function previewStoreCleanup(params: {
           },
         })
       : 0;
+  const preserveSessionKeys = collectSessionMaintenancePreserveKeys([params.activeKey]);
   const pruned = pruneStaleEntries(previewStore, params.maintenance.pruneAfterMs, {
     log: false,
+    preserveKeys: preserveSessionKeys,
     onPruned: ({ key }) => {
       staleKeys.add(key);
     },
   });
   const capped = capEntryCount(previewStore, params.maintenance.maxEntries, {
     log: false,
+    preserveKeys: preserveSessionKeys,
     onCapped: ({ key }) => {
       cappedKeys.add(key);
     },
@@ -484,6 +488,7 @@ async function previewStoreCleanup(params: {
     store: previewStore,
     storePath: params.target.storePath,
     activeSessionKey: params.activeKey,
+    preserveKeys: preserveSessionKeys,
     maintenance: params.maintenance,
     warnOnly: false,
     dryRun: true,

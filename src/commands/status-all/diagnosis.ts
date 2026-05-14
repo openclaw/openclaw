@@ -4,6 +4,7 @@ import { resolveGatewayLogPaths, resolveGatewayRestartLogPath } from "../../daem
 import {
   formatPortDiagnostics,
   isDualStackLoopbackGatewayListeners,
+  isExpectedGatewayListeners,
   type PortUsage,
 } from "../../infra/ports.js";
 import {
@@ -150,7 +151,11 @@ export async function appendStatusAllDiagnosis(params: {
       params.portUsage.listeners,
       params.port,
     );
-    const portOk = params.portUsage.listeners.length === 0 || benignDualStackLoopback;
+    const expectedGatewayListeners = isExpectedGatewayListeners(
+      params.portUsage.listeners,
+      params.port,
+    );
+    const portOk = params.portUsage.listeners.length === 0 || expectedGatewayListeners;
     emitCheck(`Port ${params.port}`, portOk ? "ok" : "warn");
     if (!portOk) {
       for (const line of formatPortDiagnostics(params.portUsage)) {
@@ -160,6 +165,8 @@ export async function appendStatusAllDiagnosis(params: {
       lines.push(
         `  ${muted("Detected dual-stack loopback listeners (127.0.0.1 + ::1) for one gateway process.")}`,
       );
+    } else if (expectedGatewayListeners) {
+      lines.push(`  ${muted("Detected OpenClaw Gateway listener on the configured port.")}`);
     }
   }
 
@@ -219,17 +226,20 @@ export async function appendStatusAllDiagnosis(params: {
   if (logPaths) {
     params.progress.setLabel("Reading logs…");
     const restartLogPath = resolveGatewayRestartLogPath(process.env);
+    const readStderr = process.platform !== "darwin";
     const [stderrTail, stdoutTail, restartTail] = await Promise.all([
-      readFileTailLines(logPaths.stderrPath, 40).catch(() => []),
+      readStderr ? readFileTailLines(logPaths.stderrPath, 40).catch(() => []) : [],
       readFileTailLines(logPaths.stdoutPath, 40).catch(() => []),
       readFileTailLines(restartLogPath, 30).catch(() => []),
     ]);
     if (stderrTail.length > 0 || stdoutTail.length > 0) {
       lines.push("");
       lines.push(muted(`Gateway logs (tail, summarized): ${logPaths.logDir}`));
-      lines.push(`  ${muted(`# stderr: ${logPaths.stderrPath}`)}`);
-      for (const line of summarizeLogTail(stderrTail, { maxLines: 22 }).map(redactSecrets)) {
-        lines.push(`  ${muted(line)}`);
+      if (readStderr) {
+        lines.push(`  ${muted(`# stderr: ${logPaths.stderrPath}`)}`);
+        for (const line of summarizeLogTail(stderrTail, { maxLines: 22 }).map(redactSecrets)) {
+          lines.push(`  ${muted(line)}`);
+        }
       }
       lines.push(`  ${muted(`# stdout: ${logPaths.stdoutPath}`)}`);
       for (const line of summarizeLogTail(stdoutTail, { maxLines: 22 }).map(redactSecrets)) {

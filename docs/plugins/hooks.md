@@ -134,7 +134,7 @@ observation-only.
 
 **Sessions and compaction**
 
-- `session_start` / `session_end` - track session lifecycle boundaries
+- `session_start` / `session_end` - track session lifecycle boundaries. The event's `reason` is one of `new`, `reset`, `idle`, `daily`, `compaction`, `deleted`, `shutdown`, `restart`, or `unknown`. The `shutdown` and `restart` values fire from the gateway shutdown finalizer when the process is stopped or restarted while sessions are still active, so downstream plugins (such as memory or transcript stores) can finalize ghost rows that would otherwise be left in an open state across restarts. The finalizer is bounded so a slow plugin cannot block SIGTERM/SIGINT.
 - `before_compaction` / `after_compaction` - observe or annotate compaction cycles
 - `before_reset` - observe session-reset events (`/reset`, programmatic resets)
 
@@ -148,12 +148,28 @@ observation-only.
 - `cron_changed` - observe gateway-owned cron lifecycle changes (added, updated, removed, started, finished, scheduled)
 - **`before_install`** - inspect skill or plugin install scans and optionally block
 
+## Debug runtime hooks
+
+Use `before_model_resolve` when a plugin needs to switch the provider or model
+for an agent turn. It runs before model resolution; `llm_output` only runs after
+a model attempt produces assistant output.
+
+For proof of the effective session model, inspect runtime registrations, then
+use `openclaw sessions` or the Gateway session/status surfaces. When debugging
+provider payloads, start the Gateway with `--raw-stream` and
+`--raw-stream-path <path>`; those flags write raw model stream events to a jsonl
+file.
+
 ## Tool call policy
 
 `before_tool_call` receives:
 
 - `event.toolName`
 - `event.params`
+- optional `event.derivedPaths`, containing best-effort host-derived target path
+  hints for well-known tool envelopes such as `apply_patch`; when present,
+  these paths may be incomplete or may over-approximate what the tool will
+  actually touch (for example, with malformed or partial inputs)
 - optional `event.runId`
 - optional `event.toolCallId`
 - context fields such as `ctx.agentId`, `ctx.sessionKey`, `ctx.sessionId`,
@@ -180,7 +196,7 @@ type BeforeToolCallResult = {
 };
 ```
 
-Rules:
+Hook guard behavior for typed lifecycle hooks:
 
 - `block: true` is terminal and skips lower-priority handlers.
 - `block: false` is treated as no decision.
@@ -369,6 +385,12 @@ Decision rules:
 - `message_sending` with `cancel: false` is treated as no decision.
 - Rewritten `content` continues to lower-priority hooks unless a later hook
   cancels delivery.
+- `message_sending` can return `cancelReason` and bounded `metadata` with a
+  cancellation. New message lifecycle APIs expose this as a suppressed delivery
+  outcome with reason `cancelled_by_message_sending_hook`; legacy direct
+  delivery keeps returning an empty result array for compatibility.
+- `message_sent` is observation-only. Handler failures are logged and do not
+  change the delivery result.
 
 ## Install hooks
 

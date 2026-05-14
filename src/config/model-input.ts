@@ -1,6 +1,10 @@
-import { modelKey, normalizeStaticProviderModelId } from "../agents/model-ref-shared.js";
 import { normalizeProviderId } from "../agents/provider-id.js";
-import { normalizeOptionalString, resolvePrimaryStringValue } from "../shared/string-coerce.js";
+import { normalizeGooglePreviewModelId } from "../plugin-sdk/provider-model-id-normalize.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  resolvePrimaryStringValue,
+} from "../shared/string-coerce.js";
 import type { AgentModelConfig } from "./types.agents-shared.js";
 
 type AgentModelListLike = {
@@ -9,7 +13,25 @@ type AgentModelListLike = {
   timeoutMs?: number;
 };
 
-const GOOGLE_CONFIG_MODEL_PROVIDERS = new Set(["google", "google-gemini-cli", "google-vertex"]);
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function modelKeyForConfig(provider: string, model: string): string {
+  const providerId = provider.trim();
+  const modelId = model.trim();
+  if (!providerId) {
+    return modelId;
+  }
+  if (!modelId) {
+    return providerId;
+  }
+  return normalizeLowercaseStringOrEmpty(modelId).startsWith(
+    `${normalizeLowercaseStringOrEmpty(providerId)}/`,
+  )
+    ? modelId
+    : `${providerId}/${modelId}`;
+}
 
 export function resolveAgentModelPrimaryValue(model?: AgentModelConfig): string | undefined {
   return resolvePrimaryStringValue(model);
@@ -52,10 +74,35 @@ export function normalizeAgentModelRefForConfig(model: string): string {
   }
 
   const provider = normalizeProviderId(trimmed.slice(0, slash));
-  if (!GOOGLE_CONFIG_MODEL_PROVIDERS.has(provider)) {
-    return trimmed;
+  const normalizedModel = normalizeGooglePreviewModelId(trimmed.slice(slash + 1));
+  return modelKeyForConfig(provider, normalizedModel);
+}
+
+function mergeAgentModelEntryForConfig(existing: unknown, incoming: unknown): unknown {
+  if (!isPlainRecord(existing) || !isPlainRecord(incoming)) {
+    return incoming;
   }
 
-  const normalizedModel = normalizeStaticProviderModelId(provider, trimmed.slice(slash + 1));
-  return modelKey(provider, normalizedModel);
+  const existingParams = isPlainRecord(existing.params) ? existing.params : undefined;
+  const incomingParams = isPlainRecord(incoming.params) ? incoming.params : undefined;
+  return {
+    ...existing,
+    ...incoming,
+    ...(existingParams || incomingParams
+      ? { params: { ...existingParams, ...incomingParams } }
+      : undefined),
+  };
+}
+
+export function normalizeAgentModelMapForConfig<T extends Record<string, unknown>>(models: T): T {
+  let mutated = false;
+  const next: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(models)) {
+    const normalizedKey = normalizeAgentModelRefForConfig(key);
+    if (normalizedKey !== key || Object.prototype.hasOwnProperty.call(next, normalizedKey)) {
+      mutated = true;
+    }
+    next[normalizedKey] = mergeAgentModelEntryForConfig(next[normalizedKey], entry);
+  }
+  return (mutated ? next : models) as T;
 }

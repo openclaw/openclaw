@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
 import { classifyEmbeddedPiRunResultForModelFallback } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -21,6 +21,7 @@ const tempDirs = new Set<string>();
 
 type ProjectorNotification = Parameters<CodexAppServerEventProjector["handleNotification"]>[0];
 type ProjectedAttemptResult = ReturnType<CodexAppServerEventProjector["buildResult"]>;
+type MirrorTaggedMessage = { __openclaw?: { mirrorIdentity?: string } };
 
 async function createParams(): Promise<EmbeddedRunAttemptParams> {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-outcome-contract-"));
@@ -87,6 +88,11 @@ function classifyProjectedAttemptResult(result: ProjectedAttemptResult) {
   });
 }
 
+function readMirrorIdentity(message: unknown): string | undefined {
+  const meta = (message as MirrorTaggedMessage | undefined)?.__openclaw;
+  return meta?.mirrorIdentity;
+}
+
 afterEach(async () => {
   for (const tempDir of tempDirs) {
     await fs.rm(tempDir, { recursive: true, force: true });
@@ -105,7 +111,7 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
 
     const result = projector.buildResult(buildToolTelemetry());
 
-    expect(result.assistantTexts).toEqual([]);
+    expect(result.assistantTexts).toStrictEqual([]);
     expect(result.lastAssistant).toBeUndefined();
     expect(result.promptError).toBeNull();
   });
@@ -155,22 +161,44 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
 
     const result = projector.buildResult(buildToolTelemetry());
 
-    expect(result.assistantTexts).toEqual([]);
+    expect(result.assistantTexts).toStrictEqual([]);
     expect(result.lastAssistant).toBeUndefined();
     expect(result.promptError).toBeNull();
-    expect(result.messagesSnapshot).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          role: "assistant",
-          content: [
-            {
-              type: "text",
-              text: `Codex reasoning:\n${OUTCOME_FALLBACK_RUNTIME_CONTRACT.reasoningOnlyText}`,
-            },
-          ],
-        }),
-      ]),
-    );
+    expect(result.messagesSnapshot.map((message) => message.role)).toStrictEqual([
+      "user",
+      "assistant",
+    ]);
+    const reasoningMessage = result.messagesSnapshot[1];
+    if (reasoningMessage?.role !== "assistant") {
+      throw new Error("expected Codex reasoning mirror assistant message");
+    }
+    expect(readMirrorIdentity(reasoningMessage)).toBe(`${TURN_ID}:reasoning`);
+    expect(reasoningMessage.content).toStrictEqual([
+      {
+        type: "text",
+        text: `Codex reasoning:\n${OUTCOME_FALLBACK_RUNTIME_CONTRACT.reasoningOnlyText}`,
+      },
+    ]);
+    expect(reasoningMessage.api).toBe("openai-codex-responses");
+    expect(reasoningMessage.provider).toBe("codex");
+    expect(reasoningMessage.model).toBe(OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel);
+    expect(reasoningMessage.usage).toStrictEqual({
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 0,
+      },
+    });
+    expect(reasoningMessage.stopReason).toBe("stop");
+    expect(typeof reasoningMessage.timestamp).toBe("number");
+    expect(reasoningMessage.timestamp).toBeGreaterThan(0);
   });
 
   it("preserves planning-only terminal turns for OpenClaw-owned fallback classification", async () => {
@@ -199,22 +227,44 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
 
     const result = projector.buildResult(buildToolTelemetry());
 
-    expect(result.assistantTexts).toEqual([]);
+    expect(result.assistantTexts).toStrictEqual([]);
     expect(result.lastAssistant).toBeUndefined();
     expect(result.promptError).toBeNull();
-    expect(result.messagesSnapshot).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          role: "assistant",
-          content: [
-            {
-              type: "text",
-              text: `Codex plan:\n${OUTCOME_FALLBACK_RUNTIME_CONTRACT.planningOnlyText}`,
-            },
-          ],
-        }),
-      ]),
-    );
+    expect(result.messagesSnapshot.map((message) => message.role)).toStrictEqual([
+      "user",
+      "assistant",
+    ]);
+    const planMessage = result.messagesSnapshot[1];
+    if (planMessage?.role !== "assistant") {
+      throw new Error("expected Codex plan mirror assistant message");
+    }
+    expect(readMirrorIdentity(planMessage)).toBe(`${TURN_ID}:plan`);
+    expect(planMessage.content).toStrictEqual([
+      {
+        type: "text",
+        text: `Codex plan:\n${OUTCOME_FALLBACK_RUNTIME_CONTRACT.planningOnlyText}`,
+      },
+    ]);
+    expect(planMessage.api).toBe("openai-codex-responses");
+    expect(planMessage.provider).toBe("codex");
+    expect(planMessage.model).toBe(OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel);
+    expect(planMessage.usage).toStrictEqual({
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 0,
+      },
+    });
+    expect(planMessage.stopReason).toBe("stop");
+    expect(typeof planMessage.timestamp).toBe("number");
+    expect(planMessage.timestamp).toBeGreaterThan(0);
   });
 
   it("preserves tool side-effect telemetry so fallback can stay disabled", async () => {
@@ -227,7 +277,7 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
       }),
     );
 
-    expect(result.assistantTexts).toEqual([]);
+    expect(result.assistantTexts).toStrictEqual([]);
     expect(result.didSendViaMessagingTool).toBe(true);
     expect(result.messagingToolSentTexts).toEqual(["sent out of band"]);
   });
@@ -307,10 +357,12 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
       const result = await build();
 
       expect(result.agentHarnessResultClassification).toBe(classification);
-      expect(classifyProjectedAttemptResult(result)).toMatchObject({
-        reason: "format",
-        code: expectedCode,
-      });
+      const projected = classifyProjectedAttemptResult(result);
+      if (!projected || !("reason" in projected)) {
+        throw new Error("expected format fallback projection");
+      }
+      expect(projected.reason).toBe("format");
+      expect(projected.code).toBe(expectedCode);
     },
   );
 

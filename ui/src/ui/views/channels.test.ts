@@ -169,11 +169,11 @@ describe("WhatsApp card actions", () => {
       onWhatsAppStart,
     });
 
-    expect(labels).toContain("Show QR");
-    expect(labels).not.toContain("Relink");
-    expect(labels).not.toContain("Wait for scan");
+    expect(labels).toEqual(["Save", "Reload", "Show QR", "Logout", "Refresh"]);
 
-    buttons.find((button) => button.textContent?.trim() === "Show QR")?.click();
+    const showQr = buttons.find((button) => button.textContent?.trim() === "Show QR");
+    expect(showQr).toBeInstanceOf(HTMLButtonElement);
+    showQr!.click();
     expect(onWhatsAppStart).toHaveBeenCalledWith(false);
   });
 
@@ -184,10 +184,11 @@ describe("WhatsApp card actions", () => {
       onWhatsAppStart,
     });
 
-    expect(labels).toContain("Relink");
-    expect(labels).not.toContain("Show QR");
+    expect(labels).toEqual(["Save", "Reload", "Relink", "Logout", "Refresh"]);
 
-    buttons.find((button) => button.textContent?.trim() === "Relink")?.click();
+    const relink = buttons.find((button) => button.textContent?.trim() === "Relink");
+    expect(relink).toBeInstanceOf(HTMLButtonElement);
+    relink!.click();
     expect(onWhatsAppStart).toHaveBeenCalledWith(true);
   });
 
@@ -197,7 +198,6 @@ describe("WhatsApp card actions", () => {
       qrDataUrl: "data:image/png;base64,current-qr",
     });
 
-    expect(labels).toContain("Show QR");
-    expect(labels).toContain("Wait for scan");
+    expect(labels).toEqual(["Save", "Reload", "Show QR", "Wait for scan", "Logout", "Refresh"]);
   });
 });

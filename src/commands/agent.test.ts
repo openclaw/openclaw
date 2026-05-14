@@ -9,6 +9,7 @@ import * as attemptExecutionRuntime from "../agents/command/attempt-execution.ru
 import { loadManifestModelCatalog, loadModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import * as runtimeSnapshotModule from "../config/runtime-snapshot.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -18,7 +19,10 @@ import {
   resetAgentEventsForTest,
   resetAgentRunContextForTest,
 } from "../infra/agent-events.js";
+import type { PluginProviderRegistration } from "../plugins/registry.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { agentCommand, agentCommandFromIngress } from "./agent.js";
 import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -193,12 +197,15 @@ vi.mock("../config/sessions/transcript-resolve.runtime.js", () => {
   };
   const joinPath = (...parts: string[]): string => {
     const separator = parts.some((part) => part.includes("\\")) ? "\\" : "/";
-    return parts
-      .map((part, index) =>
-        index === 0 ? part.replace(/[\\/]+$/u, "") : part.replace(/^[\\/]+|[\\/]+$/gu, ""),
-      )
-      .filter(Boolean)
-      .join(separator);
+    const normalizedParts: string[] = [];
+    for (const [index, part] of parts.entries()) {
+      const normalized =
+        index === 0 ? part.replace(/[\\/]+$/u, "") : part.replace(/^[\\/]+|[\\/]+$/gu, "");
+      if (normalized.length > 0) {
+        normalizedParts.push(normalized);
+      }
+    }
+    return normalizedParts.join(separator);
   };
   const resolveSessionFile = (sessionId: string, agentId: string, sessionsDir?: string): string =>
     joinPath(sessionsDir ?? ".openclaw", "agents", agentId, "sessions", `${sessionId}.jsonl`);
@@ -296,7 +303,8 @@ function createDefaultAgentResult(params?: {
 }
 
 function getLastEmbeddedCall() {
-  return vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
+  const calls = vi.mocked(runEmbeddedPiAgent).mock.calls;
+  return calls[calls.length - 1]?.[0];
 }
 
 function expectLastRunProviderModel(provider: string, model: string): void {
@@ -318,8 +326,30 @@ function mockModelCatalogOnce(entries: ReturnType<typeof loadManifestModelCatalo
   vi.mocked(loadModelCatalog).mockResolvedValueOnce(entries);
 }
 
+function installThinkingTestProviders() {
+  const registry = createTestRegistry();
+  registry.providers = ["anthropic", "codex", "ollama", "openai", "openrouter"].map(
+    (providerId): PluginProviderRegistration => ({
+      pluginId: providerId,
+      source: "test",
+      provider: {
+        id: providerId,
+        label: providerId,
+        auth: [],
+        resolveThinkingProfile: () => ({
+          levels: BASE_THINKING_LEVELS.map((id) => ({ id })),
+          defaultLevel: "off",
+        }),
+      },
+    }),
+  );
+  setActivePluginRegistry(registry);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+  resetPluginRuntimeStateForTest();
+  installThinkingTestProviders();
   clearSessionStoreCacheForTest();
   resetAgentEventsForTest();
   resetAgentRunContextForTest();
@@ -351,24 +381,30 @@ describe("agentCommand", () => {
         runtime,
       );
 
-      expect(pluginRegistryMocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith({
-        scope: "all",
-        config: expect.any(Object),
-        activationSourceConfig: expect.any(Object),
-        workspaceDir: path.join(home, "openclaw"),
-        onlyPluginIds: ["codex"],
-      });
+      expect(pluginRegistryMocks.ensurePluginRegistryLoaded).toHaveBeenCalledOnce();
+      const registryLoad = pluginRegistryMocks.ensurePluginRegistryLoaded.mock.calls[0]?.[0];
+      expect(registryLoad?.scope).toBe("all");
+      expect(registryLoad?.config).toBeTypeOf("object");
+      expect(registryLoad?.activationSourceConfig).toBeTypeOf("object");
+      expect(registryLoad?.workspaceDir).toBe(path.join(home, "openclaw"));
+      expect(registryLoad?.onlyPluginIds).toEqual(["codex"]);
       expectLastRunProviderModel("openai", "gpt-5.2");
     });
   });
 
-  it("does not enable Codex for one-shot OpenAI overrides when the agent forces PI", async () => {
+  it("does not enable Codex for one-shot OpenAI overrides when the provider forces PI", async () => {
     await withTempHome(async (home) => {
       const storePath = path.join(home, "sessions.json");
-      mockConfig(home, storePath, {
-        agentRuntime: { id: "pi" },
-        models: undefined,
-      });
+      const cfg = mockConfig(home, storePath, { models: undefined });
+      cfg.models = {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            agentRuntime: { id: "pi" },
+            models: [],
+          },
+        },
+      };
 
       await agentCommand(
         {
@@ -435,14 +471,15 @@ describe("agentCommand", () => {
       expect(entry.thinkingLevel).toBe("high");
       expect(entry.verboseLevel).toBe("on");
 
-      const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
+      const callArgs = getLastEmbeddedCall();
       expect(callArgs?.thinkLevel).toBe("high");
       expect(callArgs?.verboseLevel).toBe("on");
       expect(callArgs?.senderIsOwner).toBe(true);
       expect(callArgs?.prompt).toBe("ping");
       expect(callArgs?.agentAccountId).toBe("kev");
 
-      const logged = (runtime.log as unknown as MockInstance).mock.calls.at(-1)?.[0] as string;
+      const logCalls = (runtime.log as unknown as MockInstance).mock.calls;
+      const logged = logCalls[logCalls.length - 1]?.[0] as string;
       const parsed = JSON.parse(logged) as {
         payloads: Array<{ text: string; mediaUrl?: string | null }>;
         meta: { durationMs: number };
@@ -506,11 +543,9 @@ describe("agentCommand", () => {
         { sendMessageTelegram },
       );
 
-      expect(sendMessageTelegram).toHaveBeenCalledWith(
-        "+1222",
-        "assistant-visible",
-        expect.objectContaining({ verbose: false }),
-      );
+      expect(sendMessageTelegram).toHaveBeenCalledWith("+1222", "assistant-visible", {
+        verbose: false,
+      });
       expect(vi.mocked(attemptExecutionRuntime.persistCliTurnTranscript)).toHaveBeenCalledTimes(1);
       const persistArgs = vi.mocked(attemptExecutionRuntime.persistCliTurnTranscript).mock
         .calls[0]?.[0];
@@ -532,13 +567,9 @@ describe("agentCommand", () => {
       await agentCommand({ message: "ping", agentId: "main" }, runtime);
 
       const callArgs = getLastEmbeddedCall();
-      expect(callArgs).toEqual(
-        expect.objectContaining({
-          provider: "openai",
-          model: "gpt-5.5",
-          fastMode: true,
-        }),
-      );
+      expect(callArgs?.provider).toBe("openai");
+      expect(callArgs?.model).toBe("gpt-5.5");
+      expect(callArgs?.fastMode).toBe(true);
     });
   });
 
@@ -558,13 +589,11 @@ describe("agentCommand", () => {
 
       expect(loadModelCatalog).not.toHaveBeenCalled();
       expectLastRunProviderModel("openrouter", "openrouter/auto");
-      expect(modelSelectionModule.resolveThinkingDefault).toHaveBeenCalledWith(
-        expect.objectContaining({
-          provider: "openrouter",
-          model: "auto",
-          catalog: undefined,
-        }),
-      );
+      const thinkingDefaultCall = vi.mocked(modelSelectionModule.resolveThinkingDefault).mock
+        .calls[0]?.[0];
+      expect(thinkingDefaultCall?.provider).toBe("openrouter");
+      expect(thinkingDefaultCall?.model).toBe("openrouter/auto");
+      expect(thinkingDefaultCall?.catalog).toBeUndefined();
     });
   });
 
@@ -585,15 +614,11 @@ describe("agentCommand", () => {
       );
 
       const callArgs = getLastEmbeddedCall();
-      expect(callArgs).toEqual(
-        expect.objectContaining({
-          provider: "openrouter",
-          model: "openrouter/auto",
-          modelRun: true,
-          promptMode: "none",
-          disableTools: true,
-        }),
-      );
+      expect(callArgs?.provider).toBe("openrouter");
+      expect(callArgs?.model).toBe("openrouter/auto");
+      expect(callArgs?.modelRun).toBe(true);
+      expect(callArgs?.promptMode).toBe("none");
+      expect(callArgs?.disableTools).toBe(true);
     });
   });
 
@@ -638,16 +663,12 @@ describe("agentCommand", () => {
 
       expect(runTurn).not.toHaveBeenCalled();
       const callArgs = getLastEmbeddedCall();
-      expect(callArgs).toEqual(
-        expect.objectContaining({
-          provider: "openrouter",
-          model: "openrouter/auto",
-          prompt: "Reply with exactly OPENCLAW-MODEL-OK",
-          modelRun: true,
-          promptMode: "none",
-          disableTools: true,
-        }),
-      );
+      expect(callArgs?.provider).toBe("openrouter");
+      expect(callArgs?.model).toBe("openrouter/auto");
+      expect(callArgs?.prompt).toBe("Reply with exactly OPENCLAW-MODEL-OK");
+      expect(callArgs?.modelRun).toBe(true);
+      expect(callArgs?.promptMode).toBe("none");
+      expect(callArgs?.disableTools).toBe(true);
     });
   });
 
@@ -668,7 +689,7 @@ describe("agentCommand", () => {
         runtime,
       );
 
-      const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
+      const callArgs = getLastEmbeddedCall();
       expect(callArgs?.sessionId).toBe("session-123");
       expect(callArgs?.sessionFile).toContain(
         `${path.dirname(resumeStore)}${path.sep}agents${path.sep}main${path.sep}sessions${path.sep}session-123.jsonl`,

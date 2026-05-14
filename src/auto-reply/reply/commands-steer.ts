@@ -7,11 +7,16 @@ import { logVerbose } from "../../globals.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import {
+  formatEmbeddedPiQueueFailureSummary,
   isEmbeddedPiRunActive,
-  queueEmbeddedPiMessage,
+  queueEmbeddedPiMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunSessionId,
 } from "./commands-steer.runtime.js";
-import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
+import type {
+  CommandHandler,
+  CommandHandlerResult,
+  HandleCommandsParams,
+} from "./commands-types.js";
 
 const STEER_USAGE = "Usage: /steer <message>";
 
@@ -68,6 +73,35 @@ function resolveSteerSessionId(params: {
   return sessionId;
 }
 
+function applySteerFallbackPrompt(ctx: HandleCommandsParams["ctx"], message: string): void {
+  const mutableCtx = ctx as Record<string, unknown>;
+  mutableCtx.Body = message;
+  mutableCtx.RawBody = message;
+  mutableCtx.CommandBody = message;
+  mutableCtx.BodyForCommands = message;
+  mutableCtx.BodyForAgent = message;
+  mutableCtx.BodyStripped = message;
+}
+
+function formatSteerError(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function continueWithSteerFallback(
+  params: HandleCommandsParams,
+  message: string,
+  logMessage: string,
+): CommandHandlerResult {
+  logVerbose(logMessage);
+  applySteerFallbackPrompt(params.ctx, message);
+  if (params.rootCtx && params.rootCtx !== params.ctx) {
+    applySteerFallbackPrompt(params.rootCtx, message);
+  }
+  params.command.rawBodyNormalized = message;
+  params.command.commandBodyNormalized = message;
+  return { shouldContinue: true };
+}
+
 export const handleSteerCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -89,24 +123,42 @@ export const handleSteerCommand: CommandHandler = async (params, allowTextComman
 
   const targetSessionKey = resolveSteerTargetSessionKey(params);
   if (!targetSessionKey) {
-    return { shouldContinue: false, reply: { text: "⚠️ No current session to steer." } };
+    return continueWithSteerFallback(
+      params,
+      message,
+      "steer: no current session; continuing with /steer payload as a normal prompt",
+    );
   }
 
   const sessionId = resolveSteerSessionId({ commandParams: params, targetSessionKey });
   if (!sessionId) {
-    return { shouldContinue: false, reply: { text: "⚠️ No active run to steer in this session." } };
+    return continueWithSteerFallback(
+      params,
+      message,
+      `steer: no active run for ${targetSessionKey}; continuing with /steer payload as a normal prompt`,
+    );
   }
 
-  const steered = queueEmbeddedPiMessage(sessionId, message, {
+  const queueOutcome = await queueEmbeddedPiMessageWithOutcomeAsync(sessionId, message, {
     steeringMode: "all",
     debounceMs: 0,
+  }).catch((err: unknown): CommandHandlerResult => {
+    return continueWithSteerFallback(
+      params,
+      message,
+      `steer: active session ${sessionId} threw while steering: ${formatSteerError(err)}; continuing with /steer payload as a normal prompt`,
+    );
   });
-  if (!steered) {
-    logVerbose(`steer: active session ${sessionId} rejected steering injection`);
-    return {
-      shouldContinue: false,
-      reply: { text: "⚠️ Current run is active but not accepting steering right now." },
-    };
+  if ("shouldContinue" in queueOutcome) {
+    return queueOutcome;
+  }
+  if (!queueOutcome.queued) {
+    const summary = formatEmbeddedPiQueueFailureSummary(queueOutcome);
+    return continueWithSteerFallback(
+      params,
+      message,
+      `steer: active session ${sessionId} rejected steering injection: ${summary}; continuing with /steer payload as a normal prompt`,
+    );
   }
 
   return { shouldContinue: false, reply: { text: "steered current session." } };

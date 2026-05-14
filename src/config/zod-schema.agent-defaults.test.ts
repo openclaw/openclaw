@@ -3,26 +3,74 @@ import { validateConfigObject } from "./validation.js";
 import { AgentDefaultsSchema } from "./zod-schema.agent-defaults.js";
 import { AgentEntrySchema } from "./zod-schema.agent-runtime.js";
 
+type SchemaParseResult = {
+  success: boolean;
+  error?: { issues: Array<{ path: Array<string | number | symbol> }> };
+};
+
+function expectSchemaSuccess(result: SchemaParseResult): void {
+  expect(result.success).toBe(true);
+}
+
+function expectSchemaFailurePath(result: SchemaParseResult, expectedPathPrefix: string): void {
+  expect(result.success).toBe(false);
+  if (result.success || !result.error) {
+    throw new Error(`Expected schema validation to fail at ${expectedPathPrefix}.`);
+  }
+  const issuePaths = result.error.issues.map((issue) => issue.path.join("."));
+  expect(
+    issuePaths.some(
+      (path) => path === expectedPathPrefix || path.startsWith(`${expectedPathPrefix}.`),
+    ),
+  ).toBe(true);
+}
+
 describe("agent defaults schema", () => {
   it("accepts subagent archiveAfterMinutes=0 to disable archiving", () => {
-    expect(() =>
-      AgentDefaultsSchema.parse({
+    expectSchemaSuccess(
+      AgentDefaultsSchema.safeParse({
         subagents: {
           archiveAfterMinutes: 0,
         },
       }),
-    ).not.toThrow();
+    );
+  });
+
+  it("accepts subagent delegation mode on defaults and agent entries", () => {
+    expectSchemaSuccess(
+      AgentDefaultsSchema.safeParse({
+        subagents: {
+          delegationMode: "prefer",
+        },
+      }),
+    );
+    expectSchemaSuccess(
+      AgentEntrySchema.safeParse({
+        id: "coordinator",
+        subagents: {
+          delegationMode: "suggest",
+        },
+      }),
+    );
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({
+        subagents: {
+          delegationMode: "required",
+        },
+      }),
+      "subagents.delegationMode",
+    );
   });
 
   it("accepts videoGenerationModel", () => {
-    expect(() =>
-      AgentDefaultsSchema.parse({
+    expectSchemaSuccess(
+      AgentDefaultsSchema.safeParse({
         videoGenerationModel: {
           primary: "qwen/wan2.6-t2v",
           fallbacks: ["minimax/video-01"],
         },
       }),
-    ).not.toThrow();
+    );
   });
 
   it("accepts imageGenerationModel timeoutMs", () => {
@@ -37,22 +85,23 @@ describe("agent defaults schema", () => {
       primary: "openrouter/openai/gpt-5.4-image-2",
       timeoutMs: 180_000,
     });
-    expect(() =>
-      AgentDefaultsSchema.parse({
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({
         imageGenerationModel: {
           primary: "openrouter/openai/gpt-5.4-image-2",
           timeoutMs: 0,
         },
       }),
-    ).toThrow();
+      "imageGenerationModel.timeoutMs",
+    );
   });
 
   it("accepts mediaGenerationAutoProviderFallback", () => {
-    expect(() =>
-      AgentDefaultsSchema.parse({
+    expectSchemaSuccess(
+      AgentDefaultsSchema.safeParse({
         mediaGenerationAutoProviderFallback: false,
       }),
-    ).not.toThrow();
+    );
   });
 
   it("accepts experimental.localModelLean", () => {
@@ -80,7 +129,10 @@ describe("agent defaults schema", () => {
   });
 
   it("rejects invalid contextInjection values", () => {
-    expect(() => AgentDefaultsSchema.parse({ contextInjection: "unknown" })).toThrow();
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({ contextInjection: "unknown" }),
+      "contextInjection",
+    );
   });
 
   it("accepts supported optional bootstrap filenames", () => {
@@ -96,10 +148,14 @@ describe("agent defaults schema", () => {
   });
 
   it("rejects unsupported optional bootstrap filenames", () => {
-    expect(() =>
-      AgentDefaultsSchema.parse({ skipOptionalBootstrapFiles: ["AGENTS.md"] }),
-    ).toThrow();
-    expect(() => AgentDefaultsSchema.parse({ skipOptionalBootstrapFiles: ["SOUL.MD"] })).toThrow();
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({ skipOptionalBootstrapFiles: ["AGENTS.md"] }),
+      "skipOptionalBootstrapFiles",
+    );
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({ skipOptionalBootstrapFiles: ["SOUL.MD"] }),
+      "skipOptionalBootstrapFiles",
+    );
   });
 
   it("accepts embeddedPi.executionContract", () => {
@@ -109,6 +165,38 @@ describe("agent defaults schema", () => {
       },
     })!;
     expect(result.embeddedPi?.executionContract).toBe("strict-agentic");
+  });
+
+  it("accepts runRetries configuration on defaults and agent entries", () => {
+    const result = AgentDefaultsSchema.parse({
+      runRetries: {
+        base: 24,
+        max: 160,
+      },
+    });
+    expect(result?.runRetries?.base).toBe(24);
+    expect(result?.runRetries?.max).toBe(160);
+
+    const agentResult = AgentEntrySchema.parse({
+      id: "test",
+      runRetries: {
+        min: 10,
+        max: 50,
+      },
+    });
+    expect(agentResult?.runRetries?.min).toBe(10);
+    expect(agentResult?.runRetries?.max).toBe(50);
+  });
+
+  it("rejects runRetries with max < min", () => {
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({ runRetries: { min: 100, max: 50 } }),
+      "runRetries.max",
+    );
+    expectSchemaFailurePath(
+      AgentEntrySchema.safeParse({ id: "test", runRetries: { min: 100, max: 50 } }),
+      "runRetries.max",
+    );
   });
 
   it("accepts compaction.truncateAfterCompaction", () => {
@@ -196,8 +284,14 @@ describe("agent defaults schema", () => {
   });
 
   it("rejects zero heartbeat timeoutSeconds", () => {
-    expect(() => AgentDefaultsSchema.parse({ heartbeat: { timeoutSeconds: 0 } })).toThrow();
-    expect(() => AgentEntrySchema.parse({ id: "ops", heartbeat: { timeoutSeconds: 0 } })).toThrow();
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({ heartbeat: { timeoutSeconds: 0 } }),
+      "heartbeat.timeoutSeconds",
+    );
+    expectSchemaFailurePath(
+      AgentEntrySchema.safeParse({ id: "ops", heartbeat: { timeoutSeconds: 0 } }),
+      "heartbeat.timeoutSeconds",
+    );
   });
 
   it("preserves per-agent contextTokens through config validation", () => {
@@ -212,20 +306,27 @@ describe("agent defaults schema", () => {
       },
     });
 
-    expect(result).toMatchObject({
-      ok: true,
-      config: {
-        agents: {
-          list: [{ contextTokens: 1_048_576 }],
-        },
-      },
-    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error("expected config validation to succeed");
+    }
+    const config = result.config as { agents?: { list?: Array<{ contextTokens?: number }> } };
+    expect(config.agents?.list?.[0]?.contextTokens).toBe(1_048_576);
   });
 
   it("rejects non-positive contextTokens on agent entries and defaults", () => {
-    expect(() => AgentEntrySchema.parse({ id: "ops", contextTokens: 0 })).toThrow();
-    expect(() => AgentEntrySchema.parse({ id: "ops", contextTokens: -1 })).toThrow();
-    expect(() => AgentEntrySchema.parse({ id: "ops", contextTokens: 1.5 })).toThrow();
-    expect(() => AgentDefaultsSchema.parse({ contextTokens: 0 })).toThrow();
+    expectSchemaFailurePath(
+      AgentEntrySchema.safeParse({ id: "ops", contextTokens: 0 }),
+      "contextTokens",
+    );
+    expectSchemaFailurePath(
+      AgentEntrySchema.safeParse({ id: "ops", contextTokens: -1 }),
+      "contextTokens",
+    );
+    expectSchemaFailurePath(
+      AgentEntrySchema.safeParse({ id: "ops", contextTokens: 1.5 }),
+      "contextTokens",
+    );
+    expectSchemaFailurePath(AgentDefaultsSchema.safeParse({ contextTokens: 0 }), "contextTokens");
   });
 });

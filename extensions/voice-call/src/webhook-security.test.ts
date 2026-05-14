@@ -104,7 +104,8 @@ function expectAcceptedWebhookVersion(
   result: { ok: boolean; version?: string },
   version: "v2" | "v3",
 ) {
-  expect(result).toMatchObject({ ok: true, version });
+  expect(result.ok).toBe(true);
+  expect(result.version).toBe(version);
 }
 
 function verifyTwilioNgrokLoopback(signature: string) {
@@ -443,7 +444,8 @@ describe("verifyPlivoWebhook", () => {
     );
 
     expect(first.ok).toBe(true);
-    expect(first.verifiedRequestKey).toEqual(expect.any(String));
+    expect(first.verifiedRequestKey).toBeTypeOf("string");
+    expect(first.verifiedRequestKey).not.toBe("");
     expect(second.ok).toBe(true);
     expect(second.verifiedRequestKey).toBe(first.verifiedRequestKey);
     expect(second.isReplay).toBe(true);

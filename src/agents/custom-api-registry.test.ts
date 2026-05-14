@@ -4,7 +4,7 @@ import {
   getApiProvider,
   registerBuiltInApiProviders,
   unregisterApiProviders,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ensureCustomApiRegistered, getCustomApiRegistrySourceId } from "./custom-api-registry.js";
 
@@ -29,10 +29,9 @@ describe("ensureCustomApiRegistered", () => {
     expect(ensureCustomApiRegistered("test-custom-api", streamFn)).toBe(true);
     expect(ensureCustomApiRegistered("test-custom-api", streamFn)).toBe(false);
 
-    expect(getRegisteredTestProvider()).toMatchObject({
-      stream: expect.any(Function),
-      streamSimple: expect.any(Function),
-    });
+    const provider = getRegisteredTestProvider();
+    expect(typeof provider.stream).toBe("function");
+    expect(typeof provider.streamSimple).toBe("function");
   });
 
   it("delegates both stream entrypoints to the provided stream function", () => {

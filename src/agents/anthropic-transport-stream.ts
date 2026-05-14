@@ -1,4 +1,4 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
 import {
   calculateCost,
   getEnvApiKey,
@@ -8,7 +8,7 @@ import {
   type Model,
   type SimpleStreamOptions,
   type ThinkingLevel,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
@@ -108,6 +108,8 @@ type MutableAssistantOutput = {
   errorMessage?: string;
 };
 
+const EMPTY_ANTHROPIC_MESSAGES_FALLBACK_TEXT = ".";
+
 function isClaudeOpus47Model(modelId: string): boolean {
   return modelId.includes("opus-4-7") || modelId.includes("opus-4.7");
 }
@@ -199,6 +201,10 @@ function isDirectAnthropicModel(model: Pick<AnthropicTransportModel, "provider" 
   }
   const endpointClass = resolveProviderEndpoint(model.baseUrl).endpointClass;
   return endpointClass === "default" || endpointClass === "anthropic-public";
+}
+
+function isKimiAnthropicProvider(provider: string | undefined): boolean {
+  return /^kimi(?:-|$)/.test(normalizeLowercaseStringOrEmpty(provider ?? ""));
 }
 
 function buildAnthropicBetaHeader(
@@ -419,6 +425,12 @@ function convertAnthropicMessages(
     }
   }
   return params;
+}
+
+function ensureNonEmptyAnthropicMessages(messages: Array<Record<string, unknown>>) {
+  return messages.length > 0
+    ? messages
+    : [{ role: "user", content: EMPTY_ANTHROPIC_MESSAGES_FALLBACK_TEXT }];
 }
 
 function convertAnthropicTools(tools: Context["tools"], isOAuthToken: boolean) {
@@ -648,7 +660,12 @@ function createAnthropicTransportClient(params: {
   const { model, context, apiKey, options } = params;
   const needsInterleavedBeta =
     (options?.interleavedThinking ?? true) && !supportsAdaptiveThinking(model.id);
-  const fetch = buildGuardedModelFetch(model);
+  // Kimi's Anthropic thinking SSE is already well-formed for this parser, but
+  // the OpenAI SDK compatibility sanitizer can stall before the text block.
+  const fetch =
+    isKimiAnthropicProvider(model.provider) && options?.thinkingEnabled === true
+      ? buildGuardedModelFetch(model, undefined, { sanitizeSse: false })
+      : buildGuardedModelFetch(model);
   if (model.provider === "github-copilot") {
     const betaFeatures = needsInterleavedBeta ? ["interleaved-thinking-2025-05-14"] : [];
     return {
@@ -745,7 +762,9 @@ function buildAnthropicParams(
   });
   const params: Record<string, unknown> = {
     model: model.id,
-    messages: convertAnthropicMessages(context.messages, model, isOAuthToken),
+    messages: ensureNonEmptyAnthropicMessages(
+      convertAnthropicMessages(context.messages, model, isOAuthToken),
+    ),
     max_tokens: maxTokens,
     stream: true,
   };

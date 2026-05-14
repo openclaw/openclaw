@@ -13,11 +13,21 @@ import {
 } from "./fs-bridge.test-helpers.js";
 
 function expectNoScriptsContaining(scripts: string[], needle: string) {
-  expect(scripts.filter((script) => script.includes(needle))).toEqual([]);
+  expect(scripts.join("\n")).not.toContain(needle);
 }
 
 function expectSomeScriptContaining(scripts: string[], needle: string) {
-  expect(scripts.filter((script) => script.includes(needle)).length).toBeGreaterThan(0);
+  expect(scripts.join("\n")).toContain(needle);
+}
+
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 describe("sandbox fs bridge shell compatibility", () => {
@@ -44,13 +54,13 @@ describe("sandbox fs bridge shell compatibility", () => {
       await bridge.rename({ from: "a.txt", to: "c.txt" });
       await bridge.stat({ filePath: "c.txt" });
 
-      expect(mockedExecDockerRaw).toHaveBeenCalled();
+      expect(mockedExecDockerRaw).toHaveBeenCalledTimes(19);
 
       const scripts = getScriptsFromCalls();
       const executables = mockedExecDockerRaw.mock.calls.map(([args]) => args[3] ?? "");
 
-      expect(executables.filter((shell) => shell !== "sh")).toEqual([]);
-      expect(scripts.filter((script) => !/set -eu[;\n]/.test(script))).toEqual([]);
+      expect(executables.every((shell) => shell === "sh")).toBe(true);
+      expect(scripts.every((script) => /set -eu[;\n]/.test(script))).toBe(true);
       expectNoScriptsContaining(scripts, "pipefail");
     });
   });
@@ -157,7 +167,9 @@ describe("sandbox fs bridge shell compatibility", () => {
       await bridge.rename({ from: "a.txt", to: "nested/b.txt" });
 
       const scripts = getScriptsFromCalls();
-      expect(scripts.filter((script) => script.includes("operation = sys.argv[1]")).length).toBe(3);
+      expect(countMatching(scripts, (script) => script.includes("operation = sys.argv[1]"))).toBe(
+        3,
+      );
       expectNoScriptsContaining(scripts, 'mkdir -p -- "$2"');
       expectNoScriptsContaining(scripts, 'rm -f -- "$2"');
       expectNoScriptsContaining(scripts, 'mv -- "$3" "$2/$4"');

@@ -10,6 +10,7 @@ import type {
   VideoGenerationAssetRole as CoreVideoGenerationAssetRole,
   VideoGenerationMode as CoreVideoGenerationMode,
   VideoGenerationModeCapabilities as CoreVideoGenerationModeCapabilities,
+  VideoGenerationModelCapabilitiesContext as CoreVideoGenerationModelCapabilitiesContext,
   VideoGenerationProvider as CoreVideoGenerationProvider,
   VideoGenerationProviderCapabilities as CoreVideoGenerationProviderCapabilities,
   VideoGenerationProviderConfiguredContext as CoreVideoGenerationProviderConfiguredContext,
@@ -64,6 +65,15 @@ export type VideoGenerationSourceAsset = {
 export type VideoGenerationProviderConfiguredContext = {
   cfg?: OpenClawConfig;
   agentDir?: string;
+};
+
+export type VideoGenerationModelCapabilitiesContext = {
+  provider: string;
+  model: string;
+  cfg: OpenClawConfig;
+  agentDir?: string;
+  authStore?: AuthProfileStore;
+  timeoutMs?: number;
 };
 
 export type VideoGenerationRequest = {
@@ -151,12 +161,17 @@ export type VideoGenerationProvider = {
   models?: string[];
   capabilities: VideoGenerationProviderCapabilities;
   isConfigured?: (ctx: VideoGenerationProviderConfiguredContext) => boolean;
+  resolveModelCapabilities?: (
+    ctx: VideoGenerationModelCapabilitiesContext,
+  ) =>
+    | VideoGenerationProviderCapabilities
+    | undefined
+    | Promise<VideoGenerationProviderCapabilities | undefined>;
   generateVideo: (req: VideoGenerationRequest) => Promise<VideoGenerationResult>;
 };
 
 type AssertAssignable<_Left extends _Right, _Right> = true;
-
-type _VideoGenerationSdkCompat = [
+const _videoGenerationSdkCompat: [
   AssertAssignable<GeneratedVideoAsset, CoreGeneratedVideoAsset>,
   AssertAssignable<CoreGeneratedVideoAsset, GeneratedVideoAsset>,
   AssertAssignable<VideoGenerationAssetRole, CoreVideoGenerationAssetRole>,
@@ -179,6 +194,14 @@ type _VideoGenerationSdkCompat = [
     CoreVideoGenerationProviderConfiguredContext,
     VideoGenerationProviderConfiguredContext
   >,
+  AssertAssignable<
+    VideoGenerationModelCapabilitiesContext,
+    CoreVideoGenerationModelCapabilitiesContext
+  >,
+  AssertAssignable<
+    CoreVideoGenerationModelCapabilitiesContext,
+    VideoGenerationModelCapabilitiesContext
+  >,
   AssertAssignable<VideoGenerationRequest, CoreVideoGenerationRequest>,
   AssertAssignable<CoreVideoGenerationRequest, VideoGenerationRequest>,
   AssertAssignable<VideoGenerationResolution, CoreVideoGenerationResolution>,
@@ -189,7 +212,8 @@ type _VideoGenerationSdkCompat = [
   AssertAssignable<CoreVideoGenerationSourceAsset, VideoGenerationSourceAsset>,
   AssertAssignable<VideoGenerationTransformCapabilities, CoreVideoGenerationTransformCapabilities>,
   AssertAssignable<CoreVideoGenerationTransformCapabilities, VideoGenerationTransformCapabilities>,
-];
+] = [] as never;
+void _videoGenerationSdkCompat;
 
 export {
   DASHSCOPE_WAN_VIDEO_CAPABILITIES,

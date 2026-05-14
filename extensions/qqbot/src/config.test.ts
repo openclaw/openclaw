@@ -1,6 +1,6 @@
 import fs from "node:fs";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { type JsonSchemaObject, validateJsonSchemaValue } from "openclaw/plugin-sdk/config-schema";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { describe, expect, it } from "vitest";
 import { qqbotSetupAdapterShared } from "./bridge/config-shared.js";
 import {
@@ -278,10 +278,12 @@ describe("qqbot config", () => {
       return (value as Record<string, unknown>)[key];
     }, next) as Record<string, unknown> | undefined;
 
-    expect(accountConfig).toMatchObject({
+    expect(accountConfig).toStrictEqual({
       enabled: true,
+      allowFrom: ["*"],
       appId: "102905186",
       clientSecret: "Oi2Mg1Mh2Ni3:Pl7TpBXuHe1OmAYwKi7W",
+      clientSecretFile: undefined,
     });
   });
 
@@ -311,14 +313,14 @@ describe("qqbot config", () => {
         accountId: DEFAULT_ACCOUNT_ID,
         input,
       } as never),
-    ).toEqual({});
+    ).toStrictEqual({});
     expect(
       lightweightSetup.applyAccountConfig?.({
         cfg: {} as OpenClawConfig,
         accountId: DEFAULT_ACCOUNT_ID,
         input,
       } as never),
-    ).toEqual({});
+    ).toStrictEqual({});
   });
 
   it("preserves the --use-env add flow across setup paths", () => {
@@ -333,7 +335,7 @@ describe("qqbot config", () => {
         accountId: DEFAULT_ACCOUNT_ID,
         input,
       } as never),
-    ).toMatchObject({
+    ).toStrictEqual({
       channels: {
         qqbot: {
           enabled: true,
@@ -348,7 +350,7 @@ describe("qqbot config", () => {
         accountId: DEFAULT_ACCOUNT_ID,
         input,
       } as never),
-    ).toMatchObject({
+    ).toStrictEqual({
       channels: {
         qqbot: {
           enabled: true,
@@ -396,13 +398,13 @@ describe("qqbot config", () => {
         accountId: "bot2",
         input,
       } as never),
-    ).toEqual({});
+    ).toStrictEqual({});
     expect(
       lightweightSetup.applyAccountConfig?.({
         cfg: {} as OpenClawConfig,
         accountId: "bot2",
         input,
       } as never),
-    ).toEqual({});
+    ).toStrictEqual({});
   });
 });

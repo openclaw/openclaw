@@ -11,6 +11,13 @@ import {
 
 const patternFiles = createPatternFileHelper("openclaw-vitest-unit-config-");
 
+function requireTestConfig<T extends { test?: unknown }>(config: T): NonNullable<T["test"]> {
+  if (!config.test) {
+    throw new Error("expected unit vitest test config");
+  }
+  return config.test as NonNullable<T["test"]>;
+}
+
 afterEach(() => {
   patternFiles.cleanup();
 });
@@ -38,7 +45,7 @@ describe("loadIncludePatternsFromEnv", () => {
 
 describe("loadExtraExcludePatternsFromEnv", () => {
   it("returns an empty list when no extra exclude file is configured", () => {
-    expect(loadExtraExcludePatternsFromEnv({})).toEqual([]);
+    expect(loadExtraExcludePatternsFromEnv({})).toStrictEqual([]);
   });
 
   it("loads extra exclude patterns from a JSON file", () => {
@@ -72,20 +79,23 @@ describe("loadExtraExcludePatternsFromEnv", () => {
 describe("unit vitest config", () => {
   it("defaults unit tests to the non-isolated runner", () => {
     const unitConfig = createUnitVitestConfig({});
-    expect(unitConfig.test?.isolate).toBe(false);
-    expect(normalizeConfigPath(unitConfig.test?.runner)).toBe("test/non-isolated-runner.ts");
+    const testConfig = requireTestConfig(unitConfig);
+    expect(testConfig.isolate).toBe(false);
+    expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
   });
 
   it("keeps acp and ui tests out of the generic unit lane", () => {
     const unitConfig = createUnitVitestConfig({});
-    expect(unitConfig.test?.exclude).toEqual(expect.arrayContaining(["extensions/**", "test/**"]));
-    expect(unitConfig.test?.include).not.toEqual(
-      expect.arrayContaining([
-        "ui/src/ui/app-chat.test.ts",
-        "ui/src/ui/chat/**/*.test.ts",
-        "ui/src/ui/views/chat.test.ts",
-      ]),
-    );
+    const testConfig = requireTestConfig(unitConfig);
+    expect(testConfig.exclude).toContain("extensions/**");
+    expect(testConfig.exclude).toContain("test/**");
+    for (const pattern of [
+      "ui/src/ui/app-chat.test.ts",
+      "ui/src/ui/chat/**/*.test.ts",
+      "ui/src/ui/views/chat.test.ts",
+    ]) {
+      expect(testConfig.include).not.toContain(pattern);
+    }
   });
 
   it("narrows the active include list to CLI file filters when present", () => {
@@ -95,13 +105,15 @@ describe("unit vitest config", () => {
         argv: ["node", "vitest", "run", "src/config/channel-configured.test.ts"],
       },
     );
-    expect(unitConfig.test?.include).toEqual(["src/config/channel-configured.test.ts"]);
-    expect(unitConfig.test?.passWithNoTests).toBe(true);
+    const testConfig = requireTestConfig(unitConfig);
+    expect(testConfig.include).toEqual(["src/config/channel-configured.test.ts"]);
+    expect(testConfig.passWithNoTests).toBe(true);
   });
 
   it("adds the OpenClaw runtime setup hooks on top of the base setup", () => {
     const unitConfig = createUnitVitestConfig({});
-    expect(normalizeConfigPaths(unitConfig.test?.setupFiles)).toEqual([
+    const testConfig = requireTestConfig(unitConfig);
+    expect(normalizeConfigPaths(testConfig.setupFiles)).toEqual([
       "test/setup.ts",
       "test/setup-openclaw-runtime.ts",
     ]);
@@ -114,33 +126,28 @@ describe("unit vitest config", () => {
         extraExcludePatterns: ["src/security/**"],
       },
     );
-    expect(unitConfig.test?.exclude).toEqual(
-      expect.arrayContaining(["src/commands/**", "src/config/**", "src/security/**"]),
-    );
+    const testConfig = requireTestConfig(unitConfig);
+    expect(testConfig.exclude).toContain("src/commands/**");
+    expect(testConfig.exclude).toContain("src/config/**");
+    expect(testConfig.exclude).toContain("src/security/**");
   });
 
   it("scopes default coverage to source files owned by the unit lane", () => {
     const unitConfig = createUnitVitestConfig({});
-    expect(unitConfig.test?.coverage?.include).toEqual(
-      expect.arrayContaining([
-        "src/commitments/runtime.ts",
-        "src/media-generation/runtime-shared.ts",
-        "src/web-search/runtime.ts",
-      ]),
-    );
-    expect(unitConfig.test?.coverage?.include).not.toEqual(
-      expect.arrayContaining(["src/markdown/render.ts", "src/security/audit-workspace-skills.ts"]),
-    );
+    const testConfig = requireTestConfig(unitConfig);
+    const coverageInclude = testConfig.coverage?.include;
+    expect(coverageInclude).toContain("src/commitments/runtime.ts");
+    expect(coverageInclude).toContain("src/media-generation/runtime-shared.ts");
+    expect(coverageInclude).toContain("src/web-search/runtime.ts");
+    expect(coverageInclude).not.toContain("src/markdown/render.ts");
+    expect(coverageInclude).not.toContain("src/security/audit-workspace-skills.ts");
   });
 
   it("derives default coverage includes from non-fast unit tests with sibling source files", () => {
-    expect(resolveDefaultUnitCoverageIncludePatterns()).toEqual(
-      expect.arrayContaining([
-        "packages/memory-host-sdk/src/host/embeddings.ts",
-        "src/commitments/store.ts",
-        "src/tools/planner.ts",
-      ]),
-    );
+    const coverageInclude = resolveDefaultUnitCoverageIncludePatterns();
+    expect(coverageInclude).toContain("packages/memory-host-sdk/src/host/embeddings.ts");
+    expect(coverageInclude).toContain("src/commitments/store.ts");
+    expect(coverageInclude).toContain("src/tools/planner.ts");
   });
 
   it("leaves coverage include filters unset for explicit unit include lists", () => {
@@ -150,8 +157,9 @@ describe("unit vitest config", () => {
         includePatterns: ["src/commitments/runtime.test.ts"],
       },
     );
+    const testConfig = requireTestConfig(unitConfig);
 
-    expect(unitConfig.test?.coverage?.include).toBeUndefined();
+    expect(testConfig.coverage?.include).toBeUndefined();
   });
 
   it("keeps bundled unit include files out of the resolved exclude list", () => {
@@ -165,21 +173,18 @@ describe("unit vitest config", () => {
         ],
       },
     );
+    const testConfig = requireTestConfig(unitConfig);
 
-    expect(unitConfig.test?.include).toEqual([
+    expect(testConfig.include).toEqual([
       "src/infra/matrix-plugin-helper.test.ts",
       "src/plugin-sdk/facade-runtime.test.ts",
       "src/plugins/loader.test.ts",
     ]);
-    expect(unitConfig.test?.exclude).not.toEqual(
-      expect.arrayContaining([
-        "src/infra/**",
-        "src/plugin-sdk/**",
-        "src/plugins/**",
-        "src/infra/matrix-plugin-helper.test.ts",
-        "src/plugin-sdk/facade-runtime.test.ts",
-        "src/plugins/loader.test.ts",
-      ]),
-    );
+    expect(testConfig.exclude).not.toContain("src/infra/**");
+    expect(testConfig.exclude).not.toContain("src/plugin-sdk/**");
+    expect(testConfig.exclude).not.toContain("src/plugins/**");
+    expect(testConfig.exclude).not.toContain("src/infra/matrix-plugin-helper.test.ts");
+    expect(testConfig.exclude).not.toContain("src/plugin-sdk/facade-runtime.test.ts");
+    expect(testConfig.exclude).not.toContain("src/plugins/loader.test.ts");
   });
 });

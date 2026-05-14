@@ -83,7 +83,7 @@ export function shouldAllowSilentLocalPairing(params: {
   if (params.locality === "remote") {
     return false;
   }
-  if (params.hasBrowserOriginHeader && !params.isControlUi && !params.isWebchat) {
+  if (params.hasBrowserOriginHeader) {
     return false;
   }
   if (
@@ -400,6 +400,12 @@ export function resolveUnauthorizedHandshakeContext(params: {
         authProvided,
         canRetryWithDeviceToken,
         recommendedNextStep: "update_auth_credentials",
+      });
+    case "scope_mismatch":
+      return buildUnauthorizedHandshakeContext({
+        authProvided,
+        canRetryWithDeviceToken,
+        recommendedNextStep: "review_auth_configuration",
       });
     case "rate_limited":
       return buildUnauthorizedHandshakeContext({

@@ -67,6 +67,7 @@ const CronFailoverReasonSchema = Type.Union([
   Type.Literal("format"),
   Type.Literal("rate_limit"),
   Type.Literal("billing"),
+  Type.Literal("server_error"),
   Type.Literal("timeout"),
   Type.Literal("model_not_found"),
   Type.Literal("empty_response"),
@@ -349,6 +350,8 @@ export const CronListParamsSchema = Type.Object(
 );
 
 export const CronStatusParamsSchema = Type.Object({}, { additionalProperties: false });
+
+export const CronGetParamsSchema = cronIdOrJobIdParams({});
 
 export const CronAddParamsSchema = Type.Object(
   {

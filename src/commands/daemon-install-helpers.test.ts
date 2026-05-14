@@ -49,6 +49,18 @@ afterEach(() => {
   vi.resetAllMocks();
 });
 
+function firstMockArg(mockFn: ReturnType<typeof vi.fn>, label: string): Record<string, any> {
+  const call = mockFn.mock.calls[0];
+  if (!call) {
+    throw new Error(`Expected ${label} call`);
+  }
+  const arg = call.at(0);
+  if (!arg || typeof arg !== "object") {
+    throw new Error(`Expected ${label} first argument`);
+  }
+  return arg as Record<string, any>;
+}
+
 describe("resolveGatewayDevMode", () => {
   it("detects dev mode for src ts entrypoints", () => {
     expect(resolveGatewayDevMode(["node", "/Users/me/openclaw/src/cli/index.ts"])).toBe(true);
@@ -127,13 +139,14 @@ describe("buildGatewayInstallPlan", () => {
     expect(plan.workingDirectory).toBe("/Users/me");
     expect(plan.environment).toEqual({ OPENCLAW_PORT: "3000" });
     expect(mocks.resolvePreferredNodePath).not.toHaveBeenCalled();
-    expect(mocks.buildServiceEnvironment).toHaveBeenCalledWith(
-      expect.objectContaining({
-        env: { HOME: isolatedHome },
-        port: 3000,
-        extraPathDirs: ["/custom"],
-      }),
+    expect(mocks.buildServiceEnvironment).toHaveBeenCalledOnce();
+    const serviceEnvRequest = firstMockArg(
+      mocks.buildServiceEnvironment,
+      "buildServiceEnvironment",
     );
+    expect(serviceEnvRequest?.env).toStrictEqual({ HOME: isolatedHome });
+    expect(serviceEnvRequest?.port).toBe(3000);
+    expect(serviceEnvRequest?.extraPathDirs).toStrictEqual(["/custom"]);
   });
 
   it("does not prepend '.' when nodePath is a bare executable name", async () => {
@@ -146,11 +159,10 @@ describe("buildGatewayInstallPlan", () => {
       nodePath: "node",
     });
 
-    expect(mocks.buildServiceEnvironment).toHaveBeenCalledWith(
-      expect.objectContaining({
-        extraPathDirs: undefined,
-      }),
-    );
+    expect(mocks.buildServiceEnvironment).toHaveBeenCalledOnce();
+    expect(
+      firstMockArg(mocks.buildServiceEnvironment, "buildServiceEnvironment").extraPathDirs,
+    ).toBeUndefined();
   });
 
   it("emits warnings when renderSystemNodeWarning returns one", async () => {
@@ -188,10 +200,9 @@ describe("buildGatewayInstallPlan", () => {
     });
 
     expect(plan.workingDirectory).toBe(path.join(isolatedHome, ".openclaw"));
-    expect(mocks.buildServiceEnvironment).toHaveBeenCalledWith(
-      expect.objectContaining({
-        platform: "darwin",
-      }),
+    expect(mocks.buildServiceEnvironment).toHaveBeenCalledOnce();
+    expect(firstMockArg(mocks.buildServiceEnvironment, "buildServiceEnvironment").platform).toBe(
+      "darwin",
     );
   });
 
@@ -228,18 +239,15 @@ describe("buildGatewayInstallPlan", () => {
       runtime: "node",
     });
 
-    expect(mocks.resolveGatewayProgramArguments).toHaveBeenCalledWith(
-      expect.objectContaining({
-        wrapperPath,
-      }),
-    );
-    expect(mocks.buildServiceEnvironment).toHaveBeenCalledWith(
-      expect.objectContaining({
-        env: expect.objectContaining({
-          OPENCLAW_WRAPPER: wrapperPath,
-        }),
-      }),
-    );
+    expect(mocks.resolveGatewayProgramArguments).toHaveBeenCalledOnce();
+    expect(
+      firstMockArg(mocks.resolveGatewayProgramArguments, "resolveGatewayProgramArguments")
+        .wrapperPath,
+    ).toBe(wrapperPath);
+    expect(mocks.buildServiceEnvironment).toHaveBeenCalledOnce();
+    expect(
+      firstMockArg(mocks.buildServiceEnvironment, "buildServiceEnvironment").env?.OPENCLAW_WRAPPER,
+    ).toBe(wrapperPath);
     expect(plan.environment.OPENCLAW_WRAPPER).toBe(wrapperPath);
   });
 
@@ -409,25 +417,19 @@ describe("buildGatewayInstallPlan", () => {
       'Exec SecretRef passEnv ref "HOME" blocked by host-env security policy',
       "Config SecretRef",
     );
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("XDG_CONFIG_HOME"),
-      "Config SecretRef",
-    );
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("XDG_CONFIG_DIRS"),
-      "Config SecretRef",
-    );
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("BASH_ENV"), "Config SecretRef");
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("GH_TOKEN"), "Config SecretRef");
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("AWS_ACCESS_KEY_ID"),
-      "Config SecretRef",
-    );
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("DOCKER_HOST"), "Config SecretRef");
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("NODE_TLS_REJECT_UNAUTHORIZED"),
-      "Config SecretRef",
-    );
+    const warningOutput = warn.mock.calls.map(([message]) => message).join("\n");
+    for (const blockedName of [
+      "XDG_CONFIG_HOME",
+      "XDG_CONFIG_DIRS",
+      "BASH_ENV",
+      "GH_TOKEN",
+      "AWS_ACCESS_KEY_ID",
+      "DOCKER_HOST",
+      "NODE_TLS_REJECT_UNAUTHORIZED",
+    ]) {
+      expect(warningOutput).toContain(blockedName);
+    }
+    expect(warn.mock.calls.every(([, title]) => title === "Config SecretRef")).toBe(true);
   });
 
   it("does not include passEnv values for unused exec SecretRef providers", async () => {
@@ -627,8 +629,14 @@ describe("buildGatewayInstallPlan", () => {
     expect(plan.environment.OPENAI_API_KEY).toBe("sk-openai-test");
     expect(plan.environment.ANTHROPIC_TOKEN).toBe("ant-test-token");
     expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("NODE_OPTIONS"), "Auth profile");
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("GIT_ASKPASS"), "Auth profile");
+    expect(warn).toHaveBeenCalledWith(
+      'Auth profile env ref "NODE_OPTIONS" blocked by host-env security policy',
+      "Auth profile",
+    );
+    expect(warn).toHaveBeenCalledWith(
+      'Auth profile env ref "GIT_ASKPASS" blocked by host-env security policy',
+      "Auth profile",
+    );
   });
 });
 
@@ -931,7 +939,7 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       serviceEnvironment: {
         HOME: "/from-service",
         OPENCLAW_PORT: "3000",
-        PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        PATH: "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
         TMPDIR: "/tmp",
       },
     });
@@ -953,7 +961,9 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       },
     });
 
-    expect(plan.environment.PATH).toBe("/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin");
+    expect(plan.environment.PATH).toBe(
+      "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+    );
   });
 
   it("drops legacy inline env values when the key is now managed by .env", async () => {

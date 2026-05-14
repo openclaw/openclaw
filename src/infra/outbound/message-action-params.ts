@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { root } from "../../infra/fs-safe.js";
 import { basenameFromMediaSource } from "../../infra/local-file-access.js";
 import { resolveChannelAccountMediaMaxMb } from "../../media/configured-max-bytes.js";
+import { basenameFromAnyPath } from "../../media/file-name.js";
 import {
   buildOutboundMediaLoadOptions,
   resolveOutboundMediaAccess,
@@ -131,8 +132,9 @@ function inferAttachmentFilename(params: {
   const mediaHint = params.mediaHint?.trim();
   if (mediaHint) {
     const base = basenameFromMediaSource(mediaHint);
-    if (base) {
-      return base;
+    const safeBase = base ? basenameFromAnyPath(base) : undefined;
+    if (safeBase) {
+      return safeBase;
     }
   }
   const ext = params.contentType ? extensionForMime(params.contentType) : undefined;
@@ -384,9 +386,14 @@ export async function hydrateAttachmentParamsForAction(params: {
   mediaPolicy: AttachmentMediaPolicy;
 }): Promise<void> {
   const shouldHydrateUploadFile = params.action === "upload-file";
+  // Reply gets the same hydration as sendAttachment so threaded sends with
+  // an attachment go through the resolver's localRoots/sandbox/size checks
+  // instead of forwarding raw paths to the channel runtime. Reply has its
+  // own `text`/`message` field, so don't fall back caption -> message.
   if (
     params.action !== "sendAttachment" &&
     params.action !== "setGroupIcon" &&
+    params.action !== "reply" &&
     !shouldHydrateUploadFile
   ) {
     return;

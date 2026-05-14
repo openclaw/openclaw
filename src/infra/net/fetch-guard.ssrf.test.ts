@@ -65,6 +65,26 @@ function okResponse(body = "ok"): Response {
   return new Response(body, { status: 200 });
 }
 
+async function raceWithTimeoutResult<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  timeoutResult: T,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => resolve(timeoutResult), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 function getDispatcherClassName(value: unknown): string | null {
   if (!value || typeof value !== "object") {
     return null;
@@ -74,17 +94,54 @@ function getDispatcherClassName(value: unknown): string | null {
 }
 
 function expectDispatcherAttached(value: unknown): void {
-  expect(value).toEqual(expect.any(Object));
+  expect(getDispatcherClassName(value)).toMatch(/^(Agent|Mock)$/u);
+}
+
+function firstMockCall<T extends unknown[]>(mock: { mock: { calls: T[] } }): T | undefined {
+  return mock.mock.calls[0];
 }
 
 function getSecondRequestHeaders(fetchImpl: ReturnType<typeof vi.fn>): Headers {
-  const [, secondInit] = fetchImpl.mock.calls[1] as [string, RequestInit];
+  const secondInit = getSecondRequestInit(fetchImpl);
   return new Headers(secondInit.headers);
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function getFirstRequestInit(fetchImpl: ReturnType<typeof vi.fn>): RequestInit {
+  const [call] = fetchImpl.mock.calls;
+  if (!call) {
+    throw new Error("expected first fetch call");
+  }
+  const [, init] = call as [string, RequestInit | undefined];
+  return requireRecord(init, "first fetch init") as RequestInit;
+}
+
 function getSecondRequestInit(fetchImpl: ReturnType<typeof vi.fn>): RequestInit {
-  const [, secondInit] = fetchImpl.mock.calls[1] as [string, RequestInit];
+  const call = fetchImpl.mock.calls[1];
+  if (!call) {
+    throw new Error("expected second fetch call");
+  }
+  const [, secondInit] = call as [string, RequestInit];
   return secondInit;
+}
+
+function expectAgentConstructorOptions(params: { bodyTimeout: number; headersTimeout: number }) {
+  const [call] = agentCtor.mock.calls;
+  if (!call) {
+    throw new Error("expected Agent constructor call");
+  }
+  const options = requireRecord(call[0], "Agent constructor options");
+  const connect = requireRecord(options.connect, "Agent connect options");
+  expect(typeof connect.lookup).toBe("function");
+  expect(options.allowH2).toBe(false);
+  expect(options.bodyTimeout).toBe(params.bodyTimeout);
+  expect(options.headersTimeout).toBe(params.headersTimeout);
 }
 
 async function expectRedirectFailure(params: {
@@ -252,7 +309,7 @@ describe("fetchWithSsrFGuard hardening", () => {
     ).rejects.toThrow(/private|internal|blocked/i);
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(logWarnMock).toHaveBeenCalledTimes(1);
-    const [warning] = logWarnMock.mock.calls[0] as [string];
+    const [warning] = firstMockCall(logWarnMock) as [string];
     expect(warning).toContain(
       "security: blocked URL fetch (qa-audit) targetOrigin=http://127.0.0.1:8080",
     );
@@ -552,12 +609,12 @@ describe("fetchWithSsrFGuard hardening", () => {
         servername: "public.example",
       },
     });
-    expect(fetchImpl).toHaveBeenCalledWith(
-      "https://public.example/resource",
-      expect.objectContaining({
-        dispatcher: expect.any(Object),
-      }),
-    );
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const fetchCall = firstMockCall(fetchImpl) as [string, { dispatcher?: unknown }] | undefined;
+    expect(fetchCall?.[0]).toBe("https://public.example/resource");
+    if (!fetchCall?.[1].dispatcher) {
+      throw new Error("Expected proxy dispatcher");
+    }
     await result.release();
   });
 
@@ -671,9 +728,9 @@ describe("fetchWithSsrFGuard hardening", () => {
     });
 
     expect(result.response.status).toBe(200);
-    const firstHeaders = fetchImpl.mock.calls[0]?.[1]?.headers;
+    const firstHeaders = getFirstRequestInit(fetchImpl).headers;
     expect(firstHeaders).not.toBe(headers);
-    expect(Object.getOwnPropertySymbols(firstHeaders as object)).toEqual([]);
+    expect(Object.getOwnPropertySymbols(firstHeaders as object)).toStrictEqual([]);
     const secondHeaders = getSecondRequestHeaders(fetchImpl);
     expect(secondHeaders.get("authorization")).toBeNull();
     expect(secondHeaders.get("accept")).toBe("application/json");
@@ -1164,14 +1221,7 @@ describe("fetchWithSsrFGuard hardening", () => {
     });
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-    expect(agentCtor).toHaveBeenCalledWith({
-      connect: expect.objectContaining({
-        lookup: expect.any(Function),
-      }),
-      allowH2: false,
-      bodyTimeout: 123_456,
-      headersTimeout: 123_456,
-    });
+    expectAgentConstructorOptions({ bodyTimeout: 123_456, headersTimeout: 123_456 });
     await result.release();
   });
 
@@ -1201,13 +1251,14 @@ describe("fetchWithSsrFGuard hardening", () => {
       timeoutMs: 1,
     });
 
-    const outcome = await Promise.race([
+    const outcome = await raceWithTimeoutResult(
       fetchPromise.then(
         () => "resolved",
         (error: unknown) => (error instanceof Error ? error.name : "rejected"),
       ),
-      new Promise<string>((resolve) => setTimeout(() => resolve("hung"), 250)),
-    ]);
+      250,
+      "hung",
+    );
 
     expect(outcome).toBe("TimeoutError");
   });
@@ -1230,14 +1281,7 @@ describe("fetchWithSsrFGuard hardening", () => {
       });
 
       expect(fetchImpl).toHaveBeenCalledTimes(1);
-      expect(agentCtor).toHaveBeenCalledWith({
-        connect: expect.objectContaining({
-          lookup: expect.any(Function),
-        }),
-        allowH2: false,
-        bodyTimeout: 1_900_000,
-        headersTimeout: 1_900_000,
-      });
+      expectAgentConstructorOptions({ bodyTimeout: 1_900_000, headersTimeout: 1_900_000 });
       await result.release();
     } finally {
       resetGlobalUndiciStreamTimeoutsForTests();

@@ -16,7 +16,7 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 import { attachCodexMirrorIdentity, mirrorCodexAppServerTranscript } from "./transcript-mirror.js";
 
-type MirroredAgentMessage = Extract<AgentMessage, { role: "user" | "assistant" }>;
+type MirroredAgentMessage = Extract<AgentMessage, { role: "user" | "assistant" | "toolResult" }>;
 
 // Mirrors transcript-mirror.ts's fallback fingerprint exactly so test
 // expectations stay in sync without exposing the helper publicly.
@@ -46,8 +46,18 @@ async function makeRoot(prefix: string): Promise<string> {
   return root;
 }
 
+function parseJsonLines<T>(raw: string): T[] {
+  const records: T[] = [];
+  for (const line of raw.trim().split("\n")) {
+    if (line.length > 0) {
+      records.push(JSON.parse(line) as T);
+    }
+  }
+  return records;
+}
+
 describe("mirrorCodexAppServerTranscript", () => {
-  it("mirrors user and assistant messages into the Pi transcript", async () => {
+  it("mirrors user, assistant, and tool result messages into the Pi transcript", async () => {
     const sessionFile = await createTempSessionFile();
     const userMessage = makeAgentUserMessage({
       content: [{ type: "text", text: "hello" }],
@@ -57,11 +67,24 @@ describe("mirrorCodexAppServerTranscript", () => {
       content: [{ type: "text", text: "hi there" }],
       timestamp: Date.now() + 1,
     });
+    const toolResultMessage = castAgentMessage({
+      role: "toolResult",
+      toolCallId: "call-1",
+      toolName: "read",
+      content: [
+        {
+          type: "toolResult",
+          toolCallId: "call-1",
+          content: "read output",
+        },
+      ],
+      timestamp: Date.now() + 2,
+    }) as MirroredAgentMessage;
 
     await mirrorCodexAppServerTranscript({
       sessionFile,
       sessionKey: "session-1",
-      messages: [userMessage, assistantMessage],
+      messages: [userMessage, assistantMessage, toolResultMessage],
       idempotencyScope: "scope-1",
     });
 
@@ -70,9 +93,15 @@ describe("mirrorCodexAppServerTranscript", () => {
     expect(raw).toContain('"content":[{"type":"text","text":"hello"}]');
     expect(raw).toContain('"role":"assistant"');
     expect(raw).toContain('"content":[{"type":"text","text":"hi there"}]');
+    expect(raw).toContain('"role":"toolResult"');
+    expect(raw).toContain('"toolCallId":"call-1"');
+    expect(raw).toContain('"content":"read output"');
     expect(raw).toContain(`"idempotencyKey":"scope-1:user:${expectedFingerprint(userMessage)}"`);
     expect(raw).toContain(
       `"idempotencyKey":"scope-1:assistant:${expectedFingerprint(assistantMessage)}"`,
+    );
+    expect(raw).toContain(
+      `"idempotencyKey":"scope-1:toolResult:${expectedFingerprint(toolResultMessage)}"`,
     );
   });
 
@@ -123,11 +152,9 @@ describe("mirrorCodexAppServerTranscript", () => {
       idempotencyScope: "scope-1",
     });
 
-    const records = (await fs.readFile(sessionFile, "utf8"))
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as { type?: string; message?: { role?: string } });
+    const records = parseJsonLines<{ type?: string; message?: { role?: string } }>(
+      await fs.readFile(sessionFile, "utf8"),
+    );
     expect(records.slice(1)).toHaveLength(2);
   });
 
@@ -224,7 +251,7 @@ describe("mirrorCodexAppServerTranscript", () => {
       idempotencyScope: "scope-1",
     });
 
-    await expect(fs.readFile(sessionFile, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.readFile(sessionFile, "utf8")).rejects.toHaveProperty("code", "ENOENT");
   });
 
   it("migrates small linear transcripts before mirroring", async () => {
@@ -275,8 +302,9 @@ describe("mirrorCodexAppServerTranscript", () => {
       )
       .filter((record) => record.type === "message");
 
-    expect(records[0]).toMatchObject({ id: "legacy-user", parentId: null });
-    expect(records[1]).toMatchObject({ parentId: "legacy-user" });
+    expect(records[0]?.id).toBe("legacy-user");
+    expect(records[0]?.parentId).toBeNull();
+    expect(records[1]?.parentId).toBe("legacy-user");
   });
 
   // Helpers for the identity-based regression tests below.
@@ -290,11 +318,7 @@ describe("mirrorCodexAppServerTranscript", () => {
     message?: { role?: string; content?: Array<{ text?: string }> };
   };
   function readFileMessages(raw: string): Array<{ role?: string; text?: string }> {
-    return raw
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as FileMessage)
+    return parseJsonLines<FileMessage>(raw)
       .filter((record) => record.type === "message")
       .map((record) => ({
         role: record.message?.role,

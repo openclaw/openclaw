@@ -37,8 +37,14 @@ describe("buildInlineProviderModels", () => {
 
     const result = buildInlineProviderModels(providers);
 
-    expect(result).toHaveLength(1);
-    expect(result[0].baseUrl).toBe("http://localhost:8000");
+    expect(result).toEqual([
+      {
+        ...makeModel("custom-model"),
+        provider: "custom",
+        baseUrl: "http://localhost:8000",
+        api: undefined,
+      },
+    ]);
   });
 
   it("inherits api from provider when model does not specify it", () => {
@@ -52,8 +58,14 @@ describe("buildInlineProviderModels", () => {
 
     const result = buildInlineProviderModels(providers);
 
-    expect(result).toHaveLength(1);
-    expect(result[0].api).toBe("anthropic-messages");
+    expect(result).toEqual([
+      {
+        ...makeModel("custom-model"),
+        provider: "custom",
+        baseUrl: "http://localhost:8000",
+        api: "anthropic-messages",
+      },
+    ]);
   });
 
   it("model-level api takes precedence over provider-level api", () => {
@@ -67,8 +79,14 @@ describe("buildInlineProviderModels", () => {
 
     const result = buildInlineProviderModels(providers);
 
-    expect(result).toHaveLength(1);
-    expect(result[0].api).toBe("anthropic-messages");
+    expect(result).toEqual([
+      {
+        ...makeModel("custom-model"),
+        provider: "custom",
+        baseUrl: "http://localhost:8000",
+        api: "anthropic-messages",
+      },
+    ]);
   });
 
   it("inherits both baseUrl and api from provider config", () => {
@@ -83,12 +101,10 @@ describe("buildInlineProviderModels", () => {
     const result = buildInlineProviderModels(providers);
 
     expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({
-      provider: "custom",
-      baseUrl: "http://localhost:10000",
-      api: "anthropic-messages",
-      name: "claude-opus-4.5",
-    });
+    expect(result[0].provider).toBe("custom");
+    expect(result[0].baseUrl).toBe("http://localhost:10000");
+    expect(result[0].api).toBe("anthropic-messages");
+    expect(result[0].name).toBe("claude-opus-4.5");
   });
 
   it("normalizes bare Google API hosts for custom Google Generative AI providers", () => {
@@ -103,11 +119,9 @@ describe("buildInlineProviderModels", () => {
     const result = buildInlineProviderModels(providers);
 
     expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({
-      provider: "google-paid",
-      api: "google-generative-ai",
-      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-    });
+    expect(result[0].provider).toBe("google-paid");
+    expect(result[0].api).toBe("google-generative-ai");
+    expect(result[0].baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
   });
 
   it("merges provider-level headers into inline models", () => {
@@ -122,8 +136,15 @@ describe("buildInlineProviderModels", () => {
 
     const result = buildInlineProviderModels(providers);
 
-    expect(result).toHaveLength(1);
-    expect(result[0].headers).toEqual({ "User-Agent": "custom-agent/1.0" });
+    expect(result).toEqual([
+      {
+        ...makeModel("claude-sonnet-4-6"),
+        provider: "proxy",
+        baseUrl: "https://proxy.example.com",
+        api: "anthropic-messages",
+        headers: { "User-Agent": "custom-agent/1.0" },
+      },
+    ]);
   });
 
   it("merges provider request headers into inline models", () => {
@@ -141,9 +162,48 @@ describe("buildInlineProviderModels", () => {
     };
 
     const result = buildInlineProviderModels(providers);
+    const [
+      {
+        id,
+        name,
+        reasoning,
+        input,
+        cost,
+        contextWindow,
+        maxTokens,
+        provider,
+        baseUrl,
+        api,
+        headers,
+      },
+    ] = result;
 
     expect(result).toHaveLength(1);
-    expect(result[0].headers).toEqual({ "X-Tenant": "acme" });
+    expect({
+      id,
+      name,
+      reasoning,
+      input,
+      cost,
+      contextWindow,
+      maxTokens,
+      provider,
+      baseUrl,
+      api,
+      headers: headers ? { ...headers } : undefined,
+    }).toStrictEqual({
+      id: "proxy-model",
+      name: "proxy-model",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1,
+      maxTokens: 1,
+      provider: "proxy",
+      baseUrl: "https://proxy.example.com/v1",
+      api: "openai-completions",
+      headers: { "X-Tenant": "acme" },
+    });
   });
 
   it("keeps inline provider transport overrides once the llm transport adapter is available", () => {
@@ -162,11 +222,9 @@ describe("buildInlineProviderModels", () => {
     } as unknown as Parameters<typeof buildInlineProviderModels>[0]);
 
     expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({
-      provider: "proxy",
-      api: "openai-completions",
-      baseUrl: "https://proxy.example.com/v1",
-    });
+    expect(result[0].provider).toBe("proxy");
+    expect(result[0].api).toBe("openai-completions");
+    expect(result[0].baseUrl).toBe("https://proxy.example.com/v1");
   });
 
   it("omits headers when neither provider nor model specifies them", () => {

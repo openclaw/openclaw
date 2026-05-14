@@ -6,11 +6,13 @@ import {
   DEFAULT_LIVE_RETRIES,
   allReleasePathLanes,
   mainLanes,
+  normalizeReleaseProfile,
   releasePathChunkLanes,
   tailLanes,
 } from "./docker-e2e-scenarios.mjs";
 
 export { DEFAULT_LIVE_RETRIES };
+export { normalizeReleaseProfile };
 
 export const DEFAULT_E2E_BARE_IMAGE = "openclaw-docker-e2e-bare:local";
 export const DEFAULT_E2E_FUNCTIONAL_IMAGE = "openclaw-docker-e2e-functional:local";
@@ -25,6 +27,7 @@ export const DEFAULT_RESOURCE_LIMITS = {
   "live:droid": 4,
   "live:gemini": 4,
   "live:opencode": 4,
+  "live:openai": 1,
   npm: 10,
   service: 7,
 };
@@ -330,8 +333,10 @@ function laneCredentialRequirements(poolLane) {
   }
   if (
     poolLane.name === "openwebui" ||
+    poolLane.name === "openai-chat-tools" ||
     poolLane.name === "openai-web-search-minimal" ||
-    poolLane.name === "live-codex-npm-plugin"
+    poolLane.name === "live-codex-npm-plugin" ||
+    poolLane.name === "live-plugin-tool"
   ) {
     credentials.push("openai");
   }
@@ -374,6 +379,7 @@ function buildPlanJson(params) {
       package: lanesNeedOpenClawPackage(scheduledLanes),
     },
     profile: params.profile,
+    releaseProfile: params.releaseProfile,
     selectedLanes: params.selectedLaneNames,
     tailLanes: params.orderedTailLanes.map((poolLane) => poolLane.name),
     version: 1,
@@ -381,12 +387,16 @@ function buildPlanJson(params) {
 }
 
 export function resolveDockerE2ePlan(options) {
+  const releaseProfile = normalizeReleaseProfile(options.releaseProfile);
   const retriedMainLanes = applyLiveRetries(mainLanes, options.liveRetries);
   const retriedTailLanes = applyLiveRetries(tailLanes, options.liveRetries);
   const upgradeSurvivorBaselines = options.upgradeSurvivorBaselines ?? "";
   const upgradeSurvivorScenarios = options.upgradeSurvivorScenarios ?? "";
   const unexpandedSelectableLanes = dedupeLanes([
-    ...allReleasePathLanes({ includeOpenWebUI: options.includeOpenWebUI }),
+    ...allReleasePathLanes({
+      includeOpenWebUI: options.includeOpenWebUI,
+      releaseProfile: "full",
+    }),
     ...retriedMainLanes,
     ...retriedTailLanes,
   ]);
@@ -401,13 +411,14 @@ export function resolveDockerE2ePlan(options) {
     options.selectedLaneNames.length === 0 && options.profile === RELEASE_PATH_PROFILE
       ? options.planReleaseAll
         ? expandUpgradeSurvivorBaselineLanes(
-            allReleasePathLanes({ includeOpenWebUI: options.includeOpenWebUI }),
+            allReleasePathLanes({ includeOpenWebUI: options.includeOpenWebUI, releaseProfile }),
             upgradeSurvivorBaselines,
             upgradeSurvivorScenarios,
           )
         : expandUpgradeSurvivorBaselineLanes(
             releasePathChunkLanes(options.releaseChunk, {
               includeOpenWebUI: options.includeOpenWebUI,
+              releaseProfile,
             }),
             upgradeSurvivorBaselines,
             upgradeSurvivorScenarios,
@@ -458,6 +469,7 @@ export function resolveDockerE2ePlan(options) {
       orderedTailLanes,
       profile: options.profile,
       releaseChunk: options.releaseChunk,
+      releaseProfile,
       selectedLaneNames: options.selectedLaneNames,
     }),
     scheduledLanes: [...orderedLanes, ...orderedTailLanes],

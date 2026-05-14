@@ -35,14 +35,10 @@ describe("session cost usage", () => {
       "",
     ].join("\n");
   const waitFor = async (predicate: () => Promise<boolean>, timeoutMs = 2_000): Promise<void> => {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      if (await predicate()) {
-        return;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
-    throw new Error("Timed out waiting for condition");
+    await vi.waitFor(async () => expect(await predicate()).toBe(true), {
+      interval: 1,
+      timeout: timeoutMs,
+    });
   };
   const requireValue = <T>(value: T | null | undefined, message: string): T => {
     if (value == null) {
@@ -1054,43 +1050,54 @@ describe("session cost usage", () => {
       "utf-8",
     );
 
-    await withStateDir(root, async () => {
-      await refreshCostUsageCache();
-      const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
-      const lockPath = `${cachePath}.lock`;
-      await fs.writeFile(
-        lockPath,
-        `${JSON.stringify({ pid: process.pid, startedAt: Date.now() })}\n`,
-        "utf-8",
-      );
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      await withStateDir(root, async () => {
+        await refreshCostUsageCache();
+        const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
+        const lockPath = `${cachePath}.lock`;
+        await fs.writeFile(
+          lockPath,
+          `${JSON.stringify({ pid: process.pid, startedAt: Date.now() })}\n`,
+          "utf-8",
+        );
 
-      try {
-        const cold = await loadSessionCostSummaryFromCache({
-          sessionId: "sess-cache-lock-busy",
-          sessionFile,
-        });
-        expect(cold.summary).toBeNull();
+        try {
+          const cold = await loadSessionCostSummaryFromCache({
+            sessionId: "sess-cache-lock-busy",
+            sessionFile,
+          });
+          expect(cold.summary).toBeNull();
 
-        await new Promise((resolve) => setTimeout(resolve, 75));
-        const stillMissing = await loadSessionCostSummaryFromCache({
-          sessionId: "sess-cache-lock-busy",
-          sessionFile,
-          requestRefresh: false,
-        });
-        expect(stillMissing.summary).toBeNull();
-      } finally {
-        await fs.rm(lockPath, { force: true });
-      }
+          await vi.advanceTimersByTimeAsync(75);
+          const stillMissing = await loadSessionCostSummaryFromCache({
+            sessionId: "sess-cache-lock-busy",
+            sessionFile,
+            requestRefresh: false,
+          });
+          expect(stillMissing.summary).toBeNull();
+        } finally {
+          await fs.rm(lockPath, { force: true });
+        }
 
-      await waitFor(async () => {
-        const warm = await loadSessionCostSummaryFromCache({
-          sessionId: "sess-cache-lock-busy",
-          sessionFile,
-          requestRefresh: false,
-        });
-        return warm.summary?.totalTokens === 10;
+        await vi.waitFor(
+          async () => {
+            const warm = await loadSessionCostSummaryFromCache({
+              sessionId: "sess-cache-lock-busy",
+              sessionFile,
+              requestRefresh: false,
+            });
+            expect(warm.summary?.totalTokens).toBe(10);
+          },
+          {
+            interval: 1,
+            timeout: 200,
+          },
+        );
       });
-    });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("summarizes a single session file", async () => {
@@ -1817,25 +1824,21 @@ example
     expect(tokenBuckets).toHaveLength(2);
 
     const sorted = [...tokenBuckets].toSorted((a, b) => a.quarterIndex - b.quarterIndex);
-    expect(sorted[0]).toMatchObject({
-      date: "2026-03-15",
-      quarterIndex: 26,
-      input: 6,
-      output: 9,
-      cacheRead: 6,
-      cacheWrite: 6,
-      totalTokens: 35,
-    });
+    expect(sorted[0]?.date).toBe("2026-03-15");
+    expect(sorted[0]?.quarterIndex).toBe(26);
+    expect(sorted[0]?.input).toBe(6);
+    expect(sorted[0]?.output).toBe(9);
+    expect(sorted[0]?.cacheRead).toBe(6);
+    expect(sorted[0]?.cacheWrite).toBe(6);
+    expect(sorted[0]?.totalTokens).toBe(35);
     expect(sorted[0]?.totalCost).toBeCloseTo(0.035, 6);
-    expect(sorted[1]).toMatchObject({
-      date: "2026-03-15",
-      quarterIndex: 95,
-      input: 2,
-      output: 3,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 9,
-    });
+    expect(sorted[1]?.date).toBe("2026-03-15");
+    expect(sorted[1]?.quarterIndex).toBe(95);
+    expect(sorted[1]?.input).toBe(2);
+    expect(sorted[1]?.output).toBe(3);
+    expect(sorted[1]?.cacheRead).toBe(0);
+    expect(sorted[1]?.cacheWrite).toBe(0);
+    expect(sorted[1]?.totalTokens).toBe(9);
     expect(sorted[1]?.totalCost).toBeCloseTo(0.009, 6);
   });
 
