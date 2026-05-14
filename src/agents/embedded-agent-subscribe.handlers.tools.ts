@@ -274,10 +274,41 @@ function emitTrackedItemEvent(ctx: ToolHandlerContext, itemData: AgentItemEventD
     ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
     data: itemData,
   });
-  void ctx.params.onAgentEvent?.({
+  emitAgentEventCallbackBestEffort(ctx, {
     stream: "item",
     data: itemData,
   });
+}
+
+function warnBestEffortEventFailure(ctx: ToolHandlerContext, label: string, error: unknown): void {
+  ctx.log.warn(`${label} callback failed: ${String(error)}`);
+}
+
+function emitExecutionPhaseBestEffort(
+  ctx: ToolHandlerContext,
+  info: Parameters<NonNullable<ToolHandlerContext["params"]["onExecutionPhase"]>>[0],
+): void {
+  try {
+    ctx.params.onExecutionPhase?.(info);
+  } catch (error) {
+    warnBestEffortEventFailure(ctx, "tool execution phase", error);
+  }
+}
+
+function emitAgentEventCallbackBestEffort(
+  ctx: ToolHandlerContext,
+  event: Parameters<NonNullable<ToolHandlerContext["params"]["onAgentEvent"]>>[0],
+): void {
+  try {
+    const result = ctx.params.onAgentEvent?.(event);
+    if (isPromiseLike<void>(result)) {
+      void Promise.resolve(result).catch((error: unknown) => {
+        warnBestEffortEventFailure(ctx, "tool agent event", error);
+      });
+    }
+  } catch (error) {
+    warnBestEffortEventFailure(ctx, "tool agent event", error);
+  }
 }
 
 function readToolResultDetailsRecord(result: unknown): Record<string, unknown> | undefined {
@@ -868,7 +899,7 @@ export function handleToolExecutionStart(
     const args = evt.args;
     const runId = ctx.params.runId;
     ctx.state.toolExecutionSinceLastBlockReply = true;
-    ctx.params.onExecutionPhase?.({
+    emitExecutionPhaseBestEffort(ctx, {
       phase: "tool_execution_started",
       tool: toolName,
       toolCallId,
@@ -973,7 +1004,7 @@ export function handleToolExecutionStart(
     };
     emitTrackedItemEvent(ctx, itemData);
     // Best-effort typing signal; do not block tool summaries on slow emitters.
-    void ctx.params.onAgentEvent?.({
+    emitAgentEventCallbackBestEffort(ctx, {
       stream: "tool",
       data: {
         phase: "start",
@@ -1095,7 +1126,7 @@ export function handleToolExecutionUpdate(
   };
   emitTrackedItemEvent(ctx, itemData);
   if (!toolProgress) {
-    void ctx.params.onAgentEvent?.({
+    emitAgentEventCallbackBestEffort(ctx, {
       stream: "tool",
       data: {
         phase: "update",
@@ -1133,7 +1164,7 @@ export function handleToolExecutionUpdate(
         ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
         data: outputData,
       });
-      void ctx.params.onAgentEvent?.({
+      emitAgentEventCallbackBestEffort(ctx, {
         stream: "command_output",
         data: outputData,
       });
@@ -1320,7 +1351,7 @@ export async function handleToolExecutionEnd(
       : {}),
   };
   emitTrackedItemEvent(ctx, itemData);
-  void ctx.params.onAgentEvent?.({
+  emitAgentEventCallbackBestEffort(ctx, {
     stream: "tool",
     data: {
       phase: "result",
@@ -1366,7 +1397,7 @@ export async function handleToolExecutionEnd(
         ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
         data: approvalData,
       });
-      void ctx.params.onAgentEvent?.({
+      emitAgentEventCallbackBestEffort(ctx, {
         stream: "approval",
         data: approvalData,
       });
@@ -1433,7 +1464,7 @@ export async function handleToolExecutionEnd(
         ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
         data: outputData,
       });
-      void ctx.params.onAgentEvent?.({
+      emitAgentEventCallbackBestEffort(ctx, {
         stream: "command_output",
         data: outputData,
       });
@@ -1459,7 +1490,7 @@ export async function handleToolExecutionEnd(
             ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
             data: approvalData,
           });
-          void ctx.params.onAgentEvent?.({
+          emitAgentEventCallbackBestEffort(ctx, {
             stream: "approval",
             data: approvalData,
           });
@@ -1505,7 +1536,7 @@ export async function handleToolExecutionEnd(
         ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
         data: patchData,
       });
-      void ctx.params.onAgentEvent?.({
+      emitAgentEventCallbackBestEffort(ctx, {
         stream: "patch",
         data: patchData,
       });
