@@ -189,6 +189,7 @@ Docs: https://docs.openclaw.ai
 - Gateway: throttle assistant/thinking agent event fanout during streaming bursts without dropping buffered deltas. (#80335) Thanks @samzong.
 - Codex app-server: keep the short post-tool completion watchdog armed across dynamic tool completion bookkeeping so embedded Codex runs fail fast and release their session lane when Codex goes quiet after a tool result. (#81697) Thanks @mbelinky.
 - Models: restore authenticated CLI runtime providers in the `/models` picker while keeping legacy runtime aliases hidden from setup/default model choices. Closes #81212. (#81239) Thanks @anagnorisis2peripeteia.
+- Agents/cron: honor a cron payload's explicit `timeoutSeconds` for the LLM idle watchdog even when it numerically equals `agents.defaults.timeoutSeconds`, preserving explicit per-run timeout intent and preventing stalled streaming replies from being cut to the implicit 120s cap. (#79426) Thanks @legolaz8451.
 
 ### Changes
 
@@ -713,7 +714,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- Agents/cron: honor a cron payload's explicit `timeoutSeconds` for the LLM idle watchdog even when it numerically equals `agents.defaults.timeoutSeconds`, preserving explicit per-run timeout intent and preventing stalled streaming replies from being cut to the implicit 120s cap. (#79426) Thanks @legolaz8451.
 - Agents/compaction: keep the recent tail after manual `/compact` when Pi returns an empty or no-op compaction summary, preventing blank checkpoints from replacing the live context.
 - Native commands: handle slash commands before workspace and agent-reply bootstrap so Telegram `/status` and other command-only native replies do not wait behind full agent turn setup.
 - Telegram/groups: include the recent local chat window and nearby reply-target window as generic inbound context so stale reply ancestry does not overshadow the live group conversation.
@@ -731,6 +731,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/macOS: `repairLaunchAgentBootstrap` no longer kickstarts an already-running LaunchAgent, preventing unnecessary service restarts and session disconnects when repair runs against a healthy gateway. Fixes #77428. Thanks @ramitrkar-hash.
 - Gateway/macOS: `openclaw gateway stop --disable` now persists the LaunchAgent disable bit even after a previous bootout left the service not loaded, keeping the explicit stay-down path reliable. (#78412) Thanks @wdeveloper16.
 - CLI/status: keep lean `openclaw status --json` off manifest-backed channel discovery so configured-channel checks do not repeatedly rescan plugin metadata. Fixes #79129.
+- Gateway/Tailscale: add opt-in `gateway.tailscale.preserveFunnel` so when `tailscale.mode = "serve"` and an externally configured Tailscale Funnel route already covers the gateway port, OpenClaw skips re-applying `tailscale serve` on startup and skips the `resetOnExit` teardown for that run, keeping operator-managed Funnel exposure alive across gateway restarts. Fixes #57241. Thanks @RenzoMXD.
 - Control UI/chat: hide retired and non-public Google Gemini model IDs from chat model catalogs and route the bare `gemini-3-pro` alias to Gemini 3.1 Pro Preview instead of the shut-down Gemini 3 Pro Preview. Thanks @BunsDev.
 - CLI/infer: canonicalize case-only catalog model refs in `infer model run --model` so mixed-case provider/model strings resolve to the canonical catalog entry instead of failing with `Unknown model`. (#78940) Thanks @ai-hpc.
 - CLI/infer: allow explicit local `infer model run --model <provider/model>` probes to use exact bundled static catalog rows before the provider is written to config, surfacing missing credentials as auth errors instead of `Unknown model`.
