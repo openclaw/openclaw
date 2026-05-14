@@ -452,6 +452,20 @@ function isHostPeerResolutionFailure(
   return `${result.stderr}\n${result.stdout}`.includes("openclaw@");
 }
 
+function collectExistingManagedPeerDependencyPins(
+  dependencies: Record<string, string>,
+  previousManagedPeerDependencies: string[],
+): Record<string, string> {
+  const pins: Record<string, string> = {};
+  for (const packageName of previousManagedPeerDependencies) {
+    const dependencySpec = dependencies[packageName];
+    if (dependencySpec) {
+      pins[packageName] = dependencySpec;
+    }
+  }
+  return pins;
+}
+
 async function collectNpmResolvedManagedNpmRootPeerDependencyPins(params: {
   npmRoot: string;
   runCommand?: ManagedNpmRootRunCommand;
@@ -460,6 +474,10 @@ async function collectNpmResolvedManagedNpmRootPeerDependencyPins(params: {
   const manifest = await readManagedNpmRootManifest(path.join(params.npmRoot, "package.json"));
   const dependencies = readDependencyRecord(manifest.dependencies);
   const previousManagedPeerDependencies = readManagedPeerDependencyKeys(manifest.openclaw);
+  const fallbackPeerPins = collectExistingManagedPeerDependencyPins(
+    dependencies,
+    previousManagedPeerDependencies,
+  );
   for (const packageName of previousManagedPeerDependencies) {
     delete dependencies[packageName];
   }
@@ -540,7 +558,7 @@ async function collectNpmResolvedManagedNpmRootPeerDependencyPins(params: {
       }
     }
     if (result.code !== 0) {
-      throw new Error(`npm peer plan failed: ${result.stderr.trim() || result.stdout.trim()}`);
+      return fallbackPeerPins;
     }
     const lockfile = await readManagedNpmRootManifest(tempLockPath);
     return collectNpmLockPeerDependencyPins({ lockfile });

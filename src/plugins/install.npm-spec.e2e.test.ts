@@ -548,7 +548,7 @@ describe("installPluginFromNpmSpec e2e", () => {
       openclaw?: { managedPeerDependencies?: string[] };
     };
     expect(rootManifest.dependencies?.[laterPlugin]).toBe("1.0.0");
-    expect(rootManifest.dependencies?.[runtimePeer]).toBe("^1.0.0");
+    expect(rootManifest.dependencies?.[runtimePeer]).toBe("1.0.0");
     expect(rootManifest.openclaw?.managedPeerDependencies ?? []).toContain(runtimePeer);
   });
 
@@ -692,8 +692,8 @@ describe("installPluginFromNpmSpec e2e", () => {
     ).rejects.toHaveProperty("code", "ENOENT");
   });
 
-  it("rolls back the managed root when npm peer planning fails", async () => {
-    const rootDir = await makeTempDir("npm-plugin-peer-plan-rollback-e2e");
+  it("falls back to the legacy install path when npm cannot plan third-party peers", async () => {
+    const rootDir = await makeTempDir("npm-plugin-peer-plan-fallback-e2e");
     const npmRoot = path.join(rootDir, "managed-npm");
     const blockedPlugin = `missing-peer-plugin-${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
     const missingPeer = `missing-peer-${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
@@ -723,22 +723,19 @@ describe("installPluginFromNpmSpec e2e", () => {
       timeoutMs: 120_000,
     });
 
-    if (result.ok) {
-      throw new Error("expected npm peer planning to fail");
-    }
-    expect(result.error).toContain("npm peer dependency planning failed");
+    expect(result.ok).toBe(true);
     const rootManifest = JSON.parse(
       await fs.readFile(path.join(npmRoot, "package.json"), "utf8"),
     ) as {
       dependencies?: Record<string, string>;
       openclaw?: { managedPeerDependencies?: string[] };
     };
-    expect(rootManifest.dependencies?.[blockedPlugin]).toBeUndefined();
+    expect(rootManifest.dependencies?.[blockedPlugin]).toBe("1.0.0");
     expect(rootManifest.dependencies?.[missingPeer]).toBeUndefined();
     expect(rootManifest.openclaw?.managedPeerDependencies ?? []).not.toContain(missingPeer);
     await expect(
       fs.lstat(path.join(npmRoot, "node_modules", blockedPlugin, "package.json")),
-    ).rejects.toHaveProperty("code", "ENOENT");
+    ).resolves.toBeTruthy();
   });
 
   it("does not take ownership of an existing root dependency observed as a peer", async () => {

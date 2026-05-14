@@ -497,6 +497,51 @@ describe("managed npm root", () => {
     });
   });
 
+  it("preserves existing managed peer dependencies when npm cannot plan third-party peers", async () => {
+    const npmRoot = await makeTempRoot();
+    await fs.writeFile(
+      path.join(npmRoot, "package.json"),
+      `${JSON.stringify(
+        {
+          private: true,
+          dependencies: {
+            plugin: "1.0.0",
+            "runtime-peer": "2.0.0",
+          },
+          openclaw: {
+            managedPeerDependencies: ["runtime-peer"],
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const runCommand = vi.fn(async () => ({
+      code: 1,
+      stdout: "",
+      stderr: "npm ERR! ERESOLVE could not resolve third-party peer dependency",
+      signal: null,
+      killed: false,
+      termination: "exit" as const,
+    }));
+
+    await expect(syncManagedNpmRootPeerDependencies({ npmRoot, runCommand })).resolves.toBe(false);
+    expect(runCommand).toHaveBeenCalledTimes(1);
+    await expect(
+      fs.readFile(path.join(npmRoot, "package.json"), "utf8").then((raw) => JSON.parse(raw)),
+    ).resolves.toEqual({
+      private: true,
+      dependencies: {
+        plugin: "1.0.0",
+        "runtime-peer": "2.0.0",
+      },
+      openclaw: {
+        managedPeerDependencies: ["runtime-peer"],
+      },
+    });
+  });
+
   it("removes one managed dependency without dropping unrelated metadata", async () => {
     const npmRoot = await makeTempRoot();
     await fs.writeFile(
