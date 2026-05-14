@@ -943,6 +943,53 @@ describe("searchMemoryWiki", () => {
     ]);
   });
 
+  it("keeps gateway-style archived session memory hits when the path owner matches agent scope", async () => {
+    const { config } = await createQueryVault({
+      initialize: true,
+      config: {
+        search: { backend: "shared", corpus: "memory" },
+      },
+    });
+    loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+      storePath: "(test)",
+      store: {},
+    });
+    const manager = createMemoryManager({
+      searchResults: [
+        {
+          path: "sessions/secondary/deleted-stem.jsonl.deleted.2026-02-16T22-27-33.000Z",
+          startLine: 1,
+          endLine: 2,
+          score: 30,
+          snippet: "archived transcript",
+          source: "sessions",
+        },
+        {
+          path: "MEMORY.md",
+          startLine: 5,
+          endLine: 6,
+          score: 10,
+          snippet: "durable memory",
+          source: "memory",
+        },
+      ],
+    });
+    getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
+
+    const results = await searchMemoryWiki({
+      config,
+      appConfig: createAppConfig(),
+      agentId: "secondary",
+      query: "transcript",
+      maxResults: 10,
+    });
+
+    expect(results.map((result) => result.path)).toEqual([
+      "sessions/secondary/deleted-stem.jsonl.deleted.2026-02-16T22-27-33.000Z",
+      "MEMORY.md",
+    ]);
+  });
+
   it("drops gateway-style session memory hits when shared store keys belong to another agent", async () => {
     const { config } = await createQueryVault({
       initialize: true,

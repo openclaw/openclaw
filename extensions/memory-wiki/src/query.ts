@@ -4,7 +4,7 @@ import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-ru
 import { resolveDefaultAgentId, resolveSessionAgentId } from "openclaw/plugin-sdk/memory-host-core";
 import { getActiveMemorySearchManager } from "openclaw/plugin-sdk/memory-host-search";
 import {
-  extractTranscriptStemFromSessionsMemoryHit,
+  extractTranscriptIdentityFromSessionsMemoryHit,
   loadCombinedSessionStoreForGateway,
   resolveTranscriptStemToSessionKeys,
 } from "openclaw/plugin-sdk/session-transcript-hit";
@@ -1287,16 +1287,23 @@ async function createSessionMemoryPathVisibilityChecker(params: {
     scopedAgentId ? { agentId: scopedAgentId } : {},
   );
   return (relPath) => {
-    const stem = extractTranscriptStemFromSessionsMemoryHit(relPath);
-    if (!stem) {
+    const identity = extractTranscriptIdentityFromSessionsMemoryHit(relPath);
+    if (!identity) {
       return false;
     }
+    const archivedOwnerMatchesScope = Boolean(
+      identity.archived &&
+      identity.ownerAgentId &&
+      (!scopedAgentId || normalizeLowercaseStringOrEmpty(identity.ownerAgentId) === scopedAgentId),
+    );
+    const archivedOwnerAgentId = archivedOwnerMatchesScope ? identity.ownerAgentId : undefined;
     const keys = filterSessionKeysByScopedAgent({
       cfg: params.cfg,
       scopedAgentId,
       keys: resolveTranscriptStemToSessionKeys({
         store: combinedSessionStore,
-        stem,
+        stem: identity.stem,
+        ...(archivedOwnerAgentId ? { archivedOwnerAgentId } : {}),
       }),
     });
     if (!guard) {
