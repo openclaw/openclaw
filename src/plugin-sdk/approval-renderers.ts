@@ -6,6 +6,7 @@ import {
   buildPluginApprovalRequestMessage,
   buildPluginApprovalResolvedMessage,
   resolvePluginApprovalRequestAllowedDecisions,
+  type PluginApprovalLanguage,
   type PluginApprovalRequest,
   type PluginApprovalResolved,
 } from "../infra/plugin-approvals.js";
@@ -71,13 +72,18 @@ export function buildPluginApprovalPendingReplyPayload(params: {
   text?: string;
   approvalSlug?: string;
   allowedDecisions?: readonly ExecApprovalReplyDecision[];
+  language?: PluginApprovalLanguage | null;
   channelData?: Record<string, unknown>;
 }): ReplyPayload {
   return buildApprovalPendingReplyPayload({
     approvalKind: "plugin",
     approvalId: params.request.id,
     approvalSlug: params.approvalSlug ?? params.request.id.slice(0, 8),
-    text: params.text ?? buildPluginApprovalRequestMessage(params.request, params.nowMs),
+    text:
+      params.text ??
+      buildPluginApprovalRequestMessage(params.request, params.nowMs, {
+        language: params.language,
+      }),
     allowedDecisions:
       params.allowedDecisions ??
       resolvePluginApprovalRequestAllowedDecisions(params.request.request),

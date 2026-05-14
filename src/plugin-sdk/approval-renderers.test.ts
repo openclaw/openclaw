@@ -226,6 +226,7 @@ describe("plugin-sdk/approval-renderers", () => {
         expiresAtMs: 121_000,
       },
       nowMs: 1_000,
+      language: "simple",
     });
 
     expect(payload.text).toContain("Approval needed");
@@ -256,6 +257,7 @@ describe("plugin-sdk/approval-renderers", () => {
         expiresAtMs: 121_000,
       },
       nowMs: 1_000,
+      language: "simple",
     });
 
     expect(payload.text).toContain("Summary: use the network or download data");
@@ -264,5 +266,26 @@ describe("plugin-sdk/approval-renderers", () => {
     expect(payload.text).toContain(
       "Piping data into a shell can run code that is not visible in the approval prompt.",
     );
+  });
+
+  it("preserves the original plugin approval wording by default", () => {
+    const payload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id: "plugin-command-original",
+        request: {
+          title: "Codex app-server command approval",
+          description: "Command: mkdir -p outputs/openmodelapi",
+          toolName: "codex_command_approval",
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: 121_000,
+      },
+      nowMs: 1_000,
+    });
+
+    expect(payload.text).toContain("Plugin approval required");
+    expect(payload.text).not.toContain("Summary: create/check workspace files or folders");
+    expect(payload.text).not.toContain("Technical details:");
+    expect(payload.text).toContain("Command: mkdir -p outputs/openmodelapi");
   });
 });

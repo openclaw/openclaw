@@ -194,6 +194,43 @@ describe("plugin approval forwarding", () => {
       });
     });
 
+    it("uses simple plugin approval language when configured", async () => {
+      const deliver = vi.fn().mockResolvedValue([]);
+      const { forwarder } = createForwarder({
+        cfg: {
+          approvals: {
+            plugin: {
+              enabled: true,
+              mode: "targets",
+              language: "simple",
+              targets: [{ channel: "slack", to: "U123" }],
+            },
+          },
+        } as OpenClawConfig,
+        deliver,
+      });
+      await forwarder.handlePluginApprovalRequested!(
+        makePluginRequest({
+          request: {
+            ...makePluginRequest().request,
+            title: "Codex app-server command approval",
+            description:
+              "Command: mkdir -p outputs/openmodelapi && pwd && ls -ld outputs outputs/openmodelapi",
+            toolName: "codex_command_approval",
+          },
+        }),
+      );
+      await flushPendingDelivery();
+      const deliveryArgs = deliver.mock.calls[0]?.[0] as
+        | { payloads?: Array<{ text?: string }> }
+        | undefined;
+      const text = deliveryArgs?.payloads?.[0]?.text ?? "";
+      expect(text).toContain("Approval needed");
+      expect(text).toContain("Summary: create/check workspace files or folders");
+      expect(text).toContain("- create folder(s): outputs/openmodelapi");
+      expect(text).toContain("Technical details:");
+    });
+
     it("includes severity icon for critical", async () => {
       const deliver = vi.fn().mockResolvedValue([]);
       const { forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG, deliver });

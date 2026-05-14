@@ -9,13 +9,20 @@ const ExecApprovalForwardTargetSchema = z
   })
   .strict();
 
-const ExecApprovalForwardingSchema = z
+const ExecApprovalForwardingShape = {
+  enabled: z.boolean().optional(),
+  mode: z.union([z.literal("session"), z.literal("targets"), z.literal("both")]).optional(),
+  agentFilter: z.array(z.string()).optional(),
+  sessionFilter: z.array(z.string()).optional(),
+  targets: z.array(ExecApprovalForwardTargetSchema).optional(),
+};
+
+const ExecApprovalForwardingSchema = z.object(ExecApprovalForwardingShape).strict().optional();
+
+const PluginApprovalForwardingSchema = z
   .object({
-    enabled: z.boolean().optional(),
-    mode: z.union([z.literal("session"), z.literal("targets"), z.literal("both")]).optional(),
-    agentFilter: z.array(z.string()).optional(),
-    sessionFilter: z.array(z.string()).optional(),
-    targets: z.array(ExecApprovalForwardTargetSchema).optional(),
+    ...ExecApprovalForwardingShape,
+    language: z.union([z.literal("original"), z.literal("simple")]).optional(),
   })
   .strict()
   .optional();
@@ -23,7 +30,7 @@ const ExecApprovalForwardingSchema = z
 export const ApprovalsSchema = z
   .object({
     exec: ExecApprovalForwardingSchema,
-    plugin: ExecApprovalForwardingSchema,
+    plugin: PluginApprovalForwardingSchema,
   })
   .strict()
   .optional();

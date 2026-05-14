@@ -292,6 +292,7 @@ function buildMatrixApprovalMetadata(params: {
 }
 
 function buildPendingApprovalContent(params: {
+  cfg: CoreConfig;
   view: PendingApprovalView;
   nowMs: number;
 }): PendingApprovalContent {
@@ -314,6 +315,7 @@ function buildPendingApprovalContent(params: {
           } satisfies PluginApprovalRequest,
           nowMs: params.nowMs,
           allowedDecisions,
+          language: params.cfg.approvals?.plugin?.language,
         })
       : buildExecApprovalPendingReplyPayload({
           approvalId: params.view.approvalId,
@@ -410,8 +412,9 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
     },
   },
   presentation: {
-    buildPendingPayload: ({ view, nowMs }) =>
+    buildPendingPayload: ({ cfg, view, nowMs }) =>
       buildPendingApprovalContent({
+        cfg,
         view,
         nowMs,
       }),

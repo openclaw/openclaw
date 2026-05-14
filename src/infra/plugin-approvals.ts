@@ -31,10 +31,14 @@ export type PluginApprovalResolved = {
   request?: PluginApprovalRequestPayload;
 };
 
+export type PluginApprovalLanguage = "original" | "simple";
+
 export const DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS = 120_000;
 export const MAX_PLUGIN_APPROVAL_TIMEOUT_MS = 600_000;
 export const PLUGIN_APPROVAL_TITLE_MAX_LENGTH = 80;
 export const PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH = 256;
+export const DEFAULT_PLUGIN_APPROVAL_LANGUAGE =
+  "original" as const satisfies PluginApprovalLanguage;
 export const DEFAULT_PLUGIN_APPROVAL_DECISIONS = [
   "allow-once",
   "allow-always",
@@ -68,6 +72,10 @@ export function resolvePluginApprovalRequestAllowedDecisions(params?: {
   return explicit.length > 0 ? explicit : DEFAULT_PLUGIN_APPROVAL_DECISIONS;
 }
 
+export function resolvePluginApprovalLanguage(value?: string | null): PluginApprovalLanguage {
+  return value === "simple" || value === "original" ? value : DEFAULT_PLUGIN_APPROVAL_LANGUAGE;
+}
+
 type ApprovalRiskLevel = "low" | "medium" | "high";
 
 type CommandActionKind =
@@ -98,7 +106,8 @@ const RISK_RANK: Record<ApprovalRiskLevel, number> = {
 
 const SECRETISH_PATH_RE =
   /(^|[/_.-])(secret|secrets|token|tokens|password|passwd|credential|credentials|api[-_]?key|private[-_]?key|id_rsa|\.env)([/_.-]|$)/i;
-const SYSTEM_PATH_RE = /^(?:\/(?:bin|boot|dev|etc|lib|opt|proc|root|sbin|sys|usr)\b|\/var\/(?!log\b))/i;
+const SYSTEM_PATH_RE =
+  /^(?:\/(?:bin|boot|dev|etc|lib|opt|proc|root|sbin|sys|usr)\b|\/var\/(?!log\b))/i;
 
 function buildPlainEnglishApprovalLines(payload: PluginApprovalRequestPayload): string[] {
   const command = extractApprovalCommand(payload);
@@ -308,7 +317,10 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
           text: `create or update file timestamp${targetText}`,
           risk: sensitiveTarget || systemTarget ? "medium" : "low",
           kind: "write",
-          reason: sensitiveTarget || systemTarget ? "It writes to a sensitive or system path." : undefined,
+          reason:
+            sensitiveTarget || systemTarget
+              ? "It writes to a sensitive or system path."
+              : undefined,
         },
         sudoPrefix,
       );
@@ -686,16 +698,22 @@ function isSystemPath(path: string): boolean {
 export function buildPluginApprovalRequestMessage(
   request: PluginApprovalRequest,
   nowMsValue: number,
+  options?: { language?: PluginApprovalLanguage | null },
 ): string {
   const lines: string[] = [];
   const severity = request.request.severity ?? "warning";
   const icon = severity === "critical" ? "🚨" : severity === "info" ? "ℹ️" : "🛡️";
-  lines.push(`${icon} Approval needed`);
-  lines.push(...buildPlainEnglishApprovalLines(request.request));
-  lines.push(...buildApprovalDecisionHelpLines(request.request));
-  lines.push("");
-  lines.push("Technical details:");
-  lines.push("Type: Plugin approval required");
+  const language = resolvePluginApprovalLanguage(options?.language);
+  if (language === "simple") {
+    lines.push(`${icon} Approval needed`);
+    lines.push(...buildPlainEnglishApprovalLines(request.request));
+    lines.push(...buildApprovalDecisionHelpLines(request.request));
+    lines.push("");
+    lines.push("Technical details:");
+    lines.push("Type: Plugin approval required");
+  } else {
+    lines.push(`${icon} Plugin approval required`);
+  }
   lines.push(`Title: ${request.request.title}`);
   lines.push(`Description: ${request.request.description}`);
   if (request.request.toolName) {

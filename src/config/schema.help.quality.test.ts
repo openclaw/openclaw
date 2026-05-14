@@ -426,6 +426,7 @@ const ENUM_EXPECTATIONS: Record<string, string[]> = {
   "models.providers.*.auth": ['"api-key"', '"token"', '"oauth"', '"aws-sdk"'],
   "gateway.reload.mode": ['"off"', '"restart"', '"hot"', '"hybrid"'],
   "approvals.exec.mode": ['"session"', '"targets"', '"both"'],
+  "approvals.plugin.language": ['"original"', '"simple"'],
   "bindings[].match.peer.kind": ['"direct"', '"group"', '"channel"', '"dm"'],
   "broadcast.strategy": ['"parallel"', '"sequential"'],
   "hooks.mappings[].action": ['"wake"', '"agent"'],

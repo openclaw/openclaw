@@ -263,6 +263,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "approvals.exec.targets[].threadId": "Approval Target Thread ID",
   "approvals.plugin": "Plugin Approval Forwarding",
   "approvals.plugin.enabled": "Forward Plugin Approvals",
+  "approvals.plugin.language": "Plugin Approval Language",
   "approvals.plugin.mode": "Plugin Approval Forwarding Mode",
   "approvals.plugin.agentFilter": "Plugin Approval Agent Filter",
   "approvals.plugin.sessionFilter": "Plugin Approval Session Filter",

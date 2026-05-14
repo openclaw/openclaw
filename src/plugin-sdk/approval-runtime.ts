@@ -41,6 +41,8 @@ export {
   buildPluginApprovalResolvedMessage,
   DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS,
   MAX_PLUGIN_APPROVAL_TIMEOUT_MS,
+  resolvePluginApprovalLanguage,
+  type PluginApprovalLanguage,
   type PluginApprovalRequest,
   type PluginApprovalRequestPayload,
   type PluginApprovalResolved,
