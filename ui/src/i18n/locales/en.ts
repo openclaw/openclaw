@@ -238,6 +238,15 @@ export const en: TranslationMap = {
     noSummary: "No summary captured.",
     branchFromCheckpoint: "Branch from checkpoint",
     restoreCheckpoint: "Restore checkpoint",
+    pagination: {
+      of: "of {count}",
+    },
+    perPage: "{size} per page",
+    minutesSeconds: "{minutes}m {seconds}s",
+    seconds: "{count}s",
+    minutes: "{count}m",
+    hoursMinutes: "{hours}h {minutes}m",
+    hours: "{count}h",
   },
   agents: {
     noAgents: "No agents",
@@ -486,6 +495,11 @@ export const en: TranslationMap = {
       required: "This gateway requires auth. Add a token or password, then click Connect.",
       failed:
         "Auth failed. Re-copy a tokenized URL with {command}, or update the token, then click Connect.",
+      tokenizedUrl: "copies a tokenized URL",
+      setToken: "sets a reusable token",
+      tokenFragment: "Use the URL fragment",
+      queryParams: "or query params",
+      serverLogs: "Check server logs for details.",
     },
     pairing: {
       hint: "This device needs pairing approval from the gateway host.",
@@ -526,7 +540,13 @@ export const en: TranslationMap = {
     },
     cards: {
       cost: "Cost",
+      cronJobs: "{count} cron job",
+      cronJobs_plural: "{count} cron jobs",
+      cronFailed: "{count} failed",
+      costHint: "{tokens} tokens · {messages} messages",
       skills: "Skills",
+      skillsBlocked: "{count} blocked",
+      skillsActive: "{count} active",
       recentSessions: "Recent Sessions",
       modelAuth: "Model Auth",
       modelAuthOk: "{count} ok",

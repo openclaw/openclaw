@@ -240,6 +240,15 @@ export const es: TranslationMap = {
     noSummary: "No se capturó ningún resumen.",
     branchFromCheckpoint: "Crear rama desde el punto de control",
     restoreCheckpoint: "Restaurar punto de control",
+    pagination: {
+      of: "of {count}",
+    },
+    perPage: "{size} per page",
+    minutesSeconds: "{minutes}m {seconds}s",
+    seconds: "{count}s",
+    minutes: "{count}m",
+    hoursMinutes: "{hours}h {minutes}m",
+    hours: "{count}h",
   },
   agents: {
     noAgents: "No agents",
@@ -490,6 +499,11 @@ export const es: TranslationMap = {
         "Esta puerta de enlace requiere autenticación. Añade un token o contraseña y haz clic en Conectar.",
       failed:
         "Autenticación fallida. Vuelve a copiar una URL con token mediante {command}, o actualiza el token y haz clic en Conectar.",
+      tokenizedUrl: "copies a tokenized URL",
+      setToken: "sets a reusable token",
+      tokenFragment: "Use the URL fragment",
+      queryParams: "or query params",
+      serverLogs: "Check server logs for details.",
     },
     pairing: {
       hint: "Este dispositivo necesita aprobación de emparejamiento del host de la puerta de enlace.",
@@ -530,7 +544,13 @@ export const es: TranslationMap = {
     },
     cards: {
       cost: "Costo",
+      cronJobs: "{count} cron job",
+      cronJobs_plural: "{count} cron jobs",
+      cronFailed: "{count} failed",
+      costHint: "{tokens} tokens · {messages} messages",
       skills: "Skills",
+      skillsBlocked: "{count} blocked",
+      skillsActive: "{count} active",
       recentSessions: "Sesiones recientes",
       modelAuth: "Autenticación del modelo",
       modelAuthOk: "{count} ok",

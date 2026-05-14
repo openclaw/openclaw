@@ -243,6 +243,15 @@ export const ja_JP: TranslationMap = {
     noSummary: "要約は取得されていません。",
     branchFromCheckpoint: "チェックポイントからブランチ",
     restoreCheckpoint: "チェックポイントを復元",
+    pagination: {
+      of: "of {count}",
+    },
+    perPage: "{size} per page",
+    minutesSeconds: "{minutes}m {seconds}s",
+    seconds: "{count}s",
+    minutes: "{count}m",
+    hoursMinutes: "{hours}h {minutes}m",
+    hours: "{count}h",
   },
   agents: {
     noAgents: "No agents",
@@ -494,6 +503,11 @@ export const ja_JP: TranslationMap = {
         "この Gateway では認証が必要です。トークンまたはパスワードを追加してから、［Connect］をクリックしてください。",
       failed:
         "認証に失敗しました。{command} でトークン付き URL を再コピーするか、トークンを更新してから、［Connect］をクリックしてください。",
+      tokenizedUrl: "copies a tokenized URL",
+      setToken: "sets a reusable token",
+      tokenFragment: "Use the URL fragment",
+      queryParams: "or query params",
+      serverLogs: "Check server logs for details.",
     },
     pairing: {
       hint: "このデバイスは Gateway ホストからのペアリング承認が必要です。",
@@ -534,7 +548,13 @@ export const ja_JP: TranslationMap = {
     },
     cards: {
       cost: "コスト",
+      cronJobs: "{count} cron job",
+      cronJobs_plural: "{count} cron jobs",
+      cronFailed: "{count} failed",
+      costHint: "{tokens} tokens · {messages} messages",
       skills: "Skills",
+      skillsBlocked: "{count} blocked",
+      skillsActive: "{count} active",
       recentSessions: "最近のセッション",
       modelAuth: "モデル認証",
       modelAuthOk: "{count} 件が正常",

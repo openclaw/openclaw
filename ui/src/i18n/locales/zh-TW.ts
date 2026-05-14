@@ -238,6 +238,15 @@ export const zh_TW: TranslationMap = {
     noSummary: "未擷取摘要。",
     branchFromCheckpoint: "從檢查點建立分支",
     restoreCheckpoint: "還原檢查點",
+    pagination: {
+      of: "of {count}",
+    },
+    perPage: "{size} per page",
+    minutesSeconds: "{minutes}m {seconds}s",
+    seconds: "{count}s",
+    minutes: "{count}m",
+    hoursMinutes: "{hours}h {minutes}m",
+    hours: "{count}h",
   },
   agents: {
     noAgents: "No agents",
@@ -485,6 +494,11 @@ export const zh_TW: TranslationMap = {
     auth: {
       required: "此網關需要身份驗證。添加令牌或密碼，然後點擊連接。",
       failed: "身份驗證失敗。請使用 {command} 重新複製令牌化 URL，或更新令牌，然後點擊連接。",
+      tokenizedUrl: "copies a tokenized URL",
+      setToken: "sets a reusable token",
+      tokenFragment: "Use the URL fragment",
+      queryParams: "or query params",
+      serverLogs: "Check server logs for details.",
     },
     pairing: {
       hint: "此裝置需要閘道主機的配對批准。",
@@ -522,7 +536,13 @@ export const zh_TW: TranslationMap = {
     },
     cards: {
       cost: "成本",
+      cronJobs: "{count} cron job",
+      cronJobs_plural: "{count} cron jobs",
+      cronFailed: "{count} failed",
+      costHint: "{tokens} tokens · {messages} messages",
       skills: "Skills",
+      skillsBlocked: "{count} blocked",
+      skillsActive: "{count} active",
       recentSessions: "最近會話",
       modelAuth: "模型驗證",
       modelAuthOk: "{count} 正常",

@@ -241,6 +241,15 @@ export const fa: TranslationMap = {
     noSummary: "هیچ خلاصه‌ای ثبت نشده است.",
     branchFromCheckpoint: "انشعاب از نقطهٔ وارسی",
     restoreCheckpoint: "بازیابی نقطهٔ وارسی",
+    pagination: {
+      of: "of {count}",
+    },
+    perPage: "{size} per page",
+    minutesSeconds: "{minutes}m {seconds}s",
+    seconds: "{count}s",
+    minutes: "{count}m",
+    hoursMinutes: "{hours}h {minutes}m",
+    hours: "{count}h",
   },
   agents: {
     noAgents: "هیچ عاملی وجود ندارد",
@@ -492,6 +501,11 @@ export const fa: TranslationMap = {
         "این Gateway به احراز هویت نیاز دارد. یک توکن یا گذرواژه اضافه کنید، سپس روی اتصال کلیک کنید.",
       failed:
         "احراز هویت ناموفق بود. یک URL دارای توکن را با {command} دوباره کپی کنید، یا توکن را به‌روزرسانی کنید، سپس روی اتصال کلیک کنید.",
+      tokenizedUrl: "copies a tokenized URL",
+      setToken: "sets a reusable token",
+      tokenFragment: "Use the URL fragment",
+      queryParams: "or query params",
+      serverLogs: "Check server logs for details.",
     },
     pairing: {
       hint: "این دستگاه به تأیید جفت‌سازی از میزبان Gateway نیاز دارد.",
@@ -531,7 +545,13 @@ export const fa: TranslationMap = {
     },
     cards: {
       cost: "هزینه",
+      cronJobs: "{count} cron job",
+      cronJobs_plural: "{count} cron jobs",
+      cronFailed: "{count} failed",
+      costHint: "{tokens} tokens · {messages} messages",
       skills: "Skills",
+      skillsBlocked: "{count} blocked",
+      skillsActive: "{count} active",
       recentSessions: "نشست‌های اخیر",
       modelAuth: "احراز هویت مدل",
       modelAuthOk: "{count} سالم",

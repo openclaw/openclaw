@@ -239,6 +239,15 @@ export const ko: TranslationMap = {
     noSummary: "캡처된 요약이 없습니다.",
     branchFromCheckpoint: "체크포인트에서 브랜치 생성",
     restoreCheckpoint: "체크포인트 복원",
+    pagination: {
+      of: "of {count}",
+    },
+    perPage: "{size} per page",
+    minutesSeconds: "{minutes}m {seconds}s",
+    seconds: "{count}s",
+    minutes: "{count}m",
+    hoursMinutes: "{hours}h {minutes}m",
+    hours: "{count}h",
   },
   agents: {
     noAgents: "No agents",
@@ -489,6 +498,11 @@ export const ko: TranslationMap = {
         "이 Gateway에는 인증이 필요합니다. 토큰이나 비밀번호를 추가한 다음 Connect를 클릭하세요.",
       failed:
         "인증에 실패했습니다. {command}로 토큰이 포함된 URL을 다시 복사하거나 토큰을 업데이트한 다음 Connect를 클릭하세요.",
+      tokenizedUrl: "copies a tokenized URL",
+      setToken: "sets a reusable token",
+      tokenFragment: "Use the URL fragment",
+      queryParams: "or query params",
+      serverLogs: "Check server logs for details.",
     },
     pairing: {
       hint: "이 디바이스는 gateway host의 페어링 승인이 필요합니다.",
@@ -529,7 +543,13 @@ export const ko: TranslationMap = {
     },
     cards: {
       cost: "비용",
+      cronJobs: "{count} cron job",
+      cronJobs_plural: "{count} cron jobs",
+      cronFailed: "{count} failed",
+      costHint: "{tokens} tokens · {messages} messages",
       skills: "Skills",
+      skillsBlocked: "{count} blocked",
+      skillsActive: "{count} active",
       recentSessions: "최근 세션",
       modelAuth: "모델 인증",
       modelAuthOk: "{count}개 정상",

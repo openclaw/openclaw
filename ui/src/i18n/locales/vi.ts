@@ -240,6 +240,15 @@ export const vi: TranslationMap = {
     noSummary: "Chưa ghi nhận bản tóm tắt.",
     branchFromCheckpoint: "Tạo nhánh từ điểm kiểm tra",
     restoreCheckpoint: "Khôi phục điểm kiểm tra",
+    pagination: {
+      of: "of {count}",
+    },
+    perPage: "{size} per page",
+    minutesSeconds: "{minutes}m {seconds}s",
+    seconds: "{count}s",
+    minutes: "{count}m",
+    hoursMinutes: "{hours}h {minutes}m",
+    hours: "{count}h",
   },
   agents: {
     noAgents: "Không có agent",
@@ -488,6 +497,11 @@ export const vi: TranslationMap = {
       required: "Gateway này yêu cầu xác thực. Thêm token hoặc mật khẩu, rồi nhấp Kết nối.",
       failed:
         "Xác thực thất bại. Sao chép lại URL có token bằng {command}, hoặc cập nhật token, rồi nhấp Kết nối.",
+      tokenizedUrl: "copies a tokenized URL",
+      setToken: "sets a reusable token",
+      tokenFragment: "Use the URL fragment",
+      queryParams: "or query params",
+      serverLogs: "Check server logs for details.",
     },
     pairing: {
       hint: "Thiết bị này cần phê duyệt ghép nối từ máy chủ Gateway.",
@@ -528,7 +542,13 @@ export const vi: TranslationMap = {
     },
     cards: {
       cost: "Chi phí",
+      cronJobs: "{count} cron job",
+      cronJobs_plural: "{count} cron jobs",
+      cronFailed: "{count} failed",
+      costHint: "{tokens} tokens · {messages} messages",
       skills: "Skills",
+      skillsBlocked: "{count} blocked",
+      skillsActive: "{count} active",
       recentSessions: "Phiên gần đây",
       modelAuth: "Xác thực mô hình",
       modelAuthOk: "{count} ok",

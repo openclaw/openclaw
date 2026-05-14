@@ -160,8 +160,8 @@ export function renderOverviewCards(props: OverviewCardsProps) {
       label: t("overview.cards.cost"),
       value: totalCost,
       hint: t("overview.cards.costHint", {
-        tokens: String(totalTokens),
-        messages: String(totalMessages),
+        tokens: totalTokens,
+        messages: totalMessages,
       }),
     },
     {

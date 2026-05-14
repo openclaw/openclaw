@@ -240,6 +240,15 @@ export const it: TranslationMap = {
     noSummary: "Nessun riepilogo acquisito.",
     branchFromCheckpoint: "Crea ramo dal checkpoint",
     restoreCheckpoint: "Ripristina checkpoint",
+    pagination: {
+      of: "of {count}",
+    },
+    perPage: "{size} per page",
+    minutesSeconds: "{minutes}m {seconds}s",
+    seconds: "{count}s",
+    minutes: "{count}m",
+    hoursMinutes: "{hours}h {minutes}m",
+    hours: "{count}h",
   },
   agents: {
     noAgents: "Nessun agente",
@@ -492,6 +501,11 @@ export const it: TranslationMap = {
         "Questo Gateway richiede l'autenticazione. Aggiungi un token o una password, quindi fai clic su Connetti.",
       failed:
         "Autenticazione non riuscita. Ricopia un URL con token usando {command}, oppure aggiorna il token, quindi fai clic su Connetti.",
+      tokenizedUrl: "copies a tokenized URL",
+      setToken: "sets a reusable token",
+      tokenFragment: "Use the URL fragment",
+      queryParams: "or query params",
+      serverLogs: "Check server logs for details.",
     },
     pairing: {
       hint: "Questo dispositivo richiede l'approvazione dell'abbinamento dall'host del Gateway.",
@@ -532,7 +546,13 @@ export const it: TranslationMap = {
     },
     cards: {
       cost: "Costo",
+      cronJobs: "{count} cron job",
+      cronJobs_plural: "{count} cron jobs",
+      cronFailed: "{count} failed",
+      costHint: "{tokens} tokens · {messages} messages",
       skills: "Skills",
+      skillsBlocked: "{count} blocked",
+      skillsActive: "{count} active",
       recentSessions: "Sessioni recenti",
       modelAuth: "Autenticazione modello",
       modelAuthOk: "{count} ok",

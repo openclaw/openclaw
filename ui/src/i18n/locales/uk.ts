@@ -241,6 +241,15 @@ export const uk: TranslationMap = {
     noSummary: "Підсумок не зафіксовано.",
     branchFromCheckpoint: "Створити гілку з контрольної точки",
     restoreCheckpoint: "Відновити контрольну точку",
+    pagination: {
+      of: "of {count}",
+    },
+    perPage: "{size} per page",
+    minutesSeconds: "{minutes}m {seconds}s",
+    seconds: "{count}s",
+    minutes: "{count}m",
+    hoursMinutes: "{hours}h {minutes}m",
+    hours: "{count}h",
   },
   agents: {
     noAgents: "No agents",
@@ -492,6 +501,11 @@ export const uk: TranslationMap = {
         "Цей шлюз потребує автентифікації. Додайте токен або пароль, а потім натисніть «Підключити».",
       failed:
         "Автентифікація не вдалася. Знову скопіюйте URL з токеном за допомогою {command} або оновіть токен, а потім натисніть «Підключити».",
+      tokenizedUrl: "copies a tokenized URL",
+      setToken: "sets a reusable token",
+      tokenFragment: "Use the URL fragment",
+      queryParams: "or query params",
+      serverLogs: "Check server logs for details.",
     },
     pairing: {
       hint: "Цей пристрій потребує схвалення спарювання від хоста шлюзу.",
@@ -532,7 +546,13 @@ export const uk: TranslationMap = {
     },
     cards: {
       cost: "Вартість",
+      cronJobs: "{count} cron job",
+      cronJobs_plural: "{count} cron jobs",
+      cronFailed: "{count} failed",
+      costHint: "{tokens} tokens · {messages} messages",
       skills: "Навички",
+      skillsBlocked: "{count} blocked",
+      skillsActive: "{count} active",
       recentSessions: "Нещодавні сеанси",
       modelAuth: "Авторизація моделей",
       modelAuthOk: "{count} в нормі",

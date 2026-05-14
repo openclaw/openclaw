@@ -240,6 +240,15 @@ export const pt_BR: TranslationMap = {
     noSummary: "Nenhum resumo capturado.",
     branchFromCheckpoint: "Criar ramificação a partir do checkpoint",
     restoreCheckpoint: "Restaurar checkpoint",
+    pagination: {
+      of: "of {count}",
+    },
+    perPage: "{size} per page",
+    minutesSeconds: "{minutes}m {seconds}s",
+    seconds: "{count}s",
+    minutes: "{count}m",
+    hoursMinutes: "{hours}h {minutes}m",
+    hours: "{count}h",
   },
   agents: {
     noAgents: "No agents",
@@ -490,6 +499,11 @@ export const pt_BR: TranslationMap = {
         "Este gateway requer autenticação. Adicione um token ou senha e clique em Conectar.",
       failed:
         "Falha na autenticação. Recopie uma URL com token usando {command}, ou atualize o token e clique em Conectar.",
+      tokenizedUrl: "copies a tokenized URL",
+      setToken: "sets a reusable token",
+      tokenFragment: "Use the URL fragment",
+      queryParams: "or query params",
+      serverLogs: "Check server logs for details.",
     },
     pairing: {
       hint: "Este dispositivo precisa de aprovação de pareamento do host do gateway.",
@@ -530,7 +544,13 @@ export const pt_BR: TranslationMap = {
     },
     cards: {
       cost: "Custo",
+      cronJobs: "{count} cron job",
+      cronJobs_plural: "{count} cron jobs",
+      cronFailed: "{count} failed",
+      costHint: "{tokens} tokens · {messages} messages",
       skills: "Skills",
+      skillsBlocked: "{count} blocked",
+      skillsActive: "{count} active",
       recentSessions: "Sessões Recentes",
       modelAuth: "Autenticação de modelo",
       modelAuthOk: "{count} ok",

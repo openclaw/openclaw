@@ -238,6 +238,15 @@ export const th: TranslationMap = {
     noSummary: "ไม่มีสรุปที่บันทึกไว้",
     branchFromCheckpoint: "แตกแขนงจากเช็กพอยต์",
     restoreCheckpoint: "กู้คืนเช็กพอยต์",
+    pagination: {
+      of: "of {count}",
+    },
+    perPage: "{size} per page",
+    minutesSeconds: "{minutes}m {seconds}s",
+    seconds: "{count}s",
+    minutes: "{count}m",
+    hoursMinutes: "{hours}h {minutes}m",
+    hours: "{count}h",
   },
   agents: {
     noAgents: "No agents",
@@ -485,6 +494,11 @@ export const th: TranslationMap = {
     auth: {
       required: "เกตเวย์นี้ต้องมีการยืนยันตัวตน เพิ่มโทเค็นหรือรหัสผ่าน แล้วคลิก Connect",
       failed: "การยืนยันตัวตนล้มเหลว คัดลอก URL ที่มีโทเค็นอีกครั้งด้วย {command} หรืออัปเดตโทเค็น แล้วคลิก Connect",
+      tokenizedUrl: "copies a tokenized URL",
+      setToken: "sets a reusable token",
+      tokenFragment: "Use the URL fragment",
+      queryParams: "or query params",
+      serverLogs: "Check server logs for details.",
     },
     pairing: {
       hint: "อุปกรณ์นี้ต้องได้รับการอนุมัติการจับคู่จากโฮสต์เกตเวย์",
@@ -522,7 +536,13 @@ export const th: TranslationMap = {
     },
     cards: {
       cost: "ค่าใช้จ่าย",
+      cronJobs: "{count} cron job",
+      cronJobs_plural: "{count} cron jobs",
+      cronFailed: "{count} failed",
+      costHint: "{tokens} tokens · {messages} messages",
       skills: "ทักษะ",
+      skillsBlocked: "{count} blocked",
+      skillsActive: "{count} active",
       recentSessions: "เซสชันล่าสุด",
       modelAuth: "การยืนยันตัวตนของโมเดล",
       modelAuthOk: "{count} ใช้งานได้",
