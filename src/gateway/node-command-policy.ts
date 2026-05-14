@@ -160,6 +160,9 @@ function normalizePlatformId(platform?: string, deviceFamily?: string): Platform
   if (byPlatform) {
     return byPlatform;
   }
+  if (raw) {
+    return "unknown";
+  }
   const family = normalizeDeviceMetadataForPolicy(deviceFamily);
   const byFamily = resolvePlatformIdByDeviceFamily(family);
   return byFamily ?? "unknown";

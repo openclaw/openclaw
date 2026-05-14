@@ -106,6 +106,7 @@ describe("gateway/node-command-policy", () => {
     const cfg = {} as OpenClawConfig;
     const cases = [
       { platform: "darwin", deviceFamily: "iPhone" },
+      { platform: "darwin", deviceFamily: "Mac" },
       { platform: "Darwin-x64" },
       { platform: "macintosh" },
       { platform: "win32" },
