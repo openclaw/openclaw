@@ -754,6 +754,8 @@ public struct AgentParams: Codable, Sendable {
     public let voicewaketrigger: String?
     public let idempotencykey: String
     public let label: String?
+    public let adaptermeta: [String: AnyCodable]?
+    public let paperclip: AnyCodable?
 
     public init(
         message: String,
@@ -790,7 +792,9 @@ public struct AgentParams: Codable, Sendable {
         inputprovenance: [String: AnyCodable]?,
         voicewaketrigger: String?,
         idempotencykey: String,
-        label: String?)
+        label: String?,
+        adaptermeta: [String: AnyCodable]?,
+        paperclip: AnyCodable?)
     {
         self.message = message
         self.agentid = agentid
@@ -827,6 +831,8 @@ public struct AgentParams: Codable, Sendable {
         self.voicewaketrigger = voicewaketrigger
         self.idempotencykey = idempotencykey
         self.label = label
+        self.adaptermeta = adaptermeta
+        self.paperclip = paperclip
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -865,6 +871,8 @@ public struct AgentParams: Codable, Sendable {
         case voicewaketrigger = "voiceWakeTrigger"
         case idempotencykey = "idempotencyKey"
         case label
+        case adaptermeta = "adapterMeta"
+        case paperclip
     }
 }
 

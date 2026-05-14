@@ -182,6 +182,19 @@ export const AgentParamsSchema = Type.Object(
     voiceWakeTrigger: Type.Optional(Type.String()),
     idempotencyKey: NonEmptyString,
     label: Type.Optional(SessionLabelString),
+    // Generic landing pad for opaque per-adapter metadata. Each external agent
+    // or plugin adapter writes under its own top-level key here
+    // (e.g. `adapterMeta: { paperclip: {...}, greptile: {...} }`); the gateway
+    // accepts the bag as-is and never inspects it. Keeping this as a namespace
+    // instead of a vendor-named root field means new adapters can land
+    // protocol-side without growing the schema. See #74635 and #62102.
+    adapterMeta: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+    // Backward-compatible alias for adapters published before `adapterMeta`
+    // was introduced. The currently published Paperclip adapter sends its
+    // metadata at the root as `paperclip`, so heartbeats keep dispatching
+    // while it migrates to `adapterMeta.paperclip`. Can be removed once
+    // Paperclip cuts a release that nests under `adapterMeta`. See #74635.
+    paperclip: Type.Optional(Type.Unknown()),
   },
   { additionalProperties: false },
 );
