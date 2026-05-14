@@ -104,6 +104,8 @@ const UNICODE_TO_SLACK: Record<string, string> = {
   "⏳": "hourglass_flowing_sand",
   "⚠️": "warning",
   "✍": "writing_hand",
+  "🗜️": "compression",
+  "🗜": "compression",
   "🧠": "brain",
   "🛠️": "hammer_and_wrench",
   "💻": "computer",

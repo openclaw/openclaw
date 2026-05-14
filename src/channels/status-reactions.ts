@@ -20,18 +20,18 @@ export type StatusReactionAdapter = {
 
 export type StatusReactionEmojis = {
   queued?: string; // Default: uses initialEmoji param
-  thinking?: string; // Default: "🤔"
-  tool?: string; // Default: "🔥"
-  coding?: string; // Default: "👨‍💻"
-  web?: string; // Default: "🌎"
+  thinking?: string; // Default: "🧠"
+  tool?: string; // Default: "🛠️"
+  coding?: string; // Default: "💻"
+  web?: string; // Default: "🌐"
   deploy?: string; // Default: "🛫"
   build?: string; // Default: "🏗️"
   concierge?: string; // Default: "💁"
-  done?: string; // Default: "👍"
-  error?: string; // Default: "😱"
-  stallSoft?: string; // Default: "🥱"
-  stallHard?: string; // Default: "😨"
-  compacting?: string; // Default: "✍"
+  done?: string; // Default: "✅"
+  error?: string; // Default: "❌"
+  stallSoft?: string; // Default: "⏳"
+  stallHard?: string; // Default: "⚠️"
+  compacting?: string; // Default: "🗜️"
 };
 
 export type StatusReactionTiming = {
@@ -61,18 +61,18 @@ export type StatusReactionController = {
 
 export const DEFAULT_EMOJIS: Required<StatusReactionEmojis> = {
   queued: "👀",
-  thinking: "🤔",
-  tool: "🔥",
-  coding: "👨‍💻",
-  web: "🌎",
+  thinking: "🧠",
+  tool: "🛠️",
+  coding: "💻",
+  web: "🌐",
   deploy: "🛫",
   build: "🏗️",
   concierge: "💁",
-  done: "👍",
-  error: "😱",
-  stallSoft: "🥱",
-  stallHard: "😨",
-  compacting: "✍",
+  done: "✅",
+  error: "❌",
+  stallSoft: "⏳",
+  stallHard: "⚠️",
+  compacting: "🗜️",
 };
 
 export const DEFAULT_TIMING: Required<StatusReactionTiming> = {
