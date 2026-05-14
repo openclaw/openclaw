@@ -759,10 +759,10 @@ function isCompressibleStaticAsset(filePath: string): boolean {
   return COMPRESSIBLE_STATIC_ASSET_EXTENSIONS.has(path.extname(filePath).toLowerCase());
 }
 
-function parseAcceptEncoding(req: IncomingMessage): Set<string> {
+function parseAcceptEncoding(req: IncomingMessage): Map<string, number> {
   const rawHeader = req.headers?.["accept-encoding"];
   const raw = Array.isArray(rawHeader) ? rawHeader.join(",") : (rawHeader ?? "");
-  const accepted = new Set<string>();
+  const accepted = new Map<string, number>();
   for (const item of raw.split(",")) {
     const parts = item.split(";").map((part) => part.trim());
     const encoding = normalizeLowercaseStringOrEmpty(parts[0] ?? "");
@@ -774,10 +774,11 @@ function parseAcceptEncoding(req: IncomingMessage): Set<string> {
       .find((part) => part.toLowerCase().startsWith("q="))
       ?.slice(2)
       .trim();
-    if (q !== undefined && Number(q) <= 0) {
+    const quality = q === undefined ? 1 : Number(q);
+    if (!Number.isFinite(quality)) {
       continue;
     }
-    accepted.add(encoding);
+    accepted.set(encoding, Math.min(Math.max(quality, 0), 1));
   }
   return accepted;
 }
@@ -787,11 +788,14 @@ function selectStaticAssetEncoding(req: IncomingMessage, filePath: string): "br"
     return null;
   }
   const accepted = parseAcceptEncoding(req);
-  if (accepted.has("br")) {
-    return "br";
-  }
-  if (accepted.has("gzip") || accepted.has("*")) {
-    return "gzip";
+  const wildcardQuality = accepted.get("*");
+  const supported = [
+    { encoding: "br" as const, quality: accepted.get("br") ?? wildcardQuality ?? 0 },
+    { encoding: "gzip" as const, quality: accepted.get("gzip") ?? wildcardQuality ?? 0 },
+  ].filter((candidate) => candidate.quality > 0);
+  supported.sort((a, b) => b.quality - a.quality);
+  if (supported[0]) {
+    return supported[0].encoding;
   }
   return null;
 }
