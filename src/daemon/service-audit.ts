@@ -70,8 +70,53 @@ export function needsNodeRuntimeMigration(issues: ServiceConfigIssue[]): boolean
   );
 }
 
+/**
+ * Returns true if the service command includes the `gateway` subcommand.
+ *
+ * Two layouts are recognised:
+ * 1. Direct invocation: `[..., "gateway", ...]` — any element equals `"gateway"`.
+ * 2. Shell-wrapped invocation: `["/bin/zsh", "-lc", "... gateway ..."]` — a
+ *    POSIX shell binary (`/bin/sh`, `/bin/bash`, `/bin/zsh`, `sh`, `bash`,
+ *    `zsh`) is invoked with `-c` or `-lc` flags and the inline shell command
+ *    string contains `gateway` as a word boundary match.
+ */
 function hasGatewaySubcommand(programArguments?: string[]): boolean {
-  return Boolean(programArguments?.some((arg) => arg === "gateway"));
+  if (!programArguments || programArguments.length === 0) {
+    return false;
+  }
+  // Fast path: any element is exactly "gateway"
+  if (programArguments.some((arg) => arg === "gateway")) {
+    return true;
+  }
+  // Shell-wrapped path: detect `/bin/sh -lc "... gateway ..."` style LaunchAgent
+  // wrappers. Match common POSIX shell binaries (bare names or full paths).
+  const SHELL_BASENAMES = new Set(["sh", "bash", "zsh", "dash", "fish"]);
+  const firstArg = programArguments[0];
+  if (!firstArg) {
+    return false;
+  }
+  const basename = firstArg.split("/").pop() ?? firstArg;
+  if (!SHELL_BASENAMES.has(basename)) {
+    return false;
+  }
+  // Look for a `-c` or shell option that precedes an inline command string.
+  // Common patterns: `-c`, `-lc`, `-login -c`, etc.
+  for (let i = 1; i < programArguments.length; i += 1) {
+    const arg = programArguments[i];
+    // If this element looks like a flag, keep scanning; if it looks like the
+    // inline command string (no leading dash), test it for the gateway word.
+    if (arg.startsWith("-")) {
+      // Accept -c, -lc, and other variants that include 'c' (inline command)
+      if (/c/.test(arg)) {
+        // The next element is the inline command string
+        const inlineCmd = programArguments[i + 1];
+        if (inlineCmd && /\bgateway\b/.test(inlineCmd)) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
 }
 
 function parseSystemdUnit(content: string): {

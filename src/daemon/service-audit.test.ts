@@ -460,6 +460,54 @@ describe("auditGatewayServiceConfig", () => {
 
     expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayProxyEnvEmbedded)).toBe(true);
   });
+
+  it("does not flag gateway-command-missing for shell-wrapped LaunchAgent using zsh -lc", async () => {
+    // Reproduces the pattern reported in #81751:
+    // LaunchAgent ProgramArguments = ["/bin/zsh", "-lc",
+    //   "set -a; [ -f $HOME/.config/api-keys.env ] && . ...; exec .../openclaw/dist/index.js gateway --port 18890"]
+    const shellCmd =
+      "set -a; [ -f \"$HOME/.config/api-keys.env\" ] && . \"$HOME/.config/api-keys.env\"; " +
+      "set +a; unset OPENCLAW_GATEWAY_TOKEN; " +
+      "exec /opt/homebrew/opt/node/bin/node /Users/antonio/.npm-global/lib/node_modules/openclaw/dist/index.js gateway --port 18890";
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "darwin",
+      expectedPort: 18890,
+      command: {
+        programArguments: ["/bin/zsh", "-lc", shellCmd],
+        environment: {},
+      },
+    });
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayCommandMissing)).toBe(false);
+  });
+
+  it("does not flag gateway-command-missing for shell-wrapped LaunchAgent using /bin/sh -c", async () => {
+    const shellCmd =
+      ". /tmp/openclaw-env.sh && exec /usr/local/bin/node /opt/openclaw/dist/index.js gateway --port 18889";
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "darwin",
+      expectedPort: 18889,
+      command: {
+        programArguments: ["/bin/sh", "-c", shellCmd],
+        environment: {},
+      },
+    });
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayCommandMissing)).toBe(false);
+  });
+
+  it("still flags gateway-command-missing when the shell inline command does not contain gateway", async () => {
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "darwin",
+      expectedPort: 18888,
+      command: {
+        programArguments: ["/bin/sh", "-c", "exec /usr/local/bin/node /opt/openclaw/dist/index.js start"],
+        environment: {},
+      },
+    });
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayCommandMissing)).toBe(true);
+  });
 });
 
 describe("checkTokenDrift", () => {
