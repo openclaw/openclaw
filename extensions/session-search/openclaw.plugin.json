@@ -1,0 +1,13 @@
+{
+  "id": "session-search",
+  "name": "Session Search",
+  "description": "Search, inspect, inject, and resume prior OpenClaw sessions from the Control UI. Build/test verified on OpenClaw 2026.5.7 (Ittiz/openclaw@1a68b5a09e); live injection verified on OpenClaw 2026.5.10-beta.1.",
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
