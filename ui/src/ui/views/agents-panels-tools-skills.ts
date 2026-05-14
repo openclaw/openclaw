@@ -564,10 +564,17 @@ export function renderAgentTools(params: {
                   </span>
                 </span>
                 <span class="agent-tools-group__counts">
-                  <span>${formatCountLabel(section.tools.length, t("agentTools.count.tool"))}</span>
+                  <span
+                    >${formatCountLabel(
+                      section.tools.length,
+                      t("agentTools.count.tool"),
+                      t("agentTools.count.tool"),
+                    )}</span
+                  >
                   <span
                     >${formatCountLabel(
                       enabledSectionCount,
+                      t("agentTools.count.enabledTool"),
                       t("agentTools.count.enabledTool"),
                     )}</span
                   >
@@ -575,6 +582,7 @@ export function renderAgentTools(params: {
                     ? html`<span
                         >${formatCountLabel(
                           activeSectionCount,
+                          t("agentTools.count.liveTool"),
                           t("agentTools.count.liveTool"),
                         )}</span
                       >`
