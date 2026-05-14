@@ -189,7 +189,7 @@ import {
 } from "../../tool-search.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import { normalizeUsage, type NormalizedUsage } from "../../usage.js";
-import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
+import { DEFAULT_BOOTSTRAP_FILENAME, type WorkspaceBootstrapFile } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
 import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
@@ -1099,30 +1099,51 @@ export async function runEmbeddedAttempt(
       workspaceDir: resolvedWorkspace,
       warn: (message) => log.warn(message),
     });
-    const preloadedBootstrapFiles =
-      isRawModelRun || contextInjectionMode === "never"
-        ? undefined
-        : await resolveBootstrapFilesForRun({
-            workspaceDir: resolvedWorkspace,
-            config: params.config,
-            sessionKey: params.sessionKey,
-            sessionId: params.sessionId,
-            warn: bootstrapWarn,
-            contextMode: params.bootstrapContextMode,
-            runKind: params.bootstrapContextRunKind,
-          });
-    const bootstrapRouting = await resolveAttemptWorkspaceBootstrapRouting({
-      isWorkspaceBootstrapPending,
-      bootstrapFiles: preloadedBootstrapFiles,
-      bootstrapContextRunKind: params.bootstrapContextRunKind,
-      trigger: params.trigger,
-      sessionKey: params.sessionKey,
-      isPrimaryRun: isPrimaryBootstrapRun(params.sessionKey),
-      isCanonicalWorkspace: params.isCanonicalWorkspace,
-      effectiveWorkspace,
-      resolvedWorkspace,
-      hasBootstrapFileAccess: bootstrapHasFileAccess,
-    });
+    let completedBootstrapTurn: boolean | undefined;
+    const hasCompletedBootstrapTurnForAttempt = async (sessionFile: string) => {
+      completedBootstrapTurn ??= await hasCompletedBootstrapTurn(sessionFile);
+      return completedBootstrapTurn;
+    };
+    const resolveBootstrapRouting = (bootstrapFiles?: readonly WorkspaceBootstrapFile[]) =>
+      resolveAttemptWorkspaceBootstrapRouting({
+        isWorkspaceBootstrapPending,
+        bootstrapFiles,
+        bootstrapContextRunKind: params.bootstrapContextRunKind,
+        trigger: params.trigger,
+        sessionKey: params.sessionKey,
+        isPrimaryRun: isPrimaryBootstrapRun(params.sessionKey),
+        isCanonicalWorkspace: params.isCanonicalWorkspace,
+        effectiveWorkspace,
+        resolvedWorkspace,
+        hasBootstrapFileAccess: bootstrapHasFileAccess,
+      });
+    const shouldProbeContinuationSkip =
+      !isRawModelRun &&
+      contextInjectionMode === "continuation-skip" &&
+      (params.bootstrapContextRunKind ?? "default") !== "heartbeat" &&
+      (await hasCompletedBootstrapTurnForAttempt(params.sessionFile));
+    let preloadedBootstrapFiles: WorkspaceBootstrapFile[] | undefined;
+    let bootstrapRouting =
+      shouldProbeContinuationSkip || isRawModelRun || contextInjectionMode === "never"
+        ? await resolveBootstrapRouting()
+        : undefined;
+    if (
+      !isRawModelRun &&
+      contextInjectionMode !== "never" &&
+      (bootstrapRouting === undefined || bootstrapRouting.bootstrapMode === "full")
+    ) {
+      preloadedBootstrapFiles = await resolveBootstrapFilesForRun({
+        workspaceDir: resolvedWorkspace,
+        config: params.config,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+        warn: bootstrapWarn,
+        contextMode: params.bootstrapContextMode,
+        runKind: params.bootstrapContextRunKind,
+      });
+      bootstrapRouting = await resolveBootstrapRouting(preloadedBootstrapFiles);
+    }
+    bootstrapRouting ??= await resolveBootstrapRouting(preloadedBootstrapFiles);
     const bootstrapMode = bootstrapRouting.bootstrapMode;
     const {
       bootstrapFiles: hookAdjustedBootstrapFiles,
@@ -1136,7 +1157,7 @@ export async function runEmbeddedAttempt(
       bootstrapContextRunKind: params.bootstrapContextRunKind ?? "default",
       bootstrapMode,
       sessionFile: params.sessionFile,
-      hasCompletedBootstrapTurn,
+      hasCompletedBootstrapTurn: hasCompletedBootstrapTurnForAttempt,
       resolveBootstrapContextForRun: async () => {
         const bootstrapFiles =
           preloadedBootstrapFiles ??

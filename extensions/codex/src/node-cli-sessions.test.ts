@@ -2,10 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CODEX_CLI_SESSIONS_LIST_COMMAND,
   createCodexCliSessionNodeHostCommands,
+  listCodexCliSessionsOnNode,
   resolveCodexCliResumeSpawnInvocation,
 } from "./node-cli-sessions.js";
 
@@ -147,5 +149,32 @@ describe("codex cli node sessions", () => {
       shell: undefined,
       windowsHide: true,
     });
+  });
+
+  it("reports malformed node session payloadJSON with an owned error", async () => {
+    const runtime = {
+      nodes: {
+        list: vi.fn(async () => ({
+          nodes: [
+            {
+              nodeId: "node-1",
+              connected: true,
+              commands: [CODEX_CLI_SESSIONS_LIST_COMMAND],
+            },
+          ],
+        })),
+        invoke: vi.fn(async () => ({
+          ok: true,
+          payloadJSON: "{not json",
+        })),
+      },
+    } as unknown as PluginRuntime;
+
+    await expect(
+      listCodexCliSessionsOnNode({
+        runtime,
+        requestedNode: "node-1",
+      }),
+    ).rejects.toThrow("Codex CLI node command returned malformed payloadJSON.");
   });
 });

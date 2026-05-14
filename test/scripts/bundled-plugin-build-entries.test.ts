@@ -68,6 +68,12 @@ describe("bundled plugin build entries", () => {
     expect(pickEntries(entries, Object.keys(expectedEntries))).toStrictEqual(expectedEntries);
   });
 
+  it("keeps the Telegram ingress worker out of bundled plugin public-surface entries", () => {
+    const entries = listBundledPluginBuildEntries();
+
+    expect(entries["extensions/telegram/telegram-ingress-worker.runtime"]).toBeUndefined();
+  });
+
   it("packs runtime core support packages without requiring plugin manifests", () => {
     const artifacts = listBundledPluginPackArtifacts();
 

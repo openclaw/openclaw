@@ -239,6 +239,10 @@ function buildCoreDistEntries(): Record<string, string> {
     "facade-activation-check.runtime": "src/plugin-sdk/facade-activation-check.runtime.ts",
     extensionAPI: "src/extensionAPI.ts",
     "infra/warning-filter": "src/infra/warning-filter.ts",
+    "telegram-ingress-worker.runtime": bundledPluginFile(
+      "telegram",
+      "src/telegram-ingress-worker.runtime.ts",
+    ),
     "telegram/audit": bundledPluginFile("telegram", "src/audit.ts"),
     "telegram/token": bundledPluginFile("telegram", "src/token.ts"),
     "plugins/build-smoke-entry": "src/plugins/build-smoke-entry.ts",

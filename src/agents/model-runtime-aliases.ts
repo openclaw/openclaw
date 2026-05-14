@@ -85,7 +85,7 @@ export function listLegacyRuntimeModelProviderAliases(): readonly LegacyRuntimeM
   return LEGACY_RUNTIME_MODEL_PROVIDER_ALIASES;
 }
 
-/** True for CLI runtime provider ids such as `claude-cli` and `codex-cli`. */
+/** True for CLI runtime provider ids such as `claude-cli` and `google-gemini-cli`. */
 export function isCliRuntimeProvider(provider: string): boolean {
   return CLI_RUNTIME_PROVIDER_IDS.has(normalizeProviderId(provider));
 }

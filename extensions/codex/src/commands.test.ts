@@ -638,7 +638,7 @@ describe("codex command", () => {
     });
 
     const statusResult = await handleCodexCommand(createContext("status"), { deps });
-    expectResultTextContains(statusResult, "Rate limits: Codex: primary 42%");
+    expectResultTextContains(statusResult, "Rate limits: Codex: primary 58% left");
     const accountResult = await handleCodexCommand(createContext("account"), { deps });
     expectResultTextContains(accountResult, "Codex is available.");
   });

@@ -624,7 +624,13 @@ function parseCodexCliSessionsListResult(raw: unknown): CodexCliSessionsListResu
 function unwrapNodeInvokePayload(raw: unknown): unknown {
   const record = isRecord(raw) ? raw : {};
   if (typeof record.payloadJSON === "string" && record.payloadJSON.trim()) {
-    return JSON.parse(record.payloadJSON) as unknown;
+    try {
+      return JSON.parse(record.payloadJSON) as unknown;
+    } catch (error) {
+      throw new Error("Codex CLI node command returned malformed payloadJSON.", {
+        cause: error,
+      });
+    }
   }
   if ("payload" in record) {
     return record.payload;
