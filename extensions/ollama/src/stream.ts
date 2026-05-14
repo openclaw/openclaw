@@ -296,16 +296,25 @@ function resolveOllamaNumCtx(model: ProviderRuntimeModel): number {
 /**
  * Resolves num_ctx for native /api/chat requests:
  *  1. explicit `params.num_ctx` set on the model wins,
- *  2. otherwise return undefined so Ollama's model, OLLAMA_CONTEXT_LENGTH,
- *     VRAM, or Modelfile policy decides.
+ *  2. otherwise preserve the configured OpenClaw context budget when present
+ *     so native Ollama does not silently fall back to its Modelfile/default
+ *     context for existing configs.
  *
  * This intentionally differs from `resolveOllamaNumCtx` by not falling back
- * to `DEFAULT_CONTEXT_TOKENS`: that constant is a sane wrapper-side guess for
- * the OpenAI-compat path, but native `/api/chat` should not force the full
- * advertised catalog context for local models unless the operator opted in.
+ * to `DEFAULT_CONTEXT_TOKENS`: absent a configured model budget, native
+ * `/api/chat` should leave Ollama's model, OLLAMA_CONTEXT_LENGTH, VRAM, or
+ * Modelfile policy in control.
  */
 function resolveOllamaNativeNumCtx(model: ProviderRuntimeModel): number | undefined {
-  return resolveOllamaConfiguredNumCtx(model);
+  const configured = resolveOllamaConfiguredNumCtx(model);
+  if (configured !== undefined) {
+    return configured;
+  }
+  const fallback = model.contextWindow ?? model.maxTokens;
+  if (typeof fallback === "number" && Number.isFinite(fallback) && fallback > 0) {
+    return Math.floor(fallback);
+  }
+  return undefined;
 }
 
 function resolveOllamaModelOptions(model: ProviderRuntimeModel): Record<string, unknown> {
