@@ -137,6 +137,30 @@ declare global {
 const bootAssistantIdentity = normalizeAssistantIdentity({});
 const bootLocalUserIdentity = loadLocalUserIdentity();
 
+const DASHBOARD_SHORTCUT_EDITABLE_SELECTOR =
+  'input, textarea, select, [contenteditable=""], [contenteditable="true"], [contenteditable="plaintext-only"], [role="textbox"], .cm-editor';
+
+function isDashboardShortcutEditableElement(element: Element): boolean {
+  if (element instanceof HTMLElement && element.isContentEditable) {
+    return true;
+  }
+  return element.matches(DASHBOARD_SHORTCUT_EDITABLE_SELECTOR);
+}
+
+function isDashboardShortcutEditableTarget(event: KeyboardEvent): boolean {
+  const path = event.composedPath();
+  for (const item of path) {
+    if (!(item instanceof Element)) {
+      continue;
+    }
+    if (isDashboardShortcutEditableElement(item)) {
+      return true;
+    }
+  }
+  const active = document.activeElement;
+  return active instanceof Element && isDashboardShortcutEditableElement(active);
+}
+
 function resolveOnboardingMode(): boolean {
   if (!window.location.search) {
     return false;
@@ -620,10 +644,62 @@ export class OpenClawApp extends LitElement {
         this.paletteQuery = "";
         this.paletteActiveIndex = 0;
       }
+      return;
+    }
+
+    if (isDashboardShortcutEditableTarget(e) || e.altKey || e.ctrlKey || e.metaKey) {
+      return;
+    }
+
+    if (e.key === "/") {
+      e.preventDefault();
+      this.focusChatComposer();
+      return;
+    }
+
+    if (e.key.toLowerCase() === "n" && this.tab === "chat" && this.chatNewMessagesBelow) {
+      e.preventDefault();
+      this.scrollToBottom();
+      return;
+    }
+
+    if (e.key !== "Escape") {
+      return;
+    }
+
+    if (this.paletteOpen) {
+      e.preventDefault();
+      this.paletteOpen = false;
+      this.paletteQuery = "";
+      return;
+    }
+
+    if (this.chatMobileControlsOpen) {
+      e.preventDefault();
+      this.setChatMobileControlsOpen(false, { restoreFocus: true });
+      return;
+    }
+
+    if (this.sessionSwitchNotice) {
+      e.preventDefault();
+      this.sessionSwitchNotice = null;
+      return;
+    }
+
+    if (this.settings.chatFocusMode) {
+      e.preventDefault();
+      this.applySettings({
+        ...this.settings,
+        chatFocusMode: false,
+      });
     }
   };
   private chatMobileControlsKeydownHandler = (e: KeyboardEvent) => {
-    if (e.key !== "Escape" || !this.chatMobileControlsOpen) {
+    if (
+      e.key !== "Escape" ||
+      !this.chatMobileControlsOpen ||
+      isDashboardShortcutEditableTarget(e)
+    ) {
       return;
     }
     e.preventDefault();
@@ -803,6 +879,20 @@ export class OpenClawApp extends LitElement {
     requestAnimationFrame(() => {
       if (focusTarget.isConnected) {
         focusTarget.focus();
+      }
+    });
+  }
+
+  private focusChatComposer() {
+    if (this.tab !== "chat") {
+      this.setTab("chat");
+    }
+    void this.updateComplete.then(() => {
+      const composer = this.querySelector<HTMLTextAreaElement>(
+        ".agent-chat__composer-combobox textarea",
+      );
+      if (composer && !composer.disabled) {
+        composer.focus();
       }
     });
   }

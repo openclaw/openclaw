@@ -488,6 +488,111 @@ describe("control UI routing", () => {
     expect(app.chatMobileControlsOpen).toBe(false);
   });
 
+  it("dispatches guarded dashboard chat shortcuts", async () => {
+    const app = mountApp("/overview");
+    await app.updateComplete;
+
+    const scrollToBottom = vi.spyOn(app, "scrollToBottom");
+    app.chatNewMessagesBelow = true;
+    const overviewJump = new KeyboardEvent("keydown", {
+      key: "N",
+      bubbles: true,
+      cancelable: true,
+    });
+    document.dispatchEvent(overviewJump);
+
+    expect(overviewJump.defaultPrevented).toBe(false);
+    expect(scrollToBottom).not.toHaveBeenCalled();
+
+    const slash = new KeyboardEvent("keydown", {
+      key: "/",
+      bubbles: true,
+      cancelable: true,
+    });
+    document.dispatchEvent(slash);
+    await app.updateComplete;
+    await nextFrame();
+
+    const composer = expectElement(
+      app,
+      ".agent-chat__composer-combobox textarea",
+      HTMLTextAreaElement,
+    );
+    expect(app.tab).toBe("chat");
+    expect(slash.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(composer);
+
+    app.chatNewMessagesBelow = true;
+    composer.blur();
+    app.requestUpdate();
+    await app.updateComplete;
+
+    const jump = new KeyboardEvent("keydown", {
+      key: "N",
+      bubbles: true,
+      cancelable: true,
+    });
+    document.dispatchEvent(jump);
+
+    expect(jump.defaultPrevented).toBe(true);
+    expect(scrollToBottom).toHaveBeenCalledOnce();
+
+    const editableJump = new KeyboardEvent("keydown", {
+      key: "N",
+      bubbles: true,
+      cancelable: true,
+    });
+    composer.dispatchEvent(editableJump);
+
+    expect(editableJump.defaultPrevented).toBe(false);
+    expect(scrollToBottom).toHaveBeenCalledOnce();
+
+    app.paletteOpen = true;
+    const escape = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    document.dispatchEvent(escape);
+
+    expect(escape.defaultPrevented).toBe(true);
+    expect(app.paletteOpen).toBe(false);
+
+    app.chatMobileControlsOpen = true;
+    composer.focus();
+    const editableEscape = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    composer.dispatchEvent(editableEscape);
+
+    expect(editableEscape.defaultPrevented).toBe(false);
+    expect(app.chatMobileControlsOpen).toBe(true);
+
+    const plaintextOnly = document.createElement("div");
+    plaintextOnly.setAttribute("contenteditable", "plaintext-only");
+    plaintextOnly.tabIndex = 0;
+    app.append(plaintextOnly);
+    plaintextOnly.focus();
+    app.paletteOpen = true;
+    app.chatMobileControlsOpen = true;
+
+    for (const key of ["/", "N", "Escape"]) {
+      const event = new KeyboardEvent("keydown", {
+        key,
+        bubbles: true,
+        cancelable: true,
+      });
+      plaintextOnly.dispatchEvent(event);
+      expect(event.defaultPrevented, key).toBe(false);
+    }
+
+    expect(app.paletteOpen).toBe(true);
+    expect(app.chatMobileControlsOpen).toBe(true);
+    expect(scrollToBottom).toHaveBeenCalledOnce();
+  });
+
   it("preserves session navigation and keeps focus mode scoped to chat", async () => {
     const app = mountApp("/sessions?session=agent:main:subagent:task-123");
     await app.updateComplete;
