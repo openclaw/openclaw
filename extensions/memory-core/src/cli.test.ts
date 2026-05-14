@@ -1642,13 +1642,24 @@ describe("memory cli", () => {
 
   it("prints conceptual promotion signals", async () => {
     await withTempWorkspace(async (workspaceDir) => {
+      await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", "2026-05-01.md"),
+        [
+          "# 2026-05-01",
+          "",
+          "Infra notes",
+          "Configured router VLAN 10 and Glacier backup notes for QMD.",
+        ].join("\n"),
+        "utf-8",
+      );
       await recordShortTermRecalls({
         workspaceDir,
         query: "router vlan",
-        nowMs: Date.parse("2026-04-01T00:00:00.000Z"),
+        nowMs: Date.parse("2026-05-01T00:00:00.000Z"),
         results: [
           {
-            path: "memory/2026-04-01.md",
+            path: "memory/2026-05-01.md",
             startLine: 4,
             endLine: 8,
             score: 0.9,
@@ -1660,10 +1671,10 @@ describe("memory cli", () => {
       await recordShortTermRecalls({
         workspaceDir,
         query: "glacier backup",
-        nowMs: Date.parse("2026-04-03T00:00:00.000Z"),
+        nowMs: Date.parse("2026-05-03T00:00:00.000Z"),
         results: [
           {
-            path: "memory/2026-04-01.md",
+            path: "memory/2026-05-01.md",
             startLine: 4,
             endLine: 8,
             score: 0.88,

@@ -284,14 +284,17 @@ function isContaminatedDreamingSnippet(raw: string): boolean {
     return true;
   }
 
+  const withoutPrefix = consumeDreamingLeadPrefix(snippet);
   const hasNarrativeLead = hasDreamingNarrativeLead(snippet);
+  const hasEvidenceLead = /^evidence:/i.test(withoutPrefix);
   const hasConfidence = /\bconfidence:\s*\d/i.test(snippet);
   const hasEvidence = /\bevidence:\s*(?:memory\/\.dreams\/session-corpus\/|memory\/)/i.test(
     snippet,
   );
   const hasStatus = /\bstatus:\s*staged\b/i.test(snippet);
   const hasRecalls = /\brecalls:\s*\d+\b/i.test(snippet);
-  return hasNarrativeLead && hasConfidence && hasEvidence && hasStatus && hasRecalls;
+  const hasDreamingMetadataCluster = hasConfidence && hasEvidence && hasStatus && hasRecalls;
+  return hasDreamingMetadataCluster && (hasNarrativeLead || hasEvidenceLead);
 }
 
 function normalizeMemoryPath(rawPath: string): string {

@@ -1093,6 +1093,14 @@ describe("short-term promotion", () => {
     ).toBe(true);
   });
 
+  it("treats evidence-prefixed dreaming staging snippets as contaminated", () => {
+    expect(
+      __testing.isContaminatedDreamingSnippet(
+        "- evidence: memory/.dreams/session-corpus/2026-04-08.txt:1-1 recalls: 3 status: staged Candidate: Default to action. confidence: 0.76",
+      ),
+    ).toBe(true);
+  });
+
   it("does not treat ordinary candidate notes with daily-memory evidence as contaminated", () => {
     expect(
       __testing.isContaminatedDreamingSnippet(

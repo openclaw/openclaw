@@ -10,6 +10,7 @@ import { hashText } from "./internal.js";
 
 const log = createSubsystemLogger("memory");
 const DREAMING_NARRATIVE_RUN_PREFIX = "dreaming-narrative-";
+const HEARTBEAT_POLL_MESSAGE = "[OpenClaw heartbeat poll]";
 // Keep the historical one-line-per-message export shape for normal turns, but
 // wrap pathological long messages so downstream indexers never ingest a single
 // toxic line. Wrapped continuation lines still map back to the same JSONL line.
@@ -29,11 +30,15 @@ export type SessionFileEntry = {
   messageTimestampsMs: number[];
   /** True when this transcript belongs to an internal dreaming narrative run. */
   generatedByDreamingNarrative?: boolean;
+  /** True when this transcript belongs to an internal system-managed run. */
+  generatedBySystemAutomation?: boolean;
 };
 
 export type BuildSessionEntryOptions = {
   /** Optional preclassification from a caller-managed dreaming transcript lookup. */
   generatedByDreamingNarrative?: boolean;
+  /** Optional preclassification from a caller-managed system-session lookup. */
+  generatedBySystemAutomation?: boolean;
 };
 
 function isDreamingNarrativeBootstrapRecord(record: unknown): boolean {
@@ -163,6 +168,51 @@ function isDreamingNarrativeTranscriptFromSessionStore(absPath: string): boolean
   return dreamingTranscriptPaths.has(normalizedAbsPath);
 }
 
+function isSystemManagedSessionStoreKey(
+  sessionKey: string,
+  entry: { systemSent?: unknown } | undefined,
+): boolean {
+  if (entry?.systemSent === true) {
+    return true;
+  }
+  const trimmed = sessionKey.trim();
+  if (!trimmed) {
+    return false;
+  }
+  const firstSeparator = trimmed.indexOf(":");
+  if (firstSeparator < 0) {
+    return trimmed === "heartbeat" || trimmed.startsWith("cron:");
+  }
+  const secondSeparator = trimmed.indexOf(":", firstSeparator + 1);
+  const sessionSegment = secondSeparator < 0 ? trimmed : trimmed.slice(secondSeparator + 1);
+  return sessionSegment === "main:heartbeat" || sessionSegment.startsWith("cron:");
+}
+
+function loadSystemManagedTranscriptPathSetForSessionsDir(
+  sessionsDir: string,
+): ReadonlySet<string> {
+  const storePath = path.join(sessionsDir, "sessions.json");
+  const store = loadSessionStore(storePath);
+  const transcriptPaths = new Set<string>();
+  for (const [sessionKey, entry] of Object.entries(store)) {
+    if (!isSystemManagedSessionStoreKey(sessionKey, entry)) {
+      continue;
+    }
+    const transcriptPath = resolveSessionStoreTranscriptPath(sessionsDir, entry);
+    if (transcriptPath) {
+      transcriptPaths.add(transcriptPath);
+    }
+  }
+  return transcriptPaths;
+}
+
+function isSystemManagedTranscriptFromSessionStore(absPath: string): boolean {
+  const sessionsDir = path.dirname(absPath);
+  const normalizedAbsPath = normalizeComparablePath(absPath);
+  const transcriptPaths = loadSystemManagedTranscriptPathSetForSessionsDir(sessionsDir);
+  return transcriptPaths.has(normalizedAbsPath);
+}
+
 export async function listSessionFilesForAgent(agentId: string): Promise<string[]> {
   const dir = resolveSessionTranscriptsDirForAgent(agentId);
   try {
@@ -206,6 +256,33 @@ function collectRawSessionText(content: unknown): string | null {
     }
   }
   return parts.length > 0 ? parts.join("\n") : null;
+}
+
+function isHeartbeatPollRecord(record: unknown): boolean {
+  if (!record || typeof record !== "object" || Array.isArray(record)) {
+    return false;
+  }
+  const candidate = record as {
+    type?: unknown;
+    customType?: unknown;
+    content?: unknown;
+    message?: unknown;
+  };
+  if (candidate.type === "custom_message" && candidate.customType === "openclaw.runtime-context") {
+    return (
+      typeof candidate.content === "string" &&
+      candidate.content.includes("Read HEARTBEAT.md if it exists") &&
+      candidate.content.includes("reply HEARTBEAT_OK")
+    );
+  }
+  if (candidate.type !== "message") {
+    return false;
+  }
+  const message = candidate.message as { role?: unknown; content?: unknown } | undefined;
+  if (!message || message.role !== "user") {
+    return false;
+  }
+  return collectRawSessionText(message.content)?.trim() === HEARTBEAT_POLL_MESSAGE;
 }
 
 function isHighSurrogate(code: number): boolean {
@@ -335,6 +412,8 @@ export async function buildSessionEntry(
     const messageTimestampsMs: number[] = [];
     let generatedByDreamingNarrative =
       opts.generatedByDreamingNarrative ?? isDreamingNarrativeTranscriptFromSessionStore(absPath);
+    let generatedBySystemAutomation =
+      opts.generatedBySystemAutomation ?? isSystemManagedTranscriptFromSessionStore(absPath);
     for (let jsonlIdx = 0; jsonlIdx < lines.length; jsonlIdx++) {
       const line = lines[jsonlIdx];
       if (!line.trim()) {
@@ -348,6 +427,12 @@ export async function buildSessionEntry(
       }
       if (!generatedByDreamingNarrative && isDreamingNarrativeGeneratedRecord(record)) {
         generatedByDreamingNarrative = true;
+      }
+      if (!generatedBySystemAutomation && isHeartbeatPollRecord(record)) {
+        generatedBySystemAutomation = true;
+      }
+      if (generatedByDreamingNarrative || generatedBySystemAutomation) {
+        continue;
       }
       if (
         !record ||
@@ -394,6 +479,7 @@ export async function buildSessionEntry(
       lineMap,
       messageTimestampsMs,
       ...(generatedByDreamingNarrative ? { generatedByDreamingNarrative: true } : {}),
+      ...(generatedBySystemAutomation ? { generatedBySystemAutomation: true } : {}),
     };
   } catch (err) {
     log.debug(`Failed reading session file ${absPath}: ${String(err)}`);

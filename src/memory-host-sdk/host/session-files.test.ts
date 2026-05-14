@@ -411,6 +411,78 @@ describe("buildSessionEntry", () => {
     expect(entry?.lineMap).toEqual([]);
   });
 
+  it("flags system-managed heartbeat transcripts from the sibling session store", async () => {
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const filePath = path.join(sessionsDir, "heartbeat-session.jsonl");
+    await fs.writeFile(
+      filePath,
+      [
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            content: "[OpenClaw heartbeat poll]",
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            content: "HEARTBEAT_OK",
+          },
+        }),
+      ].join("\n"),
+    );
+    await fs.writeFile(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify({
+        "agent:main:main:heartbeat": {
+          sessionId: "heartbeat-session",
+          sessionFile: filePath,
+          updatedAt: Date.now(),
+          systemSent: true,
+        },
+      }),
+      "utf-8",
+    );
+
+    const entry = await buildSessionEntry(filePath);
+
+    expect(entry).not.toBeNull();
+    expect(entry?.generatedBySystemAutomation).toBe(true);
+    expect(entry?.content).toBe("");
+    expect(entry?.lineMap).toEqual([]);
+  });
+
+  it("flags heartbeat transcripts from runtime context even without a session store entry", async () => {
+    const jsonlLines = [
+      JSON.stringify({
+        type: "custom_message",
+        customType: "openclaw.runtime-context",
+        content:
+          "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. If nothing needs attention, reply HEARTBEAT_OK.",
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "[OpenClaw heartbeat poll]" },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "HEARTBEAT_OK" },
+      }),
+    ];
+    const filePath = path.join(tmpDir, "heartbeat-runtime-context.jsonl");
+    await fs.writeFile(filePath, jsonlLines.join("\n"));
+
+    const entry = await buildSessionEntry(filePath);
+
+    expect(entry).not.toBeNull();
+    expect(entry?.generatedBySystemAutomation).toBe(true);
+    expect(entry?.content).toBe("");
+    expect(entry?.lineMap).toEqual([]);
+  });
+
   it("does not flag ordinary transcripts that quote the dream-diary prompt", async () => {
     const jsonlLines = [
       JSON.stringify({
