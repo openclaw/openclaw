@@ -135,7 +135,7 @@ is available, then fall back to `latest`.
 
     This CLI flag applies to plugin install/update flows. Gateway-backed skill dependency installs use the matching `dangerouslyForceUnsafeInstall` request override, while `openclaw skills install` remains a separate ClawHub skill download/install flow.
 
-    If a plugin you published on ClawHub is hidden or blocked by a registry scan, use the publisher steps in [ClawHub](/clawhub/security). `--dangerously-force-unsafe-install` only affects installs on your own machine; it does not ask ClawHub to rescan the plugin or make a blocked release public.
+    If a plugin you published on ClawHub is hidden or blocked by a registry scan, use the publisher steps in [ClawHub publishing](/clawhub/publishing). `--dangerously-force-unsafe-install` only affects installs on your own machine; it does not ask ClawHub to rescan the plugin or make a blocked release public.
 
   </Accordion>
   <Accordion title="Hook packs and npm specs">
