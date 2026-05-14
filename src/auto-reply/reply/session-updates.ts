@@ -203,6 +203,7 @@ export async function ensureSkillSnapshot(params: {
     skillFilter,
     sessionAgentId,
     remoteEligibility,
+    cfg.skills,
   ]);
 
   // For hydrateResolvedSkills callbacks: reuse cached resolvedSkills when available.
