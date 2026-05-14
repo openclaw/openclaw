@@ -8,6 +8,7 @@ import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-regist
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { normalizeDeviceMetadataForPolicy } from "./device-metadata-normalization.js";
 import type { NodeSession } from "./node-registry.js";
+import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 
 const CAMERA_COMMANDS = ["camera.list"];
 const CAMERA_DANGEROUS_COMMANDS = ["camera.snap", "camera.clip"];
@@ -49,6 +50,11 @@ const SYSTEM_COMMANDS = [
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_BROWSER_PROXY_COMMAND,
 ];
+const DESKTOP_HOST_COMMANDS = new Set<string>([
+  ...NODE_SYSTEM_RUN_COMMANDS,
+  NODE_BROWSER_PROXY_COMMAND,
+  ...SCREEN_COMMANDS,
+]);
 const UNKNOWN_PLATFORM_COMMANDS = [
   ...CAMERA_COMMANDS,
   ...LOCATION_COMMANDS,
@@ -255,7 +261,29 @@ export function isForegroundRestrictedPluginNodeCommand(command: string): boolea
 }
 
 type NodeCommandPolicyNode = Pick<NodeSession, "platform" | "deviceFamily"> &
-  Partial<Pick<NodeSession, "caps" | "commands">>;
+  Partial<Pick<NodeSession, "caps" | "commands" | "clientId" | "clientMode">>;
+
+function isDesktopPlatformId(platformId: PlatformId): boolean {
+  return platformId === "macos" || platformId === "windows" || platformId === "linux";
+}
+
+function isBundledNodeHost(node?: NodeCommandPolicyNode): boolean {
+  return (
+    node?.clientId === GATEWAY_CLIENT_IDS.NODE_HOST &&
+    node?.clientMode === GATEWAY_CLIENT_MODES.NODE
+  );
+}
+
+function filterDesktopHostCommandDefaults(params: {
+  platformId: PlatformId;
+  node?: NodeCommandPolicyNode;
+  commands: readonly string[];
+}): string[] {
+  if (!isDesktopPlatformId(params.platformId) || isBundledNodeHost(params.node)) {
+    return [...params.commands];
+  }
+  return params.commands.filter((command) => !DESKTOP_HOST_COMMANDS.has(command));
+}
 
 function hasTalkSurface(node?: NodeCommandPolicyNode): boolean {
   if (!node) {
@@ -276,7 +304,11 @@ export function resolveNodeCommandAllowlist(
   node?: NodeCommandPolicyNode,
 ): Set<string> {
   const platformId = normalizePlatformId(node?.platform, node?.deviceFamily);
-  const base = PLATFORM_DEFAULTS[platformId] ?? PLATFORM_DEFAULTS.unknown;
+  const base = filterDesktopHostCommandDefaults({
+    platformId,
+    node,
+    commands: PLATFORM_DEFAULTS[platformId] ?? PLATFORM_DEFAULTS.unknown,
+  });
   const talkCommands = hasTalkSurface(node) ? TALK_PTT_COMMANDS : [];
   const pluginDefaults = listDefaultPluginNodeCommands(platformId);
   const extra = cfg.gateway?.nodes?.allowCommands ?? [];

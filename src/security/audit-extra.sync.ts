@@ -15,6 +15,7 @@ import {
   listDangerousPluginNodeCommands,
   resolveNodeCommandAllowlist,
 } from "../gateway/node-command-policy.js";
+import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../gateway/protocol/client-info.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -127,9 +128,24 @@ function listKnownNodeCommands(cfg: OpenClawConfig): Set<string> {
   const platformNodes = [
     { platform: "ios", deviceFamily: "iPhone" },
     { platform: "android", deviceFamily: "Android" },
-    { platform: "macos", deviceFamily: "Mac" },
-    { platform: "linux", deviceFamily: "Linux" },
-    { platform: "windows", deviceFamily: "Windows" },
+    {
+      platform: "macos",
+      deviceFamily: "Mac",
+      clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+      clientMode: GATEWAY_CLIENT_MODES.NODE,
+    },
+    {
+      platform: "linux",
+      deviceFamily: "Linux",
+      clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+      clientMode: GATEWAY_CLIENT_MODES.NODE,
+    },
+    {
+      platform: "windows",
+      deviceFamily: "Windows",
+      clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+      clientMode: GATEWAY_CLIENT_MODES.NODE,
+    },
     { platform: "unknown" },
   ];
   for (const node of platformNodes) {

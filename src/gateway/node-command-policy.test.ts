@@ -8,6 +8,7 @@ import {
   normalizeDeclaredNodeCommands,
   resolveNodeCommandAllowlist,
 } from "./node-command-policy.js";
+import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 
 describe("gateway/node-command-policy", () => {
   afterEach(() => {
@@ -108,11 +109,15 @@ describe("gateway/node-command-policy", () => {
       { platform: "darwin", deviceFamily: "iPhone" },
       { platform: "darwin", deviceFamily: "Mac" },
       { platform: "macos" },
+      { platform: "macos", deviceFamily: "Mac" },
       { platform: "macos", deviceFamily: "iPhone" },
       { platform: "macOS 26.3.1", deviceFamily: "iPhone" },
+      { platform: "macOS 26.3.1", deviceFamily: "Mac" },
       { platform: "windows" },
+      { platform: "windows", deviceFamily: "Windows" },
       { platform: "windows", deviceFamily: "iPhone" },
       { platform: "linux" },
+      { platform: "linux", deviceFamily: "Linux" },
       { platform: "linux", deviceFamily: "iPhone" },
       { platform: "Darwin-x64" },
       { platform: "macintosh" },
@@ -154,12 +159,12 @@ describe("gateway/node-command-policy", () => {
       platform: "macOS 15.5.0",
       deviceFamily: "Mac",
     });
-    expect(macAllowlist.has("system.run")).toBe(true);
-    expect(macAllowlist.has("system.which")).toBe(true);
-    expect(macAllowlist.has("screen.snapshot")).toBe(true);
+    expect(macAllowlist.has("system.run")).toBe(false);
+    expect(macAllowlist.has("system.which")).toBe(false);
+    expect(macAllowlist.has("screen.snapshot")).toBe(false);
   });
 
-  it("keeps host command defaults for canonical desktop platforms", () => {
+  it("keeps host command defaults for bundled node-host desktop platforms", () => {
     const cfg = {} as OpenClawConfig;
     const cases = [
       { platform: "macos", deviceFamily: "Mac" },
@@ -168,7 +173,11 @@ describe("gateway/node-command-policy", () => {
     ];
 
     for (const node of cases) {
-      const allowlist = resolveNodeCommandAllowlist(cfg, node);
+      const allowlist = resolveNodeCommandAllowlist(cfg, {
+        ...node,
+        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+        clientMode: GATEWAY_CLIENT_MODES.NODE,
+      });
       expect(allowlist.has("system.run")).toBe(true);
       expect(allowlist.has("system.which")).toBe(true);
     }

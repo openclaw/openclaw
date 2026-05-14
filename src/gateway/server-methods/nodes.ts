@@ -344,6 +344,8 @@ function resolveAllowedPendingNodeActions(params: {
   const allowlist = resolveNodeCommandAllowlist(params.cfg, {
     platform: connect?.client?.platform,
     deviceFamily: connect?.client?.deviceFamily,
+    clientId: connect?.client?.id,
+    clientMode: connect?.client?.mode,
     caps: connect?.caps,
     commands: declaredCommands,
   });
@@ -773,6 +775,8 @@ export const nodeHandlers: GatewayRequestHandlers = {
       const currentAllowlist = resolveNodeCommandAllowlist(cfg, {
         platform: approvedNode.platform,
         deviceFamily: approvedNode.deviceFamily,
+        clientId: approvedNode.clientId,
+        clientMode: approvedNode.clientMode,
         caps: approvedNode.caps,
         commands: approvedNode.commands,
       });

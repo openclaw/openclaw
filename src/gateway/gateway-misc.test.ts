@@ -20,6 +20,7 @@ import {
   resolveNodeCommandAllowlist,
 } from "./node-command-policy.js";
 import type { SerializedEventPayload } from "./node-registry.js";
+import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 import type { RequestFrame } from "./protocol/index.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { createChatRunRegistry } from "./server-chat.js";
@@ -875,6 +876,8 @@ describe("resolveNodeCommandAllowlist", () => {
       {
         platform: "macOS 26.3.1",
         deviceFamily: "Mac",
+        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+        clientMode: GATEWAY_CLIENT_MODES.NODE,
       },
     );
 
@@ -890,6 +893,8 @@ describe("resolveNodeCommandAllowlist", () => {
       {
         platform: "windows",
         deviceFamily: "Windows",
+        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+        clientMode: GATEWAY_CLIENT_MODES.NODE,
       },
     );
 

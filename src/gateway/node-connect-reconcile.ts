@@ -124,6 +124,8 @@ function buildNodePairingRequestInput(params: {
 }): NodePairingRequestInput {
   return {
     nodeId: params.nodeId,
+    clientId: params.connectParams.client.id,
+    clientMode: params.connectParams.client.mode,
     displayName: params.connectParams.client.displayName,
     platform: params.connectParams.client.platform,
     version: params.connectParams.client.version,
@@ -147,6 +149,8 @@ export async function reconcileNodePairingOnConnect(params: {
   const allowlist = resolveNodeCommandAllowlist(params.cfg, {
     platform: params.connectParams.client.platform,
     deviceFamily: params.connectParams.client.deviceFamily,
+    clientId: params.connectParams.client.id,
+    clientMode: params.connectParams.client.mode,
     caps: params.connectParams.caps,
     commands: params.connectParams.commands,
   });
