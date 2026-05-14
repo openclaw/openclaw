@@ -754,6 +754,7 @@ export class OpenClawApp extends LitElement {
       this as unknown as Parameters<typeof scheduleChatScrollInternal>[0],
       true,
       Boolean(opts?.smooth),
+      { source: "manual" },
     );
   }
 

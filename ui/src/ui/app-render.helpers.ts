@@ -26,6 +26,11 @@ import {
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "./session-key.ts";
+import {
+  CHAT_AUTO_SCROLL_MODES,
+  normalizeChatAutoScrollMode,
+  type ChatAutoScrollMode,
+} from "./storage.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-coerce.ts";
 import type { ThemeMode } from "./theme.ts";
 import type { SessionsListResult } from "./types.ts";
@@ -258,6 +263,52 @@ export function renderChatSessionSelect(state: AppViewState) {
   return renderChatSessionSelectBase(state, switchChatSession);
 }
 
+function chatAutoScrollLabel(mode: ChatAutoScrollMode) {
+  switch (mode) {
+    case "always":
+      return t("chat.autoScrollAlways");
+    case "off":
+      return t("chat.autoScrollOff");
+    case "near-bottom":
+      return t("chat.autoScrollNearBottom");
+  }
+  return t("chat.autoScrollNearBottom");
+}
+
+function renderChatAutoScrollSelect(state: AppViewState) {
+  const mode = normalizeChatAutoScrollMode(state.settings.chatAutoScroll);
+  const label = t("chat.autoScrollMode");
+  return html`
+    <label class="field chat-controls__autoscroll" title=${label}>
+      <span class="agent-chat__sr-only">${label}</span>
+      <select
+        class="chat-controls__autoscroll-select"
+        data-chat-auto-scroll-select="true"
+        aria-label=${label}
+        title=${label}
+        .value=${mode}
+        @change=${(event: Event) => {
+          const nextMode = normalizeChatAutoScrollMode(
+            (event.currentTarget as HTMLSelectElement | null)?.value,
+          );
+          state.applySettings({
+            ...state.settings,
+            chatAutoScroll: nextMode,
+          });
+        }}
+      >
+        ${CHAT_AUTO_SCROLL_MODES.map(
+          (option) => html`
+            <option value=${option} ?selected=${option === mode}>
+              ${chatAutoScrollLabel(option)}
+            </option>
+          `,
+        )}
+      </select>
+    </label>
+  `;
+}
+
 export function renderChatControls(state: AppViewState) {
   const hideCron = state.sessionsHideCron ?? true;
   const hiddenCronCount = hideCron ? countHiddenCronSessions(state, state.sessionsResult) : 0;
@@ -347,6 +398,7 @@ export function renderChatControls(state: AppViewState) {
         ${refreshIcon}
       </button>
       <span class="chat-controls__separator">|</span>
+      ${renderChatAutoScrollSelect(state)}
       <button
         class="btn btn--sm btn--icon ${showThinking ? "active" : ""}"
         ?disabled=${disableThinkingToggle}
@@ -511,6 +563,7 @@ export function renderChatMobileToggle(state: AppViewState) {
         <div class="chat-controls">
           ${renderChatSessionSelectBase(state, switchChatSession)}
           <div class="chat-controls__thinking">
+            ${renderChatAutoScrollSelect(state)}
             <button
               class="btn btn--sm btn--icon ${showThinking ? "active" : ""}"
               ?disabled=${disableThinkingToggle}

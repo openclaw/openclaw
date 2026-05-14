@@ -1214,6 +1214,19 @@
   max-width: none;
 }
 
+.chat-controls__autoscroll {
+  min-width: 112px;
+  max-width: 118px;
+}
+
+.chat-controls__autoscroll-select {
+  width: 100%;
+  height: 32px;
+  min-width: 0;
+  padding: 4px 26px 4px 8px;
+  font-size: 12px;
+}
+
 .chat-controls__thinking {
   display: flex;
   align-items: center;

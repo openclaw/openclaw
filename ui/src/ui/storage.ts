@@ -40,6 +40,15 @@ export type BorderRadiusStop = (typeof BORDER_RADIUS_STOPS)[number];
 export const TEXT_SCALE_STOPS = [90, 100, 110, 125, 140] as const;
 export type TextScaleStop = (typeof TEXT_SCALE_STOPS)[number];
 
+export const CHAT_AUTO_SCROLL_MODES = ["always", "near-bottom", "off"] as const;
+export type ChatAutoScrollMode = (typeof CHAT_AUTO_SCROLL_MODES)[number];
+
+export function normalizeChatAutoScrollMode(value: unknown): ChatAutoScrollMode {
+  return CHAT_AUTO_SCROLL_MODES.includes(value as ChatAutoScrollMode)
+    ? (value as ChatAutoScrollMode)
+    : "near-bottom";
+}
+
 function snapBorderRadius(value: number): BorderRadiusStop {
   let best: BorderRadiusStop = BORDER_RADIUS_STOPS[0];
   let bestDist = Math.abs(value - best);
@@ -79,6 +88,7 @@ export type UiSettings = {
   chatFocusMode: boolean;
   chatShowThinking: boolean;
   chatShowToolCalls: boolean;
+  chatAutoScroll?: ChatAutoScrollMode;
   splitRatio: number; // Sidebar split ratio (0.4 to 0.7, default 0.6)
   navCollapsed: boolean; // Collapsible sidebar state
   navWidth: number; // Sidebar width when expanded (240–400px)
@@ -221,6 +231,7 @@ export function loadSettings(): UiSettings {
     chatFocusMode: false,
     chatShowThinking: true,
     chatShowToolCalls: true,
+    chatAutoScroll: "near-bottom",
     splitRatio: 0.6,
     navCollapsed: false,
     navWidth: 220,
@@ -266,6 +277,7 @@ export function loadSettings(): UiSettings {
         typeof parsed.chatShowToolCalls === "boolean"
           ? parsed.chatShowToolCalls
           : defaults.chatShowToolCalls,
+      chatAutoScroll: normalizeChatAutoScrollMode(parsed.chatAutoScroll),
       splitRatio:
         typeof parsed.splitRatio === "number" &&
         parsed.splitRatio >= 0.4 &&
@@ -403,6 +415,7 @@ function persistSettings(next: UiSettings) {
     chatFocusMode: next.chatFocusMode,
     chatShowThinking: next.chatShowThinking,
     chatShowToolCalls: next.chatShowToolCalls,
+    chatAutoScroll: normalizeChatAutoScrollMode(next.chatAutoScroll),
     splitRatio: next.splitRatio,
     navCollapsed: next.navCollapsed,
     navWidth: next.navWidth,
