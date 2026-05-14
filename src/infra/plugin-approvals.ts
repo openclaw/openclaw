@@ -37,6 +37,7 @@ export const DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS = 120_000;
 export const MAX_PLUGIN_APPROVAL_TIMEOUT_MS = 600_000;
 export const PLUGIN_APPROVAL_TITLE_MAX_LENGTH = 80;
 export const PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH = 256;
+const SIMPLE_COMMAND_PREVIEW_MAX_LENGTH = 180;
 export const DEFAULT_PLUGIN_APPROVAL_LANGUAGE =
   "original" as const satisfies PluginApprovalLanguage;
 export const DEFAULT_PLUGIN_APPROVAL_DECISIONS = [
@@ -130,6 +131,9 @@ function buildPlainEnglishApprovalLines(payload: PluginApprovalRequestPayload): 
     if (summary.actions.length > 4) {
       lines.push(`- ${summary.actions.length - 4} more background step(s)`);
     }
+    if (summary.commandPreview) {
+      lines.push("", "Command preview", summary.commandPreview);
+    }
     lines.push("", `Risk: ${formatRiskLevel(summary.risk)}`, summary.riskReason);
     return lines;
   }
@@ -210,6 +214,7 @@ function summarizeShellCommand(command: string): {
   actions: string[];
   risk: ApprovalRiskLevel;
   riskReason: string;
+  commandPreview?: string;
 } {
   const decodedCommand = decodeBasicHtmlEntities(command);
   const expandedSegments = splitCommandSegments(decodedCommand).flatMap((segment) =>
@@ -234,7 +239,36 @@ function summarizeShellCommand(command: string): {
     actions: actions.length > 0 ? actions : ["run the requested terminal command"],
     risk,
     riskReason,
+    commandPreview: shouldShowCommandPreview(summaries)
+      ? buildCommandPreview(decodedCommand)
+      : undefined,
   };
+}
+
+function shouldShowCommandPreview(summaries: readonly CommandActionSummary[]): boolean {
+  return summaries.some((summary) => summary.kind === "unknown");
+}
+
+function buildCommandPreview(command: string): string {
+  const compact = redactSensitiveCommandText(command).replace(/\s+/g, " ").trim();
+  if (compact.length <= SIMPLE_COMMAND_PREVIEW_MAX_LENGTH) {
+    return compact;
+  }
+  return `${compact.slice(0, SIMPLE_COMMAND_PREVIEW_MAX_LENGTH - 1).trimEnd()}...`;
+}
+
+function redactSensitiveCommandText(command: string): string {
+  return command
+    .replace(/(authorization:\s*bearer\s+)(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi, "$1[redacted]")
+    .replace(
+      /(\b(?:api[-_]?key|auth[-_]?token|password|passwd|secret|token)\b\s*=\s*)(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi,
+      "$1[redacted]",
+    )
+    .replace(
+      /(--(?:api[-_]?key|auth[-_]?token|password|passwd|secret|token)(?:=|\s+))(?:"[^"]+"|'[^']+'|[^\s'"\\]+)/gi,
+      "$1[redacted]",
+    )
+    .replace(/(https?:\/\/[^:\s/@]+:)[^@\s/]+@/gi, "$1[redacted]@");
 }
 
 function splitCommandSegments(command: string): string[] {
