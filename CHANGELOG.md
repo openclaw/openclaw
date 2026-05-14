@@ -21,6 +21,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- ACP/Codex: surface redacted Codex wrapper stderr for generic ACP internal failures and preserve safe Codex model/provider routing in isolated `CODEX_HOME`, making `sessions_spawn(runtime="acp", agentId="codex")` failures actionable. Fixes #80079. (#80718) Thanks @leoge007.
 - ACP: treat rejected timeout config options as best-effort hints so ACP turns continue with adapters that do not support `session/set_config_option` timeout keys. Fixes #81250. (#81603) Thanks @qkal.
 - Cron/Codex: default exact-command scheduled agent turns to lightweight bootstrap context so automation runs the command before loading workspace identity or memory context.
 - Codex plugin/Gateway: strip unpaired UTF-16 surrogates from Codex app-server JSON-RPC payloads and let stale reply-work recovery abort stalled reply runs, preventing malformed media turns from wedging gateway lanes.
