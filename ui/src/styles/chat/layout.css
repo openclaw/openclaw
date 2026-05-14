@@ -737,6 +737,65 @@
   align-self: center;
 }
 
+.agent-chat__run-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  max-width: 132px;
+  padding: 0 8px;
+  border-radius: var(--radius-full);
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.agent-chat__run-status svg {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.6px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex-shrink: 0;
+}
+
+.agent-chat__run-status-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.agent-chat__run-status--in-progress {
+  color: var(--info);
+  border-color: color-mix(in srgb, var(--info) 32%, transparent);
+}
+
+.agent-chat__run-status--in-progress svg {
+  animation: chat-run-status-spin 1s linear infinite;
+}
+
+.agent-chat__run-status--done {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 32%, transparent);
+}
+
+.agent-chat__run-status--interrupted {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 36%, transparent);
+}
+
+@keyframes chat-run-status-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .chat-send-btn {
   display: inline-flex;
   align-items: center;
@@ -753,6 +812,18 @@
     background var(--duration-fast) ease,
     color var(--duration-fast) ease;
   padding: 0;
+}
+
+@media (max-width: 560px) {
+  .agent-chat__run-status {
+    width: 24px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .agent-chat__run-status-label {
+    display: none;
+  }
 }
 
 .chat-send-btn svg {

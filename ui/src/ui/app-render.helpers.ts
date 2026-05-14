@@ -8,6 +8,7 @@ import {
 } from "./app-chat.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
+import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
 import {
   isCronSessionKey,
   parseSessionKey,
@@ -140,8 +141,6 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   state.chatStream = null;
   state.chatSideResult = null;
   state.lastError = null;
-  state.compactionStatus = null;
-  state.fallbackStatus = null;
   state.chatAvatarUrl = null;
   state.chatAvatarSource = null;
   state.chatAvatarStatus = null;
@@ -149,9 +148,13 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   state.chatQueue = restoreChatQueueForSession(state, sessionKey);
   host.resetChatInputHistoryNavigation();
   host.chatStreamStartedAt = null;
-  state.chatRunId = null;
-  host.chatSideResultTerminalRuns.clear();
-  host.resetToolStream();
+  reconcileChatRunLifecycle(state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
+    clearLocalRun: true,
+    clearChatStream: true,
+    clearToolStream: true,
+    clearSideResultTerminalRuns: true,
+    clearRunStatus: true,
+  });
   host.resetChatScroll();
   state.applySettings({
     ...state.settings,

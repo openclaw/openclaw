@@ -72,6 +72,7 @@ import {
   type RealtimeTalkLaunchOptions,
   type RealtimeTalkStatus,
 } from "./chat/realtime-talk.ts";
+import type { ChatRunUiStatus } from "./chat/run-lifecycle.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
 import {
   loadToolsEffective as loadToolsEffectiveInternal,
@@ -214,6 +215,8 @@ export class OpenClawApp extends LitElement {
   @state() chatSideResult: ChatSideResult | null = null;
   @state() compactionStatus: CompactionStatus | null = null;
   @state() fallbackStatus: FallbackStatus | null = null;
+  @state() chatRunStatus: ChatRunUiStatus | null = null;
+  chatRunStatusClearTimer: ReturnType<typeof globalThis.setTimeout> | number | null = null;
   @state() chatAvatarUrl: string | null = null;
   @state() chatAvatarSource: string | null = null;
   @state() chatAvatarStatus: "none" | "local" | "remote" | "data" | null = null;
