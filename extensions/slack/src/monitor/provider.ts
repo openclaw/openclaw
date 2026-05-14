@@ -35,6 +35,10 @@ import { resolveSlackChannelAllowlist } from "../resolve-channels.js";
 import { resolveSlackUserAllowlist, type SlackUserResolution } from "../resolve-users.js";
 import { resolveSlackAppToken, resolveSlackBotToken } from "../token.js";
 import { normalizeAllowList } from "./allow-list.js";
+import {
+  collectIgnoredSlackChannelRouteKeys,
+  formatIgnoredSlackChannelRouteKeyWarning,
+} from "./channel-config.js";
 import { resolveSlackSlashCommandConfig } from "./commands.js";
 import {
   getRuntimeConfig,
@@ -422,6 +426,24 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             channelsConfig = nextChannels;
             ctx.channelsConfig = nextChannels;
             summarizeMapping("slack channels", mapping, unresolved, runtime);
+            for (const key of collectIgnoredSlackChannelRouteKeys({
+              channels: channelsConfig,
+              groupPolicy,
+              allowNameMatching,
+              keys: unresolved,
+            })) {
+              runtime.log?.(
+                warn(
+                  formatIgnoredSlackChannelRouteKeyWarning({
+                    path:
+                      account.accountId === "default"
+                        ? "channels.slack.channels"
+                        : `channels.slack.accounts.${account.accountId}.channels`,
+                    key,
+                  }),
+                ),
+              );
+            }
           }
         } catch (err) {
           runtime.log?.(

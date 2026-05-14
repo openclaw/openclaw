@@ -1,3 +1,4 @@
+import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   flush,
@@ -49,6 +50,45 @@ describe("slack allowlist log formatting", () => {
 });
 
 describe("slack startup user allowlist resolution", () => {
+  it("warns when allowlisted channel routes are keyed by unresolved names", async () => {
+    resetSlackTestState({
+      channels: {
+        slack: {
+          enabled: true,
+          groupPolicy: "allowlist",
+          channels: {
+            "example-channel": { requireMention: false },
+            C0AL2GDUA7J: { requireMention: false },
+          },
+        },
+      },
+    });
+    const runtime = createNonExitingRuntimeEnv();
+    const controller = new AbortController();
+    const run = monitorSlackProvider({
+      botToken: "bot-token",
+      appToken: "app-token",
+      abortSignal: controller.signal,
+      config: slackTestState.config,
+      runtime,
+    });
+    try {
+      await getSlackHandlerOrThrow("message");
+      await flush();
+      await flush();
+
+      expect(runtime.log).toHaveBeenCalledWith(
+        expect.stringContaining('channels.slack.channels."example-channel" is keyed by name'),
+      );
+      expect(runtime.log).not.toHaveBeenCalledWith(
+        expect.stringContaining('channels.slack.channels."C0AL2GDUA7J"'),
+      );
+    } finally {
+      controller.abort();
+      await run;
+    }
+  });
+
   it("skips user entry resolution when name matching is not enabled", async () => {
     resetSlackTestState({
       messages: {

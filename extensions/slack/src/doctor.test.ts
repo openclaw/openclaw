@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { slackDoctor } from "./doctor.js";
+import { collectSlackIgnoredChannelRouteKeyWarnings, slackDoctor } from "./doctor.js";
 
 function getSlackCompatibilityNormalizer(): NonNullable<
   typeof slackDoctor.normalizeCompatibilityConfig
@@ -12,6 +12,89 @@ function getSlackCompatibilityNormalizer(): NonNullable<
 }
 
 describe("slack doctor", () => {
+  it("warns when allowlisted channel routes are keyed by name", () => {
+    const warnings = collectSlackIgnoredChannelRouteKeyWarnings({
+      cfg: {
+        channels: {
+          slack: {
+            groupPolicy: "allowlist",
+            channels: {
+              "example-channel": { requireMention: false },
+              C0AL2GDUA7J: { requireMention: false },
+              "*": { requireMention: true },
+            },
+            accounts: {
+              work: {
+                channels: {
+                  "ops-room": { requireMention: false },
+                  C0AL2GDUA8K: { requireMention: false },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(warnings).toHaveLength(2);
+    expect(warnings[0]).toContain('channels.slack.channels."example-channel"');
+    expect(warnings[0]).toContain("is keyed by name, not a Slack channel ID");
+    expect(warnings[1]).toContain('channels.slack.accounts.work.channels."ops-room"');
+  });
+
+  it("does not warn about name-keyed routes when dangerous name matching is enabled", () => {
+    expect(
+      collectSlackIgnoredChannelRouteKeyWarnings({
+        cfg: {
+          channels: {
+            slack: {
+              groupPolicy: "allowlist",
+              dangerouslyAllowNameMatching: true,
+              channels: {
+                "example-channel": { requireMention: false },
+              },
+            },
+          },
+        },
+      }),
+    ).toEqual([]);
+  });
+
+  it("honors account-level dangerous name matching overrides", () => {
+    const warnings = collectSlackIgnoredChannelRouteKeyWarnings({
+      cfg: {
+        channels: {
+          slack: {
+            groupPolicy: "allowlist",
+            dangerouslyAllowNameMatching: true,
+            accounts: {
+              inherited: {
+                channels: {
+                  "ops-room": { requireMention: false },
+                },
+              },
+              disabled: {
+                dangerouslyAllowNameMatching: false,
+                channels: {
+                  "alerts-room": { requireMention: false },
+                },
+              },
+              enabled: {
+                dangerouslyAllowNameMatching: true,
+                channels: {
+                  "triage-room": { requireMention: false },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('channels.slack.accounts.disabled.channels."alerts-room"');
+  });
+
   it("warns when mutable allowlist entries rely on disabled name matching", async () => {
     const warnings = await Promise.resolve(
       slackDoctor.collectMutableAllowlistWarnings?.({

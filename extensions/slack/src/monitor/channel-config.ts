@@ -33,6 +33,8 @@ type SlackChannelConfigEntry = {
 
 export type SlackChannelConfigEntries = Record<string, SlackChannelConfigEntry>;
 
+const SLACK_CHANNEL_ROUTE_ID_KEY_RE = /^(?:channel:)?[CGD][A-Z0-9]{8,}$/i;
+
 function firstDefined<T>(...values: Array<T | undefined>) {
   for (const value of values) {
     if (value !== undefined) {
@@ -40,6 +42,31 @@ function firstDefined<T>(...values: Array<T | undefined>) {
     }
   }
   return undefined;
+}
+
+export function isSlackChannelRouteIdKey(raw: string): boolean {
+  return SLACK_CHANNEL_ROUTE_ID_KEY_RE.test(raw.trim());
+}
+
+export function collectIgnoredSlackChannelRouteKeys(params: {
+  channels?: SlackChannelConfigEntries;
+  groupPolicy?: string;
+  allowNameMatching?: boolean;
+  keys?: string[];
+}): string[] {
+  if (params.groupPolicy !== "allowlist" || params.allowNameMatching) {
+    return [];
+  }
+  const entries = params.channels ?? {};
+  const keys = params.keys ?? Object.keys(entries);
+  return keys.filter((key) => key !== "*" && !isSlackChannelRouteIdKey(key));
+}
+
+export function formatIgnoredSlackChannelRouteKeyWarning(params: {
+  path: string;
+  key: string;
+}): string {
+  return `[slack] ${params.path}."${params.key}" is keyed by name, not a Slack channel ID. Entries under groupPolicy: "allowlist" key by ID and this entry will not match. Find the channel's Slack ID in the Slack URL or via conversations.info, then rekey.`;
 }
 
 export function resolveSlackChannelLabel(params: { channelId?: string; channelName?: string }) {
