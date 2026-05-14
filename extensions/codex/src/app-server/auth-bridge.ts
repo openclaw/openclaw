@@ -35,14 +35,14 @@ const CODEX_APP_SERVER_NATIVE_HOME_DIRNAME = "home";
 const CODEX_API_KEY_ENV_VAR = "CODEX_API_KEY";
 const OPENAI_API_KEY_ENV_VAR = "OPENAI_API_KEY";
 const CODEX_APP_SERVER_API_KEY_ENV_VARS = [CODEX_API_KEY_ENV_VAR, OPENAI_API_KEY_ENV_VAR];
-const CODEX_APP_SERVER_ISOLATION_ENV_VARS = [CODEX_HOME_ENV_VAR, HOME_ENV_VAR];
+const CODEX_APP_SERVER_HOME_ENV_VARS = [CODEX_HOME_ENV_VAR, HOME_ENV_VAR];
 
 type AuthProfileOrderConfig = Parameters<typeof resolveAuthProfileOrder>[0]["cfg"];
 
 export async function bridgeCodexAppServerStartOptions(params: {
   startOptions: CodexAppServerStartOptions;
   agentDir: string;
-  authProfileId?: string;
+  authProfileId?: string | null;
   config?: AuthProfileOrderConfig;
 }): Promise<CodexAppServerStartOptions> {
   if (params.startOptions.transport !== "stdio") {
@@ -52,6 +52,9 @@ export async function bridgeCodexAppServerStartOptions(params: {
     params.startOptions,
     params.agentDir,
   );
+  if (params.authProfileId === null) {
+    return isolatedStartOptions;
+  }
   const store = ensureCodexAppServerAuthProfileStore({
     agentDir: params.agentDir,
     authProfileId: params.authProfileId,
@@ -259,18 +262,20 @@ async function withAgentCodexHomeEnvironment(
     : resolveCodexAppServerHomeDir(agentDir);
   const nativeHome = startOptions.env?.[HOME_ENV_VAR]?.trim()
     ? startOptions.env[HOME_ENV_VAR]
-    : path.join(codexHome, CODEX_APP_SERVER_NATIVE_HOME_DIRNAME);
+    : undefined;
   await fs.mkdir(codexHome, { recursive: true });
-  await fs.mkdir(nativeHome, { recursive: true });
+  if (nativeHome) {
+    await fs.mkdir(nativeHome, { recursive: true });
+  }
   const nextStartOptions: CodexAppServerStartOptions = {
     ...startOptions,
     env: {
       ...startOptions.env,
       [CODEX_HOME_ENV_VAR]: codexHome,
-      [HOME_ENV_VAR]: nativeHome,
+      ...(nativeHome ? { [HOME_ENV_VAR]: nativeHome } : {}),
     },
   };
-  const clearEnv = withoutClearedCodexIsolationEnv(startOptions.clearEnv);
+  const clearEnv = withoutClearedCodexHomeEnv(startOptions.clearEnv);
   if (clearEnv) {
     nextStartOptions.clearEnv = clearEnv;
   } else {
@@ -279,11 +284,11 @@ async function withAgentCodexHomeEnvironment(
   return nextStartOptions;
 }
 
-function withoutClearedCodexIsolationEnv(clearEnv: string[] | undefined): string[] | undefined {
+function withoutClearedCodexHomeEnv(clearEnv: string[] | undefined): string[] | undefined {
   if (!clearEnv) {
     return undefined;
   }
-  const reserved = new Set(CODEX_APP_SERVER_ISOLATION_ENV_VARS);
+  const reserved = new Set(CODEX_APP_SERVER_HOME_ENV_VARS);
   const filtered = clearEnv.filter((envVar) => !reserved.has(envVar.trim().toUpperCase()));
   return filtered.length === clearEnv.length ? clearEnv : filtered;
 }
@@ -291,10 +296,13 @@ function withoutClearedCodexIsolationEnv(clearEnv: string[] | undefined): string
 export async function applyCodexAppServerAuthProfile(params: {
   client: CodexAppServerClient;
   agentDir: string;
-  authProfileId?: string;
+  authProfileId?: string | null;
   startOptions?: CodexAppServerStartOptions;
   config?: AuthProfileOrderConfig;
 }): Promise<void> {
+  if (params.authProfileId === null) {
+    return;
+  }
   const loginParams = await resolveCodexAppServerAuthProfileLoginParams({
     agentDir: params.agentDir,
     authProfileId: params.authProfileId,

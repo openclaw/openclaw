@@ -629,7 +629,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
   });
 
-  it("migrates legacy Codex CLI primary refs to OpenAI refs plus model runtime", () => {
+  it("migrates legacy Codex CLI primary refs to the Codex app-server route", () => {
     const res = normalizeCompatibilityConfigValues({
       agents: {
         defaults: {
@@ -652,14 +652,157 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.config.agents?.defaults?.agentRuntime).toBeUndefined();
     expect(res.config.agents?.defaults?.models).toEqual({
       "codex-cli/gpt-5.5": { alias: "Codex CLI" },
-      "openai/gpt-5.5": {
-        alias: "OpenAI GPT",
-        agentRuntime: { id: "codex-cli" },
+      "openai/gpt-5.5": { alias: "OpenAI GPT", agentRuntime: { id: "codex" } },
+      "openai/gpt-5.4-mini": { agentRuntime: { id: "codex" } },
+    });
+  });
+
+  it("migrates legacy Codex CLI fallback refs when the primary is already canonical", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.5",
+            fallbacks: ["codex-cli/gpt-5.4"],
+          },
+          models: {
+            "codex-cli/gpt-5.4": { alias: "Legacy CLI fallback" },
+          },
+        },
       },
-      "openai/gpt-5.4-mini": {
-        agentRuntime: { id: "codex-cli" },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.agents?.defaults?.model).toEqual({
+      primary: "openai/gpt-5.5",
+      fallbacks: ["openai/gpt-5.4"],
+    });
+    expect(res.config.agents?.defaults?.models).toEqual({
+      "codex-cli/gpt-5.4": { alias: "Legacy CLI fallback" },
+      "openai/gpt-5.4": {
+        alias: "Legacy CLI fallback",
+        agentRuntime: { id: "codex" },
       },
     });
+  });
+
+  it("migrates standalone legacy Codex CLI allowlist keys", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        defaults: {
+          models: {
+            "codex-cli/gpt-5.4": { alias: "Legacy CLI fallback" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.agents?.defaults?.models).toEqual({
+      "codex-cli/gpt-5.4": { alias: "Legacy CLI fallback" },
+      "openai/gpt-5.4": {
+        alias: "Legacy CLI fallback",
+        agentRuntime: { id: "codex" },
+      },
+    });
+  });
+
+  it("pins migrated Codex CLI refs to Codex when OpenAI uses a custom base URL", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        defaults: {
+          model: "codex-cli/gpt-5.5",
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://proxy.example/v1",
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.agents?.defaults?.model).toBe("openai/gpt-5.5");
+    expect(res.config.agents?.defaults?.models?.["openai/gpt-5.5"]?.agentRuntime).toEqual({
+      id: "codex",
+    });
+  });
+
+  it("migrates existing Codex CLI runtime pins to the Codex app-server runtime", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.5": {
+              agentRuntime: { id: "codex-cli", mode: "strict" },
+            },
+          },
+        },
+        list: [
+          {
+            id: "reviewer",
+            models: {
+              "openai/gpt-5.4-mini": {
+                agentRuntime: { id: "codex-cli" },
+              },
+            },
+          },
+        ],
+      },
+      models: {
+        providers: {
+          openai: {
+            agentRuntime: { id: "codex-cli" },
+            models: [
+              {
+                id: "gpt-5.5",
+                agentRuntime: { id: "codex-cli" },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.agents?.defaults?.models?.["openai/gpt-5.5"]?.agentRuntime).toEqual({
+      id: "codex",
+      mode: "strict",
+    });
+    expect(res.config.agents?.list?.[0]?.models?.["openai/gpt-5.4-mini"]?.agentRuntime).toEqual({
+      id: "codex",
+    });
+    expect(res.config.models?.providers?.openai?.agentRuntime).toEqual({ id: "codex" });
+    expect(res.config.models?.providers?.openai?.models?.[0]?.agentRuntime).toEqual({
+      id: "codex",
+    });
+    expect(res.changes).toContain(
+      "Moved agents.defaults.models.openai/gpt-5.5 agentRuntime.id from codex-cli to codex.",
+    );
+    expect(res.changes).toContain(
+      "Moved agents.list.reviewer.models.openai/gpt-5.4-mini agentRuntime.id from codex-cli to codex.",
+    );
+    expect(res.changes).toContain(
+      "Moved models.providers.openai agentRuntime.id from codex-cli to codex.",
+    );
+    expect(res.changes).toContain(
+      "Moved models.providers.openai.models.gpt-5.5 agentRuntime.id from codex-cli to codex.",
+    );
+  });
+
+  it("migrates provider-scoped Codex CLI runtime pins without agents config", () => {
+    const res = normalizeCompatibilityConfigValues({
+      models: {
+        providers: {
+          openai: {
+            agentRuntime: { id: "codex-cli" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.models?.providers?.openai?.agentRuntime).toEqual({ id: "codex" });
+    expect(res.changes).toContain(
+      "Moved models.providers.openai agentRuntime.id from codex-cli to codex.",
+    );
   });
 
   it("migrates legacy Gemini CLI primary refs to Google refs plus model runtime", () => {

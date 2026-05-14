@@ -1037,6 +1037,36 @@ describe("modelsAuthLoginCommand", () => {
     );
   });
 
+  it("normalizes retired Google Gemini login defaults before config writes", async () => {
+    const runtime = createRuntime();
+    runProviderAuth.mockResolvedValue({
+      profiles: [
+        {
+          profileId: "google:default",
+          credential: { type: "api_key", provider: "google", key: "gemini-demo" },
+        },
+      ],
+      defaultModel: "google/gemini-3-pro-preview",
+    });
+    mocks.resolvePluginProviders.mockReturnValue([
+      createProvider({
+        id: "google",
+        label: "Google",
+        run: runProviderAuth as ProviderPlugin["auth"][number]["run"],
+      }),
+    ]);
+
+    await modelsAuthLoginCommand({ provider: "google", setDefault: true }, runtime);
+
+    expect(lastUpdatedConfig?.agents?.defaults?.model).toEqual({
+      primary: "google/gemini-3.1-pro-preview",
+    });
+    expect(lastUpdatedConfig?.agents?.defaults?.models).toEqual({
+      "google/gemini-3.1-pro-preview": {},
+    });
+    expect(runtime.log).toHaveBeenCalledWith("Default model set to google/gemini-3.1-pro-preview");
+  });
+
   it("overwrites an existing primary when login uses --set-default", async () => {
     const runtime = createRuntime();
     currentConfig = {

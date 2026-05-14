@@ -289,7 +289,8 @@ function buildManifestChannelPlugin(params: {
     !catalogMeta &&
     (!channelConfigValue ||
       typeof channelConfigValue !== "object" ||
-      Array.isArray(channelConfigValue))
+      Array.isArray(channelConfigValue)) &&
+    !params.record.channels.includes(params.channelId)
   ) {
     return undefined;
   }
@@ -369,7 +370,7 @@ function canUseManifestChannelPlugin(record: PluginManifestRecord, channelId: st
   if (hasChannelConfig) {
     return record.setup?.requiresRuntime === false || !record.setupSource;
   }
-  return record.channelCatalogMeta?.id === channelId;
+  return record.channelCatalogMeta?.id === channelId || !record.setupSource;
 }
 
 export { resolveReadOnlyChannelCommandDefaults };

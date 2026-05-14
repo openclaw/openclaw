@@ -115,7 +115,9 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain("update-channel-switch skill-install update-corrupt-plugin");
     expect(workflow).toContain("update-corrupt-plugin upgrade-survivor");
     expect(workflow).toContain("published-upgrade-survivor");
-    expect(workflow).toContain("published-upgrade-survivor update-restart-auth");
+    expect(workflow).toContain(
+      "published-upgrade-survivor root-managed-vps-upgrade update-restart-auth",
+    );
     expect(workflow).toContain("plugins-offline plugin-update");
     expect(workflow).toContain("include_release_path_suites=true");
     expect(workflow).not.toContain("telegram_mode requires source=npm");
@@ -367,6 +369,7 @@ describe("package artifact reuse", () => {
     );
     expect(workflow).toContain('add_profile_suite live-gateway-advisory-docker-xai-zai "full"');
     expect(workflow).toContain('add_profile_suite live-cli-backend-docker "stable full"');
+    expect(workflow).toContain('add_profile_suite live-subagent-announce-docker "stable full"');
     expect(workflow).toContain(
       "inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id",
     );
@@ -375,15 +378,18 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("suite_id: live-gateway-advisory-docker-deepseek-fireworks");
     expect(workflow).toContain("suite_id: live-gateway-advisory-docker-opencode-openrouter");
     expect(workflow).toContain("suite_id: live-gateway-advisory-docker-xai-zai");
+    expect(workflow).toContain("suite_id: live-subagent-announce-docker");
     expect(workflow).toContain("suite_group: live-gateway-advisory-docker");
     expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_PROVIDERS=deepseek,fireworks");
     expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go,openrouter");
     expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_PROVIDERS=xai,zai");
     expect(workflow).toContain("inputs.live_suite_filter == 'live-gateway-advisory-docker'");
-    expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_MODEL=codex-cli/gpt-5.4");
+    expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_MODEL=claude-cli/claude-sonnet-4-6");
     expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_AUTH=api-key");
-    expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_USE_CI_SAFE_CODEX_CONFIG=1");
-    expect((workflow.match(/service_tier=\\"fast\\"/g) ?? []).length).toBeGreaterThanOrEqual(2);
+    expect(workflow).not.toContain("OPENCLAW_LIVE_CLI_BACKEND_USE_CI_SAFE_CODEX_CONFIG=1");
+    expect(workflow).not.toContain('service_tier=\\"fast\\"');
+    expect(workflow).not.toContain("OPENCLAW_LIVE_CLI_BACKEND_ARGS=");
+    expect(workflow).not.toContain("OPENCLAW_LIVE_CLI_BACKEND_RESUME_ARGS=");
     expect(workflow).not.toContain(
       'OPENCLAW_LIVE_CLI_BACKEND_ARGS=["exec","--json","--color","never","--sandbox","danger-full-access","--skip-git-repo-check"]',
     );
@@ -483,6 +489,7 @@ describe("package artifact reuse", () => {
       readFileSync("scripts/test-live-gateway-models-docker.sh", "utf8"),
       readFileSync("scripts/test-live-cli-backend-docker.sh", "utf8"),
       readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8"),
+      readFileSync("scripts/test-live-subagent-announce-docker.sh", "utf8"),
     ];
     const build = readFileSync("scripts/test-live-build-docker.sh", "utf8");
     const stage = readFileSync("scripts/lib/live-docker-stage.sh", "utf8");
@@ -502,6 +509,9 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain(
       'command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-codex-harness-docker.sh',
     );
+    expect(workflow).toContain(
+      'command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 20m bash .release-harness/scripts/test-live-subagent-announce-docker.sh',
+    );
     expect(scenarios).toContain("function liveDockerScriptCommand");
     expect(scenarios).toContain(
       "if [ -d .release-harness/scripts ]; then harness=.release-harness",
@@ -511,6 +521,9 @@ describe("package artifact reuse", () => {
     expect(scenarios).toMatch(/liveDockerScriptCommand\(\s*"test-live-cli-backend-docker\.sh"/u);
     expect(scenarios).toMatch(/liveDockerScriptCommand\(\s*"test-live-acp-bind-docker\.sh"/u);
     expect(scenarios).toMatch(/liveDockerScriptCommand\(\s*"test-live-codex-harness-docker\.sh"/u);
+    expect(scenarios).toMatch(
+      /liveDockerScriptCommand\(\s*"test-live-subagent-announce-docker\.sh"/u,
+    );
     expect(scheduler).toContain("function liveDockerHarnessScriptCommand");
     expect(scheduler).toContain('liveDockerHarnessScriptCommand("test-live-build-docker.sh")');
     expect(harness).toContain('source "$TRUSTED_HARNESS_DIR/scripts/lib/live-docker-auth.sh"');
@@ -587,7 +600,7 @@ describe("package artifact reuse", () => {
     );
     expect(workflow).toContain("suite_profile: custom");
     expect(workflow).toContain(
-      "docker_lanes: doctor-switch update-channel-switch skill-install update-corrupt-plugin upgrade-survivor published-upgrade-survivor update-restart-auth plugins-offline plugin-update",
+      "docker_lanes: doctor-switch update-channel-switch skill-install update-corrupt-plugin upgrade-survivor published-upgrade-survivor root-managed-vps-upgrade update-restart-auth plugins-offline plugin-update",
     );
     expect(workflow).toContain(
       "published_upgrade_survivor_baselines: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'last-stable-4 2026.4.23 2026.5.2 2026.4.15' || '' }}",
@@ -874,6 +887,28 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("Unreleased prerelease fallback");
     expect(workflow).not.toContain("gh api --repo");
     expect(workflow).not.toContain("timeout-minutes: 360");
+  });
+
+  it("keeps beta release verification and ClawHub publish repair hooks wired", () => {
+    const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
+      scripts?: Record<string, string>;
+    };
+    const releaseWorkflow = readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8");
+    const clawHubWorkflow = readFileSync(".github/workflows/plugin-clawhub-release.yml", "utf8");
+
+    expect(packageJson.scripts?.["release:verify-beta"]).toBe(
+      "node --import tsx scripts/release-verify-beta.ts",
+    );
+    expect(packageJson.scripts?.["release:fast-pretag-check"]).toBe(
+      "bash scripts/release-fast-pretag-check.sh",
+    );
+    expect(clawHubWorkflow).toContain("Verify published ClawHub package");
+    expect(clawHubWorkflow).toContain("bun install failed while preparing ClawHub CLI; retrying");
+    expect(clawHubWorkflow).toContain("max-parallel: 32");
+    expect(releaseWorkflow).toContain("Plugin npm run ID");
+    expect(releaseWorkflow).toContain("Plugin ClawHub run ID");
+    expect(releaseWorkflow).toContain("OpenClaw npm run ID");
+    expect(releaseWorkflow).toContain("finished with ${conclusion} in ${duration_label}");
   });
 
   it("keeps release workflow setup and timeout budgets bounded", () => {

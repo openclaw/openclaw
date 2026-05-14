@@ -226,6 +226,9 @@ function normalizeEmbeddedRunAttemptResult(
     messagingToolSentTexts?: EmbeddedRunAttemptForRunner["messagingToolSentTexts"] | null;
     messagingToolSentMediaUrls?: EmbeddedRunAttemptForRunner["messagingToolSentMediaUrls"] | null;
     messagingToolSentTargets?: EmbeddedRunAttemptForRunner["messagingToolSentTargets"] | null;
+    messagingToolSourceReplyPayloads?:
+      | EmbeddedRunAttemptForRunner["messagingToolSourceReplyPayloads"]
+      | null;
     itemLifecycle?: EmbeddedRunAttemptForRunner["itemLifecycle"] | null;
   };
   return {
@@ -236,6 +239,7 @@ function normalizeEmbeddedRunAttemptResult(
     messagingToolSentTexts: raw.messagingToolSentTexts ?? [],
     messagingToolSentMediaUrls: raw.messagingToolSentMediaUrls ?? [],
     messagingToolSentTargets: raw.messagingToolSentTargets ?? [],
+    messagingToolSourceReplyPayloads: raw.messagingToolSourceReplyPayloads ?? [],
     itemLifecycle: raw.itemLifecycle ?? {
       startedCount: 0,
       completedCount: 0,
@@ -894,7 +898,11 @@ export async function runEmbeddedPiAgent(
 
       const MAX_TIMEOUT_COMPACTION_ATTEMPTS = 2;
       const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;
-      const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(profileCandidates.length);
+      const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(
+        profileCandidates.length,
+        params.config,
+        sessionAgentId,
+      );
       let overflowCompactionAttempts = 0;
       let toolResultTruncationAttempted = false;
       let bootstrapPromptWarningSignaturesSeen =
@@ -1332,6 +1340,7 @@ export async function runEmbeddedPiAgent(
             execOverrides: params.execOverrides,
             bashElevated: params.bashElevated,
             timeoutMs: params.timeoutMs,
+            runTimeoutOverrideMs: params.runTimeoutOverrideMs,
             runId: params.runId,
             abortSignal: attemptAbortController.signal,
             replyOperation: params.replyOperation,
@@ -2351,6 +2360,7 @@ export async function runEmbeddedPiAgent(
             failoverFailure,
             failoverReason: assistantFailoverReason,
             timedOut,
+            idleTimedOut,
             timedOutDuringCompaction,
             timedOutDuringToolExecution,
             profileRotated: false,
@@ -2490,6 +2500,11 @@ export async function runEmbeddedPiAgent(
             suppressToolErrorWarnings: params.suppressToolErrorWarnings,
             inlineToolResultsAllowed: false,
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+            messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
+            sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+            agentId: params.agentId,
+            runId: params.runId,
+            runAborted: aborted,
             didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
             heartbeatToolResponse: attempt.heartbeatToolResponse,
           });
@@ -2519,12 +2534,9 @@ export async function runEmbeddedPiAgent(
           });
 
           // Timeout aborts can leave the run without payloads or with only a
-          // partial assistant fragment. Emit an explicit timeout error instead.
-          if (
-            timedOutDuringPrompt &&
-            !hasMessagingToolDeliveryEvidence(attempt) &&
-            (!payloadsWithToolMedia?.length || hasPartialAssistantTextAfterPromptTimeout)
-          ) {
+          // partial assistant fragment. Emit an explicit timeout error instead,
+          // preserving any tool payloads that succeeded before the timeout.
+          if (timedOutDuringPrompt && !hasMessagingToolDeliveryEvidence(attempt)) {
             const timeoutText = idleTimedOut
               ? "The model did not produce a response before the model idle timeout. " +
                 "Please try again, or increase `models.providers.<id>.timeoutSeconds` for slow local or self-hosted providers."
@@ -2544,6 +2556,7 @@ export async function runEmbeddedPiAgent(
             });
             return {
               payloads: [
+                ...(hasPartialAssistantTextAfterPromptTimeout ? [] : payloadsWithToolMedia || []),
                 {
                   text: timeoutText,
                   isError: true,
@@ -2568,6 +2581,7 @@ export async function runEmbeddedPiAgent(
               messagingToolSentTexts: attempt.messagingToolSentTexts,
               messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
               messagingToolSentTargets: attempt.messagingToolSentTargets,
+              messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
               heartbeatToolResponse: attempt.heartbeatToolResponse,
               successfulCronAdds: attempt.successfulCronAdds,
             };
@@ -2785,6 +2799,7 @@ export async function runEmbeddedPiAgent(
               messagingToolSentTexts: attempt.messagingToolSentTexts,
               messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
               messagingToolSentTargets: attempt.messagingToolSentTargets,
+              messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
               heartbeatToolResponse: attempt.heartbeatToolResponse,
               successfulCronAdds: attempt.successfulCronAdds,
             };
@@ -2836,6 +2851,7 @@ export async function runEmbeddedPiAgent(
               messagingToolSentTexts: attempt.messagingToolSentTexts,
               messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
               messagingToolSentTargets: attempt.messagingToolSentTargets,
+              messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
               heartbeatToolResponse: attempt.heartbeatToolResponse,
               successfulCronAdds: attempt.successfulCronAdds,
             };
@@ -2946,6 +2962,7 @@ export async function runEmbeddedPiAgent(
               messagingToolSentTexts: attempt.messagingToolSentTexts,
               messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
               messagingToolSentTargets: attempt.messagingToolSentTargets,
+              messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
               heartbeatToolResponse: attempt.heartbeatToolResponse,
               successfulCronAdds: attempt.successfulCronAdds,
             };
@@ -3061,6 +3078,7 @@ export async function runEmbeddedPiAgent(
             messagingToolSentTexts: attempt.messagingToolSentTexts,
             messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
             messagingToolSentTargets: attempt.messagingToolSentTargets,
+            messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
             heartbeatToolResponse: attempt.heartbeatToolResponse,
             successfulCronAdds: attempt.successfulCronAdds,
           };

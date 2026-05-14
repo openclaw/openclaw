@@ -115,7 +115,7 @@ describe("loadConfigForInstall", () => {
     );
 
     const result = await loadConfigForInstall(discordNpmRequest);
-    expect(readConfigFileSnapshotMock).toHaveBeenCalled();
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(1);
     expect(collectChannelDoctorStaleConfigMutationsMock).toHaveBeenCalledWith(snapshotCfg);
     expect(result).toEqual({ config: snapshotCfg, baseHash: "abc" });
   });

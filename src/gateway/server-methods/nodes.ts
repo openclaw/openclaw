@@ -22,6 +22,11 @@ import {
   resolveApnsRelayConfigFromEnv,
 } from "../../infra/push-apns.js";
 import {
+  recordRemoteNodeInfo,
+  refreshRemoteNodeBins,
+  removeRemoteNodeInfo,
+} from "../../infra/skills-remote.js";
+import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
@@ -29,10 +34,12 @@ import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "../node-ca
 import {
   isForegroundRestrictedPluginNodeCommand,
   isNodeCommandAllowed,
+  normalizeDeclaredNodeCommands,
   resolveNodeCommandAllowlist,
 } from "../node-command-policy.js";
 import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
 import { sanitizeNodeInvokeParamsForForwarding } from "../node-invoke-sanitize.js";
+import type { NodeSession } from "../node-registry.js";
 import { refreshClientPluginNodeCapability } from "../plugin-node-capability.js";
 import {
   type ConnectParams,
@@ -51,6 +58,7 @@ import {
   validateNodePairVerifyParams,
   validateNodeRenameParams,
 } from "../protocol/index.js";
+import type { NodeEventContext } from "../server-node-events-types.js";
 import {
   NODE_WAKE_RECONNECT_POLL_MS,
   NODE_WAKE_RECONNECT_RETRY_WAIT_MS,
@@ -292,6 +300,34 @@ function enqueuePendingNodeAction(params: {
 
 function listPendingNodeActions(nodeId: string): PendingNodeAction[] {
   return prunePendingNodeActions(nodeId, Date.now());
+}
+
+function refreshConnectedNodeSurfaceCaches(params: {
+  context: GatewayRequestContext;
+  nodeSession: NodeSession;
+  cfg?: OpenClawConfig;
+}) {
+  const cfg = params.cfg ?? params.context.getRuntimeConfig();
+  const { nodeSession } = params;
+  recordRemoteNodeInfo({
+    nodeId: nodeSession.nodeId,
+    displayName: nodeSession.displayName,
+    platform: nodeSession.platform,
+    deviceFamily: nodeSession.deviceFamily,
+    commands: nodeSession.commands,
+    remoteIp: nodeSession.remoteIp,
+  });
+  void refreshRemoteNodeBins({
+    nodeId: nodeSession.nodeId,
+    platform: nodeSession.platform,
+    deviceFamily: nodeSession.deviceFamily,
+    commands: nodeSession.commands,
+    cfg,
+  }).catch((err) =>
+    params.context.logGateway.warn(
+      `remote bin probe failed for ${nodeSession.nodeId}: ${formatErrorMessage(err)}`,
+    ),
+  );
 }
 
 function resolveAllowedPendingNodeActions(params: {
@@ -667,6 +703,19 @@ export const nodeHandlers: GatewayRequestHandlers = {
         remoteIp: p.remoteIp,
         silent: p.silent,
       });
+      const resolvedAt = Date.now();
+      for (const superseded of result.superseded ?? []) {
+        context.broadcast(
+          "node.pair.resolved",
+          {
+            requestId: superseded.requestId,
+            nodeId: superseded.nodeId,
+            decision: "rejected",
+            ts: resolvedAt,
+          },
+          { dropIfSlow: true },
+        );
+      }
       if (result.status === "pending" && result.created) {
         context.broadcast("node.pair.requested", result.request, {
           dropIfSlow: true,
@@ -720,6 +769,25 @@ export const nodeHandlers: GatewayRequestHandlers = {
         return;
       }
       const approvedNode = approved.node;
+      const cfg = context.getRuntimeConfig();
+      const currentAllowlist = resolveNodeCommandAllowlist(cfg, {
+        platform: approvedNode.platform,
+        deviceFamily: approvedNode.deviceFamily,
+        caps: approvedNode.caps,
+        commands: approvedNode.commands,
+      });
+      const currentAllowedCommands = normalizeDeclaredNodeCommands({
+        declaredCommands: approvedNode.commands ?? [],
+        allowlist: currentAllowlist,
+      });
+      const updatedNode = context.nodeRegistry.updateSurface(approvedNode.nodeId, {
+        caps: approvedNode.caps ?? [],
+        commands: currentAllowedCommands,
+        permissions: approvedNode.permissions,
+      });
+      if (updatedNode) {
+        refreshConnectedNodeSurfaceCaches({ context, nodeSession: updatedNode, cfg });
+      }
       context.broadcast(
         "node.pair.resolved",
         {
@@ -778,6 +846,13 @@ export const nodeHandlers: GatewayRequestHandlers = {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
         return;
       }
+      pendingNodeActionsById.delete(removed.nodeId);
+      context.nodeRegistry.updateSurface(removed.nodeId, {
+        caps: [],
+        commands: [],
+        permissions: undefined,
+      });
+      removeRemoteNodeInfo(removed.nodeId);
       context.broadcast(
         "node.pair.resolved",
         {
@@ -1286,7 +1361,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
     await respondUnavailableOnThrow(respond, async () => {
       const { handleNodeEvent } = await import("../server-node-events.js");
       const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id ?? "node";
-      const nodeContext = {
+      const nodeContext: NodeEventContext = {
         deps: context.deps,
         broadcast: context.broadcast,
         nodeSendToSession: context.nodeSendToSession,
@@ -1304,6 +1379,14 @@ export const nodeHandlers: GatewayRequestHandlers = {
         getHealthCache: context.getHealthCache,
         refreshHealthSnapshot: context.refreshHealthSnapshot,
         loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+        authorizeNodeSystemRunEvent: (eventParams) =>
+          context.nodeRegistry.authorizeSystemRunEvent({
+            nodeId: eventParams.nodeId,
+            connId: eventParams.connId,
+            runId: eventParams.runId,
+            sessionKey: eventParams.sessionKey,
+            terminal: eventParams.terminal,
+          }),
         logGateway: { warn: context.logGateway.warn },
       };
       const result = await handleNodeEvent(
@@ -1313,7 +1396,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
           event: p.event,
           payloadJSON,
         },
-        { deviceId: client?.connect?.device?.id },
+        { connId: client?.connId, deviceId: client?.connect?.device?.id },
       );
       respond(true, result ?? { ok: true }, undefined);
     });

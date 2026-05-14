@@ -11,6 +11,19 @@ import {
 import { createMessageReceiveContext, shouldAckMessageAfterStage } from "./receive.js";
 import { classifyDurableSendRecoveryState, createDurableMessageStateRecord } from "./state.js";
 
+function requireMockCall(
+  mock: { mock: { calls: unknown[][] } },
+  callIndex: number,
+  label: string,
+): unknown[] {
+  const resolvedIndex = callIndex < 0 ? mock.mock.calls.length + callIndex : callIndex;
+  const call = mock.mock.calls[resolvedIndex];
+  if (!call) {
+    throw new Error(`expected ${label} call ${callIndex}`);
+  }
+  return call;
+}
+
 describe("message lifecycle primitives", () => {
   it("tracks live preview finalization state", () => {
     const receipt = {
@@ -86,11 +99,11 @@ describe("message lifecycle primitives", () => {
     expect(liveState.receipt?.primaryPlatformMessageId).toBe("preview-1");
     expect(liveState.receipt?.platformMessageIds).toEqual(["preview-1"]);
     expect(onPreviewFinalized).toHaveBeenCalledTimes(1);
-    const [previewId, receiptArg, stateArg] = onPreviewFinalized.mock.calls[0] as unknown as [
-      string,
-      { primaryPlatformMessageId?: string },
-      unknown,
-    ];
+    const [previewId, receiptArg, stateArg] = requireMockCall(
+      onPreviewFinalized,
+      0,
+      "preview finalized",
+    ) as [string, { primaryPlatformMessageId?: string }, unknown];
     expect(previewId).toBe("preview-1");
     expect(receiptArg.primaryPlatformMessageId).toBe("preview-1");
     expect(stateArg).toBe(liveState);
@@ -213,7 +226,7 @@ describe("message lifecycle primitives", () => {
     expect(result.liveState?.phase).toBe("previewing");
     expect(deliverNormally).not.toHaveBeenCalled();
     expect(handlePreviewEditError).toHaveBeenCalledTimes(1);
-    const [editErrorContext] = handlePreviewEditError.mock.calls[0] as unknown as [
+    const [editErrorContext] = requireMockCall(handlePreviewEditError, 0, "preview edit error") as [
       { error: unknown; id?: string; edit?: unknown; payload?: unknown },
     ];
     expect(editErrorContext.error).toBe(editError);

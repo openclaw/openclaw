@@ -22,6 +22,7 @@ import {
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 
 type OpenAICompletionsOutput = Parameters<typeof __testing.processOpenAICompletionsStream>[1];
+type OpenAIResponsesOutput = Parameters<typeof __testing.processResponsesStream>[1];
 
 type CapturedStreamEvent = { type?: string; delta?: string };
 
@@ -60,6 +61,54 @@ function createAssistantOutput(model: Model<"openai-completions">): OpenAIComple
   };
 }
 
+function createResponsesAssistantOutput(
+  model: Model<"azure-openai-responses">,
+): OpenAIResponsesOutput {
+  return {
+    role: "assistant" as const,
+    content: [],
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: Date.now(),
+  };
+}
+
+function createAzureResponsesModel(): Model<"azure-openai-responses"> {
+  return {
+    id: "gpt-5.4-pro",
+    name: "GPT-5.4 Pro",
+    api: "azure-openai-responses",
+    provider: "azure-openai-responses-devdiv",
+    baseUrl: "https://example.openai.azure.com/openai/responses",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200_000,
+    maxTokens: 8192,
+  };
+}
+
+function neverYieldsStream(): AsyncIterable<unknown> {
+  return {
+    [Symbol.asyncIterator]() {
+      return {
+        next: async () => await new Promise<IteratorResult<unknown>>(() => undefined),
+        return: async () => ({ done: true, value: undefined }),
+      };
+    },
+  };
+}
+
 async function* streamChunks(chunks: readonly unknown[]): AsyncGenerator<never> {
   for (const chunk of chunks) {
     yield chunk as never;
@@ -78,6 +127,19 @@ function expectRecordFields(record: unknown, expected: Record<string, unknown>) 
 }
 
 describe("openai transport stream", () => {
+  it("fails Azure Responses streams when headers arrive but no first event follows", async () => {
+    const model = createAzureResponsesModel();
+    await expect(
+      __testing.processResponsesStream(
+        neverYieldsStream(),
+        createResponsesAssistantOutput(model),
+        { push: vi.fn() },
+        model,
+        { firstEventTimeoutMs: 1 },
+      ),
+    ).rejects.toThrow(/did not deliver a first event within 1ms after HTTP streaming headers/);
+  });
+
   it("summarizes model payload tools with full names when requested", () => {
     const previous = process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
     process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = "tools";
@@ -1312,6 +1374,35 @@ describe("openai transport stream", () => {
     expect(params.reasoning).toEqual({ effort: "high" });
   });
 
+  it("forwards temperature and top_p to chat completions request params", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [{ role: "user", content: "hi", timestamp: 1 }],
+        tools: [],
+      } as never,
+      {
+        temperature: 0.4,
+        topP: 0.9,
+      },
+    );
+
+    expect(params.temperature).toBe(0.4);
+    expect(params.top_p).toBe(0.9);
+  });
+
   it("does not build OpenRouter reasoning params for Hunter Alpha when reasoning is disabled", () => {
     const params = buildOpenAICompletionsParams(
       {
@@ -1440,6 +1531,7 @@ describe("openai transport stream", () => {
         serviceTier: "auto",
         sessionId: "session-123",
         temperature: 0.2,
+        topP: 0.85,
       },
       {
         openclaw_session_id: "session-123",
@@ -1463,6 +1555,7 @@ describe("openai transport stream", () => {
     expect(params).not.toHaveProperty("prompt_cache_retention");
     expect(params).not.toHaveProperty("service_tier");
     expect(params).not.toHaveProperty("temperature");
+    expect(params).not.toHaveProperty("top_p");
   });
 
   it("sanitizes Codex responses params after payload hooks mutate them without stripping cache identity", () => {
@@ -1476,6 +1569,7 @@ describe("openai transport stream", () => {
       prompt_cache_retention: "24h",
       service_tier: "auto",
       temperature: 0.2,
+      top_p: 0.85,
     };
 
     const sanitized = __testing.sanitizeOpenAICodexResponsesParams(
@@ -1500,6 +1594,7 @@ describe("openai transport stream", () => {
     expect(sanitized).not.toHaveProperty("prompt_cache_retention");
     expect(sanitized).not.toHaveProperty("service_tier");
     expect(sanitized).not.toHaveProperty("temperature");
+    expect(sanitized).not.toHaveProperty("top_p");
   });
 
   it("preserves custom Codex-compatible responses params", () => {
@@ -1526,6 +1621,7 @@ describe("openai transport stream", () => {
         maxTokens: 1024,
         sessionId: "session-123",
         temperature: 0.2,
+        topP: 0.85,
       },
       {
         openclaw_session_id: "session-123",
@@ -1541,6 +1637,7 @@ describe("openai transport stream", () => {
     });
     expect(params.max_output_tokens).toBe(1024);
     expect(params.temperature).toBe(0.2);
+    expect(params.top_p).toBe(0.85);
   });
 
   it("preserves custom Codex-compatible responses params after payload hooks mutate them", () => {
@@ -2215,6 +2312,37 @@ describe("openai transport stream", () => {
         required: [],
       },
     });
+  });
+
+  it("passes explicit Responses tool_choice when tools are present", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "lookup_weather",
+            description: "Get forecast",
+            parameters: { type: "object", properties: {}, additionalProperties: false },
+          },
+        ],
+      } as never,
+      { toolChoice: "required" } as never,
+    ) as { tool_choice?: string };
+
+    expect(params.tool_choice).toBe("required");
   });
 
   it("falls back to strict:false when a native OpenAI tool schema is not strict-compatible", () => {

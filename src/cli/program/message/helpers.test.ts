@@ -274,7 +274,7 @@ describe("runMessageAction", () => {
       scope: "configured-channels",
       onlyChannelIds: ["telegram"],
     });
-    expect(messageCommandMock).toHaveBeenCalled();
+    expect(messageCommandMock).toHaveBeenCalledTimes(1);
   });
 
   it("loads configured channel plugins for mixed broadcast target prefixes", async () => {

@@ -156,11 +156,11 @@ function mockStringMessages(mock: { mock: { calls: unknown[][] } }): string[] {
 }
 
 function expectLogContains(mock: { mock: { calls: unknown[][] } }, expected: string): void {
-  expect(mockStringMessages(mock).some((message) => message.includes(expected))).toBe(true);
+  expect(mockStringMessages(mock).join("\n")).toContain(expected);
 }
 
 function expectLogNotContains(mock: { mock: { calls: unknown[][] } }, expected: string): void {
-  expect(mockStringMessages(mock).every((message) => !message.includes(expected))).toBe(true);
+  expect(mockStringMessages(mock).join("\n")).not.toContain(expected);
 }
 
 function requireAddCall(harness: { addCalls: CronAddInput[] }, index: number): CronAddInput {

@@ -10,6 +10,7 @@ import {
   formatConnectErrorMessage,
   readConnectErrorRecoveryAdvice,
   readConnectErrorDetailCode,
+  readPairingConnectErrorDetails,
 } from "../../../src/gateway/protocol/connect-error-details.js";
 import {
   isRetryableGatewayStartupUnavailableError,
@@ -71,6 +72,14 @@ export function resolveGatewayErrorDetailCode(
   return readConnectErrorDetailCode(error?.details);
 }
 
+function shouldContinueReconnectForPairingRequired(details: unknown): boolean {
+  const pairingDetails = readPairingConnectErrorDetails(details);
+  return (
+    pairingDetails?.pauseReconnect === false ||
+    pairingDetails?.recommendedNextStep === "wait_then_retry"
+  );
+}
+
 /**
  * Auth errors that won't resolve without user action — don't auto-reconnect.
  *
@@ -84,6 +93,12 @@ export function isNonRecoverableAuthError(error: GatewayErrorInfo | undefined): 
     return false;
   }
   const code = resolveGatewayErrorDetailCode(error);
+  if (
+    code === ConnectErrorDetailCodes.PAIRING_REQUIRED &&
+    shouldContinueReconnectForPairingRequired(error.details)
+  ) {
+    return false;
+  }
   return (
     code === ConnectErrorDetailCodes.AUTH_TOKEN_MISSING ||
     code === ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID ||
@@ -98,13 +113,26 @@ export function isNonRecoverableAuthError(error: GatewayErrorInfo | undefined): 
   );
 }
 
+function isLoopbackIPv4Host(host: string): boolean {
+  const octets = host.split(".");
+  if (octets.length !== 4 || octets[0] !== "127") {
+    return false;
+  }
+  return octets.every((octet) => {
+    if (!/^\d+$/.test(octet)) {
+      return false;
+    }
+    const value = Number(octet);
+    return value >= 0 && value <= 255;
+  });
+}
+
 function isTrustedRetryEndpoint(url: string): boolean {
   try {
     const gatewayUrl = new URL(url, window.location.href);
     const host = gatewayUrl.hostname.trim().toLowerCase();
-    const isLoopbackHost =
-      host === "localhost" || host === "::1" || host === "[::1]" || host === "127.0.0.1";
-    const isLoopbackIPv4 = host.startsWith("127.");
+    const isLoopbackHost = host === "localhost" || host === "::1" || host === "[::1]";
+    const isLoopbackIPv4 = isLoopbackIPv4Host(host);
     if (isLoopbackHost || isLoopbackIPv4) {
       return true;
     }
@@ -471,11 +499,10 @@ export class GatewayBrowserClient {
       this.flushPending(new Error(`gateway closed (${ev.code}): ${reason}`));
       this.opts.onClose?.({ code: ev.code, reason, error: connectError });
       const connectErrorCode = resolveGatewayErrorDetailCode(connectError);
-      if (
-        connectErrorCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH &&
-        this.deviceTokenRetryBudgetUsed &&
-        !this.pendingDeviceTokenRetry
-      ) {
+      if (connectErrorCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH) {
+        if (this.pendingDeviceTokenRetry) {
+          this.scheduleReconnect();
+        }
         return;
       }
       if (!isNonRecoverableAuthError(connectError)) {

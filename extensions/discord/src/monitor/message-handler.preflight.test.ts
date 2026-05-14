@@ -99,6 +99,16 @@ function expectPreflightResult(
   return result;
 }
 
+type MockWithCalls = { mock: { calls: unknown[][] } };
+
+function firstMockArg(mock: MockWithCalls, label: string) {
+  const call = mock.mock.calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call[0];
+}
+
 function createThreadClient(params: { threadId: string; parentId: string }): DiscordClient {
   return {
     fetchChannel: async (channelId: string) => {
@@ -527,7 +537,7 @@ describe("preflightDiscordMessage", () => {
     });
 
     expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
-    const dmAudioCall = transcribeFirstAudioMock.mock.calls[0]?.[0] as
+    const dmAudioCall = firstMockArg(transcribeFirstAudioMock, "transcribeFirstAudio") as
       | { ctx?: { MediaUrls?: unknown; MediaTypes?: unknown } }
       | undefined;
     expect(dmAudioCall?.ctx?.MediaUrls).toEqual([
@@ -615,7 +625,156 @@ describe("preflightDiscordMessage", () => {
     });
 
     expect(resolveDiscordDmCommandAccessMock).toHaveBeenCalledTimes(1);
-    expect(resolveDiscordDmCommandAccessMock.mock.calls[0]?.[0]?.accountId).toBe("default");
+    expect(
+      (
+        firstMockArg(resolveDiscordDmCommandAccessMock, "resolveDiscordDmCommandAccess") as
+          | { accountId?: unknown }
+          | undefined
+      )?.accountId,
+    ).toBe("default");
+  });
+
+  it("passes bot-loop protection facts for accepted bot-authored Discord messages (#58789)", async () => {
+    const channelId = "channel-bot-loop";
+    const guildId = "guild-bot-loop";
+    const senderBotId = "relay-bot-1";
+    const messageTimestamp = "2026-05-13T05:00:00.000Z";
+
+    const message = createDiscordMessage({
+      id: "m-loop-1",
+      channelId,
+      content: "chatter <@openclaw-bot>",
+      mentionedUsers: [{ id: "openclaw-bot" }],
+      author: { id: senderBotId, bot: true, username: "Relay" },
+      timestamp: messageTimestamp,
+    });
+    const result = await preflightDiscordMessage(
+      createPreflightArgs({
+        cfg: DEFAULT_PREFLIGHT_CFG,
+        discordConfig: {
+          allowBots: true,
+          botLoopProtection: {
+            enabled: true,
+            maxEventsPerWindow: 3,
+            cooldownSeconds: 60,
+          },
+        } as DiscordConfig,
+        data: createGuildEvent({
+          channelId,
+          guildId,
+          author: message.author,
+          message,
+        }),
+        client: createGuildTextClient(channelId),
+      }),
+    );
+
+    expect(expectPreflightResult(result).botLoopProtection).toEqual({
+      scopeId: "default",
+      conversationId: channelId,
+      senderId: senderBotId,
+      receiverId: "openclaw-bot",
+      config: {
+        enabled: true,
+        maxEventsPerWindow: 3,
+        cooldownSeconds: 60,
+      },
+      defaultsConfig: undefined,
+      defaultEnabled: true,
+      nowMs: Date.parse(messageTimestamp),
+    });
+  });
+
+  it("passes generic channel defaults for Discord bot loop budgets", async () => {
+    const channelId = "channel-bot-loop-defaults";
+    const guildId = "guild-bot-loop-defaults";
+    const discordConfig = { allowBots: true } as DiscordConfig;
+    const message = createDiscordMessage({
+      id: "m-loop-default-1",
+      channelId,
+      content: "relay <@openclaw-bot>",
+      mentionedUsers: [{ id: "openclaw-bot" }],
+      author: { id: "relay-bot-defaults", bot: true, username: "Relay" },
+    });
+    const result = await runGuildPreflight({
+      channelId,
+      guildId,
+      message,
+      discordConfig,
+      cfg: {
+        ...DEFAULT_PREFLIGHT_CFG,
+        channels: {
+          defaults: {
+            botLoopProtection: {
+              maxEventsPerWindow: 1,
+              cooldownSeconds: 60,
+            },
+          },
+        },
+      },
+    });
+
+    expect(expectPreflightResult(result).botLoopProtection?.defaultsConfig).toEqual({
+      maxEventsPerWindow: 1,
+      cooldownSeconds: 60,
+    });
+  });
+
+  it("does not prepare loop-guard facts for bot messages that later preflight gates drop (#58789)", async () => {
+    const channelId = "channel-bot-loop-dropped";
+    const guildId = "guild-bot-loop-dropped";
+    const senderBotId = "relay-bot-dropped";
+    const discordConfig = {
+      allowBots: true,
+      botLoopProtection: {
+        enabled: true,
+        maxEventsPerWindow: 1,
+        cooldownSeconds: 60,
+      },
+    } as DiscordConfig;
+    const guildEntries = {
+      [guildId]: {
+        requireMention: false,
+        ignoreOtherMentions: true,
+      },
+    };
+
+    for (const messageId of ["m-dropped-1", "m-dropped-2"]) {
+      const message = createDiscordMessage({
+        id: messageId,
+        channelId,
+        content: `cc <@999> ${messageId}`,
+        mentionedUsers: [{ id: "999" }],
+        author: { id: senderBotId, bot: true, username: "Relay" },
+      });
+
+      expect(
+        await runGuildPreflight({
+          channelId,
+          guildId,
+          message,
+          discordConfig,
+          guildEntries,
+        }),
+      ).toBeNull();
+    }
+
+    const validMessage = createDiscordMessage({
+      id: "m-valid-after-dropped",
+      channelId,
+      content: "legitimate bot relay",
+      author: { id: senderBotId, bot: true, username: "Relay" },
+    });
+
+    expect(
+      await runGuildPreflight({
+        channelId,
+        guildId,
+        message: validMessage,
+        discordConfig,
+        guildEntries,
+      }),
+    ).not.toBeNull();
   });
 
   it("keeps bound-thread regular bot messages flowing when allowBots=true", async () => {
@@ -772,9 +931,10 @@ describe("preflightDiscordMessage", () => {
     });
 
     expect(fetchPluralKitMessageInfoMock).toHaveBeenCalledTimes(1);
-    const pluralKitCall = fetchPluralKitMessageInfoMock.mock.calls[0]?.[0] as
-      | { messageId?: unknown; config?: { enabled?: unknown } }
-      | undefined;
+    const pluralKitCall = firstMockArg(
+      fetchPluralKitMessageInfoMock,
+      "fetchPluralKitMessageInfo",
+    ) as { messageId?: unknown; config?: { enabled?: unknown } } | undefined;
     expect(pluralKitCall?.messageId).toBe("proxy-456");
     expect(pluralKitCall?.config?.enabled).toBe(true);
     const preflight = expectPreflightResult(result);
@@ -1484,7 +1644,7 @@ describe("preflightDiscordMessage", () => {
     });
 
     expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(1);
-    const guildAudioCall = transcribeFirstAudioMock.mock.calls[0]?.[0] as
+    const guildAudioCall = firstMockArg(transcribeFirstAudioMock, "transcribeFirstAudio") as
       | { ctx?: { MediaUrls?: unknown; MediaTypes?: unknown } }
       | undefined;
     expect(guildAudioCall?.ctx?.MediaUrls).toEqual([
