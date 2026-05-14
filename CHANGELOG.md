@@ -20,6 +20,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Cron/Codex: default exact-command scheduled agent turns to lightweight bootstrap context so automation runs the command before loading workspace identity or memory context.
 - Codex plugin/Gateway: strip unpaired UTF-16 surrogates from Codex app-server JSON-RPC payloads and let stale reply-work recovery abort stalled reply runs, preventing malformed media turns from wedging gateway lanes.
 - Bind gateway approval access to requester metadata [AI]. (#81380) Thanks @pgondhi987.
 - Telegram: let isolated polling drain independent topics, DMs, and status/control commands concurrently while preserving same-lane order. (#81849) Thanks @VACInc.

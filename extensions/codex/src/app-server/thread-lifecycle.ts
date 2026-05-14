@@ -571,7 +571,7 @@ function buildCronCollaborationInstructions(): string {
   return [
     "This is an OpenClaw cron automation turn. Apply these instructions only to this scheduled job; ordinary chat turns should stay in Codex Default mode.",
     "Execute the cron payload directly. If it asks you to run an exact command, run that command before doing any investigation, planning, memory review, or workspace bootstrap.",
-    "Do not read AGENTS.md, SOUL.md, USER.md, PROJECTS.md, MEMORY.md, day logs, entity summaries, or other workspace memory/bootstrap files unless the cron payload explicitly asks you to inspect them or the requested command fails and the file is needed to diagnose that failure.",
+    "Use context already provided by the runtime, but do not spend time loading or re-reading workspace bootstrap, memory, or project-doc files before executing the cron payload. Inspect those files only if the payload asks for them or the command fails and they are needed to diagnose it.",
     "Keep output concise and automation-oriented. Prefer the final command result or a short failure summary over status narration.",
   ].join("\n\n");
 }
