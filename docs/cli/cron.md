@@ -100,7 +100,13 @@ Note: cron job definitions live in `jobs.json`, while pending runtime state live
 
 ### Manual runs
 
-`openclaw cron run` returns as soon as the manual run is queued. Successful responses include `{ ok: true, enqueued: true, runId }`. Use `openclaw cron runs --id <job-id>` to follow the eventual outcome.
+`openclaw cron run` returns as soon as the manual run is queued. Successful responses include `{ ok: true, enqueued: true, runId }`. Use `openclaw cron runs --id <job-id>` to follow the eventual outcome, or add `--wait` to keep the CLI open until that queued run records a terminal status.
+
+```bash
+openclaw cron run <job-id> --wait --wait-timeout 10m --poll-interval 2s
+```
+
+With `--wait`, the command exits `0` only when the run finishes with `ok`; `error`, `skipped`, or a wait timeout exit non-zero. `openclaw cron runs --id <job-id> --run-id <run-id>` filters history to one exact run.
 
 <Note>
 `openclaw cron run <job-id>` force-runs by default. Use `--due` to keep the older "only run if due" behavior.
@@ -226,7 +232,9 @@ openclaw cron get <job-id>
 openclaw cron show <job-id>
 openclaw cron run <job-id>
 openclaw cron run <job-id> --due
+openclaw cron run <job-id> --wait --wait-timeout 10m
 openclaw cron runs --id <job-id> --limit 50
+openclaw cron runs --id <job-id> --run-id <run-id>
 ```
 
 `openclaw cron list` shows all matching jobs by default. Pass `--agent <id>` to show only jobs whose effective normalized agent id matches; jobs without a stored agent id count as the configured default agent.

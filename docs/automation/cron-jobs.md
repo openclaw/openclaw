@@ -372,11 +372,17 @@ openclaw cron edit <jobId> --message "Updated prompt" --model "opus"
 # Force run a job now
 openclaw cron run <jobId>
 
+# Force run a job now and wait for its terminal status
+openclaw cron run <jobId> --wait --wait-timeout 10m
+
 # Run only if due
 openclaw cron run <jobId> --due
 
 # View run history
 openclaw cron runs --id <jobId> --limit 50
+
+# View one exact run
+openclaw cron runs --id <jobId> --run-id <runId>
 
 # Delete a job
 openclaw cron remove <jobId>
