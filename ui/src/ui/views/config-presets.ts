@@ -1,4 +1,3 @@
-import { t } from "../../i18n/index.ts";
 /**
  * Config presets — opinionated configuration bundles that set multiple
  * settings at once. Applied via config.patch.
@@ -18,10 +17,10 @@ export type ConfigPresetPatch = {
 
 export type ConfigPreset = {
   id: ConfigPresetId;
-  label: string;
-  description: string;
-  detail: string;
-  impact: string;
+  labelKey: string;
+  descriptionKey: string;
+  detailKey: string;
+  impactKey: string;
   icon: string;
   patch: ConfigPresetPatch;
 };
@@ -29,10 +28,10 @@ export type ConfigPreset = {
 export const CONFIG_PRESETS: ConfigPreset[] = [
   {
     id: "personal",
-    label: t("config.preset.personal.label"),
-    description: t("config.preset.personal.description"),
-    detail: t("config.preset.personal.detail"),
-    impact: t("config.preset.personal.impact"),
+    labelKey: "config.preset.personal.label",
+    descriptionKey: "config.preset.personal.description",
+    detailKey: "config.preset.personal.detail",
+    impactKey: "config.preset.personal.impact",
     icon: "✨",
     patch: {
       agents: {
@@ -46,10 +45,10 @@ export const CONFIG_PRESETS: ConfigPreset[] = [
   },
   {
     id: "codeAgent",
-    label: t("config.preset.codeAgent.label"),
-    description: t("config.preset.codeAgent.description"),
-    detail: t("config.preset.codeAgent.detail"),
-    impact: t("config.preset.codeAgent.impact"),
+    labelKey: "config.preset.codeAgent.label",
+    descriptionKey: "config.preset.codeAgent.description",
+    detailKey: "config.preset.codeAgent.detail",
+    impactKey: "config.preset.codeAgent.impact",
     icon: "🛠️",
     patch: {
       agents: {
@@ -63,10 +62,10 @@ export const CONFIG_PRESETS: ConfigPreset[] = [
   },
   {
     id: "teamBot",
-    label: t("config.preset.teamBot.label"),
-    description: t("config.preset.teamBot.description"),
-    detail: t("config.preset.teamBot.detail"),
-    impact: t("config.preset.teamBot.impact"),
+    labelKey: "config.preset.teamBot.label",
+    descriptionKey: "config.preset.teamBot.description",
+    detailKey: "config.preset.teamBot.detail",
+    impactKey: "config.preset.teamBot.impact",
     icon: "👥",
     patch: {
       agents: {
@@ -80,10 +79,10 @@ export const CONFIG_PRESETS: ConfigPreset[] = [
   },
   {
     id: "minimal",
-    label: t("config.preset.minimal.label"),
-    description: t("config.preset.minimal.description"),
-    detail: t("config.preset.minimal.detail"),
-    impact: t("config.preset.minimal.impact"),
+    labelKey: "config.preset.minimal.label",
+    descriptionKey: "config.preset.minimal.description",
+    detailKey: "config.preset.minimal.detail",
+    impactKey: "config.preset.minimal.impact",
     icon: "⚡",
     patch: {
       agents: {

@@ -2,6 +2,7 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import { t } from "../../i18n/index.ts";
 import { renderQuickSettings, type QuickSettingsProps } from "./config-quick.ts";
 
 function expectButtonByText(container: Element, text: string): HTMLButtonElement {
@@ -156,7 +157,9 @@ describe("renderQuickSettings", () => {
     );
 
     const browserRow = expectRowByLabel(container, "Browser enabled");
-    expect(browserRow.querySelector(".qs-toggle__hint")?.textContent).toBe("Disabled");
+    expect(browserRow.querySelector(".qs-toggle__hint")?.textContent).toBe(
+      t("config.quick.disabled"),
+    );
     const browserInput = browserRow.querySelector("input");
     expect(browserInput).toBeInstanceOf(HTMLInputElement);
     expect((browserInput as HTMLInputElement).checked).toBe(false);
@@ -180,7 +183,7 @@ describe("renderQuickSettings", () => {
 
     render(renderQuickSettings(createProps({ textScale: 125, setTextScale })), container);
 
-    const textSizeRow = expectRowByLabel(container, "Text size");
+    const textSizeRow = expectRowByLabel(container, t("config.quick.textSize"));
     const active = Array.from(textSizeRow.querySelectorAll("button")).find((button) =>
       button.classList.contains("qs-segmented__btn--active"),
     );
@@ -207,8 +210,10 @@ describe("renderQuickSettings", () => {
     const titles = Array.from(container.querySelectorAll(".qs-identity-card__title")).map((node) =>
       node.textContent?.trim(),
     );
-    expect(titles).toEqual(["You", "Nova"]);
-    expect(container.querySelector('input[placeholder="You"]')).toBeNull();
+    expect(titles).toEqual([t("config.quick.localUser"), "Nova"]);
+    expect(
+      container.querySelector(`input[placeholder="${t("config.quick.localUser")}"]`),
+    ).toBeNull();
     expect(
       Array.from(container.querySelectorAll(".qs-row__label")).some(
         (node) => node.textContent?.trim() === "Name",
@@ -263,7 +268,7 @@ describe("renderQuickSettings", () => {
       source: "assets/avatars/nova-portrait.png",
     });
     expect(container.querySelector(".qs-identity-card__issue")?.textContent?.trim()).toBe(
-      "File not found",
+      t("config.quick.import.fileNotFound"),
     );
     expect(
       Array.from(container.querySelectorAll("label.btn")).some(
@@ -436,7 +441,7 @@ describe("renderQuickSettings", () => {
 
     expect(
       Array.from(container.querySelectorAll("button")).some(
-        (button) => button.textContent?.trim() === "Import",
+        (button) => button.textContent?.trim() === t("config.quick.custom"),
       ),
     ).toBe(true);
   });
@@ -457,7 +462,7 @@ describe("renderQuickSettings", () => {
       container,
     );
 
-    expectButtonByText(container, "Import").click();
+    expectButtonByText(container, t("config.quick.custom")).click();
 
     expect(onOpenCustomThemeImport).toHaveBeenCalledTimes(1);
     expect(setTheme).not.toHaveBeenCalled();

@@ -1225,16 +1225,18 @@ export function renderConfig(props: ConfigProps) {
   const schemaProps = analysis.schema?.properties ?? {};
 
   const VIRTUAL_SECTIONS = new Set(["__appearance__", "__notifications__"]);
-  const visibleCategories = SECTION_CATEGORIES.map((cat) =>
-    Object.assign({}, cat, {
-      sections: cat.sections.filter(
-        (s) =>
-          ((includeVirtualSections && VIRTUAL_SECTIONS.has(s.key)) || s.key in schemaProps) &&
-          (!include || include.has(s.key)) &&
-          (!exclude || !exclude.has(s.key)),
-      ),
-    }),
-  ).filter((cat) => cat.sections.length > 0);
+  const visibleCategories = getSectionCategories()
+    .map((cat) =>
+      Object.assign({}, cat, {
+        sections: cat.sections.filter(
+          (s) =>
+            ((includeVirtualSections && VIRTUAL_SECTIONS.has(s.key)) || s.key in schemaProps) &&
+            (!include || include.has(s.key)) &&
+            (!exclude || !exclude.has(s.key)),
+        ),
+      }),
+    )
+    .filter((cat) => cat.sections.length > 0);
 
   // Catch any schema keys not in our categories
   const extraSections = Object.keys(schemaProps)
@@ -1265,13 +1267,9 @@ export function renderConfig(props: ConfigProps) {
   const effectiveSubsection = null;
 
   const topTabs = [
-<<<<<<< HEAD
     ...(showRootTab
       ? [{ key: null as string | null, label: props.navRootLabel ?? t("config.nav.settings") }]
       : []),
-=======
-    { key: null as string | null, label: props.navRootLabel ?? t("config.nav.settings") },
->>>>>>> 91ee7d66e2 (feat(i18n): translate config pages to Simplified Chinese)
     ...[...visibleCategories, ...(otherCategory ? [otherCategory] : [])].flatMap((cat) =>
       cat.sections.map((s) => ({ key: s.key, label: s.label })),
     ),
@@ -1314,7 +1312,7 @@ export function renderConfig(props: ConfigProps) {
                 >
                   <polyline points="15 18 9 12 15 6"></polyline>
                 </svg>
-                Quick Settings
+                ${t("config.search.quickSettings")}
               </button>
             `
           : nothing}
@@ -1832,7 +1830,7 @@ export function renderConfig(props: ConfigProps) {
                         : nothing}
                       <div class="field config-raw-field">
                         <span style="display:flex;align-items:center;gap:8px;">
-                          Raw config (JSON/JSON5)
+                          ${t("config.raw.label")}
                           ${sensitiveCount > 0
                             ? html`
                                 <span class="pill pill--sm"
@@ -1841,9 +1839,7 @@ export function renderConfig(props: ConfigProps) {
                                 >
                                 <button
                                   class="btn btn--icon config-raw-toggle ${blurred ? "" : "active"}"
-                                  title=${blurred
-                                    ? "Reveal sensitive values"
-                                    : "Hide sensitive values"}
+                                  title=${blurred ? t("config.raw.reveal") : t("config.raw.hide")}
                                   aria-label=${t("config.raw.toggleAria")}
                                   aria-pressed=${!blurred}
                                   @click=${() => {
@@ -1859,13 +1855,15 @@ export function renderConfig(props: ConfigProps) {
                         ${blurred
                           ? html`
                               <div class="callout info" style="margin-top: 12px">
-                                ${sensitiveCount} sensitive value${sensitiveCount === 1 ? "" : "s"}
-                                hidden. Use the reveal button above to edit the raw config.
+                                ${t("config.raw.hiddenHint", {
+                                  count: String(sensitiveCount),
+                                  values: `${sensitiveCount} sensitive value${sensitiveCount === 1 ? "" : "s"}`,
+                                })}
                               </div>
                             `
                           : html`
                               <textarea
-                                placeholder=t("config.raw.label")
+                                .placeholder=${t("config.raw.placeholder")}
                                 .value=${props.raw}
                                 @input=${(e: Event) => {
                                   props.onRawChange((e.target as HTMLTextAreaElement).value);
