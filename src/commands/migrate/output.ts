@@ -120,16 +120,16 @@ function formatItemDisplayName(item: MigrationItem): string {
 }
 
 const REASON_CODE_MESSAGES: Record<string, string> = {
-  plugin_missing: "Plugin not found in the Codex marketplace.",
-  marketplace_missing: "Codex marketplace is unavailable.",
-  disabled: "Plugin is disabled in Codex.",
-  refresh_failed: "Failed to refresh the Codex plugin marketplace.",
-  auth_required: "Plugin requires additional authentication.",
-  already_active: "Plugin is already active in OpenClaw.",
-  installed: "Plugin is already installed in OpenClaw.",
-  plugin_install_failed: "Plugin installation failed.",
-  codex_subscription_required: "Plugin requires an active Codex subscription.",
-  "not selected for migration": "Skipped because it was not selected for migration.",
+  plugin_missing: "Plugin not found in the Codex marketplace",
+  marketplace_missing: "Codex marketplace is unavailable",
+  disabled: "Plugin is disabled in Codex",
+  refresh_failed: "Failed to refresh the Codex plugin marketplace",
+  auth_required: "Plugin requires additional authentication",
+  already_active: "Plugin is already active in OpenClaw",
+  installed: "Plugin is already installed in OpenClaw",
+  plugin_install_failed: "Plugin installation failed",
+  codex_subscription_required: "Plugin requires an active Codex subscription",
+  "not selected for migration": "Skipped because it was not selected for migration",
 };
 
 // Phrase-form conflict reasons, used as-is in selection-prompt hints
@@ -145,7 +145,7 @@ function conflictReasonSentence(reason: string): string | undefined {
   if (!phrase) {
     return undefined;
   }
-  return `${phrase.charAt(0).toUpperCase()}${phrase.slice(1)}.`;
+  return `${phrase.charAt(0).toUpperCase()}${phrase.slice(1)}`;
 }
 
 function humanizeReason(reason: string | undefined): string | undefined {

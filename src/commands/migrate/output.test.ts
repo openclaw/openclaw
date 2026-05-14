@@ -100,7 +100,7 @@ describe("formatMigrationResult", () => {
       .join("\n");
 
     expect(output).toContain("❌");
-    expect(output).toContain("Plugin not found in the Codex marketplace.");
+    expect(output).toContain("Plugin not found in the Codex marketplace");
   });
 
   it("says (Skipped) for user-deselected skill/plugin items", () => {
