@@ -480,6 +480,7 @@ describe("gateway node command allowlist", () => {
         port,
         commands: ["canvas.snapshot", "system.run"],
         platform: "macos",
+        deviceFamily: "Mac",
         instanceId: displayName,
         displayName,
       });
@@ -523,6 +524,7 @@ describe("gateway node command allowlist", () => {
         port,
         commands: ["canvas.snapshot"],
         platform: "macos",
+        deviceFamily: "Mac",
         instanceId: displayName,
         displayName,
         onEvent: (evt) => {
@@ -593,6 +595,7 @@ describe("gateway node command allowlist", () => {
         port,
         commands: ["canvas.snapshot", "system.run"],
         platform: "macos",
+        deviceFamily: "Mac",
         instanceId: displayName,
         displayName,
         deviceIdentity,

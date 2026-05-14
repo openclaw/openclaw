@@ -73,6 +73,7 @@ describe("reconcileNodePairingOnConnect", () => {
           id: "openclaw-macos",
           version: "test",
           platform: "macos",
+          deviceFamily: "Mac",
           mode: "node",
         },
         caps: ["talk"],
@@ -98,7 +99,10 @@ describe("reconcileNodePairingOnConnect", () => {
     );
   });
 
-  it("filters host commands when canonical platform conflicts with device family", async () => {
+  it.each([
+    ["conflicts with device family", { deviceFamily: "iPhone" }],
+    ["omits device family", {}],
+  ])("filters host commands when canonical platform %s", async (_label, clientExtra) => {
     const requestPairing = vi.fn(async (input: NodePairingRequestInput) => ({
       status: "pending" as const,
       request: { ...input, requestId: "req-mismatch", ts: 1 },
@@ -112,8 +116,8 @@ describe("reconcileNodePairingOnConnect", () => {
           id: "openclaw-ios",
           version: "test",
           platform: "macos",
-          deviceFamily: "iPhone",
           mode: "node",
+          ...clientExtra,
         },
         commands: ["system.run", "system.which"],
       }),

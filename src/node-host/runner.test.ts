@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayClientOptions } from "../gateway/client.js";
-import { resolveNodeHostGatewayPlatform, runNodeHost } from "./runner.js";
+import {
+  resolveNodeHostGatewayDeviceFamily,
+  resolveNodeHostGatewayPlatform,
+  runNodeHost,
+} from "./runner.js";
 
 const mocks = vi.hoisted(() => ({
   capturedGatewayClientOptions: [] as GatewayClientOptions[],
@@ -74,6 +78,10 @@ describe("runNodeHost", () => {
     expect(resolveNodeHostGatewayPlatform("win32")).toBe("windows");
     expect(resolveNodeHostGatewayPlatform("linux")).toBe("linux");
     expect(resolveNodeHostGatewayPlatform("freebsd")).toBe("unknown");
+    expect(resolveNodeHostGatewayDeviceFamily("darwin")).toBe("Mac");
+    expect(resolveNodeHostGatewayDeviceFamily("win32")).toBe("Windows");
+    expect(resolveNodeHostGatewayDeviceFamily("linux")).toBe("Linux");
+    expect(resolveNodeHostGatewayDeviceFamily("freebsd")).toBeUndefined();
   });
 
   it("passes the resolved Gateway URL to the Gateway client", async () => {
@@ -88,6 +96,9 @@ describe("runNodeHost", () => {
     expect(mocks.capturedGatewayClientOptions[0]?.url).toBe("ws://127.0.0.1:18789");
     expect(mocks.capturedGatewayClientOptions[0]?.platform).toBe(
       resolveNodeHostGatewayPlatform(process.platform),
+    );
+    expect(mocks.capturedGatewayClientOptions[0]?.deviceFamily).toBe(
+      resolveNodeHostGatewayDeviceFamily(process.platform),
     );
   });
 });

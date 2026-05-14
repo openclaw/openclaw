@@ -107,9 +107,12 @@ describe("gateway/node-command-policy", () => {
     const cases = [
       { platform: "darwin", deviceFamily: "iPhone" },
       { platform: "darwin", deviceFamily: "Mac" },
+      { platform: "macos" },
       { platform: "macos", deviceFamily: "iPhone" },
       { platform: "macOS 26.3.1", deviceFamily: "iPhone" },
+      { platform: "windows" },
       { platform: "windows", deviceFamily: "iPhone" },
+      { platform: "linux" },
       { platform: "linux", deviceFamily: "iPhone" },
       { platform: "Darwin-x64" },
       { platform: "macintosh" },
@@ -158,9 +161,14 @@ describe("gateway/node-command-policy", () => {
 
   it("keeps host command defaults for canonical desktop platforms", () => {
     const cfg = {} as OpenClawConfig;
+    const cases = [
+      { platform: "macos", deviceFamily: "Mac" },
+      { platform: "windows", deviceFamily: "Windows" },
+      { platform: "linux", deviceFamily: "Linux" },
+    ];
 
-    for (const platform of ["macos", "windows", "linux"]) {
-      const allowlist = resolveNodeCommandAllowlist(cfg, { platform });
+    for (const node of cases) {
+      const allowlist = resolveNodeCommandAllowlist(cfg, node);
       expect(allowlist.has("system.run")).toBe(true);
       expect(allowlist.has("system.which")).toBe(true);
     }

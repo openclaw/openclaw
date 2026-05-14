@@ -147,14 +147,11 @@ function platformMatchesDeviceFamily(
   platformId: Exclude<PlatformId, "unknown">,
   family: string,
 ): boolean {
-  if (!family) {
-    return true;
-  }
   switch (platformId) {
     case "ios":
-      return /^(?:iphone|ipad|ios)$/.test(family);
+      return family === "" || /^(?:iphone|ipad|ios)$/.test(family);
     case "android":
-      return family === "android";
+      return family === "" || family === "android";
     case "macos":
       return family === "mac";
     case "windows":

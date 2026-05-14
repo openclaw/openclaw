@@ -49,6 +49,19 @@ export function resolveNodeHostGatewayPlatform(platform: NodeJS.Platform): strin
   }
 }
 
+export function resolveNodeHostGatewayDeviceFamily(platform: NodeJS.Platform): string | undefined {
+  switch (platform) {
+    case "darwin":
+      return "Mac";
+    case "win32":
+      return "Windows";
+    case "linux":
+      return "Linux";
+    default:
+      return undefined;
+  }
+}
+
 function writeStderrLine(message: string): void {
   process.stderr.write(`${message}\n`);
 }
@@ -242,6 +255,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     clientDisplayName: displayName,
     clientVersion: VERSION,
     platform: resolveNodeHostGatewayPlatform(process.platform),
+    deviceFamily: resolveNodeHostGatewayDeviceFamily(process.platform),
     mode: GATEWAY_CLIENT_MODES.NODE,
     role: "node",
     scopes: [],
