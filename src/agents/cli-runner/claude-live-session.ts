@@ -207,6 +207,36 @@ function buildClaudeLiveKey(context: PreparedCliRunContext): string {
   )}`;
 }
 
+/**
+ * Compare two `buildClaudeLiveFingerprint` outputs and return the names of
+ * the top-level keys whose JSON-serialized values differ. Used solely to
+ * surface "why did the live session restart?" — when this is non-empty,
+ * the live session manager is about to tear down and re-spawn claude-cli,
+ * which can orphan an in-flight tool_use in the transcript and produce
+ * user-visible silent aborts on the next resume.
+ *
+ * Defensive: if either side is not parseable as our JSON shape, returns
+ * `["<unparseable>"]` rather than crashing the diagnostic.
+ */
+function diffFingerprintKeys(a: string, b: string): string[] {
+  let parsedA: Record<string, unknown>;
+  let parsedB: Record<string, unknown>;
+  try {
+    parsedA = JSON.parse(a) as Record<string, unknown>;
+    parsedB = JSON.parse(b) as Record<string, unknown>;
+  } catch {
+    return ["<unparseable>"];
+  }
+  const keys = new Set([...Object.keys(parsedA), ...Object.keys(parsedB)]);
+  const diffs: string[] = [];
+  for (const key of keys) {
+    if (JSON.stringify(parsedA[key]) !== JSON.stringify(parsedB[key])) {
+      diffs.push(key);
+    }
+  }
+  return diffs;
+}
+
 function buildClaudeLiveFingerprint(params: {
   context: PreparedCliRunContext;
   argv: string[];
@@ -871,6 +901,15 @@ export async function runClaudeLiveSessionTurn(params: {
     session = null;
   }
   if (session && session.fingerprint !== fingerprint) {
+    // Log which top-level fingerprint key(s) changed so we can root-cause
+    // why the live session is being torn down. A restart mid-tool orphans
+    // the in-flight tool_use in claude-cli's transcript and produces a
+    // user-visible silent abort on the next resume; identifying the
+    // unstable fingerprint dimensions is the first step toward stopping
+    // those restarts at their source.
+    cliBackendLog.info(
+      `claude live session fingerprint mismatch: keys=${diffFingerprintKeys(session.fingerprint, fingerprint).join(",") || "none"}`,
+    );
     closeLiveSession(session, "restart");
     session = null;
   }
@@ -891,6 +930,9 @@ export async function runClaudeLiveSessionTurn(params: {
         throw error;
       }
       if (session.fingerprint !== fingerprint) {
+        cliBackendLog.info(
+          `claude live session fingerprint mismatch (pending): keys=${diffFingerprintKeys(session.fingerprint, fingerprint).join(",") || "none"}`,
+        );
         closeLiveSession(session, "restart");
         session = null;
       } else if (resumeCapable && !params.useResume) {
