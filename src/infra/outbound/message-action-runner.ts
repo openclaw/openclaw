@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
@@ -622,12 +623,33 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   const hasPresentation = hasMessagePresentationBlocks(params.presentation);
   const hasInteractive = hasInteractiveReplyBlocks(params.interactive);
   const caption = readStringParam(params, "caption", { allowEmpty: true }) ?? "";
+  const messageFile = readStringParam(params, "messageFile", { trim: false });
+  let fileMessage: string | null = null;
+  if (messageFile) {
+    if (params.message !== undefined) {
+      throw new Error("use --message or --message-file, not both");
+    }
+    try {
+      fileMessage = await fs.readFile(messageFile, "utf8");
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") {
+        throw new Error(`message file not found: ${messageFile}`, { cause: err });
+      }
+      if (code === "EACCES") {
+        throw new Error(`message file is not readable: ${messageFile}`, { cause: err });
+      }
+      throw new Error(`failed to read message file: ${messageFile}`, { cause: err });
+    }
+  }
   let message =
+    fileMessage ??
     readStringParam(params, "message", {
       required: !mediaHint && !hasPresentation && !hasInteractive,
       allowEmpty: true,
-    }) ?? "";
-  if (message.includes("\\n")) {
+    }) ??
+    "";
+  if (fileMessage === null && message.includes("\\n")) {
     message = message.replaceAll("\\n", "\n");
   }
   if (!message.trim() && caption.trim()) {

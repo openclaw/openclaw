@@ -68,8 +68,8 @@ Name lookup:
 
 - `send`
   - Channels: WhatsApp/Telegram/Discord/Google Chat/Slack/Mattermost (plugin)/Signal/iMessage/Matrix/Microsoft Teams
-  - Required: `--target`, plus `--message`, `--media`, or `--presentation`
-  - Optional: `--media`, `--presentation`, `--delivery`, `--pin`, `--reply-to`, `--thread-id`, `--gif-playback`, `--force-document`, `--silent`
+  - Required: `--target`, plus `--message` or `--message-file`, `--media`, or `--presentation`
+  - Optional: `--message-file <path>` (read message body from a file; mutually exclusive with `--message`), `--media`, `--presentation`, `--delivery`, `--pin`, `--reply-to`, `--thread-id`, `--gif-playback`, `--force-document`, `--silent`
   - Shared presentation payloads: `--presentation` sends semantic blocks (`text`, `context`, `divider`, `buttons`, `select`) that core renders through the selected channel's declared capabilities. See [Message Presentation](/plugins/message-presentation).
   - Generic delivery preferences: `--delivery` accepts delivery hints such as `{ "pin": true }`; `--pin` is shorthand for pinned delivery when the channel supports it.
   - Telegram only: `--force-document` (send images, GIFs, and videos as documents to avoid Telegram compression)
