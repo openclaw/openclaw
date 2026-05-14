@@ -2420,6 +2420,38 @@ describe("prepareSlackMessage sender prefix", () => {
     expect(result.ctxPayload.BodyForAgent).not.toContain("Sender (untrusted metadata):");
   });
 
+  it("prefixes Slack MPIM BodyForAgent when group sender metadata is enabled", async () => {
+    const ctx = createSenderPrefixCtx({
+      channels: { groupSenderMetadataPrefix: true },
+      slashCommand: { command: "/openclaw", enabled: true },
+    });
+    ctx.resolveUserName = async (id: string) => ({ name: id === "U1" ? "Alice" : "Bek" }) as any;
+
+    const result = await prepareSlackMessage({
+      ctx,
+      account: { accountId: "default", config: {}, replyToMode: "off" } as never,
+      message: {
+        type: "message",
+        channel: "G1",
+        channel_type: "mpim",
+        text: "<@BOT> hello from mpim",
+        user: "U1",
+        ts: "1700000000.0108",
+        event_ts: "1700000000.0108",
+      } as never,
+      opts: { source: "message", wasMentioned: true },
+    });
+
+    if (!result) {
+      throw new Error("expected Slack MPIM sender metadata prefix message");
+    }
+    expect(result.ctxPayload.ChatType).toBe("group");
+    expect(result.ctxPayload.BodyForAgent).toBe(
+      'Sender (untrusted metadata): {"id":"U1","name":"Alice"}\n<@BOT> (Bek) hello from mpim',
+    );
+    expect(result.ctxPayload.RawBody).toBe("<@BOT> (Bek) hello from mpim");
+  });
+
   it("records skipped channel history with sender metadata when enabled", async () => {
     const ctx = createSenderPrefixCtx({
       channels: { groupSenderMetadataPrefix: true },
@@ -2447,6 +2479,62 @@ describe("prepareSlackMessage sender prefix", () => {
     expect(ctx.channelHistories.get("C1")?.[0]?.body).toBe(
       'Sender (untrusted metadata): {"id":"U1","name":"Alice"}\nbackground context',
     );
+  });
+
+  it("records accepted open-channel history with sender metadata when enabled", async () => {
+    const ctx = createSenderPrefixCtx({
+      channels: { groupSenderMetadataPrefix: true },
+      slashCommand: { command: "/openclaw", enabled: true },
+    });
+    ctx.historyLimit = 5;
+    ctx.channelsConfig = { C1: { requireMention: false } };
+    ctx.channelsConfigKeys = ["C1"];
+    ctx.resolveUserName = async (id: string) => ({ name: id === "U1" ? "Alice" : "Bek" }) as any;
+
+    const first = await prepareSlackMessage({
+      ctx,
+      account: { accountId: "default", config: {}, replyToMode: "off" } as never,
+      message: {
+        type: "message",
+        channel: "C1",
+        channel_type: "channel",
+        text: "first open-channel context",
+        user: "U1",
+        ts: "1700000000.0109",
+        event_ts: "1700000000.0109",
+      } as never,
+      opts: { source: "message" },
+    });
+
+    if (!first) {
+      throw new Error("expected first open-channel sender metadata message");
+    }
+    expect(ctx.channelHistories.get("C1")?.[0]?.body).toBe(
+      'Sender (untrusted metadata): {"id":"U1","name":"Alice"}\nfirst open-channel context',
+    );
+
+    const second = await prepareSlackMessage({
+      ctx,
+      account: { accountId: "default", config: {}, replyToMode: "off" } as never,
+      message: {
+        type: "message",
+        channel: "C1",
+        channel_type: "channel",
+        text: "second open-channel request",
+        user: "U1",
+        ts: "1700000000.0110",
+        event_ts: "1700000000.0110",
+      } as never,
+      opts: { source: "message" },
+    });
+
+    if (!second) {
+      throw new Error("expected second open-channel sender metadata message");
+    }
+    expect(second.ctxPayload.Body).toContain(
+      'Sender (untrusted metadata): {"id":"U1","name":"Alice"}\nfirst open-channel context',
+    );
+    expect(second.ctxPayload.Body).toContain("second open-channel request");
   });
 
   it("keeps raw Slack mention tokens when user lookup cannot resolve them", async () => {

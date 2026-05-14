@@ -707,23 +707,30 @@ export async function prepareSlackMessage(params: {
       ? `[Slack file: ${formatSlackFileReference(message.files[0])}]`
       : "";
     const pendingBody = pendingText || fallbackFile;
-    const pendingSenderName = pendingBody ? await resolveSenderName() : undefined;
+    let pendingEntry: {
+      sender: string;
+      body: string;
+      timestamp?: number;
+      messageId?: string;
+    } | null = null;
+    if (pendingBody) {
+      const pendingSenderName = await resolveSenderName();
+      pendingEntry = {
+        sender: pendingSenderName,
+        body: prependSlackSenderMetadata(pendingBody, {
+          enabled: groupSenderMetadataPrefixEnabled,
+          senderId,
+          senderName: pendingSenderName,
+        }),
+        timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
+        messageId: message.ts,
+      };
+    }
     recordPendingHistoryEntryIfEnabled({
       historyMap: ctx.channelHistories,
       historyKey,
       limit: ctx.historyLimit,
-      entry: pendingBody
-        ? {
-            sender: pendingSenderName ?? senderId,
-            body: prependSlackSenderMetadata(pendingBody, {
-              enabled: groupSenderMetadataPrefixEnabled,
-              senderId,
-              senderName: pendingSenderName,
-            }),
-            timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
-            messageId: message.ts,
-          }
-        : null,
+      entry: pendingEntry,
     });
     return null;
   }
