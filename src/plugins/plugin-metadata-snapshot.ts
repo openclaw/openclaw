@@ -187,7 +187,13 @@ function watchedFileFingerprint(filePath: string | undefined, watchedFiles: Set<
   return fileFingerprint(filePath);
 }
 
+function resolveInstallRecordPath(value: unknown, env: NodeJS.ProcessEnv): string | undefined {
+  const normalized = normalizeString(value);
+  return normalized ? resolveUserPath(normalized, env) : undefined;
+}
+
 function installRecordPathFingerprints(
+  env: NodeJS.ProcessEnv,
   records: unknown,
   watchedFiles: Set<string>,
 ): readonly unknown[] {
@@ -202,19 +208,56 @@ function installRecordPathFingerprints(
       }
       const installPath = normalizeString(rawRecord.installPath);
       const sourcePath = normalizeString(rawRecord.sourcePath);
+      const resolvedInstallPath = resolveInstallRecordPath(rawRecord.installPath, env);
+      const resolvedSourcePath = resolveInstallRecordPath(rawRecord.sourcePath, env);
       return [
         pluginId,
         installPath,
         sourcePath,
         watchedFileFingerprint(
-          installPath ? path.join(installPath, "package.json") : undefined,
+          resolvedInstallPath ? path.join(resolvedInstallPath, "package.json") : undefined,
           watchedFiles,
         ),
         watchedFileFingerprint(
-          installPath ? path.join(installPath, "openclaw.plugin.json") : undefined,
+          resolvedInstallPath ? path.join(resolvedInstallPath, "openclaw.plugin.json") : undefined,
           watchedFiles,
         ),
-        watchedFileFingerprint(sourcePath, watchedFiles),
+        watchedFileFingerprint(resolvedSourcePath, watchedFiles),
+        watchedFileFingerprint(
+          resolvedSourcePath ? path.join(resolvedSourcePath, "package.json") : undefined,
+          watchedFiles,
+        ),
+        watchedFileFingerprint(
+          resolvedSourcePath ? path.join(resolvedSourcePath, "openclaw.plugin.json") : undefined,
+          watchedFiles,
+        ),
+      ];
+    });
+}
+
+function managedNpmDependencyMetadataFingerprints(
+  npmRoot: string,
+  watchedFiles: Set<string>,
+): readonly unknown[] {
+  const rootManifest = readJsonObject(path.join(npmRoot, "package.json"));
+  const dependencies = isRecord(rootManifest?.dependencies) ? rootManifest.dependencies : {};
+  const nodeModulesRoot = path.join(npmRoot, "node_modules");
+  return Object.entries(dependencies)
+    .toSorted(([left], [right]) => left.localeCompare(right))
+    .map(([packageName, rawSpec]) => {
+      const dependencySpec = normalizeString(rawSpec);
+      if (!dependencySpec) {
+        return [packageName, rawSpec];
+      }
+      const packageDir = path.resolve(nodeModulesRoot, packageName);
+      if (!isPathInsideOrEqual(packageDir, path.resolve(nodeModulesRoot))) {
+        return [packageName, dependencySpec, "outside-node-modules"];
+      }
+      return [
+        packageName,
+        dependencySpec,
+        watchedFileFingerprint(path.join(packageDir, "package.json"), watchedFiles),
+        watchedFileFingerprint(path.join(packageDir, "openclaw.plugin.json"), watchedFiles),
       ];
     });
 }
@@ -401,7 +444,12 @@ function resolvePersistedRegistryMemoState(params: {
       }),
     ];
   });
-  const installRecordFiles = installRecordPathFingerprints(installRecords, watchedFiles);
+  const installRecordFiles = installRecordPathFingerprints(
+    params.env,
+    installRecords,
+    watchedFiles,
+  );
+  const managedNpmDependencyFiles = managedNpmDependencyMetadataFingerprints(npmRoot, watchedFiles);
   const watchedFilesList = [...watchedFiles].toSorted();
   return {
     fastHash,
@@ -410,6 +458,7 @@ function resolvePersistedRegistryMemoState(params: {
       indexHash: hashJson(stableMemoValue(index) ?? null),
       installRecords: hashJson(stableMemoValue(installRecords)),
       installRecordFiles,
+      managedNpmDependencyFiles,
       npmPackageJson: fileFingerprint(path.join(npmRoot, "package.json")),
       plugins: watchedPlugins,
       diagnostics: watchedDiagnostics,

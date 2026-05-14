@@ -119,6 +119,23 @@ function writeRecoverableNpmPlugin(params: {
   writeJson(path.join(packageDir, "openclaw.plugin.json"), { id: params.pluginId });
 }
 
+function writePersistedInstallRecords(
+  stateDir: string,
+  installRecords: Record<string, Record<string, unknown>>,
+): void {
+  writeJson(path.join(stateDir, "plugins", "installs.json"), {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash: "test",
+    generatedAtMs: 1,
+    installRecords,
+    diagnostics: [],
+    plugins: [],
+  });
+}
+
 function makeIndex(pluginId = "demo"): InstalledPluginIndex {
   return {
     version: 1,
@@ -332,6 +349,42 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledTimes(2);
   });
 
+  it.each([
+    [
+      "install path package manifest",
+      "~/tracked-plugin",
+      (recordPath: string) => ({ source: "path", installPath: recordPath }),
+      (homeDir: string) => path.join(homeDir, "tracked-plugin", "package.json"),
+    ],
+    [
+      "source path package manifest",
+      "~/tracked-plugin",
+      (recordPath: string) => ({ source: "path", sourcePath: recordPath }),
+      (homeDir: string) => path.join(homeDir, "tracked-plugin", "package.json"),
+    ],
+  ])(
+    "refreshes when home-relative install record %s changes",
+    (_, recordPath, record, targetPath) => {
+      const stateDir = tempStateDir();
+      const homeDir = path.join(stateDir, "home");
+      const filePath = targetPath(homeDir);
+      writePersistedInstallRecords(stateDir, { demo: record(recordPath) });
+      writeJson(filePath, { version: "1.0.0" });
+      loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+        source: "persisted",
+        snapshot: makeIndex(),
+        diagnostics: [],
+      });
+
+      loadPluginMetadataSnapshot({ config: {}, env: { HOME: homeDir }, stateDir });
+      writeJson(filePath, { version: "1.0.1000" });
+      loadPluginMetadataSnapshot({ config: {}, env: { HOME: homeDir }, stateDir });
+
+      expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
+      expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it("refreshes when recovered managed npm package metadata changes", () => {
     const stateDir = tempStateDir();
     writeRecoverableNpmPlugin({
@@ -352,6 +405,33 @@ describe("loadPluginMetadataSnapshot process memo", () => {
       pluginId: "recovered",
       stateDir,
       version: "1.0.10",
+      writeRootManifest: false,
+    });
+    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
+
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
+    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes when a declared recovered managed npm package appears", () => {
+    const stateDir = tempStateDir();
+    writeJson(path.join(stateDir, "npm", "package.json"), {
+      dependencies: {
+        "late-plugin": "1.0.0",
+      },
+    });
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "persisted",
+      snapshot: makeIndex(),
+      diagnostics: [],
+    });
+
+    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
+    writeRecoverableNpmPlugin({
+      packageName: "late-plugin",
+      pluginId: "late-plugin",
+      stateDir,
+      version: "1.0.0",
       writeRootManifest: false,
     });
     loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
