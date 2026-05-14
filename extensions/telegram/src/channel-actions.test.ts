@@ -314,4 +314,26 @@ describe("telegramMessageActions", () => {
       }
     }
   });
+
+  it("remaps thread-create to topic-create via resolveCliActionRequest", () => {
+    const result = telegramMessageActions.resolveCliActionRequest?.({
+      action: "thread-create",
+      args: { threadName: "Build Updates", target: "-100123", channel: "telegram" },
+    });
+    expect(result).toBeDefined();
+    expect(result!.action).toBe("topic-create");
+    expect(result!.args.name).toBe("Build Updates");
+    expect(result!.args.target).toBe("-100123");
+    expect(result!.args).not.toHaveProperty("threadName");
+  });
+
+  it("passes non-thread-create actions through resolveCliActionRequest unchanged", () => {
+    const result = telegramMessageActions.resolveCliActionRequest?.({
+      action: "send",
+      args: { message: "hello", target: "-100123" },
+    });
+    expect(result).toBeDefined();
+    expect(result!.action).toBe("send");
+    expect(result!.args.message).toBe("hello");
+  });
 });

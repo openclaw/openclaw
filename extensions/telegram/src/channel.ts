@@ -217,6 +217,8 @@ const telegramMessageAdapter = createChannelMessageAdapterFromOutbound<OpenClawC
 });
 
 const telegramMessageActions: ChannelMessageActionAdapter = {
+  resolveCliActionRequest: (ctx) =>
+    telegramMessageActionsImpl.resolveCliActionRequest?.(ctx) ?? { action: ctx.action, args: ctx.args },
   resolveExecutionMode: (ctx) =>
     getOptionalTelegramRuntime()?.channel?.telegram?.messageActions?.resolveExecutionMode?.(ctx) ??
     telegramMessageActionsImpl.resolveExecutionMode?.(ctx) ??
