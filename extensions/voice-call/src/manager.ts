@@ -415,6 +415,16 @@ export class CallManager {
   }
 
   /**
+   * Returns true if there is an outstanding transcript waiter for this call
+   * (i.e., a programmatic flow is already lined up to consume the next user
+   * speech). Webhook-side code uses this to avoid double-firing
+   * auto-response when a turn-aware flow will already handle the transcript.
+   */
+  hasTranscriptWaiter(callId: CallId): boolean {
+    return this.transcriptWaiters.has(callId);
+  }
+
+  /**
    * Get an active call by provider call ID (e.g., Twilio CallSid).
    */
   getCallByProviderCallId(providerCallId: string): CallRecord | undefined {
