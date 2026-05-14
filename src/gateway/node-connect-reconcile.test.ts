@@ -72,7 +72,7 @@ describe("reconcileNodePairingOnConnect", () => {
         client: {
           id: "openclaw-macos",
           version: "test",
-          platform: "darwin",
+          platform: "macos",
           mode: "node",
         },
         caps: ["talk"],

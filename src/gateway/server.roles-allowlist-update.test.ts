@@ -479,7 +479,7 @@ describe("gateway node command allowlist", () => {
       nodeClient = await connectNodeClientWithPairing({
         port,
         commands: ["canvas.snapshot", "system.run"],
-        platform: "darwin",
+        platform: "macos",
         instanceId: displayName,
         displayName,
       });
@@ -522,7 +522,7 @@ describe("gateway node command allowlist", () => {
       nodeClient = await connectNodeClientWithPairing({
         port,
         commands: ["canvas.snapshot"],
-        platform: "darwin",
+        platform: "macos",
         instanceId: displayName,
         displayName,
         onEvent: (evt) => {
@@ -592,7 +592,7 @@ describe("gateway node command allowlist", () => {
       nodeClient = await connectNodeClientWithPairing({
         port,
         commands: ["canvas.snapshot", "system.run"],
-        platform: "darwin",
+        platform: "macos",
         instanceId: displayName,
         displayName,
         deviceIdentity,

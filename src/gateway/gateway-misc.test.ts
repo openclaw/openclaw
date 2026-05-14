@@ -785,7 +785,7 @@ describe("node subscription manager", () => {
           client: {
             id: "node-client",
             version: "1.0.0",
-            platform: "darwin",
+            platform: "macos",
             mode: "node",
           },
           device: { id: "node-a" },
