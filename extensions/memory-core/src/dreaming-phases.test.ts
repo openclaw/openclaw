@@ -687,7 +687,7 @@ describe("memory-core dreaming phases", () => {
         "memory/2026-04-05-vendor-pitch.md",
       ]),
     );
-    expect(after.every((entry) => entry.dailyCount > 0)).toBe(true);
+    expect(after.every((entry) => (entry.dailyCount ?? 0) > 0)).toBe(true);
     expect(
       after.some((entry) => entry.snippet.includes("Vendor pitch: prefer the multi-year SLA.")),
     ).toBe(true);
