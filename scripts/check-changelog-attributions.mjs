@@ -14,6 +14,7 @@ export const FORBIDDEN_CHANGELOG_THANKS_HANDLES = [
   "openclaw-clawsweeper[bot]",
 ];
 export const FORBIDDEN_CHANGELOG_THANKS_HANDLE_PREFIXES = ["app/"];
+export const FORBIDDEN_CHANGELOG_THANKS_HANDLE_SUFFIXES = ["[bot]"];
 export const CHANGELOG_THANKS_REQUIRE_HUMAN_CREDIT_HANDLES = [
   "clawsweeper",
   "openclaw-clawsweeper",
@@ -21,6 +22,7 @@ export const CHANGELOG_THANKS_REQUIRE_HUMAN_CREDIT_HANDLES = [
   "openclaw-clawsweeper[bot]",
 ];
 export const CHANGELOG_THANKS_REQUIRE_HUMAN_CREDIT_HANDLE_PREFIXES = ["app/"];
+export const CHANGELOG_THANKS_REQUIRE_HUMAN_CREDIT_HANDLE_SUFFIXES = ["[bot]"];
 
 const THANKS_PATTERN = /\bThanks\b/iu;
 const THANKED_HANDLE_PATTERN = /@([-_/A-Za-z0-9]+(?:\[bot\])?)/giu;
@@ -34,7 +36,8 @@ export function isForbiddenChangelogThanksHandle(handle, options = {}) {
   }
   if (
     FORBIDDEN_CHANGELOG_THANKS_HANDLES.includes(normalized) ||
-    FORBIDDEN_CHANGELOG_THANKS_HANDLE_PREFIXES.some((prefix) => normalized.startsWith(prefix))
+    FORBIDDEN_CHANGELOG_THANKS_HANDLE_PREFIXES.some((prefix) => normalized.startsWith(prefix)) ||
+    FORBIDDEN_CHANGELOG_THANKS_HANDLE_SUFFIXES.some((suffix) => normalized.endsWith(suffix))
   ) {
     return true;
   }
@@ -54,6 +57,9 @@ export function requiresExplicitHumanChangelogThanks(handle) {
     CHANGELOG_THANKS_REQUIRE_HUMAN_CREDIT_HANDLES.includes(normalized) ||
     CHANGELOG_THANKS_REQUIRE_HUMAN_CREDIT_HANDLE_PREFIXES.some((prefix) =>
       normalized.startsWith(prefix),
+    ) ||
+    CHANGELOG_THANKS_REQUIRE_HUMAN_CREDIT_HANDLE_SUFFIXES.some((suffix) =>
+      normalized.endsWith(suffix),
     )
   );
 }

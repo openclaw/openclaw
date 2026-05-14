@@ -65,6 +65,7 @@ describe("check-changelog-attributions", () => {
       "- Maintainer-owned fix. Thanks @steipete.",
       "- Mixed credit. Thanks @contributor and @OpenClaw.",
       "- Bot repair. Thanks @clawsweeper[bot].",
+      "- Dependency bump. Thanks @dependabot[bot].",
       "- App repair. Thanks @app/clawsweeper.",
     ].join("\n");
 
@@ -74,7 +75,8 @@ describe("check-changelog-attributions", () => {
       { line: 3, handle: "steipete", text: "- Maintainer-owned fix. Thanks @steipete." },
       { line: 4, handle: "openclaw", text: "- Mixed credit. Thanks @contributor and @OpenClaw." },
       { line: 5, handle: "clawsweeper[bot]", text: "- Bot repair. Thanks @clawsweeper[bot]." },
-      { line: 6, handle: "app/clawsweeper", text: "- App repair. Thanks @app/clawsweeper." },
+      { line: 6, handle: "dependabot[bot]", text: "- Dependency bump. Thanks @dependabot[bot]." },
+      { line: 7, handle: "app/clawsweeper", text: "- App repair. Thanks @app/clawsweeper." },
     ]);
   });
 
@@ -110,6 +112,10 @@ describe("check-changelog-attributions", () => {
     expect(isForbiddenChangelogThanksHandle("clawsweeper[bot]")).toBe(true);
     expect(isForbiddenChangelogThanksHandle("openclaw-clawsweeper")).toBe(true);
     expect(isForbiddenChangelogThanksHandle("openclaw-clawsweeper[bot]")).toBe(true);
+    expect(isForbiddenChangelogThanksHandle("dependabot[bot]")).toBe(true);
+    expect(isForbiddenChangelogThanksHandle("dependabot[bot]", { strictBotHandle: true })).toBe(
+      true,
+    );
     expect(isForbiddenChangelogThanksHandle("alice")).toBe(false);
     expect(isForbiddenChangelogThanksHandle("human-clawsweeper-fan")).toBe(false);
     expect(
@@ -118,6 +124,7 @@ describe("check-changelog-attributions", () => {
 
     expect(requiresExplicitHumanChangelogThanks("clawsweeper")).toBe(true);
     expect(requiresExplicitHumanChangelogThanks("clawsweeper[bot]")).toBe(true);
+    expect(requiresExplicitHumanChangelogThanks("dependabot[bot]")).toBe(true);
     expect(requiresExplicitHumanChangelogThanks("app/clawsweeper")).toBe(true);
     expect(requiresExplicitHumanChangelogThanks("human-clawsweeper-fan")).toBe(false);
     expect(requiresExplicitHumanChangelogThanks("steipete")).toBe(false);
@@ -129,7 +136,7 @@ describe("check-changelog-attributions", () => {
     try {
       let output = "";
       try {
-        validateChangelogEntry(repo, "clawsweeper[bot]");
+        validateChangelogEntry(repo, "dependabot[bot]");
       } catch (error) {
         output = String((error as { stdout?: unknown }).stdout ?? error);
       }
@@ -142,7 +149,7 @@ describe("check-changelog-attributions", () => {
   it("accepts explicit human thanks for bot PR changelog entries", () => {
     const repo = createRepoWithPrChangelogDiff("- Bot repair (#123). Thanks @alice.");
     try {
-      expect(validateChangelogEntry(repo, "clawsweeper[bot]")).toContain("explicit thanks");
+      expect(validateChangelogEntry(repo, "dependabot[bot]")).toContain("explicit thanks");
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }
