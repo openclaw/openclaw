@@ -163,13 +163,44 @@ function extractApprovalCommand(payload: PluginApprovalRequestPayload): string |
   return match?.[1]?.trim() || null;
 }
 
+function decodeBasicHtmlEntities(value: string): string {
+  return value.replace(/&(?:amp|lt|gt|quot|apos|#\d+|#x[0-9a-f]+);/gi, (entity) => {
+    const normalized = entity.toLowerCase();
+    switch (normalized) {
+      case "&amp;":
+        return "&";
+      case "&lt;":
+        return "<";
+      case "&gt;":
+        return ">";
+      case "&quot;":
+        return '"';
+      case "&apos;":
+        return "'";
+      default: {
+        const decimal = /^&#(\d+);$/i.exec(entity);
+        const hex = /^&#x([0-9a-f]+);$/i.exec(entity);
+        const codePoint = decimal
+          ? Number.parseInt(decimal[1] ?? "", 10)
+          : hex
+            ? Number.parseInt(hex[1] ?? "", 16)
+            : Number.NaN;
+        return Number.isFinite(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff
+          ? String.fromCodePoint(codePoint)
+          : entity;
+      }
+    }
+  });
+}
+
 function summarizeShellCommand(command: string): {
   headline: string;
   actions: string[];
   risk: ApprovalRiskLevel;
   riskReason: string;
 } {
-  const segments = splitCommandSegments(command).flatMap((segment) =>
+  const decodedCommand = decodeBasicHtmlEntities(command);
+  const segments = splitCommandSegments(decodedCommand).flatMap((segment) =>
     expandCommandSegment(segment),
   );
   const summaries = segments.map((segment) => summarizeCommandSegment(segment)).filter(Boolean);
@@ -184,10 +215,7 @@ function summarizeShellCommand(command: string): {
   const mediumReason = summaries.find(
     (summary) => summary.risk === "medium" && summary.reason,
   )?.reason;
-  const riskReason =
-    highReason ??
-    mediumReason ??
-    buildDefaultRiskReason(risk, summaries);
+  const riskReason = highReason ?? mediumReason ?? buildDefaultRiskReason(risk, summaries);
 
   return {
     headline: buildCommandHeadline(actionSummaries),
@@ -246,6 +274,10 @@ function splitCommandSegments(command: string): string[] {
 }
 
 function expandCommandSegment(segment: string): string[] {
+  const controlSegments = expandShellControlSegment(segment);
+  if (controlSegments) {
+    return controlSegments.flatMap((controlSegment) => expandCommandSegment(controlSegment));
+  }
   if (isShellBookkeepingSegment(segment)) {
     return [];
   }
@@ -257,6 +289,30 @@ function expandCommandSegment(segment: string): string[] {
     );
   }
   return [segment];
+}
+
+function expandShellControlSegment(segment: string): string[] | null {
+  const trimmed = segment.trim();
+  if (/^(?:then|else|fi|do|done)\b$/.test(trimmed)) {
+    return [];
+  }
+
+  const leadingBody = /^(?:then|else|do)\s+(.+)$/s.exec(trimmed);
+  if (leadingBody) {
+    return splitCommandSegments(leadingBody[1] ?? "");
+  }
+
+  const conditional = /^(?:if|elif|while|until)\s+(.+)$/s.exec(trimmed);
+  if (conditional) {
+    const condition = stripTrailingShellControl(conditional[1] ?? "");
+    return condition ? splitCommandSegments(condition) : [];
+  }
+
+  return null;
+}
+
+function stripTrailingShellControl(value: string): string {
+  return value.replace(/\s+(?:then|do)\b[\s\S]*$/i, "").trim();
 }
 
 function isShellBookkeepingSegment(segment: string): boolean {
@@ -869,6 +925,10 @@ function resolveCommandWords(segment: string): { words: string[]; usedSudo: bool
       words.shift();
       continue;
     }
+    if (first === "!") {
+      words.shift();
+      continue;
+    }
     if (first === "env") {
       words.shift();
       while (words[0] && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0]) || words[0]?.startsWith("-"))) {
@@ -987,11 +1047,11 @@ function buildDefaultRiskReason(
   if (risk === "low" && kinds.has("process")) {
     return "Reads local process state. No network, service change, or delete step detected.";
   }
-  if (risk === "low" && (kinds.has("read") || kinds.has("service"))) {
-    return "Reads local state or logs. No network, service change, or delete step detected.";
-  }
   if (risk === "low" && kinds.has("write")) {
     return "Only creates or checks workspace files. No network, service, or delete step detected.";
+  }
+  if (risk === "low" && (kinds.has("read") || kinds.has("service"))) {
+    return "Reads local state or logs. No network, service change, or delete step detected.";
   }
   if (risk === "high") {
     return "This can make sensitive or hard-to-reverse changes. Review carefully before approving.";
@@ -1002,23 +1062,18 @@ function buildDefaultRiskReason(
 function getCommandTargetArgs(command: string, args: readonly string[]): string[] {
   if (command === "[" || command === "test") {
     return args.filter(
-      (arg) => arg && arg !== "]" && !arg.startsWith("-") && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(arg),
+      (arg) =>
+        arg &&
+        arg !== "!" &&
+        arg !== "]" &&
+        !arg.startsWith("-") &&
+        !/^[A-Za-z_][A-Za-z0-9_]*=/.test(arg),
     );
   }
   if (
-    [
-      "awk",
-      "cut",
-      "echo",
-      "jq",
-      "pgrep",
-      "printf",
-      "ps",
-      "sleep",
-      "sort",
-      "tr",
-      "uniq",
-    ].includes(command)
+    ["awk", "cut", "echo", "jq", "pgrep", "printf", "ps", "sleep", "sort", "tr", "uniq"].includes(
+      command,
+    )
   ) {
     return [];
   }

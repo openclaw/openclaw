@@ -407,6 +407,33 @@ describe("plugin-sdk/approval-renderers", () => {
     expect(payload.text).not.toContain("run 'printf");
   });
 
+  it("decodes escaped shell separators and summarizes shell conditionals", () => {
+    const payload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id: "plugin-command-escaped-shell",
+        request: {
+          title: "Codex app-server command approval",
+          description:
+            "Command: mkdir -p memory &amp;&amp; if [ ! -f memory/context.md ]; then printf '%s\\n' ready; fi",
+          toolName: "codex_command_approval",
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: 121_000,
+      },
+      nowMs: 1_000,
+      language: "simple",
+    });
+
+    expect(payload.text).toContain("Action\nCreate/check workspace files or folders");
+    expect(payload.text).toContain("- create folder(s): memory");
+    expect(payload.text).toContain("- check whether a condition or file exists: memory/context.md");
+    expect(payload.text).toContain("Risk: Low");
+    expect(payload.text).not.toContain("&amp");
+    expect(payload.text).not.toContain("run &amp");
+    expect(payload.text).not.toContain("run if");
+    expect(payload.text).not.toContain("run then");
+  });
+
   it("preserves the original plugin approval wording by default", () => {
     const payload = buildPluginApprovalPendingReplyPayload({
       request: {
