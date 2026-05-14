@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatCodexUsageLimitErrorMessage,
   resolveCodexUsageLimitResetAtMs,
+  summarizeCodexRateLimits,
   summarizeCodexAccountUsage,
 } from "./rate-limits.js";
 
@@ -64,5 +65,34 @@ describe("Codex rate limit blocking resets", () => {
 
     expect(resolveCodexUsageLimitResetAtMs(payload, nowMs)).toBe(weeklyReset * 1000);
     expect(summarizeCodexAccountUsage(payload, nowMs)?.blockedUntilMs).toBe(weeklyReset * 1000);
+  });
+});
+
+describe("summarizeCodexRateLimits", () => {
+  it("formats status limits like provider usage summaries", () => {
+    const nowMs = 1_700_000_000_000;
+    const nowSeconds = nowMs / 1000;
+
+    expect(
+      summarizeCodexRateLimits(
+        {
+          rateLimits: {
+            limitId: "codex",
+            limitName: "Codex",
+            primary: {
+              usedPercent: 26,
+              windowDurationMins: 300,
+              resetsAt: nowSeconds + 3 * 60 * 60,
+            },
+            secondary: {
+              usedPercent: 4,
+              windowDurationMins: 7 * 24 * 60,
+              resetsAt: nowSeconds + 7 * 24 * 60 * 60,
+            },
+          },
+        },
+        nowMs,
+      ),
+    ).toBe("Codex: primary 74% left ⏱3h · secondary 96% left ⏱7d");
   });
 });

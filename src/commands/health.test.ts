@@ -227,6 +227,29 @@ describe("healthCommand", () => {
     const lines = formatHealthChannelLines(summary, { accountMode: "default" });
     expect(lines).toStrictEqual(["WhatsApp: auth stabilizing"]);
   });
+
+  it("formats iMessage probe failures as failed health lines", () => {
+    const summary = createHealthSummary({
+      channels: {
+        imessage: {
+          accountId: "default",
+          configured: true,
+          probe: {
+            ok: false,
+            error:
+              "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
+          },
+        },
+      },
+      channelOrder: ["imessage"],
+      channelLabels: { imessage: "iMessage" },
+    });
+
+    const lines = formatHealthChannelLines(summary, { accountMode: "default" });
+    expect(lines).toContain(
+      "iMessage: failed (unknown) - imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
+    );
+  });
 });
 
 describe("formatHealthCheckFailure", () => {

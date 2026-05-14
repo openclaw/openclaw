@@ -388,7 +388,7 @@ Prefer the narrowest metadata that already describes ownership. Use
 when those fields express the relationship. Use `activation` for extra planner
 hints that cannot be represented by those ownership fields.
 Use top-level `cliBackends` for CLI runtime aliases such as `claude-cli`,
-`codex-cli`, or `google-gemini-cli`; `activation.onAgentHarnesses` is only for
+`my-cli`, or `google-gemini-cli`; `activation.onAgentHarnesses` is only for
 embedded agent harness ids that do not already have an ownership field.
 
 This block is metadata only. It does not register runtime behavior, and it does
@@ -1266,7 +1266,11 @@ hook instead.
 
 ## Discovery precedence (duplicate plugin ids)
 
-OpenClaw discovers plugins from several roots (bundled, global install, workspace, explicit config-selected paths). If two discoveries share the same `id`, only the **highest-precedence** manifest is kept; lower-precedence duplicates are dropped instead of loading beside it.
+OpenClaw discovers plugins from several roots. For the raw filesystem scan
+order, see [Plugin scan
+order](/gateway/configuration-reference#plugin-scan-order). If two discoveries
+share the same `id`, only the **highest-precedence** manifest is kept;
+lower-precedence duplicates are dropped instead of loading beside it.
 
 Precedence, highest to lowest:
 

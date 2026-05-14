@@ -82,6 +82,9 @@ export function createCronPromptExecutor(params: {
   resolvedVerboseLevel: VerboseLevel;
   thinkLevel: ThinkLevel | undefined;
   timeoutMs: number;
+  /** Set when the cron payload's `timeoutSeconds` was explicitly configured. */
+  runTimeoutOverrideMs?: number;
+  senderIsOwner: boolean;
   messageChannel: string | undefined;
   suppressExecNotifyOnExit: boolean;
   resolvedDelivery: {
@@ -177,7 +180,7 @@ export function createCronPromptExecutor(params: {
             onExecutionPhase: params.onExecutionPhase,
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature,
-            senderIsOwner: true,
+            senderIsOwner: params.senderIsOwner,
           });
           bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
             result.meta?.systemPromptReport,
@@ -230,6 +233,7 @@ export function createCronPromptExecutor(params: {
           }).enabled,
           verboseLevel: params.resolvedVerboseLevel,
           timeoutMs: params.timeoutMs,
+          runTimeoutOverrideMs: params.runTimeoutOverrideMs,
           bootstrapContextMode: params.agentPayload?.lightContext ? "lightweight" : undefined,
           bootstrapContextRunKind: "cron",
           toolsAllow: params.agentPayload?.toolsAllow,
@@ -314,6 +318,9 @@ export async function executeCronRun(params: {
   ) => void;
   thinkLevel: ThinkLevel | undefined;
   timeoutMs: number;
+  /** Set when the cron payload's `timeoutSeconds` was explicitly configured. */
+  runTimeoutOverrideMs?: number;
+  senderIsOwner: boolean;
   suppressExecNotifyOnExit: boolean;
   runStartedAt?: number;
 }): Promise<CronExecutionResult> {
@@ -338,6 +345,7 @@ export async function executeCronRun(params: {
     resolvedVerboseLevel,
     thinkLevel: params.thinkLevel,
     timeoutMs: params.timeoutMs,
+    runTimeoutOverrideMs: params.runTimeoutOverrideMs,
     messageChannel: params.resolvedDelivery.channel,
     suppressExecNotifyOnExit: params.suppressExecNotifyOnExit,
     resolvedDelivery: params.resolvedDelivery,
@@ -350,6 +358,7 @@ export async function executeCronRun(params: {
     abortReason: params.abortReason,
     onExecutionStarted: params.onExecutionStarted,
     onExecutionPhase: params.onExecutionPhase,
+    senderIsOwner: params.senderIsOwner,
   });
 
   const runStartedAt = params.runStartedAt ?? Date.now();

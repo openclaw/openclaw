@@ -64,6 +64,22 @@ function collectConfiguredChannelIds(cfg: OpenClawConfig): string[] {
   return Object.keys(channels).filter((channelId) => channelId !== "defaults");
 }
 
+// Past-tense "Removed X" lines must not appear under a "Doctor changes" panel
+// when the run did not write to disk; retitle to signal the preview state.
+function emitDoctorChangesPanel(
+  changeLines: ReadonlyArray<string>,
+  shouldRepair: boolean,
+  options: { sanitize?: boolean } = {},
+): void {
+  if (changeLines.length === 0) {
+    return;
+  }
+  const body = changeLines.join("\n");
+  const message = options.sanitize ? sanitizeDoctorNote(body) : body;
+  const title = shouldRepair ? "Doctor changes" : "Doctor changes preview";
+  note(message, title);
+}
+
 export async function loadAndMaybeMigrateDoctorConfig(params: {
   options: DoctorOptions;
   confirm: (p: { message: string; initialValue: boolean }) => Promise<boolean>;
@@ -123,9 +139,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   if (legacyIssueLines.length > 0) {
     note(legacyIssueLines.join("\n"), "Legacy config keys detected");
   }
-  if (legacyStep.changeLines.length > 0) {
-    note(legacyStep.changeLines.join("\n"), "Doctor changes");
-  }
+  emitDoctorChangesPanel(legacyStep.changeLines, shouldRepair);
   if (hasLegacyInternalHookHandlers(snapshot.parsed)) {
     note(
       [
@@ -143,7 +157,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
   const normalized = normalizeCompatibilityConfigValues(candidate);
   if (normalized.changes.length > 0) {
-    note(normalized.changes.join("\n"), "Doctor changes");
+    emitDoctorChangesPanel(normalized.changes, shouldRepair);
     ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
       state: { cfg, candidate, pendingChanges, fixHints },
       mutation: normalized,
@@ -155,7 +169,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const { applyPluginAutoEnable } = await import("../config/plugin-auto-enable.js");
   const autoEnable = applyPluginAutoEnable({ config: candidate, env: process.env });
   if (autoEnable.changes.length > 0) {
-    note(autoEnable.changes.join("\n"), "Doctor changes");
+    emitDoctorChangesPanel(autoEnable.changes, shouldRepair);
     ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
       state: { cfg, candidate, pendingChanges, fixHints },
       mutation: autoEnable,
@@ -202,7 +216,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       if (staleCleanup.changes.length === 0) {
         continue;
       }
-      note(sanitizeDoctorNote(staleCleanup.changes.join("\n")), "Doctor changes");
+      emitDoctorChangesPanel(staleCleanup.changes, shouldRepair, { sanitize: true });
       ({ cfg, candidate, pendingChanges, fixHints } = applyDoctorConfigMutation({
         state: { cfg, candidate, pendingChanges, fixHints },
         mutation: staleCleanup,
