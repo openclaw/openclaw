@@ -1,0 +1,29 @@
+{
+  "id": "spec-center",
+  "activation": {
+    "onStartup": true
+  },
+  "name": "Spec Center",
+  "description": "Markdown-first specs for auditable OpenClaw workflow runs.",
+  "commandAliases": [
+    {
+      "name": "spec",
+      "kind": "runtime-slash"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "defaultSpecRoot": {
+        "type": "string"
+      }
+    }
+  },
+  "uiHints": {
+    "defaultSpecRoot": {
+      "label": "Default Spec Root",
+      "help": "Optional local directory used when /spec import omits repo."
+    }
+  }
+}

@@ -36,6 +36,11 @@
       - any-glob-to-any-file:
           - "extensions/google-meet/**"
           - "docs/plugins/google-meet.md"
+"plugin: spec-center":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/spec-center/**"
+          - "docs/plugins/spec-center.md"
 "plugin: migrate-hermes":
   - changed-files:
       - any-glob-to-any-file:

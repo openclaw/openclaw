@@ -1,0 +1,19 @@
+{
+  "name": "@openclaw/spec-center",
+  "version": "2026.5.14",
+  "private": true,
+  "description": "OpenClaw Spec Center plugin",
+  "type": "module",
+  "dependencies": {
+    "yaml": "2.9.0"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
