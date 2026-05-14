@@ -1,4 +1,7 @@
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import {
+  hasOutboundReplyContent,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
 import { isParentOwnedBackgroundAcpSession } from "../../acp/session-interaction-mode.js";
 import {
   resolveAgentConfig,
@@ -1017,7 +1020,7 @@ export async function dispatchReplyFromConfig(
     ): Promise<{ queuedFinal: boolean; routedFinalCount: number }> => {
       const sourceReplyTranscriptMirror =
         getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror;
-      if (resolveSendableOutboundReplyParts(payload).hasContent) {
+      if (hasOutboundReplyContent(payload, { trimText: true })) {
         markInboundDedupeReplayUnsafe();
       }
       const ttsPayload = await maybeApplyTtsToReplyPayload({
@@ -1468,7 +1471,7 @@ export async function dispatchReplyFromConfig(
             const run = async () => {
               if (
                 payload.isReasoning !== true &&
-                resolveSendableOutboundReplyParts(payload).hasContent
+                hasOutboundReplyContent(payload, { trimText: true })
               ) {
                 markInboundDedupeReplayUnsafe();
               }
@@ -1504,7 +1507,7 @@ export async function dispatchReplyFromConfig(
                       return { ...payload, text: text.trim() ? text : undefined };
                     })()
                   : payload;
-              if (!resolveSendableOutboundReplyParts(visiblePayload).hasContent) {
+              if (!hasOutboundReplyContent(visiblePayload, { trimText: true })) {
                 return;
               }
               // Channels that keep a live draft preview may need to rotate their

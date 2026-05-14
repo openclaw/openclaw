@@ -41,6 +41,16 @@ Both transports are production-ready and reach feature parity for messaging, sla
 **Pick HTTP Request URLs** when running multiple Gateway replicas behind a load balancer, when outbound WSS is blocked but inbound HTTPS is allowed, or when you already terminate Slack webhooks at a reverse proxy.
 </Note>
 
+## Install
+
+Install Slack before configuring the channel:
+
+```bash
+openclaw plugins install @openclaw/slack
+```
+
+`plugins install` registers and enables the plugin. The plugin still does nothing until you configure the Slack app and channel settings below. See [Plugins](/tools/plugin) for general plugin behavior and install rules.
+
 ## Quick setup
 
 <Tabs>
@@ -181,7 +191,7 @@ Both transports are production-ready and reach feature parity for messaging, sla
         </CodeGroup>
 
         <Note>
-          **Recommended** matches the bundled Slack plugin's full feature set: App Home, slash commands, files, reactions, pins, group DMs, and emoji/usergroup reads. Pick **Minimal** when workspace policy restricts scopes — it covers DMs, channel/group history, mentions, and slash commands but drops files, reactions, pins, group-DM (`mpim:*`), `emoji:read`, and `usergroups:read`. See [Manifest and scope checklist](#manifest-and-scope-checklist) for per-scope rationale and additive options like extra slash commands.
+          **Recommended** matches the Slack plugin's full feature set: App Home, slash commands, files, reactions, pins, group DMs, and emoji/usergroup reads. Pick **Minimal** when workspace policy restricts scopes — it covers DMs, channel/group history, mentions, and slash commands but drops files, reactions, pins, group-DM (`mpim:*`), `emoji:read`, and `usergroups:read`. See [Manifest and scope checklist](#manifest-and-scope-checklist) for per-scope rationale and additive options like extra slash commands.
         </Note>
 
         After Slack creates the app:
@@ -383,7 +393,7 @@ openclaw gateway
         </CodeGroup>
 
         <Note>
-          **Recommended** matches the bundled Slack plugin's full feature set; **Minimal** drops files, reactions, pins, group-DM (`mpim:*`), `emoji:read`, and `usergroups:read` for restrictive workspaces. See [Manifest and scope checklist](#manifest-and-scope-checklist) for per-scope rationale.
+          **Recommended** matches the Slack plugin's full feature set; **Minimal** drops files, reactions, pins, group-DM (`mpim:*`), `emoji:read`, and `usergroups:read` for restrictive workspaces. See [Manifest and scope checklist](#manifest-and-scope-checklist) for per-scope rationale.
         </Note>
 
         <Info>

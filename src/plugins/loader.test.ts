@@ -6231,6 +6231,91 @@ module.exports = {
         expectDuplicateWarning: false,
         assert: expectPluginSourcePrecedence,
       },
+      {
+        label: "transient installed memory plugin beats bundled duplicate",
+        pluginId: "memory-lancedb",
+        bundledFilename: "index.cjs",
+        loadRegistry: () => {
+          writeBundledPlugin({
+            id: "memory-lancedb",
+            body: memoryPluginBody("memory-lancedb"),
+          });
+          return withStateDir((stateDir) => {
+            const globalDir = path.join(stateDir, "node_modules", "@openclaw", "memory-lancedb");
+            mkdirSafe(globalDir);
+            const globalPlugin = writePlugin({
+              id: "memory-lancedb",
+              body: `module.exports = {
+                id: "memory-lancedb",
+                kind: "memory",
+                register(api) {
+                  api.registerTool({
+                    name: "memory_recall",
+                    description: "Recall memories",
+                    parameters: {},
+                    execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
+                  });
+                },
+              };`,
+              dir: globalDir,
+              filename: "index.cjs",
+            });
+            updatePluginManifest(globalPlugin, {
+              kind: "memory",
+              contracts: { tools: ["memory_recall"] },
+            });
+            fs.writeFileSync(
+              path.join(globalDir, "package.json"),
+              JSON.stringify(
+                {
+                  name: "@openclaw/memory-lancedb",
+                  version: "2026.5.12-beta.1",
+                  openclaw: { extensions: ["./index.cjs"] },
+                },
+                null,
+                2,
+              ),
+              "utf-8",
+            );
+
+            return loadOpenClawPlugins({
+              cache: false,
+              config: {
+                plugins: {
+                  allow: ["memory-lancedb"],
+                  slots: { memory: "memory-lancedb" },
+                  entries: {
+                    "memory-lancedb": { enabled: true },
+                  },
+                  installs: {
+                    "memory-lancedb": {
+                      source: "npm",
+                      spec: "@openclaw/memory-lancedb",
+                      resolvedName: "@openclaw/memory-lancedb",
+                      resolvedVersion: "2026.5.12-beta.1",
+                      installPath: globalDir,
+                    },
+                  },
+                },
+              },
+            });
+          });
+        },
+        expectedLoadedOrigin: "global",
+        expectedDisabledOrigin: "bundled",
+        expectedDisabledError: "overridden by global plugin",
+        expectDuplicateWarning: false,
+        assert: (
+          registry: PluginRegistry,
+          scenario: Parameters<typeof expectPluginSourcePrecedence>[1],
+        ) => {
+          expectPluginSourcePrecedence(registry, scenario);
+          expect(
+            registry.tools.flatMap((entry) => entry.names),
+            scenario.label,
+          ).toContain("memory_recall");
+        },
+      },
     ] as const;
 
     runRegistryScenarios(scenarios, (scenario) => scenario.loadRegistry());

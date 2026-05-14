@@ -262,31 +262,21 @@ function humanizeMigrationConflictReason(reason: string | undefined): string {
 }
 
 export function formatMigrationSkillSelectionHint(item: MigrationItem): string | undefined {
-  const sourceLabel = readMigrationSkillSourceLabel(item);
-  if (item.status === "conflict") {
-    const reason = humanizeMigrationConflictReason(item.reason);
-    return sourceLabel ? `${sourceLabel} ${reason}` : reason;
+  if (item.status !== "conflict") {
+    return undefined;
   }
-  return sourceLabel ?? undefined;
+  const sourceLabel = readMigrationSkillSourceLabel(item);
+  const reason = humanizeMigrationConflictReason(item.reason);
+  return sourceLabel ? `${sourceLabel} ${reason}` : reason;
 }
 
 export function formatMigrationPluginSelectionHint(item: MigrationItem): string | undefined {
-  const pluginName = readMigrationPluginName(item);
-  const configKey = readMigrationPluginConfigKey(item);
-  const marketplace = readMigrationPluginMarketplaceName(item);
-  if (item.status === "conflict") {
-    const reason = humanizeMigrationConflictReason(item.reason);
-    return marketplace ? `${marketplace} plugin ${reason}` : reason;
+  if (item.status !== "conflict") {
+    return undefined;
   }
-  const parts = [
-    marketplace,
-    configKey && configKey !== pluginName ? `config: ${configKey}` : undefined,
-  ];
-  return (
-    parts
-      .filter((value): value is string => typeof value === "string" && value.length > 0)
-      .join("; ") || undefined
-  );
+  const marketplace = readMigrationPluginMarketplaceName(item);
+  const reason = humanizeMigrationConflictReason(item.reason);
+  return marketplace ? `${marketplace} plugin ${reason}` : reason;
 }
 
 export function applyMigrationSelectedSkillItemIds(
