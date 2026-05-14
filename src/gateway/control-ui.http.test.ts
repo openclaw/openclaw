@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { gunzipSync } from "node:zlib";
 import { describe, expect, it, vi } from "vitest";
 import { resolveStateDir } from "../config/paths.js";
 import {
@@ -74,11 +75,16 @@ describe("handleControlUiHttpRequest", () => {
     method: "GET" | "HEAD" | "POST";
     rootPath: string;
     basePath?: string;
+    headers?: IncomingMessage["headers"];
     rootKind?: "resolved" | "bundled";
   }) {
     const { res, end } = makeMockHttpResponse();
     const handled = await handleControlUiHttpRequest(
-      { url: params.url, method: params.method } as IncomingMessage,
+      {
+        url: params.url,
+        method: params.method,
+        headers: params.headers ?? {},
+      } as IncomingMessage,
       res,
       {
         ...(params.basePath ? { basePath: params.basePath } : {}),
@@ -1139,6 +1145,70 @@ describe("handleControlUiHttpRequest", () => {
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(200);
         expect(firstEndCallLength(end)).toBe(0);
+      },
+    });
+  });
+
+  it("compresses text control-ui assets when the client accepts gzip", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const script = "const answer = 42;\n".repeat(200);
+        await writeAssetFile(tmp, "app.js", script);
+
+        const { res, end, handled } = await runControlUiRequest({
+          url: "/assets/app.js",
+          method: "GET",
+          rootPath: tmp,
+          headers: { "accept-encoding": "gzip" },
+        });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(res.setHeader).toHaveBeenCalledWith("Content-Encoding", "gzip");
+        expect(res.setHeader).toHaveBeenCalledWith("Vary", "Accept-Encoding");
+        const body = end.mock.calls[0]?.[0];
+        expect(Buffer.isBuffer(body)).toBe(true);
+        expect(gunzipSync(body as Buffer).toString("utf8")).toBe(script);
+      },
+    });
+  });
+
+  it("advertises negotiated compression on HEAD requests for text assets", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        await writeAssetFile(tmp, "actual.css", "body { color: red; }\n");
+
+        const { res, end, handled } = await runControlUiRequest({
+          url: "/assets/actual.css",
+          method: "HEAD",
+          rootPath: tmp,
+          headers: { "accept-encoding": "gzip" },
+        });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(res.setHeader).toHaveBeenCalledWith("Content-Encoding", "gzip");
+        expect(firstEndCallLength(end)).toBe(0);
+      },
+    });
+  });
+
+  it("does not compress already-compressed image assets", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        await writeAssetFile(tmp, "photo.png", "png-bytes");
+
+        const { res, end, handled } = await runControlUiRequest({
+          url: "/assets/photo.png",
+          method: "GET",
+          rootPath: tmp,
+          headers: { "accept-encoding": "gzip" },
+        });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(res.setHeader).not.toHaveBeenCalledWith("Content-Encoding", "gzip");
+        expect(responseBody(end)).toBe("png-bytes");
       },
     });
   });
