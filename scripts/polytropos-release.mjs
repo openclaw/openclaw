@@ -368,19 +368,24 @@ const prefix = getGlobalPrefix();
 banner(logStream, `Installing globally into prefix: ${prefix}`);
 await shTee(logStream, "npm", ["install", "-g", "--prefix", prefix, currentTgz]);
 
-// Run the installed package postinstall helper from the global prefix (not the repo copy).
-banner(logStream, "Running installed package postinstall helper...");
+// Run the Polytropos-owned bundled plugin deps helper from the repo (targets the installed package root).
+banner(logStream, "Running Polytropos bundled plugin deps helper...");
 {
   const npmRoot = sh("npm", ["root", "-g", "--prefix", prefix]);
   const pkgName = sh("node", ["-p", "require('./package.json').name"], { cwd: repoRoot });
   const installedRoot = path.join(npmRoot, pkgName);
-  const helperPath = path.join(installedRoot, "scripts", "postinstall-bundled-plugins.mjs");
+  const helperPath = path.join(repoRoot, "scripts", "polytropos-bundled-plugin-deps-helper.mjs");
   if (!fs.existsSync(helperPath)) {
-    fail(
-      `postinstall helper not found at ${helperPath} (resolved from installedRoot=${installedRoot})`,
-    );
+    fail(`Polytropos helper not found at ${helperPath}`);
   }
-  await shTee(logStream, "node", [helperPath]);
+  await shTee(logStream, "node", [
+    helperPath,
+    "--package-root",
+    installedRoot,
+    "--extensions-dir",
+    path.join(installedRoot, "dist", "extensions"),
+    "--allow-non-global",
+  ]);
 }
 
 banner(logStream, "Restarting gateway...");

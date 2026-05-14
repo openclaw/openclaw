@@ -73,6 +73,7 @@ What it does (high level):
 - runs `npm pack` to produce `v<ver>+poly.<N>.tgz`
 - updates symlinks (mandatory): `previous.tgz` then `current.tgz`
 - installs `current.tgz` globally into `/home/ec2-user/.npm-global`
+- runs the Polytropos bundled plugin deps helper (`scripts/polytropos-bundled-plugin-deps-helper.mjs`) against the installed package root to ensure bundled plugin runtime deps are present
 - restarts the gateway
 
 ## Dev mode (without a second gateway)
