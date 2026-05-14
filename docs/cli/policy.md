@@ -55,10 +55,7 @@ policy for channels and tool metadata looks like this:
     ],
   },
   "tools": {
-    "settings": {
-      "requireRisk": true,
-      "requireSensitivity": true,
-    },
+    "requireMetadata": ["risk", "sensitivity", "owner"],
   },
 }
 ```
@@ -117,8 +114,6 @@ Policy config lives under `plugins.entries.policy.config`.
         "config": {
           "enabled": true,
           "path": "policy.jsonc",
-          "requireRisk": true,
-          "requireSensitivity": true,
           "runtimeToolPolicy": false,
           "workspaceRepairs": false,
           "expectedHash": "sha256:...",
@@ -130,22 +125,20 @@ Policy config lives under `plugins.entries.policy.config`.
 }
 ```
 
-| Setting                   | Purpose                                                             |
-| ------------------------- | ------------------------------------------------------------------- |
-| `enabled`                 | Enable policy checks even before `policy.jsonc` exists.             |
-| `requireRisk`             | Require governed tool declarations to include risk metadata.        |
-| `requireSensitivity`      | Require governed tool declarations to include sensitivity metadata. |
-| `runtimeToolPolicy`       | Apply enabled tool requirements through the trusted tool hook.      |
-| `workspaceRepairs`        | Allow `doctor --fix` to edit policy-managed workspace settings.     |
-| `expectedHash`            | Optional hash-lock for the approved policy artifact.                |
-| `expectedAttestationHash` | Optional hash-lock for the last accepted clean policy check.        |
-| `path`                    | Workspace-relative location of the policy artifact.                 |
+| Setting                   | Purpose                                                                  |
+| ------------------------- | ------------------------------------------------------------------------ |
+| `enabled`                 | Enable policy checks even before `policy.jsonc` exists.                  |
+| `runtimeToolPolicy`       | Apply authored tool metadata requirements through the trusted tool hook. |
+| `workspaceRepairs`        | Allow `doctor --fix` to edit policy-managed workspace settings.          |
+| `expectedHash`            | Optional hash-lock for the approved policy artifact.                     |
+| `expectedAttestationHash` | Optional hash-lock for the last accepted clean policy check.             |
+| `path`                    | Workspace-relative location of the policy artifact.                      |
 
 Set `plugins.entries.policy.config.enabled` to `false` to disable policy checks
 for a workspace while leaving the plugin installed.
 
-Tool requirement booleans can also live under `tools.settings` in
-`policy.jsonc`. Config wins when both places set the same value.
+Tool metadata requirements are authored in `policy.jsonc` with
+`tools.requireMetadata`, for example `["risk", "sensitivity", "owner"]`.
 
 ## Accept policy state
 
@@ -240,13 +233,13 @@ Policy currently verifies:
 | `policy/tools-missing-sensitivity-token` | A governed tool declaration is missing sensitivity metadata.        |
 | `policy/tools-unknown-sensitivity-token` | A governed tool declaration uses an unknown sensitivity value.      |
 
-Example JSON finding:
-
 Policy findings can include both `target` and `requirement`. `target` is the
 observed workspace thing that does not conform. `requirement` is the authored
 policy rule that made it a finding. Both values are addresses today, usually
 `oc://` paths, but the field names describe their policy role rather than the
 address format.
+
+Example JSON finding:
 
 ```json
 {
@@ -274,7 +267,7 @@ Example tool finding:
   "line": 12,
   "ocPath": "oc://TOOLS.md/tools/deploy",
   "target": "oc://TOOLS.md/tools/deploy",
-  "requirement": "oc://policy.jsonc/tools/settings/requireRisk"
+  "requirement": "oc://policy.jsonc/tools/requireMetadata"
 }
 ```
 

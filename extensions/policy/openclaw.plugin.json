@@ -20,14 +20,6 @@
         "type": "boolean",
         "description": "Enable policy doctor checks even before policy.jsonc exists."
       },
-      "requireRisk": {
-        "type": "boolean",
-        "description": "Require governed tool declarations in TOOLS.md to include risk metadata."
-      },
-      "requireSensitivity": {
-        "type": "boolean",
-        "description": "Require governed tool declarations in TOOLS.md to include sensitivity metadata."
-      },
       "runtimeToolPolicy": {
         "type": "boolean",
         "description": "Apply enabled policy tool requirements at runtime through the trusted tool policy hook."

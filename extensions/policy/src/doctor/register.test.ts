@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  runDoctorLintChecks,
   type HealthCheck,
   type HealthCheckContext,
   type HealthFinding,
@@ -87,6 +88,7 @@ async function runDeniedChannelRepair(repairCheckCtx: HealthRepairContext) {
 
 describe("registerPolicyDoctorChecks", () => {
   beforeEach(async () => {
+    resetPolicyDoctorChecksForTest();
     workspaceDir = await fs.mkdtemp(join(tmpdir(), "policy-doctor-"));
   });
 
@@ -113,6 +115,7 @@ describe("registerPolicyDoctorChecks", () => {
       "policy/tools-missing-risk-level",
       "policy/tools-unknown-risk-level",
       "policy/tools-missing-sensitivity-token",
+      "policy/tools-missing-owner",
       "policy/tools-unknown-sensitivity-token",
     ]);
     expect(duplicateChecks).toEqual([]);
@@ -530,33 +533,67 @@ describe("registerPolicyDoctorChecks", () => {
     expect(result.findings).toEqual([]);
   });
 
+  it("reports invalid requireMetadata policy entries", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ tools: { requireMetadata: ["risk", "unsupported"] } }),
+      "utf-8",
+    );
+    await fs.writeFile(join(workspaceDir, "TOOLS.md"), "## Tools\n\n### deploy\n", "utf-8");
+
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()), {
+      checks: registerChecks(),
+    });
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/policy-jsonc-invalid",
+        severity: "error",
+        path: "policy.jsonc",
+        target: "oc://policy.jsonc/tools/requireMetadata/#1",
+      }),
+    ]);
+  });
+
   it("reports governed tools missing risk and sensitivity metadata", async () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     await fs.writeFile(configPath, "{}", "utf-8");
     await fs.writeFile(
       join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({ tools: { settings: { requireRisk: true, requireSensitivity: true } } }),
+      JSON.stringify({ tools: { requireMetadata: ["risk", "sensitivity", "owner"] } }),
       "utf-8",
     );
     await fs.writeFile(join(workspaceDir, "TOOLS.md"), "## Tools\n\n### deploy\n", "utf-8");
 
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()), {
+      checks: registerChecks(),
+    });
 
-    expect(result.findings).toEqual([
-      expect.objectContaining({
-        checkId: "policy/tools-missing-risk-level",
-        severity: "error",
-        path: "TOOLS.md",
-        ocPath: "oc://TOOLS.md/tools/deploy",
-      }),
-      expect.objectContaining({
-        checkId: "policy/tools-missing-sensitivity-token",
-        severity: "error",
-        path: "TOOLS.md",
-        ocPath: "oc://TOOLS.md/tools/deploy",
-      }),
-    ]);
+    expect(result.findings).toHaveLength(3);
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/tools-missing-risk-level",
+          severity: "error",
+          path: "TOOLS.md",
+          ocPath: "oc://TOOLS.md/tools/deploy",
+        }),
+        expect.objectContaining({
+          checkId: "policy/tools-missing-sensitivity-token",
+          severity: "error",
+          path: "TOOLS.md",
+          ocPath: "oc://TOOLS.md/tools/deploy",
+        }),
+        expect.objectContaining({
+          checkId: "policy/tools-missing-owner",
+          severity: "error",
+          path: "TOOLS.md",
+          ocPath: "oc://TOOLS.md/tools/deploy",
+        }),
+      ]),
+    );
   });
 
   it("reports unknown governed tool risk metadata", async () => {
@@ -564,7 +601,7 @@ describe("registerPolicyDoctorChecks", () => {
     await fs.writeFile(configPath, "{}", "utf-8");
     await fs.writeFile(
       join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({ tools: { settings: { requireRisk: true } } }),
+      JSON.stringify({ tools: { requireMetadata: ["risk"] } }),
       "utf-8",
     );
     await fs.writeFile(
@@ -573,8 +610,9 @@ describe("registerPolicyDoctorChecks", () => {
       "utf-8",
     );
 
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()), {
+      checks: registerChecks(),
+    });
 
     expect(result.findings).toEqual([
       expect.objectContaining({
@@ -591,7 +629,7 @@ describe("registerPolicyDoctorChecks", () => {
     await fs.writeFile(configPath, "{}", "utf-8");
     await fs.writeFile(
       join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({ tools: { settings: { requireSensitivity: true } } }),
+      JSON.stringify({ tools: { requireMetadata: ["sensitivity"] } }),
       "utf-8",
     );
     await fs.writeFile(
@@ -600,8 +638,9 @@ describe("registerPolicyDoctorChecks", () => {
       "utf-8",
     );
 
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()), {
+      checks: registerChecks(),
+    });
 
     expect(result.findings).toEqual([
       expect.objectContaining({

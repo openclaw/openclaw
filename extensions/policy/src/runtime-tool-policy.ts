@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import { basename, isAbsolute, resolve } from "node:path";
-import { parseOcDocument, type Diagnostic, type JsoncAst } from "@openclaw/oc-path/api.js";
+import JSON5 from "json5";
 import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
@@ -8,7 +8,6 @@ import type {
   PluginJsonValue,
   PluginTrustedToolPolicyRegistration,
 } from "openclaw/plugin-sdk/core";
-import { jsoncValueToUnknown } from "./jsonc-value.js";
 import {
   collectPolicyEvidence,
   policyDocumentHash,
@@ -17,11 +16,11 @@ import {
   type PolicyToolEvidence,
 } from "./policy-state.js";
 
+const SUPPORTED_TOOL_METADATA = ["risk", "sensitivity", "owner"] as const;
+
 type PolicyRuntimeSettings = {
   readonly enabled?: boolean;
   readonly runtimeToolPolicy?: boolean;
-  readonly requireRisk?: boolean;
-  readonly requireSensitivity?: boolean;
   readonly expectedHash?: string;
   readonly path?: string;
 };
@@ -183,7 +182,7 @@ function runtimeApprovalMetadata(
       scope: "policy",
       hash: policyWorkspaceHash(state.evidence),
     },
-    target: tool?.ocPath ?? `oc://TOOLS.md/tools/${toolName}`,
+    target: tool?.source ?? `oc://TOOLS.md/tools/${toolName}`,
   };
 }
 
@@ -202,8 +201,8 @@ async function loadRuntimePolicyState(
   if (policyRaw === null) {
     return { policyPath, evidence, settings };
   }
-  const parsed = parsePolicyFile(policyRaw, policyPath);
-  if (parsed.diagnostics.some((diagnostic) => diagnostic.severity === "error")) {
+  const parsed = parsePolicyFile(policyRaw);
+  if (!parsed.ok) {
     return {
       policyPath,
       policyError: `Policy tool runtime is enabled, but ${policyPath} could not be parsed.`,
@@ -211,7 +210,7 @@ async function loadRuntimePolicyState(
       settings,
     };
   }
-  const policy = parsed.ast.root === null ? {} : jsoncValueToUnknown(parsed.ast.root);
+  const policy = parsed.value;
   const policyShapeError = validateRuntimePolicyShape(policy, policyPath);
   if (policyShapeError !== undefined) {
     return { policyPath, policyError: policyShapeError, evidence, settings };
@@ -226,26 +225,30 @@ async function loadRuntimePolicyState(
 }
 
 function toolMetadataRequired(state: RuntimePolicyState): boolean {
-  return requireRisk(state) || requireSensitivity(state);
+  return requiredToolMetadata(state.policy).size > 0;
 }
 
 function toolMetadataBlockReason(
   tool: PolicyToolEvidence,
   state: RuntimePolicyState,
 ): string | undefined {
-  if (requireRisk(state) && tool.risk === undefined) {
+  const required = requiredToolMetadata(state.policy);
+  if (required.has("risk") && tool.risk === undefined) {
     return `Policy requires risk metadata for '${tool.id}', but TOOLS.md does not declare it.`;
   }
   if (tool.risk !== undefined && !["low", "medium", "high", "critical"].includes(tool.risk)) {
     return `Policy requires known risk metadata for '${tool.id}', but TOOLS.md declares '${tool.risk}'.`;
   }
-  if (requireSensitivity(state)) {
+  if (required.has("sensitivity")) {
     if (tool.sensitivity === undefined) {
       return `Policy requires sensitivity metadata for '${tool.id}', but TOOLS.md does not declare it.`;
     }
     if (!["public", "internal", "confidential", "restricted"].includes(tool.sensitivity)) {
       return `Policy requires known sensitivity metadata for '${tool.id}', but TOOLS.md declares '${tool.sensitivity}'.`;
     }
+  }
+  if (required.has("owner") && tool.owner === undefined) {
+    return `Policy requires owner metadata for '${tool.id}', but TOOLS.md does not declare it.`;
   }
   return undefined;
 }
@@ -258,6 +261,16 @@ function validateRuntimePolicyShape(policy: unknown, policyPath: string): string
     return `Policy tool runtime is enabled, but ${policyPath} has an invalid tools section.`;
   }
   if (isRecord(policy.tools)) {
+    if (
+      policy.tools.requireMetadata !== undefined &&
+      !isStringArray(policy.tools.requireMetadata)
+    ) {
+      return `Policy tool runtime is enabled, but ${policyPath} has an invalid tools.requireMetadata section.`;
+    }
+    const unsupported = unsupportedToolMetadata(policy.tools.requireMetadata);
+    if (unsupported !== undefined) {
+      return `Policy tool runtime is enabled, but ${policyPath} has unsupported tools.requireMetadata '${unsupported}'.`;
+    }
     if (policy.tools.settings !== undefined && !isRecord(policy.tools.settings)) {
       return `Policy tool runtime is enabled, but ${policyPath} has an invalid tools.settings section.`;
     }
@@ -278,18 +291,42 @@ function validateRuntimePolicyShape(policy: unknown, policyPath: string): string
   return undefined;
 }
 
-function requireRisk(state: RuntimePolicyState): boolean {
-  return (
-    state.settings.requireRisk === true ||
-    readPolicyBoolean(state.policy, ["tools", "settings", "requireRisk"]) === true
-  );
+function requiredToolMetadata(policy: unknown): ReadonlySet<string> {
+  return new Set(readPolicyStringArray(policy, ["tools", "requireMetadata"]) ?? []);
 }
 
-function requireSensitivity(state: RuntimePolicyState): boolean {
-  return (
-    state.settings.requireSensitivity === true ||
-    readPolicyBoolean(state.policy, ["tools", "settings", "requireSensitivity"]) === true
-  );
+function readPolicyStringArray(
+  policy: unknown,
+  path: readonly string[],
+): readonly string[] | undefined {
+  let current: unknown = policy;
+  for (const part of path) {
+    if (!isRecord(current)) {
+      return undefined;
+    }
+    current = current[part];
+  }
+  if (!Array.isArray(current) || !current.every((entry) => typeof entry === "string")) {
+    return undefined;
+  }
+  return current.map((entry) => entry.trim().toLowerCase()).filter(Boolean);
+}
+
+function isStringArray(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+}
+
+function unsupportedToolMetadata(value: unknown): string | undefined {
+  if (!isStringArray(value)) {
+    return undefined;
+  }
+  return value
+    .map((entry) => entry.trim().toLowerCase())
+    .find(
+      (entry) =>
+        entry !== "" &&
+        !SUPPORTED_TOOL_METADATA.includes(entry as (typeof SUPPORTED_TOOL_METADATA)[number]),
+    );
 }
 
 function toolApprovalReason(tool: PolicyToolEvidence): string | undefined {
@@ -345,27 +382,12 @@ async function readFileIfExists(path: string): Promise<string | null> {
 
 function parsePolicyFile(
   raw: string,
-  fileName: string,
-): {
-  readonly ast: JsoncAst;
-  readonly diagnostics: readonly Diagnostic[];
-} {
-  const parsed = parseOcDocument(raw, { fileName });
-  if (parsed.ast.kind !== "jsonc") {
-    throw new Error(`${fileName} did not parse as jsonc.`);
+): { readonly ok: true; readonly value: unknown } | { readonly ok: false } {
+  try {
+    return { ok: true, value: JSON5.parse(raw) };
+  } catch {
+    return { ok: false };
   }
-  return { ast: parsed.ast, diagnostics: parsed.diagnostics };
-}
-
-function readPolicyBoolean(policy: unknown, path: readonly string[]): boolean | undefined {
-  let current: unknown = policy;
-  for (const part of path) {
-    if (!isRecord(current)) {
-      return undefined;
-    }
-    current = current[part];
-  }
-  return typeof current === "boolean" ? current : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

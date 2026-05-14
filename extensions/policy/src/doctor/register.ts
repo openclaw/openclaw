@@ -19,6 +19,7 @@ const CHECK_IDS = {
   policyHashMismatch: "policy/policy-hash-mismatch",
   policyInvalidFile: "policy/policy-jsonc-invalid",
   policyMissingFile: "policy/policy-jsonc-missing",
+  policyMissingToolOwner: "policy/tools-missing-owner",
   policyMissingToolRisk: "policy/tools-missing-risk-level",
   policyMissingToolSensitivity: "policy/tools-missing-sensitivity-token",
   policyUnknownToolRisk: "policy/tools-unknown-risk-level",
@@ -34,11 +35,13 @@ export const POLICY_CHECK_IDS = [
   CHECK_IDS.policyMissingToolRisk,
   CHECK_IDS.policyUnknownToolRisk,
   CHECK_IDS.policyMissingToolSensitivity,
+  CHECK_IDS.policyMissingToolOwner,
   CHECK_IDS.policyUnknownToolSensitivity,
 ] as const;
 
 const KNOWN_RISK_LEVELS = ["low", "medium", "high", "critical"] as const;
 const KNOWN_SENSITIVITY_LEVELS = ["public", "internal", "confidential", "restricted"] as const;
+const SUPPORTED_TOOL_METADATA = ["risk", "sensitivity", "owner"] as const;
 
 let registered = false;
 const policyEvaluationCache = new WeakMap<HealthCheckContext, Promise<PolicyEvaluation>>();
@@ -72,6 +75,7 @@ export function registerPolicyDoctorChecks(host?: PolicyDoctorRegistrationHost):
   registerHealthCheck(policyToolsMissingRiskCheck);
   registerHealthCheck(policyToolsUnknownRiskCheck);
   registerHealthCheck(policyToolsMissingSensitivityCheck);
+  registerHealthCheck(policyToolsMissingOwnerCheck);
   registerHealthCheck(policyToolsUnknownSensitivityCheck);
   registered = true;
 }
@@ -205,6 +209,16 @@ const policyToolsUnknownSensitivityCheck: HealthCheck = {
   },
 };
 
+const policyToolsMissingOwnerCheck: HealthCheck = {
+  id: CHECK_IDS.policyMissingToolOwner,
+  kind: "plugin",
+  description: "TOOLS.md policy entries declare an accountable owner.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyMissingToolOwner);
+  },
+};
+
 async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEvaluation> {
   const settings = policySettings(ctx);
   const policyPath = policyDisplayName(ctx);
@@ -284,20 +298,27 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
     };
   }
 
+  const metadataRequirementFindings = toolMetadataRequirementFindings(policy, policyFile.ocDocName);
   const policyFindings: HealthFinding[] = [
     ...channelFindings(
-    policy,
-    policyFile.displayName,
-    policyFile.ocDocName,
-    evidence,
+      policy,
+      policyFile.displayName,
+      policyFile.ocDocName,
+      evidence,
     ),
+    ...metadataRequirementFindings,
   ];
-  if (policyRequirementEnabled(settings, policy, "requireRisk")) {
+  const requiredMetadata =
+    metadataRequirementFindings.length === 0 ? requiredToolMetadata(policy) : new Set<string>();
+  if (requiredMetadata.has("risk")) {
     policyFindings.push(...toolRiskFindings(policyFile.ocDocName, evidence));
     policyFindings.push(...toolUnknownRiskFindings(policyFile.ocDocName, evidence));
   }
-  if (policyRequirementEnabled(settings, policy, "requireSensitivity")) {
+  if (requiredMetadata.has("sensitivity")) {
     policyFindings.push(...toolSensitivityFindings(policyFile.ocDocName, evidence));
+  }
+  if (requiredMetadata.has("owner")) {
+    policyFindings.push(...toolOwnerFindings(policyFile.ocDocName, evidence));
   }
   const attestationFindings = policyAttestationFindings(
     policyFile.displayName,
@@ -443,6 +464,50 @@ function toAttestedFinding(finding: HealthFinding): Record<string, unknown> {
   };
 }
 
+function toolMetadataRequirementFindings(
+  policy: unknown,
+  policyDocName: string,
+): readonly HealthFinding[] {
+  if (!isRecord(policy) || !isRecord(policy.tools) || policy.tools.requireMetadata === undefined) {
+    return [];
+  }
+  if (!Array.isArray(policy.tools.requireMetadata)) {
+    return [
+      {
+        checkId: CHECK_IDS.policyInvalidFile,
+        severity: "error",
+        message: "policy.jsonc tools.requireMetadata must be an array of metadata keys.",
+        source: "policy",
+        path: "policy.jsonc",
+        target: `oc://${policyDocName}/tools/requireMetadata`,
+        fixHint: `Use supported metadata keys: ${SUPPORTED_TOOL_METADATA.join(", ")}.`,
+      },
+    ];
+  }
+  const invalidIndex = policy.tools.requireMetadata.findIndex(
+    (entry) =>
+      typeof entry !== "string" ||
+      (entry.trim() !== "" &&
+        !SUPPORTED_TOOL_METADATA.includes(
+          entry.trim().toLowerCase() as (typeof SUPPORTED_TOOL_METADATA)[number],
+        )),
+  );
+  if (invalidIndex < 0) {
+    return [];
+  }
+  return [
+    {
+      checkId: CHECK_IDS.policyInvalidFile,
+      severity: "error",
+      message: `policy.jsonc tools.requireMetadata[${invalidIndex}] must be a supported metadata key.`,
+      source: "policy",
+      path: "policy.jsonc",
+      target: `oc://${policyDocName}/tools/requireMetadata/#${invalidIndex}`,
+      fixHint: `Use supported metadata keys: ${SUPPORTED_TOOL_METADATA.join(", ")}.`,
+    },
+  ];
+}
+
 function invalidChannelDenyRuleFindings(
   policy: unknown,
   policyPath: string,
@@ -497,7 +562,7 @@ function toolRiskFindings(
         line: tool.line,
         ocPath: tool.source,
         target: tool.source,
-        requirement: `oc://${policyDocName}/tools/settings/requireRisk`,
+        requirement: `oc://${policyDocName}/tools/requireMetadata`,
         fixHint:
           "Declare risk:low, risk:medium, risk:high, risk:critical, or an R0-R5 review alias.",
       };
@@ -524,7 +589,7 @@ function toolUnknownRiskFindings(
         line: tool.line,
         ocPath: tool.source,
         target: tool.source,
-        requirement: `oc://${policyDocName}/tools/settings/requireRisk`,
+        requirement: `oc://${policyDocName}/tools/requireMetadata`,
         fixHint: `Use one of: ${KNOWN_RISK_LEVELS.join(", ")}.`,
       };
     });
@@ -546,7 +611,7 @@ function toolSensitivityFindings(
           line: tool.line,
           ocPath: tool.source,
           target: tool.source,
-          requirement: `oc://${policyDocName}/tools/settings/requireSensitivity`,
+          requirement: `oc://${policyDocName}/tools/requireMetadata`,
           fixHint: `Declare sensitivity as one of: ${KNOWN_SENSITIVITY_LEVELS.join(", ")}.`,
         },
       ];
@@ -568,11 +633,33 @@ function toolSensitivityFindings(
         line: tool.line,
         ocPath: tool.source,
         target: tool.source,
-        requirement: `oc://${policyDocName}/tools/settings/requireSensitivity`,
+        requirement: `oc://${policyDocName}/tools/requireMetadata`,
         fixHint: `Use one of: ${KNOWN_SENSITIVITY_LEVELS.join(", ")}.`,
       },
     ];
   });
+}
+
+function toolOwnerFindings(
+  policyDocName: string,
+  evidence: PolicyEvidence,
+): readonly HealthFinding[] {
+  return evidence.tools
+    .filter((tool) => tool.owner === undefined)
+    .map((tool): HealthFinding => {
+      return {
+        checkId: CHECK_IDS.policyMissingToolOwner,
+        severity: "error",
+        message: `TOOLS.md tool '${tool.id}' has no declared owner.`,
+        source: "policy",
+        path: "TOOLS.md",
+        line: tool.line,
+        ocPath: tool.source,
+        target: tool.source,
+        requirement: `oc://${policyDocName}/tools/requireMetadata`,
+        fixHint: "Declare owner:<team-or-person> for this tool.",
+      };
+    });
 }
 
 async function readPolicyFile(
@@ -759,8 +846,6 @@ function disableChannels(
 
 type PolicySettings = {
   readonly enabled?: boolean;
-  readonly requireRisk?: boolean;
-  readonly requireSensitivity?: boolean;
   readonly workspaceRepairs?: boolean;
   readonly expectedHash?: string;
   readonly expectedAttestationHash?: string;
@@ -783,25 +868,14 @@ function policyChecksEnabled(ctx: HealthCheckContext, settings: PolicySettings):
   return settings.enabled !== false;
 }
 
-function policyRequirementEnabled(
-  settings: ReturnType<typeof policySettings>,
-  policy: unknown,
-  setting: "requireRisk" | "requireSensitivity",
-): boolean {
-  const configured = settings[setting];
-  if (typeof configured === "boolean") {
-    return configured;
-  }
-  return (
-    readPolicyBoolean(policy, ["tools", "settings", setting]) ??
-    readPolicyBoolean(policy, ["settings", setting]) ??
-    readPolicyBoolean(policy, ["policy", setting]) ??
-    readPolicyBoolean(policy, [setting]) ??
-    false
-  );
+function requiredToolMetadata(policy: unknown): ReadonlySet<string> {
+  return new Set(readPolicyStringArray(policy, ["tools", "requireMetadata"]) ?? []);
 }
 
-function readPolicyBoolean(policy: unknown, path: readonly string[]): boolean | undefined {
+function readPolicyStringArray(
+  policy: unknown,
+  path: readonly string[],
+): readonly string[] | undefined {
   let current: unknown = policy;
   for (const part of path) {
     if (!isRecord(current)) {
@@ -809,7 +883,10 @@ function readPolicyBoolean(policy: unknown, path: readonly string[]): boolean | 
     }
     current = current[part];
   }
-  return typeof current === "boolean" ? current : undefined;
+  if (!Array.isArray(current) || !current.every((entry) => typeof entry === "string")) {
+    return undefined;
+  }
+  return current.map((entry) => entry.trim().toLowerCase()).filter(Boolean);
 }
 function policyPathSetting(ctx: HealthCheckContext): string {
   const configured = policySettings(ctx).path;
