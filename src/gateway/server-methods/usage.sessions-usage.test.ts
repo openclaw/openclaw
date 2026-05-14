@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 
 vi.mock("../../config/config.js", () => {
@@ -107,12 +108,15 @@ const TEST_RUNTIME_CONFIG = {
   session: {},
 };
 
-async function runSessionsUsage(params: Record<string, unknown>) {
+async function runSessionsUsage(
+  params: Record<string, unknown>,
+  config: OpenClawConfig = TEST_RUNTIME_CONFIG,
+) {
   const respond = vi.fn();
   await usageHandlers["sessions.usage"]({
     respond,
     params,
-    context: { getRuntimeConfig: () => TEST_RUNTIME_CONFIG },
+    context: { getRuntimeConfig: () => config },
   } as unknown as Parameters<(typeof usageHandlers)["sessions.usage"]>[0]);
   return respond;
 }
@@ -289,6 +293,62 @@ describe("sessions.usage", () => {
             agentId: "opus",
             sessionFile,
             sessionId: "main",
+          }),
+        );
+      });
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps global session entries in requested-agent usage lookups", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-usage-test-"));
+    const config: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", default: true }, { id: "opus" }],
+      },
+      session: { scope: "global" },
+    };
+
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const agentSessionsDir = path.join(stateDir, "agents", "opus", "sessions");
+        fs.mkdirSync(agentSessionsDir, { recursive: true });
+        const sessionFile = path.join(agentSessionsDir, "current.jsonl");
+        fs.writeFileSync(sessionFile, "", "utf-8");
+
+        const sessionEntry = {
+          sessionId: "current",
+          sessionFile: "current.jsonl",
+          label: "Opus global",
+          updatedAt: 999,
+        };
+        vi.mocked(loadCombinedSessionStoreForGateway).mockReturnValue({
+          storePath: "(multiple)",
+          store: {
+            global: sessionEntry,
+          },
+        });
+
+        const respond = await runSessionsUsage(
+          {
+            ...BASE_USAGE_RANGE,
+            key: "global",
+            agentId: "opus",
+          },
+          config,
+        );
+
+        const sessions = expectSuccessfulSessionsUsage(respond);
+        expect(sessions).toHaveLength(1);
+        expect(sessions[0]?.key).toBe("global");
+        expect(sessions[0]?.agentId).toBe("opus");
+        expect(vi.mocked(loadSessionCostSummaryFromCache)).toHaveBeenCalledWith(
+          expect.objectContaining({
+            agentId: "opus",
+            sessionEntry,
+            sessionFile,
+            sessionId: "current",
           }),
         );
       });

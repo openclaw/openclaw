@@ -61,6 +61,7 @@ function expectFields(value: unknown, expected: Record<string, unknown>): void {
 describe("artifacts RPC handlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    hoisted.resolveSessionKeyForRun.mockReset();
     hoisted.getTaskSessionLookupByIdForStatus.mockReturnValue(undefined);
     hoisted.loadSessionEntry.mockReturnValue({
       storePath: "/tmp/sessions.json",
@@ -162,6 +163,40 @@ describe("artifacts RPC handlers", () => {
     expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("agent:work:primary");
     const payload = calls[0]?.payload as { artifacts?: Array<Record<string, unknown>> };
     expectFields(payload.artifacts?.[0], { sessionKey: "agent:work:primary" });
+  });
+
+  it("preserves agent scope when loading global-scope run artifacts", async () => {
+    const { calls, respond } = createResponder();
+    hoisted.resolveSessionKeyForRun.mockReturnValue("global");
+    mockedMessages([
+      {
+        role: "assistant",
+        content: [{ type: "file", data: "aGVsbG8=", mimeType: "text/plain", title: "out.txt" }],
+        __openclaw: { seq: 2, runId: "run-global" },
+      },
+    ]);
+
+    await artifactsHandlers["artifacts.list"]?.({
+      req: { type: "req", id: "global-run-agent-scope", method: "artifacts.list", params: {} },
+      params: { runId: "run-global", agentId: "work" },
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+      context: {
+        getRuntimeConfig: () => ({
+          session: { scope: "global" },
+          agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        }),
+      } as never,
+    });
+
+    expect(calls[0]?.ok).toBe(true);
+    expect(hoisted.resolveSessionKeyForRun).toHaveBeenCalledWith("run-global", {
+      agentId: "work",
+    });
+    expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("global", { agentId: "work" });
+    const payload = calls[0]?.payload as { artifacts?: Array<Record<string, unknown>> };
+    expectFields(payload.artifacts?.[0], { sessionKey: "global", runId: "run-global" });
   });
 
   it("gets and downloads an inline artifact", async () => {

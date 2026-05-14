@@ -395,7 +395,11 @@ async function loadArtifacts(
   if (!sessionKey) {
     return { artifacts: [] };
   }
-  const { storePath, entry } = loadSessionEntry(sessionKey);
+  const scopedGlobalAgentId =
+    cfg?.session?.scope === "global" && sessionKey === "global" ? query.agentId : undefined;
+  const { storePath, entry } = scopedGlobalAgentId
+    ? loadSessionEntry(sessionKey, { agentId: scopedGlobalAgentId })
+    : loadSessionEntry(sessionKey);
   const sessionId = entry?.sessionId;
   if (!sessionId || !storePath) {
     return { sessionKey, artifacts: [] };
