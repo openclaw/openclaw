@@ -593,7 +593,10 @@ export async function startGatewayServer(
   const diagnosticsEnabled = isDiagnosticsEnabled(cfgAtStart);
   setDiagnosticsEnabledForProcess(diagnosticsEnabled);
   if (diagnosticsEnabled) {
-    startDiagnosticHeartbeat(undefined, { getConfig: getRuntimeConfig });
+    startDiagnosticHeartbeat(undefined, {
+      getConfig: getRuntimeConfig,
+      startupGraceMs: 60_000,
+    });
   }
   setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(cfgAtStart) });
   let getActiveTaskCount = () => 0;
