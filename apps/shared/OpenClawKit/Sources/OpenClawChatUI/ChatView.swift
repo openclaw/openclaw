@@ -434,11 +434,11 @@ public struct OpenClawChatView: View {
             guard kind == "text" || kind.isEmpty else { return nil }
             return content.text
         }
-        let text = parts.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-        if !text.isEmpty {
-            return text
-        }
-        return (message.errorMessage ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return OpenClawChatMessage.displayText(
+            contentText: parts.joined(separator: "\n"),
+            role: message.role,
+            stopReason: message.stopReason,
+            errorMessage: message.errorMessage)
     }
 
     private func hasInlineAttachments(in message: OpenClawChatMessage) -> Bool {

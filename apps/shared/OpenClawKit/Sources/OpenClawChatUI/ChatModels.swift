@@ -183,41 +183,28 @@ public struct OpenClawChatMessage: Codable, Identifiable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.role = try container.decode(String.self, forKey: .role)
-        self.timestamp = try container.decodeIfPresent(Double.self, forKey: .timestamp)
-        self.toolCallId =
+        let decodedRole = try container.decode(String.self, forKey: .role)
+        let decodedTimestamp = try container.decodeIfPresent(Double.self, forKey: .timestamp)
+        let decodedToolCallId =
             try container.decodeIfPresent(String.self, forKey: .toolCallId) ??
             container.decodeIfPresent(String.self, forKey: .tool_call_id)
-        self.toolName =
+        let decodedToolName =
             try container.decodeIfPresent(String.self, forKey: .toolName) ??
             container.decodeIfPresent(String.self, forKey: .tool_name)
-        self.usage = try container.decodeIfPresent(OpenClawChatUsage.self, forKey: .usage)
-        self.stopReason = try container.decodeIfPresent(String.self, forKey: .stopReason)
-        self.errorMessage = try container.decodeIfPresent(String.self, forKey: .errorMessage)
+        let decodedUsage = try container.decodeIfPresent(OpenClawChatUsage.self, forKey: .usage)
+        let decodedStopReason = try container.decodeIfPresent(String.self, forKey: .stopReason)
+        let decodedErrorMessage = try container.decodeIfPresent(String.self, forKey: .errorMessage)
 
-        let fallbackErrorContent: [OpenClawChatMessageContent] = {
-            guard let text = self.errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !text.isEmpty
-            else {
-                return []
-            }
-            return [
-                OpenClawChatMessageContent(
-                    type: "text",
-                    text: text,
-                    thinking: nil,
-                    thinkingSignature: nil,
-                    mimeType: nil,
-                    fileName: nil,
-                    content: nil,
-                    id: nil,
-                    name: nil,
-                    arguments: nil),
-            ]
-        }()
+        self.role = decodedRole
+        self.timestamp = decodedTimestamp
+        self.toolCallId = decodedToolCallId
+        self.toolName = decodedToolName
+        self.usage = decodedUsage
+        self.stopReason = decodedStopReason
+        self.errorMessage = decodedErrorMessage
 
         if let decoded = try? container.decode([OpenClawChatMessageContent].self, forKey: .content) {
-            self.content = decoded.isEmpty ? fallbackErrorContent : decoded
+            self.content = decoded
             return
         }
 
@@ -239,8 +226,43 @@ public struct OpenClawChatMessage: Codable, Identifiable, Sendable {
             return
         }
 
-        self.content = fallbackErrorContent
+        self.content = []
     }
+
+    static func displayText(
+        contentText: String,
+        role: String,
+        stopReason: String?,
+        errorMessage: String?) -> String
+    {
+        let text = contentText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let errorText = Self.errorDisplayText(
+            role: role,
+            stopReason: stopReason,
+            errorMessage: errorMessage)
+        else {
+            return text
+        }
+        if text.isEmpty || text == Self.streamErrorFallbackText {
+            return errorText
+        }
+        return text
+    }
+
+    static func errorDisplayText(role: String, stopReason: String?, errorMessage: String?) -> String? {
+        let normalizedRole = role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedStopReason = stopReason?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard normalizedRole == "assistant",
+              normalizedStopReason == "error",
+              let text = errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !text.isEmpty
+        else {
+            return nil
+        }
+        return text
+    }
+
+    private static let streamErrorFallbackText = "[assistant turn failed before producing content]"
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
