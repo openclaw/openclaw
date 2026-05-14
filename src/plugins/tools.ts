@@ -1220,56 +1220,88 @@ export function resolvePluginTools(params: {
   if (runtimePluginIds.length === 0) {
     return tools;
   }
-  const loadOptions = buildPluginRuntimeLoadOptions(context, {
+  // Check candidates independently so an unloaded manifest sibling cannot make the
+  // registry's strict required-id lookup hide a loaded sibling.
+  const loadedPluginIds = new Set(
+    runtimePluginIds.filter((pluginId) =>
+      (["channel", "active"] as const).some(
+        (surface) =>
+          getLoadedRuntimePluginRegistry({
+            env,
+            loadOptions: loadState.loadOptions,
+            workspaceDir: loadState.loadOptions.workspaceDir,
+            requiredPluginIds: [pluginId],
+            surface,
+          }) !== undefined,
+      ),
+    ),
+  );
+  const explicitlyConfiguredPluginIds = new Set<string>();
+  const normalizedPlugins = normalizePluginsConfig(context.config.plugins);
+  for (const slotPluginId of [
+    normalizedPlugins.slots.memory,
+    normalizedPlugins.slots.contextEngine,
+  ]) {
+    if (slotPluginId) {
+      explicitlyConfiguredPluginIds.add(slotPluginId);
+    }
+  }
+  const pluginsConfig = (context.config as { plugins?: unknown } | undefined)?.plugins as
+    | { allow?: unknown; entries?: unknown }
+    | undefined;
+  if (pluginsConfig) {
+    if (Array.isArray(pluginsConfig.allow)) {
+      for (const id of pluginsConfig.allow) {
+        if (typeof id === "string") {
+          explicitlyConfiguredPluginIds.add(id);
+        }
+      }
+    }
+    if (pluginsConfig.entries && typeof pluginsConfig.entries === "object") {
+      for (const [id, entry] of Object.entries(pluginsConfig.entries as Record<string, unknown>)) {
+        if (
+          entry &&
+          typeof entry === "object" &&
+          (entry as { enabled?: unknown }).enabled === true
+        ) {
+          explicitlyConfiguredPluginIds.add(id);
+        }
+      }
+    }
+  }
+  for (const plugin of snapshot.plugins) {
+    if (plugin.origin === "config") {
+      explicitlyConfiguredPluginIds.add(plugin.id);
+    }
+  }
+  const eligiblePluginIds = runtimePluginIds.filter(
+    (id) => loadedPluginIds.has(id) || explicitlyConfiguredPluginIds.has(id),
+  );
+  if (eligiblePluginIds.length === 0) {
+    return tools;
+  }
+  const eligibleLoadOptions = buildPluginRuntimeLoadOptions(context, {
     activate: false,
     toolDiscovery: true,
-    onlyPluginIds: runtimePluginIds,
+    onlyPluginIds: eligiblePluginIds,
     runtimeOptions,
   });
-  let registry = registryHasScopedPluginTools(params.runtimeRegistry, runtimePluginIds)
+  const registry = registryHasScopedPluginTools(params.runtimeRegistry, eligiblePluginIds)
     ? params.runtimeRegistry
-    : undefined;
-  if (!registry) {
-    registry = resolvePluginToolRegistry({
-      loadOptions,
-      onlyPluginIds: runtimePluginIds,
-    });
-  }
-  if (!registry) {
-    // Cold registry: path-based plugins (origin "config") registered via plugins.load.paths
-    // are not pinned to any active channel/surface registry until explicitly loaded.
-    // Trigger a standalone load so their tool factories become available, then retry.
-    try {
-      ensureStandaloneRuntimePluginRegistryLoaded({
-        surface: "channel",
-        requiredPluginIds: runtimePluginIds,
-        loadOptions,
+    : resolvePluginToolRegistry({
+        loadOptions: eligibleLoadOptions,
+        onlyPluginIds: eligiblePluginIds,
       });
-    } catch (error) {
-      context.logger.error(
-        `failed to cold-load plugin tool registry for plugin ids [${runtimePluginIds.join(", ")}]: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-      throw error;
-    }
-    registry = resolvePluginToolRegistry({
-      loadOptions,
-      onlyPluginIds: runtimePluginIds,
-    });
-    if (!registry) {
-      context.logger.warn(
-        `plugin tool registry still unavailable after cold load for plugin ids [${runtimePluginIds.join(
-          ", ",
-        )}]`,
-      );
-      return tools;
-    }
+  if (!registry) {
+    context.logger.warn(
+      `plugin tool registry unavailable for eligible plugin ids [${eligiblePluginIds.join(", ")}]`,
+    );
+    return tools;
   }
 
-  const scopedPluginIds = new Set(runtimePluginIds);
+  const scopedPluginIds = new Set(eligiblePluginIds);
   const registryToolPluginIds = new Set(registry.tools.map((entry) => entry.pluginId));
-  const missingRegistryToolPluginIds = runtimePluginIds.filter(
+  const missingRegistryToolPluginIds = eligiblePluginIds.filter(
     (pluginId) => !registryToolPluginIds.has(pluginId),
   );
   for (const pluginId of missingRegistryToolPluginIds) {
