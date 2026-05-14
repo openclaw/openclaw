@@ -131,20 +131,20 @@ function listKnownNodeCommands(cfg: OpenClawConfig): Set<string> {
     {
       platform: "macos",
       deviceFamily: "Mac",
-      clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-      clientMode: GATEWAY_CLIENT_MODES.NODE,
+      trustedClientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+      trustedClientMode: GATEWAY_CLIENT_MODES.NODE,
     },
     {
       platform: "linux",
       deviceFamily: "Linux",
-      clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-      clientMode: GATEWAY_CLIENT_MODES.NODE,
+      trustedClientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+      trustedClientMode: GATEWAY_CLIENT_MODES.NODE,
     },
     {
       platform: "windows",
       deviceFamily: "Windows",
-      clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-      clientMode: GATEWAY_CLIENT_MODES.NODE,
+      trustedClientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+      trustedClientMode: GATEWAY_CLIENT_MODES.NODE,
     },
     { platform: "unknown" },
   ];

@@ -7,6 +7,8 @@ export type NodeSession = {
   client: GatewayWsClient;
   clientId?: string;
   clientMode?: string;
+  trustedClientId?: string;
+  trustedClientMode?: string;
   displayName?: string;
   platform?: string;
   version?: string;
@@ -166,12 +168,22 @@ export class NodeRegistry {
       typeof (connect as { pathEnv?: string }).pathEnv === "string"
         ? (connect as { pathEnv?: string }).pathEnv
         : undefined;
+    const trustedClientId =
+      typeof (connect as { trustedClientId?: string }).trustedClientId === "string"
+        ? (connect as { trustedClientId?: string }).trustedClientId
+        : undefined;
+    const trustedClientMode =
+      typeof (connect as { trustedClientMode?: string }).trustedClientMode === "string"
+        ? (connect as { trustedClientMode?: string }).trustedClientMode
+        : undefined;
     const session: NodeSession = {
       nodeId,
       connId: client.connId,
       client,
       clientId: connect.client.id,
       clientMode: connect.client.mode,
+      trustedClientId,
+      trustedClientMode,
       displayName: connect.client.displayName,
       platform: connect.client.platform,
       version: connect.client.version,

@@ -876,8 +876,8 @@ describe("resolveNodeCommandAllowlist", () => {
       {
         platform: "macOS 26.3.1",
         deviceFamily: "Mac",
-        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-        clientMode: GATEWAY_CLIENT_MODES.NODE,
+        trustedClientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+        trustedClientMode: GATEWAY_CLIENT_MODES.NODE,
       },
     );
 
@@ -893,8 +893,8 @@ describe("resolveNodeCommandAllowlist", () => {
       {
         platform: "windows",
         deviceFamily: "Windows",
-        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-        clientMode: GATEWAY_CLIENT_MODES.NODE,
+        trustedClientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+        trustedClientMode: GATEWAY_CLIENT_MODES.NODE,
       },
     );
 

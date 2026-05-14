@@ -495,7 +495,7 @@ describe("gateway node command allowlist", () => {
       const node = await findConnectedNodeByDisplayName(displayName);
       const nodeId = requireNodeId(node?.nodeId, displayName);
 
-      await expectPendingPairingCommands(nodeId, ["canvas.snapshot", "system.run"]);
+      await expectPendingPairingCommands(nodeId, ["canvas.snapshot"]);
 
       const canvasRes = await rpcReq(ws, "node.invoke", {
         nodeId,
@@ -593,7 +593,7 @@ describe("gateway node command allowlist", () => {
       );
       nodeClient = await connectNodeClientWithPairing({
         port,
-        commands: ["canvas.snapshot", "system.run"],
+        commands: ["canvas.snapshot"],
         platform: "macos",
         deviceFamily: "Mac",
         instanceId: displayName,
@@ -611,13 +611,13 @@ describe("gateway node command allowlist", () => {
       const node = await findConnectedNodeByDisplayName(displayName);
       const nodeId = requireNodeId(node?.nodeId, displayName);
       const pending = await getPendingNodePairing(nodeId);
-      expect(pending?.commands).toEqual(["canvas.snapshot", "system.run"]);
+      expect(pending?.commands).toEqual(["canvas.snapshot"]);
 
       configPath = getGatewayTestConfigPath();
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.writeFile(
         configPath,
-        JSON.stringify({ gateway: { nodes: { denyCommands: ["system.run"] } } }, null, 2),
+        JSON.stringify({ gateway: { nodes: { denyCommands: ["canvas.snapshot"] } } }, null, 2),
       );
 
       const approveRes = await rpcReq(ws, "node.pair.approve", { requestId: pending?.requestId });
@@ -628,13 +628,13 @@ describe("gateway node command allowlist", () => {
           const refreshed = await findConnectedNodeByDisplayName(displayName);
           return refreshed?.commands?.toSorted() ?? [];
         }, FAST_WAIT_OPTS)
-        .toEqual(["canvas.snapshot"]);
+        .toEqual([]);
 
       const invokeRes = await rpcReq(ws, "node.invoke", {
         nodeId,
-        command: "system.run",
-        params: { command: ["echo", "stale"] },
-        idempotencyKey: "stale-allowlist-system-run",
+        command: "canvas.snapshot",
+        params: { format: "png" },
+        idempotencyKey: "stale-allowlist-canvas-snapshot",
       });
       expect(invokeRes.ok).toBe(false);
       expect(invokeRes.error?.message ?? "").toContain("node command not allowed");

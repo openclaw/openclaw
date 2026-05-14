@@ -942,6 +942,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           authMethod,
         );
         let hasServerApprovedDeviceTokenBaseline = false;
+        let trustedClientId: string | undefined;
+        let trustedClientMode: string | undefined;
         if (device && devicePublicKey) {
           const formatAuditList = (items: string[] | undefined): string => {
             if (!items || items.length === 0) {
@@ -1189,6 +1191,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             }
           } else {
             hasServerApprovedDeviceTokenBaseline = true;
+            trustedClientId = paired.clientId;
+            trustedClientMode = paired.clientMode;
             const claimedPlatform = connectParams.client.platform;
             const pairedPlatform = paired.platform;
             const claimedDeviceFamily = connectParams.client.deviceFamily;
@@ -1287,6 +1291,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           const reconciliation = await reconcileNodePairingOnConnect({
             cfg: getRuntimeConfig(),
             connectParams,
+            trustedClientId,
+            trustedClientMode,
             pairedNode: await getPairedNode(connectParams.device?.id ?? connectParams.client.id),
             reportedClientIp,
             requestPairing: async (input) => await requestNodePairing(input),
@@ -1314,10 +1320,14 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             declaredCaps?: string[];
             declaredCommands?: string[];
             declaredPermissions?: Record<string, boolean>;
+            trustedClientId?: string;
+            trustedClientMode?: string;
           };
           nodeConnectParams.declaredCaps = reconciliation.declaredCaps;
           nodeConnectParams.declaredCommands = reconciliation.declaredCommands;
           nodeConnectParams.declaredPermissions = reconciliation.declaredPermissions;
+          nodeConnectParams.trustedClientId = reconciliation.trustedClientId;
+          nodeConnectParams.trustedClientMode = reconciliation.trustedClientMode;
           connectParams.caps = reconciliation.effectiveCaps;
           connectParams.commands = reconciliation.effectiveCommands;
           connectParams.permissions = reconciliation.effectivePermissions;

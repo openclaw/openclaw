@@ -123,6 +123,12 @@ describe("gateway/node-command-policy", () => {
       { platform: "macintosh" },
       { platform: "win32" },
       { platform: "linux-gnu" },
+      {
+        platform: "macos",
+        deviceFamily: "Mac",
+        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+        clientMode: GATEWAY_CLIENT_MODES.NODE,
+      },
     ];
 
     for (const node of cases) {
@@ -175,8 +181,8 @@ describe("gateway/node-command-policy", () => {
     for (const node of cases) {
       const allowlist = resolveNodeCommandAllowlist(cfg, {
         ...node,
-        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-        clientMode: GATEWAY_CLIENT_MODES.NODE,
+        trustedClientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+        trustedClientMode: GATEWAY_CLIENT_MODES.NODE,
       });
       expect(allowlist.has("system.run")).toBe(true);
       expect(allowlist.has("system.which")).toBe(true);

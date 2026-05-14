@@ -261,7 +261,7 @@ export function isForegroundRestrictedPluginNodeCommand(command: string): boolea
 }
 
 type NodeCommandPolicyNode = Pick<NodeSession, "platform" | "deviceFamily"> &
-  Partial<Pick<NodeSession, "caps" | "commands" | "clientId" | "clientMode">>;
+  Partial<Pick<NodeSession, "caps" | "commands" | "trustedClientId" | "trustedClientMode">>;
 
 function isDesktopPlatformId(platformId: PlatformId): boolean {
   return platformId === "macos" || platformId === "windows" || platformId === "linux";
@@ -269,8 +269,8 @@ function isDesktopPlatformId(platformId: PlatformId): boolean {
 
 function isBundledNodeHost(node?: NodeCommandPolicyNode): boolean {
   return (
-    node?.clientId === GATEWAY_CLIENT_IDS.NODE_HOST &&
-    node?.clientMode === GATEWAY_CLIENT_MODES.NODE
+    node?.trustedClientId === GATEWAY_CLIENT_IDS.NODE_HOST &&
+    node?.trustedClientMode === GATEWAY_CLIENT_MODES.NODE
   );
 }
 
