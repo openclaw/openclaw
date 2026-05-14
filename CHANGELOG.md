@@ -52,6 +52,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Channels/status reactions: sync `DEFAULT_EMOJIS` with the documented self-explanatory defaults (🧠 thinking, 🛠️ tool, 💻 coding, 🌐 web, ⏳ stallSoft, ⚠️ stallHard, ✅ done, ❌ error) so stall and lifecycle reactions read as status indicators instead of emotional commentary. Fixes #59077. Thanks @OolonColoophid.
 - Infra/retry: keep jittered retry delays at or above server-supplied Retry-After lower bounds when the hint can be honored. Fixes #68541. (#68543) Thanks @Feelw00.
 - Redact persisted secret-shaped payloads [AI]. (#79006) Thanks @pgondhi987.
 - Agents: label `.openclaw/sandboxes` exec workdirs as sandbox runs in compact tool summaries instead of showing the full path.
