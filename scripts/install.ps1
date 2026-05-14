@@ -568,10 +568,6 @@ function Install-OpenClawFromGit {
     }
 
     if (-not $SkipUpdate) {
-<<<<<<< fix-issue-81334-channel-plugins-without-channelconfigs
-        if (-not (git -C $RepoDir status --porcelain 2>$null)) {
-            try { git -C $RepoDir pull --rebase 2>$null } catch { Write-Host "[!] Git pull failed (non-critical), continuing installation..." -ForegroundColor Yellow }
-=======
         # PowerShell 7+ surfaces native-command stderr as terminating errors when
         # $ErrorActionPreference=Stop, so git's normal "From <url>" progress line
         # would abort the script. Swallow failures here — pull is best-effort.
@@ -579,7 +575,6 @@ function Install-OpenClawFromGit {
         try { $dirty = git -C $RepoDir status --porcelain 2>$null } catch {}
         if (-not $dirty) {
             try { git -C $RepoDir pull --rebase 2>$null } catch {}
->>>>>>> main
         } else {
             Write-Host "[!] Repo is dirty; skipping git pull" -ForegroundColor Yellow
         }
