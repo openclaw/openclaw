@@ -219,6 +219,34 @@ describe("pdftoppm fallback — canvas unavailable, pdftoppm available", () => {
       expect(mockRm).toHaveBeenCalledWith(dir, { recursive: true, force: true });
     }
   });
+
+  it("invokes pdftoppm with -scale-to-x/-scale-to-y so output stays within the pixel budget (#75358)", async () => {
+    // Regression: the previous fallback passed `-r <dpi>` with a 72 DPI
+    // floor, so for large source pages or small `maxPixels` budgets the
+    // rendered PNG could exceed `plan.pixels` while `remainingPixels` was
+    // decremented by the smaller planned size. Switching to
+    // `-scale-to-x` / `-scale-to-y` forces Poppler to honor the planned
+    // width/height regardless of source dimensions.
+    const extractor = freshCreate();
+    await extractor.extract({
+      buffer: Buffer.from("%PDF-1.4"),
+      mimeType: "application/pdf",
+      maxPages: 1,
+      maxPixels: 10_000, // intentionally tight — must still be honored
+      minTextChars: 10,
+    });
+    expect(mockSpawn).toHaveBeenCalled();
+    const [bin, argv] = mockSpawn.mock.calls[mockSpawn.mock.calls.length - 1] as [string, string[]];
+    expect(bin).toBe("pdftoppm");
+    expect(argv).toContain("-scale-to-x");
+    expect(argv).toContain("-scale-to-y");
+    expect(argv).not.toContain("-r");
+    const xIdx = argv.indexOf("-scale-to-x");
+    const yIdx = argv.indexOf("-scale-to-y");
+    expect(Number(argv[xIdx + 1])).toBeGreaterThan(0);
+    expect(Number(argv[yIdx + 1])).toBeGreaterThan(0);
+    expect(Number(argv[xIdx + 1]) * Number(argv[yIdx + 1])).toBeLessThanOrEqual(10_000);
+  });
 });
 
 describe("pdftoppm fallback — canvas unavailable, pdftoppm unavailable", () => {

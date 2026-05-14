@@ -6,7 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
-- Fix [openclaw#75358](https://github.com/openclaw/openclaw/issues/75358): document-extract plugin falls back to pdftoppm when @napi-rs/canvas is unavailable on headless Linux.
+- Fix [openclaw#75358](https://github.com/openclaw/openclaw/issues/75358): document-extract plugin falls back to pdftoppm when @napi-rs/canvas is unavailable on headless Linux. The fallback now invokes `pdftoppm` with `-scale-to-x`/`-scale-to-y` derived from `resolveRenderPlan`, so the rendered PNG honors the `maxPixels` budget for large pages and small budgets.
 - Control UI/i18n: add a `pnpm ui:i18n:report` baseline report for hardcoded-copy focus areas and locale fallback metadata. (#81320) Thanks @samzong.
 - Maintainer tooling: add a repo-local `codex-review` skill for Codex closeout reviews, including local dirty-work and PR-branch review helpers that rerun until no accepted/actionable findings remain and avoid unsupported inline prompts with `--base`.
 - Maintainer tooling: fail CI when pull requests add package patch files or pnpm patched dependencies, preserving the upstream-and-bump dependency workflow.

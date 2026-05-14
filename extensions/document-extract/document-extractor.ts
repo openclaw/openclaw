@@ -103,7 +103,8 @@ function isPdftoppmAvailable(): Promise<boolean> {
 async function renderPageWithPdftoppm(
   buffer: Buffer,
   pageNumber: number,
-  dpi: number,
+  targetWidth: number,
+  targetHeight: number,
 ): Promise<Buffer | null> {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "oc-pdf-"));
   await fs.chmod(tempDir, 0o700);
@@ -111,7 +112,13 @@ async function renderPageWithPdftoppm(
     const pdfPath = path.join(tempDir, "input.pdf");
     const outPrefix = path.join(tempDir, "page");
     await fs.writeFile(pdfPath, buffer);
-    const clampedDpi = Math.min(300, Math.max(72, dpi));
+    // Bound the output to the planned width/height so the post-fix pixel
+    // count never exceeds `plan.pixels`. `-scale-to-x` / `-scale-to-y`
+    // force the renderer to honor the budget regardless of source page
+    // size or DPI heuristics; without this clamp `pdftoppm` could
+    // produce a much larger PNG than the plan allowed.  See #75358.
+    const clampedWidth = Math.max(1, Math.floor(targetWidth));
+    const clampedHeight = Math.max(1, Math.floor(targetHeight));
     await new Promise<void>((resolve, reject) => {
       const child = spawn(
         "pdftoppm",
@@ -121,8 +128,10 @@ async function renderPageWithPdftoppm(
           String(pageNumber),
           "-l",
           String(pageNumber),
-          "-r",
-          String(clampedDpi),
+          "-scale-to-x",
+          String(clampedWidth),
+          "-scale-to-y",
+          String(clampedHeight),
           pdfPath,
           outPrefix,
         ],
@@ -263,8 +272,12 @@ async function extractPdfContent(
         if (!plan) {
           break;
         }
-        const dpi = Math.min(300, Math.max(72, Math.round((72 * plan.width) / viewport.width)));
-        const png = await renderPageWithPdftoppm(Buffer.from(request.buffer), pageNum, dpi);
+        const png = await renderPageWithPdftoppm(
+          Buffer.from(request.buffer),
+          pageNum,
+          plan.width,
+          plan.height,
+        );
         if (png) {
           images.push({ type: "image", data: png.toString("base64"), mimeType: "image/png" });
           remainingPixels -= plan.pixels;
