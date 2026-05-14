@@ -5,11 +5,9 @@ import {
   resetFileLockManagerForTest,
 } from "@openclaw/fs-safe/file-lock";
 import {
-  readLockFileOwnerPayload,
   removeReportedStaleLockIfStillStale,
   shouldRemoveDeadOwnerOrExpiredLock,
 } from "../infra/stale-lock-file.js";
-import { isPidAlive } from "../shared/pid-alive.js";
 
 export type FileLockOptions = {
   retries: {
@@ -48,15 +46,11 @@ async function shouldReclaimPluginLock(params: {
   staleMs: number;
   nowMs: number;
 }): Promise<boolean> {
-  const payload = readLockFileOwnerPayload(params.payload);
-  if (payload?.pid && !isPidAlive(payload.pid)) {
-    return true;
-  }
-  if (payload?.createdAt) {
-    const createdAt = Date.parse(payload.createdAt);
-    return !Number.isFinite(createdAt) || params.nowMs - createdAt > params.staleMs;
-  }
-  return false;
+  return shouldRemoveDeadOwnerOrExpiredLock({
+    payload: params.payload,
+    staleMs: params.staleMs,
+    nowMs: params.nowMs,
+  });
 }
 
 function isFileLockError(error: unknown, code: string): boolean {

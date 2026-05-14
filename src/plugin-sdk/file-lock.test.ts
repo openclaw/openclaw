@@ -69,7 +69,7 @@ describe("acquireFileLock", () => {
       stale: 10,
     } as const;
 
-    const deadPid = Number.MAX_SAFE_INTEGER;
+    const deadPid = -1;
     await fs.writeFile(
       lockPath,
       JSON.stringify({ pid: deadPid, createdAt: new Date(Date.now() - 60_000).toISOString() }),
@@ -147,7 +147,7 @@ describe("acquireFileLock", () => {
         }
       })(),
     ).rejects.toMatchObject({
-      code: FILE_LOCK_STALE_ERROR_CODE,
+      code: FILE_LOCK_TIMEOUT_ERROR_CODE,
     });
     await expect(fs.realpath(caught?.lockPath ?? "")).resolves.toBe(await fs.realpath(lockPath));
     await expect(fs.readFile(lockPath, "utf8")).resolves.toContain(`"pid":${process.pid}`);
