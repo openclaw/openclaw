@@ -18,6 +18,7 @@ import {
 } from "./tts.js";
 
 const SENSEAUDIO_TTS_MODELS = [DEFAULT_SENSEAUDIO_TTS_MODEL] as const;
+const SENSEAUDIO_LIST_VOICES_TIMEOUT_MS = 15_000;
 
 type SenseAudioSpeechConfig = {
   apiKey?: string;
@@ -108,7 +109,7 @@ export function buildSenseAudioSpeechProvider(): SpeechProviderPlugin {
   return {
     id: "senseaudio",
     label: "SenseAudio",
-    autoSelectOrder: 24,
+    autoSelectOrder: 45,
     models: SENSEAUDIO_TTS_MODELS,
     resolveConfig: ({ rawConfig }) => normalizeSenseAudioProviderConfig(rawConfig),
     parseDirectiveToken,
@@ -157,6 +158,7 @@ export function buildSenseAudioSpeechProvider(): SpeechProviderPlugin {
       return await listSenseAudioSystemVoices({
         apiKey,
         baseUrl: trimToUndefined(req.baseUrl) ?? config?.baseUrl ?? DEFAULT_SENSEAUDIO_TTS_BASE_URL,
+        timeoutMs: SENSEAUDIO_LIST_VOICES_TIMEOUT_MS,
       });
     },
     isConfigured: ({ providerConfig }) =>

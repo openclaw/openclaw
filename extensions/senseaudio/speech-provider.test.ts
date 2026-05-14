@@ -47,7 +47,7 @@ describe("buildSenseAudioSpeechProvider — registration shape", () => {
     const provider = buildSenseAudioSpeechProvider();
     expect(provider.id).toBe("senseaudio");
     expect(provider.label).toBe("SenseAudio");
-    expect(provider.autoSelectOrder).toBe(24);
+    expect(provider.autoSelectOrder).toBe(45);
     expect(provider.models).toEqual(["senseaudio-tts-1.5-260319"]);
   });
 });
