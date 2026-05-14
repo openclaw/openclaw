@@ -2909,6 +2909,141 @@ describe("resolvePluginTools optional tools", () => {
 
     expectResolvedToolNames(tools, ["optional_tool"]);
   });
+
+  it("returns tools for loaded plugins even when manifest snapshot has unloaded siblings", () => {
+    const config = createContext().config;
+    installToolManifestSnapshots({
+      config,
+      plugins: [
+        {
+          id: "loaded-plugin",
+          origin: "bundled",
+          enabledByDefault: true,
+          channels: [],
+          providers: [],
+          contracts: { tools: ["loaded_tool"] },
+        },
+        {
+          id: "unloaded-plugin",
+          origin: "bundled",
+          enabledByDefault: true,
+          channels: [],
+          providers: [],
+          contracts: { tools: ["unloaded_tool"] },
+        },
+      ],
+    });
+    const loadedFactory = vi.fn(() => makeTool("loaded_tool"));
+    setActivePluginRegistry(
+      {
+        plugins: [{ id: "loaded-plugin", status: "loaded" }],
+        tools: [
+          {
+            pluginId: "loaded-plugin",
+            optional: false,
+            source: "/tmp/loaded-plugin.js",
+            names: ["loaded_tool"],
+            factory: loadedFactory,
+          },
+        ],
+        diagnostics: [],
+      } as never,
+      "test-tool-registry",
+      "gateway-bindable",
+      "/tmp",
+    );
+
+    const tools = resolvePluginTools(
+      createResolveToolsParams({ toolAllowlist: ["group:plugins"] }),
+    );
+
+    expectResolvedToolNames(tools, ["loaded_tool"]);
+    expect(loadedFactory).toHaveBeenCalledTimes(1);
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+  });
+
+  it("cold-loads slot-selected plugin tools when an unrelated plugin is already loaded", () => {
+    const baseContext = createContext();
+    const config = {
+      ...baseContext.config,
+      plugins: {
+        ...baseContext.config.plugins,
+        allow: ["loaded-plugin"],
+        slots: { memory: "memory-core" },
+      },
+    };
+    installToolManifestSnapshots({
+      config,
+      plugins: [
+        {
+          id: "loaded-plugin",
+          origin: "bundled",
+          enabledByDefault: true,
+          channels: [],
+          providers: [],
+          contracts: { tools: ["loaded_tool"] },
+        },
+        {
+          id: "memory-core",
+          origin: "bundled",
+          enabledByDefault: true,
+          channels: [],
+          providers: [],
+          contracts: { tools: ["memory_search"] },
+        },
+      ],
+    });
+    const loadedFactory = vi.fn(() => makeTool("loaded_tool"));
+    const memoryFactory = vi.fn(() => makeTool("memory_search"));
+    setActivePluginRegistry(
+      {
+        plugins: [{ id: "loaded-plugin", status: "loaded" }],
+        tools: [
+          {
+            pluginId: "loaded-plugin",
+            optional: false,
+            source: "/tmp/loaded-plugin.js",
+            names: ["loaded_tool"],
+            factory: loadedFactory,
+          },
+        ],
+        diagnostics: [],
+      } as never,
+      "test-tool-registry",
+      "gateway-bindable",
+      "/tmp",
+    );
+    loadOpenClawPluginsMock.mockReturnValue(
+      createToolRegistry([
+        {
+          pluginId: "memory-core",
+          optional: false,
+          source: "/tmp/memory-core.js",
+          names: ["memory_search"],
+          factory: memoryFactory,
+        },
+      ]),
+    );
+
+    const tools = resolvePluginTools(
+      createResolveToolsParams({
+        context: { ...baseContext, config } as never,
+        toolAllowlist: ["group:plugins"],
+      }),
+    );
+
+    expectResolvedToolNames(tools, ["memory_search"]);
+    expect(loadedFactory).not.toHaveBeenCalled();
+    expect(memoryFactory).toHaveBeenCalledTimes(1);
+    expect(
+      loadOpenClawPluginsMock.mock.calls.map(
+        ([params]) => (params as { onlyPluginIds?: string[] }).onlyPluginIds,
+      ),
+    ).toStrictEqual([
+      ["loaded-plugin", "memory-core"],
+      ["loaded-plugin", "memory-core"],
+    ]);
+  });
 });
 
 describe("buildPluginToolMetadataKey", () => {

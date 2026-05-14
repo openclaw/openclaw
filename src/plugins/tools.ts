@@ -8,7 +8,10 @@ import { compileGlobPatterns, matchesAnyGlobPattern } from "../agents/glob-patte
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, normalizeToolName } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
+import {
+  getActiveRuntimePluginRegistry,
+  getLoadedRuntimePluginRegistry,
+} from "./active-runtime-registry.js";
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
 import type { PluginLoadOptions } from "./loader.js";
 import {
@@ -19,6 +22,7 @@ import type { PluginManifestRecord } from "./manifest-registry.js";
 import { hasManifestToolAvailability } from "./manifest-tool-availability.js";
 import type { PluginMetadataManifestView } from "./plugin-metadata-snapshot.types.js";
 import type { PluginRegistry, PluginToolRegistration } from "./registry-types.js";
+import { getActivePluginChannelRegistry } from "./runtime.js";
 import { withPluginRuntimePluginScope } from "./runtime/gateway-request-scope.js";
 import {
   buildPluginRuntimeLoadOptions,
@@ -1095,30 +1099,100 @@ export function resolvePluginTools(params: {
   if (runtimePluginIds.length === 0) {
     return tools;
   }
-  const loadOptions = buildPluginRuntimeLoadOptions(context, {
-    activate: false,
-    toolDiscovery: true,
-    onlyPluginIds: runtimePluginIds,
-    runtimeOptions,
-  });
-  let registry = registryHasScopedPluginTools(params.runtimeRegistry, runtimePluginIds)
-    ? params.runtimeRegistry
-    : undefined;
-  if (!registry) {
-    registry = resolvePluginToolRegistry({
-      loadOptions,
-      onlyPluginIds: runtimePluginIds,
+  // Drop plugins that are not actually loaded in any surface resolvePluginToolRegistry
+  // consults AND are not explicitly opted-in by user config. Without this filter, a single
+  // bundled-but-not-loaded plugin (e.g. a memory plugin not selected for the current memory
+  // slot) makes `registryContainsPluginIds` fail its `every` check and discards every other
+  // tool too. We must NOT filter out plugins the user explicitly enabled via
+  // `plugins.allow` or `plugins.entries[id].enabled = true`, because those need to flow
+  // through to the cold-load path so they actually get materialized. Read both the active
+  // and channel surfaces so a pinned gateway channel registry still contributes.
+  const loadedPluginIds = new Set<string>();
+  for (const reg of [getActiveRuntimePluginRegistry(), getActivePluginChannelRegistry()]) {
+    if (!reg) {
+      continue;
+    }
+    for (const plugin of reg.plugins ?? []) {
+      if (plugin.status === undefined || plugin.status === "loaded") {
+        loadedPluginIds.add(plugin.id);
+      }
+    }
+  }
+  const explicitlyConfiguredPluginIds = new Set<string>();
+  const normalizedPlugins = normalizePluginsConfig(context.config.plugins);
+  for (const slotPluginId of [
+    normalizedPlugins.slots.memory,
+    normalizedPlugins.slots.contextEngine,
+  ]) {
+    if (slotPluginId) {
+      explicitlyConfiguredPluginIds.add(slotPluginId);
+    }
+  }
+  const pluginsConfig = (context.config as { plugins?: unknown } | undefined)?.plugins as
+    | { allow?: unknown; entries?: unknown }
+    | undefined;
+  if (pluginsConfig) {
+    if (Array.isArray(pluginsConfig.allow)) {
+      for (const id of pluginsConfig.allow) {
+        if (typeof id === "string") {
+          explicitlyConfiguredPluginIds.add(id);
+        }
+      }
+    }
+    if (pluginsConfig.entries && typeof pluginsConfig.entries === "object") {
+      for (const [id, entry] of Object.entries(pluginsConfig.entries as Record<string, unknown>)) {
+        if (
+          entry &&
+          typeof entry === "object" &&
+          (entry as { enabled?: unknown }).enabled === true
+        ) {
+          explicitlyConfiguredPluginIds.add(id);
+        }
+      }
+    }
+  }
+  const filteredPluginIds = runtimePluginIds.filter(
+    (id) => loadedPluginIds.has(id) || explicitlyConfiguredPluginIds.has(id),
+  );
+  // Probe already-loaded surface registries with the filtered subset so an
+  // unloaded bundled sibling cannot fail the registry's `every` check and
+  // discard tools belonging to a loaded sibling. When nothing survives the
+  // filter, fall through to the cold-load path with the full runtime plugin
+  // set so standalone/path-based (config-origin) plugins still materialize.
+  let resolvedPluginIds: readonly string[] = filteredPluginIds;
+  let registry: ReturnType<typeof resolvePluginToolRegistry>;
+  if (filteredPluginIds.length > 0) {
+    registry = registryHasScopedPluginTools(params.runtimeRegistry, filteredPluginIds)
+      ? params.runtimeRegistry
+      : undefined;
+    const probeLoadOptions = buildPluginRuntimeLoadOptions(context, {
+      activate: false,
+      toolDiscovery: true,
+      onlyPluginIds: filteredPluginIds,
+      runtimeOptions,
     });
+    if (!registry) {
+      registry = resolvePluginToolRegistry({
+        loadOptions: probeLoadOptions,
+        onlyPluginIds: filteredPluginIds,
+      });
+    }
   }
   if (!registry) {
     // Cold registry: path-based plugins (origin "config") registered via plugins.load.paths
     // are not pinned to any active channel/surface registry until explicitly loaded.
     // Trigger a standalone load so their tool factories become available, then retry.
+    const coldLoadOptions = buildPluginRuntimeLoadOptions(context, {
+      activate: false,
+      toolDiscovery: true,
+      onlyPluginIds: runtimePluginIds,
+      runtimeOptions,
+    });
     try {
       ensureStandaloneRuntimePluginRegistryLoaded({
         surface: "channel",
         requiredPluginIds: runtimePluginIds,
-        loadOptions,
+        loadOptions: coldLoadOptions,
       });
     } catch (error) {
       context.logger.error(
@@ -1129,7 +1203,7 @@ export function resolvePluginTools(params: {
       throw error;
     }
     registry = resolvePluginToolRegistry({
-      loadOptions,
+      loadOptions: coldLoadOptions,
       onlyPluginIds: runtimePluginIds,
     });
     if (!registry) {
@@ -1140,11 +1214,12 @@ export function resolvePluginTools(params: {
       );
       return tools;
     }
+    resolvedPluginIds = runtimePluginIds;
   }
 
-  const scopedPluginIds = new Set(runtimePluginIds);
+  const scopedPluginIds = new Set(resolvedPluginIds);
   const registryToolPluginIds = new Set(registry.tools.map((entry) => entry.pluginId));
-  const missingRegistryToolPluginIds = runtimePluginIds.filter(
+  const missingRegistryToolPluginIds = resolvedPluginIds.filter(
     (pluginId) => !registryToolPluginIds.has(pluginId),
   );
   for (const pluginId of missingRegistryToolPluginIds) {
