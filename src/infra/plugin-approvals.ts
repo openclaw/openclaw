@@ -31,7 +31,7 @@ export type PluginApprovalResolved = {
   request?: PluginApprovalRequestPayload;
 };
 
-export type PluginApprovalLanguage = "original" | "simple";
+export type PluginApprovalLanguage = "original" | "simple" | "simple-technical";
 
 export const DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS = 120_000;
 export const MAX_PLUGIN_APPROVAL_TIMEOUT_MS = 600_000;
@@ -73,7 +73,9 @@ export function resolvePluginApprovalRequestAllowedDecisions(params?: {
 }
 
 export function resolvePluginApprovalLanguage(value?: string | null): PluginApprovalLanguage {
-  return value === "simple" || value === "original" ? value : DEFAULT_PLUGIN_APPROVAL_LANGUAGE;
+  return value === "simple" || value === "simple-technical" || value === "original"
+    ? value
+    : DEFAULT_PLUGIN_APPROVAL_LANGUAGE;
 }
 
 type ApprovalRiskLevel = "low" | "medium" | "high";
@@ -129,7 +131,7 @@ function buildPlainEnglishApprovalLines(payload: PluginApprovalRequestPayload): 
   return [
     `Summary: let ${tool}${plugin} run one protected action`,
     `What it wants to do: ${firstLine(payload.description)}`,
-    "Risk: medium. This is not a terminal command I can translate, so review the technical details before approving.",
+    "Risk: medium. This is not a terminal command I can fully translate, so review the request before approving.",
   ];
 }
 
@@ -166,7 +168,9 @@ function summarizeShellCommand(command: string): {
   risk: ApprovalRiskLevel;
   riskReason: string;
 } {
-  const segments = splitCommandSegments(command);
+  const segments = splitCommandSegments(command).flatMap((segment) =>
+    expandCommandSegment(segment),
+  );
   const summaries = segments.map((segment) => summarizeCommandSegment(segment)).filter(Boolean);
   const actions = summaries.map((summary) => summary.text);
   const risk = summaries.reduce<ApprovalRiskLevel>(
@@ -182,7 +186,7 @@ function summarizeShellCommand(command: string): {
     mediumReason ??
     (risk === "low"
       ? "This looks like a basic workspace check with no obvious network, service, or delete step."
-      : "Review the technical details before approving.");
+      : "Review the request before approving.");
 
   return {
     headline: buildCommandHeadline(summaries),
@@ -193,10 +197,83 @@ function summarizeShellCommand(command: string): {
 }
 
 function splitCommandSegments(command: string): string[] {
-  return command
-    .split(/\s*(?:&&|\|\||;)\s*/)
-    .map((segment) => segment.trim())
-    .filter(Boolean);
+  const segments: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+  const pushCurrent = () => {
+    const segment = current.trim();
+    if (segment) {
+      segments.push(segment);
+    }
+    current = "";
+  };
+
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index] ?? "";
+    const next = command[index + 1] ?? "";
+    if (quote) {
+      current += char;
+      if (quote === '"' && char === "\\" && !escaped) {
+        escaped = true;
+        continue;
+      }
+      if (char === quote && !escaped) {
+        quote = null;
+      }
+      escaped = false;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      current += char;
+      continue;
+    }
+    if ((char === "&" && next === "&") || (char === "|" && next === "|")) {
+      pushCurrent();
+      index += 1;
+      continue;
+    }
+    if (char === ";") {
+      pushCurrent();
+      continue;
+    }
+    current += char;
+  }
+  pushCurrent();
+  return segments;
+}
+
+function expandCommandSegment(segment: string): string[] {
+  if (isShellBookkeepingSegment(segment)) {
+    return [];
+  }
+  const resolved = resolveCommandWords(segment);
+  const nested = extractShellWrapperCommand(resolved.words);
+  if (nested) {
+    return splitCommandSegments(nested).flatMap((innerSegment) =>
+      expandCommandSegment(innerSegment),
+    );
+  }
+  return [segment];
+}
+
+function isShellBookkeepingSegment(segment: string): boolean {
+  return /^set\s+[+-][A-Za-z]+\b/.test(segment.trim());
+}
+
+function extractShellWrapperCommand(words: readonly string[]): string | null {
+  const command = basename(words[0] ?? "");
+  if (!["bash", "fish", "sh", "zsh"].includes(command)) {
+    return null;
+  }
+  for (let index = 1; index < words.length; index += 1) {
+    const word = words[index] ?? "";
+    if (word === "-c" || word === "-lc" || /^-[A-Za-z]*c[A-Za-z]*$/.test(word)) {
+      return words[index + 1]?.trim() || null;
+    }
+  }
+  return null;
 }
 
 function summarizeCommandSegment(segment: string): CommandActionSummary {
@@ -212,7 +289,7 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
   const resolved = resolveCommandWords(segment);
   const command = basename(resolved.words[0] ?? "");
   const args = resolved.words.slice(1);
-  const nonOptionArgs = args.filter((word) => !word.startsWith("-"));
+  const nonOptionArgs = args.filter((word) => !word.startsWith("-") && word !== "]");
   const targetText = formatTargets(nonOptionArgs);
   const sensitiveTarget = nonOptionArgs.some(isSensitivePath);
   const systemTarget = nonOptionArgs.some(isSystemPath);
@@ -232,6 +309,36 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
           risk: systemTarget ? "medium" : "low",
           kind: "read",
           reason: systemTarget ? "It touches a system-level path." : undefined,
+        },
+        sudoPrefix,
+      );
+    case "[":
+    case "test":
+      return withSudo(
+        {
+          text: `check whether a condition or file exists${targetText}`,
+          risk: sensitiveTarget || systemTarget ? "medium" : "low",
+          kind: "read",
+          reason: sensitiveTarget
+            ? "It checks a secret or credential path."
+            : systemTarget
+              ? "It checks a system-level path."
+              : undefined,
+        },
+        sudoPrefix,
+      );
+    case ".":
+    case "source":
+      return withSudo(
+        {
+          text: `load a local environment/script file${targetText}`,
+          risk: sensitiveTarget || systemTarget ? "medium" : "low",
+          kind: "read",
+          reason: sensitiveTarget
+            ? "It may load secrets or credentials into the command environment."
+            : systemTarget
+              ? "It reads a system-level file."
+              : undefined,
         },
         sudoPrefix,
       );
@@ -388,7 +495,7 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
     case "wget":
       return withSudo(
         {
-          text: `make a network request or download data${targetText}`,
+          text: `make a network request or download data${formatNetworkTargets(args)}`,
           risk: "medium",
           kind: "network",
           reason: "Network commands can send or fetch data outside this machine.",
@@ -642,6 +749,19 @@ function resolveCommandWords(segment: string): { words: string[]; usedSudo: bool
       }
       continue;
     }
+    if (first === "timeout" || first === "gtimeout") {
+      words.shift();
+      while (words[0]?.startsWith("-")) {
+        const option = words.shift();
+        if (["-k", "--kill-after", "-s", "--signal"].includes(option ?? "") && words[0]) {
+          words.shift();
+        }
+      }
+      if (words[0] && /^\d+(?:\.\d+)?[smhd]?$/i.test(words[0])) {
+        words.shift();
+      }
+      continue;
+    }
     if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0] ?? "")) {
       words.shift();
       continue;
@@ -683,6 +803,24 @@ function formatTargets(args: readonly string[]): string {
   return targets.length > 3 ? `: ${shown}, and ${targets.length - 3} more` : `: ${shown}`;
 }
 
+function formatNetworkTargets(args: readonly string[]): string {
+  const targets = args
+    .filter((arg) => /^https?:\/\//i.test(arg))
+    .map((arg) => {
+      try {
+        const url = new URL(arg);
+        return `${url.origin}${url.pathname}`;
+      } catch {
+        return arg;
+      }
+    });
+  if (targets.length === 0) {
+    return "";
+  }
+  const shown = targets.slice(0, 2).join(", ");
+  return targets.length > 2 ? `: ${shown}, and ${targets.length - 2} more` : `: ${shown}`;
+}
+
 function basename(command: string): string {
   return command.split("/").pop()?.trim() ?? command;
 }
@@ -704,13 +842,14 @@ export function buildPluginApprovalRequestMessage(
   const severity = request.request.severity ?? "warning";
   const icon = severity === "critical" ? "🚨" : severity === "info" ? "ℹ️" : "🛡️";
   const language = resolvePluginApprovalLanguage(options?.language);
-  if (language === "simple") {
+  if (language === "simple" || language === "simple-technical") {
     lines.push(`${icon} Approval needed`);
     lines.push(...buildPlainEnglishApprovalLines(request.request));
     lines.push(...buildApprovalDecisionHelpLines(request.request));
-    lines.push("");
-    lines.push("Technical details:");
-    lines.push("Type: Plugin approval required");
+    if (language === "simple") {
+      return lines.join("\n");
+    }
+    lines.push("", "Technical details:", "Type: Plugin approval required");
   } else {
     lines.push(`${icon} Plugin approval required`);
   }

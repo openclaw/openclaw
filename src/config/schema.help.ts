@@ -776,7 +776,7 @@ export const FIELD_HELP: Record<string, string> = {
   "approvals.plugin.enabled":
     "Enables forwarding of plugin approval requests to configured delivery destinations (default: false). Independent of approvals.exec.enabled.",
   "approvals.plugin.language":
-    'Prompt language for plugin approvals: "original" preserves the raw approval format, while "simple" adds a plain-English summary and keeps the technical details below it. Default: "original".',
+    'Prompt language for plugin approvals: "original" preserves the raw approval format, "simple" shows only the plain-English approval prompt, and "simple-technical" adds raw technical details below the plain summary. Default: "original".',
   "approvals.plugin.mode":
     'Controls where plugin approval prompts are sent: "session" uses origin chat, "targets" uses configured targets, and "both" sends to both paths.',
   "approvals.plugin.agentFilter":

@@ -22,7 +22,9 @@ const ExecApprovalForwardingSchema = z.object(ExecApprovalForwardingShape).stric
 const PluginApprovalForwardingSchema = z
   .object({
     ...ExecApprovalForwardingShape,
-    language: z.union([z.literal("original"), z.literal("simple")]).optional(),
+    language: z
+      .union([z.literal("original"), z.literal("simple"), z.literal("simple-technical")])
+      .optional(),
   })
   .strict()
   .optional();

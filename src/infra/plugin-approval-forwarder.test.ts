@@ -228,7 +228,9 @@ describe("plugin approval forwarding", () => {
       expect(text).toContain("Approval needed");
       expect(text).toContain("Summary: create/check workspace files or folders");
       expect(text).toContain("- create folder(s): outputs/openmodelapi");
-      expect(text).toContain("Technical details:");
+      expect(text).not.toContain("Technical details:");
+      expect(text).not.toContain("Tool: codex_command_approval");
+      expect(text).not.toContain("ID: plugin-req-1");
     });
 
     it("includes severity icon for critical", async () => {

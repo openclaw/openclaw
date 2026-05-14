@@ -1,7 +1,7 @@
 export type NativeExecApprovalEnableMode = boolean | "auto";
 
 export type ExecApprovalForwardingMode = "session" | "targets" | "both";
-export type PluginApprovalLanguage = "original" | "simple";
+export type PluginApprovalLanguage = "original" | "simple" | "simple-technical";
 
 export type ExecApprovalForwardTarget = {
   /** Channel id (e.g. "discord", "slack", or plugin channel id). */
