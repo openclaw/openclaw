@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { repeat } from "lit/directives/repeat.js";
 import { t } from "../i18n/index.ts";
 import {
   CHAT_SESSIONS_ACTIVE_MINUTES,
@@ -17,7 +18,12 @@ import {
 } from "./chat/session-controls.ts";
 import { refreshSlashCommands } from "./chat/slash-commands.ts";
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
-import { ChatState, loadChatHistory } from "./controllers/chat.ts";
+import {
+  ChatState,
+  loadChatHistory,
+  rememberChatHistorySnapshot,
+  restoreChatHistorySnapshot,
+} from "./controllers/chat.ts";
 import { createSessionAndRefresh, loadSessions } from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
@@ -26,6 +32,13 @@ import {
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "./session-key.ts";
+import {
+  MAX_PINNED_SESSION_KEYS,
+  MAX_PINNED_SESSION_SLOTS,
+  MIN_PINNED_SESSION_SLOTS,
+  normalizePinnedSessionKeys,
+  normalizePinnedSessionSlotCount,
+} from "./storage.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-coerce.ts";
 import type { ThemeMode } from "./theme.ts";
 import type { SessionsListResult } from "./types.ts";
@@ -34,6 +47,7 @@ import type { ChatQueueItem } from "./ui-types.ts";
 export { isCronSessionKey, parseSessionKey, resolveSessionDisplayName, resolveSessionOptionGroups };
 
 type SessionDefaultsSnapshot = {
+  defaultAgentId?: string;
   mainSessionKey?: string;
   mainKey?: string;
 };
@@ -129,14 +143,15 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   const host = state as unknown as SessionSwitchHost;
   const previousSessionKey = state.sessionKey;
   saveChatQueueForSession(state, previousSessionKey);
+  if (previousSessionKey) {
+    rememberChatHistorySnapshot(state as unknown as ChatState, previousSessionKey);
+  }
   state.sessionKey = sessionKey;
   (state as unknown as { currentSessionId?: string | null }).currentSessionId = null;
   state.chatMessage = "";
   state.chatAttachments = [];
-  state.chatMessages = [];
   state.chatToolMessages = [];
   state.chatStreamSegments = [];
-  state.chatThinkingLevel = null;
   state.chatStream = null;
   state.chatSideResult = null;
   state.lastError = null;
@@ -153,6 +168,10 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   host.chatSideResultTerminalRuns.clear();
   host.resetToolStream();
   host.resetChatScroll();
+  if (!restoreChatHistorySnapshot(state as unknown as ChatState, sessionKey)) {
+    state.chatMessages = [];
+    state.chatThinkingLevel = null;
+  }
   state.applySettings({
     ...state.settings,
     sessionKey,
@@ -213,6 +232,623 @@ export function renderTab(state: AppViewState, tab: Tab, opts?: { collapsed?: bo
       <span class="nav-item__icon" aria-hidden="true">${icons[iconForTab(tab)]}</span>
       ${!collapsed ? html`<span class="nav-item__text">${titleForTab(tab)}</span>` : nothing}
     </a>
+  `;
+}
+
+function getPinnedSessionKeys(state: Pick<AppViewState, "settings">): string[] {
+  return normalizePinnedSessionKeys(state.settings.pinnedSessionKeys);
+}
+
+function getPinnedSessionSlotCount(
+  state: Pick<AppViewState, "settings">,
+  opts?: { min?: number },
+): number {
+  const base = normalizePinnedSessionSlotCount(state.settings.pinnedSessionSlotCount);
+  return Math.max(opts?.min ?? MIN_PINNED_SESSION_SLOTS, base);
+}
+
+function resolveSessionDefaults(state: Pick<AppViewState, "hello">): SessionDefaultsSnapshot {
+  const snapshot = state.hello?.snapshot as
+    | { sessionDefaults?: SessionDefaultsSnapshot }
+    | undefined;
+  return snapshot?.sessionDefaults ?? {};
+}
+
+function resolvePinnedSessionPreferenceKey(state: Pick<AppViewState, "hello">): string {
+  const defaults = resolveSessionDefaults(state);
+  const mainSessionKey = normalizeOptionalString(defaults.mainSessionKey);
+  if (mainSessionKey) {
+    return mainSessionKey;
+  }
+  const mainKey = normalizeOptionalString(defaults.mainKey);
+  if (mainKey) {
+    return mainKey;
+  }
+  return "main";
+}
+
+function canonicalizePinnedSessionKey(
+  state: Pick<AppViewState, "hello">,
+  sessionKey: string,
+): string {
+  const key = normalizeOptionalString(sessionKey) ?? "";
+  if (!key) {
+    return key;
+  }
+  const defaults = resolveSessionDefaults(state);
+  const mainSessionKey = normalizeOptionalString(defaults.mainSessionKey);
+  if (!mainSessionKey) {
+    return key;
+  }
+  const mainKey = normalizeOptionalString(defaults.mainKey) ?? "main";
+  const defaultAgentId = normalizeAgentId(defaults.defaultAgentId ?? "main");
+  if (
+    key === "main" ||
+    key === mainKey ||
+    key === `agent:${defaultAgentId}:main` ||
+    key === `agent:${defaultAgentId}:${mainKey}`
+  ) {
+    return mainSessionKey;
+  }
+  return key;
+}
+
+function canonicalizePinnedSessionKeys(
+  state: Pick<AppViewState, "hello">,
+  keys: string[],
+): string[] {
+  return normalizePinnedSessionKeys(keys.map((key) => canonicalizePinnedSessionKey(state, key)));
+}
+
+function persistPinnedSessionPreferences(
+  state: Pick<AppViewState, "client" | "connected" | "hello"> & {
+    sessionsError?: string | null;
+  },
+  settings: Pick<AppViewState, "settings">["settings"],
+) {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  void state.client
+    .request("sessions.patch", {
+      key: resolvePinnedSessionPreferenceKey(state),
+      controlUiPinnedSessionKeys: canonicalizePinnedSessionKeys(
+        state,
+        normalizePinnedSessionKeys(settings.pinnedSessionKeys),
+      ),
+      controlUiPinnedSessionSlotCount: normalizePinnedSessionSlotCount(
+        settings.pinnedSessionSlotCount,
+      ),
+    })
+    .catch((err) => {
+      if ("sessionsError" in state) {
+        state.sessionsError = String(err);
+      }
+    });
+}
+
+function updatePinnedSessionKeys(state: AppViewState, nextKeys: string[]) {
+  const nextSettings = {
+    ...state.settings,
+    pinnedSessionKeys: canonicalizePinnedSessionKeys(state, nextKeys),
+  };
+  state.applySettings(nextSettings);
+  persistPinnedSessionPreferences(state, nextSettings);
+}
+
+function updatePinnedSessionSlotCount(state: AppViewState, nextCount: number) {
+  const nextSettings = {
+    ...state.settings,
+    pinnedSessionSlotCount: normalizePinnedSessionSlotCount(nextCount),
+  };
+  state.applySettings(nextSettings);
+  persistPinnedSessionPreferences(state, nextSettings);
+}
+
+export function addPinnedChatSlot(state: AppViewState) {
+  updatePinnedSessionSlotCount(state, getPinnedSessionSlotCount(state) + 1);
+}
+
+export function removePinnedChatSlot(state: AppViewState) {
+  updatePinnedSessionSlotCount(
+    state,
+    Math.max(getPinnedSessionKeys(state).length, getPinnedSessionSlotCount(state) - 1),
+  );
+}
+
+export function pinChatSession(state: AppViewState, sessionKey: string) {
+  const trimmedKey = canonicalizePinnedSessionKey(state, sessionKey);
+  if (!trimmedKey) {
+    return;
+  }
+  const current = getPinnedSessionKeys(state);
+  if (current.includes(trimmedKey) || current.length >= MAX_PINNED_SESSION_KEYS) {
+    return;
+  }
+  updatePinnedSessionKeys(state, [...current, trimmedKey].slice(0, MAX_PINNED_SESSION_KEYS));
+}
+
+export function unpinChatSession(state: AppViewState, sessionKey: string) {
+  const trimmedKey = canonicalizePinnedSessionKey(state, sessionKey);
+  if (!trimmedKey) {
+    return;
+  }
+  const current = getPinnedSessionKeys(state);
+  if (!current.includes(trimmedKey)) {
+    return;
+  }
+  updatePinnedSessionKeys(
+    state,
+    current.filter((key) => key !== trimmedKey),
+  );
+}
+
+export async function createBlankPinnedParallelSession(state: AppViewState) {
+  if (
+    !state.client ||
+    !state.connected ||
+    state.sidebarPinnedSessionCreating ||
+    getPinnedSessionKeys(state).length >= MAX_PINNED_SESSION_KEYS
+  ) {
+    return null;
+  }
+  state.sidebarPinnedSessionCreating = true;
+  try {
+    const agentId = parseAgentSessionKey(state.sessionKey)?.agentId ?? "main";
+    const nextKey = await createSessionAndRefresh(
+      state as unknown as Parameters<typeof createSessionAndRefresh>[0],
+      {
+        agentId,
+        label: "Parallel chat",
+        parentSessionKey: state.sessionKey,
+      },
+      {
+        activeMinutes: 0,
+        limit: 0,
+        includeGlobal: true,
+        includeUnknown: true,
+        showArchived: state.sessionsShowArchived,
+      },
+    );
+    if (!nextKey) {
+      return null;
+    }
+    const nextPinnedKeys = canonicalizePinnedSessionKeys(state, [
+      ...getPinnedSessionKeys(state),
+      nextKey,
+    ]);
+    const nextSettings = {
+      ...state.settings,
+      pinnedSessionKeys: nextPinnedKeys,
+      pinnedSessionSlotCount: Math.max(getPinnedSessionSlotCount(state), nextPinnedKeys.length),
+    };
+    state.applySettings(nextSettings);
+    persistPinnedSessionPreferences(state, nextSettings);
+    navigateToPinnedChat(state, nextKey);
+    startPinnedSessionRename(state, nextKey, "Parallel chat");
+    void refreshSessionOptions(state);
+    return nextKey;
+  } catch (err) {
+    state.sessionsError = String(err);
+    return null;
+  } finally {
+    state.sidebarPinnedSessionCreating = false;
+  }
+}
+
+function schedulePinnedSessionRenameFocus(key: string) {
+  if (typeof document === "undefined") {
+    return;
+  }
+  const target = encodeURIComponent(key);
+  requestAnimationFrame(() => {
+    const input = document.querySelector<HTMLInputElement>(`[data-pinned-rename-key="${target}"]`);
+    input?.focus();
+    input?.select();
+  });
+}
+
+function startPinnedSessionRename(state: AppViewState, key: string, initialValue?: string) {
+  state.sidebarPinnedSessionEditingKey = key;
+  state.sidebarPinnedSessionRenameDraft = initialValue ?? "";
+  schedulePinnedSessionRenameFocus(key);
+}
+
+function cancelPinnedSessionRename(state: AppViewState) {
+  state.sidebarPinnedSessionEditingKey = null;
+  state.sidebarPinnedSessionRenameDraft = "";
+}
+
+async function commitPinnedSessionRename(state: AppViewState, key: string) {
+  if (!state.client || !state.connected) {
+    cancelPinnedSessionRename(state);
+    return;
+  }
+  const nextLabel = state.sidebarPinnedSessionRenameDraft?.trim() ?? "";
+  cancelPinnedSessionRename(state);
+  if (!nextLabel) {
+    return;
+  }
+  try {
+    await state.client.request("sessions.patch", { key, label: nextLabel });
+    void refreshSessionOptions(state);
+  } catch (err) {
+    state.sessionsError = String(err);
+  }
+}
+
+export function reorderPinnedChatSession(state: AppViewState, fromKey: string, toKey: string) {
+  const keys = canonicalizePinnedSessionKeys(state, getPinnedSessionKeys(state));
+  const fromIndex = keys.indexOf(canonicalizePinnedSessionKey(state, fromKey));
+  const toIndex = keys.indexOf(canonicalizePinnedSessionKey(state, toKey));
+  if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) {
+    return;
+  }
+  const next = [...keys];
+  const [moved] = next.splice(fromIndex, 1);
+  next.splice(toIndex, 0, moved);
+  updatePinnedSessionKeys(state, next);
+}
+
+type PinnedChatEntry = {
+  key: string;
+  label: string;
+  editLabel: string;
+  scopeLabel: string;
+  active: boolean;
+  missing: boolean;
+  status: SessionsListResult["sessions"][number]["status"] | null;
+};
+
+function resolvePinnedChatEditLabel(
+  key: string,
+  row: SessionsListResult["sessions"][number],
+  fallbackLabel: string,
+): string {
+  const label = normalizeOptionalString(row.label);
+  if (label && label !== key) {
+    return label;
+  }
+  const displayName = normalizeOptionalString(row.displayName);
+  if (displayName && displayName !== key) {
+    return displayName;
+  }
+  return fallbackLabel;
+}
+
+export function resolvePinnedChatEntries(state: AppViewState): PinnedChatEntry[] {
+  const rows = state.sessionsResult?.sessions ?? [];
+  const byKey = new Map<string, SessionsListResult["sessions"][number]>();
+  for (const row of rows) {
+    byKey.set(row.key, row);
+  }
+
+  const activeKey = canonicalizePinnedSessionKey(state, state.sessionKey);
+  const entries = canonicalizePinnedSessionKeys(state, getPinnedSessionKeys(state)).map((key) => {
+    const row = byKey.get(key);
+    const scopeLabel = normalizeOptionalString(parseAgentSessionKey(key)?.rest) ?? key;
+    const label = row ? resolveSessionDisplayName(key, row) : scopeLabel;
+    const editLabel = row ? resolvePinnedChatEditLabel(key, row, label) : scopeLabel;
+    return {
+      key,
+      label,
+      editLabel,
+      scopeLabel,
+      active: key === activeKey,
+      missing: !row,
+      status: row?.status ?? null,
+    };
+  });
+
+  const counts = new Map<string, number>();
+  for (const entry of entries) {
+    counts.set(entry.label, (counts.get(entry.label) ?? 0) + 1);
+  }
+  for (const entry of entries) {
+    if ((counts.get(entry.label) ?? 0) > 1 && entry.scopeLabel !== entry.label) {
+      entry.label = `${entry.label} · ${entry.scopeLabel}`;
+    }
+  }
+  return entries;
+}
+
+function resolvePinnedChatStatusTone(status: PinnedChatEntry["status"]): string {
+  if (status === "running") {
+    return "sidebar-pinned-chats__status--running";
+  }
+  if (status === "failed" || status === "killed" || status === "timeout") {
+    return "sidebar-pinned-chats__status--error";
+  }
+  if (status === "done") {
+    return "sidebar-pinned-chats__status--done";
+  }
+  return "";
+}
+
+function resolvePinnedChatStatusLabel(status: PinnedChatEntry["status"]): string {
+  if (status === "running") {
+    return "Running";
+  }
+  if (status === "failed") {
+    return "Failed";
+  }
+  if (status === "killed") {
+    return "Killed";
+  }
+  if (status === "timeout") {
+    return "Timed out";
+  }
+  if (status === "done") {
+    return "Done";
+  }
+  return "Idle";
+}
+
+function navigateToPinnedChat(state: AppViewState, sessionKey: string) {
+  if (state.tab !== "chat") {
+    state.setTab("chat");
+  }
+  switchChatSession(state, sessionKey);
+}
+
+export function renderSidebarPinnedChats(state: AppViewState) {
+  if (state.settings.navCollapsed) {
+    return nothing;
+  }
+
+  const entries = resolvePinnedChatEntries(state);
+  const pinnedKeys = canonicalizePinnedSessionKeys(state, getPinnedSessionKeys(state));
+  const currentPinned = pinnedKeys.includes(canonicalizePinnedSessionKey(state, state.sessionKey));
+  const canPinCurrent =
+    Boolean(normalizeOptionalString(state.sessionKey)) &&
+    !currentPinned &&
+    pinnedKeys.length < MAX_PINNED_SESSION_KEYS;
+  const canCreateParallelSession =
+    Boolean(state.client && state.connected) &&
+    entries.length < MAX_PINNED_SESSION_KEYS &&
+    !state.sidebarPinnedSessionCreating;
+  const slotCount = Math.max(entries.length, getPinnedSessionSlotCount(state));
+  const canAddSlot = slotCount < MAX_PINNED_SESSION_SLOTS;
+  const emptySlots = Math.max(0, slotCount - entries.length);
+  const canRemoveEmptySlot = slotCount > Math.max(MIN_PINNED_SESSION_SLOTS, entries.length);
+
+  return html`
+    <section class="sidebar-pinned-chats nav-section">
+      <div class="sidebar-pinned-chats__header">
+        <span class="sidebar-pinned-chats__label">Pinned chats</span>
+        <div class="sidebar-pinned-chats__header-actions">
+          <span class="sidebar-pinned-chats__count">${entries.length}/${slotCount}</span>
+          <button
+            class="sidebar-pinned-chats__action"
+            type="button"
+            title="Add pinned slot"
+            aria-label="Add pinned slot"
+            ?disabled=${!canAddSlot}
+            @click=${() => addPinnedChatSlot(state)}
+          >
+            ${icons.plus}
+          </button>
+        </div>
+      </div>
+      <div class="sidebar-pinned-chats__items">
+        ${repeat(
+          entries,
+          (entry) => entry.key,
+          (entry) => {
+            const isEditing = state.sidebarPinnedSessionEditingKey === entry.key;
+            return html`
+              <div
+                class="sidebar-pinned-chats__row ${isEditing
+                  ? "sidebar-pinned-chats__row--editing"
+                  : ""}"
+                ?draggable=${!isEditing}
+                @dragstart=${(event: DragEvent) => {
+                  if (isEditing) {
+                    return;
+                  }
+                  event.dataTransfer?.setData("text/plain", entry.key);
+                  if (event.dataTransfer) {
+                    event.dataTransfer.effectAllowed = "move";
+                  }
+                }}
+                @dragover=${(event: DragEvent) => {
+                  if (isEditing) {
+                    return;
+                  }
+                  event.preventDefault();
+                  if (event.dataTransfer) {
+                    event.dataTransfer.dropEffect = "move";
+                  }
+                }}
+                @drop=${(event: DragEvent) => {
+                  if (isEditing) {
+                    return;
+                  }
+                  event.preventDefault();
+                  const fromKey = event.dataTransfer?.getData("text/plain")?.trim();
+                  if (!fromKey) {
+                    return;
+                  }
+                  reorderPinnedChatSession(state, fromKey, entry.key);
+                }}
+              >
+                ${isEditing
+                  ? html`
+                      <input
+                        class="sidebar-pinned-chats__rename-input"
+                        data-pinned-rename-key=${encodeURIComponent(entry.key)}
+                        .value=${state.sidebarPinnedSessionRenameDraft ?? ""}
+                        @input=${(event: Event) => {
+                          state.sidebarPinnedSessionRenameDraft = (
+                            event.target as HTMLInputElement
+                          ).value;
+                        }}
+                        @keydown=${(event: KeyboardEvent) => {
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            void commitPinnedSessionRename(state, entry.key);
+                            return;
+                          }
+                          if (event.key === "Escape") {
+                            event.preventDefault();
+                            cancelPinnedSessionRename(state);
+                          }
+                        }}
+                        @blur=${() => {
+                          void commitPinnedSessionRename(state, entry.key);
+                        }}
+                      />
+                      <span
+                        class="sidebar-pinned-chats__status ${resolvePinnedChatStatusTone(
+                          entry.status,
+                        )}"
+                        title=${resolvePinnedChatStatusLabel(entry.status)}
+                        aria-label=${resolvePinnedChatStatusLabel(entry.status)}
+                      ></span>
+                      <button
+                        class="sidebar-pinned-chats__remove"
+                        type="button"
+                        title="Save name"
+                        aria-label="Save name"
+                        @mousedown=${(event: MouseEvent) => event.preventDefault()}
+                        @click=${() => {
+                          void commitPinnedSessionRename(state, entry.key);
+                        }}
+                      >
+                        ${icons.check}
+                      </button>
+                      <button
+                        class="sidebar-pinned-chats__remove"
+                        type="button"
+                        title="Cancel rename"
+                        aria-label="Cancel rename"
+                        @mousedown=${(event: MouseEvent) => event.preventDefault()}
+                        @click=${() => cancelPinnedSessionRename(state)}
+                      >
+                        ${icons.x}
+                      </button>
+                    `
+                  : html`
+                      <button
+                        class="nav-item sidebar-pinned-chats__slot ${entry.active
+                          ? "nav-item--active"
+                          : ""} ${entry.missing ? "sidebar-pinned-chats__slot--missing" : ""}"
+                        title=${`${entry.key} (drag to reorder)`}
+                        @click=${() => navigateToPinnedChat(state, entry.key)}
+                      >
+                        <span class="nav-item__icon" aria-hidden="true"
+                          >${icons.messageSquare}</span
+                        >
+                        <span class="nav-item__text">${entry.label}</span>
+                      </button>
+                      ${entry.missing
+                        ? nothing
+                        : html`
+                            <button
+                              class="sidebar-pinned-chats__remove"
+                              type="button"
+                              title="Rename chat"
+                              aria-label="Rename chat"
+                              @click=${(event: Event) => {
+                                event.stopPropagation();
+                                startPinnedSessionRename(state, entry.key, entry.editLabel);
+                              }}
+                            >
+                              ${icons.edit}
+                            </button>
+                          `}
+                      <span
+                        class="sidebar-pinned-chats__status ${resolvePinnedChatStatusTone(
+                          entry.status,
+                        )}"
+                        title=${resolvePinnedChatStatusLabel(entry.status)}
+                        aria-label=${resolvePinnedChatStatusLabel(entry.status)}
+                      ></span>
+                      <button
+                        class="sidebar-pinned-chats__remove"
+                        type="button"
+                        title="Unpin chat"
+                        aria-label="Unpin chat"
+                        @click=${(event: Event) => {
+                          event.stopPropagation();
+                          unpinChatSession(state, entry.key);
+                        }}
+                      >
+                        ${icons.x}
+                      </button>
+                    `}
+              </div>
+            `;
+          },
+        )}
+        ${Array.from({ length: emptySlots }, (_, index) => {
+          const actionable = canPinCurrent && index === 0;
+          return html`
+            <div class="sidebar-pinned-chats__row">
+              <button
+                class="sidebar-pinned-chats__empty ${actionable
+                  ? "sidebar-pinned-chats__empty--actionable"
+                  : ""}"
+                type="button"
+                ?disabled=${!actionable}
+                title=${actionable ? state.sessionKey : "Empty pinned slot"}
+                @click=${() => {
+                  if (!actionable) {
+                    return;
+                  }
+                  pinChatSession(state, state.sessionKey);
+                }}
+              >
+                <span class="nav-item__icon" aria-hidden="true"
+                  >${actionable ? icons.plus : icons.bookmark}</span
+                >
+                <span class="nav-item__text"
+                  >${actionable ? "Pin current chat" : "Empty pinned slot"}</span
+                >
+              </button>
+              ${canRemoveEmptySlot
+                ? html`
+                    <button
+                      class="sidebar-pinned-chats__action"
+                      type="button"
+                      title="New parallel session"
+                      aria-label="New parallel session"
+                      ?disabled=${!canCreateParallelSession}
+                      @click=${() => {
+                        void createBlankPinnedParallelSession(state);
+                      }}
+                    >
+                      <span class="sidebar-pinned-chats__action-text">New</span>
+                    </button>
+                    <button
+                      class="sidebar-pinned-chats__remove"
+                      type="button"
+                      title="Remove empty slot"
+                      aria-label="Remove empty slot"
+                      @click=${() => removePinnedChatSlot(state)}
+                    >
+                      ${icons.x}
+                    </button>
+                  `
+                : html`
+                    <button
+                      class="sidebar-pinned-chats__action"
+                      type="button"
+                      title="New parallel session"
+                      aria-label="New parallel session"
+                      ?disabled=${!canCreateParallelSession}
+                      @click=${() => {
+                        void createBlankPinnedParallelSession(state);
+                      }}
+                    >
+                      <span class="sidebar-pinned-chats__action-text">New</span>
+                    </button>
+                  `}
+            </div>
+          `;
+        })}
+      </div>
+    </section>
   `;
 }
 

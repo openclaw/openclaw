@@ -169,6 +169,12 @@ export const SessionsPatchParamsSchema = Type.Object(
     verboseLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     traceLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     reasoningLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    controlUiPinnedSessionKeys: Type.Optional(
+      Type.Union([Type.Array(NonEmptyString, { maxItems: 12 }), Type.Null()]),
+    ),
+    controlUiPinnedSessionSlotCount: Type.Optional(
+      Type.Union([Type.Integer({ minimum: 3, maximum: 12 }), Type.Null()]),
+    ),
     responseUsage: Type.Optional(
       Type.Union([
         Type.Literal("off"),

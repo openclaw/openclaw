@@ -70,6 +70,14 @@ The Control UI supports a per-browser personal identity (display name and avatar
 
 The same browser-local pattern applies to the assistant avatar override. Uploaded assistant avatars overlay the gateway-resolved identity on the local browser only and never round-trip through `config.patch`. The shared `ui.assistant.avatar` config field is still available for non-UI clients writing the field directly (such as scripted gateways or custom dashboards).
 
+## Pinned chats
+
+The left sidebar can keep a small set of pinned chat slots for sessions you want to jump between quickly. Pin the current chat from an empty slot, use **New** to create a parallel pinned chat, rename pinned slots inline, drag them to reorder, or unpin a slot when it is no longer useful. Pinned rows show the session run state so you can see which chats are running, done, or in error while you work in another session.
+
+Pinned chat membership and slot count are saved as Control UI session preferences through `sessions.patch` on the gateway's main session entry. That makes the pinned sidebar follow you across browsers and devices after they connect to the same gateway. The browser still keeps a local copy for fast startup and offline rendering; the gateway copy wins when `sessions.list` returns pinned preferences.
+
+The preference fields are `controlUiPinnedSessionKeys` and `controlUiPinnedSessionSlotCount`. Session keys are normalized, deduplicated, and capped at 12 pinned chats. Slot count is an integer from 3 to 12; empty slots let you pin the current chat or start a new parallel chat without disturbing existing pins.
+
 ## Runtime config endpoint
 
 The Control UI fetches its runtime settings from `/__openclaw/control-ui-config.json`. That endpoint is gated by the same gateway auth as the rest of the HTTP surface: unauthenticated browsers cannot fetch it, and a successful fetch requires either an already valid gateway token/password, Tailscale Serve identity, or a trusted-proxy identity.
@@ -99,6 +107,7 @@ Imported themes are stored only in the current browser profile. They are not wri
   <Accordion title="Chat and Talk">
     - Chat with the model via Gateway WS (`chat.history`, `chat.send`, `chat.abort`, `chat.inject`).
     - Chat history refreshes request a bounded recent window with per-message text caps so large sessions do not force the browser to render a full transcript payload before the chat becomes usable.
+    - Pin sidebar chat slots for quick session switching, parallel chats, inline renames, drag reorder, and cross-device preference sync (`sessions.list`, `sessions.patch`).
     - Talk through browser realtime sessions. OpenAI uses direct WebRTC, Google Live uses a constrained one-use browser token over WebSocket, and backend-only realtime voice plugins use the Gateway relay transport. Client-owned provider sessions start with `talk.client.create`; Gateway relay sessions start with `talk.session.create`. The relay keeps provider credentials on the Gateway while the browser streams microphone PCM through `talk.session.appendAudio` and forwards `openclaw_agent_consult` provider tool calls through `talk.client.toolCall` for Gateway policy and the larger configured OpenClaw model.
     - Stream tool calls + live tool output cards in Chat (agent events).
 

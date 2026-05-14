@@ -90,6 +90,56 @@ function normalizeSubagentControlScope(raw: string): "children" | "none" | undef
   return undefined;
 }
 
+function normalizeControlUiPinnedSessionKeys(
+  raw: unknown,
+): string[] | null | { error: string } | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  if (raw === null) {
+    return null;
+  }
+  if (!Array.isArray(raw)) {
+    return { error: "invalid controlUiPinnedSessionKeys: expected array" };
+  }
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const item of raw) {
+    const trimmed = normalizeOptionalString(item) ?? "";
+    if (!trimmed) {
+      return { error: "invalid controlUiPinnedSessionKeys: empty session key" };
+    }
+    if (seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    normalized.push(trimmed);
+    if (normalized.length > 12) {
+      return { error: "invalid controlUiPinnedSessionKeys: too many pinned sessions" };
+    }
+  }
+  return normalized;
+}
+
+function normalizeControlUiPinnedSessionSlotCount(
+  raw: unknown,
+): number | null | { error: string } | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  if (raw === null) {
+    return null;
+  }
+  if (typeof raw !== "number" || !Number.isFinite(raw)) {
+    return { error: "invalid controlUiPinnedSessionSlotCount: expected integer" };
+  }
+  const normalized = Math.trunc(raw);
+  if (normalized < 3 || normalized > 12) {
+    return { error: "invalid controlUiPinnedSessionSlotCount (use integer 3-12)" };
+  }
+  return normalized;
+}
+
 export async function applySessionsPatchToStore(params: {
   cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
@@ -528,6 +578,32 @@ export async function applySessionsPatchToStore(params: {
         level: thinkingLevel,
         catalog: thinkingCatalog,
       });
+    }
+  }
+
+  if ("controlUiPinnedSessionKeys" in patch) {
+    const normalized = normalizeControlUiPinnedSessionKeys(patch.controlUiPinnedSessionKeys);
+    if (normalized && typeof normalized === "object" && "error" in normalized) {
+      return invalid(normalized.error);
+    }
+    if (normalized === null) {
+      delete next.controlUiPinnedSessionKeys;
+    } else if (normalized !== undefined) {
+      next.controlUiPinnedSessionKeys = normalized;
+    }
+  }
+
+  if ("controlUiPinnedSessionSlotCount" in patch) {
+    const normalized = normalizeControlUiPinnedSessionSlotCount(
+      patch.controlUiPinnedSessionSlotCount,
+    );
+    if (normalized && typeof normalized === "object" && "error" in normalized) {
+      return invalid(normalized.error);
+    }
+    if (normalized === null) {
+      delete next.controlUiPinnedSessionSlotCount;
+    } else if (normalized !== undefined) {
+      next.controlUiPinnedSessionSlotCount = normalized;
     }
   }
 

@@ -5,6 +5,8 @@ const {
   refreshChatAvatarMock,
   refreshSlashCommandsMock,
   loadChatHistoryMock,
+  rememberChatHistorySnapshotMock,
+  restoreChatHistorySnapshotMock,
   createSessionAndRefreshMock,
   loadSessionsMock,
 } = vi.hoisted(() => ({
@@ -12,6 +14,8 @@ const {
   refreshChatAvatarMock: vi.fn(),
   refreshSlashCommandsMock: vi.fn(),
   loadChatHistoryMock: vi.fn(),
+  rememberChatHistorySnapshotMock: vi.fn(),
+  restoreChatHistorySnapshotMock: vi.fn(),
   createSessionAndRefreshMock: vi.fn(),
   loadSessionsMock: vi.fn(),
 }));
@@ -29,6 +33,8 @@ vi.mock("./chat/slash-commands.ts", () => ({
 
 vi.mock("./controllers/chat.ts", () => ({
   loadChatHistory: loadChatHistoryMock,
+  rememberChatHistorySnapshot: rememberChatHistorySnapshotMock,
+  restoreChatHistorySnapshot: restoreChatHistorySnapshotMock,
 }));
 
 vi.mock("./controllers/sessions.ts", () => ({
@@ -36,17 +42,28 @@ vi.mock("./controllers/sessions.ts", () => ({
   loadSessions: loadSessionsMock,
 }));
 
+vi.mock("./app-settings.ts", () => ({
+  syncUrlWithSessionKey: vi.fn(),
+}));
+
 import {
+  addPinnedChatSlot,
+  createBlankPinnedParallelSession,
   createChatSession,
   dismissChatError,
   handleChatManualRefresh,
   isCronSessionKey,
   parseSessionKey,
+  pinChatSession,
   resolveAssistantAttachmentAuthToken,
+  removePinnedChatSlot,
+  reorderPinnedChatSession,
   resolveDashboardHeaderContext,
+  resolvePinnedChatEntries,
   resolveSessionOptionGroups,
   resolveSessionDisplayName,
   switchChatSession,
+  unpinChatSession,
 } from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import type { SessionsListResult } from "./types.ts";
@@ -58,6 +75,9 @@ beforeEach(() => {
   refreshChatAvatarMock.mockReset();
   refreshSlashCommandsMock.mockReset();
   loadChatHistoryMock.mockReset();
+  rememberChatHistorySnapshotMock.mockReset();
+  restoreChatHistorySnapshotMock.mockReset();
+  restoreChatHistorySnapshotMock.mockReturnValue(false);
   createSessionAndRefreshMock.mockReset();
   loadSessionsMock.mockReset();
 });
@@ -95,6 +115,8 @@ function createSettings(): AppViewState["settings"] {
     locale: "en",
     sessionKey: "main",
     lastActiveSessionKey: "main",
+    pinnedSessionKeys: [],
+    pinnedSessionSlotCount: 3,
     theme: "claw",
     themeMode: "dark",
     splitRatio: 0.6,
@@ -128,6 +150,10 @@ function createChatSessionState(overrides: Partial<AppViewState> = {}) {
     chatAvatarStatus: null,
     chatAvatarReason: null,
     chatQueue: [],
+    chatQueueBySession: {},
+    sidebarPinnedSessionCreating: false,
+    sidebarPinnedSessionEditingKey: null,
+    sidebarPinnedSessionRenameDraft: "",
     chatRunId: null,
     chatSending: false,
     chatLoading: false,
@@ -891,6 +917,248 @@ describe("createChatSession", () => {
       "Session list is still refreshing. Try New Chat again in a moment.",
     );
     expect(loadChatHistoryMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("pinned chats", () => {
+  it("deduplicates labels for pinned chat entries", () => {
+    const state = {
+      sessionKey: "agent:main:subagent:one",
+      settings: {
+        pinnedSessionKeys: ["agent:main:subagent:one", "agent:main:subagent:two"],
+      },
+      sessionsResult: {
+        ts: 0,
+        path: "",
+        count: 2,
+        defaults: {
+          modelProvider: "openai",
+          model: "gpt-5",
+          contextTokens: null,
+        },
+        sessions: [
+          row({ key: "agent:main:subagent:one", label: "worker" }),
+          row({ key: "agent:main:subagent:two", label: "worker" }),
+        ],
+      },
+    } as unknown as AppViewState;
+
+    const entries = resolvePinnedChatEntries(state);
+    expect(entries.map((entry) => entry.label)).toEqual([
+      "Subagent: worker · subagent:one",
+      "Subagent: worker · subagent:two",
+    ]);
+    expect(entries.map((entry) => entry.editLabel)).toEqual(["worker", "worker"]);
+  });
+
+  it("uses the raw display name as the pinned chat rename draft fallback", () => {
+    const state = {
+      sessionKey: "agent:main:subagent:one",
+      settings: {
+        pinnedSessionKeys: ["agent:main:subagent:one"],
+      },
+      sessionsResult: {
+        ts: 0,
+        path: "",
+        count: 1,
+        defaults: {
+          modelProvider: "openai",
+          model: "gpt-5",
+          contextTokens: null,
+        },
+        sessions: [row({ key: "agent:main:subagent:one", displayName: "Worker display" })],
+      },
+    } as unknown as AppViewState;
+
+    const [entry] = resolvePinnedChatEntries(state);
+
+    expect(entry.label).toBe("Subagent: Worker display");
+    expect(entry.editLabel).toBe("Worker display");
+  });
+
+  it("matches pinned main aliases against the canonical main session row", () => {
+    const state = {
+      sessionKey: "main",
+      hello: {
+        snapshot: {
+          sessionDefaults: {
+            mainSessionKey: "agent:main:main",
+            mainKey: "main",
+            defaultAgentId: "main",
+          },
+        },
+      },
+      settings: {
+        pinnedSessionKeys: ["main"],
+      },
+      sessionsResult: {
+        ts: 0,
+        path: "",
+        count: 1,
+        defaults: {
+          modelProvider: "openai",
+          model: "gpt-5",
+          contextTokens: null,
+        },
+        sessions: [row({ key: "agent:main:main", label: "Home base", status: "running" })],
+      },
+    } as unknown as AppViewState;
+
+    const [entry] = resolvePinnedChatEntries(state);
+
+    expect(entry.key).toBe("agent:main:main");
+    expect(entry.missing).toBe(false);
+    expect(entry.active).toBe(true);
+    expect(entry.status).toBe("running");
+    expect(entry.editLabel).toBe("Home base");
+  });
+
+  it("pins and unpins sessions without duplicates", () => {
+    const settings = { ...createSettings(), pinnedSessionKeys: ["main"] };
+    const state = {
+      connected: false,
+      client: null,
+      settings,
+      applySettings(next: typeof settings) {
+        state.settings = next;
+      },
+    } as unknown as AppViewState;
+
+    pinChatSession(state, "main");
+    pinChatSession(state, "agent:main:subagent:one");
+    expect(state.settings.pinnedSessionKeys).toEqual(["main", "agent:main:subagent:one"]);
+
+    unpinChatSession(state, "main");
+    expect(state.settings.pinnedSessionKeys).toEqual(["agent:main:subagent:one"]);
+  });
+
+  it("adds and removes pinned chat slots without dropping below the floor", () => {
+    const settings = {
+      ...createSettings(),
+      pinnedSessionKeys: ["main"],
+      pinnedSessionSlotCount: 3,
+    };
+    const state = {
+      connected: false,
+      client: null,
+      settings,
+      applySettings(next: typeof settings) {
+        state.settings = next;
+      },
+    } as unknown as AppViewState;
+
+    addPinnedChatSlot(state);
+    addPinnedChatSlot(state);
+    expect(state.settings.pinnedSessionSlotCount).toBe(5);
+
+    removePinnedChatSlot(state);
+    removePinnedChatSlot(state);
+    removePinnedChatSlot(state);
+    expect(state.settings.pinnedSessionSlotCount).toBe(3);
+  });
+
+  it("reorders pinned sessions", () => {
+    const settings = {
+      ...createSettings(),
+      pinnedSessionKeys: ["main", "agent:main:dashboard:a", "agent:main:dashboard:b"],
+      pinnedSessionSlotCount: 3,
+    };
+    const state = {
+      connected: false,
+      client: null,
+      settings,
+      applySettings(next: typeof settings) {
+        state.settings = next;
+      },
+    } as unknown as AppViewState;
+
+    reorderPinnedChatSession(state, "agent:main:dashboard:b", "main");
+
+    expect(state.settings.pinnedSessionKeys).toEqual([
+      "agent:main:dashboard:b",
+      "main",
+      "agent:main:dashboard:a",
+    ]);
+  });
+
+  it("creates a blank parallel session, pins it, and switches to it", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.patch") {
+        return { ok: true };
+      }
+      throw new Error(`Unexpected method: ${method}`);
+    });
+    createSessionAndRefreshMock.mockResolvedValue("agent:main:dashboard:parallel-1");
+    const settings = {
+      ...createSettings(),
+      pinnedSessionKeys: ["main"],
+      pinnedSessionSlotCount: 3,
+    };
+    const state = {
+      connected: true,
+      client: { request },
+      tab: "chat",
+      sessionKey: "main",
+      settings,
+      chatMessage: "",
+      chatAttachments: [],
+      chatMessages: [],
+      chatToolMessages: [],
+      chatStreamSegments: [],
+      chatThinkingLevel: null,
+      chatStream: null,
+      chatSideResult: null,
+      lastError: null,
+      compactionStatus: null,
+      fallbackStatus: null,
+      chatAvatarUrl: null,
+      chatAvatarSource: null,
+      chatAvatarStatus: null,
+      chatAvatarReason: null,
+      chatQueue: [],
+      chatQueueBySession: {},
+      chatRunId: null,
+      chatSideResultTerminalRuns: new Set<string>(),
+      chatStreamStartedAt: null,
+      sessionsShowArchived: false,
+      sidebarPinnedSessionCreating: false,
+      applySettings(next: typeof settings) {
+        state.settings = next;
+      },
+      loadAssistantIdentity: vi.fn(),
+      resetToolStream: vi.fn(),
+      resetChatScroll: vi.fn(),
+      resetChatInputHistoryNavigation: vi.fn(),
+      setTab: vi.fn(),
+    } as unknown as AppViewState;
+
+    refreshChatAvatarMock.mockResolvedValue(undefined);
+    refreshSlashCommandsMock.mockResolvedValue(undefined);
+    loadChatHistoryMock.mockResolvedValue(undefined);
+    loadSessionsMock.mockResolvedValue(undefined);
+
+    const createdKey = await createBlankPinnedParallelSession(state);
+
+    expect(createdKey).toBe("agent:main:dashboard:parallel-1");
+    expect(createSessionAndRefreshMock).toHaveBeenCalledWith(
+      state,
+      {
+        agentId: "main",
+        label: "Parallel chat",
+        parentSessionKey: "main",
+      },
+      {
+        activeMinutes: 0,
+        limit: 0,
+        includeGlobal: true,
+        includeUnknown: true,
+        showArchived: false,
+      },
+    );
+    expect(state.settings.pinnedSessionKeys).toEqual(["main", "agent:main:dashboard:parallel-1"]);
+    expect(state.sessionKey).toBe("agent:main:dashboard:parallel-1");
+    expect(state.sidebarPinnedSessionEditingKey).toBe("agent:main:dashboard:parallel-1");
+    expect(state.sidebarPinnedSessionRenameDraft).toBe("Parallel chat");
   });
 });
 

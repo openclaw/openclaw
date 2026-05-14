@@ -1298,7 +1298,7 @@ describe("loadChatHistory retry handling", () => {
     });
     await firstLoad;
 
-    expect(state.chatLoading).toBe(true);
+    expect(state.chatLoading).toBe(false);
     expect(state.chatMessages).toEqual([
       { role: "assistant", content: [{ type: "text", text: "visible old" }] },
     ]);
@@ -1313,6 +1313,35 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatLoading).toBe(false);
     expect(state.chatMessages).toEqual([
       { role: "assistant", content: [{ type: "text", text: "other history" }] },
+    ]);
+    expect(state.chatThinkingLevel).toBe("low");
+  });
+
+  it("keeps cached messages visible while refreshing history", async () => {
+    const deferred = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const request = vi.fn().mockReturnValue(deferred.promise);
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [{ role: "assistant", content: [{ type: "text", text: "cached" }] }],
+      chatThinkingLevel: "high",
+    });
+
+    const load = loadChatHistory(state);
+
+    expect(state.chatLoading).toBe(false);
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "cached" }] },
+    ]);
+
+    deferred.resolve({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "fresh" }] }],
+      thinkingLevel: "low",
+    });
+    await load;
+
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "fresh" }] },
     ]);
     expect(state.chatThinkingLevel).toBe("low");
   });

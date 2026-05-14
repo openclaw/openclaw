@@ -29,7 +29,7 @@ function setControlUiBasePath(value: string | undefined) {
     return;
   }
   if (value == null) {
-    delete window.__OPENCLAW_CONTROL_UI_BASE_PATH__;
+    delete window["__OPENCLAW_CONTROL_UI_BASE_PATH__"];
     return;
   }
   Object.defineProperty(window, "__OPENCLAW_CONTROL_UI_BASE_PATH__", {
@@ -512,6 +512,71 @@ describe("loadSettings default gateway URL derivation", () => {
     const settings = loadSettings();
     expect(settings.theme).toBe("claw");
     expect(settings.themeMode).toBe("dark");
+  });
+
+  it("normalizes pinned session keys on load and save", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+
+    const gwUrl = expectedGatewayUrl("");
+    localStorage.setItem(
+      `openclaw.control.settings.v1:${gwUrl}`,
+      JSON.stringify({
+        gatewayUrl: gwUrl,
+        sessionKey: "main",
+        lastActiveSessionKey: "main",
+        pinnedSessionSlotCount: 99,
+        pinnedSessionKeys: [
+          "agent:main:main",
+          "agent:main:main",
+          "",
+          "agent:main:subagent:a",
+          "agent:main:subagent:b",
+          "agent:main:subagent:c",
+          "agent:main:subagent:d",
+          "agent:main:subagent:e",
+          "agent:main:subagent:f",
+          "agent:main:subagent:g",
+          "agent:main:subagent:h",
+          "agent:main:subagent:i",
+          "agent:main:subagent:j",
+          "agent:main:subagent:k",
+          "agent:main:subagent:l",
+          "agent:main:subagent:m",
+        ],
+      }),
+    );
+
+    expect(loadSettings().pinnedSessionKeys).toEqual([
+      "agent:main:main",
+      "agent:main:subagent:a",
+      "agent:main:subagent:b",
+      "agent:main:subagent:c",
+      "agent:main:subagent:d",
+      "agent:main:subagent:e",
+      "agent:main:subagent:f",
+      "agent:main:subagent:g",
+      "agent:main:subagent:h",
+      "agent:main:subagent:i",
+      "agent:main:subagent:j",
+      "agent:main:subagent:k",
+    ]);
+    expect(loadSettings().pinnedSessionSlotCount).toBe(12);
+
+    saveSettings({
+      ...loadSettings(),
+      pinnedSessionKeys: ["main", "main", "agent:main:subagent:a"],
+      pinnedSessionSlotCount: 4,
+    });
+
+    const persisted = JSON.parse(
+      localStorage.getItem(`openclaw.control.settings.v1:${gwUrl}`) ?? "{}",
+    );
+    expect(persisted.pinnedSessionKeys).toEqual(["main", "agent:main:subagent:a"]);
+    expect(persisted.pinnedSessionSlotCount).toBe(4);
   });
 
   it("scopes persisted session selection per gateway", () => {

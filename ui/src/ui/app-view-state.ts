@@ -136,6 +136,9 @@ export type AppViewState = {
   };
   updateRealtimeTalkOptions: (next: Partial<AppViewState["realtimeTalkOptions"]>) => void;
   chatManualRefreshInFlight: boolean;
+  sidebarPinnedSessionEditingKey?: string | null;
+  sidebarPinnedSessionRenameDraft?: string;
+  sidebarPinnedSessionCreating?: boolean;
   chatHeaderControlsHidden: boolean;
   chatMobileControlsOpen: boolean;
   nodesLoading: boolean;

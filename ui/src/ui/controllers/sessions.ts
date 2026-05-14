@@ -1,5 +1,10 @@
 import { toNumber } from "../format.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
+import {
+  MIN_PINNED_SESSION_SLOTS,
+  normalizePinnedSessionKeys,
+  normalizePinnedSessionSlotCount,
+} from "../storage.ts";
 import type {
   GatewaySessionRow,
   SessionCompactionCheckpoint,
@@ -39,6 +44,19 @@ type LoadSessionsOverrides = {
   includeUnknown?: boolean;
   showArchived?: boolean;
   configuredAgentsOnly?: boolean;
+};
+
+type PinnedSessionPreferenceState = SessionsState & {
+  hello?: { snapshot?: unknown } | null;
+  settings?: {
+    pinnedSessionKeys?: string[];
+    pinnedSessionSlotCount?: number;
+  };
+  applySettings?: (next: unknown) => void;
+};
+
+type SessionsDescribeResult = {
+  session?: GatewaySessionRow | null;
 };
 
 type CreateSessionParams = {
@@ -95,6 +113,8 @@ const SESSION_EVENT_ROW_FIELDS = [
   "totalTokensFresh",
   "updatedAt",
   "verboseLevel",
+  "controlUiPinnedSessionKeys",
+  "controlUiPinnedSessionSlotCount",
 ] as const satisfies readonly (keyof GatewaySessionRow)[];
 
 function getSessionsLoadControl(state: SessionsState): SessionsLoadControl {
@@ -158,6 +178,119 @@ function projectSessionsResultForAvailability(
 
 function compareSessionRowsByUpdatedAt(a: GatewaySessionRow, b: GatewaySessionRow): number {
   return (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
+}
+
+function resolvePinnedSessionPreferenceKey(
+  state: SessionsState & { hello?: { snapshot?: unknown } | null },
+): string {
+  const snapshot = state.hello?.snapshot as
+    | { sessionDefaults?: { mainSessionKey?: string; mainKey?: string } }
+    | undefined;
+  const mainSessionKey = snapshot?.sessionDefaults?.mainSessionKey?.trim();
+  if (mainSessionKey) {
+    return mainSessionKey;
+  }
+  const mainKey = snapshot?.sessionDefaults?.mainKey?.trim();
+  if (mainKey) {
+    return mainKey;
+  }
+  return "main";
+}
+
+function resolvePinnedSessionPreferenceKeyCandidates(
+  state: PinnedSessionPreferenceState,
+): string[] {
+  return Array.from(
+    new Set([resolvePinnedSessionPreferenceKey(state), "main", "agent:main:main"].filter(Boolean)),
+  );
+}
+
+function findPinnedSessionPreferenceRow(
+  state: PinnedSessionPreferenceState,
+  sessions: GatewaySessionRow[],
+): GatewaySessionRow | null {
+  const candidateKeys = new Set(resolvePinnedSessionPreferenceKeyCandidates(state));
+  return sessions.find((row) => candidateKeys.has(row.key)) ?? null;
+}
+
+async function loadPinnedSessionPreferenceRow(
+  state: PinnedSessionPreferenceState,
+  client: NonNullable<SessionsState["client"]>,
+  res: SessionsListResult,
+): Promise<GatewaySessionRow | null> {
+  const listedRow = findPinnedSessionPreferenceRow(state, res.sessions);
+  if (listedRow) {
+    return listedRow;
+  }
+  if (!state.settings || typeof state.applySettings !== "function") {
+    return null;
+  }
+  for (const key of resolvePinnedSessionPreferenceKeyCandidates(state)) {
+    try {
+      const described = await client.request<SessionsDescribeResult | undefined>(
+        "sessions.describe",
+        {
+          key,
+        },
+      );
+      if (described?.session) {
+        return described.session;
+      }
+    } catch (err) {
+      state.sessionsError = String(err);
+      return null;
+    }
+  }
+  return null;
+}
+
+function syncPinnedSessionPreferences(
+  state: PinnedSessionPreferenceState,
+  prefsRow: GatewaySessionRow | null,
+) {
+  if (!state.settings || typeof state.applySettings !== "function") {
+    return;
+  }
+  const prefsKey = resolvePinnedSessionPreferenceKey(state);
+  const localKeys = normalizePinnedSessionKeys(state.settings.pinnedSessionKeys);
+  const localSlotCount = normalizePinnedSessionSlotCount(state.settings.pinnedSessionSlotCount);
+  const serverHasPrefs =
+    Array.isArray(prefsRow?.controlUiPinnedSessionKeys) ||
+    typeof prefsRow?.controlUiPinnedSessionSlotCount === "number";
+
+  if (serverHasPrefs) {
+    const nextKeys = normalizePinnedSessionKeys(prefsRow?.controlUiPinnedSessionKeys);
+    const nextSlotCount = normalizePinnedSessionSlotCount(
+      prefsRow?.controlUiPinnedSessionSlotCount,
+    );
+    const sameKeys =
+      localKeys.length === nextKeys.length &&
+      localKeys.every((key, index) => key === nextKeys[index]);
+    if (sameKeys && localSlotCount === nextSlotCount) {
+      return;
+    }
+    state.applySettings({
+      ...state.settings,
+      pinnedSessionKeys: nextKeys,
+      pinnedSessionSlotCount: nextSlotCount,
+    });
+    return;
+  }
+
+  const localHasPrefs = localKeys.length > 0 || localSlotCount > MIN_PINNED_SESSION_SLOTS;
+  if (!localHasPrefs || !state.client || !state.connected) {
+    return;
+  }
+
+  void state.client
+    .request("sessions.patch", {
+      key: prefsKey,
+      controlUiPinnedSessionKeys: localKeys,
+      controlUiPinnedSessionSlotCount: localSlotCount,
+    })
+    .catch((err) => {
+      state.sessionsError = String(err);
+    });
 }
 
 function checkpointSummarySignature(
@@ -448,6 +581,9 @@ async function loadSessionsOnce(
     const res = await client.request<SessionsListResult | undefined>("sessions.list", params);
     if (res) {
       state.sessionsResult = projectSessionsResultForAvailability(res, { showArchived });
+      const pinnedPreferenceState = state as PinnedSessionPreferenceState;
+      const prefsRow = await loadPinnedSessionPreferenceRow(pinnedPreferenceState, client, res);
+      syncPinnedSessionPreferences(pinnedPreferenceState, prefsRow);
       const nextKeys = new Set(state.sessionsResult.sessions.map((row) => row.key));
       for (const key of Object.keys(state.sessionsCheckpointItemsByKey)) {
         if (!nextKeys.has(key)) {
