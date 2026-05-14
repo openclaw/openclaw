@@ -86,15 +86,6 @@ importers:
       '@openclaw/fs-safe':
         specifier: 0.2.4
         version: 0.2.4
-      '@slack/bolt':
-        specifier: 4.7.2
-        version: 4.7.2(@types/express@5.0.6)
-      '@slack/types':
-        specifier: 2.21.1
-        version: 2.21.1
-      '@slack/web-api':
-        specifier: 7.15.2
-        version: 7.15.2
       ajv:
         specifier: 8.20.0
         version: 8.20.0
