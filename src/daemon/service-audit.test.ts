@@ -358,6 +358,37 @@ describe("auditGatewayServiceConfig", () => {
     ).toBe(undefined);
   });
 
+  it("accepts shell-wrapped LaunchAgent gateway commands", async () => {
+    const command =
+      'set -a; [ -f "$HOME/.config/api-keys.env" ] && . "$HOME/.config/api-keys.env"; set +a; unset OPENCLAW_GATEWAY_TOKEN; exec /opt/homebrew/opt/node/bin/node /Users/test/.npm-global/lib/node_modules/openclaw/dist/index.js gateway --port 18890';
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "darwin",
+      expectedPort: 18890,
+      command: {
+        programArguments: ["/bin/zsh", "-lc", command],
+        environment: {},
+      },
+    });
+
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayCommandMissing)).toBe(false);
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayPortMismatch)).toBe(false);
+    expect(readGatewayServiceCommandPort(["/bin/zsh", "-lc", command])).toBe(18890);
+  });
+
+  it("does not treat gateway-looking option names in shell wrappers as the gateway subcommand", async () => {
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "darwin",
+      command: {
+        programArguments: ["/bin/zsh", "-lc", "exec /usr/local/bin/helper --gateway-url ws://x"],
+        environment: {},
+      },
+    });
+
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayCommandMissing)).toBe(true);
+  });
+
   it("flags gateway service port drift from the expected config port", async () => {
     const audit = await auditGatewayServiceConfig({
       env: { HOME: "/tmp" },

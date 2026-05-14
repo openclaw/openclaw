@@ -76,8 +76,26 @@ export function needsNodeRuntimeMigration(issues: ServiceConfigIssue[]): boolean
   );
 }
 
+function tokenizeShellCommandFragment(value: string): string[] {
+  return value.match(/[^\s;"'`]+/g) ?? [];
+}
+
+function expandServiceCommandTokens(programArguments?: string[]): string[] {
+  if (!programArguments || programArguments.length === 0) {
+    return [];
+  }
+  const tokens: string[] = [];
+  for (const arg of programArguments) {
+    tokens.push(arg);
+    if (/[\s;"'`]/.test(arg)) {
+      tokens.push(...tokenizeShellCommandFragment(arg));
+    }
+  }
+  return tokens;
+}
+
 function hasGatewaySubcommand(programArguments?: string[]): boolean {
-  return Boolean(programArguments?.some((arg) => arg === "gateway"));
+  return expandServiceCommandTokens(programArguments).some((arg) => arg === "gateway");
 }
 
 function parseSystemdUnit(content: string): {
@@ -269,10 +287,11 @@ function readGatewayServiceCommandPortState(
   if (!programArguments || programArguments.length === 0) {
     return { kind: "missing" };
   }
-  for (let index = 0; index < programArguments.length; index += 1) {
-    const arg = programArguments[index];
+  const commandTokens = expandServiceCommandTokens(programArguments);
+  for (let index = 0; index < commandTokens.length; index += 1) {
+    const arg = commandTokens[index];
     if (arg === "--port") {
-      return parseGatewayPortArg(programArguments[index + 1]);
+      return parseGatewayPortArg(commandTokens[index + 1]);
     }
     if (arg.startsWith("--port=")) {
       return parseGatewayPortArg(arg.slice("--port=".length));
