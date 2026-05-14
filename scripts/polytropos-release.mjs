@@ -8,7 +8,7 @@
  *   - upstream tag: v<ver> (fetched from upstream remote)
  *   - polytropos tag: v<ver>+poly.<N>  (N is a global build number)
  * - Determine v<ver> from the most recent reachable upstream tag (v*).
- * - Release always switches `previous.tgz` then `current.tgz` (mandatory), installs `current.tgz` globally, then restarts the gateway.
+ * - Release always switches `previous.tgz` then `current.tgz` (mandatory) and installs `current.tgz` globally. Gateway activation/restart is a separate step.
  */
 
 import { execFileSync, spawn } from "node:child_process";
@@ -291,7 +291,7 @@ Behavior:
   - Updates ~/polytropos/releases/previous.tgz -> old current.tgz (if present)
   - Updates ~/polytropos/releases/current.tgz -> new tarball
   - Installs current.tgz globally into /home/ec2-user/.npm-global
-  - Restarts gateway: systemctl --user restart openclaw-gateway
+  - Does not restart/activate the gateway (run: systemctl --user restart openclaw-gateway)
 `);
 }
 
@@ -374,20 +374,27 @@ banner(logStream, "Running Polytropos bundled plugin deps helper...");
   const npmRoot = sh("npm", ["root", "-g", "--prefix", prefix]);
   const pkgName = sh("node", ["-p", "require('./package.json').name"], { cwd: repoRoot });
   const installedRoot = path.join(npmRoot, pkgName);
-  const helperPath = path.join(installedRoot, "scripts", "polytropos-bundled-plugin-deps-helper.mjs");
+  const helperPath = path.join(
+    installedRoot,
+    "scripts",
+    "polytropos-bundled-plugin-deps-helper.mjs",
+  );
   if (!fs.existsSync(helperPath)) {
     fail(`Polytropos helper not found at ${helperPath}`);
   }
   await shTee(logStream, "node", [helperPath]);
 }
 
-banner(logStream, "Restarting gateway...");
-await shTee(logStream, "systemctl", ["--user", "restart", "openclaw-gateway"]);
+banner(
+  logStream,
+  "Activation required: restart gateway to run the new code (systemctl --user restart openclaw-gateway)",
+);
 
-banner(logStream, "Done.");
+banner(logStream, "Release staged (not activated).");
 banner(logStream, `- Tag: ${polyTag}`);
 banner(logStream, `- Tarball: ${tarPath}`);
 banner(logStream, `- current.tgz -> ${readlinkAbs(currentTgz)}`);
 banner(logStream, `- previous.tgz -> ${readlinkAbs(previousTgz)}`);
+banner(logStream, "- Next: systemctl --user restart openclaw-gateway");
 
 logStream.end();

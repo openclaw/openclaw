@@ -4,7 +4,7 @@
 
 See also:
 
-- Release mechanism: [`docs/polytropos/CORE-RELEASES.md`](../CORE-RELEASES.md)
+- Release mechanism: [`docs/polytropos/CORE-RELEASES.md`](./CORE-RELEASES.md)
 
 ## Inputs
 
@@ -27,9 +27,15 @@ Output of this step: `openclaw-polytropos` `main` contains upstream `<upstreamTa
 
 ### 3) Release
 
-After the merge is successfully completed, run the standard release script (this includes tagging, building prepared artifacts, producing a `.tgz` via `npm pack`, updating `current.tgz`/`previous.tgz`, installing globally, restarting, and verification):
+After the merge is successfully completed, run the standard release script (this stages the new code by tagging, building prepared artifacts, producing a `.tgz` via `npm pack`, updating `current.tgz`/`previous.tgz`, installing globally, and running the bundled deps helper):
 
 - [`docs/polytropos/CORE-RELEASES.md`](./CORE-RELEASES.md)
+
+Then activate the staged release by restarting the gateway (separate step):
+
+```bash
+systemctl --user restart openclaw-gateway
+```
 
 ## Notes
 

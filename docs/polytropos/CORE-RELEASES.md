@@ -4,7 +4,8 @@ This document defines the **release** mechanism for Polytropos core (openclaw-po
 
 ## Terms
 
-- **Release**: producing a versioned `.tgz` under `~/polytropos/releases/` and switching `current.tgz`/`previous.tgz`.
+- **Release (staging)**: producing a versioned `.tgz` under `~/polytropos/releases/`, switching `current.tgz`/`previous.tgz`, and installing `current.tgz` globally.
+- **Activation**: restarting the gateway so it starts using the newly installed global package.
 - **Update**: merging a newer upstream OpenClaw tag into our fork, then performing the standard **release** procedure (see [`docs/polytropos/UPDATE-PROCEDURE.md`](./UPDATE-PROCEDURE.md)).
 
 ## Goal
@@ -48,9 +49,17 @@ Switching is done by:
    - `previous.tgz` → old `current.tgz`
    - `current.tgz` → new `<tag>.tgz`
 2. installing the tarball globally into the prefix the service uses (`/home/ec2-user/.npm-global`)
-3. restarting the gateway
+3. running the Polytropos bundled plugin deps helper from the installed package (ensures bundled plugin runtime deps exist)
 
 Rollback is the same operation, pointing `current.tgz` back to `previous.tgz`.
+
+## Activation (restart)
+
+After a release is staged, activate it by restarting the gateway:
+
+```bash
+systemctl --user restart openclaw-gateway
+```
 
 ## Release procedure (scripted)
 
@@ -74,7 +83,7 @@ What it does (high level):
 - updates symlinks (mandatory): `previous.tgz` then `current.tgz`
 - installs `current.tgz` globally into `/home/ec2-user/.npm-global`
 - runs the Polytropos bundled plugin deps helper from the installed package (`scripts/polytropos-bundled-plugin-deps-helper.mjs`); it self-discovers the installed package root and ensures bundled plugin runtime deps are present
-- restarts the gateway
+- does not restart/activate the gateway (activation is a separate manual step)
 
 ## Dev mode (without a second gateway)
 
