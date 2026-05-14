@@ -245,7 +245,7 @@ function sourceCodexAppServerStartOptions(codexHome: string): CodexAppServerStar
   return {
     transport: "stdio",
     command: "codex",
-    commandSource: "config",
+    commandSource: "managed",
     args: ["app-server", "--listen", "stdio://"],
     headers: {},
     env: {
