@@ -83,9 +83,11 @@ type ApprovalRiskLevel = "low" | "medium" | "high";
 type CommandActionKind =
   | "database"
   | "delete"
+  | "format"
   | "network"
   | "package"
   | "permissions"
+  | "process"
   | "read"
   | "remote"
   | "service"
@@ -98,6 +100,7 @@ type CommandActionSummary = {
   risk: ApprovalRiskLevel;
   kind: CommandActionKind;
   reason?: string;
+  hideWhenGrouped?: boolean;
 };
 
 const RISK_RANK: Record<ApprovalRiskLevel, number> = {
@@ -115,39 +118,37 @@ function buildPlainEnglishApprovalLines(payload: PluginApprovalRequestPayload): 
   const command = extractApprovalCommand(payload);
   if (command) {
     const summary = summarizeShellCommand(command);
-    const lines = [`Summary: ${summary.headline}`, "What it wants to do:"];
-    for (const action of summary.actions.slice(0, 5)) {
+    const lines = ["Action", formatSentence(summary.headline), "", "It will"];
+    for (const action of summary.actions.slice(0, 4)) {
       lines.push(`- ${action}`);
     }
-    if (summary.actions.length > 5) {
-      lines.push(`- ...and ${summary.actions.length - 5} more step(s)`);
+    if (summary.actions.length > 4) {
+      lines.push(`- ${summary.actions.length - 4} more background step(s)`);
     }
-    lines.push(`Risk: ${summary.risk}. ${summary.riskReason}`);
+    lines.push("", `Risk: ${formatRiskLevel(summary.risk)}`, summary.riskReason);
     return lines;
   }
 
   const tool = payload.toolName ? `the ${payload.toolName} tool` : "a protected plugin tool";
   const plugin = payload.pluginId ? ` from ${payload.pluginId}` : "";
   return [
-    `Summary: let ${tool}${plugin} run one protected action`,
-    `What it wants to do: ${firstLine(payload.description)}`,
-    "Risk: medium. This is not a terminal command I can fully translate, so review the request before approving.",
+    "Action",
+    `Let ${tool}${plugin} run one protected action`,
+    "",
+    "It will",
+    `- ${firstLine(payload.description)}`,
+    "",
+    "Risk: Medium",
+    "I cannot fully summarize this request, so review it before approving.",
   ];
 }
 
 function buildApprovalDecisionHelpLines(payload: PluginApprovalRequestPayload): string[] {
   const decisions = resolvePluginApprovalRequestAllowedDecisions(payload);
-  const lines = ["Choices:"];
-  if (decisions.includes("allow-once")) {
-    lines.push("- allow-once: approve this one request");
+  if (decisions.length === 0) {
+    return [];
   }
-  if (decisions.includes("allow-always")) {
-    lines.push("- allow-always: remember this kind of request for this agent");
-  }
-  if (decisions.includes("deny")) {
-    lines.push("- deny: block it");
-  }
-  return lines;
+  return ["", "Choose below."];
 }
 
 function extractApprovalCommand(payload: PluginApprovalRequestPayload): string | null {
@@ -172,7 +173,9 @@ function summarizeShellCommand(command: string): {
     expandCommandSegment(segment),
   );
   const summaries = segments.map((segment) => summarizeCommandSegment(segment)).filter(Boolean);
-  const actions = summaries.map((summary) => summary.text);
+  const visibleSummaries = summaries.filter((summary) => !summary.hideWhenGrouped);
+  const actionSummaries = visibleSummaries.length > 0 ? visibleSummaries : summaries;
+  const actions = uniqueStrings(actionSummaries.map((summary) => summary.text));
   const risk = summaries.reduce<ApprovalRiskLevel>(
     (current, summary) => (RISK_RANK[summary.risk] > RISK_RANK[current] ? summary.risk : current),
     "low",
@@ -184,13 +187,11 @@ function summarizeShellCommand(command: string): {
   const riskReason =
     highReason ??
     mediumReason ??
-    (risk === "low"
-      ? "This looks like a basic workspace check with no obvious network, service, or delete step."
-      : "Review the request before approving.");
+    buildDefaultRiskReason(risk, summaries);
 
   return {
-    headline: buildCommandHeadline(summaries),
-    actions: actions.length > 0 ? actions : [`run terminal command: ${command}`],
+    headline: buildCommandHeadline(actionSummaries),
+    actions: actions.length > 0 ? actions : ["run the requested terminal command"],
     risk,
     riskReason,
   };
@@ -263,7 +264,7 @@ function isShellBookkeepingSegment(segment: string): boolean {
 }
 
 function extractShellWrapperCommand(words: readonly string[]): string | null {
-  const command = basename(words[0] ?? "");
+  const command = cleanCommandName(basename(words[0] ?? ""));
   if (!["bash", "fish", "sh", "zsh"].includes(command)) {
     return null;
   }
@@ -287,9 +288,9 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
   }
 
   const resolved = resolveCommandWords(segment);
-  const command = basename(resolved.words[0] ?? "");
+  const command = cleanCommandName(basename(resolved.words[0] ?? ""));
   const args = resolved.words.slice(1);
-  const nonOptionArgs = args.filter((word) => !word.startsWith("-") && word !== "]");
+  const nonOptionArgs = getCommandTargetArgs(command, args);
   const targetText = formatTargets(nonOptionArgs);
   const sensitiveTarget = nonOptionArgs.some(isSensitivePath);
   const systemTarget = nonOptionArgs.some(isSystemPath);
@@ -357,6 +358,47 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
       );
     case "pwd":
       return { text: "show the current folder", risk: "low", kind: "read" };
+    case "sleep":
+      return {
+        text: "wait briefly",
+        risk: "low",
+        kind: "read",
+        hideWhenGrouped: true,
+      };
+    case "printf":
+    case "echo":
+      return withSudo(
+        {
+          text: redirected ? "write terminal output into a file" : "format a short status message",
+          risk: redirected ? "medium" : "low",
+          kind: redirected ? "write" : "format",
+          reason: redirected ? "Shell redirection writes to a file." : undefined,
+          hideWhenGrouped: !redirected,
+        },
+        sudoPrefix,
+      );
+    case "ps":
+    case "pgrep":
+      return withSudo(
+        {
+          text: "check running processes",
+          risk: "low",
+          kind: "process",
+        },
+        sudoPrefix,
+      );
+    case "kill":
+    case "killall":
+    case "pkill":
+      return withSudo(
+        {
+          text: "stop running processes",
+          risk: "high",
+          kind: "process",
+          reason: "Stopping processes can interrupt running work or services.",
+        },
+        sudoPrefix,
+      );
     case "ls":
       return withSudo(
         {
@@ -407,7 +449,7 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
     case "tail":
       return withSudo(
         {
-          text: `read file contents${targetText}`,
+          text: formatReadFileAction(command, nonOptionArgs),
           risk: sensitiveTarget || systemTarget ? "medium" : "low",
           kind: "read",
           reason: sensitiveTarget
@@ -415,6 +457,33 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
             : systemTarget
               ? "It may read system-level files."
               : undefined,
+        },
+        sudoPrefix,
+      );
+    case "wc":
+    case "stat":
+    case "file":
+      return withSudo(
+        {
+          text: `inspect file details${targetText}`,
+          risk: sensitiveTarget || systemTarget ? "medium" : "low",
+          kind: "read",
+          reason: sensitiveTarget
+            ? "It may inspect secret or credential files."
+            : systemTarget
+              ? "It inspects system-level files."
+              : undefined,
+        },
+        sudoPrefix,
+      );
+    case "df":
+    case "du":
+      return withSudo(
+        {
+          text: `check disk usage${targetText}`,
+          risk: systemTarget ? "medium" : "low",
+          kind: "read",
+          reason: systemTarget ? "It inspects system-level storage paths." : undefined,
         },
         sudoPrefix,
       );
@@ -441,17 +510,6 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
             sensitiveTarget || systemTarget
               ? "It writes to a sensitive or system path."
               : undefined,
-        },
-        sudoPrefix,
-      );
-    case "echo":
-    case "printf":
-      return withSudo(
-        {
-          text: redirected ? "write terminal output into a file" : "print text in the terminal",
-          risk: redirected ? "medium" : "low",
-          kind: redirected ? "write" : "read",
-          reason: redirected ? "Shell redirection writes to a file." : undefined,
         },
         sudoPrefix,
       );
@@ -539,6 +597,26 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
     case "service":
     case "launchctl":
       return withSudo(summarizeServiceCommand(command, args), sudoPrefix);
+    case "journalctl":
+      return withSudo(
+        {
+          text: "read service logs",
+          risk: "low",
+          kind: "service",
+        },
+        sudoPrefix,
+      );
+    case "ss":
+    case "lsof":
+    case "netstat":
+      return withSudo(
+        {
+          text: "check network listeners or open files",
+          risk: "low",
+          kind: "process",
+        },
+        sudoPrefix,
+      );
     case "ssh":
     case "scp":
       return withSudo(
@@ -572,13 +650,39 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
         },
         sudoPrefix,
       );
+    case "jq":
+      return withSudo(
+        {
+          text: redirected ? "filter data and write the result" : "filter command output",
+          risk: redirected ? "medium" : "low",
+          kind: redirected ? "write" : "format",
+          reason: redirected ? "Shell redirection writes to a file." : undefined,
+          hideWhenGrouped: !redirected,
+        },
+        sudoPrefix,
+      );
+    case "awk":
+    case "cut":
+    case "sort":
+    case "tr":
+    case "uniq":
+      return withSudo(
+        {
+          text: redirected ? "process text and write the result" : "process text output",
+          risk: redirected ? "medium" : "low",
+          kind: redirected ? "write" : "format",
+          reason: redirected ? "Shell redirection writes to a file." : undefined,
+          hideWhenGrouped: !redirected,
+        },
+        sudoPrefix,
+      );
     default:
       return withSudo(
         {
-          text: command ? `run terminal command: ${command}` : `run terminal command: ${segment}`,
+          text: command ? `run ${command}` : "run the requested terminal command",
           risk: "medium",
           kind: "unknown",
-          reason: "This command is not recognized by the plain-English translator.",
+          reason: "I cannot fully summarize this command, so review it before approving.",
         },
         sudoPrefix,
       );
@@ -711,6 +815,10 @@ function summarizeDatabaseCommand(
 function buildCommandHeadline(summaries: readonly CommandActionSummary[]): string {
   const kinds = new Set(summaries.map((summary) => summary.kind));
   const allLow = summaries.every((summary) => summary.risk === "low");
+  const actionText = summaries.map((summary) => summary.text).join(" ");
+  if (actionText.includes("agent-route log") && kinds.has("process")) {
+    return "check agent route status";
+  }
   if (kinds.has("delete")) {
     return "delete files or folders";
   }
@@ -719,6 +827,9 @@ function buildCommandHeadline(summaries: readonly CommandActionSummary[]): strin
   }
   if (kinds.has("service")) {
     return "inspect or change a running service";
+  }
+  if (kinds.has("process")) {
+    return "check running processes";
   }
   if (kinds.has("network")) {
     return "use the network or download data";
@@ -738,6 +849,9 @@ function buildCommandHeadline(summaries: readonly CommandActionSummary[]): strin
   if (allLow && kinds.size === 1 && kinds.has("read")) {
     return "read or list files";
   }
+  if (allLow && kinds.size === 1 && kinds.has("format")) {
+    return "format a status message";
+  }
   return "run a terminal command";
 }
 
@@ -745,7 +859,7 @@ function resolveCommandWords(segment: string): { words: string[]; usedSudo: bool
   const words = splitShellWords(segment);
   let usedSudo = false;
   while (words.length > 0) {
-    const first = basename(words[0] ?? "");
+    const first = cleanCommandName(basename(words[0] ?? ""));
     if (first === "sudo") {
       usedSudo = true;
       words.shift();
@@ -849,6 +963,118 @@ function firstLine(value: string): string {
   return value.split(/\r?\n/)[0]?.trim() || "run the requested plugin action";
 }
 
+function formatSentence(value: string): string {
+  const trimmed = value.trim();
+  return trimmed ? `${trimmed[0]?.toUpperCase() ?? ""}${trimmed.slice(1)}` : trimmed;
+}
+
+function formatRiskLevel(risk: ApprovalRiskLevel): string {
+  return risk === "low" ? "Low" : risk === "medium" ? "Medium" : "High";
+}
+
+function uniqueStrings(values: readonly string[]): string[] {
+  return [...new Set(values)];
+}
+
+function buildDefaultRiskReason(
+  risk: ApprovalRiskLevel,
+  summaries: readonly CommandActionSummary[],
+): string {
+  const kinds = new Set(summaries.map((summary) => summary.kind));
+  if (risk === "low" && kinds.size === 1 && kinds.has("format")) {
+    return "Only formats a short status message. No files, network, or services changed.";
+  }
+  if (risk === "low" && kinds.has("process")) {
+    return "Reads local process state. No network, service change, or delete step detected.";
+  }
+  if (risk === "low" && (kinds.has("read") || kinds.has("service"))) {
+    return "Reads local state or logs. No network, service change, or delete step detected.";
+  }
+  if (risk === "low" && kinds.has("write")) {
+    return "Only creates or checks workspace files. No network, service, or delete step detected.";
+  }
+  if (risk === "high") {
+    return "This can make sensitive or hard-to-reverse changes. Review carefully before approving.";
+  }
+  return "May read sensitive data or change local state. Review before approving.";
+}
+
+function getCommandTargetArgs(command: string, args: readonly string[]): string[] {
+  if (command === "[" || command === "test") {
+    return args.filter(
+      (arg) => arg && arg !== "]" && !arg.startsWith("-") && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(arg),
+    );
+  }
+  if (
+    [
+      "awk",
+      "cut",
+      "echo",
+      "jq",
+      "pgrep",
+      "printf",
+      "ps",
+      "sleep",
+      "sort",
+      "tr",
+      "uniq",
+    ].includes(command)
+  ) {
+    return [];
+  }
+
+  const optionValueFlags = new Set([
+    "-A",
+    "-B",
+    "-C",
+    "-c",
+    "-e",
+    "-f",
+    "-m",
+    "-n",
+    "--after-context",
+    "--before-context",
+    "--bytes",
+    "--context",
+    "--file",
+    "--lines",
+    "--max-count",
+    "--regexp",
+  ]);
+  const targets: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index] ?? "";
+    if (!arg || arg === "]" || /^[A-Za-z_][A-Za-z0-9_]*=/.test(arg)) {
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      if (optionValueFlags.has(arg) && args[index + 1]) {
+        index += 1;
+      }
+      continue;
+    }
+    if ((command === "head" || command === "tail") && /^\d+$/.test(arg)) {
+      continue;
+    }
+    targets.push(arg);
+  }
+  return targets;
+}
+
+function formatReadFileAction(command: string, args: readonly string[]): string {
+  if (args.some((arg) => arg.includes("/tmp/openclaw-agent-routes/"))) {
+    return command === "tail" || command === "head"
+      ? "read recent agent-route log output"
+      : "read agent-route log output";
+  }
+  if (args.some((arg) => /\.log(?:\b|$)|\/logs?\//i.test(arg))) {
+    return command === "tail" || command === "head"
+      ? "read recent local log output"
+      : "read local log output";
+  }
+  return `read file contents${formatTargets(args)}`;
+}
+
 function formatTargets(args: readonly string[]): string {
   const targets = args.filter((arg) => arg && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(arg));
   if (targets.length === 0) {
@@ -878,6 +1104,10 @@ function formatNetworkTargets(args: readonly string[]): string {
 
 function basename(command: string): string {
   return command.split("/").pop()?.trim() ?? command;
+}
+
+function cleanCommandName(command: string): string {
+  return command.replace(/^['"]+|['"]+$/g, "");
 }
 
 function isSensitivePath(path: string): boolean {

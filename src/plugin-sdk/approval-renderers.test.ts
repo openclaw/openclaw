@@ -230,13 +230,15 @@ describe("plugin-sdk/approval-renderers", () => {
     });
 
     expect(payload.text).toContain("Approval needed");
-    expect(payload.text).toContain("Summary: create/check workspace files or folders");
+    expect(payload.text).toContain("Action\nCreate/check workspace files or folders");
+    expect(payload.text).toContain("It will");
     expect(payload.text).toContain("- create folder(s): outputs/openmodelapi");
     expect(payload.text).toContain("- show the current folder");
     expect(payload.text).toContain("- list files or folders: outputs, outputs/openmodelapi");
-    expect(payload.text).toContain("Risk: low.");
-    expect(payload.text).toContain("Choices:");
-    expect(payload.text).toContain("- allow-once: approve this one request");
+    expect(payload.text).toContain("Risk: Low");
+    expect(payload.text).toContain("Choose below.");
+    expect(payload.text).not.toContain("Choices:");
+    expect(payload.text).not.toContain("- allow-once: approve this one request");
     expect(payload.text).not.toContain("Technical details:");
     expect(payload.text).not.toContain("Type: Plugin approval required");
     expect(payload.text).not.toContain("Title: Codex app-server command approval");
@@ -270,7 +272,7 @@ describe("plugin-sdk/approval-renderers", () => {
     });
 
     expect(payload.text).toContain("Approval needed");
-    expect(payload.text).toContain("Summary: create/check workspace files or folders");
+    expect(payload.text).toContain("Action\nCreate/check workspace files or folders");
     expect(payload.text).toContain("Technical details:");
     expect(payload.text).toContain("Type: Plugin approval required");
     expect(payload.text).toContain(
@@ -295,9 +297,9 @@ describe("plugin-sdk/approval-renderers", () => {
       language: "simple",
     });
 
-    expect(payload.text).toContain("Summary: use the network or download data");
+    expect(payload.text).toContain("Action\nUse the network or download data");
     expect(payload.text).toContain("- download or generate something and pipe it into a shell");
-    expect(payload.text).toContain("Risk: high.");
+    expect(payload.text).toContain("Risk: High");
     expect(payload.text).toContain(
       "Piping data into a shell can run code that is not visible in the approval prompt.",
     );
@@ -319,13 +321,13 @@ describe("plugin-sdk/approval-renderers", () => {
       language: "simple",
     });
 
-    expect(payload.text).toContain("Summary: run a terminal command");
+    expect(payload.text).toContain("Action\nRun a terminal command");
     expect(payload.text).toContain("- run shell expansion or nested command");
-    expect(payload.text).toContain("Risk: high.");
+    expect(payload.text).toContain("Risk: High");
     expect(payload.text).toContain(
       "Shell expansions can run nested commands that are not fully visible in the approval summary.",
     );
-    expect(payload.text).not.toContain("- print text in the terminal");
+    expect(payload.text).not.toContain("format a short status message");
   });
 
   it("summarizes timeout and shell-wrapper command approvals by their inner actions", () => {
@@ -345,16 +347,64 @@ describe("plugin-sdk/approval-renderers", () => {
       language: "simple",
     });
 
-    expect(payload.text).toContain("Summary: use the network or download data");
+    expect(payload.text).toContain("Action\nUse the network or download data");
     expect(payload.text).toContain("- check whether a condition or file exists: .env.auth");
     expect(payload.text).toContain("- load a local environment/script file: ./.env.auth");
     expect(payload.text).toContain(
       "- make a network request or download data: http://127.0.0.1:3025/api/health",
     );
-    expect(payload.text).toContain("Risk: medium.");
+    expect(payload.text).toContain("Risk: Medium");
     expect(payload.text).not.toContain("run terminal command: timeout");
     expect(payload.text).not.toContain("Authorization: Bearer");
     expect(payload.text).not.toContain("Technical details:");
+  });
+
+  it("groups route-agent process and log checks without surfacing helper commands", () => {
+    const payload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id: "plugin-command-route-check",
+        request: {
+          title: "Codex app-server command approval",
+          description:
+            "Command: sleep 1 && ps aux | grep route-agent && printf '%s\\n' ok && tail -n 100 /tmp/openclaw-agent-routes/media-20260515-014908.log && printf done",
+          toolName: "codex_command_approval",
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: 121_000,
+      },
+      nowMs: 1_000,
+      language: "simple",
+    });
+
+    expect(payload.text).toContain("Action\nCheck agent route status");
+    expect(payload.text).toContain("- check running processes");
+    expect(payload.text).toContain("- read recent agent-route log output");
+    expect(payload.text).toContain("Risk: Low");
+    expect(payload.text).not.toContain("sleep");
+    expect(payload.text).not.toContain("printf");
+    expect(payload.text).not.toContain("/tmp/openclaw-agent-routes");
+  });
+
+  it("renders quoted printf approvals as short status formatting", () => {
+    const payload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id: "plugin-command-printf",
+        request: {
+          title: "Codex app-server command approval",
+          description: "Command: 'printf' '%s' 'Check Codex app-server command approval'",
+          toolName: "codex_command_approval",
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: 121_000,
+      },
+      nowMs: 1_000,
+      language: "simple",
+    });
+
+    expect(payload.text).toContain("Action\nFormat a status message");
+    expect(payload.text).toContain("- format a short status message");
+    expect(payload.text).toContain("Risk: Low");
+    expect(payload.text).not.toContain("run 'printf");
   });
 
   it("preserves the original plugin approval wording by default", () => {
@@ -373,7 +423,7 @@ describe("plugin-sdk/approval-renderers", () => {
     });
 
     expect(payload.text).toContain("Plugin approval required");
-    expect(payload.text).not.toContain("Summary: create/check workspace files or folders");
+    expect(payload.text).not.toContain("Action\nCreate/check workspace files or folders");
     expect(payload.text).not.toContain("Technical details:");
     expect(payload.text).toContain("Command: mkdir -p outputs/openmodelapi");
   });
