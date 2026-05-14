@@ -1447,6 +1447,16 @@ describe("classifyProviderRuntimeFailureKind", () => {
         "OAuth token refresh failed for openai-codex: invalid_grant. Please try again or re-authenticate.",
       ),
     ).toBe("auth_refresh");
+    expect(
+      classifyProviderRuntimeFailureKind(
+        "Your access token could not be refreshed because you have since logged out or signed in to another account. Please sign in again.",
+      ),
+    ).toBe("auth_refresh");
+    expect(
+      classifyProviderRuntimeFailureKind(
+        "Your authentication session could not be refreshed automatically. Please log out and sign in again.",
+      ),
+    ).toBe("auth_refresh");
   });
 
   it("classifies OAuth refresh timeouts and lock contention distinctly", () => {
