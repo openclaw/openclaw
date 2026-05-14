@@ -92,7 +92,9 @@ function makeManifestRegistry(pluginId = "demo"): PluginManifestRegistry {
   return { plugins: [plugin], diagnostics: [] };
 }
 
-function firstPlugin(snapshot: ReturnType<typeof loadPluginMetadataSnapshot>): PluginManifestRecord {
+function firstPlugin(
+  snapshot: ReturnType<typeof loadPluginMetadataSnapshot>,
+): PluginManifestRecord {
   const plugin = snapshot.plugins[0];
   if (!plugin) {
     throw new Error("expected memo test fixture plugin");

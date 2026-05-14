@@ -163,13 +163,13 @@ export async function prepareCliRunContext(
     config: params.config,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
+    contextMode: params.bootstrapContextMode,
+    runKind: params.bootstrapContextRunKind,
     warn: prepareDeps.makeBootstrapWarn({
       sessionLabel,
       workspaceDir,
       warn: (message) => cliBackendLog.warn(message),
     }),
-    contextMode: params.bootstrapContextMode,
-    runKind: params.bootstrapContextRunKind,
   });
   const bootstrapMaxChars = resolveBootstrapMaxChars(params.config);
   const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config);

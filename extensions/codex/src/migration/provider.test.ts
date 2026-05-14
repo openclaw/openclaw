@@ -1648,6 +1648,7 @@ function createConfigRuntime(
         return {
           path: "/tmp/openclaw.json",
           previousHash: null,
+          persistedHash: "test-persisted-hash",
           snapshot: {} as never,
           nextConfig: configState,
           afterWrite: { mode: "auto" },
