@@ -14,6 +14,8 @@ import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 export type StatusReactionAdapter = {
   /** Set/replace the current reaction emoji. */
   setReaction: (emoji: string) => Promise<void>;
+  /** Clear all status reactions for single-slot platforms such as WhatsApp. */
+  clearReaction?: () => Promise<void>;
   /** Remove a specific reaction emoji (optional — needed for Discord-style platforms). */
   removeReaction?: (emoji: string) => Promise<void>;
 };
@@ -439,11 +441,20 @@ export function createStatusReactionController(params: {
     finished = true;
 
     await enqueue(async () => {
-      if (adapter.removeReaction) {
+      if (adapter.clearReaction) {
+        try {
+          await adapter.clearReaction();
+        } catch (err) {
+          if (onError) {
+            onError(err);
+          }
+        } finally {
+          activeEmojis.clear();
+        }
+      } else if (adapter.removeReaction) {
         await removeActiveEmojis();
       } else {
-        // For platforms without removeReaction, set empty or just skip
-        // (Telegram handles this atomically on the next setReaction)
+        // Telegram handles this atomically on the next setReaction.
       }
       currentEmoji = "";
       pendingEmoji = "";

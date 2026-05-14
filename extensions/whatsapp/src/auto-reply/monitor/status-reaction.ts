@@ -94,7 +94,7 @@ export async function createWhatsAppStatusReactionController(
       setReaction: async (emoji: string) => {
         await sendReactionWhatsApp(chatId, msgId, emoji, reactionOptions);
       },
-      removeReaction: async (_emoji: string) => {
+      clearReaction: async () => {
         await sendReactionWhatsApp(chatId, msgId, "", reactionOptions);
       },
     },
@@ -102,9 +102,7 @@ export async function createWhatsAppStatusReactionController(
     emojis: statusReactionsConfig.emojis,
     timing: statusReactionsConfig.timing,
     onError: (err) => {
-      logVerbose(
-        `WhatsApp status-reaction error for chat ${chatId}/${msgId}: ${String(err)}`,
-      );
+      logVerbose(`WhatsApp status-reaction error for chat ${chatId}/${msgId}: ${String(err)}`);
     },
   });
 }

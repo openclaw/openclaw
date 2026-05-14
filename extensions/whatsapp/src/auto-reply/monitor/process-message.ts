@@ -32,7 +32,6 @@ import { whatsappInboundLog } from "../loggers.js";
 import type { WebInboundMsg } from "../types.js";
 import { elide } from "../util.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
-import { createWhatsAppStatusReactionController } from "./status-reaction.js";
 import {
   resolveVisibleWhatsAppGroupHistory,
   resolveVisibleWhatsAppReplyContext,
@@ -64,6 +63,10 @@ import {
   type LoadConfigFn,
   type resolveAgentRoute,
 } from "./runtime-api.js";
+import {
+  createWhatsAppStatusReactionController,
+  type StatusReactionController,
+} from "./status-reaction.js";
 
 const WHATSAPP_MESSAGE_RECEIVED_HOOK_LIMITS = {
   maxConcurrency: 8,
@@ -199,6 +202,7 @@ export async function processMessage(params: {
   suppressGroupHistoryClear?: boolean;
   ackAlreadySent?: boolean;
   ackReaction?: AckReactionHandle | null;
+  statusReactionController?: StatusReactionController | null;
   /** Pre-computed audio transcript from a caller-level preflight, used to avoid
    * re-transcribing the same voice note once per broadcast agent.
    * - string  → transcript obtained; use it directly, skip internal STT
@@ -331,7 +335,8 @@ export async function processMessage(params: {
   // signaling (queued → thinking → tool → done/error). The plain ackReaction is
   // skipped so the same message slot isn't used for two competing systems.
   const statusReactionController =
-    params.cfg.messages?.statusReactions?.enabled === true && !params.ackAlreadySent
+    params.statusReactionController ??
+    (params.cfg.messages?.statusReactions?.enabled === true && !params.ackAlreadySent
       ? await createWhatsAppStatusReactionController({
           cfg: params.cfg,
           msg: params.msg,
@@ -341,9 +346,9 @@ export async function processMessage(params: {
           verbose: params.verbose,
           accountId: account.accountId,
         })
-      : null;
+      : null);
 
-  if (statusReactionController) {
+  if (statusReactionController && !params.statusReactionController) {
     void statusReactionController.setQueued();
   }
 
