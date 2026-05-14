@@ -197,7 +197,13 @@ export async function ensureSkillSnapshot(params: {
     });
   };
 
-  const _snapshotCacheKey = JSON.stringify([workspaceDir, snapshotVersion, skillFilter]);
+  const _snapshotCacheKey = JSON.stringify([
+    workspaceDir,
+    snapshotVersion,
+    skillFilter,
+    sessionAgentId,
+    remoteEligibility,
+  ]);
 
   // For hydrateResolvedSkills callbacks: reuse cached resolvedSkills when available.
   const _cachedRebuild = (): SkillSnapshot => {
