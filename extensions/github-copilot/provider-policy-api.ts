@@ -7,6 +7,7 @@ import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runti
 // `getSessionDefaults` calls). Without this artifact, callers fall through to
 // the stock thinking profile and xhigh disappears from the dashboard.
 const COPILOT_XHIGH_MODEL_IDS = [
+  "gpt-5.5",
   "gpt-5.4",
   "gpt-5.3-codex",
   "gpt-5.2",

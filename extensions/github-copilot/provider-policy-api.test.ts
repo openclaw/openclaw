@@ -20,8 +20,8 @@ describe("github-copilot provider-policy-api", () => {
     ).toEqual(["off", "minimal", "low", "medium", "high", "xhigh"]);
   });
 
-  it("appends xhigh for GPT-5.4 / 5.3-codex / 5.2 variants", () => {
-    for (const modelId of ["gpt-5.4", "gpt-5.3-codex", "gpt-5.2", "gpt-5.2-codex"]) {
+  it("appends xhigh for GPT-5.5 / 5.4 / 5.3-codex / 5.2 variants", () => {
+    for (const modelId of ["gpt-5.5", "gpt-5.4", "gpt-5.3-codex", "gpt-5.2", "gpt-5.2-codex"]) {
       expect(
         resolveThinkingProfile({
           provider: "github-copilot",
