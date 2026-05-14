@@ -6,6 +6,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Agents/skills: cache hydrated `resolvedSkills` across warm gateway turns while keying reuse by the redacted effective config, reducing redundant skill snapshot rebuilds without crossing config-gated skill boundaries. (#81451) Thanks @solodmd.
+
 ### Fixes
 
 - Memory search: stop using chokidar write-stability polling for memory and QMD watchers so large Markdown extraPath trees no longer build up regular file descriptors; changed files now settle through the existing debounced sync queue. Fixes #77327 and #78224. (#81802) Thanks @frankekn, @loyur, and @JanPlessow.
@@ -41,7 +43,6 @@ Docs: https://docs.openclaw.ai
 - Gateway: expose optional `isHeartbeat` metadata on agent event payloads so clients can distinguish scheduled heartbeat runs from ordinary chat runs. (#80610) Thanks @medns.
 - Agents: add `agents.defaults.runRetries` and `agents.list[].runRetries` config for embedded Pi runner retry loop limits. (#80661) Thanks @medns.
 - Codex: add node-backed Codex CLI session listing and binding so an OpenClaw conversation can continue an existing Codex CLI session running on a paired node.
-- Agents/skills: cache hydrated `resolvedSkills` across warm gateway turns while keying reuse by the redacted effective config, reducing redundant skill snapshot rebuilds without crossing config-gated skill boundaries. (#81451) Thanks @solodmd.
 
 ### Fixes
 
