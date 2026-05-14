@@ -46,6 +46,7 @@ import {
   __testing,
   clearPluginLoaderCache,
   loadOpenClawPlugins,
+  type PluginLoadOptions,
   PluginLoadReentryError,
   resolveRuntimePluginRegistry,
 } from "./loader.js";
@@ -96,6 +97,10 @@ let cachedBundledTelegramDir = "";
 let cachedBundledMemoryDir = "";
 
 type GlobalHookRunner = NonNullable<ReturnType<typeof getGlobalHookRunner>>;
+type PluginStartupTraceDetail = {
+  name: string;
+  metrics: ReadonlyArray<readonly [string, number | string]>;
+};
 
 function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
   let count = 0;
@@ -913,6 +918,36 @@ function expectEscapingEntryRejected(params: {
   return registry;
 }
 
+function createStartupTraceRecorder(): {
+  details: PluginStartupTraceDetail[];
+  startupTrace: NonNullable<PluginLoadOptions["startupTrace"]>;
+} {
+  const details: PluginStartupTraceDetail[] = [];
+  return {
+    details,
+    startupTrace: {
+      detail: (name, metrics) => {
+        details.push({ name, metrics });
+      },
+    },
+  };
+}
+
+function collectStartupTraceMetrics(
+  details: readonly PluginStartupTraceDetail[],
+  name: string,
+): Record<string, number | string> {
+  const matched = details.filter((entry) => entry.name === name);
+  expect(matched.length).toBeGreaterThan(0);
+  const metrics: Record<string, number | string> = {};
+  for (const entry of matched) {
+    for (const [key, value] of entry.metrics) {
+      metrics[key] = value;
+    }
+  }
+  return metrics;
+}
+
 afterEach(() => {
   clearRuntimeConfigSnapshot();
   runtimeRegistryLoaderTesting.resetPluginRegistryLoadedForTests();
@@ -926,6 +961,76 @@ afterAll(() => {
 });
 
 describe("loadOpenClawPlugins", () => {
+  it("emits loader startup trace timings for normal plugin load and register", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "trace-plugin",
+      filename: "trace-plugin.cjs",
+      body: `module.exports = { id: "trace-plugin", register() {} };`,
+    });
+    const { details, startupTrace } = createStartupTraceRecorder();
+
+    loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["trace-plugin"],
+      },
+      options: {
+        startupTrace,
+      },
+    });
+
+    const metrics = collectStartupTraceMetrics(details, "plugins.gateway-load.plugin.trace-plugin");
+    expect(metrics.loadMs).toEqual(expect.any(Number));
+    expect(metrics.loadFailedCount).toBe(0);
+    expect(metrics.registerMs).toEqual(expect.any(Number));
+    expect(metrics.registerFailedCount).toBe(0);
+    expect(metrics.loadAndRegisterMs).toEqual(expect.any(Number));
+  });
+
+  it("emits loader startup trace failure counts for load and register failures", () => {
+    useNoBundledPlugins();
+    const loadFailPlugin = writePlugin({
+      id: "trace-load-fail",
+      filename: "trace-load-fail.cjs",
+      body: `throw new Error("load boom");`,
+    });
+    const registerFailPlugin = writePlugin({
+      id: "trace-register-fail",
+      filename: "trace-register-fail.cjs",
+      body: `module.exports = { id: "trace-register-fail", register() { throw new Error("register boom"); } };`,
+    });
+    const { details, startupTrace } = createStartupTraceRecorder();
+
+    loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [loadFailPlugin.file, registerFailPlugin.file] },
+          allow: ["trace-load-fail", "trace-register-fail"],
+        },
+      },
+      startupTrace,
+    });
+
+    const loadFailMetrics = collectStartupTraceMetrics(
+      details,
+      "plugins.gateway-load.plugin.trace-load-fail",
+    );
+    expect(loadFailMetrics.loadMs).toEqual(expect.any(Number));
+    expect(loadFailMetrics.loadFailedCount).toBe(1);
+    expect(loadFailMetrics.registerMs).toBeUndefined();
+
+    const registerFailMetrics = collectStartupTraceMetrics(
+      details,
+      "plugins.gateway-load.plugin.trace-register-fail",
+    );
+    expect(registerFailMetrics.loadFailedCount).toBe(0);
+    expect(registerFailMetrics.registerMs).toEqual(expect.any(Number));
+    expect(registerFailMetrics.registerFailedCount).toBe(1);
+    expect(registerFailMetrics.loadAndRegisterMs).toEqual(expect.any(Number));
+  });
+
   it("can load scoped plugins from a supplied manifest registry without rereading manifests", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
