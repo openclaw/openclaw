@@ -4,8 +4,8 @@ This document defines the **release** mechanism for Polytropos core (openclaw-po
 
 ## Terms
 
-- **Release (staging)**: producing a versioned `.tgz` under `~/polytropos/releases/`, switching `current.tgz`/`previous.tgz`, and installing `current.tgz` globally.
-- **Activation**: restarting the gateway so it starts using the newly installed global package.
+- **Release (staging)**: producing a versioned `.tgz` under `~/polytropos/releases/`, switching `current.tgz`/`previous.tgz`, and installing `current.tgz` globally. A release stages new bits but does **not** change what the running gateway process is currently executing.
+- **Activation**: applying a staged release to the running gateway by restarting/reloading it using the appropriate procedure for your runtime context (service manager, container/orchestrator, supervisor, etc.).
 - **Update**: merging a newer upstream OpenClaw tag into our fork, then performing the standard **release** procedure (see [`docs/polytropos/UPDATE-PROCEDURE.md`](./UPDATE-PROCEDURE.md)).
 
 ## Goal
@@ -53,13 +53,12 @@ Switching is done by:
 
 Rollback is the same operation, pointing `current.tgz` back to `previous.tgz`.
 
-## Activation (restart)
+## Activation (restart/reload)
 
-After a release is staged, activate it by restarting the gateway:
+Activation is a separate step from release.
 
-```bash
-systemctl --user restart openclaw-gateway
-```
+1. Complete the **release** procedure first (the new `.tgz` is built, `current.tgz` is updated, and the package is installed globally).
+2. Then **activate** the staged release by restarting/reloading the gateway using the appropriate procedure for your environment (for example: your service manager, container/orchestrator, or supervisor).
 
 ## Release procedure (scripted)
 

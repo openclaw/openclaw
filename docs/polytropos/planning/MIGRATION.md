@@ -7,7 +7,7 @@ After this migration, core updates/releases are performed by running the release
 - produces a `.tgz` via `npm pack`
 - updates `current.tgz` / `previous.tgz`
 - installs `current.tgz` globally
-- restarts the gateway
+- stages the new code; activation is performed separately by restarting/reloading the gateway using the appropriate procedure for your environment
 
 Dev mode (if/when needed) uses `npm link` (documented in [`docs/polytropos/CORE-RELEASES.md`](../CORE-RELEASES.md)).
 
@@ -58,8 +58,7 @@ See: [`docs/polytropos/CORE-RELEASES.md`](../CORE-RELEASES.md)
 4. Install it globally into the same prefix the service uses:
    - `npm install -g --prefix /home/ec2-user/.npm-global ~/polytropos/releases/current.tgz`
 
-5. Restart the gateway:
-   - `systemctl --user restart openclaw-gateway`
+5. Activate the staged release by restarting/reloading the gateway using the appropriate procedure for your environment.
 
 6. Verify health:
    - `openclaw gateway status`

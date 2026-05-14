@@ -31,11 +31,9 @@ After the merge is successfully completed, run the standard release script (this
 
 - [`docs/polytropos/CORE-RELEASES.md`](./CORE-RELEASES.md)
 
-Then activate the staged release by restarting the gateway (separate step):
+### 4) Activation (separate step)
 
-```bash
-systemctl --user restart openclaw-gateway
-```
+After the **release** step completes successfully, activate the staged release by restarting/reloading the gateway using the appropriate procedure for your environment (service manager, container/orchestrator, supervisor, etc.).
 
 ## Notes
 
