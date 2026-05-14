@@ -6,7 +6,7 @@ import type { NpmSpecResolution } from "./install-source-utils.js";
 import { readJson, readJsonIfExists, writeJson } from "./json-files.js";
 import type { ParsedRegistryNpmSpec } from "./npm-registry-spec.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
-import { createSafeNpmInstallEnv } from "./safe-package-install.js";
+import { createSafeNpmInstallArgs, createSafeNpmInstallEnv } from "./safe-package-install.js";
 
 type ManagedNpmRootManifest = {
   private?: boolean;
@@ -510,14 +510,15 @@ async function collectNpmResolvedManagedNpmRootPeerDependencyPins(params: {
       "npm",
       "install",
       "--package-lock-only",
-      "--omit=peer",
-      "--omit=optional",
       "--force",
-      "--loglevel=error",
-      "--ignore-scripts",
-      "--workspaces=false",
-      "--no-audit",
-      "--no-fund",
+      ...createSafeNpmInstallArgs({
+        omitDev: true,
+        omitPeer: true,
+        loglevel: "error",
+        ignoreWorkspaces: true,
+        noAudit: true,
+        noFund: true,
+      }).slice(1),
     ];
     const npmPlanOptions = {
       cwd: tempRoot,
@@ -535,12 +536,15 @@ async function collectNpmResolvedManagedNpmRootPeerDependencyPins(params: {
           "npm",
           "install",
           "--package-lock-only",
-          "--legacy-peer-deps",
-          "--loglevel=error",
-          "--ignore-scripts",
-          "--workspaces=false",
-          "--no-audit",
-          "--no-fund",
+          ...createSafeNpmInstallArgs({
+            omitDev: true,
+            omitPeer: true,
+            legacyPeerDeps: true,
+            loglevel: "error",
+            ignoreWorkspaces: true,
+            noAudit: true,
+            noFund: true,
+          }).slice(1),
         ],
         {
           cwd: tempRoot,
