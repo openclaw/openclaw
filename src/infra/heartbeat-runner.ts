@@ -34,6 +34,7 @@ import {
   stripHeartbeatToken,
   type HeartbeatTask,
 } from "../auto-reply/heartbeat.js";
+import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { resolveDefaultModel } from "../auto-reply/reply/directive-handling.defaults.js";
 import { resolveResponsePrefixTemplate } from "../auto-reply/reply/response-prefix-template.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
@@ -86,6 +87,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import { sanitizeAssistantVisibleText } from "../shared/text/assistant-visible-text.js";
 import { escapeRegExp } from "../utils.js";
 import { MAX_SAFE_TIMEOUT_DELAY_MS, resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { loadOrCreateDeviceIdentity } from "./device-identity.js";
@@ -740,7 +742,8 @@ function normalizeHeartbeatReply(
   ackMaxChars: number,
 ) {
   const rawText = typeof payload.text === "string" ? payload.text : "";
-  const textForStrip = stripLeadingHeartbeatResponsePrefix(rawText, responsePrefix);
+  const sanitizedText = sanitizeAssistantVisibleText(rawText);
+  const textForStrip = stripLeadingHeartbeatResponsePrefix(sanitizedText, responsePrefix);
   const stripped = stripHeartbeatToken(textForStrip, {
     mode: "heartbeat",
     maxAckChars: ackMaxChars,
@@ -769,6 +772,12 @@ function normalizeHeartbeatToolNotification(
     finalText = `${responsePrefix} ${finalText}`;
   }
   return { shouldSkip: false, text: finalText, hasMedia: false };
+}
+
+function isInternalHeartbeatNoticePayload(payload: ReplyPayload | undefined): boolean {
+  return payload
+    ? getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true
+    : false;
 }
 
 type HeartbeatWakePayloadFlags = {
@@ -1680,6 +1689,8 @@ export async function runHeartbeatOnce(opts: {
       : [];
     const ackMaxChars = resolveHeartbeatAckMaxChars(cfg, heartbeat);
     const responsePrefix = resolveHeartbeatResponsePrefix();
+    const canUseReplyPayload =
+      !usesHeartbeatResponseTool || isInternalHeartbeatNoticePayload(replyPayload);
 
     if (heartbeatToolResponse && !heartbeatToolResponse.notify) {
       await restoreHeartbeatUpdatedAt({
@@ -1710,7 +1721,10 @@ export async function runHeartbeatOnce(opts: {
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
-    if (!heartbeatToolResponse && (!replyPayload || !hasOutboundReplyContent(replyPayload))) {
+    if (
+      !heartbeatToolResponse &&
+      (!canUseReplyPayload || !replyPayload || !hasOutboundReplyContent(replyPayload))
+    ) {
       await restoreHeartbeatUpdatedAt({
         storePath,
         sessionKey,
@@ -1740,15 +1754,15 @@ export async function runHeartbeatOnce(opts: {
 
     const normalized = heartbeatToolResponse
       ? normalizeHeartbeatToolNotification(heartbeatToolResponse, responsePrefix)
-      : replyPayload
+      : canUseReplyPayload && replyPayload
         ? normalizeHeartbeatReply(replyPayload, responsePrefix, ackMaxChars)
         : { shouldSkip: true, text: "", hasMedia: false };
-    // For exec completion events, don't skip even if the response looks like HEARTBEAT_OK.
-    // The model should be responding with exec results, not ack tokens.
-    // Also, if normalized.text is empty due to token stripping but we have exec completion,
-    // fall back to the original reply text.
+    // Legacy exec completion events may relay the original response text when
+    // ack-token stripping leaves the normalized text empty. Heartbeat response
+    // tool mode must not treat ordinary reply text as a delivery path.
     const execFallbackText =
       !heartbeatToolResponse &&
+      !usesHeartbeatResponseTool &&
       hasRelayableExecCompletion &&
       !normalized.text.trim() &&
       replyPayload?.text?.trim()
@@ -1789,7 +1803,7 @@ export async function runHeartbeatOnce(opts: {
     }
 
     const mediaUrls =
-      heartbeatToolResponse || !replyPayload
+      heartbeatToolResponse || !canUseReplyPayload || !replyPayload
         ? []
         : resolveSendableOutboundReplyParts(replyPayload).mediaUrls;
 
