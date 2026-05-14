@@ -583,6 +583,7 @@ export async function startGatewayServer(
       authOverride: opts.auth,
       tailscaleOverride: opts.tailscale,
       activateRuntimeSecrets,
+      measure: (name, run) => startupTrace.measure(name, run),
     }),
   );
   cfgAtStart = authBootstrap.cfg;
@@ -666,9 +667,13 @@ export async function startGatewayServer(
       ["ownerMapsMs", metrics.ownerMapsMs],
       ["totalMs", metrics.totalMs],
       ["indexPlugins", String(metrics.indexPluginCount)],
+      ["indexPluginCount", metrics.indexPluginCount],
       ["manifestPlugins", String(metrics.manifestPluginCount)],
+      ["manifestPluginCount", metrics.manifestPluginCount],
       ["startupPlugins", String(metrics.startupPluginCount)],
+      ["startupPluginCount", metrics.startupPluginCount],
       ["deferredChannelPlugins", String(metrics.deferredChannelPluginCount)],
+      ["deferredChannelPluginCount", metrics.deferredChannelPluginCount],
     ]);
   }
   let { pluginRegistry, baseGatewayMethods } = pluginBootstrap;

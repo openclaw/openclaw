@@ -661,6 +661,8 @@ export function loadGatewayPlugins(params: {
       ["pluginIdsMs", pluginIdsMs],
       ["loadMs", 0],
       ["pluginIds", "0"],
+      ["pluginCount", 0],
+      ["gatewayHandlerCount", 0],
     ]);
     return {
       pluginRegistry,
@@ -692,6 +694,9 @@ export function loadGatewayPlugins(params: {
     },
     preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
     preferBuiltPluginArtifacts: true,
+    ...(params.startupTrace !== undefined && {
+      startupTrace: params.startupTrace,
+    }),
     ...(params.pluginLookUpTable?.manifestRegistry
       ? { manifestRegistry: params.pluginLookUpTable.manifestRegistry }
       : {}),
@@ -706,7 +711,9 @@ export function loadGatewayPlugins(params: {
     ["pluginIdsMs", pluginIdsMs],
     ["loadMs", loadMs],
     ["pluginIds", String(pluginIds.length)],
+    ["pluginCount", pluginIds.length],
     ["gatewayHandlers", String(pluginMethods.length)],
+    ["gatewayHandlerCount", pluginMethods.length],
     ["loaderCallsCount", loaderStatsAfter.calls - loaderStatsBefore.calls],
     ["loaderNativeHitsCount", loaderStatsAfter.nativeHits - loaderStatsBefore.nativeHits],
     ["loaderNativeMissesCount", loaderStatsAfter.nativeMisses - loaderStatsBefore.nativeMisses],

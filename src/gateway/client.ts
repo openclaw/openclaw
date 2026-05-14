@@ -725,18 +725,10 @@ export class GatewayClient {
     ) {
       return true;
     }
-    if (detailCode !== ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH) {
-      return false;
+    if (detailCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH) {
+      return !this.pendingDeviceTokenRetry;
     }
-    if (this.pendingDeviceTokenRetry) {
-      return false;
-    }
-    // If the endpoint is not trusted for retry, mismatch is terminal until operator action.
-    if (!this.isTrustedDeviceRetryEndpoint()) {
-      return true;
-    }
-    // Pause mismatch reconnect loops once the one-shot device-token retry is consumed.
-    return this.deviceTokenRetryBudgetUsed;
+    return false;
   }
 
   private shouldRetryWithStoredDeviceToken(params: {

@@ -230,12 +230,20 @@ async function downloadToFile(
               reject(new Error(`Redirect loop or missing Location header`));
               return;
             }
-            const redirectUrl = new URL(location, url).href;
+            let redirectUrl: URL;
+            try {
+              redirectUrl = new URL(location, url);
+            } catch {
+              reject(new Error("Invalid redirect Location header"));
+              return;
+            }
             const redirectHeaders =
-              new URL(redirectUrl).origin === parsedUrl.origin
+              redirectUrl.origin === parsedUrl.origin
                 ? headers
                 : retainSafeHeadersForCrossOriginRedirect(headers);
-            resolve(downloadToFile(redirectUrl, dest, redirectHeaders, maxRedirects - 1, maxBytes));
+            resolve(
+              downloadToFile(redirectUrl.href, dest, redirectHeaders, maxRedirects - 1, maxBytes),
+            );
             return;
           }
           if (!res.statusCode || res.statusCode >= 400) {
