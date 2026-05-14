@@ -198,3 +198,23 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - Connection/provider additions: update all UI surfaces + docs + status/config forms.
 - Provider tool schemas: prefer flat string enum helpers over `Type.Union([Type.Literal(...)])`; some providers reject `anyOf`. Not a repo-wide protocol/schema ban.
 - External messaging: no token-delta channel messages. Follow `docs/concepts/streaming.md`; preview/block streaming uses edits/chunks and preserves final/fallback delivery.
+
+## INFRASTRUCTURE RULES (CRITICAL)
+
+This project utilizes Podman managed by user-level systemd (Quadlets).
+
+**NEVER EXECUTE THE FOLLOWING:**
+
+- `podman run ...`
+- `podman start openclaw-gateway`
+- `podman restart openclaw-gateway`
+- `kill -9` on container processes or conmon.
+
+**IF YOU NEED TO MANAGE CONTAINER STATE, YOU MUST USE SYSTEMD:**
+
+- To restart: `systemctl --user restart openclaw-gateway.service`
+- To stop/kill: `systemctl --user stop openclaw-gateway.service`
+- To check status: `systemctl --user status openclaw-gateway.service`
+- To view logs: `journalctl --user -u openclaw-gateway.service -n 50 --no-pager`
+
+If a Podman lock occurs, ALWAYS stop the systemd service first before attempting manual cleanup.
