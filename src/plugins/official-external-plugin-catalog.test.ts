@@ -24,11 +24,11 @@ describe("official external plugin catalog", () => {
     expect(resolveOfficialExternalPluginId(wecomByChannel)).toBe("wecom-openclaw-plugin");
     expect(resolveOfficialExternalPluginId(wecomByPlugin)).toBe("wecom-openclaw-plugin");
     expect(resolveOfficialExternalPluginInstall(wecomByChannel)?.npmSpec).toBe(
-      "@wecom/wecom-openclaw-plugin@2026.4.23",
+      "@wecom/wecom-openclaw-plugin@2026.5.7",
     );
     expect(resolveOfficialExternalPluginId(yuanbaoByChannel)).toBe("openclaw-plugin-yuanbao");
     expect(resolveOfficialExternalPluginInstall(yuanbaoByChannel)?.npmSpec).toBe(
-      "openclaw-plugin-yuanbao@2.13.0",
+      "openclaw-plugin-yuanbao@2.13.1",
     );
   });
 
@@ -44,7 +44,7 @@ describe("official external plugin catalog", () => {
     );
   });
 
-  it("keeps Matrix and Mattermost out of the external catalog until cutover", () => {
+  it("lists Matrix as an official external ClawHub channel after cutover", () => {
     const ids = new Set<string>();
     for (const entry of listOfficialExternalPluginCatalogEntries()) {
       const pluginId = resolveOfficialExternalPluginId(entry);
@@ -53,7 +53,14 @@ describe("official external plugin catalog", () => {
       }
     }
 
-    expect(ids.has("matrix")).toBe(false);
+    expect(ids.has("matrix")).toBe(true);
     expect(ids.has("mattermost")).toBe(false);
+    expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("matrix"))).toEqual({
+      clawhubSpec: "clawhub:@openclaw/matrix",
+      npmSpec: "@openclaw/matrix",
+      defaultChoice: "clawhub",
+      minHostVersion: ">=2026.4.10",
+      allowInvalidConfigRecovery: true,
+    });
   });
 });

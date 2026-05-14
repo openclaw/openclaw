@@ -532,6 +532,7 @@ export async function startGatewayServer(
   });
   const startupTrace = createGatewayStartupTrace();
   const startupConfigModulePromise = import("./server-startup-config.js");
+  const reloadHandlersModulePromise = import("./server-reload-handlers.js");
   let startupPluginsModulePromise: Promise<typeof import("./server-startup-plugins.js")> | null =
     null;
   const loadStartupPluginsModule = () => {
@@ -582,6 +583,7 @@ export async function startGatewayServer(
       authOverride: opts.auth,
       tailscaleOverride: opts.tailscale,
       activateRuntimeSecrets,
+      measure: (name, run) => startupTrace.measure(name, run),
     }),
   );
   cfgAtStart = authBootstrap.cfg;
@@ -592,7 +594,10 @@ export async function startGatewayServer(
   const diagnosticsEnabled = isDiagnosticsEnabled(cfgAtStart);
   setDiagnosticsEnabledForProcess(diagnosticsEnabled);
   if (diagnosticsEnabled) {
-    startDiagnosticHeartbeat(undefined, { getConfig: getRuntimeConfig });
+    startDiagnosticHeartbeat(undefined, {
+      getConfig: getRuntimeConfig,
+      startupGraceMs: 60_000,
+    });
   }
   setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(cfgAtStart) });
   let getActiveTaskCount = () => 0;
@@ -662,9 +667,13 @@ export async function startGatewayServer(
       ["ownerMapsMs", metrics.ownerMapsMs],
       ["totalMs", metrics.totalMs],
       ["indexPlugins", String(metrics.indexPluginCount)],
+      ["indexPluginCount", metrics.indexPluginCount],
       ["manifestPlugins", String(metrics.manifestPluginCount)],
+      ["manifestPluginCount", metrics.manifestPluginCount],
       ["startupPlugins", String(metrics.startupPluginCount)],
+      ["startupPluginCount", metrics.startupPluginCount],
       ["deferredChannelPlugins", String(metrics.deferredChannelPluginCount)],
+      ["deferredChannelPluginCount", metrics.deferredChannelPluginCount],
     ]);
   }
   let { pluginRegistry, baseGatewayMethods } = pluginBootstrap;
@@ -881,6 +890,11 @@ export async function startGatewayServer(
     gatewayMethods: listActiveGatewayMethods(baseGatewayMethods),
   });
   deps.cron = runtimeState.cronState.cron;
+  const pluginHostServices = {
+    get cron() {
+      return runtimeState.cronState.cron;
+    },
+  };
 
   let closePreludeStarted = false;
   let postReadyMaintenanceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -929,7 +943,8 @@ export async function startGatewayServer(
   const createCloseHandler =
     () => async (opts?: { reason?: string; restartExpectedMs?: number | null }) => {
       const channelIds = listLoadedChannelPlugins().map((plugin) => plugin.id as ChannelId);
-      const { createGatewayCloseHandler } = await loadGatewayCloseModule();
+      const { createGatewayCloseHandler, drainActiveSessionsForShutdown } =
+        await loadGatewayCloseModule();
       await createGatewayCloseHandler({
         bonjourStop: runtimeState.bonjourStop,
         tailscaleCleanup: runtimeState.tailscaleCleanup,
@@ -957,6 +972,7 @@ export async function startGatewayServer(
         wss,
         httpServer,
         httpServers,
+        drainActiveSessionsForShutdown,
       })(opts);
     };
   let clearFallbackGatewayContextForServer = () => {};
@@ -1176,6 +1192,7 @@ export async function startGatewayServer(
         workspaceDir: defaultWorkspaceDir,
         log,
         coreGatewayMethodNames: baseMethods,
+        hostServices: pluginHostServices,
         baseMethods,
         pluginLookUpTable: nextPluginLookUpTable,
       });
@@ -1260,6 +1277,9 @@ export async function startGatewayServer(
       chatRunBuffers: chatRunState.buffers,
       chatDeltaSentAt: chatRunState.deltaSentAt,
       chatDeltaLastBroadcastLen: chatRunState.deltaLastBroadcastLen,
+      chatDeltaLastBroadcastText: chatRunState.deltaLastBroadcastText,
+      agentDeltaSentAt: chatRunState.agentDeltaSentAt,
+      bufferedAgentEvents: chatRunState.bufferedAgentEvents,
       addChatRun,
       removeChatRun,
       subscribeSessionEvents: sessionEventSubscribers.subscribe,
@@ -1306,6 +1326,7 @@ export async function startGatewayServer(
           workspaceDir: defaultWorkspaceDir,
           log,
           coreGatewayMethodNames: baseMethods,
+          hostServices: pluginHostServices,
           baseMethods,
           pluginIds: startupPluginIds,
           pluginLookUpTable,
@@ -1414,6 +1435,7 @@ export async function startGatewayServer(
                   workspaceDir: defaultWorkspaceDir,
                   log,
                   baseMethods,
+                  hostServices: pluginHostServices,
                   startupPluginIds,
                   pluginLookUpTable,
                   startupTrace,
@@ -1446,7 +1468,7 @@ export async function startGatewayServer(
     postAttachRuntimeReturned = true;
     activateScheduledServicesWhenReady();
 
-    const { startManagedGatewayConfigReloader } = await import("./server-reload-handlers.js");
+    const { startManagedGatewayConfigReloader } = await reloadHandlersModulePromise;
     runtimeState.configReloader = startManagedGatewayConfigReloader({
       minimalTestGateway,
       initialConfig: cfgAtStart,

@@ -309,7 +309,7 @@ describe("createInboundDebouncer", () => {
     await debouncer.enqueue({ key: "a", id: "1" });
     await debouncer.enqueue({ key: "a", id: "2" });
 
-    expect(calls).toEqual([]);
+    expect(calls).toStrictEqual([]);
     await vi.advanceTimersByTimeAsync(10);
     expect(calls).toEqual([["1", "2"]]);
 
@@ -353,7 +353,7 @@ describe("createInboundDebouncer", () => {
     await debouncer.enqueue({ key: "forward", id: "1", windowMs: 30 });
     await debouncer.enqueue({ key: "forward", id: "2", windowMs: 30 });
 
-    expect(calls).toEqual([]);
+    expect(calls).toStrictEqual([]);
     await vi.advanceTimersByTimeAsync(30);
     expect(calls).toEqual([["1", "2"]]);
 
@@ -402,7 +402,7 @@ describe("createInboundDebouncer", () => {
       await Promise.resolve();
 
       expect(started).toEqual(["1"]);
-      expect(finished).toEqual([]);
+      expect(finished).toStrictEqual([]);
 
       if (!releaseFirst) {
         throw new Error("Expected first inbound debounce release callback to be initialized");
@@ -473,7 +473,7 @@ describe("createInboundDebouncer", () => {
       await Promise.resolve();
 
       expect(started).toEqual(["1"]);
-      expect(finished).toEqual([]);
+      expect(finished).toStrictEqual([]);
 
       if (!releaseFirst) {
         throw new Error("Expected first inbound debounce release callback to be initialized");
@@ -488,7 +488,7 @@ describe("createInboundDebouncer", () => {
     }
   });
 
-  it("does not serialize keyed turns when debounce is disabled and no keyed chain exists", async () => {
+  it("does not serialize keyed turns by default when debounce is disabled", async () => {
     const started: string[] = [];
     let releaseFirst: (() => void) | undefined;
     const firstGate = new Promise<void>((resolve) => {
@@ -519,6 +519,41 @@ describe("createInboundDebouncer", () => {
     }
     releaseFirst();
     await Promise.all([first, second]);
+  });
+
+  it("serializes keyed turns when immediate serialization is enabled", async () => {
+    const started: string[] = [];
+    let releaseFirst: (() => void) | undefined;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 0,
+      serializeImmediate: true,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        const id = items[0]?.id ?? "";
+        started.push(id);
+        if (id === "1") {
+          await firstGate;
+        }
+      },
+    });
+
+    const first = debouncer.enqueue({ key: "a", id: "1" });
+    await Promise.resolve();
+    const second = debouncer.enqueue({ key: "a", id: "2" });
+    await Promise.resolve();
+
+    expect(started).toEqual(["1"]);
+
+    if (!releaseFirst) {
+      throw new Error("Expected first inbound debounce release callback to be initialized");
+    }
+    releaseFirst();
+    await Promise.all([first, second]);
+    expect(started).toEqual(["1", "2"]);
   });
 
   it("swallows onError failures so keyed chains still complete", async () => {
@@ -557,8 +592,8 @@ describe("createInboundDebouncer", () => {
 
     try {
       await expect(debouncer.enqueue({ key: "a", id: "1" })).resolves.toBeUndefined();
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(unhandled).toEqual([]);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(unhandled).toStrictEqual([]);
     } finally {
       process.off("unhandledRejection", onUnhandledRejection);
     }
@@ -639,7 +674,7 @@ describe("createInboundDebouncer", () => {
 
       await Promise.resolve();
       expect(started).toEqual(["2"]);
-      expect(finished).toEqual([]);
+      expect(finished).toStrictEqual([]);
 
       if (!releaseOverflow) {
         throw new Error("Expected inbound overflow release callback to be initialized");

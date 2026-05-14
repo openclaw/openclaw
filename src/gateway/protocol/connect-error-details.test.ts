@@ -13,6 +13,7 @@ import {
   readConnectPairingRequiredDetails,
   readConnectPairingRequiredMessage,
   readPairingConnectErrorDetails,
+  resolveAuthConnectErrorDetailCode,
 } from "./connect-error-details.js";
 
 describe("readConnectErrorDetailCode", () => {
@@ -52,6 +53,12 @@ describe("readConnectErrorRecoveryAdvice", () => {
   });
 });
 
+describe("resolveAuthConnectErrorDetailCode", () => {
+  it("maps device token scope mismatches to a dedicated auth detail", () => {
+    expect(resolveAuthConnectErrorDetailCode("scope_mismatch")).toBe("AUTH_SCOPE_MISMATCH");
+  });
+});
+
 describe("pairing connect details", () => {
   it("builds reason-specific pairing messages", () => {
     expect(buildPairingConnectErrorMessage(ConnectPairingRequiredReasons.SCOPE_UPGRADE)).toBe(
@@ -67,12 +74,18 @@ describe("pairing connect details", () => {
       buildPairingConnectErrorDetails({
         reason: ConnectPairingRequiredReasons.NOT_PAIRED,
         requestId: "req-123",
+        recommendedNextStep: "wait_then_retry",
+        retryable: true,
+        pauseReconnect: false,
       }),
     ).toEqual({
       code: "PAIRING_REQUIRED",
       reason: "not-paired",
       requestId: "req-123",
       remediationHint: "Approve this device from the pending pairing requests.",
+      recommendedNextStep: "wait_then_retry",
+      retryable: true,
+      pauseReconnect: false,
     });
   });
 

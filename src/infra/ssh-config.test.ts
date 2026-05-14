@@ -80,7 +80,7 @@ describe("ssh-config", () => {
     expect(parsed.user).toBe("bob");
     expect(parsed.host).toBe("example.com");
     expect(parsed.port).toBeUndefined();
-    expect(parsed.identityFiles).toEqual([]);
+    expect(parsed.identityFiles).toStrictEqual([]);
   });
 
   it("resolves ssh config via ssh -G", async () => {
@@ -98,7 +98,7 @@ describe("ssh-config", () => {
       { identity: "  /tmp/custom_id  " },
     );
 
-    const args = spawnMock.mock.calls.at(-1)?.[1] as string[] | undefined;
+    const args = requireSpawnArgs(spawnMock.mock.calls.length - 1);
     expect(args).toEqual(["-G", "-p", "2022", "-i", "/tmp/custom_id", "--", "me@alias"]);
   });
 

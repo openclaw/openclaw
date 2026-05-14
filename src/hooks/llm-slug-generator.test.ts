@@ -22,12 +22,16 @@ vi.mock("../agents/pi-embedded.js", () => ({
 
 import { generateSlugViaLLM } from "./llm-slug-generator.js";
 
-function requireFirstRunOptions(): unknown {
-  const options = runEmbeddedPiAgentMock.mock.calls[0]?.[0];
-  if (!options) {
+function requireFirstRunOptions(): Record<string, unknown> {
+  const [call] = runEmbeddedPiAgentMock.mock.calls;
+  if (!call) {
+    throw new Error("expected embedded Pi agent run");
+  }
+  const [options] = call;
+  if (!options || typeof options !== "object") {
     throw new Error("expected embedded Pi agent run options");
   }
-  return options;
+  return options as Record<string, unknown>;
 }
 
 describe("generateSlugViaLLM", () => {
@@ -45,12 +49,9 @@ describe("generateSlugViaLLM", () => {
     });
 
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-    expect(requireFirstRunOptions()).toEqual(
-      expect.objectContaining({
-        timeoutMs: 15_000,
-        cleanupBundleMcpOnRunEnd: true,
-      }),
-    );
+    const options = requireFirstRunOptions();
+    expect(options.timeoutMs).toBe(15_000);
+    expect(options.cleanupBundleMcpOnRunEnd).toBe(true);
   });
 
   it("honors configured agent timeoutSeconds for slow local providers", async () => {
@@ -66,11 +67,7 @@ describe("generateSlugViaLLM", () => {
     });
 
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-    expect(requireFirstRunOptions()).toEqual(
-      expect.objectContaining({
-        timeoutMs: 500_000,
-      }),
-    );
+    expect(requireFirstRunOptions().timeoutMs).toBe(500_000);
   });
 
   it("infers provider metadata for bare configured agent models", async () => {
@@ -104,11 +101,8 @@ describe("generateSlugViaLLM", () => {
     });
 
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-    expect(requireFirstRunOptions()).toEqual(
-      expect.objectContaining({
-        provider: "openai-codex",
-        model: "gpt-5.5",
-      }),
-    );
+    const options = requireFirstRunOptions();
+    expect(options.provider).toBe("openai-codex");
+    expect(options.model).toBe("gpt-5.5");
   });
 });

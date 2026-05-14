@@ -57,7 +57,7 @@ describe("buildBootstrapContextFiles", () => {
   });
   it("skips empty or whitespace-only content", () => {
     const files = [makeFile({ content: "   \n  " })];
-    expect(buildBootstrapContextFiles(files)).toEqual([]);
+    expect(buildBootstrapContextFiles(files)).toStrictEqual([]);
   });
   it("truncates large bootstrap content", () => {
     const head = `HEAD-${"a".repeat(600)}`;
@@ -71,14 +71,11 @@ describe("buildBootstrapContextFiles", () => {
       warn: (message) => warnings.push(message),
     });
     const kept = result?.content.match(/kept (\d+)\+(\d+) chars/);
-    if (!kept) {
-      throw new Error("missing truncation kept-count marker");
-    }
-    expect(kept[1].length).toBeGreaterThan(0);
-    expect(kept[2].length).toBeGreaterThan(0);
-    const headChars = Number(kept[1]);
-    const tailChars = Number(kept[2]);
+    expect(kept?.slice(0, 3)).toStrictEqual(["kept 74+24 chars", "74", "24"]);
+    const headChars = Number(kept?.[1]);
+    const tailChars = Number(kept?.[2]);
     expect(result?.content).toContain("[...truncated, read TOOLS.md for full content...]");
+    expect(result?.content.length).toBe(199);
     expect(result?.content.length).toBeLessThan(long.length);
     expect(result?.content.length).toBeLessThanOrEqual(maxChars);
     expect(result?.content.startsWith(long.slice(0, headChars))).toBe(true);
@@ -178,7 +175,7 @@ describe("buildBootstrapContextFiles", () => {
       maxChars: 200,
       totalMaxChars: 40,
     });
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
   });
 
   it("keeps missing markers under small total budgets", () => {
@@ -222,7 +219,7 @@ describe("buildBootstrapContextFiles", () => {
     expect(warnings).toHaveLength(3);
     expect(
       warnings.filter((warning) => !warning.includes('missing or invalid "path" field')),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 });
 

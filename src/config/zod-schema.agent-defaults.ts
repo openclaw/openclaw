@@ -8,6 +8,7 @@ import {
   AgentRuntimePolicySchema,
   AgentModelSchema,
   MemorySearchSchema,
+  AgentRunRetriesConfigSchema,
 } from "./zod-schema.agent-runtime.js";
 import {
   BlockStreamingChunkSchema,
@@ -218,6 +219,7 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
+    runRetries: AgentRunRetriesConfigSchema.optional(),
     embeddedPi: z
       .object({
         projectSettingsPolicy: z
@@ -259,6 +261,7 @@ export const AgentDefaultsSchema = z
     maxConcurrent: z.number().int().positive().optional(),
     subagents: z
       .object({
+        delegationMode: z.enum(["suggest", "prefer"]).optional(),
         allowAgents: z.array(z.string()).optional(),
         maxConcurrent: z.number().int().positive().optional(),
         maxSpawnDepth: z

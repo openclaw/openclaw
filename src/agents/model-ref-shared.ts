@@ -56,6 +56,27 @@ function normalizeBuiltInProviderModelId(provider: string, model: string): strin
   return model;
 }
 
+export function normalizeConfiguredProviderCatalogModelId(provider: string, model: string): string {
+  const providerModel = normalizeStaticProviderModelId(provider, model);
+  const googlePrefix = "google/";
+  if (!providerModel.startsWith(googlePrefix)) {
+    const slash = providerModel.indexOf("/");
+    if (slash <= 0 || slash >= providerModel.length - 1) {
+      return providerModel;
+    }
+    const prefix = providerModel.slice(0, slash + 1);
+    const suffix = providerModel.slice(slash + 1);
+    if (!suffix.startsWith(googlePrefix)) {
+      return providerModel;
+    }
+    const normalizedSuffix = normalizeGooglePreviewModelId(suffix);
+    return normalizedSuffix === suffix ? providerModel : `${prefix}${normalizedSuffix}`;
+  }
+  const modelId = providerModel.slice(googlePrefix.length);
+  const normalizedModelId = normalizeGooglePreviewModelId(modelId);
+  return normalizedModelId === modelId ? providerModel : `${googlePrefix}${normalizedModelId}`;
+}
+
 function parseStaticModelRef(raw: string, defaultProvider: string): StaticModelRef | null {
   const trimmed = raw.trim();
   if (!trimmed) {

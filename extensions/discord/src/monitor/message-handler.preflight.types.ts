@@ -1,5 +1,6 @@
-import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import type { SessionBindingRecord } from "openclaw/plugin-sdk/conversation-runtime";
+import type { ChannelBotLoopProtectionFacts } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { ChannelType, Client, User } from "../internal/discord.js";
@@ -19,7 +20,7 @@ export type DiscordMessageEvent = import("./listeners.js").DiscordMessageEvent;
 type DiscordMessagePreflightSharedFields = {
   cfg: LoadedConfig;
   discordConfig: NonNullable<
-    import("openclaw/plugin-sdk/config-types").OpenClawConfig["channels"]
+    import("openclaw/plugin-sdk/config-contracts").OpenClawConfig["channels"]
   >["discord"];
   accountId: string;
   token: string;
@@ -92,6 +93,7 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
   historyEntry?: HistoryEntry;
   threadBindings: DiscordThreadBindingLookup;
   discordRestFetch?: typeof fetch;
+  botLoopProtection?: ChannelBotLoopProtectionFacts;
 };
 
 export type DiscordMessagePreflightParams = DiscordMessagePreflightSharedFields & {

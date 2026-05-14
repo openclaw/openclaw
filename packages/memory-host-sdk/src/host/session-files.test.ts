@@ -119,18 +119,15 @@ describe("buildSessionEntry", () => {
     fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
 
     const entry = requireSessionEntry(await buildSessionEntry(filePath));
-    // The content should have 3 lines (3 message records)
-    const contentLines = entry.content.split("\n");
-    expect(contentLines).toHaveLength(3);
-    expect(contentLines[0]).toContain("User: Hello world");
-    expect(contentLines[1]).toContain("Assistant: Hi there");
-    expect(contentLines[2]).toContain("User: Tell me a joke");
+    expect(entry.content).toBe(
+      "User: Hello world\nAssistant: Hi there, how can I help?\nUser: Tell me a joke",
+    );
 
     // lineMap should map each content line to its original JSONL line (1-indexed)
     // Content line 0 → JSONL line 4 (the first user message)
     // Content line 1 → JSONL line 6 (the assistant message)
     // Content line 2 → JSONL line 7 (the second user message)
-    expect(entry.lineMap).toEqual([4, 6, 7]);
+    expect(entry.lineMap).toStrictEqual([4, 6, 7]);
   });
 
   it("returns empty lineMap when no messages are found", async () => {
@@ -143,7 +140,7 @@ describe("buildSessionEntry", () => {
 
     const entry = requireSessionEntry(await buildSessionEntry(filePath));
     expect(entry.content).toBe("");
-    expect(entry.lineMap).toEqual([]);
+    expect(entry.lineMap).toStrictEqual([]);
   });
 
   it("indexes usage-counted reset/deleted archives but still skips bak and checkpoint artifacts", async () => {
@@ -170,17 +167,17 @@ describe("buildSessionEntry", () => {
 
     // Usage-counted archives (reset, deleted) must surface real content so
     // post-reset memory_search can recover prior session history.
-    expect(resetEntry.content).toContain("User: Archived hello");
-    expect(resetEntry.lineMap).toEqual([1]);
-    expect(deletedEntry.content).toContain("User: Archived hello");
-    expect(deletedEntry.lineMap).toEqual([1]);
+    expect(resetEntry.content).toBe("User: Archived hello");
+    expect(resetEntry.lineMap).toStrictEqual([1]);
+    expect(deletedEntry.content).toBe("User: Archived hello");
+    expect(deletedEntry.lineMap).toStrictEqual([1]);
 
     // .bak and compaction checkpoints remain opaque pre-archive / snapshot
     // artifacts and stay empty so they do not get double-indexed.
     expect(bakEntry.content).toBe("");
-    expect(bakEntry.lineMap).toEqual([]);
+    expect(bakEntry.lineMap).toStrictEqual([]);
     expect(checkpointEntry.content).toBe("");
-    expect(checkpointEntry.lineMap).toEqual([]);
+    expect(checkpointEntry.lineMap).toStrictEqual([]);
   });
 
   it("keeps cron-run deleted archives opaque when the live session store entry is gone", async () => {
@@ -203,7 +200,7 @@ describe("buildSessionEntry", () => {
     const entry = requireSessionEntry(await buildSessionEntry(archivePath));
 
     expect(entry.content).toBe("");
-    expect(entry.lineMap).toEqual([]);
+    expect(entry.lineMap).toStrictEqual([]);
     expect(entry.generatedByCronRun).toBe(true);
   });
 
@@ -224,7 +221,7 @@ describe("buildSessionEntry", () => {
     const entry = requireSessionEntry(await buildSessionEntry(archivePath));
 
     expect(entry.content).toBe("");
-    expect(entry.lineMap).toEqual([]);
+    expect(entry.lineMap).toStrictEqual([]);
     expect(entry.generatedByCronRun).toBe(true);
   });
 
@@ -240,7 +237,7 @@ describe("buildSessionEntry", () => {
     fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
 
     const entry = requireSessionEntry(await buildSessionEntry(filePath));
-    expect(entry.lineMap).toEqual([3, 5]);
+    expect(entry.lineMap).toStrictEqual([3, 5]);
   });
 
   it("strips inbound metadata when a user envelope is split across text blocks", async () => {
@@ -296,6 +293,6 @@ describe("buildSessionEntry", () => {
 
     const entry = requireSessionEntry(await buildSessionEntry(filePath));
     expect(entry.content).toBe("Assistant: User-facing summary.\nUser: Actual user follow-up.");
-    expect(entry.lineMap).toEqual([2, 3]);
+    expect(entry.lineMap).toStrictEqual([2, 3]);
   });
 });

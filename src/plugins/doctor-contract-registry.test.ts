@@ -23,6 +23,14 @@ function makeTempDir(): string {
   return makeTrackedTempDir("openclaw-doctor-contract-registry", tempDirs);
 }
 
+function requireFirstCreateJitiCall(): [string, { tryNative?: boolean }] {
+  const call = mocks.createJiti.mock.calls[0];
+  if (!call) {
+    throw new Error("expected createJiti call");
+  }
+  return call as [string, { tryNative?: boolean }];
+}
+
 afterEach(() => {
   setPluginDoctorContractRegistryModuleLoaderFactoryForTest?.(undefined);
   cleanupTrackedTempDirs(tempDirs);
@@ -114,14 +122,9 @@ describe("doctor-contract-registry module loader", () => {
     }
 
     expect(mocks.createJiti).toHaveBeenCalledTimes(1);
-    expect(mocks.createJiti.mock.calls[0]?.[0]).toBe(
-      pathToFileURL(contractApiPath, { windows: true }).href,
-    );
-    expect(mocks.createJiti.mock.calls[0]?.[1]).toEqual(
-      expect.objectContaining({
-        tryNative: false,
-      }),
-    );
+    const [jitiPath, jitiOptions] = requireFirstCreateJitiCall();
+    expect(jitiPath).toBe(pathToFileURL(contractApiPath, { windows: true }).href);
+    expect(jitiOptions.tryNative).toBe(false);
   });
 
   it("prefers doctor-contract-api over the broader contract-api surface", () => {
@@ -257,9 +260,12 @@ describe("doctor-contract-registry module loader", () => {
         message: "load path contract",
       },
     ]);
-    expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledWith(
-      expect.objectContaining({ config }),
-    );
+    expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledWith({
+      config,
+      workspaceDir: "/workspace",
+      env: {},
+      includeDisabled: true,
+    });
   });
 
   it("reads doctor contracts from the current manifest registry on each call", () => {

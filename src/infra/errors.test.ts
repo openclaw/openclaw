@@ -50,7 +50,7 @@ describe("error helpers", () => {
         ...((current as { errors?: unknown[] }).errors ?? []),
       ]),
     ).toEqual([root, child, leaf]);
-    expect(collectErrorGraphCandidates(null)).toEqual([]);
+    expect(collectErrorGraphCandidates(null)).toStrictEqual([]);
   });
 
   it("matches errno-shaped errors by code", () => {

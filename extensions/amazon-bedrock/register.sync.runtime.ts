@@ -1,19 +1,17 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import { streamSimple } from "@earendil-works/pi-ai";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
-import type { OpenClawPluginApi, ProviderThinkingProfile } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
   ANTHROPIC_BY_MODEL_REPLAY_HOOKS,
   normalizeProviderId,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import {
-  createBedrockNoCacheWrapper,
-  isAnthropicBedrockModel,
-  streamWithPayloadPatch,
-} from "openclaw/plugin-sdk/provider-stream-shared";
+import { streamWithPayloadPatch } from "openclaw/plugin-sdk/provider-stream-shared";
 import { refreshAwsSharedConfigCacheForBedrock } from "./aws-credential-refresh.js";
 import { mergeImplicitBedrockProvider, resolveBedrockConfigApiKey } from "./discovery-shared.js";
 import { bedrockMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
+import { isOpus47BedrockModelRef, resolveBedrockClaudeThinkingProfile } from "./thinking-policy.js";
 
 type GuardrailConfig = {
   guardrailIdentifier: string;
@@ -36,6 +34,30 @@ type AmazonBedrockPluginConfig = {
 
 const BEDROCK_SERVICE_TIER_VALUES = ["flex", "priority", "default", "reserved"] as const;
 type BedrockServiceTier = (typeof BEDROCK_SERVICE_TIER_VALUES)[number];
+
+function isAnthropicBedrockModel(modelId: string): boolean {
+  const normalized = modelId.trim().toLowerCase();
+  if (normalized.includes("anthropic.claude") || normalized.includes("anthropic/claude")) {
+    return true;
+  }
+  if (
+    /^arn:aws(-cn|-us-gov)?:bedrock:/.test(normalized) &&
+    normalized.includes(":application-inference-profile/")
+  ) {
+    const profileId = normalized.split(":application-inference-profile/")[1] ?? "";
+    return profileId.includes("claude");
+  }
+  return false;
+}
+
+function createBedrockNoCacheWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) =>
+    underlying(model, context, {
+      ...options,
+      cacheRetention: "none",
+    });
+}
 
 function isBedrockServiceTier(value: string): value is BedrockServiceTier {
   return BEDROCK_SERVICE_TIER_VALUES.some((tier) => tier === value);
@@ -100,7 +122,7 @@ function createGuardrailWrapStreamFn(
 
 /**
  * Mirrors the shipped pi-ai Bedrock `supportsPromptCaching` matcher.
- * Keep this in sync with node_modules/@mariozechner/pi-ai/dist/providers/amazon-bedrock.js.
+ * Keep this in sync with node_modules/@earendil-works/pi-ai/dist/providers/amazon-bedrock.js.
  */
 function matchesPiAiPromptCachingModelId(modelId: string): boolean {
   const id = modelId.toLowerCase();
@@ -180,12 +202,6 @@ function extractRegionFromArn(arn: string): string | undefined {
  */
 function resolvedModelSupportsCaching(modelArn: string): boolean {
   return matchesPiAiPromptCachingModelId(modelArn);
-}
-
-function isOpus47BedrockModelRef(modelRef: string): boolean {
-  return /(?:^|[/.:])(?:(?:us|eu|ap|apac|au|jp|global)\.)?anthropic\.claude-opus-4[.-]7(?:$|[-.:/])/i.test(
-    modelRef,
-  );
 }
 
 /**
@@ -344,14 +360,6 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
   // Keep registration-local constants inside the function so partial module
   // initialization during test bootstrap cannot trip TDZ reads.
   const providerId = "amazon-bedrock";
-  const claude46ModelRe = /claude-(?:opus|sonnet)-4(?:\.|-)6(?:$|[-.])/i;
-  const baseClaudeThinkingLevels = [
-    { id: "off" },
-    { id: "minimal" },
-    { id: "low" },
-    { id: "medium" },
-    { id: "high" },
-  ] as const satisfies ProviderThinkingProfile["levels"];
   // Match region from bedrock-runtime (Converse API) URLs.
   // e.g. https://bedrock-runtime.us-east-1.amazonaws.com
   const bedrockRegionRe = /bedrock-runtime\.([a-z0-9-]+)\.amazonaws\./;
@@ -364,23 +372,6 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     /ValidationException[\s\S]*(?:invalid_request_error[\s\S]*)?temperature[\s\S]*deprecated|ValidationException[\s\S]*deprecated[\s\S]*temperature/i;
   const anthropicByModelReplayHooks = ANTHROPIC_BY_MODEL_REPLAY_HOOKS;
   const startupPluginConfig = (api.pluginConfig ?? {}) as AmazonBedrockPluginConfig;
-
-  function resolveBedrockClaudeThinkingProfile(modelId: string): ProviderThinkingProfile {
-    const trimmed = modelId.trim();
-    if (isOpus47BedrockModelRef(trimmed)) {
-      return {
-        levels: [...baseClaudeThinkingLevels, { id: "xhigh" }, { id: "adaptive" }, { id: "max" }],
-        defaultLevel: "off",
-      };
-    }
-    if (claude46ModelRe.test(trimmed)) {
-      return {
-        levels: [...baseClaudeThinkingLevels, { id: "adaptive" }],
-        defaultLevel: "adaptive",
-      };
-    }
-    return { levels: baseClaudeThinkingLevels };
-  }
 
   function resolveCurrentPluginConfig(
     config: OpenClawConfig | undefined,

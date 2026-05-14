@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { defaultRuntime } from "../../runtime.js";
 import { findRoutedCommand } from "./routes.js";
 
 const runConfigGetMock = vi.hoisted(() => vi.fn(async () => {}));
@@ -12,6 +13,8 @@ const tasksAuditJsonCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const channelsListCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const channelsStatusCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const agentsListCommandMock = vi.hoisted(() => vi.fn(async () => {}));
+const runPluginsListCommandMock = vi.hoisted(() => vi.fn(async () => {}));
+const pluginsCliLoadedMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../config-cli.js", () => ({
   runConfigGet: runConfigGetMock,
@@ -54,6 +57,17 @@ vi.mock("../../commands/agents.js", () => ({
   agentsListCommand: agentsListCommandMock,
 }));
 
+vi.mock("../plugins-list-command.js", () => ({
+  runPluginsListCommand: runPluginsListCommandMock,
+}));
+
+vi.mock("../plugins-cli.js", () => {
+  pluginsCliLoadedMock();
+  return {
+    registerPluginsCli: vi.fn(),
+  };
+});
+
 describe("program routes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -63,10 +77,10 @@ describe("program routes", () => {
 
   function expectRoute(path: string[], argv?: string[]): ProgramRoute {
     const route = findRoutedCommand(path, argv);
-    expect(route).toEqual(expect.objectContaining({ run: expect.any(Function) }));
     if (route === null) {
       throw new Error(`Expected routed command for ${path.join(" ")}`);
     }
+    expect(route.run).toBeTypeOf("function");
     return route;
   }
 
@@ -99,7 +113,7 @@ describe("program routes", () => {
     await expect(expectRoute(["agents"]).run(["node", "openclaw", "agents"])).resolves.toBe(true);
     expect(agentsListCommandMock).toHaveBeenCalledWith(
       { json: false, bindings: false },
-      expect.any(Object),
+      defaultRuntime,
     );
 
     await expect(
@@ -114,7 +128,7 @@ describe("program routes", () => {
     ).resolves.toBe(true);
     expect(agentsListCommandMock).toHaveBeenLastCalledWith(
       { json: true, bindings: true },
-      expect.any(Object),
+      defaultRuntime,
     );
   });
 
@@ -125,7 +139,7 @@ describe("program routes", () => {
     );
     expect(channelsListCommandMock).toHaveBeenCalledWith(
       { json: true, all: false },
-      expect.any(Object),
+      defaultRuntime,
     );
 
     const statusRoute = expectRoute(["channels", "status"]);
@@ -137,13 +151,38 @@ describe("program routes", () => {
         "status",
         "--json",
         "--probe",
+        "--channel",
+        "imsg",
         "--timeout",
         "5000",
       ]),
     ).resolves.toBe(true);
     expect(channelsStatusCommandMock).toHaveBeenCalledWith(
-      { json: true, probe: true, timeout: "5000" },
-      expect.any(Object),
+      { channel: "imsg", json: true, probe: true, timeout: "5000" },
+      defaultRuntime,
+    );
+  });
+
+  it("routes plugins list JSON without importing the full plugins CLI", async () => {
+    const route = expectRoute(["plugins", "list"]);
+    expect(route.loadPlugins).toBeUndefined();
+    expect(route.canRun?.(["node", "openclaw", "plugins", "list"])).toBe(false);
+
+    await expect(
+      route.run(["node", "openclaw", "plugins", "list", "--json", "--enabled", "--verbose"]),
+    ).resolves.toBe(true);
+
+    expect(runPluginsListCommandMock).toHaveBeenCalledWith(
+      { json: true, enabled: true, verbose: true },
+      defaultRuntime,
+    );
+    expect(pluginsCliLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it("returns false for plugins list JSON route with unsupported arguments", async () => {
+    await expectRunFalse(
+      ["plugins", "list"],
+      ["node", "openclaw", "plugins", "list", "--json", "--wat"],
     );
   });
 
@@ -251,7 +290,7 @@ describe("program routes", () => {
     ).resolves.toBe(true);
     expect(statusJsonCommandMock).toHaveBeenCalledWith(
       { deep: true, all: false, usage: true, timeoutMs: 5000 },
-      expect.any(Object),
+      defaultRuntime,
     );
   });
 
@@ -397,15 +436,19 @@ describe("program routes", () => {
       ]),
     ).resolves.toBe(true);
     expect(modelsStatusCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({
+      {
         probeProvider: "openai",
         probeTimeout: "5000",
         probeConcurrency: "2",
         probeMaxTokens: "64",
         probeProfile: "-1",
         agent: "default",
-      }),
-      expect.any(Object),
+        json: false,
+        plain: false,
+        check: false,
+        probe: false,
+      },
+      defaultRuntime,
     );
   });
 
@@ -426,7 +469,7 @@ describe("program routes", () => {
     ).resolves.toBe(true);
     expect(tasksListJsonCommandMock).toHaveBeenCalledWith(
       { json: true, runtime: "cli", status: "running" },
-      expect.any(Object),
+      defaultRuntime,
     );
 
     const listRoute = expectRoute(["tasks", "list"]);
@@ -436,7 +479,7 @@ describe("program routes", () => {
     ).resolves.toBe(true);
     expect(tasksListJsonCommandMock).toHaveBeenLastCalledWith(
       { json: true, runtime: "cron", status: undefined },
-      expect.any(Object),
+      defaultRuntime,
     );
   });
 
@@ -455,7 +498,7 @@ describe("program routes", () => {
     await expect(separateValueRoute.run(separateValueArgv)).resolves.toBe(true);
     expect(tasksListJsonCommandMock).toHaveBeenCalledWith(
       { json: true, runtime: "cli", status: "running" },
-      expect.any(Object),
+      defaultRuntime,
     );
 
     const parentOptionBeforeSubcommandArgv = [
@@ -476,7 +519,7 @@ describe("program routes", () => {
     ).resolves.toBe(true);
     expect(tasksListJsonCommandMock).toHaveBeenLastCalledWith(
       { json: true, runtime: "cli", status: undefined },
-      expect.any(Object),
+      defaultRuntime,
     );
   });
 
@@ -500,7 +543,7 @@ describe("program routes", () => {
     ).resolves.toBe(true);
     expect(tasksAuditJsonCommandMock).toHaveBeenCalledWith(
       { json: true, severity: "error", code: "stale_running", limit: 5 },
-      expect.any(Object),
+      defaultRuntime,
     );
   });
 

@@ -4,13 +4,13 @@ import { dispatchOutbound } from "./outbound-dispatch.js";
 import type { GatewayAccount, GatewayPluginRuntime } from "./types.js";
 
 const sendVoiceMessageMock = vi.hoisted(() =>
-  vi.fn(async () => ({ id: "voice-1", timestamp: "2026-04-25T00:00:00.000Z" })),
+  vi.fn(async (_params: unknown) => ({ id: "voice-1", timestamp: "2026-04-25T00:00:00.000Z" })),
 );
 const sendMediaMock = vi.hoisted(() =>
-  vi.fn(async () => ({ id: "media-1", timestamp: "2026-04-25T00:00:00.000Z" })),
+  vi.fn(async (_params: unknown) => ({ id: "media-1", timestamp: "2026-04-25T00:00:00.000Z" })),
 );
 const sendTextMock = vi.hoisted(() =>
-  vi.fn(async () => ({ id: "text-1", timestamp: "2026-04-25T00:00:00.000Z" })),
+  vi.fn(async (_params: unknown) => ({ id: "text-1", timestamp: "2026-04-25T00:00:00.000Z" })),
 );
 const audioFileToSilkBase64Mock = vi.hoisted(() => vi.fn(async () => "silk-base64"));
 
@@ -59,29 +59,11 @@ function makeInbound(overrides: Partial<InboundContext> = {}): InboundContext {
     peerId: "user-openid",
     qualifiedTarget: "qqbot:c2c:user-openid",
     fromAddress: "qqbot:c2c:user-openid",
-    parsedContent: "voice",
-    userContent: "voice",
-    quotePart: "",
-    dynamicCtx: "",
-    userMessage: "voice",
     agentBody: "voice",
     body: "voice",
-    systemPrompts: [],
-    attachments: {
-      attachmentInfo: "",
-      imageUrls: [],
-      imageMediaTypes: [],
-      voiceAttachmentPaths: [],
-      voiceAttachmentUrls: [],
-      voiceAsrReferTexts: [],
-      voiceTranscripts: [],
-      voiceTranscriptSources: [],
-      attachmentLocalPaths: [],
-    },
     localMediaPaths: [],
     localMediaTypes: [],
     remoteMediaUrls: [],
-    remoteMediaTypes: [],
     uniqueVoicePaths: [],
     uniqueVoiceUrls: [],
     uniqueVoiceAsrReferTexts: [],
@@ -98,6 +80,7 @@ function makeInbound(overrides: Partial<InboundContext> = {}): InboundContext {
 
 function makeRuntime(params: {
   onFinalize?: (ctx: Record<string, unknown>) => void;
+  isControlCommandMessage?: (text?: string, cfg?: unknown) => boolean;
   onDeliver?: (
     deliver: (
       payload: { text?: string; audioAsVoice?: boolean },
@@ -164,6 +147,9 @@ function makeRuntime(params: {
       text: {
         chunkMarkdownText: (text: string) => [text],
       },
+      commands: {
+        isControlCommandMessage: params.isControlCommandMessage ?? (() => false),
+      },
     },
     tts: {
       textToSpeech: vi.fn(async () => ({
@@ -193,11 +179,9 @@ describe("dispatchOutbound", () => {
       { runtime, cfg: {}, account },
     );
 
-    expect(finalized).toMatchObject({
-      MediaType: "audio/wav",
-      MediaTypes: ["audio/wav"],
-      QQVoiceAttachmentPaths: ["/tmp/qqbot/voice.wav"],
-    });
+    expect(finalized?.MediaType).toBe("audio/wav");
+    expect(finalized?.MediaTypes).toEqual(["audio/wav"]);
+    expect(finalized?.QQVoiceAttachmentPaths).toEqual(["/tmp/qqbot/voice.wav"]);
     expect(finalized).not.toHaveProperty("MediaPath");
     expect(finalized).not.toHaveProperty("MediaPaths");
   });
@@ -218,14 +202,44 @@ describe("dispatchOutbound", () => {
       accountId: "qq-main",
     });
     expect(audioFileToSilkBase64Mock).toHaveBeenCalledWith("/tmp/openclaw-qqbot/tts.wav");
-    expect(sendMediaMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "voice",
-        source: { base64: "silk-base64" },
-        msgId: "msg-1",
-        ttsText: "read this aloud",
-      }),
-    );
+    const sentMedia = sendMediaMock.mock.calls.at(0)?.[0] as
+      | { kind?: string; source?: unknown; msgId?: string; ttsText?: string }
+      | undefined;
+    expect(sentMedia?.kind).toBe("voice");
+    expect(sentMedia?.source).toEqual({ base64: "silk-base64" });
+    expect(sentMedia?.msgId).toBe("msg-1");
+    expect(sentMedia?.ttsText).toBe("read this aloud");
     expect(sendTextMock).not.toHaveBeenCalled();
+  });
+
+  it("marks recognized C2C framework slash commands as text commands", async () => {
+    let finalized: Record<string, unknown> | undefined;
+    const runtime = makeRuntime({
+      isControlCommandMessage: (text) => text === "/models",
+      onFinalize: (ctx) => (finalized = ctx),
+    });
+
+    await dispatchOutbound(
+      makeInbound({
+        event: {
+          type: "c2c",
+          senderId: "user-openid",
+          messageId: "msg-models",
+          content: "/models",
+          timestamp: "2026-04-25T00:00:00.000Z",
+        },
+        agentBody: "/models",
+        body: "/models",
+        commandAuthorized: true,
+      }),
+      { runtime, cfg: { commands: { text: true } }, account },
+    );
+
+    expect(finalized?.CommandBody).toBe("/models");
+    expect(finalized?.CommandAuthorized).toBe(true);
+    expect(finalized?.CommandSource).toBe("text");
+    expect(finalized?.Provider).toBe("qqbot");
+    expect(finalized?.Surface).toBe("qqbot");
+    expect(finalized?.ChatType).toBe("direct");
   });
 });

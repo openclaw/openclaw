@@ -1,4 +1,4 @@
-import type { ImageContent } from "@mariozechner/pi-ai";
+import type { ImageContent } from "@earendil-works/pi-ai";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
@@ -8,8 +8,12 @@ import type { CliBackendConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
+import type { BootstrapContextMode } from "../bootstrap-files.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
-import type { EmbeddedRunTrigger } from "../pi-embedded-runner/run/params.js";
+import type {
+  CurrentTurnPromptContext,
+  EmbeddedRunTrigger,
+} from "../pi-embedded-runner/run/params.js";
 import type { SkillSnapshot } from "../skills.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 
@@ -23,6 +27,8 @@ export type RunCliAgentParams = {
   config?: OpenClawConfig;
   prompt: string;
   transcriptPrompt?: string;
+  /** Runtime-only current-turn context visible to the model but excluded from transcript text. */
+  currentTurnContext?: CurrentTurnPromptContext;
   inputProvenance?: InputProvenance;
   provider: string;
   model?: string;
@@ -43,6 +49,8 @@ export type RunCliAgentParams = {
   authProfileId?: string;
   bootstrapPromptWarningSignaturesSeen?: string[];
   bootstrapPromptWarningSignature?: string;
+  bootstrapContextMode?: BootstrapContextMode;
+  bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
   skillsSnapshot?: SkillSnapshot;
@@ -55,6 +63,14 @@ export type RunCliAgentParams = {
   disableTools?: boolean;
   abortSignal?: AbortSignal;
   onExecutionStarted?: () => void;
+  onExecutionPhase?: (info: {
+    phase: "process_spawned" | "model_call_started";
+    provider?: string;
+    model?: string;
+    backend?: string;
+    source?: string;
+    firstModelCallStarted?: boolean;
+  }) => void;
   replyOperation?: ReplyOperation;
   /**
    * Close any long-lived CLI live session created for this run after the run

@@ -400,7 +400,9 @@ async function expectNotifyOnExitWake(tool: ExecToolInstance, expected: Record<s
   );
   try {
     await startBackgroundCommand(tool, shellEcho("notify"));
-    await expect.poll(() => wakeHandler.mock.calls[0]?.[0], NOTIFY_POLL_OPTIONS).toEqual(expected);
+    await expect
+      .poll(() => wakeHandler.mock.calls.at(0)?.[0], NOTIFY_POLL_OPTIONS)
+      .toEqual(expected);
   } finally {
     dispose();
   }
@@ -515,17 +517,16 @@ const LONG_LOG_EXPECTATION_CASES: LongLogExpectationCase[] = [
 const expectNotifyNoopEvents = (
   events: string[],
   notifyOnExitEmptySuccess: boolean,
+  sessionId: string,
   label: string,
 ) => {
   if (!notifyOnExitEmptySuccess) {
-    expect(events, label).toEqual([]);
+    expect(events, label).toStrictEqual([]);
     return;
   }
-  expect(events.length, label).toBeGreaterThan(0);
-  expect(
-    events.some((event) => event.includes(OUTPUT_EXEC_COMPLETED)),
-    label,
-  ).toBe(true);
+  expect(events, label).toStrictEqual([
+    `${OUTPUT_EXEC_COMPLETED} (${sessionId.slice(0, 8)}, code 0)`,
+  ]);
 };
 const runDisallowedElevationCase = async ({
   defaultLevel,
@@ -620,10 +621,10 @@ const runNotifyNoopCase = async ({ label, notifyOnExitEmptySuccess }: NotifyNoop
     notifyOnExitEmptySuccess ? { notifyOnExitEmptySuccess: true } : {},
   );
 
-  const { status } = await runBackgroundCommandToCompletion(tool, COMMAND_NOOP);
+  const { sessionId, status } = await runBackgroundCommandToCompletion(tool, COMMAND_NOOP);
   expect(status).toBe(PROCESS_STATUS_COMPLETED);
   const events = peekSystemEvents(DEFAULT_NOTIFY_SESSION_KEY);
-  expectNotifyNoopEvents(events, notifyOnExitEmptySuccess, label);
+  expectNotifyNoopEvents(events, notifyOnExitEmptySuccess, sessionId, label);
 };
 
 describe("tool descriptions", () => {
@@ -768,13 +769,11 @@ describe("exec notifyOnExit", () => {
     );
     const formatted = await drainNotifyEvents();
 
-    expect(finished).toMatchObject({
-      id: sessionId,
-      status: PROCESS_STATUS_COMPLETED,
-      exitCode: 0,
-    });
+    expect(finished?.id).toBe(sessionId);
+    expect(finished?.status).toBe(PROCESS_STATUS_COMPLETED);
+    expect(finished?.exitCode).toBe(0);
     expect(hasEvent).toBe(true);
-    expect(queuedEvent).toMatchObject({ trusted: false });
+    expect(queuedEvent?.trusted).toBe(false);
     expect(formatted).toBeUndefined();
   });
 
@@ -794,14 +793,10 @@ describe("exec notifyOnExit", () => {
       event.text.includes(sessionId.slice(0, 8)),
     );
 
-    expect(queuedEvent).toMatchObject({
-      trusted: false,
-      deliveryContext: {
-        channel: "telegram",
-        to: "telegram:-1003774691294:topic:47",
-        threadId: "47",
-      },
-    });
+    expect(queuedEvent?.trusted).toBe(false);
+    expect(queuedEvent?.deliveryContext?.channel).toBe("telegram");
+    expect(queuedEvent?.deliveryContext?.to).toBe("telegram:-1003774691294:topic:47");
+    expect(queuedEvent?.deliveryContext?.threadId).toBe("47");
   });
 
   it("scopes notifyOnExit heartbeat wake to the exec session key", async () => {
@@ -964,7 +959,7 @@ describe("exec backgrounded onUpdate suppression", () => {
       ]);
       // Abort almost immediately so the signal fires while the command
       // is still producing output.
-      setTimeout(() => abortController.abort(), 0);
+      setImmediate(() => abortController.abort());
       await execTool.execute(nextCallId(), { command }, abortController.signal, onUpdateSpy);
       const callsAtAbort = onUpdateSpy.mock.calls.length;
       // Allow a tick for any straggling stdout data events.

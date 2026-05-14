@@ -4,7 +4,7 @@ import {
   listChatCommands,
   maybeResolveTextAlias,
   normalizeCommandBody,
-} from "openclaw/plugin-sdk/command-auth";
+} from "openclaw/plugin-sdk/command-auth-native";
 import {
   isAbortRequestText,
   isBtwRequestText,
@@ -16,6 +16,7 @@ type TelegramSequentialKeyContext = {
   me?: UserFromGetMe;
   message?: Message;
   channelPost?: Message;
+  editedMessage?: Message;
   editedChannelPost?: Message;
   update?: {
     message?: Message;
@@ -48,6 +49,21 @@ function resolveStatusCommandControlLane(params: {
   return command?.category === "status" && command.key !== "export-session";
 }
 
+export function isTelegramControlLaneText(params: {
+  rawText?: string;
+  botUsername?: string;
+}): boolean {
+  if (
+    isAbortRequestText(
+      params.rawText,
+      params.botUsername ? { botUsername: params.botUsername } : undefined,
+    )
+  ) {
+    return true;
+  }
+  return resolveStatusCommandControlLane(params);
+}
+
 export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): string {
   const reaction = ctx.update?.message_reaction;
   if (reaction?.chat?.id) {
@@ -56,6 +72,7 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
   const msg =
     ctx.message ??
     ctx.channelPost ??
+    ctx.editedMessage ??
     ctx.editedChannelPost ??
     ctx.update?.message ??
     ctx.update?.edited_message ??
@@ -65,13 +82,7 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
   const chatId = msg?.chat?.id ?? ctx.chat?.id;
   const rawText = msg?.text ?? msg?.caption;
   const botUsername = ctx.me?.username;
-  if (isAbortRequestText(rawText, botUsername ? { botUsername } : undefined)) {
-    if (typeof chatId === "number") {
-      return `telegram:${chatId}:control`;
-    }
-    return "telegram:control";
-  }
-  if (resolveStatusCommandControlLane({ rawText, botUsername })) {
+  if (isTelegramControlLaneText({ rawText, botUsername })) {
     if (typeof chatId === "number") {
       return `telegram:${chatId}:control`;
     }
@@ -96,7 +107,8 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
   }
   const isGroup = msg?.chat?.type === "group" || msg?.chat?.type === "supergroup";
   const messageThreadId = msg?.message_thread_id;
-  const isForum = msg?.chat?.is_forum;
+  const isForum =
+    msg?.chat?.is_forum ?? (msg?.chat?.type === "supergroup" && msg?.is_topic_message === true);
   const threadId = isGroup
     ? resolveTelegramForumThreadId({ isForum, messageThreadId })
     : messageThreadId;

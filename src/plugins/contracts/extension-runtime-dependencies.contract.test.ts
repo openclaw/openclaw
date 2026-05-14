@@ -27,8 +27,8 @@ const INDIRECT_RUNTIME_DEPENDENCIES = new Map<string, Set<string>>([
   ],
   [
     "extensions/whatsapp",
-    // Baileys loads jimp as an optional peer when it needs media thumbnails.
-    new Set(["jimp"]),
+    // Baileys loads these optional peers for media decoding and thumbnails.
+    new Set(["audio-decode", "jimp"]),
   ],
   [
     "extensions/memory-lancedb",
@@ -206,7 +206,7 @@ describe("Discord dependency ownership", () => {
     const manifest = readPackageManifest("package.json");
     const discordDependencies = allDependencyNames(manifest).filter(isDiscordPackageDependency);
 
-    expect(discordDependencies).toEqual([]);
+    expect(discordDependencies).toStrictEqual([]);
   });
 
   for (const manifestPath of listPackageManifests(EXTENSION_ROOT)) {
@@ -220,7 +220,7 @@ describe("Discord dependency ownership", () => {
       const manifest = readPackageManifest(manifestPath);
       const discordDependencies = allDependencyNames(manifest).filter(isDiscordPackageDependency);
 
-      expect(discordDependencies).toEqual([]);
+      expect(discordDependencies).toStrictEqual([]);
     });
   }
 });
@@ -280,7 +280,7 @@ describe("extension runtime dependency manifests", () => {
           !allowedIndirect.has(dependencyName) && !runtimeText.includes(dependencyName),
       );
 
-      expect(unused).toEqual([]);
+      expect(unused).toStrictEqual([]);
     });
   }
 });

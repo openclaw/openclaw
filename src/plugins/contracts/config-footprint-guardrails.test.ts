@@ -53,8 +53,9 @@ function collectSchemaPaths(schema: unknown, prefix = ""): string[] {
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
-  expect(value).not.toBeNull();
-  expect(typeof value).toBe("object");
+  if (!value || typeof value !== "object") {
+    throw new Error("expected record");
+  }
   expect(Array.isArray(value)).toBe(false);
   return value as Record<string, unknown>;
 }
@@ -112,7 +113,7 @@ describe("config footprint guardrails", () => {
         "channels.discord.channels.*.allow",
         "channels.discord.accounts.*.channels.*.allow",
       ].filter((path) => basePaths.has(path)),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("keeps bundled channel private-network config canonical in generated metadata", () => {

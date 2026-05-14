@@ -315,7 +315,7 @@ describe("createAcpReplyProjector", () => {
       });
 
       await vi.advanceTimersByTimeAsync(1200);
-      expect(deliveries).toEqual([]);
+      expect(deliveries).toStrictEqual([]);
 
       await projector.onEvent({
         type: "text_delta",
@@ -361,7 +361,7 @@ describe("createAcpReplyProjector", () => {
       text: " now?",
       tag: "agent_message_chunk",
     });
-    expect(deliveries).toEqual([]);
+    expect(deliveries).toStrictEqual([]);
 
     await projector.onEvent({ type: "done" });
     expect(deliveries).toHaveLength(3);
@@ -389,7 +389,7 @@ describe("createAcpReplyProjector", () => {
       title: "Run tests",
       text: "Run tests (in_progress)",
     });
-    expect(deliveries).toEqual([]);
+    expect(deliveries).toStrictEqual([]);
 
     await projector.onEvent({ type: "error", message: "turn failed" });
     expect(deliveries).toHaveLength(2);
@@ -409,7 +409,7 @@ describe("createAcpReplyProjector", () => {
       used: 10,
       size: 100,
     });
-    expect(hidden).toEqual([]);
+    expect(hidden).toStrictEqual([]);
 
     const { deliveries: shown, projector: shownProjector } = createProjectorHarness(
       createLiveCfgOverrides({
@@ -457,7 +457,7 @@ describe("createAcpReplyProjector", () => {
       tag: "available_commands_update",
     });
 
-    expect(deliveries).toEqual([]);
+    expect(deliveries).toStrictEqual([]);
   });
 
   it("dedupes repeated tool lifecycle updates when repeatSuppression is enabled", async () => {
@@ -649,12 +649,13 @@ describe("createAcpReplyProjector", () => {
     });
     await projector.flush(true);
 
-    expect(deliveries).toHaveLength(2);
-    expect(deliveries).toContainEqual({ kind: "block", text: "hello" });
-    expect(deliveries).toContainEqual({
-      kind: "tool",
-      text: prefixSystemMessage("output truncated"),
-    });
+    expect(deliveries).toEqual([
+      { kind: "block", text: "hello" },
+      {
+        kind: "tool",
+        text: prefixSystemMessage("output truncated"),
+      },
+    ]);
   });
 
   it("supports tagVisibility overrides for tool updates", async () => {

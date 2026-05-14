@@ -32,30 +32,35 @@ const REQUIRED_PACKED_PATHS = [
 
 describe("parseReleaseVersion", () => {
   it("parses stable CalVer releases", () => {
-    expect(parseReleaseVersion("2026.3.10")).toMatchObject({
+    expect(parseReleaseVersion("2026.3.10")).toStrictEqual({
       version: "2026.3.10",
       baseVersion: "2026.3.10",
       channel: "stable",
       year: 2026,
       month: 3,
       day: 10,
+      alphaNumber: undefined,
+      betaNumber: undefined,
+      date: new Date(Date.UTC(2026, 2, 10)),
     });
   });
 
   it("parses beta CalVer releases", () => {
-    expect(parseReleaseVersion("2026.3.10-beta.2")).toMatchObject({
+    expect(parseReleaseVersion("2026.3.10-beta.2")).toStrictEqual({
       version: "2026.3.10-beta.2",
       baseVersion: "2026.3.10",
       channel: "beta",
       year: 2026,
       month: 3,
       day: 10,
+      alphaNumber: undefined,
       betaNumber: 2,
+      date: new Date(Date.UTC(2026, 2, 10)),
     });
   });
 
   it("parses alpha CalVer releases", () => {
-    expect(parseReleaseVersion("2026.3.10-alpha.2")).toMatchObject({
+    expect(parseReleaseVersion("2026.3.10-alpha.2")).toStrictEqual({
       version: "2026.3.10-alpha.2",
       baseVersion: "2026.3.10",
       channel: "alpha",
@@ -63,17 +68,22 @@ describe("parseReleaseVersion", () => {
       month: 3,
       day: 10,
       alphaNumber: 2,
+      betaNumber: undefined,
+      date: new Date(Date.UTC(2026, 2, 10)),
     });
   });
 
   it("parses stable correction releases", () => {
-    expect(parseReleaseVersion("2026.3.10-1")).toMatchObject({
+    expect(parseReleaseVersion("2026.3.10-1")).toStrictEqual({
       version: "2026.3.10-1",
       baseVersion: "2026.3.10",
       channel: "stable",
       year: 2026,
       month: 3,
       day: 10,
+      alphaNumber: undefined,
+      betaNumber: undefined,
+      date: new Date(Date.UTC(2026, 2, 10)),
       correctionNumber: 1,
     });
   });
@@ -89,11 +99,12 @@ describe("parseReleaseVersion", () => {
 
 describe("parseReleaseTagVersion", () => {
   it("accepts correction release tags", () => {
-    expect(parseReleaseTagVersion("2026.3.10-2")).toMatchObject({
+    expect(parseReleaseTagVersion("2026.3.10-2")).toStrictEqual({
       version: "2026.3.10-2",
       packageVersion: "2026.3.10-2",
       baseVersion: "2026.3.10",
       channel: "stable",
+      date: new Date(Date.UTC(2026, 2, 10)),
       correctionNumber: 2,
     });
   });
@@ -539,7 +550,9 @@ describe("collectReleaseTagErrors", () => {
         releaseTag: "v2026.3.10",
         now: new Date("2026-03-13T00:00:00Z"),
       }),
-    ).toContainEqual(expect.stringContaining("must be within 2 days"));
+    ).toStrictEqual([
+      "Release version 2026.3.10 is 3 days away from current UTC date 2026-03-13; release CalVer date 2026-03-10 must be within 2 days.",
+    ]);
   });
 
   it("accepts fallback correction tags for stable package versions", () => {
@@ -569,7 +582,9 @@ describe("collectReleaseTagErrors", () => {
         releaseTag: "v2026.3.10-1",
         now: new Date("2026-03-10T00:00:00Z"),
       }),
-    ).toContainEqual(expect.stringContaining("does not match package.json version"));
+    ).toStrictEqual([
+      "Release tag v2026.3.10-1 does not match package.json version 2026.3.10-beta.1; expected v2026.3.10-beta.1.",
+    ]);
   });
 });
 

@@ -9,6 +9,8 @@ import {
   makeTempDir,
 } from "./exec-approvals-test-helpers.js";
 import {
+  analyzeArgvCommand,
+  evaluateExecAllowlist,
   evaluateShellAllowlist,
   requiresExecApproval,
   resolveAllowAlwaysPatterns,
@@ -135,7 +137,7 @@ describe("resolveAllowAlwaysPatterns", () => {
       env,
       safeBins,
     });
-    expect(persisted).toEqual([]);
+    expect(persisted).toStrictEqual([]);
 
     const second = evaluateShellAllowlist({
       command,
@@ -168,7 +170,7 @@ describe("resolveAllowAlwaysPatterns", () => {
     if (params.expectPersisted) {
       expect(persisted).toEqual([touch]);
     } else {
-      expect(persisted).toEqual([]);
+      expect(persisted).toStrictEqual([]);
     }
 
     const second = evaluateShellAllowlist({
@@ -219,7 +221,7 @@ describe("resolveAllowAlwaysPatterns", () => {
         },
       ],
     });
-    expect(patterns).toEqual([]);
+    expect(patterns).toStrictEqual([]);
   });
 
   it("persists benign awk interpreters when strict inline-eval is enabled", () => {
@@ -272,20 +274,17 @@ describe("resolveAllowAlwaysPatterns", () => {
       strictInlineEval: true,
     });
 
-    expect(entries).toEqual([
-      expect.objectContaining({
-        pattern: awk,
-        argPattern: expect.any(String),
-      }),
-    ]);
-    expect(
-      matchAllowlist(
-        entries,
-        resolution.execution ?? null,
-        [awk, "-F", ",", "-f", "script.awk", "data.csv"],
-        "win32",
-      ),
-    ).toEqual(expect.objectContaining({ pattern: awk, argPattern: expect.any(String) }));
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.pattern).toBe(awk);
+    expect(typeof entries[0]?.argPattern).toBe("string");
+    const matched = matchAllowlist(
+      entries,
+      resolution.execution ?? null,
+      [awk, "-F", ",", "-f", "script.awk", "data.csv"],
+      "win32",
+    );
+    expect(matched?.pattern).toBe(awk);
+    expect(typeof matched?.argPattern).toBe("string");
     expect(
       matchAllowlist(
         entries,
@@ -295,6 +294,69 @@ describe("resolveAllowAlwaysPatterns", () => {
       ),
     ).toBeNull();
   });
+
+  it.each([
+    {
+      name: "empty PowerShell file argument",
+      argvPrefix: [],
+      fileFlag: "-File",
+      scriptArgs: [""],
+      expectedArgPattern: "^\x00$",
+    },
+    {
+      name: "PowerShell file alias argument",
+      argvPrefix: [],
+      fileFlag: "-fi",
+      scriptArgs: ["arg"],
+      expectedArgPattern: "^arg\x00$",
+    },
+    {
+      name: "empty PowerShell file argument after dispatch unwrap",
+      argvPrefix: ["env"],
+      fileFlag: "/file",
+      scriptArgs: [""],
+      expectedArgPattern: "^\x00$",
+    },
+  ])(
+    "persists allow-always patterns for $name",
+    ({ argvPrefix, fileFlag, scriptArgs, expectedArgPattern }) => {
+      const dir = makeTempDir();
+      makeExecutable(dir, "env");
+      makeExecutable(dir, "pwsh");
+      const scriptPath = path.join(dir, "script.ps1");
+      fs.writeFileSync(scriptPath, "");
+      fs.chmodSync(scriptPath, 0o755);
+      try {
+        const env = makePathEnv(dir);
+        const analysis = analyzeArgvCommand({
+          argv: [...argvPrefix, "pwsh", fileFlag, scriptPath, ...scriptArgs],
+          cwd: dir,
+          env,
+        });
+        expect(analysis.ok).toBe(true);
+
+        const entries = resolveAllowAlwaysPatternEntries({
+          segments: analysis.segments,
+          cwd: dir,
+          env,
+          platform: "win32",
+        });
+        expect(entries).toEqual([{ pattern: scriptPath, argPattern: expectedArgPattern }]);
+
+        const result = evaluateExecAllowlist({
+          analysis,
+          allowlist: entries,
+          safeBins: new Set(),
+          cwd: dir,
+          env,
+          platform: "win32",
+        });
+        expect(result.allowlistSatisfied).toBe(true);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("keeps inline awk programs out of allow-always persistence in strict inline-eval mode", () => {
     if (process.platform === "win32") {
@@ -312,7 +374,7 @@ describe("resolveAllowAlwaysPatterns", () => {
       safeBins,
       strictInlineEval: true,
     });
-    expect(persisted).toEqual([]);
+    expect(persisted).toStrictEqual([]);
   });
 
   it("unwraps shell wrappers and persists the inner executable instead", () => {
@@ -460,7 +522,7 @@ describe("resolveAllowAlwaysPatterns", () => {
         env,
         safeBins,
       });
-      expect(persisted).toEqual([]);
+      expect(persisted).toStrictEqual([]);
 
       const second = evaluateShellAllowlist({
         command,
@@ -589,7 +651,7 @@ $0 \\"$1\\"" touch {marker}`,
       ],
       platform: process.platform,
     });
-    expect(patterns).toEqual([]);
+    expect(patterns).toStrictEqual([]);
   });
 
   it("detects shell wrappers even when unresolved executableName is a full path", () => {
@@ -730,7 +792,7 @@ $0 \\"$1\\"" touch {marker}`,
       env: makePathEnv(dir),
       platform: process.platform,
     });
-    expect(patterns).toEqual([]);
+    expect(patterns).toStrictEqual([]);
   });
 
   it("fails closed for unresolved dispatch wrappers", () => {
@@ -750,7 +812,7 @@ $0 \\"$1\\"" touch {marker}`,
       ],
       platform: process.platform,
     });
-    expect(patterns).toEqual([]);
+    expect(patterns).toStrictEqual([]);
   });
 
   it("prevents allow-always bypass for busybox shell applets", () => {
@@ -879,7 +941,7 @@ $0 \\"$1\\"" touch {marker}`,
       env,
       safeBins,
     });
-    expect(persisted).toEqual([]);
+    expect(persisted).toStrictEqual([]);
 
     const second = evaluateShellAllowlist({
       command: `awk 'BEGIN{system("id > ${path.join(dir, "marker")}")}'`,
@@ -915,7 +977,7 @@ $0 \\"$1\\"" touch {marker}`,
       env,
       safeBins,
     });
-    expect(persisted).toEqual([]);
+    expect(persisted).toStrictEqual([]);
 
     const second = evaluateShellAllowlist({
       command: `sh -c '$0 "$@"' awk 'BEGIN{system("id > /tmp/pwned")}'`,
@@ -977,7 +1039,7 @@ $0 \\"$1\\"" touch {marker}`,
       env,
       safeBins,
     });
-    expect(persisted).toEqual([]);
+    expect(persisted).toStrictEqual([]);
 
     const second = evaluateShellAllowlist({
       command: `sh -c '$0 "$@"' env BASH_ENV=/tmp/payload.sh bash -c 'id > /tmp/pwned'`,
@@ -1005,7 +1067,7 @@ $0 \\"$1\\"" touch {marker}`,
       env,
       safeBins,
     });
-    expect(persisted).toEqual([]);
+    expect(persisted).toStrictEqual([]);
 
     const second = evaluateShellAllowlist({
       command: `sh -c '$0 "$@"' bash -c 'id > /tmp/pwned'`,
@@ -1033,7 +1095,7 @@ $0 \\"$1\\"" touch {marker}`,
       env,
       safeBins,
     });
-    expect(persisted).toEqual([]);
+    expect(persisted).toStrictEqual([]);
 
     const second = evaluateShellAllowlist({
       command: `sh -c '$0 "$@"' xargs sh -c 'id > /tmp/pwned'`,

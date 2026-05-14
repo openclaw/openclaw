@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -127,6 +127,39 @@ describe("resolveDiscordAccount allowFrom precedence", () => {
     });
 
     expect(resolved.config.allowFrom).toBeUndefined();
+  });
+});
+
+describe("resolveDiscordAccount botLoopProtection precedence", () => {
+  it("merges account overrides over Discord channel defaults field-by-field", () => {
+    const resolved = resolveDiscordAccount({
+      cfg: {
+        channels: {
+          discord: {
+            botLoopProtection: {
+              maxEventsPerWindow: 4,
+              windowSeconds: 60,
+              cooldownSeconds: 30,
+            },
+            accounts: {
+              work: {
+                token: "token-work",
+                botLoopProtection: {
+                  windowSeconds: 10,
+                },
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(resolved.config.botLoopProtection).toEqual({
+      maxEventsPerWindow: 4,
+      windowSeconds: 10,
+      cooldownSeconds: 30,
+    });
   });
 });
 

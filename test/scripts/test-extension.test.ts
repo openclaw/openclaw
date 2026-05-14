@@ -35,7 +35,11 @@ function runScript(args: string[], cwd = process.cwd()) {
 }
 
 function requireFirstMockArg<T>(mock: { mock: { calls: Array<[T, ...unknown[]]> } }): T {
-  const [arg] = mock.mock.calls[0] ?? [];
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error("expected first mock call argument");
+  }
+  const [arg] = call;
   if (arg === undefined) {
     throw new Error("expected first mock call argument");
   }
@@ -250,7 +254,7 @@ describe("scripts/test-extension.mjs", () => {
 
   it("can fail safe to all extensions when the base revision is unavailable", () => {
     const extensionIds = listChangedExtensionIds({
-      base: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      base: "refs/heads/openclaw-test-missing-base",
       unavailableBaseBehavior: "all",
     });
 
@@ -509,14 +513,21 @@ describe("scripts/test-extension.mjs", () => {
     await expect(runPromise).resolves.toBe(0);
     expect(runGroup).toHaveBeenCalledTimes(3);
     const firstRunGroupParams = requireFirstMockArg<RunGroupParams>(runGroup);
-    expect(firstRunGroupParams).toMatchObject({
+    expect(firstRunGroupParams).toEqual({
       args: ["--reporter=dot"],
       config: "heavy",
+      env: {
+        OPENCLAW_EXTENSION_BATCH_PARALLEL: "2",
+        OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(
+          process.cwd(),
+          "node_modules",
+          ".experimental-vitest-cache",
+          "extension-batch",
+          "0-heavy",
+        ),
+      },
       targets: ["extensions/two"],
     });
-    expect(firstRunGroupParams.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toContain(
-      path.join("node_modules", ".experimental-vitest-cache", "extension-batch", "0-heavy"),
-    );
   });
 
   it("keeps extension batch parallelism bounded by group count", () => {

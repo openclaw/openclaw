@@ -1,5 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { clearPresences, setPresence } from "../monitor/presence-cache.js";
 import { DiscordThreadInitialMessageError } from "../send.js";
@@ -86,6 +86,29 @@ const {
 
 const enableAllActions = () => true;
 const DISCORD_TEST_CFG = EMPTY_DISCORD_TEST_CONFIG;
+
+type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
+
+function mockCall(source: MockCallSource, label: string, callIndex = 0): Array<unknown> {
+  const call = source.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected ${label} call ${callIndex}`);
+  }
+  return call;
+}
+
+function mockObjectArg(
+  source: MockCallSource,
+  label: string,
+  callIndex: number,
+  argIndex: number,
+): Record<string, unknown> {
+  const value = mockCall(source, label, callIndex)[argIndex];
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label} call ${callIndex} argument ${argIndex} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
 
 function handleMessagingAction(
   action: string,
@@ -177,6 +200,17 @@ describe("handleDiscordMessagingAction", () => {
   });
 
   it("uses configured defaultAccount when cfg is provided and accountId is omitted", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          defaultAccount: "work",
+          accounts: {
+            work: { token: "token-work" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
     await handleMessagingAction(
       "react",
       {
@@ -185,24 +219,16 @@ describe("handleDiscordMessagingAction", () => {
         emoji: "✅",
       },
       enableAllActions,
-      {
-        channels: {
-          discord: {
-            defaultAccount: "work",
-            accounts: {
-              work: { token: "token-work" },
-            },
-          },
-        },
-      } as OpenClawConfig,
+      cfg,
     );
 
-    expect(reactMessageDiscord).toHaveBeenCalledWith(
+    expect(reactMessageDiscord).toHaveBeenCalledTimes(1);
+    expect(mockCall(reactMessageDiscord, "reactMessageDiscord")).toEqual([
       "C1",
       "M1",
       "✅",
-      expect.objectContaining({ accountId: "work" }),
-    );
+      { cfg, accountId: "work" },
+    ]);
   });
 
   it("resolves Discord DM targets for reaction adds", async () => {
@@ -338,7 +364,7 @@ describe("handleDiscordMessagingAction", () => {
         maxSelections: 2,
         durationHours: 24,
       },
-      expect.any(Object),
+      { cfg: DISCORD_TEST_CFG, content: undefined },
     );
   });
 
@@ -370,7 +396,11 @@ describe("handleDiscordMessagingAction", () => {
       },
     } as OpenClawConfig;
     await handleMessagingAction("readMessages", { channelId: "C1" }, enableAllActions, cfg);
-    expect(readMessagesDiscord).toHaveBeenCalledWith("C1", expect.any(Object), { cfg });
+    expect(readMessagesDiscord).toHaveBeenCalledWith(
+      "C1",
+      { limit: undefined, before: undefined, after: undefined, around: undefined },
+      { cfg },
+    );
   });
 
   it("adds normalized timestamps to fetchMessage payloads", async () => {
@@ -481,16 +511,15 @@ describe("handleDiscordMessagingAction", () => {
       DISCORD_TEST_CFG,
       { mediaAccess, mediaLocalRoots: ["/tmp/agent-root"], mediaReadFile },
     );
-    expect(sendMessageDiscord).toHaveBeenCalledWith(
-      "channel:123",
-      "hello",
-      expect.objectContaining({
-        mediaAccess,
-        mediaUrl: "/tmp/image.png",
-        mediaLocalRoots: ["/tmp/agent-root"],
-        mediaReadFile,
-      }),
-    );
+    expect(sendMessageDiscord).toHaveBeenCalledTimes(1);
+    const call = mockCall(sendMessageDiscord, "sendMessageDiscord");
+    const sendOptions = mockObjectArg(sendMessageDiscord, "sendMessageDiscord", 0, 2);
+    expect(call[0]).toBe("channel:123");
+    expect(call[1]).toBe("hello");
+    expect(sendOptions.mediaAccess).toBe(mediaAccess);
+    expect(sendOptions.mediaUrl).toBe("/tmp/image.png");
+    expect(sendOptions.mediaLocalRoots).toEqual(["/tmp/agent-root"]);
+    expect(sendOptions.mediaReadFile).toBe(mediaReadFile);
   });
 
   it("allows media-only message sends", async () => {
@@ -505,14 +534,14 @@ describe("handleDiscordMessagingAction", () => {
       DISCORD_TEST_CFG,
       { mediaLocalRoots: ["/tmp/agent-root"] },
     );
-    expect(sendMessageDiscord).toHaveBeenCalledWith(
-      "channel:123",
-      "",
-      expect.objectContaining({
-        mediaUrl: "/tmp/image.png",
-        mediaLocalRoots: ["/tmp/agent-root"],
-      }),
-    );
+    expect(sendMessageDiscord).toHaveBeenCalledTimes(1);
+    const call = mockCall(sendMessageDiscord, "sendMessageDiscord");
+    const sendOptions = mockObjectArg(sendMessageDiscord, "sendMessageDiscord", 0, 2);
+    expect(call[0]).toBe("channel:123");
+    const content = call[1];
+    expect(content).toBe("");
+    expect(sendOptions.mediaUrl).toBe("/tmp/image.png");
+    expect(sendOptions.mediaLocalRoots).toEqual(["/tmp/agent-root"]);
   });
 
   it("ignores empty components objects for regular media sends", async () => {
@@ -533,14 +562,14 @@ describe("handleDiscordMessagingAction", () => {
     );
 
     expect(sendDiscordComponentMessage).not.toHaveBeenCalled();
-    expect(sendMessageDiscord).toHaveBeenCalledWith(
-      "channel:123",
-      "hello",
-      expect.objectContaining({
-        mediaUrl: "/tmp/image.png",
-        mediaLocalRoots: ["/tmp/agent-root"],
-      }),
-    );
+    expect(sendMessageDiscord).toHaveBeenCalledTimes(1);
+    const call = mockCall(sendMessageDiscord, "sendMessageDiscord");
+    const sendOptions = mockObjectArg(sendMessageDiscord, "sendMessageDiscord", 0, 2);
+    expect(call[0]).toBe("channel:123");
+    const content = call[1];
+    expect(content).toBe("hello");
+    expect(sendOptions.mediaUrl).toBe("/tmp/image.png");
+    expect(sendOptions.mediaLocalRoots).toEqual(["/tmp/agent-root"]);
   });
 
   it("forwards the optional filename into sendMessageDiscord", async () => {
@@ -555,14 +584,14 @@ describe("handleDiscordMessagingAction", () => {
       },
       enableAllActions,
     );
-    expect(sendMessageDiscord).toHaveBeenCalledWith(
-      "channel:123",
-      "hello",
-      expect.objectContaining({
-        mediaUrl: "/tmp/generated-image",
-        filename: "image.png",
-      }),
-    );
+    expect(sendMessageDiscord).toHaveBeenCalledTimes(1);
+    const call = mockCall(sendMessageDiscord, "sendMessageDiscord");
+    const sendOptions = mockObjectArg(sendMessageDiscord, "sendMessageDiscord", 0, 2);
+    expect(call[0]).toBe("channel:123");
+    const content = call[1];
+    expect(content).toBe("hello");
+    expect(sendOptions.mediaUrl).toBe("/tmp/generated-image");
+    expect(sendOptions.filename).toBe("image.png");
   });
 
   it("rejects voice messages that include content", async () => {
@@ -671,13 +700,10 @@ describe("handleDiscordGuildAction", () => {
       cfg,
       accountId: "work",
     });
-    expect(result.details).toEqual(
-      expect.objectContaining({
-        ok: true,
-        status: "online",
-        activities: [],
-      }),
-    );
+    const details = result.details as Record<string, unknown>;
+    expect(details.ok).toBe(true);
+    expect(details.status).toBe("online");
+    expect(details.activities).toEqual([]);
   });
 });
 
@@ -712,7 +738,14 @@ describe("handleDiscordGuildAction - channel management", () => {
       },
       { cfg: DISCORD_TEST_CFG },
     );
-    expect(result.details).toMatchObject({ ok: true });
+    expect(result.details).toEqual({
+      ok: true,
+      channel: {
+        id: "new-channel",
+        name: "test",
+        type: 0,
+      },
+    });
   });
 
   it("respects channel gating for channelCreate", async () => {
@@ -967,14 +1000,15 @@ describe("handleDiscordModerationAction", () => {
       },
       moderationEnabled,
     );
-    expect(timeoutMemberDiscord).toHaveBeenCalledWith(
-      expect.objectContaining({
-        guildId: "G1",
-        userId: "U1",
-        durationMinutes: 5,
-      }),
-      { cfg: DISCORD_TEST_CFG, accountId: "ops" },
-    );
+    expect(timeoutMemberDiscord).toHaveBeenCalledTimes(1);
+    const params = mockObjectArg(timeoutMemberDiscord, "timeoutMemberDiscord", 0, 0);
+    expect(params.guildId).toBe("G1");
+    expect(params.userId).toBe("U1");
+    expect(params.durationMinutes).toBe(5);
+    expect(mockCall(timeoutMemberDiscord, "timeoutMemberDiscord")[1]).toEqual({
+      cfg: DISCORD_TEST_CFG,
+      accountId: "ops",
+    });
   });
 });
 
@@ -994,10 +1028,14 @@ describe("handleDiscordAction per-account gating", () => {
       { action: "timeout", guildId: "G1", userId: "U1", durationMinutes: 5, accountId: "ops" },
       cfg,
     );
-    expect(timeoutMemberDiscord).toHaveBeenCalledWith(
-      expect.objectContaining({ guildId: "G1", userId: "U1" }),
-      { cfg, accountId: "ops" },
-    );
+    expect(timeoutMemberDiscord).toHaveBeenCalledTimes(1);
+    const params = mockObjectArg(timeoutMemberDiscord, "timeoutMemberDiscord", 0, 0);
+    expect(params.guildId).toBe("G1");
+    expect(params.userId).toBe("U1");
+    expect(mockCall(timeoutMemberDiscord, "timeoutMemberDiscord")[1]).toEqual({
+      cfg,
+      accountId: "ops",
+    });
   });
 
   it("blocks moderation when account omits it", async () => {
@@ -1079,9 +1117,13 @@ describe("handleDiscordAction per-account gating", () => {
       cfg,
     );
 
-    expect(createChannelDiscord).toHaveBeenCalledWith(
-      expect.objectContaining({ guildId: "G1", name: "alerts" }),
-      { cfg, accountId: "ops" },
-    );
+    expect(createChannelDiscord).toHaveBeenCalledTimes(1);
+    const params = mockObjectArg(createChannelDiscord, "createChannelDiscord", 0, 0);
+    expect(params.guildId).toBe("G1");
+    expect(params.name).toBe("alerts");
+    expect(mockCall(createChannelDiscord, "createChannelDiscord")[1]).toEqual({
+      cfg,
+      accountId: "ops",
+    });
   });
 });

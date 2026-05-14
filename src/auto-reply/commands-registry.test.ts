@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  pinActivePluginChannelRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   buildCommandText,
@@ -82,12 +86,27 @@ function installOllamaThinkingProvider() {
   setActivePluginRegistry(registry);
 }
 
+function createNativeCommandsRegistry(id: "discord" | "slack") {
+  return createTestRegistry([
+    {
+      pluginId: id,
+      plugin: createChannelTestPluginBase({
+        id,
+        capabilities: { nativeCommands: true, chatTypes: ["direct"] },
+      }),
+      source: "test",
+    },
+  ]);
+}
+
 beforeEach(() => {
   vi.doUnmock("../channels/plugins/index.js");
+  resetPluginRuntimeStateForTest();
   setActivePluginRegistry(createTestRegistry([]));
 });
 
 afterEach(() => {
+  resetPluginRuntimeStateForTest();
   setActivePluginRegistry(createTestRegistry([]));
 });
 
@@ -97,6 +116,18 @@ function commandKeySet(commands: readonly ChatCommandDefinition[]): Set<string> 
 
 function nativeNameSet(specs: readonly { name: string }[]): Set<string> {
   return new Set(specs.map((spec) => spec.name));
+}
+
+function expectSetContainsAll(values: ReadonlySet<string>, expected: readonly string[]) {
+  for (const value of expected) {
+    expect(values.has(value), `expected set to contain ${value}`).toBe(true);
+  }
+}
+
+function expectSetOmitsAll(values: ReadonlySet<string>, expected: readonly string[]) {
+  for (const value of expected) {
+    expect(values.has(value), `expected set not to contain ${value}`).toBe(false);
+  }
 }
 
 function requireChatCommand(key: string): ChatCommandDefinition {
@@ -113,6 +144,17 @@ function requireNativeCommand(name: string, provider?: string): ChatCommandDefin
     throw new Error(`Expected native command "${name}"`);
   }
   return command;
+}
+
+function requireNativeSpec(
+  specs: readonly { name: string; acceptsArgs?: boolean; descriptionLocalizations?: unknown }[],
+  name: string,
+) {
+  const spec = specs.find((candidate) => candidate.name === name);
+  if (!spec) {
+    throw new Error(`Expected native command spec "${name}"`);
+  }
+  return spec;
 }
 
 function requireCommandArg(
@@ -172,46 +214,41 @@ describe("commands registry", () => {
 
   it("exposes native specs", () => {
     const specs = listNativeCommandSpecs();
-    expect([...nativeNameSet(specs)]).toEqual(
-      expect.arrayContaining(["help", "stop", "skill", "tasks", "whoami", "compact"]),
-    );
+    expectSetContainsAll(nativeNameSet(specs), [
+      "help",
+      "stop",
+      "skill",
+      "tasks",
+      "whoami",
+      "compact",
+    ]);
   });
 
   it("exposes /side as a BTW text and native alias", () => {
-    const btw = listChatCommands().find((command) => command.key === "btw");
-    expect(btw).toMatchObject({
-      nativeName: "btw",
-      nativeAliases: ["side"],
-      textAliases: ["/btw", "/side"],
-    });
+    const btw = requireChatCommand("btw");
+    expect(btw.nativeName).toBe("btw");
+    expect(btw.nativeAliases).toEqual(["side"]);
+    expect(btw.textAliases).toEqual(["/btw", "/side"]);
     expect(normalizeCommandBody("/side what changed?")).toBe("/btw what changed?");
     expect(requireNativeCommand("side").key).toBe("btw");
-    expect(listNativeCommandSpecs().find((spec) => spec.name === "side")).toMatchObject({
-      acceptsArgs: true,
-    });
+    expect(requireNativeSpec(listNativeCommandSpecs(), "side").acceptsArgs).toBe(true);
   });
 
   it("filters commands based on config flags", () => {
     const disabled = listChatCommandsForConfig({
       commands: { config: false, plugins: false, debug: false },
     });
-    expect([...commandKeySet(disabled)]).not.toEqual(
-      expect.arrayContaining(["config", "plugins", "debug"]),
-    );
+    expectSetOmitsAll(commandKeySet(disabled), ["config", "plugins", "debug"]);
 
     const enabled = listChatCommandsForConfig({
       commands: { config: true, plugins: true, debug: true },
     });
-    expect([...commandKeySet(enabled)]).toEqual(
-      expect.arrayContaining(["config", "plugins", "debug"]),
-    );
+    expectSetContainsAll(commandKeySet(enabled), ["config", "plugins", "debug"]);
 
     const nativeDisabled = listNativeCommandSpecsForConfig({
       commands: { config: false, plugins: false, debug: false, native: true },
     });
-    expect([...nativeNameSet(nativeDisabled)]).not.toEqual(
-      expect.arrayContaining(["config", "plugins", "debug"]),
-    );
+    expectSetOmitsAll(nativeNameSet(nativeDisabled), ["config", "plugins", "debug"]);
   });
 
   it("does not enable restricted commands from inherited flags", () => {
@@ -224,9 +261,7 @@ describe("commands registry", () => {
     const commands = listChatCommandsForConfig({
       commands: inheritedCommands as never,
     });
-    expect([...commandKeySet(commands)]).not.toEqual(
-      expect.arrayContaining(["config", "plugins", "debug", "bash"]),
-    );
+    expectSetOmitsAll(commandKeySet(commands), ["config", "plugins", "debug", "bash"]);
   });
 
   it("appends skill commands when provided", () => {
@@ -244,16 +279,15 @@ describe("commands registry", () => {
       },
       { skillCommands },
     );
-    expect(commands.find((spec) => spec.nativeName === "demo_skill")).toMatchObject({
-      category: "tools",
-    });
+    const command = commands.find((spec) => spec.nativeName === "demo_skill");
+    expect(command?.category).toBe("tools");
 
     const native = listNativeCommandSpecsForConfig(
       { commands: { config: false, plugins: false, debug: false, native: true } },
       { skillCommands },
     );
-    expect(native.find((spec) => spec.name === "demo_skill")).toMatchObject({
-      descriptionLocalizations: { ko: "데모 스킬" },
+    expect(requireNativeSpec(native, "demo_skill").descriptionLocalizations).toEqual({
+      ko: "데모 스킬",
     });
   });
 
@@ -293,7 +327,7 @@ describe("commands registry", () => {
     const command = findCommandByNativeName("status", "discord", {
       includeBundledChannelFallback: false,
     });
-    expect(command).toMatchObject({ key: "status" });
+    expect(command?.key).toBe("status");
   });
 
   it("keeps discord native command specs within slash-command limits", () => {
@@ -371,13 +405,11 @@ describe("commands registry", () => {
 
   it("registers fast mode as a first-class options command", () => {
     const fast = requireChatCommand("fast");
-    expect(fast).toMatchObject({
-      nativeName: "fast",
-      textAliases: ["/fast"],
-      category: "options",
-    });
+    expect(fast.nativeName).toBe("fast");
+    expect(fast.textAliases).toEqual(["/fast"]);
+    expect(fast.category).toBe("options");
     const modeArg = requireCommandArg(fast, "mode");
-    expect(modeArg.choices).toEqual(["status", "on", "off"]);
+    expect(modeArg.choices).toEqual(["status", "on", "off", "default"]);
   });
 
   it("detects known text commands", () => {
@@ -440,6 +472,61 @@ describe("commands registry", () => {
         commandSource: "native",
       }),
     ).toBe(true);
+  });
+
+  it("refreshes dock commands when pinned-empty fallback active registry changes", () => {
+    const pinnedEmptyRegistry = createTestRegistry([]);
+    setActivePluginRegistry(pinnedEmptyRegistry);
+    pinActivePluginChannelRegistry(pinnedEmptyRegistry);
+
+    setActivePluginRegistry(createNativeCommandsRegistry("discord"));
+    const discordCommandKeys = commandKeySet(listChatCommands());
+    expect(discordCommandKeys.has("dock:discord")).toBe(true);
+    expect(discordCommandKeys.has("dock:slack")).toBe(false);
+
+    setActivePluginRegistry(createNativeCommandsRegistry("slack"));
+    const slackCommandKeys = commandKeySet(listChatCommands());
+    expect(slackCommandKeys.has("dock:discord")).toBe(false);
+    expect(slackCommandKeys.has("dock:slack")).toBe(true);
+  });
+
+  it("refreshes text-command gating when pinned-empty fallback active registry changes", () => {
+    const cfg = { commands: { text: false } };
+    const pinnedEmptyRegistry = createTestRegistry([]);
+    setActivePluginRegistry(pinnedEmptyRegistry);
+    pinActivePluginChannelRegistry(pinnedEmptyRegistry);
+
+    setActivePluginRegistry(createNativeCommandsRegistry("discord"));
+    expect(
+      shouldHandleTextCommands({
+        cfg,
+        surface: "discord",
+        commandSource: "text",
+      }),
+    ).toBe(false);
+    expect(
+      shouldHandleTextCommands({
+        cfg,
+        surface: "slack",
+        commandSource: "text",
+      }),
+    ).toBe(true);
+
+    setActivePluginRegistry(createNativeCommandsRegistry("slack"));
+    expect(
+      shouldHandleTextCommands({
+        cfg,
+        surface: "discord",
+        commandSource: "text",
+      }),
+    ).toBe(true);
+    expect(
+      shouldHandleTextCommands({
+        cfg,
+        surface: "slack",
+        commandSource: "text",
+      }),
+    ).toBe(false);
   });
 
   it("normalizes telegram-style command mentions for the current bot", () => {
@@ -505,7 +592,10 @@ describe("commands registry args", () => {
     };
 
     const args = parseCommandArgs(command, "set foo bar baz");
-    expect(args).toMatchObject({ values: { action: "set", path: "foo", value: "bar baz" } });
+    if (!args) {
+      throw new Error("Expected parsed command args");
+    }
+    expect(args.values).toEqual({ action: "set", path: "foo", value: "bar baz" });
   });
 
   it("serializes args via raw first, then values", () => {
@@ -606,8 +696,10 @@ describe("commands registry args", () => {
     const seenChoice = requireSeenChoice(seen);
     expect(seenChoice.commandKey).toBe("think");
     expect(seenChoice.argName).toBe("level");
-    expect(seenChoice.provider).toEqual(expect.stringMatching(/\S/));
-    expect(seenChoice.model).toEqual(expect.stringMatching(/\S/));
+    expect(typeof seenChoice.provider).toBe("string");
+    expect(seenChoice.provider?.trim().length).toBeGreaterThan(0);
+    expect(typeof seenChoice.model).toBe("string");
+    expect(seenChoice.model?.trim().length).toBeGreaterThan(0);
     expect(seenChoice.catalogLength).toBe(0);
   });
 
@@ -633,6 +725,7 @@ describe("commands registry args", () => {
 
     expect(menu.arg.name).toBe("level");
     expect(menu.choices.map((choice) => choice.value)).toEqual([
+      "default",
       "off",
       "low",
       "medium",
@@ -640,7 +733,7 @@ describe("commands registry args", () => {
       "max",
     ]);
     expect(formatCommandArgMenuTitle({ command, menu })).toBe(
-      "Choose level for /think.\nOptions: off, low, medium, high, max.",
+      "Choose level for /think.\nOptions: default, off, low, medium, high, max.",
     );
   });
 

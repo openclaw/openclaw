@@ -396,6 +396,71 @@ Successfully processed 1 files`;
         ],
         expected: { untrustedWorld: 1 },
       },
+      {
+        name: "Anonymous Logon SID (S-1-5-7) is world, not group",
+        entries: [
+          aclEntry({
+            principal: "*S-1-5-7",
+            rights: ["R"],
+            rawRights: "(R)",
+            canRead: true,
+            canWrite: false,
+          }),
+        ],
+        expected: { untrustedWorld: 1 },
+      },
+      {
+        name: "BUILTIN\\\\Guests SID (S-1-5-32-546) is world, not group",
+        entries: [
+          aclEntry({
+            principal: "*S-1-5-32-546",
+            rights: ["R"],
+            rawRights: "(R)",
+            canRead: true,
+            canWrite: false,
+          }),
+        ],
+        expected: { untrustedWorld: 1 },
+      },
+      {
+        name: "Interactive SID (S-1-5-4) is world, not group",
+        entries: [
+          aclEntry({
+            principal: "*S-1-5-4",
+            rights: ["R"],
+            rawRights: "(R)",
+            canRead: true,
+            canWrite: false,
+          }),
+        ],
+        expected: { untrustedWorld: 1 },
+      },
+      {
+        name: "Local SID (S-1-2-0) is world, not group",
+        entries: [
+          aclEntry({
+            principal: "*S-1-2-0",
+            rights: ["R"],
+            rawRights: "(R)",
+            canRead: true,
+            canWrite: false,
+          }),
+        ],
+        expected: { untrustedWorld: 1 },
+      },
+      {
+        name: "Network SID (S-1-5-2) is world, not group",
+        entries: [
+          aclEntry({
+            principal: "*S-1-5-2",
+            rights: ["R"],
+            rawRights: "(R)",
+            canRead: true,
+            canWrite: false,
+          }),
+        ],
+        expected: { untrustedWorld: 1 },
+      },
     ] as const)("$name", ({ entries, env, expected }) => {
       expectSummaryCounts(entries, expected, env);
     });
@@ -767,10 +832,16 @@ Successfully processed 1 files`;
         isDir: false,
         env,
       });
-      expect(result).toMatchObject({
-        command: DEFAULT_ICACLS,
-        args: expect.arrayContaining(["C:\\test\\file.txt", "/inheritance:r"]),
-      });
+      const command = expectIcaclsResetCommand(result);
+      expect(command.command).toBe(DEFAULT_ICACLS);
+      expect(command.args).toStrictEqual([
+        "C:\\test\\file.txt",
+        "/inheritance:r",
+        "/grant:r",
+        "WORKGROUP\\TestUser:F",
+        "/grant:r",
+        "*S-1-5-18:F",
+      ]);
     });
 
     it("uses a validated SystemRoot for the structured command executable", () => {
@@ -791,10 +862,16 @@ Successfully processed 1 files`;
         userInfo: mockUserInfo,
       });
       // Should return a valid command using the system username
-      expect(result).toMatchObject({
-        command: DEFAULT_ICACLS,
-        args: expect.arrayContaining([`${MOCK_USERNAME}:F`]),
-      });
+      const command = expectIcaclsResetCommand(result);
+      expect(command.command).toBe(DEFAULT_ICACLS);
+      expect(command.args).toStrictEqual([
+        "C:\\test\\file.txt",
+        "/inheritance:r",
+        "/grant:r",
+        `${MOCK_USERNAME}:F`,
+        "/grant:r",
+        "*S-1-5-18:F",
+      ]);
     });
 
     it("includes display string matching formatIcaclsResetCommand", () => {

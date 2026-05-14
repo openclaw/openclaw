@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { Readable } from "node:stream";
 import JSZip from "jszip";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import sharp from "sharp";
@@ -37,7 +38,14 @@ describe("media store", () => {
   }
 
   async function expectPathMissing(targetPath: string): Promise<void> {
-    await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+    let statError: unknown;
+    try {
+      await fs.stat(targetPath);
+    } catch (error) {
+      statError = error;
+    }
+    expect(statError).toBeInstanceOf(Error);
+    expect((statError as NodeJS.ErrnoException).code).toBe("ENOENT");
   }
 
   async function expectOriginalFilenameCase(params: {
@@ -134,9 +142,14 @@ describe("media store", () => {
       );
       await withTempStore(async (_store) => {
         const mediaDir = await storeWithMock.ensureMediaDir();
-        await expect(
-          storeWithMock.saveMediaBuffer(Buffer.from("voice"), "audio/ogg", "failed-buffer"),
-        ).rejects.toMatchObject({ code: "ENOSPC" });
+        let saveError: unknown;
+        try {
+          await storeWithMock.saveMediaBuffer(Buffer.from("voice"), "audio/ogg", "failed-buffer");
+        } catch (error) {
+          saveError = error;
+        }
+        expect(saveError).toBeInstanceOf(Error);
+        expect((saveError as NodeJS.ErrnoException).code).toBe("ENOSPC");
 
         const failedDir = path.join(mediaDir, "failed-buffer");
         const entries = await fs.readdir(failedDir).catch(() => []);
@@ -260,12 +273,21 @@ describe("media store", () => {
         params.setupSource !== undefined
           ? await params.setupSource(home)
           : path.join(home, params.relativeSourcePath ?? "");
-      const rejection = expect(store.saveMediaSource(sourcePath)).rejects;
       if (typeof params.expectedError === "string") {
+        const rejection = expect(store.saveMediaSource(sourcePath)).rejects;
         await rejection.toThrow(params.expectedError);
         return;
       }
-      await rejection.toMatchObject(params.expectedError);
+      let sourceError: unknown;
+      try {
+        await store.saveMediaSource(sourcePath);
+      } catch (error) {
+        sourceError = error;
+      }
+      expect(sourceError).toBeInstanceOf(Error);
+      for (const [key, value] of Object.entries(params.expectedError)) {
+        expect((sourceError as Record<string, unknown>)[key]).toStrictEqual(value);
+      }
     });
   }
 
@@ -382,6 +404,83 @@ describe("media store", () => {
       name: "does not leave final media artifacts when buffer writes fail",
       run: async () => {
         await expectFailedBufferWriteCase();
+      },
+    },
+    {
+      name: "saves streams with detected extension without buffering first",
+      run: async () => {
+        await withTempStore(async (store) => {
+          const saved = await store.saveMediaStream(
+            Readable.from([Buffer.from([0xff, 0xd8, 0xff, 0x00])]),
+            undefined,
+            "stream-inbound",
+            1024,
+            "photo.bin",
+          );
+
+          expect(saved.id).toMatch(/^photo---[a-f0-9-]{36}\.jpg$/);
+          expect(saved.size).toBe(4);
+          expect(saved.contentType).toBe("image/jpeg");
+          await expect(fs.readFile(saved.path)).resolves.toEqual(
+            Buffer.from([0xff, 0xd8, 0xff, 0x00]),
+          );
+        });
+      },
+    },
+    {
+      name: "uses original filename to detect generic stream content type",
+      run: async () => {
+        await withTempStore(async (store) => {
+          const saved = await store.saveMediaStream(
+            Readable.from([Buffer.from("name,value\none,1\n")]),
+            "application/octet-stream",
+            "stream-inbound",
+            1024,
+            "report.csv",
+          );
+
+          expect(saved.id).toMatch(/^report---[a-f0-9-]{36}\.csv$/);
+          expect(saved.contentType).toBe("text/csv");
+        });
+      },
+    },
+    {
+      name: "prefers detected stream mime over generic zip header extension",
+      run: async () => {
+        await withTempStore(async (store) => {
+          const saved = await store.saveMediaStream(
+            Readable.from([Buffer.from("docx")]),
+            "application/zip",
+            "stream-inbound",
+            1024,
+            undefined,
+            "document.docx",
+          );
+
+          expect(saved.id).toMatch(/^[a-f0-9-]{36}\.docx$/);
+          expect(saved.contentType).toBe(
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          );
+        });
+      },
+    },
+    {
+      name: "rejects oversized streams before writing a final artifact",
+      run: async () => {
+        await withTempStore(async (store, home) => {
+          await expect(
+            store.saveMediaStream(
+              Readable.from([Buffer.alloc(4), Buffer.alloc(4)]),
+              "application/octet-stream",
+              "oversized-stream",
+              7,
+            ),
+          ).rejects.toThrow("Media exceeds 0MB limit");
+
+          const targetDir = path.join(home, ".openclaw", "media", "oversized-stream");
+          const entries = await fs.readdir(targetDir).catch(() => []);
+          expect(entries).toStrictEqual([]);
+        });
       },
     },
     {
@@ -556,6 +655,14 @@ describe("media store", () => {
       expectedExtension: ".jpg",
     },
     {
+      name: "uses original filename to detect generic buffer content type",
+      buffer: Buffer.from("name,value\none,1\n"),
+      contentType: "application/octet-stream",
+      originalFilename: "report.csv",
+      expectedContentType: "text/csv",
+      expectedExtension: ".csv",
+    },
+    {
       name: "preserves original extension for generic file buffers",
       buffer: Buffer.from("custom binary"),
       contentType: "application/octet-stream",
@@ -577,7 +684,13 @@ describe("media store", () => {
       ...("originalFilename" in testCase
         ? {
             assertSaved: async (saved: Awaited<ReturnType<typeof store.saveMediaBuffer>>) => {
-              expect(path.basename(saved.path)).toMatch(/^report---.+\.custom$/);
+              const escapedExtension = testCase.expectedExtension.replace(
+                /[.*+?^${}()|[\]\\]/g,
+                "\\$&",
+              );
+              expect(path.basename(saved.path)).toMatch(
+                new RegExp(`^report---.+${escapedExtension}$`),
+              );
             },
           }
         : {}),
@@ -828,6 +941,18 @@ describe("media store", () => {
         filename: "报告_2024---a1b2c3d4-e5f6-7890-abcd-ef1234567890.pdf",
         expected: "报告_2024.pdf",
         basePath: "/media",
+      },
+      {
+        name: "extracts from Windows paths on non-Windows hosts",
+        filename: "report---a1b2c3d4-e5f6-7890-abcd-ef1234567890.pdf",
+        expected: "report.pdf",
+        basePath: String.raw`C:\media\inbound`,
+      },
+      {
+        name: "extracts from mixed-separator paths",
+        filename: "photo---a1b2c3d4-e5f6-7890-abcd-ef1234567890.png",
+        expected: "photo.png",
+        basePath: String.raw`C:\media/inbound`,
       },
     ] as const)("$name", async ({ filename, expected, basePath }) => {
       await expectOriginalFilenameCase({ filename, expected, basePath });
