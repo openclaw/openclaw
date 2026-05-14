@@ -83,17 +83,6 @@ and `text-runtime` remain package exports only for backwards compatibility; use
 focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
 `text-chunking`, `text-utility-runtime`, and `logging-core` instead.
 
-### Reserved bundled plugin helper subpaths
-
-These subpaths are package exports for their owning bundled plugins, not generic
-plugin authoring APIs. Cross-owner extension imports are blocked by package
-contract guardrails.
-
-| Subpath                                | Owner | Key exports                                                      |
-| -------------------------------------- | ----- | ---------------------------------------------------------------- |
-| `plugin-sdk/codex-mcp-projection`      | Codex | Codex user MCP server projection for bundled Codex thread setup  |
-| `plugin-sdk/codex-native-task-runtime` | Codex | Native subagent task mirror helpers for the bundled Codex plugin |
-
 <AccordionGroup>
   <Accordion title="Channel subpaths">
     | Subpath | Key exports |
