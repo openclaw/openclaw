@@ -188,6 +188,45 @@ function buildFallbackStateMismatchError(details: ConnectPairingRequiredDetails)
   );
 }
 
+async function buildStaleApproveRequestIdError(
+  _opts: DevicesRpcOpts,
+  staleRequestId: string,
+): Promise<Error> {
+  const lines = [
+    `Pairing requestId "${staleRequestId}" is not in the local pending state.`,
+    "It may have been superseded by a fresh request during the gateway dial, expired (5-minute TTL), or never been created in this profile.",
+  ];
+  try {
+    const list = await listDevicePairing();
+    const otherPending = (list.pending ?? []).filter(
+      (entry) => normalizeOptionalString(entry.requestId) && entry.requestId !== staleRequestId,
+    );
+    // The freshest pending entry is not necessarily the replacement for the
+    // stale id — TTL prune or profile/state mismatch can leave an unrelated
+    // request as the only visible one, and a multi-device profile can mix
+    // requests from agents the operator did not type the command for. Always
+    // route the operator through `openclaw devices list` so they can verify
+    // the deviceId and scopes before approving anything, instead of printing
+    // a direct rerun the operator might copy uncritically.
+    if (otherPending.length === 0) {
+      lines.push(
+        "No other pending requests are visible in this profile. List pending requests with: openclaw devices list",
+      );
+    } else {
+      const count = otherPending.length;
+      const label = count === 1 ? "request is" : "requests are";
+      lines.push(
+        `${count} other pending ${label} visible in this profile. Inspect device id and requested scopes before approving:`,
+        "  openclaw devices list",
+      );
+    }
+  } catch {
+    // diagnostic-only — never replace the primary failure mode with a
+    // local-state read error
+  }
+  return new Error(lines.join("\n"));
+}
+
 function assertLocalFallbackMatchesGatewayRequest(
   details: ConnectPairingRequiredDetails,
   list: DevicePairingList,
@@ -318,7 +357,17 @@ async function approvePairingWithFallback(
       if (gatewayRequestId && gatewayRequestId === requestId) {
         throw buildFallbackStateMismatchError(fallback.details);
       }
-      return null;
+      // The user-supplied requestId is not in local pending state and the
+      // gateway error did not surface a distinct alternative. The most common
+      // cause is supersession: the gateway dial just replaced the pending
+      // entry (`reconcilePendingPairingRequests` builds a fresh requestId
+      // when the incoming scope set diverges from the stored one — see
+      // `src/infra/device-pairing.ts:533-570`). Other causes are the 5-minute
+      // TTL prune (`PENDING_TTL_MS` in device-pairing.ts:132) or invoking
+      // approve under a different profile/state-dir. Surface the current
+      // local pending state so the operator has actionable diagnosis
+      // instead of the bare "unknown requestId" emitted by the caller.
+      throw await buildStaleApproveRequestIdError(opts, requestId);
     }
     if (approved.status === "forbidden") {
       throw new Error(formatDevicePairingForbiddenMessage(approved), { cause: error });
