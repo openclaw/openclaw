@@ -140,7 +140,7 @@ function sourceAppCacheKey(fixture: { codexHome: string }): string {
       start: {
         transport: "stdio",
         command: "codex",
-        commandSource: "config",
+        commandSource: "managed",
         args: ["app-server", "--listen", "stdio://"],
         headers: {},
         env: {
@@ -241,6 +241,14 @@ describe("buildCodexMigrationProvider", () => {
     expectRecordFields(mockCallArg(appServerRequest), {
       method: "plugin/list",
       requestParams: { cwds: [] },
+    });
+    expectRecordFields((mockCallArg(appServerRequest) as { startOptions?: unknown }).startOptions, {
+      command: "codex",
+      commandSource: "managed",
+      env: {
+        CODEX_HOME: fixture.codexHome,
+        HOME: path.dirname(fixture.codexHome),
+      },
     });
     expect(
       appServerRequest.mock.calls.some(
