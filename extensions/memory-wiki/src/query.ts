@@ -1244,6 +1244,9 @@ function filterSessionKeysByScopedAgent(params: {
     return params.keys;
   }
   return params.keys.filter((key) => {
+    if (params.cfg.session?.scope === "global" && key.trim().toLowerCase() === "global") {
+      return true;
+    }
     const ownerAgentId = resolveSessionAgentId({
       sessionKey: key,
       config: params.cfg,

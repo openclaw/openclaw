@@ -2,7 +2,7 @@ import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { getAgentRunContext, registerAgentRunContext } from "../infra/agent-events.js";
+import { getAgentRunContext } from "../infra/agent-events.js";
 import {
   normalizeAgentId,
   parseAgentSessionKey,
@@ -69,13 +69,16 @@ function resolveRunSessionKeyForCaller(storeKey: string) {
 
 export function resolveSessionKeyForRun(runId: string, opts: { agentId?: string } = {}) {
   const cfg = getRuntimeConfig();
-  const requestedAgentId = normalizeAgentId(
+  const explicitAgentId =
     typeof opts.agentId === "string" && opts.agentId.trim()
-      ? opts.agentId
-      : resolveDefaultAgentId(cfg),
-  );
-  const cacheAgentId = requestedAgentId;
+      ? normalizeAgentId(opts.agentId)
+      : undefined;
   const cached = getAgentRunContext(runId)?.sessionKey;
+  if (!explicitAgentId && cached) {
+    return cached;
+  }
+  const requestedAgentId = explicitAgentId ?? normalizeAgentId(resolveDefaultAgentId(cfg));
+  const cacheAgentId = requestedAgentId;
   if (cached && sessionKeyMatchesAgent(cached, requestedAgentId, cfg)) {
     const sessionKey = resolveRunSessionKeyForCaller(cached);
     setResolvedSessionKeyCache(runId, cacheAgentId, sessionKey);
@@ -100,9 +103,6 @@ export function resolveSessionKeyForRun(runId: string, opts: { agentId?: string 
   const storeKey = resolvePreferredSessionKeyForSessionIdMatches(matches, runId);
   if (storeKey) {
     const sessionKey = resolveRunSessionKeyForCaller(storeKey);
-    if (!cached) {
-      registerAgentRunContext(runId, { sessionKey: storeKey });
-    }
     setResolvedSessionKeyCache(runId, cacheAgentId, sessionKey);
     return sessionKey;
   }

@@ -884,6 +884,65 @@ describe("searchMemoryWiki", () => {
     ]);
   });
 
+  it("keeps gateway-style global session memory hits for non-default agents", async () => {
+    const { config } = await createQueryVault({
+      initialize: true,
+      config: {
+        search: { backend: "shared", corpus: "memory" },
+      },
+    });
+    const appConfig = {
+      session: { scope: "global" },
+      agents: {
+        list: [{ id: "main", default: true }, { id: "secondary" }],
+      },
+    } as OpenClawConfig;
+    loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+      storePath: "(test)",
+      store: {
+        global: {
+          sessionId: "visible-session",
+          updatedAt: 1,
+          sessionFile: "/tmp/openclaw/visible-session.jsonl",
+        },
+      },
+    });
+    const manager = createMemoryManager({
+      searchResults: [
+        {
+          path: "sessions/visible-session.jsonl",
+          startLine: 1,
+          endLine: 2,
+          score: 30,
+          snippet: "global transcript",
+          source: "sessions",
+        },
+        {
+          path: "MEMORY.md",
+          startLine: 5,
+          endLine: 6,
+          score: 10,
+          snippet: "durable memory",
+          source: "memory",
+        },
+      ],
+    });
+    getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
+
+    const results = await searchMemoryWiki({
+      config,
+      appConfig,
+      agentId: "secondary",
+      query: "transcript",
+      maxResults: 10,
+    });
+
+    expect(results.map((result) => result.path)).toEqual([
+      "sessions/visible-session.jsonl",
+      "MEMORY.md",
+    ]);
+  });
+
   it("drops gateway-style session memory hits when shared store keys belong to another agent", async () => {
     const { config } = await createQueryVault({
       initialize: true,

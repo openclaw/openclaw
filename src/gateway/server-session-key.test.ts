@@ -204,19 +204,12 @@ describe("resolveSessionKeyForRun", () => {
     expect(hoisted.loadCombinedSessionStoreForGatewayMock).not.toHaveBeenCalled();
   });
 
-  it("does not use non-default active run contexts without an explicit agent scope", () => {
+  it("uses non-default active run contexts without an explicit agent scope", () => {
     hoisted.loadConfigMock.mockReturnValue({});
-    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
-      storePath: "(multiple)",
-      store: {},
-    });
     registerAgentRunContext("run-live-work", { sessionKey: "agent:work:main" });
 
-    expect(resolveSessionKeyForRun("run-live-work")).toBeUndefined();
-    expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledWith(
-      {},
-      { agentId: "main" },
-    );
+    expect(resolveSessionKeyForRun("run-live-work")).toBe("agent:work:main");
+    expect(hoisted.loadCombinedSessionStoreForGatewayMock).not.toHaveBeenCalled();
   });
 
   it("uses legacy store entries for the configured default agent", () => {
@@ -247,7 +240,7 @@ describe("resolveSessionKeyForRun", () => {
     expect(resolveSessionKeyForRun("run-race")).toBeUndefined();
     registerAgentRunContext("run-race", { sessionKey: "agent:main:main" });
 
-    expect(resolveSessionKeyForRun("run-race")).toBe("main");
+    expect(resolveSessionKeyForRun("run-race")).toBe("agent:main:main");
     expect(hoisted.loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledTimes(1);
   });
 

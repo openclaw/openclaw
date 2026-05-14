@@ -16,6 +16,10 @@ function normalizeAgentIdForCompare(value: string | undefined): string | undefin
   return value?.trim().toLowerCase() || undefined;
 }
 
+function isGlobalSessionKeyForSharedScope(cfg: OpenClawConfig, key: string): boolean {
+  return cfg.session?.scope === "global" && key.trim().toLowerCase() === "global";
+}
+
 function filterSessionKeysByScopedAgent(params: {
   cfg: OpenClawConfig;
   keys: string[];
@@ -26,6 +30,9 @@ function filterSessionKeysByScopedAgent(params: {
     return params.keys;
   }
   return params.keys.filter((key) => {
+    if (isGlobalSessionKeyForSharedScope(params.cfg, key)) {
+      return true;
+    }
     const ownerAgentId = resolveSessionAgentId({
       sessionKey: key,
       config: params.cfg,

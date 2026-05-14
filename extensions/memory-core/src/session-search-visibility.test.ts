@@ -142,6 +142,39 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
     expect(filtered).toEqual([hit]);
   });
 
+  it("keeps global-scope session hits for non-default agents", async () => {
+    combinedSessionStore = {
+      global: {
+        sessionId: "w1",
+        updatedAt: 1,
+        sessionFile: "/tmp/sessions/w1.jsonl",
+      },
+    };
+    const hit: MemorySearchResult = {
+      path: "sessions/w1.jsonl",
+      source: "sessions",
+      score: 1,
+      snippet: "x",
+      startLine: 1,
+      endLine: 2,
+    };
+    const cfg = asOpenClawConfig({
+      session: { scope: "global" },
+      tools: {
+        sessions: { visibility: "all" },
+        agentToAgent: { enabled: true, allow: ["*"] },
+      },
+    });
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg,
+      agentId: "secondary",
+      requesterSessionKey: "agent:secondary:main",
+      sandboxed: false,
+      hits: [hit],
+    });
+    expect(filtered).toEqual([hit]);
+  });
+
   it("does not keep cross-agent session hits outside the scoped store", async () => {
     combinedSessionStore = {};
     const hit: MemorySearchResult = {
