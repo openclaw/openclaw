@@ -372,7 +372,7 @@ function canUseManifestChannelPlugin(record: PluginManifestRecord, channelId: st
   // Allow channels without channelConfigs to be visible for backward compatibility
   // This fixes issue where third-party channel plugins that declare channels
   // but lack channelConfigs metadata were silently hidden from UI and CLI
-  if (record.channels.includes(channelId)) {
+  if (record.channels && record.channels.includes(channelId)) {
     return true;
   }
   return record.channelCatalogMeta?.id === channelId;
