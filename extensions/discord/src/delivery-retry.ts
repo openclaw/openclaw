@@ -12,6 +12,9 @@ const DISCORD_DELIVERY_RETRY_DEFAULTS = {
   minDelayMs: 1000,
   maxDelayMs: 30_000,
   jitter: 0,
+  // A hung Discord delivery call would otherwise pin retryAsync forever.
+  // 30s converts the hang into a real timeout the runner can surface.
+  perCallTimeoutMs: 30_000,
 } satisfies Required<RetryConfig>;
 
 export function isRetryableDiscordDeliveryError(err: unknown): boolean {

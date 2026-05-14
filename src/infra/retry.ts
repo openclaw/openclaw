@@ -7,6 +7,15 @@ export type RetryConfig = {
   minDelayMs?: number;
   maxDelayMs?: number;
   jitter?: number;
+  /**
+   * Per-attempt timeout in milliseconds. When > 0, each call to `fn()` is
+   * raced against this timeout and rejects with a timeout error if it does
+   * not settle in time. `0` (the default) disables the per-call timeout and
+   * preserves the legacy behavior of awaiting `fn()` indefinitely. The
+   * orphaned in-flight call is not cancelled — callers that need true
+   * cancellation must wire an AbortController through `fn`.
+   */
+  perCallTimeoutMs?: number;
 };
 
 export type RetryInfo = {
@@ -29,6 +38,7 @@ const DEFAULT_RETRY_CONFIG = {
   minDelayMs: 300,
   maxDelayMs: 30_000,
   jitter: 0,
+  perCallTimeoutMs: 0,
 };
 
 const clampNumber = (value: unknown, fallback: number, min?: number, max?: number) => {
@@ -55,7 +65,11 @@ export function resolveRetryConfig(
     Math.round(clampNumber(overrides?.maxDelayMs, defaults.maxDelayMs, 0)),
   );
   const jitter = clampNumber(overrides?.jitter, defaults.jitter, 0, 1);
-  return { attempts, minDelayMs, maxDelayMs, jitter };
+  const perCallTimeoutMs = Math.max(
+    0,
+    Math.round(clampNumber(overrides?.perCallTimeoutMs, defaults.perCallTimeoutMs, 0)),
+  );
+  return { attempts, minDelayMs, maxDelayMs, jitter, perCallTimeoutMs };
 }
 
 type JitterMode = "symmetric" | "positive";
@@ -80,6 +94,35 @@ function applyJitter(delayMs: number, jitter: number, mode: JitterMode = "symmet
   // positive branch exists to enforce. Symmetric has no floor contract so
   // it stays on `Math.round`.
   return Math.max(0, mode === "positive" ? Math.ceil(raw) : Math.round(raw));
+}
+
+async function runWithPerCallTimeout<T>(
+  fn: () => Promise<T>,
+  timeoutMs: number,
+  label?: string,
+): Promise<T> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return fn();
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      const labelText = label ? ` (label=${label})` : "";
+      reject(new Error(`Request timeout after ${timeoutMs}ms${labelText}`));
+    }, timeoutMs);
+    // The timer should not keep the Node event loop alive on its own.
+    const maybeUnref = (timer as { unref?: () => void }).unref;
+    if (typeof maybeUnref === "function") {
+      maybeUnref.call(timer);
+    }
+  });
+  try {
+    return await Promise.race([fn(), timeoutPromise]);
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
 }
 
 export async function retryAsync<T>(
@@ -115,12 +158,13 @@ export async function retryAsync<T>(
       ? resolved.maxDelayMs
       : Number.POSITIVE_INFINITY;
   const jitter = resolved.jitter;
+  const perCallTimeoutMs = resolved.perCallTimeoutMs;
   const shouldRetry = options.shouldRetry ?? (() => true);
   let lastErr: unknown;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      return await fn();
+      return await runWithPerCallTimeout(fn, perCallTimeoutMs, options.label);
     } catch (err) {
       lastErr = err;
       if (attempt >= maxAttempts || !shouldRetry(err, attempt)) {

@@ -16,6 +16,9 @@ const DISCORD_RETRY_DEFAULTS = {
   minDelayMs: 500,
   maxDelayMs: 30_000,
   jitter: 0.1,
+  // A hung Discord REST call would otherwise pin the retry runner forever
+  // — same failure mode as the Telegram bug fixed alongside this default.
+  perCallTimeoutMs: 30_000,
 } satisfies RetryConfig;
 
 const DISCORD_RETRYABLE_STATUS_CODES = new Set([408, 429]);

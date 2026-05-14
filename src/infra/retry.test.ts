@@ -214,6 +214,90 @@ describe("retryAsync", () => {
     expect(delays[0]).toBe(expectedDelay);
   });
 
+  it("rejects with a timeout error when fn hangs past perCallTimeoutMs", async () => {
+    vi.useFakeTimers();
+    try {
+      const fn = vi.fn<() => Promise<unknown>>(() => new Promise(() => {}));
+      const promise = retryAsync(fn, {
+        attempts: 1,
+        minDelayMs: 0,
+        maxDelayMs: 0,
+        jitter: 0,
+        perCallTimeoutMs: 1_000,
+        label: "deleteMessage",
+      });
+      const settled = promise.then(
+        (value) => ({ ok: true as const, value }),
+        (error) => ({ ok: false as const, error }),
+      );
+      await vi.advanceTimersByTimeAsync(1_010);
+      const result = await settled;
+      expect(result.ok).toBe(false);
+      const error = (result as { ok: false; error: unknown }).error;
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toMatch(/timeout/i);
+      expect((error as Error).message).toContain("1000ms");
+      expect((error as Error).message).toContain("label=deleteMessage");
+      expect(fn).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries a hanging call when shouldRetry matches the timeout error", async () => {
+    vi.useFakeTimers();
+    try {
+      let calls = 0;
+      const fn = vi.fn<() => Promise<string>>(() => {
+        calls += 1;
+        if (calls === 1) {
+          return new Promise<string>(() => {});
+        }
+        return Promise.resolve("ok");
+      });
+      const promise = retryAsync(fn, {
+        attempts: 2,
+        minDelayMs: 0,
+        maxDelayMs: 0,
+        jitter: 0,
+        perCallTimeoutMs: 500,
+        shouldRetry: (err) => /timeout/i.test((err as Error)?.message ?? ""),
+      });
+      await vi.runAllTimersAsync();
+      await expect(promise).resolves.toBe("ok");
+      expect(fn).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not impose a timeout when perCallTimeoutMs is zero", async () => {
+    vi.useFakeTimers();
+    try {
+      const fn = vi.fn<() => Promise<string>>().mockImplementationOnce(
+        () =>
+          new Promise<string>((resolve) => {
+            setTimeout(() => resolve("late"), 5_000);
+          }),
+      );
+      const promise = retryAsync(fn, {
+        attempts: 1,
+        minDelayMs: 0,
+        maxDelayMs: 0,
+        jitter: 0,
+        perCallTimeoutMs: 0,
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+      await expect(promise).resolves.toBe("late");
+      expect(fn).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
   it("uses secure jitter when configured", async () => {
     vi.useFakeTimers();
     randomMocks.generateSecureFraction.mockReturnValue(1);
@@ -244,12 +328,24 @@ describe("resolveRetryConfig", () => {
     {
       name: "rounds attempts and delays",
       overrides: { attempts: 2.6, minDelayMs: 10.4, maxDelayMs: 99.8, jitter: 0.4 },
-      expected: { attempts: 3, minDelayMs: 10, maxDelayMs: 100, jitter: 0.4 },
+      expected: {
+        attempts: 3,
+        minDelayMs: 10,
+        maxDelayMs: 100,
+        jitter: 0.4,
+        perCallTimeoutMs: 0,
+      },
     },
     {
       name: "clamps attempts to at least one and maxDelayMs to minDelayMs",
       overrides: { attempts: 0, minDelayMs: 250, maxDelayMs: 100, jitter: -1 },
-      expected: { attempts: 1, minDelayMs: 250, maxDelayMs: 250, jitter: 0 },
+      expected: {
+        attempts: 1,
+        minDelayMs: 250,
+        maxDelayMs: 250,
+        jitter: 0,
+        perCallTimeoutMs: 0,
+      },
     },
     {
       name: "falls back for non-finite overrides and caps jitter at one",
@@ -259,7 +355,35 @@ describe("resolveRetryConfig", () => {
         maxDelayMs: Number.NaN,
         jitter: 2,
       },
-      expected: { attempts: 3, minDelayMs: 300, maxDelayMs: 30000, jitter: 1 },
+      expected: {
+        attempts: 3,
+        minDelayMs: 300,
+        maxDelayMs: 30000,
+        jitter: 1,
+        perCallTimeoutMs: 0,
+      },
+    },
+    {
+      name: "rounds and clamps perCallTimeoutMs to a non-negative integer",
+      overrides: { perCallTimeoutMs: -50 },
+      expected: {
+        attempts: 3,
+        minDelayMs: 300,
+        maxDelayMs: 30000,
+        jitter: 0,
+        perCallTimeoutMs: 0,
+      },
+    },
+    {
+      name: "preserves a finite perCallTimeoutMs override",
+      overrides: { perCallTimeoutMs: 12_345.7 },
+      expected: {
+        attempts: 3,
+        minDelayMs: 300,
+        maxDelayMs: 30000,
+        jitter: 0,
+        perCallTimeoutMs: 12346,
+      },
     },
   ])("$name", ({ overrides, expected }) => {
     expect(resolveRetryConfig(undefined, overrides)).toEqual(expected);

@@ -9,6 +9,12 @@ export const CHANNEL_API_RETRY_DEFAULTS = {
   minDelayMs: 400,
   maxDelayMs: 30_000,
   jitter: 0.1,
+  // Without a per-call ceiling, a hung upstream HTTP call (e.g. a grammY
+  // bot.api.* request that never resolves) wedges the whole retry runner
+  // and the surrounding CLI invocation forever. 30s converts the hang into
+  // a real timeout error; the default shouldRetry regex matches "timeout"
+  // so the runner naturally retries before giving up.
+  perCallTimeoutMs: 30_000,
 };
 
 const CHANNEL_API_RETRY_RE = /429|timeout|connect|reset|closed|unavailable|temporarily/i;

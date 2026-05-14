@@ -12,6 +12,9 @@ const DISCORD_API_RETRY_DEFAULTS = {
   minDelayMs: 500,
   maxDelayMs: 5 * 60_000,
   jitter: 0.1,
+  // A hung Discord REST call would otherwise pin retryAsync forever. 30s
+  // converts the hang into a real timeout the runner can retry/surface.
+  perCallTimeoutMs: 30_000,
 };
 const DISCORD_API_429_FALLBACK_RETRY_AFTER_SECONDS = 60;
 
