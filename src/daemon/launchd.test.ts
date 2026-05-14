@@ -28,6 +28,8 @@ const state = vi.hoisted(() => ({
   printFailuresRemaining: 0,
   bootstrapError: "",
   bootstrapCode: 1,
+  bootstrapFailuresRemaining: Number.POSITIVE_INFINITY,
+  bootstrapResults: [] as Array<{ stderr: string; code: number }>,
   kickstartError: "",
   kickstartCode: 1,
   kickstartFailuresRemaining: 0,
@@ -187,7 +189,12 @@ vi.mock("./exec-file.js", () => ({
       return { stdout: "", stderr: "", code: 0 };
     }
     if (call[0] === "bootstrap") {
-      if (state.bootstrapError) {
+      const queued = state.bootstrapResults.shift();
+      if (queued) {
+        return { stdout: "", stderr: queued.stderr, code: queued.code };
+      }
+      if (state.bootstrapError && state.bootstrapFailuresRemaining > 0) {
+        state.bootstrapFailuresRemaining -= 1;
         return { stdout: "", stderr: state.bootstrapError, code: state.bootstrapCode };
       }
       state.serviceLoaded = true;
@@ -288,6 +295,8 @@ beforeEach(() => {
   state.printFailuresRemaining = 0;
   state.bootstrapError = "";
   state.bootstrapCode = 1;
+  state.bootstrapFailuresRemaining = Number.POSITIVE_INFINITY;
+  state.bootstrapResults.length = 0;
   state.kickstartError = "";
   state.kickstartCode = 1;
   state.kickstartFailuresRemaining = 0;
@@ -509,6 +518,46 @@ describe("launchd install", () => {
       (c) => c[0] === "kickstart" && c[2] === serviceId,
     );
     expect(installKickstartIndex).toBe(-1);
+  });
+
+  it("retries bootstrap once after booting out an already-registered LaunchAgent", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.bootstrapError =
+      "Could not bootstrap service: 5: Input/output error: already exists in domain for gui/501";
+    state.bootstrapCode = 5;
+    state.bootstrapFailuresRemaining = 1;
+
+    await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+    });
+
+    const { domain, serviceId } = expectLaunchctlEnableBootstrapOrder(env);
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    expect(state.launchctlCalls).toContainEqual(["bootout", domain, plistPath]);
+    expect(state.launchctlCalls).toContainEqual(["bootout", serviceId]);
+    expect(countMatching(state.launchctlCalls, (call) => call[0] === "bootstrap")).toBe(2);
+  });
+
+  it("reports the retry bootstrap error when already-registered recovery fails differently", async () => {
+    const env = createDefaultLaunchdEnv();
+    state.bootstrapResults.push(
+      {
+        stderr:
+          "Could not bootstrap service: 5: Input/output error: already exists in domain for gui/501",
+        code: 5,
+      },
+      { stderr: "Bootstrap failed: 125: Domain does not support specified action", code: 125 },
+    );
+
+    await expect(
+      installLaunchAgent({
+        env,
+        stdout: new PassThrough(),
+        programArguments: defaultProgramArguments,
+      }),
+    ).rejects.toThrow("launchctl bootstrap failed: Bootstrap failed: 125");
   });
 
   it("writes LaunchAgent environment to an owner-only env file when provided", async () => {

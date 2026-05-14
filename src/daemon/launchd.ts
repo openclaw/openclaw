@@ -315,6 +315,25 @@ async function bootstrapLaunchAgentOrThrow(params: {
       actionHint: params.actionHint,
     });
   }
+  if (isAlreadyBootstrappedDetail(detail, boot.code)) {
+    const bootout = await execLaunchctl(["bootout", params.serviceTarget]);
+    if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
+      throw new Error(`launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`);
+    }
+    const retry = await execLaunchctl(["bootstrap", params.domain, params.plistPath]);
+    if (retry.code === 0) {
+      return;
+    }
+    const retryDetail = (retry.stderr || retry.stdout).trim();
+    if (isUnsupportedGuiDomain(retryDetail)) {
+      throwBootstrapGuiSessionError({
+        detail: retryDetail,
+        domain: params.domain,
+        actionHint: params.actionHint,
+      });
+    }
+    throw new Error(`launchctl bootstrap failed: ${retryDetail}`);
+  }
   throw new Error(`launchctl bootstrap failed: ${detail}`);
 }
 
@@ -526,6 +545,16 @@ function isUnsupportedGuiDomain(detail: string): boolean {
   return (
     normalized.includes("domain does not support specified action") ||
     normalized.includes("bootstrap failed: 125")
+  );
+}
+
+function isAlreadyBootstrappedDetail(detail: string, code?: number): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(detail);
+  return (
+    normalized.includes("already bootstrapped") ||
+    normalized.includes("already loaded") ||
+    normalized.includes("already exists in domain") ||
+    (code === 5 && normalized.includes("input/output error"))
   );
 }
 
