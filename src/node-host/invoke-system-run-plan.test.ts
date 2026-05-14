@@ -1043,4 +1043,49 @@ describe("hardenApprovedExecutionPaths", () => {
       });
     }
   });
+
+  it("captures fish script operands with plus-prefixed filenames", () => {
+    const cases = [
+      {
+        name: "plus-prefixed fish script",
+        argv: ["fish", "+setup.fish"],
+      },
+      {
+        name: "plus-prefixed fish script before script args",
+        argv: ["fish", "+setup.fish", "-c", "echo arg"],
+      },
+    ];
+
+    for (const testCase of cases) {
+      runNamedCase(testCase.name, () => {
+        const tmp = createFixtureDir("openclaw-fish-plus-script-");
+        const scriptPath = path.join(tmp, "+setup.fish");
+        fs.writeFileSync(scriptPath, "echo SAFE\n");
+        const snapshot = resolveMutableFileOperandSnapshotSync({
+          argv: testCase.argv,
+          cwd: tmp,
+          shellCommand: null,
+        });
+        expect(snapshot).toEqual({
+          ok: true,
+          snapshot: {
+            argvIndex: 1,
+            path: fs.realpathSync(scriptPath),
+            sha256: sha256FileSync(scriptPath),
+          },
+        });
+        if (!snapshot.ok || snapshot.snapshot === null) {
+          throw new Error("expected mutable file operand snapshot");
+        }
+        fs.writeFileSync(scriptPath, "echo CHANGED\n");
+        expect(
+          revalidateApprovedMutableFileOperand({
+            snapshot: snapshot.snapshot,
+            argv: testCase.argv,
+            cwd: tmp,
+          }),
+        ).toBe(false);
+      });
+    }
+  });
 });
