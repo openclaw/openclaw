@@ -1033,7 +1033,12 @@ import { buildMemorySystemPromptAddition } from "openclaw/plugin-sdk/core";
 
 export default function (api) {
   api.registerContextEngine("lossless-claw", (ctx) => ({
-    info: { id: "lossless-claw", name: "Lossless Claw", ownsCompaction: true },
+    info: {
+      id: "lossless-claw",
+      name: "Lossless Claw",
+      ownsCompaction: true,
+      interceptsCompaction: true,
+    },
     async ingest() {
       return { ingested: true };
     },
@@ -1049,6 +1054,14 @@ export default function (api) {
     },
     async compact() {
       return { ok: true, compacted: false };
+    },
+    async interceptCompaction(request) {
+      return {
+        handled: true,
+        summary: await summarizeSessionFile(request.sessionFile),
+        firstKeptEntryId: request.firstKeptEntryId,
+        tokensBefore: request.tokensBefore,
+      };
     },
   }));
 }
@@ -1102,6 +1115,22 @@ export default function (api) {
   }));
 }
 ```
+
+`ownsCompaction` and `interceptsCompaction` are separate capability flags.
+`ownsCompaction` covers OpenClaw's queued/manual lane: `/compact`, overflow
+recovery, and proactive compaction started by the engine. `interceptsCompaction`
+covers Pi's `session_before_compact` event lane during in-attempt
+auto-compaction. An engine can set both when it owns queued compaction and also
+wants to replace Pi's default auto-compaction summary.
+
+When `interceptsCompaction: true`, the engine must implement
+`interceptCompaction(request)`. Return `handled: true` with a replacement
+summary, `firstKeptEntryId`, and `tokensBefore` to override the runtime's
+default summary. Return `handled: false` to fall back. The request includes the
+Pi `sessionId`, optional OpenClaw `sessionKey`, on-disk `sessionFile`,
+best-effort token counts, the planned compaction boundary, and an abort signal.
+The host registers this hook after safeguard compaction so handled intercepts
+win, but safeguard cancellation still stops the event before the intercept.
 
 ## Adding a new capability
 

@@ -285,6 +285,20 @@ Where:
 
 These are Pi runtime semantics (OpenClaw consumes the events, but Pi decides when to compact).
 
+When the active context engine declares `interceptsCompaction: true`, OpenClaw
+keeps Pi auto-compaction enabled and registers a `session_before_compact`
+extension for that engine. Pi still decides when the event fires; the engine's
+`interceptCompaction(request)` decides whether to replace Pi's default
+compaction summary.
+
+- `handled: true` returns a replacement summary with `firstKeptEntryId` and
+  `tokensBefore`.
+- `handled: false`, a missing session file, a missing intercept method, or a
+  thrown error falls back to the normal runtime compaction path.
+- If safeguard compaction is enabled too, the intercept runs after the
+  safeguard so handled intercepts win under Pi's last-truthy result semantics.
+  Safeguard cancellation still stops the event chain before the intercept.
+
 OpenClaw can also trigger a preflight local compaction before opening the next
 run when `agents.defaults.compaction.maxActiveTranscriptBytes` is set and the
 active transcript file reaches that size. This is a file-size guard for local
@@ -328,6 +342,9 @@ OpenClaw also enforces a safety floor for embedded runs:
 - Default floor is `20000` tokens.
 - Set `agents.defaults.compaction.reserveTokensFloor: 0` to disable the floor.
 - If it's already higher, OpenClaw leaves it alone.
+- When the active context engine declares `ownsCompaction: true` or
+  `interceptsCompaction: true`, OpenClaw treats the floor as `0` for that run
+  because the engine owns post-compaction headroom.
 - Manual `/compact` honors an explicit `agents.defaults.compaction.keepRecentTokens`
   and keeps Pi's recent-tail cut point. Without an explicit keep budget,
   manual compaction remains a hard checkpoint and rebuilt context starts from

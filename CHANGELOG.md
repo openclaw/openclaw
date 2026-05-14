@@ -11,6 +11,7 @@ Docs: https://docs.openclaw.ai
 - CLI/policy: add the bundled Policy plugin for policy-backed channel conformance checks, doctor lint findings, and opt-in workspace repair. (#80407) Thanks @giodl73-repo.
 - Agents/config: allow `agents.list[].experimental.localModelLean` so lean local-model mode can be enabled for one configured agent instead of globally.
 - Providers/xAI: add device-code OAuth login so remote and headless setups can authorize xAI without a localhost browser callback. (#84005) Thanks @fuller-stack-dev.
+- Context engines: let plugins intercept Pi auto-compaction events with their own replacement summaries. (#81164) Thanks @100yenadmin.
 
 ### Fixes
 
