@@ -199,6 +199,40 @@ describe("artifacts RPC handlers", () => {
     expectFields(payload.artifacts?.[0], { sessionKey: "global", runId: "run-global" });
   });
 
+  it("preserves inferred task agent scope when loading global-scope task artifacts", async () => {
+    const { calls, respond } = createResponder();
+    hoisted.getTaskSessionLookupByIdForStatus.mockReturnValue({
+      agentId: "work",
+      requesterSessionKey: "global",
+    });
+    mockedMessages([
+      {
+        role: "assistant",
+        content: [{ type: "file", data: "aGVsbG8=", mimeType: "text/plain", title: "task.txt" }],
+        __openclaw: { seq: 2, taskId: "task-global" },
+      },
+    ]);
+
+    await artifactsHandlers["artifacts.list"]?.({
+      req: { type: "req", id: "global-task-agent-scope", method: "artifacts.list", params: {} },
+      params: { taskId: "task-global" },
+      client: null,
+      isWebchatConnect: () => false,
+      respond,
+      context: {
+        getRuntimeConfig: () => ({
+          session: { scope: "global" },
+          agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        }),
+      } as never,
+    });
+
+    expect(calls[0]?.ok).toBe(true);
+    expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("global", { agentId: "work" });
+    const payload = calls[0]?.payload as { artifacts?: Array<Record<string, unknown>> };
+    expectFields(payload.artifacts?.[0], { sessionKey: "global", taskId: "task-global" });
+  });
+
   it("gets and downloads an inline artifact", async () => {
     const listed = collectArtifactsFromMessages({
       sessionKey: "agent:main:main",

@@ -313,6 +313,7 @@ type UsageGroupingMode = "instance" | "family";
 
 type MergedEntry = {
   key: string;
+  agentId: string;
   sessionId: string;
   sessionFile: string;
   label?: string;
@@ -948,6 +949,7 @@ export const usageHandlers: GatewayRequestHandlers = {
               groupingMode,
               base: {
                 key: resolvedStoreKey,
+                agentId: agentIdFromKey,
                 sessionId,
                 sessionFile,
                 label: storeEntry?.label,
@@ -989,6 +991,7 @@ export const usageHandlers: GatewayRequestHandlers = {
             groupingMode,
             base: {
               key: storeMatch.key,
+              agentId: discovered.agentId,
               sessionId: discovered.sessionId,
               sessionFile: discovered.sessionFile,
               label: storeMatch.entry.label,
@@ -1004,6 +1007,7 @@ export const usageHandlers: GatewayRequestHandlers = {
           mergedEntries.push({
             // Keep agentId in the key so the dashboard can attribute sessions and later fetch logs.
             key: `agent:${discovered.agentId}:${discovered.sessionId}`,
+            agentId: discovered.agentId,
             sessionId: discovered.sessionId,
             sessionFile: discovered.sessionFile,
             label: undefined, // No label for unnamed sessions
@@ -1104,7 +1108,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     };
 
     for (const merged of limitedEntries) {
-      const agentId = parseAgentSessionKey(merged.key)?.agentId;
+      const agentId = merged.agentId;
       let usage: SessionCostSummary | null = null;
       const includedSessionIds = merged.includedSessionIds ?? [merged.sessionId];
       for (const includedSessionId of includedSessionIds) {

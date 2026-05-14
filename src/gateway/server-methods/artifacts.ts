@@ -41,6 +41,11 @@ type ArtifactQuery = {
   agentId?: string;
 };
 
+type ResolvedArtifactSession = {
+  sessionKey: string;
+  agentId?: string;
+};
+
 function artifactError(type: string, message: string, details?: Record<string, unknown>) {
   return errorShape(ErrorCodes.INVALID_REQUEST, message, {
     details: {
@@ -355,14 +360,22 @@ function collectArtifactsFromMessage(params: {
   }
 }
 
-function resolveQuerySessionKey(query: ArtifactQuery, cfg?: OpenClawConfig): string | undefined {
+function resolveQuerySession(
+  query: ArtifactQuery,
+  cfg?: OpenClawConfig,
+): ResolvedArtifactSession | undefined {
   if (query.sessionKey) {
-    return resolveScopedArtifactSessionKey(query.sessionKey, query.agentId, cfg);
+    const sessionKey = resolveScopedArtifactSessionKey(query.sessionKey, query.agentId, cfg);
+    if (!sessionKey) {
+      return undefined;
+    }
+    return { sessionKey, ...(query.agentId ? { agentId: query.agentId } : {}) };
   }
   if (query.runId) {
     const agentId = query.agentId ?? resolveDefaultAgentId(cfg ?? {});
     const sessionKey = resolveSessionKeyForRun(query.runId, { agentId });
-    return resolveScopedArtifactSessionKey(sessionKey, agentId, cfg);
+    const scopedSessionKey = resolveScopedArtifactSessionKey(sessionKey, agentId, cfg);
+    return scopedSessionKey ? { sessionKey: scopedSessionKey, agentId } : undefined;
   }
   if (query.taskId) {
     const task = getTaskSessionLookupByIdForStatus(query.taskId);
@@ -378,11 +391,13 @@ function resolveQuerySessionKey(query: ArtifactQuery, cfg?: OpenClawConfig): str
     }
     const agentId = query.agentId ?? taskAgentId ?? resolveDefaultAgentId(cfg ?? {});
     if (requesterSessionKey) {
-      return resolveScopedArtifactSessionKey(requesterSessionKey, agentId, cfg);
+      const scopedSessionKey = resolveScopedArtifactSessionKey(requesterSessionKey, agentId, cfg);
+      return scopedSessionKey ? { sessionKey: scopedSessionKey, agentId } : undefined;
     }
     const runId = asNonEmptyString(task?.runId);
     const sessionKey = runId ? resolveSessionKeyForRun(runId, { agentId }) : undefined;
-    return resolveScopedArtifactSessionKey(sessionKey, agentId, cfg);
+    const scopedSessionKey = resolveScopedArtifactSessionKey(sessionKey, agentId, cfg);
+    return scopedSessionKey ? { sessionKey: scopedSessionKey, agentId } : undefined;
   }
   return undefined;
 }
@@ -391,12 +406,13 @@ async function loadArtifacts(
   query: ArtifactQuery,
   cfg?: OpenClawConfig,
 ): Promise<{ artifacts: ArtifactRecord[]; sessionKey?: string }> {
-  const sessionKey = resolveQuerySessionKey(query, cfg);
-  if (!sessionKey) {
+  const resolved = resolveQuerySession(query, cfg);
+  if (!resolved) {
     return { artifacts: [] };
   }
+  const { sessionKey } = resolved;
   const scopedGlobalAgentId =
-    cfg?.session?.scope === "global" && sessionKey === "global" ? query.agentId : undefined;
+    cfg?.session?.scope === "global" && sessionKey === "global" ? resolved.agentId : undefined;
   const { storePath, entry } = scopedGlobalAgentId
     ? loadSessionEntry(sessionKey, { agentId: scopedGlobalAgentId })
     : loadSessionEntry(sessionKey);
