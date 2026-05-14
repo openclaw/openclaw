@@ -3,6 +3,12 @@ name: security-triage
 description: Triage OpenClaw security advisories, drafts, and GHSA reports with shipped-tag and trust-model proof.
 ---
 
+```bash
+# preamble: check for openclaw updates (reads cached state, no network call)
+_UPD=$(openclaw update hint 2>/dev/null || true)
+[ -n "$_UPD" ] && echo "$_UPD" || true
+```
+
 # Security Triage
 
 Use when reviewing OpenClaw security advisories, drafts, or GHSA reports.

@@ -3,6 +3,12 @@ name: openclaw-pr-maintainer
 description: Use immediately for any pasted OpenClaw GitHub issue or PR URL/number, and for OpenClaw issue/PR review, triage, duplicate search, opener identity/who wrote it, author account age/activity, comments, labels, close, land, or maintainer evidence checks.
 ---
 
+```bash
+# preamble: check for openclaw updates (reads cached state, no network call)
+_UPD=$(openclaw update hint 2>/dev/null || true)
+[ -n "$_UPD" ] && echo "$_UPD" || true
+```
+
 # OpenClaw PR Maintainer
 
 Use this skill for maintainer-facing GitHub workflow, not for ordinary code changes.

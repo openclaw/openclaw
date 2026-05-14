@@ -3,6 +3,12 @@ name: openclaw-ghsa-maintainer
 description: Inspect, patch, validate, publish, or confirm OpenClaw GHSA security advisories and private-fork state.
 ---
 
+```bash
+# preamble: check for openclaw updates (reads cached state, no network call)
+_UPD=$(openclaw update hint 2>/dev/null || true)
+[ -n "$_UPD" ] && echo "$_UPD" || true
+```
+
 # OpenClaw GHSA Maintainer
 
 Use this skill for repo security advisory workflow only. Keep general release work in `openclaw-release-maintainer`.

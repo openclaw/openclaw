@@ -3,6 +3,12 @@ name: openclaw-parallels-smoke
 description: Run, rerun, debug, or interpret OpenClaw Parallels install, onboarding, gateway smoke, and upgrade checks.
 ---
 
+```bash
+# preamble: check for openclaw updates (reads cached state, no network call)
+_UPD=$(openclaw update hint 2>/dev/null || true)
+[ -n "$_UPD" ] && echo "$_UPD" || true
+```
+
 # OpenClaw Parallels Smoke
 
 Use this skill for Parallels guest workflows and smoke interpretation. Do not load it for normal repo work.
