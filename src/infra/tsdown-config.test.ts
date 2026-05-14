@@ -112,6 +112,16 @@ describe("tsdown config", () => {
     }
   });
 
+  it("keeps root-package-excluded external plugins out of the root dist graph", () => {
+    const distGraph = requireUnifiedDistGraph();
+    const keys = entryKeys(distGraph);
+    const hasPluginEntry = (pluginId: string) =>
+      keys.some((entry) => entry.startsWith(`${bundledPluginRoot(pluginId)}/`));
+
+    expect(hasPluginEntry("amazon-bedrock")).toBe(false);
+    expect(hasPluginEntry("amazon-bedrock-mantle")).toBe(false);
+  });
+
   it("keeps gateway lifecycle lazy runtime behind one stable dist entry", () => {
     const distGraph = requireUnifiedDistGraph();
 

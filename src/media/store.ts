@@ -14,6 +14,7 @@ import { resolvePinnedHostname } from "../infra/net/ssrf.js";
 import { writeSiblingTempFile } from "../infra/sibling-temp-file.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveConfigDir } from "../utils.js";
+import { basenameFromAnyPath, extnameFromAnyPath, nameFromAnyPath } from "./file-name.js";
 import { detectMime, extensionForMime } from "./mime.js";
 import { isFsSafeError, readLocalFileSafely, type FsSafeLikeError } from "./store.runtime.js";
 
@@ -123,12 +124,12 @@ function sanitizeFilename(name: string): string {
  * Falls back to basename if no pattern match, or "file.bin" if empty.
  */
 export function extractOriginalFilename(filePath: string): string {
-  const basename = path.basename(filePath);
+  const basename = basenameFromAnyPath(filePath);
   if (!basename) {
     return "file.bin";
   } // Fallback for empty input
 
-  const ext = path.extname(basename);
+  const ext = extnameFromAnyPath(basename);
   const nameWithoutExt = path.basename(basename, ext);
 
   // Check for ---{uuid} pattern (36 chars: 8-4-4-4-12 with hyphens)
@@ -294,7 +295,7 @@ function buildSavedMediaId(params: {
     return params.ext ? `${params.baseId}${params.ext}` : params.baseId;
   }
 
-  const base = path.parse(params.originalFilename).name;
+  const base = nameFromAnyPath(params.originalFilename);
   const sanitized = sanitizeFilename(base);
   return sanitized
     ? `${sanitized}---${params.baseId}${params.ext}`
@@ -305,7 +306,7 @@ function safeOriginalFilenameExtension(originalFilename?: string): string | unde
   if (!originalFilename) {
     return undefined;
   }
-  const ext = path.extname(originalFilename).toLowerCase();
+  const ext = extnameFromAnyPath(originalFilename).toLowerCase();
   return /^\.[a-z0-9]{1,16}$/.test(ext) ? ext : undefined;
 }
 

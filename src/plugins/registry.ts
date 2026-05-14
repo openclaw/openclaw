@@ -2396,12 +2396,13 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
           } satisfies PluginRuntime["state"];
         }
         if (prop === "config") {
-          const config = Reflect.get(target, prop, receiver) as PluginRuntime["config"];
+          const config = Reflect.get(target, prop, receiver);
           return {
             ...config,
-            loadConfig: () => runWithPluginScope(() => config.loadConfig()),
-            writeConfigFile: (cfg, options) =>
-              runWithPluginScope(() => config.writeConfigFile(cfg, options)),
+            current: () => runWithPluginScope(() => config.current()),
+            mutateConfigFile: (params) => runWithPluginScope(() => config.mutateConfigFile(params)),
+            replaceConfigFile: (params) =>
+              runWithPluginScope(() => config.replaceConfigFile(params)),
           } satisfies PluginRuntime["config"];
         }
         if (prop === "llm") {

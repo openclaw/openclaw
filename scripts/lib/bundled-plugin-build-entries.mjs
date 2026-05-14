@@ -31,6 +31,10 @@ function isManifestlessBundledRuntimeSupportPackage(params) {
   return params.topLevelPublicSurfaceEntries.length > 0;
 }
 
+function shouldBuildBundledDistEntry(packageJson) {
+  return packageJson?.openclaw?.build?.bundledDist !== false;
+}
+
 export function collectPluginSourceEntries(packageJson) {
   let packageEntries = Array.isArray(packageJson?.openclaw?.extensions)
     ? packageJson.openclaw.extensions.filter(
@@ -110,6 +114,9 @@ export function collectBundledPluginBuildEntries(params = {}) {
       continue;
     }
     if (!shouldBuildBundledCluster(dirent.name, env, { packageJson })) {
+      continue;
+    }
+    if (!shouldBuildBundledDistEntry(packageJson)) {
       continue;
     }
     if (EXCLUDED_CORE_BUNDLED_PLUGIN_DIRS.has(dirent.name)) {

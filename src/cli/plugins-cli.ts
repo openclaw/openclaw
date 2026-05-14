@@ -365,20 +365,33 @@ export function registerPluginsCli(program: Command) {
         buildPluginDiagnosticsReport,
         formatPluginCompatibilityNotice,
       } = await import("../plugins/status.js");
-      const report = buildPluginDiagnosticsReport({ effectiveOnly: true });
+      const {
+        collectStalePluginConfigWarnings,
+        isStalePluginAutoRepairBlocked,
+        scanStalePluginConfig,
+      } = await import("../commands/doctor/shared/stale-plugin-config.js");
+      const cfg = getRuntimeConfig();
+      const configSnapshot = await readConfigFileSnapshot().catch(() => null);
+      const sourceCfg = (configSnapshot?.sourceConfig ?? configSnapshot?.config ?? cfg) as
+        | OpenClawConfig
+        | undefined;
+      const report = buildPluginDiagnosticsReport({ config: cfg, effectiveOnly: true });
       const errors = report.plugins.filter((p) => p.status === "error");
       const diags = report.diagnostics.filter((d) => d.level === "error");
       const shadowed = report.diagnostics.filter((entry) =>
         isErroredConfigSelectedShadowDiagnostic({ entry, plugins: report.plugins }),
       );
       const compatibility = buildPluginCompatibilityNotices({ report });
+      const stalePluginConfigHits = scanStalePluginConfig(sourceCfg ?? cfg, process.env);
+      const stalePluginConfigWarnings = collectStalePluginConfigWarnings({
+        hits: stalePluginConfigHits,
+        doctorFixCommand: "openclaw doctor --fix",
+        autoRepairBlocked: isStalePluginAutoRepairBlocked(sourceCfg ?? cfg, process.env),
+      });
+      const hasInstallTreeIssues =
+        errors.length > 0 || diags.length > 0 || shadowed.length > 0 || compatibility.length > 0;
 
-      if (
-        errors.length === 0 &&
-        diags.length === 0 &&
-        shadowed.length === 0 &&
-        compatibility.length === 0
-      ) {
+      if (!hasInstallTreeIssues && stalePluginConfigWarnings.length === 0) {
         defaultRuntime.log("No plugin issues detected.");
         return;
       }
@@ -435,6 +448,19 @@ export function registerPluginsCli(program: Command) {
           const marker = notice.severity === "warn" ? theme.warn("warn") : theme.muted("info");
           lines.push(`- ${formatPluginCompatibilityNotice(notice)} [${marker}]`);
         }
+      }
+      if (stalePluginConfigWarnings.length > 0) {
+        if (lines.length > 0) {
+          lines.push("");
+        }
+        lines.push(theme.warn("Plugin configuration:"));
+        lines.push(...stalePluginConfigWarnings);
+      }
+      if (!hasInstallTreeIssues && stalePluginConfigWarnings.length > 0) {
+        if (lines.length > 0) {
+          lines.push("");
+        }
+        lines.push("No plugin install-tree issues detected; configuration warnings remain.");
       }
       const docs = formatDocsLink("/plugin", "docs.openclaw.ai/plugin");
       lines.push("");

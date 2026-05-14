@@ -393,6 +393,30 @@
       }
     },
     {
+      "name": "@openclaw/slack",
+      "description": "OpenClaw Slack channel plugin",
+      "source": "official",
+      "kind": "channel",
+      "openclaw": {
+        "channel": {
+          "id": "slack",
+          "label": "Slack",
+          "selectionLabel": "Slack (Socket Mode)",
+          "detailLabel": "Slack Bot",
+          "docsPath": "/channels/slack",
+          "docsLabel": "slack",
+          "blurb": "supported (Socket Mode).",
+          "systemImage": "number",
+          "markdownCapable": true
+        },
+        "install": {
+          "npmSpec": "@openclaw/slack",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.5.12-beta.1"
+        }
+      }
+    },
+    {
       "name": "@openclaw/synology-chat",
       "description": "Synology Chat channel plugin for OpenClaw",
       "source": "official",
