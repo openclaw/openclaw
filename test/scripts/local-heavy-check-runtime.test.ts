@@ -22,6 +22,11 @@ const ROOMY_HOST = {
   totalMemoryBytes: 128 * GIB,
   logicalCpuCount: 16,
 };
+const LOW_VIRTUAL_MEMORY_HOST = {
+  totalMemoryBytes: 128 * GIB,
+  freeVirtualMemoryBytes: 2 * GIB,
+  logicalCpuCount: 16,
+};
 
 function makeEnv(overrides: Record<string, string | undefined> = {}) {
   const env = {
@@ -181,6 +186,43 @@ describe("local-heavy-check-runtime", () => {
     ]);
     expect(env.GOGC).toBe("30");
     expect(env.GOMEMLIMIT).toBe("3GiB");
+  });
+
+  it("blocks local tsgo before launch when Windows virtual memory is too low", () => {
+    const { args, env } = applyLocalTsgoPolicy([], makeEnv(), LOW_VIRTUAL_MEMORY_HOST);
+
+    expect(args).toEqual([
+      "--declaration",
+      "false",
+      "--incremental",
+      "--tsBuildInfoFile",
+      ".artifacts/tsgo-cache/root.tsbuildinfo",
+      "--singleThreaded",
+      "--checkers",
+      "1",
+    ]);
+    expect(env.GOGC).toBe("30");
+    expect(env.GOMEMLIMIT).toBe("1GiB");
+    expect(env.OPENCLAW_TSGO_RESOURCE_GUARD_ERROR).toContain("free virtual memory");
+  });
+
+  it("allows explicitly bypassing the tsgo resource guard", () => {
+    const { args, env } = applyLocalTsgoPolicy(
+      [],
+      makeEnv({
+        OPENCLAW_TSGO_RESOURCE_GUARD: "0",
+      }),
+      LOW_VIRTUAL_MEMORY_HOST,
+    );
+
+    expect(args).toEqual([
+      "--declaration",
+      "false",
+      "--incremental",
+      "--tsBuildInfoFile",
+      ".artifacts/tsgo-cache/root.tsbuildinfo",
+    ]);
+    expect(env.OPENCLAW_TSGO_RESOURCE_GUARD_ERROR).toBeUndefined();
   });
 
   it("allows forcing full-speed tsgo runs on roomy hosts", () => {

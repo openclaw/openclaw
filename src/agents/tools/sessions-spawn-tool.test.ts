@@ -88,6 +88,11 @@ describe("sessions_spawn tool", () => {
     return value as Record<string, unknown>;
   }
 
+  const executionPacketForTest = {
+    foundationRefs: { constitution: "test" },
+    confidenceLoop: { evidence: ["test"] },
+  };
+
   function expectDetailFields(details: unknown, expected: Record<string, unknown>) {
     const record = requireRecord(details, "result details");
     for (const [key, value] of Object.entries(expected)) {
@@ -282,6 +287,7 @@ describe("sessions_spawn tool", () => {
 
     const result = await tool.execute("call-1", {
       task: "build feature",
+      executionPacket: executionPacketForTest,
       agentId: "main",
       model: "anthropic/claude-sonnet-4-6",
       thinking: "medium",
@@ -321,6 +327,7 @@ describe("sessions_spawn tool", () => {
 
     await tool.execute("call-inherited-deny", {
       task: "build feature",
+      executionPacket: executionPacketForTest,
     });
 
     const spawnContext = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 1, "spawnSubagentDirect");
@@ -335,6 +342,7 @@ describe("sessions_spawn tool", () => {
 
     await tool.execute("call-inherited-allow", {
       task: "build feature",
+      executionPacket: executionPacketForTest,
     });
 
     const spawnContext = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 1, "spawnSubagentDirect");
@@ -408,6 +416,7 @@ describe("sessions_spawn tool", () => {
 
     const result = await tool.execute("call-role-error", {
       task: "build feature",
+      executionPacket: executionPacketForTest,
       agentId: "reviewer",
     });
 
@@ -425,10 +434,38 @@ describe("sessions_spawn tool", () => {
 
     const result = await tool.execute("call-no-role-error", {
       task: "build feature",
+      executionPacket: executionPacketForTest,
     });
 
     expectDetailFields(result.details, { status: "error", error: "spawn failed" });
     expect(result.details).not.toHaveProperty("role");
+  });
+
+  it("rejects side-effectful spawn tasks without an execution packet", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("call-missing-execution-packet", {
+      task: "edit the runtime packet flow",
+    });
+
+    expectDetailFields(result.details, { status: "error" });
+    expect(JSON.stringify(result.details)).toContain("requires an executionPacket");
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
+  it("allows side-effectful spawn tasks with an execution packet", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await tool.execute("call-with-execution-packet", {
+      task: "edit the runtime packet flow",
+      executionPacket: executionPacketForTest,
+    });
+
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
   });
 
   it("supports legacy timeoutSeconds alias", async () => {

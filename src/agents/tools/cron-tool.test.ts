@@ -35,6 +35,11 @@ describe("cron tool", () => {
     threadId?: string | number;
   };
 
+  const executionPacketForTest = {
+    foundationRefs: { constitution: "test" },
+    confidenceLoop: { evidence: ["test"] },
+  };
+
   function createTestCronTool(
     opts?: Parameters<typeof createCronTool>[0],
   ): ReturnType<typeof createCronTool> {
@@ -169,6 +174,43 @@ describe("cron tool", () => {
     callGatewayMock.mockResolvedValue({ ok: true });
     extractDeliveryInfoMock.mockReset();
     extractDeliveryInfoMock.mockReturnValue({ deliveryContext: undefined, threadId: undefined });
+  });
+
+  it("rejects side-effectful cron agentTurn jobs without an execution packet", async () => {
+    const tool = createTestCronTool();
+
+    await expect(
+      tool.execute("call-cron-missing-execution-packet", {
+        action: "add",
+        job: {
+          name: "edit-runtime-flow",
+          schedule: { at: new Date(123).toISOString() },
+          payload: { kind: "agentTurn", message: "edit the runtime packet flow" },
+        },
+      }),
+    ).rejects.toThrow("requires an executionPacket");
+
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("allows side-effectful cron agentTurn jobs with an execution packet", async () => {
+    const tool = createTestCronTool();
+
+    await tool.execute("call-cron-with-execution-packet", {
+      action: "add",
+      job: {
+        name: "edit-runtime-flow",
+        schedule: { at: new Date(123).toISOString() },
+        payload: { kind: "agentTurn", message: "edit the runtime packet flow" },
+        executionPacket: executionPacketForTest,
+      },
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.add");
+    expect(params).not.toHaveProperty("executionPacket");
+    expect((params?.payload as Record<string, unknown> | undefined) ?? {}).not.toHaveProperty(
+      "executionPacket",
+    );
   });
 
   it("allows scoped isolated cron runs to remove the current job", async () => {

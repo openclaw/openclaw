@@ -6,12 +6,14 @@ import path from "node:path";
 const GIB = 1024 ** 3;
 const DEFAULT_LOCAL_GO_GC = "30";
 const DEFAULT_LOCAL_GO_MEMORY_LIMIT = "3GiB";
+const DEFAULT_LOCAL_GO_LOW_VIRTUAL_MEMORY_LIMIT = "1GiB";
 const DEFAULT_LOCAL_TSGO_BUILD_INFO_FILE = ".artifacts/tsgo-cache/root.tsbuildinfo";
 const DEFAULT_LOCK_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_LOCK_POLL_MS = 500;
 const DEFAULT_LOCK_PROGRESS_MS = 15 * 1000;
 const DEFAULT_STALE_LOCK_MS = 30 * 1000;
 const DEFAULT_FAST_LOCAL_CHECK_MIN_MEMORY_BYTES = 48 * GIB;
+const DEFAULT_TSGO_MIN_FREE_VIRTUAL_MEMORY_BYTES = 4 * GIB;
 const DEFAULT_FAST_LOCAL_CHECK_MIN_CPUS = 12;
 const SLEEP_BUFFER = new Int32Array(new SharedArrayBuffer(4));
 
@@ -61,7 +63,13 @@ export function applyLocalTsgoPolicy(args, env, hostResources) {
     );
   }
 
-  if (shouldThrottleLocalHeavyChecks(nextEnv, hostResources, "auto")) {
+  const resolvedHostResources = resolveHostResources(hostResources);
+  const lowVirtualMemoryReason = getTsgoLowVirtualMemoryReason(nextEnv, resolvedHostResources);
+  if (lowVirtualMemoryReason) {
+    nextEnv.OPENCLAW_TSGO_RESOURCE_GUARD_ERROR = lowVirtualMemoryReason;
+  }
+
+  if (shouldThrottleLocalHeavyChecks(nextEnv, resolvedHostResources, "auto")) {
     insertBeforeSeparator(nextArgs, "--singleThreaded");
     insertBeforeSeparator(nextArgs, "--checkers", "1");
 
@@ -69,7 +77,9 @@ export function applyLocalTsgoPolicy(args, env, hostResources) {
       nextEnv.GOGC = DEFAULT_LOCAL_GO_GC;
     }
     if (!nextEnv.GOMEMLIMIT) {
-      nextEnv.GOMEMLIMIT = DEFAULT_LOCAL_GO_MEMORY_LIMIT;
+      nextEnv.GOMEMLIMIT = lowVirtualMemoryReason
+        ? DEFAULT_LOCAL_GO_LOW_VIRTUAL_MEMORY_LIMIT
+        : DEFAULT_LOCAL_GO_MEMORY_LIMIT;
     }
   }
   if (nextEnv.OPENCLAW_TSGO_PPROF_DIR && !hasFlag(nextArgs, "--pprofDir")) {
@@ -165,6 +175,11 @@ function shouldThrottleLocalHeavyChecks(env, hostResources, defaultMode = "throt
     return false;
   }
 
+  const resolvedHostResources = resolveHostResources(hostResources);
+  if (isLowFreeVirtualMemory(env, resolvedHostResources)) {
+    return true;
+  }
+
   const mode = readLocalCheckMode(env, defaultMode);
   if (mode === "throttled") {
     return true;
@@ -173,7 +188,6 @@ function shouldThrottleLocalHeavyChecks(env, hostResources, defaultMode = "throt
     return false;
   }
 
-  const resolvedHostResources = resolveHostResources(hostResources);
   return (
     resolvedHostResources.totalMemoryBytes < DEFAULT_FAST_LOCAL_CHECK_MIN_MEMORY_BYTES ||
     resolvedHostResources.logicalCpuCount < DEFAULT_FAST_LOCAL_CHECK_MIN_CPUS
@@ -356,14 +370,85 @@ function resolveHostResources(hostResources) {
 
   return {
     totalMemoryBytes: os.totalmem(),
+    freeMemoryBytes: os.freemem(),
+    freeVirtualMemoryBytes: readWindowsFreeVirtualMemoryBytes(),
     logicalCpuCount:
       typeof os.availableParallelism === "function" ? os.availableParallelism() : os.cpus().length,
   };
 }
 
+function getTsgoLowVirtualMemoryReason(env, hostResources) {
+  if (!isLowFreeVirtualMemory(env, hostResources)) {
+    return "";
+  }
+
+  const minBytes = readPositiveInt(
+    env.OPENCLAW_TSGO_MIN_FREE_VIRTUAL_MEMORY_BYTES,
+    DEFAULT_TSGO_MIN_FREE_VIRTUAL_MEMORY_BYTES,
+  );
+  const freeBytes = hostResources.freeVirtualMemoryBytes;
+  return `[tsgo] local resource guard blocked this run: free virtual memory is ${formatBytes(
+    freeBytes,
+  )}, below required ${formatBytes(
+    minBytes,
+  )}. Close memory-heavy apps, increase the Windows page file, or set OPENCLAW_TSGO_RESOURCE_GUARD=0 to bypass the guard.`;
+}
+
+function isLowFreeVirtualMemory(env, hostResources) {
+  if (!isLocalCheckEnabled(env) || env.OPENCLAW_TSGO_RESOURCE_GUARD === "0") {
+    return false;
+  }
+
+  const freeBytes = hostResources.freeVirtualMemoryBytes;
+  if (!Number.isFinite(freeBytes) || freeBytes <= 0) {
+    return false;
+  }
+
+  const minBytes = readPositiveInt(
+    env.OPENCLAW_TSGO_MIN_FREE_VIRTUAL_MEMORY_BYTES,
+    DEFAULT_TSGO_MIN_FREE_VIRTUAL_MEMORY_BYTES,
+  );
+  return freeBytes < minBytes;
+}
+
+function readWindowsFreeVirtualMemoryBytes() {
+  if (process.platform !== "win32") {
+    return undefined;
+  }
+
+  const result = spawnSync(
+    "powershell",
+    ["-NoProfile", "-Command", "(Get-CimInstance Win32_OperatingSystem).FreeVirtualMemory"],
+    {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      windowsHide: true,
+    },
+  );
+  if (result.status !== 0) {
+    return undefined;
+  }
+
+  const freeVirtualMemoryKiB = Number.parseInt(result.stdout.trim(), 10);
+  if (!Number.isFinite(freeVirtualMemoryKiB) || freeVirtualMemoryKiB <= 0) {
+    return undefined;
+  }
+  return freeVirtualMemoryKiB * 1024;
+}
+
 function readPositiveInt(rawValue, fallback) {
   const parsed = Number.parseInt(rawValue ?? "", 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes < 0) {
+    return "unknown";
+  }
+  if (bytes >= GIB) {
+    return `${(bytes / GIB).toFixed(2)}GiB`;
+  }
+  return `${Math.round(bytes / (1024 ** 2))}MiB`;
 }
 
 function writeOwnerFile(ownerPath, owner) {

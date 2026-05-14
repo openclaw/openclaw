@@ -6,11 +6,31 @@ import {
   getSparseTsgoGuardError,
   shouldSkipSparseTsgoGuardError,
 } from "../../scripts/lib/tsgo-sparse-guard.mjs";
+import { resolveTsgoInvocation } from "../../scripts/lib/tsgo-invocation.mjs";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
 
 describe("run-tsgo sparse guard", () => {
+  it("resolves tsgo through the package JS entrypoint without a shell shim", () => {
+    const cwd = createTempDir("openclaw-run-tsgo-");
+    const tsgoScript = path.join(
+      cwd,
+      "node_modules",
+      "@typescript",
+      "native-preview",
+      "bin",
+      "tsgo.js",
+    );
+    fs.mkdirSync(path.dirname(tsgoScript), { recursive: true });
+    fs.writeFileSync(tsgoScript, "", "utf8");
+
+    expect(resolveTsgoInvocation(cwd, { nodePath: "node-test" })).toEqual({
+      command: "node-test",
+      argsPrefix: [tsgoScript],
+    });
+  });
+
   it("ignores non-core projects", () => {
     const cwd = createTempDir("openclaw-run-tsgo-");
 
