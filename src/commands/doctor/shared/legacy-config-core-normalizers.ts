@@ -573,7 +573,7 @@ function normalizeLegacyCodexCliProviderRuntimePins(
         changes.push(
           `Moved models.providers.${sanitizeForLog(providerId)}.models.${sanitizeForLog(modelId)} agentRuntime.id from codex-cli to codex.`,
         );
-        return { ...entry, agentRuntime: runtime.value };
+        return Object.assign({}, entry, { agentRuntime: runtime.value });
       });
       if (providerChanged) {
         nextProvider.models = nextProviderModels;
