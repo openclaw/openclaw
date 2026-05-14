@@ -107,6 +107,7 @@ describe("gateway/node-command-policy", () => {
     const cases = [
       { platform: "darwin", deviceFamily: "iPhone" },
       { platform: "darwin", deviceFamily: "Mac" },
+      { platform: "macOS 26.3.1", deviceFamily: "iPhone" },
       { platform: "Darwin-x64" },
       { platform: "macintosh" },
       { platform: "win32" },
@@ -122,6 +123,34 @@ describe("gateway/node-command-policy", () => {
       expect(allowlist.has("screen.snapshot")).toBe(false);
       expect(allowlist.has("system.notify")).toBe(true);
     }
+  });
+
+  it("keeps defaults for first-party native platform labels with matching families", () => {
+    const cfg = {} as OpenClawConfig;
+
+    const iosAllowlist = resolveNodeCommandAllowlist(cfg, {
+      platform: "iOS 18.4.0",
+      deviceFamily: "iPhone",
+    });
+    expect(iosAllowlist.has("device.info")).toBe(true);
+    expect(iosAllowlist.has("photos.latest")).toBe(true);
+    expect(iosAllowlist.has("system.run")).toBe(false);
+
+    const ipadAllowlist = resolveNodeCommandAllowlist(cfg, {
+      platform: "iPadOS 18.4.0",
+      deviceFamily: "iPad",
+    });
+    expect(ipadAllowlist.has("device.info")).toBe(true);
+    expect(ipadAllowlist.has("motion.activity")).toBe(true);
+    expect(ipadAllowlist.has("system.run")).toBe(false);
+
+    const macAllowlist = resolveNodeCommandAllowlist(cfg, {
+      platform: "macOS 15.5.0",
+      deviceFamily: "Mac",
+    });
+    expect(macAllowlist.has("system.run")).toBe(true);
+    expect(macAllowlist.has("system.which")).toBe(true);
+    expect(macAllowlist.has("screen.snapshot")).toBe(true);
   });
 
   it("keeps host command defaults for canonical desktop platforms", () => {

@@ -828,7 +828,7 @@ describe("resolveNodeCommandAllowlist", () => {
     const allow = resolveNodeCommandAllowlist(
       {},
       {
-        platform: "ios",
+        platform: "iOS 26.0",
         deviceFamily: "iPhone",
       },
     );
@@ -851,7 +851,7 @@ describe("resolveNodeCommandAllowlist", () => {
     const allow = resolveNodeCommandAllowlist(
       {},
       {
-        platform: "android",
+        platform: "Android 16",
         deviceFamily: "Android",
       },
     );
@@ -873,7 +873,7 @@ describe("resolveNodeCommandAllowlist", () => {
     const allow = resolveNodeCommandAllowlist(
       {},
       {
-        platform: "macos",
+        platform: "macOS 26.3.1",
         deviceFamily: "Mac",
       },
     );

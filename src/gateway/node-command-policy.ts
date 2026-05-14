@@ -143,6 +143,22 @@ function resolvePlatformIdByExactMatch(value: string): Exclude<PlatformId, "unkn
   return undefined;
 }
 
+function resolvePlatformIdByNativeLabel(
+  platform: string,
+  deviceFamily: string,
+): Exclude<PlatformId, "unknown"> | undefined {
+  if (/^(?:ios|ipados) \d+(?:\.\d+){0,2}$/.test(platform)) {
+    return /^(?:iphone|ipad|ios)$/.test(deviceFamily) ? "ios" : undefined;
+  }
+  if (/^macos \d+(?:\.\d+){0,2}$/.test(platform)) {
+    return deviceFamily === "mac" ? "macos" : undefined;
+  }
+  if (/^android \d+(?: \(sdk \d+\))?$/.test(platform)) {
+    return deviceFamily === "android" ? "android" : undefined;
+  }
+  return undefined;
+}
+
 function resolvePlatformIdByDeviceFamily(
   value: string,
 ): Exclude<PlatformId, "unknown"> | undefined {
@@ -160,10 +176,14 @@ function normalizePlatformId(platform?: string, deviceFamily?: string): Platform
   if (byPlatform) {
     return byPlatform;
   }
+  const family = normalizeDeviceMetadataForPolicy(deviceFamily);
+  const byNativeLabel = resolvePlatformIdByNativeLabel(raw, family);
+  if (byNativeLabel) {
+    return byNativeLabel;
+  }
   if (raw) {
     return "unknown";
   }
-  const family = normalizeDeviceMetadataForPolicy(deviceFamily);
   const byFamily = resolvePlatformIdByDeviceFamily(family);
   return byFamily ?? "unknown";
 }
