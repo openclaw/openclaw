@@ -20,6 +20,7 @@ import {
 } from "./accounts.js";
 import {
   createMattermostClient,
+  fetchMattermostPost,
   fetchMattermostMe,
   normalizeMattermostBaseUrl,
   updateMattermostPost,
@@ -67,6 +68,7 @@ import {
   type MattermostWebSocketFactory,
 } from "./monitor-websocket.js";
 import { runWithReconnect } from "./reconnect.js";
+import { resolveMattermostReplyContext } from "./reply-context.js";
 import { deliverMattermostReplyPayload } from "./reply-delivery.js";
 import type {
   ChannelAccountSnapshot,
@@ -141,6 +143,8 @@ type MattermostReaction = {
 };
 const RECENT_MATTERMOST_MESSAGE_TTL_MS = 5 * 60_000;
 const RECENT_MATTERMOST_MESSAGE_MAX = 2000;
+const POST_CACHE_TTL_MS = 5 * 60_000;
+const POST_CACHE_MAX = 1000;
 
 function normalizeInteractionSourceIps(values?: string[]): string[] {
   return (values ?? [])
@@ -581,7 +585,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       accountId: account.accountId,
       allowedSourceIps: effectiveInteractionSourceIps,
       trustedProxies: cfg.gateway?.trustedProxies,
-      allowRealIpFallback: cfg.gateway?.allowRealIpFallback === true,
+      allowRealIpFallback: cfg.gateway?.allowRealIpFallback,
       handleInteraction: handleModelPickerInteraction,
       authorizeButtonClick: async ({ payload, post }) => {
         const channelInfo = await resolveChannelInfo(payload.channel_id);
@@ -794,6 +798,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
   );
   const channelHistories = new Map<string, HistoryEntry[]>();
+  const postCache = new Map<string, { value: MattermostPost | null; expiresAt: number }>();
   const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const { groupPolicy, providerMissingFallbackApplied } =
@@ -826,6 +831,44 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     saveRemoteMedia: (params) => core.channel.media.saveRemoteMedia(params),
     mediaKindFromMime: (contentType) => core.media.mediaKindFromMime(contentType) as MediaKind,
   });
+
+  const setCachedPostInfo = (postId: string, value: MattermostPost | null) => {
+    const now = Date.now();
+    for (const [cachedPostId, entry] of postCache) {
+      if (entry.expiresAt <= now) {
+        postCache.delete(cachedPostId);
+      }
+    }
+    if (postCache.size >= POST_CACHE_MAX) {
+      const oldestKey = postCache.keys().next().value;
+      if (oldestKey) {
+        postCache.delete(oldestKey);
+      }
+    }
+    postCache.set(postId, {
+      value,
+      expiresAt: now + POST_CACHE_TTL_MS,
+    });
+  };
+
+  const resolvePostInfo = async (postId: string): Promise<MattermostPost | null> => {
+    const cached = postCache.get(postId);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.value;
+    }
+    if (cached) {
+      postCache.delete(postId);
+    }
+    try {
+      const info = await fetchMattermostPost(client, postId);
+      setCachedPostInfo(postId, info);
+      return info;
+    } catch (err) {
+      logger.debug?.(`mattermost: post lookup failed: ${String(err)}`);
+      setCachedPostInfo(postId, null);
+      return null;
+    }
+  };
 
   const runModelPickerCommand = async (params: {
     commandText: string;
@@ -901,7 +944,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         fallbackLimit: account.textChunkLimit ?? 4000,
       },
     );
-    const shouldDeliverReplies = params.deliverReplies === true;
+    const shouldDeliverReplies = Boolean(params.deliverReplies);
     const { onModelSelected, typingCallbacks, ...replyPipeline } =
       createChannelMessageReplyPipeline({
         cfg,
@@ -1491,6 +1534,15 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
 
         const to = kind === "direct" ? `user:${senderId}` : `channel:${channelId}`;
         const mediaPayload = buildAgentMediaPayload(mediaList);
+        const { replyToBody, replyToSender } = await resolveMattermostReplyContext({
+          effectiveReplyToId,
+          currentPostId: post.id ?? undefined,
+          resolvePostInfo,
+          resolveUserInfo,
+          botUserId,
+          botUsername,
+          logVerboseMessage,
+        });
         const commandBody = rawText.trim();
         const inboundHistory =
           historyKey && historyLimit > 0
@@ -1532,6 +1584,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           MessageSidLast:
             allMessageIds.length > 1 ? allMessageIds[allMessageIds.length - 1] : undefined,
           ReplyToId: effectiveReplyToId,
+          ReplyToBody: replyToBody,
+          ReplyToSender: replyToSender,
           MessageThreadId: effectiveReplyToId,
           Timestamp: typeof post.create_at === "number" ? post.create_at : undefined,
           WasMentioned: kind !== "direct" ? mentionDecision.effectiveWasMentioned : undefined,
