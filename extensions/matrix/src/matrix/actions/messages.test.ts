@@ -41,6 +41,7 @@ function createPollStartEvent(params?: {
   answers?: Array<Record<string, unknown>>;
   includeDisclosedKind?: boolean;
   maxSelections?: number;
+  relation?: Record<string, unknown>;
 }): Record<string, unknown> {
   return {
     event_id: "$poll",
@@ -54,6 +55,7 @@ function createPollStartEvent(params?: {
         ...(params?.maxSelections !== undefined ? { max_selections: params.maxSelections } : {}),
         answers: params?.answers ?? [{ id: "a1", "m.text": "Apple" }],
       },
+      ...(params?.relation ? { "m.relates_to": params.relation } : {}),
     },
   };
 }
@@ -473,14 +475,11 @@ describe("matrix message actions", () => {
         { id: "a1", "m.text": "Apple" },
         { id: "a2", "m.text": "Strawberry" },
       ],
-    });
-    pollRoot.content = {
-      ...pollRoot.content,
-      "m.relates_to": {
+      relation: {
         rel_type: "m.thread",
         event_id: "$thread-root",
       },
-    };
+    });
     const getEvent = vi.fn(async (_roomId: string, eventId: string) => {
       if (eventId === "$thread-root") {
         return threadRoot;
