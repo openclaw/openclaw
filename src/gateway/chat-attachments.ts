@@ -114,21 +114,43 @@ function shouldIgnoreProvidedImageMime(params: {
   return isGenericContainerMime(params.sniffedMime) && isImageMime(params.providedMime);
 }
 
+function isBase64DataChar(code: number): boolean {
+  return (
+    (code >= 0x41 && code <= 0x5a) || // A-Z
+    (code >= 0x61 && code <= 0x7a) || // a-z
+    (code >= 0x30 && code <= 0x39) || // 0-9
+    code === 0x2b ||                   // +
+    code === 0x2f                      // /
+  );
+}
+
 function isValidBase64(value: string): boolean {
-  // Regex-based validation is unsafe for large payloads in V8 — running
-  // RegExp.test() against a multi-MB base64 string can exhaust the engine's
-  // recursion stack and throw RangeError: Maximum call stack size exceeded.
-  // Use a Buffer round-trip check instead: zero regex, safe at any size.
+  // Regex-based validation is unsafe for large payloads — running RegExp.test()
+  // against a multi-MB base64 string exhausts V8's recursion stack and throws
+  // RangeError: Maximum call stack size exceeded.
   // See: https://github.com/openclaw/openclaw/issues/80679
-  if (value.length === 0) {
+  //
+  // Use a character-loop validator instead: no regex, no Buffer decode, no
+  // memory allocation beyond the loop counter. Size guards remain intact and
+  // run after this check, preserving the estimate-before-decode contract.
+  if (value.length === 0 || value.length % 4 !== 0) {
     return false;
   }
-  try {
-    const normalized = value.replace(/\s/g, "");
-    return Buffer.from(normalized, "base64").toString("base64") === normalized;
-  } catch {
-    return false;
+  let padding = 0;
+  let sawPadding = false;
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    if (code === 0x3d) { // '='
+      padding++;
+      if (padding > 2) return false;
+      sawPadding = true;
+      continue;
+    }
+    if (sawPadding || !isBase64DataChar(code)) {
+      return false;
+    }
   }
+  return true;
 }
 
 function verifyDecodedSize(buffer: Buffer, estimatedBytes: number, label: string): void {
