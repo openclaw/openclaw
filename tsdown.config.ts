@@ -221,6 +221,7 @@ function buildCoreDistEntries(): Record<string, string> {
     "provider-dispatcher.runtime": "src/auto-reply/reply/provider-dispatcher.runtime.ts",
     "server-close.runtime": "src/gateway/server-close.runtime.ts",
     "plugins/memory-state": "src/plugins/memory-state.ts",
+    "plugins/hook-runner-global": "src/plugins/hook-runner-global.ts",
     "subagent-registry.runtime": "src/agents/subagent-registry.runtime.ts",
     "task-registry-control.runtime": "src/tasks/task-registry-control.runtime.ts",
     "agents/pi-model-discovery-runtime": "src/agents/pi-model-discovery-runtime.ts",
