@@ -226,14 +226,44 @@ function isMalformedUsageCostCacheLockRecent(mtimeMs: number): boolean {
   return Date.now() - mtimeMs < USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS;
 }
 
+function isUnsupportedHardLinkError(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException).code;
+  return code === "ENOTSUP" || code === "EOPNOTSUPP" || code === "EXDEV";
+}
+
+async function writeUsageCostCacheLockWithExclusiveCreate(
+  lockPath: string,
+  content: string,
+): Promise<void> {
+  const handle = await fs.promises.open(lockPath, "wx");
+  let wrote = false;
+  try {
+    await handle.writeFile(content);
+    wrote = true;
+  } finally {
+    await handle.close().catch(() => undefined);
+    if (!wrote) {
+      await fs.promises.rm(lockPath, { force: true }).catch(() => undefined);
+    }
+  }
+}
+
 async function writeUsageCostCacheLockAtomically(
   lockPath: string,
   lock: UsageCostCacheLock,
 ): Promise<void> {
   const tempPath = `${lockPath}.${process.pid}.${process.hrtime.bigint()}.tmp`;
-  await fs.promises.writeFile(tempPath, `${JSON.stringify(lock)}\n`, { flag: "wx" });
+  const content = `${JSON.stringify(lock)}\n`;
+  await fs.promises.writeFile(tempPath, content, { flag: "wx" });
   try {
-    await fs.promises.link(tempPath, lockPath);
+    try {
+      await fs.promises.link(tempPath, lockPath);
+    } catch (err) {
+      if (!isUnsupportedHardLinkError(err)) {
+        throw err;
+      }
+      await writeUsageCostCacheLockWithExclusiveCreate(lockPath, content);
+    }
   } finally {
     await fs.promises.rm(tempPath, { force: true }).catch(() => undefined);
   }

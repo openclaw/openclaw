@@ -244,6 +244,63 @@ describe("session cost usage", () => {
     });
   });
 
+  it("falls back to exclusive create when usage cache lock hardlinks are unsupported", async () => {
+    const root = await makeSessionCostRoot("cost-cache-lock-no-hardlink");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-cache-lock-no-hardlink.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      transcriptText("sess-cache-lock-no-hardlink", {
+        type: "message",
+        timestamp: "2026-02-05T12:00:00.000Z",
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.4",
+          usage: {
+            input: 10,
+            output: 20,
+            totalTokens: 30,
+            cost: { total: 0.03 },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const unsupportedLink = Object.assign(new Error("hard links are not supported"), {
+      code: "ENOTSUP",
+    });
+    const linkSpy = vi.spyOn(nodeFs.promises, "link").mockRejectedValueOnce(unsupportedLink);
+
+    try {
+      await withStateDir(root, async () => {
+        const result = await refreshCostUsageCache();
+        expect(result).toBe("refreshed");
+
+        const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
+        const summary = await loadCostUsageSummaryFromCache({
+          startMs: Date.UTC(2026, 1, 5),
+          endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+          requestRefresh: false,
+        });
+        const lockPath = `${cachePath}.lock`;
+        const remainingTempLocks = (await fs.readdir(sessionsDir)).filter(
+          (entry) => entry.startsWith(".usage-cost-cache.json.lock.") && entry.endsWith(".tmp"),
+        );
+
+        expect(linkSpy).toHaveBeenCalledTimes(1);
+        await expect(fs.access(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+        expect(remainingTempLocks).toEqual([]);
+        expect(summary.totals.totalTokens).toBe(30);
+        expect(summary.cacheStatus?.status).toBe("fresh");
+      });
+    } finally {
+      linkSpy.mockRestore();
+    }
+  });
+
   it("refreshes append-only durable aggregate cache by scanning only appended bytes", async () => {
     const root = await makeSessionCostRoot("cost-cache-append");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
