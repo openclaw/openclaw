@@ -493,6 +493,7 @@ describe("QmdMemoryManager", () => {
     const initialUpdateCalls = spawnMock.mock.calls.filter((call) => call[1]?.[0] === "update");
     expect(initialUpdateCalls).toHaveLength(0);
     const watchOptions = firstWatchOptions();
+    expect(watchOptions).not.toHaveProperty("awaitWriteFinish");
     expect(watchOptions.ignored?.(path.join(workspaceDir, "node_modules", "pkg", "note.md"))).toBe(
       true,
     );

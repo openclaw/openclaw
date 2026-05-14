@@ -62,7 +62,6 @@ const log = createSubsystemLogger("memory");
 
 const SNIPPET_HEADER_RE = /@@\s*-([0-9]+),([0-9]+)/;
 const SEARCH_PENDING_UPDATE_WAIT_MS = 500;
-const QMD_WATCH_STABILITY_MS = 200;
 const MAX_QMD_OUTPUT_CHARS = 200_000;
 const NUL_MARKER_RE = /(?:\^@|\\0|\\x00|\\u0000|null\s*byte|nul\s*byte)/i;
 const QMD_EMBED_BACKOFF_BASE_MS = 60_000;
@@ -1560,10 +1559,6 @@ export class QmdMemoryManager implements MemorySearchManager {
     this.watcher = chokidar.watch(watchPathList, {
       ignoreInitial: true,
       ignored: (watchPath) => shouldIgnoreMemoryWatchPath(watchPath),
-      awaitWriteFinish: {
-        stabilityThreshold: QMD_WATCH_STABILITY_MS,
-        pollInterval: 100,
-      },
     });
     const markDirty = () => {
       this.dirty = true;
