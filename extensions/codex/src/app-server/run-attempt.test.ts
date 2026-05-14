@@ -2522,18 +2522,9 @@ describe("runCodexAppServerAttempt", () => {
 
     const turnStart = harness.requests.find((request) => request.method === "turn/start");
     const turnStartParams = turnStart?.params as {
-      collaborationMode?: {
-        settings?: { developer_instructions?: string | null };
-      };
       input?: Array<{ text?: string }>;
     };
     expect(turnStartParams.input?.[0]?.text).toBe(exactCommand);
-    expect(turnStartParams.collaborationMode?.settings?.developer_instructions).toContain(
-      "This is an OpenClaw cron automation turn",
-    );
-    expect(turnStartParams.collaborationMode?.settings?.developer_instructions).toContain(
-      "run that command before doing any investigation",
-    );
   });
 
   it("fires llm_input, llm_output, and agent_end hooks for codex turns", async () => {
@@ -5882,25 +5873,6 @@ describe("runCodexAppServerAttempt", () => {
 
     params.trigger = "user";
     expect(buildTurnCollaborationMode(params).settings.developer_instructions).toBeNull();
-  });
-
-  it("uses turn-scoped collaboration instructions for cron Codex turns", () => {
-    const params = createParams("/tmp/session.jsonl", "/tmp/workspace");
-    params.trigger = "cron";
-
-    const cronCollaborationMode = buildTurnCollaborationMode(params);
-    expect(cronCollaborationMode.mode).toBe("default");
-    expect(cronCollaborationMode.settings.model).toBe("gpt-5.4-codex");
-    expect(cronCollaborationMode.settings.reasoning_effort).toBe("medium");
-    expect(cronCollaborationMode.settings.developer_instructions).toContain(
-      "This is an OpenClaw cron automation turn",
-    );
-    expect(cronCollaborationMode.settings.developer_instructions).toContain(
-      "If it asks you to run an exact command, run that command before doing any investigation",
-    );
-    expect(cronCollaborationMode.settings.developer_instructions).not.toContain(
-      "Do not read AGENTS.md",
-    );
   });
 
   it("preserves the bound auth profile when resume params omit authProfileId", async () => {

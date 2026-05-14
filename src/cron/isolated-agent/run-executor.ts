@@ -128,6 +128,8 @@ export function createCronPromptExecutor(params: {
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.cronSession.sessionEntry.systemPromptReport,
   );
+  const bootstrapContextMode =
+    params.agentPayload?.lightContext === true ? "lightweight" : undefined;
 
   const runPrompt = async (promptText: string) => {
     const fallbackResult = await runWithModelFallback({
@@ -178,7 +180,7 @@ export function createCronPromptExecutor(params: {
             abortSignal: params.abortSignal,
             onExecutionStarted: params.onExecutionStarted,
             onExecutionPhase: params.onExecutionPhase,
-            bootstrapContextMode: "lightweight",
+            bootstrapContextMode,
             bootstrapContextRunKind: "cron",
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature,
@@ -236,7 +238,7 @@ export function createCronPromptExecutor(params: {
           verboseLevel: params.resolvedVerboseLevel,
           timeoutMs: params.timeoutMs,
           runTimeoutOverrideMs: params.runTimeoutOverrideMs,
-          bootstrapContextMode: "lightweight",
+          bootstrapContextMode,
           bootstrapContextRunKind: "cron",
           toolsAllow: params.agentPayload?.toolsAllow,
           execOverrides: params.suppressExecNotifyOnExit

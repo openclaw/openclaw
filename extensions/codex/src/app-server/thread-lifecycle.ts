@@ -558,21 +558,10 @@ export function buildTurnCollaborationMode(
 }
 
 function buildTurnScopedCollaborationInstructions(params: EmbeddedRunAttemptParams): string | null {
-  if (params.trigger === "cron") {
-    return buildCronCollaborationInstructions();
-  }
   if (params.trigger === "heartbeat") {
     return buildHeartbeatCollaborationInstructions();
   }
   return null;
-}
-
-function buildCronCollaborationInstructions(): string {
-  return [
-    "This is an OpenClaw cron automation turn. Apply these instructions only to this scheduled job; ordinary chat turns should stay in Codex Default mode.",
-    "Execute the cron payload directly. If it asks you to run an exact command, run that command before doing any investigation, planning, memory review, or workspace bootstrap.",
-    "Keep output concise and automation-oriented. Prefer the final command result or a short failure summary over status narration.",
-  ].join("\n\n");
 }
 
 function buildHeartbeatCollaborationInstructions(): string {
