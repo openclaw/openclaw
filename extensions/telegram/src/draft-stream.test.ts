@@ -167,6 +167,28 @@ describe("createTelegramDraftStream", () => {
     ).toBe(false);
   });
 
+  it("does not retry forum topic preview sends without the topic id", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage.mockRejectedValueOnce(new Error("400: Bad Request: message thread not found"));
+    const warn = vi.fn();
+    const stream = createDraftStream(api, {
+      thread: { id: 42, scope: "forum" },
+      warn,
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", { message_thread_id: 42 });
+    expect(warn).toHaveBeenCalledWith(
+      "telegram stream preview failed: 400: Bad Request: message thread not found",
+    );
+    expect(
+      warn.mock.calls.some(([message]) => String(message).includes("retrying without thread")),
+    ).toBe(false);
+  });
+
   it("keeps allow_sending_without_reply on message previews that target a reply", async () => {
     const api = createMockDraftApi();
     const stream = createDraftStream(api, {
