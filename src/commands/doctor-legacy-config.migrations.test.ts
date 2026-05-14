@@ -126,6 +126,17 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.changes).toStrictEqual([]);
   };
 
+  const ollamaModel = (overrides: Record<string, unknown> = {}) => ({
+    id: "llama3.3",
+    name: "Llama 3.3",
+    reasoning: false,
+    input: ["text"] as Array<"text">,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 81920,
+    maxTokens: 8192,
+    ...overrides,
+  });
+
   beforeAll(() => {
     previousOauthDir = process.env.OPENCLAW_OAUTH_DIR;
     tempOauthDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-oauth-"));
@@ -1227,6 +1238,214 @@ describe("normalizeCompatibilityConfigValues", () => {
       "Moved tools.media.audio.models[0].deepgram → tools.media.audio.models[0].providerOptions.deepgram.",
       "Merged tools.media.models[0].deepgram → tools.media.models[0].providerOptions.deepgram (filled missing canonical fields from legacy).",
     ]);
+  });
+
+  it("sets native Ollama params.num_ctx from explicit model contextWindow budgets", () => {
+    const res = normalizeCompatibilityConfigValues({
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost:11434",
+            api: "ollama",
+            models: [
+              ollamaModel({
+                params: {
+                  temperature: 0.2,
+                },
+              }),
+              ollamaModel({
+                id: "llama3.3-small",
+                contextWindow: 32768,
+                maxTokens: 4096,
+                params: {
+                  num_ctx: 16384,
+                },
+              }),
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.config.models?.providers?.ollama?.models?.map((model) => model.params)).toEqual([
+      { temperature: 0.2, num_ctx: 81920 },
+      { num_ctx: 16384 },
+    ]);
+    expect(res.changes).toEqual([
+      "Set models.providers.ollama.models[0].params.num_ctx to 81920 for native Ollama compatibility.",
+    ]);
+  });
+
+  it("sets native Ollama params.num_ctx from custom provider maxTokens budgets", () => {
+    const res = normalizeCompatibilityConfigValues({
+      models: {
+        providers: {
+          localOllama: {
+            baseUrl: "http://ollama-box:11434",
+            api: "ollama",
+            models: [
+              ollamaModel({
+                contextWindow: 0,
+                maxTokens: 24576,
+              }),
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.config.models?.providers?.localOllama?.models?.[0]?.params).toEqual({
+      num_ctx: 24576,
+    });
+    expect(res.changes).toEqual([
+      "Set models.providers.localOllama.models[0].params.num_ctx to 24576 for native Ollama compatibility.",
+    ]);
+  });
+
+  it("prefers provider contextWindow over model maxTokens for native Ollama params.num_ctx", () => {
+    const modelWithoutContextWindow = ollamaModel({
+      contextWindow: undefined,
+      maxTokens: 4096,
+    });
+    const res = normalizeCompatibilityConfigValues({
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost:11434",
+            api: "ollama",
+            contextWindow: 65536,
+            models: [modelWithoutContextWindow],
+          },
+        },
+      },
+    });
+
+    expect(res.config.models?.providers?.ollama?.models?.[0]?.params).toBeUndefined();
+    expect(res.config.models?.providers?.ollama?.params).toEqual({
+      num_ctx: 65536,
+    });
+    expect(res.changes).toEqual([
+      "Set models.providers.ollama.params.num_ctx to 65536 for native Ollama compatibility.",
+    ]);
+  });
+
+  it("sets provider-level native Ollama params.num_ctx when auto-discovered models use provider budgets", () => {
+    const res = normalizeCompatibilityConfigValues({
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost:11434",
+            api: "ollama",
+            contextWindow: 65536,
+            models: [],
+          },
+        },
+      },
+    });
+
+    expect(res.config.models?.providers?.ollama?.params).toEqual({
+      num_ctx: 65536,
+    });
+    expect(res.changes).toEqual([
+      "Set models.providers.ollama.params.num_ctx to 65536 for native Ollama compatibility.",
+    ]);
+  });
+
+  it("sets provider-level native Ollama params.num_ctx when explicit model entries also exist", () => {
+    const res = normalizeCompatibilityConfigValues({
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost:11434",
+            api: "ollama",
+            contextWindow: 65536,
+            models: [
+              ollamaModel({
+                contextWindow: 32768,
+              }),
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.config.models?.providers?.ollama?.params).toEqual({
+      num_ctx: 65536,
+    });
+    expect(res.config.models?.providers?.ollama?.models?.[0]?.params).toEqual({
+      num_ctx: 32768,
+    });
+    expect(res.changes).toEqual([
+      "Set models.providers.ollama.params.num_ctx to 65536 for native Ollama compatibility.",
+      "Set models.providers.ollama.models[0].params.num_ctx to 32768 for native Ollama compatibility.",
+    ]);
+  });
+
+  it("keeps existing provider-level native Ollama params.num_ctx ahead of inherited provider budgets", () => {
+    const res = normalizeCompatibilityConfigValues({
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost:11434",
+            api: "ollama",
+            contextWindow: 65536,
+            params: {
+              num_ctx: 32768,
+            },
+            models: [
+              ollamaModel({
+                contextWindow: undefined,
+                maxTokens: undefined,
+              }),
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.config.models?.providers?.ollama?.params).toEqual({
+      num_ctx: 32768,
+    });
+    expect(res.config.models?.providers?.ollama?.models?.[0]?.params).toBeUndefined();
+    expect(res.changes).toEqual([]);
+  });
+
+  it("does not set native Ollama params for OpenAI-compatible Ollama configs", () => {
+    const input = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost:11434/v1",
+            api: "openai-completions" as const,
+            models: [ollamaModel()],
+          },
+        },
+      },
+    };
+
+    const res = normalizeCompatibilityConfigValues(input);
+
+    expect(res.config).toEqual(input);
+    expect(res.changes).toEqual([]);
+  });
+
+  it("does not set native Ollama params for implicit OpenAI-compatible Ollama configs", () => {
+    const input = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost:11434/v1",
+            contextWindow: 65536,
+            models: [ollamaModel()],
+          },
+        },
+      },
+    };
+
+    const res = normalizeCompatibilityConfigValues(input);
+
+    expect(res.config).toEqual(input);
+    expect(res.changes).toEqual([]);
   });
 
   it("normalizes persisted mistral model maxTokens that matched the old context-sized defaults", () => {

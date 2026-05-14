@@ -19,6 +19,7 @@ import {
   createChannelProgressDraftGate,
   formatChannelProgressDraftText,
   isChannelProgressDraftWorkToolName,
+  mergeChannelProgressDraftLine,
   resolveChannelProgressDraftMaxLines,
   resolveChannelProgressDraftLabel,
   resolveChannelProgressDraftRender,
@@ -1061,13 +1062,13 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       if (!previewToolProgressEnabled || previewToolProgressSuppressed) {
         return;
       }
-      const previous = previewToolProgressLines.at(-1);
-      if (previous?.text === normalized) {
+      const nextLines = mergeChannelProgressDraftLine(previewToolProgressLines, line, {
+        maxLines: resolveChannelProgressDraftMaxLines(account.config),
+      });
+      if (nextLines === previewToolProgressLines) {
         return;
       }
-      previewToolProgressLines = [...previewToolProgressLines, line].slice(
-        -resolveChannelProgressDraftMaxLines(account.config),
-      );
+      previewToolProgressLines = nextLines;
       draftStream.update(
         formatChannelProgressDraftText({
           entry: account.config,
@@ -1080,12 +1081,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       return;
     }
     if (previewToolProgressEnabled && !previewToolProgressSuppressed) {
-      const previous = previewToolProgressLines.at(-1);
-      if (previous?.text !== normalized) {
-        previewToolProgressLines = [...previewToolProgressLines, line].slice(
-          -resolveChannelProgressDraftMaxLines(account.config),
-        );
-      }
+      previewToolProgressLines = mergeChannelProgressDraftLine(previewToolProgressLines, line, {
+        maxLines: resolveChannelProgressDraftMaxLines(account.config),
+      });
     }
     const alreadyStarted = progressDraftGate.hasStarted;
     await progressDraftGate.noteWork();
@@ -1234,6 +1232,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
                   await pushPreviewToolProgress(
                     buildChannelProgressDraftLineForEntry(account.config, {
                       event: "item",
+                      itemId: payload.itemId,
                       itemKind: payload.kind,
                       title: payload.title,
                       name: payload.name,

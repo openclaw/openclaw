@@ -30,6 +30,8 @@ import { CLI_AUTH_EPOCH_VERSION, resolveCliAuthEpoch } from "../cli-auth-epoch.j
 import { resolveCliBackendConfig } from "../cli-backends.js";
 import { hashCliSessionText, resolveCliSessionReuse } from "../cli-session.js";
 import { claudeCliSessionTranscriptHasContent } from "../command/attempt-execution.helpers.js";
+import { resolveContextWindowInfo } from "../context-window-guard.js";
+import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import {
   resolveBootstrapMaxChars,
@@ -156,6 +158,12 @@ export async function prepareCliRunContext(
   const modelId = (params.model ?? "default").trim() || "default";
   const normalizedModel = normalizeCliModel(modelId, backendResolved.config);
   const modelDisplay = `${params.provider}/${modelId}`;
+  const contextWindowInfo = resolveContextWindowInfo({
+    cfg: params.config,
+    provider: params.provider,
+    modelId,
+    defaultTokens: DEFAULT_CONTEXT_TOKENS,
+  });
 
   const sessionLabel = params.sessionKey ?? params.sessionId;
   const { bootstrapFiles, contextFiles } = await prepareDeps.resolveBootstrapContextForRun({
@@ -471,6 +479,7 @@ export async function prepareCliRunContext(
     reusableCliSession,
     modelId,
     normalizedModel,
+    contextWindowInfo,
     systemPrompt,
     systemPromptReport,
     bootstrapPromptWarningLines: bootstrapPromptWarning.lines,
