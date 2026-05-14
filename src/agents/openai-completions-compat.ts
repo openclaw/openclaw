@@ -54,8 +54,7 @@ export function resolveOpenAICompletionsCompatDefaults(
     endpointClass === "zai-native" ||
     (isDefaultRoute && isDefaultRouteProvider(input.provider, "zai"));
   const isXiaomiMiMo =
-    endpointClass === "xiaomi-native" ||
-    (isDefaultRoute && isDefaultRouteProvider(input.provider, "xiaomi", "xiaomi-coding"));
+    isDefaultRoute && isDefaultRouteProvider(input.provider, "xiaomi", "xiaomi-coding");
   const isDeepSeek =
     endpointClass === "deepseek-native" ||
     (isDefaultRoute && isDefaultRouteProvider(input.provider, "deepseek"));
@@ -66,7 +65,6 @@ export function resolveOpenAICompletionsCompatDefaults(
     endpointClass === "mistral-public" ||
     endpointClass === "opencode-native" ||
     endpointClass === "xai-native" ||
-    endpointClass === "xiaomi-native" ||
     isZai ||
     isXiaomiMiMo ||
     (isDefaultRoute &&
