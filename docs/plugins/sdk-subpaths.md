@@ -64,6 +64,17 @@ APIs. Maintainers track the exact set in
 `scripts/lib/plugin-sdk-deprecated-public-subpaths.json` and the current budget
 with `pnpm plugin-sdk:surface`.
 
+### Reserved bundled-plugin helper subpaths
+
+These subpaths are transitional helper surfaces owned by their matching bundled
+plugin. They remain importable for compatibility and package-contract checks,
+but new shared helpers should use plugin-neutral SDK contracts instead.
+
+| Subpath                                | Key exports                                                                                                          |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `plugin-sdk/codex-mcp-projection`      | Codex app-server helper for projecting user MCP server config into thread config without deep-importing core helpers |
+| `plugin-sdk/codex-native-task-runtime` | Codex app-server native task mirror helpers for recording task run creation, progress, and final state               |
+
 ### Deprecated broad barrels
 
 These broad re-export barrels remain buildable for OpenClaw source and
