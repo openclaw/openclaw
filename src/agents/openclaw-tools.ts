@@ -1,3 +1,4 @@
+import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import { selectApplicableRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
@@ -117,6 +118,8 @@ export function createOpenClawTools(
     cronSelfRemoveOnlyJobId?: string;
     /** Require explicit message targets (no implicit last-route sends). */
     requireExplicitMessageTarget?: boolean;
+    /** Visible source replies must be sent through the message tool when set to message_tool_only. */
+    sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
     /** If true, omit the message tool from the tool list. */
     disableMessageTool?: boolean;
     /** If true, include the heartbeat response tool for structured heartbeat outcomes. */
@@ -283,6 +286,7 @@ export function createOpenClawTools(
     : createMessageTool({
         agentAccountId: options?.agentAccountId,
         agentSessionKey: options?.agentSessionKey,
+        agentId: sessionAgentId,
         sessionId: options?.sessionId,
         config: options?.config,
         currentChannelId: options?.currentChannelId,
@@ -294,6 +298,7 @@ export function createOpenClawTools(
         hasRepliedRef: options?.hasRepliedRef,
         sandboxRoot: options?.sandboxRoot,
         requireExplicitTarget: options?.requireExplicitMessageTarget,
+        sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
         requesterSenderId: options?.requesterSenderId ?? undefined,
         senderIsOwner: options?.senderIsOwner,
       });
@@ -409,6 +414,8 @@ export function createOpenClawTools(
             config: resolvedConfig,
             requesterAgentIdOverride: options?.requesterAgentIdOverride,
             workspaceDir: spawnWorkspaceDir,
+            inheritedToolAllowlist: options?.inheritedToolAllowlist,
+            inheritedToolDenylist: options?.inheritedToolDenylist,
           }),
         ]),
     createSessionsYieldTool({
@@ -423,6 +430,8 @@ export function createOpenClawTools(
       runSessionKey: options?.runSessionKey,
       config: resolvedConfig,
       sandboxed: options?.sandboxed,
+      activeModelProvider: options?.modelProvider,
+      activeModelId: options?.modelId,
     }),
     ...collectPresentOpenClawTools([webSearchTool, webFetchTool, imageTool, pdfTool]),
   ];

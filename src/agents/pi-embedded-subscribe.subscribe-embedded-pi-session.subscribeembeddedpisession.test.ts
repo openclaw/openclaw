@@ -1,5 +1,6 @@
-import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
+import * as agentEvents from "../infra/agent-events.js";
 import {
   THINKING_TAG_CASES,
   createSubscribedSessionHarness,
@@ -111,6 +112,55 @@ describe("subscribeEmbeddedPiSession", () => {
     });
   }
 
+  function findBlockReplyPayload(
+    onBlockReply: { mock: { calls: unknown[][] } },
+    text: string,
+  ): { mediaUrls?: unknown } | undefined {
+    return onBlockReply.mock.calls
+      .map((call) => call[0] as { text?: unknown; mediaUrls?: unknown })
+      .find((payload) => payload.text === text);
+  }
+
+  function mockCallArg(mock: { mock: { calls: unknown[][] } }, callIndex = 0): unknown {
+    const call = mock.mock.calls[callIndex];
+    if (!call) {
+      throw new Error(`expected mock call ${callIndex + 1}`);
+    }
+    return call[0];
+  }
+
+  function latestMockCallArg(mock: { mock: { calls: unknown[][] } }): unknown {
+    return mockCallArg(mock, mock.mock.calls.length - 1);
+  }
+
+  function expectBlockReplyPayload(
+    onBlockReply: { mock: { calls: unknown[][] } },
+    expected: { text: string; mediaUrls?: string[] },
+  ): void {
+    const payload = findBlockReplyPayload(onBlockReply, expected.text);
+    if (!payload) {
+      throw new Error(`Expected block reply text: ${expected.text}`);
+    }
+    if (expected.mediaUrls !== undefined) {
+      expect(payload.mediaUrls).toStrictEqual(expected.mediaUrls);
+    }
+  }
+
+  function expectLifecyclePayload(
+    payloads: Array<Record<string, unknown>>,
+    expected: { phase: string; livenessState: string; replayInvalid: boolean },
+  ): void {
+    const payload = payloads.find(
+      (item) =>
+        item.phase === expected.phase &&
+        item.livenessState === expected.livenessState &&
+        item.replayInvalid === expected.replayInvalid,
+    );
+    if (!payload) {
+      throw new Error(`Expected lifecycle payload for phase ${expected.phase}`);
+    }
+  }
+
   it("captures usage from completions timings on done events", () => {
     const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
 
@@ -211,12 +261,12 @@ describe("subscribeEmbeddedPiSession", () => {
       await flushBlockReplyCallbacks();
 
       expect(onBlockReply).toHaveBeenCalledTimes(1);
-      expect(onBlockReply.mock.calls[0][0].text).toBe("Final answer");
+      expect((mockCallArg(onBlockReply) as { text?: string }).text).toBe("Final answer");
 
       const streamTexts = onReasoningStream.mock.calls
         .map((call) => call[0]?.text)
         .filter((value): value is string => typeof value === "string");
-      expect(streamTexts.at(-1)).toBe("Reasoning:\n_Because it helps_");
+      expect(streamTexts.at(-1)).toBe("Because it helps");
 
       expect(assistantMessage.content).toEqual([
         { type: "thinking", thinking: "Because it helps" },
@@ -300,13 +350,11 @@ describe("subscribeEmbeddedPiSession", () => {
     });
 
     await vi.waitFor(() => {
-      expect(onToolResult).toHaveBeenCalled();
+      expect(onToolResult).toHaveBeenCalledTimes(2);
     });
-    const payload = onToolResult.mock.calls.at(-1)?.[0] as
-      | { text?: string; mediaUrls?: string[] }
-      | undefined;
-    expect(payload?.text ?? "").toContain("Fetched page");
-    expect(payload?.mediaUrls).toBeUndefined();
+    const payload = latestMockCallArg(onToolResult) as { text?: string; mediaUrls?: string[] };
+    expect(payload.text ?? "").toContain("Fetched page");
+    expect(payload.mediaUrls).toBeUndefined();
   });
 
   it("delivers generated image media once in markdown verbose output", async () => {
@@ -342,13 +390,14 @@ describe("subscribeEmbeddedPiSession", () => {
     });
 
     await vi.waitFor(() => {
-      expect(onToolResult).toHaveBeenCalled();
+      expect(onToolResult).toHaveBeenCalledTimes(2);
     });
-    const toolPayload = onToolResult.mock.calls.at(-1)?.[0] as
-      | { text?: string; mediaUrls?: string[] }
-      | undefined;
-    expect(toolPayload?.text ?? "").toContain("Generated 1 image");
-    expect(toolPayload?.mediaUrls).toBeUndefined();
+    const toolPayload = latestMockCallArg(onToolResult) as {
+      text?: string;
+      mediaUrls?: string[];
+    };
+    expect(toolPayload.text ?? "").toContain("Generated 1 image");
+    expect(toolPayload.mediaUrls).toBeUndefined();
 
     emit({ type: "message_start", message: { role: "assistant" } });
     emitAssistantTextDelta(emit, "Here is the image.");
@@ -361,12 +410,10 @@ describe("subscribeEmbeddedPiSession", () => {
     });
     await flushBlockReplyCallbacks();
 
-    expect(onBlockReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "Here is the image.",
-        mediaUrls: ["/tmp/generated.png"],
-      }),
-    );
+    expectBlockReplyPayload(onBlockReply, {
+      text: "Here is the image.",
+      mediaUrls: ["/tmp/generated.png"],
+    });
   });
 
   it("does not duplicate generated image media when the assistant reply has MEDIA lines", async () => {
@@ -402,7 +449,7 @@ describe("subscribeEmbeddedPiSession", () => {
     });
 
     await vi.waitFor(() => {
-      expect(onToolResult).toHaveBeenCalled();
+      expect(onToolResult).toHaveBeenCalledTimes(2);
     });
 
     emit({ type: "message_start", message: { role: "assistant" } });
@@ -416,12 +463,10 @@ describe("subscribeEmbeddedPiSession", () => {
     });
     await flushBlockReplyCallbacks();
 
-    expect(onBlockReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "Here is the selected image.",
-        mediaUrls: ["./selected.png"],
-      }),
-    );
+    expectBlockReplyPayload(onBlockReply, {
+      text: "Here is the selected image.",
+      mediaUrls: ["./selected.png"],
+    });
   });
 
   it("does not attach generated image media to an early streamed chunk before explicit MEDIA", async () => {
@@ -458,18 +503,19 @@ describe("subscribeEmbeddedPiSession", () => {
     });
 
     await vi.waitFor(() => {
-      expect(onToolResult).toHaveBeenCalled();
+      expect(onToolResult).toHaveBeenCalledTimes(2);
     });
 
     emit({ type: "message_start", message: { role: "assistant" } });
     emitAssistantTextDelta(emit, "Generated 1 image.\n");
 
-    expect(onBlockReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "Generated 1 image.",
-      }),
-    );
-    expect(onBlockReply.mock.calls.some(([payload]) => payload.mediaUrls?.length)).toBe(false);
+    expectBlockReplyPayload(onBlockReply, {
+      text: "Generated 1 image.",
+    });
+    const earlyMediaPayloads = onBlockReply.mock.calls
+      .map(([payload]) => payload)
+      .filter((payload) => payload.mediaUrls?.length);
+    expect(earlyMediaPayloads).toStrictEqual([]);
 
     emitAssistantTextDelta(emit, "MEDIA:/tmp/generated.png");
     emit({
@@ -538,12 +584,10 @@ describe("subscribeEmbeddedPiSession", () => {
     emit({ type: "agent_end" });
     await flushBlockReplyCallbacks();
 
-    expect(onBlockReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "Here it is.",
-        mediaUrls: ["/tmp/lobster-boss.mp3"],
-      }),
-    );
+    expectBlockReplyPayload(onBlockReply, {
+      text: "Here it is.",
+      mediaUrls: ["/tmp/lobster-boss.mp3"],
+    });
   });
 
   it.each([
@@ -606,12 +650,13 @@ describe("subscribeEmbeddedPiSession", () => {
       emit({ type: "message_start", message: { role: "assistant" } });
       emitAssistantTextDelta(emit, firstChunk);
 
-      expect(onBlockReply).toHaveBeenCalledWith(
-        expect.objectContaining({
-          text: firstChunk.trim(),
-        }),
-      );
-      expect(onBlockReply.mock.calls.some(([payload]) => payload.mediaUrls?.length)).toBe(false);
+      expectBlockReplyPayload(onBlockReply, {
+        text: firstChunk.trim(),
+      });
+      const earlyMediaPayloads = onBlockReply.mock.calls
+        .map(([payload]) => payload)
+        .filter((payload) => payload.mediaUrls?.length);
+      expect(earlyMediaPayloads).toStrictEqual([]);
 
       emitAssistantTextDelta(emit, `MEDIA:${mediaUrl}`);
       emit({
@@ -701,16 +746,14 @@ describe("subscribeEmbeddedPiSession", () => {
       });
       await flushBlockReplyCallbacks();
 
-      expect(onBlockReply.mock.calls.length).toBeGreaterThan(0);
       const payloadTexts = onBlockReply.mock.calls
         .map((call) => call[0]?.text)
         .filter((value): value is string => typeof value === "string");
+      expect(payloadTexts).toEqual(["Final answer"]);
       for (const text of payloadTexts) {
         expect(text).not.toContain("Reasoning");
         expect(text).not.toContain(open);
       }
-      const combined = payloadTexts.join(" ").replace(/\s+/g, " ").trim();
-      expect(combined).toBe("Final answer");
     },
   );
 
@@ -751,8 +794,50 @@ describe("subscribeEmbeddedPiSession", () => {
     const streamTexts = onReasoningStream.mock.calls
       .map((call) => call[0]?.text)
       .filter((value): value is string => typeof value === "string");
-    expect(streamTexts.at(-1)).toBe("Reasoning:\n_Checking files done_");
+    expect(streamTexts.at(-1)).toBe("Checking files done");
     expect(onReasoningEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it("extracts correct reasoning delta for incremental stream updates", () => {
+    const emitAgentEventSpy = vi.spyOn(agentEvents, "emitAgentEvent").mockImplementation(() => {});
+    const { emit } = createSubscribedHarness({
+      runId: "run",
+      reasoningMode: "stream",
+      onReasoningStream: vi.fn(),
+    });
+
+    emit({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "Step 1" }],
+      },
+      assistantMessageEvent: {
+        type: "thinking_delta",
+        delta: "Step 1",
+      },
+    });
+
+    emit({
+      type: "message_update",
+      message: {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "Step 1 and Step 2" }],
+      },
+      assistantMessageEvent: {
+        type: "thinking_delta",
+        delta: " and Step 2",
+      },
+    });
+
+    const thinkingEvents = emitAgentEventSpy.mock.calls
+      .map((call) => call[0])
+      .filter((evt) => evt?.stream === "thinking");
+
+    expect(thinkingEvents.length).toBe(2);
+    expect(thinkingEvents[0]?.data?.delta).toBe("Step 1");
+    expect(thinkingEvents[1]?.data?.delta).toBe(" and Step 2");
+    emitAgentEventSpy.mockRestore();
   });
 
   it("emits reasoning end once when native and tagged reasoning end overlap", () => {
@@ -968,7 +1053,7 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(subscription.getLastToolError()?.toolName).toBe("session_status");
   });
 
-  it("emits lifecycle:error event on agent_end when last assistant message was an error", async () => {
+  it("emits lifecycle:error event on agent_end when last assistant message was an error", () => {
     const { emit, onAgentEvent } = createAgentEventHarness({
       runId: "run-error",
       sessionKey: "test-session",
@@ -982,8 +1067,12 @@ describe("subscribeEmbeddedPiSession", () => {
     // Look for lifecycle:error event
     const lifecycleError = findLifecycleErrorAgentEvent(onAgentEvent.mock.calls);
 
-    expect(lifecycleError).toBeDefined();
-    expect(lifecycleError?.data?.error).toContain("API rate limit reached");
+    if (!lifecycleError) {
+      throw new Error("Expected lifecycle error event");
+    }
+    const error = (lifecycleError.data as { error?: unknown } | undefined)?.error;
+    expect(typeof error).toBe("string");
+    expect(error).toContain("API rate limit reached");
   });
 
   it("preserves replay-invalid lifecycle truth across compaction retries after mutating tools", () => {
@@ -1017,13 +1106,11 @@ describe("subscribeEmbeddedPiSession", () => {
       hadPotentialSideEffects: true,
     });
     const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
-    expect(payloads).toContainEqual(
-      expect.objectContaining({
-        phase: "end",
-        livenessState: "abandoned",
-        replayInvalid: true,
-      }),
-    );
+    expectLifecyclePayload(payloads, {
+      phase: "end",
+      livenessState: "abandoned",
+      replayInvalid: true,
+    });
   });
 
   it("preserves deterministic side-effect liveness across compaction retries", () => {
@@ -1049,12 +1136,10 @@ describe("subscribeEmbeddedPiSession", () => {
     emit({ type: "agent_end" });
 
     const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
-    expect(payloads).toContainEqual(
-      expect.objectContaining({
-        phase: "end",
-        livenessState: "working",
-        replayInvalid: true,
-      }),
-    );
+    expectLifecyclePayload(payloads, {
+      phase: "end",
+      livenessState: "working",
+      replayInvalid: true,
+    });
   });
 });

@@ -145,9 +145,11 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       logWsControl: createLogger() as never,
     });
 
-    expect(onMessage).toBeDefined();
+    if (onMessage === undefined) {
+      throw new Error("expected websocket message handler");
+    }
 
-    onMessage?.(
+    onMessage(
       JSON.stringify({
         type: "req",
         id: "connect-1",
@@ -170,7 +172,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     await vi.waitFor(() => {
       expect(socketSend).toHaveBeenCalled();
     });
-    const hello = JSON.parse(socketSend.mock.calls[0]?.[0] ?? "{}") as { ok?: boolean };
+    const hello = JSON.parse(socketSend.mock.calls.at(0)?.[0] ?? "{}") as { ok?: boolean };
     expect(hello.ok).toBe(true);
 
     await vi.waitFor(() => {

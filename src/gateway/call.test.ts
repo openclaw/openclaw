@@ -4,6 +4,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { captureEnv } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
@@ -569,6 +571,28 @@ describe("callGateway url resolution", () => {
     ]);
   });
 
+  it("falls back to broad operator scopes for unresolved plugin session actions", async () => {
+    setLocalLoopbackGatewayConfig();
+    setActivePluginRegistry(createEmptyPluginRegistry());
+
+    await callGatewayCli({
+      method: "plugins.sessionAction",
+      params: {
+        pluginId: "remote-plugin",
+        actionId: "approve",
+      },
+    });
+
+    expect(lastClientOptions?.scopes).toEqual([
+      "operator.admin",
+      "operator.read",
+      "operator.write",
+      "operator.approvals",
+      "operator.pairing",
+      "operator.talk.secrets",
+    ]);
+  });
+
   it("passes explicit scopes through, including empty arrays", async () => {
     setLocalLoopbackGatewayConfig();
 
@@ -576,7 +600,7 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.scopes).toEqual(["operator.read"]);
 
     await callGatewayScoped({ method: "health", scopes: [] });
-    expect(lastClientOptions?.scopes).toEqual([]);
+    expect(lastClientOptions?.scopes).toStrictEqual([]);
   });
 
   it("uses backend client metadata for explicit scoped default calls", async () => {
@@ -614,13 +638,15 @@ describe("callGateway url resolution", () => {
   it("waits for event-loop readiness before starting CLI pairing requests", async () => {
     setLocalLoopbackGatewayConfig();
 
-    let resolveReady!: (result: {
-      ready: boolean;
-      elapsedMs: number;
-      maxDriftMs: number;
-      checks: number;
-      aborted: boolean;
-    }) => void;
+    let resolveReady:
+      | ((result: {
+          ready: boolean;
+          elapsedMs: number;
+          maxDriftMs: number;
+          checks: number;
+          aborted: boolean;
+        }) => void)
+      | undefined;
     eventLoopReadyState.promise = new Promise((resolve) => {
       resolveReady = resolve;
     });
@@ -638,6 +664,9 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.clientName).toBe(GATEWAY_CLIENT_NAMES.CLI);
     expect(startCalls).toBe(0);
 
+    if (!resolveReady) {
+      throw new Error("Expected gateway event-loop readiness resolver to be initialized");
+    }
     resolveReady({ ready: true, elapsedMs: 0, maxDriftMs: 0, checks: 2, aborted: false });
     await promise;
 
@@ -865,12 +894,16 @@ describe("callGateway error details", () => {
     expect(err?.message).toContain("Source: local loopback");
     expect(err?.message).toContain("Bind: loopback");
     expect(isGatewayTransportError(err)).toBe(true);
-    expect(err).toMatchObject({
-      name: "GatewayTransportError",
-      kind: "closed",
-      code: 1006,
-      reason: "no close reason",
-    });
+    const transportError = err as {
+      name?: string;
+      kind?: string;
+      code?: number;
+      reason?: string;
+    };
+    expect(transportError.name).toBe("GatewayTransportError");
+    expect(transportError.kind).toBe("closed");
+    expect(transportError.code).toBe(1006);
+    expect(transportError.reason).toBe("no close reason");
   });
 
   it("keeps the request alive through internally retried startup-unavailable handshakes", async () => {
@@ -915,11 +948,10 @@ describe("callGateway error details", () => {
     await promise;
 
     expect(isGatewayTransportError(err)).toBe(true);
-    expect(err).toMatchObject({
-      name: "GatewayTransportError",
-      kind: "timeout",
-      timeoutMs: 5,
-    });
+    const transportError = err as { name?: string; kind?: string; timeoutMs?: number };
+    expect(transportError.name).toBe("GatewayTransportError");
+    expect(transportError.kind).toBe("timeout");
+    expect(transportError.timeoutMs).toBe(5);
   });
 
   it("charges event-loop readiness against the wrapper timeout", async () => {
@@ -956,14 +988,18 @@ describe("callGateway error details", () => {
       aborted: false,
     };
 
-    await expect(callGateway({ method: "health", timeoutMs: 5 })).rejects.toMatchObject({
-      name: "GatewayTransportError",
-      kind: "timeout",
-      timeoutMs: 5,
+    let err: unknown;
+    await callGateway({ method: "health", timeoutMs: 5 }).catch((caught) => {
+      err = caught;
     });
+    expect(isGatewayTransportError(err)).toBe(true);
+    const transportError = err as { name?: string; kind?: string; timeoutMs?: number };
+    expect(transportError.name).toBe("GatewayTransportError");
+    expect(transportError.kind).toBe("timeout");
+    expect(transportError.timeoutMs).toBe(5);
     expect(eventLoopReadyState.calls).toHaveLength(1);
     expect(eventLoopReadyState.calls[0]?.maxWaitMs).toBe(5);
-    expect(lastClientOptions).not.toBeNull();
+    expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18789");
     expect(startCalls).toBe(0);
   });
 
@@ -1064,7 +1100,7 @@ describe("callGateway error details", () => {
   it("waits for gateway client teardown before resolving", async () => {
     setLocalLoopbackGatewayConfig();
 
-    let releaseStop!: () => void;
+    let releaseStop: (() => void) | undefined;
     let stopStarted = false;
     let stopFinished = false;
     let callResolved = false;
@@ -1116,6 +1152,9 @@ describe("callGateway error details", () => {
     });
     expect(callResolved).toBe(false);
 
+    if (!releaseStop) {
+      throw new Error("Expected gateway stop release callback to be initialized");
+    }
     releaseStop();
     await promise;
 
@@ -1127,7 +1166,7 @@ describe("callGateway error details", () => {
     setLocalLoopbackGatewayConfig();
 
     vi.useFakeTimers();
-    let releaseStop!: () => void;
+    let releaseStop: (() => void) | undefined;
     let stopStarted = false;
 
     __testing.setDepsForTests({
@@ -1173,6 +1212,9 @@ describe("callGateway error details", () => {
 
     await vi.advanceTimersByTimeAsync(5);
 
+    if (!releaseStop) {
+      throw new Error("Expected gateway stop release callback to be initialized");
+    }
     releaseStop();
 
     await expect(promise).resolves.toEqual({ ok: true });

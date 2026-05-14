@@ -9,6 +9,7 @@ import {
   setSerializedSessionStore,
   writeSessionStoreCache,
 } from "./store-cache.js";
+import { collectSessionMaintenancePreserveKeys } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   capEntryCount,
@@ -153,27 +154,36 @@ export function loadSessionStore(
   if (opts.runMaintenance) {
     const maintenance = opts.maintenanceConfig ?? resolveMaintenanceConfig();
     const beforeCount = Object.keys(store).length;
+    let pruned = 0;
+    let capped = 0;
     if (maintenance.mode === "enforce" && beforeCount > maintenance.maxEntries) {
-      const pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, { log: false });
+      const preserveSessionKeys = collectSessionMaintenancePreserveKeys();
+      pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, {
+        log: false,
+        preserveKeys: preserveSessionKeys,
+      });
       const countAfterPrune = Object.keys(store).length;
-      const capped = shouldRunSessionEntryMaintenance({
+      capped = shouldRunSessionEntryMaintenance({
         entryCount: countAfterPrune,
         maxEntries: maintenance.maxEntries,
       })
-        ? capEntryCount(store, maintenance.maxEntries, { log: false })
+        ? capEntryCount(store, maintenance.maxEntries, {
+            log: false,
+            preserveKeys: preserveSessionKeys,
+          })
         : 0;
-      const afterCount = Object.keys(store).length;
-      if (pruned > 0 || capped > 0) {
-        serializedFromDisk = undefined;
-        log.info("applied load-time maintenance to oversized session store", {
-          storePath,
-          before: beforeCount,
-          after: afterCount,
-          pruned,
-          capped,
-          maxEntries: maintenance.maxEntries,
-        });
-      }
+    }
+    const afterCount = Object.keys(store).length;
+    if (pruned > 0 || capped > 0) {
+      serializedFromDisk = undefined;
+      log.info("applied load-time maintenance to session store", {
+        storePath,
+        before: beforeCount,
+        after: afterCount,
+        pruned,
+        capped,
+        maxEntries: maintenance.maxEntries,
+      });
     }
   }
 

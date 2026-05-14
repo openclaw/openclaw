@@ -3,9 +3,13 @@ import { describe, expect, it } from "vitest";
 import { TALK_TEST_PROVIDER_ID } from "../../test-utils/talk-test-provider.js";
 import {
   formatValidationErrors,
+  validateChatEvent,
   validateModelsListParams,
   validateNodeEventResult,
+  validateNodePairRequestParams,
   validateNodePresenceAlivePayload,
+  validateTasksCancelParams,
+  validateTasksListParams,
   validateTalkConfigResult,
   validateTalkEvent,
   validateTalkClientCreateParams,
@@ -151,6 +155,7 @@ describe("validateTalkConfigResult", () => {
               },
               model: "gpt-realtime",
               voice: "alloy",
+              instructions: "Speak with crisp diction.",
               mode: "realtime",
               transport: "gateway-relay",
               brain: "agent-consult",
@@ -168,7 +173,7 @@ describe("validateTalkClientCreateParams", () => {
       validateTalkClientCreateParams({
         sessionKey: "agent:main:main",
         provider: "openai",
-        model: "gpt-realtime-1.5",
+        model: "gpt-realtime-2",
         voice: "alloy",
         mode: "realtime",
         transport: "webrtc",
@@ -177,7 +182,7 @@ describe("validateTalkClientCreateParams", () => {
     ).toBe(true);
   });
 
-  it("rejects request-time instruction overrides", () => {
+  it("rejects request-time instruction overrides for Talk client creation", () => {
     expect(
       validateTalkClientCreateParams({
         sessionKey: "agent:main:main",
@@ -269,8 +274,9 @@ describe("validateTalkSession", () => {
     expect(
       validateTalkSessionCreateParams({
         sessionKey: "agent:main:main",
+        spawnedBy: "agent:main:parent",
         provider: "openai",
-        model: "gpt-realtime-1.5",
+        model: "gpt-realtime-2",
         voice: "alloy",
         mode: "realtime",
         transport: "managed-room",
@@ -284,7 +290,7 @@ describe("validateTalkSession", () => {
         roomUrl: "/talk/rooms/talk_handoff-1",
         sessionKey: "agent:main:main",
         provider: "openai",
-        model: "gpt-realtime-1.5",
+        model: "gpt-realtime-2",
         voice: "alloy",
         mode: "realtime",
         transport: "managed-room",
@@ -311,7 +317,7 @@ describe("validateTalkSession", () => {
     ).toBe(true);
   });
 
-  it("rejects request-time instruction overrides", () => {
+  it("rejects request-time instruction overrides for Talk session creation", () => {
     expect(
       validateTalkSessionCreateParams({
         sessionKey: "agent:main:main",
@@ -406,6 +412,7 @@ describe("validateTalkSessionRelayParams", () => {
         sessionId: "session-1",
         callId: "call-1",
         result: { ok: true },
+        options: { suppressResponse: true, willContinue: true },
       }),
     ).toBe(true);
   });
@@ -443,6 +450,53 @@ describe("validateWakeParams", () => {
   });
 });
 
+describe("validateChatEvent", () => {
+  it("accepts v4 chat delta text and replacement markers", () => {
+    expect(
+      validateChatEvent({
+        runId: "run-chat",
+        sessionKey: "agent:main:main",
+        seq: 1,
+        state: "delta",
+        deltaText: "hello",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "hello" }],
+        },
+      }),
+    ).toBe(true);
+    expect(
+      validateChatEvent({
+        runId: "run-chat",
+        sessionKey: "agent:main:main",
+        seq: 2,
+        state: "delta",
+        deltaText: "replacement",
+        replace: true,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "replacement" }],
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects v3-style chat deltas without deltaText", () => {
+    expect(
+      validateChatEvent({
+        runId: "run-chat",
+        sessionKey: "agent:main:main",
+        seq: 1,
+        state: "delta",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "hello" }],
+        },
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("validateModelsListParams", () => {
   it("accepts the supported model catalog views", () => {
     expect(validateModelsListParams({})).toBe(true);
@@ -454,6 +508,25 @@ describe("validateModelsListParams", () => {
   it("rejects unknown model catalog views and extra fields", () => {
     expect(validateModelsListParams({ view: "available" })).toBe(false);
     expect(validateModelsListParams({ view: "configured", provider: "minimax" })).toBe(false);
+  });
+});
+
+describe("validateTasksListParams", () => {
+  it("accepts SDK task ledger filters", () => {
+    expect(
+      validateTasksListParams({
+        status: ["running", "completed"],
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        limit: 50,
+        cursor: "100",
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects internal task statuses and unknown fields", () => {
+    expect(validateTasksListParams({ status: "succeeded" })).toBe(false);
+    expect(validateTasksCancelParams({ taskId: "task-1", force: true })).toBe(false);
   });
 });
 
@@ -479,6 +552,27 @@ describe("validateNodePresenceAlivePayload", () => {
       validateNodePresenceAlivePayload({
         trigger: "silent_push",
         arbitrary: true,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("validateNodePairRequestParams", () => {
+  it("accepts node pairing permissions", () => {
+    expect(
+      validateNodePairRequestParams({
+        nodeId: "ios-node-1",
+        commands: ["canvas.snapshot"],
+        permissions: { camera: true, notifications: false },
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects non-boolean node pairing permissions", () => {
+    expect(
+      validateNodePairRequestParams({
+        nodeId: "ios-node-1",
+        permissions: { camera: "yes" },
       }),
     ).toBe(false);
   });

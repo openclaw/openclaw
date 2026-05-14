@@ -1,4 +1,4 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import {
   createNativeOpenAIResponsesModel,
   createParameterFreeTool,
@@ -97,14 +97,17 @@ describe("AgentRuntimePlan tool policy helpers", () => {
     });
 
     expect(normalized[0]?.parameters).toEqual(normalizedParameterFreeSchema());
-    expect(mocks.normalizeProviderToolSchemas).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai",
-        modelId: "gpt-5.4",
-        modelApi: "openai-responses",
-        workspaceDir: "/tmp/openclaw-runtime-plan-tools",
-      }),
-    );
+    expect(mocks.normalizeProviderToolSchemas).toHaveBeenCalledTimes(1);
+    expect(mocks.normalizeProviderToolSchemas.mock.calls.at(0)?.[0]).toEqual({
+      tools: [createParameterFreeTool()],
+      provider: "openai",
+      config: undefined,
+      workspaceDir: "/tmp/openclaw-runtime-plan-tools",
+      env: process.env,
+      modelId: "gpt-5.4",
+      modelApi: "openai-responses",
+      model: createNativeOpenAIResponsesModel(),
+    });
   });
 
   it("routes diagnostics through RuntimePlan when a plan is available", () => {

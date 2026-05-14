@@ -20,6 +20,19 @@ import {
   searchClawHubSkills,
 } from "./clawhub.js";
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  let statError: unknown;
+  try {
+    await fs.stat(targetPath);
+  } catch (error) {
+    statError = error;
+  }
+  if (statError === undefined) {
+    throw new Error(`Expected ${targetPath} to be missing`);
+  }
+  expect((statError as { code?: unknown }).code).toBe("ENOENT");
+}
+
 describe("clawhub helpers", () => {
   const originalHome = process.env.HOME;
 
@@ -237,7 +250,7 @@ describe("clawhub helpers", () => {
       });
     };
 
-    await expect(searchClawHubSkills({ query: "calendar", fetchImpl })).resolves.toEqual([]);
+    await expect(searchClawHubSkills({ query: "calendar", fetchImpl })).resolves.toStrictEqual([]);
   });
 
   it("fetches typed package readiness reports", async () => {
@@ -359,7 +372,7 @@ describe("clawhub helpers", () => {
     } finally {
       const archiveDir = path.dirname(archive.archivePath);
       await archive.cleanup();
-      await expect(fs.stat(archiveDir)).rejects.toThrow();
+      await expectPathMissing(archiveDir);
     }
   });
 
@@ -398,7 +411,7 @@ describe("clawhub helpers", () => {
     } finally {
       const archiveDir = path.dirname(archive.archivePath);
       await archive.cleanup();
-      await expect(fs.stat(archiveDir)).rejects.toThrow();
+      await expectPathMissing(archiveDir);
     }
   });
 
@@ -497,7 +510,7 @@ describe("clawhub helpers", () => {
     } finally {
       const archiveDir = path.dirname(archive.archivePath);
       await archive.cleanup();
-      await expect(fs.stat(archiveDir)).rejects.toThrow();
+      await expectPathMissing(archiveDir);
     }
   });
 });

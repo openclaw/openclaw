@@ -134,8 +134,8 @@ describe("runServiceRestart token drift", () => {
 
     expect(loadConfig).toHaveBeenCalledTimes(1);
     const payload = readJsonLog<{ warnings?: string[] }>();
-    expect(payload.warnings).toEqual(
-      expect.arrayContaining([expect.stringContaining("gateway install --force")]),
+    expect(payload.warnings?.some((warning) => warning.includes("gateway install --force"))).toBe(
+      true,
     );
   });
 
@@ -156,8 +156,8 @@ describe("runServiceRestart token drift", () => {
     await runServiceRestart(createServiceRunArgs(true));
 
     const payload = readJsonLog<{ warnings?: string[] }>();
-    expect(payload.warnings).toEqual(
-      expect.arrayContaining([expect.stringContaining("gateway install --force")]),
+    expect(payload.warnings?.some((warning) => warning.includes("gateway install --force"))).toBe(
+      true,
     );
   });
 
@@ -214,6 +214,31 @@ describe("runServiceRestart token drift", () => {
     expect(payload.result).toBe("stopped");
     expect(payload.message).toContain("unmanaged process");
     expect(service.stop).not.toHaveBeenCalled();
+  });
+
+  it("runs a requested managed stop even when the service is not loaded", async () => {
+    const onNotLoaded = vi.fn(async () => ({
+      result: "stopped" as const,
+      message: "Gateway stop signal sent to unmanaged process on port 18789: 4200.",
+    }));
+    service.isLoaded.mockResolvedValue(false);
+
+    await runServiceStop({
+      serviceNoun: "Gateway",
+      service,
+      opts: { json: true, disable: true },
+      stopWhenNotLoaded: true,
+      onNotLoaded,
+    });
+
+    const payload = readJsonLog<{ result?: string; service?: { loaded?: boolean } }>();
+    expect(payload.result).toBe("stopped");
+    expect(payload.service?.loaded).toBe(false);
+    expect(service.stop).toHaveBeenCalledTimes(1);
+    const [stopOptions] = service.stop.mock.calls[0] ?? [];
+    expect(stopOptions?.env).toBe(process.env);
+    expect(stopOptions?.disable).toBe(true);
+    expect(onNotLoaded).not.toHaveBeenCalled();
   });
 
   it("emits started when a not-loaded start path repairs the service", async () => {
@@ -453,15 +478,12 @@ describe("runServiceRestart token drift", () => {
     }>();
     expect(payload.ok).toBe(true);
     expect(payload.result).toBe("not-loaded");
-    expect(payload.hints).toEqual(expect.arrayContaining(["openclaw gateway install"]));
-    expect(payload.hintItems).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          kind: "install",
-          text: "openclaw gateway install",
-        }),
-      ]),
-    );
+    expect(payload.hints?.includes("openclaw gateway install")).toBe(true);
+    expect(
+      payload.hintItems?.some(
+        (item) => item.kind === "install" && item.text === "openclaw gateway install",
+      ),
+    ).toBe(true);
     expect(service.restart).not.toHaveBeenCalled();
   });
 });

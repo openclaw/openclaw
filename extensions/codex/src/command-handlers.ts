@@ -6,7 +6,7 @@ import {
   readCodexComputerUseStatus,
   type CodexComputerUseSetupParams,
 } from "./app-server/computer-use.js";
-import type { CodexComputerUseConfig } from "./app-server/config.js";
+import { isCodexFastServiceTier, type CodexComputerUseConfig } from "./app-server/config.js";
 import { listAllCodexAppServerModels } from "./app-server/models.js";
 import { isJsonObject, type JsonValue } from "./app-server/protocol.js";
 import { rememberCodexRateLimits } from "./app-server/rate-limit-cache.js";
@@ -15,6 +15,7 @@ import {
   readCodexAppServerBinding,
   writeCodexAppServerBinding,
 } from "./app-server/session-binding.js";
+import { readCodexAccountAuthOverview } from "./command-account.js";
 import {
   buildHelp,
   formatAccount,
@@ -31,9 +32,11 @@ import {
   readCodexStatusProbes,
   requestOptions,
   safeCodexControlRequest,
+  type CodexControlRequestOptions,
   type SafeValue,
 } from "./command-rpc.js";
 import {
+  createCodexCliNodeConversationBindingData,
   readCodexConversationBindingData,
   resolveCodexDefaultWorkspaceDir,
   startCodexConversationThread,
@@ -49,6 +52,11 @@ import {
   steerCodexConversationTurn,
   stopCodexConversationTurn,
 } from "./conversation-control.js";
+import {
+  formatCodexCliSessions,
+  listCodexCliSessionsOnNode,
+  resolveCodexCliSessionForBindingOnNode,
+} from "./node-cli-sessions.js";
 
 export type CodexCommandDeps = {
   codexControlRequest: CodexControlRequestFn;
@@ -69,19 +77,31 @@ export type CodexCommandDeps = {
   setCodexConversationPermissions: typeof setCodexConversationPermissions;
   steerCodexConversationTurn: typeof steerCodexConversationTurn;
   stopCodexConversationTurn: typeof stopCodexConversationTurn;
+  listCodexCliSessionsOnNode: ListCodexCliSessionsOnNodeFn;
+  resolveCodexCliSessionForBindingOnNode: ResolveCodexCliSessionForBindingOnNodeFn;
 };
 
 type CodexControlRequestFn = (
   pluginConfig: unknown,
   method: CodexControlMethod,
   requestParams: JsonValue | undefined,
+  options?: CodexControlRequestOptions,
 ) => Promise<JsonValue | undefined>;
 
 type SafeCodexControlRequestFn = (
   pluginConfig: unknown,
   method: CodexControlMethod,
   requestParams: JsonValue | undefined,
+  options?: CodexControlRequestOptions,
 ) => Promise<SafeValue<JsonValue | undefined>>;
+
+type ListCodexCliSessionsOnNodeFn = (
+  params: Omit<Parameters<typeof listCodexCliSessionsOnNode>[0], "runtime">,
+) => ReturnType<typeof listCodexCliSessionsOnNode>;
+
+type ResolveCodexCliSessionForBindingOnNodeFn = (
+  params: Omit<Parameters<typeof resolveCodexCliSessionForBindingOnNode>[0], "runtime">,
+) => ReturnType<typeof resolveCodexCliSessionForBindingOnNode>;
 
 const defaultCodexCommandDeps: CodexCommandDeps = {
   codexControlRequest,
@@ -102,6 +122,12 @@ const defaultCodexCommandDeps: CodexCommandDeps = {
   setCodexConversationPermissions,
   steerCodexConversationTurn,
   stopCodexConversationTurn,
+  listCodexCliSessionsOnNode: async () => {
+    throw new Error("Codex CLI node sessions require Gateway node runtime.");
+  },
+  resolveCodexCliSessionForBindingOnNode: async () => {
+    throw new Error("Codex CLI node sessions require Gateway node runtime.");
+  },
 };
 
 type ParsedBindArgs = {
@@ -116,6 +142,20 @@ type ParsedComputerUseArgs = {
   action: "status" | "install";
   overrides: Partial<CodexComputerUseConfig>;
   hasOverrides: boolean;
+  help?: boolean;
+};
+
+type ParsedCodexCliSessionsArgs = {
+  host?: string;
+  filter: string;
+  limit?: number;
+  help?: boolean;
+};
+
+type ParsedResumeArgs = {
+  threadId?: string;
+  host?: string;
+  bindHere?: boolean;
   help?: boolean;
 };
 
@@ -209,6 +249,9 @@ export async function handleCodexSubcommand(
   }
   if (normalized === "threads") {
     return { text: await buildThreads(deps, options.pluginConfig, rest.join(" ")) };
+  }
+  if (normalized === "sessions") {
+    return { text: await buildCodexCliSessions(deps, rest) };
   }
   if (normalized === "resume") {
     return { text: await resumeThread(deps, ctx, options.pluginConfig, rest) };
@@ -325,7 +368,19 @@ export async function handleCodexSubcommand(
     if (limits.ok) {
       rememberCodexRateLimits(limits.value);
     }
-    return { text: formatAccount(account, limits) };
+    return {
+      text: formatAccount(
+        account,
+        limits,
+        await readCodexAccountAuthOverview({
+          ctx,
+          pluginConfig: options.pluginConfig,
+          safeCodexControlRequest: deps.safeCodexControlRequest,
+          account,
+          limits,
+        }),
+      ),
+    };
   }
   return { text: `Unknown Codex command: ${formatCodexDisplayText(subcommand)}\n\n${buildHelp()}` };
 }
@@ -421,7 +476,7 @@ async function detachConversation(
   const current = await ctx.getCurrentConversationBinding();
   const data = readCodexConversationBindingData(current);
   const detached = await ctx.detachConversationBinding();
-  if (data) {
+  if (data?.kind === "codex-app-server-session") {
     await deps.clearCodexAppServerBinding(data.sessionFile);
   } else if (ctx.sessionFile) {
     await deps.clearCodexAppServerBinding(ctx.sessionFile);
@@ -440,6 +495,16 @@ async function describeConversationBinding(
   if (!current || !data) {
     return "No Codex conversation binding is attached.";
   }
+  if (data.kind === "codex-cli-node-session") {
+    return [
+      "Codex conversation binding:",
+      "- Mode: Codex CLI node session",
+      `- Node: ${formatCodexDisplayText(data.nodeId)}`,
+      `- Session: ${formatCodexDisplayText(data.sessionId)}`,
+      `- Workspace: ${formatCodexDisplayText(data.cwd ?? "unknown")}`,
+      "- Active run: not tracked",
+    ].join("\n");
+  }
   const threadBinding = await deps.readCodexAppServerBinding(data.sessionFile);
   const active = deps.readCodexConversationActiveTurn(data.sessionFile);
   return [
@@ -447,7 +512,7 @@ async function describeConversationBinding(
     `- Thread: ${formatCodexDisplayText(threadBinding?.threadId ?? "unknown")}`,
     `- Workspace: ${formatCodexDisplayText(data.workspaceDir)}`,
     `- Model: ${formatCodexDisplayText(threadBinding?.model ?? "default")}`,
-    `- Fast: ${threadBinding?.serviceTier === "fast" ? "on" : "off"}`,
+    `- Fast: ${isCodexFastServiceTier(threadBinding?.serviceTier) ? "on" : "off"}`,
     `- Permissions: ${threadBinding ? formatPermissionsMode(threadBinding) : "default"}`,
     `- Active run: ${formatCodexDisplayText(active ? active.turnId : "none")}`,
     `- Session: ${formatCodexDisplayText(data.sessionFile)}`,
@@ -466,14 +531,36 @@ async function buildThreads(
   return formatThreads(response);
 }
 
+async function buildCodexCliSessions(deps: CodexCommandDeps, args: string[]): Promise<string> {
+  const parsed = parseCodexCliSessionsArgs(args);
+  if (parsed.help || !parsed.host) {
+    return "Usage: /codex sessions --host <node> [filter] [--limit <n>]";
+  }
+  return formatCodexCliSessions(
+    await deps.listCodexCliSessionsOnNode({
+      requestedNode: parsed.host,
+      filter: parsed.filter,
+      limit: parsed.limit,
+    }),
+  );
+}
+
 async function resumeThread(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
   pluginConfig: unknown,
   args: string[],
 ): Promise<string> {
-  const [threadId] = args;
-  const normalizedThreadId = threadId?.trim();
+  const parsed = parseResumeArgs(args);
+  const normalizedThreadId = parsed.threadId?.trim();
+  if (parsed.help) {
+    return args.includes("--help") || args.includes("-h") || parsed.host
+      ? "Usage: /codex resume <thread-id>\nUsage: /codex resume <session-id> --host <node> --bind here"
+      : "Usage: /codex resume <thread-id>";
+  }
+  if (parsed.host) {
+    return await bindCodexCliNodeSession(deps, ctx, parsed);
+  }
   if (!normalizedThreadId || args.length !== 1) {
     return "Usage: /codex resume <thread-id>";
   }
@@ -499,6 +586,47 @@ async function resumeThread(
   return `Attached this OpenClaw session to Codex thread ${formatCodexDisplayText(
     effectiveThreadId,
   )}.`;
+}
+
+async function bindCodexCliNodeSession(
+  deps: CodexCommandDeps,
+  ctx: PluginCommandContext,
+  parsed: ParsedResumeArgs,
+): Promise<string> {
+  if (!parsed.threadId || !parsed.host || parsed.bindHere !== true) {
+    return "Usage: /codex resume <session-id> --host <node> --bind here";
+  }
+  const resolved = await deps.resolveCodexCliSessionForBindingOnNode({
+    requestedNode: parsed.host,
+    sessionId: parsed.threadId,
+  });
+  if (!resolved.session) {
+    return `No Codex CLI session ${formatCodexDisplayText(parsed.threadId)} was found on ${formatCodexDisplayText(parsed.host)}.`;
+  }
+  const nodeId = resolved.node.nodeId;
+  if (!nodeId) {
+    return "Cannot bind Codex CLI session because the selected node did not include a node id.";
+  }
+  const data = createCodexCliNodeConversationBindingData({
+    nodeId,
+    sessionId: parsed.threadId,
+    cwd: resolved.session?.cwd,
+  });
+  const summary = `Codex CLI session ${formatCodexDisplayText(parsed.threadId)} on ${formatCodexDisplayText(nodeId)}`;
+  const request = await ctx.requestConversationBinding({
+    summary,
+    detachHint: "/codex detach",
+    data,
+  });
+  if (request.status === "bound") {
+    return `Bound this conversation to Codex CLI session ${formatCodexDisplayText(
+      parsed.threadId,
+    )} on ${formatCodexDisplayText(nodeId)}.`;
+  }
+  if (request.status === "pending") {
+    return request.reply.text ?? "Codex CLI session binding is pending approval.";
+  }
+  return formatCodexDisplayText(request.message);
 }
 
 async function stopConversationTurn(
@@ -612,7 +740,8 @@ async function setConversationPermissions(
 
 async function resolveControlSessionFile(ctx: PluginCommandContext): Promise<string | undefined> {
   const binding = await ctx.getCurrentConversationBinding();
-  return readCodexConversationBindingData(binding)?.sessionFile ?? ctx.sessionFile;
+  const data = readCodexConversationBindingData(binding);
+  return data?.kind === "codex-app-server-session" ? data.sessionFile : ctx.sessionFile;
 }
 
 async function handleCodexDiagnosticsFeedback(
@@ -647,19 +776,12 @@ async function handleCodexDiagnosticsFeedback(
       text: await previewCodexDiagnosticsFeedbackApproval(deps, ctx, parsed.note),
     };
   }
-  return await requestCodexDiagnosticsFeedbackApproval(
-    deps,
-    ctx,
-    pluginConfig,
-    parsed.note,
-    commandPrefix,
-  );
+  return await requestCodexDiagnosticsFeedbackApproval(deps, ctx, parsed.note, commandPrefix);
 }
 
 async function requestCodexDiagnosticsFeedbackApproval(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
-  pluginConfig: unknown,
   note: string,
   commandPrefix: string,
 ): Promise<PluginCommandResult> {
@@ -1601,6 +1723,86 @@ function parseBindArgs(args: string[]): ParsedBindArgs {
   parsed.cwd = normalizeOptionalString(parsed.cwd);
   parsed.model = normalizeOptionalString(parsed.model);
   parsed.provider = normalizeOptionalString(parsed.provider);
+  return parsed;
+}
+
+function parseCodexCliSessionsArgs(args: string[]): ParsedCodexCliSessionsArgs {
+  const parsed: ParsedCodexCliSessionsArgs = { filter: "" };
+  const filter: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--help" || arg === "-h") {
+      parsed.help = true;
+      continue;
+    }
+    if (arg === "--host" || arg === "--node") {
+      const value = readRequiredOptionValue(args, index);
+      if (!value || parsed.host !== undefined) {
+        parsed.help = true;
+        continue;
+      }
+      parsed.host = value;
+      index += 1;
+      continue;
+    }
+    if (arg === "--limit") {
+      const value = readRequiredOptionValue(args, index);
+      const parsedLimit = value ? Number.parseInt(value, 10) : Number.NaN;
+      if (!Number.isFinite(parsedLimit) || parsedLimit <= 0) {
+        parsed.help = true;
+        continue;
+      }
+      parsed.limit = parsedLimit;
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      parsed.help = true;
+      continue;
+    }
+    filter.push(arg);
+  }
+  parsed.host = normalizeOptionalString(parsed.host);
+  parsed.filter = filter.join(" ").trim();
+  return parsed;
+}
+
+function parseResumeArgs(args: string[]): ParsedResumeArgs {
+  const parsed: ParsedResumeArgs = {};
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--help" || arg === "-h") {
+      parsed.help = true;
+      continue;
+    }
+    if (arg === "--host" || arg === "--node") {
+      const value = readRequiredOptionValue(args, index);
+      if (!value || parsed.host !== undefined) {
+        parsed.help = true;
+        continue;
+      }
+      parsed.host = value;
+      index += 1;
+      continue;
+    }
+    if (arg === "--bind") {
+      const value = readRequiredOptionValue(args, index);
+      if (value !== "here" || parsed.bindHere !== undefined) {
+        parsed.help = true;
+        continue;
+      }
+      parsed.bindHere = true;
+      index += 1;
+      continue;
+    }
+    if (!arg.startsWith("-") && !parsed.threadId) {
+      parsed.threadId = arg;
+      continue;
+    }
+    parsed.help = true;
+  }
+  parsed.threadId = normalizeOptionalString(parsed.threadId);
+  parsed.host = normalizeOptionalString(parsed.host);
   return parsed;
 }
 

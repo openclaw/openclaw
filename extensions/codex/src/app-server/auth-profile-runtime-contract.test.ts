@@ -35,6 +35,7 @@ function threadStartResult(threadId = "thread-auth-contract") {
   return {
     thread: {
       id: threadId,
+      sessionId: "session-1",
       forkedFromId: null,
       preview: "",
       ephemeral: false,
@@ -111,7 +112,7 @@ function createCodexAuthProfileHarness(params: { startMethod: "thread/start" | "
     seenAuthProfileIds,
     seenAgentDirs,
     async waitForMethod(method: string) {
-      await vi.waitFor(() => expect(requests.some((entry) => entry.method === method)).toBe(true), {
+      await vi.waitFor(() => expect(requests.map((entry) => entry.method)).toContain(method), {
         interval: 1,
       });
     },
@@ -211,8 +212,7 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
     await harness.completeTurn();
     await run;
 
-    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
-      authProfileId: AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId,
-    });
+    const binding = await readCodexAppServerBinding(sessionFile);
+    expect(binding?.authProfileId).toBe(AUTH_PROFILE_RUNTIME_CONTRACT.openAiCodexProfileId);
   });
 });

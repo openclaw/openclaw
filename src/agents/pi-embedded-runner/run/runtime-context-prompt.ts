@@ -1,4 +1,3 @@
-import { truncateUtf16Safe } from "../../../utils.js";
 import {
   OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER,
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
@@ -9,7 +8,6 @@ import type { CurrentTurnPromptContext } from "./params.js";
 export { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE };
 
 const OPENCLAW_RUNTIME_EVENT_USER_PROMPT = "Continue the OpenClaw runtime event.";
-const MAX_CURRENT_TURN_CONTEXT_STRING_CHARS = 2_000;
 
 type RuntimeContextSession = {
   sendCustomMessage: (
@@ -30,43 +28,24 @@ type RuntimeContextPromptParts = {
   runtimeSystemContext?: string;
 };
 
-function neutralizeMarkdownFences(value: string): string {
-  return value.replaceAll("```", "`\u200b``");
-}
-
-function truncateCurrentTurnContextString(value: string): string {
-  if (value.length <= MAX_CURRENT_TURN_CONTEXT_STRING_CHARS) {
-    return value;
-  }
-  return `${truncateUtf16Safe(value, Math.max(0, MAX_CURRENT_TURN_CONTEXT_STRING_CHARS - 14)).trimEnd()}…[truncated]`;
-}
-
-function sanitizeCurrentTurnContextString(value: string): string {
-  return neutralizeMarkdownFences(truncateCurrentTurnContextString(value.replaceAll("\0", "")));
-}
-
-export function buildCurrentTurnPromptContextSuffix(
+export function buildCurrentTurnPromptContextPrefix(
   context: CurrentTurnPromptContext | undefined,
 ): string {
-  const reply = context?.reply;
-  const replyBody = reply?.body?.trim();
-  if (!reply || !replyBody) {
-    return "";
+  return context?.text.trim() ?? "";
+}
+
+export function buildCurrentTurnPrompt(params: {
+  context: CurrentTurnPromptContext | undefined;
+  prompt: string;
+}): string {
+  const prefix = buildCurrentTurnPromptContextPrefix(params.context);
+  if (!prefix) {
+    return params.prompt;
   }
-  const payload = {
-    sender_label: reply.senderLabel
-      ? sanitizeCurrentTurnContextString(reply.senderLabel)
-      : undefined,
-    is_quote: reply.isQuote === true ? true : undefined,
-    body: sanitizeCurrentTurnContextString(replyBody),
-  };
-  return [
-    "",
-    "Reply target of current user message (untrusted, for context):",
-    "```json",
-    JSON.stringify(payload, null, 2),
-    "```",
-  ].join("\n");
+  if (!params.prompt) {
+    return prefix;
+  }
+  return [prefix, params.prompt].join(params.context?.promptJoiner ?? "\n\n");
 }
 
 function removeLastPromptOccurrence(text: string, prompt: string): string | null {

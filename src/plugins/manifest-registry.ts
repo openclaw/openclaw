@@ -11,6 +11,7 @@ import { resolveCompatibilityHostVersion } from "../version.js";
 import { loadBundleManifest } from "./bundle-manifest.js";
 import { normalizePluginsConfigWithResolver } from "./config-policy.js";
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
+import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import type { PluginManifestCommandAlias } from "./manifest-command-aliases.js";
 import type {
@@ -412,11 +413,15 @@ function buildRecord(params: {
     kind: params.manifest.kind,
     channels: params.manifest.channels ?? [],
     providers: params.manifest.providers ?? [],
-    providerDiscoverySource: params.manifest.providerDiscoveryEntry
-      ? resolvePluginSourcePath(
-          path.resolve(params.candidate.rootDir, params.manifest.providerDiscoveryEntry),
-        )
-      : undefined,
+    providerDiscoverySource:
+      (params.manifest.providerCatalogEntry ?? params.manifest.providerDiscoveryEntry)
+        ? resolvePluginSourcePath(
+            path.resolve(
+              params.candidate.rootDir,
+              params.manifest.providerCatalogEntry ?? params.manifest.providerDiscoveryEntry!,
+            ),
+          )
+        : undefined,
     modelSupport: params.manifest.modelSupport,
     modelCatalog: params.manifest.modelCatalog,
     modelPricing: params.manifest.modelPricing,
@@ -605,7 +610,7 @@ function pushNonBundledChannelConfigDescriptorDiagnostic(params: {
     level: "warn",
     pluginId: sanitizeForLog(params.record.id),
     source: sanitizeForLog(params.record.manifestPath),
-    message: `channel plugin manifest declares ${safeMissingChannels.join(", ")} without channelConfigs metadata; add openclaw.plugin.json#channelConfigs so config schema and setup surfaces work before runtime loads`,
+    message: `channel plugin manifest declares ${safeMissingChannels.join(", ")} without channelConfigs metadata; add openclaw.plugin.json#channelConfigs so config schema and setup surfaces work before runtime loads. Channels without channelConfigs still appear in channel listings, but setup UI may be limited.`,
   });
 }
 
@@ -646,10 +651,14 @@ function matchesInstalledPluginRecord(params: {
   if (!record) {
     return false;
   }
-  const candidateSource = resolveUserPath(params.candidate.source, params.env);
+  const resolvedCandidateSource = resolveUserPath(params.candidate.source, params.env);
+  const candidateSource = safeRealpathSync(resolvedCandidateSource) ?? resolvedCandidateSource;
   const trackedPaths = [record.installPath, record.sourcePath]
     .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
-    .map((entry) => resolveUserPath(entry, params.env));
+    .map((entry) => {
+      const resolved = resolveUserPath(entry, params.env);
+      return safeRealpathSync(resolved) ?? resolved;
+    });
   if (trackedPaths.length === 0) {
     return false;
   }
@@ -843,7 +852,12 @@ export function loadPluginManifestRegistry(
   const currentHostVersion = resolveCompatibilityHostVersion(env);
 
   for (const candidate of candidates) {
-    const rejectHardlinks = candidate.origin !== "bundled";
+    const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
+      origin: candidate.origin,
+      rootDir: candidate.rootDir,
+      env,
+      realpathCache,
+    });
     const isBundleRecord = (candidate.format ?? "openclaw") === "bundle";
     const manifestRes:
       | ReturnType<typeof loadPluginManifest>

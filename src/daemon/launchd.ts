@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
 import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import { formatPortDiagnostics, inspectPortUsage } from "../infra/ports.js";
 import { cleanStaleGatewayProcessesSync } from "../infra/restart-stale-pids.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
@@ -41,6 +42,7 @@ const LAUNCH_AGENT_PRIVATE_DIR_MODE = 0o700;
 const LAUNCH_AGENT_ENV_FILE_MODE = 0o600;
 const LAUNCH_AGENT_ENV_WRAPPER_MODE = 0o700;
 const LAUNCH_AGENT_ENV_DIR_NAME = "service-env";
+const LAUNCH_AGENT_STDERR_PATH = "/dev/null";
 
 function assertValidLaunchAgentLabel(label: string): string {
   const trimmed = label.trim();
@@ -251,6 +253,12 @@ async function resolveLaunchAgentGatewayPort(env: GatewayServiceEnv): Promise<nu
   const fromArgs = parseGatewayPortFromProgramArguments(command?.programArguments);
   if (fromArgs !== null) {
     return fromArgs;
+  }
+  const fromServiceEnv = parseStrictPositiveInteger(
+    command?.environment?.OPENCLAW_GATEWAY_PORT ?? "",
+  );
+  if (fromServiceEnv !== undefined) {
+    return fromServiceEnv;
   }
   const fromEnv = parseStrictPositiveInteger(env.OPENCLAW_GATEWAY_PORT ?? "");
   return fromEnv ?? null;
@@ -464,6 +472,13 @@ export async function repairLaunchAgentBootstrap(args: {
     return { ok: true, status: repairStatus };
   }
 
+  // Service is already bootstrapped. Only kickstart if it is not actively running —
+  // kickstarting a healthy running service causes unnecessary session disconnects.
+  const runtime = await readLaunchAgentRuntime(env);
+  if (runtime.status === "running") {
+    return { ok: true, status: repairStatus };
+  }
+
   const kick = await execLaunchctl(["kickstart", serviceTarget]);
   if (kick.code !== 0) {
     return {
@@ -544,7 +559,6 @@ async function bootoutLaunchAgentOrThrow(params: {
     );
   }
   params.stdout.write(`${formatLine("Warning", params.warning)}\n`);
-  params.stdout.write(`${formatLine("Stopped LaunchAgent (degraded)", params.serviceTarget)}\n`);
 }
 
 type LaunchAgentProbeResult =
@@ -593,22 +607,58 @@ async function waitForLaunchAgentStopped(serviceTarget: string): Promise<LaunchA
   return lastUnknown ?? { state: "running" };
 }
 
-export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs): Promise<void> {
+async function assertGatewayPortReleasedAfterStop(env: GatewayServiceEnv): Promise<void> {
+  const port = await resolveLaunchAgentGatewayPort(env);
+  if (port === null) {
+    return;
+  }
+  cleanStaleGatewayProcessesSync(port);
+  const diagnostics = await inspectPortUsage(port).catch(() => null);
+  if (diagnostics?.status !== "busy") {
+    return;
+  }
+  throw new Error(
+    [
+      `gateway port ${port} is still busy after LaunchAgent stop`,
+      ...formatPortDiagnostics(diagnostics),
+    ].join("\n"),
+  );
+}
+
+export async function stopLaunchAgent({
+  stdout,
+  env,
+  disable: persistDisable,
+}: GatewayServiceControlArgs): Promise<void> {
   const serviceEnv = env ?? (process.env as GatewayServiceEnv);
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env: serviceEnv });
   const serviceTarget = `${domain}/${label}`;
 
-  // Keep the LaunchAgent installed, but persistently suppress KeepAlive/RunAtLoad
-  // before stopping the current process. Without `disable`, launchd can relaunch
-  // the process as soon as `stop` exits.
-  const disable = await execLaunchctl(["disable", serviceTarget]);
-  if (disable.code !== 0) {
+  if (!persistDisable) {
+    // Default: bootout only. Removes the job from the current launchd domain without
+    // persisting a disable, so KeepAlive auto-recovery survives future crashes and
+    // `openclaw gateway start` re-enables cleanly without a manual `launchctl enable`.
+    const bootout = await execLaunchctl(["bootout", serviceTarget]);
+    if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
+      throw new Error(`launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`);
+    }
+    await assertGatewayPortReleasedAfterStop(serviceEnv);
+    stdout.write(`${formatLine("Stopped LaunchAgent", serviceTarget)}\n`);
+    return;
+  }
+
+  // --disable: persistently suppress KeepAlive/RunAtLoad before stopping.
+  // Without this, launchd can relaunch the process as soon as `stop` exits.
+  const disableResult = await execLaunchctl(["disable", serviceTarget]);
+  if (disableResult.code !== 0) {
     await bootoutLaunchAgentOrThrow({
       serviceTarget,
       stdout,
-      warning: `launchctl disable failed; used bootout fallback and left service unloaded: ${formatLaunchctlResultDetail(disable)}`,
+      warning: `launchctl disable failed; used bootout fallback and left service unloaded: ${formatLaunchctlResultDetail(disableResult)}`,
     });
+    await assertGatewayPortReleasedAfterStop(serviceEnv);
+    stdout.write(`${formatLine("Stopped LaunchAgent (degraded)", serviceTarget)}\n`);
     return;
   }
 
@@ -620,6 +670,8 @@ export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs
       stdout,
       warning: `launchctl stop failed; used bootout fallback and left service unloaded: ${formatLaunchctlResultDetail(stop)}`,
     });
+    await assertGatewayPortReleasedAfterStop(serviceEnv);
+    stdout.write(`${formatLine("Stopped LaunchAgent (degraded)", serviceTarget)}\n`);
     return;
   }
 
@@ -630,9 +682,12 @@ export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs
         ? `launchctl print could not confirm stop; used bootout fallback and left service unloaded: ${stopState.detail ?? "unknown error"}`
         : "launchctl stop did not fully stop the service; used bootout fallback and left service unloaded";
     await bootoutLaunchAgentOrThrow({ serviceTarget, stdout, warning });
+    await assertGatewayPortReleasedAfterStop(serviceEnv);
+    stdout.write(`${formatLine("Stopped LaunchAgent (degraded)", serviceTarget)}\n`);
     return;
   }
 
+  await assertGatewayPortReleasedAfterStop(serviceEnv);
   stdout.write(`${formatLine("Stopped LaunchAgent", serviceTarget)}\n`);
 }
 
@@ -643,7 +698,7 @@ async function writeLaunchAgentPlist({
   environment,
   description,
 }: Omit<GatewayServiceInstallArgs, "stdout">): Promise<{ plistPath: string; stdoutPath: string }> {
-  const { logDir, stdoutPath, stderrPath } = resolveGatewayLogPaths(env);
+  const { logDir, stdoutPath } = resolveGatewayLogPaths(env);
   await ensureSecureDirectory(logDir);
 
   const domain = resolveGuiDomain();
@@ -680,7 +735,7 @@ async function writeLaunchAgentPlist({
     programArguments: prepared.programArguments,
     workingDirectory,
     stdoutPath,
-    stderrPath,
+    stderrPath: LAUNCH_AGENT_STDERR_PATH,
     environment: prepared.inlineEnvironment,
   });
   await fs.writeFile(plistPath, plist, { encoding: "utf8", mode: LAUNCH_AGENT_PLIST_MODE });
@@ -752,7 +807,7 @@ async function rewriteLaunchAgentPlistForRestart({
     return;
   }
 
-  const { logDir, stdoutPath, stderrPath } = resolveGatewayLogPaths(env);
+  const { logDir, stdoutPath } = resolveGatewayLogPaths(env);
   await ensureSecureDirectory(logDir);
 
   const serviceDescription = resolveGatewayServiceDescription({
@@ -771,7 +826,7 @@ async function rewriteLaunchAgentPlistForRestart({
     programArguments: prepared.programArguments,
     workingDirectory: existing.workingDirectory,
     stdoutPath,
-    stderrPath,
+    stderrPath: LAUNCH_AGENT_STDERR_PATH,
     environment: prepared.inlineEnvironment,
   });
   await fs.writeFile(plistPath, plist, { encoding: "utf8", mode: LAUNCH_AGENT_PLIST_MODE });
@@ -828,6 +883,15 @@ export async function restartLaunchAgent({
   const cleanupPort = await resolveLaunchAgentGatewayPort(serviceEnv);
   if (cleanupPort !== null) {
     cleanStaleGatewayProcessesSync(cleanupPort);
+    const diagnostics = await inspectPortUsage(cleanupPort).catch(() => null);
+    if (diagnostics?.status === "busy") {
+      throw new Error(
+        [
+          `gateway port ${cleanupPort} is still busy before LaunchAgent restart`,
+          ...formatPortDiagnostics(diagnostics),
+        ].join("\n"),
+      );
+    }
   }
 
   // `openclaw gateway restart` is an explicit operator request to bring the

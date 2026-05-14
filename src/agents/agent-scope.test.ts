@@ -120,6 +120,36 @@ describe("resolveAgentConfig", () => {
     });
   });
 
+  it("merges runRetries from defaults with per-agent overrides", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          runRetries: {
+            base: 24,
+            perProfile: 8,
+            min: 32,
+            max: 160,
+          },
+        },
+        list: [
+          {
+            id: "main",
+            runRetries: {
+              max: 50,
+            },
+          },
+        ],
+      },
+    };
+
+    expect(resolveAgentConfig(cfg, "main")?.runRetries).toEqual({
+      base: 24,
+      perProfile: 8,
+      min: 32,
+      max: 50,
+    });
+  });
+
   it("resolves explicit and effective model primary separately", () => {
     const cfgWithStringDefault = {
       agents: {
@@ -196,14 +226,14 @@ describe("resolveAgentConfig", () => {
         ],
       },
     };
-    expect(resolveAgentModelFallbacksOverride(cfgNoOverride, "linus")).toEqual([]);
+    expect(resolveAgentModelFallbacksOverride(cfgNoOverride, "linus")).toStrictEqual([]);
     expect(
       resolveEffectiveModelFallbacks({
         cfg: cfgNoOverride,
         agentId: "linus",
         hasSessionModelOverride: false,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
 
     const cfgStringModel: OpenClawConfig = {
       agents: {
@@ -215,7 +245,7 @@ describe("resolveAgentConfig", () => {
         ],
       },
     };
-    expect(resolveAgentModelFallbacksOverride(cfgStringModel, "linus")).toEqual([]);
+    expect(resolveAgentModelFallbacksOverride(cfgStringModel, "linus")).toStrictEqual([]);
 
     const cfgStrictAgentWithDefaultFallbacks: OpenClawConfig = {
       agents: {
@@ -244,7 +274,7 @@ describe("resolveAgentConfig", () => {
         hasSessionModelOverride: true,
         modelOverrideSource: "auto",
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
 
     // Explicit empty list disables global fallbacks for that agent.
     const cfgDisable: OpenClawConfig = {
@@ -260,7 +290,7 @@ describe("resolveAgentConfig", () => {
         ],
       },
     };
-    expect(resolveAgentModelFallbacksOverride(cfgDisable, "linus")).toEqual([]);
+    expect(resolveAgentModelFallbacksOverride(cfgDisable, "linus")).toStrictEqual([]);
 
     expect(
       resolveEffectiveModelFallbacks({
@@ -284,21 +314,21 @@ describe("resolveAgentConfig", () => {
         hasSessionModelOverride: true,
         modelOverrideSource: "user",
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(
       resolveEffectiveModelFallbacks({
         cfg,
         agentId: "linus",
         hasSessionModelOverride: true,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(
       resolveEffectiveModelFallbacks({
         cfg: cfgNoOverride,
         agentId: "linus",
         hasSessionModelOverride: true,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
 
     const cfgInheritDefaultsWithoutAgentModel: OpenClawConfig = {
       agents: {
@@ -325,7 +355,7 @@ describe("resolveAgentConfig", () => {
         hasSessionModelOverride: true,
         modelOverrideSource: "auto",
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("updates the effective model primary at the winning config layer", () => {
@@ -574,7 +604,6 @@ describe("resolveAgentConfig", () => {
     };
     // Should normalize to "main" (default)
     const result = resolveAgentConfig(cfg, "");
-    expect(result).toBeDefined();
     expect(result?.workspace).toBe("~/openclaw");
   });
 
@@ -771,6 +800,6 @@ describe("resolveAgentSkillsFilter", () => {
       },
     };
 
-    expect(resolveAgentSkillsFilter(cfg, "writer")).toEqual([]);
+    expect(resolveAgentSkillsFilter(cfg, "writer")).toStrictEqual([]);
   });
 });

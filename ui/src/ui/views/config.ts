@@ -2,7 +2,12 @@ import JSON5 from "json5";
 import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
 import { icons } from "../icons.ts";
-import { BORDER_RADIUS_STOPS, type BorderRadiusStop } from "../storage.ts";
+import {
+  BORDER_RADIUS_STOPS,
+  TEXT_SCALE_STOPS,
+  type BorderRadiusStop,
+  type TextScaleStop,
+} from "../storage.ts";
 import type { ThemeTransitionContext } from "../theme-transition.ts";
 import type { ThemeMode, ThemeName } from "../theme.ts";
 import type { ConfigUiHints } from "../types.ts";
@@ -24,6 +29,14 @@ const BORDER_RADIUS_LABELS: Record<BorderRadiusStop, string> = {
   50: "Default",
   75: "Round",
   100: "Full",
+};
+
+const TEXT_SCALE_LABELS: Record<TextScaleStop, string> = {
+  90: "Small",
+  100: "Default",
+  110: "Large",
+  125: "XL",
+  140: "XXL",
 };
 
 export type WebPushUiState = {
@@ -85,6 +98,8 @@ export type ConfigProps = {
   onOpenCustomThemeImport?: () => void;
   borderRadius: number;
   setBorderRadius: (value: number) => void;
+  textScale: number;
+  setTextScale: (value: number) => void;
   gatewayUrl: string;
   assistantName: string;
   configPath?: string | null;
@@ -478,40 +493,23 @@ function scopeSchemaSections(
   const include = params.include;
   const exclude = params.exclude;
   const nextProps: Record<string, JsonSchema> = {};
-  for (const [key, value] of Object.entries(schema.properties)) {
+  for (const key of Object.keys(schema.properties)) {
     if (include && include.size > 0 && !include.has(key)) {
       continue;
     }
     if (exclude && exclude.size > 0 && exclude.has(key)) {
       continue;
     }
-    nextProps[key] = value;
+    nextProps[key] = schema.properties[key];
   }
   return { ...schema, properties: nextProps };
 }
 
-function scopeUnsupportedPaths(
-  unsupportedPaths: string[],
-  params: { include?: ReadonlySet<string> | null; exclude?: ReadonlySet<string> | null },
-): string[] {
-  const include = params.include;
-  const exclude = params.exclude;
-  if ((!include || include.size === 0) && (!exclude || exclude.size === 0)) {
-    return unsupportedPaths;
+function asConfigSchema(value: unknown): JsonSchema | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
   }
-  return unsupportedPaths.filter((entry) => {
-    if (entry === "<root>") {
-      return true;
-    }
-    const [top] = entry.split(".");
-    if (include && include.size > 0) {
-      return include.has(top);
-    }
-    if (exclude && exclude.size > 0) {
-      return !exclude.has(top);
-    }
-    return true;
-  });
+  return value as JsonSchema;
 }
 
 function resolveSectionMeta(
@@ -1080,6 +1078,26 @@ function renderAppearanceSection(props: ConfigProps) {
       </div>
 
       <div class="settings-appearance__section">
+        <h3 class="settings-appearance__heading">Text size</h3>
+        <div class="settings-text-scale">
+          <div class="settings-text-scale__options">
+            ${TEXT_SCALE_STOPS.map(
+              (stop) => html`
+                <button
+                  type="button"
+                  class="settings-text-scale__btn ${stop === props.textScale ? "active" : ""}"
+                  @click=${() => props.setTextScale(stop)}
+                >
+                  <span class="settings-text-scale__sample">${TEXT_SCALE_LABELS[stop]}</span>
+                  <span class="settings-text-scale__label">${stop}%</span>
+                </button>
+              `,
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-appearance__section">
         <h3 class="settings-appearance__heading">Connection</h3>
         <div class="settings-info-grid">
           <div class="settings-info-row">
@@ -1177,11 +1195,8 @@ export function renderConfig(props: ConfigProps) {
   const includeVirtualSections = props.includeVirtualSections ?? true;
   const include = props.includeSections?.length ? new Set(props.includeSections) : null;
   const exclude = props.excludeSections?.length ? new Set(props.excludeSections) : null;
-  const rawAnalysis = analyzeConfigSchema(props.schema);
-  const analysis = {
-    schema: scopeSchemaSections(rawAnalysis.schema, { include, exclude }),
-    unsupportedPaths: scopeUnsupportedPaths(rawAnalysis.unsupportedPaths, { include, exclude }),
-  };
+  const scopedSchema = scopeSchemaSections(asConfigSchema(props.schema), { include, exclude });
+  const analysis = analyzeConfigSchema(scopedSchema);
   const formUnsafe = analysis.schema ? analysis.unsupportedPaths.length > 0 : false;
   const rawAvailable = props.rawAvailable ?? true;
   const formMode = showModeToggle && rawAvailable ? props.formMode : "form";

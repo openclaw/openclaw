@@ -1,11 +1,16 @@
 {
-  "fallbackKeys": [],
-  "generatedAt": "2026-05-06T03:20:54.698Z",
+  "fallbackKeys": [
+    "chat.autoScrollAlways",
+    "chat.autoScrollMode",
+    "chat.autoScrollNearBottom",
+    "chat.autoScrollOff"
+  ],
+  "generatedAt": "2026-05-14T02:57:13.869Z",
   "locale": "it",
   "model": "gpt-5.5",
   "provider": "openai",
-  "sourceHash": "c97d50965a8485bb290aa7f158bae5dbadf3642e71bf4712207555f0abea23c2",
-  "totalKeys": 1017,
-  "translatedKeys": 1017,
+  "sourceHash": "21a3e182cf575ee49da8100200441d290766012efb17685445098f21d46dcab7",
+  "totalKeys": 1112,
+  "translatedKeys": 1108,
   "workflow": 1
 }

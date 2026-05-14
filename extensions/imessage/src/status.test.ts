@@ -50,6 +50,22 @@ describe("createIMessageRpcClient", () => {
     );
     expect(spawnMock).not.toHaveBeenCalled();
   });
+
+  it("promotes Full Disk Access rpc banners to the public probe error", async () => {
+    const { IMessageRpcClient, PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR } =
+      await import("./client.js");
+    const client = new IMessageRpcClient();
+    const internals = client as unknown as {
+      handleLine: (line: string) => void;
+      buildCloseError: (code: number | null, signal: NodeJS.Signals | null) => Error;
+    };
+
+    internals.handleLine(
+      "imsg cannot access /Users/alice/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
+    );
+
+    expect(internals.buildCloseError(1, null).message).toBe(PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR);
+  });
 });
 
 describe("imessage setup status", () => {
@@ -166,6 +182,24 @@ describe("probeIMessage", () => {
     expect(result.ok).toBe(false);
     expect(result.fatal).toBe(true);
     expect(result.error).toMatch(/rpc/i);
+    expect(createIMessageRpcClientMock).not.toHaveBeenCalled();
+  });
+
+  it("fails fast for default local imsg probes on non-mac hosts", async () => {
+    const createIMessageRpcClientMock = vi
+      .spyOn(clientModule, "createIMessageRpcClient")
+      .mockResolvedValue({
+        request: vi.fn(),
+        stop: vi.fn(),
+      } as unknown as Awaited<ReturnType<typeof clientModule.createIMessageRpcClient>>);
+
+    const result = await probeIMessage(1000, { cliPath: "imsg", platform: "linux" });
+
+    expect(result.ok).toBe(false);
+    expect(result.fatal).toBe(true);
+    expect(result.error).toMatch(/macOS/i);
+    expect(result.error).toMatch(/SSH wrapper/i);
+    expect(setupRuntime.detectBinary).not.toHaveBeenCalled();
     expect(createIMessageRpcClientMock).not.toHaveBeenCalled();
   });
 

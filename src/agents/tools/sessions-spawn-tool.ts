@@ -10,6 +10,12 @@ import { callGateway } from "../../gateway/call.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
+import {
+  findAcpUnsupportedInheritedToolAllow,
+  findAcpUnsupportedInheritedToolDeny,
+  formatAcpInheritedToolAllowError,
+  formatAcpInheritedToolDenyError,
+} from "../inherited-tool-deny.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
 import { registerSubagentRun } from "../subagent-registry.js";
@@ -18,13 +24,19 @@ import {
   SUBAGENT_SPAWN_MODES,
   spawnSubagentDirect,
 } from "../subagent-spawn.js";
+import { normalizeSubagentTaskName } from "../subagent-task-name.js";
 import {
   describeSessionsSpawnTool,
   SESSIONS_SPAWN_SUBAGENT_TOOL_DISPLAY_SUMMARY,
   SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readStringParam, ToolInputError } from "./common.js";
+import {
+  jsonResult,
+  normalizeToolModelOverride,
+  readStringParam,
+  ToolInputError,
+} from "./common.js";
 import {
   resolveDisplaySessionKey,
   resolveInternalSessionKey,
@@ -147,6 +159,12 @@ function createSessionsSpawnToolSchema(params: {
   const spawnModes = params.threadAvailable ? SUBAGENT_SPAWN_MODES : (["run"] as const);
   const schema = {
     task: Type.String(),
+    taskName: Type.Optional(
+      Type.String({
+        description:
+          "Stable optional alias for later subagents targeting. Use lowercase letters, digits, and underscores, starting with a letter.",
+      }),
+    ),
     label: Type.Optional(Type.String()),
     runtime: optionalStringEnum(
       params.acpAvailable ? SESSIONS_SPAWN_RUNTIMES : (["subagent"] as const),
@@ -268,11 +286,19 @@ export function createSessionsSpawnTool(
         );
       }
       const task = readStringParam(params, "task", { required: true });
+      const taskNameResult = normalizeSubagentTaskName(params.taskName);
+      if (taskNameResult.error) {
+        return jsonResult({
+          status: "error",
+          error: taskNameResult.error,
+        });
+      }
+      const taskName = taskNameResult.taskName;
       const label = readStringParam(params, "label") ?? "";
       const runtime = params.runtime === "acp" ? "acp" : "subagent";
       const requestedAgentId = readStringParam(params, "agentId");
       const resumeSessionId = readStringParam(params, "resumeSessionId");
-      const modelOverride = readStringParam(params, "model");
+      const modelOverride = normalizeToolModelOverride(readStringParam(params, "model"));
       const thinkingOverrideRaw = readStringParam(params, "thinking");
       const cwd = readStringParam(params, "cwd");
       const mode = params.mode === "run" || params.mode === "session" ? params.mode : undefined;
@@ -282,13 +308,35 @@ export function createSessionsSpawnTool(
       const sandbox = params.sandbox === "require" ? "require" : "inherit";
       const context =
         params.context === "fork" || params.context === "isolated" ? params.context : undefined;
-      const streamTo = params.streamTo === "parent" ? "parent" : undefined;
+      const streamTo = runtime === "acp" && params.streamTo === "parent" ? "parent" : undefined;
       const lightContext = params.lightContext === true;
       const roleContext = requestedAgentId ? { role: requestedAgentId } : {};
       if (runtime === "acp" && !acpAvailable) {
         return jsonResult({
           status: "error",
           error: resolveAcpUnavailableMessage(opts),
+          ...roleContext,
+        });
+      }
+      const acpUnsupportedInheritedTool =
+        runtime === "acp"
+          ? findAcpUnsupportedInheritedToolDeny(opts?.inheritedToolDenylist)
+          : undefined;
+      if (acpUnsupportedInheritedTool) {
+        return jsonResult({
+          status: "forbidden",
+          error: formatAcpInheritedToolDenyError(acpUnsupportedInheritedTool),
+          ...roleContext,
+        });
+      }
+      const acpUnsupportedInheritedAllow =
+        runtime === "acp"
+          ? findAcpUnsupportedInheritedToolAllow(opts?.inheritedToolAllowlist)
+          : undefined;
+      if (acpUnsupportedInheritedAllow) {
+        return jsonResult({
+          status: "forbidden",
+          error: formatAcpInheritedToolAllowError(acpUnsupportedInheritedAllow),
           ...roleContext,
         });
       }
@@ -354,6 +402,8 @@ export function createSessionsSpawnTool(
             agentGroupSpace: opts?.agentGroupSpace,
             agentMemberRoleIds: opts?.agentMemberRoleIds,
             sandboxed: opts?.sandboxed,
+            inheritedToolAllowlist: opts?.inheritedToolAllowlist,
+            inheritedToolDenylist: opts?.inheritedToolDenylist,
           },
         );
         const childSessionKey = result.childSessionKey?.trim();
@@ -400,6 +450,7 @@ export function createSessionsSpawnTool(
               requesterOrigin,
               requesterDisplayKey,
               task,
+              taskName,
               cleanup: trackedCleanup,
               label: label || undefined,
               runTimeoutSeconds,
@@ -425,6 +476,7 @@ export function createSessionsSpawnTool(
       const result = await spawnSubagentDirect(
         {
           task,
+          taskName,
           label: label || undefined,
           agentId: requestedAgentId,
           model: modelOverride,
@@ -455,6 +507,8 @@ export function createSessionsSpawnTool(
           agentMemberRoleIds: opts?.agentMemberRoleIds,
           requesterAgentIdOverride: opts?.requesterAgentIdOverride,
           workspaceDir: opts?.workspaceDir,
+          inheritedToolAllowlist: opts?.inheritedToolAllowlist,
+          inheritedToolDenylist: opts?.inheritedToolDenylist,
         },
       );
 

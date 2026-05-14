@@ -149,13 +149,31 @@ function createInstalledPluginIndexSnapshot(
 
 function expectInspectReport(
   pluginId: string,
+  options: Omit<Parameters<typeof buildPluginInspectReport>[0], "id"> = {},
 ): NonNullable<ReturnType<typeof buildPluginInspectReport>> {
-  const inspect = buildPluginInspectReport({ id: pluginId });
-  expect(inspect).not.toBeNull();
-  if (!inspect) {
+  const inspect = buildPluginInspectReport({ id: pluginId, ...options });
+  if (inspect === null) {
     throw new Error(`expected inspect report for ${pluginId}`);
   }
   return inspect;
+}
+
+function mockInput(mock: { mock: { calls: unknown[][] } }, index = 0): Record<string, unknown> {
+  const input = mock.mock.calls[index]?.[0];
+  if (!input || typeof input !== "object") {
+    throw new Error(`expected mock input ${index}`);
+  }
+  return input as Record<string, unknown>;
+}
+
+function expectMockCalledWithFields(
+  mock: { mock: { calls: unknown[][] } },
+  fields: Record<string, unknown>,
+) {
+  const input = mockInput(mock, mock.mock.calls.length - 1);
+  for (const [key, expected] of Object.entries(fields)) {
+    expect(input[key]).toEqual(expected);
+  }
 }
 
 function expectPluginLoaderCall(params: {
@@ -167,21 +185,19 @@ function expectPluginLoaderCall(params: {
   logger?: unknown;
   loadModules?: boolean;
 }) {
-  expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
-    expect.objectContaining({
-      ...(params.config !== undefined ? { config: params.config } : {}),
-      ...(params.activationSourceConfig !== undefined
-        ? { activationSourceConfig: params.activationSourceConfig }
-        : {}),
-      ...(params.autoEnabledReasons !== undefined
-        ? { autoEnabledReasons: params.autoEnabledReasons }
-        : {}),
-      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-      ...(params.env ? { env: params.env } : {}),
-      ...(params.logger !== undefined ? { logger: params.logger } : {}),
-      ...(params.loadModules !== undefined ? { loadModules: params.loadModules } : {}),
-    }),
-  );
+  expectMockCalledWithFields(loadOpenClawPluginsMock, {
+    ...(params.config !== undefined ? { config: params.config } : {}),
+    ...(params.activationSourceConfig !== undefined
+      ? { activationSourceConfig: params.activationSourceConfig }
+      : {}),
+    ...(params.autoEnabledReasons !== undefined
+      ? { autoEnabledReasons: params.autoEnabledReasons }
+      : {}),
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    ...(params.env ? { env: params.env } : {}),
+    ...(params.logger !== undefined ? { logger: params.logger } : {}),
+    ...(params.loadModules !== undefined ? { loadModules: params.loadModules } : {}),
+  });
 }
 
 function expectMetadataSnapshotLoaderCall(params: {
@@ -192,27 +208,23 @@ function expectMetadataSnapshotLoaderCall(params: {
   logger?: unknown;
   loadModules?: boolean;
 }) {
-  expect(loadPluginMetadataRegistrySnapshotMock).toHaveBeenCalledWith(
-    expect.objectContaining({
-      ...(params.config !== undefined ? { config: params.config } : {}),
-      ...(params.activationSourceConfig !== undefined
-        ? { activationSourceConfig: params.activationSourceConfig }
-        : {}),
-      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-      ...(params.env ? { env: params.env } : {}),
-      ...(params.logger !== undefined ? { logger: params.logger } : {}),
-      ...(params.loadModules !== undefined ? { loadModules: params.loadModules } : {}),
-    }),
-  );
+  expectMockCalledWithFields(loadPluginMetadataRegistrySnapshotMock, {
+    ...(params.config !== undefined ? { config: params.config } : {}),
+    ...(params.activationSourceConfig !== undefined
+      ? { activationSourceConfig: params.activationSourceConfig }
+      : {}),
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    ...(params.env ? { env: params.env } : {}),
+    ...(params.logger !== undefined ? { logger: params.logger } : {}),
+    ...(params.loadModules !== undefined ? { loadModules: params.loadModules } : {}),
+  });
 }
 
 function expectAutoEnabledStatusLoad(params: { rawConfig: unknown }) {
-  expect(applyPluginAutoEnableMock).toHaveBeenCalledWith(
-    expect.objectContaining({
-      config: params.rawConfig,
-      env: process.env,
-    }),
-  );
+  expectMockCalledWithFields(applyPluginAutoEnableMock, {
+    config: params.rawConfig,
+    env: process.env,
+  });
 }
 
 function createCompatChainFixture() {
@@ -315,8 +327,8 @@ function expectAutoEnabledDemoCompatibilityNoticesPreserveRawConfig() {
 }
 
 function expectNoCompatibilityWarnings() {
-  expect(buildPluginCompatibilityNotices()).toEqual([]);
-  expect(buildPluginCompatibilityWarnings()).toEqual([]);
+  expect(buildPluginCompatibilityNotices()).toStrictEqual([]);
+  expect(buildPluginCompatibilityWarnings()).toStrictEqual([]);
 }
 
 function expectCompatibilityOutput(params: { notices?: unknown[]; warnings?: string[] }) {
@@ -363,7 +375,7 @@ function expectBundleInspectState(
   },
 ) {
   expect(inspect.bundleCapabilities).toEqual(params.bundleCapabilities);
-  expect(inspect.mcpServers).toEqual([]);
+  expect(inspect.mcpServers).toStrictEqual([]);
   expect(inspect.shape).toBe(params.shape);
 }
 
@@ -494,20 +506,14 @@ describe("plugin status reports", () => {
 
     const report = buildPluginRegistrySnapshotReport({ config: {} });
 
-    expect(report.plugins[0]).toMatchObject({
-      id: "provider-env-plugin",
-      compat: ["provider-auth-env-vars"],
-    });
+    expect(report.plugins[0]?.id).toBe("provider-env-plugin");
+    expect(report.plugins[0]?.compat).toEqual(["provider-auth-env-vars"]);
   });
 
   it("uses a metadata snapshot load for snapshot reports", () => {
     buildPluginSnapshotReport({ config: {}, workspaceDir: "/workspace" });
 
-    expect(loadPluginMetadataRegistrySnapshotMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        loadModules: false,
-      }),
-    );
+    expect(mockInput(loadPluginMetadataRegistrySnapshotMock).loadModules).toBe(false);
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
@@ -569,10 +575,9 @@ describe("plugin status reports", () => {
       }),
     );
 
-    const inspect = buildPluginInspectReport({ id: "demo", config: rawConfig });
+    const inspect = expectInspectReport("demo", { config: rawConfig });
 
-    expect(inspect).not.toBeNull();
-    expectInspectPolicy(inspect!, {
+    expectInspectPolicy(inspect, {
       allowPromptInjection: undefined,
       allowConversationAccess: undefined,
       hookTimeoutMs: undefined,
@@ -646,14 +651,11 @@ describe("plugin status reports", () => {
 
     const report = buildPluginSnapshotReport({ config: {} });
 
-    expect(report.plugins).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: "runtime-loaded", imported: true }),
-        expect.objectContaining({ id: "facade-loaded", imported: true }),
-        expect.objectContaining({ id: "bundle-loaded", imported: false }),
-        expect.objectContaining({ id: "cold-plugin", imported: false }),
-      ]),
-    );
+    const pluginsById = new Map(report.plugins.map((plugin) => [plugin.id, plugin]));
+    expect(pluginsById.get("runtime-loaded")?.imported).toBe(true);
+    expect(pluginsById.get("facade-loaded")?.imported).toBe(true);
+    expect(pluginsById.get("bundle-loaded")?.imported).toBe(false);
+    expect(pluginsById.get("cold-plugin")?.imported).toBe(false);
   });
 
   it("marks snapshot-loaded plugin modules as imported during full report loads", () => {
@@ -666,12 +668,9 @@ describe("plugin status reports", () => {
 
     const report = buildPluginDiagnosticsReport({ config: {} });
 
-    expect(report.plugins).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: "runtime-loaded", imported: true }),
-        expect.objectContaining({ id: "bundle-loaded", imported: false }),
-      ]),
-    );
+    const pluginsById = new Map(report.plugins.map((plugin) => [plugin.id, plugin]));
+    expect(pluginsById.get("runtime-loaded")?.imported).toBe(true);
+    expect(pluginsById.get("bundle-loaded")?.imported).toBe(false);
   });
 
   it("marks errored plugin modules as imported when full diagnostics already evaluated them", () => {
@@ -682,11 +681,9 @@ describe("plugin status reports", () => {
 
     const report = buildPluginDiagnosticsReport({ config: {} });
 
-    expect(report.plugins).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: "broken-plugin", status: "error", imported: true }),
-      ]),
-    );
+    const plugin = report.plugins.find((entry) => entry.id === "broken-plugin");
+    expect(plugin?.status).toBe("error");
+    expect(plugin?.imported).toBe(true);
   });
 
   it("builds an inspect report with capability shape and policy", () => {
@@ -720,19 +717,18 @@ describe("plugin status reports", () => {
       typedHooks: [createTypedHook({ pluginId: "google", hookName: "before_agent_start" })],
     });
 
-    const inspect = buildPluginInspectReport({ id: "google" });
+    const inspect = expectInspectReport("google");
 
-    expect(inspect).not.toBeNull();
-    expectInspectShape(inspect!, {
+    expectInspectShape(inspect, {
       shape: "hybrid-capability",
       capabilityMode: "hybrid",
       capabilityKinds: ["text-inference", "media-understanding", "image-generation", "web-search"],
     });
-    expect(inspect?.usesLegacyBeforeAgentStart).toBe(true);
-    expect(inspect?.compatibility).toEqual([
+    expect(inspect.usesLegacyBeforeAgentStart).toBe(true);
+    expect(inspect.compatibility).toEqual([
       createCompatibilityNotice({ pluginId: "google", code: "legacy-before-agent-start" }),
     ]);
-    expectInspectPolicy(inspect!, {
+    expectInspectPolicy(inspect, {
       allowPromptInjection: false,
       allowConversationAccess: true,
       hookTimeoutMs: undefined,
@@ -741,7 +737,7 @@ describe("plugin status reports", () => {
       allowedModels: ["openai/gpt-5.5"],
       hasAllowedModelsConfig: true,
     });
-    expect(inspect?.diagnostics).toEqual([
+    expect(inspect.diagnostics).toEqual([
       { level: "warn", pluginId: "google", message: "watch this surface" },
     ]);
   });
@@ -817,7 +813,7 @@ describe("plugin status reports", () => {
       capabilityKinds: ["context-engine"],
     });
     expect(inspect.capabilities).toEqual([{ kind: "context-engine", ids: ["moon-engine"] }]);
-    expect(inspect.compatibility).toEqual([]);
+    expect(inspect.compatibility).toStrictEqual([]);
     expectNoCompatibilityWarnings();
   });
 

@@ -335,7 +335,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       (shard) => shard.shardName === "agentic-plugins",
     );
 
-    expect(pluginsShard).toMatchObject({
+    expect(pluginsShard).toEqual({
       checkName: "checks-node-agentic-plugins",
       configs: ["test/vitest/vitest.plugins.config.ts"],
       requiresDist: false,
@@ -351,11 +351,12 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
 
   it("keeps expensive plugin shards release-only when normal CI asks for the cheaper plan", () => {
     const shards = createNodeTestShards({ includeReleaseOnlyPluginShards: false });
+    const shardNames = shards.map((shard) => shard.shardName);
 
-    expect(shards.some((shard) => shard.shardName === "agentic-plugins")).toBe(false);
-    expect(shards.some((shard) => shard.shardName === "agentic-gateway-core")).toBe(true);
-    expect(shards.some((shard) => shard.shardName === "agentic-gateway-methods")).toBe(true);
-    expect(shards.some((shard) => shard.shardName === "agentic-plugin-sdk")).toBe(true);
+    expect(shardNames).not.toContain("agentic-plugins");
+    expect(shardNames).toContain("agentic-gateway-core");
+    expect(shardNames).toContain("agentic-gateway-methods");
+    expect(shardNames).toContain("agentic-plugin-sdk");
   });
 
   it("splits auto-reply into balanced core/top-level and reply subtree shards", () => {

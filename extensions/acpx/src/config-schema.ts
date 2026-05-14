@@ -1,4 +1,4 @@
-import { z } from "openclaw/plugin-sdk/zod";
+import { z } from "zod";
 
 const ACPX_PERMISSION_MODES = ["approve-all", "approve-reads", "deny-all"] as const;
 export type AcpxPermissionMode = (typeof ACPX_PERMISSION_MODES)[number];
@@ -33,7 +33,7 @@ export type AcpxPluginConfig = {
   timeoutSeconds?: number;
   queueOwnerTtlSeconds?: number;
   mcpServers?: Record<string, McpServerConfig>;
-  agents?: Record<string, { command: string }>;
+  agents?: Record<string, { command: string; args?: string[] }>;
 };
 
 export type ResolvedAcpxPluginConfig = {
@@ -111,6 +111,7 @@ export const AcpxPluginConfigSchema = z.strictObject({
       z.string(),
       z.strictObject({
         command: nonEmptyTrimmedString("agents.<id>.command must be a non-empty string"),
+        args: z.array(z.string({ error: "args must be an array of strings" })).optional(),
       }),
     )
     .optional(),

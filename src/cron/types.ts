@@ -125,11 +125,40 @@ export type CronRunOutcome = {
   diagnostics?: CronRunDiagnostics;
 };
 
+export type CronAgentExecutionPhase =
+  | "runner_entered"
+  | "workspace"
+  | "runtime_plugins"
+  | "model_resolution"
+  | "auth"
+  | "context_engine"
+  | "attempt_dispatch"
+  | "context_assembled"
+  | "turn_accepted"
+  | "process_spawned"
+  | "tool_execution_started"
+  | "assistant_output_started"
+  | "model_call_started";
+
 export type CronAgentExecutionStarted = {
   jobId: string;
   agentId?: string;
   sessionId?: string;
   sessionKey?: string;
+  phase?: CronAgentExecutionPhase;
+  provider?: string;
+  model?: string;
+  backend?: string;
+  source?: string;
+  tool?: string;
+  toolCallId?: string;
+  itemId?: string;
+  /** @deprecated Use phase-specific execution milestones for watchdog progress. */
+  firstModelCallStarted?: boolean;
+};
+
+export type CronAgentExecutionPhaseUpdate = CronAgentExecutionStarted & {
+  phase: CronAgentExecutionPhase;
 };
 
 export type CronFailureAlert = {

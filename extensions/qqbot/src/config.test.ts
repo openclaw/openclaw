@@ -1,6 +1,6 @@
 import fs from "node:fs";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { type JsonSchemaObject, validateJsonSchemaValue } from "openclaw/plugin-sdk/config-schema";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { describe, expect, it } from "vitest";
 import { qqbotSetupAdapterShared } from "./bridge/config-shared.js";
 import {
@@ -11,6 +11,13 @@ import {
 import { qqbotSetupPlugin } from "./channel.setup.js";
 import { QQBotConfigSchema } from "./config-schema.js";
 import { makeQqbotDefaultAccountConfig, makeQqbotSecretRefConfig } from "./qqbot-test-support.js";
+
+function requireQQBotSetup() {
+  if (!qqbotSetupPlugin.setup) {
+    throw new Error("QQBot setup missing");
+  }
+  return qqbotSetupPlugin.setup;
+}
 
 describe("qqbot config", () => {
   it("accepts top-level speech overrides in the manifest schema", () => {
@@ -254,10 +261,9 @@ describe("qqbot config", () => {
       expectedPath: ["channels", "qqbot", "accounts", "bot2"],
     },
   ])("splits --token on the first colon for $accountId", ({ inputAccountId, expectedPath }) => {
-    const setup = qqbotSetupPlugin.setup;
-    expect(setup).toBeDefined();
+    const setup = requireQQBotSetup();
 
-    const next = setup!.applyAccountConfig?.({
+    const next = setup.applyAccountConfig?.({
       cfg: {} as OpenClawConfig,
       accountId: inputAccountId,
       input: {
@@ -272,18 +278,18 @@ describe("qqbot config", () => {
       return (value as Record<string, unknown>)[key];
     }, next) as Record<string, unknown> | undefined;
 
-    expect(accountConfig).toMatchObject({
+    expect(accountConfig).toStrictEqual({
       enabled: true,
+      allowFrom: ["*"],
       appId: "102905186",
       clientSecret: "Oi2Mg1Mh2Ni3:Pl7TpBXuHe1OmAYwKi7W",
+      clientSecretFile: undefined,
     });
   });
 
   it("rejects malformed --token consistently across setup paths", () => {
     const runtimeSetup = qqbotSetupAdapterShared;
-    const lightweightSetup = qqbotSetupPlugin.setup;
-    expect(runtimeSetup).toBeDefined();
-    expect(lightweightSetup).toBeDefined();
+    const lightweightSetup = requireQQBotSetup();
 
     const input = { token: "broken", name: "Bad" };
 
@@ -295,7 +301,7 @@ describe("qqbot config", () => {
       } as never),
     ).toBe("QQBot --token must be in appId:clientSecret format");
     expect(
-      lightweightSetup!.validateInput?.({
+      lightweightSetup.validateInput?.({
         cfg: {} as OpenClawConfig,
         accountId: DEFAULT_ACCOUNT_ID,
         input,
@@ -307,21 +313,19 @@ describe("qqbot config", () => {
         accountId: DEFAULT_ACCOUNT_ID,
         input,
       } as never),
-    ).toEqual({});
+    ).toStrictEqual({});
     expect(
-      lightweightSetup!.applyAccountConfig?.({
+      lightweightSetup.applyAccountConfig?.({
         cfg: {} as OpenClawConfig,
         accountId: DEFAULT_ACCOUNT_ID,
         input,
       } as never),
-    ).toEqual({});
+    ).toStrictEqual({});
   });
 
   it("preserves the --use-env add flow across setup paths", () => {
     const runtimeSetup = qqbotSetupAdapterShared;
-    const lightweightSetup = qqbotSetupPlugin.setup;
-    expect(runtimeSetup).toBeDefined();
-    expect(lightweightSetup).toBeDefined();
+    const lightweightSetup = requireQQBotSetup();
 
     const input = { useEnv: true, name: "Env Bot" };
 
@@ -331,7 +335,7 @@ describe("qqbot config", () => {
         accountId: DEFAULT_ACCOUNT_ID,
         input,
       } as never),
-    ).toMatchObject({
+    ).toStrictEqual({
       channels: {
         qqbot: {
           enabled: true,
@@ -341,12 +345,12 @@ describe("qqbot config", () => {
       },
     });
     expect(
-      lightweightSetup!.applyAccountConfig?.({
+      lightweightSetup.applyAccountConfig?.({
         cfg: {} as OpenClawConfig,
         accountId: DEFAULT_ACCOUNT_ID,
         input,
       } as never),
-    ).toMatchObject({
+    ).toStrictEqual({
       channels: {
         qqbot: {
           enabled: true,
@@ -359,7 +363,6 @@ describe("qqbot config", () => {
 
   it("uses configured defaultAccount when runtime setup accountId is omitted", () => {
     const runtimeSetup = qqbotSetupAdapterShared;
-    expect(runtimeSetup).toBeDefined();
 
     expect(
       runtimeSetup.resolveAccountId?.({
@@ -371,9 +374,7 @@ describe("qqbot config", () => {
 
   it("rejects --use-env for named accounts across setup paths", () => {
     const runtimeSetup = qqbotSetupAdapterShared;
-    const lightweightSetup = qqbotSetupPlugin.setup;
-    expect(runtimeSetup).toBeDefined();
-    expect(lightweightSetup).toBeDefined();
+    const lightweightSetup = requireQQBotSetup();
 
     const input = { useEnv: true, name: "Env Bot" };
 
@@ -385,7 +386,7 @@ describe("qqbot config", () => {
       } as never),
     ).toBe("QQBot --use-env only supports the default account");
     expect(
-      lightweightSetup!.validateInput?.({
+      lightweightSetup.validateInput?.({
         cfg: {} as OpenClawConfig,
         accountId: "bot2",
         input,
@@ -397,13 +398,13 @@ describe("qqbot config", () => {
         accountId: "bot2",
         input,
       } as never),
-    ).toEqual({});
+    ).toStrictEqual({});
     expect(
-      lightweightSetup!.applyAccountConfig?.({
+      lightweightSetup.applyAccountConfig?.({
         cfg: {} as OpenClawConfig,
         accountId: "bot2",
         input,
       } as never),
-    ).toEqual({});
+    ).toStrictEqual({});
   });
 });

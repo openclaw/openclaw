@@ -1,4 +1,4 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import type { ClientToolDefinition } from "./pi-embedded-runner/run/params.js";
@@ -46,22 +46,24 @@ describe("pi tool definition adapter", () => {
   it("wraps tool errors into a tool result", async () => {
     const result = await executeThrowingTool("boom", "call1");
 
-    expect(result.details).toMatchObject({
-      status: "error",
-      tool: "boom",
-    });
-    expect(result.details).toMatchObject({ error: "nope" });
+    const details = result.details as
+      | { status?: string; tool?: string; error?: string }
+      | undefined;
+    expect(details?.status).toBe("error");
+    expect(details?.tool).toBe("boom");
+    expect(details?.error).toBe("nope");
     expect(JSON.stringify(result.details)).not.toContain("\n    at ");
   });
 
   it("normalizes exec tool aliases in error results", async () => {
     const result = await executeThrowingTool("bash", "call2");
 
-    expect(result.details).toMatchObject({
-      status: "error",
-      tool: "exec",
-      error: "nope",
-    });
+    const details = result.details as
+      | { status?: string; tool?: string; error?: string }
+      | undefined;
+    expect(details?.status).toBe("error");
+    expect(details?.tool).toBe("exec");
+    expect(details?.error).toBe("nope");
   });
 
   it("coerces details-only tool results to include content", async () => {
@@ -81,7 +83,7 @@ describe("pi tool definition adapter", () => {
     expect(result.details).toEqual({
       hits: [{ id: "a1", score: 0.9 }],
     });
-    expect(result.content[0]).toMatchObject({ type: "text" });
+    expect(result.content[0]?.type).toBe("text");
     expect((result.content[0] as { text?: string }).text).toContain('"hits"');
   });
 
@@ -102,7 +104,7 @@ describe("pi tool definition adapter", () => {
       count: 2,
       ids: ["m1", "m2"],
     });
-    expect(result.content[0]).toMatchObject({ type: "text" });
+    expect(result.content[0]?.type).toBe("text");
     expect((result.content[0] as { text?: string }).text).toContain('"count"');
   });
 });
@@ -122,9 +124,10 @@ function makeClientTool(name: string): ClientToolDefinition {
   };
 }
 
-async function executeClientTool(
-  params: unknown,
-): Promise<{ calledWith: Record<string, unknown> | undefined }> {
+async function executeClientTool(params: unknown): Promise<{
+  calledWith: Record<string, unknown> | undefined;
+  result: Awaited<ReturnType<ToolExecute>>;
+}> {
   let captured: Record<string, unknown> | undefined;
   const [def] = toClientToolDefinitions([makeClientTool("search")], (_name, p) => {
     captured = p;
@@ -132,14 +135,40 @@ async function executeClientTool(
   if (!def) {
     throw new Error("missing client tool definition");
   }
-  await def.execute("call-c1", params, undefined, undefined, extensionContext);
-  return { calledWith: captured };
+  const result = await def.execute("call-c1", params, undefined, undefined, extensionContext);
+  return { calledWith: captured, result };
 }
 
 describe("toClientToolDefinitions – param coercion", () => {
+  it("returns terminal pending results for each client tool in a batch", async () => {
+    const completed: Array<{ id: string; name: string; params: Record<string, unknown> }> = [];
+    const defs = toClientToolDefinitions([makeClientTool("search"), makeClientTool("lookup")], {
+      complete: (id, name, params) => {
+        completed.push({ id, name, params });
+      },
+    });
+    const [search, lookup] = defs;
+    if (!search || !lookup) {
+      throw new Error("missing client tool definition");
+    }
+
+    const [searchResult, lookupResult] = await Promise.all([
+      search.execute("call-search", { query: "first" }, undefined, undefined, extensionContext),
+      lookup.execute("call-lookup", { query: "second" }, undefined, undefined, extensionContext),
+    ]);
+
+    expect(searchResult.terminate).toBe(true);
+    expect(lookupResult.terminate).toBe(true);
+    expect(completed).toEqual([
+      { id: "call-search", name: "search", params: { query: "first" } },
+      { id: "call-lookup", name: "lookup", params: { query: "second" } },
+    ]);
+  });
+
   it("passes plain object params through unchanged", async () => {
-    const { calledWith } = await executeClientTool({ query: "hello" });
+    const { calledWith, result } = await executeClientTool({ query: "hello" });
     expect(calledWith).toEqual({ query: "hello" });
+    expect(result.terminate).toBe(true);
   });
 
   it("parses a JSON string into an object (streaming delta accumulation)", async () => {
@@ -154,27 +183,27 @@ describe("toClientToolDefinitions – param coercion", () => {
 
   it("falls back to empty object for invalid JSON string", async () => {
     const { calledWith } = await executeClientTool("not-json");
-    expect(calledWith).toEqual({});
+    expect(calledWith).toStrictEqual({});
   });
 
   it("falls back to empty object for empty string", async () => {
     const { calledWith } = await executeClientTool("");
-    expect(calledWith).toEqual({});
+    expect(calledWith).toStrictEqual({});
   });
 
   it("falls back to empty object for null", async () => {
     const { calledWith } = await executeClientTool(null);
-    expect(calledWith).toEqual({});
+    expect(calledWith).toStrictEqual({});
   });
 
   it("falls back to empty object for undefined", async () => {
     const { calledWith } = await executeClientTool(undefined);
-    expect(calledWith).toEqual({});
+    expect(calledWith).toStrictEqual({});
   });
 
   it("falls back to empty object for a JSON array string", async () => {
     const { calledWith } = await executeClientTool("[1,2,3]");
-    expect(calledWith).toEqual({});
+    expect(calledWith).toStrictEqual({});
   });
 
   it("handles nested JSON string correctly", async () => {

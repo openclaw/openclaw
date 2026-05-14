@@ -1,3 +1,4 @@
+import { normalizeGooglePreviewModelId } from "../plugin-sdk/provider-model-id-normalize.js";
 import { normalizeProviderModelIdWithManifest } from "../plugins/manifest-model-id-normalization.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
@@ -32,19 +33,48 @@ export function normalizeStaticProviderModelId(
     manifestPlugins?: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
   } = {},
 ): string {
+  const normalizedProvider = normalizeProviderId(provider);
   if (options.allowManifestNormalization === false) {
-    return model;
+    return normalizeBuiltInProviderModelId(normalizedProvider, model);
   }
-  return (
+  const manifestModelId =
     normalizeProviderModelIdWithManifest({
-      provider,
+      provider: normalizedProvider,
       plugins: options.manifestPlugins,
       context: {
-        provider,
+        provider: normalizedProvider,
         modelId: model,
       },
-    }) ?? model
-  );
+    }) ?? model;
+  return normalizeBuiltInProviderModelId(normalizedProvider, manifestModelId);
+}
+
+function normalizeBuiltInProviderModelId(provider: string, model: string): string {
+  if (provider === "google" || provider === "google-gemini-cli" || provider === "google-vertex") {
+    return normalizeGooglePreviewModelId(model);
+  }
+  return model;
+}
+
+export function normalizeConfiguredProviderCatalogModelId(provider: string, model: string): string {
+  const providerModel = normalizeStaticProviderModelId(provider, model);
+  const googlePrefix = "google/";
+  if (!providerModel.startsWith(googlePrefix)) {
+    const slash = providerModel.indexOf("/");
+    if (slash <= 0 || slash >= providerModel.length - 1) {
+      return providerModel;
+    }
+    const prefix = providerModel.slice(0, slash + 1);
+    const suffix = providerModel.slice(slash + 1);
+    if (!suffix.startsWith(googlePrefix)) {
+      return providerModel;
+    }
+    const normalizedSuffix = normalizeGooglePreviewModelId(suffix);
+    return normalizedSuffix === suffix ? providerModel : `${prefix}${normalizedSuffix}`;
+  }
+  const modelId = providerModel.slice(googlePrefix.length);
+  const normalizedModelId = normalizeGooglePreviewModelId(modelId);
+  return normalizedModelId === modelId ? providerModel : `${googlePrefix}${normalizedModelId}`;
 }
 
 function parseStaticModelRef(raw: string, defaultProvider: string): StaticModelRef | null {

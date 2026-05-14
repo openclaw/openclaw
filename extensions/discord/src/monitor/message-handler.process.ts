@@ -1,4 +1,8 @@
-import { resolveAckReaction, resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  formatReasoningMessage,
+  resolveAckReaction,
+  resolveHumanDelayConfig,
+} from "openclaw/plugin-sdk/agent-runtime";
 import {
   createStatusReactionController,
   DEFAULT_TIMING,
@@ -13,13 +17,14 @@ import {
   resolveChannelMessageSourceReplyDeliveryMode,
 } from "openclaw/plugin-sdk/channel-message";
 import {
-  formatChannelProgressDraftLine,
-  formatChannelProgressDraftLineForEntry,
+  buildChannelProgressDraftLine,
+  buildChannelProgressDraftLineForEntry,
   resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-streaming";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   hasFinalInboundReplyDispatch,
+  recordChannelBotPairLoopAndCheckSuppression,
   runInboundReplyTurn,
 } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
@@ -136,9 +141,19 @@ export async function processDiscordMessage(
     route,
     discordRestFetch,
     abortSignal,
+    botLoopProtection,
   } = ctx;
   if (isProcessAborted(abortSignal)) {
     return;
+  }
+  if (botLoopProtection) {
+    const botLoopResult = recordChannelBotPairLoopAndCheckSuppression(botLoopProtection);
+    if (botLoopResult.suppressed) {
+      logVerbose(
+        `discord: bot-to-bot loop detected before dispatch setup, suppressing for ${Math.max(0, Math.ceil((botLoopResult.cooldownUntilMs - Date.now()) / 1000))}s`,
+      );
+      return;
+    }
   }
 
   const ssrfPolicy = cfg.browser?.ssrfPolicy;
@@ -665,7 +680,10 @@ export async function processDiscordMessage(
                   draftPreview.suppressDefaultToolProgressMessages ? true : undefined,
                 onReasoningStream: async (payload) => {
                   await statusReactions.setThinking();
-                  await draftPreview.pushReasoningProgress(payload?.text);
+                  const formattedText = payload?.text
+                    ? formatReasoningMessage(payload.text)
+                    : undefined;
+                  await draftPreview.pushReasoningProgress(formattedText);
                 },
                 onToolStart: async (payload) => {
                   if (isProcessAborted(abortSignal)) {
@@ -674,7 +692,7 @@ export async function processDiscordMessage(
                   await maybeBindStatusReactionsToToolReaction(payload);
                   await statusReactions.setTool(payload.name);
                   await draftPreview.pushToolProgress(
-                    formatChannelProgressDraftLineForEntry(
+                    buildChannelProgressDraftLineForEntry(
                       discordConfig,
                       {
                         event: "tool",
@@ -689,7 +707,7 @@ export async function processDiscordMessage(
                 },
                 onItemEvent: async (payload) => {
                   await draftPreview.pushToolProgress(
-                    formatChannelProgressDraftLineForEntry(discordConfig, {
+                    buildChannelProgressDraftLineForEntry(discordConfig, {
                       event: "item",
                       itemKind: payload.kind,
                       title: payload.title,
@@ -707,7 +725,7 @@ export async function processDiscordMessage(
                     return;
                   }
                   await draftPreview.pushToolProgress(
-                    formatChannelProgressDraftLine({
+                    buildChannelProgressDraftLine({
                       event: "plan",
                       phase: payload.phase,
                       title: payload.title,
@@ -721,7 +739,7 @@ export async function processDiscordMessage(
                     return;
                   }
                   await draftPreview.pushToolProgress(
-                    formatChannelProgressDraftLine({
+                    buildChannelProgressDraftLine({
                       event: "approval",
                       phase: payload.phase,
                       title: payload.title,
@@ -736,7 +754,7 @@ export async function processDiscordMessage(
                     return;
                   }
                   await draftPreview.pushToolProgress(
-                    formatChannelProgressDraftLine({
+                    buildChannelProgressDraftLine({
                       event: "command-output",
                       phase: payload.phase,
                       title: payload.title,
@@ -751,7 +769,7 @@ export async function processDiscordMessage(
                     return;
                   }
                   await draftPreview.pushToolProgress(
-                    formatChannelProgressDraftLine({
+                    buildChannelProgressDraftLine({
                       event: "patch",
                       phase: payload.phase,
                       title: payload.title,

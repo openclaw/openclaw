@@ -67,6 +67,57 @@ vi.mock("../config/sessions.js", () => {
 const announceSpy = vi.fn(async (_params: unknown) => true);
 const runSubagentEndedHookMock = vi.fn(async (_event?: unknown, _ctx?: unknown) => {});
 const emitSessionLifecycleEventMock = vi.fn();
+
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean) {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireSubagentEndedHookCall(runId: string): {
+  event: Record<string, unknown>;
+  ctx: Record<string, unknown>;
+} {
+  const call = runSubagentEndedHookMock.mock.calls.find((candidate) => {
+    const ctx = candidate[1] as { runId?: string } | undefined;
+    return ctx?.runId === runId;
+  });
+  if (!call) {
+    throw new Error(`expected subagent_ended hook call for ${runId}`);
+  }
+  return {
+    event: requireRecord(call[0], `${runId} subagent_ended event`),
+    ctx: requireRecord(call[1], `${runId} subagent_ended context`),
+  };
+}
+
+function requireSessionLifecycleEventCall(label: string): Record<string, unknown> {
+  const call = emitSessionLifecycleEventMock.mock.calls[0];
+  if (!call) {
+    throw new Error(`expected ${label}`);
+  }
+  return requireRecord(call[0], label);
+}
+
+function requireFirstAnnounceCall(): Record<string, unknown> {
+  const call = announceSpy.mock.calls[0];
+  if (!call) {
+    throw new Error("expected announce call");
+  }
+  return requireRecord(call[0], "announce params");
+}
+
 const noopContextEngine = {
   info: { id: "test-context-engine", name: "Test context engine" },
   ingest: async () => ({ ingested: false }),
@@ -136,7 +187,7 @@ describe("subagent registry steer restarts", () => {
   };
 
   const createDeferredAnnounceResolver = (): ((value: boolean) => void) => {
-    let resolveAnnounce!: (value: boolean) => void;
+    let resolveAnnounce: ((value: boolean) => void) | undefined;
     announceSpy.mockImplementationOnce(
       () =>
         new Promise<boolean>((resolve) => {
@@ -144,6 +195,9 @@ describe("subagent registry steer restarts", () => {
         }),
     );
     return (value: boolean) => {
+      if (!resolveAnnounce) {
+        throw new Error("Expected subagent announcement resolver to be initialized");
+      }
       resolveAnnounce(value);
     };
   };
@@ -282,16 +336,11 @@ describe("subagent registry steer restarts", () => {
         });
         expect(matchingCalls).toHaveLength(1);
       });
-      expect(runSubagentEndedHookMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          runId: "run-new",
-        }),
-        expect.objectContaining({
-          runId: "run-new",
-        }),
-      );
+      const hookCall = requireSubagentEndedHookCall("run-new");
+      expect(hookCall.event.runId).toBe("run-new");
+      expect(hookCall.ctx.runId).toBe("run-new");
 
-      const announce = (announceSpy.mock.calls[0]?.[0] ?? {}) as { childRunId?: string };
+      const announce = requireFirstAnnounceCall();
       expect(announce.childRunId).toBe("run-new");
     }
   });
@@ -316,17 +365,12 @@ describe("subagent registry steer restarts", () => {
       await waitForRegistrySideEffect(() => {
         expect(runSubagentEndedHookMock).toHaveBeenCalledTimes(1);
       });
-      expect(runSubagentEndedHookMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          targetSessionKey: "agent:main:subagent:completion-delayed",
-          reason: "subagent-complete",
-          sendFarewell: true,
-        }),
-        expect.objectContaining({
-          runId: "run-completion-delayed",
-          requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
-        }),
-      );
+      const hookCall = requireSubagentEndedHookCall("run-completion-delayed");
+      expect(hookCall.event.targetSessionKey).toBe("agent:main:subagent:completion-delayed");
+      expect(hookCall.event.reason).toBe("subagent-complete");
+      expect(hookCall.event.sendFarewell).toBe(true);
+      expect(hookCall.ctx.runId).toBe("run-completion-delayed");
+      expect(hookCall.ctx.requesterSessionKey).toBe(MAIN_REQUESTER_SESSION_KEY);
     }
   });
 
@@ -356,7 +400,7 @@ describe("subagent registry steer restarts", () => {
     }
   });
 
-  it("clears announce retry state when replacing after steer restart", async () => {
+  it("clears announce retry state when replacing after steer restart", () => {
     {
       registerRun({
         runId: "run-retry-reset-old",
@@ -409,21 +453,13 @@ describe("subagent registry steer restarts", () => {
       emitLifecycleEnd("run-terminal-state-new");
 
       await waitForRegistrySideEffect(() => {
-        expect(runSubagentEndedHookMock).toHaveBeenCalledWith(
-          expect.objectContaining({
-            runId: "run-terminal-state-new",
-          }),
-          expect.objectContaining({
-            runId: "run-terminal-state-new",
-          }),
-        );
+        const hookCall = requireSubagentEndedHookCall("run-terminal-state-new");
+        expect(hookCall.event.runId).toBe("run-terminal-state-new");
+        expect(hookCall.ctx.runId).toBe("run-terminal-state-new");
       });
-      expect(emitSessionLifecycleEventMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          sessionKey: "agent:main:subagent:terminal-state",
-          reason: "subagent-status",
-        }),
-      );
+      const lifecycleEvent = requireSessionLifecycleEventCall("terminal-state lifecycle event");
+      expect(lifecycleEvent.sessionKey).toBe("agent:main:subagent:terminal-state");
+      expect(lifecycleEvent.reason).toBe("subagent-status");
     }
   });
 
@@ -482,11 +518,13 @@ describe("subagent registry steer restarts", () => {
     expect(replaced).toBe(true);
 
     const next = listMainRuns().find((entry) => entry.runId === "run-runtime-new");
-    expect(next).toBeDefined();
+    if (next === undefined) {
+      throw new Error("expected restarted run");
+    }
     expect(mod.getSubagentSessionStartedAt(next)).toBe(1_000);
-    expect(next?.accumulatedRuntimeMs).toBe(120_000);
+    expect(next.accumulatedRuntimeMs).toBe(120_000);
 
-    if (!next?.startedAt) {
+    if (!next.startedAt) {
       throw new Error("missing next startedAt");
     }
     next.endedAt = next.startedAt + 30_000;
@@ -516,11 +554,12 @@ describe("subagent registry steer restarts", () => {
     expect(replaced).toBe(true);
 
     const run = listMainRuns().find((entry) => entry.runId === "run-wake-new");
-    expect(run).toMatchObject({
-      frozenResultText: undefined,
-      fallbackFrozenResultText: "final summary before wake",
-      fallbackFrozenResultCapturedAt: 1234,
-    });
+    if (!run) {
+      throw new Error("expected wake replacement run");
+    }
+    expect(run.frozenResultText).toBeUndefined();
+    expect(run.fallbackFrozenResultText).toBe("final summary before wake");
+    expect(run.fallbackFrozenResultCapturedAt).toBe(1234);
   });
 
   it("restores announce for a finished run when steer replacement dispatch fails", async () => {
@@ -541,7 +580,7 @@ describe("subagent registry steer restarts", () => {
     await flushAnnounce();
 
     expect(announceSpy).toHaveBeenCalledTimes(1);
-    const announce = (announceSpy.mock.calls[0]?.[0] ?? {}) as { childRunId?: string };
+    const announce = requireFirstAnnounceCall();
     expect(announce.childRunId).toBe("run-failed-restart");
   });
 
@@ -563,35 +602,32 @@ describe("subagent registry steer restarts", () => {
     expect(mod.isSubagentSessionRunActive(childSessionKey)).toBe(false);
 
     const run = listMainRuns()[0];
-    expect(run?.outcome).toMatchObject({ status: "error", error: "manual kill" });
-    expect(run?.outcome?.startedAt).toEqual(expect.any(Number));
-    expect(run?.outcome?.endedAt).toEqual(expect.any(Number));
-    expect(run?.outcome?.elapsedMs).toEqual(expect.any(Number));
+    expect(run?.outcome?.status).toBe("error");
+    expect(run?.outcome?.error).toBe("manual kill");
+    expect(run?.outcome?.startedAt).toBeTypeOf("number");
+    expect(run?.outcome?.endedAt).toBeTypeOf("number");
+    expect(run?.outcome?.elapsedMs).toBeTypeOf("number");
+    expect(run?.outcome?.elapsedMs).toBeGreaterThanOrEqual(0);
     expect(run?.outcome?.endedAt).toBeGreaterThanOrEqual(run?.outcome?.startedAt ?? 0);
     expect(run?.cleanupHandled).toBe(true);
     expect(typeof run?.cleanupCompletedAt).toBe("number");
     await flushAnnounce();
-    expect(runSubagentEndedHookMock).toHaveBeenCalledWith(
-      {
-        targetSessionKey: childSessionKey,
-        targetKind: "subagent",
-        reason: "subagent-killed",
-        sendFarewell: true,
-        accountId: undefined,
-        runId: "run-killed",
-        endedAt: expect.any(Number),
-        outcome: "killed",
-        error: "manual kill",
-      },
-      {
-        runId: "run-killed",
-        childSessionKey,
-        requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
-      },
-    );
+    const hookCall = requireSubagentEndedHookCall("run-killed");
+    expect(hookCall.event.targetSessionKey).toBe(childSessionKey);
+    expect(hookCall.event.targetKind).toBe("subagent");
+    expect(hookCall.event.reason).toBe("subagent-killed");
+    expect(hookCall.event.sendFarewell).toBe(true);
+    expect(hookCall.event.accountId).toBeUndefined();
+    expect(hookCall.event.runId).toBe("run-killed");
+    expect(typeof hookCall.event.endedAt).toBe("number");
+    expect(hookCall.event.outcome).toBe("killed");
+    expect(hookCall.event.error).toBe("manual kill");
+    expect(hookCall.ctx.runId).toBe("run-killed");
+    expect(hookCall.ctx.childSessionKey).toBe(childSessionKey);
+    expect(hookCall.ctx.requesterSessionKey).toBe(MAIN_REQUESTER_SESSION_KEY);
   });
 
-  it("treats a child session as inactive when only a stale older row is still unended", async () => {
+  it("treats a child session as inactive when only a stale older row is still unended", () => {
     const childSessionKey = "agent:main:subagent:stale-active-older-row";
 
     mod.addSubagentRunForTests({
@@ -640,7 +676,7 @@ describe("subagent registry steer restarts", () => {
     await flushAnnounce();
 
     expect(announceSpy).toHaveBeenCalledTimes(1);
-    const announce = (announceSpy.mock.calls[0]?.[0] ?? {}) as { childRunId?: string };
+    const announce = requireFirstAnnounceCall();
     expect(announce.childRunId).toBe("run-kill-race");
 
     const run = listMainRuns()[0];
@@ -681,7 +717,7 @@ describe("subagent registry steer restarts", () => {
       const childRunIds = announceSpy.mock.calls.map(
         (call) => ((call[0] ?? {}) as { childRunId?: string }).childRunId,
       );
-      expect(childRunIds.filter((id) => id === "run-parent")).toHaveLength(1);
+      expect(countMatching(childRunIds, (id) => id === "run-parent")).toBe(1);
     });
 
     emitLifecycleEnd("run-child");
@@ -689,15 +725,15 @@ describe("subagent registry steer restarts", () => {
       const childRunIds = announceSpy.mock.calls.map(
         (call) => ((call[0] ?? {}) as { childRunId?: string }).childRunId,
       );
-      expect(childRunIds.filter((id) => id === "run-parent")).toHaveLength(2);
-      expect(childRunIds.filter((id) => id === "run-child")).toHaveLength(1);
+      expect(countMatching(childRunIds, (id) => id === "run-parent")).toBe(2);
+      expect(countMatching(childRunIds, (id) => id === "run-child")).toBe(1);
     });
 
     const childRunIds = announceSpy.mock.calls.map(
       (call) => ((call[0] ?? {}) as { childRunId?: string }).childRunId,
     );
-    expect(childRunIds.filter((id) => id === "run-parent")).toHaveLength(2);
-    expect(childRunIds.filter((id) => id === "run-child")).toHaveLength(1);
+    expect(countMatching(childRunIds, (id) => id === "run-parent")).toBe(2);
+    expect(countMatching(childRunIds, (id) => id === "run-child")).toBe(1);
   });
 
   it("retries completion-mode announce delivery with backoff and then gives up after retry limit", async () => {

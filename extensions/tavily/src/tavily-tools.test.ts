@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -15,13 +15,28 @@ import {
 
 const { runTavilySearch, runTavilyExtract } = vi.hoisted(() => ({
   runTavilySearch: vi.fn(async (params: Record<string, unknown>) => params),
-  runTavilyExtract: vi.fn(async (params: unknown) => ({ ok: true, params })),
+  runTavilyExtract: vi.fn(async (params: Record<string, unknown>) => ({ ok: true, params })),
 }));
+
+type TavilyExtractParams = {
+  cfg?: unknown;
+  urls?: string[];
+  query?: string;
+  chunksPerSource?: number;
+};
 
 vi.mock("./tavily-client.js", () => ({
   runTavilySearch,
   runTavilyExtract,
 }));
+
+function requireFirstMockArg(mock: ReturnType<typeof vi.fn>, label: string): unknown {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`Expected ${label}`);
+  }
+  return call[0];
+}
 
 function fakeApi(): OpenClawPluginApi {
   return {
@@ -49,7 +64,10 @@ describe("tavily tools", () => {
     runTavilySearch.mockReset();
     runTavilySearch.mockImplementation(async (params: Record<string, unknown>) => params);
     runTavilyExtract.mockReset();
-    runTavilyExtract.mockImplementation(async (params: unknown) => ({ ok: true, params }));
+    runTavilyExtract.mockImplementation(async (params: Record<string, unknown>) => ({
+      ok: true,
+      params,
+    }));
     vi.unstubAllEnvs();
   });
 
@@ -122,24 +140,23 @@ describe("tavily tools", () => {
       includeDomains: ["docs.openclaw.ai", "openclaw.ai"],
       excludeDomains: ["bad.example"],
     });
-    expect(result).toMatchObject({
-      details: {
-        ok: true,
-        params: {
-          cfg: { env: "test" },
-          query: "best docs",
-          searchDepth: "advanced",
-          topic: "news",
-          maxResults: 5,
-          includeAnswer: true,
-          timeRange: "week",
-          includeDomains: ["docs.openclaw.ai", "openclaw.ai"],
-          excludeDomains: ["bad.example"],
-        },
+    const expectedResult = {
+      ok: true,
+      params: {
+        cfg: { env: "test" },
+        query: "best docs",
+        searchDepth: "advanced",
+        topic: "news",
+        maxResults: 5,
+        includeAnswer: true,
+        timeRange: "week",
+        includeDomains: ["docs.openclaw.ai", "openclaw.ai"],
+        excludeDomains: ["bad.example"],
       },
-    });
-    expect(result.content[0]).toMatchObject({
-      type: "text",
+    };
+    expect(result).toEqual({
+      content: [{ type: "text", text: JSON.stringify(expectedResult, null, 2) }],
+      details: expectedResult,
     });
   });
 
@@ -208,18 +225,18 @@ describe("tavily tools", () => {
     await searchTool.execute("search-call", { query: "openclaw" });
     await extractTool.execute("extract-call", { urls: ["https://example.com"] });
 
-    expect(runTavilySearch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg: runtimeConfig,
-        query: "openclaw",
-      }),
-    );
-    expect(runTavilyExtract).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg: runtimeConfig,
-        urls: ["https://example.com"],
-      }),
-    );
+    const searchParams = requireFirstMockArg(runTavilySearch, "Tavily search params") as Record<
+      string,
+      unknown
+    >;
+    expect(searchParams.cfg).toBe(runtimeConfig);
+    expect(searchParams.query).toBe("openclaw");
+    const extractParams = requireFirstMockArg(
+      runTavilyExtract,
+      "Tavily extract params",
+    ) as TavilyExtractParams;
+    expect(extractParams.cfg).toBe(runtimeConfig);
+    expect(extractParams.urls).toEqual(["https://example.com"]);
   });
 
   it("drops empty domain arrays and forwards query-scoped chunking", async () => {
@@ -231,21 +248,23 @@ describe("tavily tools", () => {
       config: { env: "test" },
     } as never);
 
+    const expectedResult = {
+      ok: true,
+      params: {
+        cfg: { env: "test" },
+        query: "simple",
+        includeAnswer: false,
+      },
+    };
     await expect(
       searchTool.execute("call-2", {
         query: "simple",
         include_domains: [""],
         exclude_domains: [],
       }),
-    ).resolves.toMatchObject({
-      details: {
-        ok: true,
-        params: {
-          cfg: { env: "test" },
-          query: "simple",
-          includeAnswer: false,
-        },
-      },
+    ).resolves.toEqual({
+      content: [{ type: "text", text: JSON.stringify(expectedResult, null, 2) }],
+      details: expectedResult,
     });
 
     const extractTool = createTavilyExtractTool(fakeApi());
@@ -255,14 +274,14 @@ describe("tavily tools", () => {
       chunks_per_source: 2,
     });
 
-    expect(runTavilyExtract).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg: {},
-        urls: ["https://example.com"],
-        query: "pricing",
-        chunksPerSource: 2,
-      }),
-    );
+    const extractParams = requireFirstMockArg(
+      runTavilyExtract,
+      "Tavily extract params",
+    ) as TavilyExtractParams;
+    expect(extractParams.cfg).toEqual({});
+    expect(extractParams.urls).toEqual(["https://example.com"]);
+    expect(extractParams.query).toBe("pricing");
+    expect(extractParams.chunksPerSource).toBe(2);
   });
 
   it("rejects chunks_per_source without query", async () => {

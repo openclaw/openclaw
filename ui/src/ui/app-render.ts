@@ -2,7 +2,12 @@ import { html, nothing } from "lit";
 import { styleMap } from "lit/directives/style-map.js";
 import { t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
-import { hasAbortableSessionRun, refreshChat } from "./app-chat.ts";
+import {
+  CHAT_SESSIONS_ACTIVE_MINUTES,
+  CHAT_SESSIONS_REFRESH_LIMIT,
+  hasAbortableSessionRun,
+  refreshChat,
+} from "./app-chat.ts";
 import { DEFAULT_CRON_FORM } from "./app-defaults.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import {
@@ -20,6 +25,7 @@ import {
 } from "./app-render.helpers.ts";
 import { warnQueryToken } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
+import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
 import {
   controlUiNowMs,
   recordControlUiRenderTiming,
@@ -545,14 +551,22 @@ function extractMcpServerCount(state: AppViewState): number {
   return Object.keys(servers).length;
 }
 
-function extractQuickSettingsSecurity(state: AppViewState): {
+export function extractQuickSettingsSecurity(state: AppViewState): {
   gatewayAuth: string;
   execPolicy: string;
   deviceAuth: boolean;
+  browserEnabled: boolean;
+  toolProfile: string;
 } {
   const config = state.configForm ?? state.configSnapshot?.config;
   if (!config || typeof config !== "object") {
-    return { gatewayAuth: "unknown", execPolicy: "unknown", deviceAuth: false };
+    return {
+      gatewayAuth: "unknown",
+      execPolicy: "unknown",
+      deviceAuth: false,
+      browserEnabled: true,
+      toolProfile: "full",
+    };
   }
   const cfg = config;
   const gateway =
@@ -578,19 +592,35 @@ function extractQuickSettingsSecurity(state: AppViewState): {
       gatewayAuth = "none";
     }
   }
-  const agents = cfg.agents;
   let execPolicy = "allowlist";
-  if (agents && typeof agents === "object") {
-    const defaults = (agents as Record<string, unknown>).defaults;
-    if (defaults && typeof defaults === "object") {
-      const exec = (defaults as Record<string, unknown>).exec;
-      if (exec && typeof exec === "object") {
-        const security = (exec as Record<string, unknown>).security;
-        if (typeof security === "string") {
-          execPolicy = security;
+  let toolProfile = "full";
+  const tools = cfg.tools;
+  if (tools && typeof tools === "object") {
+    const profile = (tools as Record<string, unknown>).profile;
+    if (typeof profile === "string") {
+      const trimmedProfile = profile.trim();
+      if (trimmedProfile) {
+        toolProfile = trimmedProfile;
+      }
+    }
+    const exec = (tools as Record<string, unknown>).exec;
+    if (exec && typeof exec === "object") {
+      const security = (exec as Record<string, unknown>).security;
+      if (typeof security === "string") {
+        const trimmedSecurity = security.trim();
+        if (trimmedSecurity) {
+          execPolicy = trimmedSecurity;
         }
       }
     }
+  }
+  let browserEnabled = true;
+  const browser =
+    "browser" in cfg && cfg.browser && typeof cfg.browser === "object"
+      ? (cfg.browser as Record<string, unknown>)
+      : null;
+  if (browser && typeof browser.enabled === "boolean") {
+    browserEnabled = browser.enabled;
   }
   let deviceAuth = true;
   if (gateway) {
@@ -602,7 +632,7 @@ function extractQuickSettingsSecurity(state: AppViewState): {
       deviceAuth = false;
     }
   }
-  return { gatewayAuth, execPolicy, deviceAuth };
+  return { gatewayAuth, execPolicy, deviceAuth, browserEnabled, toolProfile };
 }
 
 function resolveQuickSettingsSessionRow(state: AppViewState) {
@@ -955,6 +985,8 @@ export function renderApp(state: AppViewState) {
     onClearCustomTheme: () => state.clearCustomTheme(),
     borderRadius: state.settings.borderRadius,
     setBorderRadius: (value) => state.setBorderRadius(value),
+    textScale: state.settings.textScale ?? 100,
+    setTextScale: (value) => state.setTextScale(value),
     gatewayUrl: state.settings.gatewayUrl,
     assistantName: state.assistantName,
     configPath: state.configSnapshot?.path ?? null,
@@ -981,7 +1013,9 @@ export function renderApp(state: AppViewState) {
       "config",
       {
         tab: state.tab,
+        formMode: overrides.formMode,
         activeSection: overrides.activeSection,
+        activeSubsection: overrides.activeSubsection,
         schemaSectionCount: countTopLevelSchemaProperties(commonConfigProps.schema),
         hasSearch: Boolean(overrides.searchQuery?.trim()),
       },
@@ -1098,11 +1132,20 @@ export function renderApp(state: AppViewState) {
               state.configActiveSection = "auth";
               requestHostUpdate?.();
             },
+            onBrowserEnabledToggle: (enabled) => {
+              updateConfigFormValue(state, ["browser", "enabled"], enabled);
+              requestHostUpdate?.();
+            },
+            onToolProfileChange: (profile) => {
+              updateConfigFormValue(state, ["tools", "profile"], profile);
+              requestHostUpdate?.();
+            },
             theme: state.theme,
             themeMode: state.themeMode,
             hasCustomTheme: Boolean(state.settings.customTheme),
             customThemeLabel: state.settings.customTheme?.label ?? null,
             borderRadius: state.settings.borderRadius,
+            textScale: state.settings.textScale ?? 100,
             setTheme: (theme, context) => state.setTheme(theme, context),
             onOpenCustomThemeImport: () => {
               state.setTab("appearance");
@@ -1115,6 +1158,7 @@ export function renderApp(state: AppViewState) {
             },
             setThemeMode: (mode, context) => state.setThemeMode(mode, context),
             setBorderRadius: (value) => state.setBorderRadius(value),
+            setTextScale: (value) => state.setTextScale(value),
             userAvatar: state.userAvatar ?? null,
             onUserAvatarChange: (avatar) => state.applyLocalUserIdentity?.({ avatar }),
             assistantAvatar: configAssistantAvatar,
@@ -2445,10 +2489,13 @@ export function renderApp(state: AppViewState) {
                   realtimeTalkStatus: state.realtimeTalkStatus,
                   realtimeTalkDetail: state.realtimeTalkDetail,
                   realtimeTalkTranscript: state.realtimeTalkTranscript,
+                  realtimeTalkOptionsOpen: state.realtimeTalkOptionsOpen,
+                  realtimeTalkOptions: state.realtimeTalkOptions,
                   connected: state.connected,
                   canSend: state.connected,
                   disabledReason: chatDisabledReason,
                   error: state.lastError,
+                  runStatus: state.chatRunStatus,
                   onDismissError: () => dismissChatError(state),
                   sessions: state.sessionsResult,
                   focusMode: chatFocus,
@@ -2456,7 +2503,7 @@ export function renderApp(state: AppViewState) {
                   onRefresh: () => {
                     state.chatSideResult = null;
                     state.resetToolStream();
-                    return refreshChat(state, { scheduleScroll: false });
+                    return refreshChat(state, { awaitHistory: true, scheduleScroll: false });
                   },
                   onToggleFocusMode: () => {
                     if (state.onboarding) {
@@ -2480,15 +2527,19 @@ export function renderApp(state: AppViewState) {
                     state.sessionsExpandedCheckpointKey = state.sessionKey;
                     state.setTab("sessions" as import("./navigation.ts").Tab);
                     void loadSessions(state, {
-                      activeMinutes: 0,
-                      limit: 0,
+                      activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
+                      limit: CHAT_SESSIONS_REFRESH_LIMIT,
                       includeGlobal: true,
                       includeUnknown: true,
                     });
                   },
                   onToggleRealtimeTalk: () => state.toggleRealtimeTalk(),
+                  onToggleRealtimeTalkOptions: () => {
+                    state.realtimeTalkOptionsOpen = !state.realtimeTalkOptionsOpen;
+                  },
+                  onRealtimeTalkOptionsChange: (next) => state.updateRealtimeTalkOptions(next),
                   canAbort: hasAbortableSessionRun(state),
-                  onAbort: () => void state.handleAbortChat(),
+                  onAbort: () => void state.handleAbortChat({ preserveDraft: true }),
                   onQueueRemove: (id) => state.removeQueuedMessage(id),
                   onQueueSteer: (id) => void state.steerQueuedChatMessage(id),
                   onDismissSideResult: () => {
@@ -2499,12 +2550,25 @@ export function renderApp(state: AppViewState) {
                     if (!state.client || !state.connected) {
                       return;
                     }
+                    const hadActiveRun = hasAbortableSessionRun(state);
                     try {
                       await state.client.request("sessions.reset", { key: state.sessionKey });
                       state.chatMessages = [];
                       state.chatSideResult = null;
-                      state.chatStream = null;
-                      state.chatRunId = null;
+                      reconcileChatRunLifecycle(
+                        state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],
+                        {
+                          outcome: hadActiveRun ? "interrupted" : undefined,
+                          sessionStatus: "killed",
+                          runId: state.chatRunId,
+                          sessionKey: state.sessionKey,
+                          clearLocalRun: true,
+                          clearChatStream: true,
+                          clearToolStream: true,
+                          clearSideResultTerminalRuns: true,
+                          clearRunStatus: !hadActiveRun,
+                        },
+                      );
                       await loadChatHistory(state);
                     } catch (err) {
                       state.lastError = String(err);

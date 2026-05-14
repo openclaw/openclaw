@@ -51,7 +51,6 @@ function expectServiceContext(
 }
 
 function expectServiceLogger(ctx: OpenClawPluginServiceContext) {
-  expect(ctx.logger).toBeDefined();
   expect(typeof ctx.logger.info).toBe("function");
   expect(typeof ctx.logger.warn).toBe("function");
   expect(typeof ctx.logger.error).toBe("function");
@@ -79,15 +78,25 @@ function expectServiceLifecycleState(params: {
   expectServiceContexts(params.contexts, params.config);
 }
 
+function requireLoggerErrorMessage(index = 0): string {
+  const call = mockedLogger.error.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected logger error call ${index}`);
+  }
+  return call[0];
+}
+
 async function startTrackingServices(params: {
   services: OpenClawPluginService[];
   config?: Parameters<typeof startPluginServices>[0]["config"];
   workspaceDir?: string;
+  startupTrace?: Parameters<typeof startPluginServices>[0]["startupTrace"];
 }) {
   return startPluginServices({
     registry: createRegistry(params.services),
     config: params.config ?? createServiceConfig(),
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    ...(params.startupTrace ? { startupTrace: params.startupTrace } : {}),
   });
 }
 
@@ -170,17 +179,82 @@ describe("startPluginServices", () => {
 
     await handle.stop();
 
-    expect(mockedLogger.error).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "plugin service failed (service-start-fail, plugin=plugin:test, root=/plugins/test-plugin):",
-      ),
-    );
-    expect(mockedLogger.error.mock.calls[0]?.[0]).not.toContain("\n");
-    expect(mockedLogger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("plugin service stop failed (service-stop-fail):"),
-    );
+    expect(mockedLogger.error.mock.calls).toEqual([
+      [
+        "plugin service failed (service-start-fail, plugin=plugin:test, root=/plugins/test-plugin): start failed",
+      ],
+    ]);
+    expect(requireLoggerErrorMessage()).not.toContain("\n");
+    expect(mockedLogger.warn.mock.calls).toEqual([
+      ["plugin service stop failed (service-stop-fail): Error: stop failed"],
+    ]);
     expect(stopOk).toHaveBeenCalledOnce();
     expect(stopThrows).toHaveBeenCalledOnce();
+  });
+
+  it("emits per-service startup trace spans and summary", async () => {
+    const measured: string[] = [];
+    const details: Array<{
+      name: string;
+      metrics: ReadonlyArray<readonly [string, number | string]>;
+    }> = [];
+    const startupTrace: NonNullable<Parameters<typeof startPluginServices>[0]["startupTrace"]> = {
+      measure: async (name, run) => {
+        measured.push(name);
+        return await run();
+      },
+      detail: (name, metrics) => {
+        details.push({ name, metrics });
+      },
+    };
+
+    await startTrackingServices({
+      services: [
+        createTrackingService("service-a"),
+        createTrackingService("service-fail", { failOnStart: true }),
+      ],
+      startupTrace,
+    });
+
+    expect(measured).toEqual([
+      "sidecars.plugin-services.plugin~003Atest.service-a",
+      "sidecars.plugin-services.plugin~003Atest.service-fail",
+    ]);
+    expect(details).toEqual([
+      {
+        name: "sidecars.plugin-services.summary",
+        metrics: [
+          ["serviceCount", 2],
+          ["startedCount", 1],
+          ["failedCount", 1],
+        ],
+      },
+    ]);
+  });
+
+  it("keeps distinct service trace ownership keys non-colliding", async () => {
+    const measured: string[] = [];
+    const startupTrace: NonNullable<Parameters<typeof startPluginServices>[0]["startupTrace"]> = {
+      measure: async (name, run) => {
+        measured.push(name);
+        return await run();
+      },
+    };
+
+    await startPluginServices({
+      registry: createRegistry(
+        [createTrackingService("service:a"), createTrackingService("service_a")],
+        "plugin:test",
+      ),
+      config: createServiceConfig(),
+      startupTrace,
+    });
+
+    expect(measured).toEqual([
+      "sidecars.plugin-services.plugin~003Atest.service~003Aa",
+      "sidecars.plugin-services.plugin~003Atest.service_a",
+    ]);
+    expect(new Set(measured).size).toBe(measured.length);
   });
 
   it("grants internal diagnostics only to trusted diagnostics exporter services", async () => {

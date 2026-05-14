@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import {
+  createPreUpdateConfigSnapshot,
   maintainConfigBackups,
   rotateConfigBackups,
   hardenBackupPermissions,
@@ -13,6 +14,20 @@ import {
 } from "./config.backup-rotation.test-helpers.js";
 import { withTempHome } from "./test-helpers.js";
 import type { OpenClawConfig } from "./types.js";
+
+async function expectRegularFile(filePath: string): Promise<void> {
+  expect((await fs.stat(filePath)).isFile()).toBe(true);
+}
+
+async function expectPathMissing(filePath: string): Promise<void> {
+  let error: { code?: unknown } | undefined;
+  try {
+    await fs.stat(filePath);
+  } catch (err) {
+    error = err as { code?: unknown };
+  }
+  expect(error?.code).toBe("ENOENT");
+}
 
 describe("config backup rotation", () => {
   it("keeps a 5-deep backup ring for config writes", async () => {
@@ -51,7 +66,7 @@ describe("config backup rotation", () => {
       await expect(readName(".bak.2")).resolves.toBe("v3");
       await expect(readName(".bak.3")).resolves.toBe("v2");
       await expect(readName(".bak.4")).resolves.toBe("v1");
-      await expect(fs.stat(`${configPath}.bak.5`)).rejects.toThrow();
+      await expectPathMissing(`${configPath}.bak.5`);
     });
   });
 
@@ -92,14 +107,14 @@ describe("config backup rotation", () => {
       await cleanOrphanBackups(configPath, fs);
 
       // Valid backups preserved
-      await expect(fs.stat(`${configPath}.bak`)).resolves.toBeDefined();
-      await expect(fs.stat(`${configPath}.bak.1`)).resolves.toBeDefined();
-      await expect(fs.stat(`${configPath}.bak.2`)).resolves.toBeDefined();
+      await expectRegularFile(`${configPath}.bak`);
+      await expectRegularFile(`${configPath}.bak.1`);
+      await expectRegularFile(`${configPath}.bak.2`);
 
       // Orphans removed
-      await expect(fs.stat(`${configPath}.bak.1772352289`)).rejects.toThrow();
-      await expect(fs.stat(`${configPath}.bak.before-marketing`)).rejects.toThrow();
-      await expect(fs.stat(`${configPath}.bak.99`)).rejects.toThrow();
+      await expectPathMissing(`${configPath}.bak.1772352289`);
+      await expectPathMissing(`${configPath}.bak.before-marketing`);
+      await expectPathMissing(`${configPath}.bak.99`);
 
       // Main config untouched
       await expect(fs.readFile(configPath, "utf-8")).resolves.toBe("current");
@@ -128,7 +143,92 @@ describe("config backup rotation", () => {
         expectPosixMode(primaryBackupStat.mode, 0o600);
       }
       // Out-of-ring orphan gets pruned.
-      await expect(fs.stat(`${configPath}.bak.orphan`)).rejects.toThrow();
+      await expectPathMissing(`${configPath}.bak.orphan`);
+    });
+  });
+
+  it("createPreUpdateConfigSnapshot writes .pre-update outside rotation ring", async () => {
+    await withTempHome(async () => {
+      const configPath = resolveConfigPathFromTempState();
+      const content = JSON.stringify({ plugins: { installs: ["matrix"] } });
+      await fs.writeFile(configPath, content, { mode: 0o600 });
+
+      const { existsSync } = await import("node:fs");
+      await createPreUpdateConfigSnapshot({
+        configPath,
+        fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
+      });
+
+      const snapshotPath = `${configPath}.pre-update`;
+      await expectRegularFile(snapshotPath);
+      await expect(fs.readFile(snapshotPath, "utf-8")).resolves.toBe(content);
+      if (!IS_WINDOWS) {
+        const stat = await fs.stat(snapshotPath);
+        expectPosixMode(stat.mode, 0o600);
+      }
+    });
+  });
+
+  it("createPreUpdateConfigSnapshot survives multiple config writes", async () => {
+    await withTempHome(async () => {
+      const configPath = resolveConfigPathFromTempState();
+      const original = JSON.stringify({ version: "original" });
+      await fs.writeFile(configPath, original, { mode: 0o600 });
+
+      const { existsSync } = await import("node:fs");
+      await createPreUpdateConfigSnapshot({
+        configPath,
+        fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
+      });
+
+      // Simulate multiple config writes + backup rotations
+      for (let i = 0; i < 7; i++) {
+        await rotateConfigBackups(configPath, fs);
+        await fs.copyFile(configPath, `${configPath}.bak`);
+        await fs.writeFile(configPath, JSON.stringify({ version: `write-${i}` }));
+      }
+
+      // .pre-update still holds the original content
+      const snapshotPath = `${configPath}.pre-update`;
+      await expect(fs.readFile(snapshotPath, "utf-8")).resolves.toBe(original);
+    });
+  });
+
+  it("createPreUpdateConfigSnapshot is first-write-wins; second call does not overwrite", async () => {
+    await withTempHome(async () => {
+      const configPath = resolveConfigPathFromTempState();
+      const original = JSON.stringify({ snapshot: "first" });
+      await fs.writeFile(configPath, original, { mode: 0o600 });
+
+      const { existsSync } = await import("node:fs");
+      await createPreUpdateConfigSnapshot({
+        configPath,
+        fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
+      });
+
+      // Mutate config and call again
+      await fs.writeFile(configPath, JSON.stringify({ snapshot: "second" }));
+      await createPreUpdateConfigSnapshot({
+        configPath,
+        fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
+      });
+
+      const snapshotPath = `${configPath}.pre-update`;
+      await expect(fs.readFile(snapshotPath, "utf-8")).resolves.toBe(original);
+    });
+  });
+
+  it("createPreUpdateConfigSnapshot is a no-op when config does not exist", async () => {
+    await withTempHome(async () => {
+      const configPath = resolveConfigPathFromTempState();
+      const { existsSync } = await import("node:fs");
+
+      await createPreUpdateConfigSnapshot({
+        configPath,
+        fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
+      });
+
+      await expectPathMissing(`${configPath}.pre-update`);
     });
   });
 });
