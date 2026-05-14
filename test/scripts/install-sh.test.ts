@@ -381,9 +381,32 @@ describe("install.sh", () => {
     expect(result.stdout).toContain("main=main");
   });
 
-  it("uses frozen lockfile installs for git installs", () => {
+  it("fetches main without tags for git installs", () => {
+    expect(script).toContain('git -C "$repo_dir" fetch --no-tags origin main');
+    expect(script).toContain('git -C "$repo_dir" pull --rebase --no-tags || true');
+  });
+
+  it("uses non-frozen lockfile installs only for moving git refs", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      git() {
+        if [[ "$1" == "-C" && "$3" == "ls-remote" && "\${7:-}" == "feature" ]]; then
+          return 0
+        fi
+        return 1
+      }
+      printf 'main=%s\\n' "$(git_install_lockfile_flag /repo main)"
+      printf 'branch=%s\\n' "$(git_install_lockfile_flag /repo feature)"
+      printf 'tag=%s\\n' "$(git_install_lockfile_flag /repo v2026.5.12)"
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("main=--no-frozen-lockfile");
+    expect(result.stdout).toContain("branch=--no-frozen-lockfile");
+    expect(result.stdout).toContain("tag=--frozen-lockfile");
     expect(script).toContain(
-      'run_quiet_step "Installing dependencies" run_pnpm -C "$repo_dir" install --frozen-lockfile',
+      'CI="${CI:-true}" SHARP_IGNORE_GLOBAL_LIBVIPS="$SHARP_IGNORE_GLOBAL_LIBVIPS" run_quiet_step "Installing dependencies" run_pnpm -C "$repo_dir" install "$install_lockfile_flag"',
     );
   });
 

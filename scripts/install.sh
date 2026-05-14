@@ -1993,6 +1993,18 @@ checkout_git_openclaw_ref() {
     return 1
 }
 
+git_install_lockfile_flag() {
+    local repo_dir="$1"
+    local ref="$2"
+
+    if [[ "$ref" == "main" ]] || git -C "$repo_dir" ls-remote --exit-code --heads origin "$ref" >/dev/null 2>&1; then
+        echo "--no-frozen-lockfile"
+        return 0
+    fi
+
+    echo "--frozen-lockfile"
+}
+
 repo_pnpm_spec() {
     local repo_dir="$1"
     local package_json="${repo_dir}/package.json"
@@ -2369,7 +2381,9 @@ install_openclaw_from_git() {
     cleanup_legacy_submodules "$repo_dir"
     activate_repo_pnpm_version "$repo_dir"
 
-    CI="${CI:-true}" SHARP_IGNORE_GLOBAL_LIBVIPS="$SHARP_IGNORE_GLOBAL_LIBVIPS" run_quiet_step "Installing dependencies" run_pnpm -C "$repo_dir" install --no-frozen-lockfile
+    local install_lockfile_flag
+    install_lockfile_flag="$(git_install_lockfile_flag "$repo_dir" "$git_ref")"
+    CI="${CI:-true}" SHARP_IGNORE_GLOBAL_LIBVIPS="$SHARP_IGNORE_GLOBAL_LIBVIPS" run_quiet_step "Installing dependencies" run_pnpm -C "$repo_dir" install "$install_lockfile_flag"
 
     if ! run_quiet_step "Building UI" run_pnpm -C "$repo_dir" ui:build; then
         ui_warn "UI build failed; continuing (CLI may still work)"
