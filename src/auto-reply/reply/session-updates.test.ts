@@ -11,7 +11,11 @@ const {
   resolveSessionAgentIdMock,
   resolveAgentIdFromSessionKeyMock,
 } = vi.hoisted(() => ({
-  buildWorkspaceSkillSnapshotMock: vi.fn(() => ({ prompt: "", skills: [], resolvedSkills: [] })),
+  buildWorkspaceSkillSnapshotMock: vi.fn((..._args: unknown[]) => ({
+    prompt: "",
+    skills: [] as unknown[],
+    resolvedSkills: [] as unknown[],
+  })),
   ensureSkillsWatcherMock: vi.fn(),
   getSkillsSnapshotVersionMock: vi.fn(() => 0),
   shouldRefreshSnapshotForVersionMock: vi.fn(() => false),
@@ -195,5 +199,100 @@ describe("ensureSkillSnapshot", () => {
       cfg: {},
     });
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("invalidates cache when non-skills config gates change", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+
+    buildWorkspaceSkillSnapshotMock.mockImplementation((_workspaceDir, opts) => {
+      const config = (opts as { config?: { channels?: { discord?: { token?: string } } } }).config;
+      return {
+        prompt: "",
+        skills: [],
+        resolvedSkills: config?.channels?.discord?.token ? [{ name: "discord" }] : [],
+      };
+    });
+
+    const strippedSnapshot = {
+      prompt: "skills prompt",
+      skills: [{ name: "discord" }],
+      version: 0,
+    };
+
+    const first = await ensureSkillSnapshot({
+      sessionEntry: {
+        sessionId: "sess-1",
+        updatedAt: Date.now(),
+        skillsSnapshot: strippedSnapshot,
+      },
+      sessionStore: {},
+      sessionKey: "main",
+      isFirstTurnInSession: true,
+      workspaceDir: "/tmp/workspace",
+      cfg: { channels: { discord: { token: "enabled" } } },
+    });
+
+    expect(first.skillsSnapshot?.resolvedSkills).toEqual([{ name: "discord" }]);
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
+
+    const second = await ensureSkillSnapshot({
+      sessionEntry: {
+        sessionId: "sess-2",
+        updatedAt: Date.now(),
+        skillsSnapshot: { ...strippedSnapshot },
+      },
+      sessionStore: {},
+      sessionKey: "other",
+      isFirstTurnInSession: false,
+      workspaceDir: "/tmp/workspace",
+      cfg: { channels: { discord: {} } },
+    });
+
+    expect(second.skillsSnapshot?.resolvedSkills).toEqual([]);
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("redacts secret values in the cache key while preserving eligibility presence", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+
+    buildWorkspaceSkillSnapshotMock.mockReturnValue({
+      prompt: "",
+      skills: [],
+      resolvedSkills: [{ name: "discord" }],
+    });
+
+    const strippedSnapshot = {
+      prompt: "skills prompt",
+      skills: [{ name: "discord" }],
+      version: 0,
+    };
+
+    await ensureSkillSnapshot({
+      sessionEntry: {
+        sessionId: "sess-1",
+        updatedAt: Date.now(),
+        skillsSnapshot: strippedSnapshot,
+      },
+      sessionStore: {},
+      sessionKey: "main",
+      isFirstTurnInSession: true,
+      workspaceDir: "/tmp/workspace",
+      cfg: { channels: { discord: { token: "first-secret" } } },
+    });
+
+    await ensureSkillSnapshot({
+      sessionEntry: {
+        sessionId: "sess-2",
+        updatedAt: Date.now(),
+        skillsSnapshot: { ...strippedSnapshot },
+      },
+      sessionStore: {},
+      sessionKey: "other",
+      isFirstTurnInSession: false,
+      workspaceDir: "/tmp/workspace",
+      cfg: { channels: { discord: { token: "rotated-secret" } } },
+    });
+
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
   });
 });

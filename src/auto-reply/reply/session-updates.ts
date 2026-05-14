@@ -11,6 +11,7 @@ import {
 } from "../../agents/skills/refresh-state.js";
 import { ensureSkillsWatcher } from "../../agents/skills/refresh.js";
 import { hydrateResolvedSkills } from "../../agents/skills/snapshot-hydration.js";
+import { stableStringify } from "../../agents/stable-stringify.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -39,6 +40,69 @@ const _RESOLVED_SKILLS_CACHE_MAX = 10;
 
 export function __testing_resetResolvedSkillsCache(): void {
   _resolvedSkillsCache.clear();
+}
+
+function isSensitiveConfigKey(key: string): boolean {
+  const normalized = key.toLowerCase().replaceAll(/[^a-z0-9]/g, "");
+  return (
+    normalized.endsWith("apikey") ||
+    normalized.endsWith("token") ||
+    normalized.endsWith("secret") ||
+    normalized.endsWith("password") ||
+    normalized.endsWith("privatekey") ||
+    normalized.endsWith("clientsecret")
+  );
+}
+
+function redactSensitiveConfigValue(value: unknown): unknown {
+  if (value === undefined || value === null || value === false || value === "") {
+    return value;
+  }
+  if (typeof value === "string") {
+    return value.trim() ? "[redacted:string]" : "";
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) && value !== 0 ? "[redacted:number]" : value;
+  }
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.length === 0 ? [] : "[redacted:array]";
+  }
+  return "[redacted:object]";
+}
+
+function redactConfigForSkillSnapshotCache(value: unknown, stack = new WeakSet<object>()): unknown {
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  if (stack.has(value)) {
+    return "[Circular]";
+  }
+  stack.add(value);
+  try {
+    if (Array.isArray(value)) {
+      return value.map((entry) => redactConfigForSkillSnapshotCache(entry, stack));
+    }
+    const redacted: Record<string, unknown> = {};
+    for (const key of Object.keys(value as Record<string, unknown>).toSorted()) {
+      const field = (value as Record<string, unknown>)[key];
+      redacted[key] = isSensitiveConfigKey(key)
+        ? redactSensitiveConfigValue(field)
+        : redactConfigForSkillSnapshotCache(field, stack);
+    }
+    return redacted;
+  } finally {
+    stack.delete(value);
+  }
+}
+
+function fingerprintSkillSnapshotConfig(config: OpenClawConfig): string {
+  return crypto
+    .createHash("sha256")
+    .update(stableStringify(redactConfigForSkillSnapshotCache(config)))
+    .digest("hex");
 }
 
 // nextEntry.skillsSnapshot may carry resolvedSkills (full Skill[] with
@@ -197,20 +261,17 @@ export async function ensureSkillSnapshot(params: {
     });
   };
 
-  // Redacted fingerprint of the skills config: avoids leaking apiKey values
-  // into the module-level cache key while still differentiating configs that
-  // produce different skill sets.
-  const _skillsCfgFingerprint =
-    cfg.skills === undefined
-      ? ""
-      : crypto.createHash("sha256").update(JSON.stringify(cfg.skills)).digest("hex");
+  // Skill eligibility can depend on config outside cfg.skills via
+  // frontmatter requires.config. Fingerprint the redacted effective config so
+  // cache reuse follows the same boundary without putting raw secrets in keys.
+  const _configFingerprint = fingerprintSkillSnapshotConfig(cfg);
   const _snapshotCacheKey = JSON.stringify([
     workspaceDir,
     snapshotVersion,
     skillFilter,
     sessionAgentId,
     remoteEligibility,
-    _skillsCfgFingerprint,
+    _configFingerprint,
   ]);
 
   // For hydrateResolvedSkills callbacks: reuse cached resolvedSkills when available.
