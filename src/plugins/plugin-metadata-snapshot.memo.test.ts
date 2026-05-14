@@ -62,6 +62,13 @@ function makeIndex(pluginId = "demo"): InstalledPluginIndex {
         rootDir: `/plugins/${pluginId}`,
         origin: "global",
         enabled: true,
+        startup: {
+          sidecar: false,
+          memory: false,
+          deferConfiguredChannelFullLoadUntilAfterListen: false,
+          agentHarnesses: [],
+        },
+        compat: [],
       },
     ],
   };
@@ -83,6 +90,26 @@ function makeManifestRegistry(pluginId = "demo"): PluginManifestRegistry {
     origin: "global",
   };
   return { plugins: [plugin], diagnostics: [] };
+}
+
+function requireFirstPlugin(
+  snapshot: ReturnType<typeof loadPluginMetadataSnapshot>,
+): PluginManifestRecord {
+  const plugin = snapshot.plugins[0];
+  if (!plugin) {
+    throw new Error("expected metadata snapshot to include a plugin");
+  }
+  return plugin;
+}
+
+function requireFirstCommandAlias(
+  plugin: PluginManifestRecord,
+): NonNullable<PluginManifestRecord["commandAliases"]>[number] {
+  const commandAlias = plugin.commandAliases?.[0];
+  if (!commandAlias) {
+    throw new Error("expected metadata snapshot plugin to include a command alias");
+  }
+  return commandAlias;
 }
 
 describe("loadPluginMetadataSnapshot process memo", () => {
@@ -110,11 +137,13 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     });
 
     const first = loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
-    first.plugins[0]?.providers.push("first-mutated");
-    first.plugins[0]!.commandAliases![0]!.name = "first-command-mutated";
+    const firstPlugin = requireFirstPlugin(first);
+    firstPlugin.providers.push("first-mutated");
+    requireFirstCommandAlias(firstPlugin).name = "first-command-mutated";
     const second = loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
-    second.plugins[0]?.providers.push("second-mutated");
-    second.plugins[0]!.commandAliases![0]!.name = "second-command-mutated";
+    const secondPlugin = requireFirstPlugin(second);
+    secondPlugin.providers.push("second-mutated");
+    requireFirstCommandAlias(secondPlugin).name = "second-command-mutated";
     const third = loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
 
     expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledOnce();
