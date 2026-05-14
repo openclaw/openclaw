@@ -33,7 +33,9 @@ export { drainFormattedSystemEvents } from "./session-system-events.js";
 
 // Warm-start resolvedSkills cache: avoids redundant buildSnapshot calls when
 // stripPersistedSkillsCache has removed resolvedSkills between turns.
+// Bounded to 10 entries to prevent unbounded growth in long-lived gateways.
 const _resolvedSkillsCache = new Map<string, unknown>();
+const _RESOLVED_SKILLS_CACHE_MAX = 10;
 
 export function __testing_resetResolvedSkillsCache(): void {
   _resolvedSkillsCache.clear();
@@ -156,8 +158,6 @@ export async function ensureSkillSnapshot(params: {
     };
   }
 
-  const startTotal = performance.now();
-
   const {
     sessionEntry,
     sessionStore,
@@ -183,25 +183,18 @@ export async function ensureSkillSnapshot(params: {
   });
   const snapshotVersion = getSkillsSnapshotVersion(workspaceDir);
   const existingSnapshot = nextEntry?.skillsSnapshot;
-  const startWatcher = performance.now();
   ensureSkillsWatcher({ workspaceDir, config: cfg });
-  console.log(
-    `[perf] ensureSkillSnapshot: ensureSkillsWatcher took ${(performance.now() - startWatcher).toFixed(1)}ms`,
-  );
   const shouldRefreshSnapshot =
     shouldRefreshSnapshotForVersion(existingSnapshot?.version, snapshotVersion) ||
     !matchesSkillFilter(existingSnapshot?.skillFilter, skillFilter);
   const buildSnapshot = () => {
-    const start = performance.now();
-    const snapshot = buildWorkspaceSkillSnapshot(workspaceDir, {
+    return buildWorkspaceSkillSnapshot(workspaceDir, {
       config: cfg,
       agentId: sessionAgentId,
       skillFilter,
       eligibility: { remote: remoteEligibility },
       snapshotVersion,
     });
-    console.log(`[perf] buildSnapshot took ${(performance.now() - start).toFixed(1)}ms`);
-    return snapshot;
   };
 
   const _snapshotCacheKey = JSON.stringify([workspaceDir, snapshotVersion, skillFilter]);
@@ -214,6 +207,12 @@ export async function ensureSkillSnapshot(params: {
     }
     const snapshot = buildSnapshot();
     _resolvedSkillsCache.set(_snapshotCacheKey, snapshot.resolvedSkills);
+    if (_resolvedSkillsCache.size > _RESOLVED_SKILLS_CACHE_MAX) {
+      const oldest = _resolvedSkillsCache.keys().next().value;
+      if (oldest !== undefined) {
+        _resolvedSkillsCache.delete(oldest);
+      }
+    }
     return snapshot;
   };
 
@@ -221,6 +220,12 @@ export async function ensureSkillSnapshot(params: {
   const _buildAndCache = (): SkillSnapshot => {
     const snapshot = buildSnapshot();
     _resolvedSkillsCache.set(_snapshotCacheKey, snapshot.resolvedSkills);
+    if (_resolvedSkillsCache.size > _RESOLVED_SKILLS_CACHE_MAX) {
+      const oldest = _resolvedSkillsCache.keys().next().value;
+      if (oldest !== undefined) {
+        _resolvedSkillsCache.delete(oldest);
+      }
+    }
     return snapshot;
   };
 
@@ -273,8 +278,6 @@ export async function ensureSkillSnapshot(params: {
     };
     await persistSessionEntryUpdate({ sessionStore, sessionKey, storePath, nextEntry });
   }
-
-  console.log(`[perf] ensureSkillSnapshot total: ${(performance.now() - startTotal).toFixed(1)}ms`);
 
   return { sessionEntry: nextEntry, skillsSnapshot, systemSent };
 }
