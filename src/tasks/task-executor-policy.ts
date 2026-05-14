@@ -14,52 +14,43 @@ export function isTerminalTaskStatus(status: TaskStatus): boolean {
 function resolveTaskDisplayTitle(task: TaskRecord): string {
   return formatTaskStatusTitleText(
     task.label?.trim() ||
-      (task.runtime === "acp"
-        ? "ACP background task"
-        : task.runtime === "subagent"
-          ? "Subagent task"
-          : task.task.trim() || "Background task"),
+      (task.runtime === "subagent" ? "Subagent task" : task.task.trim() || "Background task"),
   );
-}
-
-function resolveTaskRunLabel(task: TaskRecord): string {
-  return task.runId ? ` (run ${task.runId.slice(0, 8)})` : "";
 }
 
 export function formatTaskTerminalMessage(task: TaskRecord): string {
   const title = resolveTaskDisplayTitle(task);
-  const runLabel = resolveTaskRunLabel(task);
   const summary = sanitizeTaskStatusText(task.terminalSummary, {
     errorContext: task.status !== "succeeded" || task.terminalOutcome === "blocked",
   });
   if (task.status === "succeeded") {
     if (task.terminalOutcome === "blocked") {
       return summary
-        ? `Background task blocked: ${title}${runLabel}. ${summary}`
-        : `Background task blocked: ${title}${runLabel}.`;
+        ? `Background work needs follow-up: ${title}. ${summary}`
+        : `Background work needs follow-up: ${title}.`;
     }
     return summary
-      ? `Background task done: ${title}${runLabel}. ${summary}`
-      : `Background task done: ${title}${runLabel}.`;
+      ? `Background work finished: ${title}. ${summary}`
+      : `Background work finished: ${title}. Please send Moeed a concise user-facing summary in your normal voice.`;
   }
   if (task.status === "timed_out") {
-    return `Background task timed out: ${title}${runLabel}.`;
+    return `Background work timed out: ${title}. Please send Moeed a concise update in your normal voice.`;
   }
   if (task.status === "lost") {
     const error = sanitizeTaskStatusText(task.error, { errorContext: true });
     const fallbackSummary = sanitizeTaskStatusText(task.terminalSummary, { errorContext: true });
-    return `Background task lost: ${title}${runLabel}. ${error || fallbackSummary || "Backing session disappeared."}`;
+    return `Background work was interrupted: ${title}. ${error || fallbackSummary || "Backing session disappeared."}`;
   }
   if (task.status === "cancelled") {
-    return `Background task cancelled: ${title}${runLabel}.`;
+    return `Background work was cancelled: ${title}.`;
   }
   const error = sanitizeTaskStatusText(task.error, { errorContext: true });
   const fallbackSummary = sanitizeTaskStatusText(task.terminalSummary, { errorContext: true });
   return error
-    ? `Background task failed: ${title}${runLabel}. ${error}`
+    ? `Background work failed: ${title}. ${error}`
     : fallbackSummary
-      ? `Background task failed: ${title}${runLabel}. ${fallbackSummary}`
-      : `Background task failed: ${title}${runLabel}.`;
+      ? `Background work failed: ${title}. ${fallbackSummary}`
+      : `Background work failed: ${title}. Please send Moeed a concise update in your normal voice.`;
 }
 
 export function formatTaskBlockedFollowupMessage(task: TaskRecord): string | null {
@@ -67,11 +58,10 @@ export function formatTaskBlockedFollowupMessage(task: TaskRecord): string | nul
     return null;
   }
   const title = resolveTaskDisplayTitle(task);
-  const runLabel = resolveTaskRunLabel(task);
   const summary =
     sanitizeTaskStatusText(task.terminalSummary, { errorContext: true }) ||
     "Task is blocked and needs follow-up.";
-  return `Task needs follow-up: ${title}${runLabel}. ${summary}`;
+  return `Follow-up needed for background work: ${title}. ${summary}`;
 }
 
 export function formatTaskStateChangeMessage(

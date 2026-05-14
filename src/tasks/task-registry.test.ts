@@ -914,7 +914,7 @@ describe("task-registry", () => {
         to: "notifychat:123",
         threadId: "321",
       });
-      expect(String(message.content)).toContain("Background task done: ACP background task");
+      expect(String(message.content)).toContain("Background work finished: Investigate issue");
       expectRecordFields(message.mirror, {
         sessionKey: "agent:main:main",
       });
@@ -999,7 +999,7 @@ describe("task-registry", () => {
       });
       expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
       expect(peekSystemEvents(ownerKey)).toEqual([
-        "Background task done: ACP background task (run run-grou).",
+        "Background work finished: Investigate issue. Please send Moeed a concise user-facing summary in your normal voice.",
       ]);
       expect(hasPendingHeartbeatWake()).toBe(true);
     });
@@ -1047,7 +1047,7 @@ describe("task-registry", () => {
       await waitForAssertion(() => {
         const events = peekSystemEvents("agent:main:main");
         expect(events).toHaveLength(1);
-        expect(events[0]).toContain("Background task failed: ACP background task");
+        expect(events[0]).toContain("Background work failed: Investigate issue");
       });
     });
   });
@@ -1083,8 +1083,8 @@ describe("task-registry", () => {
         }),
       );
       expect(peekSystemEvents("agent:main:main")).toEqual([
-        "Background task blocked: ACP background task (run run-deli). Writable session or apply_patch authorization required.",
-        "Task needs follow-up: ACP background task (run run-deli). Writable session or apply_patch authorization required.",
+        "Background work needs follow-up: Port the repo changes. Writable session or apply_patch authorization required.",
+        "Follow-up needed for background work: Port the repo changes. Writable session or apply_patch authorization required.",
       ]);
       expect(hasPendingHeartbeatWake()).toBe(true);
     });
@@ -1124,7 +1124,7 @@ describe("task-registry", () => {
       );
       const events = peekSystemEvents("agent:main:main");
       expect(events).toHaveLength(1);
-      expect(events[0]).toContain("Background task done: ACP background task");
+      expect(events[0]).toContain("Background work finished: Investigate issue");
       expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
     });
   });
@@ -1154,8 +1154,8 @@ describe("task-registry", () => {
         }),
       );
       expect(peekSystemEvents("agent:main:main")).toEqual([
-        "Background task blocked: ACP background task (run run-sess). Writable session or apply_patch authorization required.",
-        "Task needs follow-up: ACP background task (run run-sess). Writable session or apply_patch authorization required.",
+        "Background work needs follow-up: Port the repo changes. Writable session or apply_patch authorization required.",
+        "Follow-up needed for background work: Port the repo changes. Writable session or apply_patch authorization required.",
       ]);
       expect(hasPendingHeartbeatWake()).toBe(true);
       expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
@@ -1206,7 +1206,8 @@ describe("task-registry", () => {
 
       await waitForAssertion(() =>
         expectRecordFields(sentMessageCall(), {
-          content: "Background task done: ACP background task (run run-deta).",
+          content:
+            "Background work finished: Create the file and verify it. Please send Moeed a concise user-facing summary in your normal voice.",
         }),
       );
     });
@@ -1242,11 +1243,11 @@ describe("task-registry", () => {
       await waitForAssertion(() =>
         expectRecordFields(sentMessageCall(), {
           content:
-            "Background task blocked: ACP background task (run run-bloc). Writable session or apply_patch authorization required.",
+            "Background work needs follow-up: Port the repo changes. Writable session or apply_patch authorization required.",
         }),
       );
       expect(peekSystemEvents("agent:main:main")).toEqual([
-        "Task needs follow-up: ACP background task (run run-bloc). Writable session or apply_patch authorization required.",
+        "Follow-up needed for background work: Port the repo changes. Writable session or apply_patch authorization required.",
       ]);
       expect(hasPendingHeartbeatWake()).toBe(true);
     });
@@ -1282,7 +1283,7 @@ describe("task-registry", () => {
       await waitForAssertion(() =>
         expectRecordFields(sentMessageCall(), {
           content:
-            "Background task done: ACP background task (run run-succ). Created /tmp/file.txt and verified contents.",
+            "Background work finished: Create the file and verify it. Created /tmp/file.txt and verified contents.",
         }),
       );
       expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
@@ -2692,7 +2693,7 @@ describe("task-registry", () => {
       await waitForAssertion(() =>
         expectRecordFields(sentMessageCall(), {
           content:
-            "Background task update: ACP background task. No output for 60s. It may be waiting for input.",
+            "Background task update: Investigate issue. No output for 60s. It may be waiting for input.",
         }),
       );
       expectRecordFields(requireTaskByRunId("run-state-change"), {
@@ -2767,7 +2768,8 @@ describe("task-registry", () => {
       expectRecordFields(sentMessageCall(), {
         channel: "guildchat",
         to: "guildchat:123",
-        content: "Background task done: ACP background task (run run-quie).",
+        content:
+          "Background work finished: Create the file. Please send Moeed a concise user-facing summary in your normal voice.",
       });
       expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
       relay.dispose();
@@ -2817,8 +2819,7 @@ describe("task-registry", () => {
       expectRecordFields(sentMessageCall(), {
         channel: "guildchat",
         to: "guildchat:123",
-        content:
-          "Background task failed: ACP background task (run run-fail). Permission denied by ACP runtime",
+        content: "Background work failed: Write the file. Permission denied by ACP runtime",
       });
       expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
     });
@@ -2866,7 +2867,7 @@ describe("task-registry", () => {
       relay.notifyStarted();
       await flushAsyncWork();
       expectRecordFields(sentMessageCall(), {
-        content: "Background task update: ACP background task. Started.",
+        content: "Background task update: Create the file. Started.",
       });
 
       hoisted.sendMessageMock.mockClear();
@@ -2874,7 +2875,7 @@ describe("task-registry", () => {
       await flushAsyncWork();
       expectRecordFields(sentMessageCall(), {
         content:
-          "Background task update: ACP background task. No output for 1s. It may be waiting for input.",
+          "Background task update: Create the file. No output for 1s. It may be waiting for input.",
       });
 
       expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
@@ -2927,7 +2928,7 @@ describe("task-registry", () => {
         expectRecordFields(sentMessageCall(), {
           channel: "notifychat",
           to: "notifychat:123",
-          content: "Background task cancelled: ACP background task (run run-canc).",
+          content: "Background work was cancelled: Investigate issue.",
         }),
       );
     });
@@ -2979,7 +2980,7 @@ describe("task-registry", () => {
         expectRecordFields(sentMessageCall(), {
           channel: "notifychat",
           to: "notifychat:123",
-          content: "Background task cancelled: Subagent task (run run-canc).",
+          content: "Background work was cancelled: Subagent task.",
         }),
       );
     });
@@ -3026,7 +3027,7 @@ describe("task-registry", () => {
         expectRecordFields(sentMessageCall(), {
           channel: "notifychat",
           to: "notifychat:123",
-          content: "Background task cancelled: Investigate issue (run run-canc).",
+          content: "Background work was cancelled: Investigate issue.",
         }),
       );
     });

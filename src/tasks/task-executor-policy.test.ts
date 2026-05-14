@@ -52,10 +52,10 @@ describe("task-executor-policy", () => {
     };
 
     expect(formatTaskTerminalMessage(blockedTask)).toBe(
-      "Background task blocked: ACP import (run run-1234). Needs login.",
+      "Background work needs follow-up: ACP import. Needs login.",
     );
     expect(formatTaskBlockedFollowupMessage(blockedTask)).toBe(
-      "Task needs follow-up: ACP import (run run-1234). Needs login.",
+      "Follow-up needed for background work: ACP import. Needs login.",
     );
     expect(formatTaskStateChangeMessage(blockedTask, progressEvent)).toBe(
       "Background task update: ACP import. No output for 60s.",
@@ -91,13 +91,13 @@ describe("task-executor-policy", () => {
     };
 
     expect(formatTaskTerminalMessage(blockedTask)).toBe(
-      "Background task blocked: Background task (run run-1234).",
+      "Background work needs follow-up: Background task.",
     );
     expect(formatTaskBlockedFollowupMessage(blockedTask)).toBe(
-      "Task needs follow-up: Background task (run run-1234). Task is blocked and needs follow-up.",
+      "Follow-up needed for background work: Background task. Task is blocked and needs follow-up.",
     );
     expect(formatTaskTerminalMessage(failedTask)).toBe(
-      "Background task failed: Background task (run run-2234). Needs manual approval.",
+      "Background work failed: Background task. Needs manual approval.",
     );
     expect(formatTaskStateChangeMessage(blockedTask, progressEvent)).toBeNull();
   });
@@ -112,11 +112,37 @@ describe("task-executor-policy", () => {
     });
 
     expect(formatTaskTerminalMessage(blockedTask)).toBe(
-      "Background task blocked: ACP import (run run-1234). Command did not run: approval timed out.",
+      "Background work needs follow-up: ACP import. Command did not run: approval timed out.",
     );
     expect(formatTaskBlockedFollowupMessage(blockedTask)).toBe(
-      "Task needs follow-up: ACP import (run run-1234). Command did not run: approval timed out.",
+      "Follow-up needed for background work: ACP import. Command did not run: approval timed out.",
     );
+  });
+
+  it("does not emit raw task completion boilerplate or run metadata", () => {
+    const messages = [
+      formatTaskTerminalMessage(
+        createTask({
+          status: "succeeded",
+          runId: "run-1234567890",
+          task: "ACP smoke test",
+        }),
+      ),
+      formatTaskTerminalMessage(
+        createTask({
+          status: "failed",
+          runId: "run-2234567890",
+          error: "Worker failed.",
+          task: "ACP smoke test",
+        }),
+      ),
+    ];
+
+    for (const message of messages) {
+      expect(message).not.toContain("Background task done:");
+      expect(message).not.toMatch(/\(run [^)]+\)/);
+      expect(message).not.toContain("ACP background task");
+    }
   });
 
   it("keeps delivery policy decisions explicit", () => {
