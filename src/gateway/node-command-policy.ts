@@ -279,6 +279,16 @@ function filterDesktopHostCommandDefaults(params: {
   return params.commands.filter((command) => !DESKTOP_HOST_COMMANDS.has(command));
 }
 
+function filterApprovedRuntimeCommands(params: {
+  platformId: PlatformId;
+  commands: readonly string[];
+}): string[] {
+  if (!isDesktopPlatformId(params.platformId)) {
+    return [];
+  }
+  return params.commands.filter((command) => DESKTOP_HOST_COMMANDS.has(command.trim()));
+}
+
 function hasTalkSurface(node?: NodeCommandPolicyNode): boolean {
   if (!node) {
     return false;
@@ -306,7 +316,10 @@ function resolveNodeCommandAllowlistInternal(
   });
   const talkCommands = hasTalkSurface(node) ? TALK_PTT_COMMANDS : [];
   const pluginDefaults = listDefaultPluginNodeCommands(platformId);
-  const approved = node?.approvedCommands ?? [];
+  const approved = filterApprovedRuntimeCommands({
+    platformId,
+    commands: node?.approvedCommands ?? [],
+  });
   const extra = cfg.gateway?.nodes?.allowCommands ?? [];
   const deny = new Set(cfg.gateway?.nodes?.denyCommands ?? []);
   const dangerousPluginCommands = new Set(listDangerousPluginNodeCommands());

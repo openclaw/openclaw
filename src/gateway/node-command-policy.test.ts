@@ -188,6 +188,31 @@ describe("gateway/node-command-policy", () => {
     }
   });
 
+  it("does not grandfather approved non-default commands after config removal", () => {
+    const staleApproval = resolveNodeCommandAllowlist({} as OpenClawConfig, {
+      platform: "macos",
+      deviceFamily: "Mac",
+      approvedCommands: ["screen.record"],
+    });
+    expect(staleApproval.has("screen.record")).toBe(false);
+
+    const currentConfigApproval = resolveNodeCommandAllowlist(
+      {
+        gateway: {
+          nodes: {
+            allowCommands: ["screen.record"],
+          },
+        },
+      } as OpenClawConfig,
+      {
+        platform: "macos",
+        deviceFamily: "Mac",
+        approvedCommands: ["screen.record"],
+      },
+    );
+    expect(currentConfigApproval.has("screen.record")).toBe(true);
+  });
+
   it("reads foreground restriction metadata from plugin node policies", () => {
     expect(isForegroundRestrictedPluginNodeCommand("canvas.snapshot")).toBe(false);
 
