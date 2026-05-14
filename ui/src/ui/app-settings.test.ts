@@ -47,6 +47,7 @@ type SettingsHost = {
     navGroupsCollapsed: Record<string, boolean>;
     borderRadius: number;
     documentTitleSyncEnabled: boolean;
+    textScale?: import("./storage.ts").TextScaleStop;
     customTheme?: import("./custom-theme.ts").ImportedCustomTheme;
   };
   theme: ThemeName & ThemeMode;
@@ -146,6 +147,7 @@ const createHost = (tab: Tab): SettingsHost => ({
     navGroupsCollapsed: {},
     borderRadius: 50,
     documentTitleSyncEnabled: true,
+    textScale: 100,
   },
   theme: "claw" as unknown as ThemeName & ThemeMode,
   themeMode: "system",
@@ -292,6 +294,18 @@ describe("setTabFromRoute", () => {
     expect(host.theme).toBe("knot");
     expect(host.themeMode).toBe("light");
     expect(host.themeResolved).toBe("openknot-light");
+  });
+
+  it("applies normalized browser-local text scale", () => {
+    const host = createHost("chat");
+
+    applySettings(host, {
+      ...host.settings,
+      textScale: 125,
+    });
+
+    expect(host.settings.textScale).toBe(125);
+    expect(document.documentElement.style.getPropertyValue("--control-ui-text-scale")).toBe("1.25");
   });
 
   it("syncs both theme family and mode from persisted settings", () => {

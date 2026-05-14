@@ -35,9 +35,9 @@
           }
         },
         "install": {
-          "npmSpec": "@wecom/wecom-openclaw-plugin@2026.4.23",
+          "npmSpec": "@wecom/wecom-openclaw-plugin@2026.5.7",
           "defaultChoice": "npm",
-          "expectedIntegrity": "sha512-bnzfdIEEu1/LFvcdyjaTkyxt27w6c7dqhkPezU62OWaqmcdFsUGR3T55USK/O9pIKsNcnL1Tnu1pqKYCWHFgWQ=="
+          "expectedIntegrity": "sha512-TCkP9as00WfEhgFWG8YL/rcmaWGIshAki2HQh83nTRccGfVBCoGjrEboTTqq3yDmK9koWTV11zi8u8A4dNtvug=="
         }
       }
     },
@@ -393,6 +393,30 @@
       }
     },
     {
+      "name": "@openclaw/slack",
+      "description": "OpenClaw Slack channel plugin",
+      "source": "official",
+      "kind": "channel",
+      "openclaw": {
+        "channel": {
+          "id": "slack",
+          "label": "Slack",
+          "selectionLabel": "Slack (Socket Mode)",
+          "detailLabel": "Slack Bot",
+          "docsPath": "/channels/slack",
+          "docsLabel": "slack",
+          "blurb": "supported (Socket Mode).",
+          "systemImage": "number",
+          "markdownCapable": true
+        },
+        "install": {
+          "npmSpec": "@openclaw/slack",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.5.12-beta.1"
+        }
+      }
+    },
+    {
       "name": "@openclaw/synology-chat",
       "description": "Synology Chat channel plugin for OpenClaw",
       "source": "official",
@@ -475,8 +499,9 @@
           "systemImage": "message"
         },
         "install": {
+          "clawhubSpec": "clawhub:@openclaw/whatsapp",
           "npmSpec": "@openclaw/whatsapp",
-          "defaultChoice": "npm",
+          "defaultChoice": "clawhub",
           "minHostVersion": ">=2026.4.25"
         }
       }

@@ -14,7 +14,7 @@ import type {
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
-import { replaceConfigFile } from "openclaw/plugin-sdk/config-mutation";
+import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
 import {
   buildPluginBindingResolvedText,
   parsePluginBindingApprovalCustomId,
@@ -179,6 +179,7 @@ export const registerTelegramHandlers = ({
     key: string;
     threadId?: number;
     messages: Array<{ msg: Message; ctx: TelegramContext; receivedAtMs: number }>;
+    promptContextMinTimestampMs?: number;
     timer: ReturnType<typeof setTimeout>;
   };
   const textFragmentBuffer = new Map<string, TextFragmentEntry>();
@@ -197,6 +198,28 @@ export const registerTelegramHandlers = ({
     debounceLane: TelegramDebounceLane;
     botUsername?: string;
     threadId?: number;
+    promptContextMinTimestampMs?: number;
+  };
+  const normalizePromptContextMinTimestampMs = (timestampMs?: number) =>
+    typeof timestampMs === "number" && Number.isFinite(timestampMs) ? timestampMs : undefined;
+  const promptContextBoundaryOptions = (
+    timestampMs?: number,
+  ): Pick<TelegramMessageContextOptions, "promptContextMinTimestampMs"> => {
+    const promptContextMinTimestampMs = normalizePromptContextMinTimestampMs(timestampMs);
+    return promptContextMinTimestampMs === undefined ? {} : { promptContextMinTimestampMs };
+  };
+  const latestPromptContextMinTimestampMs = (
+    ...timestamps: Array<number | undefined>
+  ): number | undefined => {
+    let latest: number | undefined;
+    for (const timestampMs of timestamps) {
+      const normalized = normalizePromptContextMinTimestampMs(timestampMs);
+      if (normalized === undefined) {
+        continue;
+      }
+      latest = latest === undefined ? normalized : Math.max(latest, normalized);
+    }
+    return latest;
   };
   const resolveTelegramDebounceLane = (msg: Message): TelegramDebounceLane => {
     const forwardMeta = msg as {
@@ -368,6 +391,7 @@ export const registerTelegramHandlers = ({
 
   const inboundDebouncer = createInboundDebouncer<TelegramDebounceEntry>({
     debounceMs,
+    serializeImmediate: true,
     resolveDebounceMs: (entry) =>
       entry.debounceLane === "forward" ? FORWARD_BURST_DEBOUNCE_MS : debounceMs,
     buildKey: (entry) => entry.debounceKey,
@@ -397,6 +421,7 @@ export const registerTelegramHandlers = ({
         await processMessageWithReplyChain(last.ctx, last.msg, last.allMedia, last.storeAllowFrom, {
           receivedAtMs: last.receivedAtMs,
           ingressBuffer: "inbound-debounce",
+          ...promptContextBoundaryOptions(last.promptContextMinTimestampMs),
         });
         return;
       }
@@ -409,6 +434,9 @@ export const registerTelegramHandlers = ({
         return;
       }
       const first = entries[0];
+      const promptContextMinTimestampMs = latestPromptContextMinTimestampMs(
+        ...entries.map((entry) => entry.promptContextMinTimestampMs),
+      );
       const baseCtx = first.ctx;
       const syntheticMessage = buildSyntheticTextMessage({
         base: first.msg,
@@ -426,6 +454,7 @@ export const registerTelegramHandlers = ({
           ...(messageIdOverride ? { messageIdOverride } : {}),
           receivedAtMs: first.receivedAtMs,
           ingressBuffer: "inbound-debounce",
+          ...promptContextBoundaryOptions(promptContextMinTimestampMs),
         },
       );
     },
@@ -454,13 +483,14 @@ export const registerTelegramHandlers = ({
     messageThreadId?: number;
     resolvedThreadId?: number;
     senderId?: string | number;
+    runtimeCfg?: OpenClawConfig;
   }): {
     agentId: string;
     sessionEntry: ReturnType<typeof resolveSessionStoreEntry>["existing"];
     sessionKey: string;
     model?: string;
   } => {
-    const runtimeCfg = telegramDeps.getRuntimeConfig();
+    const runtimeCfg = params.runtimeCfg ?? telegramDeps.getRuntimeConfig();
     const resolvedThreadId =
       params.resolvedThreadId ??
       resolveTelegramForumThreadId({
@@ -505,7 +535,7 @@ export const registerTelegramHandlers = ({
     const storePath = telegramDeps.resolveStorePath(runtimeCfg.session?.store, {
       agentId: route.agentId,
     });
-    const store = loadSessionStore(storePath);
+    const store = (telegramDeps.loadSessionStore ?? loadSessionStore)(storePath);
     const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
     const storedOverride = resolveStoredModelOverride({
       sessionEntry: entry,
@@ -585,6 +615,7 @@ export const registerTelegramHandlers = ({
         primaryEntry.msg,
         allMedia,
         storeAllowFrom,
+        promptContextBoundaryOptions(entry.promptContextMinTimestampMs),
       );
     } catch (err) {
       runtime.error?.(danger(`media group handler failed: ${String(err)}`));
@@ -620,6 +651,7 @@ export const registerTelegramHandlers = ({
         messageIdOverride: String(last.msg.message_id),
         receivedAtMs: first.receivedAtMs,
         ingressBuffer: "text-fragment",
+        ...promptContextBoundaryOptions(entry.promptContextMinTimestampMs),
       });
     } catch (err) {
       runtime.error?.(danger(`text fragment handler failed: ${String(err)}`));
@@ -698,6 +730,7 @@ export const registerTelegramHandlers = ({
   const buildPromptContextForMessage = (
     msg: Message,
     replyChainNodes: TelegramCachedMessageNode[],
+    options?: TelegramMessageContextOptions,
   ): TelegramPromptContextEntry[] => {
     const messageId = typeof msg.message_id === "number" ? String(msg.message_id) : undefined;
     const currentNode = messageCache.get({
@@ -715,6 +748,9 @@ export const registerTelegramHandlers = ({
       replyChainNodes,
       recentLimit: 10,
       replyTargetWindowSize: 2,
+      ...(options?.promptContextMinTimestampMs !== undefined
+        ? { minTimestampMs: options.promptContextMinTimestampMs }
+        : {}),
     });
     return conversationContext.length > 0
       ? [
@@ -785,7 +821,7 @@ export const registerTelegramHandlers = ({
   ) => {
     const replyChainNodes = buildReplyChainForMessage(msg);
     const { replyMedia, replyChain } = await resolveReplyMediaForChain(ctx, replyChainNodes);
-    const promptContext = buildPromptContextForMessage(msg, replyChainNodes);
+    const promptContext = buildPromptContextForMessage(msg, replyChainNodes, options);
     await processMessage(
       ctx,
       allMedia,
@@ -1267,6 +1303,7 @@ export const registerTelegramHandlers = ({
     storeAllowFrom: string[];
     sendOversizeWarning: boolean;
     oversizeLogMessage: string;
+    promptContextMinTimestampMs?: number;
   }) => {
     const {
       ctx,
@@ -1277,6 +1314,7 @@ export const registerTelegramHandlers = ({
       storeAllowFrom,
       sendOversizeWarning,
       oversizeLogMessage,
+      promptContextMinTimestampMs,
     } = params;
 
     // Text fragment handling - Telegram splits long pastes into multiple inbound messages (~4096 chars).
@@ -1314,6 +1352,10 @@ export const registerTelegramHandlers = ({
             nextTotalChars <= TELEGRAM_TEXT_FRAGMENT_MAX_TOTAL_CHARS
           ) {
             existing.messages.push({ msg, ctx, receivedAtMs: nowMs });
+            existing.promptContextMinTimestampMs = latestPromptContextMinTimestampMs(
+              existing.promptContextMinTimestampMs,
+              promptContextMinTimestampMs,
+            );
             scheduleTextFragmentFlush(existing);
             return;
           }
@@ -1335,6 +1377,7 @@ export const registerTelegramHandlers = ({
         const entry: TextFragmentEntry = {
           key,
           messages: [{ msg, ctx, receivedAtMs: nowMs }],
+          ...promptContextBoundaryOptions(promptContextMinTimestampMs),
           timer: setTimeout(() => {}, TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS),
         };
         textFragmentBuffer.set(key, entry);
@@ -1350,6 +1393,10 @@ export const registerTelegramHandlers = ({
       if (existing) {
         clearTimeout(existing.timer);
         existing.messages.push({ msg, ctx });
+        existing.promptContextMinTimestampMs = latestPromptContextMinTimestampMs(
+          existing.promptContextMinTimestampMs,
+          promptContextMinTimestampMs,
+        );
         existing.timer = setTimeout(async () => {
           mediaGroupBuffer.delete(mediaGroupId);
           mediaGroupProcessing = mediaGroupProcessing
@@ -1362,6 +1409,7 @@ export const registerTelegramHandlers = ({
       } else {
         const entry: MediaGroupEntry = {
           messages: [{ msg, ctx }],
+          ...promptContextBoundaryOptions(promptContextMinTimestampMs),
           timer: setTimeout(async () => {
             mediaGroupBuffer.delete(mediaGroupId);
             mediaGroupProcessing = mediaGroupProcessing
@@ -1458,6 +1506,7 @@ export const registerTelegramHandlers = ({
       debounceKey,
       debounceLane,
       botUsername: ctx.me?.username,
+      ...promptContextBoundaryOptions(promptContextMinTimestampMs),
     });
   };
   bot.on("callback_query", async (ctx) => {
@@ -2163,9 +2212,11 @@ export const registerTelegramHandlers = ({
       if (migration.migrated) {
         runtime.log?.(warn(`[telegram] Migrating group config from ${oldChatId} to ${newChatId}`));
         migrateTelegramGroupConfig({ cfg, accountId, oldChatId, newChatId });
-        await replaceConfigFile({
-          nextConfig: currentConfig,
+        await mutateConfigFile({
           afterWrite: { mode: "auto" },
+          mutate: (draft) => {
+            migrateTelegramGroupConfig({ cfg: draft, accountId, oldChatId, newChatId });
+          },
         });
         runtime.log?.(warn(`[telegram] Group config migrated and saved successfully`));
       } else if (migration.skippedExisting) {
@@ -2326,6 +2377,18 @@ export const registerTelegramHandlers = ({
         }
       }
 
+      const promptContextMinTimestampMs = normalizePromptContextMinTimestampMs(
+        resolveTelegramSessionState({
+          chatId: event.chatId,
+          isGroup: event.isGroup,
+          isForum: event.isForum,
+          messageThreadId: event.messageThreadId,
+          resolvedThreadId,
+          senderId: event.senderId,
+          runtimeCfg: cfg,
+        }).sessionEntry?.sessionStartedAt,
+      );
+
       recordMessageForReplyChain(event.msg, resolvedThreadId ?? dmThreadId);
       await processInboundMessage({
         ctx: event.ctx,
@@ -2336,6 +2399,7 @@ export const registerTelegramHandlers = ({
         storeAllowFrom,
         sendOversizeWarning: event.sendOversizeWarning,
         oversizeLogMessage: event.oversizeLogMessage,
+        ...promptContextBoundaryOptions(promptContextMinTimestampMs),
       });
     } catch (err) {
       runtime.error?.(danger(`${event.errorMessage}: ${String(err)}`));

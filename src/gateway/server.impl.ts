@@ -593,7 +593,10 @@ export async function startGatewayServer(
   const diagnosticsEnabled = isDiagnosticsEnabled(cfgAtStart);
   setDiagnosticsEnabledForProcess(diagnosticsEnabled);
   if (diagnosticsEnabled) {
-    startDiagnosticHeartbeat(undefined, { getConfig: getRuntimeConfig });
+    startDiagnosticHeartbeat(undefined, {
+      getConfig: getRuntimeConfig,
+      startupGraceMs: 60_000,
+    });
   }
   setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(cfgAtStart) });
   let getActiveTaskCount = () => 0;
@@ -1269,6 +1272,9 @@ export async function startGatewayServer(
       chatRunBuffers: chatRunState.buffers,
       chatDeltaSentAt: chatRunState.deltaSentAt,
       chatDeltaLastBroadcastLen: chatRunState.deltaLastBroadcastLen,
+      chatDeltaLastBroadcastText: chatRunState.deltaLastBroadcastText,
+      agentDeltaSentAt: chatRunState.agentDeltaSentAt,
+      bufferedAgentEvents: chatRunState.bufferedAgentEvents,
       addChatRun,
       removeChatRun,
       subscribeSessionEvents: sessionEventSubscribers.subscribe,

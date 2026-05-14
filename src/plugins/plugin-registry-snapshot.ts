@@ -90,12 +90,21 @@ function resolveComparablePath(filePath: string): string {
   }
 }
 
+function isRelativePathInsideOrEqual(relativePath: string): boolean {
+  return (
+    relativePath === "" ||
+    (relativePath !== ".." &&
+      !relativePath.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relativePath))
+  );
+}
+
 function isPathInsideOrEqual(childPath: string, parentPath: string): boolean {
   const relative = path.relative(
     resolveComparablePath(parentPath),
     resolveComparablePath(childPath),
   );
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  return isRelativePathInsideOrEqual(relative);
 }
 
 function hasMismatchedPersistedBundledPluginRoot(
@@ -128,7 +137,7 @@ function resolveRecordPackageJsonPath(plugin: InstalledPluginIndexRecord): strin
   const rootDir = plugin.rootDir || path.dirname(plugin.manifestPath);
   const resolved = path.resolve(rootDir, packageJsonPath);
   const relative = path.relative(rootDir, resolved);
-  return relative.startsWith("..") || path.isAbsolute(relative) ? null : resolved;
+  return isRelativePathInsideOrEqual(relative) ? resolved : null;
 }
 
 function hasStalePersistedPluginDiagnostics(index: InstalledPluginIndex): boolean {

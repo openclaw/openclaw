@@ -22,13 +22,21 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { defaultCodexAppInventoryCache } from "../app-server/app-inventory-cache.js";
 import {
+  resolveCodexAppServerAuthAccountCacheKey,
+  resolveCodexAppServerAuthProfileIdForAgent,
+  resolveCodexAppServerEnvApiKeyCacheKey,
+} from "../app-server/auth-bridge.js";
+import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
+  readCodexPluginConfig,
+  resolveCodexAppServerRuntimeOptions,
   type ResolvedCodexPluginPolicy,
 } from "../app-server/config.js";
 import {
   ensureCodexPluginActivation,
   type CodexPluginActivationResult,
 } from "../app-server/plugin-activation.js";
+import { buildCodexPluginAppCacheKey } from "../app-server/plugin-app-cache-key.js";
 import type { v2 } from "../app-server/protocol.js";
 import { requestCodexAppServerJson } from "../app-server/request.js";
 import { buildCodexMigrationPlan } from "./plan.js";
@@ -40,15 +48,21 @@ import {
   readCodexPluginMigrationConfigEntry,
   type CodexPluginMigrationConfigEntry,
 } from "./plan.js";
+import { resolveCodexMigrationTargets } from "./targets.js";
 
 const CODEX_PLUGIN_AUTH_REQUIRED_REASON = "auth_required";
 const CODEX_PLUGIN_NOT_SELECTED_REASON = "not selected for migration";
+const CODEX_CONFIG_PATCH_MODE_RETURN = "return";
 
 class CodexPluginConfigConflictError extends Error {
   constructor(readonly reason: string) {
     super(reason);
     this.name = "CodexPluginConfigConflictError";
   }
+}
+
+function shouldReturnCodexPluginConfigPatch(ctx: MigrationProviderContext): boolean {
+  return ctx.providerOptions?.configPatchMode === CODEX_CONFIG_PATCH_MODE_RETURN;
 }
 
 export async function applyCodexMigrationPlan(params: {
@@ -104,6 +118,8 @@ async function applyCodexPluginInstallItem(
     };
   }
   try {
+    const appCacheKey = await buildTargetCodexPluginAppCacheKey(ctx);
+    const appServer = resolveTargetCodexAppServer(ctx);
     const result = await ensureCodexPluginActivation({
       identity: policy,
       installEvenIfActive: true,
@@ -112,10 +128,14 @@ async function applyCodexPluginInstallItem(
           method,
           requestParams,
           timeoutMs: 60_000,
+          startOptions: appServer.start,
+          agentDir: resolveCodexMigrationTargets(ctx).agentDir,
           config: ctx.config,
+          isolated: true,
         }),
+      appCache: defaultCodexAppInventoryCache,
+      appCacheKey,
     });
-    defaultCodexAppInventoryCache.clear();
     const baseDetails = {
       ...item.details,
       code: result.reason,
@@ -162,6 +182,38 @@ async function applyCodexPluginInstallItem(
   }
 }
 
+function resolveTargetCodexAppServer(ctx: MigrationProviderContext) {
+  return resolveCodexAppServerRuntimeOptions({
+    pluginConfig: readCodexPluginConfig(ctx.config),
+  });
+}
+
+async function buildTargetCodexPluginAppCacheKey(ctx: MigrationProviderContext): Promise<string> {
+  const targets = resolveCodexMigrationTargets(ctx);
+  const appServer = resolveTargetCodexAppServer(ctx);
+  const authProfileId = resolveCodexAppServerAuthProfileIdForAgent({
+    agentDir: targets.agentDir,
+    config: ctx.config,
+  });
+  const accountId = await resolveCodexAppServerAuthAccountCacheKey({
+    authProfileId,
+    agentDir: targets.agentDir,
+    config: ctx.config,
+  });
+  const envApiKeyFingerprint = authProfileId
+    ? undefined
+    : resolveCodexAppServerEnvApiKeyCacheKey({
+        startOptions: appServer.start,
+      });
+  return buildCodexPluginAppCacheKey({
+    appServer,
+    agentDir: targets.agentDir,
+    authProfileId,
+    accountId,
+    envApiKeyFingerprint,
+  });
+}
+
 async function applyCodexPluginConfigItem(
   ctx: MigrationProviderContext,
   item: MigrationItem,
@@ -173,14 +225,32 @@ async function applyCodexPluginConfigItem(
   if (entries.length === 0) {
     return markMigrationItemSkipped(item, "no selected Codex plugins");
   }
+  const returnPatch = shouldReturnCodexPluginConfigPatch(ctx);
   const configApi = ctx.runtime?.config;
-  if (!configApi?.current || !configApi.mutateConfigFile) {
+  const currentConfig = returnPatch
+    ? ctx.config
+    : (configApi?.current?.() as MigrationProviderContext["config"] | undefined);
+  if (!currentConfig) {
     return markMigrationItemError(item, "config runtime unavailable");
   }
-  const currentConfig = configApi.current() as MigrationProviderContext["config"];
   const value = buildCodexPluginsConfigValue(entries, { config: currentConfig });
   if (!ctx.overwrite && hasCodexPluginConfigConflict(currentConfig, value)) {
     return markMigrationItemConflict(item, MIGRATION_REASON_TARGET_EXISTS);
+  }
+  const migratedItem: MigrationItem = {
+    ...item,
+    status: "migrated",
+    details: {
+      ...item.details,
+      path: [...CODEX_PLUGIN_CONFIG_PATH],
+      value,
+    },
+  };
+  if (returnPatch) {
+    return migratedItem;
+  }
+  if (!configApi?.mutateConfigFile) {
+    return markMigrationItemError(item, "config runtime unavailable");
   }
   try {
     await configApi.mutateConfigFile({
@@ -193,15 +263,7 @@ async function applyCodexPluginConfigItem(
         writeMigrationConfigPath(draft as Record<string, unknown>, CODEX_PLUGIN_CONFIG_PATH, value);
       },
     });
-    return {
-      ...item,
-      status: "migrated",
-      details: {
-        ...item.details,
-        path: [...CODEX_PLUGIN_CONFIG_PATH],
-        value,
-      },
-    };
+    return migratedItem;
   } catch (error) {
     if (error instanceof CodexPluginConfigConflictError) {
       return markMigrationItemConflict(item, error.reason);

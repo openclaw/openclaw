@@ -1,10 +1,12 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 
-type IMessageAttachment = {
+export type IMessageAttachment = {
   original_path?: string | null;
   mime_type?: string | null;
   missing?: boolean | null;
+  transfer_name?: string | null;
+  uti?: string | null;
 };
 
 export type IMessagePayload = {
