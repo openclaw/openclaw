@@ -46,6 +46,40 @@ export type AgentContextPruningConfig = {
   };
 };
 
+export type CliTmuxExecutionConfig = {
+  /** Prefix for OpenClaw-managed tmux sessions. */
+  sessionNamePrefix?: string;
+  /** Runtime directory for tmux metadata, logs, settings, and hook events. */
+  runtimeDir?: string;
+  /** Time to wait for a new tmux Claude session to become usable. */
+  startupTimeoutMs?: number;
+  /** Overall timeout for a single tmux turn. */
+  turnTimeoutMs?: number;
+  /** Idle duration used by terminal-output fallback completion. */
+  turnIdleMs?: number;
+  /** Number of pane lines to capture for diagnostics. */
+  captureLines?: number;
+  /** Send Ctrl-C/kill the tmux session when OpenClaw aborts the run. */
+  stopOnAbort?: boolean;
+  /** How Claude Code memory is disabled in tmux mode. */
+  memoryMode?: "managed-disabled" | "bare";
+  /** Whether OpenClaw injects managed Claude Code hooks. */
+  hookMode?: "managed" | "off";
+  /** Auth source for non-bare interactive Claude Code. */
+  authMode?: "openclaw" | "user-claude";
+};
+
+export type CliExecutionConfig =
+  | {
+      /** Spawn a short-lived child process for each run. */
+      mode?: "child";
+    }
+  | {
+      /** Reuse a long-lived interactive session controlled by tmux. */
+      mode: "tmux";
+      tmux?: CliTmuxExecutionConfig;
+    };
+
 export type CliBackendConfig = {
   /** CLI command to execute (absolute path or on PATH). */
   command: string;
@@ -89,6 +123,8 @@ export type CliBackendConfig = {
   imageMode?: "repeat" | "list";
   /** Serialize runs for this CLI. */
   serialize?: boolean;
+  /** Process execution strategy for this backend. */
+  execution?: CliExecutionConfig;
   /** Runtime reliability tuning for this backend's process lifecycle. */
   reliability?: {
     /** No-output watchdog tuning (fresh vs resumed runs). */

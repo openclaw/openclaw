@@ -104,12 +104,17 @@ async function resolveClaudeBareManagedEnv(params: {
   backendConfig: CliBackendConfig;
   authProfileId?: string;
 }): Promise<Record<string, string> | undefined> {
-  // `claude --bare` ignores Claude's local OAuth/keychain state, so pipe any
-  // OpenClaw-managed Anthropic API auth into the child environment explicitly.
+  // `claude --bare` ignores Claude's local OAuth/keychain state, and tmux
+  // non-bare mode defaults to OpenClaw-owned auth. Pipe Anthropic API auth
+  // into the Claude process explicitly for both modes.
   if (params.backendId !== "claude-cli") {
     return undefined;
   }
+  const tmuxOpenClawAuth =
+    params.backendConfig.execution?.mode === "tmux" &&
+    (params.backendConfig.execution.tmux?.authMode ?? "openclaw") === "openclaw";
   if (
+    !tmuxOpenClawAuth &&
     !hasCliFlag(params.backendConfig.args, "--bare") &&
     !hasCliFlag(params.backendConfig.resumeArgs, "--bare")
   ) {

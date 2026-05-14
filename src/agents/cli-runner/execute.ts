@@ -61,6 +61,7 @@ import {
   isExpectedSemanticPromptFile,
   resolveSemanticExpectedFiles,
 } from "./semantic-prompt.js";
+import { executeTmuxCliRun } from "./tmux/execute.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 const executeDeps = {
@@ -413,7 +414,9 @@ export async function executeWithOverflowProtection(
         : undefined;
 
     // Layer 1: Write session prompt file and build loader prompt (Claude CLI only)
-    if (context.isClaude && !isSystemCall && ENABLE_SEMANTIC_PROMPT_LOADER) {
+    const useTmuxExecution = backend.execution?.mode === "tmux";
+
+    if (context.isClaude && !useTmuxExecution && !isSystemCall && ENABLE_SEMANTIC_PROMPT_LOADER) {
       // Semantic prompt loader path: write one session file + reference workspace context files directly
       try {
         const semanticContextPaths = _activeContextFiles.map((f) => f.path);
@@ -491,7 +494,7 @@ export async function executeWithOverflowProtection(
         latestSemanticFiles = undefined;
         loaderFallbackReason = "write_failed";
       }
-    } else if (context.isClaude && !isSystemCall) {
+    } else if (context.isClaude && !useTmuxExecution && !isSystemCall) {
       try {
         cliSystemPromptFile = await writeClaudeSystemPromptFile({
           sessionFile: params.sessionFile,
@@ -762,6 +765,39 @@ export async function executeWithOverflowProtection(
           }
           return next;
         })();
+        if (useTmuxExecution) {
+          const cliOutput = await executeTmuxCliRun({
+            backend,
+            backendId: context.backendResolved.id,
+            workspaceDir: context.workspaceDir,
+            sessionId: params.sessionId,
+            ...(resolvedSessionId ? { cliSessionId: resolvedSessionId } : {}),
+            runId: params.runId,
+            modelId: context.normalizedModel,
+            systemPrompt,
+            prompt,
+            timeoutMs: params.timeoutMs,
+            env,
+            ...(context.preparedBackend.mcpConfigHash
+              ? { mcpConfigHash: context.preparedBackend.mcpConfigHash }
+              : {}),
+            ...(params.authProfileId ? { authProfileId: params.authProfileId } : {}),
+            ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
+            ...(params.onSystemInit ? { onSystemInit: params.onSystemInit } : {}),
+            ...(params.onAssistantTurn ? { onAssistantTurn: params.onAssistantTurn } : {}),
+            ...(params.onToolUseEvent ? { onToolUseEvent: params.onToolUseEvent } : {}),
+            ...(params.onToolResult ? { onToolResult: params.onToolResult } : {}),
+          });
+          latestCliSessionBinding =
+            !isSystemCall && (cliOutput.sessionId || resolvedSessionId)
+              ? { sessionId: cliOutput.sessionId ?? resolvedSessionId ?? "" }
+              : undefined;
+          latestCliPromptLoad = undefined;
+          cliBackendLog.info(
+            `cli tmux complete: provider=${params.provider} model=${context.modelId} session=${cliOutput.sessionId ?? resolvedSessionId ?? "new"} chars=${cliOutput.text.length}`,
+          );
+          return cliOutput;
+        }
         const noOutputTimeoutMs = resolveCliNoOutputTimeoutMs({
           backend,
           timeoutMs: params.timeoutMs,

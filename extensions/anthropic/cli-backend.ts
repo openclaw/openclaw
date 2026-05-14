@@ -60,6 +60,9 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
           resume: { ...CLI_RESUME_WATCHDOG_DEFAULTS },
         },
       },
+      execution: {
+        mode: "child",
+      },
       serialize: true,
     },
     normalizeConfig: normalizeClaudeBackendConfig,
