@@ -196,7 +196,7 @@ describe("resolveMemoryBackendConfig", () => {
 
   it("normalizes direct file qmd paths to escaped exact-file patterns", async () => {
     const workspaceDir = await createFixtureDir("direct-file-path");
-    const notesPath = path.join(workspaceDir, "notes[1].md");
+    const notesPath = path.join(workspaceDir, "notes{a,b}[1].md");
     await fs.writeFile(notesPath, "# Notes\n", "utf8");
 
     const cfg = {
@@ -207,7 +207,7 @@ describe("resolveMemoryBackendConfig", () => {
       memory: {
         backend: "qmd",
         qmd: {
-          paths: [{ path: "notes[1].md", name: "direct-note", pattern: "**/*.md" }],
+          paths: [{ path: "notes{a,b}[1].md", name: "direct-note", pattern: "**/*.md" }],
         },
       },
     } as OpenClawConfig;
@@ -216,7 +216,7 @@ describe("resolveMemoryBackendConfig", () => {
     const custom = resolved.qmd?.collections.find((c) => c.name.startsWith("direct-note"));
     expect(custom).toMatchObject({
       path: workspaceDir,
-      pattern: String.raw`notes\[1\].md`,
+      pattern: String.raw`notes\{a,b\}\[1\].md`,
     });
   });
 

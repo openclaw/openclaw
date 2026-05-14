@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { escape as escapeGlobPattern } from "minimatch";
 import {
   CANONICAL_ROOT_MEMORY_FILENAME,
   type MemoryBackend,
@@ -20,6 +19,10 @@ import {
 } from "./config-utils.js";
 import { isPathInside } from "./fs-utils.js";
 import { normalizeLowercaseStringOrEmpty } from "./string-utils.js";
+
+function escapeQmdExactFilePattern(fileName: string): string {
+  return fileName.replace(/[\\*?[\]{}()!+@]/g, "\\$&");
+}
 
 export type ResolvedMemoryBackendConfig = {
   backend: MemoryBackend;
@@ -307,7 +310,7 @@ function resolveCustomPaths(
         // parent-directory collection with an exact-filename pattern, regardless
         // of any user-supplied glob (a glob does not apply to a single file).
         collectionPath = path.dirname(resolved);
-        pattern = escapeGlobPattern(path.basename(resolved));
+        pattern = escapeQmdExactFilePattern(path.basename(resolved));
       }
     } catch {
       // not a file or can't stat, use as-is
