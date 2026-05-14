@@ -6,11 +6,13 @@ from pathlib import Path
 
 
 def run():
+    user_id = os.getenv("USER_ID", "123")
+
     env = os.environ.copy()
-    env["CUA_SERVICE_WEBSOCKET"] = "ws://localhost:7002/cua/123/api/ws/run-agent"
+    env["CUA_SERVICE_WEBSOCKET"] = f"ws://localhost:7002/cua/{user_id}/api/ws/run-agent"
     env["BROWSER_SERVICE_URL"] = "http://localhost:7002"
     env["CUA_ORCHESTRATOR_URL"] = "http://localhost:9000"
-    env["CUA_HEALTH_URL"] = "http://localhost:7002/cua/123/api/health"
+    env["CUA_HEALTH_URL"] = f"http://localhost:7002/cua/{user_id}/api/health"
 
     # Resolve cua_client.py relative to this file's location.
     # Works on any machine and inside the container.

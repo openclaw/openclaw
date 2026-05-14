@@ -16,7 +16,7 @@ Do **not** use legacy `ComposioToolSet`, `App`, `entity.initiate_connection(...)
 | Variable                         | Description                        |
 | -------------------------------- | ---------------------------------- |
 | `COMPOSIO_API_KEY`               | Composio API key                   |
-| `COMPOSIO_USER_ID`               | Stable app-side user identifier    |
+| `USER_ID`                        | Stable app-side user identifier    |
 | `MICROSOFT_TEAMS_AUTH_CONFIG_ID` | Auth config ID starting with `ac_` |
 
 - Network access required
@@ -42,7 +42,7 @@ import inspect
 
 required = [
     "COMPOSIO_API_KEY",
-    "COMPOSIO_USER_ID",
+    "USER_ID",
     "MICROSOFT_TEAMS_AUTH_CONFIG_ID",
 ]
 
@@ -50,7 +50,11 @@ missing = [name for name in required if not os.environ.get(name)]
 if missing:
     raise RuntimeError(f"Missing required env vars: {', '.join(missing)}")
 
-composio = Composio(api_key=os.environ["COMPOSIO_API_KEY"])
+composio = Composio(
+    api_key=os.environ["COMPOSIO_API_KEY"],
+    timeout=30,
+    max_retries=1,
+)
 
 print("has_tools=", hasattr(composio, "tools"))
 print("has_actions=", hasattr(composio, "actions"))
@@ -85,22 +89,23 @@ has_connected_accounts= True
 | Term                   | Description                                                          |
 | ---------------------- | -------------------------------------------------------------------- |
 | `auth_config_id`       | Composio auth blueprint for Microsoft Teams. Starts with `ac_`.      |
-| `user_id`              | Stable app-side user identifier, from `COMPOSIO_USER_ID`.            |
+| `user_id`              | Stable app-side user identifier, from `USER_ID`.                     |
 | `connected_account_id` | Actual authenticated Teams connection. Starts with `ca_`.            |
 | `chat_id`              | Microsoft Teams chat/conversation target used when sending messages. |
 
-> Use the same `COMPOSIO_USER_ID` every time for the same human. Changing it will make Composio treat the user as a different account and may require re-authentication.
+> Use the same `USER_ID` every time for the same human. Changing it will make Composio treat the user as a different account and may require re-authentication.
 
 ---
 
 ## Authentication Workflow
 
-1. Check whether `COMPOSIO_USER_ID` already has an active Teams connected account.
+1. Check whether `USER_ID` already has an active Teams connected account.
 2. If an active account exists, reuse its `connected_account_id`.
-3. If no active account exists, call `composio.connected_accounts.initiate(user_id=..., auth_config_id=...)`.
+3. If no active account exists, call `composio.connected_accounts.link(user_id=..., auth_config_id=...)`.
 4. Send the user **exactly one** redirect URL.
-5. Wait for the user to confirm they completed auth, or use `wait_for_connection()` only when the process is expected to block.
-6. Print the `connected_account_id`; do not try to persist it with `os.environ[...]` inside Python.
+5. **Wait patiently.** The redirect URL may take several seconds to load — this is normal and expected. Do not regenerate the link or assume failure just because the user has not responded immediately. Only generate a new link if the user explicitly reports the link expired or failed.
+6. Wait for the user to confirm they completed auth, or use `wait_for_connection()` only when the process is expected to block.
+7. Print the `connected_account_id`; do not try to persist it with `os.environ[...]` inside Python.
 
 > ❌ Do not repeatedly generate fresh auth links unless the previous one expired.
 
@@ -112,6 +117,7 @@ Microsoft Teams is not connected in Composio yet.
 Please open this link and authorize your Microsoft Teams account:
 <URL>
 
+Note: the page may take a few seconds to load — please be patient.
 Once done, tell me and I'll continue.
 ```
 
@@ -125,8 +131,12 @@ Once done, tell me and I'll continue.
 import os
 from composio import Composio
 
-composio = Composio(api_key=os.environ["COMPOSIO_API_KEY"])
-user_id = os.environ["COMPOSIO_USER_ID"]
+composio = Composio(
+    api_key=os.environ["COMPOSIO_API_KEY"],
+    timeout=30,
+    max_retries=1,
+)
+user_id = os.environ["USER_ID"]
 auth_config_id = os.environ["MICROSOFT_TEAMS_AUTH_CONFIG_ID"]
 ```
 
@@ -136,8 +146,12 @@ auth_config_id = os.environ["MICROSOFT_TEAMS_AUTH_CONFIG_ID"]
 import os
 from composio import Composio
 
-composio = Composio(api_key=os.environ["COMPOSIO_API_KEY"])
-user_id = os.environ["COMPOSIO_USER_ID"]
+composio = Composio(
+    api_key=os.environ["COMPOSIO_API_KEY"],
+    timeout=30,
+    max_retries=1,
+)
+user_id = os.environ["USER_ID"]
 auth_config_id = os.environ["MICROSOFT_TEAMS_AUTH_CONFIG_ID"]
 
 accounts = composio.connected_accounts.list(
@@ -164,11 +178,15 @@ else:
 import os
 from composio import Composio
 
-composio = Composio(api_key=os.environ["COMPOSIO_API_KEY"])
-user_id = os.environ["COMPOSIO_USER_ID"]
+composio = Composio(
+    api_key=os.environ["COMPOSIO_API_KEY"],
+    timeout=30,
+    max_retries=1,
+)
+user_id = os.environ["USER_ID"]
 auth_config_id = os.environ["MICROSOFT_TEAMS_AUTH_CONFIG_ID"]
 
-connection_request = composio.connected_accounts.initiate(
+connection_request = composio.connected_accounts.link(
     user_id=user_id,
     auth_config_id=auth_config_id,
 )
@@ -186,18 +204,9 @@ Send the printed `AUTH_URL` to the user.
 import os
 from composio import Composio
 
-composio = Composio(api_key=os.environ["COMPOSIO_API_KEY"])
-user_id = os.environ["COMPOSIO_USER_ID"]
-auth_config_id = os.environ["MICROSOFT_TEAMS_AUTH_CONFIG_ID"]
-
-connection_request = composio.connected_accounts.initiate(
-    user_id=user_id,
-    auth_config_id=auth_config_id,
-)
-
-print(f"AUTH_URL={connection_request.redirect_url}")
-
-connected_account = connection_request.wait_for_connection()
+# The redirect page may take several seconds to load — this is expected.
+# Do not re-initiate auth unless the user confirms the link failed or expired.
+connected_account = connection_request.wait_for_connection(timeout=120)  # give it time
 connected_account_id = getattr(connected_account, "id", "")
 
 if not connected_account_id:
@@ -214,8 +223,12 @@ print(f"CONNECTED_ACCOUNT_ID={connected_account_id}")
 import os
 from composio import Composio
 
-composio = Composio(api_key=os.environ["COMPOSIO_API_KEY"])
-user_id = os.environ["COMPOSIO_USER_ID"]
+composio = Composio(
+    api_key=os.environ["COMPOSIO_API_KEY"],
+    timeout=30,
+    max_retries=1,
+)
+user_id = os.environ["USER_ID"]
 auth_config_id = os.environ["MICROSOFT_TEAMS_AUTH_CONFIG_ID"]
 
 accounts = composio.connected_accounts.list(
@@ -237,11 +250,15 @@ All tool calls use string slugs, `user_id`, `connected_account_id`, and `argumen
 import os
 from composio import Composio
 
-composio = Composio(api_key=os.environ["COMPOSIO_API_KEY"])
+composio = Composio(
+    api_key=os.environ["COMPOSIO_API_KEY"],
+    timeout=30,
+    max_retries=1,
+)
 
 result = composio.tools.execute(
     "MICROSOFT_TEAMS_GET_MY_PROFILE",
-    user_id=os.environ["COMPOSIO_USER_ID"],
+    user_id=os.environ["USER_ID"],
     connected_account_id="ca_...",
     arguments={},
     dangerously_skip_version_check=True,
@@ -269,8 +286,12 @@ print(result)
 import os
 from composio import Composio
 
-composio = Composio(api_key=os.environ["COMPOSIO_API_KEY"])
-user_id = os.environ["COMPOSIO_USER_ID"]
+composio = Composio(
+    api_key=os.environ["COMPOSIO_API_KEY"],
+    timeout=30,
+    max_retries=1,
+)
+user_id = os.environ["USER_ID"]
 
 tools = composio.tools.get(
     user_id=user_id,
@@ -341,11 +362,15 @@ Reply yes to confirm or no to cancel.
 import os
 from composio import Composio
 
-composio = Composio(api_key=os.environ["COMPOSIO_API_KEY"])
+composio = Composio(
+    api_key=os.environ["COMPOSIO_API_KEY"],
+    timeout=30,
+    max_retries=1,
+)
 
 result = composio.tools.execute(
     "MICROSOFT_TEAMS_TEAMS_POST_CHAT_MESSAGE",
-    user_id=os.environ["COMPOSIO_USER_ID"],
+    user_id=os.environ["USER_ID"],
     connected_account_id="ca_...",
     arguments={
         "chat_id": "...",
@@ -365,11 +390,15 @@ print(result)
 import os
 from composio import Composio
 
-composio = Composio(api_key=os.environ["COMPOSIO_API_KEY"])
+composio = Composio(
+    api_key=os.environ["COMPOSIO_API_KEY"],
+    timeout=30,
+    max_retries=1,
+)
 
 result = composio.tools.execute(
     "MICROSOFT_TEAMS_CHATS_GET_ALL_CHATS",
-    user_id=os.environ["COMPOSIO_USER_ID"],
+    user_id=os.environ["USER_ID"],
     connected_account_id="ca_...",
     arguments={},
     dangerously_skip_version_check=True,
@@ -386,11 +415,15 @@ print(result)
 import os
 from composio import Composio
 
-composio = Composio(api_key=os.environ["COMPOSIO_API_KEY"])
+composio = Composio(
+    api_key=os.environ["COMPOSIO_API_KEY"],
+    timeout=30,
+    max_retries=1,
+)
 
 result = composio.tools.execute(
     "MICROSOFT_TEAMS_TEAMS_CREATE_CHAT",
-    user_id=os.environ["COMPOSIO_USER_ID"],
+    user_id=os.environ["USER_ID"],
     connected_account_id="ca_...",
     arguments={
         "chatType": "oneOnOne",
@@ -415,16 +448,16 @@ print(result)
 
 ## Failure Handling
 
-| Symptom                                           | Cause                    | Fix                                                                                                                                                                                   |
-| ------------------------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `COMPOSIO_API_KEY` missing                        | env not set              | Set `COMPOSIO_API_KEY`                                                                                                                                                                |
-| `COMPOSIO_USER_ID` missing                        | env not set              | Set stable user ID, check USER.md or name included in telegram reply to create on (use first and last name if possiblt), eg: if name is "UZAIR MOHAMMED BAIG" then id is `uzair_baig` |
-| `MICROSOFT_TEAMS_AUTH_CONFIG_ID` missing          | env not set              | Set Teams auth config ID starting with `ac_`                                                                                                                                          |
-| `ModuleNotFoundError: No module named 'composio'` | image missing package    | Install `composio` into `/opt/skills-venv`; do not install `composio-core`                                                                                                            |
-| `has_tools=False`                                 | deprecated SDK installed | Replace `composio-core` with `composio`                                                                                                                                               |
-| No active account                                 | user not authenticated   | Generate one auth link with `connected_accounts.initiate(...)`                                                                                                                        |
-| Tool call rejected due to version                 | toolkit version mismatch | Pass `dangerously_skip_version_check=True`                                                                                                                                            |
-| Missing fields                                    | SDK/tool schema changed  | Inspect object safely; use `content` for message body and `chat_id` for target                                                                                                        |
+| Symptom                                           | Cause                    | Fix                                                                            |
+| ------------------------------------------------- | ------------------------ | ------------------------------------------------------------------------------ |
+| `COMPOSIO_API_KEY` missing                        | env not set              | Set `COMPOSIO_API_KEY`                                                         |
+| `USER_ID` missing                                 | env not set              | Set stable user ID, e.g. `openclaw_ubaig`                                      |
+| `MICROSOFT_TEAMS_AUTH_CONFIG_ID` missing          | env not set              | Set Teams auth config ID starting with `ac_`                                   |
+| `ModuleNotFoundError: No module named 'composio'` | image missing package    | Install `composio` into `/opt/skills-venv`; do not install `composio-core`     |
+| `has_tools=False`                                 | deprecated SDK installed | Replace `composio-core` with `composio`                                        |
+| No active account                                 | user not authenticated   | Generate one auth link with `connected_accounts.link(...)`                     |
+| Tool call rejected due to version                 | toolkit version mismatch | Pass `dangerously_skip_version_check=True`                                     |
+| Missing fields                                    | SDK/tool schema changed  | Inspect object safely; use `content` for message body and `chat_id` for target |
 
 ---
 

@@ -46,7 +46,7 @@ import websockets
 DEFAULT_HOST = "localhost"
 DEFAULT_WS_PORT = "8882"
 DEFAULT_JISR_URL = "https://master-works.jisr.net/"
-DEFAULT_CHAT_ID = "123"
+DEFAULT_CHAT_ID = os.getenv("USER_ID", "123")
 
 # Gemini model used for summarization
 SUMMARY_MODEL = "gemini-2.0-flash"
