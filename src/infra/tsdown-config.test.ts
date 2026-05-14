@@ -166,16 +166,19 @@ describe("tsdown config", () => {
     expect(hookEntries).toStrictEqual([]);
   });
 
-  it("externalizes known heavy native dependencies", () => {
+  it("externalizes known heavy native and declaration-fragile dependencies", () => {
     const unifiedGraph = unifiedDistGraph();
     const neverBundle = unifiedGraph?.deps?.neverBundle;
     const external = unifiedGraph?.inputOptions?.({})?.external;
 
     if (typeof neverBundle === "function") {
+      expect(neverBundle("@anthropic-ai/vertex-sdk")).toBe(true);
       expect(neverBundle("@discordjs/voice")).toBe(true);
       expect(neverBundle("@lancedb/lancedb")).toBe(true);
       expect(neverBundle("@larksuiteoapi/node-sdk")).toBe(true);
       expect(neverBundle("@matrix-org/matrix-sdk-crypto-nodejs")).toBe(true);
+      expect(neverBundle("@slack/bolt")).toBe(true);
+      expect(neverBundle("@slack/web-api")).toBe(true);
       expect(neverBundle("@vitest/expect")).toBe(true);
       expect(neverBundle("matrix-js-sdk/lib/client.js")).toBe(true);
       expect(neverBundle("prism-media")).toBe(true);
@@ -184,9 +187,12 @@ describe("tsdown config", () => {
       expect(neverBundle("not-a-runtime-dependency")).toBe(false);
     } else {
       for (const dependency of [
+        "@anthropic-ai/vertex-sdk",
         "@discordjs/voice",
         "@lancedb/lancedb",
         "@larksuiteoapi/node-sdk",
+        "@slack/bolt",
+        "@slack/web-api",
         "@vitest/expect",
         "matrix-js-sdk",
         "prism-media",

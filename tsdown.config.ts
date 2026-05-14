@@ -161,10 +161,13 @@ const bundledPluginRoot = (pluginId: string) => ["extensions", pluginId].join("/
 const bundledPluginFile = (pluginId: string, relativePath: string) =>
   `${bundledPluginRoot(pluginId)}/${relativePath}`;
 const explicitNeverBundleDependencies = [
+  "@anthropic-ai/vertex-sdk",
   "@discordjs/voice",
   "@lancedb/lancedb",
   "@larksuiteoapi/node-sdk",
   "@matrix-org/matrix-sdk-crypto-nodejs",
+  "@slack/bolt",
+  "@slack/web-api",
   "@vitest/expect",
   "matrix-js-sdk",
   "prism-media",

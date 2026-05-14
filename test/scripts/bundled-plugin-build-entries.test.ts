@@ -110,11 +110,11 @@ describe("bundled plugin build entries", () => {
     }
   });
 
-  it("keeps external-only Amazon providers out of bundled dist entries", () => {
+  it("keeps external-only providers out of bundled dist entries", () => {
     const entries = listBundledPluginBuildEntries();
     const artifacts = listBundledPluginPackArtifacts();
 
-    for (const pluginId of ["amazon-bedrock", "amazon-bedrock-mantle"]) {
+    for (const pluginId of ["amazon-bedrock", "amazon-bedrock-mantle", "anthropic-vertex"]) {
       expectNoPrefixMatches(Object.keys(entries), `extensions/${pluginId}/`);
       expectNoPrefixMatches(artifacts, `dist/extensions/${pluginId}/`);
     }

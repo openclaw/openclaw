@@ -16,15 +16,13 @@ import {
   resolveCliNetworkProxyPolicy,
 } from "./command-path-policy.js";
 import { isReservedNonPluginCommandRoot } from "./command-registration-policy.js";
+import { getCoreCliParentDefaultHelpCommands } from "./program/core-command-descriptors.js";
+import { getSubCliParentDefaultHelpCommands } from "./program/subcli-descriptors.js";
 
 const ROOT_HELP_ALIASES = new Set(["tools"]);
 const BARE_PARENT_DEFAULT_HELP_COMMANDS = new Set([
-  "approvals",
-  "channels",
-  "cron",
-  "devices",
-  "mcp",
-  "plugins",
+  ...getCoreCliParentDefaultHelpCommands(),
+  ...getSubCliParentDefaultHelpCommands(),
 ]);
 
 function isBareParentDefaultHelpArgv(argv: string[]): boolean {
