@@ -250,6 +250,10 @@ function isCronMessagePresentationWarning(text: string | undefined): boolean {
   );
 }
 
+function isCronRecoveredExecWarning(text: string | undefined): boolean {
+  return normalizeOptionalString(text)?.startsWith("⚠️ 🛠️ Exec failed") === true;
+}
+
 export function resolveCronPayloadOutcome(params: {
   payloads: DeliveryPayload[];
   runLevelError?: unknown;
@@ -275,9 +279,12 @@ export function resolveCronPayloadOutcome(params: {
   const normalizedFinalAssistantVisibleText = normalizeOptionalString(
     params.finalAssistantVisibleText,
   );
-  const hasAnySuccessfulPayload =
+  const hasSuccessfulPayloadAfterLastError =
     !params.runLevelError &&
-    params.payloads.some((payload) => payload?.isError !== true && Boolean(payload?.text?.trim()));
+    lastErrorPayloadIndex >= 0 &&
+    params.payloads
+      .slice(lastErrorPayloadIndex + 1)
+      .some((payload) => payload?.isError !== true && Boolean(payload?.text?.trim()));
   const hasSuccessfulPayloadBeforeLastError =
     !params.runLevelError &&
     lastErrorPayloadIndex > 0 &&
@@ -290,8 +297,17 @@ export function resolveCronPayloadOutcome(params: {
     lastErrorPayloadIndex >= 0 &&
     isCronMessagePresentationWarning(lastErrorPayloadText) &&
     (normalizedFinalAssistantVisibleText !== undefined || hasSuccessfulPayloadBeforeLastError);
+  const hasRecoveredExecWarning =
+    !params.runLevelError &&
+    params.failureSignal?.fatalForCron !== true &&
+    normalizedFinalAssistantVisibleText !== undefined &&
+    hasSuccessfulPayloadBeforeLastError &&
+    isCronRecoveredExecWarning(lastErrorPayloadText);
   const hasFatalStructuredErrorPayload =
-    hasErrorPayload && !hasAnySuccessfulPayload && !hasPendingPresentationWarning;
+    hasErrorPayload &&
+    !hasSuccessfulPayloadAfterLastError &&
+    !hasPendingPresentationWarning &&
+    !hasRecoveredExecWarning;
   const hasStructuredDeliveryPayloads = selectedDeliveryPayloads.some((payload) =>
     payloadHasStructuredDeliveryContent(payload),
   );

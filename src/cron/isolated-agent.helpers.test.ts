@@ -65,7 +65,7 @@ describe("resolveCronPayloadOutcome", () => {
     expect(result.summary).toBe("Write completed successfully.");
   });
 
-  it("treats recovered tool errors as non-fatal regardless of payload order", () => {
+  it("treats recovered exec errors as non-fatal when final assistant text confirms recovery", () => {
     const result = resolveCronPayloadOutcome({
       payloads: [
         { text: "Fallback log written successfully." },
@@ -79,6 +79,21 @@ describe("resolveCronPayloadOutcome", () => {
     expect(result.embeddedRunError).toBeUndefined();
     expect(result.outputText).toBe("Fallback log written successfully.");
     expect(result.deliveryPayloads).toEqual([{ text: "Fallback log written successfully." }]);
+  });
+
+  it("keeps trailing exec errors fatal without final assistant recovery text", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        { text: "Fallback log written successfully." },
+        { text: "⚠️ 🛠️ Exec failed: Discord channel unavailable", isError: true },
+      ],
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(true);
+    expect(result.embeddedRunError).toBe("⚠️ 🛠️ Exec failed: Discord channel unavailable");
+    expect(result.deliveryPayloads).toEqual([
+      { text: "⚠️ 🛠️ Exec failed: Discord channel unavailable", isError: true },
+    ]);
   });
 
   it("treats trailing message delivery warnings as non-fatal when final assistant text exists", () => {
@@ -96,15 +111,15 @@ describe("resolveCronPayloadOutcome", () => {
     expect(result.deliveryPayloads).toEqual([{ text: "Final cron report" }]);
   });
 
-  it("treats trailing canvas warnings as non-fatal when earlier assistant output exists", () => {
+  it("keeps trailing canvas warnings fatal when earlier assistant output exists", () => {
     const result = resolveCronPayloadOutcome({
       payloads: [{ text: "Saved report to disk." }, { text: "⚠️ 🖼️ Canvas failed", isError: true }],
     });
 
-    expect(result.hasFatalErrorPayload).toBe(false);
+    expect(result.hasFatalErrorPayload).toBe(true);
     expect(result.pendingPresentationWarningError).toBeUndefined();
-    expect(result.embeddedRunError).toBeUndefined();
-    expect(result.deliveryPayloads).toEqual([{ text: "Saved report to disk." }]);
+    expect(result.embeddedRunError).toBe("⚠️ 🖼️ Canvas failed");
+    expect(result.deliveryPayloads).toEqual([{ text: "⚠️ 🖼️ Canvas failed", isError: true }]);
   });
 
   it("keeps standalone presentation warnings fatal when there is no cron output", () => {
@@ -117,17 +132,19 @@ describe("resolveCronPayloadOutcome", () => {
     expect(result.deliveryPayloads).toEqual([{ text: "⚠️ ✉️ Message failed", isError: true }]);
   });
 
-  it("treats trailing errors as non-fatal when earlier assistant output exists", () => {
+  it("keeps trailing errors fatal when earlier assistant output exists", () => {
     const result = resolveCronPayloadOutcome({
       payloads: [{ text: "Partial result" }, { text: "model provider unreachable", isError: true }],
       finalAssistantVisibleText: "Partial result",
       preferFinalAssistantVisibleText: true,
     });
 
-    expect(result.hasFatalErrorPayload).toBe(false);
-    expect(result.embeddedRunError).toBeUndefined();
-    expect(result.outputText).toBe("Partial result");
-    expect(result.deliveryPayloads).toEqual([{ text: "Partial result" }]);
+    expect(result.hasFatalErrorPayload).toBe(true);
+    expect(result.embeddedRunError).toBe("model provider unreachable");
+    expect(result.outputText).toBe("model provider unreachable");
+    expect(result.deliveryPayloads).toEqual([
+      { text: "model provider unreachable", isError: true },
+    ]);
   });
 
   it("keeps error payloads fatal when the run also reported a run-level error", () => {
