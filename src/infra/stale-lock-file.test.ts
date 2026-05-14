@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isPidDefinitelyDead, shouldRemoveDeadOwnerOrExpiredLock } from "./stale-lock-file.js";
+import { shouldRemoveDeadOwnerOrExpiredLock } from "./stale-lock-file.js";
 
 describe("stale lock file ownership", () => {
   it("treats permission-denied process probes as not definitely dead", () => {
@@ -26,9 +26,5 @@ describe("stale lock file ownership", () => {
         isPidDefinitelyDead: () => true,
       }),
     ).toBe(true);
-  });
-
-  it("treats invalid pids as definitely dead", () => {
-    expect(isPidDefinitelyDead(-1)).toBe(true);
   });
 });

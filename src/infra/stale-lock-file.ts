@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { isPidDefinitelyDead as defaultIsPidDefinitelyDead } from "../shared/pid-alive.js";
 
 export type LockFileSnapshot = {
   raw: string;
@@ -55,25 +56,13 @@ export function shouldRemoveDeadOwnerOrExpiredLock(params: {
 }): boolean {
   const payload = readLockFileOwnerPayload(params.payload);
   if (payload?.pid) {
-    return (params.isPidDefinitelyDead ?? isPidDefinitelyDead)(payload.pid);
+    return (params.isPidDefinitelyDead ?? defaultIsPidDefinitelyDead)(payload.pid);
   }
   if (payload?.createdAt) {
     const createdAt = Date.parse(payload.createdAt);
     return !Number.isFinite(createdAt) || (params.nowMs ?? Date.now()) - createdAt > params.staleMs;
   }
   return false;
-}
-
-export function isPidDefinitelyDead(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) {
-    return true;
-  }
-  try {
-    process.kill(pid, 0);
-    return false;
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "ESRCH";
-  }
 }
 
 export async function removeLockFileIfSnapshotMatches(params: {
