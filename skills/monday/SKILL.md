@@ -20,79 +20,89 @@ Manage Monday.com boards and tasks via the GraphQL API.
 
 ## API key setup
 
-Set the key via the OpenClaw dashboard (recommended — the "API key" field for this skill), or:
+Set the key via the OpenClaw dashboard ("API key" field for this skill — recommended), or:
 
 ```bash
-# Option A: state-dir dotenv (persists across gateway restarts)
-echo 'MONDAY_API_KEY=your_token_here' >> ~/.openclaw/.env
+# CLI:
+openclaw config set skills.entries.monday.apiKey YOUR_TOKEN_HERE
+
+# Or state-dir dotenv (survives gateway restarts):
+echo 'MONDAY_API_KEY=YOUR_TOKEN_HERE' >> ~/.openclaw/.env
 openclaw gateway restart
-
-# Option B: skill config directly
-openclaw config set skills.entries.monday.apiKey your_token_here
 ```
-
-**Do not** add it manually to `~/.openclaw/service-env/*.env` or `~/.openclaw/openclaw.json env` — those paths are fragile without a full `openclaw gateway install` cycle.
 
 Generate a token: Monday.com → Profile picture → Developers → My Access Tokens → Copy.
 
 ---
 
-## Helper — resolve token
+## IMPORTANT — token resolution
 
-All commands use this helper. It reads from the injected env first, then falls back to the skill config in the openclaw.json:
+`$MONDAY_API_KEY` is injected by OpenClaw before skill execution. Every shell command runs in a **separate subprocess** — bash functions defined in one command are NOT available in the next. Each command block below is self-contained and resolves the token inline.
+
+**Token resolution snippet** (include at the top of every command block):
 
 ```bash
-monday_token() {
-  local tok="${MONDAY_API_KEY:-}"
-  if [ -z "$tok" ] && [ -n "${OPENCLAW_CONFIG_PATH:-}" ]; then
-    tok=$(jq -r '.skills.entries["monday"].apiKey // empty' "$OPENCLAW_CONFIG_PATH" 2>/dev/null || true)
-  fi
-  if [ -z "$tok" ] && [ -f "${HOME}/.openclaw/openclaw.json" ]; then
-    tok=$(jq -r '.skills.entries["monday"].apiKey // empty' "${HOME}/.openclaw/openclaw.json" 2>/dev/null || true)
-  fi
-  if [ -z "$tok" ]; then
-    echo "Error: MONDAY_API_KEY is not set. Add it via the OpenClaw dashboard or set it in ~/.openclaw/.env" >&2
-    return 1
-  fi
-  printf '%s' "$tok"
-}
-
-monday_gql() {
-  local query="$1"
-  local token
-  token=$(monday_token) || return 1
-  curl -s -X POST https://api.monday.com/v2 \
-    -H "Content-Type: application/json" \
-    -H "Authorization: $token" \
-    -H "API-Version: 2024-01" \
-    -d "$query"
-}
+MONDAY_API_KEY="${MONDAY_API_KEY:-}"
+if [ -z "$MONDAY_API_KEY" ]; then
+  MONDAY_API_KEY=$(jq -r '.skills.entries["monday"].apiKey // empty' "${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}" 2>/dev/null)
+fi
+if [ -z "$MONDAY_API_KEY" ]; then
+  echo "Error: MONDAY_API_KEY not set. Run: openclaw config set skills.entries.monday.apiKey YOUR_TOKEN" >&2
+  exit 1
+fi
 ```
 
 ---
 
 ## View boards
 
-List all boards (id, name, state):
+List all boards (id, name, state, item count):
 
 ```bash
-monday_gql '{"query":"{ boards(limit:50) { id name description board_kind state items_count } }"}' \
+MONDAY_API_KEY="${MONDAY_API_KEY:-}"
+if [ -z "$MONDAY_API_KEY" ]; then
+  MONDAY_API_KEY=$(jq -r '.skills.entries["monday"].apiKey // empty' "${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}" 2>/dev/null)
+fi
+
+curl -s -X POST https://api.monday.com/v2 \
+  -H "Content-Type: application/json" \
+  -H "Authorization: $MONDAY_API_KEY" \
+  -H "API-Version: 2024-01" \
+  -d '{"query":"{ boards(limit:50) { id name description board_kind state items_count } }"}' \
   | jq '.data.boards[]'
 ```
 
-Get columns of a specific board (needed to know column IDs before updating status):
+Get columns of a specific board (needed before updating status — reveals column IDs):
 
 ```bash
+MONDAY_API_KEY="${MONDAY_API_KEY:-}"
+if [ -z "$MONDAY_API_KEY" ]; then
+  MONDAY_API_KEY=$(jq -r '.skills.entries["monday"].apiKey // empty' "${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}" 2>/dev/null)
+fi
 BOARD_ID=1234567890
-monday_gql "{\"query\":\"{ boards(ids: $BOARD_ID) { columns { id title type } } }\"}" \
+
+curl -s -X POST https://api.monday.com/v2 \
+  -H "Content-Type: application/json" \
+  -H "Authorization: $MONDAY_API_KEY" \
+  -H "API-Version: 2024-01" \
+  -d "{\"query\":\"{ boards(ids: $BOARD_ID) { columns { id title type } } }\"}" \
   | jq '.data.boards[0].columns[]'
 ```
 
 List groups on a board:
 
 ```bash
+MONDAY_API_KEY="${MONDAY_API_KEY:-}"
+if [ -z "$MONDAY_API_KEY" ]; then
+  MONDAY_API_KEY=$(jq -r '.skills.entries["monday"].apiKey // empty' "${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}" 2>/dev/null)
+fi
 BOARD_ID=1234567890
-monday_gql "{\"query\":\"{ boards(ids: $BOARD_ID) { groups { id title } } }\"}" \
+
+curl -s -X POST https://api.monday.com/v2 \
+  -H "Content-Type: application/json" \
+  -H "Authorization: $MONDAY_API_KEY" \
+  -H "API-Version: 2024-01" \
+  -d "{\"query\":\"{ boards(ids: $BOARD_ID) { groups { id title } } }\"}" \
   | jq '.data.boards[0].groups[]'
 ```
 
@@ -100,27 +110,54 @@ monday_gql "{\"query\":\"{ boards(ids: $BOARD_ID) { groups { id title } } }\"}" 
 
 ## View tasks assigned to me
 
-Get your user ID:
+Get your user ID first:
 
 ```bash
-monday_gql '{"query":"{ me { id name email } }"}' | jq '.data.me'
+MONDAY_API_KEY="${MONDAY_API_KEY:-}"
+if [ -z "$MONDAY_API_KEY" ]; then
+  MONDAY_API_KEY=$(jq -r '.skills.entries["monday"].apiKey // empty' "${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}" 2>/dev/null)
+fi
+
+curl -s -X POST https://api.monday.com/v2 \
+  -H "Content-Type: application/json" \
+  -H "Authorization: $MONDAY_API_KEY" \
+  -H "API-Version: 2024-01" \
+  -d '{"query":"{ me { id name email } }"}' \
+  | jq '.data.me'
 ```
 
-Get all items where you are assigned (person column), on a specific board:
+Get items assigned to you on a specific board (replace ME_ID with your numeric user id):
 
 ```bash
+MONDAY_API_KEY="${MONDAY_API_KEY:-}"
+if [ -z "$MONDAY_API_KEY" ]; then
+  MONDAY_API_KEY=$(jq -r '.skills.entries["monday"].apiKey // empty' "${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}" 2>/dev/null)
+fi
 BOARD_ID=1234567890
-ME_ID=12345678   # from the me query above
+ME_ID=12345678
 
-monday_gql "{\"query\":\"{ boards(ids: $BOARD_ID) { items_page(limit: 100, query_params: {rules: [{column_id: \\\"person\\\", compare_value: [\\\"$ME_ID\\\"]}]}) { items { id name state column_values { id title text } } } } }\"}" \
+curl -s -X POST https://api.monday.com/v2 \
+  -H "Content-Type: application/json" \
+  -H "Authorization: $MONDAY_API_KEY" \
+  -H "API-Version: 2024-01" \
+  -d "{\"query\":\"{ boards(ids: $BOARD_ID) { items_page(limit: 100, query_params: {rules: [{column_id: \\\"person\\\", compare_value: [\\\"$ME_ID\\\"]}]}) { items { id name state column_values { id title text } } } } }\"}" \
   | jq '.data.boards[0].items_page.items[]'
 ```
 
 Get a single item by ID:
 
 ```bash
+MONDAY_API_KEY="${MONDAY_API_KEY:-}"
+if [ -z "$MONDAY_API_KEY" ]; then
+  MONDAY_API_KEY=$(jq -r '.skills.entries["monday"].apiKey // empty' "${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}" 2>/dev/null)
+fi
 ITEM_ID=9876543210
-monday_gql "{\"query\":\"{ items(ids: [$ITEM_ID]) { id name state board { name } column_values { id title text } } }\"}" \
+
+curl -s -X POST https://api.monday.com/v2 \
+  -H "Content-Type: application/json" \
+  -H "Authorization: $MONDAY_API_KEY" \
+  -H "API-Version: 2024-01" \
+  -d "{\"query\":\"{ items(ids: [$ITEM_ID]) { id name state board { name } column_values { id title text } } }\"}" \
   | jq '.data.items[0]'
 ```
 
@@ -128,23 +165,40 @@ monday_gql "{\"query\":\"{ items(ids: [$ITEM_ID]) { id name state board { name }
 
 ## Update task status
 
-First check what status labels exist on the board's status column:
+First check what status labels the board uses (so you can pass the exact label string):
 
 ```bash
+MONDAY_API_KEY="${MONDAY_API_KEY:-}"
+if [ -z "$MONDAY_API_KEY" ]; then
+  MONDAY_API_KEY=$(jq -r '.skills.entries["monday"].apiKey // empty' "${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}" 2>/dev/null)
+fi
 BOARD_ID=1234567890
-monday_gql "{\"query\":\"{ boards(ids: $BOARD_ID) { columns { id title type settings_str } } }\"}" \
-  | jq '.data.boards[0].columns[] | select(.type=="color") | {id, title, settings: (.settings_str | fromjson | .labels)}'
+
+curl -s -X POST https://api.monday.com/v2 \
+  -H "Content-Type: application/json" \
+  -H "Authorization: $MONDAY_API_KEY" \
+  -H "API-Version: 2024-01" \
+  -d "{\"query\":\"{ boards(ids: $BOARD_ID) { columns { id title type settings_str } } }\"}" \
+  | jq '.data.boards[0].columns[] | select(.type=="color") | {id, title, labels: (.settings_str | fromjson | .labels)}'
 ```
 
-Update status by label (must match exactly, case-sensitive):
+Update an item's status (COLUMN_ID is the `id` field from the columns query, usually `"status"`):
 
 ```bash
+MONDAY_API_KEY="${MONDAY_API_KEY:-}"
+if [ -z "$MONDAY_API_KEY" ]; then
+  MONDAY_API_KEY=$(jq -r '.skills.entries["monday"].apiKey // empty' "${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}" 2>/dev/null)
+fi
 ITEM_ID=9876543210
 BOARD_ID=1234567890
-COLUMN_ID="status"   # from columns query above
+COLUMN_ID="status"
 LABEL="Done"
 
-monday_gql "{\"query\":\"mutation { change_column_value(item_id: $ITEM_ID, board_id: $BOARD_ID, column_id: \\\"$COLUMN_ID\\\", value: \\\"{\\\\\\\"label\\\\\\\": \\\\\\\"$LABEL\\\\\\\"}\\\") { id name } }\"}" \
+curl -s -X POST https://api.monday.com/v2 \
+  -H "Content-Type: application/json" \
+  -H "Authorization: $MONDAY_API_KEY" \
+  -H "API-Version: 2024-01" \
+  -d "{\"query\":\"mutation { change_column_value(item_id: $ITEM_ID, board_id: $BOARD_ID, column_id: \\\"$COLUMN_ID\\\", value: \\\"{\\\\\\\"label\\\\\\\": \\\\\\\"$LABEL\\\\\\\"}\\\") { id name } }\"}" \
   | jq '.data.change_column_value'
 ```
 
@@ -155,69 +209,117 @@ monday_gql "{\"query\":\"mutation { change_column_value(item_id: $ITEM_ID, board
 Basic item on a board:
 
 ```bash
+MONDAY_API_KEY="${MONDAY_API_KEY:-}"
+if [ -z "$MONDAY_API_KEY" ]; then
+  MONDAY_API_KEY=$(jq -r '.skills.entries["monday"].apiKey // empty' "${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}" 2>/dev/null)
+fi
 BOARD_ID=1234567890
 ITEM_NAME="New task name"
 
-monday_gql "{\"query\":\"mutation { create_item(board_id: $BOARD_ID, item_name: \\\"$ITEM_NAME\\\") { id name } }\"}" \
+curl -s -X POST https://api.monday.com/v2 \
+  -H "Content-Type: application/json" \
+  -H "Authorization: $MONDAY_API_KEY" \
+  -H "API-Version: 2024-01" \
+  -d "{\"query\":\"mutation { create_item(board_id: $BOARD_ID, item_name: \\\"$ITEM_NAME\\\") { id name } }\"}" \
   | jq '.data.create_item'
 ```
 
-Item in a specific group with status pre-set:
+Item in a specific group (use groups query to find GROUP_ID):
 
 ```bash
+MONDAY_API_KEY="${MONDAY_API_KEY:-}"
+if [ -z "$MONDAY_API_KEY" ]; then
+  MONDAY_API_KEY=$(jq -r '.skills.entries["monday"].apiKey // empty' "${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}" 2>/dev/null)
+fi
 BOARD_ID=1234567890
-GROUP_ID="topics"   # from groups query
+GROUP_ID="topics"
 ITEM_NAME="New task name"
-COLUMN_JSON='{"status": {"label": "Working on it"}}'
-ESCAPED_COL=$(printf '%s' "$COLUMN_JSON" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')
 
-monday_gql "{\"query\":\"mutation { create_item(board_id: $BOARD_ID, group_id: \\\"$GROUP_ID\\\", item_name: \\\"$ITEM_NAME\\\", column_values: $ESCAPED_COL) { id name } }\"}" \
+curl -s -X POST https://api.monday.com/v2 \
+  -H "Content-Type: application/json" \
+  -H "Authorization: $MONDAY_API_KEY" \
+  -H "API-Version: 2024-01" \
+  -d "{\"query\":\"mutation { create_item(board_id: $BOARD_ID, group_id: \\\"$GROUP_ID\\\", item_name: \\\"$ITEM_NAME\\\") { id name } }\"}" \
   | jq '.data.create_item'
 ```
 
 ---
 
-## Other useful operations
+## Other operations
 
 Search items by name on a board:
 
 ```bash
+MONDAY_API_KEY="${MONDAY_API_KEY:-}"
+if [ -z "$MONDAY_API_KEY" ]; then
+  MONDAY_API_KEY=$(jq -r '.skills.entries["monday"].apiKey // empty' "${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}" 2>/dev/null)
+fi
 BOARD_ID=1234567890
 TERM="deploy"
 
-monday_gql "{\"query\":\"{ boards(ids: $BOARD_ID) { items_page(limit: 50, query_params: {rules: [{column_id: \\\"name\\\", compare_value: [\\\"$TERM\\\"], operator: contains_text}]}) { items { id name column_values { id text } } } } }\"}" \
+curl -s -X POST https://api.monday.com/v2 \
+  -H "Content-Type: application/json" \
+  -H "Authorization: $MONDAY_API_KEY" \
+  -H "API-Version: 2024-01" \
+  -d "{\"query\":\"{ boards(ids: $BOARD_ID) { items_page(limit: 50, query_params: {rules: [{column_id: \\\"name\\\", compare_value: [\\\"$TERM\\\"], operator: contains_text}]}) { items { id name column_values { id text } } } } }\"}" \
   | jq '.data.boards[0].items_page.items[]'
 ```
 
 Add a comment to an item:
 
 ```bash
+MONDAY_API_KEY="${MONDAY_API_KEY:-}"
+if [ -z "$MONDAY_API_KEY" ]; then
+  MONDAY_API_KEY=$(jq -r '.skills.entries["monday"].apiKey // empty' "${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}" 2>/dev/null)
+fi
 ITEM_ID=9876543210
 BODY="Comment text here"
 
-monday_gql "{\"query\":\"mutation { create_update(item_id: $ITEM_ID, body: \\\"$BODY\\\") { id } }\"}" \
+curl -s -X POST https://api.monday.com/v2 \
+  -H "Content-Type: application/json" \
+  -H "Authorization: $MONDAY_API_KEY" \
+  -H "API-Version: 2024-01" \
+  -d "{\"query\":\"mutation { create_update(item_id: $ITEM_ID, body: \\\"$BODY\\\") { id } }\"}" \
   | jq '.data.create_update'
 ```
 
 ---
 
-## Troubleshooting
+## Diagnostics
 
-If `$MONDAY_API_KEY` is empty in the shell even though you've set it:
+Verify token and connectivity:
 
-1. Check skill config: `jq '.skills.entries["monday"]' ~/.openclaw/openclaw.json`
-2. Set via CLI: `openclaw config set skills.entries.monday.apiKey YOUR_TOKEN`
-3. Or add to state-dir dotenv and restart: `echo 'MONDAY_API_KEY=YOUR_TOKEN' >> ~/.openclaw/.env && openclaw gateway restart`
+```bash
+MONDAY_API_KEY="${MONDAY_API_KEY:-}"
+if [ -z "$MONDAY_API_KEY" ]; then
+  MONDAY_API_KEY=$(jq -r '.skills.entries["monday"].apiKey // empty' "${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}" 2>/dev/null)
+fi
 
-The `monday_token()` helper above reads from both `$MONDAY_API_KEY` env and the config file, so it works regardless of how the key was stored.
+echo "Token present: $([ -n "$MONDAY_API_KEY" ] && echo YES || echo NO)"
+echo "Token prefix:  ${MONDAY_API_KEY:0:10}..."
+
+curl -s -X POST https://api.monday.com/v2 \
+  -H "Content-Type: application/json" \
+  -H "Authorization: $MONDAY_API_KEY" \
+  -H "API-Version: 2024-01" \
+  -d '{"query":"{ me { id name } }"}' \
+  | jq '.'
+```
+
+If token is missing, set it:
+
+```bash
+openclaw config set skills.entries.monday.apiKey YOUR_TOKEN_HERE
+```
 
 ---
 
 ## Notes
 
-- Confirm before mutating items (status changes, creates) — Monday.com has no undo via API.
-- Board IDs and item IDs are numeric — do not quote them in GraphQL integer fields.
-- Status column labels must match exactly (case-sensitive) the labels defined on the board.
-- Column IDs are snake_case strings from the columns query (`id` field), not the display title.
+- Each command resolves `$MONDAY_API_KEY` inline — bash functions do not persist across shell subprocesses.
+- Authorization header format: `Authorization: <token>` (no `Bearer` prefix) — Monday.com personal API tokens are JWTs sent as-is.
+- Confirm before mutating (status changes, creates) — Monday.com has no undo via API.
+- Board IDs and item IDs are numeric integers — do not quote them in GraphQL fields.
+- Status column labels must match exactly (case-sensitive) labels defined on the board.
+- Column IDs are snake_case strings from the `id` field of the columns query, not the display title.
 - Monday.com API rate limit: 60 requests/minute per token.
-- Use `API-Version: 2024-01` header for stable behavior.
