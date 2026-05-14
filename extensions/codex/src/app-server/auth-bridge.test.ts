@@ -12,6 +12,7 @@ import {
   bridgeCodexAppServerStartOptions,
   refreshCodexAppServerAuthTokens,
   resolveCodexAppServerAuthAccountCacheKey,
+  resolveCodexAppServerAuthProfileId,
   resolveCodexAppServerHomeDir,
   resolveCodexAppServerNativeHomeDir,
 } from "./auth-bridge.js";
@@ -646,6 +647,65 @@ describe("bridgeCodexAppServerStartOptions", () => {
         chatgptAccountId: "account-default",
         chatgptPlanType: null,
       });
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("selects an oauthRef-backed Codex profile for app-server login", () => {
+    expect(
+      resolveCodexAppServerAuthProfileId({
+        store: {
+          version: 1,
+          profiles: {
+            "openai-codex:default": {
+              type: "oauth",
+              provider: "openai-codex",
+              access: "",
+              refresh: "",
+              expires: Date.now() + 60_000,
+              oauthRef: {
+                source: "openclaw-credentials",
+                provider: "openai-codex",
+                id: "0123456789abcdef0123456789abcdef",
+              },
+            },
+          },
+        },
+      }),
+    ).toBe("openai-codex:default");
+  });
+
+  it("answers refresh requests from a discovered oauthRef-backed Codex profile", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    oauthMocks.refreshOpenAICodexToken.mockResolvedValueOnce({
+      access: "refreshed-ref-backed-access-token",
+      refresh: "refreshed-ref-backed-refresh-token",
+      expires: Date.now() + 60_000,
+      accountId: "account-ref-backed-refreshed",
+    });
+    try {
+      upsertAuthProfile({
+        agentDir,
+        profileId: "openai-codex:default",
+        credential: {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "ref-backed-access-token",
+          refresh: "ref-backed-refresh-token",
+          expires: Date.now() + 60_000,
+          accountId: "account-ref-backed",
+          email: "codex@example.test",
+        },
+      });
+
+      await expect(refreshCodexAppServerAuthTokens({ agentDir })).resolves.toEqual({
+        accessToken: "refreshed-ref-backed-access-token",
+        chatgptAccountId: "account-ref-backed-refreshed",
+        chatgptPlanType: null,
+      });
+
+      expect(oauthMocks.refreshOpenAICodexToken).toHaveBeenCalledWith("ref-backed-refresh-token");
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
