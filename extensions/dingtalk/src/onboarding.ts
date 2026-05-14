@@ -20,15 +20,10 @@ import {
 } from "./sdk/helpers.ts";
 import type { DingtalkConfig } from "./types/index.ts";
 
-/**
- * Indirect reference to avoid security scanner false positive.
- * The scanner flags env access + network-send in the same bundled file
- * as "credential harvesting". Using string concatenation breaks the pattern.
- */
-const _processEnv = (globalThis as Record<string, unknown>)["proc" + "ess"] as NodeJS.Process;
-const _env = _processEnv.env;
+// eslint-disable-next-line openclaw/no-process-env -- setup wizard needs env vars for default credential hints
+const _env = process.env;
 
-const channel = "dingtalk-connector" as const;
+const channel = "dingtalk" as const;
 const DINGTALK_MANUAL_SETUP_DOC = "docs/DINGTALK_MANUAL_SETUP.md";
 
 /**
@@ -103,13 +98,13 @@ async function triggerGatewayRestart(
       stdio: "ignore",
     });
     child.on("error", (err) => {
-      runtime?.log?.(`[dingtalk-connector] auto gateway restart failed: ${String(err)}`);
+      runtime?.log?.(`[dingtalk] auto gateway restart failed: ${String(err)}`);
     });
     child.unref();
-    runtime?.log?.("[dingtalk-connector] triggered 'openclaw gateway restart' (detached)");
+    runtime?.log?.("[dingtalk] triggered 'openclaw gateway restart' (detached)");
   } catch (err) {
     runtime?.log?.(
-      `[dingtalk-connector] auto gateway restart threw: ${String(err)}; please run 'openclaw gateway restart' manually`,
+      `[dingtalk] auto gateway restart threw: ${String(err)}; please run 'openclaw gateway restart' manually`,
     );
   }
 }
@@ -143,16 +138,14 @@ function normalizeString(value: unknown): string | undefined {
 function setDingtalkDmPolicy(cfg: OpenClawConfig, dmPolicy: DmPolicy): OpenClawConfig {
   const allowFrom =
     dmPolicy === "open"
-      ? addWildcardAllowFrom(cfg.channels?.["dingtalk-connector"]?.allowFrom)?.map((entry) =>
-          String(entry),
-        )
+      ? addWildcardAllowFrom(cfg.channels?.["dingtalk"]?.allowFrom)?.map((entry) => String(entry))
       : undefined;
   return {
     ...cfg,
     channels: {
       ...cfg.channels,
-      "dingtalk-connector": {
-        ...cfg.channels?.["dingtalk-connector"],
+      dingtalk: {
+        ...cfg.channels?.["dingtalk"],
         dmPolicy,
         ...(allowFrom ? { allowFrom } : {}),
       },
@@ -165,8 +158,8 @@ function setDingtalkAllowFrom(cfg: OpenClawConfig, allowFrom: string[]): OpenCla
     ...cfg,
     channels: {
       ...cfg.channels,
-      "dingtalk-connector": {
-        ...cfg.channels?.["dingtalk-connector"],
+      dingtalk: {
+        ...cfg.channels?.["dingtalk"],
         allowFrom,
       },
     },
@@ -184,7 +177,7 @@ async function promptDingtalkAllowFrom(params: {
   cfg: OpenClawConfig;
   prompter: WizardPrompter;
 }): Promise<OpenClawConfig> {
-  const existing = params.cfg.channels?.["dingtalk-connector"]?.allowFrom ?? [];
+  const existing = params.cfg.channels?.["dingtalk"]?.allowFrom ?? [];
   await params.prompter.note(
     [
       "Allowlist DingTalk DMs by user ID.",
@@ -228,7 +221,7 @@ async function noteDingtalkCredentialHelp(prompter: WizardPrompter): Promise<voi
       "4) Enable required permissions: im:message, im:chat",
       "5) Publish the app or add it to a test group",
       "Tip: you can also set DINGTALK_CLIENT_ID / DINGTALK_CLIENT_SECRET env vars.",
-      `Docs: ${formatDocsLink("/channels/dingtalk-connector", "dingtalk-connector")}`,
+      `Docs: ${formatDocsLink("/channels/dingtalk", "dingtalk")}`,
     ].join("\n"),
     "DingTalk credentials",
   );
@@ -345,12 +338,12 @@ function setDingtalkGroupPolicy(
   cfg: OpenClawConfig,
   groupPolicy: "open" | "allowlist" | "disabled",
 ): OpenClawConfig {
-  const prev = cfg.channels?.["dingtalk-connector"] as DingtalkConfig | undefined;
+  const prev = cfg.channels?.["dingtalk"] as DingtalkConfig | undefined;
   return {
     ...cfg,
     channels: {
       ...cfg.channels,
-      "dingtalk-connector": {
+      dingtalk: {
         ...prev,
         // 保留上游决定（如 Stream preflight 失败时刷写的 enabled:false），
         // policy 修复器不得额外翻转连通开关。
@@ -372,7 +365,7 @@ function setDingtalkGroupPolicy(
  */
 export function enforceDingtalkPolicyInvariants(cfg: OpenClawConfig): OpenClawConfig {
   let next = setDingtalkGroupPolicy(cfg, "open");
-  const existing = next.channels?.["dingtalk-connector"] as DingtalkConfig | undefined;
+  const existing = next.channels?.["dingtalk"] as DingtalkConfig | undefined;
   if (
     existing?.dmPolicy === "allowlist" &&
     (!existing.allowFrom || existing.allowFrom.length === 0)
@@ -385,10 +378,10 @@ export function enforceDingtalkPolicyInvariants(cfg: OpenClawConfig): OpenClawCo
 const dmPolicy: ChannelSetupDmPolicy = {
   label: "DingTalk",
   channel,
-  policyKey: "channels.dingtalk-connector.dmPolicy",
-  allowFromKey: "channels.dingtalk-connector.allowFrom",
+  policyKey: "channels.dingtalk.dmPolicy",
+  allowFromKey: "channels.dingtalk.allowFrom",
   getCurrent: (cfg) =>
-    (cfg.channels?.["dingtalk-connector"] as DingtalkConfig | undefined)?.dmPolicy ?? "open",
+    (cfg.channels?.["dingtalk"] as DingtalkConfig | undefined)?.dmPolicy ?? "open",
   setPolicy: (cfg, policy) => setDingtalkDmPolicy(cfg, policy),
   promptAllowFrom: promptDingtalkAllowFrom,
 };
@@ -432,7 +425,7 @@ export const dingtalkOnboardingAdapter: ChannelSetupWizardAdapter = {
   },
 
   configure: async ({ cfg, prompter }) => {
-    const dingtalkCfg = cfg.channels?.["dingtalk-connector"] as DingtalkConfig | undefined;
+    const dingtalkCfg = cfg.channels?.["dingtalk"] as DingtalkConfig | undefined;
     const resolved = resolveDingtalkCredentials(dingtalkCfg, {
       allowUnresolvedSecretRef: true,
     });
@@ -465,7 +458,7 @@ export const dingtalkOnboardingAdapter: ChannelSetupWizardAdapter = {
           ...next,
           channels: {
             ...next.channels,
-            "dingtalk-connector": { ...next.channels?.["dingtalk-connector"], enabled: true },
+            dingtalk: { ...next.channels?.["dingtalk"], enabled: true },
           },
         };
         // Environment variables will be used, skip manual input
@@ -505,7 +498,9 @@ export const dingtalkOnboardingAdapter: ChannelSetupWizardAdapter = {
                 normalizeString(dingtalkCfg?.clientId) ?? normalizeString(_env.DINGTALK_CLIENT_ID),
             });
 
-            const clientSecretResult = await promptSingleChannelSecretInput({
+            const { promptSingleChannelSecretInput: promptSecretFallback } =
+              await import("openclaw/plugin-sdk/setup");
+            const clientSecretResult = await promptSecretFallback({
               cfg: next,
               prompter,
               providerHint: "dingtalk",
@@ -576,8 +571,8 @@ export const dingtalkOnboardingAdapter: ChannelSetupWizardAdapter = {
         ...next,
         channels: {
           ...next.channels,
-          "dingtalk-connector": {
-            ...next.channels?.["dingtalk-connector"],
+          dingtalk: {
+            ...next.channels?.["dingtalk"],
             enabled: true,
             clientId,
             clientSecret,
@@ -611,7 +606,7 @@ export const dingtalkOnboardingAdapter: ChannelSetupWizardAdapter = {
       if (probeOk) {
         const streamPre = await validateDingtalkStreamConnection({
           clientId,
-          clientSecret,
+          clientSecret: clientSecretProbeValue ?? clientSecret,
         });
         if (streamPre.ok) {
           await prompter.note(
@@ -637,8 +632,8 @@ export const dingtalkOnboardingAdapter: ChannelSetupWizardAdapter = {
             ...next,
             channels: {
               ...next.channels,
-              "dingtalk-connector": {
-                ...next.channels?.["dingtalk-connector"],
+              dingtalk: {
+                ...next.channels?.["dingtalk"],
                 enabled: false,
               },
             },
@@ -669,7 +664,7 @@ export const dingtalkOnboardingAdapter: ChannelSetupWizardAdapter = {
     ...cfg,
     channels: {
       ...cfg.channels,
-      "dingtalk-connector": { ...cfg.channels?.["dingtalk-connector"], enabled: false },
+      dingtalk: { ...cfg.channels?.["dingtalk"], enabled: false },
     },
   }),
 };
