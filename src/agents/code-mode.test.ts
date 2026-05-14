@@ -95,6 +95,7 @@ async function runUntilCompleted(params: {
 describe("Code Mode", () => {
   afterEach(() => {
     __testing.activeRuns.clear();
+    __testing.resumingRunIds.clear();
   });
 
   it("resolves object config defaults", () => {
@@ -299,6 +300,60 @@ describe("Code Mode", () => {
     ).rejects.toThrow("different session");
   });
 
+  it("rejects concurrent waits for the same suspended run", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const config = {
+      tools: {
+        codeMode: {
+          enabled: true,
+          timeoutMs: 100,
+        },
+      },
+    } as never;
+    const ctx = {
+      config,
+      runtimeConfig: config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    };
+    const codeModeTools = createCodeModeTools(ctx);
+    applyCodeModeCatalog({
+      tools: [
+        ...codeModeTools,
+        pluginToolWithExecute(
+          "fake_slow",
+          "Slow helper",
+          async () => await new Promise<never>(() => undefined),
+        ),
+      ],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const first = resultDetails(
+      await codeModeTools[0].execute("code-call-concurrent-wait", {
+        code: "await tools.fake_slow({}); return 'done';",
+      }),
+    );
+    expect(first.status).toBe("waiting");
+
+    const firstWait = codeModeTools[1].execute("code-wait-concurrent-a", {
+      runId: first.runId,
+    });
+    await expect(
+      codeModeTools[1].execute("code-wait-concurrent-b", { runId: first.runId }),
+    ).rejects.toThrow("already being resumed");
+    const stillWaiting = resultDetails(await firstWait);
+
+    expect(stillWaiting.status).toBe("waiting");
+    expect(stillWaiting.runId).toBe(first.runId);
+  });
+
   it("reports only unsettled pending tool calls when wait times out", async () => {
     const catalogRef = createToolSearchCatalogRef();
     const config = {
@@ -379,6 +434,54 @@ describe("Code Mode", () => {
     expect(__testing.getTypescriptRuntimePromise()).toBeNull();
   });
 
+  it("allows identifiers and strings that contain import without module access", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: codeModeTools[0],
+      waitTool: codeModeTools[1],
+      code: `
+        const important = 41;
+        const message = "import docs later";
+        return important + (message.includes("import") ? 1 : 0);
+      `,
+    });
+
+    expect(details.status).toBe("completed");
+    expect(details.value).toBe(42);
+  });
+
+  it("fails pending promises that have no host bridge work", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const beforeRunCount = __testing.activeRuns.size;
+    const details = resultDetails(
+      await codeModeTools[0].execute("code-call-empty-wait", {
+        code: "await new Promise(() => undefined); return 'never';",
+      }),
+    );
+
+    expect(details.status).toBe("failed");
+    expect(String(details.error)).toContain("pending without host work");
+    expect(__testing.activeRuns.size).toBe(beforeRunCount);
+  });
+
   it("clamps omitted code-mode catalog search limits to maxSearchLimit", async () => {
     const catalogRef = createToolSearchCatalogRef();
     const config = {
@@ -449,7 +552,12 @@ describe("Code Mode", () => {
     expect(details.value).toEqual({ value: 42 });
   });
 
-  it("rejects module access", async () => {
+  it.each([
+    "const fs = require('node:fs'); return fs;",
+    "return import('node:fs');",
+    "return import.meta.url;",
+    "return `${import('node:fs')}`;",
+  ])("rejects module access: %s", async (code) => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     applyCodeModeCatalog({
       tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
@@ -462,7 +570,7 @@ describe("Code Mode", () => {
 
     const details = resultDetails(
       await codeModeTools[0].execute("code-call-import", {
-        code: "const fs = require('node:fs'); return fs;",
+        code,
       }),
     );
 
@@ -585,5 +693,6 @@ describe("Code Mode", () => {
 
     await expect(heartbeat).resolves.toBe("main-event-loop-alive");
     expect(details.status).toBe("failed");
+    expect(String(details.error)).toContain("timeout exceeded");
   });
 });

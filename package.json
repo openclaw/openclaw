@@ -1786,7 +1786,7 @@
     "pdfjs-dist": "5.7.284",
     "playwright-core": "1.60.0",
     "qrcode": "1.5.4",
-    "quickjs-wasi": "^2.2.0",
+    "quickjs-wasi": "2.2.0",
     "tar": "7.5.15",
     "tokenjuice": "0.7.0",
     "tree-sitter-bash": "0.25.1",

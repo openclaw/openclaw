@@ -40,6 +40,7 @@ const DEFAULT_MAX_PENDING_TOOL_CALLS = 16;
 const DEFAULT_SNAPSHOT_TTL_SECONDS = 900;
 const DEFAULT_SEARCH_LIMIT = 8;
 const DEFAULT_MAX_SEARCH_LIMIT = 50;
+const MAX_ACTIVE_CODE_MODE_RUNS = 64;
 
 type CodeModeLanguage = "javascript" | "typescript";
 
@@ -113,6 +114,7 @@ type CodeModeWorkerResult =
     };
 
 const activeRuns = new Map<string, CodeModeRunState>();
+const resumingRunIds = new Set<string>();
 let typescriptRuntimePromise: Promise<typeof import("typescript")> | null = null;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -223,7 +225,15 @@ function removeExpiredRuns(now = Date.now()): void {
   for (const [runId, state] of activeRuns) {
     if (state.expiresAt <= now) {
       activeRuns.delete(runId);
+      resumingRunIds.delete(runId);
     }
+  }
+}
+
+function enforceActiveRunLimit(): void {
+  removeExpiredRuns();
+  if (activeRuns.size >= MAX_ACTIVE_CODE_MODE_RUNS) {
+    throw new ToolInputError("too many suspended code mode runs.");
   }
 }
 
@@ -298,8 +308,65 @@ function readRunId(args: unknown): string {
   return runId.trim();
 }
 
+function maskCodeLiteralsAndComments(code: string): string {
+  let masked = "";
+  let index = 0;
+  while (index < code.length) {
+    const char = code[index];
+    const next = code[index + 1];
+    if (char === "/" && next === "/") {
+      masked += "  ";
+      index += 2;
+      while (index < code.length && code[index] !== "\n") {
+        masked += " ";
+        index += 1;
+      }
+      continue;
+    }
+    if (char === "/" && next === "*") {
+      masked += "  ";
+      index += 2;
+      while (index < code.length) {
+        if (code[index] === "*" && code[index + 1] === "/") {
+          masked += "  ";
+          index += 2;
+          break;
+        }
+        masked += code[index] === "\n" ? "\n" : " ";
+        index += 1;
+      }
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      const quote = char;
+      masked += " ";
+      index += 1;
+      while (index < code.length) {
+        const current = code[index];
+        masked += current === "\n" ? "\n" : " ";
+        index += 1;
+        if (current === "\\") {
+          if (index < code.length) {
+            masked += code[index] === "\n" ? "\n" : " ";
+            index += 1;
+          }
+          continue;
+        }
+        if (current === quote) {
+          break;
+        }
+      }
+      continue;
+    }
+    masked += char;
+    index += 1;
+  }
+  return masked;
+}
+
 function rejectsModuleAccess(code: string): boolean {
-  return /(^|[^\w$])import\s*(?:\(|[\s{*]|\w)|(^|[^\w$])require\s*\(/u.test(code);
+  const source = maskCodeLiteralsAndComments(code);
+  return /\bimport\b\s*(?:\.|\(|["'`{*]|\w)|\brequire\b\s*\(/u.test(source);
 }
 
 async function loadTypeScriptRuntime(): Promise<typeof import("typescript")> {
@@ -498,6 +565,7 @@ function snapshotState(params: {
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback<unknown>;
 }) {
+  enforceActiveRunLimit();
   if (params.snapshotBytes.byteLength > params.config.maxSnapshotBytes) {
     throw new ToolInputError("code mode snapshot limit exceeded");
   }
@@ -670,21 +738,25 @@ async function runWait(params: {
   ) {
     throw new ToolInputError("code mode run belongs to a different session.");
   }
-  const ready = await waitForPending(state.pending, state.config.timeoutMs);
-  if (!ready) {
-    const pending = state.pending.filter((entry) => !entry.settled);
-    return {
-      status: "waiting" as const,
-      runId: state.runId,
-      reason: codeModeWaitingReason(pending.length > 0 ? pending : state.pending),
-      pendingToolCalls: pendingToolCalls(pending.length > 0 ? pending : state.pending),
-      output: state.output,
-      telemetry: telemetry(state.runtime),
-    };
+  if (resumingRunIds.has(state.runId)) {
+    throw new ToolInputError("code mode run is already being resumed.");
   }
-
-  activeRuns.delete(state.runId);
+  resumingRunIds.add(state.runId);
   try {
+    const ready = await waitForPending(state.pending, state.config.timeoutMs);
+    if (!ready) {
+      const pending = state.pending.filter((entry) => !entry.settled);
+      return {
+        status: "waiting" as const,
+        runId: state.runId,
+        reason: codeModeWaitingReason(pending.length > 0 ? pending : state.pending),
+        pendingToolCalls: pendingToolCalls(pending.length > 0 ? pending : state.pending),
+        output: state.output,
+        telemetry: telemetry(state.runtime),
+      };
+    }
+
+    activeRuns.delete(state.runId);
     const settledRequests: SettledBridgeRequest[] = [];
     for (const entry of state.pending) {
       settledRequests.push(entry.settled ?? (await entry.promise));
@@ -731,6 +803,8 @@ async function runWait(params: {
       output: state.output,
       telemetry: telemetry(state.runtime),
     };
+  } finally {
+    resumingRunIds.delete(state.runId);
   }
 }
 
@@ -843,6 +917,7 @@ export function addClientToolsToCodeModeCatalog(params: {
 
 export const __testing = {
   activeRuns,
+  resumingRunIds,
   codeModeWorkerUrl,
   resolveCodeModeWorkerUrl,
   resolveCodeModeConfig,

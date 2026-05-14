@@ -57,6 +57,11 @@ type CodeModeWorkerResult =
       output: unknown[];
     };
 
+type VmRun = {
+  vm: QuickJS;
+  didTimeout: () => boolean;
+};
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
@@ -226,13 +231,17 @@ async function createVm(params: {
   catalog: unknown[];
   config: CodeModeConfig;
   pendingRequests: PendingBridgeRequest[];
-}) {
+}): Promise<VmRun> {
   const startedAt = Date.now();
+  let timedOut = false;
   const vm = await QuickJS.create({
     memoryLimit: params.config.memoryLimitBytes,
     intrinsics: Intrinsics.ALL,
     timezoneOffset: 0,
-    interruptHandler: () => Date.now() - startedAt > params.config.timeoutMs,
+    interruptHandler: () => {
+      timedOut = Date.now() - startedAt > params.config.timeoutMs;
+      return timedOut;
+    },
   });
   const catalogHandle = vm.hostToHandle(params.catalog);
   try {
@@ -254,21 +263,25 @@ async function createVm(params: {
     hostRequest.dispose();
   }
   vm.evalCode(CONTROLLER_SOURCE, "openclaw-code-mode:controller.js").dispose();
-  return vm;
+  return { vm, didTimeout: () => timedOut };
 }
 
 async function restoreVm(params: {
   snapshotBytes: Uint8Array;
   config: CodeModeConfig;
   pendingRequests: PendingBridgeRequest[];
-}) {
+}): Promise<VmRun> {
   const startedAt = Date.now();
+  let timedOut = false;
   const snapshot = QuickJS.deserializeSnapshot(params.snapshotBytes);
   const vm = await QuickJS.restore(snapshot, {
     memoryLimit: params.config.memoryLimitBytes,
     intrinsics: Intrinsics.ALL,
     timezoneOffset: 0,
-    interruptHandler: () => Date.now() - startedAt > params.config.timeoutMs,
+    interruptHandler: () => {
+      timedOut = Date.now() - startedAt > params.config.timeoutMs;
+      return timedOut;
+    },
   });
   vm.registerHostCallback(
     "__openclawHostRequest",
@@ -278,7 +291,7 @@ async function restoreVm(params: {
       config: params.config,
     }),
   );
-  return vm;
+  return { vm, didTimeout: () => timedOut };
 }
 
 function takeOutput(vm: QuickJS): unknown[] {
@@ -348,7 +361,11 @@ function waitingResult(params: {
 
 async function runExec(input: Extract<CodeModeWorkerInput, { kind: "exec" }>) {
   const pendingRequests: PendingBridgeRequest[] = [];
-  const vm = await createVm({ catalog: input.catalog, config: input.config, pendingRequests });
+  const { vm, didTimeout } = await createVm({
+    catalog: input.catalog,
+    config: input.config,
+    pendingRequests,
+  });
   try {
     vm.evalCode(
       buildUserSource(input.source),
@@ -359,11 +376,11 @@ async function runExec(input: Extract<CodeModeWorkerInput, { kind: "exec" }>) {
     const output = takeOutput(vm);
     const resultHandle = getResultHandle(vm);
     try {
-      if (
-        pendingRequests.length > 0 ||
-        (resultHandle.isPromise && resultHandle.promiseState === 0)
-      ) {
+      if (pendingRequests.length > 0) {
         return waitingResult({ vm, pendingRequests, output, config: input.config });
+      }
+      if (resultHandle.isPromise && resultHandle.promiseState === 0) {
+        throw new Error("code mode promise is pending without host work");
       }
       return {
         status: "completed" as const,
@@ -373,6 +390,11 @@ async function runExec(input: Extract<CodeModeWorkerInput, { kind: "exec" }>) {
     } finally {
       resultHandle.dispose();
     }
+  } catch (error) {
+    if (didTimeout()) {
+      throw new Error("code mode timeout exceeded", { cause: error });
+    }
+    throw error;
   } finally {
     vm.dispose();
   }
@@ -380,7 +402,7 @@ async function runExec(input: Extract<CodeModeWorkerInput, { kind: "exec" }>) {
 
 async function runResume(input: Extract<CodeModeWorkerInput, { kind: "resume" }>) {
   const pendingRequests: PendingBridgeRequest[] = [];
-  const vm = await restoreVm({
+  const { vm, didTimeout } = await restoreVm({
     snapshotBytes: input.snapshotBytes,
     config: input.config,
     pendingRequests,
@@ -411,11 +433,11 @@ async function runResume(input: Extract<CodeModeWorkerInput, { kind: "resume" }>
     const output = takeOutput(vm);
     const resultHandle = getResultHandle(vm);
     try {
-      if (
-        pendingRequests.length > 0 ||
-        (resultHandle.isPromise && resultHandle.promiseState === 0)
-      ) {
+      if (pendingRequests.length > 0) {
         return waitingResult({ vm, pendingRequests, output, config: input.config });
+      }
+      if (resultHandle.isPromise && resultHandle.promiseState === 0) {
+        throw new Error("code mode promise is pending without host work");
       }
       return {
         status: "completed" as const,
@@ -425,6 +447,11 @@ async function runResume(input: Extract<CodeModeWorkerInput, { kind: "resume" }>
     } finally {
       resultHandle.dispose();
     }
+  } catch (error) {
+    if (didTimeout()) {
+      throw new Error("code mode timeout exceeded", { cause: error });
+    }
+    throw error;
   } finally {
     vm.dispose();
   }
