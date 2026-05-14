@@ -1,4 +1,6 @@
 import { getRuntimeConfig } from "../../config/config.js";
+import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
+import { resolveContextEngine } from "../../context-engine/registry.js";
 import { ensureMcpLoopbackServer } from "../../gateway/mcp-http.js";
 import {
   createMcpLoopbackServerConfig,
@@ -133,6 +135,13 @@ export async function prepareCliRunContext(
     agentId: params.agentId,
   });
   const agentDir = resolveAgentDir(params.config ?? {}, sessionAgentId);
+  ensureContextEnginesInitialized();
+  const resolvedContextEngine = await resolveContextEngine(params.config, {
+    agentDir,
+    workspaceDir,
+  });
+  const contextEngine =
+    resolvedContextEngine.info.id !== "legacy" ? resolvedContextEngine : undefined;
   const requestedAuthProfileId = params.authProfileId?.trim() || undefined;
   const effectiveAuthProfileId =
     requestedAuthProfileId ?? backendResolved.defaultAuthProfileId?.trim() ?? undefined;
@@ -484,6 +493,7 @@ export async function prepareCliRunContext(
     backendResolved,
     preparedBackend: preparedBackendFinal,
     reusableCliSession,
+    contextEngine,
     modelId,
     normalizedModel,
     contextWindowInfo,
