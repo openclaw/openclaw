@@ -322,8 +322,8 @@ describe("matrix message actions", () => {
           },
         },
       ],
-      start: "start-token",
-      end: "end-token",
+      next_batch: "thread-next-token",
+      prev_batch: "thread-prev-token",
     }));
     const hydrateEvents = vi.fn(
       async (_roomId: string, events: Array<Record<string, unknown>>) => events,
@@ -368,6 +368,8 @@ describe("matrix message actions", () => {
       ]),
     );
     expect(result.messages.map((message) => message.eventId)).toEqual(["$thread-root", "$reply-1"]);
+    expect(result.nextBatch).toBe("thread-next-token");
+    expect(result.prevBatch).toBe("thread-prev-token");
   });
 
   it("hydrates encrypted thread relation events before summarizing messages", async () => {

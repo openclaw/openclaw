@@ -15,6 +15,18 @@ import {
 const MATRIX_THREAD_RELATION_TYPE = "m.thread";
 const MAX_MAIN_TIMELINE_FETCH_PAGES = 3;
 
+type MatrixMessagesPage = {
+  chunk: MatrixRawEvent[];
+  start?: string;
+  end?: string;
+};
+
+type MatrixRelationsPage = {
+  chunk: MatrixRawEvent[];
+  next_batch?: string;
+  prev_batch?: string;
+};
+
 function isThreadRelation(value: unknown): boolean {
   return (
     typeof value === "object" &&
@@ -123,11 +135,12 @@ export async function readMatrixMessages(
   return await withResolvedRoomAction(roomId, opts, async (client, resolvedRoom) => {
     const limit = resolveMatrixActionLimit(opts.limit, 20);
 
-    let res: { chunk: MatrixRawEvent[]; start?: string; end?: string };
+    let nextBatch: string | null = null;
+    let prevBatch: string | null = null;
     let hydratedChunk: MatrixRawEvent[];
 
     if (opts.threadId) {
-      res = (await client.doRequest(
+      const res = (await client.doRequest(
         "GET",
         `/_matrix/client/v1/rooms/${encodeURIComponent(resolvedRoom)}/relations/${encodeURIComponent(opts.threadId)}/${MATRIX_THREAD_RELATION_TYPE}`,
         {
@@ -135,7 +148,9 @@ export async function readMatrixMessages(
           limit,
           from: normalizeOptionalString(opts.before) ?? normalizeOptionalString(opts.after),
         },
-      )) as { chunk: MatrixRawEvent[]; start?: string; end?: string };
+      )) as MatrixRelationsPage;
+      nextBatch = res.next_batch ?? null;
+      prevBatch = res.prev_batch ?? null;
       const rawThreadEvents: MatrixRawEvent[] = [];
       if (!opts.before && !opts.after) {
         appendUniqueEvent(
@@ -151,7 +166,7 @@ export async function readMatrixMessages(
       let token = normalizeOptionalString(opts.before) ?? normalizeOptionalString(opts.after);
       const dir = opts.after ? "f" : "b";
       const mainEvents: MatrixRawEvent[] = [];
-      res = { chunk: [], start: token, end: token };
+      let res: MatrixMessagesPage = { chunk: [], start: token, end: token };
       for (
         let page = 0;
         page < MAX_MAIN_TIMELINE_FETCH_PAGES && mainEvents.length < limit;
@@ -166,7 +181,7 @@ export async function readMatrixMessages(
             limit: fetchLimit,
             from: token,
           },
-        )) as { chunk: MatrixRawEvent[]; start?: string; end?: string };
+        )) as MatrixMessagesPage;
         const hydratedPage = await client.hydrateEvents(resolvedRoom, res.chunk);
         for (const event of hydratedPage) {
           if (!isThreadEvent(event)) {
@@ -183,6 +198,8 @@ export async function readMatrixMessages(
         }
         token = res.end;
       }
+      nextBatch = res.end ?? null;
+      prevBatch = res.start ?? null;
       hydratedChunk = mainEvents;
     }
 
@@ -213,8 +230,8 @@ export async function readMatrixMessages(
     }
     return {
       messages,
-      nextBatch: res.end ?? null,
-      prevBatch: res.start ?? null,
+      nextBatch,
+      prevBatch,
     };
   });
 }
