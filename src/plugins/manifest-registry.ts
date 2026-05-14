@@ -50,7 +50,7 @@ import {
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
 } from "./official-external-plugin-catalog.js";
-import { isPathInside, safeRealpathSync } from "./path-safety.js";
+import { isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import type { PluginDependencySpecMap } from "./status-dependencies.js";
@@ -72,6 +72,7 @@ function isPluginRootPath(params: {
   rootPath: string;
   targetPath: string;
   rootRealPath: string;
+  rejectHardlinks?: boolean;
   targetMustExist?: boolean;
 }): boolean {
   const resolvedTargetPath = path.resolve(params.targetPath);
@@ -83,7 +84,16 @@ function isPluginRootPath(params: {
   if (!targetRealPath) {
     return params.targetMustExist !== true;
   }
-  return isPathInside(params.rootRealPath, targetRealPath);
+  if (!isPathInside(params.rootRealPath, targetRealPath)) {
+    return false;
+  }
+  if (params.rejectHardlinks === true) {
+    const targetStat = safeStatSync(resolvedTargetPath);
+    if (!targetStat || targetStat.nlink > 1) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function resolveManifestPluginSourcePath(params: {
@@ -92,6 +102,7 @@ function resolveManifestPluginSourcePath(params: {
   pluginId: string;
   entryName: "providerCatalogEntry" | "providerDiscoveryEntry";
   entry: string;
+  rejectHardlinks: boolean;
   diagnostics: PluginDiagnostic[];
 }): string | undefined {
   const pushDiagnostic = () => {
@@ -116,6 +127,7 @@ function resolveManifestPluginSourcePath(params: {
       rootPath,
       targetPath: sourcePath,
       rootRealPath,
+      rejectHardlinks: params.rejectHardlinks,
       targetMustExist: fs.existsSync(sourcePath),
     })
   ) {
@@ -129,6 +141,7 @@ function resolveManifestPluginSourcePath(params: {
       rootPath,
       targetPath: resolvedSourcePath,
       rootRealPath,
+      rejectHardlinks: params.rejectHardlinks,
       targetMustExist: fs.existsSync(resolvedSourcePath),
     })
   ) {
@@ -432,6 +445,7 @@ function buildRecord(params: {
   candidate: PluginCandidate;
   manifestPath: string;
   diagnostics: PluginDiagnostic[];
+  rejectHardlinks: boolean;
   schemaCacheKey?: string;
   configSchema?: Record<string, unknown>;
   bundledChannelConfigCollector?: BundledChannelConfigCollector;
@@ -498,6 +512,7 @@ function buildRecord(params: {
           pluginId: params.manifest.id,
           entryName: providerSourceEntry.entryName,
           entry: providerSourceEntry.entry,
+          rejectHardlinks: params.rejectHardlinks,
           diagnostics: params.diagnostics,
         })
       : undefined,
@@ -1021,6 +1036,7 @@ export function loadPluginManifestRegistry(
           candidate,
           manifestPath: manifestRes.manifestPath,
           diagnostics,
+          rejectHardlinks,
           schemaCacheKey,
           configSchema,
           trustedOfficialInstall: isTrustedOfficialPluginInstall({

@@ -1586,6 +1586,84 @@ describe("loadPluginManifestRegistry", () => {
     });
   });
 
+  it("ignores non-bundled provider discovery entries that are hardlinked", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const outsideDir = makeTempDir();
+    const outsideEntry = path.join(outsideDir, "provider-discovery.js");
+    const linkedEntry = path.join(dir, "provider-discovery.js");
+    fs.writeFileSync(outsideEntry, "export default {};\n", "utf8");
+    try {
+      fs.linkSync(outsideEntry, linkedEntry);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+        return;
+      }
+      throw err;
+    }
+    writeManifest(dir, {
+      id: "hardlink-provider",
+      providers: ["hardlink-provider"],
+      providerDiscoveryEntry: "./provider-discovery.js",
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "hardlink-provider",
+      rootDir: dir,
+      origin: "config",
+    });
+
+    expect(registry.plugins[0]?.providerDiscoverySource).toBeUndefined();
+    expectDiagnosticFields(registry, {
+      level: "warn",
+      pluginId: "hardlink-provider",
+      source: path.join(dir, "openclaw.plugin.json"),
+      messageIncludes: "providerDiscoveryEntry must resolve inside the plugin root",
+    });
+  });
+
+  it("ignores non-bundled provider discovery .js fallbacks that are hardlinked", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const outsideDir = makeTempDir();
+    const outsideEntry = path.join(outsideDir, "provider-discovery.js");
+    const linkedEntry = path.join(dir, "provider-discovery.js");
+    fs.writeFileSync(outsideEntry, "export default {};\n", "utf8");
+    try {
+      fs.linkSync(outsideEntry, linkedEntry);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+        return;
+      }
+      throw err;
+    }
+    writeManifest(dir, {
+      id: "fallback-hardlink-provider",
+      providers: ["fallback-hardlink-provider"],
+      providerDiscoveryEntry: "./provider-discovery.ts",
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "fallback-hardlink-provider",
+      rootDir: dir,
+      origin: "config",
+    });
+
+    expect(registry.plugins[0]?.providerDiscoverySource).toBeUndefined();
+    expectDiagnosticFields(registry, {
+      level: "warn",
+      pluginId: "fallback-hardlink-provider",
+      source: path.join(dir, "openclaw.plugin.json"),
+      messageIncludes: "providerDiscoveryEntry must resolve inside the plugin root",
+    });
+  });
+
   it("preserves activation and setup descriptors from plugin manifests", () => {
     const dir = makeTempDir();
     writeManifest(dir, {
