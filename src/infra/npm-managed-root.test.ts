@@ -632,6 +632,75 @@ describe("managed npm root", () => {
     });
   });
 
+  it("does not promote nested transitive lockfile versions into managed root peers", async () => {
+    const npmRoot = await makeTempRoot();
+    await fs.writeFile(
+      path.join(npmRoot, "package.json"),
+      `${JSON.stringify(
+        {
+          private: true,
+          dependencies: {
+            plugin: "1.0.0",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const runCommand = vi.fn(async (_args: string[], optionsOrTimeout: number | CommandOptions) => {
+      const options = requireCommandOptions(optionsOrTimeout, "npm peer plan");
+      if (!options.cwd) {
+        throw new Error("expected npm peer plan cwd");
+      }
+      await fs.writeFile(
+        path.join(options.cwd, "package-lock.json"),
+        `${JSON.stringify(
+          {
+            lockfileVersion: 3,
+            packages: {
+              "": {
+                dependencies: {
+                  plugin: "1.0.0",
+                },
+              },
+              "node_modules/plugin": {
+                peerDependencies: {
+                  "runtime-peer": "^2.0.0",
+                },
+                version: "1.0.0",
+              },
+              "node_modules/transitive": {
+                version: "1.0.0",
+              },
+              "node_modules/transitive/node_modules/runtime-peer": {
+                version: "1.0.0",
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      return successfulSpawn;
+    });
+
+    await expect(syncManagedNpmRootPeerDependencies({ npmRoot, runCommand })).resolves.toBe(true);
+
+    await expect(
+      fs.readFile(path.join(npmRoot, "package.json"), "utf8").then((raw) => JSON.parse(raw)),
+    ).resolves.toEqual({
+      private: true,
+      dependencies: {
+        plugin: "1.0.0",
+        "runtime-peer": "^2.0.0",
+      },
+      openclaw: {
+        managedPeerDependencies: ["runtime-peer"],
+      },
+    });
+  });
+
   it("removes one managed dependency without dropping unrelated metadata", async () => {
     const npmRoot = await makeTempRoot();
     await fs.writeFile(
@@ -782,5 +851,72 @@ describe("managed npm root", () => {
       await expectPathMissing(path.join(npmRoot, "node_modules", ".bin", binName));
     }
     await expectPathMissing(path.join(npmRoot, "node_modules", ".package-lock.json"));
+  });
+
+  it("does not repair the active OpenClaw host package in a root-managed install", async () => {
+    const npmRoot = await makeTempRoot();
+    const hostPackageRoot = path.join(npmRoot, "node_modules", "openclaw");
+    await fs.mkdir(path.join(hostPackageRoot, "dist"), { recursive: true });
+    await fs.writeFile(
+      path.join(npmRoot, "package.json"),
+      `${JSON.stringify(
+        {
+          private: true,
+          dependencies: {
+            openclaw: "2026.5.12-beta.6",
+            "@xdarkicex/openclaw-memory-libravdb": "1.4.69",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await fs.writeFile(
+      path.join(npmRoot, "package-lock.json"),
+      `${JSON.stringify(
+        {
+          lockfileVersion: 3,
+          packages: {
+            "": {
+              dependencies: {
+                openclaw: "2026.5.12-beta.6",
+                "@xdarkicex/openclaw-memory-libravdb": "1.4.69",
+              },
+            },
+            "node_modules/openclaw": {
+              version: "2026.5.12-beta.6",
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await fs.writeFile(
+      path.join(hostPackageRoot, "package.json"),
+      `${JSON.stringify({ name: "openclaw", version: "2026.5.12-beta.6" })}\n`,
+    );
+
+    const runCommand = vi.fn().mockResolvedValue(successfulSpawn);
+    await expect(
+      repairManagedNpmRootOpenClawPeer({
+        npmRoot,
+        packageRoot: hostPackageRoot,
+        runCommand,
+      }),
+    ).resolves.toBe(false);
+
+    expect(runCommand).not.toHaveBeenCalled();
+    await expect(
+      fs.readFile(path.join(npmRoot, "package.json"), "utf8").then((raw) => JSON.parse(raw)),
+    ).resolves.toMatchObject({
+      dependencies: {
+        openclaw: "2026.5.12-beta.6",
+        "@xdarkicex/openclaw-memory-libravdb": "1.4.69",
+      },
+    });
+    await expect(
+      fs.readFile(path.join(hostPackageRoot, "package.json"), "utf8"),
+    ).resolves.toContain("2026.5.12-beta.6");
   });
 });
