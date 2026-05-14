@@ -53,6 +53,15 @@ package name, version, file limits, and source metadata before it creates a
 release, then keeps new releases hidden from normal install and download
 surfaces until review and verification finish.
 
+Use this checklist before you publish:
+
+| Requirement          | Why                                                 |
+| -------------------- | --------------------------------------------------- |
+| Published on ClawHub | Users need `openclaw plugins install` hints to work |
+| Public GitHub repo   | Source review, issue tracking, transparency         |
+| Setup and usage docs | Users need to know how to configure it              |
+| Active maintenance   | Recent updates or responsive issue handling         |
+
 Use these pages for the full publishing contract:
 
 - [ClawHub publishing](/clawhub/publishing) explains owners, scopes, releases,
