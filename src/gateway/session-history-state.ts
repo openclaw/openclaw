@@ -1,3 +1,4 @@
+import { asPositiveSafeInteger } from "../shared/number-coercion.js";
 import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   projectChatDisplayMessages,
@@ -67,10 +68,6 @@ function resolveCursorSeq(cursor: string | undefined): number | undefined {
   return Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
-function resolvePositiveInteger(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
-}
-
 function toSessionHistoryMessages(messages: unknown[]): SessionHistoryMessage[] {
   return messages.filter(
     (message): message is SessionHistoryMessage =>
@@ -92,7 +89,7 @@ function buildPaginatedSessionHistory(params: {
 }
 
 function resolveMessageSeq(message: SessionHistoryMessage | undefined): number | undefined {
-  return resolvePositiveInteger(message?.__openclaw?.seq);
+  return asPositiveSafeInteger(message?.__openclaw?.seq);
 }
 
 function paginateSessionMessages(
@@ -238,7 +235,7 @@ export class SessionHistorySseState {
     if (this.limit !== undefined || this.cursor !== undefined) {
       return null;
     }
-    const carriedSeq = resolvePositiveInteger(update.messageSeq);
+    const carriedSeq = asPositiveSafeInteger(update.messageSeq);
     if (carriedSeq !== undefined) {
       if (carriedSeq <= this.rawTranscriptSeq) {
         return { shouldRefresh: true };

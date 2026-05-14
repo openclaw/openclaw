@@ -1,5 +1,6 @@
 import type { SessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import type { SessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { asPositiveSafeInteger } from "../shared/number-coercion.js";
 import { projectChatDisplayMessage } from "./chat-display-projection.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type {
@@ -17,10 +18,6 @@ import {
 
 type SessionEventSubscribers = Pick<SessionEventSubscriberRegistry, "getAll">;
 type SessionMessageSubscribers = Pick<SessionMessageSubscriberRegistry, "get">;
-
-function normalizeMessageSeq(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
-}
 
 function buildGatewaySessionSnapshot(params: {
   sessionRow: GatewaySessionRow | null | undefined;
@@ -122,11 +119,11 @@ async function handleTranscriptUpdateBroadcast(
   if (connIds.size === 0) {
     return;
   }
-  let messageSeq = normalizeMessageSeq(update.messageSeq);
+  let messageSeq = asPositiveSafeInteger(update.messageSeq);
   if (messageSeq === undefined) {
     const { entry, storePath } = loadSessionEntry(sessionKey);
     messageSeq = entry?.sessionId
-      ? normalizeMessageSeq(
+      ? asPositiveSafeInteger(
           await readSessionMessageCountAsync(entry.sessionId, storePath, entry.sessionFile),
         )
       : undefined;
