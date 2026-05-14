@@ -79,6 +79,17 @@ let noteChannelPrimer: ChannelSetupStatusModule["noteChannelPrimer"];
 let resolveChannelSelectionNoteLines: ChannelSetupStatusModule["resolveChannelSelectionNoteLines"];
 let resolveChannelSetupSelectionContributions: ChannelSetupStatusModule["resolveChannelSetupSelectionContributions"];
 
+function requireFirstMockCall<const Calls extends readonly unknown[][]>(
+  calls: Calls,
+  label: string,
+): Calls[number] {
+  const call = calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call as Calls[number];
+}
+
 describe("resolveChannelSetupSelectionContributions", () => {
   beforeEach(async () => {
     vi.resetModules();
@@ -266,16 +277,22 @@ describe("resolveChannelSetupSelectionContributions", () => {
       ] as NoteChannelPrimerChannels,
     );
 
-    expect(formatChannelPrimerLine).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: "bad\\nid",
-        label: "bad\\nid",
-        selectionLabel: "bad\\nid",
-        blurb: "Blurb\\nline",
-      }),
-    );
+    expect(formatChannelPrimerLine).toHaveBeenCalledOnce();
+    const [primerMeta] = requireFirstMockCall(formatChannelPrimerLine.mock.calls, "primer line");
+    expect(primerMeta?.id).toBe("bad\\nid");
+    expect(primerMeta?.label).toBe("bad\\nid");
+    expect(primerMeta?.selectionLabel).toBe("bad\\nid");
+    expect(primerMeta?.blurb).toBe("Blurb\\nline");
     expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("bad\\nid: Blurb\\nline"),
+      [
+        "Inbound DM safety defaults to pairing: unknown senders get a pairing code first.",
+        "Approve with: openclaw pairing approve <channel> <code>",
+        'Open/public DMs require dmPolicy="open" plus allowFrom=["*"].',
+        'For multi-user DMs, isolate sessions with: openclaw config set session.dmScope "per-channel-peer" (or "per-account-channel-peer" for multi-account channels).',
+        "Docs: https://docs.openclaw.ai/channels/pairing",
+        "",
+        "bad\\nid: Blurb\\nline",
+      ].join("\n"),
       "How channels work",
     );
   });
@@ -308,18 +325,19 @@ describe("resolveChannelSetupSelectionContributions", () => {
     });
 
     expect(formatChannelSelectionLine).toHaveBeenCalledOnce();
-    const [selectionMeta, docsLink] = formatChannelSelectionLine.mock.calls[0] ?? [];
-    expect(selectionMeta).toMatchObject({
-      label: "Zalo\\nBot",
-      blurb: "Setup\\nhelp",
-      docsLabel: "Docs\\nLabel",
-      selectionDocsPrefix: "Docs\\nPrefix",
-      selectionExtras: ["Extra\\nOne"],
-    });
+    const [selectionMeta, docsLink] = requireFirstMockCall(
+      formatChannelSelectionLine.mock.calls,
+      "selection line",
+    );
+    expect(selectionMeta?.label).toBe("Zalo\\nBot");
+    expect(selectionMeta?.blurb).toBe("Setup\\nhelp");
+    expect(selectionMeta?.docsLabel).toBe("Docs\\nLabel");
+    expect(selectionMeta?.selectionDocsPrefix).toBe("Docs\\nPrefix");
+    expect(selectionMeta?.selectionExtras).toEqual(["Extra\\nOne"]);
     if (typeof docsLink !== "function") {
       throw new Error("Expected docs link formatter");
     }
-    expect(docsLink("/channels/zalo", "Docs")).toContain("https://docs.openclaw.ai/channels/zalo");
+    expect(docsLink("/channels/zalo", "Docs")).toBe("https://docs.openclaw.ai/channels/zalo");
     expect(lines).toEqual(["Zalo\\nBot — Setup\\nhelp"]);
   });
 });

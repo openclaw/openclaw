@@ -69,22 +69,19 @@ test("sessions.create stores dashboard session model and parent linkage, and cre
     }
   >;
   const key = created.payload?.key as string;
-  expect(rawStore[key]).toMatchObject({
-    sessionId: created.payload?.sessionId,
-    label: "Dashboard Chat",
-    providerOverride: "openai",
-    modelOverride: "gpt-test-a",
-    parentSessionKey: "agent:main:main",
-  });
+  expect(rawStore[key]?.sessionId).toBe(created.payload?.sessionId);
+  expect(rawStore[key]?.label).toBe("Dashboard Chat");
+  expect(rawStore[key]?.providerOverride).toBe("openai");
+  expect(rawStore[key]?.modelOverride).toBe("gpt-test-a");
+  expect(rawStore[key]?.parentSessionKey).toBe("agent:main:main");
   expect(sessionFile).toBe(rawStore[key]?.sessionFile);
 
   const transcriptPath = path.join(dir, `${created.payload?.sessionId}.jsonl`);
   const transcript = await fs.readFile(transcriptPath, "utf-8");
   const [headerLine] = transcript.trim().split(/\r?\n/, 1);
-  expect(JSON.parse(headerLine) as { type?: string; id?: string }).toMatchObject({
-    type: "session",
-    id: created.payload?.sessionId,
-  });
+  const header = JSON.parse(headerLine) as { type?: string; id?: string };
+  expect(header.type).toBe("session");
+  expect(header.id).toBe(created.payload?.sessionId);
 });
 
 test("sessions.create accepts an explicit key for persistent dashboard sessions", async () => {
@@ -136,6 +133,55 @@ test("sessions.create scopes the main alias to the requested agent", async () =>
   >;
   expect(rawStore["agent:longmemeval:main"]?.sessionId).toBe(created.payload?.sessionId);
   expect(rawStore["agent:main:main"]).toBeUndefined();
+});
+
+test("sessions.create replaces a dead main entry with a fresh session id", async () => {
+  const { storePath } = await createSessionStoreDir();
+  testState.agentsConfig = { list: [{ id: "ops", default: true }] };
+  try {
+    await writeSessionStore({
+      agentId: "ops",
+      entries: {
+        main: {
+          updatedAt: 1,
+          label: "Ops Main",
+          sessionFile: "stale.jsonl",
+        },
+      },
+    });
+
+    const created = await directSessionReq<{
+      key?: string;
+      sessionId?: string;
+      entry?: {
+        label?: string;
+        sessionFile?: string;
+      };
+    }>("sessions.create", {
+      key: "main",
+      agentId: "ops",
+    });
+
+    expect(created.ok).toBe(true);
+    expect(created.payload?.key).toBe("agent:ops:main");
+    expect(created.payload?.sessionId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
+    expect(created.payload?.entry?.label).toBe("Ops Main");
+    expect(created.payload?.entry?.sessionFile).not.toBe("stale.jsonl");
+
+    const rawStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      {
+        sessionId?: string;
+        sessionFile?: string;
+      }
+    >;
+    expect(rawStore["agent:ops:main"]?.sessionId).toBe(created.payload?.sessionId);
+    expect(rawStore["agent:ops:main"]?.sessionFile).not.toBe("stale.jsonl");
+  } finally {
+    testState.agentsConfig = undefined;
+  }
 });
 
 test("sessions.create preserves global and unknown sentinel keys", async () => {

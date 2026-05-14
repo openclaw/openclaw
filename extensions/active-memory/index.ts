@@ -11,7 +11,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultModelForAgent,
 } from "openclaw/plugin-sdk/agent-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   resolveLivePluginConfigObject,
   resolvePluginConfigObject,
@@ -224,7 +224,7 @@ type ActiveMemorySearchDebug = {
 
 type ActiveRecallResult =
   | {
-      status: "empty" | "timeout" | "unavailable";
+      status: "empty" | "failed" | "no_relevant_memory" | "timeout" | "unavailable";
       elapsedMs: number;
       summary: string | null;
       searchDebug?: ActiveMemorySearchDebug;
@@ -256,12 +256,13 @@ type TranscriptReadLimits = {
 
 type RecallSubagentResult = {
   rawReply: string;
+  resultStatus?: "failed" | "unavailable";
   transcriptPath?: string;
   searchDebug?: ActiveMemorySearchDebug;
 };
 
 type TerminalMemorySearchResult = {
-  status: "empty";
+  status: "unavailable";
   searchDebug?: ActiveMemorySearchDebug;
 };
 
@@ -1173,7 +1174,9 @@ function resolveChatType(ctx: {
   channelId?: string;
   mainKey?: string;
 }): ActiveMemoryChatType | undefined {
-  const sessionKey = ctx.sessionKey?.trim().toLowerCase();
+  const rawSessionKey = ctx.sessionKey?.trim();
+  const { baseSessionKey } = parseThreadSessionSuffix(rawSessionKey);
+  const sessionKey = (baseSessionKey ?? rawSessionKey)?.trim().toLowerCase();
   if (sessionKey) {
     if (sessionKey.startsWith("agent:") && sessionKey.split(":")[2] === "explicit") {
       return "explicit";
@@ -1400,7 +1403,11 @@ function toSingleLineLogValue(value: unknown): string {
 }
 
 function shouldCacheResult(result: ActiveRecallResult): boolean {
-  return result.status === "ok" || result.status === "empty";
+  return result.status === "ok" && result.summary.length > 0;
+}
+
+function isUnavailableMemorySearchDebug(debug?: ActiveMemorySearchDebug): boolean {
+  return Boolean(debug?.error);
 }
 
 function resolveStatusUpdateAgentId(ctx: { agentId?: string; sessionKey?: string }): string {
@@ -1741,15 +1748,10 @@ function extractTerminalMemorySearchResultFromSessionRecord(
   }
   const details = asRecord(message.details);
   const debug = extractActiveMemorySearchDebugFromSessionRecord(value);
-  const results = Array.isArray(details?.results) ? details.results : undefined;
   const disabled = details?.disabled === true;
-  const unavailable =
-    disabled || Boolean(debug?.warning) || Boolean(debug?.error) || Boolean(details?.error);
-  const debugHits =
-    typeof debug?.hits === "number" && Number.isFinite(debug.hits) ? debug.hits : undefined;
-  const zeroHitSearch = results !== undefined ? results.length === 0 : debugHits === 0;
-  if (unavailable || zeroHitSearch) {
-    return { status: "empty", searchDebug: debug };
+  const unavailable = disabled || Boolean(debug?.error) || Boolean(details?.error);
+  if (unavailable) {
+    return { status: "unavailable", searchDebug: debug };
   }
   return undefined;
 }
@@ -2038,21 +2040,23 @@ async function buildTimeoutRecallResult(params: {
     normalizeActiveSummary(rawReply ?? "") ?? "",
     params.maxSummaryChars,
   );
+  const searchDebug =
+    params.searchDebug ??
+    subagentPartialData.searchDebug ??
+    (params.sessionFile ? await readActiveMemorySearchDebug(params.sessionFile) : undefined);
   if (summary.length === 0) {
     return {
       status: "timeout",
       elapsedMs: params.elapsedMs,
       summary: null,
+      searchDebug,
     };
   }
   return {
     status: "timeout_partial",
     elapsedMs: params.elapsedMs,
     summary,
-    searchDebug:
-      params.searchDebug ??
-      subagentPartialData.searchDebug ??
-      (params.sessionFile ? await readActiveMemorySearchDebug(params.sessionFile) : undefined),
+    searchDebug,
   };
 }
 
@@ -2564,7 +2568,7 @@ async function runRecallSubagent(params: {
   } catch (error) {
     if (params.abortSignal?.aborted) {
       const partialReply = await readPartialAssistantText(sessionFile);
-      const searchDebug = partialReply ? await readActiveMemorySearchDebug(sessionFile) : undefined;
+      const searchDebug = await readActiveMemorySearchDebug(sessionFile);
       attachPartialTimeoutData(error, partialReply, searchDebug);
     }
     if (
@@ -2574,14 +2578,14 @@ async function runRecallSubagent(params: {
       params.api.logger.debug?.(
         `active-memory: no configured memory tools available; skipping sub-agent`,
       );
-      return { rawReply: "NONE" };
+      return { rawReply: "NONE", resultStatus: "unavailable" };
     }
     if (!params.abortSignal?.aborted) {
       const message = toSingleLineLogValue(error instanceof Error ? error.message : String(error));
       params.api.logger.warn?.(
         `active-memory: memory sub-agent failed, skipping recall: ${message}`,
       );
-      return { rawReply: "NONE" };
+      return { rawReply: "NONE", resultStatus: "failed" };
     }
     throw error;
   } finally {
@@ -2777,7 +2781,7 @@ async function maybeResolveActiveRecall(params: {
       return result;
     }
 
-    const { rawReply, transcriptPath, searchDebug } = raceResult;
+    const { rawReply, resultStatus, transcriptPath, searchDebug } = raceResult;
     const summary = truncateSummary(
       normalizeActiveSummary(rawReply) ?? "",
       params.config.maxSummaryChars,
@@ -2794,12 +2798,26 @@ async function maybeResolveActiveRecall(params: {
             summary,
             searchDebug,
           }
-        : {
-            status: "empty",
-            elapsedMs: Date.now() - startedAt,
-            summary: null,
-            searchDebug,
-          };
+        : resultStatus === "failed"
+          ? {
+              status: "failed",
+              elapsedMs: Date.now() - startedAt,
+              summary: null,
+              searchDebug,
+            }
+          : resultStatus === "unavailable" || isUnavailableMemorySearchDebug(searchDebug)
+            ? {
+                status: "unavailable",
+                elapsedMs: Date.now() - startedAt,
+                summary: null,
+                searchDebug,
+              }
+            : {
+                status: "no_relevant_memory",
+                elapsedMs: Date.now() - startedAt,
+                summary: null,
+                searchDebug,
+              };
     if (params.config.logging) {
       params.api.logger.info?.(
         `${logPrefix} done status=${result.status} elapsedMs=${String(result.elapsedMs)} summaryChars=${String(result.summary?.length ?? 0)}`,
@@ -2849,7 +2867,7 @@ async function maybeResolveActiveRecall(params: {
       params.api.logger.warn?.(`${logPrefix} failed error=${message}; skipping recall`);
     }
     const result: ActiveRecallResult = {
-      status: "empty",
+      status: "failed",
       elapsedMs: Date.now() - startedAt,
       summary: null,
     };
@@ -2939,19 +2957,23 @@ export default definePluginEntry({
             };
           }
           if (action === "on" || action === "enable" || action === "enabled") {
-            const nextConfig = updateActiveMemoryGlobalEnabledInConfig(currentConfig, true);
-            await api.runtime.config.replaceConfigFile({
-              nextConfig,
+            await api.runtime.config.mutateConfigFile({
               afterWrite: { mode: "auto" },
+              mutate: (draft) => {
+                const nextConfig = updateActiveMemoryGlobalEnabledInConfig(draft, true);
+                Object.assign(draft, nextConfig);
+              },
             });
             refreshLiveConfigFromRuntime();
             return { text: "Active Memory: on globally." };
           }
           if (action === "off" || action === "disable" || action === "disabled") {
-            const nextConfig = updateActiveMemoryGlobalEnabledInConfig(currentConfig, false);
-            await api.runtime.config.replaceConfigFile({
-              nextConfig,
+            await api.runtime.config.mutateConfigFile({
               afterWrite: { mode: "auto" },
+              mutate: (draft) => {
+                const nextConfig = updateActiveMemoryGlobalEnabledInConfig(draft, false);
+                Object.assign(draft, nextConfig);
+              },
             });
             refreshLiveConfigFromRuntime();
             return { text: "Active Memory: off globally." };

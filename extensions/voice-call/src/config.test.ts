@@ -250,6 +250,31 @@ describe("validateProviderConfig", () => {
         "plugins.entries.voice-call.config.realtime.enabled and plugins.entries.voice-call.config.streaming.enabled cannot both be true",
       );
     });
+
+    it("accepts realtime.enabled with provider=telnyx", () => {
+      const config = createBaseConfig("telnyx");
+      config.realtime.enabled = true;
+      config.inboundPolicy = "allowlist";
+
+      const result = validateProviderConfig(config);
+
+      expect(result.errors).not.toContain(
+        'plugins.entries.voice-call.config.provider must be "twilio" or "telnyx" when realtime.enabled is true',
+      );
+    });
+
+    it("rejects realtime.enabled with providers that do not support it yet", () => {
+      const config = createBaseConfig("plivo");
+      config.realtime.enabled = true;
+      config.inboundPolicy = "allowlist";
+
+      const result = validateProviderConfig(config);
+
+      expect(result.valid).toBe(false);
+      expect(result.errors).toContain(
+        'plugins.entries.voice-call.config.provider must be "twilio" or "telnyx" when realtime.enabled is true',
+      );
+    });
   });
 });
 
@@ -396,6 +421,8 @@ describe("normalizeVoiceCallConfig", () => {
       sources: ["memory", "sessions"],
       fallbackToConsult: false,
     });
+    expect(normalized.realtime.consultThinkingLevel).toBeUndefined();
+    expect(normalized.realtime.consultFastMode).toBeUndefined();
     expect(normalized.realtime.agentContext).toEqual({
       enabled: false,
       maxChars: 6000,
@@ -466,6 +493,32 @@ describe("resolveVoiceCallConfig realtime settings", () => {
     expect(resolved.realtime.toolPolicy).toBe("safe-read-only");
     expect(resolved.realtime.consultPolicy).toBe("auto");
     expect(resolved.realtime.provider).toBeUndefined();
+  });
+
+  it("preserves configured realtime consult overrides", () => {
+    const resolved = resolveVoiceCallConfig({
+      enabled: true,
+      provider: "mock",
+      realtime: {
+        consultThinkingLevel: "low",
+        consultFastMode: true,
+      },
+    });
+
+    expect(resolved.realtime.consultThinkingLevel).toBe("low");
+    expect(resolved.realtime.consultFastMode).toBe(true);
+  });
+
+  it("rejects invalid realtime consult thinking levels", () => {
+    expect(() =>
+      resolveVoiceCallConfig({
+        enabled: true,
+        provider: "mock",
+        realtime: {
+          consultThinkingLevel: "turbo",
+        },
+      } as never),
+    ).toThrow(/Invalid option/);
   });
 
   it("leaves responseModel unset so voice responses can inherit runtime defaults", () => {

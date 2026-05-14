@@ -30,19 +30,23 @@ import {
 } from "openclaw/plugin-sdk/channel-streaming";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
+  type ChannelBotLoopProtectionFacts,
   type ChannelTurnRecordOptions,
   hasVisibleInboundReplyDispatch,
   runInboundReplyTurn,
 } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { resolveAgentOutboundIdentity } from "openclaw/plugin-sdk/outbound-runtime";
+import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
 import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-history";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, shouldLogVerbose, sleep } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { reactSlackMessage, removeSlackReaction } from "../../actions.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
+import { formatSlackError } from "../../errors.js";
 import { normalizeSlackOutboundText } from "../../format.js";
 import {
   compileSlackInteractiveReplies,
@@ -61,6 +65,7 @@ import {
   stopSlackStream,
 } from "../../streaming.js";
 import { resolveSlackThreadTargets } from "../../threading.js";
+import type { SlackMessageEvent } from "../../types.js";
 import { normalizeSlackAllowOwnerEntry } from "../allow-list.js";
 import { resolveStorePath, updateLastRoute } from "../config.runtime.js";
 import { recordInboundSession } from "../conversation.runtime.js";
@@ -99,10 +104,51 @@ const UNICODE_TO_SLACK: Record<string, string> = {
   "⏳": "hourglass_flowing_sand",
   "⚠️": "warning",
   "✍": "writing_hand",
+  "🗜️": "compression",
+  "🗜": "compression",
   "🧠": "brain",
   "🛠️": "hammer_and_wrench",
   "💻": "computer",
 };
+
+function resolveSlackMessageTimestampMs(message: SlackMessageEvent): number | undefined {
+  const ts = message.event_ts ?? message.ts;
+  if (!ts) {
+    return undefined;
+  }
+  const parsed = Number(ts);
+  return Number.isFinite(parsed) ? Math.trunc(parsed * 1000) : undefined;
+}
+
+function resolveSlackBotLoopProtection(
+  prepared: PreparedSlackMessage,
+): ChannelBotLoopProtectionFacts | undefined {
+  const senderBotId = prepared.message.bot_id;
+  if (!senderBotId) {
+    return undefined;
+  }
+  const receiverBotId = prepared.ctx.botId || prepared.ctx.botUserId;
+  if (
+    !receiverBotId ||
+    senderBotId === prepared.ctx.botId ||
+    prepared.message.user === prepared.ctx.botUserId
+  ) {
+    return undefined;
+  }
+  return {
+    scopeId: prepared.route.accountId,
+    conversationId: prepared.message.channel,
+    senderId: senderBotId,
+    receiverId: receiverBotId,
+    config: mergePairLoopGuardConfig(
+      prepared.account.config.botLoopProtection,
+      prepared.channelConfig?.botLoopProtection,
+    ),
+    defaultsConfig: prepared.ctx.cfg.channels?.defaults?.botLoopProtection,
+    defaultEnabled: true,
+    nowMs: resolveSlackMessageTimestampMs(prepared.message),
+  };
+}
 
 function toSlackEmojiName(emoji: string): string {
   let trimmed = emoji.trim();
@@ -331,7 +377,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     } else {
       await updateLastRoute({
         storePath,
-        sessionKey: route.mainSessionKey,
+        sessionKey: resolveInboundLastRouteSessionKey({
+          route,
+          sessionKey: prepared.ctxPayload.SessionKey ?? route.sessionKey,
+        }),
         deliveryContext: {
           channel: "slack",
           to: `user:${message.user}`,
@@ -790,7 +839,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         return;
       }
       runtime.error?.(
-        danger(`slack-stream: streaming API call failed: ${formatErrorMessage(err)}, falling back`),
+        danger(`slack-stream: streaming API call failed: ${formatSlackError(err)}, falling back`),
       );
       streamFailed = true;
       // Non-benign streaming errors leave `pendingText` populated with every
@@ -893,7 +942,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           },
           logPreviewEditFailure: (err) => {
             logVerbose(
-              `slack: preview final edit failed; falling back to standard send (${formatErrorMessage(err)})`,
+              `slack: preview final edit failed; falling back to standard send (${formatSlackError(err)})`,
             );
           },
         }),
@@ -910,7 +959,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       }
     },
     onError: (err, info) => {
-      runtime.error?.(danger(`slack ${info.kind} reply failed: ${formatErrorMessage(err)}`));
+      runtime.error?.(danger(`slack ${info.kind} reply failed: ${formatSlackError(err)}`));
       replyPipeline.typingCallbacks?.onIdle?.();
     },
   });
@@ -921,6 +970,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         cfg,
         token: ctx.botToken,
         accountId: account.accountId,
+        identity: slackIdentity,
         maxChars: Math.min(ctx.textLimit, SLACK_TEXT_LIMIT),
         resolveThreadTs: () => {
           const ts = replyPlan.peekThreadTs();
@@ -1125,6 +1175,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           ctxPayload: prepared.ctxPayload,
           recordInboundSession,
           record: prepared.turn.record as ChannelTurnRecordOptions,
+          botLoopProtection: resolveSlackBotLoopProtection(prepared),
           onPreDispatchFailure: async () => {
             dispatchSettledBeforeStart = true;
             await settleReplyDispatcher({
@@ -1260,12 +1311,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         }),
       },
     });
-    if (!turnResult.dispatched) {
-      return;
+    if (turnResult.dispatched) {
+      const result = turnResult.dispatchResult;
+      queuedFinal = result.queuedFinal;
+      counts = result.counts;
     }
-    const result = turnResult.dispatchResult;
-    queuedFinal = result.queuedFinal;
-    counts = result.counts;
   } catch (err) {
     dispatchError = err;
   } finally {
@@ -1288,7 +1338,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       if (err instanceof SlackStreamNotDeliveredError) {
         streamFallbackDelivered = await deliverPendingStreamFallback(finalStream, err);
       } else {
-        runtime.error?.(danger(`slack-stream: failed to stop stream: ${formatErrorMessage(err)}`));
+        runtime.error?.(danger(`slack-stream: failed to stop stream: ${formatSlackError(err)}`));
       }
     }
   }
@@ -1345,7 +1395,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
 
   if (!anyReplyDelivered) {
     await draftStream?.clear();
-    if (prepared.isRoomish) {
+    if (prepared.isRoomish && prepared.requireMention) {
       clearHistoryEntriesIfEnabled({
         historyMap: ctx.channelHistories,
         historyKey: prepared.historyKey,
@@ -1388,7 +1438,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     });
   }
 
-  if (prepared.isRoomish) {
+  if (prepared.isRoomish && prepared.requireMention) {
     clearHistoryEntriesIfEnabled({
       historyMap: ctx.channelHistories,
       historyKey: prepared.historyKey,

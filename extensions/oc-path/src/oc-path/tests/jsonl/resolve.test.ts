@@ -30,7 +30,10 @@ describe("resolveJsonlOcPath", () => {
     const m = rs("oc://session-events/L2/event");
     expect(m?.kind).toBe("object-entry");
     if (m?.kind === "object-entry") {
-      expect(m.node.value).toMatchObject({ kind: "string", value: "step" });
+      expect(m.node.value.kind).toBe("string");
+      if (m.node.value.kind === "string") {
+        expect(m.node.value.value).toBe("step");
+      }
     }
   });
 
@@ -38,7 +41,10 @@ describe("resolveJsonlOcPath", () => {
     const m = rs("oc://session-events/L2/result.ok");
     expect(m?.kind).toBe("object-entry");
     if (m?.kind === "object-entry") {
-      expect(m.node.value).toMatchObject({ kind: "boolean", value: true });
+      expect(m.node.value.kind).toBe("boolean");
+      if (m.node.value.kind === "boolean") {
+        expect(m.node.value.value).toBe(true);
+      }
     }
   });
 
@@ -46,7 +52,10 @@ describe("resolveJsonlOcPath", () => {
     const m = rs("oc://session-events/$last/event");
     expect(m?.kind).toBe("object-entry");
     if (m?.kind === "object-entry") {
-      expect(m.node.value).toMatchObject({ kind: "string", value: "end" });
+      expect(m.node.value.kind).toBe("string");
+      if (m.node.value.kind === "string") {
+        expect(m.node.value.value).toBe("end");
+      }
     }
   });
 
@@ -78,19 +87,19 @@ describe("resolveJsonlToUniversal — file-relative line metadata (regression)",
   it("resolves L2/event with line=2 (not 1)", () => {
     const { ast } = parseJsonl(log);
     const m = resolveOcPath(ast, parseOcPath("oc://session.jsonl/L2/event"));
-    expect(m).not.toBeNull();
-    if (m !== null) {
-      expect(m.line).toBe(2);
+    if (m === null) {
+      throw new Error("expected L2/event match");
     }
+    expect(m.line).toBe(2);
   });
 
   it("resolves L4/event with line=4", () => {
     const { ast } = parseJsonl(log);
     const m = resolveOcPath(ast, parseOcPath("oc://session.jsonl/L4/event"));
-    expect(m).not.toBeNull();
-    if (m !== null) {
-      expect(m.line).toBe(4);
+    if (m === null) {
+      throw new Error("expected L4/event match");
     }
+    expect(m.line).toBe(4);
   });
 
   it("findOcPaths over wildcard surfaces correct file-relative lines", () => {

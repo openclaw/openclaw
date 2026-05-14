@@ -117,6 +117,36 @@ describe("video-generation runtime", () => {
     ]);
   });
 
+  it("uses configured video-generation timeout when call omits timeoutMs", async () => {
+    let seenTimeoutMs: number | undefined;
+    providers = [
+      {
+        id: "video-plugin",
+        capabilities: {},
+        async generateVideo(req: { timeoutMs?: number }) {
+          seenTimeoutMs = req.timeoutMs;
+          return {
+            videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
+            model: "vid-v1",
+          };
+        },
+      },
+    ];
+
+    await runGenerateVideo({
+      cfg: {
+        agents: {
+          defaults: {
+            videoGenerationModel: { primary: "video-plugin/vid-v1", timeoutMs: 300_000 },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "animate a cat",
+    });
+
+    expect(seenTimeoutMs).toBe(300_000);
+  });
+
   it("does not list providers when explicit config disables auto provider fallback", async () => {
     const provider: VideoGenerationProvider = {
       id: "video-plugin",
@@ -424,8 +454,8 @@ describe("video-generation runtime", () => {
     });
     expect(seenCapabilityLookupTimeoutMs).toBe(5_000);
     expect(seenSupportedDurationHint).toEqual([5]);
-    expect(result.ignoredOverrides).toContainEqual({ key: "audio", value: true });
-    expect(result.normalization).toMatchObject({
+    expect(result.ignoredOverrides).toEqual([{ key: "audio", value: true }]);
+    expect(result.normalization).toEqual({
       durationSeconds: {
         requested: 6,
         applied: 5,
@@ -816,18 +846,12 @@ describe("video-generation runtime", () => {
     });
 
     expect(seenDurationSeconds).toBe(6);
-    expect(result.normalization).toMatchObject({
-      durationSeconds: {
-        requested: 5,
-        applied: 6,
-        supportedValues: [4, 6, 8],
-      },
-    });
-    expect(result.metadata).toMatchObject({
-      requestedDurationSeconds: 5,
-      normalizedDurationSeconds: 6,
-      supportedDurationSeconds: [4, 6, 8],
-    });
+    expect(result.normalization?.durationSeconds?.requested).toBe(5);
+    expect(result.normalization?.durationSeconds?.applied).toBe(6);
+    expect(result.normalization?.durationSeconds?.supportedValues).toEqual([4, 6, 8]);
+    expect(result.metadata?.requestedDurationSeconds).toBe(5);
+    expect(result.metadata?.normalizedDurationSeconds).toBe(6);
+    expect(result.metadata?.supportedDurationSeconds).toEqual([4, 6, 8]);
     expect(result.ignoredOverrides).toStrictEqual([]);
   });
 
@@ -931,16 +955,10 @@ describe("video-generation runtime", () => {
 
     expect(seenResolution).toBe("768P");
     expect(result.ignoredOverrides).toStrictEqual([]);
-    expect(result.normalization).toMatchObject({
-      resolution: {
-        requested: "720P",
-        applied: "768P",
-      },
-    });
-    expect(result.metadata).toMatchObject({
-      requestedResolution: "720P",
-      normalizedResolution: "768P",
-    });
+    expect(result.normalization?.resolution?.requested).toBe("720P");
+    expect(result.normalization?.resolution?.applied).toBe("768P");
+    expect(result.metadata?.requestedResolution).toBe("720P");
+    expect(result.metadata?.normalizedResolution).toBe("768P");
   });
 
   it("ignores unparseable video resolutions instead of sending them to providers", async () => {
@@ -1037,17 +1055,11 @@ describe("video-generation runtime", () => {
       resolution: undefined,
     });
     expect(result.ignoredOverrides).toStrictEqual([]);
-    expect(result.normalization).toMatchObject({
-      aspectRatio: {
-        applied: "16:9",
-        derivedFrom: "size",
-      },
-    });
-    expect(result.metadata).toMatchObject({
-      requestedSize: "1280x720",
-      normalizedAspectRatio: "16:9",
-      aspectRatioDerivedFromSize: "16:9",
-    });
+    expect(result.normalization?.aspectRatio?.applied).toBe("16:9");
+    expect(result.normalization?.aspectRatio?.derivedFrom).toBe("size");
+    expect(result.metadata?.requestedSize).toBe("1280x720");
+    expect(result.metadata?.normalizedAspectRatio).toBe("16:9");
+    expect(result.metadata?.aspectRatioDerivedFromSize).toBe("16:9");
   });
 
   it("builds a generic config hint without hardcoded provider ids", async () => {

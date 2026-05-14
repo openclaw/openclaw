@@ -44,9 +44,10 @@ describe("legacy migrate provider-shaped config", () => {
       changes,
     );
 
-    expect(changes).toContain(
+    expect(changes).toStrictEqual([
+      "Normalized talk.provider/providers shape (trimmed provider ids and merged missing compatibility fields).",
       "Moved legacy realtime Talk provider/model fields into talk.realtime.",
-    );
+    ]);
     expect(migrated.talk).toEqual({
       provider: "openai",
       providers: {
@@ -112,9 +113,9 @@ describe("legacy migrate provider-shaped config", () => {
       },
     });
 
-    expect(res.changes).toContain(
+    expect(res.changes).toStrictEqual([
       "Moved messages.tts.elevenlabs → messages.tts.providers.elevenlabs.",
-    );
+    ]);
     expect(res.config?.messages?.tts).toEqual({
       provider: "elevenlabs",
       providers: {
@@ -145,10 +146,10 @@ describe("legacy migrate provider-shaped config", () => {
       },
     });
 
-    expect(res.changes).toContain('Moved messages.tts.provider "edge" → "microsoft".');
-    expect(res.changes).toContain(
+    expect(res.changes).toStrictEqual([
+      'Moved messages.tts.provider "edge" → "microsoft".',
       "Moved messages.tts.providers.edge → messages.tts.providers.microsoft.",
-    );
+    ]);
     expect(res.config?.messages?.tts).toEqual({
       provider: "microsoft",
       providers: {
@@ -219,28 +220,33 @@ describe("legacy migrate provider-shaped config", () => {
       'Moved channels.discord.accounts.primary.tts.enabled → channels.discord.accounts.primary.tts.auto "off".',
       'Moved plugins.entries.voice-call.config.tts.enabled → plugins.entries.voice-call.config.tts.auto "always".',
     ]);
-    expect(res.config).toMatchObject({
-      messages: { tts: { auto: "always" } },
-      agents: {
-        defaults: { tts: { auto: "off" } },
-        list: [{ id: "voice-agent", tts: { auto: "tagged" } }],
-      },
-      channels: {
-        discord: {
-          tts: { auto: "always" },
-          accounts: { primary: { tts: { auto: "off" } } },
-        },
-      },
-      plugins: {
-        entries: {
-          "voice-call": {
-            config: {
-              tts: { auto: "always" },
-            },
-          },
-        },
-      },
+    const migratedConfig = res.config as
+      | {
+          messages?: { tts?: { auto?: unknown } };
+          agents?: {
+            defaults?: { tts?: { auto?: unknown } };
+            list?: Array<{ id?: string; tts?: { auto?: unknown } }>;
+          };
+          channels?: {
+            discord?: {
+              tts?: { auto?: unknown };
+              accounts?: { primary?: { tts?: { auto?: unknown } } };
+            };
+          };
+          plugins?: {
+            entries?: Record<string, { config?: { tts?: { auto?: unknown } } }>;
+          };
+        }
+      | undefined;
+    expect(migratedConfig?.messages?.tts?.auto).toBe("always");
+    expect(migratedConfig?.agents?.defaults?.tts?.auto).toBe("off");
+    expect(migratedConfig?.agents?.list?.[0]).toEqual({
+      id: "voice-agent",
+      tts: { auto: "tagged" },
     });
+    expect(migratedConfig?.channels?.discord?.tts?.auto).toBe("always");
+    expect(migratedConfig?.channels?.discord?.accounts?.primary?.tts?.auto).toBe("off");
+    expect(migratedConfig?.plugins?.entries?.["voice-call"]?.config?.tts?.auto).toBe("always");
   });
 
   it("moves plugins.entries.voice-call.config.tts.<provider> keys into providers", () => {
@@ -262,9 +268,9 @@ describe("legacy migrate provider-shaped config", () => {
       },
     });
 
-    expect(res.changes).toContain(
+    expect(res.changes).toStrictEqual([
       "Moved plugins.entries.voice-call.config.tts.openai → plugins.entries.voice-call.config.tts.providers.openai.",
-    );
+    ]);
     const voiceCallTts = (
       res.config?.plugins?.entries as
         | Record<string, { config?: { tts?: Record<string, unknown> } }>
@@ -301,12 +307,10 @@ describe("legacy migrate provider-shaped config", () => {
       },
     });
 
-    expect(res.changes).toContain(
+    expect(res.changes).toStrictEqual([
       'Moved plugins.entries.voice-call.config.tts.provider "edge" → "microsoft".',
-    );
-    expect(res.changes).toContain(
       "Moved plugins.entries.voice-call.config.tts.providers.edge → plugins.entries.voice-call.config.tts.providers.microsoft.",
-    );
+    ]);
     const voiceCallTts = (
       res.config?.plugins?.entries as
         | Record<string, { config?: { tts?: Record<string, unknown> } }>

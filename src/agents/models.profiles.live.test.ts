@@ -6,7 +6,7 @@ import {
   getProviders,
   type KnownProvider,
   type Model,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { getRuntimeConfig } from "../config/config.js";
@@ -273,6 +273,14 @@ describe("isProviderUnavailableErrorMessage", () => {
       isProviderUnavailableErrorMessage("provider returned error: 502 Internal Server Error"),
     ).toBe(true);
   });
+
+  it("matches xAI temporary capacity errors", () => {
+    expect(
+      isProviderUnavailableErrorMessage(
+        "Service temporarily unavailable. The model is at capacity and currently cannot serve this request. Please try again later.",
+      ),
+    ).toBe(true);
+  });
 });
 
 function isChatGPTUsageLimitErrorMessage(raw: string): boolean {
@@ -314,6 +322,7 @@ function isProviderUnavailableErrorMessage(raw: string): boolean {
     msg.includes("upstream provider unavailable") ||
     msg.includes("upstream error from google") ||
     msg.includes("temporarily rate-limited upstream") ||
+    (msg.includes("service temporarily unavailable") && msg.includes("capacity")) ||
     msg.includes("unable to access non-serverless model") ||
     msg.includes("create and start a new dedicated endpoint") ||
     msg.includes("no available capacity was found for the model") ||
@@ -535,6 +544,34 @@ async function completeSimpleWithTimeout<TApi extends Api>(
     }
   }
 }
+
+function requireToolChoicePayload(payload: unknown): unknown {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return undefined;
+  }
+  const candidate = payload as { tools?: unknown; tool_choice?: unknown };
+  if (!Array.isArray(candidate.tools) || candidate.tools.length === 0) {
+    return undefined;
+  }
+  return {
+    ...candidate,
+    tool_choice: { type: "function", name: "noop" },
+  };
+}
+
+describe("requireToolChoicePayload", () => {
+  it("requires tool use when a Responses payload has tools", () => {
+    expect(requireToolChoicePayload({ model: "gpt", tools: [{ name: "noop" }] })).toEqual({
+      model: "gpt",
+      tools: [{ name: "noop" }],
+      tool_choice: { type: "function", name: "noop" },
+    });
+  });
+
+  it("leaves payloads without tools unchanged", () => {
+    expect(requireToolChoicePayload({ model: "gpt", tools: [] })).toBeUndefined();
+  });
+});
 
 async function completeOkWithRetry(params: {
   model: Model<Api>;
@@ -973,6 +1010,7 @@ describeLive("live models (profile keys)", () => {
                   apiKey,
                   reasoning: resolveTestReasoning(model),
                   maxTokens: 128,
+                  onPayload: requireToolChoicePayload,
                 },
                 perModelTimeoutMs,
                 `${progressLabel}: tool-only regression first call`,
@@ -1003,6 +1041,7 @@ describeLive("live models (profile keys)", () => {
                     apiKey,
                     reasoning: resolveTestReasoning(model),
                     maxTokens: 128,
+                    onPayload: requireToolChoicePayload,
                   },
                   perModelTimeoutMs,
                   `${progressLabel}: tool-only regression retry ${i + 1}`,
@@ -1016,6 +1055,11 @@ describeLive("live models (profile keys)", () => {
                   .trim();
               }
 
+              if (first.stopReason === "error") {
+                throw new Error(
+                  first.errorMessage || "tool-only regression returned error with no message",
+                );
+              }
               expect(firstText.length).toBe(0);
               if (!toolCall || toolCall.type !== "toolCall") {
                 throw new Error("expected tool call");

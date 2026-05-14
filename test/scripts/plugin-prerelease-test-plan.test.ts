@@ -72,7 +72,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
 
     expect(plan.dockerLanes).not.toContain("openai-web-search-minimal");
     expect(plan.dockerLanes.some((lane) => lane.startsWith("live-"))).toBe(false);
-    expect(plan.staticChecks).toContainEqual({
+    expect(plan.staticChecks[2]).toEqual({
       check: "live-ish-availability",
       checkName: "checks-plugin-prerelease-live-ish-availability",
       command: "node scripts/plugin-prerelease-liveish-matrix.mjs",
@@ -199,6 +199,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     const staticShard = pluginWorkflow.jobs["plugin-prerelease-static-shard"];
     const nodeShard = pluginWorkflow.jobs["plugin-prerelease-node-shard"];
     const extensionShard = pluginWorkflow.jobs["plugin-prerelease-extension-shard"];
+    const inspector = pluginWorkflow.jobs["plugin-prerelease-inspector"];
     const dockerSuite = pluginWorkflow.jobs["plugin-prerelease-docker-suite"];
     const suite = pluginWorkflow.jobs["plugin-prerelease-suite"];
     const releaseWorkflow = readFullReleaseValidationWorkflow();
@@ -216,13 +217,18 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     const pluginPrereleaseScript = releaseWorkflow.jobs.plugin_prerelease.steps.find(
       (step) => step.name === "Dispatch and monitor plugin prerelease",
     ).run;
+    const buildDistStep = workflow.jobs["build-artifacts"].steps.find(
+      (step) => step.name === "Build dist",
+    );
 
     expect(workflow.jobs["plugin-prerelease-static-shard"]).toBeUndefined();
+    expect(workflow.jobs["plugin-prerelease-inspector"]).toBeUndefined();
     expect(workflow.jobs["plugin-prerelease-docker-suite"]).toBeUndefined();
     expect(workflow.jobs["plugin-prerelease-suite"]).toBeUndefined();
     expect(workflow.jobs["checks-node-extensions-shard"]).toBeUndefined();
     expect(preflight.outputs).not.toHaveProperty("run_plugin_prerelease_suite");
     expect(preflight.outputs).not.toHaveProperty("run_checks_node_extensions");
+    expect(buildDistStep.env).toEqual({ NODE_OPTIONS: "--max-old-space-size=8192" });
     expect(staticShard).toEqual({
       if: "needs.preflight.outputs.run_plugin_prerelease_static == 'true'",
       name: "${{ matrix.check_name }}",
@@ -307,7 +313,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(manifestEnv).not.toHaveProperty("OPENCLAW_CI_FULL_RELEASE_VALIDATION");
     expect(manifestScript).toContain("includeReleaseOnlyPluginShards: false");
     expect(manifestScript).not.toContain("plugin-prerelease-test-plan.mjs");
-    expect(workflow.jobs["check-shard"].strategy.matrix.include).toContainEqual({
+    expect(workflow.jobs["check-shard"].strategy.matrix.include[3]).toEqual({
       check_name: "check-dependencies",
       task: "dependencies",
       runner: "ubuntu-24.04",
@@ -380,6 +386,39 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(extensionShard.strategy.matrix).toBe(
       "${{ fromJson(needs.preflight.outputs.plugin_prerelease_extension_matrix) }}",
     );
+    expect(inspector.name).toBe("plugin-prerelease-inspector");
+    expect(inspector.needs).toEqual(["preflight"]);
+    expect(inspector.if).toBe("needs.preflight.outputs.run_plugin_prerelease_suite == 'true'");
+    expect(inspector["continue-on-error"]).toBe(true);
+    expect(inspector["runs-on"]).toBe("ubuntu-24.04");
+    expect(inspector["timeout-minutes"]).toBe(30);
+    expect(inspector.steps.find((step) => step.name === "Setup Node environment").with).toEqual({
+      "install-bun": "false",
+    });
+    const inspectorRun = inspector.steps.find(
+      (step) => step.name === "Run plugin inspector advisory sweep",
+    );
+    expect(inspectorRun.env).toEqual({
+      OPENCLAW_PLUGIN_INSPECTOR_ROOT: ".artifacts/plugin-inspector",
+      OPENCLAW_PLUGIN_INSPECTOR_VERSION: "0.3.10",
+    });
+    expect(inspectorRun.run).toContain("extensions/");
+    expect(inspectorRun.run).toContain(
+      'npm exec --yes "@openclaw/plugin-inspector@${OPENCLAW_PLUGIN_INSPECTOR_VERSION}" -- ci',
+    );
+    expect(inspectorRun.run).toContain("This job is informational");
+    expect(
+      inspector.steps.find((step) => step.name === "Upload plugin inspector advisory artifacts"),
+    ).toEqual({
+      if: "always()",
+      name: "Upload plugin inspector advisory artifacts",
+      uses: "actions/upload-artifact@v7",
+      with: {
+        "if-no-files-found": "warn",
+        name: "plugin-inspector-advisory",
+        path: ".artifacts/plugin-inspector/**",
+      },
+    });
     expect(
       staticShard.steps.find((step) => step.name === "Run plugin prerelease static shard").run,
     ).toContain('bash -c "$PLUGIN_PRERELEASE_COMMAND"');
@@ -411,8 +450,12 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       "plugin-prerelease-static-shard",
       "plugin-prerelease-node-shard",
       "plugin-prerelease-extension-shard",
+      "plugin-prerelease-inspector",
       "plugin-prerelease-docker-suite",
     ]);
+    expect(
+      suite.steps.find((step) => step.name === "Verify plugin prerelease suite").run,
+    ).toContain("plugin-prerelease-inspector advisory result");
   });
 
   it("keeps release-check reruns independent while cancelling superseded umbrella runs", () => {

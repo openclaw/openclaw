@@ -51,6 +51,27 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
+function requireRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Expected a non-array record");
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireFirstRequestCall(request: ReturnType<typeof vi.fn>): unknown[] {
+  const [call] = request.mock.calls;
+  if (!call) {
+    throw new Error("Expected client request call");
+  }
+  return call;
+}
+
+function expectTextChatMessage(message: unknown, role: string, text: string): void {
+  const record = requireRecord(message);
+  expect(record.role).toBe(role);
+  expect(record.content).toEqual([{ type: "text", text }]);
+}
+
 function createActiveStreamingState() {
   return createState({
     sessionKey: "main",
@@ -135,6 +156,91 @@ describe("handleChatEvent", () => {
     expect(state.chatRunId).toBe(null);
     expect(state.chatStream).toBe(null);
     expect(state.chatStreamStartedAt).toBe(null);
+  });
+
+  it("reconciles cached run and indicator state on terminal events", () => {
+    vi.useFakeTimers();
+    try {
+      const state = createState({
+        sessionKey: "main",
+        chatRunId: "run-1",
+        chatStream: "Live reply",
+        chatStreamStartedAt: 100,
+      }) as ChatState & {
+        chatRunStatus?: unknown;
+        compactionStatus?: unknown;
+        compactionClearTimer?: ReturnType<typeof setTimeout> | null;
+        fallbackStatus?: unknown;
+        fallbackClearTimer?: ReturnType<typeof setTimeout> | null;
+        sessionsResult?: {
+          ts: number;
+          path: string;
+          count: number;
+          defaults: Record<string, unknown>;
+          sessions: Array<Record<string, unknown>>;
+        };
+      };
+      state.compactionStatus = {
+        phase: "active",
+        runId: "run-1",
+        startedAt: 100,
+        completedAt: null,
+      };
+      state.compactionClearTimer = setTimeout(() => undefined, 1_000);
+      state.fallbackStatus = {
+        selected: "openai/gpt-5.5",
+        active: "anthropic/claude-sonnet-4-6",
+        attempts: [],
+        occurredAt: 100,
+      };
+      state.fallbackClearTimer = setTimeout(() => undefined, 1_000);
+      state.sessionsResult = {
+        ts: 0,
+        path: "",
+        count: 1,
+        defaults: {},
+        sessions: [
+          {
+            key: "main",
+            kind: "direct",
+            updatedAt: 1,
+            hasActiveRun: true,
+            status: "running",
+            startedAt: 100,
+          },
+        ],
+      };
+      const payload: ChatEventPayload = {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Live reply" }],
+        },
+      };
+
+      expect(handleChatEvent(state, payload)).toBe("final");
+
+      expect(state.chatRunId).toBeNull();
+      expect(state.chatStream).toBeNull();
+      expect(state.chatStreamStartedAt).toBeNull();
+      expect(state.compactionStatus).toBeNull();
+      expect(state.compactionClearTimer).toBeNull();
+      expect(state.fallbackStatus).toBeNull();
+      expect(state.fallbackClearTimer).toBeNull();
+      expect(state.chatRunStatus).toMatchObject({
+        phase: "done",
+        runId: "run-1",
+        sessionKey: "main",
+      });
+      expect(state.sessionsResult.sessions[0]).toMatchObject({
+        hasActiveRun: false,
+        status: "done",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("still drops events when neither session key nor active run id matches", () => {
@@ -374,10 +480,7 @@ describe("handleChatEvent", () => {
     expect(state.chatStreamStartedAt).toBe(null);
     expect(state.chatMessages).toHaveLength(2);
     expect(state.chatMessages[0]).toEqual(existingMessage);
-    expect(state.chatMessages[1]).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "Here is my reply" }],
-    });
+    expectTextChatMessage(state.chatMessages[1], "assistant", "Here is my reply");
   });
 
   it("does not persist empty or whitespace-only stream on final", () => {
@@ -519,10 +622,7 @@ describe("handleChatEvent", () => {
     expect(state.chatStreamStartedAt).toBe(null);
     expect(state.chatMessages).toHaveLength(2);
     expect(state.chatMessages[0]).toEqual(existingMessage);
-    expect(state.chatMessages[1]).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "Partial reply" }],
-    });
+    expectTextChatMessage(state.chatMessages[1], "assistant", "Partial reply");
   });
 
   it("falls back to streamed partial when aborted payload has non-assistant role", () => {
@@ -550,10 +650,7 @@ describe("handleChatEvent", () => {
 
     expect(handleChatEvent(state, payload)).toBe("aborted");
     expect(state.chatMessages).toHaveLength(2);
-    expect(state.chatMessages[1]).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "Partial reply" }],
-    });
+    expectTextChatMessage(state.chatMessages[1], "assistant", "Partial reply");
   });
 
   it("processes aborted from own run without message and empty stream", () => {
@@ -871,14 +968,12 @@ describe("sendChatMessage", () => {
 
     expect(result).toMatch(UUID_V4_RE);
     expect(state.currentSessionId).toBe("session-before-reconnect");
-    expect(request).toHaveBeenLastCalledWith(
-      "chat.send",
-      expect.objectContaining({
-        sessionKey: "main",
-        sessionId: "session-before-reconnect",
-        message: "continue",
-      }),
-    );
+    const sendRequest = request.mock.calls[request.mock.calls.length - 1];
+    expect(sendRequest?.[0]).toBe("chat.send");
+    const sendParams = requireRecord(sendRequest?.[1]);
+    expect(sendParams.sessionKey).toBe("main");
+    expect(sendParams.sessionId).toBe("session-before-reconnect");
+    expect(sendParams.message).toBe("continue");
   });
 
   it("serializes non-image chat attachments as files", async () => {
@@ -898,34 +993,32 @@ describe("sendChatMessage", () => {
     ]);
 
     expect(result).toMatch(UUID_V4_RE);
-    expect(request).toHaveBeenCalledWith(
-      "chat.send",
-      expect.objectContaining({
-        message: "summarize",
-        attachments: [
-          {
-            type: "file",
-            mimeType: "application/pdf",
-            fileName: "brief.pdf",
-            content: Buffer.from("%PDF-1.4\n").toString("base64"),
-          },
-        ],
-      }),
-    );
-    expect(state.chatMessages[0]).toMatchObject({
-      role: "user",
-      content: [
-        { type: "text", text: "summarize" },
-        {
-          type: "attachment",
-          attachment: {
-            kind: "document",
-            label: "brief.pdf",
-            mimeType: "application/pdf",
-          },
-        },
-      ],
-    });
+    expect(request).toHaveBeenCalledTimes(1);
+    const [requestMethod, requestParams] = requireFirstRequestCall(request);
+    expect(requestMethod).toBe("chat.send");
+    const sendParams = requireRecord(requestParams);
+    expect(sendParams.message).toBe("summarize");
+    expect(sendParams.attachments).toEqual([
+      {
+        type: "file",
+        mimeType: "application/pdf",
+        fileName: "brief.pdf",
+        content: Buffer.from("%PDF-1.4\n").toString("base64"),
+      },
+    ]);
+    const userMessage = requireRecord(state.chatMessages[0]);
+    expect(userMessage.role).toBe("user");
+    const content = userMessage.content;
+    expect(Array.isArray(content)).toBe(true);
+    const contentParts = content as unknown[];
+    expect(contentParts).toHaveLength(2);
+    expect(contentParts[0]).toEqual({ type: "text", text: "summarize" });
+    const attachmentPart = requireRecord(contentParts[1]);
+    expect(attachmentPart.type).toBe("attachment");
+    const attachmentPreview = requireRecord(attachmentPart.attachment);
+    expect(attachmentPreview.kind).toBe("document");
+    expect(attachmentPreview.label).toBe("brief.pdf");
+    expect(attachmentPreview.mimeType).toBe("application/pdf");
   });
 
   it("serializes attachments from the side payload store without copying data URLs into chat state", async () => {
@@ -946,24 +1039,40 @@ describe("sendChatMessage", () => {
       dataUrl: `data:application/pdf;base64,${Buffer.from(pdfBytes).toString("base64")}`,
       file,
     });
+    const previewUrl = attachment.previewUrl;
+    expect(previewUrl).toMatch(/^blob:nodedata:/u);
 
     const result = await sendChatMessage(state, "summarize", [attachment]);
 
     expect(result).toMatch(UUID_V4_RE);
-    expect(request).toHaveBeenCalledWith(
-      "chat.send",
-      expect.objectContaining({
-        attachments: [
-          expect.objectContaining({
-            type: "file",
-            content: Buffer.from(pdfBytes).toString("base64"),
-          }),
+    expect(request).toHaveBeenCalledTimes(1);
+    const [requestMethod, requestParams] = requireFirstRequestCall(request);
+    expect(requestMethod).toBe("chat.send");
+    const sendParams = requireRecord(requestParams);
+    const attachments = sendParams.attachments;
+    expect(Array.isArray(attachments)).toBe(true);
+    const [attachmentParam] = attachments as unknown[];
+    const attachmentRecord = requireRecord(attachmentParam);
+    expect(attachmentRecord.type).toBe("file");
+    expect(attachmentRecord.content).toBe(Buffer.from(pdfBytes).toString("base64"));
+    expect(state.chatMessages).toStrictEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "summarize" },
+          {
+            type: "attachment",
+            attachment: {
+              url: previewUrl,
+              kind: "document",
+              label: "brief.pdf",
+              mimeType: "application/pdf",
+            },
+          },
         ],
-      }),
-    );
-    expect(JSON.stringify(state.chatMessages)).not.toContain(
-      Buffer.from(pdfBytes).toString("base64"),
-    );
+        timestamp: expect.any(Number),
+      },
+    ]);
   });
 
   it("formats structured non-auth connect failures for chat send", async () => {
@@ -981,17 +1090,18 @@ describe("sendChatMessage", () => {
 
     const result = await sendChatMessage(state, "hello");
 
+    const expectedError =
+      "origin not allowed (open the Control UI from the gateway host or allow it in gateway.controlUi.allowedOrigins)";
     expect(result).toBeNull();
-    expect(state.lastError).toContain("origin not allowed");
-    expect(state.chatMessages.at(-1)).toMatchObject({
-      role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: expect.stringContaining("origin not allowed"),
-        },
-      ],
-    });
+    expect(state.lastError).toBe(expectedError);
+    const assistantMessage = requireRecord(state.chatMessages.at(-1));
+    expect(assistantMessage.role).toBe("assistant");
+    const content = assistantMessage.content;
+    expect(Array.isArray(content)).toBe(true);
+    const [textPart] = content as unknown[];
+    const textRecord = requireRecord(textPart);
+    expect(textRecord.type).toBe("text");
+    expect(textRecord.text).toBe(`Error: ${expectedError}`);
   });
 });
 
@@ -1018,7 +1128,9 @@ describe("abortChatRun", () => {
       sessionKey: "main",
       runId: "run-1",
     });
-    expect(state.lastError).toContain("device identity required");
+    expect(state.lastError).toBe(
+      "device identity required (use HTTPS/localhost or allow insecure auth explicitly)",
+    );
   });
 });
 
@@ -1237,7 +1349,9 @@ describe("loadChatHistory retry handling", () => {
 
     expect(state.chatMessages).toStrictEqual([]);
     expect(state.chatThinkingLevel).toBeNull();
-    expect(state.lastError).toContain("operator.read");
+    expect(state.lastError).toBe(
+      "This connection is missing operator.read, so existing chat history cannot be loaded yet.",
+    );
     expect(state.chatLoading).toBe(false);
   });
 

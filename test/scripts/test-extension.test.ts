@@ -35,7 +35,11 @@ function runScript(args: string[], cwd = process.cwd()) {
 }
 
 function requireFirstMockArg<T>(mock: { mock: { calls: Array<[T, ...unknown[]]> } }): T {
-  const [arg] = mock.mock.calls[0] ?? [];
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error("expected first mock call argument");
+  }
+  const [arg] = call;
   if (arg === undefined) {
     throw new Error("expected first mock call argument");
   }
@@ -250,7 +254,7 @@ describe("scripts/test-extension.mjs", () => {
 
   it("can fail safe to all extensions when the base revision is unavailable", () => {
     const extensionIds = listChangedExtensionIds({
-      base: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      base: "refs/heads/openclaw-test-missing-base",
       unavailableBaseBehavior: "all",
     });
 

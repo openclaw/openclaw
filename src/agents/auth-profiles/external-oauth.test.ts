@@ -5,6 +5,7 @@ import {
   overlayExternalOAuthProfiles,
   shouldPersistExternalOAuthProfile,
 } from "./external-auth.js";
+import { readManagedExternalCliCredential } from "./external-cli-sync.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 const resolveExternalAuthProfilesWithPluginsMock = vi.fn<
@@ -40,6 +41,17 @@ function createUsableOAuthExpiry(): number {
   return Date.now() + 30 * 60 * 1000;
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireProfile(store: AuthProfileStore, profileId: string): Record<string, unknown> {
+  return requireRecord(store.profiles[profileId], profileId);
+}
+
 describe("auth external oauth helpers", () => {
   beforeEach(() => {
     resolveExternalAuthProfilesWithPluginsMock.mockReset();
@@ -63,11 +75,10 @@ describe("auth external oauth helpers", () => {
 
     const store = overlayExternalOAuthProfiles(createStore());
 
-    expect(store.profiles["openai-codex:default"]).toMatchObject({
-      type: "oauth",
-      provider: "openai-codex",
-      access: "access-token",
-    });
+    const profile = requireProfile(store, "openai-codex:default");
+    expect(profile.type).toBe("oauth");
+    expect(profile.provider).toBe("openai-codex");
+    expect(profile.access).toBe("access-token");
   });
 
   it("passes config and CLI scope through overlay resolution", () => {
@@ -84,12 +95,12 @@ describe("auth external oauth helpers", () => {
       externalCliProviderIds: ["openai-codex"],
     });
 
-    expect(resolveExternalAuthProfilesWithPluginsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: cfg,
-        context: expect.objectContaining({ config: cfg }),
-      }),
+    const resolveParams = requireRecord(
+      resolveExternalAuthProfilesWithPluginsMock.mock.calls.at(0)?.[0],
+      "resolve external auth params",
     );
+    expect(resolveParams.config).toBe(cfg);
+    expect(requireRecord(resolveParams.context, "resolve context").config).toBe(cfg);
     expect(readCodexCliCredentialsCachedMock).toHaveBeenCalledTimes(1);
   });
 
@@ -148,7 +159,7 @@ describe("auth external oauth helpers", () => {
     expect(shouldPersist).toBe(true);
   });
 
-  it("does not use Codex CLI OAuth as a runtime overlay source", () => {
+  it("keeps Codex CLI OAuth from replacing stored inline token material", () => {
     readCodexCliCredentialsCachedMock.mockReturnValue(
       createCredential({
         access: "fresh-cli-access-token",
@@ -169,11 +180,48 @@ describe("auth external oauth helpers", () => {
       }),
     );
 
-    expect(overlaid.profiles["openai-codex:default"]).toMatchObject({
-      access: "stale-store-access-token",
-      refresh: "stale-store-refresh-token",
+    const profile = requireProfile(overlaid, "openai-codex:default");
+    expect(profile.access).toBe("stale-store-access-token");
+    expect(profile.refresh).toBe("stale-store-refresh-token");
+    expect(profile.accountId).toBe("acct-cli");
+  });
+
+  it("uses Codex CLI OAuth when the stored Codex profile has no inline token material", () => {
+    const cliCredential = createCredential({
+      access: "fresh-cli-access-token",
+      refresh: "fresh-cli-refresh-token",
+      expires: createUsableOAuthExpiry(),
       accountId: "acct-cli",
     });
+    const tokenlessCredential = {
+      type: "oauth",
+      provider: "openai-codex",
+      expires: Date.now() - 60_000,
+      accountId: "acct-cli",
+    } as OAuthCredential;
+    readCodexCliCredentialsCachedMock.mockReturnValue(cliCredential);
+
+    const overlaid = overlayExternalOAuthProfiles(
+      createStore({
+        "openai-codex:default": tokenlessCredential,
+      }),
+    );
+
+    const overlaidProfile = overlaid.profiles["openai-codex:default"];
+    expect(overlaidProfile?.type).toBe("oauth");
+    if (!overlaidProfile || overlaidProfile.type !== "oauth") {
+      throw new Error("expected overlaid OAuth profile");
+    }
+    expect(overlaidProfile.access).toBe("fresh-cli-access-token");
+    expect(overlaidProfile.refresh).toBe("fresh-cli-refresh-token");
+    expect(overlaidProfile.accountId).toBe("acct-cli");
+    const managedCredential = readManagedExternalCliCredential({
+      profileId: "openai-codex:default",
+      credential: tokenlessCredential,
+    });
+    expect(managedCredential?.access).toBe("fresh-cli-access-token");
+    expect(managedCredential?.refresh).toBe("fresh-cli-refresh-token");
+    expect(managedCredential?.accountId).toBe("acct-cli");
   });
 
   it("keeps healthy local oauth even when external cli has a fresher token", () => {
@@ -195,10 +243,9 @@ describe("auth external oauth helpers", () => {
       }),
     );
 
-    expect(overlaid.profiles["openai-codex:default"]).toMatchObject({
-      access: "healthy-local-access-token",
-      refresh: "healthy-local-refresh-token",
-    });
+    const profile = requireProfile(overlaid, "openai-codex:default");
+    expect(profile.access).toBe("healthy-local-access-token");
+    expect(profile.refresh).toBe("healthy-local-refresh-token");
   });
 
   it("keeps explicit local non-oauth auth over external cli oauth overlays", () => {
@@ -220,11 +267,10 @@ describe("auth external oauth helpers", () => {
       }),
     );
 
-    expect(overlaid.profiles["openai-codex:default"]).toMatchObject({
-      type: "api_key",
-      provider: "openai-codex",
-      key: "sk-local",
-    });
+    const profile = requireProfile(overlaid, "openai-codex:default");
+    expect(profile.type).toBe("api_key");
+    expect(profile.provider).toBe("openai-codex");
+    expect(profile.key).toBe("sk-local");
   });
 
   it("keeps expired local oauth when external cli belongs to a different account", () => {
@@ -248,10 +294,9 @@ describe("auth external oauth helpers", () => {
       }),
     );
 
-    expect(overlaid.profiles["openai-codex:default"]).toMatchObject({
-      access: "expired-local-access-token",
-      refresh: "expired-local-refresh-token",
-      accountId: "acct-local",
-    });
+    const profile = requireProfile(overlaid, "openai-codex:default");
+    expect(profile.access).toBe("expired-local-access-token");
+    expect(profile.refresh).toBe("expired-local-refresh-token");
+    expect(profile.accountId).toBe("acct-local");
   });
 });

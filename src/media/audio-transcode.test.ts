@@ -12,6 +12,16 @@ vi.mock("./ffmpeg-exec.js", () => ({
 
 import { transcodeAudioBufferToOpus } from "./audio-transcode.js";
 
+type MockWithCalls = { mock: { calls: unknown[][] } };
+
+function firstMockCall(mock: MockWithCalls, label: string): unknown[] {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
 describe("transcodeAudioBufferToOpus", () => {
   afterEach(() => {
     runFfmpegMock.mockReset();
@@ -44,7 +54,7 @@ describe("transcodeAudioBufferToOpus", () => {
     ).resolves.toEqual(Buffer.from("opus-output"));
 
     expect(runFfmpegMock).toHaveBeenCalledTimes(1);
-    expect(runFfmpegMock.mock.calls[0]).toStrictEqual([
+    expect(firstMockCall(runFfmpegMock, "runFfmpeg")).toStrictEqual([
       [
         "-hide_banner",
         "-loglevel",
@@ -63,6 +73,8 @@ describe("transcodeAudioBufferToOpus", () => {
         "48000",
         "-ac",
         "1",
+        "-f",
+        "opus",
         capturedOutputPath,
       ],
       { timeoutMs: 1234 },
@@ -119,6 +131,28 @@ describe("transcodeAudioBufferToOpus", () => {
 
     const tempRoot = realpathSync(resolvePreferredOpenClawTmpDir());
     expect(capturedInputPath?.startsWith(tempRoot)).toBe(true);
+    expect(capturedOutputPath ? existsSync(capturedOutputPath) : true).toBe(false);
+  });
+
+  it("preserves Windows-style output filename leaves on POSIX hosts", async () => {
+    let capturedOutputPath: string | undefined;
+    runFfmpegMock.mockImplementationOnce(async (args: string[]) => {
+      capturedOutputPath = args.at(-1);
+      const outputPath = capturedOutputPath;
+      if (!outputPath) {
+        throw new Error("missing ffmpeg output path");
+      }
+      expect(path.basename(outputPath)).toContain("reply.opus");
+      await import("node:fs/promises").then((fs) =>
+        fs.writeFile(outputPath, Buffer.from("opus-output")),
+      );
+    });
+
+    await transcodeAudioBufferToOpus({
+      audioBuffer: Buffer.from("source"),
+      outputFileName: String.raw`C:\Users\Ada\Downloads\reply.opus`,
+    });
+
     expect(capturedOutputPath ? existsSync(capturedOutputPath) : true).toBe(false);
   });
 });

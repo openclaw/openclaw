@@ -3,13 +3,16 @@ import { coerceSecretRef } from "openclaw/plugin-sdk/secret-ref-runtime";
 import { normalizeSecretInputString } from "openclaw/plugin-sdk/setup";
 import type { CoreConfig, MatrixConfig } from "../types.js";
 import { findMatrixAccountConfig } from "./account-config.js";
-import { shouldStoreMatrixAccountAtTopLevel } from "./config-paths.js";
+import {
+  resolveMatrixConfigPath as resolveMatrixConfigPathBase,
+  shouldStoreMatrixAccountAtTopLevel,
+} from "./config-paths.js";
 
 export {
   resolveMatrixConfigFieldPath,
-  resolveMatrixConfigPath,
   shouldStoreMatrixAccountAtTopLevel,
 } from "./config-paths.js";
+export const resolveMatrixConfigPath = resolveMatrixConfigPathBase;
 
 export type MatrixAccountPatch = {
   name?: string | null;

@@ -85,6 +85,36 @@ describe("music-generation runtime", () => {
     ]);
   });
 
+  it("uses configured music-generation timeout when call omits timeoutMs", async () => {
+    let seenTimeoutMs: number | undefined;
+    providers = [
+      {
+        id: "music-plugin",
+        capabilities: {},
+        async generateMusic(req: { timeoutMs?: number }) {
+          seenTimeoutMs = req.timeoutMs;
+          return {
+            tracks: [{ buffer: Buffer.from("mp3-bytes"), mimeType: "audio/mpeg" }],
+            model: "track-v1",
+          };
+        },
+      },
+    ];
+
+    await runGenerateMusic({
+      cfg: {
+        agents: {
+          defaults: {
+            musicGenerationModel: { primary: "music-plugin/track-v1", timeoutMs: 300_000 },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "play a synth line",
+    });
+
+    expect(seenTimeoutMs).toBe(300_000);
+  });
+
   it("does not list providers when explicit config disables auto provider fallback", async () => {
     const provider: MusicGenerationProvider = {
       id: "music-plugin",
@@ -365,15 +395,12 @@ describe("music-generation runtime", () => {
       durationSeconds: 30,
     });
     expect(result.ignoredOverrides).toStrictEqual([]);
-    expect(result.normalization).toMatchObject({
-      durationSeconds: {
-        requested: 45,
-        applied: 30,
-      },
-    });
-    expect(result.metadata).toMatchObject({
-      requestedDurationSeconds: 45,
-      normalizedDurationSeconds: 30,
-    });
+    if (!result.normalization || !result.metadata) {
+      throw new Error("Expected normalization and metadata");
+    }
+    expect(result.normalization.durationSeconds?.requested).toBe(45);
+    expect(result.normalization.durationSeconds?.applied).toBe(30);
+    expect(result.metadata.requestedDurationSeconds).toBe(45);
+    expect(result.metadata.normalizedDurationSeconds).toBe(30);
   });
 });

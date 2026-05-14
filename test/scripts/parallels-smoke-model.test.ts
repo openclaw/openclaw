@@ -120,9 +120,11 @@ console.log(result);
 `;
     const batch = JSON.parse(runTsEval(source, { OPENAI_API_KEY: "sk-openai" })) as Array<{
       path: string;
+      value: unknown;
     }>;
 
     expect(batch.map((entry) => entry.path)).toContain('agents.defaults.models["openai/gpt-5.5"]');
+    expect(JSON.stringify(batch)).not.toContain("agentRuntime");
   });
 
   it("keeps snapshot, host, package, and quote helpers shared", () => {
@@ -241,6 +243,17 @@ console.log(resolveUbuntuVmName("Ubuntu missing"));
     const script = readFileSync(TS_PATHS.linux, "utf8");
 
     expect(script).toContain("DPkg::Lock::Timeout=300");
+  });
+
+  it("keeps Linux bad-plugin diagnostics gated for historical update baselines", () => {
+    const script = readFileSync(TS_PATHS.linux, "utf8");
+
+    expect(script).toContain('BAD_PLUGIN_DIAGNOSTIC_MIN_VERSION = "2026.5.7"');
+    expect(script).toContain("parseOpenClawPackageVersion");
+    expect(script).toContain("maybeInjectBadPluginFixture");
+    expect(script).toContain("maybeVerifyBadPluginDiagnostic");
+    expect(script).toContain("Skipping bad plugin diagnostic fixture");
+    expect(script).toContain("Skipping bad plugin diagnostic assertion");
   });
 
   it("resolves provider defaults and explicit model overrides", () => {
@@ -582,6 +595,10 @@ console.log(JSON.stringify({
     expect(powershell).toContain("providerTimeoutConfigJson");
     expect(powershell).toContain("models.providers.${providerId}");
     expect(powershell).toContain("agents.defaults.models${configPathMapKey(modelId)}");
+    expect(powershell).toContain("OPENCLAW_PARALLELS_AGENT_RUNTIME_POLICY_SUPPORTED");
+    expect(powershell).toContain('selectedModelEntry.agentRuntime = { id: "pi" }');
+    expect(powershell).toContain("delete selectedModelEntry.agentRuntime");
+    expect(powershell).toContain("delete providerEntry.agentRuntime");
     expect(powershell).toContain("configPathMapKey");
     expect(powershell).toContain('transport: "sse"');
     expect(powershell).toContain("Resolve-OpenClawCommand");

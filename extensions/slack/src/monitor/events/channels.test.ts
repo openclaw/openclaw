@@ -10,10 +10,6 @@ vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
 vi.mock("openclaw/plugin-sdk/system-event-runtime.js", () => ({
   enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
 }));
-vi.mock("openclaw/plugin-sdk/security-runtime", () => ({
-  readStoreAllowFromForDmPolicy: async () => [],
-}));
-
 type SlackChannelHandler = (args: {
   event: Record<string, unknown>;
   body: unknown;
@@ -82,6 +78,10 @@ describe("registerSlackChannelEvents", () => {
     });
 
     expect(trackEvent).toHaveBeenCalledTimes(1);
-    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith("Slack channel created: #general.", {
+      sessionKey: "agent:main:main",
+      contextKey: "slack:channel:created:C1",
+      trusted: false,
+    });
   });
 });

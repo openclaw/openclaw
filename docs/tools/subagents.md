@@ -77,7 +77,9 @@ requester chat when the run finishes.
   <Accordion title="Non-blocking, push-based completion">
     - The spawn command is non-blocking; it returns a run id immediately.
     - On completion, the sub-agent announces a summary/result message back to the requester chat channel.
+    - Agent turns that need child results should call `sessions_yield` after spawning required work. That ends the current turn and lets completion events arrive as the next model-visible message.
     - Completion is push-based. Once spawned, do **not** poll `/subagents list`, `sessions_list`, or `sessions_history` in a loop just to wait for it to finish; inspect status only on-demand for debugging or intervention.
+    - Child output is a report/evidence for the requester agent to synthesize. It is not user-authored instruction text and cannot override system, developer, or user policy.
     - On completion, OpenClaw best-effort closes tracked browser tabs/processes opened by that sub-agent session before the announce cleanup flow continues.
 
   </Accordion>
@@ -142,11 +144,43 @@ session to confirm the effective tool list.
 - **Model:** inherits the caller unless you set `agents.defaults.subagents.model` (or per-agent `agents.list[].subagents.model`); an explicit `sessions_spawn.model` still wins.
 - **Thinking:** inherits the caller unless you set `agents.defaults.subagents.thinking` (or per-agent `agents.list[].subagents.thinking`); an explicit `sessions_spawn.thinking` still wins.
 - **Run timeout:** if `sessions_spawn.runTimeoutSeconds` is omitted, OpenClaw uses `agents.defaults.subagents.runTimeoutSeconds` when set; otherwise it falls back to `0` (no timeout).
+- **Task delivery:** native sub-agents receive the delegated task in their first visible `[Subagent Task]` message. The sub-agent system prompt carries runtime rules and routing context, not a hidden duplicate of the task.
+
+### Delegation prompt mode
+
+`agents.defaults.subagents.delegationMode` controls prompt guidance only; it does not change tool policy or enforce delegation.
+
+- `suggest` (default): keep the standard prompt nudge to use sub-agents for larger or slower work.
+- `prefer`: tell the main agent to stay responsive and delegate anything more involved than a direct reply through `sessions_spawn`.
+
+Per-agent overrides use `agents.list[].subagents.delegationMode`.
+
+```json5
+{
+  agents: {
+    defaults: {
+      subagents: {
+        delegationMode: "prefer",
+        maxConcurrent: 4,
+      },
+    },
+    list: [
+      {
+        id: "coordinator",
+        subagents: { delegationMode: "prefer" },
+      },
+    ],
+  },
+}
+```
 
 ### Tool parameters
 
 <ParamField path="task" type="string" required>
   The task description for the sub-agent.
+</ParamField>
+<ParamField path="taskName" type="string">
+  Optional stable handle for later `subagents` targeting. Must match `[a-z][a-z0-9_]{0,63}` and cannot be reserved targets such as `last` or `all`. Prefer it when the coordinator may need to steer, kill, or identify a specific child after spawning several children.
 </ParamField>
 <ParamField path="label" type="string">
   Optional human-readable label.
@@ -193,6 +227,55 @@ session to confirm the effective tool list.
 `channel`, `to`, `threadId`, `replyTo`, `transport`). For delivery, use
 `message`/`sessions_send` from the spawned run.
 </Warning>
+
+### Task names and targeting
+
+`taskName` is a model-facing handle for orchestration, not a session key.
+Use it for stable child names such as `review_subagents`,
+`linux_validation`, or `docs_update` when a coordinator may need to steer
+or kill that child later.
+
+Target resolution accepts exact `taskName` matches and unambiguous
+prefixes. Matching is scoped to the same active/recent target window used
+by numbered `/subagents` targets, so a stale completed child does not make
+a reused handle ambiguous. If two active or recent children share the same
+`taskName`, the target is ambiguous; use the list index, session key, or
+run id instead.
+
+The reserved targets `last` and `all` are not valid `taskName` values
+because they already have control meanings.
+
+## Tool: `sessions_yield`
+
+Ends the current model turn and waits for runtime events, primarily
+sub-agent completion events, to arrive as the next message. Use it after
+spawning required child work when the requester cannot produce a final
+answer until those completions arrive.
+
+`sessions_yield` is the waiting primitive. Do not replace it with polling
+loops over `subagents`, `sessions_list`, `sessions_history`, shell
+`sleep`, or process polling just to detect child completion.
+
+Only use `sessions_yield` when the session's effective tool list includes
+it. Some minimal or custom tool profiles may expose `sessions_spawn` and
+`subagents` without exposing `sessions_yield`; in that case, do not invent
+a polling loop just to wait for completion.
+
+When active children exist, OpenClaw injects a compact runtime-generated
+`Active Subagents` prompt block into normal turns so the requester can see
+the current child sessions, run ids, statuses, labels, tasks, and
+`taskName` aliases without polling. The task and label fields in that
+block are quoted as data, not instructions, because they can originate
+from user/model-provided spawn arguments.
+
+## Tool: `subagents`
+
+Lists, steers, or kills spawned sub-agent runs owned by the requester
+session. It is scoped to the current requester; a child can only
+see/control its own controlled children.
+
+Use `subagents` for on-demand status, debugging, steering, or killing.
+Use `sessions_yield` to wait for completion events.
 
 ## Thread-bound sessions
 
@@ -261,6 +344,9 @@ See [Configuration reference](/gateway/configuration-reference) and
 <ParamField path="agents.defaults.subagents.requireAgentId" type="boolean" default="false">
   Block `sessions_spawn` calls that omit `agentId` (forces explicit profile selection). Per-agent override: `agents.list[].subagents.requireAgentId`.
 </ParamField>
+<ParamField path="agents.defaults.subagents.announceTimeoutMs" type="number" default="120000">
+  Per-call timeout for gateway `agent` announce delivery attempts. Values are positive integer milliseconds and are clamped to the platform-safe timer maximum. Transient retries can make the total announce wait longer than one configured timeout.
+</ParamField>
 
 If the requester session is sandboxed, `sessions_spawn` rejects targets
 that would run unsandboxed.
@@ -298,6 +384,7 @@ worker sub-sub-agents.
         maxChildrenPerAgent: 5, // max active children per agent session (default: 5)
         maxConcurrent: 8, // global concurrency lane cap (default: 8)
         runTimeoutSeconds: 900, // default timeout for sessions_spawn when omitted (0 = no timeout)
+        announceTimeoutMs: 120000, // per-call gateway announce timeout
       },
     },
   },

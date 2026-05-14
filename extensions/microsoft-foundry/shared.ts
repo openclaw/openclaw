@@ -1,4 +1,4 @@
-import type { AuthConfig } from "openclaw/plugin-sdk/config-types";
+import type { AuthConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   applyAuthProfileConfig,
   buildApiKeyCredential,
@@ -9,7 +9,7 @@ import type { ModelApi, ModelProviderConfig } from "openclaw/plugin-sdk/provider
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const PROVIDER_ID = "microsoft-foundry";
 export const DEFAULT_API = "openai-completions";
@@ -131,13 +131,19 @@ export function isAnthropicFoundryDeployment(modelName?: string | null): boolean
  * provider and Anthropic (Claude) deployments that require a custom provider.
  * Single source of truth so the picker and the persisted catalog stay in sync.
  */
-export function partitionFoundryDeployments<T extends { modelName?: string }>(
+export function partitionFoundryDeployments<T extends { name: string; modelName?: string }>(
   deployments: readonly T[],
 ): { supported: T[]; anthropic: T[] } {
   const supported: T[] = [];
   const anthropic: T[] = [];
   for (const deployment of deployments) {
-    if (isAnthropicFoundryDeployment(deployment.modelName)) {
+    // `AzDeploymentSummary.modelName` is optional and the runtime already
+    // falls back from `modelNameHint` to `modelId` via
+    // `resolveConfiguredModelNameHint`.  Mirror that fallback here so a
+    // deployment named `claude-opus-4-6` with no returned `modelName` is
+    // still classified as Anthropic.  See #60546.
+    const classifier = resolveConfiguredModelNameHint(deployment.name, deployment.modelName);
+    if (isAnthropicFoundryDeployment(classifier)) {
       anthropic.push(deployment);
     } else {
       supported.push(deployment);

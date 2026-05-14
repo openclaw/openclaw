@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@whiskeysockets/baileys", () => {
+vi.mock("baileys", () => {
   throw new Error("setup plugin load must not load Baileys");
+});
+
+vi.mock("./src/setup-finalize.js", () => {
+  throw new Error("setup status load must not load finalize");
 });
 
 describe("whatsapp setup entry", () => {
@@ -28,10 +32,16 @@ describe("whatsapp setup entry", () => {
         stateDir: "/tmp/openclaw-state",
       }),
     ).toStrictEqual([]);
-    expect(setupEntry.loadLegacySessionSurface?.()).toEqual({
-      canonicalizeLegacySessionKey: expect.any(Function),
-      isLegacyGroupSessionKey: expect.any(Function),
-    });
+    const legacySessionSurface = setupEntry.loadLegacySessionSurface?.();
+    if (!legacySessionSurface) {
+      throw new Error("expected WhatsApp legacy session surface");
+    }
+    expect(Object.keys(legacySessionSurface).toSorted()).toEqual([
+      "canonicalizeLegacySessionKey",
+      "isLegacyGroupSessionKey",
+    ]);
+    expect(legacySessionSurface.canonicalizeLegacySessionKey).toBeTypeOf("function");
+    expect(legacySessionSurface.isLegacyGroupSessionKey).toBeTypeOf("function");
   });
 
   it("loads the delegated setup wizard without importing runtime dependencies", async () => {

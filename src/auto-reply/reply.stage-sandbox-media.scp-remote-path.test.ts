@@ -66,7 +66,21 @@ function createRemoteContexts(remotePath: string) {
 }
 
 async function expectPathMissing(targetPath: string): Promise<void> {
-  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  let statError: unknown;
+  try {
+    await fs.stat(targetPath);
+  } catch (error) {
+    statError = error;
+  }
+  expect((statError as NodeJS.ErrnoException | undefined)?.code).toBe("ENOENT");
+}
+
+function requireFirstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
 }
 
 describe("stageSandboxMedia scp remote paths", () => {
@@ -111,7 +125,8 @@ describe("stageSandboxMedia scp remote paths", () => {
         workspaceDir,
       });
 
-      expect(childProcessMocks.spawn.mock.calls[0]?.[0]).toBe("scp");
+      const [command] = requireFirstMockCall(childProcessMocks.spawn, "scp spawn");
+      expect(command).toBe("scp");
       const remoteCacheRoot = join(CONFIG_DIR, "media", "remote-cache");
       const expectedSafeDir = join(remoteCacheRoot, slugifySessionKey(sessionKey));
       try {

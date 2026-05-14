@@ -308,6 +308,18 @@ describe("loadWebMedia", () => {
     expect(result.buffer.length).toBeGreaterThan(0);
   });
 
+  it("uses only the leaf filename from Windows-style sandbox-validated media paths", async () => {
+    const result = await loadWebMedia(String.raw`C:\workspace\captures\tiny.png`, {
+      maxBytes: 1024 * 1024,
+      sandboxValidated: true,
+      readFile: async () => Buffer.from(TINY_PNG_BASE64, "base64"),
+    });
+
+    expect(result.kind).toBe("image");
+    expect(result.contentType).toBe("image/png");
+    expect(result.fileName).toBe("tiny.png");
+  });
+
   it("resolves home-relative local media paths through allowed local roots", async () => {
     vi.stubEnv("OPENCLAW_HOME", fixtureRoot);
     try {
@@ -376,10 +388,52 @@ describe("loadWebMedia", () => {
     expect(result.contentType).toBe("text/markdown");
   });
 
+  it.each([
+    {
+      label: "ZIP",
+      fileName: "archive.zip",
+      contentType: "application/zip",
+      buffer: Buffer.from([0x50, 0x4b, 0x03, 0x04]),
+    },
+    {
+      label: "gzip",
+      fileName: "archive.gz",
+      contentType: "application/gzip",
+      buffer: Buffer.from([0x1f, 0x8b, 0x08, 0x00, 0, 0, 0, 0, 0, 0x03]),
+    },
+    {
+      label: "tar",
+      fileName: "archive.tar",
+      contentType: "application/x-tar",
+      buffer: (() => {
+        const buffer = Buffer.alloc(512);
+        buffer.write("ustar", 257, "ascii");
+        return buffer;
+      })(),
+    },
+    {
+      label: "7z",
+      fileName: "archive.7z",
+      contentType: "application/x-7z-compressed",
+      buffer: Buffer.from([0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c, 0, 4]),
+    },
+  ])("allows host-read $label files", async ({ fileName, contentType, buffer }) => {
+    const archiveFile = path.join(fixtureRoot, fileName);
+    await fs.writeFile(archiveFile, buffer);
+    const result = await loadWebMedia(archiveFile, {
+      maxBytes: 1024 * 1024,
+      localRoots: "any",
+      readFile: async (filePath) => await fs.readFile(filePath),
+      hostReadCapability: true,
+    });
+    expect(result.kind).toBe("document");
+    expect(result.contentType).toBe(contentType);
+  });
+
   it("rejects binary data disguised as a CSV file", async () => {
     const fakeCsv = path.join(fixtureRoot, "evil.csv");
-    // Write ZIP magic bytes — file-type detects application/zip (not image, not CSV),
-    // so it is rejected by the host-read policy rather than allowed as an image.
+    // Declared plain-text aliases must use the text validator path even when the
+    // buffer sniffs as an otherwise allowed archive type.
     await fs.writeFile(fakeCsv, Buffer.from([0x50, 0x4b, 0x03, 0x04]));
     await expectLoadWebMediaErrorCode(
       loadWebMedia(fakeCsv, {

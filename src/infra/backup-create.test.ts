@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
 import { describe, expect, it, vi } from "vitest";
@@ -390,22 +391,88 @@ describe("createBackupArchive", () => {
         const entries = await listArchiveEntries(result.archivePath);
 
         const entrySuffixes = entries.map((entry) => entry.replace(/^.*\/state\//, "/state/"));
-        expect(entrySuffixes).toEqual(
-          expect.arrayContaining([
-            "/state/extensions/demo/openclaw.plugin.json",
-            "/state/extensions/demo/src/index.js",
-            "/state/node_modules/root-dep/index.js",
-          ]),
-        );
+        expect(entrySuffixes).toContain("/state/extensions/demo/openclaw.plugin.json");
+        expect(entrySuffixes).toContain("/state/extensions/demo/src/index.js");
+        expect(entrySuffixes).toContain("/state/node_modules/root-dep/index.js");
         const pluginNodeModuleEntries = entries.filter((entry) =>
           entry.includes("/state/extensions/demo/node_modules/"),
         );
         expect(pluginNodeModuleEntries).toStrictEqual([]);
 
         const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-        await expect(
-          backupVerifyCommand(runtime, { archive: result.archivePath }),
-        ).resolves.toMatchObject({ ok: true });
+        const verification = await backupVerifyCommand(runtime, { archive: result.archivePath });
+        expect(verification.ok).toBe(true);
+      },
+    );
+  });
+
+  it("does not duplicate the root manifest when the system tempdir lives inside the state dir", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-tmp-overlap-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const stateDir = state.stateDir;
+        const outputDir = state.path("backups");
+        const overlappingTmp = path.join(stateDir, "tmp");
+        await fs.mkdir(overlappingTmp, { recursive: true });
+        await fs.mkdir(outputDir, { recursive: true });
+        const tmpdirSpy = vi.spyOn(os, "tmpdir").mockReturnValue(overlappingTmp);
+
+        try {
+          const result = await createBackupArchive({
+            output: outputDir,
+            includeWorkspace: false,
+            nowMs: Date.UTC(2026, 4, 9, 12, 0, 0),
+          });
+          const entries = await listArchiveEntries(result.archivePath);
+          const rootManifestEntries = entries.filter(
+            (entry) => entry.endsWith("/manifest.json") && !entry.includes("/payload/"),
+          );
+          expect(rootManifestEntries).toHaveLength(1);
+
+          const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+          const verification = await backupVerifyCommand(runtime, { archive: result.archivePath });
+          expect(verification.ok).toBe(true);
+        } finally {
+          tmpdirSpy.mockRestore();
+        }
+      },
+    );
+  });
+
+  it("does not duplicate the root manifest when the system tempdir is the state dir itself", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-tmp-equals-state-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const outputDir = state.path("backups");
+        await fs.mkdir(outputDir, { recursive: true });
+        const tmpdirSpy = vi.spyOn(os, "tmpdir").mockReturnValue(state.stateDir);
+
+        try {
+          const result = await createBackupArchive({
+            output: outputDir,
+            includeWorkspace: false,
+            nowMs: Date.UTC(2026, 4, 9, 12, 0, 0),
+          });
+          const entries = await listArchiveEntries(result.archivePath);
+          const rootManifestEntries = entries.filter(
+            (entry) => entry.endsWith("/manifest.json") && !entry.includes("/payload/"),
+          );
+          expect(rootManifestEntries).toHaveLength(1);
+
+          const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+          const verification = await backupVerifyCommand(runtime, { archive: result.archivePath });
+          expect(verification.ok).toBe(true);
+        } finally {
+          tmpdirSpy.mockRestore();
+        }
       },
     );
   });
