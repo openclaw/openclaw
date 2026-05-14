@@ -33,7 +33,15 @@ import {
 
 type PluginMetadataSnapshotMemo = {
   key: string;
+  registryState?: PersistedRegistryMemoState;
   snapshot: PluginMetadataSnapshot;
+};
+
+type PersistedRegistryMemoState = {
+  fastHash: string;
+  fingerprint: unknown;
+  watchedFilesHash: string;
+  watchedFiles: readonly string[];
 };
 
 let pluginMetadataSnapshotMemo: PluginMetadataSnapshotMemo | undefined;
@@ -92,111 +100,18 @@ function normalizeString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function sortedRecordEntries(value: unknown): [string, unknown][] {
+function stableMemoValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(stableMemoValue);
+  }
   if (!isRecord(value)) {
-    return [];
+    return value;
   }
-  return Object.entries(value).toSorted(([left], [right]) => left.localeCompare(right));
-}
-
-function installRecordMemoFingerprint(record: unknown): Record<string, unknown> | unknown {
-  if (!isRecord(record)) {
-    return record;
-  }
-  const source = normalizeString(record.source);
-  return {
-    source,
-    installPath: normalizeString(record.installPath),
-    sourcePath: normalizeString(record.sourcePath),
-    version: normalizeString(record.version),
-    resolvedName: normalizeString(record.resolvedName),
-    resolvedVersion: normalizeString(record.resolvedVersion),
-    spec: source === "git" ? undefined : normalizeString(record.spec),
-    resolvedSpec: source === "git" ? undefined : normalizeString(record.resolvedSpec),
-    integrity: normalizeString(record.integrity),
-    shasum: normalizeString(record.shasum),
-    clawhubPackage: normalizeString(record.clawhubPackage),
-    clawhubFamily: normalizeString(record.clawhubFamily),
-    clawhubChannel: normalizeString(record.clawhubChannel),
-    artifactKind: normalizeString(record.artifactKind),
-    artifactFormat: normalizeString(record.artifactFormat),
-    npmTarballName: normalizeString(record.npmTarballName),
-    clawpackSha256: normalizeString(record.clawpackSha256),
-    clawpackManifestSha256: normalizeString(record.clawpackManifestSha256),
-    clawpackSize: typeof record.clawpackSize === "number" ? record.clawpackSize : undefined,
-    gitRef: normalizeString(record.gitRef),
-    gitCommit: normalizeString(record.gitCommit),
-    marketplaceName: normalizeString(record.marketplaceName),
-    marketplaceSource: normalizeString(record.marketplaceSource),
-    marketplacePlugin: normalizeString(record.marketplacePlugin),
-  };
-}
-
-function installRecordsMemoFingerprint(records: unknown): Record<string, unknown> {
   return Object.fromEntries(
-    sortedRecordEntries(records).map(([pluginId, record]) => [
-      pluginId,
-      installRecordMemoFingerprint(record),
-    ]),
+    Object.entries(value)
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => [key, stableMemoValue(entry)]),
   );
-}
-
-function installedIndexMemoFingerprint(index: Record<string, unknown> | undefined): unknown {
-  if (!index) {
-    return null;
-  }
-  const plugins = Array.isArray(index.plugins) ? index.plugins : [];
-  const diagnostics = Array.isArray(index.diagnostics) ? index.diagnostics : [];
-  return {
-    version: index.version,
-    warning: index.warning,
-    hostContractVersion: index.hostContractVersion,
-    compatRegistryVersion: index.compatRegistryVersion,
-    migrationVersion: index.migrationVersion,
-    policyHash: index.policyHash,
-    generatedAtMs: index.generatedAtMs,
-    refreshReason: index.refreshReason,
-    installRecords: installRecordsMemoFingerprint(index.installRecords),
-    plugins: plugins.map((rawPlugin) => {
-      if (!isRecord(rawPlugin)) {
-        return rawPlugin;
-      }
-      return {
-        pluginId: normalizeString(rawPlugin.pluginId),
-        packageName: normalizeString(rawPlugin.packageName),
-        packageVersion: normalizeString(rawPlugin.packageVersion),
-        installRecord: installRecordMemoFingerprint(rawPlugin.installRecord),
-        packageInstall: rawPlugin.packageInstall,
-        packageChannel: rawPlugin.packageChannel,
-        manifestPath: normalizeString(rawPlugin.manifestPath),
-        manifestHash: normalizeString(rawPlugin.manifestHash),
-        format: normalizeString(rawPlugin.format),
-        bundleFormat: normalizeString(rawPlugin.bundleFormat),
-        source: normalizeString(rawPlugin.source),
-        setupSource: normalizeString(rawPlugin.setupSource),
-        packageJson: rawPlugin.packageJson,
-        rootDir: normalizeString(rawPlugin.rootDir),
-        origin: normalizeString(rawPlugin.origin),
-        enabled: rawPlugin.enabled === true,
-        enabledByDefault: rawPlugin.enabledByDefault === true,
-        enabledByDefaultOnPlatforms: rawPlugin.enabledByDefaultOnPlatforms,
-        syntheticAuthRefs: rawPlugin.syntheticAuthRefs,
-        startup: rawPlugin.startup,
-        compat: rawPlugin.compat,
-      };
-    }),
-    diagnostics: diagnostics.map((rawDiagnostic) => {
-      if (!isRecord(rawDiagnostic)) {
-        return rawDiagnostic;
-      }
-      return {
-        level: normalizeString(rawDiagnostic.level),
-        pluginId: normalizeString(rawDiagnostic.pluginId),
-        source: normalizeString(rawDiagnostic.source),
-        message: normalizeString(rawDiagnostic.message),
-      };
-    }),
-  };
 }
 
 function isPathInsideOrEqual(childPath: string, parentPath: string): boolean {
@@ -215,6 +130,7 @@ function tryRealpath(filePath: string): string | null {
 function resolvePluginFilePath(
   pluginDir: string,
   filePath: string | undefined,
+  options: { allowSymlinkOutsideRoot?: boolean } = {},
 ):
   | { status: "ok"; path: string }
   | { status: "outside-root"; path: string }
@@ -231,7 +147,12 @@ function resolvePluginFilePath(
   }
   const rootRealPath = tryRealpath(rootDir);
   const targetRealPath = tryRealpath(resolved);
-  if (rootRealPath && targetRealPath && !isPathInsideOrEqual(targetRealPath, rootRealPath)) {
+  if (
+    rootRealPath &&
+    targetRealPath &&
+    !isPathInsideOrEqual(targetRealPath, rootRealPath) &&
+    !options.allowSymlinkOutsideRoot
+  ) {
     return { status: "outside-root", path: resolved };
   }
   return { status: "ok", path: resolved };
@@ -240,6 +161,7 @@ function resolvePluginFilePath(
 function persistedPluginFileFingerprint(
   rootDir: string | undefined,
   filePath: string | undefined,
+  options: { allowSymlinkOutsideRoot?: boolean; watchedFiles?: Set<string> } = {},
 ): unknown {
   if (!filePath) {
     return null;
@@ -247,11 +169,54 @@ function persistedPluginFileFingerprint(
   if (!rootDir) {
     return [filePath, "missing-root"];
   }
-  const resolved = resolvePluginFilePath(rootDir, filePath);
+  const resolved = resolvePluginFilePath(rootDir, filePath, {
+    allowSymlinkOutsideRoot: options.allowSymlinkOutsideRoot,
+  });
   if (resolved.status !== "ok") {
     return [filePath, resolved.status];
   }
+  options.watchedFiles?.add(resolved.path);
   return fileFingerprint(resolved.path);
+}
+
+function watchedFileFingerprint(filePath: string | undefined, watchedFiles: Set<string>): unknown {
+  if (!filePath) {
+    return null;
+  }
+  watchedFiles.add(filePath);
+  return fileFingerprint(filePath);
+}
+
+function installRecordPathFingerprints(
+  records: unknown,
+  watchedFiles: Set<string>,
+): readonly unknown[] {
+  if (!isRecord(records)) {
+    return [];
+  }
+  return Object.entries(records)
+    .toSorted(([left], [right]) => left.localeCompare(right))
+    .map(([pluginId, rawRecord]) => {
+      if (!isRecord(rawRecord)) {
+        return [pluginId, rawRecord];
+      }
+      const installPath = normalizeString(rawRecord.installPath);
+      const sourcePath = normalizeString(rawRecord.sourcePath);
+      return [
+        pluginId,
+        installPath,
+        sourcePath,
+        watchedFileFingerprint(
+          installPath ? path.join(installPath, "package.json") : undefined,
+          watchedFiles,
+        ),
+        watchedFileFingerprint(
+          installPath ? path.join(installPath, "openclaw.plugin.json") : undefined,
+          watchedFiles,
+        ),
+        watchedFileFingerprint(sourcePath, watchedFiles),
+      ];
+    });
 }
 
 function resolveRecordPackageJsonPath(record: Record<string, unknown>): string | undefined {
@@ -323,7 +288,7 @@ function clonePluginMetadataSnapshot(snapshot: PluginMetadataSnapshot): PluginMe
   };
 }
 
-function resolvePersistedRegistryMemoFingerprint(params: {
+function resolvePersistedRegistryFastMemoFingerprint(params: {
   env: NodeJS.ProcessEnv;
   preferPersisted?: boolean;
   stateDir?: string;
@@ -345,10 +310,43 @@ function resolvePersistedRegistryMemoFingerprint(params: {
   const npmRoot = params.stateDir
     ? path.join(params.stateDir, "npm")
     : resolveDefaultPluginNpmDir(params.env);
+  return {
+    index: fileFingerprint(indexPath),
+    npmPackageJson: fileFingerprint(path.join(npmRoot, "package.json")),
+  };
+}
+
+function hashWatchedFiles(watchedFiles: readonly string[]): string {
+  return hashJson(watchedFiles.map((filePath) => fileFingerprint(filePath)));
+}
+
+function resolvePersistedRegistryMemoState(params: {
+  env: NodeJS.ProcessEnv;
+  preferPersisted?: boolean;
+  stateDir?: string;
+}): PersistedRegistryMemoState {
+  const fastFingerprint = resolvePersistedRegistryFastMemoFingerprint(params);
+  const fastHash = hashJson(fastFingerprint);
+  if (isRecord(fastFingerprint) && fastFingerprint.disabled === true) {
+    return {
+      fastHash,
+      fingerprint: fastFingerprint,
+      watchedFiles: [],
+      watchedFilesHash: hashJson([]),
+    };
+  }
+  const indexPath = resolveInstalledPluginIndexStorePath({
+    env: params.env,
+    ...(params.stateDir ? { stateDir: params.stateDir } : {}),
+  });
+  const npmRoot = params.stateDir
+    ? path.join(params.stateDir, "npm")
+    : resolveDefaultPluginNpmDir(params.env);
   const index = readJsonObject(indexPath);
   const plugins = Array.isArray(index?.plugins) ? index.plugins : [];
   const diagnostics = Array.isArray(index?.diagnostics) ? index.diagnostics : [];
   const pluginRootById = new Map<string, string>();
+  const watchedFiles = new Set<string>();
   for (const rawPlugin of plugins) {
     if (!isRecord(rawPlugin)) {
       continue;
@@ -363,60 +361,99 @@ function resolvePersistedRegistryMemoFingerprint(params: {
     env: params.env,
     ...(params.stateDir ? { stateDir: params.stateDir } : {}),
   });
+  const watchedPlugins = plugins.map((rawPlugin) => {
+    if (!isRecord(rawPlugin)) {
+      return rawPlugin;
+    }
+    const rootDir = normalizeString(rawPlugin.rootDir);
+    const manifestPath = normalizeString(rawPlugin.manifestPath);
+    const packageJsonPath = resolveRecordPackageJsonPath(rawPlugin);
+    const source = normalizeString(rawPlugin.source);
+    const setupSource = normalizeString(rawPlugin.setupSource);
+    return [
+      normalizeString(rawPlugin.pluginId),
+      rootDir,
+      rootDir ? fileFingerprint(rootDir) : null,
+      manifestPath,
+      persistedPluginFileFingerprint(rootDir, manifestPath, { watchedFiles }),
+      source,
+      persistedPluginFileFingerprint(rootDir, source, { watchedFiles }),
+      setupSource,
+      persistedPluginFileFingerprint(rootDir, setupSource, { watchedFiles }),
+      packageJsonPath,
+      persistedPluginFileFingerprint(rootDir, packageJsonPath, {
+        allowSymlinkOutsideRoot: true,
+        watchedFiles,
+      }),
+    ];
+  });
+  const watchedDiagnostics = diagnostics.map((rawDiagnostic) => {
+    if (!isRecord(rawDiagnostic)) {
+      return rawDiagnostic;
+    }
+    const pluginId = normalizeString(rawDiagnostic.pluginId);
+    const source = normalizeString(rawDiagnostic.source);
+    return [
+      pluginId,
+      source,
+      persistedPluginFileFingerprint(pluginId ? pluginRootById.get(pluginId) : undefined, source, {
+        watchedFiles,
+      }),
+    ];
+  });
+  const installRecordFiles = installRecordPathFingerprints(installRecords, watchedFiles);
+  const watchedFilesList = [...watchedFiles].toSorted();
   return {
-    index: fileFingerprint(indexPath),
-    indexHash: hashJson(installedIndexMemoFingerprint(index)),
-    installRecords: hashJson(installRecordsMemoFingerprint(installRecords)),
-    npmPackageJson: fileFingerprint(path.join(npmRoot, "package.json")),
-    plugins: plugins.map((rawPlugin) => {
-      if (!isRecord(rawPlugin)) {
-        return rawPlugin;
-      }
-      const rootDir = normalizeString(rawPlugin.rootDir);
-      const manifestPath = normalizeString(rawPlugin.manifestPath);
-      const packageJsonPath = resolveRecordPackageJsonPath(rawPlugin);
-      const source = normalizeString(rawPlugin.source);
-      const setupSource = normalizeString(rawPlugin.setupSource);
-      return [
-        normalizeString(rawPlugin.pluginId),
-        rootDir,
-        rootDir ? fileFingerprint(rootDir) : null,
-        manifestPath,
-        persistedPluginFileFingerprint(rootDir, manifestPath),
-        source,
-        persistedPluginFileFingerprint(rootDir, source),
-        setupSource,
-        persistedPluginFileFingerprint(rootDir, setupSource),
-        packageJsonPath,
-        persistedPluginFileFingerprint(rootDir, packageJsonPath),
-      ];
-    }),
-    diagnostics: diagnostics.map((rawDiagnostic) => {
-      if (!isRecord(rawDiagnostic)) {
-        return rawDiagnostic;
-      }
-      const pluginId = normalizeString(rawDiagnostic.pluginId);
-      const source = normalizeString(rawDiagnostic.source);
-      return [
-        pluginId,
-        source,
-        persistedPluginFileFingerprint(pluginId ? pluginRootById.get(pluginId) : undefined, source),
-      ];
-    }),
+    fastHash,
+    fingerprint: {
+      ...fastFingerprint,
+      indexHash: hashJson(stableMemoValue(index) ?? null),
+      installRecords: hashJson(stableMemoValue(installRecords)),
+      installRecordFiles,
+      npmPackageJson: fileFingerprint(path.join(npmRoot, "package.json")),
+      plugins: watchedPlugins,
+      diagnostics: watchedDiagnostics,
+    },
+    watchedFiles: watchedFilesList,
+    watchedFilesHash: hashWatchedFiles(watchedFilesList),
   };
 }
 
-function computePluginMetadataSnapshotMemoKey(params: LoadPluginMetadataSnapshotParams): string {
-  const env = params.env ?? process.env;
-  const indexFingerprint = params.index
-    ? resolveInstalledManifestRegistryIndexFingerprint(params.index)
+function resolvePersistedRegistryMemoStateForLookup(
+  params: {
+    env: NodeJS.ProcessEnv;
+    preferPersisted?: boolean;
+    stateDir?: string;
+  },
+  memo: PluginMetadataSnapshotMemo | undefined,
+): PersistedRegistryMemoState {
+  const fastHash = hashJson(resolvePersistedRegistryFastMemoFingerprint(params));
+  const registryState = memo?.registryState;
+  if (
+    registryState &&
+    registryState.fastHash === fastHash &&
+    hashWatchedFiles(registryState.watchedFiles) === registryState.watchedFilesHash
+  ) {
+    return registryState;
+  }
+  return resolvePersistedRegistryMemoState(params);
+}
+
+function computePluginMetadataSnapshotMemoKey(params: {
+  params: LoadPluginMetadataSnapshotParams;
+  registryState: PersistedRegistryMemoState;
+}): string {
+  const { params: snapshotParams, registryState } = params;
+  const env = snapshotParams.env ?? process.env;
+  const indexFingerprint = snapshotParams.index
+    ? resolveInstalledManifestRegistryIndexFingerprint(snapshotParams.index)
     : undefined;
   return hashJson({
     controlPlane: resolvePluginControlPlaneFingerprint({
-      config: params.config,
+      config: snapshotParams.config,
       env,
-      workspaceDir: params.workspaceDir,
-      policyHash: resolveInstalledPluginIndexPolicyHash(params.config),
+      workspaceDir: snapshotParams.workspaceDir,
+      policyHash: resolveInstalledPluginIndexPolicyHash(snapshotParams.config),
       ...(indexFingerprint ? { inventoryFingerprint: indexFingerprint } : {}),
     }),
     cwd: process.cwd(),
@@ -426,14 +463,10 @@ function computePluginMetadataSnapshotMemoKey(params: LoadPluginMetadataSnapshot
       compatibilityHostVersion: resolveCompatibilityHostVersion(env),
       nixMode: resolveIsNixMode(env),
     },
-    preferPersisted: params.preferPersisted ?? null,
-    registry: resolvePersistedRegistryMemoFingerprint({
-      env,
-      ...(params.stateDir ? { stateDir: resolveUserPath(params.stateDir, env) } : {}),
-      ...(params.preferPersisted !== undefined ? { preferPersisted: params.preferPersisted } : {}),
-    }),
-    stateDir: params.stateDir ? resolveUserPath(params.stateDir, env) : null,
-    workspaceDir: params.workspaceDir ?? null,
+    preferPersisted: snapshotParams.preferPersisted ?? null,
+    registry: registryState.fingerprint,
+    stateDir: snapshotParams.stateDir ? resolveUserPath(snapshotParams.stateDir, env) : null,
+    workspaceDir: snapshotParams.workspaceDir ?? null,
   });
 }
 
@@ -582,16 +615,23 @@ export function listPluginOriginsFromMetadataSnapshot(
   return new Map(snapshot.plugins.map((record) => [record.id, record.origin]));
 }
 
-// Process-local memoization is keyed by stable registry/config/env inputs. It
-// intentionally does not watch arbitrary direct plugin file edits after a
-// persisted registry has been accepted; registry refreshes and process restarts
-// are the freshness boundaries for that broader edit flow.
+// Process-local memoization keeps the hot snapshot work cached while checking
+// the persisted metadata files that the installed-index loader consumes.
 export function loadPluginMetadataSnapshot(
   params: LoadPluginMetadataSnapshotParams,
 ): PluginMetadataSnapshot {
   const activeTimelineSpan = getActiveDiagnosticsTimelineSpan();
-  const memoKey = computePluginMetadataSnapshotMemoKey(params);
   const memo = pluginMetadataSnapshotMemo;
+  const env = params.env ?? process.env;
+  const registryState = resolvePersistedRegistryMemoStateForLookup(
+    {
+      env,
+      ...(params.stateDir ? { stateDir: resolveUserPath(params.stateDir, env) } : {}),
+      ...(params.preferPersisted !== undefined ? { preferPersisted: params.preferPersisted } : {}),
+    },
+    memo,
+  );
+  const memoKey = computePluginMetadataSnapshotMemoKey({ params, registryState });
   if (memo?.key === memoKey) {
     return measureDiagnosticsTimelineSpanSync(
       "plugins.metadata.scan",
@@ -625,6 +665,7 @@ export function loadPluginMetadataSnapshot(
   if (canMemoizePluginMetadataSnapshotResult(result)) {
     pluginMetadataSnapshotMemo = {
       key: memoKey,
+      registryState,
       snapshot: clonePluginMetadataSnapshot(result.snapshot),
     };
   }

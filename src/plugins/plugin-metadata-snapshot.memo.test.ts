@@ -54,6 +54,7 @@ function writePersistedIndex(params: {
   packageJsonPath?: string;
   pluginId: string;
   source?: string;
+  setupSource?: string;
   stateDir: string;
 }): void {
   const pluginDir = path.join(params.stateDir, "extensions", params.pluginId);
@@ -75,6 +76,7 @@ function writePersistedIndex(params: {
         manifestHash: `${params.pluginId}-manifest`,
         rootDir: pluginDir,
         ...(params.source ? { source: params.source } : {}),
+        ...(params.setupSource ? { setupSource: params.setupSource } : {}),
         origin: "global",
         enabled: true,
         packageJson: { path: "package.json", hash: `${params.pluginId}-package` },
@@ -97,13 +99,16 @@ function writeRecoverableNpmPlugin(params: {
   pluginId: string;
   stateDir: string;
   version: string;
+  writeRootManifest?: boolean;
 }): void {
   const packageDir = path.join(params.stateDir, "npm", "node_modules", params.packageName);
-  writeJson(path.join(params.stateDir, "npm", "package.json"), {
-    dependencies: {
-      [params.packageName]: "1.0.0",
-    },
-  });
+  if (params.writeRootManifest !== false) {
+    writeJson(path.join(params.stateDir, "npm", "package.json"), {
+      dependencies: {
+        [params.packageName]: "1.0.0",
+      },
+    });
+  }
   writeJson(path.join(packageDir, "package.json"), {
     name: params.packageName,
     version: params.version,
@@ -281,7 +286,7 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
   });
 
-  it("refreshes when persisted plugin metadata files change in the same process", () => {
+  it("reuses the expanded freshness fingerprint on hot cache hits", () => {
     const stateDir = tempStateDir();
     const manifestPath = path.join(stateDir, "extensions", "demo", "openclaw.plugin.json");
     writePersistedIndex({ manifestPath, pluginId: "demo", stateDir });
@@ -290,9 +295,37 @@ describe("loadPluginMetadataSnapshot process memo", () => {
       snapshot: makeIndex(),
       diagnostics: [],
     });
+    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
+    const readSpy = vi.spyOn(fs, "readFileSync");
+
+    try {
+      loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
+    } finally {
+      readSpy.mockRestore();
+    }
+
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(1);
+    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledTimes(1);
+    expect(readSpy).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["manifest", "openclaw.plugin.json", "manifestPath"],
+    ["source", "index.js", "source"],
+    ["setup source", "setup.js", "setupSource"],
+    ["package manifest", "package.json", "packageJsonPath"],
+  ])("refreshes when persisted plugin %s changes in the same process", (_, fileName, field) => {
+    const stateDir = tempStateDir();
+    const filePath = path.join(stateDir, "extensions", "demo", fileName);
+    writePersistedIndex({ [field]: filePath, pluginId: "demo", stateDir });
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "persisted",
+      snapshot: makeIndex(),
+      diagnostics: [],
+    });
 
     loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
-    writeJson(manifestPath, { id: "demo", version: "0.2.0" });
+    writeJson(filePath, { id: "demo", version: "0.2.0" });
     loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
 
     expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
@@ -318,8 +351,32 @@ describe("loadPluginMetadataSnapshot process memo", () => {
       packageName: "recovered-plugin",
       pluginId: "recovered",
       stateDir,
-      version: "1.0.1",
+      version: "1.0.10",
+      writeRootManifest: false,
     });
+    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
+
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
+    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes when an in-root package manifest symlink target changes", () => {
+    const stateDir = tempStateDir();
+    const pluginDir = path.join(stateDir, "extensions", "demo");
+    const packageJsonPath = path.join(pluginDir, "package.json");
+    const outsidePackageJsonPath = path.join(stateDir, "outside", "package.json");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    writeJson(outsidePackageJsonPath, { name: "outside", version: "1.0.0" });
+    fs.symlinkSync(outsidePackageJsonPath, packageJsonPath);
+    writePersistedIndex({ packageJsonPath, pluginId: "demo", stateDir });
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "persisted",
+      snapshot: makeIndex(),
+      diagnostics: [],
+    });
+
+    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
+    writeJson(outsidePackageJsonPath, { name: "outside", version: "1.0.1" });
     loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
 
     expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
