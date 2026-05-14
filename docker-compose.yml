@@ -122,11 +122,47 @@ services:
     depends_on:
       - openclaw-gateway
 
+  alpacore-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-alpacoredb}
+      POSTGRES_USER: ${POSTGRES_USER:-alpacoreadmin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-${ALPACORE_POSTGRES_PASSWORD:-alpacore-local-dev}}
+    volumes:
+      - alpacore-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-alpacoreadmin} -d ${POSTGRES_DB:-alpacoredb}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - alphabet-net
+    restart: unless-stopped
+
   alpacore:
     image: node:18-alpine
     container_name: alpa-engine
     working_dir: /app
-    command: sh -c "cp harvester-package.json package.json && npm install --production && node harvester-server.mjs"
+    command: >-
+      sh -c 'export DATABASE_HOST="$${DATABASE_HOST:-$${POSTGRES_HOST:-alpacore-postgres}}"
+      && export DATABASE_PORT="$${DATABASE_PORT:-$${POSTGRES_PORT:-5432}}"
+      && export DATABASE_NAME="$${DATABASE_NAME:-$${POSTGRES_DB:-alpacoredb}}"
+      && export DATABASE_USER="$${DATABASE_USER:-$${POSTGRES_USER:-alpacoreadmin}}"
+      && export DATABASE_PASSWORD="$${DATABASE_PASSWORD:-$${POSTGRES_PASSWORD:-$${ALPACORE_POSTGRES_PASSWORD:-alpacore-local-dev}}}"
+      && if [ -n "$${DATABASE_SSLMODE:-}" ]; then export DATABASE_SSLMODE="$${DATABASE_SSLMODE}"; elif [ -n "$${PGSSLMODE:-}" ]; then export DATABASE_SSLMODE="$${PGSSLMODE}"; elif [ "$${DATABASE_HOST}" = "alpacore-postgres" ]; then export DATABASE_SSLMODE=disable; else export DATABASE_SSLMODE=require; fi
+      && cp harvester-package.json package.json
+      && npm install --production
+      && node harvester-server.mjs'
+    env_file:
+      - path: .env
+        required: false
+      - path: .azure/dev/.env
+        required: false
     ports:
       - "8080:8080"
       - "5143:5143"
@@ -134,11 +170,7 @@ services:
       - HOST=0.0.0.0
       - HARVESTER_WORKERS=15
       - HARVESTER_PORT=8080
-      - REVOLUT_SIGNER_BASE_URL=${REVOLUT_SIGNER_BASE_URL:-}
-      - REVOLUT_SIGNER_SERVICE_TOKEN=${REVOLUT_SIGNER_SERVICE_TOKEN:-}
-      - REVOLUT_REFRESH_TOKEN=${REVOLUT_REFRESH_TOKEN:-}
-      - REVOLUT_BASE_URL=${REVOLUT_BASE_URL:-}
-      - REVOLUT_CLIENT_ID=${REVOLUT_CLIENT_ID:-}
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
       - SHOPIFY_API_SECRET=${SHOPIFY_API_SECRET:-}
       - HARVESTER_GITHUB_TOKEN=${HARVESTER_GITHUB_TOKEN:-}
       - HARVESTER_HF_TOKEN=${HARVESTER_HF_TOKEN:-}
@@ -153,6 +185,9 @@ services:
       - ./harvester-server.mjs:/app/harvester-server.mjs:ro
       - ./harvester-package.json:/app/harvester-package.json:ro
       - harvester-node-modules:/app/node_modules
+    depends_on:
+      alpacore-postgres:
+        condition: service_healthy
     networks:
       - alphabet-net
     restart: unless-stopped
@@ -181,3 +216,4 @@ networks:
 
 volumes:
   harvester-node-modules:
+  alpacore-postgres-data:

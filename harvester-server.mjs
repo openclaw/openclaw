@@ -90,6 +90,36 @@ const CONFIG = {
   databaseConnectTimeout: parseInt(process.env.HARVESTER_DB_CONNECT_TIMEOUT || "10000", 10),
   databaseStatementTimeout: parseInt(process.env.HARVESTER_DB_STATEMENT_TIMEOUT || "15000", 10),
 };
+const EMPIRE_MARKET_SOURCE = "CoinGecko";
+const DEFAULT_EMPIRE_MARKET_API_BASE_URL = "https://api.coingecko.com/api/v3";
+const DEFAULT_EMPIRE_MARKET_CACHE_TTL_MS = 60 * 1000;
+const DEFAULT_PAYPAL_RECOVERY_PRINCIPAL_EUR = 202000000;
+const DEFAULT_PAYPAL_RECOVERY_APR = 0.12;
+const DEFAULT_PAYPAL_RECOVERY_TARGET_DATE = "2026-12-31T23:59:59Z";
+const DEFAULT_BTC_BACKSTOP_HOLDINGS = 2400;
+const EMPIRE_MARKET_ASSET_DEFINITIONS = Object.freeze([
+  {
+    id: "bitcoin",
+    symbol: "BTC",
+    label: "Bitcoin Backstop",
+    envNames: ["ALPHABET_BTC_HOLDINGS", "BTC_BACKSTOP_HOLDINGS"],
+    defaultHoldings: DEFAULT_BTC_BACKSTOP_HOLDINGS,
+  },
+  {
+    id: "ethereum",
+    symbol: "ETH",
+    label: "Ethereum Stack",
+    envNames: ["ALPHABET_ETH_HOLDINGS", "ETH_HOLDINGS"],
+    defaultHoldings: 0,
+  },
+  {
+    id: "pi-network",
+    symbol: "PI",
+    label: "Pi Reserve",
+    envNames: ["ALPHABET_PI_HOLDINGS", "PI_HOLDINGS"],
+    defaultHoldings: 0,
+  },
+]);
 
 function readNonEmptyEnv(names) {
   for (const name of names) {
@@ -101,6 +131,23 @@ function readNonEmptyEnv(names) {
   }
 
   return "";
+}
+
+function parseConfiguredNumber(rawValue, fallbackValue = 0) {
+  if (rawValue === null || rawValue === undefined || rawValue === "") {
+    return { value: fallbackValue, configured: false };
+  }
+
+  const parsedValue = Number.parseFloat(String(rawValue).replace(/,/gu, ""));
+
+  if (!Number.isFinite(parsedValue)) {
+    return { value: fallbackValue, configured: false };
+  }
+
+  return {
+    value: parsedValue,
+    configured: true,
+  };
 }
 
 const REVOLUT_MERCHANT_BACKFILL_SOURCE = "revolut-merchant-backfill";
@@ -201,9 +248,67 @@ function normalizeAlphabetSource(req) {
 
 const serviceConfig = createServiceConfig();
 
+function createEmpireConfig() {
+  const parsedCacheTtlMs = Number.parseInt(
+    readNonEmptyEnv(["EMPIRE_MARKET_CACHE_TTL_MS", "HARVESTER_EMPIRE_MARKET_CACHE_TTL_MS"]),
+    10,
+  );
+  const parsedPaypalRecoveryPrincipal = parseConfiguredNumber(
+    readNonEmptyEnv([
+      "ALPHABET_PAYPAL_RECOVERY_PRINCIPAL_EUR",
+      "PAYPAL_RECOVERY_PRINCIPAL_EUR",
+    ]),
+    DEFAULT_PAYPAL_RECOVERY_PRINCIPAL_EUR,
+  );
+  const parsedPaypalRecoveryApr = parseConfiguredNumber(
+    readNonEmptyEnv(["ALPHABET_PAYPAL_RECOVERY_APR", "PAYPAL_RECOVERY_APR"]),
+    DEFAULT_PAYPAL_RECOVERY_APR,
+  );
+  const assets = EMPIRE_MARKET_ASSET_DEFINITIONS.map((asset) => {
+    const parsedHoldings = parseConfiguredNumber(
+      readNonEmptyEnv(asset.envNames),
+      asset.defaultHoldings,
+    );
+
+    return {
+      ...asset,
+      holdings: parsedHoldings.value,
+      holdingsConfigured: parsedHoldings.configured || asset.defaultHoldings > 0,
+    };
+  });
+
+  return {
+    assets,
+    marketApiBaseUrl:
+      normalizeBaseUrl(
+        readNonEmptyEnv(["EMPIRE_MARKET_API_BASE_URL", "HARVESTER_EMPIRE_MARKET_API_BASE_URL"]),
+      ) || DEFAULT_EMPIRE_MARKET_API_BASE_URL,
+    marketCacheTtlMs:
+      Number.isFinite(parsedCacheTtlMs) && parsedCacheTtlMs > 0
+        ? parsedCacheTtlMs
+        : DEFAULT_EMPIRE_MARKET_CACHE_TTL_MS,
+    paypalRecoveryApr: parsedPaypalRecoveryApr.value,
+    paypalRecoveryPrincipalEur: parsedPaypalRecoveryPrincipal.value,
+    paypalRecoveryTargetDate:
+      readNonEmptyEnv(["ALPHABET_PAYPAL_RECOVERY_TARGET_DATE", "PAYPAL_RECOVERY_TARGET_DATE"]) ||
+      DEFAULT_PAYPAL_RECOVERY_TARGET_DATE,
+  };
+}
+
+const empireConfig = createEmpireConfig();
+const empireMarketCache = {
+  fetchedAtMs: 0,
+  payload: null,
+};
+
 function createStripeConfig() {
   const envSecretKey = readNonEmptyEnv(["STRIPE_SECRET_KEY", "STRIPE_API_KEY"]);
   const apiBaseUrl = readNonEmptyEnv(["STRIPE_API_BASE_URL"]) || "https://api.stripe.com/v1";
+  const healthCheckPath =
+    normalizePath(
+      readNonEmptyEnv(["STRIPE_HEALTHCHECK_PATH", "HARVESTER_STRIPE_HEALTHCHECK_PATH"]),
+      "/balance",
+    ) || "/balance";
   const syncLimitValue =
     readNonEmptyEnv(["STRIPE_SYNC_LIMIT", "HARVESTER_STRIPE_SYNC_LIMIT"]) || "15";
   const secretName =
@@ -217,6 +322,7 @@ function createStripeConfig() {
     configured: Boolean(envSecretKey || keyVaultUrl),
     envSecretKey,
     apiBaseUrl: normalizeBaseUrl(apiBaseUrl),
+    healthCheckPath,
     keyVaultConfigured: Boolean(keyVaultUrl),
     keyVaultName,
     keyVaultUrl,
@@ -378,6 +484,72 @@ const STRIPE_PAYMENTS_STATUS_INDEX_SQL = `
   CREATE INDEX IF NOT EXISTS alphabet_stripe_payments_status_idx
   ON alphabet_stripe_payments (target_status, created_at DESC)
 `;
+const REVOLUT_MERCHANT_EVENTS_TABLE_SQL = `
+  CREATE TABLE IF NOT EXISTS alphabet_revolut_merchant_events (
+    event_id TEXT PRIMARY KEY,
+    event_type TEXT NOT NULL,
+    source TEXT NOT NULL,
+    order_id TEXT,
+    payment_id TEXT,
+    merchant_order_reference TEXT,
+    merchant_reference TEXT,
+    payment_status TEXT,
+    settlement_status TEXT,
+    amount_minor BIGINT,
+    amount_value NUMERIC(18, 4),
+    currency TEXT,
+    settlement_amount_minor BIGINT,
+    settlement_amount_value NUMERIC(18, 4),
+    settlement_currency TEXT,
+    customer_email TEXT,
+    amount_display TEXT,
+    settlement_amount_display TEXT,
+    created_at TIMESTAMPTZ,
+    settled_at TIMESTAMPTZ,
+    webhook_id TEXT,
+    request_id TEXT,
+    public_url TEXT,
+    webhook_url TEXT,
+    target_assets_eur BIGINT NOT NULL,
+    raw_payload JSONB NOT NULL,
+    received_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )
+`;
+const REVOLUT_MERCHANT_EVENTS_RECEIVED_AT_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS alphabet_revolut_merchant_events_received_at_idx
+  ON alphabet_revolut_merchant_events (received_at DESC)
+`;
+const REVOLUT_MERCHANT_EVENTS_TYPE_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS alphabet_revolut_merchant_events_type_idx
+  ON alphabet_revolut_merchant_events (event_type, received_at DESC)
+`;
+const REVOLUT_MERCHANT_EVENTS_ORDER_ID_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS alphabet_revolut_merchant_events_order_id_idx
+  ON alphabet_revolut_merchant_events (order_id)
+`;
+const REVOLUT_MERCHANT_EVENTS_MERCHANT_ORDER_REF_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS alphabet_revolut_merchant_events_merchant_order_ref_idx
+  ON alphabet_revolut_merchant_events (merchant_order_reference)
+`;
+const REVOLUT_MERCHANT_EVENTS_ALTER_SQL = [
+  "ALTER TABLE alphabet_revolut_merchant_events ADD COLUMN IF NOT EXISTS order_id TEXT",
+  "ALTER TABLE alphabet_revolut_merchant_events ADD COLUMN IF NOT EXISTS payment_id TEXT",
+  "ALTER TABLE alphabet_revolut_merchant_events ADD COLUMN IF NOT EXISTS merchant_order_reference TEXT",
+  "ALTER TABLE alphabet_revolut_merchant_events ADD COLUMN IF NOT EXISTS merchant_reference TEXT",
+  "ALTER TABLE alphabet_revolut_merchant_events ADD COLUMN IF NOT EXISTS payment_status TEXT",
+  "ALTER TABLE alphabet_revolut_merchant_events ADD COLUMN IF NOT EXISTS settlement_status TEXT",
+  "ALTER TABLE alphabet_revolut_merchant_events ADD COLUMN IF NOT EXISTS amount_minor BIGINT",
+  "ALTER TABLE alphabet_revolut_merchant_events ADD COLUMN IF NOT EXISTS amount_value NUMERIC(18, 4)",
+  "ALTER TABLE alphabet_revolut_merchant_events ADD COLUMN IF NOT EXISTS currency TEXT",
+  "ALTER TABLE alphabet_revolut_merchant_events ADD COLUMN IF NOT EXISTS settlement_amount_minor BIGINT",
+  "ALTER TABLE alphabet_revolut_merchant_events ADD COLUMN IF NOT EXISTS settlement_amount_value NUMERIC(18, 4)",
+  "ALTER TABLE alphabet_revolut_merchant_events ADD COLUMN IF NOT EXISTS settlement_currency TEXT",
+  "ALTER TABLE alphabet_revolut_merchant_events ADD COLUMN IF NOT EXISTS customer_email TEXT",
+  "ALTER TABLE alphabet_revolut_merchant_events ADD COLUMN IF NOT EXISTS amount_display TEXT",
+  "ALTER TABLE alphabet_revolut_merchant_events ADD COLUMN IF NOT EXISTS settlement_amount_display TEXT",
+  "ALTER TABLE alphabet_revolut_merchant_events ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ",
+  "ALTER TABLE alphabet_revolut_merchant_events ADD COLUMN IF NOT EXISTS settled_at TIMESTAMPTZ",
+];
 
 function safeParseUrl(url) {
   try {
@@ -451,6 +623,385 @@ function toNullableNumber(value) {
 
 function stringifyJson(value) {
   return JSON.stringify(value ?? null);
+}
+
+function readNestedValue(value, path) {
+  let current = value;
+
+  for (const segment of path) {
+    if (!current || typeof current !== "object" || !(segment in current)) {
+      return null;
+    }
+
+    current = current[segment];
+  }
+
+  return current ?? null;
+}
+
+function pickFirstNestedValue(value, paths) {
+  for (const path of paths) {
+    const candidate = readNestedValue(value, path);
+
+    if (candidate !== null && candidate !== undefined && candidate !== "") {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
+function normalizeTextValue(value) {
+  if (typeof value === "string") {
+    const trimmedValue = value.trim();
+    return trimmedValue || null;
+  }
+
+  if (typeof value === "number" || typeof value === "bigint") {
+    return String(value);
+  }
+
+  return null;
+}
+
+function normalizeNumericValue(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
+  if (typeof value === "object") {
+    return (
+      normalizeNumericValue(value.value) ??
+      normalizeNumericValue(value.amount) ??
+      normalizeNumericValue(value.minor_units) ??
+      normalizeNumericValue(value.minorUnits) ??
+      null
+    );
+  }
+
+  const parsedValue = Number.parseFloat(String(value).replace(/,/gu, ""));
+  return Number.isFinite(parsedValue) ? parsedValue : null;
+}
+
+function normalizeIntegerValue(value) {
+  const numericValue = normalizeNumericValue(value);
+  return Number.isFinite(numericValue) ? Math.trunc(numericValue) : null;
+}
+
+function normalizeTimestampValue(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
+  if (typeof value === "string") {
+    const trimmedValue = value.trim();
+
+    if (!trimmedValue) {
+      return null;
+    }
+
+    const parsedValue = Date.parse(trimmedValue);
+    return Number.isFinite(parsedValue) ? new Date(parsedValue).toISOString() : null;
+  }
+
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      return null;
+    }
+
+    if (value > 1_000_000_000_000) {
+      return new Date(value).toISOString();
+    }
+
+    if (value > 1_000_000_000) {
+      return new Date(value * 1000).toISOString();
+    }
+  }
+
+  return null;
+}
+
+function formatCurrencyDisplay(amountValue, currency) {
+  if (!Number.isFinite(amountValue)) {
+    return null;
+  }
+
+  const resolvedCurrency = normalizeTextValue(currency)?.toUpperCase() || "EUR";
+
+  try {
+    return new Intl.NumberFormat("en-IE", {
+      style: "currency",
+      currency: resolvedCurrency,
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(amountValue);
+  } catch {
+    return `${amountValue.toLocaleString("en-IE", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })} ${resolvedCurrency}`;
+  }
+}
+
+function formatNumberDisplay(
+  value,
+  { minimumFractionDigits = 0, maximumFractionDigits = 4 } = {},
+) {
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+
+  return new Intl.NumberFormat("en-IE", {
+    minimumFractionDigits,
+    maximumFractionDigits,
+  }).format(value);
+}
+
+function buildEmpireCountdownLabel(targetIso, referenceTimeMs = Date.now()) {
+  const targetTimeMs = Date.parse(targetIso);
+
+  if (!Number.isFinite(targetTimeMs)) {
+    return "--";
+  }
+
+  const remainingMs = targetTimeMs - referenceTimeMs;
+
+  if (remainingMs <= 0) {
+    return "MATURED";
+  }
+
+  const totalHours = Math.floor(remainingMs / (1000 * 60 * 60));
+  const days = Math.floor(totalHours / 24);
+  const hours = totalHours % 24;
+
+  return `${days}d ${hours}h`;
+}
+
+function calculatePaypalRecoverySnapshot(referenceTimeMs = Date.now()) {
+  const targetTimeMs = Date.parse(empireConfig.paypalRecoveryTargetDate);
+
+  if (!Number.isFinite(targetTimeMs)) {
+    return {
+      accruedInterestDisplay: formatCurrencyDisplay(0, "EUR"),
+      accruedInterestEur: 0,
+      apr: empireConfig.paypalRecoveryApr,
+      countdownLabel: "--",
+      daysRemaining: null,
+      principalDisplay: formatCurrencyDisplay(empireConfig.paypalRecoveryPrincipalEur, "EUR"),
+      principalEur: empireConfig.paypalRecoveryPrincipalEur,
+      targetDate: empireConfig.paypalRecoveryTargetDate,
+      targetValueDisplay: formatCurrencyDisplay(empireConfig.paypalRecoveryPrincipalEur, "EUR"),
+      targetValueEur: empireConfig.paypalRecoveryPrincipalEur,
+    };
+  }
+
+  const remainingMs = Math.max(targetTimeMs - referenceTimeMs, 0);
+  const daysRemaining = remainingMs / (1000 * 60 * 60 * 24);
+  const accruedInterestEur =
+    empireConfig.paypalRecoveryPrincipalEur * empireConfig.paypalRecoveryApr * (daysRemaining / 365);
+  const targetValueEur = empireConfig.paypalRecoveryPrincipalEur + accruedInterestEur;
+
+  return {
+    accruedInterestDisplay: formatCurrencyDisplay(accruedInterestEur, "EUR"),
+    accruedInterestEur,
+    apr: empireConfig.paypalRecoveryApr,
+    countdownLabel: buildEmpireCountdownLabel(empireConfig.paypalRecoveryTargetDate, referenceTimeMs),
+    daysRemaining,
+    principalDisplay: formatCurrencyDisplay(empireConfig.paypalRecoveryPrincipalEur, "EUR"),
+    principalEur: empireConfig.paypalRecoveryPrincipalEur,
+    targetDate: empireConfig.paypalRecoveryTargetDate,
+    targetValueDisplay: formatCurrencyDisplay(targetValueEur, "EUR"),
+    targetValueEur,
+  };
+}
+
+async function fetchEmpireMarketSnapshot({ forceRefresh = false } = {}) {
+  const nowMs = Date.now();
+  const cacheAgeMs = nowMs - empireMarketCache.fetchedAtMs;
+  const cacheIsWarm =
+    empireMarketCache.payload && cacheAgeMs >= 0 && cacheAgeMs < empireConfig.marketCacheTtlMs;
+
+  if (!forceRefresh && cacheIsWarm) {
+    return {
+      ...empireMarketCache.payload,
+      cacheAgeMs,
+      stale: false,
+    };
+  }
+
+  try {
+    const requestUrl = new URL(`./simple/price`, `${empireConfig.marketApiBaseUrl}/`);
+    requestUrl.searchParams.set(
+      "ids",
+      empireConfig.assets.map((asset) => asset.id).join(","),
+    );
+    requestUrl.searchParams.set("vs_currencies", "eur");
+
+    const response = await fetch(requestUrl, {
+      headers: {
+        Accept: "application/json",
+        [BLUEPRINT_SYNC_HEADER_NAME]: BLUEPRINT_SYNC_REF,
+        [SOVEREIGN_STATUS_HEADER_NAME]: SOVEREIGN_STATUS_HEADER_VALUE,
+        "User-Agent": "AlphabetHarvester/1.0 (OpenClaw)",
+      },
+    });
+    const payload = await parseResponsePayload(response);
+
+    if (!response.ok) {
+      const detail =
+        payload && typeof payload === "object" ? JSON.stringify(payload) : String(payload);
+
+      throw new Error(`Empire market ${response.status}: ${detail}`);
+    }
+
+    const fetchedAt = new Date().toISOString();
+    const assets = empireConfig.assets.map((asset) => {
+      const priceEur = Number(payload?.[asset.id]?.eur);
+      const normalizedPriceEur = Number.isFinite(priceEur) ? priceEur : null;
+      const valueEur = Number.isFinite(normalizedPriceEur)
+        ? normalizedPriceEur * asset.holdings
+        : null;
+      const holdingsIsWholeNumber = Number.isInteger(asset.holdings);
+
+      return {
+        id: asset.id,
+        label: asset.label,
+        holdings: asset.holdings,
+        holdingsConfigured: asset.holdingsConfigured,
+        holdingsDisplay: formatNumberDisplay(asset.holdings, {
+          minimumFractionDigits: holdingsIsWholeNumber ? 0 : 2,
+          maximumFractionDigits: holdingsIsWholeNumber ? 0 : 6,
+        }),
+        priceDisplay:
+          normalizedPriceEur === null ? null : formatCurrencyDisplay(normalizedPriceEur, "EUR"),
+        priceEur: normalizedPriceEur,
+        source: EMPIRE_MARKET_SOURCE,
+        symbol: asset.symbol,
+        valueDisplay: valueEur === null ? null : formatCurrencyDisplay(valueEur, "EUR"),
+        valueEur,
+      };
+    });
+    const totalValueEur = assets.reduce(
+      (sum, asset) => sum + (Number.isFinite(asset.valueEur) ? asset.valueEur : 0),
+      0,
+    );
+    const snapshot = {
+      assets,
+      fetchedAt,
+      source: EMPIRE_MARKET_SOURCE,
+      summary: {
+        configuredAssetCount: assets.filter((asset) => asset.holdingsConfigured).length,
+        totalValueDisplay: formatCurrencyDisplay(totalValueEur, "EUR"),
+        totalValueEur,
+      },
+    };
+
+    empireMarketCache.fetchedAtMs = nowMs;
+    empireMarketCache.payload = snapshot;
+    state.empire.lastError = null;
+    state.empire.lastUpdated = fetchedAt;
+
+    return {
+      ...snapshot,
+      cacheAgeMs: 0,
+      stale: false,
+    };
+  } catch (error) {
+    state.empire.lastError = error.message;
+    state.empire.lastUpdated = new Date().toISOString();
+
+    if (empireMarketCache.payload) {
+      log("warning", `💹 Empire market refresh failed, serving cached quotes: ${error.message}`);
+
+      return {
+        ...empireMarketCache.payload,
+        cacheAgeMs: Date.now() - empireMarketCache.fetchedAtMs,
+        fallbackError: error.message,
+        stale: true,
+      };
+    }
+
+    throw error;
+  }
+}
+
+function normalizeMoneyValue(value, fallbackCurrency = null) {
+  const amountValue = normalizeNumericValue(value);
+  const amountMinorFromValue =
+    Number.isFinite(amountValue) && Number.isInteger(amountValue) ? Math.trunc(amountValue) : null;
+  const amountMinor =
+    value && typeof value === "object"
+      ? normalizeIntegerValue(
+          value.minor_units ?? value.minorUnits ?? value.value_minor ?? value.valueMinor,
+        ) ?? amountMinorFromValue
+      : amountMinorFromValue;
+  const currency = normalizeTextValue(
+    (value && typeof value === "object" ? value.currency ?? value.ccy : null) ?? fallbackCurrency,
+  );
+
+  return {
+    amountMinor,
+    amountValue,
+    currency,
+  };
+}
+
+function mapRevolutMerchantEventRow(row) {
+  return {
+    eventId: row.event_id,
+    eventType: row.event_type,
+    source: row.source,
+    orderId: row.order_id,
+    paymentId: row.payment_id,
+    merchantOrderReference: row.merchant_order_reference,
+    merchantReference: row.merchant_reference,
+    paymentStatus: row.payment_status,
+    settlementStatus: row.settlement_status,
+    amountMinor: row.amount_minor === null ? null : Number(row.amount_minor),
+    amountValue: row.amount_value === null ? null : Number(row.amount_value),
+    currency: row.currency,
+    settlementAmountMinor:
+      row.settlement_amount_minor === null ? null : Number(row.settlement_amount_minor),
+    settlementAmountValue:
+      row.settlement_amount_value === null ? null : Number(row.settlement_amount_value),
+    settlementCurrency: row.settlement_currency,
+    customerEmail: row.customer_email,
+    amountDisplay: row.amount_display,
+    settlementAmountDisplay: row.settlement_amount_display,
+    createdAt: row.created_at,
+    settledAt: row.settled_at,
+    webhookId: row.webhook_id,
+    requestId: row.request_id,
+    publicUrl: row.public_url,
+    webhookUrl: row.webhook_url,
+    targetAssetsEur: row.target_assets_eur === null ? null : Number(row.target_assets_eur),
+    receivedAt: row.received_at,
+  };
+}
+
+function clampRevolutMerchantEventsLimit(value) {
+  const parsedValue = Number.parseInt(String(value ?? "10"), 10);
+
+  if (!Number.isFinite(parsedValue) || parsedValue <= 0) {
+    return 10;
+  }
+
+  return Math.min(parsedValue, 50);
+}
+
+function extractRevolutCustomerEmail(payload) {
+  return normalizeTextValue(
+    pickFirstNestedValue(payload, [
+      ["customer", "email"],
+      ["order", "customer", "email"],
+      ["payment", "customer", "email"],
+      ["payment", "billing_details", "email"],
+      ["billing_details", "email"],
+      ["data", "customer", "email"],
+      ["customer_email"],
+      ["email"],
+    ]),
+  );
 }
 
 function normalizeStripeExpandableId(value) {
@@ -561,6 +1112,13 @@ async function callStripeApi(path, searchParams = null, options = {}) {
   });
 
   const sanitizedPath = path.replace(/^\/+|\/+$/gu, "");
+
+  if (!sanitizedPath) {
+    throw new Error(
+      "Stripe API path is empty; expected a resource such as 'balance', 'charges', or 'account'",
+    );
+  }
+
   const requestUrl = new URL(`${stripeConfig.apiBaseUrl}/${sanitizedPath}`);
 
   if (searchParams instanceof URLSearchParams) {
@@ -812,13 +1370,25 @@ async function initializeDatabase() {
       await client.query(STRIPE_PAYMENTS_TABLE_SQL);
       await client.query(STRIPE_PAYMENTS_CREATED_AT_INDEX_SQL);
       await client.query(STRIPE_PAYMENTS_STATUS_INDEX_SQL);
+      await client.query(REVOLUT_MERCHANT_EVENTS_TABLE_SQL);
+      for (const statement of REVOLUT_MERCHANT_EVENTS_ALTER_SQL) {
+        await client.query(statement);
+      }
+      await client.query(REVOLUT_MERCHANT_EVENTS_RECEIVED_AT_INDEX_SQL);
+      await client.query(REVOLUT_MERCHANT_EVENTS_TYPE_INDEX_SQL);
+      await client.query(REVOLUT_MERCHANT_EVENTS_ORDER_ID_INDEX_SQL);
+      await client.query(REVOLUT_MERCHANT_EVENTS_MERCHANT_ORDER_REF_INDEX_SQL);
     });
+
+    await backfillRevolutMerchantExecutiveFields();
 
     markDatabaseState({ connected: true, persistenceReady: true });
     await refreshStripePaymentCount();
+    await refreshRevolutMerchantEventCount();
     log("success", `🗄️ Connected to PostgreSQL target ${databaseConfig.connectionLabel}`);
     log("success", "🗄️ Shopify order persistence ready in alpacoredb");
     log("success", "🗄️ Stripe payment persistence ready in alpacoredb");
+    log("success", "🗄️ Revolut merchant persistence ready in alpacoredb");
     return true;
   } catch (error) {
     markDatabaseState({ connected: false, persistenceReady: false, error });
@@ -963,6 +1533,208 @@ async function refreshStripePaymentCount() {
   return count;
 }
 
+async function refreshRevolutMerchantEventCount() {
+  if (!databasePool) {
+    state.revolut.persistedCount = 0;
+    return 0;
+  }
+
+  const result = await withDatabaseClient((client) =>
+    client.query("SELECT COUNT(*)::int AS count FROM alphabet_revolut_merchant_events"),
+  );
+  const count = Number(result.rows[0]?.count || 0);
+
+  state.revolut.persistedCount = count;
+  state.revolut.lastUpdated = new Date().toISOString();
+  return count;
+}
+
+async function readRevolutMerchantEvents(limit) {
+  if (!databasePool) {
+    return [];
+  }
+
+  const result = await withDatabaseClient((client) =>
+    client.query(
+      `
+        SELECT
+          event_id,
+          event_type,
+          source,
+          order_id,
+          payment_id,
+          merchant_order_reference,
+          merchant_reference,
+          payment_status,
+          settlement_status,
+          amount_minor,
+          amount_value,
+          currency,
+          settlement_amount_minor,
+          settlement_amount_value,
+          settlement_currency,
+          customer_email,
+          amount_display,
+          settlement_amount_display,
+          created_at,
+          settled_at,
+          webhook_id,
+          request_id,
+          public_url,
+          webhook_url,
+          target_assets_eur,
+          received_at
+        FROM alphabet_revolut_merchant_events
+        ORDER BY received_at DESC
+        LIMIT $1
+      `,
+      [limit],
+    ),
+  );
+
+  return result.rows.map(mapRevolutMerchantEventRow);
+}
+
+async function readRevolutMerchantExecutiveSummary() {
+  if (!databasePool) {
+    return {
+      persistedCount: 0,
+      customerEmailCount: 0,
+      latestReceivedAt: null,
+      totalAmountDisplay: null,
+      totalSettlementAmountDisplay: null,
+      totalAmountValue: null,
+      totalSettlementAmountValue: null,
+    };
+  }
+
+  const result = await withDatabaseClient((client) =>
+    client.query(`
+      SELECT
+        COUNT(*)::int AS persisted_count,
+        COUNT(DISTINCT NULLIF(customer_email, ''))::int AS customer_email_count,
+        MAX(received_at) AS latest_received_at,
+        COALESCE(SUM(CASE WHEN currency = 'EUR' THEN amount_value ELSE 0 END), 0)::text AS total_amount_value,
+        COALESCE(SUM(CASE WHEN settlement_currency = 'EUR' THEN settlement_amount_value ELSE 0 END), 0)::text AS total_settlement_amount_value
+      FROM alphabet_revolut_merchant_events
+    `),
+  );
+  const row = result.rows[0] || {};
+  const totalAmountValue = row.total_amount_value === null ? null : Number(row.total_amount_value);
+  const totalSettlementAmountValue =
+    row.total_settlement_amount_value === null ? null : Number(row.total_settlement_amount_value);
+
+  return {
+    persistedCount: Number(row.persisted_count || 0),
+    customerEmailCount: Number(row.customer_email_count || 0),
+    latestReceivedAt: row.latest_received_at || null,
+    totalAmountValue,
+    totalSettlementAmountValue,
+    totalAmountDisplay:
+      totalAmountValue === null ? null : formatCurrencyDisplay(totalAmountValue, "EUR"),
+    totalSettlementAmountDisplay:
+      totalSettlementAmountValue === null
+        ? null
+        : formatCurrencyDisplay(totalSettlementAmountValue, "EUR"),
+  };
+}
+
+async function readEmpireDashboardSnapshot() {
+  const [market, revolutSummary] = await Promise.all([
+    fetchEmpireMarketSnapshot(),
+    databasePool && state.database.connected
+      ? readRevolutMerchantExecutiveSummary()
+      : Promise.resolve({
+          customerEmailCount: 0,
+          latestReceivedAt: null,
+          persistedCount: state.revolut.persistedCount,
+          totalAmountDisplay: formatCurrencyDisplay(0, "EUR"),
+          totalAmountValue: 0,
+        }),
+  ]);
+  const paypalRecovery = calculatePaypalRecoverySnapshot();
+  const revolutValueEur = Number(revolutSummary.totalAmountValue || 0);
+  const totalNetWorthEur =
+    market.summary.totalValueEur + revolutValueEur + paypalRecovery.targetValueEur;
+
+  return {
+    market,
+    paypalRecovery,
+    revolut: {
+      latestReceivedAt: revolutSummary.latestReceivedAt || null,
+      persistedCount: Number(revolutSummary.persistedCount || state.revolut.persistedCount || 0),
+      totalAmountDisplay:
+        revolutSummary.totalAmountDisplay || formatCurrencyDisplay(revolutValueEur, "EUR"),
+      totalAmountValue: revolutValueEur,
+    },
+    summary: {
+      cryptoValueDisplay: market.summary.totalValueDisplay,
+      cryptoValueEur: market.summary.totalValueEur,
+      totalNetWorthDisplay: formatCurrencyDisplay(totalNetWorthEur, "EUR"),
+      totalNetWorthEur,
+      lastUpdated: market.fetchedAt,
+    },
+  };
+}
+
+async function backfillRevolutMerchantExecutiveFields() {
+  if (!databasePool) {
+    return 0;
+  }
+
+  return withDatabaseClient(async (client) => {
+    const result = await client.query(`
+      SELECT
+        event_id,
+        raw_payload,
+        customer_email,
+        amount_value,
+        currency,
+        amount_display,
+        settlement_amount_value,
+        settlement_currency,
+        settlement_amount_display
+      FROM alphabet_revolut_merchant_events
+      WHERE customer_email IS NULL
+        OR amount_display IS NULL
+        OR settlement_amount_display IS NULL
+    `);
+
+    let updatedCount = 0;
+
+    for (const row of result.rows) {
+      const payload = row.raw_payload && typeof row.raw_payload === "object" ? row.raw_payload : {};
+      const customerEmail = row.customer_email || extractRevolutCustomerEmail(payload);
+      const amountValue = row.amount_value === null ? null : Number(row.amount_value);
+      const settlementAmountValue =
+        row.settlement_amount_value === null ? null : Number(row.settlement_amount_value);
+      const amountDisplay =
+        row.amount_display ||
+        (amountValue === null ? null : formatCurrencyDisplay(amountValue, row.currency));
+      const settlementAmountDisplay =
+        row.settlement_amount_display ||
+        (settlementAmountValue === null
+          ? null
+          : formatCurrencyDisplay(settlementAmountValue, row.settlement_currency));
+
+      await client.query(
+        `
+          UPDATE alphabet_revolut_merchant_events
+          SET
+            customer_email = $2,
+            amount_display = $3,
+            settlement_amount_display = $4
+          WHERE event_id = $1
+        `,
+        [row.event_id, customerEmail, amountDisplay, settlementAmountDisplay],
+      );
+      updatedCount += 1;
+    }
+
+    return updatedCount;
+  });
+}
+
 async function upsertStripeChargeRecord(summary, payload, targetStatus, lastResult, processedAt) {
   if (!databasePool) {
     return;
@@ -1087,8 +1859,141 @@ async function persistStripeOutcome(summary, targetStatus, payload, lastResult) 
   );
 }
 
+async function persistQueuedRevolutMerchantEvent(summary, payload) {
+  if (!databasePool) {
+    return;
+  }
+
+  await withDatabaseClient((client) =>
+    client.query(
+      `
+        INSERT INTO alphabet_revolut_merchant_events (
+          event_id,
+          event_type,
+          source,
+          order_id,
+          payment_id,
+          merchant_order_reference,
+          merchant_reference,
+          payment_status,
+          settlement_status,
+          amount_minor,
+          amount_value,
+          currency,
+          settlement_amount_minor,
+          settlement_amount_value,
+          settlement_currency,
+          customer_email,
+          amount_display,
+          settlement_amount_display,
+          created_at,
+          settled_at,
+          webhook_id,
+          request_id,
+          public_url,
+          webhook_url,
+          target_assets_eur,
+          raw_payload
+        )
+        VALUES (
+          $1,
+          $2,
+          $3,
+          $4,
+          $5,
+          $6,
+          $7,
+          $8,
+          $9,
+          $10,
+          $11,
+          $12,
+          $13,
+          $14,
+          $15,
+          $16,
+          $17,
+          $18,
+          $19,
+          $20,
+          $21,
+          $22,
+          $23,
+          $24,
+          $25,
+          $26,
+          $27,
+          $28,
+          $29::jsonb
+        )
+        ON CONFLICT (event_id) DO UPDATE SET
+          event_type = EXCLUDED.event_type,
+          source = EXCLUDED.source,
+          order_id = EXCLUDED.order_id,
+          payment_id = EXCLUDED.payment_id,
+          merchant_order_reference = EXCLUDED.merchant_order_reference,
+          merchant_reference = EXCLUDED.merchant_reference,
+          payment_status = EXCLUDED.payment_status,
+          settlement_status = EXCLUDED.settlement_status,
+          amount_minor = EXCLUDED.amount_minor,
+          amount_value = EXCLUDED.amount_value,
+          currency = EXCLUDED.currency,
+          settlement_amount_minor = EXCLUDED.settlement_amount_minor,
+          settlement_amount_value = EXCLUDED.settlement_amount_value,
+          settlement_currency = EXCLUDED.settlement_currency,
+          customer_email = EXCLUDED.customer_email,
+          amount_display = EXCLUDED.amount_display,
+          settlement_amount_display = EXCLUDED.settlement_amount_display,
+          created_at = EXCLUDED.created_at,
+          settled_at = EXCLUDED.settled_at,
+          webhook_id = EXCLUDED.webhook_id,
+          request_id = EXCLUDED.request_id,
+          public_url = EXCLUDED.public_url,
+          webhook_url = EXCLUDED.webhook_url,
+          target_assets_eur = EXCLUDED.target_assets_eur,
+          raw_payload = EXCLUDED.raw_payload,
+          received_at = NOW()
+      `,
+      [
+        summary.eventId,
+        summary.eventType,
+        summary.source,
+        summary.orderId,
+        summary.paymentId,
+        summary.merchantOrderReference,
+        summary.merchantReference,
+        summary.paymentStatus,
+        summary.settlementStatus,
+        summary.amountMinor,
+        summary.amountValue,
+        summary.currency,
+        summary.settlementAmountMinor,
+        summary.settlementAmountValue,
+        summary.settlementCurrency,
+        summary.customerEmail,
+        summary.amountDisplay,
+        summary.settlementAmountDisplay,
+        summary.createdAt,
+        summary.settledAt,
+        summary.webhookId,
+        summary.requestId,
+        summary.publicUrl,
+        summary.webhookUrl,
+        summary.targetAssetsEur,
+        stringifyJson(payload),
+      ],
+    ),
+  );
+
+  markDatabaseState({ connected: true, persistenceReady: true });
+  await refreshRevolutMerchantEventCount();
+}
+
 async function runStripeHealthCheck() {
-  const account = await callStripeApi("account", null, { forceSecretRefresh: true });
+  const healthCheckPath = stripeConfig.healthCheckPath.replace(/^\/+|\/+$/gu, "");
+  const healthPayload = await callStripeApi(healthCheckPath, null, { forceSecretRefresh: true });
+  const account =
+    healthCheckPath === "account" ? healthPayload : await callStripeApi("account");
   const checkedAt = new Date().toISOString();
 
   state.stripe.accountId = account?.id || null;
@@ -1240,6 +2145,179 @@ function summarizeStripeCharge(charge) {
     receiptUrl: charge?.receipt_url || null,
     createdAt: unixSecondsToIso(charge?.created),
     metadata: charge?.metadata && typeof charge.metadata === "object" ? charge.metadata : {},
+  };
+}
+
+function hasRevolutMerchantSignal(req, alphabetSource) {
+  const candidates = [
+    alphabetSource === REVOLUT_MERCHANT_BACKFILL_SOURCE ? alphabetSource : "",
+    req.get("x-revolut-event"),
+    req.get("x-revolut-webhook-id"),
+    req.get("x-request-id"),
+    req.body?.id,
+    req.body?.type,
+  ];
+
+  return candidates.some((candidate) => {
+    if (typeof candidate === "string") {
+      return candidate.trim().length > 0;
+    }
+
+    return candidate !== null && candidate !== undefined;
+  });
+}
+
+function summarizeRevolutMerchantEvent(req, alphabetSource) {
+  const payload = req.body && typeof req.body === "object" ? req.body : {};
+  const webhookId = req.get("x-revolut-webhook-id")?.trim() || null;
+  const requestId = req.get("x-request-id")?.trim() || null;
+  const payloadId =
+    typeof payload?.id === "string" || typeof payload?.id === "number" ? String(payload.id) : null;
+  const eventTypeHeader = req.get("x-revolut-event")?.trim() || "";
+  const payloadType = typeof payload?.type === "string" ? payload.type.trim() : "";
+  const source = alphabetSource || "revolut-merchant";
+  const orderId = normalizeTextValue(
+    pickFirstNestedValue(payload, [
+      ["order", "id"],
+      ["data", "order", "id"],
+      ["resource", "order", "id"],
+      ["order_id"],
+      ["data", "order_id"],
+      ["resource", "order_id"],
+    ]),
+  );
+  const paymentId = normalizeTextValue(
+    pickFirstNestedValue(payload, [
+      ["payment", "id"],
+      ["data", "payment", "id"],
+      ["resource", "payment", "id"],
+      ["payment_id"],
+      ["transaction_id"],
+      ["data", "payment_id"],
+    ]),
+  );
+  const merchantOrderReference = normalizeTextValue(
+    pickFirstNestedValue(payload, [
+      ["order", "merchant_order_ext_ref"],
+      ["data", "order", "merchant_order_ext_ref"],
+      ["merchant_order_ext_ref"],
+      ["order", "merchant_order_reference"],
+      ["merchant_order_reference"],
+      ["order", "merchant_order_ref"],
+      ["merchant_order_ref"],
+      ["order", "reference"],
+    ]),
+  );
+  const merchantReference = normalizeTextValue(
+    pickFirstNestedValue(payload, [
+      ["merchant_reference"],
+      ["merchant_ref"],
+      ["reference"],
+      ["payment", "reference"],
+      ["data", "reference"],
+      ["data", "payment", "reference"],
+    ]),
+  );
+  const paymentStatus = normalizeTextValue(
+    pickFirstNestedValue(payload, [
+      ["payment", "status"],
+      ["order", "status"],
+      ["status"],
+      ["state"],
+      ["data", "status"],
+      ["data", "payment", "status"],
+    ]),
+  );
+  const amountSource =
+    pickFirstNestedValue(payload, [
+      ["payment", "amount"],
+      ["order", "amount"],
+      ["amount"],
+      ["data", "payment", "amount"],
+      ["data", "order", "amount"],
+      ["data", "amount"],
+    ]) ?? null;
+  const amountCurrency = pickFirstNestedValue(payload, [
+    ["payment", "currency"],
+    ["order", "currency"],
+    ["currency"],
+    ["data", "payment", "currency"],
+    ["data", "order", "currency"],
+    ["data", "currency"],
+  ]);
+  const amount = normalizeMoneyValue(amountSource, amountCurrency);
+  const settlementSource =
+    pickFirstNestedValue(payload, [
+      ["settlement", "amount"],
+      ["settlement_amount"],
+      ["data", "settlement", "amount"],
+    ]) ?? null;
+  const settlementCurrency = pickFirstNestedValue(payload, [
+    ["settlement", "currency"],
+    ["settlement_currency"],
+    ["data", "settlement", "currency"],
+  ]);
+  const settlement = normalizeMoneyValue(settlementSource, settlementCurrency);
+  const settlementStatus = normalizeTextValue(
+    pickFirstNestedValue(payload, [
+      ["settlement", "status"],
+      ["settlement_status"],
+      ["data", "settlement", "status"],
+    ]),
+  );
+  const customerEmail = extractRevolutCustomerEmail(payload);
+  const createdAt = normalizeTimestampValue(
+    pickFirstNestedValue(payload, [
+      ["created_at"],
+      ["createdAt"],
+      ["order", "created_at"],
+      ["order", "createdAt"],
+      ["data", "created_at"],
+      ["data", "order", "created_at"],
+    ]),
+  );
+  const settledAt = normalizeTimestampValue(
+    pickFirstNestedValue(payload, [
+      ["settlement", "settled_at"],
+      ["settled_at"],
+      ["settlement", "created_at"],
+      ["data", "settlement", "settled_at"],
+    ]),
+  );
+
+  return {
+    eventId: payloadId || webhookId || requestId || randomUUID(),
+    eventType:
+      eventTypeHeader ||
+      payloadType ||
+      (source === REVOLUT_MERCHANT_BACKFILL_SOURCE ? "manual-backfill" : "revolut-merchant"),
+    source,
+    orderId,
+    paymentId,
+    merchantOrderReference,
+    merchantReference,
+    paymentStatus,
+    settlementStatus,
+    amountMinor: amount.amountMinor,
+    amountValue: amount.amountValue,
+    currency: amount.currency,
+    settlementAmountMinor: settlement.amountMinor,
+    settlementAmountValue: settlement.amountValue,
+    settlementCurrency: settlement.currency,
+    customerEmail,
+    amountDisplay:
+      amount.amountValue === null ? null : formatCurrencyDisplay(amount.amountValue, amount.currency),
+    settlementAmountDisplay:
+      settlement.amountValue === null
+        ? null
+        : formatCurrencyDisplay(settlement.amountValue, settlement.currency),
+    createdAt,
+    settledAt,
+    webhookId,
+    requestId,
+    publicUrl: getHarvesterPublicUrl(req),
+    webhookUrl: getRevolutMerchantWebhookUrl(req),
+    targetAssetsEur: REVOLUT_MERCHANT_TARGET_ASSETS_EUR,
   };
 }
 
@@ -1413,6 +2491,7 @@ const state = {
     secretConfigured: stripeConfig.configured,
     authMode: stripeConfig.configured ? "bearer" : "disabled",
     apiBaseUrl: stripeConfig.apiBaseUrl,
+    healthCheckPath: stripeConfig.healthCheckPath,
     keyVaultConfigured: stripeConfig.keyVaultConfigured,
     keyVaultName: stripeConfig.keyVaultName,
     blueprintSyncRef: BLUEPRINT_SYNC_REF,
@@ -1462,18 +2541,49 @@ const state = {
     lastError: revolutConfig.configured
       ? null
       : "REVOLUT signer base URL, signer token, and refresh token must be configured",
+    lastAmountMinor: null,
+    lastAmountDisplay: null,
+    lastCustomerEmail: null,
+    lastCurrency: null,
+    lastEventId: null,
+    lastEventType: null,
     lastGrantedScope: null,
+    lastMerchantOrderReference: null,
+    lastMerchantReference: null,
+    lastOrderId: null,
+    lastPaymentId: null,
+    lastPaymentStatus: null,
+    lastPersistedAt: null,
     lastRefreshAt: null,
     lastRefreshStatus: null,
+    lastSettlementAmountMinor: null,
+    lastSettlementAmountDisplay: null,
+    lastSettlementCurrency: null,
+    lastSettlementStatus: null,
     lastSignerStatus: null,
     lastTokenType: null,
     lastUpdated: null,
+    lastWebhookError: null,
+    lastWebhookId: null,
+    lastWebhookReceivedAt: null,
+    merchantWebhookUrl: getRevolutMerchantWebhookUrl(),
+    persistedCount: 0,
     refreshTokenPresent: Boolean(resolveRuntimeRefreshToken()),
     revolutBaseUrl: revolutConfig.revolutBaseUrl,
     rotatedRefreshTokenAt: null,
     signerBaseUrl: revolutConfig.signerBaseUrl,
     signerConfigured: revolutConfig.signerConfigured,
     signerPath: revolutConfig.signerPath,
+    targetAssetsEur: REVOLUT_MERCHANT_TARGET_ASSETS_EUR,
+  },
+  empire: {
+    assetCount: empireConfig.assets.length,
+    cacheTtlMs: empireConfig.marketCacheTtlMs,
+    lastError: null,
+    lastUpdated: null,
+    paypalRecoveryApr: empireConfig.paypalRecoveryApr,
+    paypalRecoveryTargetDate: empireConfig.paypalRecoveryTargetDate,
+    source: EMPIRE_MARKET_SOURCE,
   },
   database: {
     configured: databaseConfig.configured,
@@ -1878,20 +2988,85 @@ app.use(express.json());
 app.post("/api/webhooks/revolut-merchant", async (req, res) => {
   const alphabetSource = normalizeAlphabetSource(req);
 
-  if (alphabetSource !== REVOLUT_MERCHANT_BACKFILL_SOURCE) {
+  if (!hasRevolutMerchantSignal(req, alphabetSource)) {
     return res.status(202).json({
       success: true,
       ignored: true,
-      queued: false,
-      expectedSource: REVOLUT_MERCHANT_BACKFILL_SOURCE,
+      persisted: false,
       publicUrl: getHarvesterPublicUrl(req),
       receivedSource: alphabetSource || null,
       webhookUrl: getRevolutMerchantWebhookUrl(req),
     });
   }
 
-  return handleStripeSyncRequest(req, res);
+  return handleRevolutMerchantWebhookRequest(req, res);
 });
+
+async function handleRevolutMerchantWebhookRequest(req, res) {
+  const alphabetSource = normalizeAlphabetSource(req);
+  const summary = summarizeRevolutMerchantEvent(req, alphabetSource);
+  const receivedAt = new Date().toISOString();
+
+  try {
+    await ensureDatabaseReady(`Revolut merchant event ${summary.eventType}`);
+    await persistQueuedRevolutMerchantEvent(summary, req.body);
+    const persistedCount = await refreshRevolutMerchantEventCount();
+
+    state.revolut.lastEventId = summary.eventId;
+    state.revolut.lastEventType = summary.eventType;
+    state.revolut.lastOrderId = summary.orderId;
+    state.revolut.lastPaymentId = summary.paymentId;
+    state.revolut.lastMerchantOrderReference = summary.merchantOrderReference;
+    state.revolut.lastMerchantReference = summary.merchantReference;
+    state.revolut.lastPaymentStatus = summary.paymentStatus;
+    state.revolut.lastAmountMinor = summary.amountMinor;
+    state.revolut.lastAmountDisplay = summary.amountDisplay;
+    state.revolut.lastCustomerEmail = summary.customerEmail;
+    state.revolut.lastCurrency = summary.currency;
+    state.revolut.lastSettlementAmountMinor = summary.settlementAmountMinor;
+    state.revolut.lastSettlementAmountDisplay = summary.settlementAmountDisplay;
+    state.revolut.lastSettlementCurrency = summary.settlementCurrency;
+    state.revolut.lastSettlementStatus = summary.settlementStatus;
+    state.revolut.lastWebhookError = null;
+    state.revolut.lastWebhookId = summary.webhookId;
+    state.revolut.lastWebhookReceivedAt = receivedAt;
+    state.revolut.lastPersistedAt = receivedAt;
+    state.revolut.lastUpdated = receivedAt;
+    state.revolut.merchantWebhookUrl = summary.webhookUrl || state.revolut.merchantWebhookUrl;
+
+    log(
+      "success",
+      `💶 Revolut merchant event persisted directly to alphabet_revolut_merchant_events: ${summary.eventType} (${summary.eventId})`,
+    );
+
+    return res.status(202).json({
+      success: true,
+      persisted: true,
+      eventId: summary.eventId,
+      eventType: summary.eventType,
+      persistedCount,
+      publicUrl: summary.publicUrl,
+      receivedAt,
+      source: summary.source,
+      table: "alphabet_revolut_merchant_events",
+      targetAssetsEur: summary.targetAssetsEur,
+      webhookUrl: summary.webhookUrl,
+    });
+  } catch (error) {
+    state.revolut.lastWebhookError = error.message;
+    state.revolut.lastUpdated = receivedAt;
+    log("error", `💶 Revolut merchant persistence failed: ${error.message}`);
+
+    return res.status(503).json({
+      error: "Revolut merchant persistence unavailable",
+      detail: error.message,
+      publicUrl: summary.publicUrl,
+      source: summary.source,
+      table: "alphabet_revolut_merchant_events",
+      webhookUrl: summary.webhookUrl,
+    });
+  }
+}
 
 async function handleStripeSyncRequest(req, res) {
   if (!stripeConfig.configured) {
@@ -2106,8 +3281,97 @@ app.get("/api/stripe/status", async (req, res) => {
 app.get("/api/stripe/sync", handleStripeSyncRequest);
 app.post("/api/stripe/sync", handleStripeSyncRequest);
 app.post("/api/stripe/fetch-orders", handleStripeSyncRequest);
-app.get("/api/revolut/status", (req, res) => {
-  res.json({ ...state.revolut });
+app.get("/api/empire/market", async (req, res) => {
+  try {
+    const snapshot = await readEmpireDashboardSnapshot();
+
+    return res.json({
+      ...snapshot,
+      database: {
+        connected: state.database.connected,
+        persistenceReady: state.database.persistenceReady,
+        table: "alphabet_revolut_merchant_events",
+        persistedCount: state.revolut.persistedCount,
+      },
+      empire: {
+        ...state.empire,
+      },
+    });
+  } catch (error) {
+    state.empire.lastError = error.message;
+    state.empire.lastUpdated = new Date().toISOString();
+
+    return res.status(503).json({
+      detail: error.message,
+      error: "Empire market feed unavailable",
+      empire: {
+        ...state.empire,
+      },
+    });
+  }
+});
+app.get("/api/revolut/status", async (req, res) => {
+  if (databasePool && state.database.connected) {
+    try {
+      await refreshRevolutMerchantEventCount();
+    } catch (error) {
+      state.revolut.lastWebhookError = error.message;
+      state.revolut.lastUpdated = new Date().toISOString();
+    }
+  }
+
+  res.json({
+    ...state.revolut,
+    database: {
+      connected: state.database.connected,
+      persistenceReady: state.database.persistenceReady,
+      table: "alphabet_revolut_merchant_events",
+      persistedCount: state.revolut.persistedCount,
+    },
+  });
+});
+app.get("/api/revolut/merchant-events", async (req, res) => {
+  try {
+    await ensureDatabaseReady("Revolut merchant executive view");
+    const limit = clampRevolutMerchantEventsLimit(req.query.limit);
+    const [events, summary] = await Promise.all([
+      readRevolutMerchantEvents(limit),
+      readRevolutMerchantExecutiveSummary(),
+    ]);
+
+    return res.json({
+      database: {
+        connected: state.database.connected,
+        persistenceReady: state.database.persistenceReady,
+        table: "alphabet_revolut_merchant_events",
+        persistedCount: state.revolut.persistedCount,
+      },
+      events,
+      summary: {
+        ...summary,
+        latestAmountDisplay: events[0]?.amountDisplay || null,
+        latestCustomerEmail: events[0]?.customerEmail || null,
+        latestEventId: events[0]?.eventId || null,
+        latestMerchantReference:
+          events[0]?.merchantOrderReference || events[0]?.merchantReference || null,
+        latestSettlementAmountDisplay: events[0]?.settlementAmountDisplay || null,
+      },
+    });
+  } catch (error) {
+    state.revolut.lastWebhookError = error.message;
+    state.revolut.lastUpdated = new Date().toISOString();
+
+    return res.status(503).json({
+      error: "Revolut merchant executive view unavailable",
+      detail: error.message,
+      database: {
+        connected: state.database.connected,
+        persistenceReady: state.database.persistenceReady,
+        table: "alphabet_revolut_merchant_events",
+        persistedCount: state.revolut.persistedCount,
+      },
+    });
+  }
 });
 app.get("/api/revolut/refresh-token", handleRevolutRefreshRequest);
 app.post("/api/revolut/refresh-token", handleRevolutRefreshRequest);
@@ -2126,6 +3390,7 @@ app.get("/api/health", (req, res) => {
       merchantWebhookUrl: state.stripe.merchantWebhookUrl,
       secretPresent: state.stripe.secretPresent,
       secretSource: state.stripe.secretSource,
+      healthCheckPath: state.stripe.healthCheckPath,
       sovereignStatus: SOVEREIGN_STATUS_HEADER_VALUE,
       blueprintSyncRef: BLUEPRINT_SYNC_REF,
       accountId: state.stripe.accountId,
@@ -2148,10 +3413,32 @@ app.get("/api/health", (req, res) => {
       accessTokenExpiresAt: state.revolut.accessTokenExpiresAt,
       clientAssertionType: state.revolut.clientAssertionType,
       clientIdMode: state.revolut.clientIdMode,
+      lastAmountMinor: state.revolut.lastAmountMinor,
+      lastAmountDisplay: state.revolut.lastAmountDisplay,
+      lastCustomerEmail: state.revolut.lastCustomerEmail,
+      lastCurrency: state.revolut.lastCurrency,
+      merchantWebhookUrl: state.revolut.merchantWebhookUrl,
+      persistedCount: state.revolut.persistedCount,
+      targetAssetsEur: state.revolut.targetAssetsEur,
+      lastEventId: state.revolut.lastEventId,
+      lastEventType: state.revolut.lastEventType,
+      lastMerchantOrderReference: state.revolut.lastMerchantOrderReference,
+      lastMerchantReference: state.revolut.lastMerchantReference,
+      lastOrderId: state.revolut.lastOrderId,
+      lastPaymentId: state.revolut.lastPaymentId,
+      lastPaymentStatus: state.revolut.lastPaymentStatus,
       lastAssertionIssuedAt: state.revolut.lastAssertionIssuedAt,
       lastAssertionExpiresAt: state.revolut.lastAssertionExpiresAt,
+      lastPersistedAt: state.revolut.lastPersistedAt,
       lastRefreshAt: state.revolut.lastRefreshAt,
       lastError: state.revolut.lastError,
+      lastSettlementAmountMinor: state.revolut.lastSettlementAmountMinor,
+      lastSettlementAmountDisplay: state.revolut.lastSettlementAmountDisplay,
+      lastSettlementCurrency: state.revolut.lastSettlementCurrency,
+      lastSettlementStatus: state.revolut.lastSettlementStatus,
+      lastWebhookError: state.revolut.lastWebhookError,
+      lastWebhookId: state.revolut.lastWebhookId,
+      lastWebhookReceivedAt: state.revolut.lastWebhookReceivedAt,
       canonicalNote: state.revolut.canonicalNote,
     },
   });
