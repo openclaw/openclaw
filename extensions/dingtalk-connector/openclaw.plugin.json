@@ -1,0 +1,519 @@
+{
+  "id": "dingtalk-connector",
+  "name": "DingTalk Channel",
+  "version": "0.8.20",
+  "description": "Official OpenClaw DingTalk channel plugin | 钉钉官方 OpenClaw 插件",
+  "author": "DingTalk Real Team",
+  "main": "index.ts",
+  "channels": [
+    "dingtalk-connector"
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "channelConfigs": {
+    "dingtalk-connector": {
+      "label": "DingTalk",
+      "description": "DingTalk enterprise bot using Stream mode (no public IP required) with AI Card streaming responses.",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "defaultAccount": {
+            "type": "string"
+          },
+          "clientId": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "clientSecret": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "enum": [
+                      "env",
+                      "file",
+                      "exec"
+                    ]
+                  },
+                  "provider": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "source",
+                  "provider",
+                  "id"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "enableMediaUpload": {
+            "type": "boolean"
+          },
+          "systemPrompt": {
+            "type": "string"
+          },
+          "dmPolicy": {
+            "default": "open",
+            "type": "string",
+            "enum": [
+              "open",
+              "pairing",
+              "allowlist"
+            ]
+          },
+          "allowFrom": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            }
+          },
+          "groupPolicy": {
+            "default": "open",
+            "type": "string",
+            "enum": [
+              "open",
+              "allowlist",
+              "disabled"
+            ]
+          },
+          "groupAllowFrom": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                }
+              ]
+            }
+          },
+          "requireMention": {
+            "default": true,
+            "type": "boolean"
+          },
+          "groups": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "requireMention": {
+                  "type": "boolean"
+                },
+                "tools": {
+                  "type": "object",
+                  "properties": {
+                    "allow": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "deny": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "enabled": {
+                  "type": "boolean"
+                },
+                "allowFrom": {
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  }
+                },
+                "systemPrompt": {
+                  "type": "string"
+                },
+                "groupSessionScope": {
+                  "type": "string",
+                  "enum": [
+                    "group",
+                    "group_sender"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "historyLimit": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "textChunkLimit": {
+            "type": "integer",
+            "exclusiveMinimum": 0
+          },
+          "mediaMaxMb": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "tools": {
+            "type": "object",
+            "properties": {
+              "docs": {
+                "type": "boolean"
+              },
+              "media": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          },
+          "typingIndicator": {
+            "type": "boolean"
+          },
+          "resolveSenderNames": {
+            "type": "boolean"
+          },
+          "separateSessionByConversation": {
+            "default": true,
+            "type": "boolean"
+          },
+          "sharedMemoryAcrossConversations": {
+            "default": false,
+            "type": "boolean"
+          },
+          "groupSessionScope": {
+            "default": "group",
+            "type": "string",
+            "enum": [
+              "group",
+              "group_sender"
+            ]
+          },
+          "asyncMode": {
+            "type": "boolean"
+          },
+          "ackText": {
+            "type": "string"
+          },
+          "endpoint": {
+            "type": "string"
+          },
+          "debug": {
+            "type": "boolean"
+          },
+          "groupReplyMode": {
+            "type": "string",
+            "enum": [
+              "text",
+              "markdown"
+            ]
+          },
+          "accounts": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "clientId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ]
+                },
+                "clientSecret": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "source": {
+                          "type": "string",
+                          "enum": [
+                            "env",
+                            "file",
+                            "exec"
+                          ]
+                        },
+                        "provider": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "id": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "required": [
+                        "source",
+                        "provider",
+                        "id"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                },
+                "chatbotUserId": {
+                  "type": "string"
+                },
+                "chatbotCorpId": {
+                  "type": "string"
+                },
+                "dmPolicy": {
+                  "type": "string",
+                  "enum": [
+                    "open",
+                    "pairing",
+                    "allowlist"
+                  ]
+                },
+                "allowFrom": {
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  }
+                },
+                "groupPolicy": {
+                  "type": "string",
+                  "enum": [
+                    "open",
+                    "allowlist",
+                    "disabled"
+                  ]
+                },
+                "groupAllowFrom": {
+                  "type": "array",
+                  "items": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      }
+                    ]
+                  }
+                },
+                "requireMention": {
+                  "type": "boolean"
+                },
+                "groups": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "object",
+                    "properties": {
+                      "requireMention": {
+                        "type": "boolean"
+                      },
+                      "tools": {
+                        "type": "object",
+                        "properties": {
+                          "allow": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "deny": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      "enabled": {
+                        "type": "boolean"
+                      },
+                      "allowFrom": {
+                        "type": "array",
+                        "items": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "number"
+                            }
+                          ]
+                        }
+                      },
+                      "systemPrompt": {
+                        "type": "string"
+                      },
+                      "groupSessionScope": {
+                        "type": "string",
+                        "enum": [
+                          "group",
+                          "group_sender"
+                        ]
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "historyLimit": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "textChunkLimit": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0
+                },
+                "mediaMaxMb": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                "tools": {
+                  "type": "object",
+                  "properties": {
+                    "docs": {
+                      "type": "boolean"
+                    },
+                    "media": {
+                      "type": "boolean"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "typingIndicator": {
+                  "type": "boolean"
+                },
+                "resolveSenderNames": {
+                  "type": "boolean"
+                },
+                "separateSessionByConversation": {
+                  "type": "boolean"
+                },
+                "sharedMemoryAcrossConversations": {
+                  "type": "boolean"
+                },
+                "groupSessionScope": {
+                  "type": "string",
+                  "enum": [
+                    "group",
+                    "group_sender"
+                  ]
+                },
+                "asyncMode": {
+                  "type": "boolean"
+                },
+                "ackText": {
+                  "type": "string"
+                },
+                "endpoint": {
+                  "type": "string"
+                },
+                "debug": {
+                  "type": "boolean"
+                },
+                "groupReplyMode": {
+                  "type": "string",
+                  "enum": [
+                    "text",
+                    "markdown"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "uiHints": {
+        "channels.dingtalk-connector.clientId": {
+          "label": "Client ID (AppKey)",
+          "help": "钉钉应用的 AppKey / Client ID",
+          "sensitive": true
+        },
+        "channels.dingtalk-connector.clientSecret": {
+          "label": "Client Secret (AppSecret)",
+          "help": "钉钉应用的 AppSecret / Client Secret",
+          "sensitive": true
+        },
+        "channels.dingtalk-connector.dmPolicy": {
+          "label": "DM Policy",
+          "help": "单聊策略：open（开放）、pairing（配对）、allowlist（白名单）"
+        },
+        "channels.dingtalk-connector.groupPolicy": {
+          "label": "Group Policy",
+          "help": "群聊策略：open（开放）、allowlist（白名单）、disabled（禁用）"
+        },
+        "channels.dingtalk-connector.requireMention": {
+          "label": "Require @Mention",
+          "help": "群聊中是否需要 @机器人 才响应"
+        },
+        "channels.dingtalk-connector.debug": {
+          "label": "Debug Mode",
+          "help": "启用调试日志",
+          "advanced": true
+        },
+        "channels.dingtalk-connector.endpoint": {
+          "label": "Gateway Endpoint",
+          "help": "自定义 DWClient 网关地址（高级）",
+          "advanced": true
+        },
+        "channels.dingtalk-connector.accounts": {
+          "label": "Accounts",
+          "help": "多账号配置，每个 key 是账号 ID"
+        }
+      }
+    }
+  }
+}
