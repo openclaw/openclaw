@@ -10,7 +10,11 @@ import { approveDevicePairing, listDevicePairing } from "../infra/device-pairing
 import { approveNodePairing, requestNodePairing } from "../infra/node-pairing.js";
 import { resolveRestartSentinelPath } from "../infra/restart-sentinel.js";
 import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+  type GatewayClientName,
+} from "../utils/message-channel.js";
 import type { GatewayClient } from "./client.js";
 
 vi.mock("../infra/update-runner.js", () => ({
@@ -93,6 +97,7 @@ const connectNodeClient = async (params: {
   platform?: string;
   deviceFamily?: string;
   deviceIdentity?: DeviceIdentity;
+  clientName?: GatewayClientName;
   instanceId?: string;
   displayName?: string;
   onEvent?: (evt: { event?: string; payload?: unknown }) => void;
@@ -105,7 +110,7 @@ const connectNodeClient = async (params: {
     url: `ws://127.0.0.1:${params.port}`,
     token,
     role: "node",
-    clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+    clientName: params.clientName ?? GATEWAY_CLIENT_NAMES.NODE_HOST,
     clientVersion: "1.0.0",
     clientDisplayName: params.displayName,
     platform: params.platform ?? "ios",
@@ -495,7 +500,7 @@ describe("gateway node command allowlist", () => {
       const node = await findConnectedNodeByDisplayName(displayName);
       const nodeId = requireNodeId(node?.nodeId, displayName);
 
-      await expectPendingPairingCommands(nodeId, ["canvas.snapshot"]);
+      await expectPendingPairingCommands(nodeId, ["canvas.snapshot", "system.run"]);
 
       const canvasRes = await rpcReq(ws, "node.invoke", {
         nodeId,
@@ -729,6 +734,71 @@ describe("gateway node command allowlist", () => {
       ).rejects.toThrow(/device metadata change pending approval/i);
     } finally {
       await iosClient?.stopAndWait();
+    }
+  });
+
+  test("does not promote paired desktop client id changes into host command defaults", async () => {
+    const deviceIdentityPath = path.join(
+      os.tmpdir(),
+      `openclaw-client-id-promotion-${Date.now()}-${Math.random().toString(36).slice(2)}.json`,
+    );
+    const deviceIdentity = loadOrCreateDeviceIdentity(deviceIdentityPath);
+    const displayName = "node-client-id-promotion";
+
+    let macClient: GatewayClient | undefined;
+    let spoofClient: GatewayClient | undefined;
+    let secondSpoofClient: GatewayClient | undefined;
+    try {
+      macClient = await connectNodeClientWithNodePairing({
+        port,
+        clientName: GATEWAY_CLIENT_NAMES.MACOS_APP,
+        commands: ["canvas.snapshot"],
+        platform: "macos",
+        deviceFamily: "Mac",
+        instanceId: displayName,
+        displayName,
+        deviceIdentity,
+      });
+      await macClient.stopAndWait();
+
+      spoofClient = await connectNodeClient({
+        port,
+        clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+        commands: ["system.run"],
+        platform: "macos",
+        deviceFamily: "Mac",
+        instanceId: displayName,
+        displayName,
+        deviceIdentity,
+      });
+      await expect
+        .poll(async () => {
+          const node = await findConnectedNodeByDisplayName(displayName);
+          return node?.commands?.toSorted() ?? [];
+        }, FAST_WAIT_OPTS)
+        .toEqual([]);
+      await spoofClient.stopAndWait();
+
+      secondSpoofClient = await connectNodeClient({
+        port,
+        clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+        commands: ["system.run"],
+        platform: "macos",
+        deviceFamily: "Mac",
+        instanceId: displayName,
+        displayName,
+        deviceIdentity,
+      });
+      await expect
+        .poll(async () => {
+          const node = await findConnectedNodeByDisplayName(displayName);
+          return node?.commands?.toSorted() ?? [];
+        }, FAST_WAIT_OPTS)
+        .toEqual([]);
+    } finally {
+      await secondSpoofClient?.stopAndWait();
+      await spoofClient?.stopAndWait();
+      await macClient?.stopAndWait();
     }
   });
 

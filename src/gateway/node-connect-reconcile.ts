@@ -8,13 +8,12 @@ import { normalizeArrayBackedTrimmedStringList } from "../shared/string-normaliz
 import {
   normalizeDeclaredNodeCommands,
   resolveNodeCommandAllowlist,
+  resolveNodePairingCommandAllowlist,
 } from "./node-command-policy.js";
 import type { ConnectParams } from "./protocol/index.js";
 
 export type NodeConnectPairingReconcileResult = {
   nodeId: string;
-  trustedClientId?: string;
-  trustedClientMode?: string;
   declaredCaps: string[];
   effectiveCaps: string[];
   declaredCommands: string[];
@@ -119,8 +118,6 @@ function intersectPermissionSurface(params: {
 function buildNodePairingRequestInput(params: {
   nodeId: string;
   connectParams: ConnectParams;
-  trustedClientId?: string;
-  trustedClientMode?: string;
   caps: string[];
   commands: string[];
   permissions?: Record<string, boolean>;
@@ -128,8 +125,6 @@ function buildNodePairingRequestInput(params: {
 }): NodePairingRequestInput {
   return {
     nodeId: params.nodeId,
-    clientId: params.trustedClientId,
-    clientMode: params.trustedClientMode,
     displayName: params.connectParams.client.displayName,
     platform: params.connectParams.client.platform,
     version: params.connectParams.client.version,
@@ -145,26 +140,23 @@ function buildNodePairingRequestInput(params: {
 export async function reconcileNodePairingOnConnect(params: {
   cfg: OpenClawConfig;
   connectParams: ConnectParams;
-  trustedClientId?: string;
-  trustedClientMode?: string;
   pairedNode: NodePairingPairedNode | null;
   reportedClientIp?: string;
   requestPairing: (input: NodePairingRequestInput) => Promise<RequestNodePairingResult>;
 }): Promise<NodeConnectPairingReconcileResult> {
   const nodeId = params.connectParams.device?.id ?? params.connectParams.client.id;
-  const allowlist = resolveNodeCommandAllowlist(params.cfg, {
+  const policyNode = {
     platform: params.connectParams.client.platform,
     deviceFamily: params.connectParams.client.deviceFamily,
-    trustedClientId: params.trustedClientId,
-    trustedClientMode: params.trustedClientMode,
     caps: params.connectParams.caps,
     commands: params.connectParams.commands,
-  });
+  };
+  const pairingAllowlist = resolveNodePairingCommandAllowlist(params.cfg, policyNode);
   const declared = normalizeDeclaredNodeCommands({
     declaredCommands: Array.isArray(params.connectParams.commands)
       ? params.connectParams.commands
       : [],
-    allowlist,
+    allowlist: pairingAllowlist,
   });
   const declaredCaps = normalizeApprovalSurfaceList(params.connectParams.caps);
   const declaredPermissions = normalizePermissionMap(params.connectParams.permissions);
@@ -174,8 +166,6 @@ export async function reconcileNodePairingOnConnect(params: {
       buildNodePairingRequestInput({
         nodeId,
         connectParams: params.connectParams,
-        trustedClientId: params.trustedClientId,
-        trustedClientMode: params.trustedClientMode,
         caps: declaredCaps,
         commands: declared,
         permissions: declaredPermissions,
@@ -184,8 +174,6 @@ export async function reconcileNodePairingOnConnect(params: {
     );
     return {
       nodeId,
-      trustedClientId: params.trustedClientId,
-      trustedClientMode: params.trustedClientMode,
       declaredCaps,
       effectiveCaps: [],
       declaredCommands: declared,
@@ -196,9 +184,13 @@ export async function reconcileNodePairingOnConnect(params: {
     };
   }
 
+  const runtimeAllowlist = resolveNodeCommandAllowlist(params.cfg, {
+    ...policyNode,
+    approvedCommands: params.pairedNode.commands,
+  });
   const approvedCommands = resolveApprovedReconnectCommands({
     pairedCommands: params.pairedNode.commands,
-    allowlist,
+    allowlist: runtimeAllowlist,
   });
   const approvedCaps = normalizeApprovalSurfaceList(params.pairedNode.caps);
   const approvedPermissions = normalizePermissionMap(params.pairedNode.permissions);
@@ -223,8 +215,6 @@ export async function reconcileNodePairingOnConnect(params: {
       buildNodePairingRequestInput({
         nodeId,
         connectParams: params.connectParams,
-        trustedClientId: params.trustedClientId,
-        trustedClientMode: params.trustedClientMode,
         caps: declaredCaps,
         commands: declared,
         permissions: declaredPermissions ?? (hasPermissionChange ? {} : undefined),
@@ -233,8 +223,6 @@ export async function reconcileNodePairingOnConnect(params: {
     );
     return {
       nodeId,
-      trustedClientId: params.trustedClientId,
-      trustedClientMode: params.trustedClientMode,
       declaredCaps,
       effectiveCaps: effectiveApprovedDeclaredCaps,
       declaredCommands: declared,
@@ -247,8 +235,6 @@ export async function reconcileNodePairingOnConnect(params: {
 
   return {
     nodeId,
-    trustedClientId: params.trustedClientId,
-    trustedClientMode: params.trustedClientMode,
     declaredCaps,
     effectiveCaps: declaredCaps,
     declaredCommands: declared,

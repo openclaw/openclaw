@@ -170,7 +170,7 @@ describe("gateway/node-command-policy", () => {
     expect(macAllowlist.has("screen.snapshot")).toBe(false);
   });
 
-  it("keeps host command defaults for bundled node-host desktop platforms", () => {
+  it("keeps explicitly approved host commands for desktop platforms", () => {
     const cfg = {} as OpenClawConfig;
     const cases = [
       { platform: "macos", deviceFamily: "Mac" },
@@ -181,8 +181,7 @@ describe("gateway/node-command-policy", () => {
     for (const node of cases) {
       const allowlist = resolveNodeCommandAllowlist(cfg, {
         ...node,
-        trustedClientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-        trustedClientMode: GATEWAY_CLIENT_MODES.NODE,
+        approvedCommands: ["system.run", "system.which"],
       });
       expect(allowlist.has("system.run")).toBe(true);
       expect(allowlist.has("system.which")).toBe(true);

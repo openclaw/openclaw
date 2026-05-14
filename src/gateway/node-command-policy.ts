@@ -8,7 +8,6 @@ import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-regist
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { normalizeDeviceMetadataForPolicy } from "./device-metadata-normalization.js";
 import type { NodeSession } from "./node-registry.js";
-import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 
 const CAMERA_COMMANDS = ["camera.list"];
 const CAMERA_DANGEROUS_COMMANDS = ["camera.snap", "camera.clip"];
@@ -261,25 +260,20 @@ export function isForegroundRestrictedPluginNodeCommand(command: string): boolea
 }
 
 type NodeCommandPolicyNode = Pick<NodeSession, "platform" | "deviceFamily"> &
-  Partial<Pick<NodeSession, "caps" | "commands" | "trustedClientId" | "trustedClientMode">>;
+  Partial<Pick<NodeSession, "caps" | "commands">> & {
+    approvedCommands?: readonly string[];
+  };
 
 function isDesktopPlatformId(platformId: PlatformId): boolean {
   return platformId === "macos" || platformId === "windows" || platformId === "linux";
 }
 
-function isBundledNodeHost(node?: NodeCommandPolicyNode): boolean {
-  return (
-    node?.trustedClientId === GATEWAY_CLIENT_IDS.NODE_HOST &&
-    node?.trustedClientMode === GATEWAY_CLIENT_MODES.NODE
-  );
-}
-
 function filterDesktopHostCommandDefaults(params: {
   platformId: PlatformId;
-  node?: NodeCommandPolicyNode;
   commands: readonly string[];
+  includeDesktopHostCommands?: boolean;
 }): string[] {
-  if (!isDesktopPlatformId(params.platformId) || isBundledNodeHost(params.node)) {
+  if (params.includeDesktopHostCommands === true || !isDesktopPlatformId(params.platformId)) {
     return [...params.commands];
   }
   return params.commands.filter((command) => !DESKTOP_HOST_COMMANDS.has(command));
@@ -299,23 +293,25 @@ function hasTalkSurface(node?: NodeCommandPolicyNode): boolean {
   );
 }
 
-export function resolveNodeCommandAllowlist(
+function resolveNodeCommandAllowlistInternal(
   cfg: OpenClawConfig,
   node?: NodeCommandPolicyNode,
+  options?: { includeDesktopHostCommands?: boolean },
 ): Set<string> {
   const platformId = normalizePlatformId(node?.platform, node?.deviceFamily);
   const base = filterDesktopHostCommandDefaults({
     platformId,
-    node,
     commands: PLATFORM_DEFAULTS[platformId] ?? PLATFORM_DEFAULTS.unknown,
+    includeDesktopHostCommands: options?.includeDesktopHostCommands,
   });
   const talkCommands = hasTalkSurface(node) ? TALK_PTT_COMMANDS : [];
   const pluginDefaults = listDefaultPluginNodeCommands(platformId);
+  const approved = node?.approvedCommands ?? [];
   const extra = cfg.gateway?.nodes?.allowCommands ?? [];
   const deny = new Set(cfg.gateway?.nodes?.denyCommands ?? []);
   const dangerousPluginCommands = new Set(listDangerousPluginNodeCommands());
   const allow = new Set(
-    [...base, ...talkCommands, ...pluginDefaults, ...extra]
+    [...base, ...talkCommands, ...pluginDefaults, ...approved, ...extra]
       .map((cmd) => cmd.trim())
       .filter((cmd) => cmd && !dangerousPluginCommands.has(cmd)),
   );
@@ -332,6 +328,22 @@ export function resolveNodeCommandAllowlist(
     }
   }
   return allow;
+}
+
+export function resolveNodeCommandAllowlist(
+  cfg: OpenClawConfig,
+  node?: NodeCommandPolicyNode,
+): Set<string> {
+  return resolveNodeCommandAllowlistInternal(cfg, node);
+}
+
+export function resolveNodePairingCommandAllowlist(
+  cfg: OpenClawConfig,
+  node?: NodeCommandPolicyNode,
+): Set<string> {
+  return resolveNodeCommandAllowlistInternal(cfg, node, {
+    includeDesktopHostCommands: true,
+  });
 }
 
 function normalizeDeclaredCommands(commands?: readonly string[]): string[] {

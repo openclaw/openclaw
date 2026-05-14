@@ -15,7 +15,6 @@ import {
   listDangerousPluginNodeCommands,
   resolveNodeCommandAllowlist,
 } from "../gateway/node-command-policy.js";
-import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../gateway/protocol/client-info.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -131,20 +130,29 @@ function listKnownNodeCommands(cfg: OpenClawConfig): Set<string> {
     {
       platform: "macos",
       deviceFamily: "Mac",
-      trustedClientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-      trustedClientMode: GATEWAY_CLIENT_MODES.NODE,
+      approvedCommands: [
+        "system.run",
+        "system.run.prepare",
+        "system.which",
+        "browser.proxy",
+        "screen.snapshot",
+      ],
     },
     {
       platform: "linux",
       deviceFamily: "Linux",
-      trustedClientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-      trustedClientMode: GATEWAY_CLIENT_MODES.NODE,
+      approvedCommands: ["system.run", "system.run.prepare", "system.which", "browser.proxy"],
     },
     {
       platform: "windows",
       deviceFamily: "Windows",
-      trustedClientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-      trustedClientMode: GATEWAY_CLIENT_MODES.NODE,
+      approvedCommands: [
+        "system.run",
+        "system.run.prepare",
+        "system.which",
+        "browser.proxy",
+        "screen.snapshot",
+      ],
     },
     { platform: "unknown" },
   ];

@@ -344,8 +344,6 @@ function resolveAllowedPendingNodeActions(params: {
   const allowlist = resolveNodeCommandAllowlist(params.cfg, {
     platform: connect?.client?.platform,
     deviceFamily: connect?.client?.deviceFamily,
-    trustedClientId: (connect as { trustedClientId?: string } | undefined)?.trustedClientId,
-    trustedClientMode: (connect as { trustedClientMode?: string } | undefined)?.trustedClientMode,
     caps: connect?.caps,
     commands: declaredCommands,
   });
@@ -775,10 +773,9 @@ export const nodeHandlers: GatewayRequestHandlers = {
       const currentAllowlist = resolveNodeCommandAllowlist(cfg, {
         platform: approvedNode.platform,
         deviceFamily: approvedNode.deviceFamily,
-        trustedClientId: approvedNode.clientId,
-        trustedClientMode: approvedNode.clientMode,
         caps: approvedNode.caps,
         commands: approvedNode.commands,
+        approvedCommands: approvedNode.commands,
       });
       const currentAllowedCommands = normalizeDeclaredNodeCommands({
         declaredCommands: approvedNode.commands ?? [],
@@ -1183,7 +1180,10 @@ export const nodeHandlers: GatewayRequestHandlers = {
           `node wake done node=${nodeId} req=${wakeReqId} connected=true totalMs=${totalDurationMs}`,
         );
       }
-      const allowlist = resolveNodeCommandAllowlist(cfg, nodeSession);
+      const allowlist = resolveNodeCommandAllowlist(cfg, {
+        ...nodeSession,
+        approvedCommands: nodeSession.commands,
+      });
       const allowed = isNodeCommandAllowed({
         command,
         declaredCommands: nodeSession.commands,

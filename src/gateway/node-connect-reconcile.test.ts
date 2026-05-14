@@ -83,8 +83,6 @@ describe("reconcileNodePairingOnConnect", () => {
         commands: ["system.run"],
         permissions: { camera: true },
       }),
-      trustedClientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-      trustedClientMode: GATEWAY_CLIENT_MODES.NODE,
       pairedNode: null,
       requestPairing,
     });
@@ -107,15 +105,6 @@ describe("reconcileNodePairingOnConnect", () => {
   it.each([
     ["conflicts with device family", { deviceFamily: "iPhone" }],
     ["omits device family", {}],
-    ["uses a generic node client", { deviceFamily: "Mac" }],
-    [
-      "spoofs the node-host client id",
-      {
-        id: GATEWAY_CLIENT_IDS.NODE_HOST,
-        mode: GATEWAY_CLIENT_MODES.NODE,
-        deviceFamily: "Mac",
-      },
-    ],
   ])("filters host commands when canonical platform %s", async (_label, clientExtra) => {
     const requestPairing = vi.fn(async (input: NodePairingRequestInput) => ({
       status: "pending" as const,
