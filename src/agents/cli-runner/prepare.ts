@@ -168,6 +168,8 @@ export async function prepareCliRunContext(
       workspaceDir,
       warn: (message) => cliBackendLog.warn(message),
     }),
+    contextMode: params.bootstrapContextMode,
+    runKind: params.bootstrapContextRunKind,
   });
   const bootstrapMaxChars = resolveBootstrapMaxChars(params.config);
   const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config);

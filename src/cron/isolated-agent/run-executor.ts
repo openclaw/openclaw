@@ -178,6 +178,8 @@ export function createCronPromptExecutor(params: {
             abortSignal: params.abortSignal,
             onExecutionStarted: params.onExecutionStarted,
             onExecutionPhase: params.onExecutionPhase,
+            bootstrapContextMode: "lightweight",
+            bootstrapContextRunKind: "cron",
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature,
             senderIsOwner: params.senderIsOwner,
@@ -234,7 +236,7 @@ export function createCronPromptExecutor(params: {
           verboseLevel: params.resolvedVerboseLevel,
           timeoutMs: params.timeoutMs,
           runTimeoutOverrideMs: params.runTimeoutOverrideMs,
-          bootstrapContextMode: params.agentPayload?.lightContext ? "lightweight" : undefined,
+          bootstrapContextMode: "lightweight",
           bootstrapContextRunKind: "cron",
           toolsAllow: params.agentPayload?.toolsAllow,
           execOverrides: params.suppressExecNotifyOnExit

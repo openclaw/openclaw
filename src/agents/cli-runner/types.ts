@@ -46,6 +46,8 @@ export type RunCliAgentParams = {
   cliSessionId?: string;
   cliSessionBinding?: CliSessionBinding;
   authProfileId?: string;
+  bootstrapContextMode?: "full" | "lightweight";
+  bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
   bootstrapPromptWarningSignaturesSeen?: string[];
   bootstrapPromptWarningSignature?: string;
   images?: ImageContent[];

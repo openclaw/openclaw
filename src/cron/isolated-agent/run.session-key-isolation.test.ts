@@ -56,10 +56,14 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
     const runRequest = requireFirstMockArg(runEmbeddedPiAgentMock, "runEmbeddedPiAgentMock") as {
       sessionId?: string;
       sessionKey?: string;
+      bootstrapContextMode?: string;
+      bootstrapContextRunKind?: string;
     };
     expect(runRequest.sessionId).toBe("isolated-run-1");
     expect(runRequest.sessionKey).toBe("agent:default:cron:daily-monitor:run:isolated-run-1");
     expect(runRequest.sessionKey).not.toBe("agent:default:cron:daily-monitor");
+    expect(runRequest.bootstrapContextMode).toBe("lightweight");
+    expect(runRequest.bootstrapContextRunKind).toBe("cron");
   });
 
   it("keeps explicit session-bound cron execution on the requested session key", async () => {
@@ -122,11 +126,15 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
       sessionId?: string;
       sessionKey?: string;
       senderIsOwner?: boolean;
+      bootstrapContextMode?: string;
+      bootstrapContextRunKind?: string;
     };
     expect(runRequest.sessionId).toBe("isolated-cli-run-1");
     expect(runRequest.sessionKey).toBe("agent:default:cron:cli-monitor:run:isolated-cli-run-1");
     expect(runRequest.sessionKey).not.toBe("agent:default:cron:cli-monitor");
     expect(runRequest.senderIsOwner).toBe(true);
+    expect(runRequest.bootstrapContextMode).toBe("lightweight");
+    expect(runRequest.bootstrapContextRunKind).toBe("cron");
   });
 
   it("runs externally sourced CLI hook turns without owner tool authority", async () => {
