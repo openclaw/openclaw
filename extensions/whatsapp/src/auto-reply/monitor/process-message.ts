@@ -63,6 +63,10 @@ import {
   type LoadConfigFn,
   type resolveAgentRoute,
 } from "./runtime-api.js";
+import {
+  createWhatsAppStatusReactionController,
+  type StatusReactionController,
+} from "./status-reaction.js";
 
 const WHATSAPP_MESSAGE_RECEIVED_HOOK_LIMITS = {
   maxConcurrency: 8,
@@ -198,6 +202,7 @@ export async function processMessage(params: {
   suppressGroupHistoryClear?: boolean;
   ackAlreadySent?: boolean;
   ackReaction?: AckReactionHandle | null;
+  statusReactionController?: StatusReactionController | null;
   /** Pre-computed audio transcript from a caller-level preflight, used to avoid
    * re-transcribing the same voice note once per broadcast agent.
    * - string  → transcript obtained; use it directly, skip internal STT
@@ -326,11 +331,33 @@ export async function processMessage(params: {
     return false;
   }
 
+  // When statusReactions.enabled, a StatusReactionController takes over lifecycle
+  // signaling (queued → thinking → tool → done/error). The plain ackReaction is
+  // skipped so the same message slot isn't used for two competing systems.
+  const statusReactionController =
+    params.statusReactionController ??
+    (params.cfg.messages?.statusReactions?.enabled === true && !params.ackAlreadySent
+      ? await createWhatsAppStatusReactionController({
+          cfg: params.cfg,
+          msg: params.msg,
+          agentId: params.route.agentId,
+          sessionKey: params.route.sessionKey,
+          conversationId,
+          verbose: params.verbose,
+          accountId: account.accountId,
+        })
+      : null);
+
+  if (statusReactionController && !params.statusReactionController) {
+    void statusReactionController.setQueued();
+  }
+
   // Send ack reaction immediately upon message receipt (post-gating). Callers
   // that do preflight work before processMessage can send it first and set
   // ackAlreadySent so slow STT does not delay user-visible receipt feedback.
+  // Skip if the status reaction controller is handling lifecycle signaling.
   let ackReaction = params.ackReaction ?? null;
-  if (!ackReaction && params.ackAlreadySent !== true) {
+  if (!statusReactionController && !ackReaction && params.ackAlreadySent !== true) {
     ackReaction = await maybeSendAckReaction({
       cfg: params.cfg,
       msg: params.msg,
@@ -517,6 +544,7 @@ export async function processMessage(params: {
             replyResolver: params.replyResolver,
             route: params.route,
             shouldClearGroupHistory,
+            statusReactionController,
           }),
       }),
     },

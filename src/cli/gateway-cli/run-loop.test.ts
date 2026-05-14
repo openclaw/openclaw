@@ -655,7 +655,7 @@ describe("runGatewayLoop", () => {
       sigusr1();
 
       await exited;
-      expect(lockRelease).toHaveBeenCalled();
+      expect(lockRelease).toHaveBeenCalledTimes(1);
       expect(runtime.exit).toHaveBeenCalledWith(0);
       expect(exitCallOrder).toEqual(["lockRelease", "exit"]);
       expect(writeGatewayRestartHandoffSync).not.toHaveBeenCalled();

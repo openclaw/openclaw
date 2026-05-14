@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { describe, expect, it, vi } from "vitest";
+import { repairToolUseResultPairing } from "../../agents/session-transcript-repair.js";
 import * as transcriptEvents from "../../sessions/transcript-events.js";
 import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
@@ -18,6 +19,12 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   type ExactAssistantMessage = Parameters<
     typeof appendExactAssistantMessageToSessionTranscript
   >[0]["message"];
+  type TranscriptRepairMessage = Parameters<typeof repairToolUseResultPairing>[0][number];
+  type TranscriptUpdateEmitterSpy = {
+    mock: {
+      calls: [string | SessionTranscriptUpdate][];
+    };
+  };
 
   function writeTranscriptStore() {
     fs.writeFileSync(
@@ -56,6 +63,18 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       stopReason: "stop",
       timestamp: Date.now(),
     };
+  }
+
+  function requireTranscriptUpdateCall(spy: TranscriptUpdateEmitterSpy): SessionTranscriptUpdate {
+    const call = spy.mock.calls[0];
+    if (!call) {
+      throw new Error("expected transcript update event");
+    }
+    const event = call[0];
+    if (typeof event === "string") {
+      throw new Error("expected structured transcript update event");
+    }
+    return event;
   }
 
   it("creates transcript file and appends message for valid session", async () => {
@@ -109,7 +128,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
     const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
     expect(emitSpy).toHaveBeenCalledTimes(1);
-    const [event] = emitSpy.mock.calls[0] as [SessionTranscriptUpdate];
+    const event = requireTranscriptUpdateCall(emitSpy);
     const message = event.message as
       | {
           role?: string;
@@ -264,6 +283,78 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       expect(messageLine.message.model).toBe("delivery-mirror");
       expect(messageLine.message.content[0].text).toBe("Repeated answer");
     }
+  });
+
+  it("keeps delivery mirrors in transcripts while repair preserves real tool results", async () => {
+    writeTranscriptStore();
+    const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
+    const toolCallId = "call_maniple_list";
+
+    const toolCallResult = await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: toolCallId,
+            name: "maniple__list_workers",
+            arguments: {},
+          },
+        ],
+        stopReason: "toolUse",
+      },
+    });
+
+    const mirrorResult = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Maniple List Workers",
+      storePath: fixture.storePath(),
+    });
+
+    expect(mirrorResult.ok).toBe(true);
+    if (!mirrorResult.ok) {
+      return;
+    }
+    expect(mirrorResult.messageId).not.toBe(toolCallResult.messageId);
+    const linesAfterMirror = fs.readFileSync(sessionFile, "utf-8").trim().split("\n");
+    expect(linesAfterMirror).toHaveLength(3);
+    const mirrorLine = JSON.parse(linesAfterMirror[2]);
+    expect(mirrorLine.message.model).toBe("delivery-mirror");
+
+    await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      message: {
+        role: "toolResult",
+        toolCallId,
+        toolName: "maniple__list_workers",
+        content: [{ type: "text", text: "workers listed" }],
+        isError: false,
+      },
+    });
+
+    const messages = fs
+      .readFileSync(sessionFile, "utf-8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { message?: TranscriptRepairMessage })
+      .flatMap((entry) => (entry.message ? [entry.message] : []));
+    expect(messages.map((message) => message.role)).toEqual([
+      "assistant",
+      "assistant",
+      "toolResult",
+    ]);
+    const repair = repairToolUseResultPairing(messages, {
+      missingToolResultText: "aborted",
+    });
+
+    expect(repair.added).toHaveLength(0);
+    expect(repair.messages.map((message) => message.role)).toEqual([
+      "assistant",
+      "toolResult",
+      "assistant",
+    ]);
+    expect((repair.messages[2] as { model?: string }).model).toBe("delivery-mirror");
   });
 
   it("finds session entry using normalized (lowercased) key", async () => {

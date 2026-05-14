@@ -146,8 +146,24 @@ function requireRecord(value: unknown, message: string): Record<string, unknown>
   return value as Record<string, unknown>;
 }
 
+function mockCall(mockFn: ReturnType<typeof vi.fn>, callIndex = 0): ReadonlyArray<unknown> {
+  const call = mockFn.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected mock call ${callIndex + 1}`);
+  }
+  return call;
+}
+
+function mockArg(mockFn: ReturnType<typeof vi.fn>, callIndex: number, argIndex: number) {
+  return mockCall(mockFn, callIndex)[argIndex];
+}
+
 function requireRequestParams(call: unknown[] | undefined): Record<string, unknown> {
   return requireRecord(call?.[2], "expected request params object");
+}
+
+function requestParams(mockFn: ReturnType<typeof vi.fn>, callIndex = 0): Record<string, unknown> {
+  return requireRecord(mockArg(mockFn, callIndex, 2), "expected request params object");
 }
 
 function expectedDiagnosticsTargetBlock(params: {
@@ -249,6 +265,116 @@ describe("codex command", () => {
     expect(writeCodexAppServerBinding).not.toHaveBeenCalled();
   });
 
+  it("lists Codex CLI sessions from a requested node", async () => {
+    const listCodexCliSessionsOnNode = vi.fn(async () => ({
+      node: { nodeId: "mb-m5", displayName: "mb-m5" },
+      result: {
+        codexHome: "/Users/mariano/.codex",
+        sessions: [
+          {
+            sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
+            cwd: "/repo",
+            updatedAt: "2026-05-13T06:30:00.000Z",
+            lastMessage: "fix the bridge",
+            messageCount: 2,
+          },
+        ],
+      },
+    }));
+
+    const result = await handleCodexCommand(createContext("sessions --host mb-m5 bridge"), {
+      deps: createDeps({ listCodexCliSessionsOnNode }),
+    });
+
+    expect(result.text).toContain("Codex CLI sessions on mb-m5 / mb-m5:");
+    expect(result.text).toContain("019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd");
+    expect(result.text).toContain(
+      "Bind: /codex resume 019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd --host mb-m5 --bind here",
+    );
+    expect(listCodexCliSessionsOnNode).toHaveBeenCalledWith({
+      requestedNode: "mb-m5",
+      filter: "bridge",
+      limit: undefined,
+    });
+  });
+
+  it("binds the current conversation to a Codex CLI node session", async () => {
+    const requestConversationBinding = vi.fn(async () => ({
+      status: "bound" as const,
+      binding: {
+        bindingId: "binding-1",
+        pluginId: "codex",
+        pluginRoot: "/plugin",
+        channel: "test",
+        accountId: "default",
+        conversationId: "conversation",
+        boundAt: 1,
+      },
+    }));
+    const resolveCodexCliSessionForBindingOnNode = vi.fn(async () => ({
+      node: { nodeId: "node-123", displayName: "mb-m5" },
+      session: {
+        sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
+        cwd: "/repo",
+        messageCount: 2,
+      },
+    }));
+
+    await expect(
+      handleCodexCommand(
+        createContext(
+          "resume 019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd --host mb-m5 --bind here",
+          undefined,
+          { requestConversationBinding },
+        ),
+        {
+          deps: createDeps({ resolveCodexCliSessionForBindingOnNode }),
+        },
+      ),
+    ).resolves.toEqual({
+      text: "Bound this conversation to Codex CLI session 019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd on node-123.",
+    });
+    expect(resolveCodexCliSessionForBindingOnNode).toHaveBeenCalledWith({
+      requestedNode: "mb-m5",
+      sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
+    });
+    expect(requestConversationBinding).toHaveBeenCalledWith({
+      summary: "Codex CLI session 019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd on node-123",
+      detachHint: "/codex detach",
+      data: {
+        kind: "codex-cli-node-session",
+        version: 1,
+        nodeId: "node-123",
+        sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
+        cwd: "/repo",
+      },
+    });
+  });
+
+  it("refuses to bind a Codex CLI node session that the node did not list", async () => {
+    const requestConversationBinding = vi.fn();
+    const resolveCodexCliSessionForBindingOnNode = vi.fn(async () => ({
+      node: { nodeId: "node-123", displayName: "mb-m5" },
+      session: undefined,
+    }));
+
+    await expect(
+      handleCodexCommand(
+        createContext(
+          "resume 019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd --host mb-m5 --bind here",
+          undefined,
+          { requestConversationBinding },
+        ),
+        {
+          deps: createDeps({ resolveCodexCliSessionForBindingOnNode }),
+        },
+      ),
+    ).resolves.toEqual({
+      text: "No Codex CLI session 019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd was found on mb-m5.",
+    });
+    expect(requestConversationBinding).not.toHaveBeenCalled();
+  });
+
   it("escapes resumed Codex thread ids before chat display", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const unsafe = "thread-123 <@U123> [trusted](https://evil)";
@@ -291,7 +417,7 @@ describe("codex command", () => {
       text: "Codex models:\n- gpt-5.4",
     });
     expect(deps.requestOptions).toHaveBeenCalledWith(undefined, 100, config);
-    const modelsRequest = listCodexAppServerModels.mock.calls[0]?.[0];
+    const modelsRequest = mockArg(listCodexAppServerModels, 0, 0) as { config?: unknown };
     expect(modelsRequest?.config).toBe(config);
   });
 
@@ -512,7 +638,7 @@ describe("codex command", () => {
     });
 
     const statusResult = await handleCodexCommand(createContext("status"), { deps });
-    expectResultTextContains(statusResult, "Rate limits: Codex: primary 42%");
+    expectResultTextContains(statusResult, "Rate limits: Codex: primary 58% left");
     const accountResult = await handleCodexCommand(createContext("account"), { deps });
     expectResultTextContains(accountResult, "Codex is available.");
   });
@@ -1636,14 +1762,14 @@ describe("codex command", () => {
       ].join("\n"),
     });
     expect(safeCodexControlRequest).toHaveBeenCalledTimes(2);
-    expect(safeCodexControlRequest.mock.calls[0]?.[0]).toBeUndefined();
-    expect(safeCodexControlRequest.mock.calls[0]?.[1]).toBe(CODEX_CONTROL_METHODS.feedback);
-    const firstFeedbackParams = requireRequestParams(safeCodexControlRequest.mock.calls[0]);
+    expect(mockArg(safeCodexControlRequest, 0, 0)).toBeUndefined();
+    expect(mockArg(safeCodexControlRequest, 0, 1)).toBe(CODEX_CONTROL_METHODS.feedback);
+    const firstFeedbackParams = requestParams(safeCodexControlRequest);
     expect(firstFeedbackParams.threadId).toBe("thread-111");
     expect(firstFeedbackParams.includeLogs).toBe(true);
-    expect(safeCodexControlRequest.mock.calls[1]?.[0]).toBeUndefined();
-    expect(safeCodexControlRequest.mock.calls[1]?.[1]).toBe(CODEX_CONTROL_METHODS.feedback);
-    const secondFeedbackParams = requireRequestParams(safeCodexControlRequest.mock.calls[1]);
+    expect(mockArg(safeCodexControlRequest, 1, 0)).toBeUndefined();
+    expect(mockArg(safeCodexControlRequest, 1, 1)).toBe(CODEX_CONTROL_METHODS.feedback);
+    const secondFeedbackParams = requestParams(safeCodexControlRequest, 1);
     expect(secondFeedbackParams.threadId).toBe("thread-222");
     expect(secondFeedbackParams.includeLogs).toBe(true);
   });
@@ -1865,9 +1991,9 @@ describe("codex command", () => {
         "Included Codex logs and spawned Codex subthreads when available.",
       ].join("\n"),
     });
-    expect(safeCodexControlRequest.mock.calls[0]?.[0]).toBeUndefined();
-    expect(safeCodexControlRequest.mock.calls[0]?.[1]).toBe(CODEX_CONTROL_METHODS.feedback);
-    const feedbackParams = requireRequestParams(safeCodexControlRequest.mock.calls[0]);
+    expect(mockArg(safeCodexControlRequest, 0, 0)).toBeUndefined();
+    expect(mockArg(safeCodexControlRequest, 0, 1)).toBe(CODEX_CONTROL_METHODS.feedback);
+    const feedbackParams = requestParams(safeCodexControlRequest);
     expect(feedbackParams.classification).toBe("bug");
     expect(feedbackParams.threadId).toBe("thread-private");
     expect(feedbackParams.includeLogs).toBe(true);
@@ -1940,9 +2066,9 @@ describe("codex command", () => {
     const token = readDiagnosticsConfirmationToken(request);
     await handleCodexCommand(createContext(`diagnostics confirm ${token}`, sessionFile), { deps });
 
-    expect(safeCodexControlRequest.mock.calls[0]?.[0]).toBeUndefined();
-    expect(safeCodexControlRequest.mock.calls[0]?.[1]).toBe(CODEX_CONTROL_METHODS.feedback);
-    const feedbackParams = requireRequestParams(safeCodexControlRequest.mock.calls[0]);
+    expect(mockArg(safeCodexControlRequest, 0, 0)).toBeUndefined();
+    expect(mockArg(safeCodexControlRequest, 0, 1)).toBe(CODEX_CONTROL_METHODS.feedback);
+    const feedbackParams = requestParams(safeCodexControlRequest);
     expect(feedbackParams.reason).toBe("x".repeat(2048));
   });
 
@@ -2578,7 +2704,7 @@ describe("codex command", () => {
     expect(result.text).toContain("/repo \uff3btrusted\uff3d\uff08https://evil\uff09");
     expect(result.text).not.toContain("<@U123>");
     expect(result.text).not.toContain("[trusted](https://evil)");
-    const bindingRequest = requestConversationBinding.mock.calls[0]?.[0];
+    const bindingRequest = mockArg(requestConversationBinding, 0, 0) as { summary?: string };
     expect(bindingRequest?.summary).toBe(
       "Codex app-server thread thread-123 &lt;\uff20U123&gt; in /repo \uff3btrusted\uff3d\uff08https://evil\uff09",
     );

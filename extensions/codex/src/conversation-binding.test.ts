@@ -29,6 +29,14 @@ import {
 
 let tempDir: string;
 
+function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
+  const call = mock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`Expected mock call ${callIndex}`);
+  }
+  return call[argIndex];
+}
+
 describe("codex conversation binding", () => {
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-binding-"));
@@ -92,10 +100,15 @@ describe("codex conversation binding", () => {
       modelProvider: "openai",
     });
 
-    const authOrderParams = agentRuntimeMocks.resolveAuthProfileOrder.mock.calls[0]?.[0];
+    const authOrderParams = mockCallArg(agentRuntimeMocks.resolveAuthProfileOrder) as {
+      cfg?: unknown;
+      provider?: unknown;
+    };
     expect(authOrderParams?.cfg).toBe(config);
     expect(authOrderParams?.provider).toBe("openai-codex");
-    const sharedClientParams = sharedClientMocks.getSharedCodexAppServerClient.mock.calls[0]?.[0];
+    const sharedClientParams = mockCallArg(sharedClientMocks.getSharedCodexAppServerClient) as {
+      authProfileId?: unknown;
+    };
     expect(sharedClientParams?.authProfileId).toBe("openai-codex:default");
     expect(requests).toHaveLength(1);
     expect(requests[0]?.method).toBe("thread/start");
@@ -149,7 +162,9 @@ describe("codex conversation binding", () => {
       modelProvider: "openai",
     });
 
-    const sharedClientParams = sharedClientMocks.getSharedCodexAppServerClient.mock.calls[0]?.[0];
+    const sharedClientParams = mockCallArg(sharedClientMocks.getSharedCodexAppServerClient) as {
+      authProfileId?: unknown;
+    };
     expect(sharedClientParams?.authProfileId).toBe("work");
     expect(requests).toHaveLength(1);
     expect(requests[0]?.method).toBe("thread/start");
@@ -217,6 +232,55 @@ describe("codex conversation binding", () => {
     );
 
     expect(result).toEqual({ handled: true });
+  });
+
+  it("routes bound Codex CLI node sessions through node resume", async () => {
+    const resumeCodexCliSessionOnNode = vi.fn(async () => ({
+      ok: true as const,
+      sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
+      text: "done",
+    }));
+
+    const result = await handleCodexConversationInboundClaim(
+      {
+        content: "continue the task",
+        channel: "discord",
+        isGroup: true,
+        commandAuthorized: true,
+      },
+      {
+        channelId: "discord",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "discord",
+          accountId: "default",
+          conversationId: "channel-1",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-cli-node-session",
+            version: 1,
+            nodeId: "mb-m5",
+            sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
+            cwd: "/repo",
+          },
+        },
+      },
+      {
+        resumeCodexCliSessionOnNode,
+        timeoutMs: 1234,
+      },
+    );
+
+    expect(result).toEqual({ handled: true, reply: { text: "done" } });
+    expect(resumeCodexCliSessionOnNode).toHaveBeenCalledWith({
+      nodeId: "mb-m5",
+      sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
+      prompt: "continue the task",
+      cwd: "/repo",
+      timeoutMs: 1234,
+    });
   });
 
   it("recreates a missing bound thread and preserves auth plus turn overrides", async () => {
@@ -327,7 +391,9 @@ describe("codex conversation binding", () => {
       "thread/start",
       "turn/start",
     ]);
-    const sharedClientParams = sharedClientMocks.getSharedCodexAppServerClient.mock.calls[0]?.[0];
+    const sharedClientParams = mockCallArg(sharedClientMocks.getSharedCodexAppServerClient) as {
+      authProfileId?: unknown;
+    };
     expect(sharedClientParams?.authProfileId).toBe("work");
     expect(requests[1]?.params.model).toBe("gpt-5.4-mini");
     expect(requests[1]?.params.approvalPolicy).toBe("on-request");

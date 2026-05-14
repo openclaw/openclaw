@@ -331,6 +331,16 @@ describe("scripts/lib/docker-e2e-plan", () => {
         weight: 3,
       },
       {
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:root-managed-vps-upgrade",
+        imageKind: "bare",
+        live: false,
+        name: "root-managed-vps-upgrade",
+        resources: ["docker", "npm"],
+        stateScenario: "upgrade-survivor",
+        timeoutMs: 1_500_000,
+        weight: 3,
+      },
+      {
         command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-restart-auth",
         imageKind: "bare",
         live: false,
@@ -363,7 +373,8 @@ describe("scripts/lib/docker-e2e-plan", () => {
         weight: 2,
       },
       {
-        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-plugin-tool",
+        command:
+          "OPENCLAW_LIVE_PLUGIN_TOOL_TIMEOUT_SECONDS=300 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-plugin-tool",
         imageKind: "bare",
         live: true,
         name: "live-plugin-tool",
@@ -482,6 +493,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "skill-install",
       "upgrade-survivor",
       "published-upgrade-survivor",
+      "root-managed-vps-upgrade",
       "update-restart-auth",
     ]);
     expect(pluginsRuntime.lanes.map((lane) => lane.name)).toEqual([
@@ -679,7 +691,9 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.credentials).toEqual(["openai"]);
     expect(plan.lanes).toHaveLength(1);
     const lane = requireFirstLane(plan);
-    expect(lane.command).toBe("OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-plugin-tool");
+    expect(lane.command).toBe(
+      "OPENCLAW_LIVE_PLUGIN_TOOL_TIMEOUT_SECONDS=300 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-plugin-tool",
+    );
     expect(lane.imageKind).toBe("bare");
     expect(lane.live).toBe(true);
     expect(lane.name).toBe("live-plugin-tool");

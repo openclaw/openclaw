@@ -53,12 +53,36 @@ function createOps(params: {
     chatRunBuffers: new Map(buffer !== undefined ? [[runId, buffer]] : []),
     chatDeltaSentAt: new Map([[runId, Date.now()]]),
     chatDeltaLastBroadcastLen: new Map([[runId, buffer?.length ?? 0]]),
+    chatDeltaLastBroadcastText: new Map(buffer !== undefined ? [[runId, buffer]] : []),
+    agentDeltaSentAt: new Map([[`${runId}:assistant`, Date.now()]]),
+    bufferedAgentEvents: new Map([
+      [
+        `${runId}:assistant`,
+        {
+          payload: {
+            runId,
+            seq: 1,
+            stream: "assistant",
+            ts: Date.now(),
+            data: { text: "buffer", delta: "buffer" },
+          },
+        },
+      ],
+    ]),
     chatAbortedRuns: new Map(),
     removeChatRun,
     agentRunSeq: new Map(),
     broadcast,
     nodeSendToSession,
   };
+}
+
+function firstBroadcastPayload(ops: { broadcast: ReturnType<typeof vi.fn> }): unknown {
+  const call = ops.broadcast.mock.calls[0];
+  if (!call) {
+    throw new Error("expected broadcast call");
+  }
+  return call[1];
 }
 
 describe("isChatStopCommandText", () => {
@@ -100,12 +124,15 @@ describe("abortChatRunById", () => {
     expect(ops.chatRunBuffers.has(runId)).toBe(false);
     expect(ops.chatDeltaSentAt.has(runId)).toBe(false);
     expect(ops.chatDeltaLastBroadcastLen.has(runId)).toBe(false);
+    expect(ops.chatDeltaLastBroadcastText.has(runId)).toBe(false);
+    expect(ops.agentDeltaSentAt?.has(`${runId}:assistant`)).toBe(false);
+    expect(ops.bufferedAgentEvents?.has(`${runId}:assistant`)).toBe(false);
     expect(ops.removeChatRun).toHaveBeenCalledWith(runId, runId, sessionKey);
     expect(ops.agentRunSeq.has(runId)).toBe(false);
     expect(ops.agentRunSeq.has("client-run-1")).toBe(false);
 
     expect(ops.broadcast).toHaveBeenCalledTimes(1);
-    const payload = ops.broadcast.mock.calls[0]?.[1] as ChatAbortPayload;
+    const payload = firstBroadcastPayload(ops) as ChatAbortPayload;
     expect(payload).toEqual({
       runId,
       sessionKey,
@@ -130,7 +157,7 @@ describe("abortChatRunById", () => {
     const result = abortChatRunById(ops, { runId, sessionKey });
 
     expect(result).toEqual({ aborted: true });
-    const payload = ops.broadcast.mock.calls[0]?.[1] as Record<string, unknown>;
+    const payload = firstBroadcastPayload(ops) as Record<string, unknown>;
     expect(payload.message).toBeUndefined();
   });
 
@@ -151,7 +178,7 @@ describe("abortChatRunById", () => {
     const result = abortChatRunById(ops, { runId, sessionKey });
 
     expect(result).toEqual({ aborted: true });
-    const payload = ops.broadcast.mock.calls[0]?.[1] as ChatAbortPayload;
+    const payload = firstBroadcastPayload(ops) as ChatAbortPayload;
     expect(payload).toEqual({
       runId,
       sessionKey,

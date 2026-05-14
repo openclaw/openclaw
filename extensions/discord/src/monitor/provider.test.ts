@@ -104,6 +104,14 @@ function createConfigWithDiscordAccount(overrides: Record<string, unknown> = {})
 
 type MockCallReader = { mock: { calls: unknown[][] } };
 
+function firstMockArg(mock: MockCallReader, label: string) {
+  const firstCall = mock.mock.calls[0];
+  if (!firstCall) {
+    throw new Error(`expected ${label} mock call`);
+  }
+  return firstCall[0];
+}
+
 function mockMessages(mock: unknown): string[] {
   return (mock as MockCallReader).mock.calls.map((call) => {
     const message = call[0];
@@ -112,16 +120,17 @@ function mockMessages(mock: unknown): string[] {
 }
 
 function expectMockLogContains(mock: unknown, expected: string): void {
-  expect(mockMessages(mock).some((message) => message.includes(expected))).toBe(true);
+  expect(mockMessages(mock).join("\n")).toContain(expected);
 }
 
 function expectMockLogNotContains(mock: unknown, expected: string): void {
-  expect(mockMessages(mock).every((message) => !message.includes(expected))).toBe(true);
+  expect(mockMessages(mock).join("\n")).not.toContain(expected);
 }
 
 function expectMessagesContainAll(messages: string[], expected: string[]): void {
+  const joinedMessages = messages.join("\n");
   for (const entry of expected) {
-    expect(messages.some((message) => message.includes(entry))).toBe(true);
+    expect(joinedMessages).toContain(entry);
   }
 }
 
@@ -154,7 +163,7 @@ describe("monitorDiscordProvider", () => {
     | { listenerTimeout?: number; slowListenerThreshold?: number }
     | undefined => {
     expect(clientConstructorOptionsMock).toHaveBeenCalledTimes(1);
-    const opts = clientConstructorOptionsMock.mock.calls[0]?.[0] as {
+    const opts = firstMockArg(clientConstructorOptionsMock, "Discord client constructor") as {
       eventQueue?: { listenerTimeout?: number; slowListenerThreshold?: number };
     };
     return opts.eventQueue;
@@ -166,21 +175,19 @@ describe("monitorDiscordProvider", () => {
     requestOptions?: { timeout?: number; runtimeProfile?: string; maxQueueSize?: number };
   } => {
     expect(clientConstructorOptionsMock).toHaveBeenCalledTimes(1);
-    return (
-      (clientConstructorOptionsMock.mock.calls[0]?.[0] as {
-        clientId?: string;
-        eventQueue?: { listenerTimeout?: number; slowListenerThreshold?: number };
-        requestOptions?: { timeout?: number; runtimeProfile?: string; maxQueueSize?: number };
-      }) ?? {}
-    );
+    return firstMockArg(clientConstructorOptionsMock, "Discord client constructor") as {
+      clientId?: string;
+      eventQueue?: { listenerTimeout?: number; slowListenerThreshold?: number };
+      requestOptions?: { timeout?: number; runtimeProfile?: string; maxQueueSize?: number };
+    };
   };
 
   const getHealthProbe = () => {
     expect(reconcileAcpThreadBindingsOnStartupMock).toHaveBeenCalledTimes(1);
-    const firstCall = reconcileAcpThreadBindingsOnStartupMock.mock.calls.at(0) as
-      | [ReconcileStartupParams]
-      | undefined;
-    const reconcileParams = firstCall?.[0];
+    const reconcileParams = firstMockArg(
+      reconcileAcpThreadBindingsOnStartupMock,
+      "ACP startup reconciliation",
+    ) as ReconcileStartupParams;
     if (!reconcileParams?.healthProbe) {
       throw new Error("healthProbe was not wired into ACP startup reconciliation");
     }
@@ -192,8 +199,7 @@ describe("monitorDiscordProvider", () => {
     gatewayRuntimeReadyTimeoutMs?: number;
   } => {
     expect(monitorLifecycleMock).toHaveBeenCalledTimes(1);
-    const firstCall = monitorLifecycleMock.mock.calls.at(0);
-    const params = firstCall?.[0] as
+    const params = firstMockArg(monitorLifecycleMock, "Discord lifecycle monitor") as
       | { gatewayReadyTimeoutMs?: number; gatewayRuntimeReadyTimeoutMs?: number }
       | undefined;
     if (!params) {
@@ -693,7 +699,7 @@ describe("monitorDiscordProvider", () => {
         reason: "status-timeout",
       });
 
-      const firstCall = getAcpSessionStatusMock.mock.calls[0]?.[0] as
+      const firstCall = firstMockArg(getAcpSessionStatusMock, "ACP session status") as
         | { signal?: AbortSignal }
         | undefined;
       if (!firstCall?.signal) {
@@ -1162,6 +1168,6 @@ describe("monitorDiscordProvider", () => {
     });
 
     const messages = vi.mocked(runtime.log).mock.calls.map((call) => String(call[0]));
-    expect(messages.every((message) => !message.includes("discord startup ["))).toBe(true);
+    expect(messages.join("\n")).not.toContain("discord startup [");
   });
 });

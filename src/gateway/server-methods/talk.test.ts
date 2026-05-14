@@ -120,11 +120,11 @@ function expectRecordFields(record: unknown, expected: Record<string, unknown>) 
 }
 
 function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0) {
-  const call = mock.mock.calls[callIndex];
+  const call = mock.mock.calls.at(callIndex);
   if (!call) {
     throw new Error(`Expected mock call ${callIndex}`);
   }
-  return call[argIndex];
+  return call.at(argIndex);
 }
 
 function expectRespondOk(mock: ReturnType<typeof vi.fn>, expected?: Record<string, unknown>) {
@@ -287,9 +287,10 @@ describe("talk.catalog handler", () => {
       },
       undefined,
     );
-    expect(JSON.stringify(respond.mock.calls[0]?.[1])).not.toContain("speech-key");
-    expect(JSON.stringify(respond.mock.calls[0]?.[1])).not.toContain("stt-key");
-    expect(JSON.stringify(respond.mock.calls[0]?.[1])).not.toContain("live-key");
+    const responsePayload = JSON.stringify(mockCallArg(respond, 0, 1));
+    expect(responsePayload).not.toContain("speech-key");
+    expect(responsePayload).not.toContain("stt-key");
+    expect(responsePayload).not.toContain("live-key");
   });
 });
 
@@ -707,14 +708,14 @@ describe("talk.session unified handlers", () => {
         sessionKey: "session:main",
         ttlMs: 5000,
       },
-      client: { connId: "conn-1" } as never,
+      client: { connId: "conn-1", connect: { scopes: ["operator.admin"] } } as never,
       isWebchatConnect: () => false,
       respond: createRespond as never,
       context: {
         getRuntimeConfig: () => ({}) as OpenClawConfig,
       } as never,
     });
-    const session = createRespond.mock.calls[0]?.[1] as { sessionId: string; token: string };
+    const session = mockCallArg(createRespond, 0, 1) as { sessionId: string; token: string };
 
     const createResult = expectRespondOk(createRespond, {
       transport: "managed-room",
@@ -806,6 +807,64 @@ describe("talk.session unified handlers", () => {
     expect(mockCallArg(broadcastToConnIds, 2, 3)).toEqual({ dropIfSlow: true });
   });
 
+  it("passes managed-room spawnedBy visibility scope to session resolution", async () => {
+    const createRespond = vi.fn();
+    await talkHandlers["talk.session.create"]({
+      req: { type: "req", id: "1", method: "talk.session.create" },
+      params: {
+        mode: "stt-tts",
+        transport: "managed-room",
+        sessionKey: "agent:worker:subagent:child",
+        spawnedBy: "agent:main:parent",
+      },
+      client: { connId: "conn-1", connect: { scopes: ["operator.write"] } } as never,
+      isWebchatConnect: () => false,
+      respond: createRespond as never,
+      context: {
+        getRuntimeConfig: () => ({}) as OpenClawConfig,
+      } as never,
+    });
+
+    expectRespondOk(createRespond, {
+      transport: "managed-room",
+      brain: "agent-consult",
+    });
+    expect(mocks.resolveSessionKeyFromResolveParams).toHaveBeenCalledWith({
+      cfg: {},
+      p: {
+        key: "agent:worker:subagent:child",
+        spawnedBy: "agent:main:parent",
+        includeGlobal: true,
+        includeUnknown: true,
+      },
+    });
+  });
+
+  it("rejects unscoped managed-room session keys without admin scope", async () => {
+    const createRespond = vi.fn();
+    await talkHandlers["talk.session.create"]({
+      req: { type: "req", id: "1", method: "talk.session.create" },
+      params: {
+        mode: "stt-tts",
+        transport: "managed-room",
+        sessionKey: "agent:worker:main",
+      },
+      client: { connId: "conn-1", connect: { scopes: ["operator.write"] } } as never,
+      isWebchatConnect: () => false,
+      respond: createRespond as never,
+      context: {
+        getRuntimeConfig: () => ({}) as OpenClawConfig,
+      } as never,
+    });
+
+    expectRespondError(createRespond, {
+      code: ErrorCodes.INVALID_REQUEST,
+      message:
+        "talk.session.create managed-room sessionKey requires spawnedBy or gateway scope: operator.admin",
+    });
+    expect(mocks.resolveSessionKeyFromResolveParams).not.toHaveBeenCalled();
+  });
+
   it("requires managed-room ownership before turn control", async () => {
     const broadcastToConnIds = vi.fn();
     const createRespond = vi.fn();
@@ -816,14 +875,14 @@ describe("talk.session unified handlers", () => {
         transport: "managed-room",
         sessionKey: "session:main",
       },
-      client: { connId: "creator" } as never,
+      client: { connId: "creator", connect: { scopes: ["operator.admin"] } } as never,
       isWebchatConnect: () => false,
       respond: createRespond as never,
       context: {
         getRuntimeConfig: () => ({}) as OpenClawConfig,
       } as never,
     });
-    const session = createRespond.mock.calls[0]?.[1] as { sessionId: string; token: string };
+    const session = mockCallArg(createRespond, 0, 1) as { sessionId: string; token: string };
 
     const unjoinedStartRespond = vi.fn();
     await talkHandlers["talk.session.startTurn"]({
@@ -964,7 +1023,7 @@ describe("talk.session unified handlers", () => {
       } as never,
     });
 
-    const session = createRespond.mock.calls[0]?.[1] as { sessionId: string };
+    const session = mockCallArg(createRespond, 0, 1) as { sessionId: string };
     const createResult = expectRespondOk(createRespond, {
       transport: "managed-room",
       brain: "direct-tools",
@@ -1188,7 +1247,7 @@ describe("talk.client.create handler", () => {
       configuredProviderId: "openai",
       providerConfigs: { openai: { apiKey: "openai-key" } },
     });
-    const createInput = createBrowserSession.mock.calls[0]?.[0] as Record<string, unknown>;
+    const createInput = mockCallArg(createBrowserSession) as Record<string, unknown>;
     expectRecordFields(createInput, {
       model: "gpt-realtime",
       voice: "alloy",

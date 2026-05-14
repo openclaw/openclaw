@@ -72,6 +72,22 @@ function readHeader(init: unknown, name: string): string | null {
   return new Headers(headers).get(name);
 }
 
+function fetchCall(mockFetch: { mock: { calls: Array<Array<unknown>> } }, index = 0) {
+  const call = mockFetch.mock.calls[index];
+  if (!call) {
+    throw new Error(`Expected fetch call ${index + 1}`);
+  }
+  return call;
+}
+
+function fetchRequestUrl(mockFetch: { mock: { calls: Array<Array<unknown>> } }, index = 0) {
+  return new URL(String(fetchCall(mockFetch, index)[0]));
+}
+
+function fetchRequestInit(mockFetch: { mock: { calls: Array<Array<unknown>> } }, index = 0) {
+  return fetchCall(mockFetch, index)[1];
+}
+
 describe("brave web search provider", () => {
   const priorFetch = global.fetch;
 
@@ -88,6 +104,34 @@ describe("brave web search provider", () => {
     expect(createBraveWebSearchContractProvider().docsUrl).toBe(
       "https://docs.openclaw.ai/tools/brave-search",
     );
+  });
+
+  it("exposes legacy top-level apiKey as a Brave-owned compatibility fallback", () => {
+    const apiKey = { source: "env", provider: "default", id: "BRAVE_API_KEY" } as const;
+    const config = {
+      tools: {
+        web: {
+          search: {
+            apiKey,
+          },
+        },
+      },
+    };
+
+    expect(createBraveWebSearchProvider().getConfiguredCredentialValue?.(config)).toEqual(apiKey);
+    expect(createBraveWebSearchContractProvider().getConfiguredCredentialValue?.(config)).toEqual(
+      apiKey,
+    );
+    expect(createBraveWebSearchProvider().getConfiguredCredentialFallback?.(config)).toEqual({
+      path: "tools.web.search.apiKey",
+      value: apiKey,
+    });
+    expect(
+      createBraveWebSearchContractProvider().getConfiguredCredentialFallback?.(config),
+    ).toEqual({
+      path: "tools.web.search.apiKey",
+      value: apiKey,
+    });
   });
 
   it("points missing-key users to fetch/browser alternatives", async () => {
@@ -220,7 +264,7 @@ describe("brave web search provider", () => {
 
     await tool.execute({ query: "latest ai news" });
 
-    const requestUrl = new URL(String(mockFetch.mock.calls[0]?.[0]));
+    const requestUrl = fetchRequestUrl(mockFetch);
     expect(requestUrl.origin).toBe("https://api.search.brave.com");
     expect(requestUrl.pathname).toBe("/proxy/res/v1/web/search");
   });
@@ -245,7 +289,7 @@ describe("brave web search provider", () => {
 
     await tool.execute({ query: "latest ai news" });
 
-    const requestUrl = new URL(String(mockFetch.mock.calls[0]?.[0]));
+    const requestUrl = fetchRequestUrl(mockFetch);
     expect(requestUrl.pathname).toBe("/proxy/res/v1/llm/context");
   });
 
@@ -288,12 +332,8 @@ describe("brave web search provider", () => {
     await secondTool.execute({ query: "base url cache identity" });
 
     expect(mockFetch).toHaveBeenCalledTimes(2);
-    expect(new URL(String(mockFetch.mock.calls[0]?.[0])).pathname).toBe(
-      "/proxy-one/res/v1/web/search",
-    );
-    expect(new URL(String(mockFetch.mock.calls[1]?.[0])).pathname).toBe(
-      "/proxy-two/res/v1/web/search",
-    );
+    expect(fetchRequestUrl(mockFetch).pathname).toBe("/proxy-one/res/v1/web/search");
+    expect(fetchRequestUrl(mockFetch, 1).pathname).toBe("/proxy-two/res/v1/web/search");
   });
 
   it("rejects invalid Brave mode values in the plugin config schema", () => {
@@ -393,7 +433,7 @@ describe("brave web search provider", () => {
 
     await tool.execute({ query: "latest ai news", freshness: "week" });
 
-    const requestUrl = new URL(String(mockFetch.mock.calls[0]?.[0]));
+    const requestUrl = fetchRequestUrl(mockFetch);
     expect(requestUrl.pathname).toBe("/res/v1/llm/context");
     expect(requestUrl.searchParams.get("freshness")).toBe("pw");
   });
@@ -422,10 +462,10 @@ describe("brave web search provider", () => {
 
     await tool.execute({ query: "latest ai news" });
 
-    const requestUrl = new URL(String(mockFetch.mock.calls[0]?.[0]));
+    const requestUrl = fetchRequestUrl(mockFetch);
     expect(requestUrl.searchParams.get("apikey")).toBeNull();
     expect(requestUrl.searchParams.get("key")).toBeNull();
-    expect(readHeader(mockFetch.mock.calls[0]?.[1], "X-Subscription-Token")).toBe("brave-test-key");
+    expect(readHeader(fetchRequestInit(mockFetch), "X-Subscription-Token")).toBe("brave-test-key");
   });
 
   it("sends Brave llm-context auth in the X-Subscription-Token header", async () => {
@@ -445,10 +485,10 @@ describe("brave web search provider", () => {
 
     await tool.execute({ query: "latest ai news" });
 
-    const requestUrl = new URL(String(mockFetch.mock.calls[0]?.[0]));
+    const requestUrl = fetchRequestUrl(mockFetch);
     expect(requestUrl.searchParams.get("apikey")).toBeNull();
     expect(requestUrl.searchParams.get("key")).toBeNull();
-    expect(readHeader(mockFetch.mock.calls[0]?.[1], "X-Subscription-Token")).toBe("brave-test-key");
+    expect(readHeader(fetchRequestInit(mockFetch), "X-Subscription-Token")).toBe("brave-test-key");
   });
 
   it("passes bounded date ranges to Brave llm-context endpoint", async () => {
@@ -472,7 +512,7 @@ describe("brave web search provider", () => {
       date_before: "2025-01-31",
     });
 
-    const requestUrl = new URL(String(mockFetch.mock.calls[0]?.[0]));
+    const requestUrl = fetchRequestUrl(mockFetch);
     expect(requestUrl.pathname).toBe("/res/v1/llm/context");
     expect(requestUrl.searchParams.get("freshness")).toBe("2025-01-01to2025-01-31");
   });
@@ -495,7 +535,7 @@ describe("brave web search provider", () => {
     await tool.execute({ query: "latest ai news", date_after: "2025-01-01" });
 
     const today = new Date().toISOString().slice(0, 10);
-    const requestUrl = new URL(String(mockFetch.mock.calls[0]?.[0]));
+    const requestUrl = fetchRequestUrl(mockFetch);
     expect(requestUrl.pathname).toBe("/res/v1/llm/context");
     expect(requestUrl.searchParams.get("freshness")).toBe(`2025-01-01to${today}`);
   });
@@ -584,7 +624,7 @@ describe("brave web search provider", () => {
       country: "VN",
     });
 
-    const requestUrl = new URL(String(mockFetch.mock.calls[0]?.[0]));
+    const requestUrl = fetchRequestUrl(mockFetch);
     expect(requestUrl.searchParams.get("country")).toBe("ALL");
   });
 

@@ -224,9 +224,9 @@ describe("pruneHistoryForContextShare", () => {
   it("drops older chunks until the history budget is met", () => {
     const { pruned, maxContextTokens } = pruneLargeSimpleHistory();
 
-    expect(pruned.droppedChunks).toBeGreaterThan(0);
+    expect(pruned.droppedChunks).toBe(2);
     expect(pruned.keptTokens).toBeLessThanOrEqual(Math.floor(maxContextTokens * 0.5));
-    expect(pruned.messages.length).toBeGreaterThan(0);
+    expect(pruned.messages.map((msg) => msg.timestamp)).toEqual([4]);
   });
 
   it("keeps the newest messages when pruning", () => {
@@ -264,7 +264,8 @@ describe("pruneHistoryForContextShare", () => {
   it("returns droppedMessagesList containing dropped messages", () => {
     const { messages, pruned } = pruneLargeSimpleHistory();
 
-    expect(pruned.droppedChunks).toBeGreaterThan(0);
+    expect(pruned.droppedChunks).toBe(2);
+    expect(pruned.droppedMessagesList.map((msg) => msg.timestamp)).toEqual([1, 2, 3]);
     expect(pruned.droppedMessagesList.length).toBe(pruned.droppedMessages);
 
     const allIds = [

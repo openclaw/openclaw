@@ -468,12 +468,11 @@ describe("skills cli commands", () => {
     await runCommand(argv);
 
     expectStatusWorkspaceCall("/tmp/workspace");
-    expect(
-      defaultRuntime.writeStdout.mock.calls.length + defaultRuntime.writeJson.mock.calls.length,
-    ).toBeGreaterThan(0);
+    expect(defaultRuntime.writeStdout).toHaveBeenCalledTimes(1);
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
     expect(defaultRuntime.log).not.toHaveBeenCalled();
     expect(runtimeErrors).toStrictEqual([]);
-    expect(runtimeStdout.length).toBeGreaterThan(0);
+    expect(runtimeStdout).toHaveLength(1);
 
     const payload = JSON.parse(runtimeStdout.at(-1) ?? "{}") as Record<string, unknown>;
     assert(payload);

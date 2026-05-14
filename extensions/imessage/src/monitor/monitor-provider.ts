@@ -65,6 +65,7 @@ import {
   resolveIMessageInboundDecision,
 } from "./inbound-processing.js";
 import { createLoopRateLimiter } from "./loop-rate-limiter.js";
+import { stageIMessageAttachments } from "./media-staging.js";
 import { parseIMessageNotification } from "./parse-notification.js";
 import { enqueueIMessageReactionSystemEvent } from "./reaction-system-event.js";
 import { normalizeAllowList, resolveRuntime } from "./runtime.js";
@@ -74,6 +75,21 @@ import { sanitizeIMessageWatchErrorPayload } from "./watch-error-log.js";
 
 const WATCH_SUBSCRIBE_MAX_ATTEMPTS = 3;
 const WATCH_SUBSCRIBE_RETRY_DELAY_MS = 1_000;
+
+function isIMessagePluginPayloadAttachment(attachment: {
+  original_path?: string | null;
+  transfer_name?: string | null;
+  uti?: string | null;
+}): boolean {
+  const attachmentPath = attachment.original_path?.trim().toLowerCase() ?? "";
+  const transferName = attachment.transfer_name?.trim().toLowerCase() ?? "";
+  const uti = attachment.uti?.trim().toLowerCase() ?? "";
+  return (
+    attachmentPath.endsWith(".pluginpayloadattachment") ||
+    transferName.endsWith(".pluginpayloadattachment") ||
+    uti === "com.apple.messages.pluginpayloadattachment"
+  );
+}
 
 async function detectRemoteHostFromCliPath(cliPath: string): Promise<string | undefined> {
   try {
@@ -172,11 +188,12 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   const loopRateLimiter = createLoopRateLimiter();
   const textLimit = resolveTextChunkLimit(cfg, "imessage", accountInfo.accountId);
   const allowFrom = normalizeAllowList(opts.allowFrom ?? imessageCfg.allowFrom);
+  const configuredGroupAllowFrom = opts.groupAllowFrom ?? imessageCfg.groupAllowFrom;
   const groupAllowFrom = normalizeAllowList(
-    opts.groupAllowFrom ??
-      imessageCfg.groupAllowFrom ??
+    configuredGroupAllowFrom ??
       (imessageCfg.allowFrom && imessageCfg.allowFrom.length > 0 ? imessageCfg.allowFrom : []),
   );
+  const allowLegacyConversationAllowFromForGroup = configuredGroupAllowFrom == null;
   const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
   const { groupPolicy, providerMissingFallbackApplied } = resolveOpenProviderRuntimeGroupPolicy({
     providerConfigPresent: cfg.channels?.imessage !== undefined,
@@ -295,7 +312,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       return shouldDebounceTextInbound({
         text: msg.text,
         cfg,
-        hasMedia: Boolean(msg.attachments && msg.attachments.length > 0),
+        hasMedia: Boolean(
+          msg.attachments?.some((attachment) => !isIMessagePluginPayloadAttachment(attachment)),
+        ),
       });
     },
     onFlush: async (entries) => {
@@ -336,6 +355,13 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const attachments = includeAttachments ? (message.attachments ?? []) : [];
     const effectiveAttachmentRoots = remoteHost ? remoteAttachmentRoots : attachmentRoots;
     const validAttachments = attachments.filter((entry) => {
+      if (isIMessagePluginPayloadAttachment(entry)) {
+        // Apple rich-link previews arrive as opaque .pluginPayloadAttachment
+        // files. The useful URL remains in message.text/attributedBody; treating
+        // the preview blob as media creates noisy phantom attachments and can
+        // keep split-send URL previews out of the text debounce path.
+        return false;
+      }
       const attachmentPath = entry?.original_path?.trim();
       if (!attachmentPath || entry?.missing) {
         return false;
@@ -346,13 +372,14 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       logVerbose(`imessage: dropping inbound attachment outside allowed roots: ${attachmentPath}`);
       return false;
     });
-    const firstAttachment = validAttachments[0];
-    const mediaPath = firstAttachment?.original_path ?? undefined;
-    const mediaType = firstAttachment?.mime_type ?? undefined;
-    // Build arrays for all attachments (for multi-image support)
-    const mediaPaths = validAttachments.map((a) => a.original_path).filter(Boolean) as string[];
-    const mediaTypes = validAttachments.map((a) => a.mime_type ?? undefined);
-    const kind = kindFromMime(mediaType ?? undefined);
+    const rawMediaAttachments = validAttachments.flatMap((a) => {
+      const attachmentPath = a.original_path?.trim();
+      return attachmentPath
+        ? [{ path: attachmentPath, contentType: a.mime_type ?? undefined }]
+        : [];
+    });
+    const placeholderMediaType = rawMediaAttachments[0]?.contentType;
+    const kind = kindFromMime(placeholderMediaType ?? undefined);
     const placeholder = kind
       ? `<media:${kind}>`
       : validAttachments.length
@@ -374,6 +401,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       bodyText,
       allowFrom,
       groupAllowFrom,
+      allowLegacyConversationAllowFromForGroup,
       groupPolicy,
       dmPolicy,
       storeAllowFrom,
@@ -475,6 +503,20 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const storePath = resolveStorePath(cfg.session?.store, {
       agentId: decision.route.agentId,
     });
+    const stagedAttachments = remoteHost
+      ? []
+      : await stageIMessageAttachments(validAttachments, {
+          maxBytes: mediaMaxBytes,
+          allowedRoots: effectiveAttachmentRoots,
+          deps: { logVerbose },
+        });
+    const mediaAttachments = remoteHost ? rawMediaAttachments : stagedAttachments;
+    const firstAttachment = mediaAttachments[0];
+    const mediaPath = firstAttachment?.path ?? undefined;
+    const mediaType = firstAttachment?.contentType ?? undefined;
+    // Build arrays for all attachments (for multi-image support)
+    const mediaPaths = mediaAttachments.map((a) => a.path).filter(Boolean);
+    const mediaTypes = mediaAttachments.map((a) => a.contentType ?? undefined);
     const previousTimestamp = readSessionUpdatedAt({
       storePath,
       sessionKey: decision.route.sessionKey,
