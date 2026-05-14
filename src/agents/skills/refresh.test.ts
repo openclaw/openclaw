@@ -29,15 +29,21 @@ const watchMock = vi.fn(() => {
   createdWatchers.push(watcher);
   return watcher;
 });
+const resolvePluginSkillDirsMock = vi.fn((): string[] => []);
 
 let refreshModule: typeof import("./refresh.js");
+
+function watchedTargets(callIndex: number): string[] {
+  const calls = watchMock.mock.calls as unknown as Array<[string[], unknown]>;
+  return calls[callIndex]?.[0] ?? [];
+}
 
 vi.mock("chokidar", () => ({
   default: { watch: watchMock },
 }));
 
 vi.mock("./plugin-skills.js", () => ({
-  resolvePluginSkillDirs: vi.fn(() => []),
+  resolvePluginSkillDirs: resolvePluginSkillDirsMock,
 }));
 
 describe("ensureSkillsWatcher", () => {
@@ -47,6 +53,7 @@ describe("ensureSkillsWatcher", () => {
 
   beforeEach(() => {
     watchMock.mockClear();
+    resolvePluginSkillDirsMock.mockClear();
     createdWatchers.length = 0;
   });
 
@@ -194,5 +201,20 @@ describe("ensureSkillsWatcher", () => {
       config: { skills: { load: { extraDirs: ["/extra/skills"] } } },
     });
     expect(watchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("reconfigures watcher when plugin skill dirs change", () => {
+    resolvePluginSkillDirsMock
+      .mockReturnValueOnce(["/tmp/plugin-a/skills"])
+      .mockReturnValueOnce(["/tmp/plugin-b/skills"]);
+
+    refreshModule.ensureSkillsWatcher({ workspaceDir: "/tmp/workspace" });
+    expect(watchMock).toHaveBeenCalledTimes(1);
+    expect(watchedTargets(0)).toContain("/tmp/plugin-a/skills");
+
+    refreshModule.ensureSkillsWatcher({ workspaceDir: "/tmp/workspace" });
+    expect(watchMock).toHaveBeenCalledTimes(2);
+    expect(createdWatchers[0]?.close).toHaveBeenCalledTimes(1);
+    expect(watchedTargets(1)).toContain("/tmp/plugin-b/skills");
   });
 });

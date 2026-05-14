@@ -22,7 +22,6 @@ export {
 type SkillsWatchState = {
   watcher: FSWatcher;
   pathsKey: string;
-  configPathsKey: string;
   debounceMs: number;
   timer?: ReturnType<typeof setTimeout>;
   pendingPath?: string;
@@ -65,14 +64,6 @@ function resolveConfigWatchPaths(workspaceDir: string, config?: OpenClawConfig):
     .map((dir) => resolveUserPath(dir));
   paths.push(...extraDirs);
   return paths;
-}
-
-function resolveWatchRootsKey(roots: string[]): string {
-  const targets = new Set<string>();
-  for (const root of roots) {
-    targets.add(toWatchRoot(root));
-  }
-  return Array.from(targets).toSorted().join("|");
 }
 
 function resolveWatchPaths(workspaceDir: string, config?: OpenClawConfig): string[] {
@@ -136,26 +127,18 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
     return;
   }
 
-  // Watcher already exists and watch is enabled.
-  // Verify current config matches before skipping filesystem scan.
+  const watchTargets = resolveWatchTargets(workspaceDir, params.config);
+  const pathsKey = watchTargets.join("|");
+  if (existing && existing.pathsKey === pathsKey && existing.debounceMs === debounceMs) {
+    return;
+  }
   if (existing) {
-    const currentConfigPathsKey = resolveWatchRootsKey(
-      resolveConfigWatchPaths(workspaceDir, params.config),
-    );
-    if (existing.debounceMs === debounceMs && existing.configPathsKey === currentConfigPathsKey) {
-      return;
-    }
-    // Config changed — close and recreate below.
     watchers.delete(workspaceDir);
     if (existing.timer) {
       clearTimeout(existing.timer);
     }
     void existing.watcher.close().catch(() => {});
   }
-
-  const watchTargets = resolveWatchTargets(workspaceDir, params.config);
-  const pathsKey = watchTargets.join("|");
-  const configPathsKey = resolveWatchRootsKey(resolveConfigWatchPaths(workspaceDir, params.config));
 
   const watcher = chokidar.watch(watchTargets, {
     ignoreInitial: true,
@@ -168,7 +151,7 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
     ignored: shouldIgnoreSkillsWatchPath,
   });
 
-  const state: SkillsWatchState = { watcher, pathsKey, configPathsKey, debounceMs };
+  const state: SkillsWatchState = { watcher, pathsKey, debounceMs };
 
   const schedule = (changedPath?: string) => {
     state.pendingPath = changedPath ?? state.pendingPath;
