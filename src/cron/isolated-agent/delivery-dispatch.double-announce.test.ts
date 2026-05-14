@@ -434,6 +434,61 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
   });
 
+  it("waits for active descendant output when the parent result has no deliverable text", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValueOnce(1).mockReturnValueOnce(0);
+    vi.mocked(waitForDescendantSubagentSummary).mockResolvedValue(
+      "Active child finished with the final result.",
+    );
+
+    const params = makeBaseParams({ synthesizedText: "placeholder" });
+    params.deliveryPayloads = [];
+    params.synthesizedText = undefined;
+    params.summary = undefined;
+    params.outputText = undefined;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(waitForDescendantSubagentSummary).toHaveBeenCalledWith({
+      sessionKey: "agent:main",
+      initialReply: undefined,
+      timeoutMs: 30_000,
+      observedActiveDescendants: true,
+    });
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectDeliveryCall(0, {
+      payloads: [{ text: "Active child finished with the final result." }],
+    });
+  });
+
+  it("delivers completed descendant output when the parent result has no deliverable text", async () => {
+    const runStartedAt = 1_000;
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(
+      "Completed child result, everything finished successfully.",
+    );
+
+    const params = makeBaseParams({ synthesizedText: "placeholder", runStartedAt });
+    params.deliveryPayloads = [];
+    params.synthesizedText = undefined;
+    params.summary = undefined;
+    params.outputText = undefined;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(readDescendantSubagentFallbackReply).toHaveBeenCalledWith({
+      sessionKey: "agent:main",
+      runStartedAt,
+    });
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectDeliveryCall(0, {
+      payloads: [{ text: "Completed child result, everything finished successfully." }],
+    });
+  });
+
   it("normal text delivery sends exactly once and sets deliveryAttempted=true", async () => {
     const params = makeBaseParams({
       synthesizedText: "Morning briefing complete.",

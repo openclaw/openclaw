@@ -1101,18 +1101,18 @@ export async function dispatchCronDelivery(
   const finalizeTextDelivery = async (
     delivery: SuccessfulDeliveryTarget,
   ): Promise<RunCronAgentTurnResult | null> => {
-    if (!synthesizedText) {
-      return null;
-    }
-    const initialSynthesizedText = synthesizedText.trim();
-    const expectedSubagentFollowup = expectsSubagentFollowup(initialSynthesizedText);
+    const initialSynthesizedText = synthesizedText?.trim();
+    const expectedSubagentFollowup = initialSynthesizedText
+      ? expectsSubagentFollowup(initialSynthesizedText)
+      : false;
     const subagentRegistryRuntime = await loadDeliverySubagentRegistryRuntime();
     const subagentFollowupSessionKey = params.runSessionKey;
     let activeSubagentRuns = subagentRegistryRuntime.countActiveDescendantRuns(
       subagentFollowupSessionKey,
     );
     const shouldCheckCompletedDescendants =
-      activeSubagentRuns === 0 && isLikelyInterimCronMessage(initialSynthesizedText);
+      activeSubagentRuns === 0 &&
+      (!initialSynthesizedText || isLikelyInterimCronMessage(initialSynthesizedText));
     const needsSubagentFollowupRuntime =
       shouldCheckCompletedDescendants || activeSubagentRuns > 0 || expectedSubagentFollowup;
     const subagentFollowupRuntime = needsSubagentFollowupRuntime
@@ -1175,7 +1175,8 @@ export async function dispatchCronDelivery(
     }
     if (
       hadDescendants &&
-      synthesizedText.trim() === initialSynthesizedText &&
+      synthesizedText?.trim() === initialSynthesizedText &&
+      initialSynthesizedText &&
       isLikelyInterimCronMessage(initialSynthesizedText) &&
       !isSilentReplyText(initialSynthesizedText, SILENT_REPLY_TOKEN)
     ) {
