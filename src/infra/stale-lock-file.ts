@@ -62,7 +62,7 @@ export function shouldRemoveDeadOwnerOrExpiredLock(params: {
     const createdAt = Date.parse(payload.createdAt);
     return !Number.isFinite(createdAt) || (params.nowMs ?? Date.now()) - createdAt > params.staleMs;
   }
-  return true;
+  return false;
 }
 
 export async function removeLockFileIfSnapshotMatches(params: {

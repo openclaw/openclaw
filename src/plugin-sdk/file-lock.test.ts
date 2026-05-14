@@ -69,9 +69,10 @@ describe("acquireFileLock", () => {
       stale: 10,
     } as const;
 
+    const deadPid = Number.MAX_SAFE_INTEGER;
     await fs.writeFile(
       lockPath,
-      JSON.stringify({ pid: 999_999, createdAt: new Date(Date.now() - 60_000).toISOString() }),
+      JSON.stringify({ pid: deadPid, createdAt: new Date(Date.now() - 60_000).toISOString() }),
       "utf8",
     );
 
@@ -82,6 +83,38 @@ describe("acquireFileLock", () => {
     } finally {
       await lock.release();
     }
+  });
+
+  it("keeps a reported stale lock when its payload is not readable", async () => {
+    const filePath = path.join(tempDir, "payload-pending");
+    const lockPath = `${filePath}.lock`;
+    const options = {
+      retries: {
+        retries: 0,
+        factor: 1,
+        minTimeout: 1,
+        maxTimeout: 1,
+      },
+      stale: 10,
+    } as const;
+
+    await fs.writeFile(lockPath, "{", "utf8");
+
+    let caught: { lockPath?: string } | undefined;
+    await expect(
+      (async () => {
+        try {
+          await acquireFileLock(filePath, options);
+        } catch (err) {
+          caught = err as { lockPath?: string };
+          throw err;
+        }
+      })(),
+    ).rejects.toMatchObject({
+      code: FILE_LOCK_TIMEOUT_ERROR_CODE,
+    });
+    await expect(fs.realpath(caught?.lockPath ?? "")).resolves.toBe(await fs.realpath(lockPath));
+    await expect(fs.readFile(lockPath, "utf8")).resolves.toBe("{");
   });
 
   it("keeps a reported stale lock when its owner pid is alive", async () => {
