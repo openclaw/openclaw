@@ -11,7 +11,7 @@ vi.mock("../../trajectory/runtime.js", async (importOriginal) => {
   return {
     ...actual,
     createTrajectoryRuntimeRecorder: vi.fn(() => ({
-      enabled: true as const,
+      enabled: true,
       filePath: "/tmp/fake-trajectory.jsonl",
       recordEvent: recordEventMock,
       flush: flushMock,
