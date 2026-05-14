@@ -16,7 +16,7 @@ import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 // discord / slack 等）保持一致。
 const { setRuntime: setDingtalkRuntime, getRuntime: getDingtalkRuntime } =
   createPluginRuntimeStore<PluginRuntime>({
-    pluginId: "dingtalk-connector",
+    pluginId: "dingtalk",
     errorMessage: "DingTalk runtime not initialized",
   });
 

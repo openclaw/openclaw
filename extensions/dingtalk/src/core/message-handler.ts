@@ -1241,7 +1241,7 @@ export async function handleDingTalkMessageInternal(params: HandleMessageParams)
   if (cfg.bindings && cfg.bindings.length > 0) {
     for (const binding of cfg.bindings) {
       const match = binding.match;
-      if (match.channel && match.channel !== "dingtalk-connector") continue;
+      if (match.channel && match.channel !== "dingtalk") continue;
       if (match.accountId && match.accountId !== accountId) continue;
       if (match.peer) {
         if (match.peer.kind && match.peer.kind !== sessionContext.chatType) continue;
@@ -1520,11 +1520,11 @@ export async function handleDingTalkMessageInternal(params: HandleMessageParams)
     // ✅ 关键修复：传递 dmScope 参数，让 SDK 使用配置文件中的 session.dmScope 设置
     const dmScope = cfg.session?.dmScope || "per-channel-peer";
     log?.info?.(
-      `🔍 构建 sessionKey 前的参数: agentId=${matchedAgentId}, channel=dingtalk-connector, accountId=${accountId}, chatType=${sessionContext.chatType}, sessionPeerId=${sessionContext.sessionPeerId}, dmScope=${dmScope}`,
+      `🔍 构建 sessionKey 前的参数: agentId=${matchedAgentId}, channel=dingtalk, accountId=${accountId}, chatType=${sessionContext.chatType}, sessionPeerId=${sessionContext.sessionPeerId}, dmScope=${dmScope}`,
     );
     const sessionKey = core.channel.routing.buildAgentSessionKey({
       agentId: matchedAgentId,
-      channel: "dingtalk-connector", // ✅ 使用 'dingtalk-connector' 而不是 'dingtalk'
+      channel: "dingtalk", // ✅ 使用 'dingtalk' 而不是 'dingtalk'
       accountId: accountId,
       peer: {
         kind: sessionContext.chatType, // ✅ 使用 sessionContext.chatType
@@ -1558,12 +1558,12 @@ export async function handleDingTalkMessageInternal(params: HandleMessageParams)
       GroupSubject: isDirect ? undefined : data.conversationTitle,
       SenderName: senderName,
       SenderId: senderId,
-      Provider: "dingtalk-connector" as const,
-      Surface: "dingtalk-connector" as const,
+      Provider: "dingtalk" as const,
+      Surface: "dingtalk" as const,
       MessageSid: data.msgId,
       Timestamp: Date.now(),
       CommandAuthorized: true,
-      OriginatingChannel: "dingtalk-connector" as const,
+      OriginatingChannel: "dingtalk" as const,
       OriginatingTo: toField, // ✅ 修复：应该使用 toField，而不是 accountId
       // 当前机器人的加密身份（用于多机器人协作时让上层 Agent 引用 / 互相 @）
       BotChatbotUserId: data.chatbotUserId,
@@ -1769,7 +1769,7 @@ export async function handleDingTalkMessage(params: HandleMessageParams): Promis
   if (cfg.bindings && cfg.bindings.length > 0) {
     for (const binding of cfg.bindings) {
       const match = binding.match;
-      if (match.channel && match.channel !== "dingtalk-connector") continue;
+      if (match.channel && match.channel !== "dingtalk") continue;
       if (match.accountId && match.accountId !== accountId) continue;
       if (match.peer) {
         if (match.peer.kind && match.peer.kind !== queueSessionContext.chatType) continue;

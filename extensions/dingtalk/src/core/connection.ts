@@ -82,7 +82,7 @@ export async function monitorSingleAccount(opts: MonitorDingtalkAccountOpts): Pr
       `[DingTalk][${accountId}] Missing credentials: ` +
         `clientId=${account.clientId ? "present" : "MISSING"}, ` +
         `clientSecret=${account.clientSecret ? "present" : "MISSING"}. ` +
-        `Please check your configuration in channels.dingtalk-connector.`,
+        `Please check your configuration in channels.dingtalk.`,
     );
   }
 

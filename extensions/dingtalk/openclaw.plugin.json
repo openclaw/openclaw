@@ -1,12 +1,12 @@
 {
-  "id": "dingtalk-connector",
+  "id": "dingtalk",
   "name": "DingTalk Channel",
   "version": "0.8.20",
   "description": "Official OpenClaw DingTalk channel plugin | 钉钉官方 OpenClaw 插件",
   "author": "DingTalk Real Team",
   "main": "index.ts",
   "channels": [
-    "dingtalk-connector"
+    "dingtalk"
   ],
   "configSchema": {
     "type": "object",
@@ -14,7 +14,7 @@
     "properties": {}
   },
   "channelConfigs": {
-    "dingtalk-connector": {
+    "dingtalk": {
       "label": "DingTalk",
       "description": "DingTalk enterprise bot using Stream mode (no public IP required) with AI Card streaming responses.",
       "schema": {
@@ -477,39 +477,39 @@
         "additionalProperties": false
       },
       "uiHints": {
-        "channels.dingtalk-connector.clientId": {
+        "channels.dingtalk.clientId": {
           "label": "Client ID (AppKey)",
           "help": "钉钉应用的 AppKey / Client ID",
           "sensitive": true
         },
-        "channels.dingtalk-connector.clientSecret": {
+        "channels.dingtalk.clientSecret": {
           "label": "Client Secret (AppSecret)",
           "help": "钉钉应用的 AppSecret / Client Secret",
           "sensitive": true
         },
-        "channels.dingtalk-connector.dmPolicy": {
+        "channels.dingtalk.dmPolicy": {
           "label": "DM Policy",
           "help": "单聊策略：open（开放）、pairing（配对）、allowlist（白名单）"
         },
-        "channels.dingtalk-connector.groupPolicy": {
+        "channels.dingtalk.groupPolicy": {
           "label": "Group Policy",
           "help": "群聊策略：open（开放）、allowlist（白名单）、disabled（禁用）"
         },
-        "channels.dingtalk-connector.requireMention": {
+        "channels.dingtalk.requireMention": {
           "label": "Require @Mention",
           "help": "群聊中是否需要 @机器人 才响应"
         },
-        "channels.dingtalk-connector.debug": {
+        "channels.dingtalk.debug": {
           "label": "Debug Mode",
           "help": "启用调试日志",
           "advanced": true
         },
-        "channels.dingtalk-connector.endpoint": {
+        "channels.dingtalk.endpoint": {
           "label": "Gateway Endpoint",
           "help": "自定义 DWClient 网关地址（高级）",
           "advanced": true
         },
-        "channels.dingtalk-connector.accounts": {
+        "channels.dingtalk.accounts": {
           "label": "Accounts",
           "help": "多账号配置，每个 key 是账号 ID"
         }

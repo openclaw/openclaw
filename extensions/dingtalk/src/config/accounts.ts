@@ -16,7 +16,7 @@ import type {
  * List all configured account IDs from the accounts field.
  */
 function listConfiguredAccountIds(cfg: ClawdbotConfig): string[] {
-  const accounts = (cfg.channels?.["dingtalk-connector"] as DingtalkConfig)?.accounts;
+  const accounts = (cfg.channels?.["dingtalk"] as DingtalkConfig)?.accounts;
   if (!accounts || typeof accounts !== "object") {
     return [];
   }
@@ -44,7 +44,7 @@ export function resolveDefaultDingtalkAccountSelection(cfg: ClawdbotConfig): {
   source: DingtalkDefaultAccountSelectionSource;
 } {
   const preferredRaw = (
-    cfg.channels?.["dingtalk-connector"] as DingtalkConfig | undefined
+    cfg.channels?.["dingtalk"] as DingtalkConfig | undefined
   )?.defaultAccount?.trim();
   const preferred = preferredRaw ? normalizeAccountId(preferredRaw) : undefined;
   if (preferred) {
@@ -80,7 +80,7 @@ function resolveAccountConfig(
   cfg: ClawdbotConfig,
   accountId: string,
 ): DingtalkAccountConfig | undefined {
-  const accounts = (cfg.channels?.["dingtalk-connector"] as DingtalkConfig)?.accounts;
+  const accounts = (cfg.channels?.["dingtalk"] as DingtalkConfig)?.accounts;
   if (!accounts || typeof accounts !== "object") {
     return undefined;
   }
@@ -92,7 +92,7 @@ function resolveAccountConfig(
  * Account-specific fields override top-level fields.
  */
 function mergeDingtalkAccountConfig(cfg: ClawdbotConfig, accountId: string): DingtalkConfig {
-  const dingtalkCfg = cfg.channels?.["dingtalk-connector"] as DingtalkConfig | undefined;
+  const dingtalkCfg = cfg.channels?.["dingtalk"] as DingtalkConfig | undefined;
 
   // Extract base config (exclude accounts field to avoid recursion)
   const { accounts: _ignored, defaultAccount: _ignoredDefaultAccount, ...base } = dingtalkCfg ?? {};
@@ -169,11 +169,8 @@ export function resolveDingtalkCredentials(
     return normalizeResolvedSecretInputString({ value, path });
   };
 
-  const clientId = resolveSecretLike(cfg?.clientId, "channels.dingtalk-connector.clientId");
-  const clientSecret = resolveSecretLike(
-    cfg?.clientSecret,
-    "channels.dingtalk-connector.clientSecret",
-  );
+  const clientId = resolveSecretLike(cfg?.clientId, "channels.dingtalk.clientId");
+  const clientSecret = resolveSecretLike(cfg?.clientSecret, "channels.dingtalk.clientSecret");
 
   if (!clientId || !clientSecret) {
     return null;
@@ -202,7 +199,7 @@ export function resolveDingtalkAccount(params: {
   const selectionSource = hasExplicitAccountId
     ? "explicit"
     : (defaultSelection?.source ?? "fallback");
-  const dingtalkCfg = params.cfg.channels?.["dingtalk-connector"] as DingtalkConfig | undefined;
+  const dingtalkCfg = params.cfg.channels?.["dingtalk"] as DingtalkConfig | undefined;
 
   // Base enabled state (top-level)
   const baseEnabled = dingtalkCfg?.enabled !== false;

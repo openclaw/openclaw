@@ -17,4 +17,4 @@ export {
   looksLikeDingtalkId,
 } from "./src/targets.js";
 
-export const dingtalkSessionBindingAdapterChannels = ["dingtalk-connector"] as const;
+export const dingtalkSessionBindingAdapterChannels = ["dingtalk"] as const;

@@ -79,7 +79,7 @@ export async function sendMarkdownMessage(
     ? [...options.atDingtalkIds]
     : [];
 
-  // 多机器人兜底：如果调用方传入全局 cfg（包含 channels.dingtalk-connector.accounts），
+  // 多机器人兜底：如果调用方传入全局 cfg（包含 channels.dingtalk.accounts），
   // 自动把文本里 `@<友好名/agentId/accountId>` 替换成 `@<chatbotUserId>`，
   // 并合并被注入的加密 ID 到 atDingtalkIds，保证钉钉正确渲染蓝色 @ 并推送给被 @ 的 bot 的 stream。
   if (options.cfg) {

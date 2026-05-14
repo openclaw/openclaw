@@ -300,7 +300,7 @@ export function checkAndMarkDingtalkMessage(
  * 获取钉钉配置
  */
 export function getDingtalkConfig(cfg: any): DingtalkConfig {
-  return (cfg?.channels as any)?.["dingtalk-connector"] || {};
+  return (cfg?.channels as any)?.["dingtalk"] || {};
 }
 
 /**

@@ -128,7 +128,7 @@ export const DingtalkConfigSchema = DingtalkConfigBaseSchema.superRefine((value,
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["defaultAccount"],
-        message: `channels.dingtalk-connector.defaultAccount="${defaultAccount}" does not match a configured account key`,
+        message: `channels.dingtalk.defaultAccount="${defaultAccount}" does not match a configured account key`,
       });
     }
   }
@@ -141,7 +141,7 @@ export const DingtalkConfigSchema = DingtalkConfigBaseSchema.superRefine((value,
         code: z.ZodIssueCode.custom,
         path: ["allowFrom"],
         message:
-          'channels.dingtalk-connector.dmPolicy="allowlist" requires channels.dingtalk-connector.allowFrom to contain at least one entry',
+          'channels.dingtalk.dmPolicy="allowlist" requires channels.dingtalk.allowFrom to contain at least one entry',
       });
     }
   }
@@ -154,7 +154,7 @@ export const DingtalkConfigSchema = DingtalkConfigBaseSchema.superRefine((value,
         code: z.ZodIssueCode.custom,
         path: ["groupAllowFrom"],
         message:
-          'channels.dingtalk-connector.groupPolicy="allowlist" requires channels.dingtalk-connector.groupAllowFrom to contain at least one entry',
+          'channels.dingtalk.groupPolicy="allowlist" requires channels.dingtalk.groupAllowFrom to contain at least one entry',
       });
     }
   }

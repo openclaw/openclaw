@@ -1,5 +1,5 @@
 {
-  "name": "@openclaw/dingtalk-connector",
+  "name": "@openclaw/dingtalk",
   "version": "2026.5.6",
   "description": "OpenClaw DingTalk (钉钉) channel plugin — Stream-mode connector with AI Card streaming and multi-account support.",
   "repository": {
@@ -31,12 +31,12 @@
     ],
     "setupEntry": "./setup-entry.ts",
     "channel": {
-      "id": "dingtalk-connector",
+      "id": "dingtalk",
       "label": "DingTalk",
       "selectionLabel": "DingTalk (钉钉)",
       "detailLabel": "DingTalk Connector",
-      "docsPath": "/channels/dingtalk-connector",
-      "docsLabel": "dingtalk-connector",
+      "docsPath": "/channels/dingtalk",
+      "docsLabel": "dingtalk",
       "blurb": "DingTalk enterprise bot using Stream mode (no public IP required) with AI Card streaming responses.",
       "aliases": [
         "dd",
@@ -46,7 +46,7 @@
       "quickstartAllowFrom": true
     },
     "install": {
-      "npmSpec": "@openclaw/dingtalk-connector",
+      "npmSpec": "@openclaw/dingtalk",
       "defaultChoice": "npm",
       "minHostVersion": ">=2026.4.10"
     },

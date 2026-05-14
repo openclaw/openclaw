@@ -7,7 +7,7 @@ import { NEW_SESSION_COMMANDS } from "./constants.ts";
 
 /** OpenClaw 标准会话上下文 */
 export interface SessionContext {
-  channel: "dingtalk-connector";
+  channel: "dingtalk";
   accountId: string;
   chatType: "direct" | "group";
   /**
@@ -68,7 +68,7 @@ export function buildSessionContext(params: {
   // sessionPeerId 被设为 accountId 以合并记忆，peerId 仍保留真实 peer，供路由匹配使用
   if (sharedMemoryAcrossConversations === true) {
     return {
-      channel: "dingtalk-connector",
+      channel: "dingtalk",
       accountId,
       chatType: isDirect ? "direct" : "group",
       peerId,
@@ -82,7 +82,7 @@ export function buildSessionContext(params: {
   // separateSessionByConversation=false 时，不区分单聊/群聊，按用户维度维护 session
   if (separateSessionByConversation === false) {
     return {
-      channel: "dingtalk-connector",
+      channel: "dingtalk",
       accountId,
       chatType: isDirect ? "direct" : "group",
       peerId,
@@ -97,7 +97,7 @@ export function buildSessionContext(params: {
   if (isDirect) {
     // 单聊：sessionPeerId 为发送者 ID，由 OpenClaw Gateway 根据 dmScope 配置处理
     return {
-      channel: "dingtalk-connector",
+      channel: "dingtalk",
       accountId,
       chatType: "direct",
       peerId,
@@ -110,7 +110,7 @@ export function buildSessionContext(params: {
   if (groupSessionScope === "group_sender") {
     // 群内每个用户独立会话
     return {
-      channel: "dingtalk-connector",
+      channel: "dingtalk",
       accountId,
       chatType: "group",
       peerId,
@@ -123,7 +123,7 @@ export function buildSessionContext(params: {
 
   // 默认：整个群共享一个会话
   return {
-    channel: "dingtalk-connector",
+    channel: "dingtalk",
     accountId,
     chatType: "group",
     peerId,

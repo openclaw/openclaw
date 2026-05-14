@@ -23,7 +23,7 @@ import type { ResolvedDingtalkAccount, DingtalkConfig } from "./types/index.ts";
 import { createLogger } from "./utils/logger.ts";
 
 /** Channel identifier used across the plugin. Single source of truth. */
-export const CHANNEL_ID = "dingtalk-connector" as const;
+export const CHANNEL_ID = "dingtalk" as const;
 
 /**
  * Per-account holder for DWS credentials. Stored in module scope instead of
@@ -154,7 +154,7 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingtalkAccount> = {
       const isDefault = accountId === DEFAULT_ACCOUNT_ID;
 
       if (isDefault) {
-        // Delete entire dingtalk-connector config
+        // Delete entire dingtalk config
         const next = { ...cfg } as ClawdbotConfig;
         const nextChannels = { ...cfg.channels };
         delete (nextChannels as Record<string, unknown>)[CHANNEL_ID];
@@ -413,7 +413,7 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingtalkAccount> = {
 
       // 检查账号是否启用和配置
       if (!account.enabled) {
-        ctx.log?.info?.(`dingtalk-connector[${ctx.accountId}] is disabled, skipping startup`);
+        ctx.log?.info?.(`dingtalk[${ctx.accountId}] is disabled, skipping startup`);
         // 返回一个永不 resolve 的 Promise，保持 pending 状态直到 abort
         return new Promise<void>((resolve) => {
           if (ctx.abortSignal?.aborted) {
@@ -448,7 +448,7 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingtalkAccount> = {
           });
         if (priorAccountWithSameClientId) {
           ctx.log?.info?.(
-            `dingtalk-connector[${ctx.accountId}] skipped: clientId "${clientId.substring(0, 8)}..." is already used by account "${priorAccountWithSameClientId}"`,
+            `dingtalk[${ctx.accountId}] skipped: clientId "${clientId.substring(0, 8)}..." is already used by account "${priorAccountWithSameClientId}"`,
           );
           return new Promise<void>((resolve) => {
             if (ctx.abortSignal?.aborted) {
@@ -478,7 +478,7 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingtalkAccount> = {
 
       ctx.setStatus({ accountId: ctx.accountId, port: null });
       ctx.log?.info(
-        `starting dingtalk-connector[${ctx.accountId}] (mode: stream, DINGTALK_AGENT=DING_DWS_CLAW, DWS_CLIENT_ID=${account.clientId ? String(account.clientId).substring(0, 8) + "..." : "N/A"})`,
+        `starting dingtalk[${ctx.accountId}] (mode: stream, DINGTALK_AGENT=DING_DWS_CLAW, DWS_CLIENT_ID=${account.clientId ? String(account.clientId).substring(0, 8) + "..." : "N/A"})`,
       );
 
       // 把 ctx.setStatus 包装成 onStatusChange 回调，传入连接层，
@@ -490,7 +490,7 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingtalkAccount> = {
         const currentSnapshot = ctx.getStatus?.() ?? { accountId: ctx.accountId };
         const nextSnapshot = { ...currentSnapshot, ...patch, accountId: ctx.accountId };
         process.stderr.write(
-          `[dingtalk-connector][${ctx.accountId}] onStatusChange patch=${JSON.stringify(patch)} current=${JSON.stringify(currentSnapshot)} next=${JSON.stringify(nextSnapshot)}\n`,
+          `[dingtalk][${ctx.accountId}] onStatusChange patch=${JSON.stringify(patch)} current=${JSON.stringify(currentSnapshot)} next=${JSON.stringify(nextSnapshot)}\n`,
         );
         ctx.setStatus(nextSnapshot as any);
       };
@@ -506,7 +506,7 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingtalkAccount> = {
       } catch (err: any) {
         // 打印真实错误到 stderr，绕过框架 log 系统（框架的 runtime.log 可能未初始化）
         ctx.log?.error(
-          `[dingtalk-connector][${ctx.accountId}] startAccount error: ${err?.message ?? err}\n${err?.stack ?? ""}`,
+          `[dingtalk][${ctx.accountId}] startAccount error: ${err?.message ?? err}\n${err?.stack ?? ""}`,
         );
         throw err;
       }

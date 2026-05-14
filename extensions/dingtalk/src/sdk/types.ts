@@ -141,7 +141,7 @@ export interface DingtalkConfig {
  */
 export interface ChannelsConfig {
   [key: string]: unknown;
-  "dingtalk-connector"?: DingtalkConfig;
+  dingtalk?: DingtalkConfig;
 }
 
 /**

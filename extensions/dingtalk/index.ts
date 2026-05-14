@@ -1,14 +1,10 @@
 import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
 
-/**
- * Slim channel entry alternative: same id as `index.ts` but without the
- * `registerFull` extras. Useful for hosts that only want the bare channel
- * registered without the gateway-methods surface.
- */
 export default defineBundledChannelEntry({
-  id: "dingtalk-connector",
+  id: "dingtalk",
   name: "DingTalk",
-  description: "DingTalk (钉钉) channel — Stream mode connector with AI Card streaming.",
+  description:
+    "DingTalk (钉钉) channel — Stream mode connector with multi-account support and DM/group security policies.",
   importMetaUrl: import.meta.url,
   plugin: {
     specifier: "./channel-plugin-api.js",

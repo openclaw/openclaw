@@ -47,7 +47,7 @@ export async function monitorDingtalkProvider(opts: MonitorDingtalkOpts = {}): P
     throw new Error("Config is required for DingTalk monitor");
   }
 
-  const log = createLogger(cfg.channels?.["dingtalk-connector"]?.debug ?? false);
+  const log = createLogger(cfg.channels?.["dingtalk"]?.debug ?? false);
 
   // 并行导入所有模块（无循环依赖，可以并行）
   const [accountsModule, monitorAccountModule, monitorSingleModule] = await Promise.all([
@@ -81,15 +81,13 @@ export async function monitorDingtalkProvider(opts: MonitorDingtalkOpts = {}): P
   }
 
   log?.info?.(
-    `dingtalk-connector: starting ${accounts.length} account(s): ${accounts.map((a) => a.accountId).join(", ")}`,
+    `dingtalk: starting ${accounts.length} account(s): ${accounts.map((a) => a.accountId).join(", ")}`,
   );
 
   const monitorPromises: Promise<void>[] = [];
   for (const account of accounts) {
     if (opts.abortSignal?.aborted) {
-      log?.info?.(
-        "dingtalk-connector: abort signal received during startup preflight; stopping startup",
-      );
+      log?.info?.("dingtalk: abort signal received during startup preflight; stopping startup");
       break;
     }
 

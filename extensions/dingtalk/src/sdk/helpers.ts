@@ -184,7 +184,7 @@ export function normalizeResolvedSecretInputString(params: {
 export function resolveDefaultGroupPolicy(cfg: {
   channels?: { [key: string]: unknown };
 }): "open" | "allowlist" | "disabled" {
-  const dingtalkCfg = cfg.channels?.["dingtalk-connector"] as
+  const dingtalkCfg = cfg.channels?.["dingtalk"] as
     | {
         groupPolicy?: "open" | "allowlist" | "disabled";
       }
