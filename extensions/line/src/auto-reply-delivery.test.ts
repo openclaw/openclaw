@@ -230,11 +230,12 @@ describe("deliverLineAutoReply", () => {
       flexMessage: { altText: "Card", contents: { type: "bubble" } },
     };
     const chunkedText = ["chunk1", "chunk2", "chunk3", "chunk4"];
+    const processLineMessageOverride = ((text: string) => ({
+      text,
+      flexMessages: [createFlexMessage("Table", { type: "bubble" })],
+    })) as LineAutoReplyDeps["processLineMessage"];
     const { deps, replyMessageLine, pushMessagesLine } = createDeps({
-      processLineMessage: (text) => ({
-        text,
-        flexMessages: [{ altText: "Table", contents: { type: "bubble" } }],
-      }),
+      processLineMessage: processLineMessageOverride,
       chunkMarkdownText: () => chunkedText,
     });
 
