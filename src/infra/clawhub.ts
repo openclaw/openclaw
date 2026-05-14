@@ -636,6 +636,87 @@ async function fetchJson<T>(params: ClawHubRequestParams): Promise<T> {
   return (await response.json()) as T;
 }
 
+function buildClawHubBodyTimeoutError(resourceLabel: string, timeoutMs: number): Error {
+  return new Error(`ClawHub ${resourceLabel} body stalled after ${timeoutMs}ms`);
+}
+
+async function readClawHubBodyChunkWithTimeout(params: {
+  reader: ReadableStreamDefaultReader<Uint8Array>;
+  timeoutMs: number;
+  resourceLabel: string;
+}): Promise<ReadableStreamReadResult<Uint8Array>> {
+  return await new Promise((resolve, reject) => {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let settled = false;
+    const settle = (fn: () => void) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timeout !== undefined) {
+        clearTimeout(timeout);
+      }
+      fn();
+    };
+
+    timeout = setTimeout(() => {
+      const error = buildClawHubBodyTimeoutError(params.resourceLabel, params.timeoutMs);
+      void params.reader.cancel(error).catch(() => undefined);
+      settle(() => reject(error));
+    }, params.timeoutMs);
+
+    void params.reader.read().then(
+      (result) => settle(() => resolve(result)),
+      (error: unknown) => settle(() => reject(error)),
+    );
+  });
+}
+
+async function readClawHubResponseBytes(params: {
+  response: Response;
+  timeoutMs?: number;
+  resourceLabel: string;
+}): Promise<Uint8Array> {
+  const timeoutMs = params.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
+  const body = params.response.body;
+  if (!body || typeof body.getReader !== "function") {
+    return new Uint8Array(await params.response.arrayBuffer());
+  }
+
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await readClawHubBodyChunkWithTimeout({
+        reader,
+        timeoutMs,
+        resourceLabel: params.resourceLabel,
+      });
+      if (done) {
+        break;
+      }
+      if (!value?.length) {
+        continue;
+      }
+      chunks.push(value);
+      total += value.length;
+    }
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {}
+  }
+
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return bytes;
+}
+
 export function resolveClawHubBaseUrl(baseUrl?: string): string {
   return normalizeBaseUrl(baseUrl);
 }
@@ -902,7 +983,11 @@ export async function downloadClawHubPackageArchive(params: {
     if (!response.ok) {
       throw await buildClawHubError(response, url, hasToken);
     }
-    const bytes = new Uint8Array(await response.arrayBuffer());
+    const bytes = await readClawHubResponseBytes({
+      response,
+      timeoutMs: params.timeoutMs,
+      resourceLabel: `ClawPack download for ${params.name}@${params.version}`,
+    });
     const sha256Hex = formatSha256Hex(bytes);
     const npmIntegrity = formatSha512Integrity(bytes);
     const npmShasum = formatSha1Hex(bytes);
@@ -977,7 +1062,11 @@ export async function downloadClawHubPackageArchive(params: {
   if (!response.ok) {
     throw await buildClawHubError(response, url, hasToken);
   }
-  const bytes = new Uint8Array(await response.arrayBuffer());
+  const bytes = await readClawHubResponseBytes({
+    response,
+    timeoutMs: params.timeoutMs,
+    resourceLabel: `package archive download for ${params.name}`,
+  });
   const sha256Hex = formatSha256Hex(bytes);
   const target = await createTempDownloadTarget({
     prefix: "openclaw-clawhub-package",
@@ -1018,7 +1107,11 @@ export async function downloadClawHubSkillArchive(params: {
   if (!response.ok) {
     throw await buildClawHubError(response, url, hasToken);
   }
-  const bytes = new Uint8Array(await response.arrayBuffer());
+  const bytes = await readClawHubResponseBytes({
+    response,
+    timeoutMs: params.timeoutMs,
+    resourceLabel: `skill archive download for ${params.slug}`,
+  });
   const sha256Hex = formatSha256Hex(bytes);
   const target = await createTempDownloadTarget({
     prefix: "openclaw-clawhub-skill",
