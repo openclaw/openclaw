@@ -46,6 +46,12 @@ function touchPersistedIndex(stateDir: string, value = 1): void {
 
 function makeIndex(pluginId = "demo"): InstalledPluginIndex {
   return {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash: "policy",
+    generatedAtMs: 1,
     installRecords: {},
     diagnostics: [],
     plugins: [
@@ -58,7 +64,7 @@ function makeIndex(pluginId = "demo"): InstalledPluginIndex {
         enabled: true,
       },
     ],
-  } as InstalledPluginIndex;
+  };
 }
 
 function makeManifestRegistry(pluginId = "demo"): PluginManifestRegistry {

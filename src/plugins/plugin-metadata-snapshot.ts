@@ -1,5 +1,4 @@
 import path from "node:path";
-import { resolveIsNixMode } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   getActiveDiagnosticsTimelineSpan,
@@ -172,7 +171,7 @@ function computePluginMetadataSnapshotMemoKey(params: LoadPluginMetadataSnapshot
     index: indexFingerprint ?? null,
     pathPolicy: {
       compatibilityHostVersion: resolveCompatibilityHostVersion(env),
-      nixMode: resolveIsNixMode(env),
+      nixMode: env.OPENCLAW_NIX_MODE ?? null,
     },
     preferPersisted: params.preferPersisted ?? null,
     registry: resolvePersistedRegistryMemoFingerprint({
