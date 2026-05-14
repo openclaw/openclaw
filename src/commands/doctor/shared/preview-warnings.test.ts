@@ -644,6 +644,35 @@ describe("doctor preview warnings", () => {
     expect(warnings[0]).not.toContain("message tool is unavailable");
   });
 
+  it("keeps the default private group advisory when only an unrelated agent lacks message tool access", () => {
+    const warnings = collectVisibleReplyToolPolicyWarnings({
+      channels: {
+        slack: {},
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            default: true,
+            tools: {
+              profile: "messaging",
+            },
+          },
+          {
+            id: "worker",
+            tools: {
+              allow: ["read"],
+            },
+          },
+        ],
+      },
+    });
+
+    expect(warnings).toEqual([expect.stringContaining("normal final replies stay private")]);
+    expect(warnings.join("\n")).not.toContain("message tool is unavailable");
+    expect(warnings.join("\n")).not.toContain("worker");
+  });
+
   it("includes the default private group reply advisory in doctor preview output", async () => {
     const warnings = await collectDoctorPreviewWarnings({
       cfg: {

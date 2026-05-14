@@ -8,7 +8,10 @@ import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../../agents/
 import { resolveAgentModelPrimaryValue } from "../../../config/model-input.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { AgentToolsConfig, ToolsConfig } from "../../../config/types.tools.js";
-import { collectChannelRouteTargets } from "../../../routing/channel-route-targets.js";
+import {
+  collectChannelRouteTargets,
+  type ChannelRouteTarget,
+} from "../../../routing/channel-route-targets.js";
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
 import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 
@@ -260,6 +263,24 @@ function collectMessageToolUnavailableTargets(
   });
 }
 
+type ChannelRouteToolAvailability = ChannelRouteTarget & {
+  messageToolAvailable: boolean;
+};
+
+function collectChannelRouteToolAvailability(cfg: OpenClawConfig): ChannelRouteToolAvailability[] {
+  return collectChannelRouteTargets(cfg).map((target) => {
+    const agentTools = resolveAgentConfig(cfg, target.agentId)?.tools;
+    return {
+      agentId: target.agentId,
+      channels: target.channels,
+      messageToolAvailable: resolveMessageToolAvailability({
+        globalTools: cfg.tools,
+        agentTools,
+      }),
+    };
+  });
+}
+
 function resolveGroupVisibleReplyProvenance(cfg: OpenClawConfig): {
   path: "messages.groupChat.visibleReplies" | "messages.visibleReplies";
   provenance: VisibleReplyPolicyProvenance;
@@ -297,41 +318,41 @@ function formatTargets(targets: string[]): string {
 
 export function collectVisibleReplyToolPolicyWarnings(cfg: OpenClawConfig): string[] {
   const groupPolicy = resolveGroupVisibleReplyProvenance(cfg);
-  const hasConfiguredChannelChat = collectChannelRouteTargets(cfg).length > 0;
-  const targets = collectMessageToolUnavailableTargets(cfg);
+  const channelRouteTools = collectChannelRouteToolAvailability(cfg);
+  const hasConfiguredChannelChat = channelRouteTools.length > 0;
   const warnings: string[] = [];
   if (
     groupPolicy.value === "message_tool" &&
     groupPolicy.provenance === "default" &&
     hasConfiguredChannelChat &&
-    targets.length === 0
+    channelRouteTools.some((target) => target.messageToolAvailable)
   ) {
     warnings.push(
       `- messages.groupChat.visibleReplies defaults to "message_tool" for configured group/channel chats; normal final replies stay private unless the agent uses the message tool. Set messages.groupChat.visibleReplies to "automatic" to restore legacy automatic room replies.`,
     );
   }
 
+  if (groupPolicy.value === "message_tool" && groupPolicy.provenance === "default") {
+    const unavailableRouteTargets = channelRouteTools
+      .filter((target) => !target.messageToolAvailable)
+      .map((target) => `agent "${target.agentId}"`);
+    if (unavailableRouteTargets.length > 0) {
+      warnings.push(
+        `- messages.groupChat.visibleReplies defaults to "message_tool", but the message tool is unavailable for ${formatTargets(unavailableRouteTargets)}; OpenClaw falls back to automatic group/channel replies to avoid silent responses. Enable the message tool or set messages.groupChat.visibleReplies explicitly.`,
+      );
+    }
+    return warnings;
+  }
+
+  const targets = collectMessageToolUnavailableTargets(cfg);
   if (targets.length === 0) {
     return warnings;
   }
   if (groupPolicy.value === "message_tool") {
-    if (groupPolicy.provenance === "default" && !hasConfiguredChannelChat) {
-      return warnings;
-    }
-    const targets = collectMessageToolUnavailableTargets(cfg, { sourceReplyRuntimeGrant: true });
-    if (targets.length === 0) {
-      return warnings;
-    }
     const targetSummary = formatTargets(targets);
-    if (groupPolicy.provenance === "default") {
-      warnings.push(
-        `- messages.groupChat.visibleReplies defaults to "message_tool", but the message tool is unavailable for ${targetSummary}; OpenClaw falls back to automatic group/channel replies to avoid silent responses. Enable the message tool or set messages.groupChat.visibleReplies explicitly.`,
-      );
-    } else {
-      warnings.push(
-        `- ${groupPolicy.path} is set to "message_tool", but the message tool is unavailable for ${targetSummary}; OpenClaw falls back to automatic visible replies, so normal replies may post to the source chat. Enable the message tool or set ${groupPolicy.path} to "automatic".`,
-      );
-    }
+    warnings.push(
+      `- ${groupPolicy.path} is set to "message_tool", but the message tool is unavailable for ${targetSummary}; OpenClaw falls back to automatic visible replies, so normal replies may post to the source chat. Enable the message tool or set ${groupPolicy.path} to "automatic".`,
+    );
   }
 
   const globalVisibleReplies = cfg.messages?.visibleReplies;
