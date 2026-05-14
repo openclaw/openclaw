@@ -88,6 +88,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
       });
       const filename = readStringParam(ctx.params, "filename");
       const replyTo = readStringParam(ctx.params, "replyTo");
+      const threadName = readStringParam(ctx.params, "threadName");
       const rawEmbeds = ctx.params.embeds;
       const embeds: DiscordSendEmbeds | undefined = Array.isArray(rawEmbeds)
         ? (rawEmbeds as DiscordSendEmbeds)
@@ -157,7 +158,14 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         embeds,
         silent,
       });
-      return jsonResult({ ok: true, result });
+      const warning = threadName
+        ? "Discord message send does not rename existing threads; use channel-edit to rename a thread."
+        : undefined;
+      return jsonResult({
+        ok: true,
+        result,
+        ...(warning ? { warning } : {}),
+      });
     }
     case "threadCreate": {
       if (!ctx.isActionEnabled("threads")) {

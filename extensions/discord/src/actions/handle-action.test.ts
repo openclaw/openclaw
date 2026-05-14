@@ -167,6 +167,41 @@ describe("handleDiscordMessageAction", () => {
     });
   });
 
+  it("forwards send threadName so Discord can report unsupported rename intent", async () => {
+    const cfg = discordConfig();
+    await handleDiscordMessageAction({
+      action: "send",
+      params: {
+        target: "channel:thread-123",
+        message: "hello",
+        threadName: "renamed thread",
+      },
+      cfg,
+      toolContext: { currentChannelProvider: "discord" },
+    });
+
+    expectDiscordActionCall({
+      payload: {
+        action: "sendMessage",
+        accountId: undefined,
+        to: "channel:thread-123",
+        content: "hello",
+        mediaUrl: undefined,
+        filename: undefined,
+        replyTo: undefined,
+        threadName: "renamed thread",
+        components: undefined,
+        embeds: undefined,
+        asVoice: false,
+        silent: false,
+        __sessionKey: undefined,
+        __agentId: undefined,
+      },
+      cfg,
+      options: defaultActionOptions(),
+    });
+  });
+
   it("maps upload-file to Discord sendMessage with media read context", async () => {
     const mediaReadFile = vi.fn(async () => Buffer.from("image"));
     const mediaAccess = {

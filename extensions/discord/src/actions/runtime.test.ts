@@ -594,6 +594,27 @@ describe("handleDiscordMessagingAction", () => {
     expect(sendOptions.filename).toBe("image.png");
   });
 
+  it("warns when threadName is supplied on message send", async () => {
+    sendMessageDiscord.mockClear();
+    const result = await handleMessagingAction(
+      "sendMessage",
+      {
+        to: "channel:thread-123",
+        content: "hello",
+        threadName: "renamed thread",
+      },
+      enableAllActions,
+    );
+
+    expect(sendMessageDiscord).toHaveBeenCalledTimes(1);
+    expect(result.details).toEqual({
+      ok: true,
+      result: {},
+      warning:
+        "Discord message send does not rename existing threads; use channel-edit to rename a thread.",
+    });
+  });
+
   it("rejects voice messages that include content", async () => {
     await expect(
       handleMessagingAction(

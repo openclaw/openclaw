@@ -99,6 +99,7 @@ export async function handleDiscordMessageAction(
     });
     const filename = readStringParam(params, "filename");
     const replyTo = readStringParam(params, "replyTo");
+    const threadName = readStringParam(params, "threadName");
     const rawEmbeds = params.embeds;
     const embeds = Array.isArray(rawEmbeds) ? rawEmbeds : undefined;
     const silent = readBooleanParam(params, "silent") === true;
@@ -113,6 +114,7 @@ export async function handleDiscordMessageAction(
         mediaUrl: mediaUrl ?? undefined,
         filename: filename ?? undefined,
         replyTo: replyTo ?? undefined,
+        threadName: threadName ?? undefined,
         components,
         embeds,
         asVoice,
