@@ -172,27 +172,22 @@ describe("sessions.usage", () => {
     vi.clearAllMocks();
   });
 
-  it("discovers configured agents for list-style usage queries without agentId", async () => {
+  it("defaults list-style usage queries without agentId to the default agent", async () => {
     const respond = await runSessionsUsage(BASE_USAGE_RANGE);
 
     expect(vi.mocked(loadCombinedSessionStoreForGateway)).toHaveBeenCalledWith(
       TEST_RUNTIME_CONFIG,
-      {},
+      { agentId: "main" },
     );
-    expect(vi.mocked(discoverAllSessions)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(discoverAllSessions)).toHaveBeenCalledTimes(1);
     expect((mockArg(vi.mocked(discoverAllSessions), 0, 0) as { agentId?: string }).agentId).toBe(
       "main",
     );
-    expect((mockArg(vi.mocked(discoverAllSessions), 1, 0) as { agentId?: string }).agentId).toBe(
-      "opus",
-    );
 
     const sessions = expectSuccessfulSessionsUsage(respond);
-    expect(sessions).toHaveLength(2);
-    expect(sessions[0].key).toBe("agent:opus:s-opus");
-    expect(sessions[0].agentId).toBe("opus");
-    expect(sessions[1].key).toBe("agent:main:s-main");
-    expect(sessions[1].agentId).toBe("main");
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0].key).toBe("agent:main:s-main");
+    expect(sessions[0].agentId).toBe("main");
   });
 
   it("uses the requested agent for list-style usage queries", async () => {

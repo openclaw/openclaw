@@ -241,7 +241,9 @@ describe("artifacts RPC handlers", () => {
     });
 
     expect(calls[0]?.ok).toBe(true);
-    expect(hoisted.resolveSessionKeyForRun).toHaveBeenCalledWith("run-1", {});
+    expect(hoisted.resolveSessionKeyForRun).toHaveBeenCalledWith("run-1", {
+      agentId: "main",
+    });
     const payload = calls[0]?.payload as { artifacts?: Array<Record<string, unknown>> };
     expectFields(payload.artifacts?.[0], { runId: "run-1" });
   });

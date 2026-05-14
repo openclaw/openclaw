@@ -866,39 +866,34 @@ export const usageHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const effectiveAgentId =
-      requestedAgentId || specificKeyAgentId || specificKey
-        ? normalizeAgentId(requestedAgentId ?? specificKeyAgentId ?? resolveDefaultAgentId(config))
-        : undefined;
+    const effectiveAgentId = normalizeAgentId(
+      requestedAgentId ?? specificKeyAgentId ?? resolveDefaultAgentId(config),
+    );
     const groupingMode: UsageGroupingMode =
       p.groupBy === "family" || p.includeHistorical === true ? "family" : "instance";
 
     // Load session store for named sessions
-    const { storePath, store } = loadCombinedSessionStoreForGateway(
+    const { storePath, store } = loadCombinedSessionStoreForGateway(config, {
+      agentId: effectiveAgentId,
+    });
+    const scopedStore = filterSessionStoreByAgent({
       config,
-      effectiveAgentId ? { agentId: effectiveAgentId } : {},
-    );
-    const scopedStore = effectiveAgentId
-      ? filterSessionStoreByAgent({
-          config,
-          store,
-          agentId: effectiveAgentId,
-        })
-      : store;
+      store,
+      agentId: effectiveAgentId,
+    });
     const now = Date.now();
 
     const mergedEntries: MergedEntry[] = [];
 
     // Optimization: If a specific key is requested, skip full directory scan
     if (specificKey) {
-      const specificAgentId = effectiveAgentId ?? normalizeAgentId(resolveDefaultAgentId(config));
       const scopedSpecificKey = resolveStoredSessionKeyForAgentStore({
         cfg: config,
-        agentId: specificAgentId,
+        agentId: effectiveAgentId,
         sessionKey: specificKey,
       });
       const scopedParsed = parseAgentSessionKey(scopedSpecificKey);
-      const agentIdFromKey = scopedParsed?.agentId ?? specificAgentId;
+      const agentIdFromKey = scopedParsed?.agentId ?? effectiveAgentId;
       const keyRest = scopedParsed?.rest ?? specificKey;
 
       // Prefer the store entry when available, even if the caller provides a discovered key
@@ -965,7 +960,7 @@ export const usageHandlers: GatewayRequestHandlers = {
       // Full discovery for list view
       const discoveredSessions = await discoverAllSessionsForUsage({
         config,
-        ...(effectiveAgentId ? { agentId: effectiveAgentId } : {}),
+        agentId: effectiveAgentId,
         startMs,
         endMs,
       });

@@ -1641,8 +1641,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const activeRunSessionKey = requestedRunId
       ? context.chatAbortControllers.get(requestedRunId)?.sessionKey
       : undefined;
-    const activeRunAgentId = resolveSessionKeyAgentId(activeRunSessionKey, cfg);
-    const inferredRunAgentId = requestedParamAgentId ?? requestedKeyAgentId ?? activeRunAgentId;
+    const inferredRunAgentId =
+      requestedParamAgentId ??
+      requestedKeyAgentId ??
+      (requestedRunId ? resolveDefaultAgentId(cfg) : undefined);
     const requestedRunAgentId = requestedRunId
       ? inferredRunAgentId
         ? normalizeAgentId(inferredRunAgentId)
@@ -1659,10 +1661,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       scopedRequestedKey ??
       scopedActiveRunSessionKey ??
       (requestedRunId
-        ? resolveSessionKeyForRun(
-            requestedRunId,
-            requestedRunAgentId ? { agentId: requestedRunAgentId } : {},
-          )
+        ? resolveSessionKeyForRun(requestedRunId, {
+            agentId: requestedRunAgentId ?? resolveDefaultAgentId(cfg),
+          })
         : undefined);
     if (!keyCandidate && requestedRunId) {
       respond(true, { ok: true, abortedRunId: null, status: "no-active-run" });

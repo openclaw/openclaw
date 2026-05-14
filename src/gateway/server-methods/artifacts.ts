@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   normalizeAgentId,
@@ -359,11 +360,9 @@ function resolveQuerySessionKey(query: ArtifactQuery, cfg?: OpenClawConfig): str
     return resolveScopedArtifactSessionKey(query.sessionKey, query.agentId, cfg);
   }
   if (query.runId) {
-    const sessionKey = resolveSessionKeyForRun(
-      query.runId,
-      query.agentId ? { agentId: query.agentId } : {},
-    );
-    return resolveScopedArtifactSessionKey(sessionKey, query.agentId, cfg);
+    const agentId = query.agentId ?? resolveDefaultAgentId(cfg ?? {});
+    const sessionKey = resolveSessionKeyForRun(query.runId, { agentId });
+    return resolveScopedArtifactSessionKey(sessionKey, agentId, cfg);
   }
   if (query.taskId) {
     const task = getTaskSessionLookupByIdForStatus(query.taskId);
@@ -377,14 +376,12 @@ function resolveQuerySessionKey(query: ArtifactQuery, cfg?: OpenClawConfig): str
     ) {
       return undefined;
     }
-    const agentId = query.agentId ?? taskAgentId;
+    const agentId = query.agentId ?? taskAgentId ?? resolveDefaultAgentId(cfg ?? {});
     if (requesterSessionKey) {
       return resolveScopedArtifactSessionKey(requesterSessionKey, agentId, cfg);
     }
     const runId = asNonEmptyString(task?.runId);
-    const sessionKey = runId
-      ? resolveSessionKeyForRun(runId, agentId ? { agentId } : {})
-      : undefined;
+    const sessionKey = runId ? resolveSessionKeyForRun(runId, { agentId }) : undefined;
     return resolveScopedArtifactSessionKey(sessionKey, agentId, cfg);
   }
   return undefined;

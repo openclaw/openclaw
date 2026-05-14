@@ -72,7 +72,7 @@ describe("sessions.abort agent scope", () => {
     });
   });
 
-  it("aborts runId-only active runs using their non-default agent session key", async () => {
+  it("defaults runId-only aborts to the configured default agent", async () => {
     const activeRun = createActiveRun("agent:beta:dashboard:target");
     const context = {
       chatAbortControllers: new Map([["run-beta", activeRun]]),
@@ -92,13 +92,14 @@ describe("sessions.abort agent scope", () => {
       isWebchatConnect: () => false,
     });
 
-    expect(resolveSessionKeyForRunMock).not.toHaveBeenCalled();
-    expect(chatAbortMock).toHaveBeenCalledTimes(1);
-    expect(chatAbortMock.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({
-        params: { sessionKey: "agent:beta:dashboard:target", runId: "run-beta" },
-      }),
-    );
+    expect(resolveSessionKeyForRunMock).toHaveBeenCalledWith("run-beta", { agentId: "main" });
+    expect(chatAbortMock).not.toHaveBeenCalled();
+    expect(activeRun.controller.signal.aborted).toBe(false);
+    expect(respond).toHaveBeenCalledWith(true, {
+      ok: true,
+      abortedRunId: null,
+      status: "no-active-run",
+    });
   });
 
   it("aborts global-scope active runs for non-default agents", async () => {

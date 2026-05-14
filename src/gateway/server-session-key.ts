@@ -63,37 +63,21 @@ function sessionKeyMatchesAgent(sessionKey: string, agentId: string, cfg: OpenCl
   return resolveSessionStoreAgentId(cfg, canonicalKey) === normalizedAgentId;
 }
 
-function resolveRunSessionKeyForCaller(
-  cfg: OpenClawConfig,
-  storeKey: string,
-  requestedAgentId: string | undefined,
-) {
-  const parsed = parseAgentSessionKey(storeKey);
-  if (
-    !requestedAgentId &&
-    parsed &&
-    parsed.agentId !== normalizeAgentId(resolveDefaultAgentId(cfg))
-  ) {
-    return storeKey;
-  }
+function resolveRunSessionKeyForCaller(storeKey: string) {
   return toAgentRequestSessionKey(storeKey) ?? storeKey;
 }
 
 export function resolveSessionKeyForRun(runId: string, opts: { agentId?: string } = {}) {
   const cfg = getRuntimeConfig();
-  const requestedAgentId =
+  const requestedAgentId = normalizeAgentId(
     typeof opts.agentId === "string" && opts.agentId.trim()
-      ? normalizeAgentId(opts.agentId)
-      : undefined;
-  const cacheAgentId = requestedAgentId ?? "*";
+      ? opts.agentId
+      : resolveDefaultAgentId(cfg),
+  );
+  const cacheAgentId = requestedAgentId;
   const cached = getAgentRunContext(runId)?.sessionKey;
-  if (!requestedAgentId && cached) {
-    const sessionKey = resolveRunSessionKeyForCaller(cfg, cached, requestedAgentId);
-    setResolvedSessionKeyCache(runId, cacheAgentId, sessionKey);
-    return sessionKey;
-  }
-  if (cached && requestedAgentId && sessionKeyMatchesAgent(cached, requestedAgentId, cfg)) {
-    const sessionKey = resolveRunSessionKeyForCaller(cfg, cached, requestedAgentId);
+  if (cached && sessionKeyMatchesAgent(cached, requestedAgentId, cfg)) {
+    const sessionKey = resolveRunSessionKeyForCaller(cached);
     setResolvedSessionKeyCache(runId, cacheAgentId, sessionKey);
     return sessionKey;
   }
@@ -108,18 +92,14 @@ export function resolveSessionKeyForRun(runId: string, opts: { agentId?: string 
     }
     resolvedSessionKeyByRunId.delete(cacheKey);
   }
-  const { store } = loadCombinedSessionStoreForGateway(
-    cfg,
-    requestedAgentId ? { agentId: requestedAgentId } : {},
-  );
+  const { store } = loadCombinedSessionStoreForGateway(cfg, { agentId: requestedAgentId });
   const matches = Object.entries(store).filter(
     (entry): entry is [string, SessionEntry] =>
-      entry[1]?.sessionId === runId &&
-      (!requestedAgentId || sessionKeyMatchesAgent(entry[0], requestedAgentId, cfg)),
+      entry[1]?.sessionId === runId && sessionKeyMatchesAgent(entry[0], requestedAgentId, cfg),
   );
   const storeKey = resolvePreferredSessionKeyForSessionIdMatches(matches, runId);
   if (storeKey) {
-    const sessionKey = resolveRunSessionKeyForCaller(cfg, storeKey, requestedAgentId);
+    const sessionKey = resolveRunSessionKeyForCaller(storeKey);
     if (!cached) {
       registerAgentRunContext(runId, { sessionKey: storeKey });
     }
