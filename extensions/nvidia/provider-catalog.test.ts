@@ -71,6 +71,9 @@ describe("nvidia provider catalog", () => {
     expect(provider.models.map((model) => model.id)).toEqual([
       "z-ai/glm-5.1",
       "nvidia/nemotron-3-super-120b-a12b",
+      "moonshotai/kimi-k2.5",
+      "minimaxai/minimax-m2.5",
+      "z-ai/glm5",
     ]);
     expect(provider.models[0]).toMatchObject({
       name: "GLM 5.1",
@@ -128,7 +131,13 @@ describe("nvidia provider catalog", () => {
 
     const provider = await buildLiveNvidiaProvider();
 
-    expect(provider.models.map((model) => model.id)).toEqual(["minimaxai/minimax-m2.7"]);
+    expect(provider.models.map((model) => model.id)).toEqual([
+      "minimaxai/minimax-m2.7",
+      "nvidia/nemotron-3-super-120b-a12b",
+      "moonshotai/kimi-k2.5",
+      "minimaxai/minimax-m2.5",
+      "z-ai/glm5",
+    ]);
   });
 
   it("caches the featured catalog for repeated provider builds", async () => {
