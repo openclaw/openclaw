@@ -542,6 +542,88 @@ describe("managed npm root", () => {
     });
   });
 
+  it("uses lockfile metadata to preserve non-host peers when host peer planning fails", async () => {
+    const npmRoot = await makeTempRoot();
+    await fs.writeFile(
+      path.join(npmRoot, "package.json"),
+      `${JSON.stringify(
+        {
+          private: true,
+          dependencies: {
+            plugin: "1.0.0",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const runCommand = vi.fn(async (_args: string[], optionsOrTimeout: number | CommandOptions) => {
+      const options = requireCommandOptions(optionsOrTimeout, "npm peer plan");
+      if (!options.cwd) {
+        throw new Error("expected npm peer plan cwd");
+      }
+      if (runCommand.mock.calls.length === 1) {
+        return {
+          code: 1,
+          stdout: "",
+          stderr: "npm ERR! notarget No matching version found for openclaw@2026.5.99-beta.1",
+          signal: null,
+          killed: false,
+          termination: "exit" as const,
+        };
+      }
+      await fs.writeFile(
+        path.join(options.cwd, "package-lock.json"),
+        `${JSON.stringify(
+          {
+            lockfileVersion: 3,
+            packages: {
+              "": {
+                dependencies: {
+                  plugin: "1.0.0",
+                },
+              },
+              "node_modules/plugin": {
+                peerDependencies: {
+                  openclaw: "2026.5.99-beta.1",
+                  "runtime-peer": "^2.0.0",
+                },
+                version: "1.0.0",
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      return successfulSpawn;
+    });
+
+    await expect(syncManagedNpmRootPeerDependencies({ npmRoot, runCommand })).resolves.toBe(true);
+    expect(runCommand).toHaveBeenCalledTimes(2);
+    const [strictArgs, rawStrictOptions] = runCommand.mock.calls[0] ?? [];
+    const [fallbackArgs, rawFallbackOptions] = runCommand.mock.calls[1] ?? [];
+    const strictOptions = requireCommandOptions(rawStrictOptions, "strict npm peer plan");
+    const fallbackOptions = requireCommandOptions(rawFallbackOptions, "fallback npm peer plan");
+    expect(strictArgs).not.toContain("--legacy-peer-deps");
+    expect(strictOptions.env?.npm_config_legacy_peer_deps).toBe("false");
+    expect(fallbackArgs).toContain("--legacy-peer-deps");
+    expect(fallbackOptions.env?.npm_config_legacy_peer_deps).toBe("true");
+    await expect(
+      fs.readFile(path.join(npmRoot, "package.json"), "utf8").then((raw) => JSON.parse(raw)),
+    ).resolves.toEqual({
+      private: true,
+      dependencies: {
+        plugin: "1.0.0",
+        "runtime-peer": "^2.0.0",
+      },
+      openclaw: {
+        managedPeerDependencies: ["runtime-peer"],
+      },
+    });
+  });
+
   it("removes one managed dependency without dropping unrelated metadata", async () => {
     const npmRoot = await makeTempRoot();
     await fs.writeFile(

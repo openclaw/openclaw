@@ -460,7 +460,17 @@ function collectExistingManagedPeerDependencyPins(
   return pins;
 }
 
-function createManagedNpmPeerPlanArgs(params?: { force?: boolean }): string[] {
+function isHostPeerResolutionFailure(
+  result: Awaited<ReturnType<ManagedNpmRootRunCommand>>,
+): boolean {
+  const output = `${result.stdout}\n${result.stderr}`;
+  return /(^|[^@\w.-])openclaw(?=$|[@\s:,"'])/i.test(output);
+}
+
+function createManagedNpmPeerPlanArgs(params?: {
+  force?: boolean;
+  legacyPeerDeps?: boolean;
+}): string[] {
   return [
     "npm",
     "install",
@@ -469,6 +479,7 @@ function createManagedNpmPeerPlanArgs(params?: { force?: boolean }): string[] {
     ...createSafeNpmInstallArgs({
       omitDev: true,
       omitPeer: true,
+      legacyPeerDeps: params?.legacyPeerDeps,
       loglevel: "error",
       ignoreWorkspaces: true,
       noAudit: true,
@@ -529,6 +540,25 @@ async function collectNpmResolvedManagedNpmRootPeerDependencyPins(params: {
     };
     const result = await command(npmPeerPlanArgs, npmPlanOptions);
     if (result.code !== 0) {
+      if (isHostPeerResolutionFailure(result)) {
+        const hostPeerFallbackArgs = createManagedNpmPeerPlanArgs({
+          force: true,
+          legacyPeerDeps: true,
+        });
+        const hostPeerFallbackOptions = {
+          ...npmPlanOptions,
+          env: createSafeNpmInstallEnv(process.env, {
+            legacyPeerDeps: true,
+            packageLock: true,
+            quiet: true,
+          }),
+        };
+        const hostPeerFallbackResult = await command(hostPeerFallbackArgs, hostPeerFallbackOptions);
+        if (hostPeerFallbackResult.code === 0) {
+          const lockfile = await readManagedNpmRootManifest(tempLockPath);
+          return collectNpmLockPeerDependencyPins({ lockfile });
+        }
+      }
       return fallbackPeerPins;
     }
     const lockfile = await readManagedNpmRootManifest(tempLockPath);
