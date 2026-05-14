@@ -10,6 +10,7 @@ import {
   resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
 } from "../agents/model-selection.js";
+import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
   formatThinkingLevels,
@@ -71,6 +72,7 @@ function normalizeExecAsk(raw: string): "off" | "on-miss" | "always" | undefined
 }
 
 function shouldPreserveSessionAuthProfileOverride(params: {
+  cfg: OpenClawConfig;
   entry: SessionEntry;
   provider: string;
 }): boolean {
@@ -89,7 +91,13 @@ function shouldPreserveSessionAuthProfileOverride(params: {
   const profileProvider = normalizeOptionalLowercaseString(
     profileOverride.slice(0, delimiterIndex),
   );
-  return profileProvider === provider;
+  if (!profileProvider) {
+    return false;
+  }
+  return (
+    resolveProviderIdForAuth(profileProvider, { config: params.cfg }) ===
+    resolveProviderIdForAuth(provider, { config: params.cfg })
+  );
 }
 
 function supportsSpawnLineage(storeKey: string): boolean {
@@ -484,6 +492,7 @@ export async function applySessionsPatchToStore(params: {
           isDefault: true,
         },
         preserveAuthProfileOverride: shouldPreserveSessionAuthProfileOverride({
+          cfg,
           entry: next,
           provider: resolvedDefault.provider,
         }),
@@ -528,6 +537,7 @@ export async function applySessionsPatchToStore(params: {
           isDefault,
         },
         preserveAuthProfileOverride: shouldPreserveSessionAuthProfileOverride({
+          cfg,
           entry: next,
           provider: resolved.ref.provider,
         }),
