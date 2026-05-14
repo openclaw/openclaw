@@ -372,6 +372,7 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
     Reusable host contracts should use generic SDK subpaths such as
     `plugin-sdk/gateway-runtime`, `plugin-sdk/security-runtime`, and
     `plugin-sdk/plugin-config-runtime`.
+
   </Accordion>
 </AccordionGroup>
 
