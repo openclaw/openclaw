@@ -115,10 +115,20 @@ function shouldIgnoreProvidedImageMime(params: {
 }
 
 function isValidBase64(value: string): boolean {
-  if (value.length === 0 || value.length % 4 !== 0) {
+  // Regex-based validation is unsafe for large payloads in V8 — running
+  // RegExp.test() against a multi-MB base64 string can exhaust the engine's
+  // recursion stack and throw RangeError: Maximum call stack size exceeded.
+  // Use a Buffer round-trip check instead: zero regex, safe at any size.
+  // See: https://github.com/openclaw/openclaw/issues/80679
+  if (value.length === 0) {
     return false;
   }
-  return /^[A-Za-z0-9+/]+={0,2}$/.test(value);
+  try {
+    const normalized = value.replace(/\s/g, "");
+    return Buffer.from(normalized, "base64").toString("base64") === normalized;
+  } catch {
+    return false;
+  }
 }
 
 function verifyDecodedSize(buffer: Buffer, estimatedBytes: number, label: string): void {
