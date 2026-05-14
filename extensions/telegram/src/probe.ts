@@ -3,7 +3,11 @@ import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { fetchWithTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { TelegramBotInfo } from "./bot-info.js";
-import { resolveTelegramApiBase, resolveTelegramTransport, type TelegramTransport } from "./fetch.js";
+import {
+  resolveTelegramApiBase,
+  resolveTelegramTransport,
+  type TelegramTransport,
+} from "./fetch.js";
 import { makeProxyFetch } from "./proxy.js";
 
 export type TelegramProbe = BaseProbeResult & {
@@ -70,7 +74,10 @@ function buildProbeTransportCacheKey(token: string, options?: TelegramProbeOptio
   return `${cacheIdentityKind}:${cacheIdentity}::${proxyKey}::${autoSelectFamilyKey}::${dnsResultOrderKey}::${apiRootKey}`;
 }
 
-function setCachedProbeTransport(cacheKey: string, transport: TelegramTransport): TelegramTransport {
+function setCachedProbeTransport(
+  cacheKey: string,
+  transport: TelegramTransport,
+): TelegramTransport {
   probeTransportCache.set(cacheKey, transport);
   if (probeTransportCache.size > MAX_PROBE_TRANSPORT_CACHE_SIZE) {
     const oldestKey = probeTransportCache.keys().next().value;
