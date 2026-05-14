@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Control UI/i18n: add a `pnpm ui:i18n:report` baseline report for hardcoded-copy focus areas and locale fallback metadata. (#81320) Thanks @samzong.
 - Maintainer tooling: add a repo-local `codex-review` skill for Codex closeout reviews, including local dirty-work and PR-branch review helpers that rerun until no accepted/actionable findings remain and avoid unsupported inline prompts with `--base`.
 - Maintainer tooling: fail CI when pull requests add package patch files or pnpm patched dependencies, preserving the upstream-and-bump dependency workflow.
 - Amazon Bedrock: externalize the Bedrock and Bedrock Mantle provider packages so core installs no longer pull AWS SDK dependencies unless those providers are installed.
@@ -17,6 +18,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- CLI/migrate: handle delayed Codex plugin marketplace responses so warnings, next-steps, and conflict states render with ⚠️ glyphs and post-install migration retries the marketplace fetch instead of silently skipping plugin items. (#81625) Thanks @sjf.
+- Channels/Weixin: bump the bundled `@tencent-weixin/openclaw-weixin` external entry to `2.4.3` (from `2.4.1`) so onboarding and `openclaw channels add` install the current Tencent Weixin (personal WeChat) plugin release. (#81730) Thanks @scotthuang.
 - CLI: lazy-load model, plugin, and device runtime helpers and keep channel option help on generated startup metadata or generic fallback text so parent/help output renders without importing those runtime paths.
 - CLI: route `plugins list --json` through the parsed command fast path and cover it in response budgets so plugin JSON inventory avoids full CLI registration work.
 - Gateway/session history: carry monotonic transcript message sequence through live updates and refresh SSE history when stale sequence input would otherwise append bad incremental state. (#81474) Thanks @samzong.
@@ -36,7 +39,7 @@ Docs: https://docs.openclaw.ai
 - CLI/migrate: drop trailing periods from Codex migrate item messages and `REASON_CODE_MESSAGES` strings so plan/result rows read as labels instead of sentence fragments. (#81705) Thanks @sjf.
 - Slack: treat malformed private-file redirect `Location` headers as unfollowable redirects instead of failing Slack media downloads.
 - Matrix: ignore malformed percent-encoding in optional location URI parameters instead of letting a bad `geo:` event abort inbound message handling.
-- Web search: auto-detect Brave from the documented `tools.web.search.apiKey` config path, keeping allowlisted isolated cron runs from reporting `web_search` unavailable when the key is stored outside plugin-scoped config. Fixes #81538. Thanks @atomicmonk.
+- Web search: auto-detect Brave through its legacy `tools.web.search.apiKey` compatibility fallback while keeping doctor migration to `plugins.entries.brave.config.webSearch.apiKey` as the canonical repair, so allowlisted isolated cron runs do not report `web_search` unavailable before migration. Fixes #81538. Thanks @atomicmonk.
 - Plugins: memoize repeated in-process plugin metadata snapshots and keep vanished managed-install residue from forcing full derived discovery, reducing gateway/status startup scans under large plugin sets. Fixes #81143 and #79806. (#81570) Thanks @Kaspre, @holgergruenhagen, @JanPlessow, and @mjamiv.
 - Plugins: discover provider plugins from `setup.providers[].envVars` credentials during provider discovery while keeping the deprecated `providerAuthEnvVars` fallback. (#81542) Thanks @JARVIS-Glasses.
 - Docs/Codex harness: clarify that per-agent `CODEX_HOME` isolates `~/.codex` while inherited `HOME` intentionally keeps `.agents` discovery and subprocess user-home state available.
@@ -289,6 +292,7 @@ Docs: https://docs.openclaw.ai
 - Codex app-server: mirror native Codex subagent spawn lifecycle events into Task Registry so app-server child agents appear in task/status surfaces without relying on transcript text. (#79512) Thanks @mbelinky.
 - Gateway: expose optional `isHeartbeat` metadata on agent event payloads so clients can distinguish scheduled heartbeat runs from ordinary chat runs. (#80610) Thanks @medns.
 - Agents: add `agents.defaults.runRetries` and `agents.list[].runRetries` config for embedded Pi runner retry loop limits. (#80661) Thanks @medns.
+- Codex: add node-backed Codex CLI session listing and binding so an OpenClaw conversation can continue an existing Codex CLI session running on a paired node.
 
 ### Fixes
 
