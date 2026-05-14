@@ -9,6 +9,7 @@ import {
 } from "./config/accounts.ts";
 import { DingtalkConfigBaseSchema } from "./config/schema.ts";
 import { monitorDingtalkProvider } from "./core/provider.ts";
+import { dingtalkOnboardingAdapter } from "./onboarding.ts";
 import { resolveDingtalkGroupToolPolicy } from "./policy.ts";
 import { probeDingtalk } from "./probe.ts";
 import {
@@ -77,6 +78,7 @@ export const dingtalkPlugin: ChannelPlugin<ResolvedDingtalkAccount> = {
   meta: {
     ...meta,
   },
+  setupWizard: dingtalkOnboardingAdapter as any,
   pairing: {
     idLabel: "dingtalkUserId",
     normalizeAllowEntry: (entry) => entry.replace(/^(dingtalk|user|dd):/i, ""),

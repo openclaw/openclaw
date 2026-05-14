@@ -11,6 +11,7 @@
     "axios": "1.14.0",
     "dingtalk-stream": "2.1.4",
     "form-data": "4.0.0",
+    "qrcode-terminal": "0.12.0",
     "zod": "4.4.3"
   },
   "devDependencies": {
