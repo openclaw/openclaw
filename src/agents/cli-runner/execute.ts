@@ -839,5 +839,5 @@ export async function executePreparedCliRun(
       }
     }
   }
-  return runResult as CliOutput;
+  return runResult;
 }
