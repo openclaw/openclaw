@@ -734,6 +734,28 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
+  it("adds MEMORY guidance when a memory file is present", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles: [
+        {
+          path: "MEMORY.md",
+          content: "NEVER use [[tts:...]] or TTS commands; ALWAYS use local Piper.",
+        },
+      ],
+      ttsHint:
+        "Voice (TTS) is enabled.\nUse [[tts:...]] and optional [[tts:text]]...[[/tts:text]] to control voice/expressiveness.",
+    });
+
+    expect(prompt).toContain(
+      "MEMORY.md: durable user preferences and behavior guidance. Keep following it throughout the session unless higher-priority instructions override.",
+    );
+    expect(prompt.indexOf("NEVER use [[tts:...]]")).toBeGreaterThan(-1);
+    expect(prompt.lastIndexOf("## Voice (TTS)")).toBeGreaterThan(
+      prompt.indexOf("NEVER use [[tts:...]]"),
+    );
+  });
+
   it("omits project context when no context files are injected", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
