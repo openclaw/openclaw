@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { parseOcDocument, type MdAst } from "@openclaw/oc-path/api.js";
 
 export type PolicyAttestation = {
   readonly checkedAt: string;
@@ -33,6 +32,7 @@ export type PolicyToolEvidence = {
   readonly line: number;
   readonly risk?: string;
   readonly sensitivity?: string;
+  readonly owner?: string;
   readonly capabilities?: readonly string[];
 };
 
@@ -126,19 +126,20 @@ export function scanPolicyChannels(cfg: Record<string, unknown>): readonly Polic
 }
 
 export function scanPolicyTools(raw: string): readonly PolicyToolEvidence[] {
-  const parsed = parseOcDocument(raw, { fileName: "TOOLS.md" });
-  if (parsed.ast.kind !== "md") {
-    return [];
-  }
-  return scanPolicyToolHeaders(parsed.ast);
+  return scanPolicyToolHeaders(raw);
 }
 
-function scanPolicyToolHeaders(ast: MdAst): readonly PolicyToolEvidence[] {
-  const tools = ast.blocks.find((entry) => entry.slug === "tools");
-  if (tools === undefined) {
+function scanPolicyToolHeaders(raw: string): readonly PolicyToolEvidence[] {
+  const lines = raw.split(/\r?\n/);
+  const toolsHeading = lines.findIndex((line) => /^##\s+tools\s*$/i.test(line.trim()));
+  if (toolsHeading < 0) {
     return [];
   }
-  return tools.bodyText.split(/\r?\n/).flatMap((line, index): readonly PolicyToolEvidence[] => {
+  const nextHeading = lines.findIndex(
+    (line, index) => index > toolsHeading && /^##\s+\S+/.test(line.trim()),
+  );
+  const body = lines.slice(toolsHeading + 1, nextHeading < 0 ? undefined : nextHeading);
+  return body.flatMap((line, index): readonly PolicyToolEvidence[] => {
     const match = /^###\s+([^\s#]+)(.*)$/.exec(line);
     if (match === null) {
       return [];
@@ -151,20 +152,25 @@ function scanPolicyToolHeaders(ast: MdAst): readonly PolicyToolEvidence[] {
       line: number;
       risk?: string;
       sensitivity?: string;
+      owner?: string;
       capabilities?: readonly string[];
     } = {
       id,
       source: `oc://TOOLS.md/tools/${id}`,
-      line: tools.line + index + 1,
+      line: toolsHeading + index + 2,
     };
     const risk = riskFromMeta(meta);
     const sensitivity = /\bsensitivity\s*:\s*([a-z0-9_-]+)\b/i.exec(meta)?.[1]?.toLowerCase();
+    const owner = /\bowner\s*:\s*([^\s#]+)\b/i.exec(meta)?.[1];
     const capabilities = meta.match(/\b[A-Z][A-Z0-9_]{2,}\b/g) ?? [];
     if (risk !== undefined) {
       entry.risk = risk;
     }
     if (sensitivity !== undefined) {
       entry.sensitivity = sensitivity;
+    }
+    if (owner !== undefined) {
+      entry.owner = owner;
     }
     if (capabilities.length > 0) {
       entry.capabilities = capabilities;

@@ -47,7 +47,7 @@ describe("policy trusted tool runtime", () => {
   it("does nothing until runtime tool policy is enabled", async () => {
     await fs.writeFile(
       join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({ tools: { settings: { runtimeToolPolicy: true, requireRisk: true } } }),
+      JSON.stringify({ tools: { requireMetadata: ["risk"] } }),
       "utf-8",
     );
     await fs.writeFile(join(workspaceDir, "TOOLS.md"), "## Tools\n\n### deploy\n", "utf-8");
@@ -58,7 +58,7 @@ describe("policy trusted tool runtime", () => {
   it("honors plugin entry enablement without requiring config.enabled", async () => {
     await fs.writeFile(
       join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({ tools: { settings: { requireRisk: true } } }),
+      JSON.stringify({ tools: { requireMetadata: ["risk"] } }),
       "utf-8",
     );
     await fs.writeFile(join(workspaceDir, "TOOLS.md"), "## Tools\n\n### deploy\n", "utf-8");
@@ -72,7 +72,7 @@ describe("policy trusted tool runtime", () => {
   it("honors explicit policy disablement", async () => {
     await fs.writeFile(
       join(workspaceDir, "policy.jsonc"),
-      JSON.stringify({ tools: { settings: { requireRisk: true } } }),
+      JSON.stringify({ tools: { requireMetadata: ["risk"] } }),
       "utf-8",
     );
     await fs.writeFile(join(workspaceDir, "TOOLS.md"), "## Tools\n\n### deploy\n", "utf-8");
@@ -120,11 +120,30 @@ describe("policy trusted tool runtime", () => {
     });
   });
 
+  it("blocks when requireMetadata contains unsupported entries", async () => {
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ tools: { requireMetadata: ["risk", "unsupported"] } }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "TOOLS.md"),
+      "## Tools\n\n### deploy risk:low\n",
+      "utf-8",
+    );
+
+    await expect(evaluate("deploy")).resolves.toEqual({
+      block: true,
+      blockReason:
+        "Policy tool runtime is enabled, but policy.jsonc has unsupported tools.requireMetadata 'unsupported'.",
+    });
+  });
+
   it("blocks tool calls whose required metadata is missing", async () => {
     await fs.writeFile(
       join(workspaceDir, "policy.jsonc"),
       JSON.stringify({
-        tools: { settings: { runtimeToolPolicy: true, requireRisk: true } },
+        tools: { requireMetadata: ["risk"] },
       }),
       "utf-8",
     );
@@ -136,11 +155,29 @@ describe("policy trusted tool runtime", () => {
     });
   });
 
+  it("blocks tool calls whose required owner metadata is missing", async () => {
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ tools: { requireMetadata: ["owner"] } }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "TOOLS.md"),
+      "## Tools\n\n### deploy risk:low sensitivity:internal\n",
+      "utf-8",
+    );
+
+    await expect(evaluate("deploy")).resolves.toEqual({
+      block: true,
+      blockReason: "Policy requires owner metadata for 'deploy', but TOOLS.md does not declare it.",
+    });
+  });
+
   it("blocks tool calls whose risk metadata is unknown", async () => {
     await fs.writeFile(
       join(workspaceDir, "policy.jsonc"),
       JSON.stringify({
-        tools: { settings: { runtimeToolPolicy: true, requireRisk: true } },
+        tools: { requireMetadata: ["risk"] },
       }),
       "utf-8",
     );
@@ -159,7 +196,7 @@ describe("policy trusted tool runtime", () => {
 
   it("requires approval for critical or irreversible tools", async () => {
     const policy = {
-      tools: { settings: { runtimeToolPolicy: true, requireRisk: true } },
+      tools: { requireMetadata: ["risk"] },
     };
     await fs.writeFile(join(workspaceDir, "policy.jsonc"), JSON.stringify(policy), "utf-8");
     await fs.writeFile(
@@ -190,7 +227,7 @@ describe("policy trusted tool runtime", () => {
 
   it("includes policy metadata when undeclared tools need approval", async () => {
     const policy = {
-      tools: { settings: { runtimeToolPolicy: true, requireRisk: true } },
+      tools: { requireMetadata: ["risk"] },
     };
     const expectedHash = policyDocumentHash(policy);
     await fs.writeFile(join(workspaceDir, "policy.jsonc"), JSON.stringify(policy), "utf-8");
@@ -220,7 +257,7 @@ describe("policy trusted tool runtime", () => {
     await fs.writeFile(
       join(workspaceDir, "policy.jsonc"),
       JSON.stringify({
-        tools: { settings: { runtimeToolPolicy: true, requireRisk: true } },
+        tools: { requireMetadata: ["risk"] },
       }),
       "utf-8",
     );
