@@ -84,8 +84,17 @@ importers:
         specifier: 0.6.0
         version: 0.6.0
       '@openclaw/fs-safe':
-        specifier: 0.2.3
-        version: 0.2.3
+        specifier: 0.2.4
+        version: 0.2.4
+      '@slack/bolt':
+        specifier: 4.7.2
+        version: 4.7.2(@types/express@5.0.6)
+      '@slack/types':
+        specifier: 2.21.1
+        version: 2.21.1
+      '@slack/web-api':
+        specifier: 7.15.2
+        version: 7.15.2
       ajv:
         specifier: 8.20.0
         version: 8.20.0
@@ -3325,8 +3334,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@openclaw/fs-safe@0.2.3':
-    resolution: {integrity: sha512-O8AJ/ZiLbBQvpxYyXrZuyIFFUG2N2Oz6uhle5Gn1gVGkgT+Qmx7O1A9tbE2pTZs2Cyk75A31H0F8w34CL2X6gg==}
+  '@openclaw/fs-safe@0.2.4':
+    resolution: {integrity: sha512-Fo3WTQhxu0asD/rZqIKBqhX6fuZfjyHxSW5yTKfcRx+D9BRAcz0AGoVh+3ur/4XRvZkvsh3Ud8XTw006yRYLgg==}
     engines: {node: '>=20.11'}
 
   '@opentelemetry/api-logs@0.217.0':
@@ -10004,7 +10013,7 @@ snapshots:
   '@openai/codex@0.130.0-win32-x64':
     optional: true
 
-  '@openclaw/fs-safe@0.2.3':
+  '@openclaw/fs-safe@0.2.4':
     optionalDependencies:
       jszip: 3.10.1
       tar: 7.5.15

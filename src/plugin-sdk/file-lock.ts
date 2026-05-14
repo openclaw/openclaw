@@ -4,10 +4,7 @@ import {
   drainFileLockManagerForTest,
   resetFileLockManagerForTest,
 } from "@openclaw/fs-safe/file-lock";
-import {
-  removeReportedStaleLockIfStillStale,
-  shouldRemoveDeadOwnerOrExpiredLock,
-} from "../infra/stale-lock-file.js";
+import { shouldRemoveDeadOwnerOrExpiredLock } from "../infra/stale-lock-file.js";
 
 export type FileLockOptions = {
   retries: {
@@ -53,10 +50,6 @@ async function shouldReclaimPluginLock(params: {
   });
 }
 
-function isFileLockError(error: unknown, code: string): boolean {
-  return (error as { code?: unknown } | null)?.code === code;
-}
-
 function normalizeLockError(err: unknown): never {
   if ((err as { code?: unknown }).code === FILE_LOCK_TIMEOUT_ERROR_CODE) {
     throw Object.assign(new Error((err as Error).message), {
@@ -86,36 +79,24 @@ export async function acquireFileLock(
   filePath: string,
   options: FileLockOptions,
 ): Promise<FileLockHandle> {
-  while (true) {
-    try {
-      const lock = await acquireFsSafeFileLock(filePath, {
-        managerKey: FILE_LOCK_MANAGER_KEY,
-        staleMs: options.stale,
-        retry: options.retries,
-        allowReentrant: true,
-        payload: () => ({ pid: process.pid, createdAt: new Date().toISOString() }),
-        shouldReclaim: shouldReclaimPluginLock,
-      });
-      return { lockPath: lock.lockPath, release: lock.release };
-    } catch (err) {
-      if (isFileLockError(err, FILE_LOCK_STALE_ERROR_CODE)) {
-        const lockPath = (err as { lockPath?: string }).lockPath;
-        if (
-          lockPath &&
-          (await removeReportedStaleLockIfStillStale({
-            lockPath,
-            shouldRemove: (snapshot) =>
-              shouldRemoveDeadOwnerOrExpiredLock({
-                payload: snapshot.payload,
-                staleMs: options.stale,
-              }),
-          }))
-        ) {
-          continue;
-        }
-      }
-      return normalizeLockError(err);
-    }
+  try {
+    const lock = await acquireFsSafeFileLock(filePath, {
+      managerKey: FILE_LOCK_MANAGER_KEY,
+      staleMs: options.stale,
+      retry: options.retries,
+      staleRecovery: "remove-if-unchanged",
+      allowReentrant: true,
+      payload: () => ({ pid: process.pid, createdAt: new Date().toISOString() }),
+      shouldReclaim: shouldReclaimPluginLock,
+      shouldRemoveStaleLock: (snapshot) =>
+        shouldRemoveDeadOwnerOrExpiredLock({
+          payload: snapshot.payload,
+          staleMs: options.stale,
+        }),
+    });
+    return { lockPath: lock.lockPath, release: lock.release };
+  } catch (err) {
+    return normalizeLockError(err);
   }
 }
 
