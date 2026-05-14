@@ -230,13 +230,12 @@ async function writeUsageCostCacheLockAtomically(
   lockPath: string,
   lock: UsageCostCacheLock,
 ): Promise<void> {
-  const tempPath = `${lockPath}.${process.pid}.${process.hrtime.bigint()}.tmp`;
-  await fs.promises.writeFile(tempPath, `${JSON.stringify(lock)}\n`, { flag: "wx" });
-  try {
-    await fs.promises.link(tempPath, lockPath);
-  } finally {
-    await fs.promises.rm(tempPath, { force: true }).catch(() => undefined);
-  }
+  // Write directly to lockPath with O_EXCL (flag: "wx") instead of using
+  // temp file + hard link. The hard-link approach (fs.promises.link) fails
+  // with ENOTSUP on SMB/NFS/virtiofs/9p/FUSE filesystems. O_EXCL is
+  // POSIX-standard and guarantees atomic create-if-not-exists on all
+  // local and network filesystems that support file creation.
+  await fs.promises.writeFile(lockPath, `${JSON.stringify(lock)}\n`, { flag: "wx" });
 }
 
 function isProcessRunning(pid: number): boolean {
