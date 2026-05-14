@@ -514,7 +514,12 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           });
           if (channelRuntimeForTask && plugin.gateway?.setChannelRuntime) {
             try {
-              plugin.gateway.setChannelRuntime(channelRuntimeForTask);
+              const result = plugin.gateway.setChannelRuntime(channelRuntimeForTask) as unknown;
+              if (result && typeof (result as Promise<unknown>).then === "function") {
+                void (result as Promise<unknown>).catch((err: unknown) => {
+                  log.warn?.(`[${id}] setChannelRuntime failed: ${formatErrorMessage(err)}`);
+                });
+              }
             } catch (err) {
               log.warn?.(`[${id}] setChannelRuntime failed: ${formatErrorMessage(err)}`);
             }

@@ -1058,4 +1058,21 @@ describe("server-channels auto restart", () => {
     expect(setChannelRuntime).toHaveBeenCalledTimes(1);
     expect(startAccount).toHaveBeenCalledTimes(1);
   });
+
+  it("catches async setChannelRuntime rejections without unhandled rejection", async () => {
+    const mockChannelRuntime = {
+      runtimeContexts: createChannelRuntimeContextRegistry(),
+    } as unknown as ChannelRuntimeSurface;
+    const setChannelRuntime = vi.fn(() =>
+      Promise.reject(new Error("async plugin error")),
+    ) as unknown as NonNullable<ChannelPlugin["gateway"]>["setChannelRuntime"];
+    const startAccount = vi.fn(async () => {});
+
+    installTestRegistry(createTestPlugin({ setChannelRuntime, startAccount }));
+    const manager = createManager({ channelRuntime: mockChannelRuntime });
+    await manager.startChannels();
+
+    // startAccount should proceed despite the async rejection caught by gateway
+    expect(startAccount).toHaveBeenCalledTimes(1);
+  });
 });

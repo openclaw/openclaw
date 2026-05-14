@@ -340,7 +340,7 @@ export type ChannelLogoutContext<ResolvedAccount = unknown> = {
 };
 
 export type ChannelGatewayAdapter<ResolvedAccount = unknown> = {
-  /** Called before each startAccount with the resolved runtime. Throwing logs a warning and does not block start. */
+  /** Called synchronously before each startAccount with the resolved runtime. Throwing logs a warning and does not block start. */
   setChannelRuntime?: (channelRuntime: ChannelRuntimeSurface) => void;
   startAccount?: (ctx: ChannelGatewayContext<ResolvedAccount>) => Promise<unknown>;
   stopAccount?: (ctx: ChannelGatewayContext<ResolvedAccount>) => Promise<void>;
