@@ -117,6 +117,7 @@ function applyGlobalDispatcherStreamTimeouts(params: {
     if (kind === "env-proxy") {
       const proxyOptions = {
         ...resolveEnvHttpProxyAgentOptions(),
+        allowH2: false,
         bodyTimeout: timeoutMs,
         headersTimeout: timeoutMs,
         ...(connect ? { connect } : {}),
@@ -125,6 +126,7 @@ function applyGlobalDispatcherStreamTimeouts(params: {
     } else {
       runtime.setGlobalDispatcher(
         new runtime.Agent({
+          allowH2: false,
           bodyTimeout: timeoutMs,
           headersTimeout: timeoutMs,
           ...(connect ? { connect } : {}),

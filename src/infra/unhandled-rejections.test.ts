@@ -71,6 +71,7 @@ describe("isTransientNetworkError", () => {
       "UND_ERR_BODY_TIMEOUT",
       "ERR_SSL_WRONG_VERSION_NUMBER",
       "ERR_SSL_PROTOCOL_RETURNED_AN_ERROR",
+      "ERR_HTTP2_INVALID_SESSION",
     ];
 
     for (const code of codes) {
@@ -158,6 +159,17 @@ describe("isTransientNetworkError", () => {
       ),
     ).toBe(true);
     expect(isTransientNetworkError(new Error("tlsv1 alert protocol version"))).toBe(true);
+  });
+
+  it("returns true for undici HTTP/2 destroyed-session errors", () => {
+    const error = Object.assign(new Error("The session has been destroyed"), {
+      code: "ERR_HTTP2_INVALID_SESSION",
+    });
+
+    expect(isTransientNetworkError(error)).toBe(true);
+    expect(isTransientNetworkError(new Error("Request failed: ERR_HTTP2_INVALID_SESSION"))).toBe(
+      true,
+    );
   });
 
   it("returns false for regular errors without network codes", () => {
@@ -375,6 +387,9 @@ describe("isTransientUnhandledRejectionError", () => {
     const rawAddressUnavailable = new Error(
       "connect EADDRNOTAVAIL 2607:6bc0::10:443 - Local (:::0)",
     );
+    const http2InvalidSession = Object.assign(new Error("The session has been destroyed"), {
+      code: "ERR_HTTP2_INVALID_SESSION",
+    });
     const generic = new Error("boom");
 
     expect(isBenignUncaughtExceptionError(epipe)).toBe(true);
@@ -384,6 +399,10 @@ describe("isTransientUnhandledRejectionError", () => {
     expect(isBenignUncaughtExceptionError(rawHostUnreachable)).toBe(true);
     expect(isBenignUncaughtExceptionError(addressUnavailable)).toBe(true);
     expect(isBenignUncaughtExceptionError(rawAddressUnavailable)).toBe(true);
+    expect(isBenignUncaughtExceptionError(http2InvalidSession)).toBe(true);
+    expect(isBenignUncaughtExceptionError(new Error("Uncaught ERR_HTTP2_INVALID_SESSION"))).toBe(
+      true,
+    );
     expect(isBenignUncaughtExceptionError(generic)).toBe(false);
   });
   it("returns true for transient SQLite errors", () => {

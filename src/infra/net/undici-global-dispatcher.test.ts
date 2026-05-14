@@ -162,6 +162,7 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
     const next = getCurrentDispatcher() as { options?: Record<string, unknown> };
     expect(next).toBeInstanceOf(Agent);
     expect(next.options).toEqual({
+      allowH2: false,
       bodyTimeout: 1_900_000,
       headersTimeout: 1_900_000,
       connect: {
@@ -182,6 +183,7 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
     const next = getCurrentDispatcher() as { options?: Record<string, unknown> };
     expect(next).toBeInstanceOf(EnvHttpProxyAgent);
+    expect(next.options?.allowH2).toBe(false);
     expect(next.options?.bodyTimeout).toBe(DEFAULT_UNDICI_STREAM_TIMEOUT_MS);
     expect(next.options?.headersTimeout).toBe(DEFAULT_UNDICI_STREAM_TIMEOUT_MS);
     expect(next.options?.connect).toEqual({
@@ -205,6 +207,7 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
     expect(next).toBeInstanceOf(EnvHttpProxyAgent);
     expect(next.options?.httpProxy).toBe("socks5://proxy.test:1080");
     expect(next.options?.httpsProxy).toBe("socks5://proxy.test:1080");
+    expect(next.options?.allowH2).toBe(false);
     expect(next.options?.bodyTimeout).toBe(DEFAULT_UNDICI_STREAM_TIMEOUT_MS);
     expect(next.options?.headersTimeout).toBe(DEFAULT_UNDICI_STREAM_TIMEOUT_MS);
   });
