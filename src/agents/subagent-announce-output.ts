@@ -212,7 +212,11 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
     }
     const role = (message as { role?: unknown }).role;
     if (role === "assistant") {
-      snapshot.toolCallCount += countAssistantToolCalls((message as { content?: unknown }).content);
+      const assistantToolCallCount = countAssistantToolCalls(
+        (message as { content?: unknown }).content,
+      );
+      snapshot.toolCallCount += assistantToolCallCount;
+      const hasToolCalls = assistantToolCallCount > 0;
       if (assistantCallsSessionsYield(message)) {
         snapshot.latestAssistantText = undefined;
         snapshot.latestRawText = undefined;
@@ -222,8 +226,17 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
         previousAssistantCalledYield = true;
         continue;
       }
+      if (hasToolCalls) {
+        snapshot.waitingForContinuation = true;
+      }
       const text = extractSubagentOutputText(message).trim();
       if (!text) {
+        if (hasToolCalls) {
+          snapshot.latestAssistantText = undefined;
+          snapshot.latestRawText = undefined;
+          snapshot.latestSilentText = undefined;
+          snapshot.assistantFragments = [];
+        }
         previousAssistantCalledYield = false;
         continue;
       }
@@ -237,8 +250,10 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
       }
       snapshot.latestSilentText = undefined;
       snapshot.latestAssistantText = text;
-      snapshot.assistantFragments.push(text);
-      snapshot.waitingForContinuation = false;
+      if (!hasToolCalls) {
+        snapshot.assistantFragments.push(text);
+        snapshot.waitingForContinuation = false;
+      }
       previousAssistantCalledYield = false;
       continue;
     }
@@ -254,7 +269,6 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
     const text = extractSubagentOutputText(message).trim();
     if (text) {
       snapshot.latestRawText = text;
-      snapshot.waitingForContinuation = false;
     }
     previousAssistantCalledYield = false;
   }

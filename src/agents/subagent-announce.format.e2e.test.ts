@@ -540,6 +540,61 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain("completed; ready for parent review");
   });
 
+  it("does not surface raw tool-result text as terminal completion when the child is still awaiting continuation", async () => {
+    callGatewaySpy.mockImplementation(async (req: unknown) => {
+      const typed = req as { method?: string; params?: { sessionKey?: string } };
+      if (typed.method === "agent") {
+        return await agentSpy(typed);
+      }
+      if (typed.method === "send") {
+        return await sendSpy(typed);
+      }
+      if (typed.method === "agent.wait") {
+        return { status: "ok", startedAt: 10, endedAt: 20 };
+      }
+      if (typed.method === "chat.history") {
+        return {
+          messages: [
+            {
+              role: "toolResult",
+              content: [{ type: "text", text: "const staleFileSlice = 'app/app.js';" }],
+            },
+            {
+              role: "assistant",
+              stopReason: "toolUse",
+              content: [{ type: "toolCall", id: "call-read", name: "read", arguments: {} }],
+            },
+          ],
+        };
+      }
+      if (typed.method === "sessions.patch" || typed.method === "sessions.delete") {
+        return {};
+      }
+      return {};
+    });
+    readLatestAssistantReplyMock.mockResolvedValue("stale assistant reply should never surface");
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-tool-boundary-no-final",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "do thing",
+      timeoutMs: 50,
+      cleanup: "keep",
+      waitForCompletion: true,
+      startedAt: 10,
+      endedAt: 20,
+    });
+
+    const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
+    const msg = call?.params?.message as string;
+    expect(msg).toContain("completed successfully");
+    expect(msg).toContain("(no output)");
+    expect(msg).not.toContain("const staleFileSlice = 'app/app.js';");
+    expect(msg).not.toContain("stale assistant reply should never surface");
+  });
+
   it("rechecks timed-out waits before announcing timeout when the run finishes immediately after", async () => {
     const waitStatuses = [
       { status: "timeout", startedAt: 10, endedAt: 20 },
@@ -755,6 +810,9 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.sessionKey).toBe("agent:main:main");
     expectInputProvenance(call?.params, "agent:main:subagent:test");
     expect(msg).toContain("final answer: 2");
+    expect(msg).toContain(
+      `Reply ONLY: ${SILENT_REPLY_TOKEN} if this exact result was already delivered to the user in this same turn.`,
+    );
     expect(msg).not.toContain("✅ Subagent");
   });
 
@@ -2026,7 +2084,7 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain("tool output only");
   });
 
-  it("ignores user text when deriving fallback completion output", async () => {
+  it("defers completion delivery instead of announcing empty successful output", async () => {
     chatHistoryMock.mockResolvedValueOnce({
       messages: [
         {
@@ -2047,13 +2105,9 @@ describe("subagent announce formatting", () => {
       ...defaultOutcomeAnnounce,
     });
 
-    expect(didAnnounce).toBe(true);
+    expect(didAnnounce).toBe(false);
     expect(sendSpy).not.toHaveBeenCalled();
-    expect(agentSpy).toHaveBeenCalledTimes(1);
-    const call = getAgentCall() as { params?: { message?: string } };
-    const msg = call?.params?.message as string;
-    expect(msg).toContain("(no output)");
-    expect(msg).not.toContain("user prompt should not be announced");
+    expect(agentSpy).not.toHaveBeenCalled();
   });
 
   it("keeps announce delivery inside requester subagent session", async () => {

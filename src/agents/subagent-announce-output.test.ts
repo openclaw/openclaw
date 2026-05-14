@@ -5,15 +5,17 @@ import {
   readSubagentOutput,
 } from "./subagent-announce-output.js";
 
-type CallGateway = typeof import("../gateway/call.js").callGateway;
-type ReadLatestAssistantReply = typeof import("./tools/agent-step.js").readLatestAssistantReply;
+type InstallOutputDepsParams = {
+  messages: Array<unknown>;
+  latestAssistantReply?: string;
+};
 
-function installOutputDeps(params: { messages: Array<unknown>; latestAssistantReply?: string }) {
+function installOutputDeps(params: InstallOutputDepsParams) {
   const callGateway = vi.fn(async () => ({ messages: params.messages }));
   const readLatestAssistantReply = vi.fn(async () => params.latestAssistantReply);
   __testing.setDepsForTest({
-    callGateway: callGateway as unknown as CallGateway,
-    readLatestAssistantReply: readLatestAssistantReply as unknown as ReadLatestAssistantReply,
+    callGateway: callGateway as never,
+    readLatestAssistantReply: readLatestAssistantReply as never,
   });
   return { callGateway, readLatestAssistantReply };
 }
@@ -102,6 +104,52 @@ describe("readSubagentOutput", () => {
 
     await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBe(
       "Mapped the code path.",
+    );
+  });
+
+  it("does not fall back to raw tool output when the latest turn is still awaiting tool continuation", async () => {
+    const deps = installOutputDeps({
+      messages: [
+        {
+          role: "toolResult",
+          content: [{ type: "text", text: "const staleFileSlice = 'app/app.js';" }],
+        },
+        {
+          role: "assistant",
+          stopReason: "toolUse",
+          content: [{ type: "toolCall", id: "call-read", name: "read", arguments: {} }],
+        },
+      ],
+      latestAssistantReply: "stale assistant reply",
+    });
+
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBeUndefined();
+    expect(deps.readLatestAssistantReply).not.toHaveBeenCalled();
+  });
+
+  it("returns final assistant output after a tool turn is followed by a real completion", async () => {
+    installOutputDeps({
+      messages: [
+        {
+          role: "assistant",
+          stopReason: "toolUse",
+          content: [{ type: "toolCall", id: "call-read", name: "read", arguments: {} }],
+        },
+        {
+          role: "toolResult",
+          content: [{ type: "text", text: "file contents" }],
+        },
+        {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "Patched successfully." }],
+        },
+      ],
+      latestAssistantReply: "stale assistant reply",
+    });
+
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBe(
+      "Patched successfully.",
     );
   });
 });

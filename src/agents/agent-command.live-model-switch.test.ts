@@ -656,6 +656,25 @@ function makeEmptyResult(provider: string, model: string) {
   };
 }
 
+function makePendingToolCallResult(provider: string, model: string) {
+  return {
+    payloads: undefined,
+    meta: {
+      durationMs: 100,
+      aborted: false,
+      stopReason: "tool_calls",
+      pendingToolCalls: [
+        {
+          id: "call-read-1",
+          name: "read",
+          arguments: "{}",
+        },
+      ],
+      agentMeta: { provider, model },
+    },
+  };
+}
+
 function setupModelSwitchRetry(switchOptions: ModelSwitchOptions) {
   let invocation = 0;
   state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
@@ -719,7 +738,6 @@ function expectFallbackOverrideCalls(first: boolean, second: boolean) {
     hasSessionModelOverride: second,
   });
 }
-
 describe("agentCommand – LiveSessionModelSwitchError retry", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -932,6 +950,41 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       id: "gpt-5.4",
       compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
     });
+  });
+
+  it("emits lifecycle error instead of success when a run exits with unresolved pending tool calls", async () => {
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      const result = await params.run(params.provider, params.model);
+      return {
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock.mockResolvedValue(makePendingToolCallResult("openai", "gpt-5.4"));
+
+    const agentCommand = await getAgentCommand();
+    await agentCommand({
+      message: "hello",
+      to: "+1234567890",
+      senderIsOwner: true,
+    });
+
+    const lifecycleEndCalls = state.emitAgentEventMock.mock.calls.filter((call: unknown[]) => {
+      const arg = call[0] as { stream?: string; data?: { phase?: string } };
+      return arg?.stream === "lifecycle" && arg?.data?.phase === "end";
+    });
+    const lifecycleErrorCalls = state.emitAgentEventMock.mock.calls.filter((call: unknown[]) => {
+      const arg = call[0] as { stream?: string; data?: { phase?: string; error?: string } };
+      return arg?.stream === "lifecycle" && arg?.data?.phase === "error";
+    });
+
+    expect(lifecycleEndCalls).toHaveLength(0);
+    expect(lifecycleErrorCalls).toHaveLength(1);
+    expect((lifecycleErrorCalls[0]?.[0] as { data?: { error?: string } })?.data?.error).toContain(
+      "pending tool call",
+    );
   });
 
   it("records fallback steps to the session trajectory runtime", async () => {

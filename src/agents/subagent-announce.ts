@@ -403,6 +403,11 @@ export async function runSubagentAnnounceFlow(params: {
         reply = fallbackReply;
       }
 
+      if (expectsCompletionMessage && outcome?.status === "ok" && !reply?.trim()) {
+        shouldDeleteChildSession = false;
+        return false;
+      }
+
       // A worker can finish just after the first wait request timed out.
       // If we already have real completion content, do one cached recheck so
       // the final completion event prefers the authoritative terminal state.
