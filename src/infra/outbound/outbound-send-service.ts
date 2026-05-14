@@ -277,6 +277,12 @@ export async function executeSendAction(params: {
       agentId: params.ctx.agentId,
       accountId: params.ctx.requesterAccountId ?? params.ctx.accountId ?? undefined,
     });
+    if (typeof defaultPayload.text === "string" && defaultPayload.text !== params.message) {
+      params.message = defaultPayload.text;
+      if (typeof params.ctx.params.message === "string") {
+        params.ctx.params.message = defaultPayload.text;
+      }
+    }
   }
   const queuePolicy = params.bestEffort === false ? "required" : "best_effort";
   const preparedPayload = await tryPreparePluginSendPayload({
