@@ -26,6 +26,7 @@ Docs: https://docs.openclaw.ai
 - CLI/plugins: keep bare plugin and parent-command help on the lightweight path, avoiding plugin registry discovery before rendering help.
 - CLI tables: preserve muted/color styling on wrapped continuation lines after multiline cells, keeping `openclaw plugins list` descriptions readable.
 - Process execution: collapse case-insensitive duplicate child environment keys on Windows so caller-provided overrides such as `PATH` cannot be shadowed by host `Path`.
+- Browser CLI: request the existing `operator.admin` gateway scope explicitly for browser control commands, avoiding unnecessary scope-upgrade approval loops. Fixes #81555. (#81716) Thanks @joshavant.
 - iOS: restore first-use Contacts, Calendar, and Reminders permission prompts and add Privacy & Access status/actions in Settings. Thanks @BunsDev.
 - Canvas: return not found for malformed percent-encoded Canvas/A2UI/document asset paths and keep decoded parent traversal blocked before path normalization.
 - Telegram: allow trusted local Bot API media files whose filenames start with dots instead of falling back to remote download.
