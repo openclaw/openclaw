@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { applySkillEnvOverrides } from "../agents/skills.js";
 import { parseWindowsCodePage } from "../infra/windows-encoding.js";
 import { withEnv } from "../test-utils/env.js";
 import { decodeCapturedOutputBuffer, sanitizeEnv } from "./invoke.js";
@@ -50,6 +51,52 @@ describe("node-host sanitizeEnv", () => {
       const env = sanitizeEnv(undefined);
       expect(env.PATH).toBe("/usr/bin:/bin");
       expect(env.BASH_ENV).toBeUndefined();
+    });
+  });
+
+  it("drops active skill SecretRef-derived env keys from exec children", () => {
+    withEnv({ OPENAI_API_KEY: undefined }, () => {
+      const restore = applySkillEnvOverrides({
+        skills: [
+          {
+            skill: {
+              name: "openai-whisper-api",
+              description: "test skill",
+              filePath: "/virtual/openai-whisper-api/SKILL.md",
+              baseDir: "/virtual/openai-whisper-api",
+              source: "test",
+              sourceInfo: {
+                path: "/virtual/openai-whisper-api/SKILL.md",
+                source: "test",
+                scope: "temporary",
+                origin: "top-level",
+              },
+              disableModelInvocation: false,
+            },
+            frontmatter: {},
+            metadata: {
+              primaryEnv: "OPENAI_API_KEY",
+              requires: { env: ["OPENAI_API_KEY"] },
+            },
+          },
+        ],
+        config: {
+          skills: {
+            entries: {
+              "openai-whisper-api": {
+                apiKey: "sk-skill-secret", // pragma: allowlist secret
+              },
+            },
+          },
+        },
+      });
+      try {
+        expect(process.env.OPENAI_API_KEY).toBe("sk-skill-secret");
+        const env = sanitizeEnv(undefined);
+        expect(env.OPENAI_API_KEY).toBeUndefined();
+      } finally {
+        restore();
+      }
     });
   });
 

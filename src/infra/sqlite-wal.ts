@@ -41,6 +41,8 @@ export function configureSqliteWalMaintenance(
     "checkpointIntervalMs",
   );
   const checkpointMode = options.checkpointMode ?? "TRUNCATE";
+  const timerCheckpointMode: SqliteWalCheckpointMode =
+    checkpointMode === "TRUNCATE" ? "PASSIVE" : checkpointMode;
 
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec(`PRAGMA wal_autocheckpoint = ${autoCheckpointPages};`);
@@ -57,7 +59,13 @@ export function configureSqliteWalMaintenance(
 
   let timer: IntervalHandle | null = null;
   if (checkpointIntervalMs > 0) {
-    timer = setInterval(checkpoint, checkpointIntervalMs) as IntervalHandle;
+    timer = setInterval(() => {
+      try {
+        db.exec(`PRAGMA wal_checkpoint(${timerCheckpointMode});`);
+      } catch (error) {
+        options.onCheckpointError?.(error);
+      }
+    }, checkpointIntervalMs) as IntervalHandle;
     timer.unref?.();
   }
 

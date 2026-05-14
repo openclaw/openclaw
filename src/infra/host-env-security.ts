@@ -207,11 +207,18 @@ export function sanitizeHostExecEnvWithDiagnostics(params?: {
   baseEnv?: Record<string, string | undefined>;
   overrides?: Record<string, string> | null;
   blockPathOverrides?: boolean;
+  blockedInheritedKeys?: Iterable<string>;
 }): HostExecEnvSanitizationResult {
   const baseEnv = params?.baseEnv ?? process.env;
+  const blockedInheritedKeys = new Set(
+    Array.from(params?.blockedInheritedKeys ?? [], (key) => key.toUpperCase()),
+  );
 
   const merged: Record<string, string> = {};
   for (const [key, value] of listNormalizedEnvEntries(baseEnv)) {
+    if (blockedInheritedKeys.has(key.toUpperCase())) {
+      continue;
+    }
     if (isDangerousHostInheritedEnvVarName(key)) {
       continue;
     }
@@ -250,6 +257,7 @@ export function sanitizeHostExecEnv(params?: {
   baseEnv?: Record<string, string | undefined>;
   overrides?: Record<string, string> | null;
   blockPathOverrides?: boolean;
+  blockedInheritedKeys?: Iterable<string>;
 }): Record<string, string> {
   return sanitizeHostExecEnvWithDiagnostics(params).env;
 }

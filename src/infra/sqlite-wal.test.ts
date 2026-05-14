@@ -28,7 +28,7 @@ describe("sqlite WAL maintenance", () => {
     );
   });
 
-  it("runs periodic TRUNCATE checkpoints and stops them on close", () => {
+  it("runs periodic PASSIVE checkpoints and TRUNCATE on close by default", () => {
     vi.useFakeTimers();
     const db = createMockDb();
 
@@ -36,10 +36,11 @@ describe("sqlite WAL maintenance", () => {
     expect(db.exec).toHaveBeenCalledTimes(2);
 
     vi.advanceTimersByTime(100);
-    expect(db.exec).toHaveBeenLastCalledWith("PRAGMA wal_checkpoint(TRUNCATE);");
+    expect(db.exec).toHaveBeenLastCalledWith("PRAGMA wal_checkpoint(PASSIVE);");
     expect(db.exec).toHaveBeenCalledTimes(3);
 
     expect(maintenance.close()).toBe(true);
+    expect(db.exec).toHaveBeenLastCalledWith("PRAGMA wal_checkpoint(TRUNCATE);");
     expect(db.exec).toHaveBeenCalledTimes(4);
 
     vi.advanceTimersByTime(200);

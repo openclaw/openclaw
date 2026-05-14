@@ -289,6 +289,42 @@ describe("web session", () => {
     expect(passed.defaultQueryTimeoutMs).toBe(120_000);
   });
 
+  it("chunks large auth key reads between event loop turns", async () => {
+    vi.stubEnv("OPENCLAW_WHATSAPP_AUTH_KEY_READ_CHUNK_SIZE", "2");
+    const get = vi.fn(async (type: string, ids: string[]) =>
+      Object.fromEntries(ids.map((id) => [id, `${type}:${id}`])),
+    );
+    useMultiFileAuthStateMock.mockResolvedValueOnce({
+      state: {
+        creds: {} as never,
+        keys: {
+          get: get as never,
+          set: vi.fn(),
+        },
+      },
+      saveCreds: vi.fn(),
+    });
+
+    await createWaSocket(false, false);
+
+    const makeCacheableSignalKeyStore = baileys.makeCacheableSignalKeyStore as ReturnType<
+      typeof vi.fn
+    >;
+    const wrappedKeys = makeCacheableSignalKeyStore.mock.calls[0]?.[0] as {
+      get: (type: "session", ids: string[]) => Promise<Record<string, string>>;
+    };
+    const result = await wrappedKeys.get("session", ["a", "b", "c", "d", "e"]);
+
+    expect(result).toEqual({
+      a: "session:a",
+      b: "session:b",
+      c: "session:c",
+      d: "session:d",
+      e: "session:e",
+    });
+    expect(get.mock.calls.map(([, ids]) => ids)).toEqual([["a", "b"], ["c", "d"], ["e"]]);
+  });
+
   it("uses ambient env proxy agent when HTTPS_PROXY is configured", async () => {
     vi.stubEnv("HTTPS_PROXY", "http://proxy.test:8080");
 

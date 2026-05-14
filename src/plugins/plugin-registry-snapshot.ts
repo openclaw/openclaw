@@ -49,6 +49,15 @@ export type PluginRegistrySnapshotResult = {
 };
 
 export const DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV = "OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY";
+export const PLUGIN_REGISTRY_SNAPSHOT_TTL_ENV = "OPENCLAW_PLUGIN_REGISTRY_SNAPSHOT_TTL_MS";
+export const DEFAULT_PLUGIN_REGISTRY_SNAPSHOT_TTL_MS = 1_000;
+
+type CachedPluginRegistrySnapshotResult = {
+  result: PluginRegistrySnapshotResult;
+  expiresAtMs: number;
+};
+
+const pluginRegistrySnapshotCache = new Map<string, CachedPluginRegistrySnapshotResult>();
 
 function formatDeprecatedPersistedRegistryDisableWarning(): string {
   return `${DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV} is a deprecated break-glass compatibility switch; use \`openclaw plugins registry --refresh\` or \`openclaw doctor --fix\` to repair registry state.`;
@@ -67,6 +76,62 @@ export type GetPluginRecordParams = LoadPluginRegistryParams & {
 function hasEnvFlag(env: NodeJS.ProcessEnv, name: string): boolean {
   const value = env[name]?.trim().toLowerCase();
   return Boolean(value && value !== "0" && value !== "false" && value !== "no");
+}
+
+function resolveSnapshotCacheTtlMs(env: NodeJS.ProcessEnv): number {
+  const raw = env[PLUGIN_REGISTRY_SNAPSHOT_TTL_ENV]?.trim();
+  if (!raw) {
+    return DEFAULT_PLUGIN_REGISTRY_SNAPSHOT_TTL_MS;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return DEFAULT_PLUGIN_REGISTRY_SNAPSHOT_TTL_MS;
+  }
+  return Math.floor(parsed);
+}
+
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableJson(entry)).join(",")}]`;
+  }
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
+    .join(",")}}`;
+}
+
+function resolvePluginRegistrySnapshotCacheKey(
+  params: LoadPluginRegistryParams,
+  env: NodeJS.ProcessEnv,
+): string | null {
+  if (
+    params.index ||
+    params.candidates ||
+    params.installRecords ||
+    params.diagnostics ||
+    params.now
+  ) {
+    return null;
+  }
+  return stableJson({
+    bundledPluginsDir: resolveBundledPluginsDir(env) ?? null,
+    configPolicyHash: params.config ? resolveInstalledPluginIndexPolicyHash(params.config) : null,
+    disablePersisted: hasEnvFlag(env, DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV),
+    filePath: params.filePath ?? null,
+    pluginIndexFilePath: params.pluginIndexFilePath ?? null,
+    preferPersisted: params.preferPersisted ?? null,
+    stateDir: params.stateDir ?? null,
+    version: env.OPENCLAW_VERSION ?? null,
+    workspaceDir: params.workspaceDir ?? null,
+  });
+}
+
+export function clearPluginRegistrySnapshotCacheForTests(): void {
+  pluginRegistrySnapshotCache.clear();
 }
 
 function hasMissingPersistedPluginSource(index: InstalledPluginIndex): boolean {
@@ -237,6 +302,17 @@ export function loadPluginRegistrySnapshotWithMetadata(
   }
 
   const env = params.env ?? process.env;
+  const cacheTtlMs = resolveSnapshotCacheTtlMs(env);
+  const cacheKey = cacheTtlMs > 0 ? resolvePluginRegistrySnapshotCacheKey(params, env) : null;
+  if (cacheKey) {
+    const cached = pluginRegistrySnapshotCache.get(cacheKey);
+    if (cached && cached.expiresAtMs > Date.now()) {
+      return cached.result;
+    }
+    if (cached) {
+      pluginRegistrySnapshotCache.delete(cacheKey);
+    }
+  }
   const diagnostics: PluginRegistrySnapshotDiagnostic[] = [];
   const disabledByCaller = params.preferPersisted === false;
   const disabledByEnv = hasEnvFlag(env, DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV);
@@ -298,11 +374,18 @@ export function loadPluginRegistrySnapshotWithMetadata(
             "Persisted plugin registry is missing recoverable managed npm plugins; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
         });
       } else {
-        return {
+        const result: PluginRegistrySnapshotResult = {
           snapshot: persistedIndex,
           source: "persisted",
           diagnostics,
         };
+        if (cacheKey) {
+          pluginRegistrySnapshotCache.set(cacheKey, {
+            result,
+            expiresAtMs: Date.now() + cacheTtlMs,
+          });
+        }
+        return result;
       }
     } else if (persistedReadsEnabled) {
       diagnostics.push({
@@ -321,7 +404,7 @@ export function loadPluginRegistrySnapshotWithMetadata(
     });
   }
 
-  return {
+  const result: PluginRegistrySnapshotResult = {
     snapshot: loadInstalledPluginIndex({
       ...params,
       ...(persistedInstallRecordReadsEnabled
@@ -331,6 +414,13 @@ export function loadPluginRegistrySnapshotWithMetadata(
     source: "derived",
     diagnostics,
   };
+  if (cacheKey) {
+    pluginRegistrySnapshotCache.set(cacheKey, {
+      result,
+      expiresAtMs: Date.now() + cacheTtlMs,
+    });
+  }
+  return result;
 }
 
 function resolveSnapshot(params: LoadPluginRegistryParams = {}): PluginRegistrySnapshot {

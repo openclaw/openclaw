@@ -4,13 +4,17 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
 import { loadInstalledPluginIndex, type InstalledPluginIndex } from "./installed-plugin-index.js";
-import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry-snapshot.js";
+import {
+  clearPluginRegistrySnapshotCacheForTests,
+  loadPluginRegistrySnapshotWithMetadata,
+} from "./plugin-registry-snapshot.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 
 const tempDirs: string[] = [];
 
 afterEach(() => {
+  clearPluginRegistrySnapshotCacheForTests();
   vi.restoreAllMocks();
   cleanupTrackedTempDirs(tempDirs);
 });

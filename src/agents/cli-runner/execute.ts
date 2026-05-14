@@ -17,7 +17,7 @@ import {
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import { classifyFailoverReason } from "../pi-embedded-helpers.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
-import { applySkillEnvOverridesFromSnapshot } from "../skills.js";
+import { applySkillEnvOverridesFromSnapshot, getActiveSkillEnvKeys } from "../skills.js";
 import { runClaudeLiveSessionTurn, shouldUseClaudeLiveSession } from "./claude-live-session.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import {
@@ -386,9 +386,11 @@ export async function executePreparedCliRun(
           isTruthyEnvValue(process.env[CLI_BACKEND_LOG_OUTPUT_ENV]) ||
           isTruthyEnvValue(process.env[LEGACY_CLAUDE_CLI_LOG_OUTPUT_ENV]);
         const env = (() => {
+          const activeSkillEnvKeys = getActiveSkillEnvKeys();
           const next = sanitizeHostExecEnv({
             baseEnv: process.env,
             blockPathOverrides: true,
+            blockedInheritedKeys: activeSkillEnvKeys,
           });
           const preservedEnv = parseCliBackendPreserveEnv(process.env[CLI_BACKEND_PRESERVE_ENV]);
           for (const key of backend.clearEnv ?? []) {
@@ -404,6 +406,7 @@ export async function executePreparedCliRun(
                 baseEnv: {},
                 overrides: backend.env,
                 blockPathOverrides: true,
+                blockedInheritedKeys: activeSkillEnvKeys,
               }),
             );
           }

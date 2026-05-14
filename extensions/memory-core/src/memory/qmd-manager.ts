@@ -2159,7 +2159,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       }
       throw err;
     }
-    const stream = handle.createReadStream({ encoding: "utf-8" });
+    const stream = handle.createReadStream({ encoding: "utf-8", autoClose: false });
     const rl = readline.createInterface({
       input: stream,
       crlfDelay: Infinity,
@@ -2181,6 +2181,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       }
     } finally {
       rl.close();
+      stream.destroy();
       await handle.close();
     }
     return {

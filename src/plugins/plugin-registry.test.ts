@@ -14,6 +14,7 @@ import {
 import { loadPluginLookUpTable } from "./plugin-lookup-table.js";
 import {
   DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV,
+  clearPluginRegistrySnapshotCacheForTests,
   createPluginRegistryIdNormalizer,
   getPluginRecord,
   inspectPluginRegistry,
@@ -39,6 +40,8 @@ import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fi
 const tempDirs: string[] = [];
 
 afterEach(() => {
+  vi.useRealTimers();
+  clearPluginRegistrySnapshotCacheForTests();
   cleanupTrackedTempDirs(tempDirs);
 });
 
@@ -699,7 +702,9 @@ describe("plugin registry facade", () => {
     expectSnapshotPluginIds(result.snapshot, ["demo"]);
   });
 
-  it("derives fresh config-scoped registries when the persisted registry is missing", () => {
+  it("coalesces config-scoped registry derivation when the persisted registry is missing", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-14T00:00:00Z"));
     const stateDir = makeTempDir();
     const workspaceDir = makeTempDir();
     const bundledRoot = makeTempDir();
@@ -732,9 +737,22 @@ describe("plugin registry facade", () => {
 
     expect(first.source).toBe("derived");
     expect(second.source).toBe("derived");
-    expect(second).not.toBe(first);
+    expect(second).toBe(first);
     expect(manifestReadsAfterFirst).toBeGreaterThan(0);
-    expect(manifestReadsAfterSecond).toBeGreaterThan(manifestReadsAfterFirst);
+    expect(manifestReadsAfterSecond).toBe(manifestReadsAfterFirst);
+
+    vi.advanceTimersByTime(1_001);
+    const third = loadPluginRegistrySnapshotWithMetadata({
+      stateDir,
+      workspaceDir,
+      config,
+      env,
+    });
+    const manifestReadsAfterThird = readFileSyncSpy.mock.calls.filter((call) =>
+      String(call[0]).endsWith("openclaw.plugin.json"),
+    ).length;
+    expect(third).not.toBe(first);
+    expect(manifestReadsAfterThird).toBeGreaterThan(manifestReadsAfterSecond);
   });
 
   it("falls back to the derived registry when persisted reads are disabled", async () => {

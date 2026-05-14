@@ -16,6 +16,7 @@ import {
   describeStdioMcpServerLaunchConfig,
   type StdioMcpServerLaunchConfig,
 } from "./mcp-stdio.js";
+import { getActiveSkillEnvKeys } from "./skills.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 // Minimal LSP JSON-RPC framing over stdio (Content-Length header + JSON body).
@@ -70,7 +71,11 @@ function delay(ms: number): Promise<void> {
 }
 
 export function spawnLspServerProcess(config: StdioMcpServerLaunchConfig): ChildProcess {
-  const mergedEnv = sanitizeHostExecEnv({ baseEnv: process.env, overrides: config.env ?? null });
+  const mergedEnv = sanitizeHostExecEnv({
+    baseEnv: process.env,
+    overrides: config.env ?? null,
+    blockedInheritedKeys: getActiveSkillEnvKeys(),
+  });
   const program = resolveWindowsSpawnProgram({
     command: config.command,
     env: mergedEnv,

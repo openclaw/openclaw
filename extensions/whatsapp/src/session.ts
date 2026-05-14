@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import type { Agent } from "node:https";
+import type { SignalDataTypeMap, SignalKeyStore } from "baileys";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { VERSION } from "openclaw/plugin-sdk/cli-runtime";
@@ -65,8 +66,56 @@ export type { CredsQueueWaitResult } from "./creds-persistence.js";
 
 const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
 const WHATSAPP_WEBSOCKET_PROXY_TARGET = "https://mmg.whatsapp.net/";
+export const WHATSAPP_AUTH_KEY_READ_CHUNK_SIZE_ENV = "OPENCLAW_WHATSAPP_AUTH_KEY_READ_CHUNK_SIZE";
+const DEFAULT_WHATSAPP_AUTH_KEY_READ_CHUNK_SIZE = 32;
 const CREDS_FLUSH_TIMEOUT_MESSAGE =
   "Queued WhatsApp creds save did not finish before auth bootstrap; skipping repair and continuing with primary creds.";
+
+function resolveWhatsAppAuthKeyReadChunkSize(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env[WHATSAPP_AUTH_KEY_READ_CHUNK_SIZE_ENV]?.trim();
+  if (!raw) {
+    return DEFAULT_WHATSAPP_AUTH_KEY_READ_CHUNK_SIZE;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_WHATSAPP_AUTH_KEY_READ_CHUNK_SIZE;
+  }
+  return parsed > 0 ? parsed : Number.MAX_SAFE_INTEGER;
+}
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => {
+    setImmediate(resolve);
+  });
+}
+
+export function createYieldingSignalKeyStore(
+  store: SignalKeyStore,
+  options: {
+    chunkSize?: number;
+    yieldBetweenChunks?: () => Promise<void>;
+  } = {},
+): SignalKeyStore {
+  const chunkSize = options.chunkSize ?? resolveWhatsAppAuthKeyReadChunkSize();
+  const yieldBetweenChunks = options.yieldBetweenChunks ?? yieldToEventLoop;
+  return {
+    ...store,
+    async get<T extends keyof SignalDataTypeMap>(type: T, ids: string[]) {
+      if (ids.length <= chunkSize) {
+        return await store.get(type, ids);
+      }
+      const result: Record<string, SignalDataTypeMap[T]> = {};
+      for (let offset = 0; offset < ids.length; offset += chunkSize) {
+        const chunk = ids.slice(offset, offset + chunkSize);
+        Object.assign(result, await store.get(type, chunk));
+        if (offset + chunkSize < ids.length) {
+          await yieldBetweenChunks();
+        }
+      }
+      return result;
+    },
+  };
+}
 
 function enqueueSaveCreds(
   authDir: string,
@@ -166,7 +215,7 @@ export async function createWaSocket(
   const sock = makeWASocket({
     auth: {
       creds: state.creds,
-      keys: makeCacheableSignalKeyStore(state.keys, logger),
+      keys: makeCacheableSignalKeyStore(createYieldingSignalKeyStore(state.keys), logger),
     },
     version,
     logger,

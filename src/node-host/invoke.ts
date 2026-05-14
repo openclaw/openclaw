@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { getActiveSkillEnvKeys } from "../agents/skills.js";
 import { GatewayClient } from "../gateway/client.js";
 import {
   ensureExecApprovals,
@@ -89,7 +90,11 @@ function resolveExecAsk(value?: string): ExecAsk {
 }
 
 export function sanitizeEnv(overrides?: Record<string, string> | null): Record<string, string> {
-  return sanitizeHostExecEnv({ overrides, blockPathOverrides: true });
+  return sanitizeHostExecEnv({
+    overrides,
+    blockPathOverrides: true,
+    blockedInheritedKeys: getActiveSkillEnvKeys(),
+  });
 }
 
 function truncateOutput(raw: string, maxChars: number): { text: string; truncated: boolean } {
