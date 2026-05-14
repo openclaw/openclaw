@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, type Mock } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { resolveSessionTranscriptPath } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
@@ -191,13 +191,18 @@ describe("sessions_send label lookup", () => {
       );
 
       const spy = agentCommand as unknown as Mock<(opts: unknown) => Promise<void>>;
-      spy.mockImplementation(async (opts: unknown) =>
-        emitLifecycleAssistantReply({
+      let announceStepCompleted = false;
+      spy.mockImplementation(async (opts: unknown) => {
+        await emitLifecycleAssistantReply({
           opts,
           defaultSessionId: "test-labeled",
           resolveText: () => "labeled response",
-        }),
-      );
+        });
+        const extraSystemPrompt = (opts as { extraSystemPrompt?: string }).extraSystemPrompt;
+        if (extraSystemPrompt?.includes("Agent-to-agent announce step")) {
+          announceStepCompleted = true;
+        }
+      });
 
       // First, create a session with a label via sessions.patch
       const { callGateway } = await import("./call.js");
@@ -234,6 +239,7 @@ describe("sessions_send label lookup", () => {
       expect(details.status).toBe("ok");
       expect(details.reply).toBe("labeled response");
       expect(details.sessionKey).toBe("agent:main:test-labeled-session");
+      await vi.waitFor(() => expect(announceStepCompleted).toBe(true), { timeout: 5_000 });
     },
   );
 });

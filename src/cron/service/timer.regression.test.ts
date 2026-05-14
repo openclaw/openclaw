@@ -180,6 +180,60 @@ describe("cron service timer regressions", () => {
     }
   });
 
+  it("preserves queued due-job running markers during incremental batch persistence", async () => {
+    const store = timerRegressionFixtures.makeStorePath();
+    const batchStart = Date.parse("2026-02-06T10:05:00.000Z");
+    const stuckThresholdMs = 2 * 60 * 60 * 1000;
+    const first = createDueIsolatedJob({
+      id: "long-first",
+      nowMs: batchStart,
+      nextRunAtMs: batchStart - 2,
+    });
+    const second = createDueIsolatedJob({
+      id: "reserved-second",
+      nowMs: batchStart,
+      nextRunAtMs: batchStart - 1,
+    });
+    await writeCronJobs(store.storePath, [first, second]);
+
+    let now = batchStart;
+    const secondStarted = createDeferred<void>();
+    const releaseSecond = createDeferred<void>();
+    const runIsolatedAgentJob = vi.fn(async ({ job }) => {
+      if (job.id === "long-first") {
+        now = batchStart + stuckThresholdMs + 1;
+        return { status: "ok" as const, summary: "first finished after stuck threshold" };
+      }
+      secondStarted.resolve();
+      await releaseSecond.promise;
+      return { status: "ok" as const, summary: "second finished" };
+    });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      cronConfig: { maxConcurrentRuns: 1 },
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    const timerRun = onTimer(state);
+    await secondStarted.promise;
+
+    try {
+      const statePath = store.storePath.replace(/\.json$/u, "-state.json");
+      const persistedState = JSON.parse(await fs.readFile(statePath, "utf8")) as {
+        jobs: Record<string, { state?: { runningAtMs?: number } }>;
+      };
+      expect(persistedState.jobs[second.id]?.state?.runningAtMs).toBe(batchStart);
+    } finally {
+      releaseSecond.resolve();
+      await timerRun;
+    }
+  });
+
   it("#24355: one-shot job retries then succeeds", async () => {
     const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");
 

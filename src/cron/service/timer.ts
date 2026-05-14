@@ -1072,6 +1072,7 @@ export async function onTimer(state: CronServiceState) {
       }
     };
 
+    const unappliedDueJobIds = new Set(dueJobs.map((due) => due.id));
     const applyCompletedResult = async (result: TimedCronRunOutcome) => {
       await locked(state, async () => {
         await ensureLoaded(state, { forceReload: true, skipRecompute: true });
@@ -1082,9 +1083,13 @@ export async function onTimer(state: CronServiceState) {
         // locked block.  The full recomputeNextRuns would silently skip
         // those jobs (advancing nextRunAtMs without execution), causing
         // daily cron schedules to jump 48 h instead of 24 h (#17852).
-        recomputeNextRunsForMaintenance(state);
+        // Jobs from the current due batch keep their running markers until
+        // their own outcomes are applied; otherwise a long batch can cross the
+        // stuck-run threshold and make queued/running jobs look idle on disk.
+        recomputeNextRunsForMaintenance(state, { preserveRunningJobIds: unappliedDueJobIds });
         await persist(state);
       });
+      unappliedDueJobIds.delete(result.jobId);
     };
 
     const concurrency = Math.min(resolveRunConcurrency(state), Math.max(1, dueJobs.length));
