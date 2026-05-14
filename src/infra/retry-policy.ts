@@ -99,10 +99,40 @@ export function createChannelApiRetryRunner(params: {
    * the regex fallback would cause duplicate message delivery.
    */
   strictShouldRetry?: boolean;
+  /**
+   * Channel's own per-request timeout in seconds (for example Telegram's
+   * `timeoutSeconds`). When neither the explicit `retry.perCallTimeoutMs`
+   * argument nor the channel `configRetry.perCallTimeoutMs` is set, this
+   * value is used as the per-attempt timeout (converted to milliseconds)
+   * so the channel's existing timeout setting is honored before the
+   * generic retry default kicks in. Priority:
+   *   explicit `retry.perCallTimeoutMs`
+   *   > `configRetry.perCallTimeoutMs`
+   *   > `channelTimeoutSeconds * 1000`
+   *   > `CHANNEL_API_RETRY_DEFAULTS.perCallTimeoutMs`.
+   */
+  channelTimeoutSeconds?: number;
 }): RetryRunner {
+  const explicitPerCallTimeoutMs =
+    params.retry?.perCallTimeoutMs ?? params.configRetry?.perCallTimeoutMs;
+  const channelDerivedPerCallTimeoutMs =
+    explicitPerCallTimeoutMs === undefined &&
+    typeof params.channelTimeoutSeconds === "number" &&
+    Number.isFinite(params.channelTimeoutSeconds) &&
+    params.channelTimeoutSeconds > 0
+      ? Math.floor(params.channelTimeoutSeconds) * 1000
+      : undefined;
   const retryConfig = resolveRetryConfig(CHANNEL_API_RETRY_DEFAULTS, {
     ...params.configRetry,
     ...params.retry,
+    // Channel-derived per-call timeout only applies when neither explicit
+    // override was provided. The `explicitPerCallTimeoutMs === undefined`
+    // guard above makes this spread a no-op when an explicit value exists,
+    // so the explicit value still wins despite appearing earlier in the
+    // spread chain.
+    ...(channelDerivedPerCallTimeoutMs !== undefined
+      ? { perCallTimeoutMs: channelDerivedPerCallTimeoutMs }
+      : {}),
   });
   const shouldRetry = resolveChannelApiShouldRetry(params);
 

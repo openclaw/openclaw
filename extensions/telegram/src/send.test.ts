@@ -1302,7 +1302,11 @@ describe("sendMessageTelegram", () => {
 
     await vi.runAllTimersAsync();
     await expect(promise).resolves.toEqual({ messageId: "1", chatId });
-    expect(firstMockCall(setTimeoutSpy, "setTimeout call")[1]).toBe(500);
+    // The retry runner now also schedules a per-call timeout for each attempt,
+    // so `setTimeout` is invoked with both the retry-after delay (500ms here)
+    // and a much larger per-call timeout cap. Assert presence of the retry
+    // delay rather than the call ordering.
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 500);
     setTimeoutSpy.mockRestore();
     vi.useRealTimers();
   });
@@ -2503,7 +2507,11 @@ describe("sendStickerTelegram", () => {
 
     await vi.runAllTimersAsync();
     await expect(promise).resolves.toEqual({ messageId: "109", chatId });
-    expect(firstMockCall(setTimeoutSpy, "setTimeout call")[1]).toBe(1000);
+    // The retry runner now also schedules a per-call timeout for each attempt,
+    // so `setTimeout` is invoked with both the retry-after delay (1000ms here,
+    // 1s rounded from retry_after=1) and a much larger per-call timeout cap.
+    // Assert presence of the retry delay rather than the call ordering.
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 1000);
     expect(sendSticker).toHaveBeenCalledTimes(2);
     setTimeoutSpy.mockRestore();
     vi.useRealTimers();

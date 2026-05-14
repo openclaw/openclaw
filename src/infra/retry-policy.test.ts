@@ -160,6 +160,96 @@ describe("createChannelApiRetryRunner", () => {
     });
   });
 
+  describe("perCallTimeoutMs priority resolution", () => {
+    // Spec: when the runner can derive a per-call timeout from multiple
+    // sources, priority order is:
+    //   explicit `retry.perCallTimeoutMs`
+    //   > `configRetry.perCallTimeoutMs`
+    //   > `channelTimeoutSeconds * 1000`
+    //   > `CHANNEL_API_RETRY_DEFAULTS.perCallTimeoutMs` (30000ms).
+    // This avoids double-handling: callers that already declared a channel
+    // request timeout (for example Telegram's `timeoutSeconds`) should not
+    // have to repeat it as a generic retry cap.
+
+    async function capturePerCallTimeoutMs(
+      runnerOptions: Parameters<typeof createChannelApiRetryRunner>[0],
+    ): Promise<number> {
+      vi.useFakeTimers();
+      try {
+        const runner = createChannelApiRetryRunner(runnerOptions);
+        // A hung call lets us read the actual per-call timeout from the
+        // resulting timeout error message ("Request timeout after Nms ...").
+        const fn = vi.fn<() => Promise<unknown>>(() => new Promise(() => {}));
+        const promise = runner(fn, "probe");
+        const settled = promise.then(
+          (value) => ({ ok: true as const, value }),
+          (error) => ({ ok: false as const, error }),
+        );
+        await vi.advanceTimersByTimeAsync(60_000);
+        const result = await settled;
+        if (result.ok) {
+          throw new Error("expected timeout-or-exhaustion failure");
+        }
+        const message = (result.error as Error).message;
+        const match = /Request timeout after (\d+)ms/.exec(message);
+        if (!match) {
+          throw new Error(`expected timeout error, got: ${message}`);
+        }
+        return Number(match[1]);
+      } finally {
+        vi.clearAllTimers();
+        vi.useRealTimers();
+      }
+    }
+
+    it("uses channel timeoutSeconds when neither retry nor configRetry specify perCallTimeoutMs", async () => {
+      const observed = await capturePerCallTimeoutMs({
+        retry: { attempts: 1, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+        channelTimeoutSeconds: 12,
+      });
+      expect(observed).toBe(12_000);
+    });
+
+    it("falls back to the channel default when no source provides perCallTimeoutMs", async () => {
+      const observed = await capturePerCallTimeoutMs({
+        retry: { attempts: 1, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+      });
+      expect(observed).toBe(30_000);
+    });
+
+    it("prefers configRetry.perCallTimeoutMs over channelTimeoutSeconds", async () => {
+      const observed = await capturePerCallTimeoutMs({
+        retry: { attempts: 1, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+        configRetry: { perCallTimeoutMs: 7_000 },
+        channelTimeoutSeconds: 12,
+      });
+      expect(observed).toBe(7_000);
+    });
+
+    it("prefers explicit retry.perCallTimeoutMs over configRetry and channel timeout", async () => {
+      const observed = await capturePerCallTimeoutMs({
+        retry: {
+          attempts: 1,
+          minDelayMs: 0,
+          maxDelayMs: 0,
+          jitter: 0,
+          perCallTimeoutMs: 4_000,
+        },
+        configRetry: { perCallTimeoutMs: 7_000 },
+        channelTimeoutSeconds: 12,
+      });
+      expect(observed).toBe(4_000);
+    });
+
+    it("ignores non-positive channelTimeoutSeconds and uses the channel default", async () => {
+      const observed = await capturePerCallTimeoutMs({
+        retry: { attempts: 1, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+        channelTimeoutSeconds: 0,
+      });
+      expect(observed).toBe(30_000);
+    });
+  });
+
   it("honors nested retry_after hints before retrying", async () => {
     vi.useFakeTimers();
 

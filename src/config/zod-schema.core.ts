@@ -729,6 +729,9 @@ export const RetryConfigSchema = z
     minDelayMs: z.number().int().min(0).optional(),
     maxDelayMs: z.number().int().min(0).optional(),
     jitter: z.number().min(0).max(1).optional(),
+    // Per-attempt timeout in milliseconds. `0` disables; positive integer caps
+    // a single underlying request so a hung upstream call cannot wedge retry.
+    perCallTimeoutMs: z.number().int().min(0).optional(),
   })
   .strict()
   .optional();

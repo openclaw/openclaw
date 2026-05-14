@@ -21,6 +21,16 @@ export type OutboundRetryConfig = {
   maxDelayMs?: number;
   /** Jitter factor (0-1) applied to delays (default: 0.1). */
   jitter?: number;
+  /**
+   * Per-attempt timeout in milliseconds. When > 0, each underlying request is
+   * raced against this cap and rejects with a timeout error if it does not
+   * settle in time so a hung upstream call cannot wedge the retry runner
+   * indefinitely. `0` disables the per-call timeout (legacy behavior). When
+   * unset, the channel's own request timeout (for example Telegram's
+   * `timeoutSeconds`) is used; if that is also unset, a channel default
+   * applies (30000ms for channel API runners).
+   */
+  perCallTimeoutMs?: number;
 };
 
 export type BlockStreamingCoalesceConfig = {

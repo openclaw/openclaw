@@ -480,6 +480,12 @@ function createTelegramRequestWithDiag(params: {
     retry: params.retry,
     configRetry: params.account.config.retry,
     verbose: params.verbose,
+    // Honor the channel's own request-timeout setting before the generic
+    // retry-runner default kicks in. Only used when neither `retry` nor
+    // `configRetry` carries an explicit `perCallTimeoutMs`.
+    ...(typeof params.account.config.timeoutSeconds === "number"
+      ? { channelTimeoutSeconds: params.account.config.timeoutSeconds }
+      : {}),
     ...(params.shouldRetry ? { shouldRetry: params.shouldRetry } : {}),
     ...(params.strictShouldRetry ? { strictShouldRetry: true } : {}),
   });
