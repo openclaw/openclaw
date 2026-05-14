@@ -1,4 +1,4 @@
-export type ConfigSetDryRunInputMode = "value" | "json" | "builder";
+export type ConfigSetDryRunInputMode = "value" | "json" | "builder" | "unset";
 
 export type ConfigSetDryRunError = {
   kind: "schema" | "resolvability";

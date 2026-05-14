@@ -2694,6 +2694,70 @@ describe("config cli", () => {
         unsetPaths: [["channels", "discord", "guilds", "123"]],
       });
     });
+
+    it("dry-runs an unset without writing the config file", async () => {
+      const resolved: OpenClawConfig = {
+        agents: { list: [{ id: "main" }] },
+        gateway: { port: 18789 },
+        tools: {
+          profile: "coding",
+          alsoAllow: ["agents_list"],
+        },
+      };
+      setSnapshot(resolved, resolved);
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "unset", "tools.alsoAllow", "--dry-run"]);
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expectLogIncludes("Dry run successful: 1 update(s) validated against /tmp/openclaw.json.");
+      expect(mockReadConfigFileSnapshot).toHaveBeenCalledTimes(2);
+    });
+
+    it("prints JSON for config unset dry-run", async () => {
+      const resolved: OpenClawConfig = {
+        agents: { list: [{ id: "main" }] },
+        gateway: { port: 18789 },
+        tools: {
+          profile: "coding",
+          alsoAllow: ["agents_list"],
+        },
+      };
+      setSnapshot(resolved, resolved);
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "unset", "tools.alsoAllow", "--dry-run", "--json"]);
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expect(parseLastLogPayload()).toMatchObject({
+        ok: true,
+        operations: 1,
+        inputModes: ["unset"],
+        checks: {
+          schema: true,
+          resolvability: true,
+          resolvabilityComplete: true,
+        },
+      });
+    });
+
+    it("rejects config unset --json without --dry-run", async () => {
+      await expect(
+        runConfigCommand(["config", "unset", "tools.alsoAllow", "--json"]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expectErrorIncludes("--json can only be used with --dry-run.");
+    });
+
+    it("rejects config unset --allow-exec without --dry-run", async () => {
+      await expect(
+        runConfigCommand(["config", "unset", "tools.alsoAllow", "--allow-exec"]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expectErrorIncludes("--allow-exec can only be used with --dry-run.");
+    });
   });
 
   describe("config file", () => {
