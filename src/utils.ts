@@ -201,3 +201,79 @@ export const CONFIG_DIR = resolveConfigDir();
 export async function pathExists(targetPath: string): Promise<boolean> {
   return await fsSafePathExists(targetPath);
 }
+
+// Cache for lid mapping JSON files to avoid repeated read on multiple jidToE164 calls
+const lidMappingCache = new Map<string, Record<string, string>>();
+
+/**
+ * Try to load LID reverse mapping from known files based on env and home directory.
+ * Returns mapping object or null if not found.
+ */
+function tryLoadLidMapping(): Record<string, string> | null {
+  try {
+    const home = resolveHomeDir();
+    if (!home) {
+      return null;
+    }
+
+    const credDir = path.join(home, ".warelay", "credentials");
+    if (!fs.existsSync(credDir)) {
+      return null;
+    }
+
+    // There can be multiple lid-mapping_*_reverse.json files, pick any loaded
+    const files = fs.readdirSync(credDir).filter(f => f.startsWith("lid-mapping_") && f.endsWith("_reverse.json"));
+
+    for (const file of files) {
+      const fullPath = path.join(credDir, file);
+      if (lidMappingCache.has(fullPath)) {
+        return lidMappingCache.get(fullPath)!;
+      }
+      const contentRaw = fs.readFileSync(fullPath, { encoding: "utf8" });
+      const parsed = safeParseJson<Record<string, string>>(contentRaw);
+      if (parsed && typeof parsed === "object") {
+        lidMappingCache.set(fullPath, parsed);
+        return parsed;
+      }
+    }
+  } catch {
+    // ignore errors
+  }
+  return null;
+}
+
+/**
+ * Convert WhatsApp JID to E.164 phone number string.
+ * Supports both traditional @s.whatsapp.net and new @lid formats.
+ * For @lid, resolves number from cached LID reverse mapping file.
+ * Returns normalized E.164 string (+123...) or null if cannot parse.
+ */
+export function jidToE164(jid: string): string | null {
+  if (!jid) {
+    return null;
+  }
+  // Check for classic jids like 1234567890@s.whatsapp.net
+  const sMatch = jid.match(/^([0-9]+)@s\.whatsapp\.net$/);
+  if (sMatch) {
+    return normalizeE164(sMatch[1]);
+  }
+
+  // Check for LID jid like 142326760485098@lid
+  const lidMatch = jid.match(/^([0-9]+)@lid$/);
+  if (lidMatch) {
+    const lidMapping = tryLoadLidMapping();
+    if (lidMapping) {
+      // jid (number string) is the key
+      const number = lidMapping[lidMatch[1]] || lidMapping[jid];
+      // Some mappings use full jid with @lid as key, some only numeric id
+      if (number) {
+        return normalizeE164(number);
+      }
+    }
+    // fallback: cannot resolve LID
+    return null;
+  }
+
+  // Not recognized format
+  return null;
+}
