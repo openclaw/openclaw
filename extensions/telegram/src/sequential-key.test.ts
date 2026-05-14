@@ -112,6 +112,28 @@ describe("getTelegramSequentialKey", () => {
     ],
     [{ message: mockMessage({ chat: mockChat({ id: 123 }), text: "/export" }) }, "telegram:123"],
     [
+      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/steer keep going" }) },
+      "telegram:123:control",
+    ],
+    [
+      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/tell keep going" }) },
+      "telegram:123:control",
+    ],
+    [
+      {
+        me: { username: "openclaw_bot" } as never,
+        message: mockMessage({
+          chat: mockChat({ id: 123 }),
+          text: "/steer@openclaw_bot keep going",
+        }),
+      },
+      "telegram:123:control",
+    ],
+    [
+      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/queue steer 500ms 3" }) },
+      "telegram:123:control",
+    ],
+    [
       { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/btw what is the time?" }) },
       "telegram:123:btw:1",
     ],

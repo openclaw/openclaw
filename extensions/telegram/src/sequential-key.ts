@@ -49,6 +49,20 @@ function resolveStatusCommandControlLane(params: {
   return command?.category === "status" && command.key !== "export-session";
 }
 
+const IMMEDIATE_COMMAND_CONTROL_LANE_ALIASES = new Set(["/queue", "/steer"]);
+
+function resolveImmediateCommandControlLane(params: {
+  rawText?: string;
+  botUsername?: string;
+}): boolean {
+  const normalizedBody = normalizeCommandBody(
+    params.rawText?.trim() ?? "",
+    params.botUsername ? { botUsername: params.botUsername } : undefined,
+  );
+  const alias = maybeResolveTextAlias(normalizedBody);
+  return alias ? IMMEDIATE_COMMAND_CONTROL_LANE_ALIASES.has(alias) : false;
+}
+
 export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): string {
   const reaction = ctx.update?.message_reaction;
   if (reaction?.chat?.id) {
@@ -74,6 +88,12 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
     return "telegram:control";
   }
   if (resolveStatusCommandControlLane({ rawText, botUsername })) {
+    if (typeof chatId === "number") {
+      return `telegram:${chatId}:control`;
+    }
+    return "telegram:control";
+  }
+  if (resolveImmediateCommandControlLane({ rawText, botUsername })) {
     if (typeof chatId === "number") {
       return `telegram:${chatId}:control`;
     }
