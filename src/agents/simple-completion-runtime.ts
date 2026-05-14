@@ -12,6 +12,7 @@ import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "./agent-scop
 import { DEFAULT_PROVIDER } from "./defaults.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import {
+  applyAuthHeaderOverride,
   applyLocalNoAuthHeaderOverride,
   getApiKeyForModel,
   type ResolvedProviderAuth,
@@ -268,7 +269,10 @@ export async function prepareSimpleCompletionModel(params: {
   };
 
   return {
-    model: applyLocalNoAuthHeaderOverride(resolvedModel, resolvedAuth),
+    model: applyLocalNoAuthHeaderOverride(
+      applyAuthHeaderOverride(resolvedModel, resolvedAuth, params.cfg),
+      resolvedAuth,
+    ),
     auth: resolvedAuth,
   };
 }

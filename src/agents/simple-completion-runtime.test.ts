@@ -6,6 +6,7 @@ const hoisted = vi.hoisted(() => ({
   resolveModelMock: vi.fn(),
   resolveModelAsyncMock: vi.fn(),
   getApiKeyForModelMock: vi.fn(),
+  applyAuthHeaderOverrideMock: vi.fn((model: unknown) => model),
   applyLocalNoAuthHeaderOverrideMock: vi.fn(),
   setRuntimeApiKeyMock: vi.fn(),
   resolveCopilotApiTokenMock: vi.fn(),
@@ -29,6 +30,7 @@ vi.mock("./simple-completion-transport.js", () => ({
 
 vi.mock("./model-auth.js", () => ({
   getApiKeyForModel: hoisted.getApiKeyForModelMock,
+  applyAuthHeaderOverride: hoisted.applyAuthHeaderOverrideMock,
   applyLocalNoAuthHeaderOverride: hoisted.applyLocalNoAuthHeaderOverrideMock,
 }));
 
@@ -53,9 +55,11 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  vi.unstubAllGlobals();
   hoisted.resolveModelMock.mockReset();
   hoisted.resolveModelAsyncMock.mockReset();
   hoisted.getApiKeyForModelMock.mockReset();
+  hoisted.applyAuthHeaderOverrideMock.mockReset();
   hoisted.applyLocalNoAuthHeaderOverrideMock.mockReset();
   hoisted.setRuntimeApiKeyMock.mockReset();
   hoisted.resolveCopilotApiTokenMock.mockReset();
@@ -63,6 +67,7 @@ beforeEach(() => {
   hoisted.prepareModelForSimpleCompletionMock.mockReset();
   hoisted.completeMock.mockReset();
 
+  hoisted.applyAuthHeaderOverrideMock.mockImplementation((model: unknown) => model);
   hoisted.applyLocalNoAuthHeaderOverrideMock.mockImplementation((model: unknown) => model);
   hoisted.prepareModelForSimpleCompletionMock.mockImplementation(
     (params: { model: unknown }) => params.model,

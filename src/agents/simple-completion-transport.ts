@@ -5,12 +5,21 @@ import { ensureCustomApiRegistered } from "./custom-api-registry.js";
 import { registerProviderStreamForModel } from "./provider-stream.js";
 import {
   buildTransportAwareSimpleStreamFn,
+  createOpenClawTransportStreamFnForModel,
   prepareTransportAwareSimpleModel,
+  resolveTransportAwareSimpleApi,
 } from "./provider-transport-stream.js";
 
 function resolveAnthropicVertexSimpleApi(baseUrl?: string): Api {
   const suffix = baseUrl?.trim() ? encodeURIComponent(baseUrl.trim()) : "default";
   return `openclaw-anthropic-vertex-simple:${suffix}`;
+}
+
+function isMiniMaxAnthropicMessagesModel(model: Model<Api>): boolean {
+  return (
+    model.api === "anthropic-messages" &&
+    (model.provider === "minimax" || model.provider === "minimax-portal")
+  );
 }
 
 export function prepareModelForSimpleCompletion<TApi extends Api>(params: {
@@ -29,6 +38,15 @@ export function prepareModelForSimpleCompletion<TApi extends Api>(params: {
     if (streamFn) {
       ensureCustomApiRegistered(transportAwareModel.api, streamFn);
       return transportAwareModel;
+    }
+  }
+
+  if (isMiniMaxAnthropicMessagesModel(model)) {
+    const api = resolveTransportAwareSimpleApi(model.api);
+    const streamFn = createOpenClawTransportStreamFnForModel(model, { cfg });
+    if (api && streamFn) {
+      ensureCustomApiRegistered(api, streamFn);
+      return { ...model, api };
     }
   }
 

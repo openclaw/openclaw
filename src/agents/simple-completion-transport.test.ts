@@ -6,7 +6,9 @@ const createAnthropicVertexStreamFnForModel = vi.fn();
 const ensureCustomApiRegistered = vi.fn();
 const resolveProviderStreamFn = vi.fn();
 const buildTransportAwareSimpleStreamFn = vi.fn();
+const createOpenClawTransportStreamFnForModel = vi.fn();
 const prepareTransportAwareSimpleModel = vi.fn();
+const resolveTransportAwareSimpleApi = vi.fn();
 
 vi.mock("./anthropic-vertex-stream.js", () => ({
   createAnthropicVertexStreamFnForModel,
@@ -18,7 +20,9 @@ vi.mock("./custom-api-registry.js", () => ({
 
 vi.mock("./provider-transport-stream.js", () => ({
   buildTransportAwareSimpleStreamFn,
+  createOpenClawTransportStreamFnForModel,
   prepareTransportAwareSimpleModel,
+  resolveTransportAwareSimpleApi,
 }));
 
 vi.mock("../plugins/provider-runtime.js", async () => {
@@ -47,7 +51,11 @@ describe("prepareModelForSimpleCompletion", () => {
     createAnthropicVertexStreamFnForModel.mockReturnValue("vertex-stream");
     resolveProviderStreamFn.mockReturnValue("ollama-stream");
     buildTransportAwareSimpleStreamFn.mockReturnValue(undefined);
+    createOpenClawTransportStreamFnForModel.mockReset();
+    createOpenClawTransportStreamFnForModel.mockReturnValue("openclaw-transport-stream");
     prepareTransportAwareSimpleModel.mockImplementation((model) => model);
+    resolveTransportAwareSimpleApi.mockReset();
+    resolveTransportAwareSimpleApi.mockReturnValue("openclaw-anthropic-messages-transport");
   });
 
   it("registers the configured Ollama transport and keeps the original api", () => {
@@ -158,6 +166,38 @@ describe("prepareModelForSimpleCompletion", () => {
     expect(result).toEqual({
       ...model,
       api: "openclaw-openai-responses-transport",
+    });
+  });
+
+  it("uses the OpenClaw Anthropic transport for MiniMax simple completions", () => {
+    const model: Model<"anthropic-messages"> = {
+      id: "MiniMax-M2.7-highspeed",
+      name: "MiniMax M2.7 Highspeed",
+      api: "anthropic-messages",
+      provider: "minimax-portal",
+      baseUrl: "https://api.minimax.io/anthropic",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 15, output: 75, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 204800,
+      maxTokens: 131072,
+    };
+
+    resolveProviderStreamFn.mockReturnValueOnce(undefined);
+
+    const result = prepareModelForSimpleCompletion({ model });
+
+    expect(createOpenClawTransportStreamFnForModel).toHaveBeenCalledWith(model, {
+      cfg: undefined,
+    });
+    expect(resolveTransportAwareSimpleApi).toHaveBeenCalledWith("anthropic-messages");
+    expect(ensureCustomApiRegistered).toHaveBeenCalledWith(
+      "openclaw-anthropic-messages-transport",
+      "openclaw-transport-stream",
+    );
+    expect(result).toEqual({
+      ...model,
+      api: "openclaw-anthropic-messages-transport",
     });
   });
 });

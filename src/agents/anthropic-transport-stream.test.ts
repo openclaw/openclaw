@@ -581,6 +581,79 @@ describe("anthropic transport stream", () => {
     expect(result.usage.output).toBe(9);
   });
 
+  it("extracts MiniMax text after thinking blocks and calculates usage cost", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: { id: "msg_minimax", usage: { input_tokens: 48, output_tokens: 0 } },
+        },
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: {
+            type: "thinking",
+            thinking: "Need a direct answer.",
+            signature: "sig_1",
+          },
+        },
+        {
+          type: "content_block_stop",
+          index: 0,
+        },
+        {
+          type: "content_block_start",
+          index: 1,
+          content_block: { type: "text", text: "pong" },
+        },
+        {
+          type: "content_block_stop",
+          index: 1,
+        },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: { input_tokens: 48, output_tokens: 38 },
+        },
+      ]),
+    );
+    const streamFn = createAnthropicMessagesTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        {
+          id: "MiniMax-M2.7-highspeed",
+          name: "MiniMax M2.7 Highspeed",
+          api: "anthropic-messages",
+          provider: "minimax-portal",
+          baseUrl: "https://api.minimax.io/anthropic/v1",
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 15, output: 75, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 204800,
+          maxTokens: 131072,
+          headers: { Authorization: "Bearer oauth-token" },
+        } satisfies AnthropicMessagesModel,
+        {
+          messages: [{ role: "user", content: "Reply with pong" }],
+        } as Parameters<typeof streamFn>[1],
+        {
+          apiKey: "oauth-token",
+          maxTokens: 1024,
+        } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    const result = await stream.result();
+
+    expect(result.content[1]).toEqual({ type: "text", text: "pong" });
+    expect(result.usage.input).toBe(48);
+    expect(result.usage.output).toBe(38);
+    expect(result.usage.cost.total).toBeGreaterThan(0);
+    const [url, init] = guardedFetchCall();
+    expect(url).toBe("https://api.minimax.io/anthropic/v1/messages");
+    expect(new Headers(init?.headers).get("authorization")).toBe("Bearer oauth-token");
+    expect(latestAnthropicRequest().payload.max_tokens).toBe(1024);
+  });
+
   it("recovers orphan text deltas when an Anthropic-compatible provider omits block start", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([
