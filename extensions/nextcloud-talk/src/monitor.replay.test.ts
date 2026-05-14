@@ -265,7 +265,7 @@ describe("createNextcloudTalkWebhookServer payload validation", () => {
       {
         type: "Add",
         actor: { type: "Person", id: "alice", name: "Alice" },
-        object: { type: "Like", id: "reaction-1", name: "👍" },
+        object: { type: "Like", id: "reaction-1", name: "like" },
         target: { type: "Note", id: "msg-1", name: "hello" },
       },
       {
