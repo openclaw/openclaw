@@ -1,4 +1,6 @@
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { isCliProvider } from "../agents/model-selection.js";
+import { normalizeProviderId } from "../agents/provider-id.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
@@ -183,6 +185,27 @@ export async function getStatusSummary(
     storeCache.set(storePath, store);
     return store;
   };
+
+  // Per-call memoization of `isCliProvider(provider, cfg)` for this status
+  // scan. The session-row hot loop below resolves a runtime label for every
+  // session entry; each label resolution hits `isCliProvider`, which can fall
+  // through to a setup-manifest lookup that executes the owning plugin's
+  // `setup` register callback (~29 ms per call with the bundled plugin set).
+  // Memoizing per scan turns the per-session cost into O(unique providers)
+  // without introducing process-global cache state — the Map is GC'd when
+  // `getStatusSummary` returns, so plugin-runtime changes between scans
+  // re-evaluate eligibility from scratch.
+  const cliProviderMemo = new Map<string, boolean>();
+  const memoizedIsCliProvider = (provider: string): boolean => {
+    const key = normalizeProviderId(provider);
+    const cached = cliProviderMemo.get(key);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const result = isCliProvider(provider, cfg);
+    cliProviderMemo.set(key, result);
+    return result;
+  };
   const buildSessionRows = (
     store: Record<string, SessionEntry | undefined>,
     opts: { agentIdOverride?: string } = {},
@@ -221,6 +244,7 @@ export async function getStatusSummary(
           model: model ?? "",
           agentId,
           sessionKey: key,
+          isCliProviderOverride: memoizedIsCliProvider,
         });
 
         return {
@@ -256,7 +280,9 @@ export async function getStatusSummary(
 
   const paths = new Set<string>();
   const byAgent = agentList.agents.map((agent) => {
-    const storePath = resolveStorePath(cfg.session?.store, { agentId: agent.id });
+    const storePath = resolveStorePath(cfg.session?.store, {
+      agentId: agent.id,
+    });
     paths.add(storePath);
     const store = loadStore(storePath);
     const sessions = buildSessionRows(store, { agentIdOverride: agent.id });

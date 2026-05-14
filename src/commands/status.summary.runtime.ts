@@ -157,6 +157,7 @@ function resolveSessionRuntimeLabel(params: {
   model: string;
   agentId?: string;
   sessionKey: string;
+  isCliProviderOverride?: (provider: string) => boolean;
 }): string {
   const runtime = resolveModelAgentRuntimeMetadata({
     cfg: params.cfg,
@@ -174,6 +175,7 @@ function resolveSessionRuntimeLabel(params: {
     sessionEntry: params.entry,
     resolvedHarness,
     fallbackProvider: params.provider,
+    isCliProviderOverride: params.isCliProviderOverride,
   });
 }
 

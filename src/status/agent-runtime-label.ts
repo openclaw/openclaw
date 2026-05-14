@@ -23,6 +23,14 @@ export function resolveAgentRuntimeLabel(args: {
   >;
   resolvedHarness?: string;
   fallbackProvider?: string;
+  /**
+   * Optional override for the CLI-provider check. Callers that resolve runtime
+   * labels in a hot loop (e.g. `status` / `sessions` building one row per
+   * session) can pass a precomputed memo of `(provider) → boolean` to avoid
+   * paying the setup-manifest discovery cost per row. Falls back to
+   * `isCliProvider` when omitted, preserving the prior contract.
+   */
+  isCliProviderOverride?: (provider: string) => boolean;
 }): string {
   const acpAgentRaw = normalizeOptionalString(args.sessionEntry?.acp?.agent);
   const acpAgent = acpAgentRaw ? sanitizeTerminalText(acpAgentRaw) : undefined;
@@ -43,7 +51,10 @@ export function resolveAgentRuntimeLabel(args: {
     normalizeOptionalString(args.sessionEntry?.providerOverride) ??
     normalizeOptionalString(args.fallbackProvider);
   const provider = providerRaw ? sanitizeTerminalText(providerRaw) : undefined;
-  if (provider && isCliProvider(provider, args.config)) {
+  const cliProviderCheck = args.isCliProviderOverride
+    ? (p: string) => args.isCliProviderOverride!(p)
+    : (p: string) => isCliProvider(p, args.config);
+  if (provider && cliProviderCheck(provider)) {
     return (
       AGENT_RUNTIME_LABELS[normalizeOptionalLowercaseString(providerRaw) ?? ""] ??
       `${provider} (cli)`
