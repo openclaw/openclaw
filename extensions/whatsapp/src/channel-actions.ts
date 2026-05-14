@@ -66,7 +66,7 @@ export function describeWhatsAppMessageActions(params: {
     return null;
   }
   const gate = createActionGate(params.cfg.channels.whatsapp.actions);
-  const actions = new Set<ChannelMessageActionName>();
+  const actions = new Set<ChannelMessageActionName>(["upload-file"]);
   const canReact =
     params.accountId != null
       ? areWhatsAppAgentReactionsEnabled({

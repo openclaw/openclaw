@@ -7,6 +7,7 @@ import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadWebMedia } from "../../media/web-media.js";
+import { resolveUploadFileActionAsSendMedia } from "../../plugin-sdk/channel-actions.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -269,6 +270,201 @@ describe("runMessageAction media behavior", () => {
     });
     vi.mocked(loadWebMedia).mockReset();
     vi.mocked(loadWebMedia).mockImplementation(actualLoadWebMedia);
+  });
+
+  it("lowers upload-file through a channel compatibility hook before media send", async () => {
+    const compatPlugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({
+        id: "compatmedia",
+        label: "CompatMedia",
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({ enabled: true }),
+          isConfigured: () => true,
+        },
+      }),
+      outbound: {
+        deliveryMode: "direct",
+        resolveTarget: ({ to }) => ({ ok: true, to: to ?? "" }),
+        sendText: async () => ({ channel: "compatmedia", messageId: "msg-test" }),
+        sendMedia: async () => ({ channel: "compatmedia", messageId: "msg-test" }),
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["upload-file"] }),
+        resolveMessageActionRequest: ({ action, args }) =>
+          resolveUploadFileActionAsSendMedia({ action, args, channelLabel: "CompatMedia" }),
+      },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "compatmedia",
+          source: "test",
+          plugin: compatPlugin,
+        },
+      ]),
+    );
+
+    const result = await runMessageAction({
+      cfg: { channels: { compatmedia: { enabled: true } } } as OpenClawConfig,
+      action: "upload-file",
+      params: {
+        channel: "compatmedia",
+        target: "12345678",
+        filePath: "https://example.com/pic.png",
+        caption: "picture caption",
+      },
+      dryRun: true,
+    });
+
+    expect(result.kind).toBe("send");
+    const sendArgs = firstMockArg(channelResolutionMocks.executeSendAction, "executeSendAction");
+    expect(sendArgs.message).toBe("picture caption");
+    expect(sendArgs.mediaUrl).toBe("https://example.com/pic.png");
+  });
+
+  it("rejects upload-file buffer payloads when a channel lowers to send media", async () => {
+    const compatPlugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({
+        id: "compatmedia",
+        label: "CompatMedia",
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({ enabled: true }),
+          isConfigured: () => true,
+        },
+      }),
+      actions: {
+        describeMessageTool: () => ({ actions: ["upload-file"] }),
+        resolveMessageActionRequest: ({ action, args }) =>
+          resolveUploadFileActionAsSendMedia({ action, args, channelLabel: "CompatMedia" }),
+      },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "compatmedia",
+          source: "test",
+          plugin: compatPlugin,
+        },
+      ]),
+    );
+
+    await expect(
+      runMessageAction({
+        cfg: { channels: { compatmedia: { enabled: true } } } as OpenClawConfig,
+        action: "upload-file",
+        params: {
+          channel: "compatmedia",
+          target: "12345678",
+          buffer: Buffer.from("hello").toString("base64"),
+          filename: "hello.txt",
+        },
+      }),
+    ).rejects.toThrow("cannot lower upload-file buffer payloads");
+    expect(channelResolutionMocks.executeSendAction).not.toHaveBeenCalled();
+  });
+
+  it("dispatches a plugin-owned action produced by the compatibility hook", async () => {
+    const dispatchedActions: string[] = [];
+    const compatPlugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({
+        id: "compatplugin",
+        label: "CompatPlugin",
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({ enabled: true }),
+          isConfigured: () => true,
+        },
+      }),
+      outbound: {
+        deliveryMode: "direct",
+        resolveTarget: ({ to }) => ({ ok: true, to: to ?? "" }),
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["upload-file", "sendAttachment"] }),
+        supportsAction: ({ action }) => action === "sendAttachment",
+        resolveMessageActionRequest: ({ action, args }) =>
+          action === "upload-file"
+            ? { action: "sendAttachment", args: { ...args, action: "sendAttachment" } }
+            : null,
+        handleAction: async ({ action }) => {
+          dispatchedActions.push(action);
+          return jsonResult({ ok: true, action });
+        },
+      },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "compatplugin",
+          source: "test",
+          plugin: compatPlugin,
+        },
+      ]),
+    );
+
+    const result = await runMessageAction({
+      cfg: { channels: { compatplugin: { enabled: true } } } as OpenClawConfig,
+      action: "upload-file",
+      params: {
+        channel: "compatplugin",
+        target: "12345678",
+      },
+    });
+
+    expect(result.kind).toBe("action");
+    expect(result.action).toBe("sendAttachment");
+    expect(requireActionPayload(result).action).toBe("sendAttachment");
+    expect(dispatchedActions).toEqual(["sendAttachment"]);
+  });
+
+  it("uses a plugin-owned resolved action for dry-run results", async () => {
+    const compatPlugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({
+        id: "compatplugin",
+        label: "CompatPlugin",
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({ enabled: true }),
+          isConfigured: () => true,
+        },
+      }),
+      outbound: {
+        deliveryMode: "direct",
+        resolveTarget: ({ to }) => ({ ok: true, to: to ?? "" }),
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["upload-file", "sendAttachment"] }),
+        resolveMessageActionRequest: ({ action, args }) =>
+          action === "upload-file"
+            ? { action: "sendAttachment", args: { ...args, action: "sendAttachment" } }
+            : null,
+      },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "compatplugin",
+          source: "test",
+          plugin: compatPlugin,
+        },
+      ]),
+    );
+
+    const result = await runMessageAction({
+      cfg: { channels: { compatplugin: { enabled: true } } } as OpenClawConfig,
+      action: "upload-file",
+      params: {
+        channel: "compatplugin",
+        target: "12345678",
+      },
+      dryRun: true,
+    });
+
+    expect(result.kind).toBe("action");
+    expect(result.action).toBe("sendAttachment");
+    expect(requireActionPayload(result).action).toBe("sendAttachment");
   });
 
   it("forwards asVoice from send actions into core delivery", async () => {

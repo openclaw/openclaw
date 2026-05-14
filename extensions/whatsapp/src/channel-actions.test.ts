@@ -128,6 +128,7 @@ describe("whatsapp channel action helpers", () => {
     } as OpenClawConfig;
 
     expect(describeWhatsAppMessageActions({ cfg, accountId: "default" })?.actions).toEqual([
+      "upload-file",
       "react",
       "poll",
     ]);
@@ -150,6 +151,7 @@ describe("whatsapp channel action helpers", () => {
     } as OpenClawConfig;
 
     expect(describeWhatsAppMessageActions({ cfg, accountId: "default" })?.actions).toEqual([
+      "upload-file",
       "poll",
     ]);
   });
@@ -170,6 +172,7 @@ describe("whatsapp channel action helpers", () => {
     } as OpenClawConfig;
 
     expect(describeWhatsAppMessageActions({ cfg, accountId: "work" })?.actions).toEqual([
+      "upload-file",
       "react",
       "poll",
     ]);
@@ -191,7 +194,11 @@ describe("whatsapp channel action helpers", () => {
     } as OpenClawConfig;
     hoisted.listWhatsAppAccountIds.mockReturnValue(["default", "work"]);
 
-    expect(describeWhatsAppMessageActions({ cfg })?.actions).toEqual(["react", "poll"]);
+    expect(describeWhatsAppMessageActions({ cfg })?.actions).toEqual([
+      "upload-file",
+      "react",
+      "poll",
+    ]);
   });
 
   it("omits react in global discovery when only disabled accounts enable agent reactions", () => {
@@ -211,6 +218,6 @@ describe("whatsapp channel action helpers", () => {
     } as OpenClawConfig;
     hoisted.listWhatsAppAccountIds.mockReturnValue(["default", "work"]);
 
-    expect(describeWhatsAppMessageActions({ cfg })?.actions).toEqual(["poll"]);
+    expect(describeWhatsAppMessageActions({ cfg })?.actions).toEqual(["upload-file", "poll"]);
   });
 });

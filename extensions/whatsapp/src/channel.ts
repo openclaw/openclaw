@@ -1,5 +1,6 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
+import { resolveUploadFileActionAsSendMedia } from "openclaw/plugin-sdk/channel-actions";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
@@ -151,6 +152,8 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
       actions: {
         describeMessageTool: ({ cfg, accountId }) =>
           describeWhatsAppMessageActions({ cfg, accountId }),
+        resolveMessageActionRequest: ({ action, args }) =>
+          resolveUploadFileActionAsSendMedia({ action, args, channelLabel: "WhatsApp" }),
         supportsAction: ({ action }) => action === "react",
         resolveExecutionMode: ({ action }) => (action === "react" ? "gateway" : "local"),
         handleAction: async ({ action, params, cfg, accountId, requesterSenderId, toolContext }) =>

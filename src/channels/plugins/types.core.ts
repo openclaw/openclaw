@@ -728,6 +728,31 @@ export type ChannelMessageActionAdapter = {
     action: ChannelMessageActionName;
     args: Record<string, unknown>;
   };
+  /**
+   * Translate generic shared-message actions after core has resolved the
+   * destination channel. Use this for channel-owned compatibility lowering,
+   * such as treating upload-file as send-with-media on media-capable channels
+   * that do not expose a native file-upload action.
+   */
+  resolveMessageActionRequest?: (params: {
+    action: ChannelMessageActionName;
+    args: Record<string, unknown>;
+    channel: string;
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    sessionKey?: string | null;
+    sessionId?: string | null;
+    agentId?: string | null;
+    requesterSenderId?: string | null;
+    senderIsOwner?: boolean;
+    toolContext?: ChannelThreadingToolContext;
+  }) =>
+    | {
+        action: ChannelMessageActionName;
+        args: Record<string, unknown>;
+      }
+    | null
+    | undefined;
   messageActionTargetAliases?: Partial<
     Record<
       ChannelMessageActionName,

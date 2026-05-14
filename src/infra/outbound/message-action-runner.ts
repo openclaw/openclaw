@@ -1052,7 +1052,11 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
   };
 }
 
-async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageActionRunResult> {
+async function handlePluginAction(
+  ctx: ResolvedActionContext & {
+    action: Exclude<ChannelMessageActionName, "send" | "poll" | "broadcast">;
+  },
+): Promise<MessageActionRunResult> {
   const {
     cfg,
     params,
@@ -1065,8 +1069,8 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
     abortSignal,
     agentId,
   } = ctx;
+  const { action } = ctx;
   throwIfAborted(abortSignal);
-  const action = input.action as Exclude<ChannelMessageActionName, "send" | "poll" | "broadcast">;
   if (dryRun) {
     return {
       kind: "action",
@@ -1152,7 +1156,7 @@ export async function runMessageAction(
   parseJsonMessageParam(params, "delivery");
   parseInteractiveParam(params);
 
-  const action = input.action;
+  let action = input.action;
   enforceMessageActionAllowlist({
     cfg,
     agentId: resolvedAgentId,
@@ -1185,6 +1189,35 @@ export async function runMessageAction(
   }
   if (accountId) {
     params.accountId = accountId;
+  }
+  const actionRequest = resolveOutboundChannelPlugin({
+    channel,
+    cfg,
+  })?.actions?.resolveMessageActionRequest?.({
+    action,
+    args: params,
+    channel,
+    cfg,
+    accountId,
+    sessionKey: input.sessionKey,
+    sessionId: input.sessionId,
+    agentId: resolvedAgentId,
+    requesterSenderId: input.requesterSenderId,
+    senderIsOwner: input.senderIsOwner,
+    toolContext: input.toolContext,
+  });
+  if (actionRequest) {
+    action = actionRequest.action;
+    params = normalizeMessageActionInput({
+      action,
+      args: actionRequest.args,
+      toolContext: input.toolContext,
+    });
+    enforceMessageActionAllowlist({
+      cfg,
+      agentId: resolvedAgentId,
+      action,
+    });
   }
   const dryRun = Boolean(input.dryRun ?? readBooleanParam(params, "dryRun"));
   const normalizationPolicy = resolveAttachmentMediaPolicy({
@@ -1290,6 +1323,7 @@ export async function runMessageAction(
     cfg,
     params,
     channel,
+    action: action as Exclude<ChannelMessageActionName, "send" | "poll" | "broadcast">,
     mediaAccess,
     accountId,
     dryRun,
