@@ -1145,8 +1145,8 @@
                       "concepts/memory",
                       "concepts/memory-builtin",
                       "concepts/memory-qmd",
-                      "concepts/memory-honcho",
                       "concepts/memory-search",
+                      "concepts/memory-honcho",
                       "concepts/active-memory",
                       "concepts/commitments",
                       "concepts/dreaming"
@@ -1478,6 +1478,7 @@
                     "pages": [
                       "gateway/configuration",
                       "gateway/configuration-reference",
+                      "gateway/configuration-internals",
                       "gateway/config-agents",
                       "gateway/config-channels",
                       "gateway/config-tools",
