@@ -40,7 +40,10 @@ import {
 import { CLI_AUTH_EPOCH_VERSION, resolveCliAuthEpoch } from "../cli-auth-epoch.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
 import { hashCliSessionText, resolveCliSessionReuse } from "../cli-session.js";
-import { claudeCliSessionTranscriptHasContent } from "../command/attempt-execution.helpers.js";
+import {
+  claudeCliSessionTranscriptHasContent,
+  claudeCliSessionTranscriptHasOrphanedToolUse,
+} from "../command/attempt-execution.helpers.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { resolveContextTokensForModel } from "../context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
@@ -86,6 +89,7 @@ const prepareDeps = {
   // Surfaced as a dep so tests can stub the on-disk Claude CLI transcript probe
   // without touching ~/.claude/projects.
   claudeCliSessionTranscriptHasContent,
+  claudeCliSessionTranscriptHasOrphanedToolUse,
 };
 
 const CLAUDE_CLI_CONTEXT_MODEL_ALIASES: Record<string, string> = {
@@ -377,15 +381,29 @@ export async function prepareCliRunContext(
   // and the post-run flow writes the new sessionId back via setCliSessionBinding.
   const candidateClaudeCliSessionId =
     params.cliSessionBinding?.sessionId?.trim() || params.cliSessionId?.trim() || undefined;
+  const hasClaudeCliCandidate =
+    candidateClaudeCliSessionId !== undefined && isClaudeCliProvider(params.provider);
   const claudeCliTranscriptMissing =
-    candidateClaudeCliSessionId !== undefined &&
-    isClaudeCliProvider(params.provider) &&
+    hasClaudeCliCandidate &&
     !(await prepareDeps.claudeCliSessionTranscriptHasContent({
       sessionId: candidateClaudeCliSessionId,
       workspaceDir: cwd,
     }));
-  const reusableCliSession: CliReusableSession = claudeCliTranscriptMissing
-    ? { invalidatedReason: "missing-transcript" }
+  const claudeCliTranscriptOrphanedToolUse =
+    hasClaudeCliCandidate &&
+    !claudeCliTranscriptMissing &&
+    (await prepareDeps.claudeCliSessionTranscriptHasOrphanedToolUse({
+      sessionId: candidateClaudeCliSessionId,
+      workspaceDir: cwd,
+    }));
+  const claudeCliInvalidatedReason: CliReusableSession["invalidatedReason"] | undefined =
+    claudeCliTranscriptMissing
+      ? "missing-transcript"
+      : claudeCliTranscriptOrphanedToolUse
+        ? "orphaned-tool-use"
+        : undefined;
+  const reusableCliSession: CliReusableSession = claudeCliInvalidatedReason
+    ? { invalidatedReason: claudeCliInvalidatedReason }
     : params.cliSessionBinding
       ? resolveCliSessionReuse({
           binding: params.cliSessionBinding,

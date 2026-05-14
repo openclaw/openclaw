@@ -120,7 +120,8 @@ export type CliReusableSession = {
     | "system-prompt"
     | "cwd"
     | "mcp"
-    | "missing-transcript";
+    | "missing-transcript"
+    | "orphaned-tool-use";
 };
 
 export type PreparedCliRunContext = {

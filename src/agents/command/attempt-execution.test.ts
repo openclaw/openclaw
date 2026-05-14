@@ -7,6 +7,7 @@ import {
   buildClaudeCliFallbackContextPrelude,
   claudeCliSessionTranscriptHasContent,
   claudeCliSessionTranscriptPath,
+  claudeCliSessionTranscriptHasOrphanedToolUse,
   createAcpVisibleTextAccumulator,
   formatClaudeCliFallbackPrelude,
   resolveFallbackRetryPrompt,
@@ -703,6 +704,318 @@ describe("claudeCliSessionTranscriptHasContent", () => {
       setTimeoutSpy.mockRestore();
       warnSpy.mockRestore();
     }
+  });
+});
+
+describe("claudeCliSessionTranscriptHasOrphanedToolUse", () => {
+  let tmpDir: string;
+  let workspaceDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "oc-claude-orphan-test-"));
+    workspaceDir = await fs.mkdtemp(path.join(tmpDir, "ws-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  async function writeJsonlSession(sessionId: string, lines: object[]) {
+    const projectDir = resolveClaudeCliProjectDirForWorkspace({
+      workspaceDir,
+      homeDir: tmpDir,
+    });
+    await fs.mkdir(projectDir, { recursive: true });
+    const file = path.join(projectDir, `${sessionId}.jsonl`);
+    await fs.writeFile(file, lines.map((l) => JSON.stringify(l)).join("\n") + "\n", "utf-8");
+    return file;
+  }
+
+  it("returns false when the transcript is missing", async () => {
+    expect(
+      await claudeCliSessionTranscriptHasOrphanedToolUse({
+        sessionId: "no-such-session",
+        workspaceDir,
+        homeDir: tmpDir,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false when the last assistant message has no tool_use", async () => {
+    await writeJsonlSession("text-only", [
+      {
+        type: "assistant",
+        message: { role: "assistant", content: [{ type: "text", text: "all done" }] },
+      },
+    ]);
+    expect(
+      await claudeCliSessionTranscriptHasOrphanedToolUse({
+        sessionId: "text-only",
+        workspaceDir,
+        homeDir: tmpDir,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false when every tool_use in the last assistant message has a matching tool_result", async () => {
+    await writeJsonlSession("answered", [
+      {
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "toolu_1", name: "Bash", input: {} }],
+        },
+      },
+      {
+        type: "user",
+        message: {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "toolu_1", content: "ok" }],
+        },
+      },
+    ]);
+    expect(
+      await claudeCliSessionTranscriptHasOrphanedToolUse({
+        sessionId: "answered",
+        workspaceDir,
+        homeDir: tmpDir,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns true when the last assistant message has a trailing tool_use without tool_result", async () => {
+    // Reproduces the 3d-engineer stuck-resume scenario: gateway died after
+    // claude emitted tool_use(Bash) but before the tool_result was flushed.
+    await writeJsonlSession("orphan", [
+      {
+        type: "assistant",
+        message: { role: "assistant", content: [{ type: "text", text: "let me run that" }] },
+      },
+      {
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "toolu_unanswered", name: "Bash", input: {} }],
+        },
+      },
+    ]);
+    expect(
+      await claudeCliSessionTranscriptHasOrphanedToolUse({
+        sessionId: "orphan",
+        workspaceDir,
+        homeDir: tmpDir,
+      }),
+    ).toBe(true);
+  });
+
+  it("returns true when the last assistant has multiple tool_use and at least one is orphaned", async () => {
+    await writeJsonlSession("partial", [
+      {
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "tool_use", id: "toolu_a", name: "Bash", input: {} },
+            { type: "tool_use", id: "toolu_b", name: "Read", input: {} },
+          ],
+        },
+      },
+      {
+        type: "user",
+        message: {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "toolu_a", content: "ok" }],
+        },
+      },
+    ]);
+    expect(
+      await claudeCliSessionTranscriptHasOrphanedToolUse({
+        sessionId: "partial",
+        workspaceDir,
+        homeDir: tmpDir,
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false when an earlier assistant tool_use is unanswered but the last assistant message resolved cleanly", async () => {
+    // Edge case: an unanswered tool_use deep in history is INERT — it
+    // can't block forward progress because a later assistant message
+    // already moved past it. Only TRAILING orphans matter.
+    await writeJsonlSession("buried", [
+      {
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "toolu_old", name: "Bash", input: {} }],
+        },
+      },
+      {
+        type: "assistant",
+        message: { role: "assistant", content: [{ type: "text", text: "moving on" }] },
+      },
+    ]);
+    expect(
+      await claudeCliSessionTranscriptHasOrphanedToolUse({
+        sessionId: "buried",
+        workspaceDir,
+        homeDir: tmpDir,
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects path-like session ids instead of escaping the Claude projects tree", async () => {
+    await writeJsonlSession("safe", []);
+    expect(
+      await claudeCliSessionTranscriptHasOrphanedToolUse({
+        sessionId: "../safe",
+        workspaceDir,
+        homeDir: tmpDir,
+      }),
+    ).toBe(false);
+  });
+
+  it("ignores sidechain entries when deciding orphans (matches main-history importer's skip rule)", async () => {
+    // A trailing sidechain (Task-tool / subagent) `tool_use` without a
+    // matching `tool_result` is NOT a forward-progress blocker for the
+    // main conversation. The existing history importer at
+    // gateway/cli-session-history.claude.ts skips `isSidechain === true`
+    // entries; this probe must do the same or it will falsely invalidate
+    // healthy main-conversation resumes that happen to have a sidechain
+    // unanswered tool_use near the tail.
+    await writeJsonlSession("sidechain-trailing", [
+      {
+        type: "assistant",
+        message: { role: "assistant", content: [{ type: "text", text: "ok" }] },
+      },
+      // Sidechain assistant with unanswered tool_use — should be ignored.
+      {
+        isSidechain: true,
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "toolu_subagent", name: "Bash", input: {} }],
+        },
+      },
+    ]);
+    expect(
+      await claudeCliSessionTranscriptHasOrphanedToolUse({
+        sessionId: "sidechain-trailing",
+        workspaceDir,
+        homeDir: tmpDir,
+      }),
+    ).toBe(false);
+  });
+
+  it("still flags a main-conversation orphan even when sidechain entries exist alongside", async () => {
+    await writeJsonlSession("main-orphan-with-sidechain", [
+      // Main assistant orphan
+      {
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "toolu_main_orphan", name: "Bash", input: {} }],
+        },
+      },
+      // Sidechain entries after that don't help the orphan get answered.
+      {
+        isSidechain: true,
+        type: "user",
+        message: {
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: "toolu_main_orphan", content: "ignored sidechain" },
+          ],
+        },
+      },
+    ]);
+    expect(
+      await claudeCliSessionTranscriptHasOrphanedToolUse({
+        sessionId: "main-orphan-with-sidechain",
+        workspaceDir,
+        homeDir: tmpDir,
+      }),
+    ).toBe(true);
+  });
+
+  it("inspects the transcript tail past 500 records (does not inherit the content-probe cap)", async () => {
+    // 600 user-pings + 1 healthy-and-resolved tool turn + 1 trailing
+    // orphan tool_use. A capped walk that stops at record 500 would
+    // never see the orphan and incorrectly return false (resume hangs).
+    const lines: object[] = [];
+    for (let i = 0; i < 600; i++) {
+      lines.push({
+        type: "user",
+        message: { role: "user", content: [{ type: "text", text: `ping ${i}` }] },
+      });
+    }
+    lines.push({
+      type: "assistant",
+      message: {
+        role: "assistant",
+        content: [{ type: "tool_use", id: "toolu_resolved_late", name: "Bash", input: {} }],
+      },
+    });
+    lines.push({
+      type: "user",
+      message: {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "toolu_resolved_late", content: "ok" }],
+      },
+    });
+    lines.push({
+      type: "assistant",
+      message: {
+        role: "assistant",
+        content: [{ type: "tool_use", id: "toolu_trailing_orphan", name: "Bash", input: {} }],
+      },
+    });
+    await writeJsonlSession("long-with-trailing-orphan", lines);
+    expect(
+      await claudeCliSessionTranscriptHasOrphanedToolUse({
+        sessionId: "long-with-trailing-orphan",
+        workspaceDir,
+        homeDir: tmpDir,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not falsely flag a long transcript whose orphan was resolved past record 500", async () => {
+    // 600 user-pings + early tool_use + 100 user-pings + late tool_result
+    // resolving it. A capped walk would stop before reaching the
+    // tool_result and return true (false positive → unnecessary reset).
+    const lines: object[] = [];
+    lines.push({
+      type: "assistant",
+      message: {
+        role: "assistant",
+        content: [{ type: "tool_use", id: "toolu_resolved_far_later", name: "Bash", input: {} }],
+      },
+    });
+    for (let i = 0; i < 600; i++) {
+      lines.push({
+        type: "user",
+        message: { role: "user", content: [{ type: "text", text: `ping ${i}` }] },
+      });
+    }
+    lines.push({
+      type: "user",
+      message: {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "toolu_resolved_far_later", content: "ok" }],
+      },
+    });
+    lines.push({
+      type: "assistant",
+      message: { role: "assistant", content: [{ type: "text", text: "moving on" }] },
+    });
+    await writeJsonlSession("long-with-resolved-far-later", lines);
+    expect(
+      await claudeCliSessionTranscriptHasOrphanedToolUse({
+        sessionId: "long-with-resolved-far-later",
+        workspaceDir,
+        homeDir: tmpDir,
+      }),
+    ).toBe(false);
   });
 });
 

@@ -9,6 +9,10 @@ import {
   stripLeadingSilentToken,
 } from "../../auto-reply/tokens.js";
 import {
+  resolveToolUseId,
+  type ToolContentBlock,
+} from "../../chat/tool-content.js";
+import {
   type ClaudeCliFallbackSeed,
   readClaudeCliFallbackSeed,
 } from "../../gateway/cli-session-history.js";
@@ -135,6 +139,114 @@ export async function claudeCliSessionTranscriptHasContent(params: {
     `claude-cli transcript probe v4 miss (sessionId-deterministic path, grace ${CLAUDE_CLI_TRANSCRIPT_FLUSH_GRACE_MS}ms): sessionId=${sessionId ?? ""} expectedPath=${expectedPath} fileExists=${second.fileExists}`,
   );
   return false;
+}
+
+function toToolContentBlocks(content: unknown): ToolContentBlock[] | undefined {
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  return content.filter((item): item is ToolContentBlock =>
+    Boolean(item && typeof item === "object"),
+  );
+}
+
+function isClaudeTranscriptToolUseBlock(block: ToolContentBlock): boolean {
+  const type = block.type;
+  return type === "tool_use" || type === "server_tool_use" || type === "mcp_tool_use";
+}
+
+function isClaudeTranscriptToolResultBlock(block: ToolContentBlock): boolean {
+  const type = block.type;
+  return type === "tool_result" || (typeof type === "string" && type.endsWith("_tool_result"));
+}
+
+async function jsonlFileHasOrphanedTrailingToolUse(filePath: string): Promise<boolean> {
+  try {
+    const stat = await fs.lstat(filePath);
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      return false;
+    }
+
+    const fh = await fs.open(filePath, "r");
+    try {
+      const rl = readline.createInterface({ input: fh.createReadStream({ encoding: "utf-8" }) });
+      let lastAssistantToolUseIds: Set<string> = new Set();
+      let answeredToolResultIds: Set<string> = new Set();
+      for await (const line of rl) {
+        if (!line.trim()) {
+          continue;
+        }
+        let obj: unknown;
+        try {
+          obj = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        const rec = obj as Record<string, unknown> | null;
+        if (rec?.isSidechain === true) {
+          continue;
+        }
+        const message = rec?.message as Record<string, unknown> | undefined;
+        const role = message?.role;
+        const blocks = toToolContentBlocks(message?.content);
+        if (!blocks) {
+          continue;
+        }
+        if (role === "assistant") {
+          lastAssistantToolUseIds = new Set();
+          answeredToolResultIds = new Set();
+          for (const block of blocks) {
+            if (isClaudeTranscriptToolUseBlock(block)) {
+              const id = resolveToolUseId(block);
+              if (id) {
+                lastAssistantToolUseIds.add(id);
+              }
+            } else if (isClaudeTranscriptToolResultBlock(block)) {
+              const id = resolveToolUseId(block);
+              if (id) {
+                answeredToolResultIds.add(id);
+              }
+            }
+          }
+        } else if (role === "user") {
+          for (const block of blocks) {
+            if (isClaudeTranscriptToolResultBlock(block)) {
+              const id = resolveToolUseId(block);
+              if (id) {
+                answeredToolResultIds.add(id);
+              }
+            }
+          }
+        }
+      }
+      for (const id of lastAssistantToolUseIds) {
+        if (!answeredToolResultIds.has(id)) {
+          return true;
+        }
+      }
+      return false;
+    } finally {
+      await fh.close();
+    }
+  } catch {
+    return false;
+  }
+}
+
+export async function claudeCliSessionTranscriptHasOrphanedToolUse(params: {
+  sessionId: string | undefined;
+  workspaceDir: string | undefined;
+  homeDir?: string;
+}): Promise<boolean> {
+  const expectedPath = claudeCliSessionTranscriptPath({
+    sessionId: params.sessionId,
+    workspaceDir: params.workspaceDir,
+    homeDir: params.homeDir,
+  });
+  if (!expectedPath) {
+    return false;
+  }
+  return await jsonlFileHasOrphanedTrailingToolUse(expectedPath);
 }
 
 export function resolveFallbackRetryPrompt(params: {
