@@ -36,7 +36,7 @@ describe("resolveSimpleCompletionSelectionForAgent", () => {
       resolveSimpleCompletionSelectionForAgent({ cfg, agentId: "ops" }),
     );
     expect(selection.provider).toBe("openrouter");
-    expect(selection.modelId).toBe("aurora-alpha");
+    expect(selection.modelId).toBe("openrouter/aurora-alpha");
   });
 
   it("keeps trailing auth profile for credential lookup", () => {
