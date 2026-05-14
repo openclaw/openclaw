@@ -304,7 +304,7 @@ function normalizeLegacyRuntimeAgentModelConfig(raw: unknown): {
   const selectedRefs: SelectedRuntimeRef[] = [];
   let selectedRuntime = migratedPrimary?.runtime;
   let selectedRuntimeRequiresPolicy =
-    Boolean(migratedPrimary) && migratedRuntimeRequiresPolicy(migratedPrimary.legacyProvider);
+    migratedPrimary !== null && migratedRuntimeRequiresPolicy(migratedPrimary.legacyProvider);
   if (migratedPrimary) {
     next.primary = migratedPrimary.ref;
     selectedRefs.push({
