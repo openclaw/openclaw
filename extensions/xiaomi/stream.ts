@@ -4,11 +4,9 @@ import { createDeepSeekV4OpenAICompatibleThinkingWrapper } from "openclaw/plugin
 const MIMO_THINKING_MODEL_IDS = new Set(["mimo-v2.5", "mimo-v2.5-pro"]);
 
 function isMiMoThinkingModelRef(model: { provider?: string; id?: unknown }): boolean {
-  return (
-    (model.provider === "xiaomi" || model.provider === "xiaomi-coding") &&
-    typeof model.id === "string" &&
-    MIMO_THINKING_MODEL_IDS.has(model.id.toLowerCase());
-  );
+  const provider = model.provider;
+  const id = typeof model.id === "string" ? model.id : "";
+  return (provider === "xiaomi" || provider === "xiaomi-coding") && MIMO_THINKING_MODEL_IDS.has(id.toLowerCase());
 }
 
 export function createMiMoThinkingWrapper(
