@@ -9,7 +9,11 @@ import {
   resolveProviderHttpRequestConfig,
   requireTranscriptionText,
 } from "./shared.js";
-import type { AudioTranscriptionRequest, AudioTranscriptionResult } from "./types.js";
+import type {
+  AudioTranscriptSegment,
+  AudioTranscriptionRequest,
+  AudioTranscriptionResult,
+} from "./types.js";
 
 type OpenAiCompatibleAudioParams = AudioTranscriptionRequest & {
   defaultBaseUrl: string;
@@ -21,6 +25,48 @@ type OpenAiCompatibleAudioParams = AudioTranscriptionRequest & {
 function resolveModel(model: string | undefined, fallback: string): string {
   const trimmed = model?.trim();
   return trimmed || fallback;
+}
+
+function resolveStringOption(...values: Array<unknown>): string | undefined {
+  for (const value of values) {
+    const text = typeof value === "string" ? value.trim() : "";
+    if (text) {
+      return text;
+    }
+  }
+  return undefined;
+}
+
+function normalizeTranscriptSegments(value: unknown): AudioTranscriptSegment[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const segments: AudioTranscriptSegment[] = [];
+  for (const segment of value) {
+    if (!segment || typeof segment !== "object" || Array.isArray(segment)) {
+      continue;
+    }
+    const record = segment as Record<string, unknown>;
+    const text = typeof record.text === "string" ? record.text.trim() : "";
+    if (!text) {
+      continue;
+    }
+    segments.push({ ...record, text } as AudioTranscriptSegment);
+  }
+  return segments.length > 0 ? segments : undefined;
+}
+
+function assertJsonResponseFormat(responseFormat: string | undefined): void {
+  if (!responseFormat) {
+    return;
+  }
+  const normalized = responseFormat.trim().toLowerCase();
+  if (normalized === "json" || normalized === "verbose_json" || normalized === "diarized_json") {
+    return;
+  }
+  throw new Error(
+    `OpenAI-compatible audio media understanding requires a JSON response_format; unsupported response_format "${responseFormat}"`,
+  );
 }
 
 /** Sends an OpenAI-compatible audio transcription request and returns validated text output. */
@@ -51,6 +97,17 @@ export async function transcribeOpenAiCompatibleAudio(
   const url = `${baseUrl}/audio/transcriptions`;
 
   const model = resolveModel(params.model, params.defaultModel);
+  const responseFormat = resolveStringOption(
+    params.responseFormat,
+    params.query?.response_format,
+    params.query?.responseFormat,
+  );
+  const chunkingStrategy = resolveStringOption(
+    params.chunkingStrategy,
+    params.query?.chunking_strategy,
+    params.query?.chunkingStrategy,
+  );
+  assertJsonResponseFormat(responseFormat);
   // Keep multipart construction centralized so provider tests cover filename and MIME behavior.
   const form = buildAudioTranscriptionFormData({
     buffer: params.buffer,
@@ -60,6 +117,8 @@ export async function transcribeOpenAiCompatibleAudio(
       model,
       language: params.language,
       prompt: params.prompt,
+      response_format: responseFormat,
+      chunking_strategy: chunkingStrategy,
     },
   });
 
@@ -82,7 +141,8 @@ export async function transcribeOpenAiCompatibleAudio(
       typeof payload.text === "string" ? payload.text : undefined,
       "Audio transcription response missing text",
     );
-    return { text, model };
+    const segments = normalizeTranscriptSegments(payload.segments);
+    return { text, model, ...(segments ? { segments } : {}) };
   } finally {
     await release();
   }

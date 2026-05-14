@@ -23,12 +23,23 @@ export type MediaAttachment = {
   alreadyTranscribed?: boolean;
 };
 
+export type AudioTranscriptSegment = {
+  text: string;
+  start?: number;
+  end?: number;
+  speaker?: string;
+  id?: string | number;
+  type?: string;
+  [key: string]: unknown;
+};
+
 export type MediaUnderstandingOutput = {
   kind: MediaUnderstandingKind;
   attachmentIndex: number;
   text: string;
   provider: string;
   model?: string;
+  segments?: AudioTranscriptSegment[];
 };
 
 type MediaUnderstandingDecisionOutcome =
@@ -103,6 +114,16 @@ export type AudioTranscriptionRequest = {
   model?: string;
   language?: string;
   prompt?: string;
+  /**
+   * OpenAI-compatible audio response format. Runner code may populate this from
+   * `tools.media.audio.providerOptions.<provider>.response_format`.
+   */
+  responseFormat?: string;
+  /**
+   * OpenAI-compatible audio chunking strategy. Runner code may populate this from
+   * `tools.media.audio.providerOptions.<provider>.chunking_strategy`.
+   */
+  chunkingStrategy?: string;
   query?: Record<string, string | number | boolean>;
   timeoutMs: number;
   fetchFn?: typeof fetch;
@@ -111,6 +132,7 @@ export type AudioTranscriptionRequest = {
 export type AudioTranscriptionResult = {
   text: string;
   model?: string;
+  segments?: AudioTranscriptSegment[];
 };
 
 export type VideoDescriptionRequest = {

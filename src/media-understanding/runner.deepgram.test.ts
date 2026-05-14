@@ -156,3 +156,77 @@ describe("runCapability deepgram provider options", () => {
     });
   });
 });
+
+describe("runCapability audio diarization options", () => {
+  it("maps providerOptions response_format/chunking_strategy to audio request fields and preserves segments", async () => {
+    await withAudioFixture("openclaw-diarized-json", async ({ ctx, media, cache }) => {
+      let seenResponseFormat: string | undefined;
+      let seenChunkingStrategy: string | undefined;
+
+      const providerRegistry = buildProviderRegistry({
+        openai: {
+          id: "openai",
+          capabilities: ["audio"],
+          transcribeAudio: async (req) => {
+            seenResponseFormat = req.responseFormat;
+            seenChunkingStrategy = req.chunkingStrategy;
+            return {
+              text: "Speaker A then Speaker B",
+              model: req.model,
+              segments: [
+                { speaker: "A", start: 0, end: 1, text: "Speaker A" },
+                { speaker: "B", start: 1, end: 2, text: "Speaker B" },
+              ],
+            };
+          },
+        },
+      });
+
+      const cfg = {
+        models: {
+          providers: {
+            openai: {
+              apiKey: "test-key",
+              models: [],
+            },
+          },
+        },
+        tools: {
+          media: {
+            audio: {
+              enabled: true,
+              providerOptions: {
+                openai: {
+                  response_format: "diarized_json",
+                  chunking_strategy: "auto",
+                },
+              },
+              models: [
+                {
+                  provider: "openai",
+                  model: "gpt-4o-transcribe-diarize",
+                },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = await runCapability({
+        capability: "audio",
+        cfg,
+        ctx,
+        attachments: cache,
+        media,
+        providerRegistry,
+      });
+
+      expect(seenResponseFormat).toBe("diarized_json");
+      expect(seenChunkingStrategy).toBe("auto");
+      expect(result.outputs[0]?.segments).toEqual([
+        { speaker: "A", start: 0, end: 1, text: "Speaker A" },
+        { speaker: "B", start: 1, end: 2, text: "Speaker B" },
+      ]);
+    });
+  });
+});

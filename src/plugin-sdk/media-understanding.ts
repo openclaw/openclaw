@@ -1,6 +1,7 @@
 // Public media-understanding helpers and types for provider plugins.
 
 export type {
+  AudioTranscriptSegment,
   AudioTranscriptionRequest,
   AudioTranscriptionResult,
   ImageDescriptionRequest,

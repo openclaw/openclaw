@@ -148,4 +148,127 @@ describe("transcribeOpenAiCompatibleAudio", () => {
       }),
     ).rejects.toThrow("Audio transcription failed: malformed JSON response");
   });
+
+  it("passes diarized OpenAI-compatible audio options as multipart fields", async () => {
+    const { fetchFn, getRequest } = createRequestCaptureJsonFetch({ text: "ok" });
+
+    await transcribeOpenAiCompatibleAudio({
+      buffer: Buffer.from("audio"),
+      fileName: "meeting.wav",
+      apiKey: "test-key",
+      timeoutMs: 1000,
+      fetchFn,
+      provider: "openai",
+      defaultBaseUrl: "https://api.openai.com/v1",
+      defaultModel: "gpt-4o-transcribe-diarize",
+      query: {
+        response_format: "diarized_json",
+        chunking_strategy: "auto",
+      },
+    });
+
+    const form = getRequest().init?.body;
+    expect(form).toBeInstanceOf(FormData);
+    expect((form as FormData).get("response_format")).toBe("diarized_json");
+    expect((form as FormData).get("chunking_strategy")).toBe("auto");
+  });
+
+  it("rejects non-JSON response formats because media understanding expects JSON", async () => {
+    const { fetchFn } = createRequestCaptureJsonFetch({ text: "ok" });
+
+    await expect(
+      transcribeOpenAiCompatibleAudio({
+        buffer: Buffer.from("audio"),
+        fileName: "meeting.wav",
+        apiKey: "test-key",
+        timeoutMs: 1000,
+        fetchFn,
+        provider: "openai",
+        defaultBaseUrl: "https://api.openai.com/v1",
+        defaultModel: "gpt-4o-transcribe",
+        query: {
+          response_format: "srt",
+        },
+      }),
+    ).rejects.toThrow(/requires a JSON response_format/);
+  });
+
+  it("omits segments when the provider returns no usable segment text", async () => {
+    const { fetchFn } = createRequestCaptureJsonFetch({
+      text: "transcript only",
+      segments: [
+        { speaker: "A", start: 0, end: 1, text: "   " },
+        { speaker: "B", start: 1, end: 2 },
+        null,
+      ],
+    });
+
+    const result = await transcribeOpenAiCompatibleAudio({
+      buffer: Buffer.from("audio"),
+      fileName: "meeting.wav",
+      apiKey: "test-key",
+      timeoutMs: 1000,
+      fetchFn,
+      provider: "openai",
+      defaultBaseUrl: "https://api.openai.com/v1",
+      defaultModel: "gpt-4o-transcribe-diarize",
+    });
+
+    expect(result).toEqual({ text: "transcript only", model: "gpt-4o-transcribe-diarize" });
+    expect(Object.hasOwn(result, "segments")).toBe(false);
+  });
+
+  it("returns diarized transcript segments when the provider includes them", async () => {
+    const { fetchFn } = createRequestCaptureJsonFetch({
+      text: "Speaker A then Speaker B",
+      segments: [
+        {
+          type: "transcript.text.segment",
+          id: "0",
+          speaker: "A",
+          start: 0,
+          end: 1.2,
+          text: "Speaker A",
+        },
+        {
+          type: "transcript.text.segment",
+          id: "1",
+          speaker: "B",
+          start: 1.3,
+          end: 2.4,
+          text: "Speaker B",
+        },
+      ],
+    });
+
+    const result = await transcribeOpenAiCompatibleAudio({
+      buffer: Buffer.from("audio"),
+      fileName: "meeting.wav",
+      apiKey: "test-key",
+      timeoutMs: 1000,
+      fetchFn,
+      provider: "openai",
+      defaultBaseUrl: "https://api.openai.com/v1",
+      defaultModel: "gpt-4o-transcribe-diarize",
+    });
+
+    expect(result.segments).toEqual([
+      {
+        type: "transcript.text.segment",
+        id: "0",
+        speaker: "A",
+        start: 0,
+        end: 1.2,
+        text: "Speaker A",
+      },
+      {
+        type: "transcript.text.segment",
+        id: "1",
+        speaker: "B",
+        start: 1.3,
+        end: 2.4,
+        text: "Speaker B",
+      },
+    ]);
+  });
 });
