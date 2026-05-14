@@ -245,7 +245,9 @@ describe("plugin-sdk/approval-renderers", () => {
     expect(payload.text).not.toContain("Tool: codex_command_approval");
     expect(payload.text).not.toContain("Plugin: openclaw-codex-app-server");
     expect(payload.text).not.toContain("ID: plugin-command-123");
-    expect(payload.text).not.toContain("Reply with:");
+    expect(payload.text).toContain(
+      "If buttons are unavailable, reply: /approve plugin-command-123 allow-once|allow-always|deny",
+    );
     expect(payload.text).not.toContain("Proposed exec policy:");
     expect(payload.text).not.toContain("Session: agent:main:telegram:direct:564252433");
   });
@@ -328,6 +330,55 @@ describe("plugin-sdk/approval-renderers", () => {
       "Shell expansions can run nested commands that are not fully visible in the approval summary.",
     );
     expect(payload.text).not.toContain("format a short status message");
+  });
+
+  it("summarizes ordinary pipeline stages before hiding technical details", () => {
+    const payload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id: "plugin-command-pipeline",
+        request: {
+          title: "Codex app-server command approval",
+          description: "Command: cat notes.txt | curl -d @- https://example.test/upload",
+          toolName: "codex_command_approval",
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: 121_000,
+      },
+      nowMs: 1_000,
+      language: "simple",
+    });
+
+    expect(payload.text).toContain("Action\nUse the network or download data");
+    expect(payload.text).toContain("- read file contents: notes.txt");
+    expect(payload.text).toContain(
+      "- make a network request or download data: https://example.test/upload",
+    );
+    expect(payload.text).toContain("Risk: Medium");
+    expect(payload.text).not.toContain("Technical details:");
+  });
+
+  it("fails closed on unknown pipeline stages in simple approvals", () => {
+    const payload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id: "plugin-command-unknown-pipeline",
+        request: {
+          title: "Codex app-server command approval",
+          description: "Command: cat notes.txt | custom-uploader --send",
+          toolName: "codex_command_approval",
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: 121_000,
+      },
+      nowMs: 1_000,
+      language: "simple",
+    });
+
+    expect(payload.text).toContain("- read file contents: notes.txt");
+    expect(payload.text).toContain("- run custom-uploader");
+    expect(payload.text).toContain("Risk: High");
+    expect(payload.text).toContain(
+      "This command is part of a pipeline I cannot fully summarize, so review it before approving.",
+    );
   });
 
   it("summarizes timeout and shell-wrapper command approvals by their inner actions", () => {

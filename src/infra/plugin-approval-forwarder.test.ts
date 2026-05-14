@@ -229,6 +229,7 @@ describe("plugin approval forwarding", () => {
       expect(text).toContain("Action\nCreate/check workspace files or folders");
       expect(text).toContain("- create folder(s): outputs/openmodelapi");
       expect(text).toContain("Choose below.");
+      expect(text).toContain("If buttons are unavailable, reply: /approve plugin-req-1");
       expect(text).not.toContain("Technical details:");
       expect(text).not.toContain("Tool: codex_command_approval");
       expect(text).not.toContain("ID: plugin-req-1");

@@ -103,6 +103,11 @@ type CommandActionSummary = {
   hideWhenGrouped?: boolean;
 };
 
+type ExpandedCommandSegment = {
+  segment: string;
+  fromPipeline?: boolean;
+};
+
 const RISK_RANK: Record<ApprovalRiskLevel, number> = {
   low: 0,
   medium: 1,
@@ -143,12 +148,19 @@ function buildPlainEnglishApprovalLines(payload: PluginApprovalRequestPayload): 
   ];
 }
 
-function buildApprovalDecisionHelpLines(payload: PluginApprovalRequestPayload): string[] {
-  const decisions = resolvePluginApprovalRequestAllowedDecisions(payload);
+function buildApprovalDecisionHelpLines(
+  request: PluginApprovalRequest,
+  options?: { includeManualFallback?: boolean },
+): string[] {
+  const decisions = resolvePluginApprovalRequestAllowedDecisions(request.request);
   if (decisions.length === 0) {
     return [];
   }
-  return ["", "Choose below."];
+  const lines = ["", "Choose below."];
+  if (options?.includeManualFallback) {
+    lines.push(`If buttons are unavailable, reply: /approve ${request.id} ${decisions.join("|")}`);
+  }
+  return lines;
 }
 
 function extractApprovalCommand(payload: PluginApprovalRequestPayload): string | null {
@@ -200,10 +212,10 @@ function summarizeShellCommand(command: string): {
   riskReason: string;
 } {
   const decodedCommand = decodeBasicHtmlEntities(command);
-  const segments = splitCommandSegments(decodedCommand).flatMap((segment) =>
+  const expandedSegments = splitCommandSegments(decodedCommand).flatMap((segment) =>
     expandCommandSegment(segment),
   );
-  const summaries = segments.map((segment) => summarizeCommandSegment(segment)).filter(Boolean);
+  const summaries = expandedSegments.map((segment) => summarizeExpandedCommandSegment(segment));
   const visibleSummaries = summaries.filter((summary) => !summary.hideWhenGrouped);
   const actionSummaries = visibleSummaries.length > 0 ? visibleSummaries : summaries;
   const actions = uniqueStrings(actionSummaries.map((summary) => summary.text));
@@ -273,7 +285,7 @@ function splitCommandSegments(command: string): string[] {
   return segments;
 }
 
-function expandCommandSegment(segment: string): string[] {
+function expandCommandSegment(segment: string): ExpandedCommandSegment[] {
   const controlSegments = expandShellControlSegment(segment);
   if (controlSegments) {
     return controlSegments.flatMap((controlSegment) => expandCommandSegment(controlSegment));
@@ -288,7 +300,23 @@ function expandCommandSegment(segment: string): string[] {
       expandCommandSegment(innerSegment),
     );
   }
-  return [segment];
+  if (hasShellExecutionExpansion(segment)) {
+    return [{ segment }];
+  }
+  if (isPipeToShellSegment(segment)) {
+    return [{ segment }];
+  }
+  const pipelineStages = splitPipelineStages(segment);
+  if (pipelineStages.length > 1) {
+    return pipelineStages.flatMap((pipelineStage) => {
+      const expandedStages = expandCommandSegment(pipelineStage);
+      for (const expanded of expandedStages) {
+        expanded.fromPipeline = true;
+      }
+      return expandedStages;
+    });
+  }
+  return [{ segment }];
 }
 
 function expandShellControlSegment(segment: string): string[] | null {
@@ -319,6 +347,53 @@ function isShellBookkeepingSegment(segment: string): boolean {
   return /^set\s+[+-][A-Za-z]+\b/.test(segment.trim());
 }
 
+function splitPipelineStages(segment: string): string[] {
+  const stages: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+  const pushCurrent = () => {
+    const stage = current.trim();
+    if (stage) {
+      stages.push(stage);
+    }
+    current = "";
+  };
+
+  for (let index = 0; index < segment.length; index += 1) {
+    const char = segment[index] ?? "";
+    const next = segment[index + 1] ?? "";
+    if (quote) {
+      current += char;
+      if (quote === '"' && char === "\\" && !escaped) {
+        escaped = true;
+        continue;
+      }
+      if (char === quote && !escaped) {
+        quote = null;
+      }
+      escaped = false;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      current += char;
+      continue;
+    }
+    if (char === "|" && next !== "|") {
+      pushCurrent();
+      continue;
+    }
+    current += char;
+  }
+  pushCurrent();
+  return stages;
+}
+
+function isPipeToShellSegment(segment: string): boolean {
+  return /\|\s*(?:sudo\s+)?(?:bash|fish|sh|zsh)(?:\s|$)/.test(segment);
+}
+
 function extractShellWrapperCommand(words: readonly string[]): string | null {
   const command = cleanCommandName(basename(words[0] ?? ""));
   if (!["bash", "fish", "sh", "zsh"].includes(command)) {
@@ -333,8 +408,21 @@ function extractShellWrapperCommand(words: readonly string[]): string | null {
   return null;
 }
 
+function summarizeExpandedCommandSegment(expanded: ExpandedCommandSegment): CommandActionSummary {
+  const summary = summarizeCommandSegment(expanded.segment);
+  if (expanded.fromPipeline && summary.kind === "unknown") {
+    return {
+      ...summary,
+      risk: "high",
+      reason:
+        "This command is part of a pipeline I cannot fully summarize, so review it before approving.",
+    };
+  }
+  return summary;
+}
+
 function summarizeCommandSegment(segment: string): CommandActionSummary {
-  if (/\|\s*(?:sudo\s+)?(?:bash|fish|sh|zsh)(?:\s|$)/.test(segment)) {
+  if (isPipeToShellSegment(segment)) {
     return {
       text: "download or generate something and pipe it into a shell",
       risk: "high",
@@ -1185,7 +1273,9 @@ export function buildPluginApprovalRequestMessage(
   if (language === "simple" || language === "simple-technical") {
     lines.push(`${icon} Approval needed`);
     lines.push(...buildPlainEnglishApprovalLines(request.request));
-    lines.push(...buildApprovalDecisionHelpLines(request.request));
+    lines.push(
+      ...buildApprovalDecisionHelpLines(request, { includeManualFallback: language === "simple" }),
+    );
     if (language === "simple") {
       return lines.join("\n");
     }
