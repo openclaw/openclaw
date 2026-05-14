@@ -440,7 +440,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       "Active child finished with the final result.",
     );
 
-    const params = makeBaseParams({ synthesizedText: "placeholder" });
+    const params = makeBaseParams({ synthesizedText: "placeholder", runStartedAt: 1_000 });
     params.deliveryPayloads = [];
     params.synthesizedText = undefined;
     params.summary = undefined;
@@ -487,6 +487,43 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expectDeliveryCall(0, {
       payloads: [{ text: "Completed child result, everything finished successfully." }],
     });
+  });
+
+  it("fails explicitly when active descendants produce no deliverable text after an empty parent reply", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValueOnce(1).mockReturnValueOnce(0);
+    vi.mocked(waitForDescendantSubagentSummary).mockResolvedValue(undefined);
+    vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(undefined);
+
+    const params = makeBaseParams({ synthesizedText: "placeholder", runStartedAt: 1_000 });
+    params.deliveryPayloads = [];
+    params.synthesizedText = undefined;
+    params.summary = undefined;
+    params.outputText = undefined;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(waitForDescendantSubagentSummary).toHaveBeenCalledWith({
+      sessionKey: "agent:main",
+      initialReply: undefined,
+      timeoutMs: 30_000,
+      observedActiveDescendants: true,
+    });
+    expect(readDescendantSubagentFallbackReply).toHaveBeenCalledWith({
+      sessionKey: "agent:main",
+      runStartedAt: 1_000,
+    });
+    expectResultFields(state.result, {
+      status: "error",
+      delivered: false,
+      deliveryAttempted: true,
+    });
+    expect((state.result as { error?: string }).error).toContain(
+      "descendant follow-up did not recover a final reply",
+    );
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(false);
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
   it("normal text delivery sends exactly once and sets deliveryAttempted=true", async () => {
