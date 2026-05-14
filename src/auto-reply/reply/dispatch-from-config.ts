@@ -27,6 +27,7 @@ import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/ex
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
+import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
@@ -355,6 +356,28 @@ async function clearPendingFinalDeliveryAfterSuccess(params: {
       };
     },
   });
+}
+
+async function mirrorInternalSourceReplyToTranscript(params: {
+  metadata: NonNullable<ReturnType<typeof getReplyPayloadMetadata>>["sourceReplyTranscriptMirror"];
+  cfg: OpenClawConfig;
+}): Promise<void> {
+  const mirror = params.metadata;
+  if (!mirror) {
+    return;
+  }
+  const result = await appendAssistantMessageToSessionTranscript({
+    sessionKey: mirror.sessionKey,
+    agentId: mirror.agentId,
+    text: mirror.text,
+    mediaUrls: mirror.mediaUrls,
+    idempotencyKey: mirror.idempotencyKey,
+    updateMode: "inline",
+    config: params.cfg,
+  });
+  if (!result.ok) {
+    logVerbose(`dispatch-from-config: internal source reply mirror skipped: ${result.reason}`);
+  }
 }
 
 export type {
@@ -992,6 +1015,8 @@ export async function dispatchReplyFromConfig(
     const sendFinalPayload = async (
       payload: ReplyPayload,
     ): Promise<{ queuedFinal: boolean; routedFinalCount: number }> => {
+      const sourceReplyTranscriptMirror =
+        getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror;
       if (resolveSendableOutboundReplyParts(payload).hasContent) {
         markInboundDedupeReplayUnsafe();
       }
@@ -1013,14 +1038,27 @@ export async function dispatchReplyFromConfig(
             `dispatch-from-config: route-reply (final) failed: ${result.error ?? "unknown error"}`,
           );
         }
+        if (result.ok) {
+          await mirrorInternalSourceReplyToTranscript({
+            metadata: sourceReplyTranscriptMirror,
+            cfg,
+          });
+        }
         return {
           queuedFinal: result.ok,
           routedFinalCount: result.ok ? 1 : 0,
         };
       }
       markInboundDedupeReplayUnsafe();
+      const queuedFinal = dispatcher.sendFinalReply(normalizedPayload);
+      if (queuedFinal) {
+        await mirrorInternalSourceReplyToTranscript({
+          metadata: sourceReplyTranscriptMirror,
+          cfg,
+        });
+      }
       return {
-        queuedFinal: dispatcher.sendFinalReply(normalizedPayload),
+        queuedFinal,
         routedFinalCount: 0,
       };
     };
