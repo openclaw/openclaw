@@ -1,6 +1,6 @@
 import { installChannelActionsContractSuite } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { describe } from "vitest";
+import { describe, expect, it } from "vitest";
 import { telegramPlugin } from "../api.js";
 
 describe("telegram actions contract", () => {
@@ -20,5 +20,25 @@ describe("telegram actions contract", () => {
         expectedCapabilities: ["delivery-pin", "presentation"],
       },
     ],
+  });
+
+  it("remaps CLI thread-create requests to Telegram topic-create", () => {
+    const request = telegramPlugin.actions?.resolveCliActionRequest?.({
+      action: "thread-create",
+      args: {
+        channel: "telegram",
+        target: "-100123",
+        threadName: "Build Updates",
+      },
+    });
+
+    expect(request).toEqual({
+      action: "topic-create",
+      args: {
+        channel: "telegram",
+        target: "-100123",
+        name: "Build Updates",
+      },
+    });
   });
 });

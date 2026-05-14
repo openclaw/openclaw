@@ -221,6 +221,14 @@ const telegramMessageActions: ChannelMessageActionAdapter = {
     getOptionalTelegramRuntime()?.channel?.telegram?.messageActions?.resolveExecutionMode?.(ctx) ??
     telegramMessageActionsImpl.resolveExecutionMode?.(ctx) ??
     "gateway",
+  resolveCliActionRequest: (ctx) =>
+    getOptionalTelegramRuntime()?.channel?.telegram?.messageActions?.resolveCliActionRequest?.(
+      ctx,
+    ) ??
+    telegramMessageActionsImpl.resolveCliActionRequest?.(ctx) ?? {
+      action: ctx.action,
+      args: ctx.args,
+    },
   describeMessageTool: (ctx) =>
     getOptionalTelegramRuntime()?.channel?.telegram?.messageActions?.describeMessageTool?.(ctx) ??
     telegramMessageActionsImpl.describeMessageTool?.(ctx) ??
