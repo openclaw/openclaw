@@ -499,12 +499,12 @@ function formatRelativeDuration(durationMs: number): string {
 }
 
 function formatResetDuration(resetsAtMs: number, nowMs: number): string {
-  const safeMs = Math.max(ONE_SECOND_MS, resetsAtMs - nowMs);
-  const totalSeconds = Math.round(safeMs / ONE_SECOND_MS);
-  const days = Math.floor(totalSeconds / 86_400);
-  const hours = Math.floor((totalSeconds % 86_400) / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
+  const durationMs =
+    Math.round(Math.max(ONE_SECOND_MS, resetsAtMs - nowMs) / ONE_SECOND_MS) * ONE_SECOND_MS;
+  const days = Math.floor(durationMs / ONE_DAY_MS);
+  const hours = Math.floor((durationMs % ONE_DAY_MS) / ONE_HOUR_MS);
+  const minutes = Math.floor((durationMs % ONE_HOUR_MS) / ONE_MINUTE_MS);
+  const seconds = Math.floor((durationMs % ONE_MINUTE_MS) / ONE_SECOND_MS);
   if (days > 0) {
     return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
   }
