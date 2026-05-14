@@ -141,6 +141,34 @@ describe("config shared auth disconnects", () => {
     expect(disconnectClientsUsingSharedGatewayAuth).toHaveBeenCalledTimes(1);
   });
 
+  it("disconnects shared-token clients when configured token scopes change", async () => {
+    const prevConfig: OpenClawConfig = {
+      gateway: {
+        auth: {
+          mode: "token",
+          token: "stable-token",
+          tokenScopes: ["operator.read"],
+        },
+      },
+    };
+    readConfigFileSnapshotForWriteMock.mockResolvedValue(createConfigWriteSnapshot(prevConfig));
+
+    const { options, disconnectClientsUsingSharedGatewayAuth } = createConfigHandlerHarness({
+      method: "config.patch",
+      params: {
+        baseHash: "base-hash",
+        raw: JSON.stringify({ gateway: { auth: { tokenScopes: ["operator.write"] } } }),
+        restartDelayMs: 1_000,
+      },
+    });
+
+    await configHandlers["config.patch"](options);
+    await flushConfigHandlerMicrotasks();
+
+    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    expect(disconnectClientsUsingSharedGatewayAuth).toHaveBeenCalledTimes(1);
+  });
+
   it("does not disconnect shared-auth clients when config.patch changes only inactive password auth", async () => {
     const prevConfig: OpenClawConfig = {
       gateway: {

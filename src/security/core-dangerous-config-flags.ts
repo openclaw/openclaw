@@ -11,6 +11,9 @@ export function collectCoreInsecureOrDangerousFlags(cfg: OpenClawConfig): string
   if (cfg.gateway?.controlUi?.dangerouslyDisableDeviceAuth === true) {
     enabledFlags.push("gateway.controlUi.dangerouslyDisableDeviceAuth=true");
   }
+  if (cfg.gateway?.auth?.allowPrivilegedTokenScopes === true) {
+    enabledFlags.push("gateway.auth.allowPrivilegedTokenScopes=true");
+  }
   if (cfg.hooks?.gmail?.allowUnsafeExternalContent === true) {
     enabledFlags.push("hooks.gmail.allowUnsafeExternalContent=true");
   }

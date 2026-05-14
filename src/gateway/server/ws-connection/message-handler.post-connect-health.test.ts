@@ -63,7 +63,10 @@ vi.mock("../health-state.js", () => ({
   incrementPresenceVersion: incrementPresenceVersionMock,
 }));
 
-import { attachGatewayWsMessageHandler } from "./message-handler.js";
+import {
+  attachGatewayWsMessageHandler,
+  resolveConfiguredTokenAuthScopes,
+} from "./message-handler.js";
 
 function createLogger() {
   return {
@@ -179,5 +182,57 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       expect(refreshHealthSnapshot).toHaveBeenCalledWith({ probe: true });
     });
     resolveRefresh?.();
+  });
+
+  it("blocks privileged configured token scopes on non-loopback gateway hosts", () => {
+    const resolvedAuth: ResolvedGatewayAuth = {
+      mode: "token",
+      token: "secret",
+      tokenScopes: ["operator.read", "operator.write"],
+      allowTailscale: false,
+    };
+
+    expect(
+      resolveConfiguredTokenAuthScopes({
+        auth: resolvedAuth,
+        authMethod: "token",
+        authOk: true,
+        role: "operator",
+        gatewayHost: "0.0.0.0",
+      }),
+    ).toEqual({ kind: "blocked-privileged-non-loopback" });
+    expect(
+      resolveConfiguredTokenAuthScopes({
+        auth: resolvedAuth,
+        authMethod: "token",
+        authOk: true,
+        role: "operator",
+        gatewayHost: "127.0.0.1",
+      }),
+    ).toEqual({ kind: "allowed", scopes: ["operator.read", "operator.write"] });
+    expect(
+      resolveConfiguredTokenAuthScopes({
+        auth: {
+          ...resolvedAuth,
+          tokenScopes: ["operator.read"],
+        },
+        authMethod: "token",
+        authOk: true,
+        role: "operator",
+        gatewayHost: "0.0.0.0",
+      }),
+    ).toEqual({ kind: "allowed", scopes: ["operator.read"] });
+    expect(
+      resolveConfiguredTokenAuthScopes({
+        auth: {
+          ...resolvedAuth,
+          allowPrivilegedTokenScopes: true,
+        },
+        authMethod: "token",
+        authOk: true,
+        role: "operator",
+        gatewayHost: "0.0.0.0",
+      }),
+    ).toEqual({ kind: "allowed", scopes: ["operator.read", "operator.write"] });
   });
 });

@@ -20,6 +20,7 @@ import {
   sendRawConnectReq,
   startGatewayServer,
   TEST_OPERATOR_CLIENT,
+  testState,
   waitForWsClose,
   withGatewayServer,
   withRuntimeVersionEnv,
@@ -262,6 +263,50 @@ export function registerDefaultAuthTokenSuite(): void {
         expect(helloOk?.auth?.deviceToken).toBeUndefined();
       } finally {
         ws.close();
+      }
+    });
+
+    test("configured token scopes grant device-less shared token read access", async () => {
+      const previousAuth = testState.gatewayAuth;
+      testState.gatewayAuth = {
+        mode: "token",
+        token: "scoped-token",
+        tokenScopes: ["operator.read"],
+      };
+      try {
+        await withGatewayServer(async ({ port: scopedPort }) => {
+          const ws = await openWs(scopedPort);
+          try {
+            const res = await connectReq(ws, {
+              token: "scoped-token",
+              scopes: ["operator.admin", "operator.read"],
+              device: null,
+            });
+            expect(res.ok).toBe(true);
+            const helloOk = res.payload as
+              | {
+                  auth?: {
+                    role?: unknown;
+                    scopes?: unknown;
+                    deviceToken?: unknown;
+                  };
+                }
+              | undefined;
+            expect(helloOk?.auth?.role).toBe("operator");
+            expect(helloOk?.auth?.scopes).toEqual(["operator.read"]);
+            expect(helloOk?.auth?.deviceToken).toBeUndefined();
+
+            const subscribe = await rpcReq(ws, "sessions.messages.subscribe", {
+              key: "agent:main:main",
+            });
+            expect(subscribe.ok).toBe(true);
+            expect(subscribe.payload?.subscribed).toBe(true);
+          } finally {
+            ws.close();
+          }
+        });
+      } finally {
+        testState.gatewayAuth = previousAuth;
       }
     });
 

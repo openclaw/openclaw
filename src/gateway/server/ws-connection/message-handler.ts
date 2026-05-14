@@ -56,6 +56,7 @@ import { normalizeDeviceMetadataForAuth } from "../../device-auth.js";
 import { ADMIN_SCOPE } from "../../method-scopes.js";
 import {
   isLocalishHost,
+  isLoopbackHost,
   isLoopbackAddress,
   isTrustedProxyAddress,
   resolveClientIp,
@@ -65,6 +66,7 @@ import {
   resolveNodePairingClientIpSource,
   shouldAutoApproveNodePairingFromTrustedCidrs,
 } from "../../node-pairing-auto-approve.js";
+import { READ_SCOPE, type OperatorScope } from "../../operator-scopes.js";
 import { checkBrowserOrigin } from "../../origin-check.js";
 import {
   buildPluginNodeCapabilityScopedHostUrl,
@@ -169,6 +171,37 @@ function resolveTrustedProxyControlUiScopes(params: {
   return params.requestedScopes.filter((scope) => declaredScopes.has(scope));
 }
 
+export function resolveConfiguredTokenAuthScopes(params: {
+  auth: ResolvedGatewayAuth;
+  authMethod: GatewayAuthResult["method"] | undefined;
+  authOk: boolean;
+  gatewayHost?: string;
+  role: string;
+}):
+  | { kind: "none" }
+  | { kind: "allowed"; scopes: OperatorScope[] }
+  | { kind: "blocked-privileged-non-loopback" } {
+  if (
+    params.role !== "operator" ||
+    params.authMethod !== "token" ||
+    !params.authOk ||
+    !params.auth.tokenScopes ||
+    params.auth.tokenScopes.length === 0
+  ) {
+    return { kind: "none" };
+  }
+  const scopes = [...params.auth.tokenScopes];
+  const hasPrivilegedScope = scopes.some((scope) => scope !== READ_SCOPE);
+  if (
+    hasPrivilegedScope &&
+    params.auth.allowPrivilegedTokenScopes !== true &&
+    !isLoopbackHost(params.gatewayHost ?? "")
+  ) {
+    return { kind: "blocked-privileged-non-loopback" };
+  }
+  return { kind: "allowed", scopes };
+}
+
 function resolvePinnedClientMetadata(params: {
   claimedPlatform?: string;
   claimedDeviceFamily?: string;
@@ -210,6 +243,7 @@ export type GatewayWsMessageHandlerParams = {
   requestHost?: string;
   requestOrigin?: string;
   requestUserAgent?: string;
+  gatewayHost?: string;
   pluginSurfaceBaseUrl?: string;
   pluginNodeCapabilities?: PluginNodeCapabilitySurface[];
   connectNonce: string;
@@ -666,6 +700,24 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             connectParams.scopes = scopes;
           }
         };
+        const applyConfiguredTokenAuthScopes = ():
+          | { kind: "none" }
+          | { kind: "applied" }
+          | { kind: "blocked-privileged-non-loopback" } => {
+          const configured = resolveConfiguredTokenAuthScopes({
+            auth: resolvedAuth,
+            authMethod,
+            authOk,
+            gatewayHost: params.gatewayHost,
+            role,
+          });
+          if (configured.kind !== "allowed") {
+            return configured;
+          }
+          scopes = configured.scopes;
+          connectParams.scopes = scopes;
+          return { kind: "applied" };
+        };
         let pairingLocality = resolvePairingLocality({
           connectParams,
           isLocalClient,
@@ -710,10 +762,25 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             isLocalClient,
           });
           // Shared token/password auth can bypass pairing for trusted operators.
-          // Device-less clients still clear self-declared scopes by default, with
-          // one narrow exception: the direct-local backend gateway-client shared-
-          // auth handoff used for in-process control-plane coordination.
+          // Device-less token clients use configured scopes when present; otherwise
+          // self-declared scopes are cleared by default, except for trusted local
+          // compatibility paths.
+          const configuredTokenAuthScopes =
+            !device && !skipLocalBackendSelfPairing
+              ? applyConfiguredTokenAuthScopes()
+              : { kind: "none" as const };
+          if (configuredTokenAuthScopes.kind === "blocked-privileged-non-loopback") {
+            const errorMessage =
+              "gateway.auth.tokenScopes includes privileged scopes on a non-loopback bind";
+            markHandshakeFailure("token-scopes-privileged-non-loopback", {
+              gatewayHost: params.gatewayHost ?? "n/a",
+            });
+            sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, errorMessage);
+            close(1008, errorMessage);
+            return false;
+          }
           if (
+            configuredTokenAuthScopes.kind !== "applied" &&
             !device &&
             !skipLocalBackendSelfPairing &&
             shouldClearUnboundScopesForMissingDeviceIdentity({

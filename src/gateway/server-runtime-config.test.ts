@@ -143,6 +143,45 @@ describe("resolveGatewayRuntimeConfig", () => {
         expectedBindHost: "0.0.0.0",
       },
       {
+        name: "lan binding with read-only token scopes",
+        cfg: {
+          gateway: {
+            bind: "lan" as const,
+            auth: { ...TOKEN_AUTH, tokenScopes: ["operator.read" as const] },
+            controlUi: { allowedOrigins: ["https://control.example.com"] },
+          },
+        },
+        expectedAuthMode: "token",
+        expectedBindHost: "0.0.0.0",
+      },
+      {
+        name: "lan binding with privileged token scopes and explicit opt-in",
+        cfg: {
+          gateway: {
+            bind: "lan" as const,
+            auth: {
+              ...TOKEN_AUTH,
+              tokenScopes: ["operator.write" as const],
+              allowPrivilegedTokenScopes: true,
+            },
+            controlUi: { allowedOrigins: ["https://control.example.com"] },
+          },
+        },
+        expectedAuthMode: "token",
+        expectedBindHost: "0.0.0.0",
+      },
+      {
+        name: "loopback binding with privileged token scopes",
+        cfg: {
+          gateway: {
+            bind: "loopback" as const,
+            auth: { ...TOKEN_AUTH, tokenScopes: ["operator.write" as const] },
+          },
+        },
+        expectedAuthMode: "token",
+        expectedBindHost: "127.0.0.1",
+      },
+      {
         name: "loopback binding with explicit none auth",
         cfg: { gateway: { bind: "loopback" as const, auth: { mode: "none" as const } } },
         expectedAuthMode: "none",
@@ -165,6 +204,18 @@ describe("resolveGatewayRuntimeConfig", () => {
         name: "lan binding with explicit none auth",
         cfg: { gateway: { bind: "lan" as const, auth: { mode: "none" as const } } },
         expectedMessage: "refusing to bind gateway",
+      },
+      {
+        name: "lan binding with privileged token scopes",
+        cfg: {
+          gateway: {
+            bind: "lan" as const,
+            auth: { ...TOKEN_AUTH, tokenScopes: ["operator.write" as const] },
+            controlUi: { allowedOrigins: ["https://control.example.com"] },
+          },
+        },
+        expectedMessage:
+          "gateway.auth.tokenScopes includes privileged scopes on a non-loopback bind",
       },
       {
         name: "loopback binding that resolves to non-loopback host",

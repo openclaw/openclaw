@@ -871,6 +871,19 @@ export const OpenClawSchema = z
               ])
               .optional(),
             token: SecretInputSchema.optional().register(sensitive),
+            tokenScopes: z
+              .array(
+                z.union([
+                  z.literal("operator.admin"),
+                  z.literal("operator.read"),
+                  z.literal("operator.write"),
+                  z.literal("operator.approvals"),
+                  z.literal("operator.pairing"),
+                  z.literal("operator.talk.secrets"),
+                ]),
+              )
+              .optional(),
+            allowPrivilegedTokenScopes: z.boolean().optional(),
             password: SecretInputSchema.optional().register(sensitive),
             allowTailscale: z.boolean().optional(),
             rateLimit: z

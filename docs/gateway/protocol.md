@@ -233,6 +233,10 @@ Common scopes:
 `talk.config` with `includeSecrets: true` requires `operator.talk.secrets`
 (or `operator.admin`).
 
+Device-less shared-token WebSocket clients do not receive scopes from
+`params.scopes`. Configure `gateway.auth.tokenScopes` on the Gateway when a
+trusted headless token client needs static access such as `operator.read`.
+
 Plugin-registered gateway RPC methods may request their own operator scope, but
 reserved core admin prefixes (`config.*`, `exec.approvals.*`, `wizard.*`,
 `update.*`) always resolve to `operator.admin`.
@@ -414,7 +418,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
   <Accordion title="Session control">
     - `sessions.list` returns the current session index, including per-row `agentRuntime` metadata when an agent runtime backend is configured.
     - `sessions.subscribe` and `sessions.unsubscribe` toggle session change event subscriptions for the current WS client.
-    - `sessions.messages.subscribe` and `sessions.messages.unsubscribe` toggle transcript/message event subscriptions for one session.
+    - `sessions.messages.subscribe` and `sessions.messages.unsubscribe` toggle transcript/message event subscriptions for one session. Requires `operator.read`; trusted headless token clients can obtain that scope through `gateway.auth.tokenScopes`.
     - `sessions.preview` returns bounded transcript previews for specific session keys.
     - `sessions.describe` returns one Gateway session row for an exact session key.
     - `sessions.resolve` resolves or canonicalizes a session target.

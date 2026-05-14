@@ -150,6 +150,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.remote.password": "Remote Gateway Password",
   "gateway.remote.tlsFingerprint": "Remote Gateway TLS Fingerprint",
   "gateway.auth.token": "Gateway Token",
+  "gateway.auth.tokenScopes": "Gateway Token Scopes",
+  "gateway.auth.allowPrivilegedTokenScopes": "Gateway Allow Privileged Token Scopes",
   "gateway.auth.password": "Gateway Password",
   browser: "Browser",
   "browser.enabled": "Browser Enabled",

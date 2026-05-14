@@ -85,6 +85,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Login/auth attempt throttling controls to reduce credential brute-force risk at the gateway boundary. Keep enabled in exposed environments and tune thresholds to your traffic baseline.",
   "gateway.auth.trustedProxy":
     "Trusted-proxy auth header mapping for upstream identity providers that inject user claims. Use only with known proxy CIDRs and strict header allowlists to prevent spoofed identity headers.",
+  "gateway.auth.tokenScopes":
+    "Static operator scopes granted to device-less WebSocket clients after successful shared-token auth. Use this for trusted headless observers; missing or empty keeps device-less token scopes empty.",
+  "gateway.auth.allowPrivilegedTokenScopes":
+    "Allows gateway.auth.tokenScopes to grant write/admin-class scopes when the Gateway is not loopback-bound. Keep this false unless an external trust boundary protects the shared token.",
   "gateway.trustedProxies":
     "CIDR/IP allowlist of upstream proxies permitted to provide forwarded client identity headers. Keep this list narrow so untrusted hops cannot impersonate users.",
   "gateway.allowRealIpFallback":

@@ -142,6 +142,13 @@ export type GatewayControlUiConfig = {
 };
 
 export type GatewayAuthMode = "none" | "token" | "password" | "trusted-proxy";
+export type GatewayTokenScope =
+  | "operator.admin"
+  | "operator.read"
+  | "operator.write"
+  | "operator.approvals"
+  | "operator.pairing"
+  | "operator.talk.secrets";
 
 /**
  * Configuration for trusted reverse proxy authentication.
@@ -179,6 +186,16 @@ export type GatewayAuthConfig = {
   mode?: GatewayAuthMode;
   /** Shared token for token mode (plaintext or SecretRef). */
   token?: SecretInput;
+  /**
+   * Static operator scopes granted to device-less clients that authenticate with
+   * the shared gateway token. Missing/empty keeps device-less token scopes empty.
+   */
+  tokenScopes?: GatewayTokenScope[];
+  /**
+   * Allow tokenScopes to grant privileged scopes on non-loopback gateway binds.
+   * Keep false unless the shared token is protected by an external trust boundary.
+   */
+  allowPrivilegedTokenScopes?: boolean;
   /** Shared password for password mode (consider env instead). */
   password?: SecretInput;
   /** Allow Tailscale identity headers when serve mode is enabled. */

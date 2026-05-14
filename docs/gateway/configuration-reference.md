@@ -444,6 +444,8 @@ See [Inferred commitments](/concepts/commitments).
     auth: {
       mode: "token", // none | token | password | trusted-proxy
       token: "your-token",
+      // tokenScopes: ["operator.read"], // optional static scopes for trusted device-less token clients
+      // allowPrivilegedTokenScopes: false, // safe default; set true only to allow write/admin tokenScopes on non-loopback binds
       // password: "your-password", // or OPENCLAW_GATEWAY_PASSWORD
       // trustedProxy: { userHeader: "x-forwarded-user" }, // for mode=trusted-proxy; see /gateway/trusted-proxy-auth
       allowTailscale: true,
@@ -515,6 +517,8 @@ See [Inferred commitments](/concepts/commitments).
 - **Auth**: required by default. Non-loopback binds require gateway auth. In practice that means a shared token/password or an identity-aware reverse proxy with `gateway.auth.mode: "trusted-proxy"`. Onboarding wizard generates a token by default.
 - If both `gateway.auth.token` and `gateway.auth.password` are configured (including SecretRefs), set `gateway.auth.mode` explicitly to `token` or `password`. Startup and service install/repair flows fail when both are configured and mode is unset.
 - `gateway.auth.mode: "none"`: explicit no-auth mode. Use only for trusted local loopback setups; this is intentionally not offered by onboarding prompts.
+- `gateway.auth.tokenScopes`: optional static operator scopes for device-less WebSocket clients that authenticate with `gateway.auth.token`. Use this for trusted headless observers that cannot complete device pairing, for example `["operator.read"]` to allow `sessions.messages.subscribe`, `sessions.subscribe`, `logs.tail`, and `channels.status`. Missing or empty keeps device-less token auth scope-less; clients cannot self-grant scopes with `params.scopes`.
+- `gateway.auth.allowPrivilegedTokenScopes`: permits `gateway.auth.tokenScopes` values beyond `operator.read` when the Gateway is bound to a non-loopback address. Keep this unset unless an external trust boundary protects the shared token.
 - `gateway.auth.mode: "trusted-proxy"`: delegate browser/user auth to an identity-aware reverse proxy and trust identity headers from `gateway.trustedProxies` (see [Trusted Proxy Auth](/gateway/trusted-proxy-auth)). This mode expects a **non-loopback** proxy source by default; same-host loopback reverse proxies require explicit `gateway.auth.trustedProxy.allowLoopback = true`. Internal same-host callers can use `gateway.auth.password` as a local direct fallback; `gateway.auth.token` remains mutually exclusive with trusted-proxy mode.
 - `gateway.auth.allowTailscale`: when `true`, Tailscale Serve identity headers can satisfy Control UI/WebSocket auth (verified via `tailscale whois`). HTTP API endpoints do **not** use that Tailscale header auth; they follow the gateway's normal HTTP auth mode instead. This tokenless flow assumes the gateway host is trusted. Defaults to `true` when `tailscale.mode = "serve"`.
 - `gateway.auth.rateLimit`: optional failed-auth limiter. Applies per client IP and per auth scope (shared-secret and device-token are tracked independently). Blocked attempts return `429` + `Retry-After`.

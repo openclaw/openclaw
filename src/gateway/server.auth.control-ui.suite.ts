@@ -540,6 +540,44 @@ export function registerControlUiAndPairingSuite(): void {
     }
   });
 
+  test("applies configured token scopes to local insecure control ui token clients", async () => {
+    testState.gatewayControlUi = { allowInsecureAuth: true };
+    const { server, ws, prevToken } = await startControlUiServerWithClient("secret", {
+      auth: { mode: "token", token: "secret", tokenScopes: ["operator.read"] },
+      wsHeaders: { origin: "http://127.0.0.1" },
+    });
+    try {
+      const res = await connectReq(ws, {
+        token: "secret",
+        device: null,
+        client: CONTROL_UI_CLIENT,
+        scopes: ["operator.admin", "operator.read"],
+      });
+      expect(res.ok).toBe(true);
+      const helloOk = res.payload as
+        | {
+            auth?: {
+              scopes?: unknown;
+              deviceToken?: unknown;
+            };
+          }
+        | undefined;
+      expect(helloOk?.auth?.scopes).toEqual(["operator.read"]);
+      expect(helloOk?.auth?.deviceToken).toBeUndefined();
+
+      const status = await rpcReq(ws, "status");
+      expect(status.ok).toBe(true);
+      const admin = await rpcReq(ws, "set-heartbeats", { enabled: false });
+      expect(admin.ok).toBe(false);
+      expect(admin.error?.message ?? "").toContain("missing scope");
+    } finally {
+      ws.close();
+      await waitForWsClose(ws, 1_000);
+      await server.close();
+      restoreGatewayToken(prevToken);
+    }
+  });
+
   test("allows control ui password-only auth on localhost when insecure auth is enabled", async () => {
     testState.gatewayControlUi = { allowInsecureAuth: true };
     testState.gatewayAuth = { mode: "password", password: "secret" }; // pragma: allowlist secret

@@ -35,6 +35,12 @@ export function mergeGatewayAuthConfig(
   if (override.password !== undefined) {
     merged.password = override.password;
   }
+  if (override.tokenScopes !== undefined) {
+    merged.tokenScopes = override.tokenScopes;
+  }
+  if (override.allowPrivilegedTokenScopes !== undefined) {
+    merged.allowPrivilegedTokenScopes = override.allowPrivilegedTokenScopes;
+  }
   if (override.allowTailscale !== undefined) {
     merged.allowTailscale = override.allowTailscale;
   }

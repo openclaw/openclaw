@@ -655,6 +655,35 @@ describe("gateway.tools config", () => {
       expect(res.issues[0]?.path).toBe("gateway.tools.allow");
     }
   });
+
+  it("accepts gateway auth token scopes", () => {
+    const res = validateConfigObject({
+      gateway: {
+        auth: {
+          mode: "token",
+          token: "secret-token",
+          tokenScopes: ["operator.read", "operator.write"],
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects unknown gateway auth token scopes", () => {
+    const res = validateConfigObject({
+      gateway: {
+        auth: {
+          mode: "token",
+          token: "secret-token",
+          tokenScopes: ["operator.fake"],
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toContain("gateway.auth.tokenScopes");
+    }
+  });
 });
 
 describe("gateway.channelHealthCheckMinutes", () => {

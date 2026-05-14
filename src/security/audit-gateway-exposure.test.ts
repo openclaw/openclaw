@@ -65,6 +65,15 @@ describe("security audit gateway exposure findings", () => {
         expectedDangerousDetails: ["gateway.controlUi.dangerouslyDisableDeviceAuth=true"],
       },
       {
+        name: "gateway token scopes allow privileged non-loopback grants",
+        cfg: {
+          gateway: {
+            auth: { allowPrivilegedTokenScopes: true },
+          },
+        } satisfies OpenClawConfig,
+        expectedDangerousDetails: ["gateway.auth.allowPrivilegedTokenScopes=true"],
+      },
+      {
         name: "generic insecure debug flags",
         cfg: {
           hooks: {

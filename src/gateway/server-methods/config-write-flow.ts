@@ -89,7 +89,7 @@ export function didSharedGatewayAuthChange(prev: OpenClawConfig, next: OpenClawC
   if (prevAuth === null || nextAuth === null) {
     return prevAuth !== nextAuth;
   }
-  return prevAuth.mode !== nextAuth.mode || !isDeepStrictEqual(prevAuth.secret, nextAuth.secret);
+  return !isDeepStrictEqual(prevAuth, nextAuth);
 }
 
 export function didActiveSharedGatewayAuthChange(params: {

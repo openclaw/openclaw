@@ -21,6 +21,8 @@ Use when:
 - Prefer small fixes at the right ownership boundary; no refactor unless it clearly improves the bug class.
 - Keep going until Codex review returns no accepted/actionable findings.
 - If a review-triggered fix changes code, rerun focused tests and rerun Codex review.
+- Stop as soon as the review command/helper exits 0 with no accepted/actionable findings. Do not run an extra direct `codex review` just to get a nicer "clean" line, a second opinion, or clearer closeout wording.
+- Treat the helper's successful exit plus absence of actionable findings as the clean review result, even if the underlying Codex CLI output is terse.
 - If rejecting a finding as intentional/not worth fixing, add a brief inline code comment only when it explains a real invariant or ownership decision that future reviewers should know.
 - Do not push just to review. Push only when the user requested push/ship/PR update.
 
@@ -31,6 +33,12 @@ Dirty local work:
 ```bash
 codex review --uncommitted
 ```
+
+Use this only when the patch is actually unstaged/staged/untracked in the
+current checkout. For committed, pushed, or PR work, review the branch against
+its base instead; do not force `--mode local` / `--uncommitted` just because the
+helper docs mention dirty work first. A clean `--uncommitted` review only proves
+there is no local patch.
 
 Branch/PR work:
 
@@ -62,7 +70,7 @@ Format first if formatting can change line locations. Then it is OK to run tests
 scripts/codex-review --parallel-tests "<focused test command>"
 ```
 
-Tradeoff: tests may force code changes that stale the review. If tests or review lead to code edits, rerun the affected tests and rerun review until no accepted/actionable findings remain.
+Tradeoff: tests may force code changes that stale the review. If tests or review lead to code edits, rerun the affected tests and rerun review until no accepted/actionable findings remain. Once that rerun exits cleanly, stop; do not spend another long review cycle on redundant confirmation.
 
 ## Context Efficiency
 
@@ -91,8 +99,10 @@ The helper:
 - chooses dirty `--uncommitted` first
 - otherwise uses current PR base if `gh pr view` works
 - otherwise uses `origin/main` for non-main branches
+- should be left in `--mode auto` or forced to `--mode branch` for committed/PR work; do not force `--mode local` after committing
 - writes only to stdout unless `--output` or `CODEX_REVIEW_OUTPUT` is set
 - supports `--dry-run` and `--parallel-tests`
+- prints `codex-review clean: no accepted/actionable findings reported` when the selected review command exits 0
 
 ## Final Report
 
@@ -100,4 +110,6 @@ Include:
 - review command used
 - tests/proof run
 - findings accepted/rejected, briefly why
-- final clean review command, or why a remaining finding was consciously rejected
+- the clean review result from the final helper/review run, or why a remaining finding was consciously rejected
+
+Do not run another Codex review solely to improve the final report wording. If the final helper run exited 0 and produced no accepted/actionable findings, report that exact run as clean.

@@ -451,6 +451,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       requestHost,
       requestOrigin,
       requestUserAgent,
+      gatewayHost: params.gatewayHost,
       pluginSurfaceBaseUrl,
       pluginNodeCapabilities,
       connectNonce,

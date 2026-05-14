@@ -867,6 +867,27 @@ Set a token so **all** WS clients must authenticate:
 }
 ```
 
+Device-less token-auth WebSocket clients do not inherit scopes from their
+handshake request. If a trusted local/headless observer needs read-only
+subscriptions without device pairing, configure:
+
+```json5
+{
+  gateway: {
+    bind: "loopback",
+    auth: {
+      mode: "token",
+      token: "your-token",
+      tokenScopes: ["operator.read"],
+    },
+  },
+}
+```
+
+Only use privileged token scopes such as `operator.write` or `operator.admin`
+on loopback binds, or set `gateway.auth.allowPrivilegedTokenScopes: true` after
+you have put an external trust boundary around the shared token.
+
 Doctor can generate one for you: `openclaw doctor --generate-gateway-token`.
 
 <Note>

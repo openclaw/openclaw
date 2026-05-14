@@ -102,9 +102,20 @@ own `system.run` exec approval policy.
 ## Shared-secret auth
 
 Shared gateway token/password auth is treated as trusted operator access for
-that Gateway. OpenAI-compatible HTTP surfaces and `/tools/invoke` restore the
-normal full operator default scope set for shared-secret bearer auth, even if a
-caller sends narrower declared scopes.
+that Gateway. Device-less WebSocket clients cannot self-grant scopes with
+`params.scopes`; token-auth clients receive `gateway.auth.tokenScopes` when that
+field is configured, otherwise they connect with no operator scopes until they
+use device pairing. Configure `["operator.read"]` for trusted headless observer
+clients that need `sessions.messages.subscribe` without an interactive pairing
+flow.
+
+OpenAI-compatible HTTP surfaces and `/tools/invoke` restore the normal full
+operator default scope set for shared-secret bearer auth, even if a caller sends
+narrower declared scopes.
+
+Privileged `gateway.auth.tokenScopes` values such as `operator.write` or
+`operator.admin` are accepted on loopback binds. Non-loopback binds require the
+explicit `gateway.auth.allowPrivilegedTokenScopes` opt-in.
 
 Identity-bearing modes, such as trusted proxy auth or private-ingress `none`,
 can still honor explicit declared scopes. Use separate Gateways for real trust

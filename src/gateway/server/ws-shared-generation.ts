@@ -40,7 +40,16 @@ export function resolveSharedGatewaySessionGeneration(
   const shared = resolveSharedSecret(auth);
   if (shared) {
     return createHash("sha256")
-      .update(`${shared.mode}\u0000${shared.secret}`, "utf8")
+      .update(
+        JSON.stringify({
+          mode: shared.mode,
+          secret: shared.secret,
+          tokenScopes: auth.mode === "token" ? [...(auth.tokenScopes ?? [])].toSorted() : undefined,
+          allowPrivilegedTokenScopes:
+            auth.mode === "token" ? auth.allowPrivilegedTokenScopes === true : undefined,
+        }),
+        "utf8",
+      )
       .digest("base64url");
   }
   if (auth.mode === "trusted-proxy") {

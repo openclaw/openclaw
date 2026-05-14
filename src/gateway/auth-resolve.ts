@@ -4,7 +4,9 @@ import type {
   GatewayTrustedProxyConfig,
 } from "../config/types.gateway.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
+import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
 import { resolveGatewayCredentialsFromValues } from "./credentials.js";
+import { isOperatorScope, type OperatorScope } from "./operator-scopes.js";
 
 export type ResolvedGatewayAuthMode = "none" | "token" | "password" | "trusted-proxy";
 export type ResolvedGatewayAuthModeSource =
@@ -18,6 +20,8 @@ export type ResolvedGatewayAuth = {
   mode: ResolvedGatewayAuthMode;
   modeSource?: ResolvedGatewayAuthModeSource;
   token?: string;
+  tokenScopes?: OperatorScope[];
+  allowPrivilegedTokenScopes?: boolean;
   password?: string;
   allowTailscale: boolean;
   trustedProxy?: GatewayTrustedProxyConfig;
@@ -26,7 +30,13 @@ export type ResolvedGatewayAuth = {
 export type EffectiveSharedGatewayAuth = {
   mode: "token" | "password";
   secret: string | undefined;
+  tokenScopes?: OperatorScope[];
+  allowPrivilegedTokenScopes?: boolean;
 };
+
+function normalizeConfiguredTokenScopes(scopes: GatewayAuthConfig["tokenScopes"]): OperatorScope[] {
+  return normalizeDeviceAuthScopes(scopes).filter(isOperatorScope);
+}
 
 export function resolveGatewayAuth(params: {
   authConfig?: GatewayAuthConfig | null;
@@ -46,6 +56,12 @@ export function resolveGatewayAuth(params: {
     }
     if (authOverride.password !== undefined) {
       authConfig.password = authOverride.password;
+    }
+    if (authOverride.tokenScopes !== undefined) {
+      authConfig.tokenScopes = authOverride.tokenScopes;
+    }
+    if (authOverride.allowPrivilegedTokenScopes !== undefined) {
+      authConfig.allowPrivilegedTokenScopes = authOverride.allowPrivilegedTokenScopes;
     }
     if (authOverride.allowTailscale !== undefined) {
       authConfig.allowTailscale = authOverride.allowTailscale;
@@ -98,6 +114,8 @@ export function resolveGatewayAuth(params: {
     mode,
     modeSource,
     token,
+    tokenScopes: normalizeConfiguredTokenScopes(authConfig.tokenScopes),
+    allowPrivilegedTokenScopes: authConfig.allowPrivilegedTokenScopes,
     password,
     allowTailscale,
     trustedProxy,
@@ -115,6 +133,12 @@ export function resolveEffectiveSharedGatewayAuth(params: {
     return {
       mode: "token",
       secret: resolvedAuth.token,
+      ...(resolvedAuth.tokenScopes && resolvedAuth.tokenScopes.length > 0
+        ? { tokenScopes: resolvedAuth.tokenScopes }
+        : {}),
+      ...(resolvedAuth.allowPrivilegedTokenScopes === true
+        ? { allowPrivilegedTokenScopes: true }
+        : {}),
     };
   }
   if (resolvedAuth.mode === "password") {

@@ -18,6 +18,7 @@ import {
   isValidIPv4,
   resolveGatewayBindHost,
 } from "./net.js";
+import { READ_SCOPE } from "./operator-scopes.js";
 import { mergeGatewayTailscaleConfig } from "./startup-auth.js";
 
 type GatewayRuntimeConfig = {
@@ -36,6 +37,10 @@ type GatewayRuntimeConfig = {
   tailscaleMode: "off" | "serve" | "funnel";
   hooksConfig: ReturnType<typeof resolveHooksConfig>;
 };
+
+function hasPrivilegedTokenScopes(auth: ResolvedGatewayAuth): boolean {
+  return (auth.tokenScopes ?? []).some((scope) => scope !== READ_SCOPE);
+}
 
 export async function resolveGatewayRuntimeConfig(params: {
   cfg: OpenClawConfig;
@@ -140,6 +145,16 @@ export async function resolveGatewayRuntimeConfig(params: {
   if (!isLoopbackHost(bindHost) && !hasSharedSecret && authMode !== "trusted-proxy") {
     throw new Error(
       `refusing to bind gateway to ${bindHost}:${params.port} without auth (set gateway.auth.token/password, or set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD; legacy CLAWDBOT_* and MOLTBOT_* environment variables are ignored)`,
+    );
+  }
+  if (
+    authMode === "token" &&
+    hasPrivilegedTokenScopes(resolvedAuth) &&
+    !resolvedAuth.allowPrivilegedTokenScopes &&
+    !isLoopbackHost(bindHost)
+  ) {
+    throw new Error(
+      "gateway.auth.tokenScopes includes privileged scopes on a non-loopback bind; set gateway.bind=loopback or gateway.auth.allowPrivilegedTokenScopes=true",
     );
   }
   if (

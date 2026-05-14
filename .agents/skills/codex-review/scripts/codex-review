@@ -151,7 +151,11 @@ run_review() {
 
 if [[ -z "$parallel_tests" ]]; then
   run_review
-  exit $?
+  review_status=$?
+  if [[ "$review_status" == 0 ]]; then
+    printf 'codex-review clean: no accepted/actionable findings reported\n'
+  fi
+  exit "$review_status"
 fi
 
 review_status_file=$(mktemp)
@@ -186,3 +190,5 @@ printf 'tests exit: %s\n' "$tests_status"
 if [[ "$review_status" != 0 || "$tests_status" != 0 ]]; then
   exit 1
 fi
+
+printf 'codex-review clean: no accepted/actionable findings reported\n'
