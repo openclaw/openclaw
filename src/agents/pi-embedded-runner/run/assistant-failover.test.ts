@@ -293,3 +293,48 @@ describe("handleAssistantFailover", () => {
     });
   });
 });
+
+describe("handleAssistantFailover – idle timeout with rate-limit signal (#81902)", () => {
+  it("marks profile failure with rate_limit when idle timer fires but error was classified as rate_limit", async () => {
+    const markSpy = vi.fn(async () => {});
+    const advanceSpy = vi.fn(async () => true);
+    const outcome = await handleAssistantFailover(
+      makeParams({
+        initialDecision: { action: "rotate_profile", reason: "rate_limit" },
+        failoverReason: "rate_limit",
+        assistantProfileFailureReason: "rate_limit",
+        rateLimitFailure: true,
+        billingFailure: false,
+        timedOut: true,
+        idleTimedOut: true,
+        lastProfileId: "sha256:deadbeef",
+        maybeMarkAuthProfileFailure: markSpy,
+        advanceAuthProfile: advanceSpy,
+      }),
+    );
+
+    expect(outcome.action).toBe("retry");
+    // The profile failure should have been marked with "rate_limit", not skipped
+    expect(markSpy).toHaveBeenCalledWith(expect.objectContaining({ reason: "rate_limit" }));
+  });
+
+  it("still skips profile failure mark when timeout fires with no classified reason", async () => {
+    const markSpy = vi.fn(async () => {});
+    const advanceSpy = vi.fn(async () => true);
+    await handleAssistantFailover(
+      makeParams({
+        initialDecision: { action: "rotate_profile", reason: "timeout" },
+        failoverReason: "timeout",
+        assistantProfileFailureReason: null,
+        timedOut: true,
+        idleTimedOut: true,
+        lastProfileId: "sha256:deadbeef",
+        maybeMarkAuthProfileFailure: markSpy,
+        advanceAuthProfile: advanceSpy,
+      }),
+    );
+
+    // With no classified reason, timeout fallback should skip marking
+    expect(markSpy).not.toHaveBeenCalled();
+  });
+});

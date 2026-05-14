@@ -99,7 +99,16 @@ export async function handleAssistantFailover(params: {
   if (decision.action === "rotate_profile") {
     const failedProfileId = params.lastProfileId;
     const timeoutFailure = params.timedOut || params.idleTimedOut;
-    const failureReason = timeoutFailure ? "timeout" : params.assistantProfileFailureReason;
+    // When the idle timer fires but the raw error message carried an
+    // actionable classification (rate_limit, billing, auth, …), preserve
+    // the real reason so `markAuthProfileFailure` applies the correct
+    // cooldown instead of silently skipping it.  Only fall back to
+    // "timeout" when no better signal was extracted from the response.
+    // Fixes: openclaw#81902
+    const failureReason =
+      timeoutFailure && !params.assistantProfileFailureReason
+        ? "timeout"
+        : params.assistantProfileFailureReason;
     const markFailedProfile = async () => {
       if (!failedProfileId || !failureReason || failureReason === "timeout") {
         return;
