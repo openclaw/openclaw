@@ -49,7 +49,7 @@ export const DEFAULT_SKILLS_WATCH_IGNORED: RegExp[] = [
   /(^|[\\/])\.cache([\\/]|$)/,
 ];
 
-function resolveConfigWatchPaths(workspaceDir: string, config?: OpenClawConfig): string[] {
+function resolveWatchPaths(workspaceDir: string, config?: OpenClawConfig): string[] {
   const paths: string[] = [];
   if (workspaceDir.trim()) {
     paths.push(path.join(workspaceDir, "skills"));
@@ -63,11 +63,6 @@ function resolveConfigWatchPaths(workspaceDir: string, config?: OpenClawConfig):
     .filter(Boolean)
     .map((dir) => resolveUserPath(dir));
   paths.push(...extraDirs);
-  return paths;
-}
-
-function resolveWatchPaths(workspaceDir: string, config?: OpenClawConfig): string[] {
-  const paths = resolveConfigWatchPaths(workspaceDir, config);
   const pluginSkillDirs = resolvePluginSkillDirs({ workspaceDir, config });
   paths.push(...pluginSkillDirs);
   return paths;
