@@ -46,6 +46,7 @@ type SettingsHost = {
     navWidth: number;
     navGroupsCollapsed: Record<string, boolean>;
     borderRadius: number;
+    documentTitleSyncEnabled: boolean;
     customTheme?: import("./custom-theme.ts").ImportedCustomTheme;
   };
   theme: ThemeName & ThemeMode;
@@ -144,6 +145,7 @@ const createHost = (tab: Tab): SettingsHost => ({
     navWidth: 220,
     navGroupsCollapsed: {},
     borderRadius: 50,
+    documentTitleSyncEnabled: true,
   },
   theme: "claw" as unknown as ThemeName & ThemeMode,
   themeMode: "system",

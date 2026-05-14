@@ -2306,6 +2306,27 @@
     },
     {
       "count": 1,
+      "kind": "html-attribute",
+      "name": "title",
+      "path": "ui/src/ui/views/config-quick.ts",
+      "text": "Keep the static 'OpenClaw Control' tab title"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "title",
+      "path": "ui/src/ui/views/config-quick.ts",
+      "text": "Show the active agent's name in the browser tab title"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/config-quick.ts",
+      "text": "Agent name"
+    },
+    {
+      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/config-quick.ts",
@@ -2345,6 +2366,13 @@
       "name": "text",
       "path": "ui/src/ui/views/config-quick.ts",
       "text": "Browser enabled"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/config-quick.ts",
+      "text": "Browser tab"
     },
     {
       "count": 1,
@@ -2520,6 +2548,13 @@
       "name": "text",
       "path": "ui/src/ui/views/config-quick.ts",
       "text": "Selected"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/config-quick.ts",
+      "text": "Static"
     },
     {
       "count": 1,
