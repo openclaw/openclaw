@@ -7,9 +7,13 @@ export async function updateSkillConfigEntry(params: {
   enabled?: boolean;
   apiKey?: string;
   env?: Record<string, string>;
+  allowConfigSizeDrop?: boolean;
 }): Promise<Record<string, unknown>> {
   const committed = await mutateConfigFileWithRetry<Record<string, unknown>>({
     afterWrite: { mode: "auto" },
+    writeOptions: {
+      allowConfigSizeDrop: params.allowConfigSizeDrop === true,
+    },
     mutate: (draft) => {
       const skills = draft.skills ? { ...draft.skills } : {};
       const entries = skills.entries ? { ...skills.entries } : {};

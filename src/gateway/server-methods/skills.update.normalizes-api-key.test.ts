@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { REDACTED_SENTINEL } from "../../config/redact-snapshot.js";
 
 let writtenConfig: unknown = null;
+let lastWriteOptions: unknown = null;
 let loadedConfig: unknown = {
   skills: {
     entries: {},
@@ -20,11 +21,13 @@ vi.mock("../../config/config.js", () => {
       writtenConfig = nextConfig;
     },
     mutateConfigFileWithRetry: async (params: {
+      writeOptions?: unknown;
       mutate: (
         draft: OpenClawConfig,
         context: { snapshot: { path: string }; previousHash: string; attempt: number },
       ) => unknown;
     }) => {
+      lastWriteOptions = params.writeOptions;
       const draft = structuredClone(loadedConfig) as OpenClawConfig;
       const snapshot = { path: "/tmp/openclaw/config.json" };
       const result = await params.mutate(draft, {
@@ -66,6 +69,7 @@ function expectWrittenSkillEntry(skillKey: string, entry: unknown) {
 describe("skills.update", () => {
   it("strips embedded CR/LF from apiKey", async () => {
     writtenConfig = null;
+    lastWriteOptions = null;
     loadedConfig = {
       skills: {
         entries: {},
@@ -98,6 +102,7 @@ describe("skills.update", () => {
 
   it("redacts apiKey and secret env values from the response but writes full values to config", async () => {
     writtenConfig = null;
+    lastWriteOptions = null;
     loadedConfig = {
       skills: {
         entries: {},
@@ -143,6 +148,7 @@ describe("skills.update", () => {
 
   it("keeps existing secrets when clients submit redacted sentinel values", async () => {
     writtenConfig = null;
+    lastWriteOptions = null;
     loadedConfig = {
       skills: {
         entries: {
@@ -179,6 +185,69 @@ describe("skills.update", () => {
         GEMINI_API_KEY: "secret-env-key-456",
         BRAVE_REGION: "eu",
       },
+    });
+  });
+
+  it("allows intentional config size drops when requested", async () => {
+    writtenConfig = null;
+    lastWriteOptions = null;
+    loadedConfig = {
+      skills: {
+        entries: {
+          "demo-skill": {
+            env: {
+              OBSOLETE_KEY: "remove-me",
+            },
+          },
+        },
+      },
+    };
+
+    await skillsHandlers["skills.update"]({
+      params: {
+        skillKey: "demo-skill",
+        env: {
+          OBSOLETE_KEY: "",
+        },
+        allowConfigSizeDrop: true,
+      },
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+      context: { getRuntimeConfig: () => loadedConfig } as never,
+      respond: () => {},
+    });
+
+    expect(lastWriteOptions).toEqual({ allowConfigSizeDrop: true });
+    expectWrittenSkillEntry("demo-skill", {
+      env: {},
+    });
+  });
+
+  it("keeps the size-drop override disabled by default", async () => {
+    writtenConfig = null;
+    lastWriteOptions = null;
+    loadedConfig = {
+      skills: {
+        entries: {},
+      },
+    };
+
+    await skillsHandlers["skills.update"]({
+      params: {
+        skillKey: "demo-skill",
+        enabled: true,
+      },
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+      context: { getRuntimeConfig: () => loadedConfig } as never,
+      respond: () => {},
+    });
+
+    expect(lastWriteOptions).toEqual({ allowConfigSizeDrop: false });
+    expectWrittenSkillEntry("demo-skill", {
+      enabled: true,
     });
   });
 });

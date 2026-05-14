@@ -328,6 +328,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
       enabled?: boolean;
       apiKey?: string;
       env?: Record<string, string>;
+      allowConfigSizeDrop?: boolean;
     };
     const updated = await updateSkillConfigEntry(p);
     respond(
