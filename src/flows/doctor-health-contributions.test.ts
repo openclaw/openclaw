@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DoctorPrompter } from "../commands/doctor-prompter.js";
 import {
   resolveDoctorHealthContributions,
   shouldSkipLegacyUpdateDoctorConfigWrite,
@@ -55,6 +56,25 @@ function requireDoctorContribution(id: string) {
   return contribution;
 }
 
+function buildDoctorPrompter(shouldRepair: boolean): DoctorPrompter {
+  return {
+    confirm: vi.fn(async () => shouldRepair),
+    confirmAutoFix: vi.fn(async () => shouldRepair),
+    confirmAggressiveAutoFix: vi.fn(async () => shouldRepair),
+    confirmRuntimeRepair: vi.fn(async () => shouldRepair),
+    select: vi.fn(async (_params, fallback) => fallback),
+    shouldRepair,
+    shouldForce: false,
+    repairMode: {
+      shouldRepair,
+      shouldForce: false,
+      nonInteractive: true,
+      canPrompt: false,
+      updateInProgress: false,
+    },
+  };
+}
+
 describe("doctor health contributions", () => {
   beforeEach(() => {
     mocks.maybeRunConfiguredPluginInstallReleaseStep.mockReset();
@@ -78,7 +98,7 @@ describe("doctor health contributions", () => {
       cfg: {},
       configResult: { cfg: {}, sourceLastTouchedVersion: "2026.4.29" },
       sourceConfigValid: true,
-      prompter: { shouldRepair: false },
+      prompter: buildDoctorPrompter(false),
       env: {},
     } as Parameters<(typeof contribution)["run"]>[0];
 
@@ -99,7 +119,7 @@ describe("doctor health contributions", () => {
       cfg: {},
       configResult: { cfg: {}, sourceLastTouchedVersion: "2026.4.29" },
       sourceConfigValid: true,
-      prompter: { shouldRepair: true },
+      prompter: buildDoctorPrompter(true),
       env: {},
     } as Parameters<(typeof contribution)["run"]>[0];
 
@@ -187,7 +207,7 @@ describe("doctor health contributions", () => {
         },
         configPath: "/tmp/fake-openclaw.json",
         sourceConfigValid: true,
-        prompter: { shouldRepair: true },
+        prompter: buildDoctorPrompter(true),
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
         options: {},
         env,

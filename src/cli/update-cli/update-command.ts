@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import fs from "node:fs/promises";
 import { existsSync } from "node:fs";
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { confirm, isCancel } from "@clack/prompts";
@@ -9,6 +9,7 @@ import {
   ensureCompletionCacheExists,
 } from "../../commands/doctor-completion.js";
 import { doctorCommand } from "../../commands/doctor.js";
+import { createPreUpdateConfigSnapshot } from "../../config/backup-rotation.js";
 import {
   ConfigMutationConflictError,
   assertConfigWriteAllowedInCurrentMode,
@@ -18,10 +19,9 @@ import {
 } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
+import { CONFIG_PATH } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
-import { createPreUpdateConfigSnapshot } from "../../config/backup-rotation.js";
-import { CONFIG_PATH } from "../../config/paths.js";
 import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "../../daemon/constants.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
@@ -140,6 +140,13 @@ const POST_INSTALL_DOCTOR_SERVICE_ENV_KEYS = [
   "OPENCLAW_PROFILE",
 ] as const;
 const POST_UPDATE_PLUGIN_REPAIR_GUIDANCE = "Run openclaw doctor --fix to attempt automatic repair.";
+
+async function createUpdateConfigSnapshot(): Promise<void> {
+  await createPreUpdateConfigSnapshot({
+    configPath: CONFIG_PATH,
+    fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
+  });
+}
 
 const UPDATE_QUIPS = [
   "Leveled up! New skills unlocked. You're welcome.",
@@ -1028,10 +1035,7 @@ async function runPackageInstallUpdate(params: {
     postVerifyStep: async (verifiedPackageRoot) => {
       const entryPath = await resolveGatewayInstallEntrypoint(verifiedPackageRoot);
       if (entryPath) {
-        await createPreUpdateConfigSnapshot({
-          configPath: CONFIG_PATH,
-          fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
-        });
+        await createUpdateConfigSnapshot();
         return await runUpdateStep({
           name: `${CLI_NAME} doctor`,
           argv: [resolveNodeRunner(), entryPath, "doctor", "--non-interactive", "--fix"],
@@ -1652,9 +1656,11 @@ async function maybeRestartService(params: {
       // that already produced the expected gateway version, a second kickstart
       // would only race the healthy supervisor-owned process.
       if (!refreshedGatewayAlreadyHealthy && params.restartScriptPath) {
+        await createUpdateConfigSnapshot();
         await runRestartScript(params.restartScriptPath);
         restartInitiated = true;
       } else if (!refreshedGatewayAlreadyHealthy && params.refreshServiceEnv && isPackageUpdate) {
+        await createUpdateConfigSnapshot();
         restarted = await runUpdatedInstallGatewayRestart({
           result: params.result,
           jsonMode: Boolean(params.opts.json),
@@ -1665,6 +1671,7 @@ async function maybeRestartService(params: {
         !refreshedGatewayAlreadyHealthy &&
         shouldUseLegacyProcessRestartAfterUpdate({ updateMode: params.result.mode })
       ) {
+        await createUpdateConfigSnapshot();
         restarted = await runDaemonRestart();
       } else if (!refreshedGatewayAlreadyHealthy && !params.opts.json) {
         defaultRuntime.log(theme.muted("No installed gateway service found; skipped restart."));
@@ -1691,10 +1698,7 @@ async function maybeRestartService(params: {
       if (!params.opts.json && restarted) {
         defaultRuntime.log(theme.success("Daemon restarted successfully."));
         defaultRuntime.log("");
-        await createPreUpdateConfigSnapshot({
-          configPath: CONFIG_PATH,
-          fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
-        });
+        await createUpdateConfigSnapshot();
         process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
         process.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV] = "1";
         try {

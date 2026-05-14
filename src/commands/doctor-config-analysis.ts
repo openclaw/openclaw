@@ -95,7 +95,8 @@ export function stripUnknownConfigKeys(config: OpenClawConfig): {
       continue;
     }
     const record = target as Record<string, unknown>;
-    const parentKey = issuePath.length === 1 && typeof issuePath[0] === "string" ? issuePath[0] : undefined;
+    const parentKey =
+      issuePath.length === 1 && typeof issuePath[0] === "string" ? issuePath[0] : undefined;
     const protectedSet = parentKey ? STRIP_PROTECTED_KEYS[parentKey] : undefined;
     for (const key of issue.keys) {
       if (typeof key !== "string" || !(key in record)) {

@@ -194,7 +194,7 @@ describe("config backup rotation", () => {
     });
   });
 
-  it("createPreUpdateConfigSnapshot is first-write-wins — second call does not overwrite", async () => {
+  it("createPreUpdateConfigSnapshot is first-write-wins; second call does not overwrite", async () => {
     await withTempHome(async () => {
       const configPath = resolveConfigPathFromTempState();
       const original = JSON.stringify({ snapshot: "first" });

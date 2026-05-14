@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -96,9 +96,9 @@ describe("doctor config analysis helpers", () => {
       } as never);
       expect(result.removed).toContain("plugins.badKey");
       expect(result.removed).not.toContain("plugins.installs");
-      expect(
-        (result.config as Record<string, Record<string, unknown>>).plugins?.installs,
-      ).toEqual(["matrix"]);
+      expect((result.config as Record<string, Record<string, unknown>>).plugins?.installs).toEqual([
+        "matrix",
+      ]);
     });
   });
 });
