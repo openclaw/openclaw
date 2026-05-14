@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
+import { writeConfigFile } from "../config/config.js";
 import {
   deriveDeviceIdFromPublicKey,
   type DeviceIdentity,
@@ -174,7 +175,17 @@ describe("node.invoke approval bypass", () => {
   let port: number;
 
   beforeAll(async () => {
-    const started = await startServerWithClient("secret", { controlUiEnabled: true });
+    await writeConfigFile({
+      gateway: {
+        nodes: {
+          pairing: { autoApproveCidrs: ["127.0.0.1/32", "::1/128"] },
+          allowCommands: ["system.run", "system.run.prepare", "system.which"],
+        },
+      },
+    });
+    const started = await startServerWithClient("secret", {
+      controlUiEnabled: true,
+    });
     server = started.server;
     port = started.port;
     started.ws.close();
@@ -186,10 +197,17 @@ describe("node.invoke approval bypass", () => {
 
   const approveAllPendingPairings = async () => {
     const { approveDevicePairing, listDevicePairing } = await import("../infra/device-pairing.js");
-    const list = await listDevicePairing();
-    for (const pending of list.pending) {
+    const { approveNodePairing, listNodePairing } = await import("../infra/node-pairing.js");
+    const deviceList = await listDevicePairing();
+    for (const pending of deviceList.pending) {
       await approveDevicePairing(pending.requestId, {
         callerScopes: pending.scopes ?? ["operator.admin"],
+      });
+    }
+    const nodeList = await listNodePairing();
+    for (const pending of nodeList.pending) {
+      await approveNodePairing(pending.requestId, {
+        callerScopes: ["operator.admin"],
       });
     }
   };
@@ -315,10 +333,10 @@ describe("node.invoke approval bypass", () => {
     deviceIdentity?: DeviceIdentity,
     commands: string[] = ["system.run"],
   ) => {
-    let readyResolve: (() => void) | null = null;
     const resolvedDeviceIdentity = deviceIdentity ?? createDeviceIdentity();
-    const startClient = async () => {
-      readyResolve = null;
+
+    const startNodeClient = async () => {
+      let readyResolve: (() => void) | null = null;
       const ready = new Promise<void>((resolve) => {
         readyResolve = resolve;
       });
@@ -334,6 +352,7 @@ describe("node.invoke approval bypass", () => {
         platform: "linux",
         mode: GATEWAY_CLIENT_MODES.NODE,
         scopes: [],
+        caps: ["system"],
         commands,
         deviceIdentity: resolvedDeviceIdentity,
         onHelloOk: () => readyResolve?.(),
@@ -347,13 +366,13 @@ describe("node.invoke approval bypass", () => {
             nodeId?: string;
           };
           const id = typeof payload?.id === "string" ? payload.id : "";
-          const eventNodeId = typeof payload?.nodeId === "string" ? payload.nodeId : "";
-          if (!id || !eventNodeId) {
+          const nodeId = typeof payload?.nodeId === "string" ? payload.nodeId : "";
+          if (!id || !nodeId) {
             return;
           }
           void client.request("node.invoke.result", {
             id,
-            nodeId: eventNodeId,
+            nodeId,
             ok: true,
             payloadJSON: JSON.stringify({ ok: true }),
           });
@@ -379,10 +398,10 @@ describe("node.invoke approval bypass", () => {
       return client;
     };
 
-    let client = await startClient();
+    let client = await startNodeClient();
     if (await approvePendingNodePairings(resolvedDeviceIdentity.deviceId)) {
       client.stop();
-      client = await startClient();
+      client = await startNodeClient();
     }
     return client;
   };

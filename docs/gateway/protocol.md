@@ -364,7 +364,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
   <Accordion title="Talk and TTS">
     - `talk.catalog` returns the read-only Talk provider catalog for speech, streaming transcription, and realtime voice. It includes provider ids, labels, configured state, exposed model/voice ids, canonical modes, transports, brain strategies, and realtime audio/capability flags without returning provider secrets or mutating global config.
     - `talk.config` returns the effective Talk config payload; `includeSecrets` requires `operator.talk.secrets` (or `operator.admin`).
-    - `talk.session.create` creates a Gateway-owned Talk session for `realtime/gateway-relay`, `transcription/gateway-relay`, or `stt-tts/managed-room`. `brain: "direct-tools"` requires `operator.admin`.
+    - `talk.session.create` creates a Gateway-owned Talk session for `realtime/gateway-relay`, `transcription/gateway-relay`, or `stt-tts/managed-room`. For `stt-tts/managed-room`, `operator.write` callers that pass `sessionKey` must also pass `spawnedBy` for scoped session-key visibility; unscoped `sessionKey` creation and `brain: "direct-tools"` require `operator.admin`.
     - `talk.session.join` validates a managed-room session token, emits `session.ready` or `session.replaced` events as needed, and returns room/session metadata plus recent Talk events without the plaintext token or stored token hash.
     - `talk.session.appendAudio` appends base64 PCM input audio to Gateway-owned realtime relay and transcription sessions.
     - `talk.session.startTurn`, `talk.session.endTurn`, and `talk.session.cancelTurn` drive managed-room turn lifecycle with stale-turn rejection before state is cleared.
@@ -468,7 +468,9 @@ enumeration of `src/gateway/server-methods/*.ts`.
 ### Common event families
 
 - `chat`: UI chat updates such as `chat.inject` and other transcript-only chat
-  events.
+  events. In protocol v4, delta payloads carry `deltaText`; `message` remains
+  the cumulative assistant snapshot. Non-prefix replacements set `replace=true`
+  and use `deltaText` as the replacement text.
 - `session.message` and `session.tool`: transcript/event-stream updates for a
   subscribed session.
 - `sessions.changed`: session index or metadata changed.
@@ -624,8 +626,8 @@ terminal summary, and sanitized error text.
 
 - `PROTOCOL_VERSION` lives in `src/gateway/protocol/version.ts`.
 - Clients send `minProtocol` + `maxProtocol`; the server rejects ranges that
-  do not include its current protocol. Native clients use a v3 lower bound so
-  additive v4 clients can still reach v3 gateways.
+  do not include its current protocol. Current clients and servers require
+  protocol v4.
 - Schemas + models are generated from TypeBox definitions:
   - `pnpm protocol:gen`
   - `pnpm protocol:gen:swift`
@@ -639,7 +641,7 @@ stable across protocol v4 and are the expected baseline for third-party clients.
 | Constant                                  | Default                                               | Source                                                                                     |
 | ----------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | `PROTOCOL_VERSION`                        | `4`                                                   | `src/gateway/protocol/version.ts`                                                          |
-| `MIN_CLIENT_PROTOCOL_VERSION`             | `3`                                                   | `src/gateway/protocol/version.ts`                                                          |
+| `MIN_CLIENT_PROTOCOL_VERSION`             | `4`                                                   | `src/gateway/protocol/version.ts`                                                          |
 | Request timeout (per RPC)                 | `30_000` ms                                           | `src/gateway/client.ts` (`requestTimeoutMs`)                                               |
 | Preauth / connect-challenge timeout       | `15_000` ms                                           | `src/gateway/handshake-timeouts.ts` (config/env can raise the paired server/client budget) |
 | Initial reconnect backoff                 | `1_000` ms                                            | `src/gateway/client.ts` (`backoffMs`)                                                      |

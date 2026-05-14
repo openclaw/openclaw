@@ -79,7 +79,7 @@ describe("packed CLI smoke", () => {
       ["doctor", "--help"],
       ["status", "--json", "--timeout", "1"],
       ["config", "schema"],
-      ["models", "list", "--provider", "amazon-bedrock"],
+      ["models", "list", "--provider", "openai"],
     ]);
   });
 
@@ -495,9 +495,7 @@ describe("collectMissingPackPaths", () => {
       "scripts/lib/package-dist-imports.mjs",
       "scripts/postinstall-bundled-plugins.mjs",
       "dist/task-registry-control.runtime.js",
-      bundledDistPluginFile("slack", "runtime-api.js"),
-      bundledDistPluginFile("slack", "openclaw.plugin.json"),
-      bundledDistPluginFile("slack", "package.json"),
+      "dist/telegram-ingress-worker.runtime.js",
       bundledDistPluginFile("telegram", "runtime-api.js"),
       bundledDistPluginFile("telegram", "openclaw.plugin.json"),
       bundledDistPluginFile("telegram", "package.json"),
@@ -527,6 +525,7 @@ describe("collectMissingPackPaths", () => {
         "scripts/postinstall-bundled-plugins.mjs",
         "dist/plugin-sdk/root-alias.cjs",
         "dist/task-registry-control.runtime.js",
+        "dist/telegram-ingress-worker.runtime.js",
         "dist/build-info.json",
         "dist/channel-catalog.json",
         PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
@@ -535,7 +534,7 @@ describe("collectMissingPackPaths", () => {
   });
 
   it("requires bundled plugin runtime sidecars that dynamic plugin boundaries resolve at runtime", () => {
-    expect(requiredBundledPluginPackPaths).toContain(
+    expect(requiredBundledPluginPackPaths).not.toContain(
       bundledDistPluginFile("slack", "runtime-api.js"),
     );
     expect(requiredBundledPluginPackPaths).toContain(

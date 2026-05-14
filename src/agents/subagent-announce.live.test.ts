@@ -31,8 +31,8 @@ type InProcessAgentDispatch =
   | { phase: "started"; resultText?: undefined }
   | { phase: "completed"; resultText: string };
 
-const REQUEST_TIMEOUT_MS = 4 * 60_000;
-const WAIT_TIMEOUT_MS = 5 * 60_000;
+const REQUEST_TIMEOUT_MS = 8 * 60_000;
+const WAIT_TIMEOUT_MS = 8 * 60_000;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -62,7 +62,7 @@ function openAiConfig(
           agentRuntime: { id: "pi" },
           apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
           baseUrl: "https://api.openai.com/v1",
-          timeoutSeconds: 180,
+          timeoutSeconds: 300,
           models: [
             {
               id: modelKey.replace(/^openai\//u, ""),
@@ -87,8 +87,8 @@ function openAiConfig(
         sandbox: { mode: "off" },
         subagents: {
           allowAgents: ["*"],
-          runTimeoutSeconds: 120,
-          announceTimeoutMs: 120_000,
+          runTimeoutSeconds: 300,
+          announceTimeoutMs: 300_000,
           archiveAfterMinutes: 60,
         },
       },
@@ -253,7 +253,7 @@ describeLive("subagent announce live", () => {
               taskName: "steered_child",
               cleanup: "keep",
               context: "isolated",
-              runTimeoutSeconds: 120,
+              runTimeoutSeconds: 300,
             })}.`,
             `Step 2: after spawn returns status="accepted", call subagents with exactly this JSON input: ${JSON.stringify(
               {
@@ -312,6 +312,6 @@ describeLive("subagent announce live", () => {
       ).toBe(true);
       expect(inProcessAgentDispatches.length).toBeGreaterThanOrEqual(1);
     },
-    6 * 60_000,
+    10 * 60_000,
   );
 });

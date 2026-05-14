@@ -161,6 +161,9 @@ const bundledPluginRoot = (pluginId: string) => ["extensions", pluginId].join("/
 const bundledPluginFile = (pluginId: string, relativePath: string) =>
   `${bundledPluginRoot(pluginId)}/${relativePath}`;
 const explicitNeverBundleDependencies = [
+  "@anthropic-ai/vertex-sdk",
+  "@slack/bolt",
+  "@slack/web-api",
   "@discordjs/voice",
   "@lancedb/lancedb",
   "@larksuiteoapi/node-sdk",
@@ -236,6 +239,10 @@ function buildCoreDistEntries(): Record<string, string> {
     "facade-activation-check.runtime": "src/plugin-sdk/facade-activation-check.runtime.ts",
     extensionAPI: "src/extensionAPI.ts",
     "infra/warning-filter": "src/infra/warning-filter.ts",
+    "telegram-ingress-worker.runtime": bundledPluginFile(
+      "telegram",
+      "src/telegram-ingress-worker.runtime.ts",
+    ),
     "telegram/audit": bundledPluginFile("telegram", "src/audit.ts"),
     "telegram/token": bundledPluginFile("telegram", "src/token.ts"),
     "plugins/build-smoke-entry": "src/plugins/build-smoke-entry.ts",
@@ -285,6 +292,8 @@ function buildUnifiedDistEntries(): Record<string, string> {
     "plugin-sdk/compat": "src/plugin-sdk/compat.ts",
     // Private bundled Codex helper for app-server native subagent task mirroring.
     "plugin-sdk/codex-native-task-runtime": "src/plugin-sdk/codex-native-task-runtime.ts",
+    // Private bundled Codex helper for app-server user MCP config projection.
+    "plugin-sdk/codex-mcp-projection": "src/plugin-sdk/codex-mcp-projection.ts",
     ...Object.fromEntries(
       Object.entries(buildPluginSdkEntrySources()).map(([entry, source]) => [
         `plugin-sdk/${entry}`,
