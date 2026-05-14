@@ -1,4 +1,5 @@
 import { registerLegacyContextEngine } from "./legacy.registration.js";
+import { registerContextMeshContextEngine } from "./contextmesh.registration.js";
 
 /**
  * Ensures all built-in context engines are registered exactly once.
@@ -20,4 +21,5 @@ export function ensureContextEnginesInitialized(): void {
 
   // Always available – safe fallback for the "legacy" slot default.
   registerLegacyContextEngine();
+  registerContextMeshContextEngine();
 }

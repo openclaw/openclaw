@@ -105,6 +105,11 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
     description: "Inspect durable background tasks and flows",
     hasSubcommands: true,
   },
+  {
+    name: "contextmesh",
+    description: "Distributed large-context preprocessing across trusted local workers",
+    hasSubcommands: true,
+  },
 ] as const satisfies ReadonlyArray<CoreCliCommandDescriptor>);
 
 export const CORE_CLI_COMMAND_DESCRIPTORS = coreCliCommandCatalog.descriptors;

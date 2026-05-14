@@ -125,6 +125,11 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<
         loadModule: () => import("./register.status-health-sessions.js"),
         exportName: "registerStatusHealthSessionsCommands",
       },
+      {
+        commandNames: ["contextmesh"],
+        loadModule: () => import("./register.contextmesh.js"),
+        exportName: "registerContextMeshCommands",
+      },
     ]),
   ),
 ];

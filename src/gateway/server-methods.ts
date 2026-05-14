@@ -16,6 +16,7 @@ import { chatHandlers } from "./server-methods/chat.js";
 import { commandsHandlers } from "./server-methods/commands.js";
 import { configHandlers } from "./server-methods/config.js";
 import { connectHandlers } from "./server-methods/connect.js";
+import { contextmeshHandlers } from "./server-methods/contextmesh.js";
 import { cronHandlers } from "./server-methods/cron.js";
 import { deviceHandlers } from "./server-methods/devices.js";
 import { diagnosticsHandlers } from "./server-methods/diagnostics.js";
@@ -98,6 +99,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...channelsHandlers,
   ...chatHandlers,
   ...commandsHandlers,
+  ...contextmeshHandlers,
   ...cronHandlers,
   ...deviceHandlers,
   ...diagnosticsHandlers,
