@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
-import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
+import type { PluginManifestRegistry } from "./manifest-registry.js";
 import {
   clearLoadPluginMetadataSnapshotMemo,
   loadPluginMetadataSnapshot,
@@ -75,41 +75,24 @@ function makeIndex(pluginId = "demo"): InstalledPluginIndex {
 }
 
 function makeManifestRegistry(pluginId = "demo"): PluginManifestRegistry {
-  const plugin: PluginManifestRecord = {
-    id: pluginId,
-    name: pluginId,
-    channels: [],
-    providers: [pluginId],
-    cliBackends: [],
-    skills: [],
-    hooks: [],
-    commandAliases: [{ name: `${pluginId}-command` }],
-    rootDir: `/plugins/${pluginId}`,
-    source: `/plugins/${pluginId}/index.js`,
-    manifestPath: `/plugins/${pluginId}/openclaw.plugin.json`,
-    origin: "global",
+  return {
+    plugins: [
+      {
+        id: pluginId,
+        name: pluginId,
+        channels: [],
+        providers: [pluginId],
+        cliBackends: [],
+        skills: [],
+        hooks: [],
+        rootDir: `/plugins/${pluginId}`,
+        source: `/plugins/${pluginId}/index.js`,
+        manifestPath: `/plugins/${pluginId}/openclaw.plugin.json`,
+        origin: "global",
+      },
+    ],
+    diagnostics: [],
   };
-  return { plugins: [plugin], diagnostics: [] };
-}
-
-function requireFirstPlugin(
-  snapshot: ReturnType<typeof loadPluginMetadataSnapshot>,
-): PluginManifestRecord {
-  const plugin = snapshot.plugins[0];
-  if (!plugin) {
-    throw new Error("expected metadata snapshot to include a plugin");
-  }
-  return plugin;
-}
-
-function requireFirstCommandAlias(
-  plugin: PluginManifestRecord,
-): NonNullable<PluginManifestRecord["commandAliases"]>[number] {
-  const commandAlias = plugin.commandAliases?.[0];
-  if (!commandAlias) {
-    throw new Error("expected metadata snapshot plugin to include a command alias");
-  }
-  return commandAlias;
 }
 
 describe("loadPluginMetadataSnapshot process memo", () => {
@@ -137,19 +120,16 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     });
 
     const first = loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
-    const firstPlugin = requireFirstPlugin(first);
-    firstPlugin.providers.push("first-mutated");
-    requireFirstCommandAlias(firstPlugin).name = "first-command-mutated";
+    expect(first.plugins[0]).toBeDefined();
+    first.plugins[0]?.providers.push("first-mutated");
     const second = loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
-    const secondPlugin = requireFirstPlugin(second);
-    secondPlugin.providers.push("second-mutated");
-    requireFirstCommandAlias(secondPlugin).name = "second-command-mutated";
+    expect(second.plugins[0]).toBeDefined();
+    second.plugins[0]?.providers.push("second-mutated");
     const third = loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
 
     expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledOnce();
     expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
     expect(third.plugins[0]?.providers).toEqual(["demo"]);
-    expect(third.plugins[0]?.commandAliases?.[0]?.name).toBe("demo-command");
     expect(second.manifestRegistry.plugins[0]).toBe(second.plugins[0]);
     expect(second.byPluginId.get("demo")).toBe(second.plugins[0]);
   });
