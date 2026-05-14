@@ -466,6 +466,27 @@ function collectExistingManagedPeerDependencyPins(
   return pins;
 }
 
+function createManagedNpmPeerPlanArgs(params?: {
+  force?: boolean;
+  legacyPeerDeps?: boolean;
+}): string[] {
+  return [
+    "npm",
+    "install",
+    "--package-lock-only",
+    ...(params?.force ? ["--force"] : []),
+    ...createSafeNpmInstallArgs({
+      omitDev: true,
+      omitPeer: true,
+      legacyPeerDeps: params?.legacyPeerDeps,
+      loglevel: "error",
+      ignoreWorkspaces: true,
+      noAudit: true,
+      noFund: true,
+    }).slice(1),
+  ];
+}
+
 async function collectNpmResolvedManagedNpmRootPeerDependencyPins(params: {
   npmRoot: string;
   runCommand?: ManagedNpmRootRunCommand;
@@ -506,20 +527,7 @@ async function collectNpmResolvedManagedNpmRootPeerDependencyPins(params: {
     );
 
     const command = params.runCommand ?? runCommandWithTimeout;
-    const npmPeerPlanArgs = [
-      "npm",
-      "install",
-      "--package-lock-only",
-      "--force",
-      ...createSafeNpmInstallArgs({
-        omitDev: true,
-        omitPeer: true,
-        loglevel: "error",
-        ignoreWorkspaces: true,
-        noAudit: true,
-        noFund: true,
-      }).slice(1),
-    ];
+    const npmPeerPlanArgs = createManagedNpmPeerPlanArgs({ force: true });
     const npmPlanOptions = {
       cwd: tempRoot,
       timeoutMs: Math.max(params.timeoutMs ?? 300_000, 300_000),
@@ -531,31 +539,15 @@ async function collectNpmResolvedManagedNpmRootPeerDependencyPins(params: {
     };
     let result = await command(npmPeerPlanArgs, npmPlanOptions);
     if (result.code !== 0 && isHostPeerResolutionFailure(result)) {
-      const hydrateResult = await command(
-        [
-          "npm",
-          "install",
-          "--package-lock-only",
-          ...createSafeNpmInstallArgs({
-            omitDev: true,
-            omitPeer: true,
-            legacyPeerDeps: true,
-            loglevel: "error",
-            ignoreWorkspaces: true,
-            noAudit: true,
-            noFund: true,
-          }).slice(1),
-        ],
-        {
-          cwd: tempRoot,
-          timeoutMs: Math.max(params.timeoutMs ?? 300_000, 300_000),
-          env: createSafeNpmInstallEnv(process.env, {
-            legacyPeerDeps: true,
-            packageLock: true,
-            quiet: true,
-          }),
-        },
-      );
+      const hydrateResult = await command(createManagedNpmPeerPlanArgs({ legacyPeerDeps: true }), {
+        cwd: tempRoot,
+        timeoutMs: Math.max(params.timeoutMs ?? 300_000, 300_000),
+        env: createSafeNpmInstallEnv(process.env, {
+          legacyPeerDeps: true,
+          packageLock: true,
+          quiet: true,
+        }),
+      });
       if (hydrateResult.code === 0) {
         await scrubHostPeerFromTempPackageLock(tempLockPath);
         result = await command(npmPeerPlanArgs, npmPlanOptions);
