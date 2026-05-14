@@ -586,7 +586,7 @@ public actor GatewayChannelActor {
         if scheme == "wss" {
             return true
         }
-        if let host = self.url.host, LoopbackHost.isLoopback(host) {
+        if let host = self.url.host, LoopbackHost.isLocalNetworkHost(host) {
             return true
         }
         return false
