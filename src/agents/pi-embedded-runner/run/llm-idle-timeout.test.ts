@@ -189,20 +189,18 @@ describe("resolveLlmIdleTimeoutMs", () => {
     expect(resolveLlmIdleTimeoutMs({ model: { baseUrl: "" } })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
   });
 
-  it("still honors an explicit provider request timeout for local providers", () => {
+  it("disables idle watchdog for local providers even with explicit modelRequestTimeoutMs", () => {
     expect(
       resolveLlmIdleTimeoutMs({
         model: { baseUrl: "http://127.0.0.1:11434" },
         modelRequestTimeoutMs: 600_000,
       }),
-    ).toBe(600_000);
+    ).toBe(0);
   });
 
-  it("still applies agents.defaults.timeoutSeconds cap for local providers", () => {
+  it("disables idle watchdog for local providers even with agents.defaults.timeoutSeconds", () => {
     const cfg = { agents: { defaults: { timeoutSeconds: 30 } } } as OpenClawConfig;
-    expect(resolveLlmIdleTimeoutMs({ cfg, model: { baseUrl: "http://127.0.0.1:11434" } })).toBe(
-      30_000,
-    );
+    expect(resolveLlmIdleTimeoutMs({ cfg, model: { baseUrl: "http://127.0.0.1:11434" } })).toBe(0);
   });
 });
 

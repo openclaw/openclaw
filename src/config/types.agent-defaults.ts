@@ -38,6 +38,8 @@ export type AgentModelEntryConfig = {
   agentRuntime?: AgentRuntimePolicyConfig;
   /** Enable streaming for this model (default: true, false for Ollama to avoid SDK issue #1205). */
   streaming?: boolean;
+  /** Runtime compatibility overrides (e.g., supportsTools for models that support tool calls). */
+  compat?: import("./types.models.js").ModelCompatConfig;
 };
 
 export type AgentModelListConfig = {

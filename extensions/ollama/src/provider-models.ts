@@ -247,13 +247,10 @@ export function buildOllamaModelDefinition(
     capabilities === undefined
       ? isReasoningModelHeuristic(modelId)
       : capabilities.includes("thinking");
-  const compat =
-    capabilities === undefined
-      ? { supportsUsageInStreaming: true }
-      : {
-          supportsTools: capabilities.includes("tools"),
-          supportsUsageInStreaming: true,
-        };
+  const compat = {
+    supportsTools: capabilities === undefined ? true : capabilities.includes("tools"),
+    supportsUsageInStreaming: true,
+  };
   return {
     id: modelId,
     name: modelId,

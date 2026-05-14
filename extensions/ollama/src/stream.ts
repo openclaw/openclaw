@@ -394,14 +394,25 @@ export function createConfiguredOllamaCompatStreamWrapper(
   const runtimeThinkValue = isNativeOllamaTransport
     ? resolveOllamaThinkValue(ctx.thinkingLevel)
     : undefined;
-  // "off" is also the implicit agent default. Preserve explicit native Ollama
-  // model config unless the active run requests a non-off thinking level.
-  const ollamaThinkValue =
-    runtimeThinkValue === false && configuredThinkValue !== undefined
-      ? undefined
-      : runtimeThinkValue;
-  if (ollamaThinkValue !== undefined) {
-    streamFn = createOllamaThinkingWrapper(streamFn, ollamaThinkValue);
+  // Non-reasoning Ollama models cannot accept a truthy thinking/think
+  // parameter — Ollama returns 400 "\"<model>\" does not support thinking".
+  // Force think: false for these models regardless of runtime think level
+  // or model-level config to prevent the error on fallback/think propagation.
+  const modelSupportsThinking = model?.reasoning === true;
+  if (!modelSupportsThinking) {
+    if (runtimeThinkValue !== false || configuredThinkValue !== undefined) {
+      streamFn = createOllamaThinkingWrapper(streamFn, false);
+    }
+  } else {
+    // "off" is also the implicit agent default. Preserve explicit native Ollama
+    // model config unless the active run requests a non-off thinking level.
+    const ollamaThinkValue =
+      runtimeThinkValue === false && configuredThinkValue !== undefined
+        ? undefined
+        : runtimeThinkValue;
+    if (ollamaThinkValue !== undefined) {
+      streamFn = createOllamaThinkingWrapper(streamFn, ollamaThinkValue);
+    }
   }
 
   if (normalizeProviderId(ctx.provider) === "ollama" && isOllamaCloudKimiModelRef(ctx.modelId)) {
@@ -433,6 +444,7 @@ export function buildOllamaChatRequest(params: {
     stream: params.stream ?? true,
     ...(params.tools && params.tools.length > 0 ? { tools: params.tools } : {}),
     ...(params.options ? { options: params.options } : {}),
+    keep_alive: "1h",
     ...params.requestParams,
   };
 }

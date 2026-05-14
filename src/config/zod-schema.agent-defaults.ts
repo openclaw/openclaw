@@ -14,6 +14,7 @@ import {
   BlockStreamingCoalesceSchema,
   CliBackendSchema,
   HumanDelaySchema,
+  ModelCompatSchema,
   TypingModeSchema,
 } from "./zod-schema.core.js";
 
@@ -73,6 +74,8 @@ export const AgentDefaultsSchema = z
             agentRuntime: AgentRuntimePolicySchema,
             /** Enable streaming for this model (default: true, false for Ollama to avoid SDK issue #1205). */
             streaming: z.boolean().optional(),
+            /** Runtime compatibility overrides (e.g., supportsTools for models that support tool calls). */
+            compat: ModelCompatSchema.optional(),
           })
           .strict(),
       )

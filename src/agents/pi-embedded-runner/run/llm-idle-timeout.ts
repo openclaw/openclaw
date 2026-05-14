@@ -102,6 +102,17 @@ export function resolveLlmIdleTimeoutMs(params?: {
   modelRequestTimeoutMs?: number;
   model?: { baseUrl?: string };
 }): number {
+  // The default watchdog is a network-silence-as-hang guard for cloud providers.
+  // Local providers can legitimately stream nothing for many minutes during
+  // prompt evaluation or thinking. Disable idle timeout early, before any
+  // configured timeout clamping, so that local models (Ollama, LM Studio,
+  // llama.cpp) are never subject to the network-silence heuristic regardless
+  // of agent-level timeoutSeconds.
+  const baseUrl = params?.model?.baseUrl;
+  if (typeof baseUrl === "string" && baseUrl.length > 0 && isLocalProviderBaseUrl(baseUrl)) {
+    return 0;
+  }
+
   const clampTimeoutMs = (valueMs: number) => Math.min(Math.floor(valueMs), MAX_SAFE_TIMEOUT_MS);
   const clampImplicitTimeoutMs = (valueMs: number) =>
     clampTimeoutMs(Math.min(valueMs, DEFAULT_LLM_IDLE_TIMEOUT_MS));
@@ -149,16 +160,6 @@ export function resolveLlmIdleTimeoutMs(params?: {
   }
 
   if (params?.trigger === "cron") {
-    return 0;
-  }
-
-  // The default watchdog is a network-silence-as-hang guard for cloud providers.
-  // Local providers can legitimately stream nothing for many minutes during
-  // prompt evaluation or thinking, so falling back to the default would abort
-  // valid local runs. Honor it only when the user has not opted out via the
-  // baseUrl pointing at loopback / private-network / `.local`.
-  const baseUrl = params?.model?.baseUrl;
-  if (typeof baseUrl === "string" && baseUrl.length > 0 && isLocalProviderBaseUrl(baseUrl)) {
     return 0;
   }
 

@@ -184,7 +184,7 @@ export const SecretsConfigSchema = z
 
 const ModelApiSchema = z.enum(MODEL_APIS);
 
-const ModelCompatSchema = z
+export const ModelCompatSchema = z
   .object({
     supportsStore: z.boolean().optional(),
     supportsPromptCacheKey: z.boolean().optional(),
