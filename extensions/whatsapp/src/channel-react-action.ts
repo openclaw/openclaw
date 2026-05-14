@@ -1,3 +1,4 @@
+import { jsonResult } from "openclaw/plugin-sdk/channel-actions";
 import {
   isWhatsAppGroupJid,
   resolveReactionMessageId,
@@ -5,23 +6,83 @@ import {
   normalizeWhatsAppTarget,
   readStringOrNumberParam,
   readStringParam,
+  sendMessageWhatsApp,
   type OpenClawConfig,
 } from "./channel-react-action.runtime.js";
 
 const WHATSAPP_CHANNEL = "whatsapp" as const;
 
-export async function handleWhatsAppReactAction(params: {
+type WhatsAppMessageActionParams = {
   action: string;
   params: Record<string, unknown>;
   cfg: OpenClawConfig;
   accountId?: string | null;
   requesterSenderId?: string | null;
+  mediaAccess?: {
+    localRoots?: readonly string[];
+    readFile?: (filePath: string) => Promise<Buffer>;
+  };
+  mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   toolContext?: {
     currentChannelId?: string | null;
     currentChannelProvider?: string | null;
     currentMessageId?: string | number | null;
   };
-}) {
+};
+
+function readUploadFileMediaSource(args: Record<string, unknown>): string | undefined {
+  return (
+    readStringParam(args, "media", { trim: false }) ??
+    readStringParam(args, "mediaUrl", { trim: false }) ??
+    readStringParam(args, "filePath", { trim: false }) ??
+    readStringParam(args, "path", { trim: false }) ??
+    readStringParam(args, "fileUrl", { trim: false })
+  );
+}
+
+function readUploadFileCaptionText(args: Record<string, unknown>): string {
+  return (
+    readStringParam(args, "message", { allowEmpty: true }) ??
+    readStringParam(args, "content", { allowEmpty: true }) ??
+    readStringParam(args, "caption", { allowEmpty: true }) ??
+    ""
+  );
+}
+
+async function handleWhatsAppUploadFileAction(params: WhatsAppMessageActionParams) {
+  const mediaUrl = readUploadFileMediaSource(params.params);
+  if (!mediaUrl) {
+    if (readStringParam(params.params, "buffer", { trim: false })) {
+      throw new Error(
+        "WhatsApp upload-file cannot send buffer payloads. Use media, mediaUrl, filePath, path, or fileUrl instead.",
+      );
+    }
+    throw new Error("WhatsApp upload-file requires media, mediaUrl, filePath, path, or fileUrl.");
+  }
+  const to = readStringParam(params.params, "to", { required: true });
+  const result = await sendMessageWhatsApp(to, readUploadFileCaptionText(params.params), {
+    verbose: false,
+    cfg: params.cfg,
+    mediaUrl,
+    mediaAccess: params.mediaAccess,
+    mediaLocalRoots: params.mediaLocalRoots,
+    mediaReadFile: params.mediaReadFile,
+    accountId: params.accountId ?? undefined,
+  });
+  return jsonResult({
+    ok: true,
+    channel: WHATSAPP_CHANNEL,
+    action: "upload-file",
+    messageId: result.messageId,
+    toJid: result.toJid,
+  });
+}
+
+export async function handleWhatsAppMessageAction(params: WhatsAppMessageActionParams) {
+  if (params.action === "upload-file") {
+    return await handleWhatsAppUploadFileAction(params);
+  }
   if (params.action !== "react") {
     throw new Error(`Action ${params.action} is not supported for provider ${WHATSAPP_CHANNEL}.`);
   }
@@ -82,3 +143,5 @@ export async function handleWhatsAppReactAction(params: {
     params.cfg,
   );
 }
+
+export const handleWhatsAppReactAction = handleWhatsAppMessageAction;

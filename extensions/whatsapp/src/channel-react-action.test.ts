@@ -4,11 +4,16 @@ import type { OpenClawConfig } from "./runtime-api.js";
 
 const hoisted = vi.hoisted(() => ({
   handleWhatsAppAction: vi.fn(async () => ({ content: [{ type: "text", text: '{"ok":true}' }] })),
+  sendMessageWhatsApp: vi.fn(async () => ({
+    messageId: "msg-media-1",
+    toJid: "1555@s.whatsapp.net",
+  })),
 }));
 
 vi.mock("./channel-react-action.runtime.js", async () => {
   return {
     handleWhatsAppAction: hoisted.handleWhatsAppAction,
+    sendMessageWhatsApp: hoisted.sendMessageWhatsApp,
     resolveReactionMessageId: ({
       args,
       toolContext,
@@ -41,7 +46,7 @@ vi.mock("./channel-react-action.runtime.js", async () => {
     readStringParam: (
       params: Record<string, unknown>,
       key: string,
-      options?: { required?: boolean; allowEmpty?: boolean },
+      options?: { required?: boolean; allowEmpty?: boolean; trim?: boolean },
     ) => {
       const value = params[key];
       if (value == null) {
@@ -73,6 +78,72 @@ describe("whatsapp react action messageId resolution", () => {
 
   beforeEach(() => {
     hoisted.handleWhatsAppAction.mockClear();
+    hoisted.sendMessageWhatsApp.mockClear();
+  });
+
+  it("sends upload-file through the WhatsApp media send path", async () => {
+    const mediaReadFile = vi.fn(async () => Buffer.from("media"));
+
+    const result = await handleWhatsAppReactAction({
+      action: "upload-file",
+      params: {
+        to: "+1555",
+        filePath: "/tmp/pic.png",
+        caption: "picture caption",
+      },
+      cfg: baseCfg,
+      accountId: "default",
+      mediaLocalRoots: ["/tmp"],
+      mediaReadFile,
+    });
+
+    expect(hoisted.sendMessageWhatsApp).toHaveBeenCalledWith("+1555", "picture caption", {
+      verbose: false,
+      cfg: baseCfg,
+      mediaUrl: "/tmp/pic.png",
+      mediaAccess: undefined,
+      mediaLocalRoots: ["/tmp"],
+      mediaReadFile,
+      accountId: "default",
+    });
+    expect(result.details).toMatchObject({
+      ok: true,
+      channel: "whatsapp",
+      action: "upload-file",
+      messageId: "msg-media-1",
+      toJid: "1555@s.whatsapp.net",
+    });
+  });
+
+  it("rejects upload-file buffer payloads without a media path", async () => {
+    await expect(
+      handleWhatsAppReactAction({
+        action: "upload-file",
+        params: {
+          to: "+1555",
+          buffer: Buffer.from("hello").toString("base64"),
+          filename: "hello.txt",
+        },
+        cfg: baseCfg,
+        accountId: "default",
+      }),
+    ).rejects.toThrow("WhatsApp upload-file cannot send buffer payloads");
+    expect(hoisted.sendMessageWhatsApp).not.toHaveBeenCalled();
+  });
+
+  it("requires upload-file media path input", async () => {
+    await expect(
+      handleWhatsAppReactAction({
+        action: "upload-file",
+        params: {
+          to: "+1555",
+          caption: "missing media",
+        },
+        cfg: baseCfg,
+        accountId: "default",
+      }),
+    ).rejects.toThrow("WhatsApp upload-file requires media");
+    expect(hoisted.sendMessageWhatsApp).not.toHaveBeenCalled();
   });
 
   it("uses explicit messageId when provided", async () => {
