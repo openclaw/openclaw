@@ -48,6 +48,7 @@ vi.mock("../cli/progress.js", () => ({
 vi.mock("@clack/prompts", () => ({
   cancel: mocks.clackCancel,
   isCancel: mocks.clackIsCancel,
+  log: { message: vi.fn() },
 }));
 
 vi.mock("./migrate/skill-selection-prompt.js", () => ({

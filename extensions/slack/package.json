@@ -9,7 +9,8 @@
     "@slack/types": "2.21.1",
     "@slack/web-api": "7.15.2",
     "https-proxy-agent": "9.0.0",
-    "typebox": "1.1.38"
+    "typebox": "1.1.38",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

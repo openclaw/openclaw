@@ -48,7 +48,7 @@ describe("startGatewayEarlyRuntime", () => {
       logHealth: { error: () => {} },
       dedupe: new Map(),
       chatAbortControllers: new Map(),
-      chatRunState: { abortedRuns: new Map() },
+      chatRunState: { abortedRuns: new Map(), deltaLastBroadcastText: new Map() },
       chatRunBuffers: new Map(),
       chatDeltaSentAt: new Map(),
       chatDeltaLastBroadcastLen: new Map(),

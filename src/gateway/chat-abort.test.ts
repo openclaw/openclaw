@@ -53,6 +53,7 @@ function createOps(params: {
     chatRunBuffers: new Map(buffer !== undefined ? [[runId, buffer]] : []),
     chatDeltaSentAt: new Map([[runId, Date.now()]]),
     chatDeltaLastBroadcastLen: new Map([[runId, buffer?.length ?? 0]]),
+    chatDeltaLastBroadcastText: new Map(buffer !== undefined ? [[runId, buffer]] : []),
     chatAbortedRuns: new Map(),
     removeChatRun,
     agentRunSeq: new Map(),
@@ -108,6 +109,7 @@ describe("abortChatRunById", () => {
     expect(ops.chatRunBuffers.has(runId)).toBe(false);
     expect(ops.chatDeltaSentAt.has(runId)).toBe(false);
     expect(ops.chatDeltaLastBroadcastLen.has(runId)).toBe(false);
+    expect(ops.chatDeltaLastBroadcastText.has(runId)).toBe(false);
     expect(ops.removeChatRun).toHaveBeenCalledWith(runId, runId, sessionKey);
     expect(ops.agentRunSeq.has(runId)).toBe(false);
     expect(ops.agentRunSeq.has("client-run-1")).toBe(false);

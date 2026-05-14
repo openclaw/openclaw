@@ -3407,6 +3407,7 @@ export async function runEmbeddedAttempt(
                     normalizeMessagesForLlmBoundary(activeSession.messages),
                   ),
                   imagesCount: imageResult.images.length,
+                  tools: tools,
                 },
                 {
                   runId: params.runId,

@@ -517,7 +517,7 @@
   resize: none;
   white-space: pre-wrap;
   font-family: var(--font-body);
-  font-size: 14px;
+  font-size: var(--control-ui-input-text-size);
   line-height: 1.45;
 }
 
@@ -597,7 +597,7 @@
   border: none;
   background: transparent;
   color: var(--text);
-  font-size: 0.92rem;
+  font-size: var(--control-ui-input-text-size);
   font-family: inherit;
   line-height: 1.4;
   outline: none;
@@ -615,7 +615,7 @@
 .agent-chat__stt-interim {
   padding: 10px 14px 0;
   color: var(--muted);
-  font-size: 0.82rem;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.35;
   overflow-wrap: anywhere;
 }

@@ -172,7 +172,7 @@ async function writeCodexCliAuthFile(codexHome: string): Promise<void> {
 }
 
 describe("bridgeCodexAppServerStartOptions", () => {
-  it("sets agent-owned CODEX_HOME and HOME for local app-server launches", async () => {
+  it("sets agent-owned CODEX_HOME without overriding HOME for local app-server launches", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const startOptions = createStartOptions();
     try {
@@ -188,12 +188,35 @@ describe("bridgeCodexAppServerStartOptions", () => {
         ...startOptions,
         env: {
           CODEX_HOME: codexHome,
-          HOME: nativeHome,
         },
       });
       await expect(fs.access(codexHome)).resolves.toBeUndefined();
-      await expect(fs.access(nativeHome)).resolves.toBeUndefined();
+      await expectPathMissing(nativeHome);
       expect(startOptions.env).toBeUndefined();
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves inherited HOME when clearEnv asks to clear app-server isolation vars", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const startOptions = createStartOptions({
+      clearEnv: ["CODEX_HOME", "HOME", "FOO"],
+    });
+    try {
+      await expect(
+        bridgeCodexAppServerStartOptions({
+          startOptions,
+          agentDir,
+        }),
+      ).resolves.toEqual({
+        ...startOptions,
+        env: {
+          CODEX_HOME: resolveCodexAppServerHomeDir(agentDir),
+        },
+        clearEnv: ["FOO"],
+      });
+      expect(startOptions.clearEnv).toEqual(["CODEX_HOME", "HOME", "FOO"]);
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
@@ -260,7 +283,6 @@ describe("bridgeCodexAppServerStartOptions", () => {
         env: {
           EXISTING: "1",
           CODEX_HOME: resolveCodexAppServerHomeDir(agentDir),
-          HOME: resolveCodexAppServerNativeHomeDir(agentDir),
         },
         clearEnv: ["FOO", "CODEX_API_KEY", "OPENAI_API_KEY"],
       });
@@ -298,7 +320,6 @@ describe("bridgeCodexAppServerStartOptions", () => {
         ...startOptions,
         env: {
           CODEX_HOME: resolveCodexAppServerHomeDir(agentDir),
-          HOME: resolveCodexAppServerNativeHomeDir(agentDir),
         },
         clearEnv: ["FOO", "CODEX_API_KEY", "OPENAI_API_KEY"],
       });
@@ -331,7 +352,6 @@ describe("bridgeCodexAppServerStartOptions", () => {
         ...startOptions,
         env: {
           CODEX_HOME: resolveCodexAppServerHomeDir(agentDir),
-          HOME: resolveCodexAppServerNativeHomeDir(agentDir),
         },
         clearEnv: ["FOO", "CODEX_API_KEY", "OPENAI_API_KEY"],
       });
@@ -364,7 +384,6 @@ describe("bridgeCodexAppServerStartOptions", () => {
         ...startOptions,
         env: {
           CODEX_HOME: resolveCodexAppServerHomeDir(agentDir),
-          HOME: resolveCodexAppServerNativeHomeDir(agentDir),
         },
       });
     } finally {

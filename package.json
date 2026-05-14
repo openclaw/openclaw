@@ -307,6 +307,10 @@
       "types": "./dist/plugin-sdk/outbound-runtime.d.ts",
       "default": "./dist/plugin-sdk/outbound-runtime.js"
     },
+    "./plugin-sdk/pair-loop-guard-runtime": {
+      "types": "./dist/plugin-sdk/pair-loop-guard-runtime.d.ts",
+      "default": "./dist/plugin-sdk/pair-loop-guard-runtime.js"
+    },
     "./plugin-sdk/poll-runtime": {
       "types": "./dist/plugin-sdk/poll-runtime.d.ts",
       "default": "./dist/plugin-sdk/poll-runtime.js"
@@ -483,6 +487,14 @@
       "types": "./dist/plugin-sdk/cli-backend.d.ts",
       "default": "./dist/plugin-sdk/cli-backend.js"
     },
+    "./plugin-sdk/codex-mcp-projection": {
+      "types": "./dist/plugin-sdk/codex-mcp-projection.d.ts",
+      "default": "./dist/plugin-sdk/codex-mcp-projection.js"
+    },
+    "./plugin-sdk/codex-native-task-runtime": {
+      "types": "./dist/plugin-sdk/codex-native-task-runtime.d.ts",
+      "default": "./dist/plugin-sdk/codex-native-task-runtime.js"
+    },
     "./plugin-sdk/agent-harness": {
       "types": "./dist/plugin-sdk/agent-harness.d.ts",
       "default": "./dist/plugin-sdk/agent-harness.js"
@@ -498,6 +510,10 @@
     "./plugin-sdk/host-runtime": {
       "types": "./dist/plugin-sdk/host-runtime.d.ts",
       "default": "./dist/plugin-sdk/host-runtime.js"
+    },
+    "./plugin-sdk/types": {
+      "types": "./dist/plugin-sdk/types.d.ts",
+      "default": "./dist/plugin-sdk/types.js"
     },
     "./plugin-sdk/process-runtime": {
       "types": "./dist/plugin-sdk/process-runtime.d.ts",
@@ -1349,6 +1365,7 @@
     "check:import-cycles": "node --import tsx scripts/check-import-cycles.ts",
     "check:loc": "node --import tsx scripts/check-ts-max-loc.ts --max 500",
     "check:madge-import-cycles": "node --import tsx scripts/check-madge-import-cycles.ts",
+    "check:media-download-helpers": "node scripts/check-media-download-helper-roundtrip.mjs",
     "check:no-conflict-markers": "node scripts/check-no-conflict-markers.mjs",
     "check:no-runtime-action-load-config": "node scripts/check-no-runtime-action-load-config.mjs",
     "check:opengrep-rule-metadata": "node security/opengrep/check-rule-metadata.mjs",
@@ -1478,6 +1495,7 @@
     "moltbot:rpc": "node scripts/run-node.mjs agent --mode rpc --json",
     "openclaw": "node scripts/run-node.mjs",
     "openclaw:rpc": "node scripts/run-node.mjs agent --mode rpc --json",
+    "perf:issue-78851": "node --import tsx scripts/perf/issue-78851-model-resolution.ts",
     "perf:kova:summary": "node scripts/kova-ci-summary.mjs",
     "perf:source:summary": "node scripts/openclaw-performance-source-summary.mjs",
     "plugin-sdk:api:check": "node --max-old-space-size=8192 --import tsx scripts/generate-plugin-sdk-api-baseline.ts --check",
@@ -1590,6 +1608,7 @@
     "test:docker:live-codex-harness": "bash scripts/test-live-codex-harness-docker.sh",
     "test:docker:live-codex-npm-plugin": "bash scripts/e2e/codex-npm-plugin-live-docker.sh",
     "test:docker:live-plugin-tool": "bash scripts/e2e/live-plugin-tool-docker.sh",
+    "test:docker:live-subagent-announce": "bash scripts/test-live-subagent-announce-docker.sh",
     "test:docker:live-gateway": "bash scripts/test-live-gateway-models-docker.sh",
     "test:docker:live-gateway:claude": "OPENCLAW_LIVE_GATEWAY_PROVIDERS=claude-cli OPENCLAW_LIVE_GATEWAY_MODELS=claude-cli/claude-sonnet-4-6 bash scripts/test-live-gateway-models-docker.sh",
     "test:docker:live-gateway:codex": "OPENCLAW_LIVE_GATEWAY_PROVIDERS=codex-cli OPENCLAW_LIVE_GATEWAY_MODELS=codex-cli/gpt-5.5 bash scripts/test-live-gateway-models-docker.sh",
@@ -1607,6 +1626,11 @@
     "test:docker:npm-onboard-slack-channel-agent": "OPENCLAW_NPM_ONBOARD_CHANNEL=slack bash scripts/e2e/npm-onboard-channel-agent-docker.sh",
     "test:docker:npm-telegram-live": "bash scripts/e2e/npm-telegram-live-docker.sh",
     "test:docker:onboard": "bash scripts/e2e/onboard-docker.sh",
+    "test:docker:release-user-journey": "bash scripts/e2e/release-user-journey-docker.sh",
+    "test:docker:release-typed-onboarding": "bash scripts/e2e/release-typed-onboarding-docker.sh",
+    "test:docker:release-media-memory": "bash scripts/e2e/release-media-memory-docker.sh",
+    "test:docker:release-upgrade-user-journey": "bash scripts/e2e/release-upgrade-user-journey-docker.sh",
+    "test:docker:release-plugin-marketplace": "bash scripts/e2e/release-plugin-marketplace-docker.sh",
     "test:docker:openai-chat-tools": "bash scripts/e2e/openai-chat-tools-docker.sh",
     "test:docker:openai-image-auth": "bash scripts/e2e/openai-image-auth-docker.sh",
     "test:docker:openai-web-search-minimal": "bash scripts/e2e/openai-web-search-minimal-docker.sh",
@@ -1618,6 +1642,7 @@
     "test:docker:published-upgrade-survivor": "env OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest} OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT=${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s} bash scripts/e2e/upgrade-survivor-docker.sh",
     "test:docker:qr": "bash scripts/e2e/qr-import-docker.sh",
     "test:docker:rerun": "node scripts/docker-e2e-rerun.mjs",
+    "test:docker:root-managed-vps-upgrade": "env OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS=1 OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@2026.5.7} OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT=${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s} bash scripts/e2e/upgrade-survivor-docker.sh",
     "test:docker:session-runtime-context": "bash scripts/e2e/session-runtime-context-docker.sh",
     "test:docker:skill-install": "bash scripts/e2e/skill-install-docker.sh",
     "test:docker:timings": "node scripts/docker-e2e-timings.mjs",
@@ -1742,7 +1767,6 @@
     "@slack/types": "2.21.1",
     "@slack/web-api": "7.15.2",
     "ajv": "8.20.0",
-    "audio-decode": "2.2.3",
     "chalk": "5.6.2",
     "chokidar": "5.0.0",
     "commander": "14.0.3",
