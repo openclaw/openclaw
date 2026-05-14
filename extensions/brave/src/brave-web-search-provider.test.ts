@@ -118,6 +118,10 @@ describe("brave web search provider", () => {
       },
     };
 
+    expect(createBraveWebSearchProvider().getConfiguredCredentialValue?.(config)).toEqual(apiKey);
+    expect(createBraveWebSearchContractProvider().getConfiguredCredentialValue?.(config)).toEqual(
+      apiKey,
+    );
     expect(createBraveWebSearchProvider().getConfiguredCredentialFallback?.(config)).toEqual({
       path: "tools.web.search.apiKey",
       value: apiKey,

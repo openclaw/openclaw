@@ -94,6 +94,13 @@ function resolveLegacyTopLevelBraveCredential(
   return { path: "tools.web.search.apiKey", value: search.apiKey };
 }
 
+function resolveConfiguredBraveCredential(config: unknown): unknown {
+  return (
+    resolveProviderWebSearchPluginConfig(config, "brave")?.apiKey ??
+    resolveLegacyTopLevelBraveCredential(config)?.value
+  );
+}
+
 function mergeScopedSearchConfig(
   searchConfig: Record<string, unknown> | undefined,
   key: string,
@@ -163,6 +170,7 @@ export function createBraveWebSearchProvider(): WebSearchProviderPlugin {
       searchCredential: { type: "top-level" },
       configuredCredential: { pluginId: "brave" },
     }),
+    getConfiguredCredentialValue: resolveConfiguredBraveCredential,
     getConfiguredCredentialFallback: resolveLegacyTopLevelBraveCredential,
     createTool: (ctx) =>
       createBraveToolDefinition(

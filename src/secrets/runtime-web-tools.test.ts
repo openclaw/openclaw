@@ -191,8 +191,16 @@ function createTestProvider(params: {
     },
     getConfiguredCredentialValue: (config) => {
       const entryConfig = config?.plugins?.entries?.[params.pluginId]?.config;
-      return entryConfig && typeof entryConfig === "object"
-        ? (entryConfig as { webSearch?: { apiKey?: unknown } }).webSearch?.apiKey
+      const configuredValue =
+        entryConfig && typeof entryConfig === "object"
+          ? (entryConfig as { webSearch?: { apiKey?: unknown } }).webSearch?.apiKey
+          : undefined;
+      if (configuredValue !== undefined || params.provider !== "brave") {
+        return configuredValue;
+      }
+      const search = config?.tools?.web?.search;
+      return search && typeof search === "object"
+        ? (search as { apiKey?: unknown }).apiKey
         : undefined;
     },
     getConfiguredCredentialFallback: (config) => {
@@ -1126,6 +1134,29 @@ describe("runtime web tools resolution", () => {
     expect(resolveManifestContractPluginIdsByCompatibilityRuntimePathMock).not.toHaveBeenCalled();
     expect(resolveBundledExplicitWebSearchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
     expect(resolvePluginWebSearchProvidersMock).not.toHaveBeenCalled();
+  });
+
+  it("prefers legacy top-level web search apiKey over provider env fallback", async () => {
+    const { metadata, resolvedConfig } = await runRuntimeWebTools({
+      config: asConfig({
+        tools: {
+          web: {
+            search: {
+              apiKey: { source: "env", provider: "default", id: "LEGACY_WEB_SEARCH_REF" },
+            },
+          },
+        },
+      }),
+      env: {
+        BRAVE_API_KEY: "ambient-brave-key",
+        LEGACY_WEB_SEARCH_REF: "legacy-web-search-key",
+      },
+    });
+
+    expect(metadata.search.providerSource).toBe("auto-detect");
+    expect(metadata.search.selectedProvider).toBe("brave");
+    expect(metadata.search.selectedProviderKeySource).toBe("secretRef");
+    expect(readProviderKey(resolvedConfig, "brave")).toBe("legacy-web-search-key");
   });
 
   it("does not resolve web fetch provider SecretRef when web fetch is inactive", async () => {
