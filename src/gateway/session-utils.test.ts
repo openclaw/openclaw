@@ -1481,6 +1481,36 @@ describe("gateway session utils", () => {
     const ops = result.agents.find((agent) => agent.id === "ops");
     expect(ops?.model).toEqual({ primary: "anthropic/claude-opus-4-6" });
   });
+
+  test("listAgentsForGateway reports per-agent thinking defaults from the agent model", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: {
+        defaults: {
+          model: { primary: "minimax/MiniMax-M2.7" },
+          thinkingDefault: "off",
+        },
+        list: [
+          { id: "main", default: true },
+          {
+            id: "investment-master",
+            model: { primary: "deepseek/deepseek-v4-flash" },
+            thinkingDefault: "xhigh",
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    const result = listAgentsForGateway(cfg);
+    const agent = result.agents.find((row) => row.id === "investment-master");
+
+    expect(agent?.model).toEqual({ primary: "deepseek/deepseek-v4-flash" });
+    expect(agent?.thinkingDefault).toBe("xhigh");
+    expect(agent?.thinkingLevels?.map((level) => level.id)).toEqual(
+      expect.arrayContaining(["off", "minimal", "low", "medium", "high", "xhigh"]),
+    );
+    expect(agent?.thinkingOptions).toEqual(agent?.thinkingLevels?.map((level) => level.label));
+  });
 });
 
 describe("resolveSessionModelRef", () => {

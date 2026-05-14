@@ -1219,6 +1219,7 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
     const meta = configuredById.get(id);
     const model = resolveGatewayAgentModel(cfg, id);
     const resolvedModel = resolveDefaultModelForAgent({ cfg, agentId: id });
+    const thinkingLevels = listThinkingLevelOptions(resolvedModel.provider, resolvedModel.model);
     return Object.assign(
       {
         id,
@@ -1232,6 +1233,14 @@ export function listAgentsForGateway(cfg: OpenClawConfig): {
           model: resolvedModel.model,
           sessionKey: resolveAgentMainSessionKey({ cfg, agentId: id }),
           acpRuntime: false,
+        }),
+        thinkingLevels,
+        thinkingOptions: thinkingLevels.map((level) => level.label),
+        thinkingDefault: resolveGatewaySessionThinkingDefault({
+          cfg,
+          provider: resolvedModel.provider,
+          model: resolvedModel.model,
+          agentId: id,
         }),
       },
       model ? { model } : {},

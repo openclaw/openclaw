@@ -272,6 +272,35 @@ describe("renderAgents", () => {
     expect(alphaSelect).not.toBe(betaSelect);
   });
 
+  it("renders the resolved per-agent thinking default in the overview", async () => {
+    const container = document.createElement("div");
+
+    render(
+      renderAgents(
+        createProps({
+          agentsList: {
+            defaultId: "alpha",
+            mainKey: "main",
+            scope: "workspace",
+            agents: [
+              { id: "alpha", name: "Alpha", thinkingDefault: "off" } as never,
+              { id: "beta", name: "Beta", thinkingDefault: "xhigh" } as never,
+            ],
+          },
+          selectedAgentId: "beta",
+        }),
+      ),
+      container,
+    );
+
+    await Promise.resolve();
+
+    const thinkingKv = Array.from(container.querySelectorAll(".agent-kv")).find(
+      (entry) => entry.querySelector(".label")?.textContent?.trim() === "Thinking Default",
+    );
+    expect(thinkingKv?.textContent).toContain("xhigh");
+  });
+
   it("shows the skills count only for the selected agent's report", async () => {
     const container = document.createElement("div");
     render(
