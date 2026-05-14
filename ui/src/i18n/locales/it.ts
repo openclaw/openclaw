@@ -695,10 +695,6 @@ export const it: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle:
-        "Scopri dove vanno i token, quando le sessioni hanno picchi e cosa determina i costi.",
-    },
     common: {
       emptyValue: "—",
       unknown: "sconosciuto",

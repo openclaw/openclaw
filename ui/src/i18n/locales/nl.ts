@@ -696,9 +696,6 @@ export const nl: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle: "Zie waar tokens naartoe gaan, wanneer sessies pieken en wat de kosten bepaalt.",
-    },
     common: {
       emptyValue: "—",
       unknown: "onbekend",
