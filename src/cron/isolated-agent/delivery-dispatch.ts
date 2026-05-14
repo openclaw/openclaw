@@ -137,6 +137,7 @@ type DispatchCronDeliveryParams = {
   deliveryBestEffort: boolean;
   deliveryPayloadHasStructuredContent: boolean;
   deliveryPayloads: ReplyPayload[];
+  emptyOutputHadFreshDescendants?: boolean;
   synthesizedText?: string;
   ttsAuto?: TtsAutoMode;
   summary?: string;
@@ -1143,7 +1144,10 @@ export async function dispatchCronDelivery(
           runStartedAt: params.runStartedAt,
         })
       : undefined;
-    const hadDescendants = activeSubagentRuns > 0 || Boolean(completedDescendantReply);
+    const hadDescendants =
+      activeSubagentRuns > 0 ||
+      Boolean(completedDescendantReply) ||
+      params.emptyOutputHadFreshDescendants === true;
     if (activeSubagentRuns > 0 || expectedSubagentFollowup) {
       let finalReply = await subagentFollowupRuntime?.waitForDescendantSubagentSummary({
         sessionKey: subagentFollowupSessionKey,

@@ -13,6 +13,7 @@ import {
   logWarnMock,
   mockRunCronFallbackPassthrough,
   pickLastNonEmptyTextFromPayloadsMock,
+  resolveCronPayloadOutcomeMock,
   resolveCronDeliveryPlanMock,
   runEmbeddedPiAgentMock,
   runCliAgentMock,
@@ -32,11 +33,13 @@ function requireEmbeddedAgentCall(index: number): { prompt?: string } {
 function requireDeliveryRequest(): {
   skipHeartbeatDelivery?: boolean;
   deliveryPayloads?: unknown;
+  emptyOutputHadFreshDescendants?: boolean;
 } {
   const request = dispatchCronDeliveryMock.mock.calls[0]?.[0] as
     | {
         skipHeartbeatDelivery?: boolean;
         deliveryPayloads?: unknown;
+        emptyOutputHadFreshDescendants?: boolean;
       }
     | undefined;
   if (!request) {
@@ -187,6 +190,37 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
     expect(countActiveDescendantRunsMock).toHaveBeenCalledWith(
       "agent:default:cron:test:run:test-session-id",
     );
+  });
+
+  it("marks empty-output delivery when a fresh descendant already settled", async () => {
+    usePayloadTextExtraction();
+    resolveCronPayloadOutcomeMock.mockReturnValue({
+      summary: undefined,
+      outputText: undefined,
+      synthesizedText: undefined,
+      deliveryPayload: undefined,
+      deliveryPayloads: [],
+      deliveryPayloadHasStructuredContent: false,
+      hasFatalErrorPayload: false,
+      embeddedRunError: undefined,
+    });
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "   " }],
+      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+    });
+    listDescendantRunsForRequesterMock.mockReturnValue([
+      {
+        startedAt: Date.now() + 60_000,
+      },
+    ]);
+    countActiveDescendantRunsMock.mockReturnValue(0);
+
+    mockRunCronFallbackPassthrough();
+    await runTurnAndExpectOk(1, 1);
+
+    const deliveryRequest = requireDeliveryRequest();
+    expect(deliveryRequest.deliveryPayloads).toEqual([]);
+    expect(deliveryRequest.emptyOutputHadFreshDescendants).toBe(true);
   });
 
   it("runs one no-tools repair pass when final cron output has no deliverable text", async () => {
