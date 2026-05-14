@@ -332,6 +332,48 @@ export async function upsertInferredCommitments(params: {
   return created;
 }
 
+export async function dismissPendingCommitmentsForScope(params: {
+  cfg?: OpenClawConfig;
+  scope: CommitmentScope;
+  dedupeKeys: string[];
+  nowMs?: number;
+}): Promise<CommitmentRecord[]> {
+  const dedupeKeys = [
+    ...new Set(params.dedupeKeys.map((key) => key.trim()).filter((key) => key.length > 0)),
+  ];
+  if (dedupeKeys.length === 0) {
+    return [];
+  }
+  const nowMs = params.nowMs ?? Date.now();
+  const store = await loadCommitmentStoreWithExpiredMarked(nowMs);
+  const scopeKey = buildCommitmentScopeKey(params.scope);
+  const dedupeKeySet = new Set(dedupeKeys);
+  const dismissed: CommitmentRecord[] = [];
+  let changed = false;
+  store.commitments = store.commitments.map((commitment) => {
+    if (
+      buildCommitmentScopeKey(commitment) !== scopeKey ||
+      !dedupeKeySet.has(commitment.dedupeKey) ||
+      !isActiveStatus(commitment.status)
+    ) {
+      return commitment;
+    }
+    changed = true;
+    const next = {
+      ...commitment,
+      status: "dismissed" as const,
+      dismissedAtMs: nowMs,
+      updatedAtMs: nowMs,
+    };
+    dismissed.push(next);
+    return next;
+  });
+  if (changed) {
+    await saveCommitmentStore(undefined, store);
+  }
+  return dismissed;
+}
+
 function countSentCommitmentsForSession(params: {
   store: CommitmentStoreFile;
   agentId: string;

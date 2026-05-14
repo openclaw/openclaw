@@ -8,6 +8,7 @@ import {
   parseCommitmentExtractionOutput,
   persistCommitmentExtractionResult,
   validateCommitmentCandidates,
+  validateCommitmentResolutions,
 } from "./extraction.js";
 import { loadCommitmentStore } from "./store.js";
 import type { CommitmentCandidate, CommitmentExtractionItem } from "./types.js";
@@ -89,6 +90,31 @@ describe("commitment extraction", () => {
     expect(parsed.candidates[0]?.suggestedText).toBe("How did the interview go?");
   });
 
+  it("parses valid resolved pending commitments from JSON output", () => {
+    const parsed = parseCommitmentExtractionOutput(
+      JSON.stringify({
+        candidates: [],
+        resolved: [
+          {
+            itemId: "turn-1",
+            dedupeKey: "gmail-reauth:sprichert",
+            reason: "The assistant reported the Gmail reauth was completed and verified.",
+            confidence: 0.95,
+          },
+        ],
+      }),
+    );
+
+    expect(parsed.resolved).toEqual([
+      {
+        itemId: "turn-1",
+        dedupeKey: "gmail-reauth:sprichert",
+        reason: "The assistant reported the Gmail reauth was completed and verified.",
+        confidence: 0.95,
+      },
+    ]);
+  });
+
   it("omits routing scope identifiers from extractor prompts", () => {
     const prompt = buildCommitmentExtractionPrompt({
       items: [
@@ -113,6 +139,29 @@ describe("commitment extraction", () => {
     expect(prompt).not.toContain("thread-secret");
   });
 
+  it("asks the extractor to resolve pending commitments closed by later verified turns", () => {
+    const prompt = buildCommitmentExtractionPrompt({
+      items: [
+        item({
+          assistantText: "The Gmail reauth completed and I verified the account is working.",
+          existingPending: [
+            {
+              kind: "open_loop",
+              reason: "User requested a Gmail reauth link.",
+              dedupeKey: "gmail-reauth:sprichert",
+              earliestMs: Date.parse("2026-04-30T17:00:00.000Z"),
+              latestMs: Date.parse("2026-04-30T23:00:00.000Z"),
+            },
+          ],
+        }),
+      ],
+    });
+
+    expect(prompt).toContain('"resolved"');
+    expect(prompt).toContain("tool-verified completion");
+    expect(prompt).toContain("gmail-reauth:sprichert");
+  });
+
   it("rejects disabled, low-confidence, and non-future candidates", () => {
     const cfg: OpenClawConfig = { commitments: { enabled: true } };
     const valid = validateCommitmentCandidates({
@@ -131,6 +180,50 @@ describe("commitment extraction", () => {
     });
 
     expect(valid.map((entry) => entry.candidate.dedupeKey)).toEqual(["interview:2026-04-30"]);
+  });
+
+  it("validates only high-confidence resolutions for existing pending commitments", () => {
+    const valid = validateCommitmentResolutions({
+      cfg: { commitments: { enabled: true } },
+      items: [
+        item({
+          existingPending: [
+            {
+              kind: "open_loop",
+              reason: "User requested a Gmail reauth link.",
+              dedupeKey: "gmail-reauth:sprichert",
+              earliestMs: Date.parse("2026-04-30T17:00:00.000Z"),
+              latestMs: Date.parse("2026-04-30T23:00:00.000Z"),
+            },
+          ],
+        }),
+      ],
+      result: {
+        candidates: [],
+        resolved: [
+          {
+            itemId: "turn-1",
+            dedupeKey: "gmail-reauth:sprichert",
+            reason: "The assistant verified reauth completed.",
+            confidence: 0.91,
+          },
+          {
+            itemId: "turn-1",
+            dedupeKey: "gmail-reauth:other",
+            reason: "Not in existing pending list.",
+            confidence: 0.99,
+          },
+          {
+            itemId: "turn-1",
+            dedupeKey: "gmail-reauth:sprichert",
+            reason: "Too uncertain.",
+            confidence: 0.5,
+          },
+        ],
+      },
+    });
+
+    expect(valid.map((entry) => entry.resolution.dedupeKey)).toEqual(["gmail-reauth:sprichert"]);
   });
 
   it("clamps inferred due time to at least one heartbeat interval after write time", () => {
@@ -193,5 +286,62 @@ describe("commitment extraction", () => {
     expect(store.commitments[0]?.reason).toBe("Updated reason");
     expect(store.commitments[0]?.confidence).toBe(0.97);
     expect(store.commitments[0]?.status).toBe("pending");
+  });
+
+  it("dismisses existing pending commitments resolved by later extraction", async () => {
+    const cfg = await createConfig();
+    await persistCommitmentExtractionResult({
+      cfg,
+      items: [item()],
+      result: {
+        candidates: [
+          candidate({
+            dedupeKey: "gmail-reauth:sprichert",
+            reason: "User requested a Gmail reauth link.",
+            suggestedText: "Did the gog Gmail reauth go through for sprichert@gmail.com?",
+          }),
+        ],
+      },
+      nowMs,
+    });
+    await persistCommitmentExtractionResult({
+      cfg,
+      items: [
+        item({
+          nowMs: nowMs + 60_000,
+          userText: "It went through.",
+          assistantText: "Confirmed: the Gmail reauth completed and the account is working.",
+          existingPending: [
+            {
+              kind: "open_loop",
+              reason: "User requested a Gmail reauth link.",
+              dedupeKey: "gmail-reauth:sprichert",
+              earliestMs: Date.parse("2026-04-30T17:00:00.000Z"),
+              latestMs: Date.parse("2026-04-30T23:00:00.000Z"),
+            },
+          ],
+        }),
+      ],
+      result: {
+        candidates: [],
+        resolved: [
+          {
+            itemId: "turn-1",
+            dedupeKey: "gmail-reauth:sprichert",
+            reason: "The assistant confirmed the reauth completed and was verified.",
+            confidence: 0.96,
+          },
+        ],
+      },
+      nowMs: nowMs + 60_000,
+    });
+
+    const store = await loadCommitmentStore();
+    expect(store.commitments).toHaveLength(1);
+    expect(store.commitments[0]).toMatchObject({
+      dedupeKey: "gmail-reauth:sprichert",
+      status: "dismissed",
+      dismissedAtMs: nowMs + 60_000,
+    });
   });
 });

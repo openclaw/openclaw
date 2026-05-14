@@ -70,6 +70,13 @@ export type CommitmentCandidate = {
   };
 };
 
+export type CommitmentResolutionCandidate = {
+  itemId: string;
+  dedupeKey: string;
+  reason: string;
+  confidence: number;
+};
+
 export type CommitmentExtractionItem = CommitmentScope & {
   itemId: string;
   nowMs: number;
@@ -89,4 +96,5 @@ export type CommitmentExtractionItem = CommitmentScope & {
 
 export type CommitmentExtractionBatchResult = {
   candidates: CommitmentCandidate[];
+  resolved?: CommitmentResolutionCandidate[];
 };
