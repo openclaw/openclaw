@@ -195,18 +195,27 @@ function createTestProvider(params: {
         ? (entryConfig as { webSearch?: { apiKey?: unknown } }).webSearch?.apiKey
         : undefined;
     },
-    getConfiguredCredentialFallback:
-      params.provider === "gemini"
-        ? (config) => {
-            const provider = config?.models?.providers?.google;
-            return provider && typeof provider === "object" && "apiKey" in provider
-              ? {
-                  path: "models.providers.google.apiKey",
-                  value: (provider as { apiKey?: unknown }).apiKey,
-                }
-              : undefined;
-          }
-        : undefined,
+    getConfiguredCredentialFallback: (config) => {
+      if (params.provider === "brave") {
+        const search = config?.tools?.web?.search;
+        return search && typeof search === "object" && "apiKey" in search
+          ? {
+              path: "tools.web.search.apiKey",
+              value: (search as { apiKey?: unknown }).apiKey,
+            }
+          : undefined;
+      }
+      if (params.provider === "gemini") {
+        const provider = config?.models?.providers?.google;
+        return provider && typeof provider === "object" && "apiKey" in provider
+          ? {
+              path: "models.providers.google.apiKey",
+              value: (provider as { apiKey?: unknown }).apiKey,
+            }
+          : undefined;
+      }
+      return undefined;
+    },
     setConfiguredCredentialValue: (configTarget, value) => {
       setConfiguredProviderKey(configTarget, params.pluginId, value);
     },
