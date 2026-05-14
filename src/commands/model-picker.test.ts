@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { NormalizedModelCatalogRow } from "../model-catalog/index.js";
 import {
@@ -20,6 +21,21 @@ const loadStaticManifestCatalogRowsForList = vi.hoisted(() =>
 );
 vi.mock("./models/list.manifest-catalog.js", () => ({
   loadStaticManifestCatalogRowsForList,
+}));
+
+const loadPreferredProviderPickerCatalog = vi.hoisted(() =>
+  vi.fn<
+    (_params: {
+      cfg: OpenClawConfig;
+      preferredProvider: string;
+      agentDir?: string;
+      workspaceDir?: string;
+      env?: NodeJS.ProcessEnv;
+    }) => Promise<ModelCatalogEntry[]>
+  >(async () => []),
+);
+vi.mock("../flows/model-picker.provider-catalog.js", () => ({
+  loadPreferredProviderPickerCatalog,
 }));
 
 const ensureAuthProfileStore = vi.hoisted(() =>
@@ -290,6 +306,7 @@ beforeEach(() => {
     }),
   });
   loadStaticManifestCatalogRowsForList.mockReturnValue([]);
+  loadPreferredProviderPickerCatalog.mockResolvedValue([]);
   listProfilesForProvider.mockReturnValue([]);
   resolveEnvApiKey.mockImplementation((_provider: string) => ({
     apiKey: "test-key",
@@ -680,8 +697,55 @@ describe("promptDefaultModel", () => {
     ]);
   });
 
-  it("loads the full model catalog when the user chooses to browse", async () => {
+  it("loads the full model catalog when browsing without a preferred provider", async () => {
     loadModelCatalog.mockResolvedValue([
+      {
+        provider: "openai-codex",
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+      },
+      {
+        provider: "openai-codex",
+        id: "gpt-5.5-pro",
+        name: "GPT-5.5 Pro",
+      },
+    ]);
+    const select = vi
+      .fn()
+      .mockResolvedValueOnce("__browse__")
+      .mockImplementationOnce(async (params) => {
+        const option = params.options.find(
+          (entry: { value: string }) => entry.value === "openai-codex/gpt-5.5-pro",
+        );
+        return option?.value ?? params.initialValue;
+      });
+    const prompter = makePrompter({ select });
+    const config = {
+      agents: {
+        defaults: {
+          model: "openai-codex/gpt-5.5",
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await promptDefaultModel({
+      config,
+      prompter,
+      allowKeep: true,
+      includeManual: true,
+      ignoreAllowlist: true,
+      browseCatalogOnDemand: true,
+    });
+
+    expect(result.model).toBe("openai-codex/gpt-5.5-pro");
+    expect(loadModelCatalog).toHaveBeenCalledOnce();
+    expect(loadPreferredProviderPickerCatalog).not.toHaveBeenCalled();
+    expect(select).toHaveBeenCalledTimes(2);
+    expect(select.mock.calls[1]?.[0]?.searchable).toBe(true);
+  });
+
+  it("loads the preferred provider catalog when the user chooses to browse", async () => {
+    loadPreferredProviderPickerCatalog.mockResolvedValue([
       {
         provider: "openai-codex",
         id: "gpt-5.5",
@@ -722,9 +786,102 @@ describe("promptDefaultModel", () => {
     });
 
     expect(result.model).toBe("openai-codex/gpt-5.5-pro");
-    expect(loadModelCatalog).toHaveBeenCalledOnce();
+    expect(loadPreferredProviderPickerCatalog).toHaveBeenCalledWith({
+      cfg: config,
+      preferredProvider: "openai-codex",
+      agentDir: expect.stringContaining("agents/main/agent"),
+    });
+    expect(loadModelCatalog).not.toHaveBeenCalled();
     expect(select).toHaveBeenCalledTimes(2);
     expect(select.mock.calls[1]?.[0]?.searchable).toBe(true);
+  });
+
+  it("scopes on-demand preferred-provider loads before the first model prompt", async () => {
+    loadPreferredProviderPickerCatalog.mockResolvedValue([
+      {
+        provider: "nvidia",
+        id: "nvidia/nemotron-3-super-120b-a12b",
+        name: "NVIDIA Nemotron 3 Super 120B",
+      },
+      {
+        provider: "nvidia",
+        id: "moonshotai/kimi-k2.5",
+        name: "Kimi K2.5",
+      },
+    ]);
+    const select = vi.fn(async (params) => params.options[0]?.value as never);
+    const prompter = makePrompter({ select });
+    const config = {
+      agents: {
+        defaults: {
+          model: "nvidia/nemotron-3-super-120b-a12b",
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await promptDefaultModel({
+      config,
+      prompter,
+      allowKeep: false,
+      includeManual: false,
+      ignoreAllowlist: true,
+      preferredProvider: "nvidia",
+      browseCatalogOnDemand: true,
+    });
+
+    expect(result.model).toBe("nvidia/nemotron-3-super-120b-a12b");
+    expect(loadPreferredProviderPickerCatalog).toHaveBeenCalledWith({
+      cfg: config,
+      preferredProvider: "nvidia",
+      agentDir: expect.stringContaining("agents/main/agent"),
+    });
+    expect(loadModelCatalog).not.toHaveBeenCalled();
+    expect(optionValues(pickerOptions(select as MockCallSource))).toEqual([
+      "nvidia/nemotron-3-super-120b-a12b",
+      "nvidia/moonshotai/kimi-k2.5",
+    ]);
+  });
+
+  it("uses the configured default agent dir for provider-scoped catalog auth", async () => {
+    loadPreferredProviderPickerCatalog.mockResolvedValue([
+      {
+        provider: "nvidia",
+        id: "z-ai/glm-5.1",
+        name: "GLM 5.1",
+      },
+    ]);
+    const select = vi.fn(async (params) => params.options[0]?.value as never);
+    const prompter = makePrompter({ select });
+    const env = {
+      ...process.env,
+      OPENCLAW_STATE_DIR: "/tmp/openclaw-picker-state",
+    };
+    const config = {
+      agents: {
+        list: [{ id: "worker", default: true }],
+        defaults: {
+          model: "nvidia/nemotron-3-super-120b-a12b",
+        },
+      },
+    } as OpenClawConfig;
+
+    await promptDefaultModel({
+      config,
+      prompter,
+      allowKeep: false,
+      includeManual: false,
+      ignoreAllowlist: true,
+      preferredProvider: "nvidia",
+      browseCatalogOnDemand: true,
+      env,
+    });
+
+    expect(loadPreferredProviderPickerCatalog).toHaveBeenCalledWith({
+      cfg: config,
+      preferredProvider: "nvidia",
+      agentDir: "/tmp/openclaw-picker-state/agents/worker/agent",
+      env,
+    });
   });
 
   it("supports configuring vLLM during setup", async () => {

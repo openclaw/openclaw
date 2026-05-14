@@ -219,13 +219,7 @@ describe("nvidia provider hooks", () => {
       entries: [],
     });
 
-    expect(entries?.map((entry) => entry.id)).toEqual([
-      "minimaxai/minimax-m2.7",
-      "nvidia/nemotron-3-super-120b-a12b",
-      "moonshotai/kimi-k2.5",
-      "minimaxai/minimax-m2.5",
-      "z-ai/glm5",
-    ]);
+    expect(entries?.map((entry) => entry.id)).toEqual(["minimaxai/minimax-m2.7"]);
   });
 
   it("opts into literal provider-prefix preservation", async () => {
@@ -278,10 +272,6 @@ describe("nvidia provider hooks", () => {
     const liveRows = await catalogProvider?.liveCatalog?.(buildCatalogContext("nvapi-test"));
     expect(liveRows?.map((entry) => `${entry.source}:${entry.provider}/${entry.model}`)).toEqual([
       "live:nvidia/minimaxai/minimax-m2.7",
-      "live:nvidia/nvidia/nemotron-3-super-120b-a12b",
-      "live:nvidia/moonshotai/kimi-k2.5",
-      "live:nvidia/minimaxai/minimax-m2.5",
-      "live:nvidia/z-ai/glm5",
     ]);
   });
 });

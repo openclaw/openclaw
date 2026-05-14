@@ -1,3 +1,4 @@
+import { lookup as dnsLookup } from "node:dns/promises";
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type {
   ModelDefinitionConfig,
@@ -5,6 +6,7 @@ import type {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   fetchWithSsrFGuard,
+  type LookupFn,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
@@ -42,6 +44,24 @@ let featuredModelCache:
   | undefined;
 let featuredModelRequest: Promise<ModelDefinitionConfig[] | null> | undefined;
 
+type DnsLookupOptions = {
+  all?: boolean;
+  family?: number;
+  hints?: number;
+  order?: "ipv4first" | "ipv6first" | "verbatim";
+  verbatim?: boolean;
+};
+
+const lookupNvidiaFeaturedModelHostname = (async (
+  hostname: string,
+  options?: number | DnsLookupOptions,
+) => {
+  if (typeof options === "object" && options !== null) {
+    return await dnsLookup(hostname, { ...options, family: 4 });
+  }
+  return await dnsLookup(hostname, { family: 4 });
+}) as LookupFn;
+
 export function buildNvidiaProvider(): ModelProviderConfig {
   return {
     ...buildManifestModelProviderConfig({
@@ -60,7 +80,7 @@ export async function buildLiveNvidiaProvider(): Promise<ModelProviderConfig> {
   }
   return {
     ...provider,
-    models: mergeFeaturedModels(featuredModels, provider.models),
+    models: featuredModels,
   };
 }
 
@@ -96,6 +116,10 @@ async function fetchNvidiaFeaturedModels(): Promise<ModelDefinitionConfig[] | nu
       timeoutMs: FEATURED_MODEL_FETCH_TIMEOUT_MS,
       requireHttps: true,
       policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(NVIDIA_FEATURED_MODELS_URL),
+      // The featured catalog is an NVIDIA-owned CloudFront URL. Some resolvers
+      // stall for seconds on the default all-family lookup; IPv4 pinning keeps
+      // the guarded fixed-host fetch on the fast path.
+      lookupFn: lookupNvidiaFeaturedModelHostname,
       auditContext: "nvidia-featured-model-catalog",
     });
     try {
@@ -176,23 +200,6 @@ function normalizeFeaturedModelName(name: string): string {
     return "";
   }
   return trimmed;
-}
-
-function mergeFeaturedModels(
-  featuredModels: ModelDefinitionConfig[],
-  fallbackModels: ModelDefinitionConfig[],
-): ModelDefinitionConfig[] {
-  const seen = new Set<string>();
-  const merged: ModelDefinitionConfig[] = [];
-  for (const model of [...featuredModels, ...fallbackModels]) {
-    const key = model.id.toLowerCase();
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    merged.push(model);
-  }
-  return merged;
 }
 
 function isBoundedPositiveInteger(value: unknown, max: number): value is number {
