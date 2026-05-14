@@ -1,6 +1,7 @@
 import path from "node:path";
 import { markMigrationItemSkipped, summarizeMigrationItems } from "../../plugin-sdk/migration.js";
 import type { MigrationItem, MigrationPlan } from "../../plugins/types.js";
+import { MIGRATION_CONFLICT_REASON_PHRASES } from "./output.js";
 
 export const MIGRATION_SKILL_NOT_SELECTED_REASON = "not selected for migration";
 export const MIGRATION_PLUGIN_NOT_SELECTED_REASON = "not selected for migration";
@@ -253,28 +254,34 @@ export function formatMigrationSkillSelectionLabel(item: MigrationItem): string 
   return readMigrationSkillName(item) ?? item.id.replace(/^skill:/u, "");
 }
 
-export function formatMigrationSkillSelectionHint(item: MigrationItem): string | undefined {
-  const parts = [readMigrationSkillSourceLabel(item)];
-  if (item.status === "conflict") {
-    parts.push(item.reason ? `conflict: ${item.reason}` : "conflict");
+function humanizeMigrationConflictReason(reason: string | undefined): string {
+  if (!reason) {
+    return "conflict";
   }
-  return (
-    parts
-      .filter((value): value is string => typeof value === "string" && value.length > 0)
-      .join("; ") || undefined
-  );
+  return MIGRATION_CONFLICT_REASON_PHRASES[reason] ?? reason;
+}
+
+export function formatMigrationSkillSelectionHint(item: MigrationItem): string | undefined {
+  const sourceLabel = readMigrationSkillSourceLabel(item);
+  if (item.status === "conflict") {
+    const reason = humanizeMigrationConflictReason(item.reason);
+    return sourceLabel ? `${sourceLabel} ${reason}` : reason;
+  }
+  return sourceLabel ?? undefined;
 }
 
 export function formatMigrationPluginSelectionHint(item: MigrationItem): string | undefined {
   const pluginName = readMigrationPluginName(item);
   const configKey = readMigrationPluginConfigKey(item);
+  const marketplace = readMigrationPluginMarketplaceName(item);
+  if (item.status === "conflict") {
+    const reason = humanizeMigrationConflictReason(item.reason);
+    return marketplace ? `${marketplace} plugin ${reason}` : reason;
+  }
   const parts = [
-    readMigrationPluginMarketplaceName(item),
+    marketplace,
     configKey && configKey !== pluginName ? `config: ${configKey}` : undefined,
   ];
-  if (item.status === "conflict") {
-    parts.push(item.reason ? `conflict: ${item.reason}` : "conflict");
-  }
   return (
     parts
       .filter((value): value is string => typeof value === "string" && value.length > 0)

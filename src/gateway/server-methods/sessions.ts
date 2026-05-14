@@ -1817,6 +1817,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       provider: resolvedDisplayModel.provider,
       model: resolvedDisplayModel.model,
       sessionKey: target.canonicalKey ?? key,
+      acpRuntime: applied.entry?.acp != null,
+      acpBackend: applied.entry?.acp?.backend,
     });
     const result: SessionsPatchResult = {
       ok: true,

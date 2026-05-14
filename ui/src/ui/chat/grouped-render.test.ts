@@ -1107,10 +1107,10 @@ describe("grouped chat rendering", () => {
     const objectUrl = "blob:managed-image";
     vi.stubGlobal(
       "URL",
-      Object.assign(URL, {
-        createObjectURL: vi.fn(() => objectUrl),
-        revokeObjectURL: vi.fn(),
-      }),
+      class extends URL {
+        static override createObjectURL = vi.fn(() => objectUrl);
+        static override revokeObjectURL = vi.fn();
+      },
     );
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
       const headers = init?.headers as Headers;

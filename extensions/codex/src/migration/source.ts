@@ -245,7 +245,7 @@ function sourceCodexAppServerStartOptions(codexHome: string): CodexAppServerStar
   return {
     transport: "stdio",
     command: "codex",
-    commandSource: "config",
+    commandSource: "managed",
     args: ["app-server", "--listen", "stdio://"],
     headers: {},
     env: {
@@ -576,7 +576,7 @@ export async function discoverCodexSource(
   const hooksPath = path.join(codexHome, "hooks", "hooks.json");
   const codexSkills = await discoverSkillDirs({
     root: codexSkillsDir,
-    sourceLabel: "Codex CLI skill",
+    sourceLabel: "Codex skill",
     excludeSystem: true,
   });
   const personalAgentSkills = await discoverSkillDirs({
