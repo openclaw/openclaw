@@ -483,6 +483,13 @@ function readConfiguredProviderCredential(params: {
   return configuredValue ?? params.provider.getCredentialValue(params.search);
 }
 
+function readConfiguredProviderScopedCredential(params: {
+  provider: PluginWebSearchProviderEntry;
+  config: OpenClawConfig;
+}): unknown {
+  return params.provider.getConfiguredCredentialValue?.(params.config);
+}
+
 function readConfiguredProviderCredentialFallback(params: {
   provider: PluginWebSearchProviderEntry;
   config: OpenClawConfig;
@@ -698,6 +705,11 @@ export async function resolveRuntimeWebTools(params: {
           provider,
           config,
           search: toolConfig,
+        }),
+      readInactiveConfiguredCredential: ({ provider, config }) =>
+        readConfiguredProviderScopedCredential({
+          provider,
+          config,
         }),
       readConfiguredCredentialFallback: ({ provider, config, toolConfig }) =>
         readConfiguredProviderCredentialFallback({

@@ -64,6 +64,11 @@ export type RuntimeWebProviderSelectionParams<
     config: OpenClawConfig;
     toolConfig: TToolConfig;
   }) => unknown;
+  readInactiveConfiguredCredential?: (params: {
+    provider: TProvider;
+    config: OpenClawConfig;
+    toolConfig: TToolConfig;
+  }) => unknown;
   readConfiguredCredentialFallback?: (params: {
     provider: TProvider;
     config: OpenClawConfig;
@@ -99,11 +104,13 @@ function pushInactiveProviderCredentialWarnings<
   skipProviderId?: string;
   details: string;
 }): void {
+  const readInactiveConfiguredCredential =
+    params.selection.readInactiveConfiguredCredential ?? params.selection.readConfiguredCredential;
   for (const provider of params.selection.providers) {
     if (provider.id === params.skipProviderId) {
       continue;
     }
-    const value = params.selection.readConfiguredCredential({
+    const value = readInactiveConfiguredCredential({
       provider,
       config: params.selection.sourceConfig,
       toolConfig: params.selection.toolConfig,

@@ -1095,7 +1095,7 @@ describe("runtime web tools resolution", () => {
   });
 
   it("auto-detects from legacy top-level web search apiKey", async () => {
-    const { metadata, resolvedConfig } = await runRuntimeWebTools({
+    const { metadata, resolvedConfig, context } = await runRuntimeWebTools({
       config: asConfig({
         tools: {
           web: {
@@ -1118,6 +1118,9 @@ describe("runtime web tools resolution", () => {
     expect(resolveBundledExplicitWebSearchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
     expect(resolveBundledWebSearchProvidersFromPublicArtifactsMock).toHaveBeenCalled();
     expect(resolvePluginWebSearchProvidersMock).not.toHaveBeenCalled();
+    expect(
+      context.warnings.filter((warning) => warning.code === "SECRETS_REF_IGNORED_INACTIVE_SURFACE"),
+    ).toEqual([]);
   });
 
   it("does not resolve web fetch provider SecretRef when web fetch is inactive", async () => {
