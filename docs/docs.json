@@ -1334,7 +1334,6 @@
                 "pages": [
                   "clawhub/api",
                   "clawhub/http-api",
-                  "clawhub/security",
                   "clawhub/acceptable-usage"
                 ]
               }

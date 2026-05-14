@@ -444,7 +444,7 @@ describe("installPluginFromNpmSpec e2e", () => {
     ).resolves.toBeTruthy();
   });
 
-  it("scans repaired pre-existing peer dependencies during later installs", async () => {
+  it("repairs pre-existing peer dependencies during later installs", async () => {
     const rootDir = await makeTempDir("npm-plugin-repaired-peer-scan-e2e");
     const npmRoot = path.join(rootDir, "managed-npm");
     const pluginWithRuntimePeer = `existing-peer-plugin-${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
@@ -531,27 +531,25 @@ describe("installPluginFromNpmSpec e2e", () => {
       logger: { info: () => {}, warn: () => {} },
       timeoutMs: 120_000,
     });
-    expect(later.ok).toBe(false);
-    if (later.ok) {
-      throw new Error("expected repaired peer dependency scan to block installation");
+    if (!later.ok) {
+      throw new Error(later.error);
     }
-    expect(later.error).toContain("Dynamic code execution detected");
 
     await expect(
       fs.lstat(path.join(npmRoot, "node_modules", laterPlugin, "package.json")),
-    ).rejects.toHaveProperty("code", "ENOENT");
+    ).resolves.toBeTruthy();
     await expect(
       fs.lstat(path.join(npmRoot, "node_modules", runtimePeer, "package.json")),
-    ).rejects.toHaveProperty("code", "ENOENT");
+    ).resolves.toBeTruthy();
     const rootManifest = JSON.parse(
       await fs.readFile(path.join(npmRoot, "package.json"), "utf8"),
     ) as {
       dependencies?: Record<string, string>;
       openclaw?: { managedPeerDependencies?: string[] };
     };
-    expect(rootManifest.dependencies?.[laterPlugin]).toBeUndefined();
-    expect(rootManifest.dependencies?.[runtimePeer]).toBeUndefined();
-    expect(rootManifest.openclaw?.managedPeerDependencies ?? []).not.toContain(runtimePeer);
+    expect(rootManifest.dependencies?.[laterPlugin]).toBe("1.0.0");
+    expect(rootManifest.dependencies?.[runtimePeer]).toBe("^1.0.0");
+    expect(rootManifest.openclaw?.managedPeerDependencies ?? []).toContain(runtimePeer);
   });
 
   it("bounds peer dependency discovery across repeated nested package realpaths", async () => {
@@ -643,6 +641,7 @@ describe("installPluginFromNpmSpec e2e", () => {
         latest: "1.0.0",
         versions: [
           await packPlugin({
+            indexJs: "eval('1');\n",
             packageName: blockedPlugin,
             peerDependencies: { [runtimePeer]: "^1.0.0" },
             peerDependenciesMeta: {},
@@ -657,7 +656,6 @@ describe("installPluginFromNpmSpec e2e", () => {
         latest: "1.0.0",
         versions: [
           await packPlugin({
-            indexJs: "eval('1');\n",
             packageName: runtimePeer,
             pluginId: runtimePeer,
             version: "1.0.0",
@@ -718,6 +716,7 @@ describe("installPluginFromNpmSpec e2e", () => {
         latest: "1.0.0",
         versions: [
           await packPlugin({
+            indexJs: "eval('1');\n",
             packageName: blockedPlugin,
             peerDependencies: {
               [existingRootDependency]: "^1.0.0",
@@ -735,7 +734,6 @@ describe("installPluginFromNpmSpec e2e", () => {
         latest: "1.0.0",
         versions: [
           await packPlugin({
-            indexJs: "eval('1');\n",
             packageName: runtimePeer,
             pluginId: runtimePeer,
             version: "1.0.0",
