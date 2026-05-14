@@ -592,7 +592,11 @@ terminal summary, and sanitized error text.
   - ClawHub mode updates one tracked slug or all tracked ClawHub installs in
     the default agent workspace.
   - Config mode patches `skills.entries.<skillKey>` values such as `enabled`,
-    `apiKey`, and `env`.
+    `apiKey`, and `env`. Trusted admin clients may also pass
+    `allowConfigSizeDrop: true` when the update intentionally removes large
+    skill env secrets, such as an integration disconnect cleanup. The flag only
+    opts into the config writer's size-drop allowance; other destructive config
+    write guards still apply.
 
 ### `models.list` views
 
