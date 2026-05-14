@@ -203,6 +203,7 @@ export async function startOrResumeThread(params: {
     } else {
       try {
         const authProfileId = params.params.authProfileId ?? binding.authProfileId;
+        const resumeConfig = mergeCodexThreadConfigs(params.config, userMcpServersConfigPatch);
         const response = assertCodexThreadResumeResponse(
           await params.client.request(
             "thread/resume",
@@ -211,7 +212,7 @@ export async function startOrResumeThread(params: {
               authProfileId,
               appServer: params.appServer,
               developerInstructions: params.developerInstructions,
-              config: params.config,
+              config: resumeConfig,
             }),
           ),
         );
