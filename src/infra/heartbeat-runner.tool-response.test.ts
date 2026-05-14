@@ -230,6 +230,30 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     expectHeartbeatToolPrompt(result);
   });
 
+  it("does not fall back to assistant text when the heartbeat response tool is required", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath });
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+        agentHarnessId: "codex",
+      });
+      replySpy.mockResolvedValue({ text: "This should have used heartbeat_respond." });
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
+      });
+
+      const calledOpts = replyOptions(replySpy);
+      expect(result.status).toBe("ran");
+      expect(calledOpts.sourceReplyDeliveryMode).toBe("message_tool_only");
+      expect(sendTelegram).not.toHaveBeenCalled();
+    });
+  });
+
   it("delivers Codex runtime failure notices during Codex heartbeat message-tool mode", async () => {
     await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg = createConfig({ tmpDir, storePath });
