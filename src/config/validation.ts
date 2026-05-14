@@ -1,5 +1,8 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
+import { buildModelAliasIndex } from "../agents/model-selection-shared.js";
 import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/ids.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
@@ -1139,7 +1142,9 @@ function validateConfigObjectWithPluginsBase(
   };
 
   const validateConfiguredModelRefs = () => {
-    const configuredRefs = collectConfiguredModelRefs(config);
+    const configuredRefs = collectConfiguredModelRefs(config, {
+      includeAgentModelCatalogEntries: false,
+    });
     if (configuredRefs.length === 0) {
       return;
     }
@@ -1164,9 +1169,21 @@ function validateConfigObjectWithPluginsBase(
     if (suppressedModels.size === 0) {
       return;
     }
+    const aliasIndex = buildModelAliasIndex({
+      cfg: config,
+      defaultProvider: DEFAULT_PROVIDER,
+    });
+    const resolveDefaultAgentModelAliasTarget = (value: string): string | null => {
+      const aliasKey = normalizeLowercaseStringOrEmpty(splitTrailingAuthProfile(value).model);
+      const aliasMatch = aliasKey ? aliasIndex.byAlias.get(aliasKey) : undefined;
+      return aliasMatch ? `${aliasMatch.ref.provider}/${aliasMatch.ref.model}` : null;
+    };
     const seen = new Set<string>();
     for (const ref of configuredRefs) {
-      const parsed = parseProviderModelRef(ref.value);
+      const configuredModel = splitTrailingAuthProfile(ref.value).model;
+      const resolvedModelRef =
+        resolveDefaultAgentModelAliasTarget(configuredModel) ?? configuredModel;
+      const parsed = resolvedModelRef ? parseProviderModelRef(resolvedModelRef) : null;
       if (!parsed) {
         continue;
       }
