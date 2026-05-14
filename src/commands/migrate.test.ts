@@ -103,7 +103,7 @@ function codexSkillPlan(overrides: Partial<MigrationPlan> = {}): MigrationPlan {
       target: "/tmp/openclaw/workspace/skills/alpha",
       details: {
         skillName: "alpha",
-        sourceLabel: "Codex CLI skill",
+        sourceLabel: "Codex skill",
       },
     },
     {
@@ -640,7 +640,7 @@ describe("migrateApplyCommand", () => {
     const optionsByValue = new Map(pluginPrompt.options?.map((option) => [option.value, option]));
     expect(optionsByValue.get("plugin:google-calendar")?.label).toBe("google-calendar");
     expect(String(optionsByValue.get("plugin:google-calendar")?.hint)).toContain(
-      "conflict: plugin exists",
+      "already installed in workspace",
     );
     expect(optionsByValue.get("plugin:gmail")?.label).toBe("gmail");
     const appliedPlan = firstAppliedPlan();
