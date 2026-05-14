@@ -260,7 +260,7 @@ export function isForegroundRestrictedPluginNodeCommand(command: string): boolea
 }
 
 type NodeCommandPolicyNode = Pick<NodeSession, "platform" | "deviceFamily"> &
-  Partial<Pick<NodeSession, "caps" | "commands">> & {
+  Partial<Pick<NodeSession, "caps" | "commands" | "connId" | "nodeId">> & {
     approvedCommands?: readonly string[];
   };
 
@@ -287,6 +287,15 @@ function filterApprovedRuntimeCommands(params: {
     return [];
   }
   return params.commands.filter((command) => DESKTOP_HOST_COMMANDS.has(command.trim()));
+}
+
+function isLiveNodeSession(node: NodeCommandPolicyNode | undefined): boolean {
+  return (
+    typeof node?.nodeId === "string" &&
+    node.nodeId.trim() !== "" &&
+    typeof node.connId === "string" &&
+    node.connId.trim() !== ""
+  );
 }
 
 function hasTalkSurface(node?: NodeCommandPolicyNode): boolean {
@@ -318,7 +327,7 @@ function resolveNodeCommandAllowlistInternal(
   const pluginDefaults = listDefaultPluginNodeCommands(platformId);
   const approved = filterApprovedRuntimeCommands({
     platformId,
-    commands: node?.approvedCommands ?? [],
+    commands: node?.approvedCommands ?? (isLiveNodeSession(node) ? (node?.commands ?? []) : []),
   });
   const extra = cfg.gateway?.nodes?.allowCommands ?? [];
   const deny = new Set(cfg.gateway?.nodes?.denyCommands ?? []);

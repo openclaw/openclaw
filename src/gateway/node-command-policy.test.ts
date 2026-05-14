@@ -188,6 +188,30 @@ describe("gateway/node-command-policy", () => {
     }
   });
 
+  it("keeps approved host commands on live desktop node sessions", () => {
+    const allowlist = resolveNodeCommandAllowlist({} as OpenClawConfig, {
+      nodeId: "node-1",
+      connId: "conn-1",
+      platform: "linux",
+      deviceFamily: "Linux",
+      commands: ["browser.proxy", "system.run"],
+    });
+
+    expect(allowlist.has("browser.proxy")).toBe(true);
+    expect(allowlist.has("system.run")).toBe(true);
+  });
+
+  it("does not treat unconnected declared host commands as approved", () => {
+    const allowlist = resolveNodeCommandAllowlist({} as OpenClawConfig, {
+      platform: "linux",
+      deviceFamily: "Linux",
+      commands: ["browser.proxy", "system.run"],
+    });
+
+    expect(allowlist.has("browser.proxy")).toBe(false);
+    expect(allowlist.has("system.run")).toBe(false);
+  });
+
   it("does not grandfather approved non-default commands after config removal", () => {
     const staleApproval = resolveNodeCommandAllowlist({} as OpenClawConfig, {
       platform: "macos",
