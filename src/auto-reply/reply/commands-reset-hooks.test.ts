@@ -458,7 +458,7 @@ describe("handleCommands reset hooks", () => {
     expect(resetMocks.resetConfiguredBindingTargetInPlace).not.toHaveBeenCalled();
   });
 
-  it("acknowledges bare /reset without falling through to model execution", async () => {
+  it("lets bare /reset fall through to model execution", async () => {
     const params = buildResetParams("/reset", {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
@@ -466,14 +466,11 @@ describe("handleCommands reset hooks", () => {
 
     const result = await maybeHandleResetCommand(params);
 
-    expect(result).toEqual({
-      shouldContinue: false,
-      reply: { text: "✅ Session reset." },
-    });
+    expect(result).toBeNull();
     expectObjectFields(firstHookEvent(), { type: "command", action: "reset" }, "hook event");
   });
 
-  it("acknowledges bare /new without falling through to model execution", async () => {
+  it("lets bare /new fall through to model execution", async () => {
     const params = buildResetParams("/new", {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
@@ -481,10 +478,7 @@ describe("handleCommands reset hooks", () => {
 
     const result = await maybeHandleResetCommand(params);
 
-    expect(result).toEqual({
-      shouldContinue: false,
-      reply: { text: "✅ New session started." },
-    });
+    expect(result).toBeNull();
     expectObjectFields(firstHookEvent(), { type: "command", action: "new" }, "hook event");
   });
 
