@@ -32,6 +32,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/WebChat: stop a successful assistant turn whose stale `errorMessage` matches a billing, auth, or rate-limit pattern from rotating profiles, falling back, or surfacing a hard `FailoverError` unless the current attempt has a real failover failure. (#70900) Thanks @truffle-dev.
 - Control UI/logs: make the Gateway Logs stream height responsive to the viewport with a minimum height floor, so larger screens can show substantially more log lines without collapsing on shorter viewports. (#53916) Thanks @extrasmall0.
 - ACP/Codex: surface redacted Codex wrapper stderr for generic ACP internal failures and preserve safe Codex model/provider routing in isolated `CODEX_HOME`, making `sessions_spawn(runtime="acp", agentId="codex")` failures actionable. Fixes #80079. (#80718) Thanks @leoge007.
 - ACP: treat rejected timeout config options as best-effort hints so ACP turns continue with adapters that do not support `session/set_config_option` timeout keys. Fixes #81250. (#81603) Thanks @qkal.
@@ -3968,7 +3969,6 @@ Docs: https://docs.openclaw.ai
 - Plugins/Comfy: read workflow and cloud auth configuration from `plugins.entries.comfy.config` while preserving legacy Comfy config fallback, so image, video, and music workflows pass config validation. Fixes #61915. (#63058) Thanks @547895019.
 - Gateway/secrets: restart secret-backed channels such as Slack and Zalo during `secrets.reload` so rotated webhook secrets take effect immediately, with the reload serialized and per-channel restart errors isolated. (#70720) Thanks @drobison00.
 - Plugins/tokenjuice: preserve `node_modules/tokenjuice/dist/rules/tests/*.json` during bundled plugin runtime staging so the plugin stops failing to load with `Cannot find module '../rules/tests/bun-test.json'`. The global basename prune treats any `tests/` directory as test cargo, but tokenjuice's `dist/rules/tests/` is runtime-loaded rule data consumed by `dist/core/builtin-rules.generated.js`. Adds an opt-in `keepDirectories` field to the per-package prune rule so packages with asset directories that collide with pruned basenames can stage cleanly.
-- Agents/WebChat: stop a successful assistant turn whose stale `errorMessage` happens to match a billing, auth, or rate-limit pattern from being converted into a hard `FailoverError`, by gating the terminal `surface_error` throw on real failover failure. (#70900) Thanks @truffle-dev.
 
 ## 2026.4.22
 

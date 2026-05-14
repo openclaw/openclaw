@@ -194,11 +194,6 @@ describe("handleAssistantFailover", () => {
     });
 
     it("coerces a null decision reason onto the most specific non-timeout failure signal", async () => {
-      // failover-policy can return `surface_error` with `reason: null`
-      // when shouldRotateAssistant fires on `failoverFailure` without a
-      // classified upstream reason. FailoverError requires a concrete
-      // reason, so the throw path coerces null onto the most specific
-      // signal the run observed.
       const outcome = await handleAssistantFailover(
         makeParams({
           initialDecision: { action: "surface_error", reason: null },
@@ -216,20 +211,23 @@ describe("handleAssistantFailover", () => {
     });
 
     it("leaves successful turns with a stale classified errorMessage on the continue_normal path", async () => {
-      // `classifyFailoverReason` runs as a pure string classifier in
-      // `run.ts` without a `stopReason === "error"` gate, so a
-      // successful turn whose lastAssistant happens to carry a stale
-      // classified errorMessage (e.g. from an earlier internal retry)
-      // can drive `shouldRotateAssistant` through its `failoverReason
-      // !== null` branch and land here with a non-null failoverReason.
-      // `failoverFailure` is gated on `stopReason === "error"` via the
-      // isXAssistantError helpers in errors.ts, so it's the correct
-      // signal that a concrete provider failure occurred on this
-      // attempt. Without this gate, throwing would convert a
-      // successful turn into a hard error for the client.
       const outcome = await handleAssistantFailover(
         makeParams({
           initialDecision: { action: "surface_error", reason: "billing" },
+          failoverFailure: false,
+          failoverReason: "billing",
+          billingFailure: false,
+        }),
+      );
+
+      expect(outcome.action).toBe("continue_normal");
+    });
+
+    it("does not escalate stale classified text after an already-started rotation attempt", async () => {
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "rotate_profile", reason: "billing" },
+          fallbackConfigured: true,
           failoverFailure: false,
           failoverReason: "billing",
           billingFailure: false,
