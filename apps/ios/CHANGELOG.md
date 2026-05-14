@@ -1,5 +1,9 @@
 # OpenClaw iOS Changelog
 
+## 2026.5.14 - 2026-05-14
+
+Maintenance update for the current OpenClaw beta release.
+
 ## 2026.5.12 - 2026-05-12
 
 Maintenance update for the current OpenClaw beta release.
