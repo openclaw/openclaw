@@ -206,7 +206,10 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
     onReplyStart?: () => Promise<void> | void;
   }) => ({
     dispatcher: {
-      sendToolResult: vi.fn(() => true),
+      sendToolResult: vi.fn((payload: unknown) => {
+        void opts.deliver(payload, { kind: "tool" });
+        return true;
+      }),
       sendBlockReply: vi.fn((payload: unknown) => {
         void opts.deliver(payload, { kind: "block" });
         return true;
@@ -1122,6 +1125,31 @@ describe("processDiscordMessage session routing", () => {
         ownerRecipient: "111",
         senderRecipient: "222",
       },
+    );
+  });
+
+  it("marks default tool progress deliveries so Discord safety scrubber preserves them", async () => {
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      params?.dispatcher.sendToolResult({ text: "📖 Read: `lines 1-10 from file.txt`" });
+      return { queuedFinal: false, counts: { final: 0, tool: 1, block: 0 } };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: { streaming: { mode: "off" } },
+      route: BASE_CHANNEL_ROUTE,
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(deliverDiscordReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [
+          expect.objectContaining({
+            text: "📖 Read: `lines 1-10 from file.txt`",
+            channelData: expect.objectContaining({ openclawDiscordToolProgress: true }),
+          }),
+        ],
+      }),
     );
   });
 
