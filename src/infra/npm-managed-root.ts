@@ -292,6 +292,74 @@ function isDevOnlyLockPackage(value: unknown): boolean {
   return isRecord(value) && value.dev === true;
 }
 
+function readStringList(value: unknown): string[] | undefined {
+  if (typeof value === "string") {
+    return [value];
+  }
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const values = value.filter((entry): entry is string => typeof entry === "string");
+  return values.length > 0 ? values : undefined;
+}
+
+function matchesNpmPlatformList(value: string | undefined, list: string[] | undefined): boolean {
+  if (!list) {
+    return true;
+  }
+  if (list.length === 1 && list[0] === "any") {
+    return true;
+  }
+  if (!value) {
+    return false;
+  }
+  let negated = 0;
+  let matched = false;
+  for (const entry of list) {
+    const negate = entry.startsWith("!");
+    const test = negate ? entry.slice(1) : entry;
+    if (negate) {
+      negated += 1;
+      if (value === test) {
+        return false;
+      }
+    } else {
+      matched = matched || value === test;
+    }
+  }
+  return matched || negated === list.length;
+}
+
+function resolveCurrentLibc(): string | undefined {
+  if (process.platform !== "linux") {
+    return undefined;
+  }
+  const report: unknown = process.report?.getReport();
+  const header = isRecord(report) ? report.header : undefined;
+  if (isRecord(header) && header.glibcVersionRuntime) {
+    return "glibc";
+  }
+  const sharedObjects = isRecord(report) ? report.sharedObjects : undefined;
+  if (
+    Array.isArray(sharedObjects) &&
+    sharedObjects.some((file) => typeof file === "string" && file.includes("musl"))
+  ) {
+    return "musl";
+  }
+  return undefined;
+}
+
+function isUnsupportedOptionalLockPackage(value: unknown): boolean {
+  if (!isRecord(value) || value.optional !== true) {
+    return false;
+  }
+  return (
+    !matchesNpmPlatformList(process.platform, readStringList(value.os)) ||
+    !matchesNpmPlatformList(process.arch, readStringList(value.cpu)) ||
+    !matchesNpmPlatformList(resolveCurrentLibc(), readStringList(value.libc))
+  );
+}
+
 function readLockPackageName(location: string, value: unknown): string | undefined {
   if (isRecord(value)) {
     const packageName = readOptionalString(value.name);
@@ -326,7 +394,11 @@ function findLockPackageVersion(params: {
   }
   const preferredLocation = `node_modules/${params.packageName}`;
   const preferredPackage = params.lockfile.packages[preferredLocation];
-  if (isRecord(preferredPackage) && !isDevOnlyLockPackage(preferredPackage)) {
+  if (
+    isRecord(preferredPackage) &&
+    !isDevOnlyLockPackage(preferredPackage) &&
+    !isUnsupportedOptionalLockPackage(preferredPackage)
+  ) {
     const preferredVersion = readOptionalString(preferredPackage.version);
     if (preferredVersion) {
       return preferredVersion;
@@ -338,7 +410,8 @@ function findLockPackageVersion(params: {
     if (
       readLockPackageName(location, value) !== params.packageName ||
       !isRecord(value) ||
-      isDevOnlyLockPackage(value)
+      isDevOnlyLockPackage(value) ||
+      isUnsupportedOptionalLockPackage(value)
     ) {
       continue;
     }
@@ -358,7 +431,12 @@ function collectNpmLockPeerDependencyPins(params: {
   for (const [location, value] of Object.entries(packages).toSorted(([left], [right]) =>
     left.localeCompare(right),
   )) {
-    if (location === "" || !isRecord(value) || isDevOnlyLockPackage(value)) {
+    if (
+      location === "" ||
+      !isRecord(value) ||
+      isDevOnlyLockPackage(value) ||
+      isUnsupportedOptionalLockPackage(value)
+    ) {
       continue;
     }
     const packageName = readLockPackageName(location, value);

@@ -450,6 +450,14 @@ describe("managed npm root", () => {
                 },
                 version: "1.0.0",
               },
+              "node_modules/unsupported-optional": {
+                optional: true,
+                os: [process.platform === "win32" ? "darwin" : "win32"],
+                peerDependencies: {
+                  "unsupported-peer": "^9.0.0",
+                },
+                version: "1.0.0",
+              },
             },
           },
           null,
