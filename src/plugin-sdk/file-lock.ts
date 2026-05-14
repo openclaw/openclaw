@@ -1,10 +1,14 @@
 import "../infra/fs-safe-defaults.js";
-import fs from "node:fs/promises";
 import {
   acquireFileLock as acquireFsSafeFileLock,
   drainFileLockManagerForTest,
   resetFileLockManagerForTest,
 } from "@openclaw/fs-safe/file-lock";
+import {
+  readLockFileOwnerPayload,
+  removeReportedStaleLockIfStillStale,
+  shouldRemoveDeadOwnerOrExpiredLock,
+} from "../infra/stale-lock-file.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 
 export type FileLockOptions = {
@@ -16,11 +20,6 @@ export type FileLockOptions = {
     randomize?: boolean;
   };
   stale: number;
-};
-
-type LockFilePayload = {
-  pid?: number;
-  createdAt?: string;
 };
 
 export type FileLockHandle = {
@@ -43,28 +42,13 @@ export type FileLockStaleError = Error & {
 
 const FILE_LOCK_MANAGER_KEY = "openclaw.plugin-sdk.file-lock";
 
-type LockFileSnapshot = {
-  raw: string;
-  payload: Record<string, unknown> | null;
-};
-
-function readLockPayload(value: Record<string, unknown> | null): LockFilePayload | null {
-  if (!value) {
-    return null;
-  }
-  return {
-    pid: typeof value.pid === "number" ? value.pid : undefined,
-    createdAt: typeof value.createdAt === "string" ? value.createdAt : undefined,
-  };
-}
-
 async function shouldReclaimPluginLock(params: {
   lockPath: string;
   payload: Record<string, unknown> | null;
   staleMs: number;
   nowMs: number;
 }): Promise<boolean> {
-  const payload = readLockPayload(params.payload);
+  const payload = readLockFileOwnerPayload(params.payload);
   if (payload?.pid && !isPidAlive(payload.pid)) {
     return true;
   }
@@ -77,81 +61,6 @@ async function shouldReclaimPluginLock(params: {
 
 function isFileLockError(error: unknown, code: string): boolean {
   return (error as { code?: unknown } | null)?.code === code;
-}
-
-async function readLockFileSnapshot(lockPath: string): Promise<LockFileSnapshot | null> {
-  let raw: string;
-  try {
-    raw = await fs.readFile(lockPath, "utf8");
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-      return null;
-    }
-    throw err;
-  }
-
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    return {
-      raw,
-      payload:
-        parsed && typeof parsed === "object" && !Array.isArray(parsed)
-          ? (parsed as Record<string, unknown>)
-          : null,
-    };
-  } catch {
-    return { raw, payload: null };
-  }
-}
-
-function shouldRemoveReportedStalePluginLock(params: {
-  payload: Record<string, unknown> | null;
-  staleMs: number;
-  nowMs: number;
-}): boolean {
-  const payload = readLockPayload(params.payload);
-  if (payload?.pid) {
-    return !isPidAlive(payload.pid);
-  }
-  if (payload?.createdAt) {
-    const createdAt = Date.parse(payload.createdAt);
-    return !Number.isFinite(createdAt) || params.nowMs - createdAt > params.staleMs;
-  }
-  return true;
-}
-
-async function removeReportedStaleLockIfStillStale(params: {
-  lockPath: string;
-  staleMs: number;
-}): Promise<boolean> {
-  const snapshot = await readLockFileSnapshot(params.lockPath);
-  if (!snapshot) {
-    return true;
-  }
-  if (
-    !shouldRemoveReportedStalePluginLock({
-      payload: snapshot.payload,
-      staleMs: params.staleMs,
-      nowMs: Date.now(),
-    })
-  ) {
-    return false;
-  }
-
-  const current = await readLockFileSnapshot(params.lockPath);
-  if (!current) {
-    return true;
-  }
-  if (current.raw !== snapshot.raw) {
-    return false;
-  }
-
-  try {
-    await fs.unlink(params.lockPath);
-    return true;
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "ENOENT";
-  }
 }
 
 function normalizeLockError(err: unknown): never {
@@ -201,7 +110,11 @@ export async function acquireFileLock(
           lockPath &&
           (await removeReportedStaleLockIfStillStale({
             lockPath,
-            staleMs: options.stale,
+            shouldRemove: (snapshot) =>
+              shouldRemoveDeadOwnerOrExpiredLock({
+                payload: snapshot.payload,
+                staleMs: options.stale,
+              }),
           }))
         ) {
           continue;
