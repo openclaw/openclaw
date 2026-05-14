@@ -1,4 +1,4 @@
-import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
+﻿import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
 import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import {
@@ -309,6 +309,7 @@ function isCronAgentExecutionStarted(info: CronAgentExecutionStarted): boolean {
     return true;
   }
   switch (info.phase) {
+    case "attempt_dispatch":
     case "turn_accepted":
     case "process_spawned":
     case "tool_execution_started":
@@ -748,7 +749,7 @@ export function applyJobResult(
       } else if (result.status === "error") {
         const retryConfig = resolveRetryConfig(state.deps.cronConfig);
         const transient = isTransientCronError(result.error, retryConfig.retryOn);
-        // consecutiveErrors is always set to ≥1 by the increment block above.
+        // consecutiveErrors is always set to 鈮? by the increment block above.
         const consecutive = job.state.consecutiveErrors;
         if (transient && consecutive <= retryConfig.maxAttempts) {
           // Schedule retry with backoff (#24355).
@@ -886,7 +887,7 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
     }
     state.deps.log.warn(
       { jobId: result.jobId },
-      "cron: applyOutcomeToStoredJob — job not found after forceReload, result discarded",
+      "cron: applyOutcomeToStoredJob 鈥?job not found after forceReload, result discarded",
     );
     return;
   }
@@ -1113,7 +1114,7 @@ export async function onTimer(state: CronServiceState) {
   } finally {
     // Piggyback session reaper on timer tick (self-throttled to every 5 min).
     // Placed in `finally` so the reaper runs even when a long-running job keeps
-    // `state.running` true across multiple timer ticks — the early return at the
+    // `state.running` true across multiple timer ticks 鈥?the early return at the
     // top of onTimer would otherwise skip the reaper indefinitely.
     const storePaths = new Set<string>();
     if (state.deps.resolveSessionStorePath) {
@@ -1804,12 +1805,12 @@ export function wake(
     // Reasons:
     //   1. The regularly-scheduled heartbeat fires for the agent's main
     //      session, not the supplied sessionKey, so it never peeks the queue
-    //      we just enqueued — the event would sit stranded indefinitely.
+    //      we just enqueued 鈥?the event would sit stranded indefinitely.
     //   2. An `intent: "event"` wake gets deferred by heartbeat-runner as
     //      not-due and is not retried (only busy-skips are), so it cannot
     //      stand in for the regular cadence either.
     // Effectively, --session-key collapses --mode now and --mode next-heartbeat
-    // into the same targeted-immediate behavior — this matches the documented
+    // into the same targeted-immediate behavior 鈥?this matches the documented
     // user intent (target a specific session for relay) better than silently
     // dropping the event.
     state.deps.requestHeartbeat({
@@ -1836,3 +1837,4 @@ export function emit(state: CronServiceState, evt: CronEvent) {
     /* ignore */
   }
 }
+
