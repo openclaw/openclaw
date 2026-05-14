@@ -185,6 +185,8 @@ const MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES = 1;
 const EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS = 30_000;
 const MID_TURN_PRECHECK_CONTINUATION_PROMPT =
   "Continue from the current transcript after the latest tool result. Do not repeat the original user request, and do not rerun completed tools unless the transcript shows they are still needed.";
+const EMPTY_TOOL_FINAL_ANSWER_CONTINUATION_PROMPT =
+  "The previous attempt completed tool calls but produced no user-visible answer. Continue from the existing transcript and tool results, and produce the final answer now. Do not call tools again.";
 const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
   "The previous attempt compacted the conversation context before producing a final user-visible answer. Continue from the compacted transcript and produce the final answer now. Do not restart from scratch, do not repeat completed work, and do not rerun tools unless the transcript clearly lacks required evidence.";
 type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
@@ -257,6 +259,44 @@ function hasCompletedModelProgressForIdleBreaker(attempt: EmbeddedRunAttemptForR
     hasMessagingToolDeliveryEvidence(attempt) ||
     attempt.itemLifecycle.completedCount > 0
   );
+}
+
+function shouldRetryEmptyFinalAnswerAfterCompletedTools(params: {
+  attempt: EmbeddedRunAttemptForRunner;
+  payloadCount: number;
+  aborted: boolean;
+  promptError: unknown;
+  timedOut: boolean;
+}): boolean {
+  const { attempt, payloadCount, aborted, promptError, timedOut } = params;
+  if (payloadCount !== 0 || aborted || promptError || timedOut) {
+    return false;
+  }
+  if (
+    attempt.clientToolCalls ||
+    attempt.yieldDetected ||
+    attempt.didSendDeterministicApprovalPrompt ||
+    attempt.lastToolError
+  ) {
+    return false;
+  }
+  if (attempt.didSendViaMessagingTool || hasMessagingToolDeliveryEvidence(attempt)) {
+    return false;
+  }
+  if ((attempt.itemLifecycle?.activeCount ?? 0) > 0) {
+    return false;
+  }
+  if ((attempt.itemLifecycle?.completedCount ?? 0) <= 0 && (attempt.toolMetas?.length ?? 0) <= 0) {
+    return false;
+  }
+  if ((attempt.assistantTexts ?? []).some((text) => text.trim().length > 0)) {
+    return false;
+  }
+  const assistant = attempt.currentAttemptAssistant ?? attempt.lastAssistant;
+  if (assistant?.stopReason === "error") {
+    return false;
+  }
+  return true;
 }
 
 function createEmptyAuthProfileStore(): AuthProfileStore {
@@ -918,6 +958,8 @@ export async function runEmbeddedPiAgent(
       let reasoningOnlyRetryAttempts = 0;
       let emptyResponseRetryAttempts = 0;
       let compactionContinuationRetryAttempts = 0;
+      let emptyToolFinalAnswerContinuationAttempts = 0;
+      let forceDisableToolsForNextAttempt = false;
       let sameModelIdleTimeoutRetries = 0;
       // Cost-runaway breaker for #76293. State lives at the run-loop level
       // on purpose so it survives across attempt boundaries and across
@@ -1304,7 +1346,7 @@ export async function runEmbeddedPiAgent(
             images: params.images,
             imageOrder: params.imageOrder,
             clientTools: params.clientTools,
-            disableTools: params.disableTools,
+            disableTools: params.disableTools || forceDisableToolsForNextAttempt,
             provider,
             modelId,
             // Use the harness selected before model/auth setup for the actual
@@ -1394,6 +1436,7 @@ export async function runEmbeddedPiAgent(
           if (postCompactionAbortError) {
             throw postCompactionAbortError;
           }
+          forceDisableToolsForNextAttempt = false;
           const attempt = normalizeEmbeddedRunAttemptResult(rawAttempt);
 
           const {
@@ -2743,6 +2786,29 @@ export async function runEmbeddedPiAgent(
             continue;
           }
           compactionContinuationRetryInstruction = null;
+          if (
+            !emptyAssistantReplyIsSilent &&
+            incompleteTurnText &&
+            emptyToolFinalAnswerContinuationAttempts < 1 &&
+            shouldRetryEmptyFinalAnswerAfterCompletedTools({
+              payloadCount,
+              aborted,
+              promptError,
+              timedOut,
+              attempt,
+            })
+          ) {
+            emptyToolFinalAnswerContinuationAttempts += 1;
+            nextAttemptPromptOverride = EMPTY_TOOL_FINAL_ANSWER_CONTINUATION_PROMPT;
+            suppressNextUserMessagePersistence = true;
+            forceDisableToolsForNextAttempt = true;
+            log.warn(
+              `empty final answer after completed tools: runId=${params.runId} sessionId=${params.sessionId} ` +
+                `tools=${attempt.toolMetas?.length ?? 0} completed=${attempt.itemLifecycle?.completedCount ?? 0} ` +
+                `— retrying 1/1 with no-tool final-answer continuation`,
+            );
+            continue;
+          }
           if (reasoningOnlyRetriesExhausted && !finalAssistantVisibleText) {
             log.warn(
               `reasoning-only retries exhausted: runId=${params.runId} sessionId=${params.sessionId} ` +
