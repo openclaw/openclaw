@@ -13,7 +13,7 @@ import {
   normalizeOptionalString,
 } from "../../../shared/string-coerce.js";
 import { sanitizeForLog } from "../../../terminal/ansi.js";
-import { isRecord } from "./legacy-config-record-shared.js";
+import { hasOwnKey, isRecord } from "./legacy-config-record-shared.js";
 import { isLegacyModelsAddCodexMetadataModel } from "./legacy-models-add-metadata.js";
 export { normalizeLegacyTalkConfig } from "./legacy-talk-config-normalizer.js";
 
@@ -1094,6 +1094,224 @@ export function normalizeLegacyMediaProviderOptions(
     tools: {
       ...cfg.tools,
       media: nextMedia as NonNullable<OpenClawConfig["tools"]>["media"],
+    },
+  };
+}
+
+function normalizeConfiguredPositiveInteger(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return Math.floor(value);
+}
+
+function resolveConfiguredOllamaModelNumCtxBudget(params: {
+  model: Record<string, unknown>;
+  provider: Record<string, unknown>;
+  providerNumCtxApplies: boolean;
+}): number | undefined {
+  const modelContextWindow = normalizeConfiguredPositiveInteger(params.model.contextWindow);
+  if (modelContextWindow !== undefined) {
+    return modelContextWindow;
+  }
+
+  const providerContextWindow = normalizeConfiguredPositiveInteger(params.provider.contextWindow);
+  if (providerContextWindow !== undefined) {
+    return params.providerNumCtxApplies ? undefined : providerContextWindow;
+  }
+
+  const modelMaxTokens = normalizeConfiguredPositiveInteger(params.model.maxTokens);
+  if (modelMaxTokens !== undefined) {
+    return modelMaxTokens;
+  }
+
+  const providerMaxTokens = normalizeConfiguredPositiveInteger(params.provider.maxTokens);
+  if (providerMaxTokens !== undefined) {
+    return params.providerNumCtxApplies ? undefined : providerMaxTokens;
+  }
+
+  return undefined;
+}
+
+function resolveConfiguredOllamaProviderNumCtxBudget(
+  provider: Record<string, unknown>,
+): number | undefined {
+  return (
+    normalizeConfiguredPositiveInteger(provider.contextWindow) ??
+    normalizeConfiguredPositiveInteger(provider.maxTokens)
+  );
+}
+
+function isNativeOllamaProviderConfig(
+  _providerId: string,
+  provider: Record<string, unknown>,
+): boolean {
+  const providerApi = normalizeOptionalLowercaseString(provider.api);
+  return providerApi === "ollama";
+}
+
+function isNativeOllamaModelConfig(params: {
+  providerId: string;
+  provider: Record<string, unknown>;
+  model: Record<string, unknown>;
+}): boolean {
+  const modelApi = normalizeOptionalLowercaseString(params.model.api);
+  if (modelApi) {
+    return modelApi === "ollama";
+  }
+
+  const providerApi = normalizeOptionalLowercaseString(params.provider.api);
+  if (providerApi) {
+    return providerApi === "ollama";
+  }
+
+  return false;
+}
+
+function hasConfiguredOllamaProviderNumCtx(provider: Record<string, unknown>): boolean {
+  const rawParams = provider.params;
+  return isRecord(rawParams) && hasOwnKey(rawParams, "num_ctx");
+}
+
+function applyLegacyOllamaProviderNumCtxParams(params: {
+  providerId: string;
+  provider: Record<string, unknown>;
+  changes: string[];
+}): { provider: Record<string, unknown>; changed: boolean } {
+  if (!isNativeOllamaProviderConfig(params.providerId, params.provider)) {
+    return { provider: params.provider, changed: false };
+  }
+
+  const rawParams = params.provider.params;
+  if (rawParams !== undefined && !isRecord(rawParams)) {
+    return { provider: params.provider, changed: false };
+  }
+  if (rawParams && hasOwnKey(rawParams, "num_ctx")) {
+    return { provider: params.provider, changed: false };
+  }
+
+  const numCtx = resolveConfiguredOllamaProviderNumCtxBudget(params.provider);
+  if (numCtx === undefined) {
+    return { provider: params.provider, changed: false };
+  }
+
+  params.changes.push(
+    `Set models.providers.${sanitizeForLog(params.providerId)}.params.num_ctx to ${numCtx} for native Ollama compatibility.`,
+  );
+  return {
+    provider: {
+      ...params.provider,
+      params: {
+        ...(rawParams ?? {}),
+        num_ctx: numCtx,
+      },
+    },
+    changed: true,
+  };
+}
+
+export function normalizeLegacyOllamaNativeNumCtxParams(
+  cfg: OpenClawConfig,
+  changes: string[],
+): OpenClawConfig {
+  const rawProviders = cfg.models?.providers;
+  if (!isRecord(rawProviders)) {
+    return cfg;
+  }
+
+  let providersChanged = false;
+  const nextProviders = { ...rawProviders };
+  type ProviderConfigMap = NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>;
+  for (const [providerId, rawProvider] of Object.entries(rawProviders)) {
+    if (!isRecord(rawProvider)) {
+      continue;
+    }
+    const rawModels = rawProvider.models;
+    if (!Array.isArray(rawModels)) {
+      continue;
+    }
+    const providerParams = applyLegacyOllamaProviderNumCtxParams({
+      providerId,
+      provider: rawProvider,
+      changes,
+    });
+    const providerNumCtxApplies =
+      isNativeOllamaProviderConfig(providerId, providerParams.provider) &&
+      hasConfiguredOllamaProviderNumCtx(providerParams.provider);
+    if (rawModels.length === 0) {
+      if (!providerParams.changed) {
+        continue;
+      }
+      nextProviders[providerId] = providerParams.provider as ProviderConfigMap[string];
+      providersChanged = true;
+      continue;
+    }
+
+    let modelsChanged = false;
+    const nextModels = rawModels.map((model, index) => {
+      if (!isRecord(model)) {
+        return model;
+      }
+      if (
+        !isNativeOllamaModelConfig({
+          providerId,
+          provider: providerParams.provider,
+          model,
+        })
+      ) {
+        return model;
+      }
+
+      const rawParams = model.params;
+      if (rawParams !== undefined && !isRecord(rawParams)) {
+        return model;
+      }
+      if (rawParams && hasOwnKey(rawParams, "num_ctx")) {
+        return model;
+      }
+
+      const numCtx = resolveConfiguredOllamaModelNumCtxBudget({
+        model,
+        provider: providerParams.provider,
+        providerNumCtxApplies,
+      });
+      if (numCtx === undefined) {
+        return model;
+      }
+
+      modelsChanged = true;
+      changes.push(
+        `Set models.providers.${sanitizeForLog(providerId)}.models[${index}].params.num_ctx to ${numCtx} for native Ollama compatibility.`,
+      );
+      return {
+        ...model,
+        params: {
+          ...(rawParams ?? {}),
+          num_ctx: numCtx,
+        },
+      };
+    });
+
+    if (!modelsChanged && !providerParams.changed) {
+      continue;
+    }
+
+    nextProviders[providerId] = {
+      ...providerParams.provider,
+      models: nextModels,
+    } as ProviderConfigMap[string];
+    providersChanged = true;
+  }
+
+  if (!providersChanged) {
+    return cfg;
+  }
+
+  return {
+    ...cfg,
+    models: {
+      ...cfg.models,
+      providers: nextProviders as NonNullable<OpenClawConfig["models"]>["providers"],
     },
   };
 }
