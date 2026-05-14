@@ -49,6 +49,12 @@ import {
   checkUpdateStatus,
 } from "../../infra/update-check.js";
 import {
+  markControlPlaneUpdateRestartSentinelFailure,
+  readControlPlaneUpdateSentinelMeta,
+  writeControlPlaneUpdateRestartSentinel,
+  type ControlPlaneUpdateSentinelMetaFile,
+} from "../../infra/update-control-plane-sentinel.js";
+import {
   canResolveRegistryVersionForPackageTarget,
   createGlobalInstallEnv,
   cleanupGlobalRenameDirs,
@@ -57,6 +63,7 @@ import {
   resolveGlobalInstallSpec,
   resolvePnpmGlobalDirFromGlobalRoot,
 } from "../../infra/update-global.js";
+import { cleanupStaleManagedServiceUpdateHandoffs } from "../../infra/update-managed-service-handoff-cleanup.js";
 import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../../plugins/config-state.js";
 import {
@@ -2084,8 +2091,52 @@ function shouldResumePostCoreUpdateInFreshProcess(params: {
   return Boolean(beforeVersion && afterVersion && beforeVersion !== afterVersion);
 }
 
+async function writeControlPlaneUpdateRestartSentinelBestEffort(params: {
+  meta: ControlPlaneUpdateSentinelMetaFile["meta"] | null;
+  result: UpdateRunResult;
+  jsonMode: boolean;
+}): Promise<void> {
+  if (!params.meta) {
+    return;
+  }
+  try {
+    await writeControlPlaneUpdateRestartSentinel({
+      meta: params.meta,
+      result: params.result,
+    });
+  } catch (err) {
+    const message = `Failed to write update.run restart sentinel: ${String(err)}`;
+    if (params.jsonMode) {
+      defaultRuntime.error(message);
+    } else {
+      defaultRuntime.log(theme.warn(message));
+    }
+  }
+}
+
+async function markControlPlaneUpdateRestartSentinelFailureBestEffort(params: {
+  meta: ControlPlaneUpdateSentinelMetaFile["meta"] | null;
+  reason: string;
+  jsonMode: boolean;
+}): Promise<void> {
+  if (!params.meta) {
+    return;
+  }
+  try {
+    await markControlPlaneUpdateRestartSentinelFailure(params.reason);
+  } catch (err) {
+    const message = `Failed to mark update.run restart sentinel failed: ${String(err)}`;
+    if (params.jsonMode) {
+      defaultRuntime.error(message);
+    } else {
+      defaultRuntime.log(theme.warn(message));
+    }
+  }
+}
+
 export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   suppressDeprecations();
+  await cleanupStaleManagedServiceUpdateHandoffs().catch(() => undefined);
   const invocationCwd = tryResolveInvocationCwd();
   const postCoreUpdateResume = process.env[POST_CORE_UPDATE_ENV] === "1";
   const postCoreUpdateChannel = process.env[POST_CORE_UPDATE_CHANNEL_ENV]?.trim();
@@ -2160,6 +2211,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     return;
   }
 
+  const controlPlaneUpdateSentinelMeta = await readControlPlaneUpdateSentinelMeta();
   const updateStatus = await checkUpdateStatus({
     root,
     timeoutMs: timeoutMs ?? 3500,
@@ -2451,6 +2503,11 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   }
 
   if (result.status === "error") {
+    await writeControlPlaneUpdateRestartSentinelBestEffort({
+      meta: controlPlaneUpdateSentinelMeta,
+      result,
+      jsonMode: Boolean(opts.json),
+    });
     await maybeRestartServiceAfterFailedPackageUpdate({
       prePackageServiceStop,
       jsonMode: Boolean(opts.json),
@@ -2460,6 +2517,11 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   }
 
   if (result.status === "skipped") {
+    await writeControlPlaneUpdateRestartSentinelBestEffort({
+      meta: controlPlaneUpdateSentinelMeta,
+      result,
+      jsonMode: Boolean(opts.json),
+    });
     await maybeRestartServiceAfterFailedPackageUpdate({
       prePackageServiceStop,
       jsonMode: Boolean(opts.json),
@@ -2567,6 +2629,11 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     : result;
 
   if (postCorePluginUpdate?.status === "error") {
+    await writeControlPlaneUpdateRestartSentinelBestEffort({
+      meta: controlPlaneUpdateSentinelMeta,
+      result: resultWithPostUpdate,
+      jsonMode: Boolean(opts.json),
+    });
     if (opts.json) {
       defaultRuntime.writeJson(resultWithPostUpdate);
     } else {
@@ -2615,6 +2682,12 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     skipPrompt: Boolean(opts.yes),
   });
 
+  await writeControlPlaneUpdateRestartSentinelBestEffort({
+    meta: controlPlaneUpdateSentinelMeta,
+    result: resultWithPostUpdate,
+    jsonMode: Boolean(opts.json),
+  });
+
   const restartOk = await maybeRestartService({
     shouldRestart,
     result: resultWithPostUpdate,
@@ -2626,6 +2699,11 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     invocationCwd,
   });
   if (!restartOk) {
+    await markControlPlaneUpdateRestartSentinelFailureBestEffort({
+      meta: controlPlaneUpdateSentinelMeta,
+      reason: "restart-unhealthy",
+      jsonMode: Boolean(opts.json),
+    });
     defaultRuntime.exit(1);
     return;
   }

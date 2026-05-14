@@ -274,6 +274,8 @@ const {
 } = await import("../config/config.js");
 const { checkUpdateStatus, fetchNpmPackageTargetStatus, fetchNpmTagVersion, resolveNpmChannelTag } =
   await import("../infra/update-check.js");
+const { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } =
+  await import("../infra/update-control-plane-sentinel.js");
 const { runCommandWithTimeout } = await import("../process/exec.js");
 const { runDaemonRestart, runDaemonInstall } = await import("./daemon-cli.js");
 const { doctorCommand } = await import("../commands/doctor.js");
@@ -3172,6 +3174,152 @@ describe("update-cli", () => {
     const probeCall = probeGatewayCall() as { includeDetails?: boolean } | undefined;
     expect(probeCall?.includeDetails).toBe(true);
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+  });
+
+  it("writes the control-plane update sentinel before managed package restart", async () => {
+    const stateDir = await createTrackedTempDir("openclaw-update-sentinel-state-");
+    const metaDir = await createTrackedTempDir("openclaw-update-sentinel-meta-");
+    const metaPath = path.join(metaDir, "meta.json");
+    await fs.writeFile(
+      metaPath,
+      JSON.stringify({
+        version: 1,
+        meta: {
+          sessionKey: "agent:main:webchat:dm:user-123",
+          deliveryContext: { channel: "webchat", to: "webchat:user-123", accountId: "default" },
+          note: "Update requested from the agent.",
+          continuationMessage: "Check the running version and finish the update report.",
+        },
+      }),
+    );
+
+    const updatedRoot = createCaseDir("openclaw-updated-root");
+    const updatedEntrypoint = path.join(updatedRoot, "dist", "entry.js");
+    setupUpdatedRootRefresh({
+      entrypoints: [updatedEntrypoint],
+      gatewayUpdateImpl: async () =>
+        makeOkUpdateResult({
+          mode: "npm",
+          root: updatedRoot,
+          before: { version: "2026.4.23" },
+          after: { version: "2026.4.24" },
+        }),
+    });
+    serviceLoaded.mockResolvedValue(true);
+    probeGateway.mockResolvedValue({
+      ok: true,
+      close: null,
+      server: {
+        version: "2026.4.24",
+        connId: "updated-gateway",
+      },
+      auth: { role: "operator", scopes: ["operator.read"], capability: "read_only" },
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+      connectLatencyMs: 1,
+      error: null,
+      url: "ws://127.0.0.1:18789",
+    });
+
+    await withEnvAsync(
+      {
+        [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]: metaPath,
+        OPENCLAW_STATE_DIR: stateDir,
+      },
+      async () => {
+        await updateCommand({ yes: true, json: true });
+      },
+    );
+
+    const raw = await fs.readFile(path.join(stateDir, "restart-sentinel.json"), "utf-8");
+    const sentinel = JSON.parse(raw) as {
+      payload?: {
+        status?: string;
+        message?: string | null;
+        continuation?: { kind?: string; message?: string };
+        stats?: { mode?: string; after?: { version?: string | null } };
+      };
+    };
+    expect(sentinel.payload?.status).toBe("ok");
+    expect(sentinel.payload?.message).toBe("Update requested from the agent.");
+    expect(sentinel.payload?.continuation).toEqual({
+      kind: "agentTurn",
+      message: "Check the running version and finish the update report.",
+    });
+    expect(sentinel.payload?.stats?.mode).toBe("npm");
+    expect(sentinel.payload?.stats?.after?.version).toBe("2026.4.24");
+  });
+
+  it("marks the control-plane update sentinel failed when restart health verification fails", async () => {
+    const stateDir = await createTrackedTempDir("openclaw-update-sentinel-state-");
+    const metaDir = await createTrackedTempDir("openclaw-update-sentinel-meta-");
+    const metaPath = path.join(metaDir, "meta.json");
+    await fs.writeFile(
+      metaPath,
+      JSON.stringify({
+        version: 1,
+        meta: {
+          sessionKey: "agent:main:webchat:dm:user-123",
+          continuationMessage: "This should not report a successful update.",
+        },
+      }),
+    );
+
+    const updatedRoot = createCaseDir("openclaw-updated-root");
+    const updatedEntrypoint = path.join(updatedRoot, "dist", "entry.js");
+    setupUpdatedRootRefresh({
+      entrypoints: [updatedEntrypoint],
+      gatewayUpdateImpl: async () =>
+        makeOkUpdateResult({
+          mode: "npm",
+          root: updatedRoot,
+          before: { version: "2026.4.23" },
+          after: { version: "2026.4.24" },
+        }),
+    });
+    prepareRestartScript.mockResolvedValue(null);
+    serviceLoaded.mockResolvedValue(true);
+    probeGateway.mockResolvedValue({
+      ok: true,
+      close: null,
+      server: {
+        version: "2026.4.23",
+        connId: "old-gateway",
+      },
+      auth: { role: "operator", scopes: ["operator.read"], capability: "read_only" },
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+      connectLatencyMs: 1,
+      error: null,
+      url: "ws://127.0.0.1:18789",
+    });
+
+    await withEnvAsync(
+      {
+        [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]: metaPath,
+        OPENCLAW_STATE_DIR: stateDir,
+      },
+      async () => {
+        await updateCommand({ yes: true, json: true });
+      },
+    );
+
+    const raw = await fs.readFile(path.join(stateDir, "restart-sentinel.json"), "utf-8");
+    const sentinel = JSON.parse(raw) as {
+      payload?: {
+        status?: string;
+        continuation?: unknown;
+        stats?: { reason?: string | null };
+      };
+    };
+    expect(sentinel.payload?.status).toBe("error");
+    expect(sentinel.payload?.stats?.reason).toBe("restart-unhealthy");
+    expect(sentinel.payload?.continuation).toBeUndefined();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
   it("fails a package update when the restarted gateway reports activated plugin load errors", async () => {

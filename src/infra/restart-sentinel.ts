@@ -142,10 +142,12 @@ export async function markUpdateRestartSentinelFailure(
     if (payload.kind !== "update") {
       return null;
     }
+    const payloadWithoutContinuation = { ...payload };
+    delete payloadWithoutContinuation.continuation;
     const stats = payload.stats ? { ...payload.stats } : {};
     stats.reason = reason;
     return {
-      ...payload,
+      ...payloadWithoutContinuation,
       status: "error",
       stats,
     };
