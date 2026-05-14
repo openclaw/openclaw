@@ -729,6 +729,65 @@ describe("gateway node command allowlist", () => {
     }
   });
 
+  test("allows canonical node-host reconnect for legacy pinned platform metadata", async () => {
+    const deviceIdentityPath = path.join(
+      os.tmpdir(),
+      `openclaw-node-host-platform-upgrade-${Date.now()}-${Math.random().toString(36).slice(2)}.json`,
+    );
+    const deviceIdentity = loadOrCreateDeviceIdentity(deviceIdentityPath);
+    const displayName = "node-host-platform-upgrade";
+
+    let legacyClient: GatewayClient | undefined;
+    let upgradedClient: GatewayClient | undefined;
+    try {
+      legacyClient = await connectNodeClientWithPairing({
+        port,
+        commands: ["canvas.snapshot"],
+        platform: "darwin",
+        deviceFamily: "Mac",
+        instanceId: displayName,
+        displayName,
+        deviceIdentity,
+      });
+      await legacyClient.stopAndWait();
+      await expect
+        .poll(async () => {
+          const listRes = await rpcReq<{ nodes?: Array<{ connected?: boolean }> }>(
+            ws,
+            "node.list",
+            {},
+          );
+          return countConnectedNodes(listRes.payload?.nodes);
+        }, FAST_WAIT_OPTS)
+        .toBe(0);
+
+      upgradedClient = await connectNodeClient({
+        port,
+        commands: ["system.run"],
+        platform: "macos",
+        deviceFamily: "Mac",
+        instanceId: displayName,
+        displayName,
+        deviceIdentity,
+      });
+
+      await expect
+        .poll(async () => {
+          const node = await findConnectedNodeByDisplayName(displayName);
+          return node?.connected ?? false;
+        }, FAST_WAIT_OPTS)
+        .toBe(true);
+
+      const node = await findConnectedNodeByDisplayName(displayName);
+      const nodeId = requireNodeId(node?.nodeId, displayName);
+      const pending = await getPendingNodePairing(nodeId);
+      expect(pending?.commands).toEqual(["system.run"]);
+    } finally {
+      await upgradedClient?.stopAndWait();
+      await legacyClient?.stopAndWait();
+    }
+  });
+
   test("filters system.run for confusable iOS metadata at connect time", async () => {
     const deviceIdentityPath = path.join(
       os.tmpdir(),
