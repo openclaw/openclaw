@@ -156,6 +156,8 @@ export async function ensureSkillSnapshot(params: {
     };
   }
 
+  const startTotal = performance.now();
+
   const {
     sessionEntry,
     sessionStore,
@@ -181,25 +183,35 @@ export async function ensureSkillSnapshot(params: {
   });
   const snapshotVersion = getSkillsSnapshotVersion(workspaceDir);
   const existingSnapshot = nextEntry?.skillsSnapshot;
+  const startWatcher = performance.now();
   ensureSkillsWatcher({ workspaceDir, config: cfg });
+  console.log(
+    `[perf] ensureSkillSnapshot: ensureSkillsWatcher took ${(performance.now() - startWatcher).toFixed(1)}ms`,
+  );
   const shouldRefreshSnapshot =
     shouldRefreshSnapshotForVersion(existingSnapshot?.version, snapshotVersion) ||
     !matchesSkillFilter(existingSnapshot?.skillFilter, skillFilter);
-  const buildSnapshot = () =>
-    buildWorkspaceSkillSnapshot(workspaceDir, {
+  const buildSnapshot = () => {
+    const start = performance.now();
+    const snapshot = buildWorkspaceSkillSnapshot(workspaceDir, {
       config: cfg,
       agentId: sessionAgentId,
       skillFilter,
       eligibility: { remote: remoteEligibility },
       snapshotVersion,
     });
+    console.log(`[perf] buildSnapshot took ${(performance.now() - start).toFixed(1)}ms`);
+    return snapshot;
+  };
 
   const _snapshotCacheKey = JSON.stringify([workspaceDir, snapshotVersion, skillFilter]);
 
   // For hydrateResolvedSkills callbacks: reuse cached resolvedSkills when available.
   const _cachedRebuild = (): SkillSnapshot => {
     const cached = _resolvedSkillsCache.get(_snapshotCacheKey);
-    if (cached !== undefined) return { resolvedSkills: cached } as SkillSnapshot;
+    if (cached !== undefined) {
+      return { resolvedSkills: cached } as SkillSnapshot;
+    }
     const snapshot = buildSnapshot();
     _resolvedSkillsCache.set(_snapshotCacheKey, snapshot.resolvedSkills);
     return snapshot;
@@ -261,6 +273,8 @@ export async function ensureSkillSnapshot(params: {
     };
     await persistSessionEntryUpdate({ sessionStore, sessionKey, storePath, nextEntry });
   }
+
+  console.log(`[perf] ensureSkillSnapshot total: ${(performance.now() - startTotal).toFixed(1)}ms`);
 
   return { sessionEntry: nextEntry, skillsSnapshot, systemSent };
 }
