@@ -507,7 +507,20 @@ export const buildTelegramMessageContext = async ({
   const statusReactionVariantsByEmoji = resolvedStatusReactionEmojis
     ? buildTelegramStatusReactionVariants(resolvedStatusReactionEmojis)
     : new Map<string, string[]>();
-  let allowedStatusReactionEmojisPromise: Promise<Set<TelegramReactionEmoji> | null> | null = null;
+  let allowedReactionEmojisPromise: Promise<Set<TelegramReactionEmoji> | null> | null = null;
+  const resolveAllowedReactionEmojis = () => {
+    allowedReactionEmojisPromise ??= resolveTelegramAllowedEmojiReactions({
+      chat: msg.chat,
+      chatId,
+      getChat: getChatApi ?? undefined,
+    }).catch((err) => {
+      logVerbose(
+        `telegram reaction available_reactions lookup failed for chat ${chatId}: ${String(err)}`,
+      );
+      return null;
+    });
+    return allowedReactionEmojisPromise;
+  };
   const createStatusReactionController =
     statusReactionsEnabled && resolvedStatusReactionEmojis && msg.message_id
       ? (runtime?.createStatusReactionController ??
@@ -520,19 +533,7 @@ export const buildTelegramMessageContext = async ({
           adapter: {
             setReaction: async (emoji: string) => {
               if (reactionApi) {
-                if (!allowedStatusReactionEmojisPromise) {
-                  allowedStatusReactionEmojisPromise = resolveTelegramAllowedEmojiReactions({
-                    chat: msg.chat,
-                    chatId,
-                    getChat: getChatApi ?? undefined,
-                  }).catch((err) => {
-                    logVerbose(
-                      `telegram status-reaction available_reactions lookup failed for chat ${chatId}: ${String(err)}`,
-                    );
-                    return null;
-                  });
-                }
-                const allowedStatusReactionEmojis = await allowedStatusReactionEmojisPromise;
+                const allowedStatusReactionEmojis = await resolveAllowedReactionEmojis();
                 const resolvedEmoji = resolveTelegramReactionVariant({
                   requestedEmoji: emoji,
                   variantsByRequestedEmoji: statusReactionVariantsByEmoji,
@@ -566,10 +567,21 @@ export const buildTelegramMessageContext = async ({
     : shouldSendAckReaction && msg.message_id && reactionApi && ackReactionEmoji
       ? withTelegramApiErrorLogging({
           operation: "setMessageReaction",
-          fn: () =>
-            reactionApi(chatId, msg.message_id, [{ type: "emoji", emoji: ackReactionEmoji }]),
+          fn: async () => {
+            const allowedReactionEmojis = await resolveAllowedReactionEmojis();
+            const resolvedEmoji = resolveTelegramReactionVariant({
+              requestedEmoji: ackReactionEmoji,
+              variantsByRequestedEmoji: new Map(),
+              allowedEmojiReactions: allowedReactionEmojis,
+            });
+            if (!resolvedEmoji) {
+              return false;
+            }
+            await reactionApi(chatId, msg.message_id, [{ type: "emoji", emoji: resolvedEmoji }]);
+            return true;
+          },
         }).then(
-          () => true,
+          (didAck) => didAck,
           (err) => {
             logVerbose(`telegram react failed for chat ${chatId}: ${String(err)}`);
             return false;

@@ -107,6 +107,120 @@ describe("buildTelegramMessageContext reactions", () => {
     expect(setMessageReaction).not.toHaveBeenCalled();
   });
 
+  it("uses an allowed Telegram fallback emoji for plain ack reactions", async () => {
+    const setMessageReaction = vi.fn(async () => undefined);
+    inboundBodyMock.mockResolvedValueOnce({
+      bodyText: "@bot hello",
+      rawBody: "@bot hello",
+      historyKey: undefined,
+      commandAuthorized: false,
+      effectiveWasMentioned: true,
+      canDetectMention: true,
+      shouldBypassMention: false,
+      stickerCacheHit: false,
+      locationData: undefined,
+    });
+
+    const ctx = await buildTelegramMessageContextForTest({
+      message: {
+        message_id: 56,
+        chat: {
+          id: -1001234567890,
+          type: "group",
+          title: "Ops",
+          available_reactions: [{ type: "emoji", emoji: "👍" }],
+        },
+        date: 1_700_000_000,
+        text: "@bot hello",
+        from: { id: 42, first_name: "Alice" },
+      },
+      cfg: {
+        agents: {
+          defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" },
+        },
+        channels: {
+          telegram: {
+            groupPolicy: "open",
+            groups: { "*": { requireMention: true } },
+          },
+        },
+        messages: {
+          ackReaction: "👀",
+          groupChat: { mentionPatterns: [] },
+        },
+      },
+      ackReactionScope: "group-all",
+      botApi: { setMessageReaction },
+      resolveGroupActivation: () => false,
+      resolveGroupRequireMention: () => true,
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: { requireMention: true },
+        topicConfig: undefined,
+      }),
+    });
+
+    await expect(ctx?.ackReactionPromise).resolves.toBe(true);
+    expect(setMessageReaction).toHaveBeenCalledWith(-1001234567890, 56, [
+      { type: "emoji", emoji: "👍" },
+    ]);
+  });
+
+  it("skips plain ack reactions when Telegram exposes no allowed emoji variant", async () => {
+    const setMessageReaction = vi.fn(async () => undefined);
+    inboundBodyMock.mockResolvedValueOnce({
+      bodyText: "@bot hello",
+      rawBody: "@bot hello",
+      historyKey: undefined,
+      commandAuthorized: false,
+      effectiveWasMentioned: true,
+      canDetectMention: true,
+      shouldBypassMention: false,
+      stickerCacheHit: false,
+      locationData: undefined,
+    });
+
+    const ctx = await buildTelegramMessageContextForTest({
+      message: {
+        message_id: 57,
+        chat: {
+          id: -1001234567890,
+          type: "group",
+          title: "Ops",
+          available_reactions: [],
+        },
+        date: 1_700_000_000,
+        text: "@bot hello",
+        from: { id: 42, first_name: "Alice" },
+      },
+      cfg: {
+        agents: {
+          defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" },
+        },
+        channels: {
+          telegram: {
+            groupPolicy: "open",
+            groups: { "*": { requireMention: true } },
+          },
+        },
+        messages: {
+          ackReaction: "👀",
+          groupChat: { mentionPatterns: [] },
+        },
+      },
+      ackReactionScope: "group-all",
+      botApi: { setMessageReaction },
+      resolveGroupActivation: () => false,
+      resolveGroupRequireMention: () => true,
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: { requireMention: true },
+        topicConfig: undefined,
+      }),
+    });
+
+    await expect(ctx?.ackReactionPromise).resolves.toBe(false);
+    expect(setMessageReaction).not.toHaveBeenCalled();
+  });
+
   it("keeps Telegram status reaction variants available for configured emoji fallbacks", async () => {
     const setMessageReaction = vi.fn(async () => undefined);
     const { controller, createStatusReactionController } = createStatusReactionControllerStub();
