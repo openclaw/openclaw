@@ -51,6 +51,7 @@ function createTestPlugin(params?: {
   id?: ChannelId;
   order?: number;
   account?: TestAccount;
+  setChannelRuntime?: NonNullable<ChannelPlugin<TestAccount>["gateway"]>["setChannelRuntime"];
   startAccount?: NonNullable<ChannelPlugin<TestAccount>["gateway"]>["startAccount"];
   listAccountIds?: ChannelPlugin<TestAccount>["config"]["listAccountIds"];
   includeDescribeAccount?: boolean;
@@ -77,6 +78,9 @@ function createTestPlugin(params?: {
       }));
   }
   const gateway: NonNullable<ChannelPlugin<TestAccount>["gateway"]> = {};
+  if (params?.setChannelRuntime) {
+    gateway.setChannelRuntime = params.setChannelRuntime;
+  }
   if (params?.startAccount) {
     gateway.startAccount = params.startAccount;
   }
@@ -1010,5 +1014,48 @@ describe("server-channels auto restart", () => {
     });
 
     expect(manager.isHealthMonitorEnabled("discord", "")).toBe(true);
+  });
+
+  it("calls setChannelRuntime before startAccount with the resolved runtime", async () => {
+    const callOrder: string[] = [];
+    const mockChannelRuntime = {
+      runtimeContexts: createChannelRuntimeContextRegistry(),
+    } as unknown as ChannelRuntimeSurface;
+
+    const setChannelRuntime = vi.fn(() => {
+      callOrder.push("setChannelRuntime");
+    });
+    const startAccount = vi.fn(async () => {
+      callOrder.push("startAccount");
+    });
+
+    installTestRegistry(createTestPlugin({ setChannelRuntime, startAccount }));
+    const manager = createManager({ channelRuntime: mockChannelRuntime });
+
+    await manager.startChannels();
+
+    expect(setChannelRuntime).toHaveBeenCalledTimes(1);
+    expect(startAccount).toHaveBeenCalledTimes(1);
+    // setChannelRuntime must be called before startAccount
+    expect(callOrder).toEqual(["setChannelRuntime", "startAccount"]);
+  });
+
+  it("does not fail channel start when setChannelRuntime throws", async () => {
+    const mockChannelRuntime = {
+      runtimeContexts: createChannelRuntimeContextRegistry(),
+    } as unknown as ChannelRuntimeSurface;
+    const setChannelRuntime = vi.fn(() => {
+      throw new Error("simulated plugin error");
+    });
+    const startAccount = vi.fn(async () => {});
+
+    installTestRegistry(createTestPlugin({ setChannelRuntime, startAccount }));
+    const manager = createManager({ channelRuntime: mockChannelRuntime });
+
+    // should not throw
+    await manager.startChannels();
+
+    expect(setChannelRuntime).toHaveBeenCalledTimes(1);
+    expect(startAccount).toHaveBeenCalledTimes(1);
   });
 });

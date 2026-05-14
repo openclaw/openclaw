@@ -340,6 +340,8 @@ export type ChannelLogoutContext<ResolvedAccount = unknown> = {
 };
 
 export type ChannelGatewayAdapter<ResolvedAccount = unknown> = {
+  /** Called before each startAccount with the resolved runtime. Throwing logs a warning and does not block start. */
+  setChannelRuntime?: (channelRuntime: ChannelRuntimeSurface) => void;
   startAccount?: (ctx: ChannelGatewayContext<ResolvedAccount>) => Promise<unknown>;
   stopAccount?: (ctx: ChannelGatewayContext<ResolvedAccount>) => Promise<void>;
   /** Keep gateway auth bypass resolution mirrored through a lightweight top-level `gateway-auth-api.ts` artifact. */

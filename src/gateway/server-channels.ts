@@ -512,6 +512,13 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             lastError: null,
             reconnectAttempts: preserveRestartAttempts ? (restartAttempts.get(rKey) ?? 0) : 0,
           });
+          if (channelRuntimeForTask && plugin.gateway?.setChannelRuntime) {
+            try {
+              plugin.gateway.setChannelRuntime(channelRuntimeForTask);
+            } catch (err) {
+              log.warn?.(`[${id}] setChannelRuntime failed: ${formatErrorMessage(err)}`);
+            }
+          }
           const task = Promise.resolve().then(() =>
             measureStartup(`channels.${channelId}.start-account`, () =>
               startAccount({
