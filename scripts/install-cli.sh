@@ -698,25 +698,32 @@ install_openclaw_from_git() {
   ensure_pnpm
   ensure_pnpm_binary_for_scripts
 
+  local cloned_repo=0
   if [[ -d "$repo_dir/.git" ]]; then
     :
   elif [[ -d "$repo_dir" ]]; then
     if [[ -z "$(ls -A "$repo_dir" 2>/dev/null || true)" ]]; then
       git clone "$repo_url" "$repo_dir"
+      cloned_repo=1
     else
       fail "Git install dir exists but is not a git repo: ${repo_dir}"
     fi
   else
     git clone "$repo_url" "$repo_dir"
+    cloned_repo=1
   fi
 
-  local git_ref
-  git_ref="$(resolve_git_openclaw_ref)"
-  if [[ -z "$(git -C "$repo_dir" status --porcelain 2>/dev/null || true)" ]]; then
-    log "Using git ref: ${git_ref}"
-    checkout_git_openclaw_ref "$repo_dir" "$git_ref"
+  if [[ "$cloned_repo" == "1" || "$GIT_UPDATE" == "1" ]]; then
+    local git_ref
+    git_ref="$(resolve_git_openclaw_ref)"
+    if [[ -z "$(git -C "$repo_dir" status --porcelain 2>/dev/null || true)" ]]; then
+      log "Using git ref: ${git_ref}"
+      checkout_git_openclaw_ref "$repo_dir" "$git_ref"
+    else
+      log "Repo is dirty; skipping git checkout/update"
+    fi
   else
-    log "Repo is dirty; skipping git checkout/update"
+    log "Git update disabled; leaving existing checkout unchanged"
   fi
 
   cleanup_legacy_submodules "$repo_dir"

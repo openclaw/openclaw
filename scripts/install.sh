@@ -2352,17 +2352,31 @@ install_openclaw_from_git() {
     ensure_pnpm
     ensure_pnpm_binary_for_scripts
 
-    if [[ ! -d "$repo_dir" ]]; then
+    local cloned_repo=0
+    if [[ -d "$repo_dir/.git" ]]; then
+        :
+    elif [[ ! -d "$repo_dir" ]]; then
         run_quiet_step "Cloning OpenClaw" git clone "$repo_url" "$repo_dir"
+        cloned_repo=1
+    elif [[ -z "$(ls -A "$repo_dir" 2>/dev/null || true)" ]]; then
+        run_quiet_step "Cloning OpenClaw" git clone "$repo_url" "$repo_dir"
+        cloned_repo=1
+    else
+        ui_error "Git install dir exists but is not a git repo: ${repo_dir}"
+        exit 1
     fi
 
-    local git_ref
-    git_ref="$(resolve_git_openclaw_ref)"
-    if [[ -z "$(git -C "$repo_dir" status --porcelain 2>/dev/null || true)" ]]; then
-        ui_info "Using git ref: ${git_ref}"
-        checkout_git_openclaw_ref "$repo_dir" "$git_ref"
+    if [[ "$cloned_repo" == "1" || "$GIT_UPDATE" == "1" ]]; then
+        local git_ref
+        git_ref="$(resolve_git_openclaw_ref)"
+        if [[ -z "$(git -C "$repo_dir" status --porcelain 2>/dev/null || true)" ]]; then
+            ui_info "Using git ref: ${git_ref}"
+            checkout_git_openclaw_ref "$repo_dir" "$git_ref"
+        else
+            ui_info "Repo has local changes; skipping git checkout/update"
+        fi
     else
-        ui_info "Repo has local changes; skipping git checkout/update"
+        ui_info "Git update disabled; leaving existing checkout unchanged"
     fi
 
     cleanup_legacy_submodules "$repo_dir"
