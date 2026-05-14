@@ -1,0 +1,15 @@
+{
+  "id": "twitch",
+  "activation": {
+    "onStartup": false
+  },
+  "channels": ["twitch"],
+  "channelEnvVars": {
+    "twitch": ["OPENCLAW_TWITCH_ACCESS_TOKEN"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

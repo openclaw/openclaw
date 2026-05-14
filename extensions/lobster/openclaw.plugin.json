@@ -1,0 +1,21 @@
+{
+  "id": "lobster",
+  "activation": {
+    "onStartup": true
+  },
+  "name": "Lobster",
+  "description": "Typed workflow tool with resumable approvals.",
+  "contracts": {
+    "tools": ["lobster"]
+  },
+  "toolMetadata": {
+    "lobster": {
+      "optional": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

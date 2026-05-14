@@ -1,0 +1,1069 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionEntry } from "../config/sessions.js";
+
+const streamSimpleMock = vi.fn();
+const readFileMock = vi.fn();
+const parseSessionEntriesMock = vi.fn();
+const migrateSessionEntriesMock = vi.fn();
+const buildSessionContextMock = vi.fn();
+const ensureOpenClawModelsJsonMock = vi.fn();
+const discoverAuthStorageMock = vi.fn();
+const discoverModelsMock = vi.fn();
+const resolveModelWithRegistryMock = vi.fn();
+const getApiKeyForModelMock = vi.fn();
+const requireApiKeyMock = vi.fn();
+const resolveSessionAuthProfileOverrideMock = vi.fn();
+const getActiveEmbeddedRunSnapshotMock = vi.fn();
+const resolveSessionAgentIdMock = vi.fn();
+const resolveSessionAgentIdsMock = vi.fn();
+const resolveAgentWorkspaceDirMock = vi.fn();
+const listAgentEntriesMock = vi.fn();
+const prepareProviderRuntimeAuthMock = vi.fn();
+const registerProviderStreamForModelMock = vi.fn();
+const diagDebugMock = vi.fn();
+
+vi.mock("@earendil-works/pi-ai", async () => {
+  const original =
+    await vi.importActual<typeof import("@earendil-works/pi-ai")>("@earendil-works/pi-ai");
+  return {
+    ...original,
+    streamSimple: (...args: unknown[]) => streamSimpleMock(...args),
+  };
+});
+
+vi.mock("node:fs/promises", () => ({
+  default: {
+    readFile: (...args: unknown[]) => readFileMock(...args),
+  },
+  readFile: (...args: unknown[]) => readFileMock(...args),
+}));
+
+vi.mock("@earendil-works/pi-coding-agent", () => ({
+  buildSessionContext: (...args: unknown[]) => buildSessionContextMock(...args),
+  generateSummary: vi.fn(async () => "summary"),
+  migrateSessionEntries: (...args: unknown[]) => migrateSessionEntriesMock(...args),
+  parseSessionEntries: (...args: unknown[]) => parseSessionEntriesMock(...args),
+}));
+
+vi.mock("./models-config.js", () => ({
+  ensureOpenClawModelsJson: (...args: unknown[]) => ensureOpenClawModelsJsonMock(...args),
+}));
+
+vi.mock("./pi-model-discovery.js", () => ({
+  discoverAuthStorage: (...args: unknown[]) => discoverAuthStorageMock(...args),
+  discoverModels: (...args: unknown[]) => discoverModelsMock(...args),
+}));
+
+vi.mock("./pi-embedded-runner/model.js", () => ({
+  resolveModelWithRegistry: (...args: unknown[]) => resolveModelWithRegistryMock(...args),
+}));
+
+vi.mock("./model-auth.js", () => ({
+  getApiKeyForModel: (...args: unknown[]) => getApiKeyForModelMock(...args),
+  requireApiKey: (...args: unknown[]) => requireApiKeyMock(...args),
+}));
+
+vi.mock("./pi-embedded-runner/runs.js", () => ({
+  getActiveEmbeddedRunSnapshot: (...args: unknown[]) => getActiveEmbeddedRunSnapshotMock(...args),
+}));
+
+vi.mock("./agent-scope.js", () => ({
+  listAgentEntries: (...args: unknown[]) => listAgentEntriesMock(...args),
+  resolveSessionAgentIds: (...args: unknown[]) => resolveSessionAgentIdsMock(...args),
+  resolveSessionAgentId: (...args: unknown[]) => resolveSessionAgentIdMock(...args),
+  resolveAgentWorkspaceDir: (...args: unknown[]) => resolveAgentWorkspaceDirMock(...args),
+}));
+
+vi.mock("../plugins/provider-runtime.js", () => ({
+  prepareProviderRuntimeAuth: (...args: unknown[]) => prepareProviderRuntimeAuthMock(...args),
+}));
+
+vi.mock("./provider-stream.js", () => ({
+  registerProviderStreamForModel: (...args: unknown[]) =>
+    registerProviderStreamForModelMock(...args),
+}));
+
+vi.mock("./auth-profiles/session-override.js", () => ({
+  resolveSessionAuthProfileOverride: (...args: unknown[]) =>
+    resolveSessionAuthProfileOverrideMock(...args),
+}));
+
+vi.mock("../logging/diagnostic.js", () => ({
+  diagnosticLogger: {
+    debug: (...args: unknown[]) => diagDebugMock(...args),
+  },
+}));
+
+const { runBtwSideQuestion } = await import("./btw.js");
+const { clearAgentHarnesses, registerAgentHarness } = await import("./harness/registry.js");
+type RunBtwSideQuestionParams = Parameters<typeof runBtwSideQuestion>[0];
+
+const DEFAULT_AGENT_DIR = "/tmp/agent";
+const DEFAULT_MODEL = "claude-sonnet-4-6";
+const DEFAULT_PROVIDER = "anthropic";
+const DEFAULT_REASONING_LEVEL = "off";
+const DEFAULT_SESSION_KEY = "agent:main:main";
+const DEFAULT_STORE_PATH = "/tmp/sessions.json";
+const DEFAULT_QUESTION = "What changed?";
+const MATH_QUESTION = "What is 17 * 19?";
+const MATH_ANSWER = "323";
+
+const DEFAULT_USAGE = {
+  input: 1,
+  output: 2,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 3,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
+
+function makeAsyncEvents(events: unknown[]) {
+  return {
+    async *[Symbol.asyncIterator]() {
+      for (const event of events) {
+        yield event;
+      }
+    },
+  };
+}
+
+function createSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
+  return {
+    sessionId: "session-1",
+    sessionFile: "session-1.jsonl",
+    updatedAt: Date.now(),
+    ...overrides,
+  };
+}
+
+function createAssistantDoneEvent(content: unknown[]) {
+  return {
+    type: "done",
+    reason: "stop",
+    message: {
+      role: "assistant",
+      content,
+      provider: DEFAULT_PROVIDER,
+      api: "anthropic-messages",
+      model: DEFAULT_MODEL,
+      stopReason: "stop",
+      usage: DEFAULT_USAGE,
+      timestamp: Date.now(),
+    },
+  };
+}
+
+function createDoneEvent(text: string) {
+  return createAssistantDoneEvent([{ type: "text", text }]);
+}
+
+function createThinkingOnlyDoneEvent(thinking: string) {
+  return createAssistantDoneEvent([{ type: "thinking", thinking }]);
+}
+
+function mockDoneAnswer(text: string) {
+  streamSimpleMock.mockReturnValue(makeAsyncEvents([createDoneEvent(text)]));
+}
+
+function runSideQuestion(overrides: Partial<RunBtwSideQuestionParams> = {}) {
+  return runBtwSideQuestion({
+    cfg: {} as never,
+    agentDir: DEFAULT_AGENT_DIR,
+    provider: DEFAULT_PROVIDER,
+    model: DEFAULT_MODEL,
+    question: DEFAULT_QUESTION,
+    sessionEntry: createSessionEntry(),
+    resolvedReasoningLevel: DEFAULT_REASONING_LEVEL,
+    opts: {},
+    isNewSession: false,
+    ...overrides,
+  });
+}
+
+function runMathSideQuestion(overrides: Partial<RunBtwSideQuestionParams> = {}) {
+  return runSideQuestion({
+    question: MATH_QUESTION,
+    ...overrides,
+  });
+}
+
+function clearBuiltSessionMessages() {
+  buildSessionContextMock.mockReturnValue({ messages: [] });
+}
+
+function createUserTranscriptMessage(content: unknown[] = [{ type: "text", text: "seed" }]) {
+  return {
+    role: "user",
+    content,
+    timestamp: 1,
+  };
+}
+
+function createAssistantTranscriptMessage(
+  content: unknown,
+  overrides: {
+    stopReason?: string;
+    output?: number;
+    timestamp?: number;
+  } = {},
+) {
+  return {
+    role: "assistant",
+    content,
+    provider: DEFAULT_PROVIDER,
+    api: "anthropic-messages",
+    model: DEFAULT_MODEL,
+    stopReason: overrides.stopReason ?? "stop",
+    usage: {
+      ...DEFAULT_USAGE,
+      output: overrides.output ?? DEFAULT_USAGE.output,
+      totalTokens: 1 + (overrides.output ?? DEFAULT_USAGE.output),
+    },
+    timestamp: overrides.timestamp ?? 2,
+  };
+}
+
+function createTranscriptEntry(params: { id: string; parentId?: string | null; message: unknown }) {
+  return {
+    type: "message",
+    id: params.id,
+    parentId: params.parentId ?? null,
+    message: params.message,
+  };
+}
+
+function mockTranscriptEntries(entries: unknown[]) {
+  parseSessionEntriesMock.mockReturnValue(entries);
+}
+
+function mockActiveTranscript(messages: unknown[]) {
+  getActiveEmbeddedRunSnapshotMock.mockReturnValue({
+    transcriptLeafId: "assistant-1",
+    messages,
+  });
+}
+
+function mockCall(
+  mockFn: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } },
+  callIndex = 0,
+): ReadonlyArray<unknown> {
+  const call = mockFn.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`Expected mock call ${callIndex + 1}`);
+  }
+  return call;
+}
+
+function mockArg(
+  mockFn: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } },
+  callIndex: number,
+  argIndex: number,
+): unknown {
+  return mockCall(mockFn, callIndex)[argIndex];
+}
+
+async function runMathSideQuestionAndCaptureContext() {
+  mockDoneAnswer(MATH_ANSWER);
+  await runMathSideQuestion();
+  const context = mockArg(streamSimpleMock, 0, 1);
+  return context;
+}
+
+function expectRecordFields(
+  record: unknown,
+  expected: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
+  const actual = record as Record<string, unknown>;
+  for (const [key, value] of Object.entries(expected)) {
+    expect(actual[key]).toEqual(value);
+  }
+  return actual;
+}
+
+function streamContext(callIndex = 0): {
+  messages?: Array<Record<string, unknown>>;
+  systemPrompt?: unknown;
+} {
+  const call = streamSimpleMock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`Expected streamSimple call at index ${callIndex}`);
+  }
+  return (call[1] ?? {}) as {
+    messages?: Array<Record<string, unknown>>;
+    systemPrompt?: unknown;
+  };
+}
+
+function contextMessages(context: unknown): Array<Record<string, unknown>> {
+  const messages = (context as { messages?: Array<Record<string, unknown>> }).messages;
+  if (!messages) {
+    throw new Error("Expected BTW context messages");
+  }
+  return messages;
+}
+
+function expectTextBlockContains(block: unknown, text: string): void {
+  const record = expectRecordFields(block, { type: "text" });
+  expect(typeof record.text).toBe("string");
+  expect(record.text).toContain(text);
+}
+
+function firstTextBlockIncludes(message: Record<string, unknown>, text: string): boolean {
+  if (!Array.isArray(message.content)) {
+    return false;
+  }
+  const [block] = message.content;
+  const blockText = (block as { text?: unknown } | undefined)?.text;
+  return typeof blockText === "string" && blockText.includes(text);
+}
+
+function expectNoAssistantMessages(context: unknown) {
+  expect(
+    (context as { messages?: Array<{ role?: string }> }).messages?.filter(
+      (message) => message.role === "assistant",
+    ),
+  ).toHaveLength(0);
+}
+
+function expectSanitizedAssistantContext(context: unknown, text: string) {
+  const messages = contextMessages(context);
+  expect(messages).toHaveLength(3);
+  expectRecordFields(messages[0], { role: "user" });
+  expectRecordFields(messages[1], {
+    role: "assistant",
+    content: [{ type: "text", text }],
+  });
+  expectRecordFields(messages[2], { role: "user" });
+}
+
+function expectSeedOnlyUserContext(context: unknown) {
+  const messages = contextMessages(context);
+  expect(messages).toHaveLength(2);
+  expectRecordFields(messages[0], {
+    role: "user",
+    content: [{ type: "text", text: "seed" }],
+  });
+  expectRecordFields(messages[1], { role: "user" });
+}
+
+describe("runBtwSideQuestion", () => {
+  beforeEach(() => {
+    streamSimpleMock.mockReset();
+    readFileMock.mockReset();
+    parseSessionEntriesMock.mockReset();
+    migrateSessionEntriesMock.mockReset();
+    buildSessionContextMock.mockReset();
+    ensureOpenClawModelsJsonMock.mockReset();
+    discoverAuthStorageMock.mockReset();
+    discoverModelsMock.mockReset();
+    resolveModelWithRegistryMock.mockReset();
+    getApiKeyForModelMock.mockReset();
+    requireApiKeyMock.mockReset();
+    resolveSessionAuthProfileOverrideMock.mockReset();
+    getActiveEmbeddedRunSnapshotMock.mockReset();
+    resolveSessionAgentIdMock.mockReset();
+    resolveSessionAgentIdsMock.mockReset();
+    resolveAgentWorkspaceDirMock.mockReset();
+    listAgentEntriesMock.mockReset();
+    prepareProviderRuntimeAuthMock.mockReset();
+    registerProviderStreamForModelMock.mockReset();
+    diagDebugMock.mockReset();
+    clearAgentHarnesses();
+
+    readFileMock.mockResolvedValue("mock transcript");
+    parseSessionEntriesMock.mockReturnValue([
+      createTranscriptEntry({
+        id: "user-1",
+        message: { role: "user", content: [{ type: "text", text: "hi" }], timestamp: 1 },
+      }),
+      createTranscriptEntry({
+        id: "assistant-1",
+        parentId: "user-1",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "hello" }],
+          timestamp: 2,
+        },
+      }),
+    ]);
+    buildSessionContextMock.mockImplementation((entries: Array<{ message?: unknown }> = []) => {
+      return { messages: entries.flatMap((entry) => (entry.message ? [entry.message] : [])) };
+    });
+    resolveModelWithRegistryMock.mockReturnValue({
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+      api: "anthropic-messages",
+    });
+    getApiKeyForModelMock.mockResolvedValue({ apiKey: "secret", mode: "api-key", source: "test" });
+    requireApiKeyMock.mockReturnValue("secret");
+    resolveSessionAuthProfileOverrideMock.mockResolvedValue("profile-1");
+    getActiveEmbeddedRunSnapshotMock.mockReturnValue(undefined);
+    resolveSessionAgentIdMock.mockReturnValue("main");
+    resolveSessionAgentIdsMock.mockReturnValue({ defaultAgentId: "main", sessionAgentId: "main" });
+    resolveAgentWorkspaceDirMock.mockReturnValue("/tmp/workspace");
+    listAgentEntriesMock.mockReturnValue([]);
+    prepareProviderRuntimeAuthMock.mockResolvedValue(undefined);
+    registerProviderStreamForModelMock.mockReturnValue(undefined);
+  });
+
+  it("streams blocks without persisting BTW data to disk", async () => {
+    const onBlockReply = vi.fn().mockResolvedValue(undefined);
+    streamSimpleMock.mockReturnValue(
+      makeAsyncEvents([
+        {
+          type: "text_delta",
+          delta: "Side answer.",
+          partial: {
+            role: "assistant",
+            content: [],
+            provider: "anthropic",
+            model: "claude-sonnet-4-6",
+          },
+        },
+        {
+          type: "text_end",
+          content: "Side answer.",
+          contentIndex: 0,
+          partial: {
+            role: "assistant",
+            content: [],
+            provider: "anthropic",
+            model: "claude-sonnet-4-6",
+          },
+        },
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "Side answer." }],
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-6",
+            stopReason: "stop",
+            usage: {
+              input: 1,
+              output: 2,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 3,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            timestamp: Date.now(),
+          },
+        },
+      ]),
+    );
+
+    const result = await runBtwSideQuestion({
+      cfg: {} as never,
+      agentDir: DEFAULT_AGENT_DIR,
+      provider: DEFAULT_PROVIDER,
+      model: DEFAULT_MODEL,
+      question: DEFAULT_QUESTION,
+      sessionEntry: createSessionEntry(),
+      sessionStore: {},
+      sessionKey: DEFAULT_SESSION_KEY,
+      storePath: DEFAULT_STORE_PATH,
+      resolvedThinkLevel: "low",
+      resolvedReasoningLevel: DEFAULT_REASONING_LEVEL,
+      blockReplyChunking: {
+        minChars: 1,
+        maxChars: 200,
+        breakPreference: "paragraph",
+      },
+      resolvedBlockStreamingBreak: "text_end",
+      opts: { onBlockReply },
+      isNewSession: false,
+    });
+
+    expect(result).toBeUndefined();
+    expect(onBlockReply).toHaveBeenCalledWith({
+      text: "Side answer.",
+      btw: { question: DEFAULT_QUESTION },
+    });
+  });
+
+  it("returns a final payload when block streaming is unavailable", async () => {
+    mockDoneAnswer("Final answer.");
+
+    const result = await runSideQuestion();
+
+    expect(result).toEqual({ text: "Final answer." });
+    const ensureArgs = mockCall(ensureOpenClawModelsJsonMock);
+    expect(ensureArgs?.[1]).toBe(DEFAULT_AGENT_DIR);
+    expect(ensureArgs?.[2]).toEqual({ workspaceDir: "/tmp/workspace" });
+  });
+
+  it("routes Codex-selected BTW questions through the harness side-question hook", async () => {
+    const codexSideQuestionMock = vi.fn().mockResolvedValue({ text: "Codex side answer." });
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex test harness",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: vi.fn(),
+      runSideQuestion: codexSideQuestionMock,
+    });
+    resolveModelWithRegistryMock.mockReturnValue({
+      provider: "openai",
+      id: "gpt-5.5",
+      api: "openai-responses",
+    });
+    resolveSessionAuthProfileOverrideMock.mockResolvedValue("openai-codex:work");
+
+    const result = await runSideQuestion({
+      provider: "openai",
+      model: "gpt-5.5",
+      sessionKey: DEFAULT_SESSION_KEY,
+    });
+
+    expect(result).toEqual({ text: "Codex side answer." });
+    expect(codexSideQuestionMock).toHaveBeenCalledTimes(1);
+    const [[sideQuestionParams]] = codexSideQuestionMock.mock.calls as unknown as Array<
+      [
+        {
+          provider?: string;
+          model?: string;
+          question?: string;
+          sessionId?: string;
+          agentId?: string;
+          workspaceDir?: string;
+          authProfileId?: string;
+        },
+      ]
+    >;
+    expect(sideQuestionParams.provider).toBe("openai");
+    expect(sideQuestionParams.model).toBe("gpt-5.5");
+    expect(sideQuestionParams.question).toBe(DEFAULT_QUESTION);
+    expect(sideQuestionParams.sessionId).toBe("session-1");
+    expect(sideQuestionParams.agentId).toBe("main");
+    expect(sideQuestionParams.workspaceDir).toBe("/tmp/workspace");
+    expect(sideQuestionParams.authProfileId).toBe("openai-codex:work");
+    expect(
+      (mockArg(codexSideQuestionMock, 0, 0) as { sessionFile?: string }).sessionFile,
+    ).toContain("session-1.jsonl");
+    expect(streamSimpleMock).not.toHaveBeenCalled();
+    expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
+  });
+
+  it("does not fall back to the direct provider call when Codex lacks BTW support", async () => {
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex test harness",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: vi.fn(),
+    });
+
+    await expect(
+      runSideQuestion({
+        provider: "openai",
+        model: "gpt-5.5",
+        sessionKey: DEFAULT_SESSION_KEY,
+      }),
+    ).rejects.toThrow('Selected agent harness "codex" does not support /btw side questions.');
+    expect(streamSimpleMock).not.toHaveBeenCalled();
+    expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps the direct provider fallback for non-Codex harnesses without side-question hooks", async () => {
+    registerAgentHarness({
+      id: "custom",
+      label: "Custom test harness",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: vi.fn(),
+    });
+    mockDoneAnswer("Direct fallback answer.");
+
+    const result = await runSideQuestion();
+
+    expect(result).toEqual({ text: "Direct fallback answer." });
+    expect(streamSimpleMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies provider runtime auth before streaming github-copilot BTW questions", async () => {
+    resolveModelWithRegistryMock.mockReturnValue({
+      provider: "github-copilot",
+      id: "gpt-5.4",
+      api: "openai-responses",
+      baseUrl: "https://api.individual.githubcopilot.com",
+    });
+    getApiKeyForModelMock.mockResolvedValue({
+      apiKey: "github-token",
+      mode: "token",
+      source: "profile",
+      profileId: "github-copilot:github",
+    });
+    requireApiKeyMock.mockReturnValue("github-token");
+    prepareProviderRuntimeAuthMock.mockResolvedValue({
+      apiKey: "copilot-runtime-token",
+      baseUrl: "https://api.enterprise.githubcopilot.com",
+    });
+    mockDoneAnswer("Copilot answer.");
+
+    const result = await runSideQuestion({
+      provider: "github-copilot",
+      model: "gpt-5.4",
+    });
+
+    expect(result).toEqual({ text: "Copilot answer." });
+    const runtimeAuthParams = expectRecordFields(mockArg(prepareProviderRuntimeAuthMock, 0, 0), {
+      provider: "github-copilot",
+      workspaceDir: "/tmp/workspace",
+    });
+    expectRecordFields(runtimeAuthParams.context, {
+      provider: "github-copilot",
+      modelId: "gpt-5.4",
+      workspaceDir: "/tmp/workspace",
+      apiKey: "github-token",
+      authMode: "token",
+      profileId: "profile-1",
+    });
+    const [streamModel, , streamOptions] = mockCall(streamSimpleMock);
+    expectRecordFields(streamModel, {
+      provider: "github-copilot",
+      id: "gpt-5.4",
+      baseUrl: "https://api.enterprise.githubcopilot.com",
+    });
+    expectRecordFields(streamOptions, { apiKey: "copilot-runtime-token" });
+  });
+
+  it("uses the provider's stream fn when registered so provider URL construction runs (#68336)", async () => {
+    // Regression: before this fix, /btw called streamSimple directly and
+    // bypassed the provider's createStreamFn/wrapStreamFn hooks. That caused
+    // Ollama Cloud (api: "openai-completions", baseUrl: "https://ollama.com/")
+    // to hit the marketing site instead of /v1/chat/completions.
+    resolveModelWithRegistryMock.mockReturnValue({
+      provider: "ollama",
+      id: "glm-5.1",
+      api: "openai-completions",
+      baseUrl: "https://ollama.com/",
+    });
+    const providerStreamFn = vi
+      .fn()
+      .mockReturnValue(makeAsyncEvents([createDoneEvent("Ollama Cloud answer.")]));
+    registerProviderStreamForModelMock.mockReturnValue(providerStreamFn);
+
+    const result = await runSideQuestion({ provider: "ollama", model: "glm-5.1" });
+
+    expect(result).toEqual({ text: "Ollama Cloud answer." });
+    const registerParams = expectRecordFields(mockArg(registerProviderStreamForModelMock, 0, 0), {
+      workspaceDir: "/tmp/workspace",
+    });
+    expectRecordFields(registerParams.model, {
+      provider: "ollama",
+      api: "openai-completions",
+      baseUrl: "https://ollama.com/",
+    });
+    expect(providerStreamFn).toHaveBeenCalledTimes(1);
+    expect(streamSimpleMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to streamSimple when no provider stream fn is registered", async () => {
+    registerProviderStreamForModelMock.mockReturnValue(undefined);
+    mockDoneAnswer("Fallback answer.");
+
+    const result = await runSideQuestion();
+
+    expect(result).toEqual({ text: "Fallback answer." });
+    expect(streamSimpleMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("strips injected empty tools arrays from BTW payloads before sending", async () => {
+    mockDoneAnswer("Final answer.");
+
+    await runSideQuestion();
+
+    const options = mockArg(streamSimpleMock, 0, 2);
+    const onPayload = (options as { onPayload?: (payload: unknown) => void })?.onPayload;
+    const payloadWithEmptyTools = { messages: [], tools: [] as unknown[] };
+
+    const result = onPayload?.(payloadWithEmptyTools);
+
+    expect(payloadWithEmptyTools).not.toHaveProperty("tools");
+    expect(result).toBeUndefined();
+  });
+
+  it("allows Bedrock /btw runs to proceed without a static api key in aws-sdk mode", async () => {
+    resolveModelWithRegistryMock.mockReturnValue({
+      provider: "amazon-bedrock",
+      id: "us.anthropic.claude-sonnet-4-5-v1:0",
+      api: "anthropic-messages",
+    });
+    getApiKeyForModelMock.mockResolvedValue({
+      apiKey: undefined,
+      mode: "aws-sdk",
+      source: "aws-sdk default chain",
+    });
+    streamSimpleMock.mockReturnValue(makeAsyncEvents([createDoneEvent("Bedrock answer.")]));
+
+    const result = await runBtwSideQuestion({
+      cfg: {} as never,
+      agentDir: DEFAULT_AGENT_DIR,
+      provider: "amazon-bedrock",
+      model: "us.anthropic.claude-sonnet-4-5-v1:0",
+      question: DEFAULT_QUESTION,
+      sessionEntry: createSessionEntry(),
+      resolvedReasoningLevel: DEFAULT_REASONING_LEVEL,
+      opts: {},
+      isNewSession: false,
+    });
+
+    expect(result).toEqual({ text: "Bedrock answer." });
+    expect(requireApiKeyMock).not.toHaveBeenCalled();
+    const [, , options] = streamSimpleMock.mock.calls.at(-1) ?? [];
+    expect((options as { apiKey?: string } | undefined)?.apiKey).toBeUndefined();
+  });
+
+  it("forces provider reasoning off even when the session think level is adaptive", async () => {
+    streamSimpleMock.mockImplementation((_model, _input, options?: { reasoning?: unknown }) => {
+      return options?.reasoning === undefined
+        ? makeAsyncEvents([createDoneEvent("Final answer.")])
+        : makeAsyncEvents([createThinkingOnlyDoneEvent("thinking only")]);
+    });
+
+    const result = await runSideQuestion({ resolvedThinkLevel: "adaptive" });
+
+    expect(result).toEqual({ text: "Final answer." });
+    const options = mockArg(streamSimpleMock, 0, 2);
+    expect((options as { reasoning?: unknown } | undefined)?.reasoning).toBeUndefined();
+  });
+
+  it("fails when the current branch has no messages", async () => {
+    clearBuiltSessionMessages();
+    streamSimpleMock.mockReturnValue(makeAsyncEvents([]));
+
+    await expect(runSideQuestion()).rejects.toThrow("No active session context.");
+  });
+
+  it("uses active-run snapshot messages for BTW context while the main run is in flight", async () => {
+    clearBuiltSessionMessages();
+    getActiveEmbeddedRunSnapshotMock.mockReturnValue({
+      transcriptLeafId: "assistant-1",
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "write some things then wait 30 seconds and write more" },
+          ],
+          timestamp: 1,
+        },
+      ],
+    });
+    mockDoneAnswer(MATH_ANSWER);
+
+    const result = await runMathSideQuestion();
+
+    expect(result).toEqual({ text: MATH_ANSWER });
+    const context = streamContext();
+    expect(String(context.systemPrompt)).toContain("ephemeral /btw side question");
+    const messages = contextMessages(context);
+    expect(messages.some((message) => message.role === "user")).toBe(true);
+    const sideQuestionMessage = messages.find(
+      (message) =>
+        message.role === "user" &&
+        firstTextBlockIncludes(
+          message,
+          `<btw_side_question>\n${MATH_QUESTION}\n</btw_side_question>`,
+        ),
+    );
+    if (!sideQuestionMessage) {
+      throw new Error("Expected BTW side question message");
+    }
+  });
+
+  it("uses the in-flight prompt as background only when there is no prior transcript context", async () => {
+    clearBuiltSessionMessages();
+    getActiveEmbeddedRunSnapshotMock.mockReturnValue({
+      transcriptLeafId: null,
+      messages: [],
+      inFlightPrompt: "build me a tic-tac-toe game in brainfuck",
+    });
+    mockDoneAnswer("You're building a tic-tac-toe game in Brainfuck.");
+
+    const result = await runSideQuestion({ question: "what are we doing?" });
+
+    expect(result).toEqual({ text: "You're building a tic-tac-toe game in Brainfuck." });
+    const [message] = contextMessages(streamContext());
+    expectRecordFields(message, { role: "user" });
+    expectTextBlockContains(
+      (message.content as Array<unknown>)[0],
+      "<in_flight_main_task>\nbuild me a tic-tac-toe game in brainfuck\n</in_flight_main_task>",
+    );
+  });
+
+  it("wraps the side question so the model does not treat it as a main-task continuation", async () => {
+    mockDoneAnswer("About 93 million miles.");
+
+    await runSideQuestion({ question: "what is the distance to the sun?" });
+
+    const context = streamContext();
+    expect(String(context.systemPrompt)).toContain(
+      "Do not continue, resume, or complete any unfinished task",
+    );
+    const sideQuestionMessage = contextMessages(context).find(
+      (message) =>
+        message.role === "user" &&
+        firstTextBlockIncludes(
+          message,
+          "Ignore any unfinished task in the conversation while answering it.",
+        ),
+    );
+    if (!sideQuestionMessage) {
+      throw new Error("Expected isolated side question message");
+    }
+  });
+
+  it("branches away from an unresolved trailing user turn before building BTW context", async () => {
+    const assistantEntry = createTranscriptEntry({
+      id: "assistant-1",
+      message: createAssistantTranscriptMessage([{ type: "text", text: "seed answer" }]),
+    });
+    const trailingUserEntry = createTranscriptEntry({
+      id: "user-2",
+      parentId: "assistant-1",
+      message: createUserTranscriptMessage([{ type: "text", text: "unfinished task" }]),
+    });
+    mockTranscriptEntries([assistantEntry, trailingUserEntry]);
+    mockDoneAnswer(MATH_ANSWER);
+
+    const result = await runMathSideQuestion();
+
+    expect(buildSessionContextMock).toHaveBeenCalledTimes(1);
+    expect(buildSessionContextMock).toHaveBeenCalledWith([assistantEntry]);
+    expect(result).toEqual({ text: MATH_ANSWER });
+  });
+
+  it("branches to the active run snapshot leaf when the session is busy", async () => {
+    const userEntry = createTranscriptEntry({
+      id: "user-seed",
+      message: createUserTranscriptMessage(),
+    });
+    const assistantEntry = createTranscriptEntry({
+      id: "assistant-seed",
+      parentId: "user-seed",
+      message: createAssistantTranscriptMessage([{ type: "text", text: "seed answer" }]),
+    });
+    const newerEntry = createTranscriptEntry({
+      id: "newer-user",
+      parentId: "assistant-seed",
+      message: createUserTranscriptMessage([{ type: "text", text: "newer unfinished task" }]),
+    });
+    mockTranscriptEntries([userEntry, assistantEntry, newerEntry]);
+    getActiveEmbeddedRunSnapshotMock.mockReturnValue({
+      transcriptLeafId: "assistant-seed",
+    });
+    mockDoneAnswer(MATH_ANSWER);
+
+    const result = await runMathSideQuestion();
+
+    expect(buildSessionContextMock).toHaveBeenCalledTimes(1);
+    expect(buildSessionContextMock).toHaveBeenCalledWith([userEntry, assistantEntry]);
+    expect(result).toEqual({ text: MATH_ANSWER });
+  });
+
+  it("falls back when the active run snapshot leaf no longer exists", async () => {
+    const userEntry = createTranscriptEntry({
+      id: "user-seed",
+      message: createUserTranscriptMessage(),
+    });
+    const assistantEntry = createTranscriptEntry({
+      id: "assistant-seed",
+      parentId: "user-seed",
+      message: createAssistantTranscriptMessage([{ type: "text", text: "seed answer" }]),
+    });
+    mockTranscriptEntries([userEntry, assistantEntry]);
+    getActiveEmbeddedRunSnapshotMock.mockReturnValue({
+      transcriptLeafId: "assistant-gone",
+    });
+    mockDoneAnswer(MATH_ANSWER);
+
+    const result = await runMathSideQuestion();
+
+    expect(buildSessionContextMock).toHaveBeenCalledTimes(1);
+    expect(buildSessionContextMock).toHaveBeenCalledWith([userEntry, assistantEntry]);
+    expect(result).toEqual({ text: MATH_ANSWER });
+    expect(diagDebugMock).toHaveBeenCalledWith(
+      "btw snapshot leaf unavailable: sessionId=session-1 leaf=assistant-gone",
+    );
+  });
+
+  it("returns the BTW answer without appending transcript custom entries", async () => {
+    mockDoneAnswer(MATH_ANSWER);
+
+    const result = await runMathSideQuestion();
+
+    expect(result).toEqual({ text: MATH_ANSWER });
+    expect(buildSessionContextMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not log transcript persistence warnings because BTW no longer writes to disk", async () => {
+    mockDoneAnswer(MATH_ANSWER);
+
+    const result = await runMathSideQuestion();
+
+    expect(result).toEqual({ text: MATH_ANSWER });
+    expect(diagDebugMock).not.toHaveBeenCalled();
+  });
+
+  it("excludes tool results from BTW context to avoid replaying raw tool output", async () => {
+    mockActiveTranscript([
+      createUserTranscriptMessage(),
+      {
+        role: "toolResult",
+        content: [{ type: "text", text: "sensitive tool output" }],
+        details: { raw: "secret" },
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "done" }],
+        timestamp: 3,
+      },
+    ]);
+    mockDoneAnswer(MATH_ANSWER);
+
+    await runMathSideQuestion();
+
+    const messages = contextMessages(streamContext());
+    expect(messages).toHaveLength(3);
+    expectRecordFields(messages[0], { role: "user" });
+    expectRecordFields(messages[1], { role: "assistant" });
+    expectRecordFields(messages[2], { role: "user" });
+    expect(messages.some((message) => message.role === "toolResult")).toBe(false);
+  });
+
+  it("strips assistant tool calls from fallback BTW context so stale calls are not replayed", async () => {
+    mockActiveTranscript([
+      createUserTranscriptMessage(),
+      createAssistantTranscriptMessage(
+        [
+          { type: "text", text: "Let me check." },
+          { type: "toolCall", id: "call_1", name: "read", arguments: { path: "README.md" } },
+          { type: "toolUse", id: "call_legacy", name: "read", input: { path: "README.md" } },
+          { type: "tool_call", id: "call_snake", name: "read", arguments: { path: "README.md" } },
+        ],
+        { stopReason: "toolUse" },
+      ),
+    ]);
+    mockDoneAnswer(MATH_ANSWER);
+
+    await runMathSideQuestion();
+
+    const context = streamContext();
+    expectSanitizedAssistantContext(context, "Let me check.");
+    const assistantMessages = contextMessages(context).filter(
+      (message) => message.role === "assistant",
+    );
+    const assistantContentTypes = assistantMessages.flatMap((message) =>
+      Array.isArray(message.content)
+        ? message.content.map((block) => (block as { type?: unknown }).type)
+        : [],
+    );
+    expect(assistantContentTypes).not.toContain("toolCall");
+    expect(assistantContentTypes).not.toContain("toolUse");
+    expect(assistantContentTypes).not.toContain("tool_call");
+  });
+
+  it("drops assistant messages that contain only tool calls", async () => {
+    mockActiveTranscript([
+      createUserTranscriptMessage(),
+      createAssistantTranscriptMessage(
+        [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+        { stopReason: "toolUse", output: 0 },
+      ),
+    ]);
+
+    const context = await runMathSideQuestionAndCaptureContext();
+
+    expectNoAssistantMessages(context);
+  });
+
+  it("strips embedded user tool results from BTW context", async () => {
+    mockActiveTranscript([
+      createUserTranscriptMessage([
+        { type: "text", text: "seed" },
+        {
+          type: "toolResult",
+          toolUseId: "call_1",
+          content: [{ type: "text", text: "secret" }],
+        },
+        {
+          type: "tool_result",
+          toolUseId: "call_2",
+          content: [{ type: "text", text: "secret-2" }],
+        },
+      ]),
+    ]);
+
+    const context = await runMathSideQuestionAndCaptureContext();
+    expectSeedOnlyUserContext(context);
+  });
+
+  it("drops assistant thinking blocks from BTW context", async () => {
+    mockActiveTranscript([
+      createUserTranscriptMessage(),
+      createAssistantTranscriptMessage(
+        [
+          { type: "text", text: "Visible answer" },
+          { type: "thinking", thinking: "Hidden chain of thought" },
+        ],
+        { output: 1 },
+      ),
+    ]);
+
+    const context = await runMathSideQuestionAndCaptureContext();
+
+    expectSanitizedAssistantContext(context, "Visible answer");
+    const assistantContentTypes = contextMessages(context)
+      .filter((message) => message.role === "assistant")
+      .flatMap((message) =>
+        Array.isArray(message.content)
+          ? message.content.map((block) => (block as { type?: unknown }).type)
+          : [],
+      );
+    expect(assistantContentTypes).not.toContain("thinking");
+  });
+
+  it("drops thinking-only assistant messages from BTW context", async () => {
+    mockActiveTranscript([
+      createUserTranscriptMessage(),
+      createAssistantTranscriptMessage(
+        [{ type: "thinking", thinking: "Hidden chain of thought" }],
+        { output: 1 },
+      ),
+    ]);
+
+    const context = await runMathSideQuestionAndCaptureContext();
+
+    expectNoAssistantMessages(context);
+  });
+
+  it("drops malformed user image blocks from BTW context", async () => {
+    mockActiveTranscript([
+      createUserTranscriptMessage([
+        { type: "text", text: "seed" },
+        { type: "image", mimeType: "image/png" },
+      ]),
+    ]);
+
+    const context = await runMathSideQuestionAndCaptureContext();
+    expectSeedOnlyUserContext(context);
+  });
+
+  it("normalizes malformed assistant content before stripping tool blocks", async () => {
+    mockActiveTranscript([
+      createUserTranscriptMessage(),
+      createAssistantTranscriptMessage(
+        { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+        { stopReason: "toolUse", output: 0 },
+      ),
+    ]);
+
+    const context = await runMathSideQuestionAndCaptureContext();
+
+    expectNoAssistantMessages(context);
+  });
+});
