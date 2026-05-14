@@ -177,6 +177,77 @@ function splitTelegramPlainTextFallback(text: string, chunkCount: number, limit:
   return chunks;
 }
 
+const TELEGRAM_HTML_ANCHOR_PATTERN =
+  /<a\b[^>]*\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>([\s\S]*?)<\/a\s*>/gi;
+const TELEGRAM_HTML_BREAK_PATTERN = /<br\s*\/?>/gi;
+const TELEGRAM_HTML_ENTITY_PATTERN = /&(#x[0-9A-Fa-f]+|#\d+|amp|lt|gt|quot|apos);/g;
+const TELEGRAM_HTML_TAG_PATTERN = /<[^>]*>/g;
+
+function decodeTelegramHtmlEntity(entity: string, fallback: string): string {
+  if (entity.startsWith("#x") || entity.startsWith("#X")) {
+    const codePoint = Number.parseInt(entity.slice(2), 16);
+    return Number.isInteger(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff
+      ? String.fromCodePoint(codePoint)
+      : fallback;
+  }
+  if (entity.startsWith("#")) {
+    const codePoint = Number.parseInt(entity.slice(1), 10);
+    return Number.isInteger(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff
+      ? String.fromCodePoint(codePoint)
+      : fallback;
+  }
+  switch (entity) {
+    case "amp":
+      return "&";
+    case "lt":
+      return "<";
+    case "gt":
+      return ">";
+    case "quot":
+      return '"';
+    case "apos":
+      return "'";
+    default:
+      return fallback;
+  }
+}
+
+function decodeTelegramHtmlEntities(text: string): string {
+  return text.replace(TELEGRAM_HTML_ENTITY_PATTERN, (match, entity: string) =>
+    decodeTelegramHtmlEntity(entity, match),
+  );
+}
+
+function stripTelegramHtmlForPlainText(html: string): string {
+  return decodeTelegramHtmlEntities(
+    html.replace(TELEGRAM_HTML_BREAK_PATTERN, "\n").replace(TELEGRAM_HTML_TAG_PATTERN, ""),
+  );
+}
+
+function telegramHtmlToPlainTextFallback(html: string): string {
+  TELEGRAM_HTML_ANCHOR_PATTERN.lastIndex = 0;
+  const withPlainLinks = html.replace(
+    TELEGRAM_HTML_ANCHOR_PATTERN,
+    (
+      _match: string,
+      doubleQuotedHref: string | undefined,
+      singleQuotedHref: string | undefined,
+      unquotedHref: string | undefined,
+      labelHtml: string,
+    ) => {
+      const href = decodeTelegramHtmlEntities(
+        doubleQuotedHref ?? singleQuotedHref ?? unquotedHref ?? "",
+      ).trim();
+      const label = stripTelegramHtmlForPlainText(labelHtml).trim();
+      if (!href) {
+        return label;
+      }
+      return !label || label === href ? href : `${label} (${href})`;
+    },
+  );
+  return stripTelegramHtmlForPlainText(withPlainLinks);
+}
+
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 const THREAD_NOT_FOUND_RE = /400:\s*Bad Request:\s*message thread not found/i;
 const MESSAGE_NOT_MODIFIED_RE =
@@ -736,7 +807,8 @@ export async function sendMessageTelegram(
 
   const buildChunkedTextPlan = (rawText: string, context: string): TelegramTextChunk[] => {
     const htmlText = renderHtmlText(rawText);
-    const fallbackText = opts.plainText ?? rawText;
+    const fallbackText =
+      opts.plainText ?? (textMode === "html" ? telegramHtmlToPlainTextFallback(htmlText) : rawText);
     let htmlChunks: string[];
     try {
       htmlChunks = splitTelegramHtmlChunks(htmlText, 4000);
