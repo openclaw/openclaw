@@ -82,17 +82,22 @@ describe("scripts/mantis/build-telegram-desktop-proof-evidence", () => {
     expect(manifest.artifacts.map((artifact) => artifact.targetPath)).toContain(
       "candidate/telegram-desktop-proof.gif",
     );
+    const artifactUrl = "https://github.com/openclaw/openclaw/actions/runs/1/artifacts/2";
     const body = renderEvidenceComment({
-      artifactUrl: "https://github.com/openclaw/openclaw/actions/runs/1/artifacts/2",
+      artifactUrl,
       artifactRoot: "mantis/telegram-desktop/pr-1/run-1",
       manifest,
       marker: "<!-- mantis-telegram-desktop-proof -->",
       requestSource: "workflow_dispatch",
       runUrl: "https://github.com/openclaw/openclaw/actions/runs/1",
-      treeUrl:
-        "https://github.com/openclaw/openclaw/tree/qa-artifacts/mantis/telegram-desktop/pr-1/run-1",
     });
 
+    expect(body).toContain("<!-- mantis-telegram-desktop-proof -->");
+    expect(body).toContain("## Mantis Telegram Desktop Proof");
+    expect(body).toContain("- Baseline: `pass` at `aaa`, expected baseline visual proof captured");
+    expect(body).toContain(
+      "- Candidate: `pass` at `bbb`, expected candidate visual proof captured",
+    );
     expect(body).toContain(
       "- Artifact: https://github.com/openclaw/openclaw/actions/runs/1/artifacts/2",
     );
@@ -104,7 +109,7 @@ describe("scripts/mantis/build-telegram-desktop-proof-evidence", () => {
     expect(body).toContain(
       "Raw QA files: https://github.com/openclaw/openclaw/actions/runs/1/artifacts/2",
     );
-    expect(body).not.toContain("<img ");
     expect(body).not.toContain("| Main | This PR |");
+    expect(body).not.toContain("<img ");
   });
 });
