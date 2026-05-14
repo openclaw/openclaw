@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "vitest";
+import { resetProviderAuthAliasMapCacheForTest } from "../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -108,6 +109,7 @@ function createAllowlistedAnthropicModelCfg(): OpenClawConfig {
 
 describe("gateway sessions patch", () => {
   afterEach(() => {
+    resetProviderAuthAliasMapCacheForTest();
     resetPluginRuntimeStateForTest();
   });
 
@@ -297,6 +299,34 @@ describe("gateway sessions patch", () => {
     expect(entry.authProfileOverride).toBe("anthropic:default");
     expect(entry.authProfileOverrideSource).toBe("user");
     expect(entry.authProfileOverrideCompactionCount).toBe(3);
+  });
+
+  test("preserves auth overrides for provider-auth aliases when model patch changes", async () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": {
+        sessionId: "sess-alias",
+        updatedAt: 1,
+        providerOverride: "byteplus",
+        modelOverride: "seedance-1-0-lite-t2v-250428",
+        authProfileOverride: "byteplus:work",
+        authProfileOverrideSource: "user",
+        authProfileOverrideCompactionCount: 2,
+      } as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, model: "byteplus-plan/ark-code-latest" },
+        loadGatewayModelCatalog: async () => [
+          { provider: "byteplus-plan", id: "ark-code-latest", name: "ark-code-latest" },
+        ],
+      }),
+    );
+    expect(entry.providerOverride).toBe("byteplus-plan");
+    expect(entry.modelOverride).toBe("ark-code-latest");
+    expect(entry.authProfileOverride).toBe("byteplus:work");
+    expect(entry.authProfileOverrideSource).toBe("user");
+    expect(entry.authProfileOverrideCompactionCount).toBe(2);
   });
 
   test("clears provider-prefixed auth overrides when model patch changes provider", async () => {

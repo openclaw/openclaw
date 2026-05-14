@@ -95,9 +95,7 @@ describe("scripts/mantis/build-telegram-desktop-proof-evidence", () => {
 
     expect(body).toContain("<!-- mantis-telegram-desktop-proof -->");
     expect(body).toContain("## Mantis Telegram Desktop Proof");
-    expect(body).toContain(
-      "- Baseline: `pass` at `aaa`, expected baseline visual proof captured",
-    );
+    expect(body).toContain("- Baseline: `pass` at `aaa`, expected baseline visual proof captured");
     expect(body).toContain(
       "- Candidate: `pass` at `bbb`, expected candidate visual proof captured",
     );
