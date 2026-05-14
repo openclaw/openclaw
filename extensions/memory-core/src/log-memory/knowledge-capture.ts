@@ -25,6 +25,46 @@ const TEACH_PHRASES = [
 
 const TEACH_PREFIXES = ["TEACH:", "FACT:", "RULE:"];
 
+// Implicit rule patterns — detect naming conventions, policies, and mandates
+// even when the speaker uses no explicit teaching marker. Both Chinese and
+// English variants are listed. Each pattern is tested case-insensitively.
+const IMPLICIT_RULE_PATTERNS: RegExp[] = [
+  // Chinese imperative/mandate patterns.
+  /必須|一律|都要|都必須/,
+  /不能|不可以|禁止|不准|絕對不/,
+  /所有.{1,20}(名稱|變數|函數|函式|檔案|目錄|模組|命名)/,
+  /命名(規則|規範|慣例|格式|方式)/,
+  /格式(規則|規範|要求|必須)/,
+  /公司(規定|規範|標準|要求)/,
+  /強硬規範|強制規範|強制要求/,
+  /我們的(規範|規則|標準|慣例)/,
+  /開頭|結尾|前綴|後綴|prefix|suffix/,
+  // English mandate patterns.
+  /\b(must|always|never|shall)\b.{3,60}\b(be|use|start|end|follow|have)\b/i,
+  /\ball\b.{1,30}\b(variable|function|file|method|class|name|identifier)s?\b/i,
+  /\b(naming|convention|policy|standard|rule|format|guideline)s?\b.{1,40}\b(is|are|must|should|require)\b/i,
+  /\b(variable|pointer|function|method|class|file)s?\b.{1,30}\b(must|should|shall|need to)\b.{1,40}\b(start|end|begin|prefix|named)\b/i,
+  /\bprefixed?\s+with\b/i,
+  /\bsuffixed?\s+with\b/i,
+  /\bstart(s|ing)?\s+with\b/i,
+  /\bend(s|ing)?\s+with\b/i,
+  /our\s+(convention|standard|rule|policy|practice)\b/i,
+  /company\s+(rule|policy|standard|mandate|requirement)\b/i,
+];
+
+export function detectImplicitRule(message: string): boolean {
+  const trimmed = message.trim();
+  if (trimmed.length < 8) {
+    return false;
+  }
+  for (const pattern of IMPLICIT_RULE_PATTERNS) {
+    if (pattern.test(trimmed)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function detectTeachingMoment(message: string): boolean {
   const trimmed = message.trim();
   if (!trimmed) {
@@ -42,7 +82,7 @@ export function detectTeachingMoment(message: string): boolean {
       return true;
     }
   }
-  return false;
+  return detectImplicitRule(trimmed);
 }
 
 export interface KnowledgeCaptureRecord {
@@ -51,8 +91,9 @@ export interface KnowledgeCaptureRecord {
 }
 
 // Captures engineer-supplied knowledge straight into the semantic layer
-// (KNOWLEDGE.md). Decay starts high so the entry survives several dream
-// cycles. Embedding is not stored — query() recomputes when needed.
+// (KNOWLEDGE.md). Entries are pinned by default so they never decay and are
+// never consumed by the dream cycle. Embedding is not stored — query()
+// recomputes when needed.
 export class KnowledgeCapture {
   constructor(
     private readonly opts: {
@@ -73,6 +114,8 @@ export class KnowledgeCapture {
     message: string;
     tags?: string[];
     title?: string;
+    // Override the default pinned=true for captures that are allowed to decay.
+    pinned?: boolean;
   }): Promise<KnowledgeCaptureRecord | null> {
     if (!detectTeachingMoment(input.message)) {
       return null;
@@ -84,20 +127,30 @@ export class KnowledgeCapture {
     message: string;
     tags?: string[];
     title?: string;
+    // All captures are pinned by default. Pass pinned: false only for
+    // knowledge that should participate in normal decay and dream cycles.
+    pinned?: boolean;
   }): Promise<KnowledgeCaptureRecord> {
     const now = this.now();
+    const isImplicitRule = detectImplicitRule(input.message);
+    const type = isImplicitRule ? "conversation_rule" : "engineer_knowledge";
     const tags = ["source:engineer_teach", ...(input.tags ?? [])];
+    if (isImplicitRule) {
+      tags.push("auto:implicit_rule");
+    }
     const id = computeEntryId({ timestamp: now, service: "engineer", message: input.message });
+    const pinned = input.pinned ?? true;
     const entry: LogMemoryEntry = {
       id,
       timestamp: now,
       layer: "semantic",
       payload: {
-        type: "engineer_knowledge",
+        type,
         content: input.message,
         tags,
         source: "engineer_teach",
         decayScore: 0.95,
+        pinned,
         accessCount: 0,
         lastAccessedAt: now,
         title: input.title,

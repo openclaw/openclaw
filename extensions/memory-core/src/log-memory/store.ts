@@ -146,7 +146,9 @@ export class LogMemoryStore {
     // Already-consolidated entries are not eligible candidates.
     const entries = await this.loadEpisodic({ includeConsolidated: false });
     return entries
-      .filter((entry) => computeCurrentDecay(entry, opts.now) < opts.threshold)
+      .filter(
+        (entry) => !entry.payload.pinned && computeCurrentDecay(entry, opts.now) < opts.threshold,
+      )
       .slice(0, opts.limit);
   }
 

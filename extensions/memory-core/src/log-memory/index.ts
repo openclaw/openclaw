@@ -34,10 +34,12 @@ export {
   type QueryOptions,
 } from "./ingestor.js";
 export {
+  detectImplicitRule,
   detectTeachingMoment,
   KnowledgeCapture,
   type KnowledgeCaptureRecord,
 } from "./knowledge-capture.js";
+export { ContextInjector, type ContextInjectorOptions } from "./context-injector.js";
 export { runDreamCycle, type DreamCycleOptions, type DreamCycleResult } from "./dream.js";
 export { DreamScheduler, DREAM_DAILY_CRON, type DreamSchedulerDeps } from "./scheduler.js";
 export { ensureLogAnalystSkill, LOG_ANALYST_SKILL_BODY, type EnsureSkillResult } from "./skill.js";

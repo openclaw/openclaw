@@ -9,7 +9,8 @@ export type LogMemoryPayloadType =
   | "raw_log"
   | "error_pattern"
   | "incident_summary"
-  | "engineer_knowledge";
+  | "engineer_knowledge"
+  | "conversation_rule";
 
 export type LogMemorySource = "log_ingest" | "engineer_teach" | "dream_consolidation";
 
@@ -19,6 +20,9 @@ export interface LogMemoryPayload {
   tags: string[];
   source: LogMemorySource;
   decayScore: number;
+  // When true, this entry is exempt from decay and will never be consumed by
+  // the dream cycle. Use for rules/conventions that must survive indefinitely.
+  pinned?: boolean;
   accessCount: number;
   lastAccessedAt: Date;
   // Set by the dream cycle when this entry has been consolidated into a

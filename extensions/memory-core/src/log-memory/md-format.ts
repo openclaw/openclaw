@@ -28,7 +28,9 @@ const META_LINE_RE = /^(?<key>[A-Za-z][A-Za-z _]*?):\s*(?<value>.*)$/;
 // `consolidatedAt` is optional — only present once the dream cycle has
 // consolidated the entry into the semantic layer.
 const EPISODIC_META_KEYS = new Set(["decay", "accessCount", "consolidatedAt"]);
-const SEMANTIC_META_KEYS = new Set(["Pattern", "Root cause", "Tags", "Source"]);
+// `Type` and `Pinned` are optional — added when non-default so existing files
+// without them continue to parse correctly.
+const SEMANTIC_META_KEYS = new Set(["Pattern", "Root cause", "Tags", "Source", "Type", "Pinned"]);
 
 export function serializeEpisodicBlock(entry: LogMemoryEntry): string {
   const heading = `## [${entry.timestamp.toISOString()}] ${entry.payload.tags.join(" ")}`.trimEnd();
@@ -58,6 +60,14 @@ export function serializeSemanticBlock(entry: LogMemoryEntry): string {
     `Tags: ${tags}`,
     `Source: ${entry.payload.source}`,
   ];
+  // Write Type only when it is not the legacy default so old readers are
+  // unaffected by the new field.
+  if (entry.payload.type !== "error_pattern" && entry.payload.type !== "engineer_knowledge") {
+    lines.push(`Type: ${entry.payload.type}`);
+  }
+  if (entry.payload.pinned) {
+    lines.push("Pinned: true");
+  }
   return `${lines.join("\n")}\n`;
 }
 
@@ -210,7 +220,13 @@ function buildSemanticEntry(input: {
     "dream_consolidation"
   ).trim();
   const source = normalizeSource(sourceRaw);
-  const type = source === "engineer_teach" ? "engineer_knowledge" : "error_pattern";
+  const typeRaw = (input.metadata.get("Type") ?? "").trim();
+  const type = typeRaw
+    ? normalizePayloadType(typeRaw, source)
+    : source === "engineer_teach"
+      ? "engineer_knowledge"
+      : "error_pattern";
+  const pinned = input.metadata.get("Pinned")?.trim().toLowerCase() === "true";
   const id = computeEntryId({
     timestamp: input.timestamp,
     service: "semantic",
@@ -218,7 +234,7 @@ function buildSemanticEntry(input: {
   });
   // Semantic decay is recomputed from importance + age via decay.ts; we still
   // record an initial value to feed selectDreamCandidates, etc.
-  const decayScore = type === "engineer_knowledge" ? 0.95 : 0.9;
+  const decayScore = type === "engineer_knowledge" || type === "conversation_rule" ? 0.95 : 0.9;
   return {
     id,
     timestamp: input.timestamp,
@@ -229,6 +245,7 @@ function buildSemanticEntry(input: {
       tags,
       source,
       decayScore,
+      pinned: pinned || undefined,
       accessCount: 0,
       lastAccessedAt: input.timestamp,
       title,
@@ -242,6 +259,22 @@ function normalizeSource(raw: string): LogMemoryPayload["source"] {
     return raw;
   }
   return "dream_consolidation";
+}
+
+function normalizePayloadType(
+  raw: string,
+  source: LogMemoryPayload["source"],
+): LogMemoryPayload["type"] {
+  if (
+    raw === "raw_log" ||
+    raw === "error_pattern" ||
+    raw === "incident_summary" ||
+    raw === "engineer_knowledge" ||
+    raw === "conversation_rule"
+  ) {
+    return raw;
+  }
+  return source === "engineer_teach" ? "engineer_knowledge" : "error_pattern";
 }
 
 function extractServiceFromTags(tags: string[]): string {

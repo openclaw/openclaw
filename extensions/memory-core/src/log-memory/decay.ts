@@ -3,6 +3,9 @@ import type { LogMemoryEntry, LogMemoryPayloadType } from "./types.js";
 // Decay model from the spec: exponential recency, diminishing access boost,
 // importance multiplier from payload type. Result clamped to [0, 1].
 export function computeCurrentDecay(entry: LogMemoryEntry, now: Date): number {
+  if (entry.payload.pinned) {
+    return 1.0;
+  }
   const ageHours = (now.getTime() - entry.timestamp.getTime()) / 3_600_000;
   const recencyFactor = Math.exp(-0.05 * Math.max(0, ageHours));
   const accessBoost = Math.min(entry.payload.accessCount * 0.1, 0.5);
@@ -21,6 +24,8 @@ export function computeInitialDecay(level: "ERROR" | "WARN" | "INFO"): number {
 
 function importanceFor(type: LogMemoryPayloadType): number {
   switch (type) {
+    case "conversation_rule":
+      return 2.5;
     case "engineer_knowledge":
       return 2.0;
     case "error_pattern":
