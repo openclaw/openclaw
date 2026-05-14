@@ -5,52 +5,220 @@
    =========================================== */
 
 .login-gate {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
   min-height: 100vh;
   min-height: 100dvh;
-  background: var(--bg);
   padding: 24px;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 18% 18%, rgba(255, 92, 92, 0.16), transparent 28%),
+    radial-gradient(circle at 82% 12%, rgba(20, 184, 166, 0.1), transparent 24%),
+    linear-gradient(180deg, var(--bg) 0%, color-mix(in srgb, var(--bg) 88%, #000) 100%);
 }
 
-.login-gate__theme {
-  position: fixed;
-  top: 16px;
-  right: 16px;
-  z-index: 10;
+.login-gate::before,
+.login-gate::after {
+  content: "";
+  position: absolute;
+  inset: auto;
+  width: 420px;
+  height: 420px;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 0;
+  filter: blur(80px);
+  opacity: 0.6;
+}
+
+.login-gate::before {
+  top: -120px;
+  left: -120px;
+  background: rgba(255, 92, 92, 0.16);
+}
+
+.login-gate::after {
+  right: -120px;
+  bottom: -140px;
+  background: rgba(20, 184, 166, 0.1);
+}
+
+.login-gate__ambient {
+  position: absolute;
+  border-radius: 50%;
+  z-index: 0;
+  filter: blur(70px);
+  pointer-events: none;
+  opacity: 0.75;
+}
+
+.login-gate__ambient--one {
+  width: 260px;
+  height: 260px;
+  top: 10%;
+  left: 10%;
+  background: rgba(255, 92, 92, 0.12);
+}
+
+.login-gate__ambient--two {
+  width: 220px;
+  height: 220px;
+  right: 8%;
+  bottom: 12%;
+  background: rgba(255, 255, 255, 0.05);
 }
 
 .login-gate__card {
-  width: min(520px, 100%);
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: 32px;
-  animation: scale-in 0.25s var(--ease-out);
+  position: relative;
+  z-index: 1;
+  width: min(920px, 100%);
+  padding: 28px;
+  border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
+  border-radius: calc(var(--radius-xl) + 2px);
+  background: color-mix(in srgb, var(--card) 82%, transparent);
+  box-shadow: var(--shadow-xl), var(--shadow-glow);
+  backdrop-filter: blur(18px) saturate(1.2);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  animation: scale-in 0.28s var(--ease-out);
 }
 
-.login-gate__header {
-  text-align: center;
-  margin-bottom: 24px;
+@supports not (backdrop-filter: blur(1px)) {
+  .login-gate__card {
+    background: var(--card);
+  }
+}
+
+.login-gate__hero {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 20px;
+}
+
+.login-gate__brand {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: min(360px, 100%);
+}
+
+.login-gate__logo-wrap {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  border-radius: 20px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent),
+    color-mix(in srgb, var(--bg-elevated) 82%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border-strong) 70%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .login-gate__logo {
-  width: 48px;
-  height: 48px;
-  margin-bottom: 12px;
+  width: 42px;
+  height: 42px;
+}
+
+.login-gate__brand-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.login-gate__badge {
+  gap: 6px;
+  width: fit-content;
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+  background: color-mix(in srgb, var(--accent-subtle) 80%, transparent);
+  color: var(--text-strong);
+}
+
+.login-gate__badge svg {
+  width: 14px;
+  height: 14px;
 }
 
 .login-gate__title {
-  font-size: 22px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
+  font-size: clamp(28px, 4vw, 38px);
+  font-weight: 750;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  color: var(--text-strong);
 }
 
 .login-gate__sub {
   color: var(--muted);
   font-size: 14px;
-  margin-top: 4px;
+}
+
+.login-gate__hero-copy {
+  max-width: 360px;
+  margin-left: auto;
+}
+
+.login-gate__eyebrow {
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 11px;
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+
+.login-gate__lede {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.login-gate__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.login-gate__meta .pill {
+  background: color-mix(in srgb, var(--secondary) 80%, transparent);
+}
+
+.login-gate__meta strong {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.login-gate__layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(280px, 0.95fr);
+  gap: 16px;
+}
+
+.login-gate__panel {
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: var(--radius-xl);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--card) 96%, transparent), color-mix(in srgb, var(--bg-accent) 86%, transparent));
+  padding: 20px;
+}
+
+.login-gate__panel--side {
+  background:
+    radial-gradient(circle at top right, rgba(255, 92, 92, 0.08), transparent 38%),
+    linear-gradient(180deg, color-mix(in srgb, var(--card) 98%, transparent), color-mix(in srgb, var(--bg-accent) 90%, transparent));
+}
+
+.login-gate__panel-title {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  margin-bottom: 14px;
 }
 
 .login-gate__form {
@@ -79,22 +247,69 @@
   margin-top: 4px;
   width: 100%;
   justify-content: center;
-  padding: 10px 16px;
+  padding: 12px 18px;
   font-size: 15px;
+  font-weight: 700;
+  box-shadow: var(--shadow-sm), 0 0 0 1px rgba(255, 255, 255, 0.03) inset;
+}
+
+.login-gate__trust-list {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.login-gate__trust-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+}
+
+.login-gate__trust-icon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 9999px;
+  background: color-mix(in srgb, var(--accent-subtle) 72%, transparent);
+  color: var(--accent);
+  flex: 0 0 auto;
+}
+
+.login-gate__trust-icon svg {
+  width: 15px;
+  height: 15px;
+}
+
+.login-gate__trust-title {
+  color: var(--text-strong);
+  font-size: 13px;
   font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.login-gate__trust-text {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
 }
 
 .login-gate__help {
-  margin-top: 20px;
-  padding-top: 16px;
-  border-top: 1px solid var(--border);
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
 }
 
 .login-gate__help-title {
-  font-weight: 600;
+  font-weight: 700;
   font-size: 12px;
   margin-bottom: 10px;
-  color: var(--fg);
+  color: var(--text-strong);
+  letter-spacing: 0.02em;
 }
 
 .login-gate__steps {
@@ -106,7 +321,7 @@
 }
 
 .login-gate__steps li {
-  margin-bottom: 6px;
+  margin-bottom: 10px;
 }
 
 .login-gate__steps li:last-child {
@@ -122,7 +337,7 @@
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  color: var(--fg);
+  color: var(--text-strong);
   user-select: all;
 }
 
@@ -135,7 +350,7 @@
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  color: var(--fg);
+  color: var(--text-strong);
   cursor: copy;
 }
 
@@ -159,6 +374,58 @@
 .login-gate__docs {
   margin-top: 10px;
   font-size: 11px;
+}
+
+.login-gate__error {
+  margin-top: 16px;
+}
+
+@media (max-width: 860px) {
+  .login-gate {
+    padding: 16px;
+  }
+
+  .login-gate__card {
+    padding: 20px;
+  }
+
+  .login-gate__hero {
+    margin-bottom: 16px;
+  }
+
+  .login-gate__hero-copy {
+    max-width: none;
+    margin-left: 0;
+  }
+
+  .login-gate__layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 560px) {
+  .login-gate__brand {
+    align-items: flex-start;
+  }
+
+  .login-gate__logo-wrap {
+    width: 56px;
+    height: 56px;
+  }
+
+  .login-gate__logo {
+    width: 36px;
+    height: 36px;
+  }
+
+  .login-gate__meta {
+    gap: 6px;
+  }
+
+  .login-gate__meta .pill {
+    width: 100%;
+    justify-content: center;
+  }
 }
 
 /* ===========================================
