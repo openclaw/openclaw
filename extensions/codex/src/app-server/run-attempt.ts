@@ -561,6 +561,19 @@ export async function runCodexAppServerAttempt(
   });
   const hadSessionFile = await pathExists(params.sessionFile);
   let historyMessages = (await readMirroredSessionHistoryMessages(params.sessionFile)) ?? [];
+  const hookContextWindowFields = {
+    ...(params.contextWindowInfo?.tokens
+      ? { contextTokenBudget: params.contextWindowInfo.tokens }
+      : params.contextTokenBudget
+        ? { contextTokenBudget: params.contextTokenBudget }
+        : {}),
+    ...(params.contextWindowInfo?.source
+      ? { contextWindowSource: params.contextWindowInfo.source }
+      : {}),
+    ...(params.contextWindowInfo?.referenceTokens
+      ? { contextWindowReferenceTokens: params.contextWindowInfo.referenceTokens }
+      : {}),
+  };
   const hookContext = {
     runId: params.runId,
     agentId: sessionAgentId,
@@ -570,6 +583,7 @@ export async function runCodexAppServerAttempt(
     messageProvider: params.messageProvider ?? undefined,
     trigger: params.trigger,
     channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+    ...hookContextWindowFields,
   };
   if (activeContextEngine) {
     await bootstrapHarnessContextEngine({
@@ -1557,6 +1571,7 @@ export async function runCodexAppServerAttempt(
           sessionId: params.sessionId,
           provider: params.provider,
           model: params.modelId,
+          ...hookContextWindowFields,
           resolvedRef:
             params.runtimePlan?.observability.resolvedRef ?? `${params.provider}/${params.modelId}`,
           ...(params.runtimePlan?.observability.harnessId
@@ -1798,6 +1813,7 @@ export async function runCodexAppServerAttempt(
         sessionId: params.sessionId,
         provider: params.provider,
         model: params.modelId,
+        ...hookContextWindowFields,
         resolvedRef:
           params.runtimePlan?.observability.resolvedRef ?? `${params.provider}/${params.modelId}`,
         ...(params.runtimePlan?.observability.harnessId
