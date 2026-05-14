@@ -10,6 +10,11 @@
       },
       "imageModel": {
         "primary": "google-vertex/gemini-3-flash-preview"
+      },
+      "userTimezone": "${USER_TIMEZONE}",
+      "envelopeTimezone": "user",
+      "heartbeat": {
+        "every": "0m"
       }
     },
     "list": [
@@ -37,13 +42,18 @@
       }
     ]
   },
+  "env": {
+    "vars": {
+      "TZ": "${USER_TIMEZONE}"
+    }
+  },
   "gateway": {
     "mode": "local",
     "auth": {
       "mode": "token",
       "token": "${GATEWAY_AUTH_TOKEN}"
     },
-    "port": 18789,
+    "port": "${OPENCLAW_GATEWAY_PORT}",
     "bind": "loopback",
     "tailscale": {
       "mode": "off",
@@ -104,7 +114,7 @@
     "token": "${HOOKS_TOKEN}",
     "allowedAgentIds": ["outlook-triage-agent", "main"],
     "allowRequestSessionKey": true,
-    "allowedSessionKeyPrefixes": ["agent:main:telegram:", "hook:"],
+    "allowedSessionKeyPrefixes": ["agent:main:", "hook:"],
     "defaultSessionKey": "hook:ingress"
   },
   "skills": {

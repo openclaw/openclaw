@@ -30,6 +30,9 @@ echo "[entrypoint] === END STARTUP DIAGNOSTICS ==="
 : "${GOOGLE_CLOUD_LOCATION:?GOOGLE_CLOUD_LOCATION is required}"
 : "${GOOGLE_APPLICATION_CREDENTIALS:?GOOGLE_APPLICATION_CREDENTIALS is required}"
 : "${GOOGLE_CREDENTIALS_JSON_B64:?GOOGLE_CREDENTIALS_JSON_B64 is required}"
+: "${OPENCLAW_GATEWAY_PORT:?OPENCLAW_GATEWAY_PORT is required}"
+
+export TZ="$$USER_TIMEZONE"
 
 # Write Google ADC credentials from base64 env var if provided.
 # This is useful when containers are started on remote servers via SSH and
@@ -76,7 +79,9 @@ export GATEWAY_AUTH_TOKEN HOOKS_TOKEN
 if [ ! -f "$CONFIG_DIR/openclaw.json" ]; then
   echo "[entrypoint] Generating openclaw.json"
   mkdir -p "$CONFIG_DIR"
-  envsubst < /opt/templates/openclaw.template.json > "$CONFIG_DIR/openclaw.json"
+  envsubst < /opt/templates/openclaw.template.json > "$CONFIG_DIR/openclaw.json.tmp"
+  jq '.gateway.port |= tonumber' "$CONFIG_DIR/openclaw.json.tmp" > "$CONFIG_DIR/openclaw.json"
+  rm -f "$CONFIG_DIR/openclaw.json.tmp"
   chmod 600 "$CONFIG_DIR/openclaw.json"
 fi
 
@@ -118,6 +123,18 @@ if [ -z "$(ls -A "$WORKSPACE_DIR" 2>/dev/null)" ]; then
     fi
   done
   echo "[entrypoint] === END USER.MD SUBSTITUTION DIAGNOSTICS ==="
+fi
+
+# Start cron daemon if installed
+if command -v cron >/dev/null 2>&1; then
+  if pgrep -x cron >/dev/null 2>&1; then
+    echo "[entrypoint] cron already running"
+  else
+    echo "[entrypoint] Starting cron daemon"
+    cron || echo "[entrypoint] WARNING: cron failed to start"
+  fi
+else
+  echo "[entrypoint] cron not installed; skipping cron daemon start"
 fi
 
 exec "$@"

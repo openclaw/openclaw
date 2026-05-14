@@ -415,16 +415,16 @@ print(result)
 
 ## Failure Handling
 
-| Symptom                                           | Cause                    | Fix                                                                            |
-| ------------------------------------------------- | ------------------------ | ------------------------------------------------------------------------------ |
-| `COMPOSIO_API_KEY` missing                        | env not set              | Set `COMPOSIO_API_KEY`                                                         |
-| `COMPOSIO_USER_ID` missing                        | env not set              | Set stable user ID, e.g. `openclaw_ubaig`                                      |
-| `MICROSOFT_TEAMS_AUTH_CONFIG_ID` missing          | env not set              | Set Teams auth config ID starting with `ac_`                                   |
-| `ModuleNotFoundError: No module named 'composio'` | image missing package    | Install `composio` into `/opt/skills-venv`; do not install `composio-core`     |
-| `has_tools=False`                                 | deprecated SDK installed | Replace `composio-core` with `composio`                                        |
-| No active account                                 | user not authenticated   | Generate one auth link with `connected_accounts.initiate(...)`                 |
-| Tool call rejected due to version                 | toolkit version mismatch | Pass `dangerously_skip_version_check=True`                                     |
-| Missing fields                                    | SDK/tool schema changed  | Inspect object safely; use `content` for message body and `chat_id` for target |
+| Symptom                                           | Cause                    | Fix                                                                                                                                                                                   |
+| ------------------------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `COMPOSIO_API_KEY` missing                        | env not set              | Set `COMPOSIO_API_KEY`                                                                                                                                                                |
+| `COMPOSIO_USER_ID` missing                        | env not set              | Set stable user ID, check USER.md or name included in telegram reply to create on (use first and last name if possiblt), eg: if name is "UZAIR MOHAMMED BAIG" then id is `uzair_baig` |
+| `MICROSOFT_TEAMS_AUTH_CONFIG_ID` missing          | env not set              | Set Teams auth config ID starting with `ac_`                                                                                                                                          |
+| `ModuleNotFoundError: No module named 'composio'` | image missing package    | Install `composio` into `/opt/skills-venv`; do not install `composio-core`                                                                                                            |
+| `has_tools=False`                                 | deprecated SDK installed | Replace `composio-core` with `composio`                                                                                                                                               |
+| No active account                                 | user not authenticated   | Generate one auth link with `connected_accounts.initiate(...)`                                                                                                                        |
+| Tool call rejected due to version                 | toolkit version mismatch | Pass `dangerously_skip_version_check=True`                                                                                                                                            |
+| Missing fields                                    | SDK/tool schema changed  | Inspect object safely; use `content` for message body and `chat_id` for target                                                                                                        |
 
 ---
 
