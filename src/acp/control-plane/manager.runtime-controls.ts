@@ -51,6 +51,27 @@ function isOptionalTimeoutConfigKey(key: string): boolean {
   return OPTIONAL_TIMEOUT_CONFIG_KEYS.has(normalizeLowercaseStringOrEmpty(key));
 }
 
+function isUnsupportedOptionalTimeoutConfigRejection(key: string, error: unknown): boolean {
+  if (!isOptionalTimeoutConfigKey(key)) {
+    return false;
+  }
+  const errorCode = error && typeof error === "object" ? (error as { code?: unknown }).code : null;
+  if (errorCode === "ACP_BACKEND_UNSUPPORTED_CONTROL") {
+    return true;
+  }
+  const message =
+    error instanceof Error ? error.message : typeof error === "string" ? error : String(error);
+  const normalized = normalizeLowercaseStringOrEmpty(message);
+  return (
+    normalized.includes("session/set_config_option") &&
+    (normalized.includes("-32602") ||
+      normalized.includes("invalid params") ||
+      normalized.includes("unsupported") ||
+      normalized.includes("not supported") ||
+      normalized.includes("not implement"))
+  );
+}
+
 export async function resolveManagerRuntimeCapabilities(params: {
   runtime: AcpRuntime;
   handle: AcpRuntimeHandle;
@@ -172,7 +193,7 @@ export async function applyManagerRuntimeControls(params: {
               value,
             });
           } catch (error) {
-            if (isOptionalTimeoutConfigKey(key)) {
+            if (isUnsupportedOptionalTimeoutConfigRejection(key, error)) {
               continue;
             }
             throw error;

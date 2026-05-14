@@ -3351,6 +3351,49 @@ describe("AcpSessionManager", () => {
     expect(runtimeState.runTurn).toHaveBeenCalledTimes(1);
   });
 
+  it("fails turns when optional timeout config writes hit runtime failures", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.setConfigOption.mockImplementation(async (input: { key: string }) => {
+      if (input.key === "timeout") {
+        throw new AcpRuntimeError("ACP_BACKEND_UNAVAILABLE", "ACP backend unavailable");
+      }
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:opencode:acp:session-1",
+      storeSessionKey: "agent:opencode:acp:session-1",
+      acp: {
+        ...readySessionMeta({ agent: "opencode" }),
+        runtimeOptions: {
+          timeoutSeconds: 120,
+        },
+      },
+    });
+
+    const manager = new AcpSessionManager();
+    await expectRejectedRecord(
+      manager.runTurn({
+        cfg: baseCfg,
+        sessionKey: "agent:opencode:acp:session-1",
+        text: "do work",
+        mode: "prompt",
+        requestId: "run-opencode",
+      }),
+      {
+        code: "ACP_BACKEND_UNAVAILABLE",
+      },
+    );
+
+    expectMockCallFields(runtimeState.setConfigOption, {
+      key: "timeout",
+      value: "120",
+    });
+    expect(runtimeState.runTurn).not.toHaveBeenCalled();
+  });
+
   it("fails turns when adapters reject required runtime config", async () => {
     const runtimeState = createRuntime();
     runtimeState.setConfigOption.mockImplementation(async (input: { key: string }) => {
