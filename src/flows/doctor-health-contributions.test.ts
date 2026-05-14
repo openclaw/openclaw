@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DoctorPrompter } from "../commands/doctor-prompter.js";
 import {
@@ -79,6 +80,10 @@ describe("doctor health contributions", () => {
   beforeEach(() => {
     mocks.maybeRunConfiguredPluginInstallReleaseStep.mockReset();
     mocks.note.mockReset();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("runs release configured plugin install repair before plugin registry and final config writes", () => {
@@ -188,11 +193,12 @@ describe("doctor health contributions", () => {
     ).toBe(false);
   });
 
-  describe("allowConfigSizeDrop during update", () => {
+  describe("config size drops during update", () => {
     beforeEach(() => {
       mocks.replaceConfigFile.mockReset();
       mocks.replaceConfigFile.mockResolvedValue(undefined);
       mocks.applyWizardMetadata.mockImplementation((cfg: unknown) => cfg);
+      vi.spyOn(fs, "existsSync").mockReturnValue(false);
     });
 
     function buildWriteConfigCtx(env: Record<string, string | undefined>) {
@@ -218,7 +224,7 @@ describe("doctor health contributions", () => {
       (entry) => entry.id === "doctor:write-config",
     )!;
 
-    it("disables allowConfigSizeDrop when OPENCLAW_UPDATE_IN_PROGRESS=1", async () => {
+    it("allows config size drops when OPENCLAW_UPDATE_IN_PROGRESS=1", async () => {
       const ctx = buildWriteConfigCtx({
         OPENCLAW_UPDATE_IN_PROGRESS: "1",
         OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
@@ -227,9 +233,23 @@ describe("doctor health contributions", () => {
       expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
         expect.objectContaining({
           writeOptions: expect.objectContaining({
-            allowConfigSizeDrop: false,
+            allowConfigSizeDrop: true,
           }),
         }),
+      );
+    });
+
+    it("points update-time config rewrites at the pre-update backup", async () => {
+      vi.mocked(fs.existsSync).mockImplementation((value) => String(value).endsWith(".pre-update"));
+      const ctx = buildWriteConfigCtx({
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
+      });
+
+      await writeConfigContribution.run(ctx);
+
+      expect(ctx.runtime.log).toHaveBeenCalledWith(
+        "Update changed config; pre-update backup: /tmp/fake-openclaw.json.pre-update",
       );
     });
 

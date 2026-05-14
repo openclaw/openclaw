@@ -363,7 +363,7 @@ export async function migrateApplyCommand(
       `openclaw migrate apply requires --yes in non-interactive mode. Preview first with ${formatCliCommand("openclaw migrate plan --provider <provider>")}.`,
     );
   }
-  const provider = resolveMigrationProvider(providerId);
+  const provider = resolveMigrationProvider(providerId, opts.configOverride);
   if (!opts.yes) {
     const plan = await migratePlanCommand(runtime, {
       ...opts,

@@ -2,6 +2,10 @@
 // Keep heavyweight tool construction out of this module so harness imports can
 // register quickly inside gateway startup and Docker e2e runs.
 
+import type {
+  CodexBundleMcpThreadConfig,
+  LoadCodexBundleMcpThreadConfigParams,
+} from "../agents/codex-mcp-config.types.js";
 import type { EmbeddedRunAttemptResult } from "../agents/pi-embedded-runner/run/types.js";
 import {
   abortEmbeddedPiRun,
@@ -134,7 +138,18 @@ export {
   logAgentRuntimeToolDiagnostics,
   normalizeAgentRuntimeTools,
 } from "../agents/runtime-plan/tools.js";
+export type {
+  CodexBundleMcpThreadConfig,
+  LoadCodexBundleMcpThreadConfigParams,
+} from "../agents/codex-mcp-config.types.js";
 export { normalizeProviderToolSchemas } from "../agents/pi-embedded-runner/tool-schema-runtime.js";
+
+export async function loadCodexBundleMcpThreadConfig(
+  params: LoadCodexBundleMcpThreadConfigParams,
+): Promise<CodexBundleMcpThreadConfig> {
+  const { loadCodexBundleMcpThreadConfig: load } = await import("../agents/codex-mcp-config.js");
+  return load(params);
+}
 export { resolveSandboxContext } from "../agents/sandbox.js";
 export { resolveBootstrapContextForRun } from "../agents/bootstrap-files.js";
 export type { EmbeddedContextFile } from "../agents/pi-embedded-helpers/types.js";

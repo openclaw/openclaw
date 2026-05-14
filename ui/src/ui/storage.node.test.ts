@@ -131,6 +131,16 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(loadSettings().gatewayUrl).toBe(expectedGatewayUrl("/openclaw"));
   });
 
+  it("defaults chat auto-scroll to near-bottom", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+
+    expect(loadSettings().chatAutoScroll).toBe("near-bottom");
+  });
+
   it("infers base path from nested pathname when configured base path is not set", () => {
     setTestLocation({
       protocol: "http:",
@@ -191,6 +201,7 @@ describe("loadSettings default gateway URL derivation", () => {
       chatFocusMode: false,
       chatShowThinking: true,
       chatShowToolCalls: true,
+      chatAutoScroll: "near-bottom",
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 220,
@@ -225,6 +236,7 @@ describe("loadSettings default gateway URL derivation", () => {
       chatFocusMode: false,
       chatShowThinking: true,
       chatShowToolCalls: true,
+      chatAutoScroll: "near-bottom",
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 220,
@@ -257,6 +269,7 @@ describe("loadSettings default gateway URL derivation", () => {
       chatFocusMode: false,
       chatShowThinking: true,
       chatShowToolCalls: true,
+      chatAutoScroll: "near-bottom",
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 220,
@@ -274,6 +287,7 @@ describe("loadSettings default gateway URL derivation", () => {
       chatFocusMode: false,
       chatShowThinking: true,
       chatShowToolCalls: true,
+      chatAutoScroll: "near-bottom",
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 220,
@@ -322,6 +336,7 @@ describe("loadSettings default gateway URL derivation", () => {
       chatFocusMode: false,
       chatShowThinking: true,
       chatShowToolCalls: true,
+      chatAutoScroll: "near-bottom",
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 220,
@@ -355,6 +370,33 @@ describe("loadSettings default gateway URL derivation", () => {
     );
 
     expect(loadSettings().textScale).toBe(125);
+  });
+
+  it("loads valid chat auto-scroll modes and normalizes invalid values", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+
+    const gwUrl = expectedGatewayUrl("");
+    localStorage.setItem(
+      `openclaw.control.settings.v1:${gwUrl}`,
+      JSON.stringify({
+        gatewayUrl: gwUrl,
+        chatAutoScroll: "off",
+      }),
+    );
+    expect(loadSettings().chatAutoScroll).toBe("off");
+
+    localStorage.setItem(
+      `openclaw.control.settings.v1:${gwUrl}`,
+      JSON.stringify({
+        gatewayUrl: gwUrl,
+        chatAutoScroll: "disabled",
+      }),
+    );
+    expect(loadSettings().chatAutoScroll).toBe("near-bottom");
   });
 
   it("clears the current-tab token when saving an empty token", () => {

@@ -205,7 +205,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     });
   });
 
-  it("resumes a thread with the matching user MCP fingerprint without resending ignored MCP config", async () => {
+  it("resends user MCP config when resuming a thread with the matching fingerprint", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const config = {
@@ -252,6 +252,8 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       config?: { mcp_servers?: Record<string, unknown> };
     };
     expect(resumeCall).toBeDefined();
-    expect(resumeParams?.config?.mcp_servers).toBeUndefined();
+    expect(resumeParams?.config?.mcp_servers).toMatchObject({
+      notes: { command: "node", args: ["/opt/notes-mcp/dist/index.js"] },
+    });
   });
 });

@@ -397,6 +397,42 @@ describe("migrateApplyCommand", () => {
     expect(mocks.provider.apply).toHaveBeenCalledTimes(1);
   });
 
+  it("uses embedded config override and return patch mode for Codex planning and apply", async () => {
+    const configOverride = {
+      plugins: {
+        entries: {
+          codex: { enabled: true },
+        },
+      },
+    };
+    const planned = codexPluginPlan();
+    const applied: MigrationApplyResult = {
+      ...planned,
+      summary: { ...planned.summary, planned: 0, migrated: planned.summary.planned },
+      items: planned.items.map((item) => ({ ...item, status: "migrated" as const })),
+    };
+    mocks.provider.plan.mockImplementation(async (ctx) => {
+      expect(ctx.config).toBe(configOverride);
+      expect(ctx.providerOptions).toEqual({ configPatchMode: "return" });
+      return planned;
+    });
+    mocks.provider.apply.mockImplementation(async (ctx) => {
+      expect(ctx.config).toBe(configOverride);
+      expect(ctx.providerOptions).toEqual({ configPatchMode: "return" });
+      return applied;
+    });
+
+    await migrateApplyCommand(runtime, {
+      provider: "codex",
+      yes: true,
+      configOverride,
+      configPatchMode: "return",
+    });
+
+    expect(mocks.provider.plan).toHaveBeenCalledTimes(1);
+    expect(mocks.provider.apply).toHaveBeenCalledTimes(1);
+  });
+
   it("previews and prompts before interactive apply without --yes", async () => {
     Object.defineProperty(process.stdin, "isTTY", {
       configurable: true,

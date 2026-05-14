@@ -7,6 +7,7 @@ import {
   decodeHeaderEnvPlaceholder,
   normalizeStringRecord,
 } from "./bundle-mcp-adapter-shared.js";
+import { buildCodexMcpServersConfig } from "../codex-mcp-config.js";
 import { serializeTomlInlineValue } from "./toml-inline.js";
 
 // Mutable JSON shape structurally compatible with the bundled Codex
@@ -70,14 +71,7 @@ export function injectCodexMcpConfigArgs(
   args: string[] | undefined,
   config: BundleMcpConfig,
 ): string[] {
-  const overrides = serializeTomlInlineValue(
-    Object.fromEntries(
-      Object.entries(config.mcpServers).map(([name, server]) => [
-        name,
-        normalizeCodexServerConfig(name, server),
-      ]),
-    ),
-  );
+  const overrides = serializeTomlInlineValue(buildCodexMcpServersConfig(config));
   return [...(args ?? []), "-c", `mcp_servers=${overrides}`];
 }
 

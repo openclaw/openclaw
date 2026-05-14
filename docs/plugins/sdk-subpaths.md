@@ -41,6 +41,13 @@ but new code should not add imports from them: `agent-runtime-test-contracts`,
 `text-runtime`, and `zod`. Import `zod` directly from `zod` in new plugin code.
 `plugin-test-runtime` is still an active focused test helper subpath.
 
+### Reserved bundled plugin helper subpaths
+
+These subpaths are plugin-owned compatibility surfaces reserved for their owning
+bundled plugin, not general SDK APIs: `plugin-sdk/codex-mcp-projection` and
+`plugin-sdk/codex-native-task-runtime`. Cross-owner extension imports are blocked
+by package contract guardrails.
+
 ### Deprecated unused public subpaths
 
 These public subpaths existed for at least one month and currently have no
