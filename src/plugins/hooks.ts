@@ -85,6 +85,11 @@ import type {
   PluginHookBeforeInstallEvent,
   PluginHookBeforeInstallResult,
 } from "./hook-types.js";
+import type {
+  PluginHookBeforeRouteInboundMessageContext,
+  PluginHookBeforeRouteInboundMessageEvent,
+  PluginHookBeforeRouteInboundMessageResult,
+} from "./hook-message.types.js";
 
 // Re-export types for consumers
 export type {
@@ -151,6 +156,9 @@ export type {
   PluginHookBeforeInstallContext,
   PluginHookBeforeInstallEvent,
   PluginHookBeforeInstallResult,
+  PluginHookBeforeRouteInboundMessageContext,
+  PluginHookBeforeRouteInboundMessageEvent,
+  PluginHookBeforeRouteInboundMessageResult,
 };
 
 export type HookRunnerLogger = {
@@ -982,6 +990,25 @@ export function createHookRunner(
   }
 
   /**
+   * Run before_route_inbound_message hook.
+   * Allows plugins to redirect or suppress inbound messages before routing.
+   * First handler returning { handled: true } wins.
+   */
+  async function runBeforeRouteInboundMessage(
+    event: PluginHookBeforeRouteInboundMessageEvent,
+    ctx: PluginHookBeforeRouteInboundMessageContext,
+  ): Promise<PluginHookBeforeRouteInboundMessageResult | undefined> {
+    return runClaimingHook<
+      "before_route_inbound_message",
+      PluginHookBeforeRouteInboundMessageResult
+    >(
+      "before_route_inbound_message",
+      event,
+      ctx,
+    );
+  }
+
+  /**
    * Run message_received hook.
    * Runs in parallel (fire-and-forget).
    */
@@ -1492,6 +1519,7 @@ export function createHookRunner(
     // Lifecycle gate hooks
     runBeforeAgentRun,
     // Message hooks
+    runBeforeRouteInboundMessage,
     runInboundClaim,
     runInboundClaimForPlugin,
     runInboundClaimForPluginOutcome,

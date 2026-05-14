@@ -1,5 +1,10 @@
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { clearHistoryEntriesIfEnabled } from "../../auto-reply/reply/history.js";
+import type {
+  PluginHookBeforeRouteInboundMessageContext,
+  PluginHookBeforeRouteInboundMessageEvent,
+} from "../../plugins/hook-message.types.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { createChannelReplyPipeline } from "../message/reply-pipeline.js";
 import type { CreateChannelReplyPipelineParams } from "../message/reply-pipeline.js";
 import { recordChannelBotPairLoopAndCheckSuppression } from "./bot-loop-protection.js";
@@ -536,6 +541,73 @@ export async function runChannelTurn<
   }
 
   const resolved = await params.adapter.resolveTurn(input, eventClass, preflight);
+
+  // ── before_route_inbound_message hook ──────────────────────────────
+  // Fire right after resolveTurn so it runs for all inbound messages:
+  // - Main adapters: runInboundReplyTurn() → runChannelTurn() → runPreparedChannelTurnCore()
+  // - Compat mode: dispatchChannelMessageReplyWithBase() → recordChannelMessageReplyDispatch()
+  const hookRunner = getGlobalHookRunner();
+  if (hookRunner) {
+    const channelName = params.channel;
+    // ctxPayload is on resolved (ChannelTurnResolved), not params (RunChannelTurnParams)
+    const ctxPayload = "ctxPayload" in resolved ? resolved.ctxPayload : undefined;
+    const bodyText = ctxPayload?.Body ?? "";
+    const isGroup = ctxPayload?.ChatType === "group" || ctxPayload?.ChatType === "supergroup";
+
+    const hookCtx: PluginHookBeforeRouteInboundMessageContext = {
+      channelId: channelName,
+      accountId: params.accountId,
+      conversationId: ctxPayload?.NativeChannelId ?? ctxPayload?.OriginatingTo,
+      parentConversationId: ctxPayload?.MessageThreadId
+        ? String(ctxPayload.MessageThreadId)
+        : undefined,
+      sessionKey: resolved.routeSessionKey,
+    };
+
+    const hookEvent: PluginHookBeforeRouteInboundMessageEvent = {
+      channel: channelName,
+      accountId: params.accountId,
+      conversationId: hookCtx.conversationId,
+      parentConversationId: hookCtx.parentConversationId,
+      body: bodyText,
+      isGroup,
+      senderId: ctxPayload?.From,
+      originalSessionKey: resolved.routeSessionKey,
+    };
+
+    const hookResult = await hookRunner.runBeforeRouteInboundMessage(hookEvent, hookCtx);
+
+    if (hookResult?.handled) {
+      // Redirect: update SessionKey in the payload that record/dispatch actually reads
+      if (
+        hookResult.redirectSessionKey &&
+        hookResult.redirectSessionKey !== resolved.routeSessionKey
+      ) {
+        // Update ctxPayload.SessionKey — this is what downstream code reads
+        if (ctxPayload) {
+          ctxPayload.SessionKey = hookResult.redirectSessionKey;
+        }
+        // Also update resolved.routeSessionKey for any downstream code that reads it directly
+        (resolved as { routeSessionKey: string }).routeSessionKey = hookResult.redirectSessionKey;
+      }
+      // Suppress: drop the message entirely — return early after onFinalize
+      if (hookResult.suppressDelivery) {
+        const suppressedResult: ChannelTurnResult<TDispatchResult> = {
+          admission: { kind: "drop", reason: "suppressed_by_hook" },
+          dispatched: false,
+          ctxPayload,
+          routeSessionKey: resolved.routeSessionKey,
+        };
+        try {
+          await params.adapter.onFinalize?.(suppressedResult);
+        } catch {
+          // Suppress onFinalize errors to not mask the suppression
+        }
+        return suppressedResult;
+      }
+    }
+  }
+
   emit({
     ...params,
     accountId: resolved.accountId ?? params.accountId,

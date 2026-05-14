@@ -94,3 +94,49 @@ export type PluginHookMessageSentEvent = {
   parentSpanId?: string;
   error?: string;
 };
+
+// ── before_route_inbound_message hook ──────────────────────────────────────
+
+/** Context supplied to the `before_route_inbound_message` handler. */
+export type PluginHookBeforeRouteInboundMessageContext = {
+  /** Channel the message arrived on (e.g. "discord", "telegram"). */
+  channelId: string;
+  /** Account identifier for multi-account gateways. */
+  accountId?: string;
+  /** Provider-native channel/conversation ID from MsgContext metadata. */
+  conversationId?: string;
+  /** Thread/parent conversation ID (Telegram topic, Discord thread, etc.). */
+  parentConversationId?: string;
+  /** The session key that was resolved for this message before hook invocation. */
+  sessionKey: string;
+};
+
+/** Event payload for the `before_route_inbound_message` hook. */
+export type PluginHookBeforeRouteInboundMessageEvent = {
+  /** Channel the message arrived on (e.g. "discord", "telegram"). */
+  channel: string;
+  /** Account identifier for multi-account gateways. */
+  accountId?: string;
+  /** Provider-native channel/conversation ID from MsgContext metadata. */
+  conversationId?: string;
+  /** Thread/parent conversation ID (Telegram topic, Discord thread, etc.). */
+  parentConversationId?: string;
+  /** Plain-text body of the inbound message. */
+  body: string;
+  /** Whether the message originated in a group/supergroup context. */
+  isGroup: boolean;
+  /** Sender identifier from the inbound message. */
+  senderId?: string;
+  /** The session key that was resolved before the hook fired. */
+  originalSessionKey: string;
+};
+
+/** Result returned by a `before_route_inbound_message` handler. */
+export type PluginHookBeforeRouteInboundMessageResult = {
+  /** Set to `true` when the plugin has made a routing decision. */
+  handled: true;
+  /** Redirect the message to a different session key. */
+  redirectSessionKey?: string;
+  /** Suppress delivery entirely — do not route the message to any session. */
+  suppressDelivery?: boolean;
+};

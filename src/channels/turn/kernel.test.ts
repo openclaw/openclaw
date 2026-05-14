@@ -17,6 +17,17 @@ import {
 } from "./kernel.js";
 import type { PreparedChannelTurn } from "./types.js";
 
+const hookMocks = vi.hoisted(() => ({
+  runner: {
+    runBeforeRouteInboundMessage: vi.fn(),
+    hasHooks: vi.fn(),
+  },
+}));
+
+vi.mock("../../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: () => hookMocks.runner,
+}));
+
 const deliverOutboundPayloads = vi.hoisted(() => vi.fn());
 const resolveOutboundDurableFinalDeliverySupport = vi.hoisted(() => vi.fn());
 const sendDurableMessageBatch = vi.hoisted(() => vi.fn());
@@ -178,6 +189,8 @@ describe("channel turn kernel", () => {
     vi.clearAllMocks();
     clearChannelBotPairLoopGuardForTests();
     resolveOutboundDurableFinalDeliverySupport.mockResolvedValue({ ok: true });
+    hookMocks.runner.runBeforeRouteInboundMessage.mockResolvedValue(undefined);
+    hookMocks.runner.hasHooks.mockReturnValue(false);
   });
 
   it("types optionally guarded prepared turns as drop-capable", () => {
@@ -1045,5 +1058,81 @@ describe("channel turn kernel", () => {
     expect(finalizedResult.admission).toEqual({ kind: "dispatch" });
     expect(finalizedResult.dispatched).toBe(false);
     expect(finalizedResult.routeSessionKey).toBe("agent:main:test:peer");
+  });
+
+  it("redirects to a different session when before_route_inbound_message hook returns a redirect", async () => {
+    const events: string[] = [];
+    const recordInboundSession = createRecordInboundSession(events);
+    const dispatch = createDispatch(events);
+
+    hookMocks.runner.runBeforeRouteInboundMessage.mockResolvedValue({
+      handled: true,
+      redirectSessionKey: "agent:main:test:redirected",
+    });
+    hookMocks.runner.hasHooks.mockReturnValue(true);
+
+    const result = await runChannelTurn({
+      channel: "test",
+      raw: { id: "msg-1", text: "hello" },
+      adapter: {
+        ingest: () => ({ id: "msg-1", rawText: "hello" }),
+        preflight: () => ({ kind: "dispatch" }),
+        resolveTurn: () => ({
+          cfg: {} as OpenClawConfig,
+          channel: "test",
+          agentId: "main",
+          routeSessionKey: "agent:main:test:original",
+          storePath: "/tmp/sessions.json",
+          ctxPayload: createCtx({ SessionKey: "agent:main:test:original" }),
+          recordInboundSession,
+          dispatchReplyWithBufferedBlockDispatcher: dispatch,
+          delivery: createNoopChannelTurnDeliveryAdapter(),
+          record: { onRecordError: vi.fn() },
+        }),
+        onFinalize: vi.fn(),
+      },
+    });
+
+    expect(result.admission).toEqual({ kind: "dispatch" });
+    expect(result.dispatched).toBe(true);
+    // The hook redirected the session
+    expect(hookMocks.runner.runBeforeRouteInboundMessage).toHaveBeenCalledOnce();
+  });
+
+  it("suppresses delivery when before_route_inbound_message hook returns suppressDelivery", async () => {
+    const events: string[] = [];
+    const recordInboundSession = createRecordInboundSession(events);
+
+    hookMocks.runner.runBeforeRouteInboundMessage.mockResolvedValue({
+      handled: true,
+      suppressDelivery: true,
+    });
+    hookMocks.runner.hasHooks.mockReturnValue(true);
+
+    const result = await runChannelTurn({
+      channel: "test",
+      raw: { id: "msg-1", text: "hello" },
+      adapter: {
+        ingest: () => ({ id: "msg-1", rawText: "hello" }),
+        preflight: () => ({ kind: "dispatch" }),
+        resolveTurn: () => ({
+          cfg: {} as OpenClawConfig,
+          channel: "test",
+          agentId: "main",
+          routeSessionKey: "agent:main:test:peer",
+          storePath: "/tmp/sessions.json",
+          ctxPayload: createCtx({ SessionKey: "agent:main:test:peer" }),
+          recordInboundSession,
+          dispatchReplyWithBufferedBlockDispatcher: createDispatch(events),
+          delivery: createNoopChannelTurnDeliveryAdapter(),
+          record: { onRecordError: vi.fn() },
+        }),
+        onFinalize: vi.fn(),
+      },
+    });
+
+    expect(result.admission).toEqual({ kind: "drop", reason: "suppressed_by_hook" });
+    expect(result.dispatched).toBe(false);
+    expect(events).toEqual([]); // No recording or dispatching
   });
 });
