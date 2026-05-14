@@ -446,12 +446,6 @@ async function scrubHostPeerFromTempPackageLock(lockPath: string): Promise<void>
   }
 }
 
-function isHostPeerResolutionFailure(
-  result: Awaited<ReturnType<ManagedNpmRootRunCommand>>,
-): boolean {
-  return `${result.stderr}\n${result.stdout}`.includes("openclaw@");
-}
-
 function collectExistingManagedPeerDependencyPins(
   dependencies: Record<string, string>,
   previousManagedPeerDependencies: string[],
@@ -466,10 +460,7 @@ function collectExistingManagedPeerDependencyPins(
   return pins;
 }
 
-function createManagedNpmPeerPlanArgs(params?: {
-  force?: boolean;
-  legacyPeerDeps?: boolean;
-}): string[] {
+function createManagedNpmPeerPlanArgs(params?: { force?: boolean }): string[] {
   return [
     "npm",
     "install",
@@ -478,7 +469,6 @@ function createManagedNpmPeerPlanArgs(params?: {
     ...createSafeNpmInstallArgs({
       omitDev: true,
       omitPeer: true,
-      legacyPeerDeps: params?.legacyPeerDeps,
       loglevel: "error",
       ignoreWorkspaces: true,
       noAudit: true,
@@ -537,22 +527,7 @@ async function collectNpmResolvedManagedNpmRootPeerDependencyPins(params: {
         quiet: true,
       }),
     };
-    let result = await command(npmPeerPlanArgs, npmPlanOptions);
-    if (result.code !== 0 && isHostPeerResolutionFailure(result)) {
-      const hydrateResult = await command(createManagedNpmPeerPlanArgs({ legacyPeerDeps: true }), {
-        cwd: tempRoot,
-        timeoutMs: Math.max(params.timeoutMs ?? 300_000, 300_000),
-        env: createSafeNpmInstallEnv(process.env, {
-          legacyPeerDeps: true,
-          packageLock: true,
-          quiet: true,
-        }),
-      });
-      if (hydrateResult.code === 0) {
-        await scrubHostPeerFromTempPackageLock(tempLockPath);
-        result = await command(npmPeerPlanArgs, npmPlanOptions);
-      }
-    }
+    const result = await command(npmPeerPlanArgs, npmPlanOptions);
     if (result.code !== 0) {
       return fallbackPeerPins;
     }
