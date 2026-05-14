@@ -933,6 +933,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         sessionId: options?.sessionId,
         agentId: resolvedAgentId,
         sandboxRoot: options?.sandboxRoot,
+        sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
         abortSignal: signal,
       });
 

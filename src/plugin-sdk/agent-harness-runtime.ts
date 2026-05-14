@@ -39,7 +39,10 @@ export type { ContextEngine as HarnessContextEngine } from "../context-engine/ty
 export type { CompactEmbeddedPiSessionParams } from "../agents/pi-embedded-runner/compact.js";
 export type { EmbeddedPiCompactResult } from "../agents/pi-embedded-runner/types.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
-export type { MessagingToolSend } from "../agents/pi-embedded-messaging.types.js";
+export type {
+  MessagingToolSend,
+  MessagingToolSourceReplyPayload,
+} from "../agents/pi-embedded-messaging.types.js";
 export type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
 export type { AgentApprovalEventData, AgentEventPayload } from "../infra/agent-events.js";
 export type { ExecApprovalDecision } from "../infra/exec-approvals.js";
