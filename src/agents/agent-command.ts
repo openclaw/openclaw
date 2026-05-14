@@ -44,6 +44,7 @@ import { resolveUserPath } from "../utils.js";
 import { resolveMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentRuntimeConfig } from "./agent-runtime-config.js";
 import {
+  canonicalizeAgentId,
   clearAutoFallbackPrimaryProbeSelection,
   entryMatchesAutoFallbackPrimaryProbe,
   hasSessionAutoModelFallbackProvenance,
@@ -384,14 +385,13 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
     workspaceDir: opts.workspaceDir,
   });
   const agentIdOverrideRaw = opts.agentId?.trim();
-  const agentIdOverride = agentIdOverrideRaw ? normalizeAgentId(agentIdOverrideRaw) : undefined;
-  if (agentIdOverride) {
-    const knownAgents = listAgentIds(cfg);
-    if (!knownAgents.includes(agentIdOverride)) {
-      throw new Error(
-        `Unknown agent id "${agentIdOverrideRaw}". Use "${formatCliCommand("openclaw agents list")}" to see configured agents.`,
-      );
-    }
+  const agentIdOverride = agentIdOverrideRaw
+    ? canonicalizeAgentId(cfg, agentIdOverrideRaw)
+    : undefined;
+  if (agentIdOverrideRaw && !agentIdOverride) {
+    throw new Error(
+      `Unknown agent id "${agentIdOverrideRaw}". Use "${formatCliCommand("openclaw agents list")}" to see configured agents.`,
+    );
   }
   const shouldScopeDefaultAgentKey =
     rawExplicitSessionKey &&
