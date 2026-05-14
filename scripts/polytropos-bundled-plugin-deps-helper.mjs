@@ -14,10 +14,13 @@
  */
 import { execSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
-import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 export const BUNDLED_PLUGIN_INSTALL_TARGETS = [];
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const DEFAULT_PACKAGE_ROOT = resolve(__dirname, "..");
 
 function readJson(filePath) {
   return JSON.parse(readFileSync(filePath, "utf8"));
@@ -116,18 +119,14 @@ function buildNpmInstallCommand(missingSpecs) {
 
 export function runBundledPluginDepsHelper(params = {}) {
   const env = params.env ?? process.env;
-  const packageRoot = params.packageRoot;
-  const extensionsDir = params.extensionsDir ?? (packageRoot ? join(packageRoot, "dist", "extensions") : null);
+  const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
+  const extensionsDir = params.extensionsDir ?? join(packageRoot, "dist", "extensions");
   const exec = params.execSync ?? execSync;
   const pathExists = params.existsSync ?? existsSync;
   const log = params.log ?? console;
   // NOTE: The upstream helper only runs under `npm install -g` (it checks `npm_config_global`).
   // Polytropos invokes this helper explicitly in release tooling, so it must be reliable in non-global
   // shells as well. Keep `--allow-non-global` as a compatibility no-op for callers that still pass it.
-
-  if (!packageRoot) {
-    throw new Error("packageRoot is required");
-  }
 
   const runtimeDeps =
     params.runtimeDeps ??
@@ -192,7 +191,7 @@ function usage() {
   console.log(`polytropos-bundled-plugin-deps-helper.mjs
 
 Usage:
-  node scripts/polytropos-bundled-plugin-deps-helper.mjs --package-root <installedRoot> [--extensions-dir <dir>] [--allow-non-global]
+  node scripts/polytropos-bundled-plugin-deps-helper.mjs [--package-root <root>] [--extensions-dir <dir>] [--allow-non-global]
 `);
 }
 
