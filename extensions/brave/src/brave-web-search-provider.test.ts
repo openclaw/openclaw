@@ -73,7 +73,7 @@ function readHeader(init: unknown, name: string): string | null {
 }
 
 function fetchCall(mockFetch: { mock: { calls: Array<Array<unknown>> } }, index = 0) {
-  const call = mockFetch.mock.calls.at(index);
+  const call = mockFetch.mock.calls[index];
   if (!call) {
     throw new Error(`Expected fetch call ${index + 1}`);
   }
@@ -104,6 +104,34 @@ describe("brave web search provider", () => {
     expect(createBraveWebSearchContractProvider().docsUrl).toBe(
       "https://docs.openclaw.ai/tools/brave-search",
     );
+  });
+
+  it("exposes legacy top-level apiKey as a Brave-owned compatibility fallback", () => {
+    const apiKey = { source: "env", provider: "default", id: "BRAVE_API_KEY" } as const;
+    const config = {
+      tools: {
+        web: {
+          search: {
+            apiKey,
+          },
+        },
+      },
+    };
+
+    expect(createBraveWebSearchProvider().getConfiguredCredentialValue?.(config)).toEqual(apiKey);
+    expect(createBraveWebSearchContractProvider().getConfiguredCredentialValue?.(config)).toEqual(
+      apiKey,
+    );
+    expect(createBraveWebSearchProvider().getConfiguredCredentialFallback?.(config)).toEqual({
+      path: "tools.web.search.apiKey",
+      value: apiKey,
+    });
+    expect(
+      createBraveWebSearchContractProvider().getConfiguredCredentialFallback?.(config),
+    ).toEqual({
+      path: "tools.web.search.apiKey",
+      value: apiKey,
+    });
   });
 
   it("points missing-key users to fetch/browser alternatives", async () => {

@@ -50,7 +50,7 @@ afterEach(() => {
 });
 
 function firstMockArg(mockFn: ReturnType<typeof vi.fn>, label: string): Record<string, any> {
-  const call = mockFn.mock.calls.at(0);
+  const call = mockFn.mock.calls[0];
   if (!call) {
     throw new Error(`Expected ${label} call`);
   }

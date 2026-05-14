@@ -102,7 +102,7 @@ function firstMockCall<T extends unknown[]>(mock: { mock: { calls: T[] } }): T |
 }
 
 function getSecondRequestHeaders(fetchImpl: ReturnType<typeof vi.fn>): Headers {
-  const [, secondInit] = fetchImpl.mock.calls.at(1) as [string, RequestInit];
+  const secondInit = getSecondRequestInit(fetchImpl);
   return new Headers(secondInit.headers);
 }
 
@@ -123,7 +123,11 @@ function getFirstRequestInit(fetchImpl: ReturnType<typeof vi.fn>): RequestInit {
 }
 
 function getSecondRequestInit(fetchImpl: ReturnType<typeof vi.fn>): RequestInit {
-  const [, secondInit] = fetchImpl.mock.calls.at(1) as [string, RequestInit];
+  const call = fetchImpl.mock.calls[1];
+  if (!call) {
+    throw new Error("expected second fetch call");
+  }
+  const [, secondInit] = call as [string, RequestInit];
   return secondInit;
 }
 

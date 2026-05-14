@@ -70,6 +70,10 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function firstMaintainParams(maintain: { mock: { calls: unknown[][] } }): Record<string, unknown> {
+  return requireRecord(maintain.mock.calls[0]?.[0], "maintain params");
+}
+
 function expectRecordFields(record: Record<string, unknown>, expected: Record<string, unknown>) {
   for (const [key, value] of Object.entries(expected)) {
     expect(record[key]).toBe(value);
@@ -324,7 +328,7 @@ describe("runContextEngineMaintenance", () => {
       bytesFreed: 0,
       rewrittenEntries: 0,
     });
-    const maintainParams = requireRecord(maintain.mock.calls.at(0)?.[0], "maintain params");
+    const maintainParams = firstMaintainParams(maintain);
     expectRecordFields(maintainParams, {
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
@@ -507,7 +511,7 @@ describe("runContextEngineMaintenance", () => {
         }
         releaseForeground();
         await waitForAssertion(() => expect(maintain).toHaveBeenCalledTimes(1));
-        const maintainParams = requireRecord(maintain.mock.calls.at(0)?.[0], "maintain params");
+        const maintainParams = firstMaintainParams(maintain);
         expectRecordFields(maintainParams, {
           sessionId: "session-1",
           sessionKey,

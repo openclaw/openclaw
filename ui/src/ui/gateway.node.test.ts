@@ -134,6 +134,19 @@ function requireFirstMockArg(
   return requireRecord(call[0], `${label} payload`);
 }
 
+function requireMockCallArg(
+  mock: ReturnType<typeof vi.fn>,
+  index: number,
+  label: string,
+): Record<string, unknown> {
+  const resolvedIndex = index < 0 ? mock.mock.calls.length + index : index;
+  const call = mock.mock.calls[resolvedIndex];
+  if (!call) {
+    throw new Error(`expected ${label} call ${index}`);
+  }
+  return requireRecord(call[0], `${label} payload`);
+}
+
 function requireFirstSignCall(): [privateKey: string, payload: string] {
   const [call] = signDevicePayloadMock.mock.calls;
   if (!call) {
@@ -167,15 +180,15 @@ function expectLatestRequestTiming(
   onRequestTiming: ReturnType<typeof vi.fn>,
   expected: Partial<RequestTimingPayload>,
 ) {
-  const timing = onRequestTiming.mock.calls.at(-1)?.[0] as RequestTimingPayload | undefined;
+  const timing = requireMockCallArg(onRequestTiming, -1, "request timing") as RequestTimingPayload;
   for (const [key, value] of Object.entries(expected)) {
-    expect(timing?.[key as keyof RequestTimingPayload]).toBe(value);
+    expect(timing[key as keyof RequestTimingPayload]).toBe(value);
   }
-  expect(timing?.startedAtMs).toBeTypeOf("number");
-  expect(timing?.endedAtMs).toBeTypeOf("number");
-  expect(timing?.durationMs).toBeTypeOf("number");
+  expect(timing.startedAtMs).toBeTypeOf("number");
+  expect(timing.endedAtMs).toBeTypeOf("number");
+  expect(timing.durationMs).toBeTypeOf("number");
   if (
-    typeof timing?.startedAtMs === "number" &&
+    typeof timing.startedAtMs === "number" &&
     typeof timing.endedAtMs === "number" &&
     typeof timing.durationMs === "number"
   ) {
@@ -660,11 +673,13 @@ describe("GatewayBrowserClient", () => {
     vi.useRealTimers();
   });
 
-  it("reconnects without cached device token for DNS hosts beginning with a 127 label", async () => {
+  it("stops reconnecting on token mismatch for DNS hosts beginning with a 127 label", async () => {
     useNodeFakeTimers();
+    const onClose = vi.fn();
     const client = new GatewayBrowserClient({
       url: "ws://127.example.invalid:18789",
       token: "shared-auth-token",
+      onClose,
     });
 
     try {
@@ -676,12 +691,19 @@ describe("GatewayBrowserClient", () => {
       await expectSocketClosed(firstWs);
       firstWs.emitClose(4008, "connect failed");
 
-      await vi.advanceTimersByTimeAsync(800);
-      const secondWs = getLatestWebSocket();
-      expect(secondWs).not.toBe(firstWs);
-      const { connectFrame: secondConnect } = await continueConnect(secondWs, "nonce-2");
-      expect(secondConnect.params?.auth?.token).toBe("shared-auth-token");
-      expect(secondConnect.params?.auth?.deviceToken).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(wsInstances).toHaveLength(1);
+      expect(onClose).toHaveBeenCalledWith({
+        code: 4008,
+        reason: "connect failed",
+        error: {
+          code: "INVALID_REQUEST",
+          message: "unauthorized",
+          details: { code: "AUTH_TOKEN_MISMATCH", canRetryWithDeviceToken: true },
+          retryable: false,
+          retryAfterMs: undefined,
+        },
+      });
     } finally {
       client.stop();
       vi.useRealTimers();
@@ -740,13 +762,15 @@ describe("GatewayBrowserClient", () => {
     vi.useRealTimers();
   });
 
-  it("continues reconnecting on first token mismatch when no retry was attempted", async () => {
+  it("stops reconnecting on token mismatch when no device-token retry is available", async () => {
     useNodeFakeTimers();
     localStorage.clear();
+    const onClose = vi.fn();
 
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",
       token: "shared-auth-token",
+      onClose,
     });
 
     const { ws: ws1, connectFrame: firstConnect } = await startConnect(client);
@@ -764,8 +788,19 @@ describe("GatewayBrowserClient", () => {
     await expectSocketClosed(ws1);
     ws1.emitClose(4008, "connect failed");
 
-    await vi.advanceTimersByTimeAsync(800);
-    expect(wsInstances).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(wsInstances).toHaveLength(1);
+    expect(onClose).toHaveBeenCalledWith({
+      code: 4008,
+      reason: "connect failed",
+      error: {
+        code: "INVALID_REQUEST",
+        message: "unauthorized",
+        details: { code: "AUTH_TOKEN_MISMATCH" },
+        retryable: false,
+        retryAfterMs: undefined,
+      },
+    });
 
     client.stop();
     vi.useRealTimers();
@@ -829,7 +864,8 @@ describe("GatewayBrowserClient", () => {
 
     const { connectFrame } = await continueConnect(secondWs, "nonce-current");
     expect(connectFrame.method).toBe("connect");
-    const signedPayload = signDevicePayloadMock.mock.calls.at(-1)?.[1];
+    const signedPayload =
+      signDevicePayloadMock.mock.calls[signDevicePayloadMock.mock.calls.length - 1]?.[1];
     expectSignedPayloadFields(signedPayload, {
       scopes: [...CONTROL_UI_OPERATOR_SCOPES],
       token: "shared-auth-token",
@@ -886,6 +922,44 @@ describe("GatewayBrowserClient", () => {
     await vi.advanceTimersByTimeAsync(30_000);
     expect(wsInstances).toHaveLength(1);
 
+    vi.useRealTimers();
+  });
+
+  it("keeps reconnecting on PAIRING_REQUIRED when retry hints keep reconnect active", async () => {
+    useNodeFakeTimers();
+    localStorage.clear();
+
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "setup-token",
+    });
+
+    const { ws: ws1, connectFrame: connect } = await startConnect(client);
+
+    ws1.emitMessage({
+      type: "res",
+      id: connect.id,
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "unauthorized",
+        details: {
+          code: "PAIRING_REQUIRED",
+          reason: "not-paired",
+          recommendedNextStep: "wait_then_retry",
+          pauseReconnect: false,
+        },
+      },
+    });
+    await expectSocketClosed(ws1);
+    ws1.emitClose(4008, "connect failed");
+
+    await vi.advanceTimersByTimeAsync(799);
+    expect(wsInstances).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(wsInstances).toHaveLength(2);
+
+    client.stop();
     vi.useRealTimers();
   });
 

@@ -93,6 +93,11 @@ function loadTestWorkspaceSkillEntries(workspaceDir: string): SkillEntry[] {
   });
 }
 
+function lastRunCommandCall(): unknown[] | undefined {
+  const calls = runCommandWithTimeoutMock.mock.calls;
+  return calls[calls.length - 1];
+}
+
 const workspaceSuite = createFixtureSuite("openclaw-skills-install-");
 
 beforeAll(async () => {
@@ -205,7 +210,7 @@ describe("installSkill code safety scanning", () => {
 
       expect(result.ok).toBe(true);
       const npmPrefix = path.join(stateDir, "tools", "node", "npm");
-      const call = runCommandWithTimeoutMock.mock.calls.at(-1);
+      const call = lastRunCommandCall();
       expect(call?.[0]).toEqual(["npm", "install", "-g", "--ignore-scripts", "example-package"]);
       const options = call?.[1] as { env?: NodeJS.ProcessEnv };
       expect(options.env?.NPM_CONFIG_PREFIX).toBe(npmPrefix);
@@ -286,7 +291,8 @@ describe("installSkill code safety scanning", () => {
 
       expect(result.ok).toBe(true);
       expect(handler).toHaveBeenCalledTimes(1);
-      const payload = handler.mock.calls.at(0)?.[0] as
+      const handlerCall = handler.mock.calls[0];
+      const payload = handlerCall?.[0] as
         | {
             targetName?: string;
             targetType?: string;
@@ -315,7 +321,7 @@ describe("installSkill code safety scanning", () => {
       expect(payload?.skill?.installId).toBe("deps");
       expect(payload?.skill?.installSpec?.kind).toBe("node");
       expect(payload?.skill?.installSpec?.package).toBe("example-package");
-      expect(handler.mock.calls.at(0)?.[1]).toEqual({
+      expect(handlerCall?.[1]).toEqual({
         origin: "openclaw-workspace",
         targetType: "skill",
         requestKind: "skill-install",

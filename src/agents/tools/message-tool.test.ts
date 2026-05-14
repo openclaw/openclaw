@@ -111,14 +111,34 @@ type RunMessageActionInput = {
   sandboxRoot?: string;
   senderIsOwner?: boolean;
   sessionKey?: string;
+  sourceReplyDeliveryMode?: string;
   toolContext?: {
+    currentChannelId?: string;
+    currentChannelProvider?: string;
     currentThreadTs?: string;
     replyToMode?: string;
   };
 };
 
 function firstRunMessageActionInput(): RunMessageActionInput | undefined {
-  return mocks.runMessageAction.mock.calls.at(0)?.[0] as RunMessageActionInput | undefined;
+  return mocks.runMessageAction.mock.calls[0]?.[0] as RunMessageActionInput | undefined;
+}
+
+function latestSecretResolveCall(): {
+  allowedPaths?: Set<string>;
+  config?: unknown;
+  targetIds?: Set<string>;
+} {
+  const calls = mocks.resolveCommandSecretRefsViaGateway.mock.calls;
+  const call = calls[calls.length - 1];
+  if (!call) {
+    throw new Error("expected secret resolution call");
+  }
+  return call[0] as {
+    allowedPaths?: Set<string>;
+    config?: unknown;
+    targetIds?: Set<string>;
+  };
 }
 
 const openClawToolsFactoryMocks = vi.hoisted(() => {
@@ -387,6 +407,22 @@ describe("message tool secret scoping", () => {
     );
   });
 
+  it("passes source reply delivery mode to the outbound runner", async () => {
+    mockSendResult();
+
+    const input = await executeSend({
+      action: { message: "hi" },
+      toolOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+        currentChannelProvider: "webchat",
+        agentSessionKey: "agent:main",
+      },
+    });
+
+    expect(input?.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(input?.toolContext?.currentChannelProvider).toBe("webchat");
+  });
+
   it("scopes command-time secret resolution to the selected channel/account", async () => {
     mockSendResult({ channel: "discord", to: "discord:123" });
     mocks.getRuntimeConfig.mockReturnValue({
@@ -419,10 +455,7 @@ describe("message tool secret scoping", () => {
       message: "hi",
     });
 
-    const secretResolveCall = mocks.resolveCommandSecretRefsViaGateway.mock.calls.at(-1)?.[0] as {
-      targetIds?: Set<string>;
-      allowedPaths?: Set<string>;
-    };
+    const secretResolveCall = latestSecretResolveCall();
     expect(secretResolveCall.targetIds).toBeInstanceOf(Set);
     expect(
       [...(secretResolveCall.targetIds ?? [])].every((id) => id.startsWith("channels.discord.")),
@@ -473,11 +506,7 @@ describe("message tool secret scoping", () => {
       message: "hi",
     });
 
-    const secretResolveCall = mocks.resolveCommandSecretRefsViaGateway.mock.calls.at(-1)?.[0] as {
-      config?: unknown;
-      targetIds?: Set<string>;
-      allowedPaths?: Set<string>;
-    };
+    const secretResolveCall = latestSecretResolveCall();
     expect(secretResolveCall.config).toBe(rawConfig);
     expect(secretResolveCall.targetIds).toEqual(
       new Set(["channels.discord.token", "channels.discord.accounts.ops.token"]),
