@@ -162,7 +162,6 @@ export async function prepareCliRunContext(
     cfg: params.config,
     provider: params.provider,
     modelId,
-    modelContextTokens: backendResolved.config.contextTokens,
     defaultTokens: DEFAULT_CONTEXT_TOKENS,
   });
 
