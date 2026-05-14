@@ -246,31 +246,47 @@ describe("createNextcloudTalkWebhookServer payload validation", () => {
 
   it("acknowledges signed non-message Talk events without invoking the handler", async () => {
     const onMessage = vi.fn(async () => {});
-    const payload = {
-      type: "Create",
-      actor: { type: "Person", id: "alice", name: "Alice" },
-      object: {
-        type: "Document",
-        id: "file-1",
-        name: "report.pdf",
-        mediaType: "application/pdf",
-      },
-      target: { type: "Collection", id: "room-1", name: "Room 1" },
-    };
-    const { body, headers } = createSignedWebhookRequest(payload);
     const harness = await startWebhookServer({
       path: "/nextcloud-non-message-event",
       onMessage,
     });
+    const payloads = [
+      {
+        type: "Create",
+        actor: { type: "Person", id: "alice", name: "Alice" },
+        object: {
+          type: "Document",
+          id: "file-1",
+          name: "report.pdf",
+          mediaType: "application/pdf",
+        },
+        target: { type: "Collection", id: "room-1", name: "Room 1" },
+      },
+      {
+        type: "Add",
+        actor: { type: "Person", id: "alice", name: "Alice" },
+        object: { type: "Like", id: "reaction-1", name: "👍" },
+        target: { type: "Note", id: "msg-1", name: "hello" },
+      },
+      {
+        type: "Create",
+        actor: { type: "Application", id: "openclaw-bot", name: "OpenClaw" },
+        object: { type: "Application", id: "openclaw-bot", name: "OpenClaw" },
+        target: { type: "Collection", id: "room-1", name: "Room 1" },
+      },
+    ];
 
-    const response = await fetch(harness.webhookUrl, {
-      method: "POST",
-      headers,
-      body,
-    });
+    for (const payload of payloads) {
+      const { body, headers } = createSignedWebhookRequest(payload);
+      const response = await fetch(harness.webhookUrl, {
+        method: "POST",
+        headers,
+        body,
+      });
 
-    expect(response.status).toBe(200);
-    expect(await response.text()).toBe("");
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe("");
+    }
     expect(onMessage).not.toHaveBeenCalled();
   });
 });
