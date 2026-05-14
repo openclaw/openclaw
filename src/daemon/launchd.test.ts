@@ -832,6 +832,34 @@ describe("launchd install", () => {
     expect(output).toContain("used bootout fallback");
   });
 
+  it("does not report degraded stop success when fallback cleanup leaves the port busy", async () => {
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_GATEWAY_PORT: "19008",
+    };
+    const stdout = new PassThrough();
+    let output = "";
+    state.disableError = "Operation not permitted";
+    stdout.on("data", (chunk: Buffer) => {
+      output += chunk.toString();
+    });
+    inspectPortUsage.mockResolvedValue({
+      port: 19008,
+      status: "busy",
+      listeners: [],
+      hints: [],
+    });
+    formatPortDiagnostics.mockReturnValue(["Port 19008 is held by pid 4242."]);
+
+    await expect(stopLaunchAgent({ env, stdout, disable: true })).rejects.toThrow(
+      "gateway port 19008 is still busy after LaunchAgent stop\nPort 19008 is held by pid 4242.",
+    );
+
+    expect(launchctlCommandNames()).toContain("bootout");
+    expect(output).toContain("used bootout fallback");
+    expect(output).not.toContain("Stopped LaunchAgent");
+  });
+
   it("falls back to bootout when stop does not fully stop the service (--disable)", async () => {
     const env = createDefaultLaunchdEnv();
     const stdout = new PassThrough();

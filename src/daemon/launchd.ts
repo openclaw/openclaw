@@ -559,7 +559,6 @@ async function bootoutLaunchAgentOrThrow(params: {
     );
   }
   params.stdout.write(`${formatLine("Warning", params.warning)}\n`);
-  params.stdout.write(`${formatLine("Stopped LaunchAgent (degraded)", params.serviceTarget)}\n`);
 }
 
 type LaunchAgentProbeResult =
@@ -659,6 +658,7 @@ export async function stopLaunchAgent({
       warning: `launchctl disable failed; used bootout fallback and left service unloaded: ${formatLaunchctlResultDetail(disableResult)}`,
     });
     await assertGatewayPortReleasedAfterStop(serviceEnv);
+    stdout.write(`${formatLine("Stopped LaunchAgent (degraded)", serviceTarget)}\n`);
     return;
   }
 
@@ -671,6 +671,7 @@ export async function stopLaunchAgent({
       warning: `launchctl stop failed; used bootout fallback and left service unloaded: ${formatLaunchctlResultDetail(stop)}`,
     });
     await assertGatewayPortReleasedAfterStop(serviceEnv);
+    stdout.write(`${formatLine("Stopped LaunchAgent (degraded)", serviceTarget)}\n`);
     return;
   }
 
@@ -682,6 +683,7 @@ export async function stopLaunchAgent({
         : "launchctl stop did not fully stop the service; used bootout fallback and left service unloaded";
     await bootoutLaunchAgentOrThrow({ serviceTarget, stdout, warning });
     await assertGatewayPortReleasedAfterStop(serviceEnv);
+    stdout.write(`${formatLine("Stopped LaunchAgent (degraded)", serviceTarget)}\n`);
     return;
   }
 
