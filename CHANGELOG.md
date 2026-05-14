@@ -8,6 +8,7 @@ Docs: https://docs.openclaw.ai
 
 - Fix [openclaw#77803](https://github.com/openclaw/openclaw/issues/77803): doctor --fix migrates invalid bailian compat.thinkingFormat enum values to the default.
 
+- Dependencies: route root ambient Node proxy agents through `@openclaw/proxyline` and drop root `proxy-agent`, `https-proxy-agent`, and `minimatch` dependencies.
 - Control UI/i18n: add a `pnpm ui:i18n:report` baseline report for hardcoded-copy focus areas and locale fallback metadata. (#81320) Thanks @samzong.
 - Maintainer tooling: add a repo-local `codex-review` skill for Codex closeout reviews, including local dirty-work and PR-branch review helpers that rerun until no accepted/actionable findings remain and avoid unsupported inline prompts with `--base`.
 - Maintainer tooling: fail CI when pull requests add package patch files or pnpm patched dependencies, preserving the upstream-and-bump dependency workflow.
@@ -21,15 +22,20 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Telegram: let isolated polling drain independent topics, DMs, and status/control commands concurrently while preserving same-lane order. (#81849) Thanks @VACInc.
+- Doctor/Codex: stop warning that the message tool is unavailable for source-reply paths where OpenClaw grants `message` at runtime, keeping update and doctor output aligned with the OpenAI happy path. Thanks @pashpashpash.
 - Build: keep externalized Slack, OpenShell sandbox, and Anthropic Vertex runtime dependency declarations out of the root dist artifact build.
 - Auto-reply/Claude CLI: bridge CLI-runtime assistant text-delta agent events into the chat reasoning preview through `onReasoningStream`, mirroring the existing assistant-text (#76914) and tool-event (#80046) bridges and adding gating so non-CLI runtimes are unaffected. Thanks @anagnorisis2peripeteia and @pashpashpash.
+- Mantis: keep QA evidence in Actions artifacts only and stop publishing evidence files to Git-backed artifact branches.
 - CLI/migrate: handle delayed Codex plugin marketplace responses so warnings, next-steps, and conflict states render with ⚠️ glyphs and post-install migration retries the marketplace fetch instead of silently skipping plugin items. (#81625) Thanks @sjf.
 - Channels/Weixin: bump the bundled `@tencent-weixin/openclaw-weixin` external entry to `2.4.3` (from `2.4.1`) so onboarding and `openclaw channels add` install the current Tencent Weixin (personal WeChat) plugin release. (#81730) Thanks @scotthuang.
 - CLI: lazy-load model, plugin, and device runtime helpers and keep channel option help on generated startup metadata or generic fallback text so parent/help output renders without importing those runtime paths.
 - CLI: route `plugins list --json` through the parsed command fast path and cover it in response budgets so plugin JSON inventory avoids full CLI registration work.
 - Gateway/session history: carry monotonic transcript message sequence through live updates and refresh SSE history when stale sequence input would otherwise append bad incremental state. (#81474) Thanks @samzong.
+- Gateway/network: keep OpenClaw-installed undici dispatchers on HTTP/1.1 and treat destroyed HTTP/2 session errors as recoverable network teardown, preventing `ERR_HTTP2_INVALID_SESSION` from crashing active gateway turns. Fixes #81627. (#81838) Thanks @joshavant.
 - Memory/daily-files: widen the daily-memory file matcher used by Dreaming, rem-backfill, rem-harness, the doctor sweep, and short-term promotion so `memory/YYYY-MM-DD-<slug>.md` files written by the bundled session-memory hook (and any future slugged variants) are discovered alongside the date-only `memory/YYYY-MM-DD.md` shape. Date extraction still uses the leading `YYYY-MM-DD` capture group, so per-day ingestion/promotion semantics are unchanged for existing date-only files; slugged files now flow through the same paths instead of being silently skipped. Fixes #69536. Thanks @jack-stormentswe.
 - macOS/Gateway: fail managed LaunchAgent stop and restart when the configured gateway port remains busy after cleanup instead of reporting success while a listener survives. Fixes #73132. Thanks @BunsDev.
+- Telegram: reuse the sticky IPv4 Bot API transport for periodic getMe health checks, so IPv4-working hosts with broken IPv6 egress stop logging repeated probe timeouts. Fixes #76852. (#76856) Thanks @SymbolStar.
 - Telegram: ship the isolated polling worker at the root dist path used by the bundled worker loader, avoiding startup failures looking for `dist/telegram-ingress-worker.runtime.js`.
 - Telegram: skip unmentioned group media before download when `requireMention` is active, avoiding failed media-download replies for messages that should be ignored. Fixes #81181. (#81785) Thanks @joshavant.
 - Control UI/Gateway: stop stale token-mismatch reconnect loops when no trusted device-token retry is available, and cap rendered chat history by raw tool-output size so dashboard auth/history work cannot keep degrading channel sockets. Fixes #72139. Thanks @BunsDev.
@@ -246,6 +252,7 @@ Docs: https://docs.openclaw.ai
 - Codex app-server: keep the short post-tool completion watchdog armed across dynamic tool completion bookkeeping so embedded Codex runs fail fast and release their session lane when Codex goes quiet after a tool result. (#81697) Thanks @mbelinky.
 - Models: restore authenticated CLI runtime providers in the `/models` picker while keeping legacy runtime aliases hidden from setup/default model choices. Closes #81212. (#81239) Thanks @anagnorisis2peripeteia.
 - Agents/cron: honor a cron payload's explicit `timeoutSeconds` for the LLM idle watchdog even when it numerically equals `agents.defaults.timeoutSeconds`, preserving explicit per-run timeout intent and preventing stalled streaming replies from being cut to the implicit 120s cap. (#79426) Thanks @legolaz8451.
+- Changelog gates: reject bot/app handles as `Thanks` attribution and require explicit human credit for bot/app-authored changelog entries. (#81357) Thanks @hxy91819.
 
 ### Changes
 
@@ -8652,7 +8659,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/Commands: keep webchat command authorization on the internal `webchat` context instead of inferring another provider from channel allowlists, fixing dropped `/new`/`/status` commands in Control UI when channel allowlists are configured. (#7189) Thanks @karlisbergmanis-lv.
 - Control UI: prevent stored XSS via assistant name/avatar by removing inline script injection, serving bootstrap config as JSON, and enforcing `script-src 'self'`. Thanks @Adam55A-code.
 - Agents/Security: sanitize workspace paths before embedding into LLM prompts (strip Unicode control/format chars) to prevent instruction injection via malicious directory names. Thanks @aether-ai-agent.
-- Agents/Sandbox: clarify system prompt path guidance so sandbox `bash/exec` uses container paths (for example `/workspace`) while file tools keep host-bridge mapping, avoiding first-attempt path misses from host-only absolute paths in sandbox command execution. (#17693) Thanks @app/juniordevbot.
+- Agents/Sandbox: clarify system prompt path guidance so sandbox `bash/exec` uses container paths (for example `/workspace`) while file tools keep host-bridge mapping, avoiding first-attempt path misses from host-only absolute paths in sandbox command execution. (#17693)
 - Agents/Context: apply configured model `contextWindow` overrides after provider discovery so `lookupContextTokens()` honors operator config values (including discovery-failure paths). (#17404) Thanks @michaelbship and @vignesh07.
 - Agents/Context: derive `lookupContextTokens()` from auth-available model metadata and keep the smallest discovered context window for duplicate model ids, preventing cross-provider cache collisions from overestimating session context limits. (#17586) Thanks @githabideri and @vignesh07.
 - Agents/OpenAI: force `store=true` for direct OpenAI Responses/Codex runs to preserve multi-turn server-side conversation state, while leaving proxy/non-OpenAI endpoints unchanged. (#16803) Thanks @mark9232 and @vignesh07.
