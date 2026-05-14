@@ -691,6 +691,22 @@ describe("launchd install", () => {
     expect(output).toContain("Stopped LaunchAgent");
   });
 
+  it("resolves the stop postcondition port from the stored LaunchAgent environment", async () => {
+    const env = createDefaultLaunchdEnv();
+    await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+      environment: { OPENCLAW_GATEWAY_PORT: "19006" },
+    });
+    state.launchctlCalls.length = 0;
+
+    await stopLaunchAgent({ env, stdout: new PassThrough() });
+
+    expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(19006);
+    expect(inspectPortUsage).toHaveBeenCalledWith(19006);
+  });
+
   it("fails stop when the verified gateway port remains busy after cleanup", async () => {
     const env = {
       ...createDefaultLaunchdEnv(),
@@ -959,6 +975,25 @@ describe("launchd install", () => {
     });
 
     expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(19001);
+  });
+
+  it("uses the stored LaunchAgent environment port for restart stale cleanup", async () => {
+    const env = createDefaultLaunchdEnv();
+    await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+      environment: { OPENCLAW_GATEWAY_PORT: "19007" },
+    });
+    state.launchctlCalls.length = 0;
+
+    await restartLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+    });
+
+    expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(19007);
+    expect(inspectPortUsage).toHaveBeenCalledWith(19007);
   });
 
   it("fails restart before kickstart when the configured gateway port remains busy", async () => {
