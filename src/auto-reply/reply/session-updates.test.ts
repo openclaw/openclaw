@@ -1,6 +1,25 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 
+const TEST_WORKSPACE_DIR = "/tmp/workspace";
+type TestSkillSnapshot = NonNullable<SessionEntry["skillsSnapshot"]>;
+
+function strippedSnapshot(skillName = "test"): TestSkillSnapshot {
+  return {
+    prompt: "skills prompt",
+    skills: [{ name: skillName }],
+    version: 0,
+  };
+}
+
+function testSessionEntry(sessionId: string, skillsSnapshot: TestSkillSnapshot): SessionEntry {
+  return {
+    sessionId,
+    updatedAt: Date.now(),
+    skillsSnapshot,
+  };
+}
+
 const {
   buildWorkspaceSkillSnapshotMock,
   ensureSkillsWatcherMock,
@@ -90,7 +109,7 @@ describe("ensureSkillSnapshot", () => {
     await ensureSkillSnapshot({
       sessionKey: "main",
       isFirstTurnInSession: false,
-      workspaceDir: "/tmp/workspace",
+      workspaceDir: TEST_WORKSPACE_DIR,
       cfg: {
         agents: {
           list: [{ id: "writer", default: true }],
@@ -109,7 +128,7 @@ describe("ensureSkillSnapshot", () => {
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
     const [[workspaceDir, snapshotParams]] = buildWorkspaceSkillSnapshotMock.mock
       .calls as unknown as Array<[string, { agentId?: string }]>;
-    expect(workspaceDir).toBe("/tmp/workspace");
+    expect(workspaceDir).toBe(TEST_WORKSPACE_DIR);
     expect(snapshotParams.agentId).toBe("writer");
     expect(resolveAgentIdFromSessionKeyMock).not.toHaveBeenCalled();
   });
@@ -119,39 +138,26 @@ describe("ensureSkillSnapshot", () => {
 
     const sessionStore: Record<string, SessionEntry> = {};
     const sessionKey = "main";
-    const strippedSnapshot = {
-      prompt: "skills prompt",
-      skills: [{ name: "test" }],
-      version: 0,
-    };
-    const sessionEntry = {
-      sessionId: "sess-1",
-      updatedAt: Date.now(),
-      skillsSnapshot: strippedSnapshot,
-    };
+    const snapshot = strippedSnapshot();
+    const sessionEntry = testSessionEntry("sess-1", snapshot);
 
     await ensureSkillSnapshot({
       sessionEntry,
       sessionStore,
       sessionKey,
       isFirstTurnInSession: true,
-      workspaceDir: "/tmp/workspace",
+      workspaceDir: TEST_WORKSPACE_DIR,
       cfg: {},
     });
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
 
-    // Second call with different session entry but same workspaceDir/version/filter
-    const sessionEntry2 = {
-      sessionId: "sess-2",
-      updatedAt: Date.now(),
-      skillsSnapshot: { ...strippedSnapshot },
-    };
+    const sessionEntry2 = testSessionEntry("sess-2", { ...snapshot });
     await ensureSkillSnapshot({
       sessionEntry: sessionEntry2,
       sessionStore: {},
       sessionKey: "other",
       isFirstTurnInSession: false,
-      workspaceDir: "/tmp/workspace",
+      workspaceDir: TEST_WORKSPACE_DIR,
       cfg: {},
     });
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
@@ -162,39 +168,29 @@ describe("ensureSkillSnapshot", () => {
 
     const sessionStore: Record<string, SessionEntry> = {};
     const sessionKey = "main";
-    const strippedSnapshot = {
-      prompt: "skills prompt",
-      skills: [{ name: "test" }],
-      version: 0,
-    };
-    const sessionEntry = {
-      sessionId: "sess-1",
-      updatedAt: Date.now(),
-      skillsSnapshot: strippedSnapshot,
-    };
+    const snapshot = strippedSnapshot();
+    const sessionEntry = testSessionEntry("sess-1", snapshot);
 
     await ensureSkillSnapshot({
       sessionEntry,
       sessionStore,
       sessionKey,
       isFirstTurnInSession: true,
-      workspaceDir: "/tmp/workspace",
+      workspaceDir: TEST_WORKSPACE_DIR,
       cfg: {},
     });
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
 
-    // Different skillFilter — cache key changes, rebuild needed
-    const sessionEntry2 = {
-      sessionId: "sess-2",
-      updatedAt: Date.now(),
-      skillsSnapshot: { ...strippedSnapshot, skillFilter: ["old-filter"] },
-    };
+    const sessionEntry2 = testSessionEntry("sess-2", {
+      ...snapshot,
+      skillFilter: ["old-filter"],
+    });
     await ensureSkillSnapshot({
       sessionEntry: sessionEntry2,
       sessionStore: {},
       sessionKey: "other",
       isFirstTurnInSession: false,
-      workspaceDir: "/tmp/workspace",
+      workspaceDir: TEST_WORKSPACE_DIR,
       skillFilter: ["new-filter"],
       cfg: {},
     });
@@ -213,22 +209,14 @@ describe("ensureSkillSnapshot", () => {
       };
     });
 
-    const strippedSnapshot = {
-      prompt: "skills prompt",
-      skills: [{ name: "discord" }],
-      version: 0,
-    };
+    const snapshot = strippedSnapshot("discord");
 
     const first = await ensureSkillSnapshot({
-      sessionEntry: {
-        sessionId: "sess-1",
-        updatedAt: Date.now(),
-        skillsSnapshot: strippedSnapshot,
-      },
+      sessionEntry: testSessionEntry("sess-1", snapshot),
       sessionStore: {},
       sessionKey: "main",
       isFirstTurnInSession: true,
-      workspaceDir: "/tmp/workspace",
+      workspaceDir: TEST_WORKSPACE_DIR,
       cfg: { channels: { discord: { token: "enabled" } } },
     });
 
@@ -236,15 +224,11 @@ describe("ensureSkillSnapshot", () => {
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
 
     const second = await ensureSkillSnapshot({
-      sessionEntry: {
-        sessionId: "sess-2",
-        updatedAt: Date.now(),
-        skillsSnapshot: { ...strippedSnapshot },
-      },
+      sessionEntry: testSessionEntry("sess-2", { ...snapshot }),
       sessionStore: {},
       sessionKey: "other",
       isFirstTurnInSession: false,
-      workspaceDir: "/tmp/workspace",
+      workspaceDir: TEST_WORKSPACE_DIR,
       cfg: { channels: { discord: {} } },
     });
 
@@ -261,35 +245,23 @@ describe("ensureSkillSnapshot", () => {
       resolvedSkills: [{ name: "discord" }],
     });
 
-    const strippedSnapshot = {
-      prompt: "skills prompt",
-      skills: [{ name: "discord" }],
-      version: 0,
-    };
+    const snapshot = strippedSnapshot("discord");
 
     await ensureSkillSnapshot({
-      sessionEntry: {
-        sessionId: "sess-1",
-        updatedAt: Date.now(),
-        skillsSnapshot: strippedSnapshot,
-      },
+      sessionEntry: testSessionEntry("sess-1", snapshot),
       sessionStore: {},
       sessionKey: "main",
       isFirstTurnInSession: true,
-      workspaceDir: "/tmp/workspace",
+      workspaceDir: TEST_WORKSPACE_DIR,
       cfg: { channels: { discord: { token: "first-secret" } } },
     });
 
     await ensureSkillSnapshot({
-      sessionEntry: {
-        sessionId: "sess-2",
-        updatedAt: Date.now(),
-        skillsSnapshot: { ...strippedSnapshot },
-      },
+      sessionEntry: testSessionEntry("sess-2", { ...snapshot }),
       sessionStore: {},
       sessionKey: "other",
       isFirstTurnInSession: false,
-      workspaceDir: "/tmp/workspace",
+      workspaceDir: TEST_WORKSPACE_DIR,
       cfg: { channels: { discord: { token: "rotated-secret" } } },
     });
 

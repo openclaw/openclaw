@@ -35,11 +35,11 @@ export { drainFormattedSystemEvents } from "./session-system-events.js";
 // Warm-start resolvedSkills cache: avoids redundant buildSnapshot calls when
 // stripPersistedSkillsCache has removed resolvedSkills between turns.
 // Bounded to 10 entries to prevent unbounded growth in long-lived gateways.
-const _resolvedSkillsCache = new Map<string, unknown>();
-const _RESOLVED_SKILLS_CACHE_MAX = 10;
+const resolvedSkillsCache = new Map<string, SkillSnapshot["resolvedSkills"]>();
+const RESOLVED_SKILLS_CACHE_MAX = 10;
 
 export function __testing_resetResolvedSkillsCache(): void {
-  _resolvedSkillsCache.clear();
+  resolvedSkillsCache.clear();
 }
 
 function isSensitiveConfigKey(key: string): boolean {
@@ -98,11 +98,24 @@ function redactConfigForSkillSnapshotCache(value: unknown, stack = new WeakSet<o
   }
 }
 
+// Skill frontmatter `requires.config` reads the full OpenClaw config, so cache
+// reuse must follow the same boundary without putting raw secrets in Map keys.
 function fingerprintSkillSnapshotConfig(config: OpenClawConfig): string {
   return crypto
     .createHash("sha256")
     .update(stableStringify(redactConfigForSkillSnapshotCache(config)))
     .digest("hex");
+}
+
+function cacheResolvedSkills(cacheKey: string, snapshot: SkillSnapshot): SkillSnapshot {
+  resolvedSkillsCache.set(cacheKey, snapshot.resolvedSkills);
+  if (resolvedSkillsCache.size > RESOLVED_SKILLS_CACHE_MAX) {
+    const oldest = resolvedSkillsCache.keys().next().value;
+    if (oldest !== undefined) {
+      resolvedSkillsCache.delete(oldest);
+    }
+  }
+  return snapshot;
 }
 
 // nextEntry.skillsSnapshot may carry resolvedSkills (full Skill[] with
@@ -261,48 +274,24 @@ export async function ensureSkillSnapshot(params: {
     });
   };
 
-  // Skill eligibility can depend on config outside cfg.skills via
-  // frontmatter requires.config. Fingerprint the redacted effective config so
-  // cache reuse follows the same boundary without putting raw secrets in keys.
-  const _configFingerprint = fingerprintSkillSnapshotConfig(cfg);
-  const _snapshotCacheKey = JSON.stringify([
+  const configFingerprint = fingerprintSkillSnapshotConfig(cfg);
+  const snapshotCacheKey = JSON.stringify([
     workspaceDir,
     snapshotVersion,
     skillFilter,
     sessionAgentId,
     remoteEligibility,
-    _configFingerprint,
+    configFingerprint,
   ]);
 
-  // For hydrateResolvedSkills callbacks: reuse cached resolvedSkills when available.
-  const _cachedRebuild = (): SkillSnapshot => {
-    const cached = _resolvedSkillsCache.get(_snapshotCacheKey);
-    if (cached !== undefined) {
-      return { resolvedSkills: cached } as SkillSnapshot;
+  const cachedRebuild = (): SkillSnapshot => {
+    if (resolvedSkillsCache.has(snapshotCacheKey)) {
+      return { resolvedSkills: resolvedSkillsCache.get(snapshotCacheKey) } as SkillSnapshot;
     }
-    const snapshot = buildSnapshot();
-    _resolvedSkillsCache.set(_snapshotCacheKey, snapshot.resolvedSkills);
-    if (_resolvedSkillsCache.size > _RESOLVED_SKILLS_CACHE_MAX) {
-      const oldest = _resolvedSkillsCache.keys().next().value;
-      if (oldest !== undefined) {
-        _resolvedSkillsCache.delete(oldest);
-      }
-    }
-    return snapshot;
+    return cacheResolvedSkills(snapshotCacheKey, buildSnapshot());
   };
 
-  // For direct build paths: build fresh and populate cache for subsequent turns.
-  const _buildAndCache = (): SkillSnapshot => {
-    const snapshot = buildSnapshot();
-    _resolvedSkillsCache.set(_snapshotCacheKey, snapshot.resolvedSkills);
-    if (_resolvedSkillsCache.size > _RESOLVED_SKILLS_CACHE_MAX) {
-      const oldest = _resolvedSkillsCache.keys().next().value;
-      if (oldest !== undefined) {
-        _resolvedSkillsCache.delete(oldest);
-      }
-    }
-    return snapshot;
-  };
+  const buildAndCache = (): SkillSnapshot => cacheResolvedSkills(snapshotCacheKey, buildSnapshot());
 
   if (isFirstTurnInSession && sessionStore && sessionKey) {
     const current = nextEntry ??
@@ -312,8 +301,8 @@ export async function ensureSkillSnapshot(params: {
       };
     const skillSnapshot =
       !current.skillsSnapshot || shouldRefreshSnapshot
-        ? _buildAndCache()
-        : hydrateResolvedSkills(current.skillsSnapshot, _cachedRebuild);
+        ? buildAndCache()
+        : hydrateResolvedSkills(current.skillsSnapshot, cachedRebuild);
     nextEntry = {
       ...current,
       sessionId: sessionId ?? current.sessionId ?? crypto.randomUUID(),
@@ -330,10 +319,10 @@ export async function ensureSkillSnapshot(params: {
     (nextEntry?.skillsSnapshot !== existingSnapshot || !shouldRefreshSnapshot);
   const skillsSnapshot =
     hasFreshSnapshotInEntry && nextEntry?.skillsSnapshot
-      ? hydrateResolvedSkills(nextEntry.skillsSnapshot, _cachedRebuild)
+      ? hydrateResolvedSkills(nextEntry.skillsSnapshot, cachedRebuild)
       : shouldRefreshSnapshot || !nextEntry?.skillsSnapshot
-        ? _buildAndCache()
-        : hydrateResolvedSkills(nextEntry.skillsSnapshot, _cachedRebuild);
+        ? buildAndCache()
+        : hydrateResolvedSkills(nextEntry.skillsSnapshot, cachedRebuild);
   if (
     skillsSnapshot &&
     sessionStore &&
