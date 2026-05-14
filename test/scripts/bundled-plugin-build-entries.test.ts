@@ -110,6 +110,16 @@ describe("bundled plugin build entries", () => {
     }
   });
 
+  it("keeps external-only Amazon providers out of bundled dist entries", () => {
+    const entries = listBundledPluginBuildEntries();
+    const artifacts = listBundledPluginPackArtifacts();
+
+    for (const pluginId of ["amazon-bedrock", "amazon-bedrock-mantle"]) {
+      expectNoPrefixMatches(Object.keys(entries), `extensions/${pluginId}/`);
+      expectNoPrefixMatches(artifacts, `dist/extensions/${pluginId}/`);
+    }
+  });
+
   it("keeps bundled channel secret contracts on packed top-level sidecars", () => {
     const artifacts = listBundledPluginPackArtifacts();
     const excludedPackageDirs = collectRootPackageExcludedExtensionDirs();
