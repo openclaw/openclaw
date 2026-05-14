@@ -30,8 +30,10 @@ import { CLI_AUTH_EPOCH_VERSION, resolveCliAuthEpoch } from "../cli-auth-epoch.j
 import { resolveCliBackendConfig } from "../cli-backends.js";
 import { hashCliSessionText, resolveCliSessionReuse } from "../cli-session.js";
 import {
+  buildClaudeCliFallbackContextPrelude,
   claudeCliSessionTranscriptHasContent,
   claudeCliSessionTranscriptHasOrphanedToolUse,
+  resolveFallbackRetryPrompt,
 } from "../command/attempt-execution.helpers.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import {
@@ -72,6 +74,9 @@ const prepareDeps = {
   // without touching ~/.claude/projects.
   claudeCliSessionTranscriptHasContent,
   claudeCliSessionTranscriptHasOrphanedToolUse,
+  // Surfaced so tests can stub the claude-cli transcript reader without
+  // having to seed a real `~/.claude/projects/<encoded-cwd>/<sid>.jsonl`.
+  buildClaudeCliFallbackContextPrelude,
 };
 
 export function setCliRunnerPrepareTestDeps(overrides: Partial<typeof prepareDeps>): void {
@@ -433,6 +438,43 @@ export async function prepareCliRunContext(
     prompt: preparedPrompt,
   });
   preparedPrompt = annotateInterSessionPromptText(preparedPrompt, params.inputProvenance);
+
+  // When we just invalidated a claude-cli session for ANY reason, the OC-side
+  // session-history reseed only fires on a pre-existing compaction summary —
+  // which agents that haven't been long enough to compact don't have. The
+  // user-visible result was amnesia: the recovered session has no memory of
+  // the invalidated one. Read the dead claude-cli transcript directly (it's
+  // still on disk and has the full conversation) and prepend a
+  // `priorContextPrelude` so the fresh session inherits the conversation
+  // context. This reuses the same builder the failover-to-different-provider
+  // path uses (`buildClaudeCliFallbackContextPrelude`), since the shape of
+  // the problem is identical: "fresh CLI session, please continue this
+  // prior conversation."
+  //
+  // We fire for EVERY invalidation reason — missing-transcript,
+  // orphaned-tool-use, system-prompt, mcp, auth-profile, auth-epoch — because
+  // every one of them produces a fresh CLI session with no prior context.
+  // (`session-expired` retains the sessionId, so it doesn't apply here; it's
+  // already covered by the existing `rawTranscriptReseedReason` path below.)
+  const recoverFromClaudeCliInvalidation =
+    !reusableCliSession.sessionId &&
+    reusableCliSession.invalidatedReason !== undefined &&
+    isClaudeCliProvider(params.provider) &&
+    candidateClaudeCliSessionId !== undefined;
+  if (recoverFromClaudeCliInvalidation) {
+    const recoveryPrelude = prepareDeps.buildClaudeCliFallbackContextPrelude({
+      cliSessionId: candidateClaudeCliSessionId,
+    });
+    if (recoveryPrelude) {
+      preparedPrompt = resolveFallbackRetryPrompt({
+        body: preparedPrompt,
+        isFallbackRetry: true,
+        sessionHasHistory: true,
+        priorContextPrelude: recoveryPrelude,
+      });
+    }
+  }
+
   const allowRawTranscriptReseed =
     backendResolved.config.reseedFromRawTranscriptWhenUncompacted === true;
   const rawTranscriptReseedReason = reusableCliSession.sessionId

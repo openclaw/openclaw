@@ -5,6 +5,7 @@ import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { CLI_AUTH_EPOCH_VERSION } from "../cli-auth-epoch.js";
 import { __testing as cliBackendsTesting } from "../cli-backends.js";
 import { hashCliSessionText } from "../cli-session.js";
 import { buildActiveMusicGenerationTaskPromptContextForSession } from "../music-generation-task-status.js";
@@ -989,6 +990,281 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
 
       expect(transcriptCheck).not.toHaveBeenCalled();
       expect(context.reusableCliSession).toEqual({ sessionId: "test-cli-sid" });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reseeds prior context from the dead claude-cli transcript when invalidator fires for missing-transcript", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "claude-cli",
+            pluginId: "anthropic",
+            bundleMcp: false,
+            config: {
+              command: "claude",
+              args: ["--print"],
+              resumeArgs: ["--resume", "{sessionId}"],
+              output: "jsonl",
+              input: "stdin",
+              sessionMode: "existing",
+            },
+          },
+        ],
+      });
+      const transcriptCheck = vi.fn(async () => false);
+      const orphanCheck = vi.fn(async () => false);
+      const fallbackPrelude = vi.fn(
+        () =>
+          "## Prior session context (from claude-cli)\n\nuser: prior question\nassistant: prior answer",
+      );
+      setCliRunnerPrepareTestDeps({
+        claudeCliSessionTranscriptHasContent: transcriptCheck,
+        claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
+        buildClaudeCliFallbackContextPrelude: fallbackPrelude,
+      });
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:telegram:direct:peer",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "follow-up ask",
+        provider: "claude-cli",
+        model: "opus",
+        timeoutMs: 1_000,
+        runId: "run-reseed-missing",
+        cliSessionBinding: { sessionId: "stale-claude-sid" },
+        cliSessionId: "stale-claude-sid",
+        config: createCliBackendConfig({ systemPromptOverride: null }),
+      });
+
+      expect(context.reusableCliSession).toEqual({ invalidatedReason: "missing-transcript" });
+      expect(fallbackPrelude).toHaveBeenCalledWith({ cliSessionId: "stale-claude-sid" });
+      expect(context.params.prompt).toContain("Prior session context (from claude-cli)");
+      expect(context.params.prompt).toContain(
+        "[Retry after the previous model attempt failed or timed out]",
+      );
+      expect(context.params.prompt).toContain("follow-up ask");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reseeds prior context when invalidator fires for orphaned-tool-use", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "claude-cli",
+            pluginId: "anthropic",
+            bundleMcp: false,
+            config: {
+              command: "claude",
+              args: ["--print"],
+              resumeArgs: ["--resume", "{sessionId}"],
+              output: "jsonl",
+              input: "stdin",
+              sessionMode: "existing",
+            },
+          },
+        ],
+      });
+      const transcriptCheck = vi.fn(async () => true);
+      const orphanCheck = vi.fn(async () => true);
+      const fallbackPrelude = vi.fn(
+        () => "## Prior session context (from claude-cli)\n\nassistant: stuck mid-tool reply",
+      );
+      setCliRunnerPrepareTestDeps({
+        claudeCliSessionTranscriptHasContent: transcriptCheck,
+        claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
+        buildClaudeCliFallbackContextPrelude: fallbackPrelude,
+      });
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:telegram:direct:peer",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "are you there?",
+        provider: "claude-cli",
+        model: "opus",
+        timeoutMs: 1_000,
+        runId: "run-reseed-orphan",
+        cliSessionBinding: { sessionId: "orphaned-claude-sid" },
+        cliSessionId: "orphaned-claude-sid",
+        config: createCliBackendConfig({ systemPromptOverride: null }),
+      });
+
+      expect(context.reusableCliSession).toEqual({ invalidatedReason: "orphaned-tool-use" });
+      expect(fallbackPrelude).toHaveBeenCalledWith({ cliSessionId: "orphaned-claude-sid" });
+      expect(context.params.prompt).toContain("Prior session context (from claude-cli)");
+      expect(context.params.prompt).toContain("are you there?");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not call the prelude builder when the claude-cli session is reusable (no invalidation)", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "claude-cli",
+            pluginId: "anthropic",
+            bundleMcp: false,
+            config: {
+              command: "claude",
+              args: ["--print"],
+              resumeArgs: ["--resume", "{sessionId}"],
+              output: "jsonl",
+              input: "stdin",
+              sessionMode: "existing",
+            },
+          },
+        ],
+      });
+      const transcriptCheck = vi.fn(async () => true);
+      const orphanCheck = vi.fn(async () => false);
+      const fallbackPrelude = vi.fn(() => "");
+      setCliRunnerPrepareTestDeps({
+        claudeCliSessionTranscriptHasContent: transcriptCheck,
+        claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
+        buildClaudeCliFallbackContextPrelude: fallbackPrelude,
+      });
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:telegram:direct:peer",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "next ask",
+        provider: "claude-cli",
+        model: "opus",
+        timeoutMs: 1_000,
+        runId: "run-reseed-skip",
+        cliSessionBinding: { sessionId: "live-claude-sid" },
+        cliSessionId: "live-claude-sid",
+        config: createCliBackendConfig({ systemPromptOverride: null }),
+      });
+
+      expect(context.reusableCliSession).toEqual({ sessionId: "live-claude-sid" });
+      expect(fallbackPrelude).not.toHaveBeenCalled();
+      expect(context.params.prompt).not.toContain("Prior session context");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reseeds prior context when invalidator fires for system-prompt change", async () => {
+    // system-prompt invalidation happens when the cli session reuse layer
+    // detects that the agent's static system prompt hashed differently
+    // than the binding's stored hash. Same end-user pain as the other
+    // invalidation paths (fresh CLI session, no memory), so the same
+    // recovery applies — read the dead transcript and reseed.
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "claude-cli",
+            pluginId: "anthropic",
+            bundleMcp: false,
+            config: {
+              command: "claude",
+              args: ["--print"],
+              resumeArgs: ["--resume", "{sessionId}"],
+              output: "jsonl",
+              input: "stdin",
+              sessionMode: "existing",
+            },
+          },
+        ],
+      });
+      const transcriptCheck = vi.fn(async () => true);
+      const orphanCheck = vi.fn(async () => false);
+      const fallbackPrelude = vi.fn(
+        () =>
+          "## Prior session context (from claude-cli)\n\nuser: prior question\nassistant: prior answer",
+      );
+      setCliRunnerPrepareTestDeps({
+        claudeCliSessionTranscriptHasContent: transcriptCheck,
+        claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
+        buildClaudeCliFallbackContextPrelude: fallbackPrelude,
+      });
+
+      // Drive a system-prompt invalidation by passing a binding whose
+      // extraSystemPromptHash doesn't match the current hash. The runtime
+      // recomputes the hash from extraSystemPromptStatic/extraSystemPrompt;
+      // we set the binding hash to a fixed wrong value.
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:telegram:direct:peer",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "follow-up",
+        provider: "claude-cli",
+        model: "opus",
+        timeoutMs: 1_000,
+        runId: "run-reseed-system-prompt",
+        extraSystemPrompt: "agent-static-prompt",
+        extraSystemPromptStatic: "agent-static-prompt",
+        cliSessionBinding: {
+          sessionId: "stale-system-prompt-sid",
+          extraSystemPromptHash: "deadbeefdeadbeef",
+          authEpochVersion: CLI_AUTH_EPOCH_VERSION,
+        },
+        cliSessionId: "stale-system-prompt-sid",
+        config: createCliBackendConfig({ systemPromptOverride: null }),
+      });
+
+      expect(context.reusableCliSession).toEqual({ invalidatedReason: "system-prompt" });
+      expect(fallbackPrelude).toHaveBeenCalledWith({ cliSessionId: "stale-system-prompt-sid" });
+      expect(context.params.prompt).toContain("Prior session context (from claude-cli)");
+      expect(context.params.prompt).toContain("follow-up");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not reseed for non-claude-cli providers even on invalidation-shaped paths", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      const transcriptCheck = vi.fn(async () => false);
+      const orphanCheck = vi.fn(async () => false);
+      const fallbackPrelude = vi.fn(() => "should-not-be-called");
+      setCliRunnerPrepareTestDeps({
+        claudeCliSessionTranscriptHasContent: transcriptCheck,
+        claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
+        buildClaudeCliFallbackContextPrelude: fallbackPrelude,
+      });
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "next ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-reseed-other-provider",
+        cliSessionBinding: { sessionId: "test-cli-sid" },
+        config: createCliBackendConfig({ systemPromptOverride: null }),
+      });
+
+      expect(transcriptCheck).not.toHaveBeenCalled();
+      expect(orphanCheck).not.toHaveBeenCalled();
+      expect(fallbackPrelude).not.toHaveBeenCalled();
+      expect(context.params.prompt).not.toContain("should-not-be-called");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
