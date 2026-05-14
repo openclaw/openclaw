@@ -12,6 +12,7 @@ import type {
 } from "@modelcontextprotocol/sdk/validation/types.js";
 import type { ErrorObject, ValidateFunction } from "ajv";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { measureDiagnosticsTimelineSpan } from "../infra/diagnostics-timeline.js";
 import { logWarn } from "../logger.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { redactSensitiveUrlLikeString } from "../shared/net/redact-sensitive-url.js";
@@ -257,31 +258,67 @@ export function createSessionMcpRuntime(params: {
           sessions.set(serverName, session);
 
           try {
-            failIfDisposed();
-            await connectWithTimeout(client, resolved.transport, resolved.connectionTimeoutMs);
-            failIfDisposed();
-            const listedTools = await listAllTools(client);
-            failIfDisposed();
-            servers[serverName] = {
-              serverName,
-              launchSummary: resolved.description,
-              toolCount: listedTools.length,
-            };
-            for (const tool of listedTools) {
-              const toolName = tool.name.trim();
-              if (!toolName) {
-                continue;
-              }
-              tools.push({
-                serverName,
-                safeServerName,
-                toolName,
-                title: tool.title,
-                description: normalizeOptionalString(tool.description),
-                inputSchema: tool.inputSchema,
-                fallbackDescription: `Provided by bundle MCP server "${serverName}" (${resolved.description}).`,
-              });
-            }
+            await measureDiagnosticsTimelineSpan(
+              "bundle-mcp.server",
+              async () => {
+                failIfDisposed();
+                await measureDiagnosticsTimelineSpan(
+                  "bundle-mcp.connect",
+                  () =>
+                    connectWithTimeout(client, resolved.transport, resolved.connectionTimeoutMs),
+                  {
+                    config: params.cfg,
+                    attributes: {
+                      serverName,
+                      safeServerName,
+                      transportType: resolved.transportType,
+                    },
+                  },
+                );
+                failIfDisposed();
+                const listedTools = await measureDiagnosticsTimelineSpan(
+                  "bundle-mcp.tools-list",
+                  () => listAllTools(client),
+                  {
+                    config: params.cfg,
+                    attributes: {
+                      serverName,
+                      safeServerName,
+                      transportType: resolved.transportType,
+                    },
+                  },
+                );
+                failIfDisposed();
+                servers[serverName] = {
+                  serverName,
+                  launchSummary: resolved.description,
+                  toolCount: listedTools.length,
+                };
+                for (const tool of listedTools) {
+                  const toolName = tool.name.trim();
+                  if (!toolName) {
+                    continue;
+                  }
+                  tools.push({
+                    serverName,
+                    safeServerName,
+                    toolName,
+                    title: tool.title,
+                    description: normalizeOptionalString(tool.description),
+                    inputSchema: tool.inputSchema,
+                    fallbackDescription: `Provided by bundle MCP server "${serverName}" (${resolved.description}).`,
+                  });
+                }
+              },
+              {
+                config: params.cfg,
+                attributes: {
+                  serverName,
+                  safeServerName,
+                  transportType: resolved.transportType,
+                },
+              },
+            );
           } catch (error) {
             if (!disposed) {
               logWarn(
