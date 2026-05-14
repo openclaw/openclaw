@@ -314,11 +314,11 @@ describe("sessions_send agent targeting", () => {
         expect(details.reply).toBe("orion response");
         expect(details.sessionKey).toBe("agent:orion:main");
 
-        const orionCall = spy.mock.calls
-          .map(([opts]) => opts as { sessionId?: string; sessionKey?: string })
-          .find((call) => call.sessionKey === "agent:orion:main");
-        expect(orionCall).toBeDefined();
-        expect(orionCall?.sessionId).toBeTypeOf("string");
+        const targetCall = spy.mock.calls
+          .map((call) => call[0] as { sessionId?: string; sessionKey?: string } | undefined)
+          .find((call) => call?.sessionKey === "agent:orion:main");
+        expect(targetCall?.sessionKey).toBe("agent:orion:main");
+        expect(targetCall?.sessionId).toBeTypeOf("string");
 
         const rawStore = JSON.parse(
           await fs.readFile(testState.sessionStorePath, "utf-8"),
@@ -328,7 +328,7 @@ describe("sessions_send agent targeting", () => {
             sessionId?: string;
           }
         >;
-        expect(rawStore["agent:orion:main"]?.sessionId).toBe(orionCall?.sessionId);
+        expect(rawStore["agent:orion:main"]?.sessionId).toBe(targetCall?.sessionId);
       } finally {
         testState.agentsConfig = undefined;
         testState.sessionStorePath = undefined;
