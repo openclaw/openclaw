@@ -184,6 +184,12 @@ function formatItemPrefix(item: MigrationItem, mode: FormatMode): string {
   if (item.kind === "manual") {
     return "🔍 ";
   }
+  // Archive items get status "migrated" once written to the report directory,
+  // but the ✅ glyph overstates what happened — the file was saved aside, not
+  // imported. A book signals "filed away for later reference".
+  if (item.kind === "archive") {
+    return "📖 ";
+  }
   if (mode === "result") {
     const glyph = RESULT_STATUS_GLYPHS[item.status];
     if (glyph) {
