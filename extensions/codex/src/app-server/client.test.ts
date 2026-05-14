@@ -126,6 +126,42 @@ describe("CodexAppServerClient", () => {
     await expect(request).rejects.toHaveProperty("message", "Method not found");
   });
 
+  it("surfaces relogin details from Codex app-server RPC errors", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+
+    const request = harness.client.request("thread/start", {});
+    const outbound = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
+    harness.send({
+      id: outbound.id,
+      error: {
+        code: -32602,
+        message: "failed to load configuration",
+        data: {
+          reason: "cloudRequirements",
+          errorCode: "Auth",
+          action: "relogin",
+          statusCode: 401,
+          detail:
+            "Your authentication session could not be refreshed automatically. Please log out and sign in again.",
+        },
+      },
+    });
+
+    await expect(request).rejects.toHaveProperty(
+      "message",
+      "failed to load configuration: Your authentication session could not be refreshed automatically. Please log out and sign in again.",
+    );
+    await expect(request).rejects.toHaveProperty("data", {
+      reason: "cloudRequirements",
+      errorCode: "Auth",
+      action: "relogin",
+      statusCode: 401,
+      detail:
+        "Your authentication session could not be refreshed automatically. Please log out and sign in again.",
+    });
+  });
+
   it("rejects timed-out requests and ignores late responses", async () => {
     vi.useFakeTimers();
     const harness = createClientHarness();
