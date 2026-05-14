@@ -876,8 +876,19 @@ export class SubscriptionRegistry {
 
   async save(): Promise<void> {
     if (!this.cache) return;
+    const data = JSON.stringify(this.cache, null, 2) + "\n";
+    // 全域路徑（~/.nuwa/subscriptions.json）永遠寫入
     await fs.mkdir(path.dirname(this.globalPath), { recursive: true });
-    await fs.writeFile(this.globalPath, JSON.stringify(this.cache, null, 2) + "\n", "utf8");
+    await fs.writeFile(this.globalPath, data, "utf8");
+    // 若本地路徑與全域不同（專案目錄覆寫設定），同步寫回
+    if (this.localPath !== this.globalPath) {
+      try {
+        await fs.mkdir(path.dirname(this.localPath), { recursive: true });
+        await fs.writeFile(this.localPath, data, "utf8");
+      } catch {
+        /* 本地寫入失敗不中斷主流程，全域已成功 */
+      }
+    }
   }
 
   // ── 顯示摘要 ────────────────────────────────────────────────────
