@@ -764,6 +764,31 @@ describe("image tool implicit imageModel config", () => {
     });
   });
 
+  it("routes explicit MiniMax chat imageModel refs through the VLM image model", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const fetch = stubMinimaxOkFetch();
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            imageModel: { primary: "minimax/MiniMax-M2.7" },
+          },
+        },
+      };
+      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
+        primary: "minimax/MiniMax-VL-01",
+      });
+
+      const tool = createRequiredImageTool({ config: cfg, agentDir });
+      await expectImageToolExecOk(tool, `data:image/png;base64,${ONE_PIXEL_PNG_B64}`);
+
+      expect(fetch).toHaveBeenCalledTimes(1);
+      const [url, options] = fetchCallAt(fetch, 0);
+      expect(url).toBe("https://api.minimax.io/v1/coding_plan/vlm");
+      const body = JSON.parse((options as RequestInit).body as string) as { image_url?: string };
+      expect(body.image_url).toMatch(/^data:image\/png;base64,/);
+    });
+  });
+
   it("passes the configured image timeout to provider calls", async () => {
     await withTempWorkspacePng(async ({ workspaceDir, imagePath }) => {
       await withTempAgentDir(async (agentDir) => {

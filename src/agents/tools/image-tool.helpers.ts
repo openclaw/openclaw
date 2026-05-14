@@ -2,6 +2,7 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { estimateBase64DecodedBytes } from "../../media/base64.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { isMinimaxVlmProvider } from "../minimax-vlm.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
 import { extractAssistantText } from "../pi-embedded-utils.js";
 import { coerceToolModelConfig, type ToolModelConfig } from "./model-config.helpers.js";
@@ -17,6 +18,8 @@ const IMAGE_REASONING_FALLBACK_SIGNATURES = new Set([
 const MAX_IMAGE_REASONING_FALLBACK_BLOCKS = 50;
 const MAX_IMAGE_REASONING_SIGNATURE_PARSE_CHARS = 2_048;
 const MAX_IMAGE_REASONING_SIGNATURE_SCAN_CHARS = 65_536;
+const MINIMAX_VLM_MODEL_ID = "MiniMax-VL-01";
+const MINIMAX_TEXT_MODEL_IDS = new Set(["minimax-m2.7", "minimax-m2.7-highspeed"]);
 
 function hasResponsesReasoningSignatureMarkers(value: string): boolean {
   const scanned = value.slice(0, MAX_IMAGE_REASONING_SIGNATURE_SCAN_CHARS);
@@ -210,20 +213,48 @@ function resolveProviderlessConfiguredImageModelRef(params: {
   );
 }
 
+function coerceMinimaxTextModelImageRef(ref: string): string {
+  const trimmed = ref.trim();
+  const slash = trimmed.indexOf("/");
+  if (slash <= 0) {
+    return trimmed;
+  }
+  const provider = normalizeProviderId(trimmed.slice(0, slash));
+  const model = trimmed.slice(slash + 1).trim();
+  if (!isMinimaxVlmProvider(provider)) {
+    return trimmed;
+  }
+  if (
+    normalizeLowercaseStringOrEmpty(model) === normalizeLowercaseStringOrEmpty(MINIMAX_VLM_MODEL_ID)
+  ) {
+    return `${provider}/${MINIMAX_VLM_MODEL_ID}`;
+  }
+  if (!MINIMAX_TEXT_MODEL_IDS.has(normalizeLowercaseStringOrEmpty(model))) {
+    return trimmed;
+  }
+  return `${provider}/${MINIMAX_VLM_MODEL_ID}`;
+}
+
+function resolveConfiguredImageModelRef(params: { cfg?: OpenClawConfig; ref: string }): string {
+  return coerceMinimaxTextModelImageRef(
+    resolveProviderlessConfiguredImageModelRef({ cfg: params.cfg, ref: params.ref }),
+  );
+}
+
 export function resolveConfiguredImageModelRefs(params: {
   cfg?: OpenClawConfig;
   imageModelConfig: ImageModelConfig;
 }): ImageModelConfig {
   const primary = params.imageModelConfig.primary?.trim();
   const fallbacks = params.imageModelConfig.fallbacks
-    ?.map((ref) => resolveProviderlessConfiguredImageModelRef({ cfg: params.cfg, ref }))
+    ?.map((ref) => resolveConfiguredImageModelRef({ cfg: params.cfg, ref }))
     .filter((ref) => ref.length > 0);
 
   return {
     ...(params.imageModelConfig.primary !== undefined
       ? {
           primary: primary
-            ? resolveProviderlessConfiguredImageModelRef({ cfg: params.cfg, ref: primary })
+            ? resolveConfiguredImageModelRef({ cfg: params.cfg, ref: primary })
             : primary,
         }
       : {}),
