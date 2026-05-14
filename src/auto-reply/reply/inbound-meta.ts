@@ -600,3 +600,40 @@ export function buildInboundUserContextPrefix(
 
   return blocks.filter(Boolean).join("\n\n");
 }
+
+/**
+ * Stable, channel-agnostic identifiers for the current inbound turn.
+ *
+ * These are the same values surfaced inside the prompt by
+ * `buildInboundUserContextPrefix`, lifted into a flat shape so the runtime can
+ * expose them to an agent subprocess out-of-band (e.g. as environment
+ * variables). That lets a shell wrapper thread its reply deterministically
+ * instead of scraping identifiers back out of the prompt text.
+ */
+export type InboundTurnContext = {
+  messageId?: string;
+  messageIdFull?: string;
+  senderId?: string;
+  senderE164?: string;
+  senderUsername?: string;
+  chatId?: string;
+  replyToId?: string;
+  channel?: string;
+  provider?: string;
+  accountId?: string;
+};
+
+export function buildInboundTurnContext(ctx: TemplateContext): InboundTurnContext {
+  return {
+    messageId: normalizePromptMetadataString(ctx.MessageSid),
+    messageIdFull: normalizePromptMetadataString(ctx.MessageSidFull),
+    senderId: normalizePromptMetadataString(ctx.SenderId),
+    senderE164: normalizePromptMetadataString(ctx.SenderE164),
+    senderUsername: normalizePromptMetadataString(ctx.SenderUsername),
+    chatId: normalizePromptMetadataString(ctx.OriginatingTo),
+    replyToId: normalizePromptMetadataString(ctx.ReplyToId),
+    channel: resolveInboundChannel(ctx),
+    provider: normalizePromptMetadataString(ctx.Provider),
+    accountId: normalizePromptMetadataString(ctx.AccountId),
+  };
+}

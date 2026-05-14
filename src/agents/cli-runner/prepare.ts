@@ -48,6 +48,11 @@ import { appendModelIdentitySystemPrompt } from "../system-prompt.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import { buildCliAgentSystemPrompt, normalizeCliModel } from "./helpers.js";
+import {
+  INBOUND_TURN_FILE_ENV_KEY,
+  resolveInboundTurnFilePath,
+  writeInboundTurnFile,
+} from "./inbound-turn-file.js";
 import { cliBackendLog } from "./log.js";
 import {
   buildCliSessionHistoryPrompt,
@@ -238,10 +243,31 @@ export async function prepareCliRunContext(
     authProfileId: effectiveAuthProfileId,
     skipLocalCredential: skipLocalCredentialEpoch,
   });
+  // Refresh the per-turn inbound file every run (CLI backends may keep a
+  // long-lived process across turns, so the identifiers cannot ride on
+  // spawn-time env vars). The env var only carries the stable path.
+  let inboundTurnEnv: Record<string, string> | undefined;
+  if (params.inboundTurn) {
+    const inboundTurnFilePath = resolveInboundTurnFilePath({ sessionId: params.sessionId });
+    try {
+      writeInboundTurnFile(inboundTurnFilePath, params.inboundTurn, { runId: params.runId });
+      inboundTurnEnv = { [INBOUND_TURN_FILE_ENV_KEY]: inboundTurnFilePath };
+    } catch (error) {
+      cliBackendLog.warn(`failed to write inbound turn file: ${String(error)}`);
+    }
+  }
+  const preparedBackendEnvSources = [
+    preparedBackend.env,
+    preparedExecution?.env,
+    inboundTurnEnv,
+  ].filter(
+    (entry): entry is Record<string, string> =>
+      Boolean(entry) && Object.keys(entry as Record<string, string>).length > 0,
+  );
   const preparedBackendEnv =
-    preparedExecution?.env && Object.keys(preparedExecution.env).length > 0
-      ? { ...preparedBackend.env, ...preparedExecution.env }
-      : preparedBackend.env;
+    preparedBackendEnvSources.length > 0
+      ? Object.assign({}, ...preparedBackendEnvSources)
+      : undefined;
   const preparedBackendCleanup =
     preparedBackend.cleanup || preparedExecution?.cleanup
       ? async () => {

@@ -3,7 +3,11 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../p
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnv } from "../../test-utils/env.js";
 import type { TemplateContext } from "../templating.js";
-import { buildInboundMetaSystemPrompt, buildInboundUserContextPrefix } from "./inbound-meta.js";
+import {
+  buildInboundMetaSystemPrompt,
+  buildInboundTurnContext,
+  buildInboundUserContextPrefix,
+} from "./inbound-meta.js";
 
 vi.mock("../../channels/plugins/registry-loaded.js", () => ({
   getLoadedChannelPluginById: (channelId: string) =>
@@ -961,5 +965,59 @@ describe("buildInboundUserContextPrefix", () => {
     expect(history).toHaveLength(20);
     expect(history[0]?.["body"]).toBe("body-5");
     expect(history.at(-1)?.["body"]).toBe("body-24");
+  });
+});
+
+describe("buildInboundTurnContext", () => {
+  it("lifts the current turn identifiers into a flat shape", () => {
+    const turn = buildInboundTurnContext({
+      MessageSid: "AAA",
+      MessageSidFull: "wamid.AAA",
+      SenderId: "15551234567@s.whatsapp.net",
+      SenderE164: "+15551234567",
+      SenderUsername: "gado",
+      OriginatingTo: "whatsapp:15551234567@s.whatsapp.net",
+      ReplyToId: "wamid.PARENT",
+      OriginatingChannel: "whatsapp",
+      Provider: "whatsapp",
+      AccountId: "default",
+    } as TemplateContext);
+
+    expect(turn).toEqual({
+      messageId: "AAA",
+      messageIdFull: "wamid.AAA",
+      senderId: "15551234567@s.whatsapp.net",
+      senderE164: "+15551234567",
+      senderUsername: "gado",
+      chatId: "whatsapp:15551234567@s.whatsapp.net",
+      replyToId: "wamid.PARENT",
+      channel: "whatsapp",
+      provider: "whatsapp",
+      accountId: "default",
+    });
+  });
+
+  it("leaves absent identifiers undefined", () => {
+    const turn = buildInboundTurnContext({
+      MessageSid: "AAA",
+      OriginatingChannel: "telegram",
+      Provider: "telegram",
+    } as TemplateContext);
+
+    expect(turn.messageId).toBe("AAA");
+    expect(turn.channel).toBe("telegram");
+    expect(turn.senderId).toBeUndefined();
+    expect(turn.replyToId).toBeUndefined();
+    expect(turn.chatId).toBeUndefined();
+  });
+
+  it("falls back to surface, then provider, when no explicit channel is set", () => {
+    expect(
+      buildInboundTurnContext({ Surface: "discord", Provider: "discord" } as TemplateContext)
+        .channel,
+    ).toBe("discord");
+    expect(buildInboundTurnContext({ Provider: "signal" } as TemplateContext).channel).toBe(
+      "signal",
+    );
   });
 });

@@ -15,6 +15,7 @@ Docs: https://docs.openclaw.ai
 - Control UI/WebChat: add a persisted auto-scroll mode selector so users can keep the current near-bottom behavior, always follow streaming output, or turn automatic streaming scroll off and use the New messages button manually. Fixes #7648 and #81287. Thanks @BunsDev.
 - ACP: add `acp.fallbacks` so ACP turns can try configured backup runtime backends when the primary backend is unavailable before any output is emitted. (#69542) Thanks @kaseonedge.
 - Gateway/startup: add owner-level startup trace attribution for auth, plugin loading, lookup counts, and plugin sidecar services. (#81738) Thanks @samzong.
+- Agents/CLI runtime: write the current inbound turn's identifiers (message id, sender id/e164, chat id, reply-to id, channel, provider) to a session-scoped per-turn file and point CLI agent subprocesses at it via `OPENCLAW_INBOUND_TURN_FILE`, so shell wrappers can thread replies without scraping the prompt — correct even for backends that keep a long-lived process across turns.
 
 ### Fixes
 
