@@ -354,9 +354,17 @@ describe("probeTelegram retry logic", () => {
       json: vi.fn().mockResolvedValue({ ok: true, result: { url: "" } }),
     });
 
-    const result = await probeTelegram(token, 30_000);
-    expect(result.ok).toBe(true);
-    expect(localForceFallback).toHaveBeenCalledWith("probe timeout/network error");
-    expect(fetchMock).toHaveBeenCalledTimes(3); // 1 failed + 1 getMe success + 1 webhook
+    vi.useFakeTimers();
+    try {
+      const probePromise = probeTelegram(token, 30_000);
+      await vi.advanceTimersByTimeAsync(1000);
+
+      const result = await probePromise;
+      expect(result.ok).toBe(true);
+      expect(localForceFallback).toHaveBeenCalledWith("probe timeout/network error");
+      expect(fetchMock).toHaveBeenCalledTimes(3); // 1 failed + 1 getMe success + 1 webhook
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
