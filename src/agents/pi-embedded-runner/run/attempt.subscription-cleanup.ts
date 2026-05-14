@@ -54,6 +54,7 @@ export function buildEmbeddedSubscriptionParams(
 
 export async function cleanupEmbeddedAttemptResources(params: {
   removeToolResultContextGuard?: () => void;
+  removeConsecutiveErrorGuard?: () => void;
   flushPendingToolResultsAfterIdle: (params: {
     agent: IdleAwareAgent | null | undefined;
     sessionManager: ToolResultFlushManager | null | undefined;
@@ -72,6 +73,11 @@ export async function cleanupEmbeddedAttemptResources(params: {
   try {
     try {
       params.removeToolResultContextGuard?.();
+    } catch {
+      /* best-effort */
+    }
+    try {
+      params.removeConsecutiveErrorGuard?.();
     } catch {
       /* best-effort */
     }
