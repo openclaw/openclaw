@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   findForbiddenChangelogThanks,
   isForbiddenChangelogThanksHandle,
+  requiresExplicitHumanChangelogThanks,
 } from "../../scripts/check-changelog-attributions.mjs";
 
 const changelogScriptPath = path.join(process.cwd(), "scripts", "pr-lib", "changelog.sh");
@@ -46,7 +47,7 @@ function validateChangelogEntry(repo: string, contrib: string): string {
     repo,
     "bash",
     [
-      "-lc",
+      "-c",
       'source "$OPENCLAW_PR_CHANGELOG_SH"; validate_changelog_entry_for_pr 123 "$OPENCLAW_TEST_CONTRIB"',
     ],
     {
@@ -114,6 +115,13 @@ describe("check-changelog-attributions", () => {
     expect(
       isForbiddenChangelogThanksHandle("human-clawsweeper-fan", { strictBotHandle: true }),
     ).toBe(false);
+
+    expect(requiresExplicitHumanChangelogThanks("clawsweeper")).toBe(true);
+    expect(requiresExplicitHumanChangelogThanks("clawsweeper[bot]")).toBe(true);
+    expect(requiresExplicitHumanChangelogThanks("app/clawsweeper")).toBe(true);
+    expect(requiresExplicitHumanChangelogThanks("human-clawsweeper-fan")).toBe(false);
+    expect(requiresExplicitHumanChangelogThanks("steipete")).toBe(false);
+    expect(requiresExplicitHumanChangelogThanks("")).toBe(false);
   });
 
   it("requires explicit human thanks for bot PR changelog entries", () => {
@@ -140,6 +148,15 @@ describe("check-changelog-attributions", () => {
     }
   });
 
+  it("keeps non-bot forbidden contributors on the no-thanks fallback", () => {
+    const repo = createRepoWithPrChangelogDiff("- Maintainer repair (#123).");
+    try {
+      expect(validateChangelogEntry(repo, "steipete")).toContain("skipping thanks check");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
   it("keeps PR changelog gates on the same attribution policy", () => {
     const commonLib = readFileSync("scripts/pr-lib/common.sh", "utf8");
     const changelogLib = readFileSync("scripts/pr-lib/changelog.sh", "utf8");
@@ -151,7 +168,9 @@ describe("check-changelog-attributions", () => {
     expect(commonLib).toContain("resolve_contributor_coauthor_email");
     expect(changelogLib).toContain("changelog_attribution_script");
     expect(changelogLib).toContain("--is-forbidden-handle");
+    expect(changelogLib).toContain("--requires-explicit-human-thanks");
     expect(changelogLib).toContain("changelog_thanks_required_for_contributor");
+    expect(changelogLib).toContain("changelog_explicit_human_thanks_required_for_contributor");
     expect(changelogLib).toContain("Choose the credited original contributor");
     expect(gates).toContain("validate_changelog_attribution_policy");
     expect(prepareCore).toContain("resolve_contributor_coauthor_email");

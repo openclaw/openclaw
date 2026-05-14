@@ -14,6 +14,13 @@ export const FORBIDDEN_CHANGELOG_THANKS_HANDLES = [
   "openclaw-clawsweeper[bot]",
 ];
 export const FORBIDDEN_CHANGELOG_THANKS_HANDLE_PREFIXES = ["app/"];
+export const CHANGELOG_THANKS_REQUIRE_HUMAN_CREDIT_HANDLES = [
+  "clawsweeper",
+  "openclaw-clawsweeper",
+  "clawsweeper[bot]",
+  "openclaw-clawsweeper[bot]",
+];
+export const CHANGELOG_THANKS_REQUIRE_HUMAN_CREDIT_HANDLE_PREFIXES = ["app/"];
 
 const THANKS_PATTERN = /\bThanks\b/iu;
 const THANKED_HANDLE_PATTERN = /@([-_/A-Za-z0-9]+(?:\[bot\])?)/giu;
@@ -36,6 +43,19 @@ export function isForbiddenChangelogThanksHandle(handle, options = {}) {
     return false;
   }
   return false;
+}
+
+export function requiresExplicitHumanChangelogThanks(handle) {
+  const normalized = handle.toLowerCase();
+  if (normalized === "" || normalized === "null") {
+    return false;
+  }
+  return (
+    CHANGELOG_THANKS_REQUIRE_HUMAN_CREDIT_HANDLES.includes(normalized) ||
+    CHANGELOG_THANKS_REQUIRE_HUMAN_CREDIT_HANDLE_PREFIXES.some((prefix) =>
+      normalized.startsWith(prefix),
+    )
+  );
 }
 
 export function findForbiddenChangelogThanks(content) {
@@ -63,6 +83,11 @@ export async function main(argv = process.argv.slice(2)) {
     })
       ? 0
       : 1;
+    return;
+  }
+
+  if (argv[0] === "--requires-explicit-human-thanks") {
+    process.exitCode = requiresExplicitHumanChangelogThanks(argv[1] ?? "") ? 0 : 1;
     return;
   }
 

@@ -175,6 +175,12 @@ changelog_thanks_required_for_contributor() {
   return 0
 }
 
+changelog_explicit_human_thanks_required_for_contributor() {
+  local contrib="${1:-}"
+  [ -n "$contrib" ] || return 1
+  node "$(changelog_attribution_script)" --requires-explicit-human-thanks "$contrib"
+}
+
 validate_changelog_entry_for_pr() {
   local pr="$1"
   local contrib="$2"
@@ -338,6 +344,11 @@ END {
       exit 1
     fi
     echo "changelog validated: found PR #$pr + thanks @$contrib"
+    return 0
+  fi
+
+  if ! changelog_explicit_human_thanks_required_for_contributor "$contrib"; then
+    echo "changelog validated: found PR #$pr (no eligible human contributor handle, skipping thanks check)"
     return 0
   fi
 
