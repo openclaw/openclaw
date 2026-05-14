@@ -11,7 +11,7 @@ the cost of every new wake timing out at WS open.
 
 Triggers (any one fires kickstart):
 
-  T1. WS upgrade probe to ws://127.0.0.1:18789/ does not return 101
+  T1. WS upgrade probe to ws://127.0.0.1:<gateway-port>/ does not return 101
       within WS_PROBE_TIMEOUT_S.
   T2. ~/.openclaw/logs/gateway.err.log in the last ERR_LOG_WINDOW_S
       contains any of the leak-triad signatures.
@@ -53,9 +53,10 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 GATEWAY_HOST = "127.0.0.1"
-GATEWAY_PORT = 18789
+DEFAULT_GATEWAY_PORT = 18789
 GATEWAY_LABEL = "ai.openclaw.gateway"
 OPENCLAW_HOME = Path(os.environ.get("OPENCLAW_HOME", Path.home() / ".openclaw"))
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 ERR_LOG = Path(os.environ.get(
     "GATEWAY_WATCHDOG_ERR_LOG",
@@ -74,7 +75,7 @@ KICKSTART_COOLDOWN_S = 180  # 3 min — gateway boot to listening can take
                              # under load (cold-start cascade hit a stuck-
                              # boot loop with the previous values).
 # Warmup must exceed the time from launchd-spawn until the gateway binds
-# port :18789. Observed cold-boot timeline: T+0 launch → T+15s "loading
+# port :<gateway-port>. Observed cold-boot timeline: T+0 launch → T+15s "loading
 # configuration" → T+30s "resolving authentication" → T+30-60s "starting"
 # → T+45-90s actually listening. Set warmup well above the worst observed
 # bind time to avoid kicking during a slow-but-healthy boot.
@@ -136,11 +137,39 @@ def load_state() -> dict:
     return {}
 
 
-def save_state(state: dict) -> None:
-    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    tmp = STATE_FILE.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(state, indent=2))
-    os.replace(tmp, STATE_FILE)
+def save_state(state: dict) -> bool:
+    try:
+        STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = STATE_FILE.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(state, indent=2))
+        os.replace(tmp, STATE_FILE)
+        return True
+    except OSError:
+        # State persistence is best-effort (e.g. sandboxed envs or read-only homes).
+        return False
+
+
+def _read_protocol_version_from_repo() -> int | None:
+    path = REPO_ROOT / "src/gateway/protocol/version.ts"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    m = re.search(r"export const PROTOCOL_VERSION\\s*=\\s*(\\d+)\\s*;", text)
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except ValueError:
+        return None
+
+
+def _read_gateway_protocol_range() -> tuple[int, int] | None:
+    # Prefer deriving from the repo's protocol constants to avoid drift.
+    protocol = _read_protocol_version_from_repo()
+    if protocol is None:
+        return None
+    return protocol, protocol
 
 
 def parse_log_ts(line: str) -> datetime | None:
@@ -203,22 +232,81 @@ def _send_ws_frame(sock: socket.socket, opcode: int, payload: bytes = b"") -> No
     sock.sendall(header + mask + masked)
 
 
-def _load_gateway_token() -> str | None:
-    env_token = os.environ.get("OPENCLAW_GATEWAY_TOKEN")
-    if env_token:
-        return env_token
+def _resolve_secret_input_string(value: object, env: dict[str, str]) -> str | None:
+    if isinstance(value, str):
+        trimmed = value.strip()
+        if not trimmed:
+            return None
+        m = re.fullmatch(r"\\$\\{([A-Z][A-Z0-9_]{0,127})\\}", trimmed)
+        if m:
+            return env.get(m.group(1))
+        for prefix in ("secretref-env:", "__env__:"):
+            if trimmed.startswith(prefix):
+                return env.get(trimmed[len(prefix):])
+        return trimmed
+
+    if isinstance(value, dict):
+        source = value.get("source")
+        secret_id = value.get("id")
+        if source == "env" and isinstance(secret_id, str):
+            return env.get(secret_id)
+    return None
+
+
+def _load_config_json() -> dict:
     try:
         data = json.loads(CONFIG_FILE.read_text())
     except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _resolve_gateway_port(config: dict) -> int:
+    env_port = os.environ.get("OPENCLAW_GATEWAY_PORT")
+    if env_port:
+        try:
+            port = int(env_port)
+            if port > 0:
+                return port
+        except ValueError:
+            pass
+    port = config.get("gateway", {}).get("port")
+    if isinstance(port, int) and port > 0:
+        return port
+    if isinstance(port, str) and port.isdigit():
+        return int(port)
+    return DEFAULT_GATEWAY_PORT
+
+
+def _load_gateway_auth(config: dict) -> dict | None:
+    env = dict(os.environ)
+    env_token = (env.get("OPENCLAW_GATEWAY_TOKEN") or "").strip() or None
+    env_password = (env.get("OPENCLAW_GATEWAY_PASSWORD") or "").strip() or None
+    if env_token:
+        return {"token": env_token}
+    if env_password:
+        return {"password": env_password}
+    auth = config.get("gateway", {}).get("auth", {})
+    if not isinstance(auth, dict):
         return None
-    token = data.get("gateway", {}).get("auth", {}).get("token")
-    return token if isinstance(token, str) and token else None
+    token = _resolve_secret_input_string(auth.get("token"), env)
+    if token:
+        return {"token": token}
+    password = _resolve_secret_input_string(auth.get("password"), env)
+    if password:
+        return {"password": password}
+    return None
 
 
 def probe_ws_upgrade(host: str, port: int, timeout_s: float) -> tuple[bool, str, float]:
-    token = _load_gateway_token()
-    if not token:
-        return False, "missing gateway auth token for websocket handshake probe", 0.0
+    config = _load_config_json()
+    auth = _load_gateway_auth(config)
+    if not auth:
+        return False, "missing gateway auth for websocket handshake probe", 0.0
+    protocol_range = _read_gateway_protocol_range()
+    if not protocol_range:
+        return False, "unable to resolve gateway protocol version from repo", 0.0
+    min_protocol, max_protocol = protocol_range
     request = (
         f"GET / HTTP/1.1\r\n"
         f"Host: {host}:{port}\r\n"
@@ -272,8 +360,8 @@ def probe_ws_upgrade(host: str, port: int, timeout_s: float) -> tuple[bool, str,
                     "id": "gateway-health-watchdog-connect",
                     "method": "connect",
                     "params": {
-                        "minProtocol": 3,
-                        "maxProtocol": 3,
+                        "minProtocol": min_protocol,
+                        "maxProtocol": max_protocol,
                         "client": {
                             "id": "gateway-client",
                             "version": "1.0.0",
@@ -286,7 +374,7 @@ def probe_ws_upgrade(host: str, port: int, timeout_s: float) -> tuple[bool, str,
                         "caps": [],
                         "commands": [],
                         "permissions": {},
-                        "auth": {"token": token},
+                        "auth": auth,
                         "locale": "en-US",
                         "userAgent": "gateway-health-watchdog/1.0",
                     },
@@ -351,9 +439,9 @@ def scan_err_log(path: Path, window_s: int, now: datetime,
     return hits
 
 
-def get_gateway_pid() -> int | None:
+def get_gateway_pid(port: int) -> int | None:
     patterns = [
-        "openclaw/dist/index.js gateway --port 18789",
+        f"openclaw/dist/index.js gateway --port {port}",
         "openclaw-gateway",
     ]
     for pattern in patterns:
@@ -412,6 +500,8 @@ def main() -> int:
 
     now = utcnow()
     state = load_state()
+    config = _load_config_json()
+    gateway_port = _resolve_gateway_port(config)
     last_kickstart = None
     if state.get("last_kickstart_at"):
         try:
@@ -423,7 +513,7 @@ def main() -> int:
     last_verdict = state.get("last_verdict", "")
 
     state["last_check_at"] = now.isoformat()
-    gw_pid = get_gateway_pid()
+    gw_pid = get_gateway_pid(gateway_port)
     gw_started = gateway_started_at(gw_pid) if gw_pid else None
     state["gateway_pid"] = gw_pid
     state["gateway_started_at"] = gw_started.isoformat() if gw_started else None
@@ -453,7 +543,7 @@ def main() -> int:
         if args.simulate_trigger in ("ws-timeout", "ws-upgrade-fail"):
             ws_failures += 1
     else:
-        ok, detail, elapsed = probe_ws_upgrade(GATEWAY_HOST, GATEWAY_PORT, WS_PROBE_TIMEOUT_S)
+        ok, detail, elapsed = probe_ws_upgrade(GATEWAY_HOST, gateway_port, WS_PROBE_TIMEOUT_S)
         if ok:
             ws_failures = 0
         else:
