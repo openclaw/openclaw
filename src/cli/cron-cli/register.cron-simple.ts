@@ -41,6 +41,14 @@ function parseCronRunWaitDuration(raw: unknown, label: string): number {
   return durationMs;
 }
 
+function parseCronRunPollInterval(raw: unknown): number {
+  const durationMs = parseCronRunWaitDuration(raw, "--poll-interval");
+  if (durationMs <= 0) {
+    throw new Error("invalid --poll-interval");
+  }
+  return durationMs;
+}
+
 async function waitForCronRunCompletion(params: {
   opts: GatewayRpcOpts;
   jobId: string;
@@ -242,6 +250,12 @@ export function registerCronSimpleCommands(cron: Command) {
       )
       .action(async (id, opts, command) => {
         try {
+          let waitTimeoutMs = 0;
+          let pollIntervalMs = 0;
+          if (opts.wait) {
+            waitTimeoutMs = parseCronRunWaitDuration(opts.waitTimeout, "--wait-timeout");
+            pollIntervalMs = parseCronRunPollInterval(opts.pollInterval);
+          }
           if (command.getOptionValueSource("timeout") === "default") {
             opts.timeout = "600000";
           }
@@ -258,8 +272,8 @@ export function registerCronSimpleCommands(cron: Command) {
               opts,
               jobId: String(id),
               runId: result.runId,
-              timeoutMs: parseCronRunWaitDuration(opts.waitTimeout, "--wait-timeout"),
-              pollIntervalMs: parseCronRunWaitDuration(opts.pollInterval, "--poll-interval"),
+              timeoutMs: waitTimeoutMs,
+              pollIntervalMs,
             });
             printCronJson({ ...res, completed: true, status: run.status, run });
             defaultRuntime.exit(run.status === "ok" ? 0 : 1);
