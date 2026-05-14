@@ -102,6 +102,37 @@ describe("gateway/node-command-policy", () => {
     expect(allowlist.has("canvas.present")).toBe(true);
   });
 
+  it("does not grant host command defaults for platform prefix aliases", () => {
+    const cfg = {} as OpenClawConfig;
+    const cases = [
+      { platform: "darwin", deviceFamily: "iPhone" },
+      { platform: "Darwin-x64" },
+      { platform: "macintosh" },
+      { platform: "win32" },
+      { platform: "linux-gnu" },
+    ];
+
+    for (const node of cases) {
+      const allowlist = resolveNodeCommandAllowlist(cfg, node);
+      expect(allowlist.has("system.run")).toBe(false);
+      expect(allowlist.has("system.run.prepare")).toBe(false);
+      expect(allowlist.has("system.which")).toBe(false);
+      expect(allowlist.has("browser.proxy")).toBe(false);
+      expect(allowlist.has("screen.snapshot")).toBe(false);
+      expect(allowlist.has("system.notify")).toBe(true);
+    }
+  });
+
+  it("keeps host command defaults for canonical desktop platforms", () => {
+    const cfg = {} as OpenClawConfig;
+
+    for (const platform of ["macos", "windows", "linux"]) {
+      const allowlist = resolveNodeCommandAllowlist(cfg, { platform });
+      expect(allowlist.has("system.run")).toBe(true);
+      expect(allowlist.has("system.which")).toBe(true);
+    }
+  });
+
   it("reads foreground restriction metadata from plugin node policies", () => {
     expect(isForegroundRestrictedPluginNodeCommand("canvas.snapshot")).toBe(false);
 

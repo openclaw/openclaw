@@ -117,16 +117,13 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
 
 type PlatformId = "ios" | "android" | "macos" | "windows" | "linux" | "unknown";
 
-const PLATFORM_PREFIX_RULES: ReadonlyArray<{
-  id: Exclude<PlatformId, "unknown">;
-  prefixes: readonly string[];
-}> = [
-  { id: "ios", prefixes: ["ios"] },
-  { id: "android", prefixes: ["android"] },
-  { id: "macos", prefixes: ["mac", "darwin"] },
-  { id: "windows", prefixes: ["win"] },
-  { id: "linux", prefixes: ["linux"] },
-] as const;
+const CANONICAL_PLATFORM_IDS = new Set<Exclude<PlatformId, "unknown">>([
+  "ios",
+  "android",
+  "macos",
+  "windows",
+  "linux",
+]);
 
 const DEVICE_FAMILY_TOKEN_RULES: ReadonlyArray<{
   id: Exclude<PlatformId, "unknown">;
@@ -139,11 +136,9 @@ const DEVICE_FAMILY_TOKEN_RULES: ReadonlyArray<{
   { id: "linux", tokens: ["linux"] },
 ] as const;
 
-function resolvePlatformIdByPrefix(value: string): Exclude<PlatformId, "unknown"> | undefined {
-  for (const rule of PLATFORM_PREFIX_RULES) {
-    if (rule.prefixes.some((prefix) => value.startsWith(prefix))) {
-      return rule.id;
-    }
+function resolvePlatformIdByExactMatch(value: string): Exclude<PlatformId, "unknown"> | undefined {
+  if (CANONICAL_PLATFORM_IDS.has(value as Exclude<PlatformId, "unknown">)) {
+    return value as Exclude<PlatformId, "unknown">;
   }
   return undefined;
 }
@@ -161,7 +156,7 @@ function resolvePlatformIdByDeviceFamily(
 
 function normalizePlatformId(platform?: string, deviceFamily?: string): PlatformId {
   const raw = normalizeDeviceMetadataForPolicy(platform);
-  const byPlatform = resolvePlatformIdByPrefix(raw);
+  const byPlatform = resolvePlatformIdByExactMatch(raw);
   if (byPlatform) {
     return byPlatform;
   }
