@@ -358,3 +358,117 @@ describe("buildWorkspaceSkillsPrompt", () => {
     );
   });
 });
+
+describe("syncSkillsToWorkspace non-destructive sync", () => {
+  const syncSkills = async (sourceWorkspace: string, targetWorkspace: string) =>
+    withEnv({ HOME: sourceWorkspace }, () =>
+      syncSkillsToWorkspace({
+        sourceWorkspaceDir: sourceWorkspace,
+        targetWorkspaceDir: targetWorkspace,
+        bundledSkillsDir: path.join(sourceWorkspace, ".bundled"),
+        managedSkillsDir: path.join(sourceWorkspace, ".managed"),
+      }),
+    );
+
+  it("does not wipe previously synced skills when the source load returns empty", async () => {
+    const sourceWorkspace = await createCaseDir("src-full");
+    const targetWorkspace = await createCaseDir("target-existing");
+
+    // First sync: source has two skills. Target should receive both.
+    await writeSkill({
+      dir: path.join(sourceWorkspace, "skills", "alpha"),
+      name: "alpha",
+      description: "Alpha skill",
+    });
+    await writeSkill({
+      dir: path.join(sourceWorkspace, "skills", "beta"),
+      name: "beta",
+      description: "Beta skill",
+    });
+    await syncSkills(sourceWorkspace, targetWorkspace);
+    expect(await pathExists(path.join(targetWorkspace, "skills", "alpha", "SKILL.md"))).toBe(true);
+    expect(await pathExists(path.join(targetWorkspace, "skills", "beta", "SKILL.md"))).toBe(true);
+
+    // Second sync with a completely empty source skills dir (simulating a
+    // transient load failure where loadWorkspaceSkillEntries returns []).
+    // Previously the implementation would wipe the entire target skills
+    // directory — now it must keep both existing skill directories intact.
+    const emptySource = await createCaseDir("src-empty");
+    await syncSkills(emptySource, targetWorkspace);
+    expect(await pathExists(path.join(targetWorkspace, "skills", "alpha", "SKILL.md"))).toBe(true);
+    expect(await pathExists(path.join(targetWorkspace, "skills", "beta", "SKILL.md"))).toBe(true);
+  });
+
+  it("preserves unrelated user-created directories in the target skills dir", async () => {
+    const sourceWorkspace = await createCaseDir("src-one");
+    const targetWorkspace = await createCaseDir("target-mixed");
+    await writeSkill({
+      dir: path.join(sourceWorkspace, "skills", "alpha"),
+      name: "alpha",
+      description: "Alpha skill",
+    });
+
+    // Simulate a skill that was installed directly inside the sandbox by
+    // the user/agent and is not part of the source manifest.
+    await writeSkill({
+      dir: path.join(targetWorkspace, "skills", "user-made"),
+      name: "user-made",
+      description: "User-installed skill",
+    });
+
+    await syncSkills(sourceWorkspace, targetWorkspace);
+
+    expect(await pathExists(path.join(targetWorkspace, "skills", "alpha", "SKILL.md"))).toBe(true);
+    // The user-installed skill must not be touched.
+    expect(await pathExists(path.join(targetWorkspace, "skills", "user-made", "SKILL.md"))).toBe(
+      true,
+    );
+  });
+
+  it("skips re-copying when the destination is already up to date", async () => {
+    const sourceWorkspace = await createCaseDir("src-mtime");
+    const targetWorkspace = await createCaseDir("target-mtime");
+    await writeSkill({
+      dir: path.join(sourceWorkspace, "skills", "alpha"),
+      name: "alpha",
+      description: "Alpha skill",
+    });
+    await syncSkills(sourceWorkspace, targetWorkspace);
+
+    const destSkillMd = path.join(targetWorkspace, "skills", "alpha", "SKILL.md");
+    const firstMtime = (await fs.stat(destSkillMd)).mtimeMs;
+
+    // Second sync with no source changes: destination mtime should stay
+    // unchanged because the incremental skip path avoids re-copying.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await syncSkills(sourceWorkspace, targetWorkspace);
+    const secondMtime = (await fs.stat(destSkillMd)).mtimeMs;
+    expect(secondMtime).toBe(firstMtime);
+  });
+
+  it("re-copies a skill when the source has been modified after the previous sync", async () => {
+    const sourceWorkspace = await createCaseDir("src-change");
+    const targetWorkspace = await createCaseDir("target-change");
+    const sourceSkillDir = path.join(sourceWorkspace, "skills", "alpha");
+    await writeSkill({
+      dir: sourceSkillDir,
+      name: "alpha",
+      description: "Original",
+    });
+    await syncSkills(sourceWorkspace, targetWorkspace);
+
+    const destSkillMd = path.join(targetWorkspace, "skills", "alpha", "SKILL.md");
+    expect((await fs.readFile(destSkillMd, "utf-8")).includes("Original")).toBe(true);
+
+    // Wait past filesystem mtime resolution, then modify source.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await writeSkill({
+      dir: sourceSkillDir,
+      name: "alpha",
+      description: "Updated",
+    });
+
+    await syncSkills(sourceWorkspace, targetWorkspace);
+    expect((await fs.readFile(destSkillMd, "utf-8")).includes("Updated")).toBe(true);
+  });
+});
