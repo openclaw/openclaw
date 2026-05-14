@@ -638,7 +638,7 @@ describe("claudeCliSessionTranscriptHasContent", () => {
         ([msg]) => typeof msg === "string" && msg.startsWith("claude-cli transcript probe v4 miss"),
       );
       expect(v4Warnings).toHaveLength(1);
-      const message = v4Warnings[0]?.[0] as string;
+      const message = v4Warnings[0]?.[0];
       expect(message).toContain("sessionId=ghost-session");
       expect(message).toContain(`grace ${GRACE_MS}ms`);
       expect(message).toContain("fileExists=false");
