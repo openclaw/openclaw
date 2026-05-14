@@ -52,12 +52,17 @@ import { resolveCodexMigrationTargets } from "./targets.js";
 
 const CODEX_PLUGIN_AUTH_REQUIRED_REASON = "auth_required";
 const CODEX_PLUGIN_NOT_SELECTED_REASON = "not selected for migration";
+const CODEX_CONFIG_PATCH_MODE_RETURN = "return";
 
 class CodexPluginConfigConflictError extends Error {
   constructor(readonly reason: string) {
     super(reason);
     this.name = "CodexPluginConfigConflictError";
   }
+}
+
+function shouldReturnCodexPluginConfigPatch(ctx: MigrationProviderContext): boolean {
+  return ctx.providerOptions?.configPatchMode === CODEX_CONFIG_PATCH_MODE_RETURN;
 }
 
 export async function applyCodexMigrationPlan(params: {
@@ -220,14 +225,32 @@ async function applyCodexPluginConfigItem(
   if (entries.length === 0) {
     return markMigrationItemSkipped(item, "no selected Codex plugins");
   }
+  const returnPatch = shouldReturnCodexPluginConfigPatch(ctx);
   const configApi = ctx.runtime?.config;
-  if (!configApi?.current || !configApi.mutateConfigFile) {
+  const currentConfig = returnPatch
+    ? ctx.config
+    : (configApi?.current?.() as MigrationProviderContext["config"] | undefined);
+  if (!currentConfig) {
     return markMigrationItemError(item, "config runtime unavailable");
   }
-  const currentConfig = configApi.current() as MigrationProviderContext["config"];
   const value = buildCodexPluginsConfigValue(entries, { config: currentConfig });
   if (!ctx.overwrite && hasCodexPluginConfigConflict(currentConfig, value)) {
     return markMigrationItemConflict(item, MIGRATION_REASON_TARGET_EXISTS);
+  }
+  const migratedItem: MigrationItem = {
+    ...item,
+    status: "migrated",
+    details: {
+      ...item.details,
+      path: [...CODEX_PLUGIN_CONFIG_PATH],
+      value,
+    },
+  };
+  if (returnPatch) {
+    return migratedItem;
+  }
+  if (!configApi?.mutateConfigFile) {
+    return markMigrationItemError(item, "config runtime unavailable");
   }
   try {
     await configApi.mutateConfigFile({
@@ -240,15 +263,7 @@ async function applyCodexPluginConfigItem(
         writeMigrationConfigPath(draft as Record<string, unknown>, CODEX_PLUGIN_CONFIG_PATH, value);
       },
     });
-    return {
-      ...item,
-      status: "migrated",
-      details: {
-        ...item.details,
-        path: [...CODEX_PLUGIN_CONFIG_PATH],
-        value,
-      },
-    };
+    return migratedItem;
   } catch (error) {
     if (error instanceof CodexPluginConfigConflictError) {
       return markMigrationItemConflict(item, error.reason);
