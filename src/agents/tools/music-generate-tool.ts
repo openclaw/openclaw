@@ -410,6 +410,7 @@ async function executeMusicGenerationJob(params: {
   effectiveCfg: OpenClawConfig;
   prompt: string;
   agentDir?: string;
+  authStore?: AuthProfileStore;
   model?: string;
   lyrics?: string;
   instrumental?: boolean;
@@ -432,6 +433,7 @@ async function executeMusicGenerationJob(params: {
     cfg: params.effectiveCfg,
     prompt: params.prompt,
     agentDir: params.agentDir,
+    authStore: params.authStore,
     modelOverride: params.model,
     lyrics: params.lyrics,
     instrumental: params.instrumental,
@@ -692,6 +694,7 @@ export function createMusicGenerateTool(options?: {
                   effectiveCfg,
                   prompt,
                   agentDir: options?.agentDir,
+                  authStore: options?.authProfileStore,
                   model,
                   lyrics,
                   instrumental,
@@ -789,6 +792,7 @@ export function createMusicGenerateTool(options?: {
           effectiveCfg,
           prompt,
           agentDir: options?.agentDir,
+          authStore: options?.authProfileStore,
           lyrics,
           instrumental,
           durationSeconds,

@@ -730,6 +730,10 @@ export function createImageGenerateTool(options?: {
         cfg: effectiveCfg,
         prompt,
         agentDir: options?.agentDir,
+        // Pass the live run authStore so codex/OAuth providers see the same
+        // in-memory profile snapshot the chat path uses, including any
+        // refresh-token state that has not been re-read from disk yet.
+        authStore: options?.authProfileStore,
         modelOverride: model,
         autoProviderFallback: explicitModelConfig ? false : undefined,
         size,

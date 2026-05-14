@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Fixes
+
+- Agents/media tools: pass the live agent run `authProfileStore` into `image_generate`, `video_generate`, and `music_generate` calls so codex/OAuth providers see the same in-memory auth profile snapshot as the chat path and can refresh expired per-agent OAuth tokens on demand instead of failing with `No API key found for provider "openai-codex"`. Fixes #81861.
+
 ### Changes
 
 - Control UI/i18n: add a `pnpm ui:i18n:report` baseline report for hardcoded-copy focus areas and locale fallback metadata. (#81320) Thanks @samzong.

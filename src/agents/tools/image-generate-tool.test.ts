@@ -708,6 +708,65 @@ describe("createImageGenerateTool", () => {
     expect(resultDetails(overrideResult).timeoutMs).toBe(12_345);
   });
 
+  it("forwards the live authProfileStore to the image-generation runtime so codex OAuth refresh sees session-time profiles", async () => {
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-2",
+      attempts: [],
+      ignoredOverrides: [],
+      images: [
+        {
+          buffer: Buffer.from("png-out"),
+          mimeType: "image/png",
+          fileName: "cat.png",
+        },
+      ],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/generated.png",
+      id: "generated.png",
+      size: 5,
+      contentType: "image/png",
+    });
+
+    const authProfileStore = {
+      version: 1,
+      profiles: {
+        "openai-codex": {
+          type: "oauth" as const,
+          provider: "openai-codex",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 600_000,
+        },
+      },
+    };
+
+    const tool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: {
+          agents: {
+            defaults: {
+              imageGenerationModel: {
+                primary: "openai/gpt-image-2",
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/agent",
+        authProfileStore,
+      }),
+    );
+
+    await tool.execute("call-authstore", {
+      prompt: "A friendly robot mascot",
+      size: "1024x1024",
+    });
+
+    const generateArgs = mockCallArg(generateImage, 0, "generateImage");
+    expect(generateArgs.authStore).toBe(authProfileStore);
+  });
+
   it("forwards output hints and OpenAI provider options", async () => {
     const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
       provider: "openai",

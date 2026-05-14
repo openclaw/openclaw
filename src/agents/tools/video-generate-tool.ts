@@ -553,6 +553,7 @@ async function executeVideoGenerationJob(params: {
   effectiveCfg: OpenClawConfig;
   prompt: string;
   agentDir?: string;
+  authStore?: AuthProfileStore;
   model?: string;
   size?: string;
   aspectRatio?: string;
@@ -579,6 +580,7 @@ async function executeVideoGenerationJob(params: {
     cfg: params.effectiveCfg,
     prompt: params.prompt,
     agentDir: params.agentDir,
+    authStore: params.authStore,
     modelOverride: params.model,
     size: params.size,
     aspectRatio: params.aspectRatio,
@@ -996,6 +998,7 @@ export function createVideoGenerateTool(options?: {
                   effectiveCfg,
                   prompt,
                   agentDir: options?.agentDir,
+                  authStore: options?.authProfileStore,
                   model,
                   size,
                   aspectRatio,
@@ -1094,6 +1097,7 @@ export function createVideoGenerateTool(options?: {
           effectiveCfg,
           prompt,
           agentDir: options?.agentDir,
+          authStore: options?.authProfileStore,
           model,
           size,
           aspectRatio,
