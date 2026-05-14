@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/session startup: name AGENTS.md, SOUL.md, IDENTITY.md, and USER.md in the bare `/new`/`/reset` prompt and have the default heartbeat prompt point at SOUL.md/IDENTITY.md, so smaller open-weights models (e.g. vllm `gpt-oss-20b`) no longer treat the generic "read the required files" instruction as optional and keep loading the workspace persona/identity files at every session start and heartbeat tick. Fixes #81710.
 - fix: harden safe-bin argument validation [AI]. (#80999) Thanks @pgondhi987.
 - fix: scan plugin runtime entries during install [AI]. (#80998) Thanks @pgondhi987.
 - Codex harness: keep auth-profile-backed media tools such as `image_generate` available when OpenAI auth lives in the agent's auth-profile store instead of environment variables.

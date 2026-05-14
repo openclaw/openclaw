@@ -11,8 +11,10 @@ export type HeartbeatTask = {
 
 // Default heartbeat prompt (used when config.agents.defaults.heartbeat.prompt is unset).
 // Keep it tight and avoid encouraging the model to invent/rehash "open loops" from prior chat context.
+// AGENTS.md/SOUL.md/IDENTITY.md content already lives in your system-prompt Project Context;
+// HEARTBEAT.md is the only file you may need to re-read each tick because it changes between runs.
 const HEARTBEAT_CONTEXT_PROMPT =
-  "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats.";
+  "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Stay in your configured persona (SOUL.md/IDENTITY.md from your Project Context) when replying. Do not infer or repeat old tasks from prior chats.";
 export const HEARTBEAT_PROMPT = `${HEARTBEAT_CONTEXT_PROMPT} If nothing needs attention, reply HEARTBEAT_OK.`;
 export const HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS =
   "Use heartbeat_respond to report the wake outcome. Set notify=false when nothing needs the user's attention. Set notify=true with notificationText only when the user should be interrupted.";

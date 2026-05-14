@@ -12,7 +12,10 @@ describe("buildBareSessionResetPrompt", () => {
   it("includes the explicit Session Startup instruction for bare /new and /reset", () => {
     const prompt = buildBareSessionResetPrompt();
     expect(prompt).toContain("Execute your Session Startup sequence now");
-    expect(prompt).toContain("read the required files before responding to the user");
+    expect(prompt).toContain("read AGENTS.md");
+    expect(prompt).toContain("SOUL.md");
+    expect(prompt).toContain("IDENTITY.md");
+    expect(prompt).toContain("USER.md");
     expect(prompt).toContain("If BOOTSTRAP.md exists in the provided Project Context");
     expect(prompt).toContain("read it and follow its instructions first");
     expect(prompt).not.toContain(
