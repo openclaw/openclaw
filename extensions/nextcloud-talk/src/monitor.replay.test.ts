@@ -244,6 +244,33 @@ describe("createNextcloudTalkWebhookServer payload validation", () => {
     expect(await response.json()).toEqual({ error: "Invalid payload format" });
   });
 
+  it("rejects partial signed message-shaped payloads", async () => {
+    const payload = {
+      type: "Create",
+      actor: { type: "Person", id: "alice", name: "Alice" },
+      object: {
+        type: "Note",
+        id: "msg-1",
+        content: "hello",
+        mediaType: "text/plain",
+      },
+    };
+    const { body, headers } = createSignedWebhookRequest(payload);
+    const harness = await startWebhookServer({
+      path: "/nextcloud-partial-message-payload",
+      onMessage: vi.fn(),
+    });
+
+    const response = await fetch(harness.webhookUrl, {
+      method: "POST",
+      headers,
+      body,
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "Invalid payload format" });
+  });
+
   it("acknowledges signed non-message Talk events without invoking the handler", async () => {
     const onMessage = vi.fn(async () => {});
     const harness = await startWebhookServer({

@@ -125,18 +125,23 @@ function isSupportedWebhookMessageShape(value: unknown): boolean {
   if (!isRecord(value)) {
     return false;
   }
+  if (value.type !== "Create" && value.type !== "Update" && value.type !== "Delete") {
+    return false;
+  }
   const actor = value.actor;
   const object = value.object;
   const target = value.target;
-  if (!isRecord(actor) || !isRecord(object) || !isRecord(target)) {
+  const actorType = isRecord(actor) ? actor.type : undefined;
+  const objectType = isRecord(object) ? object.type : undefined;
+  const targetType = isRecord(target) ? target.type : undefined;
+  if (
+    (actorType && actorType !== "Person") ||
+    (objectType && objectType !== "Note") ||
+    (targetType && targetType !== "Collection")
+  ) {
     return false;
   }
-  return (
-    (value.type === "Create" || value.type === "Update" || value.type === "Delete") &&
-    actor.type === "Person" &&
-    object.type === "Note" &&
-    target.type === "Collection"
-  );
+  return actorType === "Person" || objectType === "Note" || targetType === "Collection";
 }
 
 function parseWebhookPayload(value: unknown): NextcloudTalkWebhookPayload | null {
