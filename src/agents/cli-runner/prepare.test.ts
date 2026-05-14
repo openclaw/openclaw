@@ -966,6 +966,76 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
+  it("writes a per-turn inbound file and points OPENCLAW_INBOUND_TURN_FILE at it", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:whatsapp:direct:peer",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-inbound-turn",
+        config: createCliBackendConfig(),
+        inboundTurn: {
+          messageId: "AAA",
+          messageIdFull: "wamid.AAA",
+          senderId: "15551234567@s.whatsapp.net",
+          senderE164: "+15551234567",
+          chatId: "whatsapp:15551234567@s.whatsapp.net",
+          replyToId: "wamid.PARENT",
+          channel: "whatsapp",
+          provider: "whatsapp",
+        },
+      });
+
+      const turnFilePath = context.preparedBackend.env?.["OPENCLAW_INBOUND_TURN_FILE"];
+      expect(turnFilePath).toBeTruthy();
+      const payload = JSON.parse(fs.readFileSync(turnFilePath as string, "utf8")) as Record<
+        string,
+        unknown
+      >;
+      expect(payload).toMatchObject({
+        schema: "openclaw.inbound_turn.v1",
+        messageId: "AAA",
+        messageIdFull: "wamid.AAA",
+        senderId: "15551234567@s.whatsapp.net",
+        senderE164: "+15551234567",
+        chatId: "whatsapp:15551234567@s.whatsapp.net",
+        replyToId: "wamid.PARENT",
+        channel: "whatsapp",
+        provider: "whatsapp",
+        runId: "run-inbound-turn",
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves preparedBackend env undefined when no inbound turn is provided", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-no-inbound-turn",
+        config: createCliBackendConfig(),
+      });
+
+      expect(context.preparedBackend.env).toBeUndefined();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("does not probe the transcript for non-claude-cli providers", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {

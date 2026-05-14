@@ -1,5 +1,6 @@
 import type { ImageContent } from "@earendil-works/pi-ai";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
+import type { InboundTurnContext } from "../../auto-reply/reply/inbound-meta.js";
 import type { ReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { CliSessionBinding } from "../../config/sessions.js";
@@ -55,6 +56,12 @@ export type RunCliAgentParams = {
   messageProvider?: string;
   agentAccountId?: string;
   senderIsOwner?: boolean;
+  /**
+   * Identifiers for the current inbound turn, exposed to the CLI subprocess as
+   * `OPENCLAW_INBOUND_*` environment variables so a shell wrapper can thread its
+   * reply without scraping the prompt.
+   */
+  inboundTurn?: InboundTurnContext;
   /** Runtime tool allow-list. CLI harnesses fail closed when this is set. */
   toolsAllow?: string[];
   disableTools?: boolean;
