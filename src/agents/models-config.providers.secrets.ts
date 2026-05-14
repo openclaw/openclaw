@@ -1,5 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveProviderSyntheticAuthWithPlugin } from "../plugins/provider-runtime.js";
+import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
   isNonSecretApiKeyMarker,
@@ -42,6 +44,23 @@ export {
 type AuthProfileStoreInput = AuthProfileStore | (() => AuthProfileStore);
 
 const ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
+
+function canResolveEnvSecretRefInConfigAuth(params: {
+  config: OpenClawConfig | undefined;
+  provider: string;
+  id: string;
+}): boolean {
+  const providerName = params.provider.trim();
+  const providerConfig = params.config?.secrets?.providers?.[providerName];
+  if (!providerConfig) {
+    return providerName === resolveDefaultSecretProviderAlias(params.config ?? {}, "env");
+  }
+  if (providerConfig.source !== "env") {
+    return false;
+  }
+  const allowlist = providerConfig.allowlist;
+  return !allowlist || allowlist.includes(params.id);
+}
 
 function resolveAuthProfileStoreInput(input: AuthProfileStoreInput) {
   return typeof input === "function" ? input() : input;
@@ -208,6 +227,38 @@ function resolveConfigBackedProviderAuth(params: {
   }
 
   const configuredProvider = params.config?.models?.providers?.[authProvider];
+  const configuredApiKeyRef = resolveSecretInputRef({
+    value: configuredProvider?.apiKey,
+    defaults: params.config?.secrets?.defaults,
+  }).ref;
+  if (configuredApiKeyRef?.id.trim()) {
+    if (configuredApiKeyRef.source === "env") {
+      const envVar = configuredApiKeyRef.id.trim();
+      if (
+        !canResolveEnvSecretRefInConfigAuth({
+          config: params.config,
+          provider: configuredApiKeyRef.provider,
+          id: envVar,
+        })
+      ) {
+        return undefined;
+      }
+      const envValue = params.env?.[envVar]?.trim();
+      return envValue
+        ? {
+            apiKey: envVar,
+            discoveryApiKey: toDiscoveryApiKey(envValue),
+            mode: "api_key",
+            source: "config",
+          }
+        : undefined;
+    }
+    return {
+      apiKey: resolveNonEnvSecretRefApiKeyMarker(configuredApiKeyRef.source),
+      mode: "api_key",
+      source: "config",
+    };
+  }
   if (typeof configuredProvider?.apiKey !== "string") {
     return undefined;
   }
