@@ -112,7 +112,6 @@ export type RunEmbeddedPiAgentParams = {
   /** User-visible prompt body to submit and persist; runtime context travels separately. */
   transcriptPrompt?: string;
   currentTurnKind?: InboundTurnKind;
-  /** Explicit current-turn context that must be visible to the model but not persisted as user text. */
   currentTurnContext?: CurrentTurnPromptContext;
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];

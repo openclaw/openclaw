@@ -30,7 +30,6 @@ export type RunCliAgentParams = {
   prompt: string;
   transcriptPrompt?: string;
   currentTurnKind?: InboundTurnKind;
-  /** Runtime-only current-turn context visible to the model but excluded from transcript text. */
   currentTurnContext?: CurrentTurnPromptContext;
   inputProvenance?: InputProvenance;
   provider: string;

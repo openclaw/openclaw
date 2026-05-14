@@ -1571,6 +1571,112 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(groupHistories.get(historyKey)).toHaveLength(1);
   });
 
+  it("keeps room-event history when a newer turn supersedes dispatch", async () => {
+    const historyKey = "telegram:group:-100123";
+    const groupHistories = new Map([
+      [historyKey, [{ sender: "Alice", body: "lunch at two", timestamp: 1 }]],
+    ]);
+    let releaseFirst: (() => void) | undefined;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let secondStarted: (() => void) | undefined;
+    const secondStartGate = new Promise<void>((resolve) => {
+      secondStarted = resolve;
+    });
+    dispatchReplyWithBufferedBlockDispatcher
+      .mockImplementationOnce(async () => {
+        await firstGate;
+        return {
+          queuedFinal: false,
+          counts: { block: 0, final: 0, tool: 0 },
+          sourceReplyDeliveryMode: "message_tool_only",
+        };
+      })
+      .mockImplementationOnce(async () => {
+        secondStarted?.();
+        return {
+          queuedFinal: false,
+          counts: { block: 0, final: 0, tool: 0 },
+          sourceReplyDeliveryMode: "message_tool_only",
+        };
+      });
+
+    const createRoomContext = (messageId: number, body: string) =>
+      createContext({
+        ctxPayload: {
+          InboundTurnKind: "room_event",
+          SessionKey: "agent:main:telegram:group:-100123",
+          ChatType: "group",
+          MessageSid: String(messageId),
+          RawBody: body,
+          BodyForAgent: body,
+          CommandBody: body,
+        } as unknown as TelegramMessageContext["ctxPayload"],
+        msg: {
+          chat: { id: -100123, type: "supergroup" },
+          message_id: messageId,
+        } as unknown as TelegramMessageContext["msg"],
+        chatId: -100123,
+        isGroup: true,
+        historyKey,
+        historyLimit: 10,
+        groupHistories,
+        threadSpec: { id: undefined, scope: "none" },
+      });
+
+    const firstPromise = dispatchWithContext({
+      context: createRoomContext(99, "ambient one"),
+      streamMode: "partial",
+    });
+    const secondPromise = dispatchWithContext({
+      context: createRoomContext(100, "ambient two"),
+      streamMode: "partial",
+    });
+
+    await secondStartGate;
+    releaseFirst?.();
+    await Promise.all([firstPromise, secondPromise]);
+
+    expect(groupHistories.get(historyKey)).toHaveLength(1);
+  });
+
+  it("does not send visible error fallbacks for room events", async () => {
+    const historyKey = "telegram:group:-100123";
+    const groupHistories = new Map([
+      [historyKey, [{ sender: "Alice", body: "quiet failure", timestamp: 1 }]],
+    ]);
+    dispatchReplyWithBufferedBlockDispatcher.mockRejectedValue(new Error("provider down"));
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          InboundTurnKind: "room_event",
+          SessionKey: "agent:main:telegram:group:-100123",
+          ChatType: "group",
+          MessageSid: "101",
+          RawBody: "ambient failure",
+          BodyForAgent: "ambient failure",
+          CommandBody: "ambient failure",
+        } as unknown as TelegramMessageContext["ctxPayload"],
+        msg: {
+          chat: { id: -100123, type: "supergroup" },
+          message_id: 101,
+        } as unknown as TelegramMessageContext["msg"],
+        chatId: -100123,
+        isGroup: true,
+        historyKey,
+        historyLimit: 10,
+        groupHistories,
+        threadSpec: { id: undefined, scope: "none" },
+      }),
+      streamMode: "partial",
+    });
+
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(groupHistories.get(historyKey)).toHaveLength(1);
+  });
+
   it("shows compacting reaction during auto-compaction and resumes thinking", async () => {
     const statusReactionController = {
       setThinking: vi.fn(async () => {}),

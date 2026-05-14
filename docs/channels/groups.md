@@ -51,7 +51,7 @@ privately instead of calling the message tool. That is not a
 Discord/Slack/Telegram send failure. Use a tool-call-reliable model for
 group/channel sessions, or set
 `messages.groupChat.visibleReplies: "automatic"` to restore legacy visible
-final replies.
+final replies for group requests.
 
 If the message tool is unavailable under the active tool policy, OpenClaw falls
 back to automatic visible replies instead of silently suppressing the response.
@@ -63,7 +63,7 @@ This replaces the old pattern of forcing the model to answer `NO_REPLY` for most
 
 Typing indicators are still sent for direct group requests. Ambient always-on room events stay quiet unless the agent calls the message tool.
 
-To restore legacy automatic final replies for group/channel rooms:
+To restore legacy automatic final replies for group/channel requests:
 
 ```json5
 {
