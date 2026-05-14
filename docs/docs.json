@@ -1145,8 +1145,8 @@
                       "concepts/memory",
                       "concepts/memory-builtin",
                       "concepts/memory-qmd",
-                      "concepts/memory-search",
                       "concepts/memory-honcho",
+                      "concepts/memory-search",
                       "concepts/active-memory",
                       "concepts/commitments",
                       "concepts/dreaming"
