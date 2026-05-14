@@ -732,7 +732,7 @@ export const registerTelegramNativeCommands = ({
   const pluginCommandSpecs =
     (
       telegramDeps.getPluginCommandSpecs ?? defaultTelegramNativeCommandDeps.getPluginCommandSpecs
-    )?.("telegram") ?? [];
+    )?.("telegram", { config: cfg }) ?? [];
   const existingCommands = new Set(
     [
       ...nativeCommands.map((command) => normalizeTelegramCommandName(command.name)),

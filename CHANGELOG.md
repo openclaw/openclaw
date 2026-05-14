@@ -28,6 +28,7 @@ Docs: https://docs.openclaw.ai
 - Security/sandbox: include Windows `USERPROFILE` in the sandbox blocked home roots so credential-bearing binds (such as `.codex`, `.openclaw`, or `.ssh` under the Windows user profile) are denied even when `HOME` points at a different shell home. (#63074) Thanks @luoyanglang.
 - Gateway/OpenAI-compatible HTTP: parse shared JSON endpoint paths without trusting malformed Host headers, avoiding 500s before `/v1/chat/completions`, `/v1/responses`, and `/v1/embeddings` request handling.
 - Telegram: keep Bot API polling alive during main event-loop stalls by moving ingress to an isolated worker with a durable local spool. Fixes #81132. (#81746) Thanks @joshavant.
+- Telegram: resolve plugin native commands with the active runtime config so commands like `/codex ...` stay on the native command path.
 - Telegram: preserve rendered HTML formatting through lazy cron announce delivery so Markdown links stay clickable instead of falling back to literal anchor tags. Fixes #81742. (#81758)
 - Voice-call webhooks: parse webhook and realtime upgrade paths without trusting malformed Host headers, avoiding 500s before provider signature checks or path rejection.
 - Media store: reject malformed redirect `Location` headers as media-download failures instead of letting URL parsing escape the async response callback.
