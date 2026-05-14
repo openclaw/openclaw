@@ -385,6 +385,32 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     },
   );
 
+  it("does not reuse home-relative install record watches across env changes", () => {
+    const stateDir = tempStateDir();
+    const firstHomeDir = path.join(stateDir, "first-home");
+    const secondHomeDir = path.join(stateDir, "second-home");
+    const firstPackageJsonPath = path.join(firstHomeDir, "tracked-plugin", "package.json");
+    const secondPackageJsonPath = path.join(secondHomeDir, "tracked-plugin", "package.json");
+    writePersistedInstallRecords(stateDir, {
+      demo: { source: "path", installPath: "~/tracked-plugin" },
+    });
+    writeJson(firstPackageJsonPath, { version: "1.0.0" });
+    writeJson(secondPackageJsonPath, { version: "1.0.0" });
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "persisted",
+      snapshot: makeIndex(),
+      diagnostics: [],
+    });
+
+    loadPluginMetadataSnapshot({ config: {}, env: { HOME: firstHomeDir }, stateDir });
+    loadPluginMetadataSnapshot({ config: {}, env: { HOME: secondHomeDir }, stateDir });
+    writeJson(secondPackageJsonPath, { version: "1.0.1000" });
+    loadPluginMetadataSnapshot({ config: {}, env: { HOME: secondHomeDir }, stateDir });
+
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(3);
+    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledTimes(3);
+  });
+
   it("refreshes when recovered managed npm package metadata changes", () => {
     const stateDir = tempStateDir();
     writeRecoverableNpmPlugin({

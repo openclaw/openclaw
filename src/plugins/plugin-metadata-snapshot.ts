@@ -38,6 +38,7 @@ type PluginMetadataSnapshotMemo = {
 };
 
 type PersistedRegistryMemoState = {
+  contextHash: string;
   fastHash: string;
   fingerprint: unknown;
   watchedFilesHash: string;
@@ -359,6 +360,20 @@ function resolvePersistedRegistryFastMemoFingerprint(params: {
   };
 }
 
+function resolvePersistedRegistryMemoContextHash(params: {
+  env: NodeJS.ProcessEnv;
+  fastFingerprint: unknown;
+  preferPersisted?: boolean;
+  stateDir?: string;
+}): string {
+  return hashJson({
+    env: pickMemoRelevantEnv(params.env),
+    fastFingerprint: params.fastFingerprint,
+    preferPersisted: params.preferPersisted ?? null,
+    stateDir: params.stateDir ?? null,
+  });
+}
+
 function hashWatchedFiles(watchedFiles: readonly string[]): string {
   return hashJson(watchedFiles.map((filePath) => fileFingerprint(filePath)));
 }
@@ -370,8 +385,13 @@ function resolvePersistedRegistryMemoState(params: {
 }): PersistedRegistryMemoState {
   const fastFingerprint = resolvePersistedRegistryFastMemoFingerprint(params);
   const fastHash = hashJson(fastFingerprint);
+  const contextHash = resolvePersistedRegistryMemoContextHash({
+    ...params,
+    fastFingerprint,
+  });
   if (isRecord(fastFingerprint) && fastFingerprint.disabled === true) {
     return {
+      contextHash,
       fastHash,
       fingerprint: fastFingerprint,
       watchedFiles: [],
@@ -452,6 +472,7 @@ function resolvePersistedRegistryMemoState(params: {
   const managedNpmDependencyFiles = managedNpmDependencyMetadataFingerprints(npmRoot, watchedFiles);
   const watchedFilesList = [...watchedFiles].toSorted();
   return {
+    contextHash,
     fastHash,
     fingerprint: {
       ...fastFingerprint,
@@ -476,10 +497,16 @@ function resolvePersistedRegistryMemoStateForLookup(
   },
   memo: PluginMetadataSnapshotMemo | undefined,
 ): PersistedRegistryMemoState {
-  const fastHash = hashJson(resolvePersistedRegistryFastMemoFingerprint(params));
+  const fastFingerprint = resolvePersistedRegistryFastMemoFingerprint(params);
+  const fastHash = hashJson(fastFingerprint);
+  const contextHash = resolvePersistedRegistryMemoContextHash({
+    ...params,
+    fastFingerprint,
+  });
   const registryState = memo?.registryState;
   if (
     registryState &&
+    registryState.contextHash === contextHash &&
     registryState.fastHash === fastHash &&
     hashWatchedFiles(registryState.watchedFiles) === registryState.watchedFilesHash
   ) {
