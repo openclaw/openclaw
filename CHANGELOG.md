@@ -91,7 +91,7 @@ Docs: https://docs.openclaw.ai
 - Telegram: derive readable plain-text retries from HTML fallback sends so parse failures show `label (url)` links instead of raw anchors. (#81764) Thanks @alexph-dev.
 - Ollama/Doctor: copy explicit native Ollama `contextWindow` or `maxTokens` provider/model budgets into `params.num_ctx` during `openclaw doctor --fix`, preserving large-context configs after native Ollama stopped inferring per-request `num_ctx`. Fixes #81878. (#81928) Thanks @joshavant and @ArthurusDent.
 - Discord: honor `threadName` on `message send` to existing threads by renaming the thread after successful delivery, and warn when the rename cannot be applied. Fixes #81836. (#81933) Thanks @joshavant.
-- Memory search: stop using chokidar write-stability polling for memory and QMD watchers so large Markdown extraPath trees no longer build up regular file descriptors while the existing debounce still batches re-indexing. Fixes #77327 and #78224. Thanks @loyur and @JanPlessow.
+- Memory search: stop using chokidar write-stability polling for memory and QMD watchers so large Markdown extraPath trees no longer build up regular file descriptors; changed files now settle through the existing debounced sync queue. Fixes #77327 and #78224. (#81802) Thanks @loyur and @JanPlessow.
 - Build: keep externalized Slack, OpenShell sandbox, and Anthropic Vertex runtime dependency declarations out of the root dist artifact build.
 - ClawHub: include Amazon Bedrock and Bedrock Mantle provider packages in the published registry metadata so the externalized providers are discoverable from ClawHub as well as npm.
 - Codex account/status: hide empty rate-limit buckets and show server-reported usage-limit blocks without calling them available.
