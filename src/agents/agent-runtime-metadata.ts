@@ -23,6 +23,12 @@ export function resolveModelAgentRuntimeMetadata(params: {
   model?: string;
   sessionKey?: string;
   /**
+   * True when the loaded session entry has persisted ACP metadata. ACP-shaped
+   * keys without this marker can be bridge sessions that use the configured
+   * model/runtime.
+   */
+  acpRuntime?: boolean;
+  /**
    * The ACP backend identifier stored on the session entry (`entry.acp.backend`).
    * When provided for an ACP-keyed session, the overlay reports this value as the
    * runtime id instead of the generic fallback "acpx", so sessions backed by a
@@ -45,5 +51,5 @@ export function resolveModelAgentRuntimeMetadata(params: {
     id: policy.runtime,
     source: policy.runtimeSource ?? "implicit",
   };
-  return applyAcpRuntimeOverlay(meta, params.sessionKey, params.acpBackend);
+  return applyAcpRuntimeOverlay(meta, params.sessionKey, params.acpRuntime, params.acpBackend);
 }

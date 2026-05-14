@@ -86,6 +86,8 @@ function computeSessionAgentRuntime(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   fallbackAgentId: string;
+  /** Mirrors `entry?.acp != null` passed from loaded session rows. */
+  acpRuntime?: boolean;
   /** Mirrors `entry?.acp?.backend` passed from the session store entry. */
   acpBackend?: string;
 }): ReturnType<typeof resolveModelAgentRuntimeMetadata> {
@@ -94,6 +96,7 @@ function computeSessionAgentRuntime(params: {
     cfg: params.cfg,
     agentId,
     sessionKey: params.sessionKey,
+    acpRuntime: params.acpRuntime,
     acpBackend: params.acpBackend,
   });
 }
@@ -105,6 +108,7 @@ describe("sessions --json agentRuntime classifier (catalog #18)", () => {
       cfg,
       sessionKey: ACP_SESSION_KEY,
       fallbackAgentId: "copilot",
+      acpRuntime: true,
     });
 
     // The bug was: the session key plainly contains `:acp:` and yet the
@@ -158,6 +162,7 @@ describe("sessions --json agentRuntime classifier (catalog #18)", () => {
       cfg,
       sessionKey: ACP_SESSION_KEY,
       fallbackAgentId: "copilot",
+      acpRuntime: true,
     });
 
     expect(
@@ -178,6 +183,7 @@ describe("sessions --json agentRuntime classifier (catalog #18)", () => {
       cfg,
       sessionKey: ACP_SESSION_KEY,
       fallbackAgentId: "copilot",
+      acpRuntime: true,
       acpBackend: "custom-backend",
     });
 
@@ -185,19 +191,32 @@ describe("sessions --json agentRuntime classifier (catalog #18)", () => {
     expect(agentRuntime.source).toBe("session-key");
   });
 
-  it("backend fallback: ACP session with no entry.acp.backend falls back to 'acpx'", () => {
-    // When the session entry has no acp.backend (entry.acp is absent or backend
-    // is not set), the overlay must fall back to the canonical "acpx" id so
-    // existing behaviour is preserved.
+  it("backend fallback: ACP session with entry.acp but no backend falls back to 'acpx'", () => {
+    // When the session entry has ACP metadata but no acp.backend, the overlay
+    // must fall back to the canonical "acpx" id.
     const cfg = buildConfigWithoutAgentRuntimePolicy();
     const agentRuntime = computeSessionAgentRuntime({
       cfg,
       sessionKey: ACP_SESSION_KEY,
       fallbackAgentId: "copilot",
+      acpRuntime: true,
       // acpBackend intentionally omitted — mirrors entry with no acp.backend
     });
 
     expect(agentRuntime.id).toBe("acpx");
     expect(agentRuntime.source).toBe("session-key");
+  });
+
+  it("GREEN control: ACP-shaped bridge session without entry.acp is NOT overridden", () => {
+    const cfg = buildConfigWithoutAgentRuntimePolicy();
+    const agentRuntime = computeSessionAgentRuntime({
+      cfg,
+      sessionKey: ACP_SESSION_KEY,
+      fallbackAgentId: "copilot",
+      acpRuntime: false,
+    });
+
+    expect(agentRuntime.id).not.toBe("acpx");
+    expect(agentRuntime.source).not.toBe("session-key");
   });
 });
