@@ -143,7 +143,7 @@ function buildUnownedProviderTransportReplayFallback(params: {
     ...(isAnthropic && modelDisablesReasoningEffort(params.model)
       ? { dropThinkingBlocks: true }
       : {}),
-    ...(isStrictOpenAiCompatible ? { dropReasoningFromHistory: true } : {}),
+    ...(isStrictOpenAiCompatible && !modelId.includes("mimo") ? { dropReasoningFromHistory: true } : {}),
     ...(isGoogle || isStrictOpenAiCompatible ? { applyAssistantFirstOrderingFix: true } : {}),
     ...(isGoogle || isStrictOpenAiCompatible ? { validateGeminiTurns: true } : {}),
     ...(isAnthropic || isStrictOpenAiCompatible || isClaudeOpenAiResponses

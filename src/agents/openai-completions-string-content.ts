@@ -47,6 +47,18 @@ export function stripCompletionMessagesToRoleContent(messages: unknown[]): unkno
     if (Object.prototype.hasOwnProperty.call(record, "content")) {
       stripped.content = record.content;
     }
+    if (Object.prototype.hasOwnProperty.call(record, "reasoning_content")) {
+      stripped.reasoning_content = record.reasoning_content;
+    } else if (record.role === "assistant" && Array.isArray(record.content)) {
+      const thinkingBlocks = (record.content as Array<Record<string, unknown>>).filter(
+        (b) => b.type === "thinking" && typeof b.thinking === "string" && b.thinking,
+      );
+      if (thinkingBlocks.length > 0) {
+        stripped.reasoning_content = thinkingBlocks.map((b) => b.thinking).join("\n");
+      } else {
+        stripped.reasoning_content = "";
+      }
+    }
     return stripped;
   });
 }

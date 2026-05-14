@@ -52,7 +52,8 @@ export function buildOpenAICompatibleReplayPolicy(
           validateAnthropicTurns: false,
         }),
     ...(modelApi === "openai-completions" &&
-    (dropReasoningFromHistory || isGemma4ModelId(options.modelId))
+    (dropReasoningFromHistory || isGemma4ModelId(options.modelId)) &&
+    !normalizeLowercaseStringOrEmpty(options.modelId).includes("mimo")
       ? { dropReasoningFromHistory: true }
       : {}),
   };
