@@ -98,6 +98,37 @@ describe("reconcileNodePairingOnConnect", () => {
     );
   });
 
+  it("filters host commands when canonical platform conflicts with device family", async () => {
+    const requestPairing = vi.fn(async (input: NodePairingRequestInput) => ({
+      status: "pending" as const,
+      request: { ...input, requestId: "req-mismatch", ts: 1 },
+      created: true,
+    }));
+
+    const result = await reconcileNodePairingOnConnect({
+      cfg: {} as never,
+      connectParams: makeNodeConnectParams({
+        client: {
+          id: "openclaw-ios",
+          version: "test",
+          platform: "macos",
+          deviceFamily: "iPhone",
+          mode: "node",
+        },
+        commands: ["system.run", "system.which"],
+      }),
+      pairedNode: null,
+      requestPairing,
+    });
+
+    expect(result.declaredCommands).toEqual([]);
+    expect(requestPairing).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commands: [],
+      }),
+    );
+  });
+
   it("requires a fresh pairing request when paired node capabilities change", async () => {
     const requestPairing = vi.fn(async (input: NodePairingRequestInput) => ({
       status: "pending" as const,

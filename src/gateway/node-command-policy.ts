@@ -143,6 +143,28 @@ function resolvePlatformIdByExactMatch(value: string): Exclude<PlatformId, "unkn
   return undefined;
 }
 
+function platformMatchesDeviceFamily(
+  platformId: Exclude<PlatformId, "unknown">,
+  family: string,
+): boolean {
+  if (!family) {
+    return true;
+  }
+  switch (platformId) {
+    case "ios":
+      return /^(?:iphone|ipad|ios)$/.test(family);
+    case "android":
+      return family === "android";
+    case "macos":
+      return family === "mac";
+    case "windows":
+      return family === "windows";
+    case "linux":
+      return family === "linux";
+  }
+  return false;
+}
+
 function resolvePlatformIdByNativeLabel(
   platform: string,
   deviceFamily: string,
@@ -172,11 +194,11 @@ function resolvePlatformIdByDeviceFamily(
 
 function normalizePlatformId(platform?: string, deviceFamily?: string): PlatformId {
   const raw = normalizeDeviceMetadataForPolicy(platform);
+  const family = normalizeDeviceMetadataForPolicy(deviceFamily);
   const byPlatform = resolvePlatformIdByExactMatch(raw);
   if (byPlatform) {
-    return byPlatform;
+    return platformMatchesDeviceFamily(byPlatform, family) ? byPlatform : "unknown";
   }
-  const family = normalizeDeviceMetadataForPolicy(deviceFamily);
   const byNativeLabel = resolvePlatformIdByNativeLabel(raw, family);
   if (byNativeLabel) {
     return byNativeLabel;

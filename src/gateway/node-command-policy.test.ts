@@ -107,7 +107,10 @@ describe("gateway/node-command-policy", () => {
     const cases = [
       { platform: "darwin", deviceFamily: "iPhone" },
       { platform: "darwin", deviceFamily: "Mac" },
+      { platform: "macos", deviceFamily: "iPhone" },
       { platform: "macOS 26.3.1", deviceFamily: "iPhone" },
+      { platform: "windows", deviceFamily: "iPhone" },
+      { platform: "linux", deviceFamily: "iPhone" },
       { platform: "Darwin-x64" },
       { platform: "macintosh" },
       { platform: "win32" },
