@@ -79,7 +79,7 @@ describe("packed CLI smoke", () => {
       ["doctor", "--help"],
       ["status", "--json", "--timeout", "1"],
       ["config", "schema"],
-      ["models", "list", "--provider", "amazon-bedrock"],
+      ["models", "list", "--provider", "openai"],
     ]);
   });
 
