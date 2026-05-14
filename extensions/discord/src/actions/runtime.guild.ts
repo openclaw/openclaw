@@ -1,4 +1,5 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { RESTPatchAPIGuildScheduledEventJSONBody } from "discord-api-types/v10";
 import { resolveDefaultDiscordAccountId } from "../accounts.js";
 import { getPresence } from "../monitor/presence-cache.js";
 import {
@@ -15,7 +16,9 @@ import {
   createChannelDiscord,
   createScheduledEventDiscord,
   deleteChannelDiscord,
+  deleteScheduledEventDiscord,
   editChannelDiscord,
+  editScheduledEventDiscord,
   fetchChannelInfoDiscord,
   fetchMemberInfoDiscord,
   fetchRoleInfoDiscord,
@@ -31,6 +34,7 @@ import {
   uploadStickerDiscord,
   resolveEventCoverImage,
 } from "../send.js";
+import { stripUndefinedFields } from "../send.shared.js";
 import {
   createDiscordActionOptions,
   readDiscordChannelCreateParams,
@@ -38,13 +42,25 @@ import {
   readDiscordChannelMoveParams,
 } from "./runtime.shared.js";
 
+const DISCORD_EVENT_ENTITY_TYPE_BY_NAME = { stage: 1, external: 3, voice: 2 } as const;
+const DISCORD_DEFAULT_EVENT_ENTITY_TYPE = 2;
+
+function resolveDiscordEventEntityType(raw: string | undefined): number | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  return DISCORD_EVENT_ENTITY_TYPE_BY_NAME[raw as keyof typeof DISCORD_EVENT_ENTITY_TYPE_BY_NAME];
+}
+
 export const discordGuildActionRuntime = {
   addRoleDiscord,
   createChannelDiscord,
   createScheduledEventDiscord,
   resolveEventCoverImage,
   deleteChannelDiscord,
+  deleteScheduledEventDiscord,
   editChannelDiscord,
+  editScheduledEventDiscord,
   fetchChannelInfoDiscord,
   fetchMemberInfoDiscord,
   fetchRoleInfoDiscord,
@@ -294,7 +310,8 @@ export async function handleDiscordGuildAction(
       const location = readStringParam(params, "location");
       const imageUrl = readStringParam(params, "image", { trim: false });
       const entityTypeRaw = readStringParam(params, "entityType");
-      const entityType = entityTypeRaw === "stage" ? 1 : entityTypeRaw === "external" ? 3 : 2;
+      const entityType =
+        resolveDiscordEventEntityType(entityTypeRaw) ?? DISCORD_DEFAULT_EVENT_ENTITY_TYPE;
       const image = imageUrl
         ? await discordGuildActionRuntime.resolveEventCoverImage(imageUrl, {
             localRoots: options?.mediaLocalRoots,
@@ -317,6 +334,62 @@ export async function handleDiscordGuildAction(
         withOpts(),
       );
       return jsonResult({ ok: true, event });
+    }
+    case "eventEdit": {
+      if (!isActionEnabled("events")) {
+        throw new Error("Discord events are disabled.");
+      }
+      const guildId = readStringParam(params, "guildId", {
+        required: true,
+      });
+      const eventId = readStringParam(params, "eventId", {
+        required: true,
+      });
+      const name = readStringParam(params, "name");
+      const startTime = readStringParam(params, "startTime");
+      const endTime = readStringParam(params, "endTime");
+      const description = readStringParam(params, "description");
+      const channelId = readStringParam(params, "channelId");
+      const location = readStringParam(params, "location");
+      const imageUrl = readStringParam(params, "image", { trim: false });
+      const entityTypeRaw = readStringParam(params, "entityType");
+      const entityType = resolveDiscordEventEntityType(entityTypeRaw);
+      const image = imageUrl
+        ? await discordGuildActionRuntime.resolveEventCoverImage(imageUrl, {
+            localRoots: options?.mediaLocalRoots,
+          })
+        : undefined;
+      // Send only fields the caller provided so unrelated event state stays untouched.
+      const payload = stripUndefinedFields<RESTPatchAPIGuildScheduledEventJSONBody>({
+        name,
+        description,
+        scheduled_start_time: startTime,
+        scheduled_end_time: endTime,
+        entity_type: entityType,
+        channel_id: channelId,
+        entity_metadata: location ? { location } : undefined,
+        image,
+      });
+      const event = await discordGuildActionRuntime.editScheduledEventDiscord(
+        guildId,
+        eventId,
+        payload,
+        withOpts(),
+      );
+      return jsonResult({ ok: true, event });
+    }
+    case "eventDelete": {
+      if (!isActionEnabled("events")) {
+        throw new Error("Discord events are disabled.");
+      }
+      const guildId = readStringParam(params, "guildId", {
+        required: true,
+      });
+      const eventId = readStringParam(params, "eventId", {
+        required: true,
+      });
+      await discordGuildActionRuntime.deleteScheduledEventDiscord(guildId, eventId, withOpts());
+      return jsonResult({ ok: true, eventId });
     }
     case "channelCreate": {
       if (!isActionEnabled("channels")) {

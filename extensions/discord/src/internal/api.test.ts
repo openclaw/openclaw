@@ -11,9 +11,11 @@ import {
   createThread,
   createUserDmChannel,
   deleteChannelMessage,
+  deleteGuildScheduledEvent,
   deleteOwnMessageReaction,
   deleteWebhookMessage,
   editApplicationCommand,
+  editGuildScheduledEvent,
   editWebhookMessage,
   getCurrentUser,
   getChannelMessage,
@@ -76,7 +78,13 @@ describe("Discord REST API helpers", () => {
   });
 
   it("routes guild helpers through the typed REST client", async () => {
-    const rest = createFakeRestClient([[{ id: "c1" }], { id: "event1" }, undefined]);
+    const rest = createFakeRestClient([
+      [{ id: "c1" }],
+      { id: "event1" },
+      { id: "event1", description: "updated" },
+      undefined,
+      undefined,
+    ]);
     const body = {
       name: "standup",
       scheduled_start_time: "2026-04-29T10:00:00.000Z",
@@ -84,9 +92,15 @@ describe("Discord REST API helpers", () => {
       entity_type: 3,
       entity_metadata: { location: "voice" },
     } as const;
+    const editBody = { description: "updated" } as const;
 
     await expect(listGuildChannels(rest, "g1")).resolves.toEqual([{ id: "c1" }]);
     await expect(createGuildScheduledEvent(rest, "g1", body)).resolves.toEqual({ id: "event1" });
+    await expect(editGuildScheduledEvent(rest, "g1", "event1", editBody)).resolves.toEqual({
+      id: "event1",
+      description: "updated",
+    });
+    await deleteGuildScheduledEvent(rest, "g1", "event1");
     await createGuildBan(rest, "g1", "u1", { body: { delete_message_seconds: 0 } });
 
     expect(rest.calls).toEqual([
@@ -96,6 +110,12 @@ describe("Discord REST API helpers", () => {
         path: Routes.guildScheduledEvents("g1"),
         data: { body },
       },
+      {
+        method: "PATCH",
+        path: Routes.guildScheduledEvent("g1", "event1"),
+        data: { body: editBody },
+      },
+      { method: "DELETE", path: Routes.guildScheduledEvent("g1", "event1") },
       {
         method: "PUT",
         path: Routes.guildBan("g1", "u1"),

@@ -85,6 +85,23 @@ describe("discordMessageActions", () => {
     ]);
   });
 
+  it("exposes the full event lifecycle when events are enabled", () => {
+    const discovery = discordMessageActions.describeMessageTool?.({
+      cfg: {
+        channels: {
+          discord: {
+            token: "Bot token-main",
+            actions: { events: true },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(discovery?.actions).toEqual(
+      expect.arrayContaining(["event-list", "event-create", "event-edit", "event-delete"]),
+    );
+  });
+
   it("describes actions when the Discord token is an unresolved SecretRef", () => {
     const discovery = discordMessageActions.describeMessageTool?.({
       cfg: {

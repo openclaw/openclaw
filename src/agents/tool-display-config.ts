@@ -478,6 +478,14 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
           label: "event create",
           detailKeys: ["provider", "guildId", "eventName"],
         },
+        "event-edit": {
+          label: "event edit",
+          detailKeys: ["provider", "guildId", "eventId"],
+        },
+        "event-delete": {
+          label: "event delete",
+          detailKeys: ["provider", "guildId", "eventId"],
+        },
         timeout: {
           label: "timeout",
           detailKeys: ["provider", "guildId", "userId"],

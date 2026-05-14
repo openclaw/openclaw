@@ -59,6 +59,8 @@ export const MESSAGE_ACTION_TARGET_MODE: Record<ChannelMessageActionName, Messag
     "voice-status": "none",
     "event-list": "none",
     "event-create": "none",
+    "event-edit": "none",
+    "event-delete": "none",
     timeout: "none",
     kick: "none",
     ban: "none",

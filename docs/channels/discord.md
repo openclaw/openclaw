@@ -1098,7 +1098,7 @@ Core examples:
 - moderation: `timeout`, `kick`, `ban`
 - presence: `setPresence`
 
-The `event-create` action accepts an optional `image` parameter (URL or local file path) to set the scheduled event cover image.
+The `event-create` action accepts an optional `image` parameter (URL or local file path) to set the scheduled event cover image. The `event-edit` action takes a required `eventId` plus the same optional fields and only changes what you pass; `event-delete` cancels the event by `eventId`.
 
 Action gates live under `channels.discord.actions.*`.
 

@@ -3,6 +3,7 @@ import type {
   APIGuildScheduledEvent,
   APIRole,
   APIVoiceState,
+  RESTPatchAPIGuildScheduledEventJSONBody,
   RESTPostAPIGuildScheduledEventJSONBody,
 } from "discord-api-types/v10";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -11,6 +12,8 @@ import {
   addGuildMemberRole,
   createGuildBan,
   createGuildScheduledEvent,
+  deleteGuildScheduledEvent,
+  editGuildScheduledEvent,
   getChannel,
   getGuildMember,
   getGuildVoiceState,
@@ -119,6 +122,25 @@ export async function createScheduledEventDiscord(
 ): Promise<APIGuildScheduledEvent> {
   const rest = resolveDiscordRest(opts);
   return await createGuildScheduledEvent(rest, guildId, payload);
+}
+
+export async function editScheduledEventDiscord(
+  guildId: string,
+  eventId: string,
+  payload: RESTPatchAPIGuildScheduledEventJSONBody,
+  opts: DiscordReactOpts,
+): Promise<APIGuildScheduledEvent> {
+  const rest = resolveDiscordRest(opts);
+  return await editGuildScheduledEvent(rest, guildId, eventId, payload);
+}
+
+export async function deleteScheduledEventDiscord(
+  guildId: string,
+  eventId: string,
+  opts: DiscordReactOpts,
+): Promise<void> {
+  const rest = resolveDiscordRest(opts);
+  await deleteGuildScheduledEvent(rest, guildId, eventId);
 }
 
 export async function timeoutMemberDiscord(

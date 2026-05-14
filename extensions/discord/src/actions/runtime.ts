@@ -39,6 +39,8 @@ const guildActions = new Set([
   "voiceStatus",
   "eventList",
   "eventCreate",
+  "eventEdit",
+  "eventDelete",
   "channelCreate",
   "channelEdit",
   "channelDelete",

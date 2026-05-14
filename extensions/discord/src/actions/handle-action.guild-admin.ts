@@ -318,6 +318,54 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     );
   }
 
+  if (action === "event-edit") {
+    const guildId = readStringParam(actionParams, "guildId", {
+      required: true,
+    });
+    const eventId = readStringParam(actionParams, "eventId", {
+      required: true,
+    });
+    const name = readStringParam(actionParams, "eventName");
+    const startTime = readStringParam(actionParams, "startTime");
+    const endTime = readStringParam(actionParams, "endTime");
+    const description = readStringParam(actionParams, "desc");
+    const channelId = readStringParam(actionParams, "channelId");
+    const location = readStringParam(actionParams, "location");
+    const entityType = readStringParam(actionParams, "eventType");
+    const image = readStringParam(actionParams, "image", { trim: false });
+    return await handleDiscordAction(
+      {
+        action: "eventEdit",
+        accountId: accountId ?? undefined,
+        guildId,
+        eventId,
+        name,
+        startTime,
+        endTime,
+        description,
+        channelId,
+        location,
+        entityType,
+        image,
+      },
+      cfg,
+      { mediaLocalRoots: ctx.mediaLocalRoots },
+    );
+  }
+
+  if (action === "event-delete") {
+    const guildId = readStringParam(actionParams, "guildId", {
+      required: true,
+    });
+    const eventId = readStringParam(actionParams, "eventId", {
+      required: true,
+    });
+    return await handleDiscordAction(
+      { action: "eventDelete", accountId: accountId ?? undefined, guildId, eventId },
+      cfg,
+    );
+  }
+
   if (isDiscordModerationAction(action)) {
     const moderation = readDiscordModerationCommand(action, {
       ...actionParams,

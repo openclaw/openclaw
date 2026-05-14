@@ -752,6 +752,22 @@
             "eventName"
           ]
         },
+        "event-edit": {
+          "label": "event edit",
+          "detailKeys": [
+            "provider",
+            "guildId",
+            "eventId"
+          ]
+        },
+        "event-delete": {
+          "label": "event delete",
+          "detailKeys": [
+            "provider",
+            "guildId",
+            "eventId"
+          ]
+        },
         "timeout": {
           "label": "timeout",
           "detailKeys": [
