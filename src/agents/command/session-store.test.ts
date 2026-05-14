@@ -447,7 +447,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
-  it("persists latest systemPromptReport for downstream warning dedupe", async () => {
+  it("persists bootstrap warning dedupe state separately from systemPromptReport", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const sessionKey = "agent:codex:report:test-system-prompt-report";
       const sessionId = "test-system-prompt-report-session";
@@ -465,7 +465,6 @@ describe("updateSessionStoreAfterAgentRun", () => {
         generatedAt: Date.now(),
         bootstrapTruncation: {
           warningMode: "once" as const,
-          warningSignaturesSeen: ["sig-a", "sig-b"],
         },
         systemPrompt: {
           chars: 1,
@@ -493,16 +492,20 @@ describe("updateSessionStoreAfterAgentRun", () => {
               provider: "openai",
               model: "gpt-5.4",
             },
+            bootstrapPromptWarningSignaturesSeen: ["sig-a", "sig-b"],
             systemPromptReport: report,
           },
         } as never,
       });
 
       const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
-      expect(persisted?.systemPromptReport?.bootstrapTruncation?.warningSignaturesSeen).toEqual([
+      expect(persisted?.bootstrapPromptWarningState?.warningSignaturesSeen).toEqual([
         "sig-a",
         "sig-b",
       ]);
+      expect(
+        persisted?.systemPromptReport?.bootstrapTruncation?.warningSignaturesSeen,
+      ).toBeUndefined();
       expect(sessionStore[sessionKey]?.systemPromptReport?.bootstrapTruncation?.warningMode).toBe(
         "once",
       );

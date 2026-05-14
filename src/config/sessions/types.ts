@@ -356,6 +356,7 @@ export type SessionEntry = {
   lastAccountId?: string;
   lastThreadId?: string | number;
   skillsSnapshot?: SessionSkillSnapshot;
+  bootstrapPromptWarningState?: SessionBootstrapPromptWarningState;
   systemPromptReport?: SessionSystemPromptReport;
   /**
    * Generic plugin-owned runtime debug entries shown in verbose status surfaces.
@@ -586,6 +587,14 @@ export type SessionSkillSnapshot = {
   version?: number;
 };
 
+export type SessionBootstrapPromptWarningState = {
+  /**
+   * Internal once-mode dedupe history. This is session runtime state, not a
+   * current-run prompt report metric.
+   */
+  warningSignaturesSeen?: string[];
+};
+
 export type SessionSystemPromptReport = {
   source: "run" | "estimate";
   generatedAt: number;
@@ -600,7 +609,6 @@ export type SessionSystemPromptReport = {
     warningMode?: "off" | "once" | "always";
     warningShown?: boolean;
     promptWarningSignature?: string;
-    warningSignaturesSeen?: string[];
     truncatedFiles?: number;
     nearLimitFiles?: number;
     totalNearLimit?: boolean;

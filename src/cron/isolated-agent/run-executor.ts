@@ -124,7 +124,7 @@ export function createCronPromptExecutor(params: {
   let fallbackModel = params.liveSelection.model;
   let runEndedAt = Date.now();
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
-    params.cronSession.sessionEntry.systemPromptReport,
+    params.cronSession.sessionEntry,
   );
 
   const runPrompt = async (promptText: string) => {
@@ -180,9 +180,12 @@ export function createCronPromptExecutor(params: {
             bootstrapPromptWarningSignature,
             senderIsOwner: params.senderIsOwner,
           });
-          bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
-            result.meta?.systemPromptReport,
-          );
+          bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen({
+            bootstrapPromptWarningState: {
+              warningSignaturesSeen: result.meta?.bootstrapPromptWarningSignaturesSeen,
+            },
+            systemPromptReport: result.meta?.systemPromptReport,
+          });
           return result;
         }
         const { resolveFastModeState, runEmbeddedPiAgent } = await loadCronEmbeddedRuntime();
@@ -251,9 +254,12 @@ export function createCronPromptExecutor(params: {
           bootstrapPromptWarningSignaturesSeen,
           bootstrapPromptWarningSignature,
         });
-        bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
-          result.meta?.systemPromptReport,
-        );
+        bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen({
+          bootstrapPromptWarningState: {
+            warningSignaturesSeen: result.meta?.bootstrapPromptWarningSignaturesSeen,
+          },
+          systemPromptReport: result.meta?.systemPromptReport,
+        });
         return result;
       },
     });

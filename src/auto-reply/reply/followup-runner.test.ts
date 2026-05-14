@@ -1064,6 +1064,9 @@ describe("createFollowupRunner bootstrap warning dedupe", () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
+      bootstrapPromptWarningState: {
+        warningSignaturesSeen: ["sig-a", "sig-b"],
+      },
       systemPromptReport: {
         source: "run",
         generatedAt: Date.now(),
@@ -1086,7 +1089,6 @@ describe("createFollowupRunner bootstrap warning dedupe", () => {
           warningMode: "once",
           warningShown: true,
           promptWarningSignature: "sig-b",
-          warningSignaturesSeen: ["sig-a", "sig-b"],
           truncatedFiles: 1,
           nearLimitFiles: 0,
           totalNearLimit: false,

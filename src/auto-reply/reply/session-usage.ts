@@ -1,3 +1,4 @@
+import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { setCliSessionBinding, setCliSessionId } from "../../agents/cli-session.js";
 import {
   deriveSessionTotalTokens,
@@ -86,6 +87,7 @@ export async function persistSessionUsageUpdate(params: {
   promptTokens?: number;
   usageIsContextSnapshot?: boolean;
   systemPromptReport?: SessionSystemPromptReport;
+  bootstrapPromptWarningSignaturesSeen?: string[];
   cliSessionId?: string;
   cliSessionBinding?: import("../../config/sessions.js").CliSessionBinding;
   logLabel?: string;
@@ -111,6 +113,11 @@ export async function persistSessionUsageUpdate(params: {
         storePath,
         sessionKey,
         update: async (entry) => {
+          const bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen({
+            bootstrapPromptWarningState: {
+              warningSignaturesSeen: params.bootstrapPromptWarningSignaturesSeen,
+            },
+          });
           const resolvedContextTokens = params.contextTokensUsed ?? entry.contextTokens;
           // Use last-call usage for totalTokens when available. The accumulated
           // `usage.input` sums input tokens from every API call in the run
@@ -137,6 +144,12 @@ export async function persistSessionUsageUpdate(params: {
             model: params.modelUsed ?? entry.model,
             contextTokens: resolvedContextTokens,
             systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
+            bootstrapPromptWarningState:
+              bootstrapPromptWarningSignaturesSeen.length > 0
+                ? {
+                    warningSignaturesSeen: bootstrapPromptWarningSignaturesSeen,
+                  }
+                : undefined,
             updatedAt: Date.now(),
           };
           if (hasUsage) {
@@ -173,11 +186,22 @@ export async function persistSessionUsageUpdate(params: {
         storePath,
         sessionKey,
         update: async (entry) => {
+          const bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen({
+            bootstrapPromptWarningState: {
+              warningSignaturesSeen: params.bootstrapPromptWarningSignaturesSeen,
+            },
+          });
           const patch: Partial<SessionEntry> = {
             modelProvider: params.providerUsed ?? entry.modelProvider,
             model: params.modelUsed ?? entry.model,
             contextTokens: params.contextTokensUsed ?? entry.contextTokens,
             systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
+            bootstrapPromptWarningState:
+              bootstrapPromptWarningSignaturesSeen.length > 0
+                ? {
+                    warningSignaturesSeen: bootstrapPromptWarningSignaturesSeen,
+                  }
+                : undefined,
             updatedAt: Date.now(),
           };
           return applyCliSessionIdToSessionPatch(params, entry, patch);

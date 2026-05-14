@@ -7,6 +7,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
 import { clearCliSession, setCliSessionBinding, setCliSessionId } from "../cli-session.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { isCliProvider } from "../model-selection.js";
@@ -173,6 +174,18 @@ export async function updateSessionStoreAfterAgentRun(params: {
   next.abortedLastRun = result.meta.aborted ?? false;
   if (result.meta.systemPromptReport) {
     next.systemPromptReport = result.meta.systemPromptReport;
+  }
+  const bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen({
+    bootstrapPromptWarningState: {
+      warningSignaturesSeen: result.meta.bootstrapPromptWarningSignaturesSeen,
+    },
+  });
+  if (bootstrapPromptWarningSignaturesSeen.length > 0) {
+    next.bootstrapPromptWarningState = {
+      warningSignaturesSeen: bootstrapPromptWarningSignaturesSeen,
+    };
+  } else {
+    next.bootstrapPromptWarningState = undefined;
   }
   if (hasNonzeroUsage(usage)) {
     const { estimateUsageCost, resolveModelCostConfig } = await getUsageFormatModule();

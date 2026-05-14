@@ -1217,7 +1217,7 @@ export async function runAgentTurnWithFallback(params: {
   let didRetryTransientHttpError = false;
   let liveModelSwitchRetries = 0;
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
-    params.getActiveSessionEntry()?.systemPromptReport,
+    params.getActiveSessionEntry(),
   );
   let pendingFallbackCandidateRollback:
     | {
@@ -1590,9 +1590,12 @@ export async function runAgentTurnWithFallback(params: {
                   abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
                   replyOperation: params.replyOperation,
                 });
-                bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
-                  result.meta?.systemPromptReport,
-                );
+                bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen({
+                  bootstrapPromptWarningState: {
+                    warningSignaturesSeen: result.meta?.bootstrapPromptWarningSignaturesSeen,
+                  },
+                  systemPromptReport: result.meta?.systemPromptReport,
+                });
 
                 unsubscribeAssistantBridge();
                 await drainAssistantBridgeDelivery();
@@ -1985,9 +1988,12 @@ export async function runAgentTurnWithFallback(params: {
                     })()
                   : undefined,
               });
-              bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
-                result.meta?.systemPromptReport,
-              );
+              bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen({
+                bootstrapPromptWarningState: {
+                  warningSignaturesSeen: result.meta?.bootstrapPromptWarningSignaturesSeen,
+                },
+                systemPromptReport: result.meta?.systemPromptReport,
+              });
               lifecycleBackstop.emit("end", result);
               const resultCompactionCount = Math.max(
                 0,

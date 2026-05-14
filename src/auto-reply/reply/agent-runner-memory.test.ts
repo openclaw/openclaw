@@ -1129,6 +1129,9 @@ describe("runMemoryFlushIfNeeded", () => {
       updatedAt: Date.now(),
       totalTokens: 80_000,
       compactionCount: 1,
+      bootstrapPromptWarningState: {
+        warningSignaturesSeen: ["sig-a", "sig-b"],
+      },
       systemPromptReport: {
         source: "run",
         generatedAt: Date.now(),
@@ -1140,7 +1143,6 @@ describe("runMemoryFlushIfNeeded", () => {
           warningMode: "once",
           warningShown: true,
           promptWarningSignature: "sig-b",
-          warningSignaturesSeen: ["sig-a", "sig-b"],
           truncatedFiles: 1,
           nearLimitFiles: 0,
           totalNearLimit: false,

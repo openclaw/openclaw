@@ -148,6 +148,19 @@ describe("bootstrap prompt warnings", () => {
   it("resolves seen signatures from report history or legacy single signature", () => {
     expect(
       resolveBootstrapWarningSignaturesSeen({
+        bootstrapPromptWarningState: {
+          warningSignaturesSeen: ["sig-state-a", " ", "sig-state-b", "sig-state-a"],
+        },
+        systemPromptReport: {
+          bootstrapTruncation: {
+            warningSignaturesSeen: ["legacy-report-signature"],
+          },
+        },
+      }),
+    ).toEqual(["sig-state-a", "sig-state-b"]);
+
+    expect(
+      resolveBootstrapWarningSignaturesSeen({
         bootstrapTruncation: {
           warningSignaturesSeen: ["sig-a", " ", "sig-b", "sig-a"],
           promptWarningSignature: "legacy-ignored",
@@ -457,7 +470,7 @@ describe("bootstrap prompt warnings", () => {
     expect(meta.truncatedFiles).toBe(1);
     expect(meta.nearLimitFiles).toBe(1);
     expect(meta.promptWarningSignature).toBe(warning.signature);
-    expect(meta.warningSignaturesSeen).toEqual([warning.signature]);
+    expect(meta).not.toHaveProperty("warningSignaturesSeen");
   });
 
   it("improves cache-relevant system prompt stability versus legacy warning injection", () => {

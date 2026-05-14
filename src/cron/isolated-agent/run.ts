@@ -817,6 +817,12 @@ async function finalizeCronRun(params: {
   if (finalRunResult.meta?.systemPromptReport) {
     prepared.cronSession.sessionEntry.systemPromptReport = finalRunResult.meta.systemPromptReport;
   }
+  const bootstrapPromptWarningSignaturesSeen =
+    finalRunResult.meta?.bootstrapPromptWarningSignaturesSeen;
+  prepared.cronSession.sessionEntry.bootstrapPromptWarningState =
+    bootstrapPromptWarningSignaturesSeen && bootstrapPromptWarningSignaturesSeen.length > 0
+      ? { warningSignaturesSeen: bootstrapPromptWarningSignaturesSeen }
+      : undefined;
   const usage = finalRunResult.meta?.agentMeta?.usage;
   const promptTokens = finalRunResult.meta?.agentMeta?.promptTokens;
   const modelUsed =

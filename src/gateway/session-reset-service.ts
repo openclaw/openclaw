@@ -67,6 +67,7 @@ function stripRuntimeModelState(entry?: SessionEntry): SessionEntry | undefined 
     model: undefined,
     modelProvider: undefined,
     contextTokens: undefined,
+    bootstrapPromptWarningState: undefined,
     systemPromptReport: undefined,
   };
 }

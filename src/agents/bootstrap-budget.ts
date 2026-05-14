@@ -51,7 +51,6 @@ type BootstrapTruncationReportMeta = {
   warningMode: BootstrapPromptWarningMode;
   warningShown: boolean;
   promptWarningSignature?: string;
-  warningSignaturesSeen?: string[];
   truncatedFiles: number;
   nearLimitFiles: number;
   totalNearLimit: boolean;
@@ -99,14 +98,28 @@ function appendSeenSignature(signatures: string[], signature: string): string[] 
   return next.slice(-DEFAULT_BOOTSTRAP_PROMPT_WARNING_SIGNATURE_HISTORY_MAX);
 }
 
-export function resolveBootstrapWarningSignaturesSeen(report?: {
+export function resolveBootstrapWarningSignaturesSeen(source?: {
+  bootstrapPromptWarningState?: {
+    warningSignaturesSeen?: string[];
+  };
+  systemPromptReport?: {
+    bootstrapTruncation?: {
+      warningMode?: BootstrapPromptWarningMode;
+      warningSignaturesSeen?: string[];
+      promptWarningSignature?: string;
+    };
+  };
   bootstrapTruncation?: {
     warningMode?: BootstrapPromptWarningMode;
     warningSignaturesSeen?: string[];
     promptWarningSignature?: string;
   };
 }): string[] {
-  const truncation = report?.bootstrapTruncation;
+  if (Object.hasOwn(source ?? {}, "bootstrapPromptWarningState")) {
+    return normalizeSeenSignatures(source?.bootstrapPromptWarningState?.warningSignaturesSeen);
+  }
+
+  const truncation = source?.systemPromptReport?.bootstrapTruncation ?? source?.bootstrapTruncation;
   const seenFromReport = normalizeSeenSignatures(truncation?.warningSignaturesSeen);
   if (seenFromReport.length > 0) {
     return seenFromReport;
@@ -375,9 +388,6 @@ export function buildBootstrapTruncationReportMeta(params: {
     warningMode: params.warningMode,
     warningShown: params.warning.warningShown,
     promptWarningSignature: params.warning.signature,
-    ...(params.warning.warningSignaturesSeen.length > 0
-      ? { warningSignaturesSeen: params.warning.warningSignaturesSeen }
-      : {}),
     truncatedFiles: params.analysis.truncatedFiles.length,
     nearLimitFiles: params.analysis.nearLimitFiles.length,
     totalNearLimit: params.analysis.totalNearLimit,

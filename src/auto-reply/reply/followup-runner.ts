@@ -251,9 +251,8 @@ export function createFollowupRunner(params: {
         isHeartbeat: opts?.isHeartbeat === true,
         replyOperation,
       });
-      let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
-        activeSessionEntry?.systemPromptReport,
-      );
+      let bootstrapPromptWarningSignaturesSeen =
+        resolveBootstrapWarningSignaturesSeen(activeSessionEntry);
       replyOperation.setPhase("running");
       try {
         const outcomePlan = buildAgentRuntimeOutcomePlan();
@@ -338,9 +337,12 @@ export function createFollowupRunner(params: {
                   }
                 },
               });
-              bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
-                result.meta?.systemPromptReport,
-              );
+              bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen({
+                bootstrapPromptWarningState: {
+                  warningSignaturesSeen: result.meta?.bootstrapPromptWarningSignaturesSeen,
+                },
+                systemPromptReport: result.meta?.systemPromptReport,
+              });
               const resultCompactionCount = Math.max(
                 0,
                 result.meta?.agentMeta?.compactionCount ?? 0,
@@ -389,6 +391,8 @@ export function createFollowupRunner(params: {
           providerUsed,
           contextTokensUsed,
           systemPromptReport: runResult.meta?.systemPromptReport,
+          bootstrapPromptWarningSignaturesSeen:
+            runResult.meta?.bootstrapPromptWarningSignaturesSeen,
           cliSessionBinding: runResult.meta?.agentMeta?.cliSessionBinding,
           logLabel: "followup",
         });

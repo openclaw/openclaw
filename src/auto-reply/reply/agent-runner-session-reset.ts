@@ -79,6 +79,7 @@ export async function resetReplyRunSession(params: {
     cacheRead: undefined,
     cacheWrite: undefined,
     contextTokens: undefined,
+    bootstrapPromptWarningState: undefined,
     systemPromptReport: undefined,
     fallbackNoticeSelectedModel: undefined,
     fallbackNoticeActiveModel: undefined,
