@@ -12,8 +12,8 @@ type CanvasSnapshotPayload = {
 type CanvasSnapshotFormat = "png" | "jpg" | "jpeg";
 type CanvasSnapshotFileExtension = "png" | "jpg";
 
-function normalizeCanvasSnapshotFormat(value: string): CanvasSnapshotFormat | null {
-  const format = value.trim().toLowerCase();
+function normalizeCanvasSnapshotFormat(value: string | undefined): CanvasSnapshotFormat | null {
+  const format = value?.trim().toLowerCase() ?? "";
   if (format === "png" || format === "jpg" || format === "jpeg") {
     return format;
   }

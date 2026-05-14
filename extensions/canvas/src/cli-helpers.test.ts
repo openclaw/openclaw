@@ -19,6 +19,15 @@ describe("canvas CLI helpers", () => {
     );
   });
 
+  it.each([{ base64: "aGk=" }, { format: 42, base64: "aGk=" }])(
+    "rejects invalid canvas.snapshot format fields",
+    (payload) => {
+      expect(() => parseCanvasSnapshotPayload(payload)).toThrow(
+        /invalid canvas\.snapshot payload/i,
+      );
+    },
+  );
+
   it.each(["/../../target.sh", "../target.sh", "png/../../target.sh", "image/png", ""])(
     "rejects unsafe canvas.snapshot formats from responses: %s",
     (format) => {
