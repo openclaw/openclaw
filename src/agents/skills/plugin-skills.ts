@@ -220,16 +220,25 @@ function publishPluginSkills(skillDirs: string[], opts?: { pluginSkillsDir?: str
       // best-effort; symlink will fail below if dir is truly unusable
     }
     try {
-      const existingTarget = fs.readlinkSync(linkPath);
-      if (existingTarget === target) {
-        continue;
+      const stat = fs.lstatSync(linkPath);
+      if (stat.isSymbolicLink()) {
+        const existingTarget = fs.readlinkSync(linkPath);
+        if (existingTarget === target) {
+          continue;
+        }
+        removeGeneratedPluginSkillEntry(linkPath);
+      } else {
+        // Path exists but is not a symlink (e.g. a real directory on Windows
+        // where symlinks were replaced by junctions/copy). Remove so we can
+        // recreate the entry as a proper symlink.
+        removeGeneratedPluginSkillEntry(linkPath);
       }
-      removeGeneratedPluginSkillEntry(linkPath);
     } catch (err) {
       if (!isNotFoundError(err)) {
         log.warn(`failed to inspect plugin skill symlink "${linkPath}": ${String(err)}`);
         continue;
       }
+      // ENOENT: path does not exist — fall through to create symlink below
     }
     try {
       fs.symlinkSync(target, linkPath, resolvePluginSkillLinkType());
