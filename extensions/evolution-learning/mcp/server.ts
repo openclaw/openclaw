@@ -5,14 +5,14 @@
  * 讓 Claude Code CLI / 任何 MCP 客戶端 都能使用 nuwa 進化學習工具。
  *
  * 啟動：
- *   MCP_PORT=3741 npx tsx mcp/server.ts
+ *   MCP_PORT=34821 npx tsx mcp/server.ts
  *
  * 在 claude_desktop_config.json 或 Claude Code settings.json 中設定：
  *   {
  *     "mcpServers": {
  *       "nuwa": {
  *         "type": "http",
- *         "url": "http://localhost:3741/mcp"
+ *         "url": "http://localhost:34821/mcp"
  *       }
  *     }
  *   }
@@ -603,7 +603,7 @@ function createNuwaMcpServer(stateDir: string): McpServer {
 
 const WORKSPACE_DIR = process.env.NUWA_WORKSPACE ?? process.cwd();
 const STATE_DIR = resolveStateDir(WORKSPACE_DIR);
-const PORT = process.env.MCP_PORT ? parseInt(process.env.MCP_PORT, 10) : 3741;
+const PORT = process.env.MCP_PORT ? parseInt(process.env.MCP_PORT, 10) : 34821;
 
 const app = new Hono();
 
