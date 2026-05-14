@@ -303,6 +303,9 @@ function selectSubagentOutputText(
   outcome?: SubagentRunOutcome,
 ): string | undefined {
   if (snapshot.waitingForContinuation) {
+    if (snapshot.latestAssistantText) {
+      return snapshot.latestAssistantText;
+    }
     return undefined;
   }
   if (snapshot.latestSilentText) {

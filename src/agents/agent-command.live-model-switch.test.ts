@@ -964,7 +964,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     });
     state.runAgentAttemptMock.mockResolvedValue(makePendingToolCallResult("openai", "gpt-5.4"));
 
-    const agentCommand = await getAgentCommand();
     await agentCommand({
       message: "hello",
       to: "+1234567890",

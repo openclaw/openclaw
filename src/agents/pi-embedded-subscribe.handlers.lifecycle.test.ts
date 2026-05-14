@@ -35,6 +35,8 @@ function createContext(
       pendingToolMediaUrls: [],
       pendingToolAudioAsVoice: false,
       replayState: { replayInvalid: false, hadPotentialSideEffects: false },
+      terminalStopReason: undefined,
+      yielded: false,
       blockState: {
         thinking: true,
         final: true,
@@ -327,6 +329,25 @@ describe("handleAgentEnd", () => {
         phase: "end",
         livenessState: "abandoned",
         replayInvalid: true,
+      },
+    });
+  });
+
+  it("emits lifecycle error for terminal tool-call stop reasons", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(undefined, { onAgentEvent });
+    ctx.state.terminalStopReason = "tool_calls";
+    ctx.state.livenessState = "working";
+
+    await handleAgentEnd(ctx);
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "error",
+        error: "Agent run ended at unresolved tool boundary (tool_calls).",
+        stopReason: "tool_calls",
+        livenessState: "working",
       },
     });
   });
