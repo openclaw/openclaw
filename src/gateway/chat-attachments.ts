@@ -118,7 +118,12 @@ function isValidBase64(value: string): boolean {
   if (value.length === 0 || value.length % 4 !== 0) {
     return false;
   }
-  return /^[A-Za-z0-9+/]+={0,2}$/.test(value);
+  // Avoid regex stack overflow on very large base64 strings; use Buffer round-trip instead.
+  try {
+    return Buffer.from(value, 'base64').toString('base64') === value;
+  } catch {
+    return false;
+  }
 }
 
 function verifyDecodedSize(buffer: Buffer, estimatedBytes: number, label: string): void {
