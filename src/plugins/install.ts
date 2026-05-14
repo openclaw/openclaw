@@ -641,7 +641,11 @@ async function installPluginFromManagedNpmRoot(
     dependencySpec: params.dependencySpec,
     managedOverrides,
   });
-  await syncManagedNpmRootPeerDependencies({ npmRoot, managedOverrides });
+  await syncManagedNpmRootPeerDependencies({
+    npmRoot,
+    managedOverrides,
+    preferredPackageName: params.packageName,
+  });
   const npmInstallArgs = [
     "npm",
     ...createSafeNpmInstallArgs({
@@ -698,6 +702,7 @@ async function installPluginFromManagedNpmRoot(
       npmRoot,
       managedOverrides,
       omitUnsupportedManagedOverrides,
+      preferredPackageName: params.packageName,
     });
     if (!syncedPeerDependencies) {
       settledManagedPeerDependencies = true;
@@ -724,6 +729,7 @@ async function installPluginFromManagedNpmRoot(
       npmRoot,
       managedOverrides,
       omitUnsupportedManagedOverrides,
+      preferredPackageName: params.packageName,
     });
     settledManagedPeerDependencies = !syncedPeerDependencies;
   }
