@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { installDownloadSpec } from "./skills-install-download.js";
+import { MAX_SKILL_DOWNLOAD_BYTES, installDownloadSpec } from "./skills-install-download.js";
 import { setTempStateDir } from "./skills-install.download-test-utils.js";
 import {
   fetchWithSsrFGuardMock,
@@ -99,6 +99,19 @@ function mockArchiveResponse(buffer: Uint8Array): void {
       ok: true,
       status: 200,
       statusText: "OK",
+      body: Readable.from([Buffer.from(buffer)]),
+    },
+    release: async () => undefined,
+  });
+}
+
+function mockArchiveResponseWithHeaders(buffer: Uint8Array, headers: Record<string, string>): void {
+  fetchWithSsrFGuardMock.mockResolvedValue({
+    response: {
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      headers: new Headers(headers),
       body: Readable.from([Buffer.from(buffer)]),
     },
     release: async () => undefined,
@@ -209,6 +222,31 @@ describe("installDownloadSpec extraction safety", () => {
         "utf-8",
       ),
     ).toBe("payload");
+  });
+
+  it("rejects downloads whose advertised size exceeds the skill download limit", async () => {
+    mockArchiveResponseWithHeaders(new TextEncoder().encode("payload"), {
+      "content-length": String(MAX_SKILL_DOWNLOAD_BYTES + 1),
+    });
+    const entry = buildEntry("oversized-download");
+
+    const result = await installDownloadSpec({
+      entry,
+      spec: {
+        kind: "download",
+        id: "dl",
+        url: "https://example.invalid/payload.bin",
+        extract: false,
+        targetDir: "runtime",
+      },
+      timeoutMs: 30_000,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.stderr).toContain("download too large");
+    expect(
+      await fileExists(path.join(resolveSkillToolsRootDir(entry), "runtime", "payload.bin")),
+    ).toBe(false);
   });
 
   it.runIf(process.platform !== "win32")(
