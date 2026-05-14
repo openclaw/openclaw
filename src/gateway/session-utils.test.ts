@@ -1796,6 +1796,17 @@ describe("deriveSessionTitle", () => {
     expect(deriveSessionTitle(entry, "Hello, how are you?")).toBe("Hello, how are you?");
   });
 
+  test("ignores generic greeting-only first user messages", () => {
+    const entry = {
+      sessionId: "abcd1234-5678-90ef-ghij-klmnopqrstuv",
+      updatedAt: new Date("2024-03-15T10:30:00Z").getTime(),
+    } as SessionEntry;
+
+    expect(deriveSessionTitle(entry, "hi")).toBe("abcd1234 (2024-03-15)");
+    expect(deriveSessionTitle(entry, "hello")).toBe("abcd1234 (2024-03-15)");
+    expect(deriveSessionTitle(entry, "hey")).toBe("abcd1234 (2024-03-15)");
+  });
+
   test("truncates long first user message to 60 chars with ellipsis", () => {
     const entry = {
       sessionId: "abc123",
