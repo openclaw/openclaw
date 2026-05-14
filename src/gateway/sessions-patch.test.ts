@@ -271,7 +271,7 @@ describe("gateway sessions patch", () => {
     expectPatchError(result, "invalid elevatedLevel");
   });
 
-  test("clears auth overrides when model patch changes", async () => {
+  test("preserves same-provider auth overrides when model patch changes", async () => {
     const store: Record<string, SessionEntry> = {
       "agent:main:main": {
         sessionId: "sess",
@@ -294,6 +294,34 @@ describe("gateway sessions patch", () => {
     );
     expect(entry.providerOverride).toBe("anthropic");
     expect(entry.modelOverride).toBe("claude-sonnet-4-6");
+    expect(entry.authProfileOverride).toBe("anthropic:default");
+    expect(entry.authProfileOverrideSource).toBe("user");
+    expect(entry.authProfileOverrideCompactionCount).toBe(3);
+  });
+
+  test("clears provider-prefixed auth overrides when model patch changes provider", async () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": {
+        sessionId: "sess-provider-change",
+        updatedAt: 1,
+        providerOverride: "anthropic",
+        modelOverride: "claude-opus-4-6",
+        authProfileOverride: "anthropic:default",
+        authProfileOverrideSource: "user",
+        authProfileOverrideCompactionCount: 3,
+      } as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, model: "openai/gpt-5.4" },
+        loadGatewayModelCatalog: async () => [
+          { provider: "openai", id: "gpt-5.4", name: "gpt-5.4" },
+        ],
+      }),
+    );
+    expect(entry.providerOverride).toBe("openai");
+    expect(entry.modelOverride).toBe("gpt-5.4");
     expect(entry.authProfileOverride).toBeUndefined();
     expect(entry.authProfileOverrideSource).toBeUndefined();
     expect(entry.authProfileOverrideCompactionCount).toBeUndefined();

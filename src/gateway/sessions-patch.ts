@@ -70,6 +70,28 @@ function normalizeExecAsk(raw: string): "off" | "on-miss" | "always" | undefined
   return undefined;
 }
 
+function shouldPreserveSessionAuthProfileOverride(params: {
+  entry: SessionEntry;
+  provider: string;
+}): boolean {
+  const profileOverride = normalizeOptionalString(params.entry.authProfileOverride);
+  if (!profileOverride) {
+    return false;
+  }
+  const provider = normalizeOptionalLowercaseString(params.provider);
+  if (!provider) {
+    return false;
+  }
+  const delimiterIndex = profileOverride.indexOf(":");
+  if (delimiterIndex < 0) {
+    return true;
+  }
+  const profileProvider = normalizeOptionalLowercaseString(
+    profileOverride.slice(0, delimiterIndex),
+  );
+  return profileProvider === provider;
+}
+
 function supportsSpawnLineage(storeKey: string): boolean {
   return isSubagentSessionKey(storeKey) || isAcpSessionKey(storeKey);
 }
@@ -461,6 +483,10 @@ export async function applySessionsPatchToStore(params: {
           model: resolvedDefault.model,
           isDefault: true,
         },
+        preserveAuthProfileOverride: shouldPreserveSessionAuthProfileOverride({
+          entry: next,
+          provider: resolvedDefault.provider,
+        }),
         markLiveSwitchPending: true,
       });
     } else if (raw !== undefined) {
@@ -501,6 +527,10 @@ export async function applySessionsPatchToStore(params: {
           model: resolved.ref.model,
           isDefault,
         },
+        preserveAuthProfileOverride: shouldPreserveSessionAuthProfileOverride({
+          entry: next,
+          provider: resolved.ref.provider,
+        }),
         markLiveSwitchPending: true,
       });
     }
