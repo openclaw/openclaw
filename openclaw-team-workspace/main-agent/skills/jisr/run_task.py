@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 def run():
-    user_id = os.getenv("USER_ID", "123")
+    user_id = os.getenv("USER_ID", "345")
 
     env = os.environ.copy()
     env["CUA_SERVICE_WEBSOCKET"] = f"ws://localhost:7002/cua/{user_id}/api/ws/run-agent"

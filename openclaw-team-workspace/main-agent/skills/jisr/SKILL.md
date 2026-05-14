@@ -1,17 +1,17 @@
 ---
-name: cua
-description: "Delegates browser automation tasks to the local CUA (Computer User Agent). Use when the user asks you to navigate a website, approve requests, or do complex UI automation in the browser."
+name: jisr
+description: "Delegates JISR HR management tasks to the CUA (Computer User Agent). Use when the user asks you to navigate the JISR website, approve leave requests, check balances, or do any HR-related browser automation."
 metadata: { "openclaw": { "emoji": "🤖", "requires": { "bins": ["python3"] } } }
 ---
 
-# CUA Web Agent Skill
+# JISR Web Agent Skill
 
-Use this skill to perform web automation using the CUA (Computer User Agent) WebSocket service.
+Use this skill to perform web automation on the **JISR HR Management System** using CUA (Computer User Agent) WebSocket service.
 
 ## When to Use
 
 - User asks to "approve my leave requests in JISR"
-- User asks to "navigate to X website and do Y"
+- User asks to do anything HR-related: leave requests, balances, attendance, etc.
 - The user provides answers to a previous `ask_user` prompt and you need to resume execution.
 
 ## Writing the `--task` String (Critical)
@@ -43,7 +43,7 @@ Always run the command natively in the shell. Ensure you have `websockets` insta
 ### Starting a new task
 
 ```bash
-python3 ~/.openclaw/workspace/skills/cua/cua_client.py \
+python3 /home/node/workspace/main-agent/skills/jisr/cua_client.py \
   --task "Approve all pending leave requests"
 ```
 
@@ -54,7 +54,7 @@ If the output JSON contains `ask_user`, surface the `question` and `options` to 
 Once the user replies, resume with the same task, their answer as `user_reply`, and the returned `state_id` as `resume_state_id`:
 
 ```bash
-python3 ~/.openclaw/workspace/skills/cua/cua_client.py \
+python3 /home/node/workspace/main-agent/skills/jisr/cua_client.py \
   --task "Approve all pending leave requests" \
   --resume_state_id "1234abcd" \
   --user_reply '{"param_key": "user answer"}'
@@ -67,6 +67,13 @@ python3 ~/.openclaw/workspace/skills/cua/cua_client.py \
 | `success: true`               | Task completed. Tell the user what was done.                                                                       |
 | `success: false` + `ask_user` | CUA needs input. Surface `ask_user.question` and `options` to the user. Wait for their reply before calling again. |
 | `success: false` + `state_id` | Save the `state_id`. Pass it as `--resume_state_id` on the next call.                                              |
-| `success: false` + `error`    | Task failed. Report what failed in plain language.                                                                 |
+| `success: false` + `error`    | Task failed. Report what failed in plain language. **Do not retry.** Wait for the user to explicitly ask you to try again. |
 
 **Special case — `param_key == "confirmation"`:** The system is asking the user to confirm before taking action. You MUST stop, show the question to the user, and wait for an explicit yes/no. Never generate a confirmation answer yourself.
+
+## Sharing the JISR NoVNC Link
+
+Do **not** share or mention the JISR NoVNC link unless one of these conditions is met:
+
+1. The user is **not logged in** and needs to log in (e.g., the CUA reports an authentication error or login page)
+2. The user **explicitly asks** for the link

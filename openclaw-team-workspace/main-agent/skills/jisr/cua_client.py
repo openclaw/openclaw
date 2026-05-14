@@ -1,8 +1,7 @@
 """
 cua_client.py — Self-contained Jisr CUA client for OpenClaw.
 
-Features ported from the Baseer/Burhan integration:
-  - LLM summarization of execution logs via Google Gemini API
+Features:
   - UTF-8 sanitization on all strings
   - ask_user param_key normalization
   - result_holder pattern (structured JSON output)
@@ -10,25 +9,32 @@ Features ported from the Baseer/Burhan integration:
   - step_results accumulation (per-step iterations with reasoning + info)
   - Connection pre-check via /status endpoint (optional)
   - Service health checks for CUA + browser before task execution
+  - Login detection: if the user is not logged in, emits the login link and
+    exits immediately instead of blocking until login completes
+
+Requires:
+  USER_ID environment variable must be set (no hardcoded fallback).
 
 Usage:
-  python3 cua_client.py --chat_id "123" --task "Approve all leave requests"
+  python3 cua_client.py  --task "Approve all leave requests"
 
   # Resume after ask_user pause:
-  python3 cua_client.py --chat_id "123" --task "Approve all leave requests" \
+  python3 cua_client.py  --task "Approve all leave requests" \
       --resume_state_id "abc123" \
       --user_reply '{"leave_type": "annual"}'
 
 Output:
-  Prints a single JSON object to stdout on completion. Example:
+  Prints one or more JSON objects to stdout. Examples:
     {"success": true, "summary": "...", "total_steps": 3}
     {"success": false, "summary": "...", "error": "...", "ask_user": {...}, "state_id": "..."}
+    {"success": false, "error": "login_required", "vnc_url": "..."}
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
+import concurrent.futures
 import json
 import os
 import sys
@@ -46,14 +52,8 @@ import websockets
 DEFAULT_HOST = "localhost"
 DEFAULT_WS_PORT = "8882"
 DEFAULT_JISR_URL = "https://master-works.jisr.net/"
-DEFAULT_CHAT_ID = os.getenv("USER_ID", "123")
+DEFAULT_CHAT_ID: Optional[str] = os.getenv("USER_ID")
 
-# Gemini model used for summarization
-SUMMARY_MODEL = "gemini-2.0-flash"
-GEMINI_API_URL = (
-    "https://generativelanguage.googleapis.com/v1beta/models/"
-    "{model}:generateContent?key={api_key}"
-)
 
 # ---------------------------------------------------------------------------
 # JISR context injected into every CUA task
@@ -77,48 +77,6 @@ JISR main sections:
 * reason_category_dropdown has only 2 options: Personal or Business
 """
 
-# ---------------------------------------------------------------------------
-# LLM summarization tool schema + prompts
-# ---------------------------------------------------------------------------
-
-_SUMMARY_TOOL_NAME = "summarize_browser_task"
-
-# Gemini uses "function_declarations" inside a "tools" list
-_GEMINI_TOOLS = [
-    {
-        "function_declarations": [
-            {
-                "name": _SUMMARY_TOOL_NAME,
-                "description": "Summarize browser automation and return retrieved info verbatim.",
-                "parameters": {
-                    "type": "OBJECT",
-                    "properties": {
-                        "summary": {
-                            "type": "STRING",
-                            "description": "1-2 sentence summary of what happened.",
-                        },
-                        "retrieved_info": {
-                            "type": "STRING",
-                            "description": (
-                                "Summary of all Info logs; provide the information in "
-                                "human-readable text."
-                            ),
-                        },
-                    },
-                    "required": ["summary", "retrieved_info"],
-                },
-            }
-        ]
-    }
-]
-
-_SUMMARY_SYSTEM_PROMPT = (
-    "You summarize a browser automation execution log. "
-    "Output: (1) A brief summary of what was accomplished or what failed. "
-    "(2) Retrieved info: return all 'Info' content from the log verbatim or "
-    "in a single combined paragraph; do not add information that does not "
-    "appear in the log."
-)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -170,155 +128,13 @@ def _coerce_arguments(raw: Any) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _fallback_summary(
-    task: str,
-    step_results: List[Dict[str, Any]],
-    success: bool,
-    error: Optional[str] = None,
-) -> str:
-    """Plain-text fallback when the LLM summarizer fails."""
-    # Filter keepalive noise
-    if error and ("keepalive ping timeout" in error or "no close frame received" in error):
-        error = None
-
-    partial_steps = sum(1 for r in step_results if r.get("partial"))
+def _format_log(log_lines: List[str], success: bool) -> str:
+    """Join accumulated iteration log lines into the summary string."""
+    log = "\n".join(log_lines).strip()
     if success:
-        if partial_steps:
-            return f"Partially completed {len(step_results)} steps, {partial_steps} step(s) incomplete."
-        return f"Successfully completed {len(step_results)} steps."
-    else:
-        if error:
-            return f"Task failed: {error}"
-        return f"Task failed after {len(step_results)} steps."
-
-
-# ---------------------------------------------------------------------------
-# Gemini summarization (no SDK — plain urllib so zero extra deps)
-# ---------------------------------------------------------------------------
-
-
-def _call_gemini_summarize(user_payload: str, api_key: str) -> str:
-    """
-    Call the Gemini generateContent API synchronously using only stdlib urllib.
-    Uses function calling to get structured summary + retrieved_info.
-    Returns the generated summary string.
-    """
-    url = GEMINI_API_URL.format(model=SUMMARY_MODEL, api_key=api_key)
-
-    body = json.dumps(
-        {
-            "system_instruction": {
-                "parts": [{"text": _SUMMARY_SYSTEM_PROMPT}]
-            },
-            "contents": [
-                {"role": "user", "parts": [{"text": user_payload}]}
-            ],
-            "tools": _GEMINI_TOOLS,
-            "tool_config": {
-                "function_calling_config": {
-                    "mode": "ANY",
-                    "allowed_function_names": [_SUMMARY_TOOL_NAME],
-                }
-            },
-            "generationConfig": {"maxOutputTokens": 1024},
-        }
-    ).encode("utf-8")
-
-    req = urllib.request.Request(
-        url,
-        data=body,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
-
-    # Navigate Gemini response: candidates[0].content.parts[*]
-    candidates = data.get("candidates", [])
-    if not candidates:
-        raise ValueError("No candidates in Gemini response")
-
-    parts = candidates[0].get("content", {}).get("parts", [])
-
-    # Look for a functionCall part first
-    for part in parts:
-        fc = part.get("functionCall")
-        if fc and fc.get("name") == _SUMMARY_TOOL_NAME:
-            args = fc.get("args", {})
-            summary = args.get("summary", "").strip()
-            retrieved = args.get("retrieved_info", "").strip()
-            return f"{summary}\n\n{retrieved}" if retrieved else summary
-
-    # Fall back to plain text part
-    for part in parts:
-        text = part.get("text", "").strip()
-        if text:
-            return text
-
-    raise ValueError("No usable content in Gemini response")
-
-
-def _generate_summary(
-    task: str,
-    step_results: List[Dict[str, Any]],
-    success: bool,
-    error: Optional[str] = None,
-) -> str:
-    """Build execution log and call Gemini summarizer; fall back gracefully."""
-    api_key = os.getenv("GEMINI_API_KEY", "")
-    if not api_key:
-        print(
-            "[WARNING] GEMINI_API_KEY not set — using fallback summary.",
-            file=sys.stderr,
-        )
-        return _fallback_summary(task, step_results, success, error)
-
-    # Build execution log
-    parts: List[str] = []
-    for sr in step_results:
-        step_num = sr["step"]
-        step_desc = _sanitize_string(sr.get("description", "Unknown step"))
-        is_partial = sr.get("partial", False)
-        iterations = sr.get("iterations", [])
-
-        parts.append(f"\n=== Step {step_num}: {step_desc} ===")
-        if iterations:
-            for it in iterations:
-                action = _sanitize_string(it["action"])
-                reasoning = _sanitize_string(it["reasoning"])
-                info = _sanitize_string(it.get("info", ""))
-                line = f"  Iteration {it['iteration']} [{action}]: {reasoning}"
-                if info:
-                    line += f" | Info: {info}"
-                parts.append(line)
-        else:
-            parts.append("  → Step started but no iterations completed")
-
-        if is_partial:
-            parts.append("  → Step incomplete (reached max attempts or connection interrupted)")
-
-    execution_log = "\n".join(parts)
-
-    # Filter keepalive noise from error
-    if error and ("keepalive ping timeout" in error or "no close frame received" in error):
-        error = None
-    if error:
-        execution_log += f"\n\nError: {_sanitize_string(error)}"
-
-    user_payload = _sanitize_string(
-        f"Original Task: {task}\n\n"
-        f"Execution Log:\n{execution_log}\n\n"
-        f"Task Status: {'SUCCESS' if success else 'FAILED'}\n\n"
-        "Provide a concise summary of what was accomplished or what failed. "
-        "Ignore any WebSocket connection issues and focus on the actual task steps completed."
-    )
-
-    try:
-        return _call_gemini_summarize(user_payload, api_key)
-    except Exception as exc:
-        print(f"[WARNING] Gemini summarization failed ({exc}); using fallback.", file=sys.stderr)
-        return _fallback_summary(task, step_results, success, error)
+        return log
+    tail = "Task failed. Let me know if you would like to try again."
+    return f"{log}\n\n{tail}".strip() if log else tail
 
 
 # ---------------------------------------------------------------------------
@@ -411,8 +227,11 @@ def _check_services_healthy(
       {"ok": True, "details": {...}}               — both services healthy
       {"ok": False, "reason": str, "details": {...}} — one or more services down
     """
-    cua = _probe_cua_health(cua_health_url)
-    browser = _probe_browser_health(orchestrator_url)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        fut_cua = pool.submit(_probe_cua_health, cua_health_url)
+        fut_browser = pool.submit(_probe_browser_health, orchestrator_url)
+        cua = fut_cua.result()
+        browser = fut_browser.result()
 
     details = {
         "cua_health_ok": cua["ok"],
@@ -437,10 +256,6 @@ def _check_services_healthy(
 # Connection check + login flow
 # ---------------------------------------------------------------------------
 
-POLL_INTERVAL_SECONDS = 5
-LOGIN_WAIT_TIMEOUT_SECONDS = 300  # 5 minutes max to wait for user to log in
-
-
 def _fetch_status(chat_id: str, browser_service_url: str) -> Dict[str, Any]:
     """
     GET {browser_service_url}/cua/{chat_id}/api/status
@@ -464,6 +279,22 @@ def _fetch_status(chat_id: str, browser_service_url: str) -> Dict[str, Any]:
         return {"ok": False, "connected": False, "reason": f"http_{e.code}"}
     except Exception as e:
         return {"ok": False, "connected": False, "reason": str(e)}
+
+
+def _fetch_session_info(chat_id: str, orchestrator_url: str) -> Optional[str]:
+    """
+    GET {orchestrator_url}/sessions/{chat_id}/info
+    Returns the vnc_url from the orchestrator (includes token + path), or None on failure.
+    """
+    try:
+        url = f"{orchestrator_url}/sessions/{chat_id}/info"
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode())
+            return data.get("vnc_url") or None
+    except Exception as e:
+        print(f"[WARNING] Could not fetch session info: {e}.", file=sys.stderr)
+        return None
 
 
 def _start_orchestrator_session(chat_id: str, orchestrator_url: str) -> Optional[str]:
@@ -505,91 +336,55 @@ def _ensure_connected(
     orchestrator_url: str,
 ) -> Dict[str, Any]:
     """
-    Full connection flow:
+    Connection flow:
       1. Check if already connected (session_alive + login_completed).
-      2. If not, start the browser session via the orchestrator.
-      3. Print the noVNC URL and ask the user to log in.
-      4. Poll /api/status until login_completed=True or timeout.
+      2. If not, start the browser session and emit the login link.
 
     Returns:
-      {"ok": True, "vnc_url": "..."}            — connected and ready
-      {"ok": False, "reason": "...", ...}        — failed or timed out
+      {"ok": True, "vnc_url": "..."}                    — connected and ready
+      {"ok": False, "reason": "login_required", ...}    — session started, user must log in
+      {"ok": False, "reason": "...", ...}                — connection error
     """
     # Step 1 — already connected?
     status = _fetch_status(chat_id, browser_service_url)
     if status.get("connected"):
         print("[CUA] Already connected to Jisr.", file=sys.stderr)
-        vnc_url = f"{browser_service_url}/cua/{chat_id}/vnc/vnc_auto.html"
+        vnc_url = (
+            _fetch_session_info(chat_id, orchestrator_url)
+            or f"{browser_service_url}/cua/{chat_id}/vnc/vnc_auto.html"
+        )
         return {"ok": True, "vnc_url": vnc_url}
 
     print("[CUA] Not connected. Starting browser session...", file=sys.stderr)
 
-    # Step 2 — start session
-    vnc_url = _start_orchestrator_session(chat_id, orchestrator_url)
-    if not vnc_url:
-        # Construct fallback URL and continue anyway — session may already exist
-        vnc_url = f"{browser_service_url}/cua/{chat_id}/vnc/vnc_auto.html"
+    # Step 2 — start session and surface login link; do not block
+    _start_orchestrator_session(chat_id, orchestrator_url)
+    vnc_url = (
+        _fetch_session_info(chat_id, orchestrator_url)
+        or f"{browser_service_url}/cua/{chat_id}/vnc/vnc_auto.html"
+    )
 
-    # Step 3 — ask user to log in
     print(
         f"\n{'='*60}\n"
         f"  ACTION REQUIRED: Please log in to Jisr\n"
         f"{'='*60}\n"
         f"  Open this link in your browser to see the virtual screen:\n"
         f"  👉 {vnc_url}\n\n"
-        f"  Log in to Jisr at: {DEFAULT_JISR_URL}\n"
-        f"  Waiting for you to complete login...\n"
         f"{'='*60}\n",
         file=sys.stderr,
     )
 
-    # Also emit as structured JSON to stdout so OpenClaw can surface it to the user
+    # Emit structured JSON so OpenClaw can surface the login link to the user
     print(
         json.dumps({
             "status": "login_required",
-            "message": "Please log in to Jisr in the virtual browser to continue.",
+            "message": "You are not logged in to Jisr. Please log in using the link below.",
             "vnc_url": vnc_url,
-            "jisr_url": DEFAULT_JISR_URL,
         }),
         flush=True,
     )
 
-    # Step 4 — poll until logged in or timeout
-    elapsed = 0
-    while elapsed < LOGIN_WAIT_TIMEOUT_SECONDS:
-        time.sleep(POLL_INTERVAL_SECONDS)
-        elapsed += POLL_INTERVAL_SECONDS
-
-        status = _fetch_status(chat_id, browser_service_url)
-        if not status.get("ok"):
-            print(
-                f"[CUA] Status check failed ({status.get('reason')}) — retrying...",
-                file=sys.stderr,
-            )
-            continue
-
-        if status.get("login_completed"):
-            print("\n[CUA] ✅ Login detected! Proceeding with the task...\n", file=sys.stderr)
-            return {"ok": True, "vnc_url": vnc_url}
-
-        if status.get("session_alive"):
-            print(
-                f"[CUA] Browser is running, waiting for login... "
-                f"({elapsed}/{LOGIN_WAIT_TIMEOUT_SECONDS}s)",
-                file=sys.stderr,
-            )
-        else:
-            print(
-                f"[CUA] Waiting for browser session to start... "
-                f"({elapsed}/{LOGIN_WAIT_TIMEOUT_SECONDS}s)",
-                file=sys.stderr,
-            )
-
-    return {
-        "ok": False,
-        "reason": "login_timeout",
-        "vnc_url": vnc_url,
-    }
+    return {"ok": False, "reason": "login_required", "vnc_url": vnc_url}
 
 
 # ---------------------------------------------------------------------------
@@ -608,6 +403,7 @@ async def _run_jisr_task_ws(
 ) -> None:
     """Connect to the CUA WebSocket service, stream results, populate result_holder."""
     step_results: List[Dict[str, Any]] = []
+    log_lines: List[str] = []
     total_steps = 0
     task_completed = False
     stored_ask_user: Optional[Dict[str, Any]] = None
@@ -620,7 +416,7 @@ async def _run_jisr_task_ws(
         async with websockets.connect(
             ws_url,
             ping_interval=30,
-            ping_timeout=120,
+            ping_timeout=60,
             close_timeout=10,
         ) as ws:
             payload: Dict[str, Any] = {
@@ -659,10 +455,9 @@ async def _run_jisr_task_ws(
                             data.get("step_description", "")
                         )
                         current_step_iterations = []
-                        print(
+                        log_lines.append(
                             f"\n=== Step {current_step_number}/{total_steps}: "
-                            f"{current_step_description} ===",
-                            file=sys.stderr,
+                            f"{current_step_description} ==="
                         )
 
                     # ---- iteration_update ----
@@ -686,7 +481,7 @@ async def _run_jisr_task_ws(
                         line = f"  Iter {iteration} [{action}]: {reasoning}"
                         if info:
                             line += f" | Info: {info}"
-                        print(line, file=sys.stderr)
+                        log_lines.append(line)
 
                     # ---- step_completed ----
                     elif msg_type == "step_completed":
@@ -700,12 +495,6 @@ async def _run_jisr_task_ws(
                                 "partial": is_partial,
                                 "iterations": current_step_iterations.copy(),
                             }
-                        )
-                        suffix = " (partial)" if is_partial else ""
-                        print(
-                            f"✅ Step {step_num} completed "
-                            f"({len(current_step_iterations)} iterations){suffix}",
-                            file=sys.stderr,
                         )
                         current_step_iterations = []
 
@@ -750,27 +539,21 @@ async def _run_jisr_task_ws(
                             result_holder["summary"] = "Task paused: user input required."
                             result_holder["total_steps"] = total_steps
                         else:
-                            print(
-                                f"\n[CUA] Task complete. Generating summary from "
-                                f"{len(step_results)} steps…",
-                                file=sys.stderr,
-                            )
-                            summary = _generate_summary(task, step_results, success)
                             result_holder["success"] = success
-                            result_holder["summary"] = summary
+                            result_holder["summary"] = _format_log(log_lines, success)
                             result_holder["total_steps"] = total_steps
+                            result_holder["step_results"] = step_results
                         break
 
                     # ---- error ----
                     elif msg_type == "error":
                         task_completed = True
                         error_msg = _sanitize_string(data.get("message", "Unknown error"))
-                        summary = _generate_summary(
-                            task, step_results, success=False, error=error_msg
-                        )
+                        log_lines.append(f"\nError: {error_msg}")
                         result_holder["success"] = False
-                        result_holder["summary"] = summary
+                        result_holder["summary"] = _format_log(log_lines, False)
                         result_holder["error"] = error_msg
+                        result_holder["step_results"] = step_results
                         break
 
                 except json.JSONDecodeError as exc:
@@ -810,10 +593,11 @@ async def _run_jisr_task_ws(
             else str(exc)
         )
 
-        summary = _generate_summary(task, step_results, success=False, error=error_msg)
+        log_lines.append(f"\nError: {error_msg}")
         result_holder["success"] = False
-        result_holder["summary"] = summary
+        result_holder["summary"] = _format_log(log_lines, False)
         result_holder["error"] = "websocket_timeout" if is_keepalive else str(exc)
+        result_holder["step_results"] = step_results
         if is_keepalive:
             result_holder["partial"] = True
 
@@ -833,10 +617,11 @@ async def _run_jisr_task_ws(
                 }
             )
 
-        summary = _generate_summary(task, step_results, success=False, error=str(exc))
+        log_lines.append(f"\nError: {exc}")
         result_holder["success"] = False
-        result_holder["summary"] = summary
+        result_holder["summary"] = _format_log(log_lines, False)
         result_holder["error"] = str(exc)
+        result_holder["step_results"] = step_results
 
 
 # ---------------------------------------------------------------------------
@@ -864,13 +649,11 @@ async def run_cua_task(
     # --- Service health pre-check ---
     health = _check_services_healthy(cua_health_url, orchestrator_url)
     if not health["ok"]:
-        reason = health["reason"]
-        print(f"[CUA] Health check failed: {reason}", file=sys.stderr)
+        print(f"[CUA] Health check failed: {health['reason']}", file=sys.stderr)
         return {
             "success": False,
-            "summary": f"Service unavailable: {reason.replace('_', ' ')}.",
-            "error": reason,
-            "health_details": health.get("details"),
+            "summary": "Services are not ready yet. Please try again later.",
+            "error": "services_unavailable",
         }
     print(
         f"[CUA] Health OK — CUA {health['details']['cua_health_latency_ms']}ms, "
@@ -882,11 +665,11 @@ async def run_cua_task(
     if not skip_status_check:
         conn = _ensure_connected(chat_id, browser_service_url, orchestrator_url)
         if not conn["ok"]:
-            if conn.get("reason") == "login_timeout":
+            if conn.get("reason") == "login_required":
                 return {
                     "success": False,
-                    "summary": "Login timed out. The user did not complete login within 5 minutes.",
-                    "error": "login_timeout",
+                    "summary": "You are not logged in to Jisr. Please log in using the link provided.",
+                    "error": "login_required",
                     "vnc_url": conn.get("vnc_url"),
                 }
             return {
@@ -896,9 +679,22 @@ async def run_cua_task(
             }
         vnc_url = conn["vnc_url"]
     else:
-        vnc_url = f"{browser_service_url}/cua/{chat_id}/vnc/vnc_auto.html"
+        vnc_url = (
+            _fetch_session_info(chat_id, orchestrator_url)
+            or f"{browser_service_url}/cua/{chat_id}/vnc/vnc_auto.html"
+        )
 
     print(f"\n[LIVE VIEW] Watch the browser at:\n👉 {vnc_url}\n", file=sys.stderr)
+
+    # Notify the calling agent that the task is starting so it knows to wait
+    print(
+        json.dumps({
+            "status": "task_starting",
+            "message": f"Starting task '{task}', please wait…",
+            "task": task,
+        }),
+        flush=True,
+    )
 
     # --- Run the task ---
     result_holder: Dict[str, Any] = {}
@@ -974,6 +770,16 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
+    if not DEFAULT_CHAT_ID:
+        print(
+            json.dumps({
+                "success": False,
+                "summary": "USER_ID environment variable is not set.",
+                "error": "missing_user_id",
+            })
+        )
+        sys.exit(1)
+
     user_reply = _parse_user_reply(args.user_reply)
 
     try:
@@ -1016,8 +822,6 @@ if __name__ == "__main__":
             print(f"State ID : {result['state_id']}")
         if result.get("error") and result["error"] not in ("not_connected", "timeout", "no_result"):
             print(f"Error    : {result['error']}")
-        if result.get("health_details"):
-            print(f"Health   : {json.dumps(result['health_details'], indent=2)}")
     else:
         # Structured JSON output — this is what OpenClaw's agent reads
         print(json.dumps(result, ensure_ascii=False))
