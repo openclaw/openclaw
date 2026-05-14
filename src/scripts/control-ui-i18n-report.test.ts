@@ -1,15 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
-  computeSameAsEnglishKeys,
   filterRawCopyEntries,
   filterTranslationKeysBySurface,
-  flattenTranslations,
   formatReport,
   parseArgs,
   summarizeRawCopy,
   type RawCopyBaselineEntry,
 } from "../../scripts/control-ui-i18n-report.ts";
-import type { TranslationMap } from "../../ui/src/i18n/lib/types.ts";
 
 const entries: RawCopyBaselineEntry[] = [
   {
@@ -70,22 +67,7 @@ describe("control-ui-i18n report helpers", () => {
     });
   });
 
-  it("flattens locale maps and reports same-as-English keys", () => {
-    const source: TranslationMap = {
-      actions: { send: "Send", stop: "Stop" },
-      brand: "OpenClaw",
-    };
-    const target: TranslationMap = {
-      actions: { send: "发送", stop: "Stop" },
-      brand: "OpenClaw",
-    };
-
-    expect(
-      computeSameAsEnglishKeys(flattenTranslations(source), flattenTranslations(target)),
-    ).toEqual(["actions.stop", "brand"]);
-  });
-
-  it("filters same-as-English keys by translation key surface token", () => {
+  it("filters translation keys by surface token", () => {
     expect(
       filterTranslationKeysBySurface(
         [
@@ -125,7 +107,6 @@ describe("control-ui-i18n report helpers", () => {
           translatedKeys: 2,
           workflow: 1,
         },
-        sameAsEnglishKeys: ["brand"],
       },
       rawCopy: summarizeRawCopy(entries, 1),
       surface: "chat",
@@ -144,7 +125,7 @@ describe("control-ui-i18n report helpers", () => {
     );
     expect(report).toContain("Chat still has UI text written directly in code.\n");
     expect(report).toContain("zh-CN has 1 missing key.\n");
-    expect(report).toContain("1 zh-CN translation still matches English and needs review.\n");
+    expect(report).not.toContain("matches English");
     expect(report).toContain("4 Config form: ui/src/ui/views/config-form.render.ts\n");
     expect(report).toContain("Move text from the focus modules into translation keys.\n");
     expect(report).toContain(
@@ -169,7 +150,6 @@ describe("control-ui-i18n report helpers", () => {
           translatedKeys: 2,
           workflow: 1,
         },
-        sameAsEnglishKeys: [],
       },
       rawCopy: summarizeRawCopy(entries, 1),
       surface: "chat",

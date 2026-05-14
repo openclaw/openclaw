@@ -2,13 +2,10 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import type { TranslationMap } from "../ui/src/i18n/lib/types.ts";
 
 const ROOT = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const I18N_ASSETS_DIR = path.join(ROOT, "ui/src/i18n/.i18n");
-const LOCALES_DIR = path.join(ROOT, "ui/src/i18n/locales");
 const RAW_COPY_BASELINE_PATH = path.join(I18N_ASSETS_DIR, "raw-copy-baseline.json");
-const SOURCE_LOCALE_PATH = path.join(LOCALES_DIR, "en.ts");
 const DEFAULT_TOP = 10;
 const LOCALE_LABELS: Record<string, string> = {
   ar: "Arabic",
@@ -91,7 +88,6 @@ export type RawCopySummary = {
 export type LocaleSummary = {
   fallbackKeysInScope: string[];
   meta: LocaleMeta;
-  sameAsEnglishKeys: string[];
 };
 
 type ReportInput = {
@@ -193,29 +189,6 @@ function normalizeToken(value: string) {
   return value.trim().toLowerCase();
 }
 
-export function flattenTranslations(
-  value: TranslationMap,
-  prefix = "",
-  out = new Map<string, string>(),
-) {
-  for (const [key, nested] of Object.entries(value)) {
-    const fullKey = prefix ? `${prefix}.${key}` : key;
-    if (typeof nested === "string") {
-      out.set(fullKey, nested);
-      continue;
-    }
-    flattenTranslations(nested, fullKey, out);
-  }
-  return out;
-}
-
-export function computeSameAsEnglishKeys(source: Map<string, string>, target: Map<string, string>) {
-  return [...target.entries()]
-    .filter(([key, value]) => source.get(key) === value)
-    .map(([key]) => key)
-    .toSorted();
-}
-
 export function filterTranslationKeysBySurface(keys: string[], surface?: string) {
   if (!surface) {
     return keys;
@@ -275,24 +248,14 @@ function formatIssueLines(input: ReportInput) {
     return lines;
   }
 
-  if (
-    input.locale.fallbackKeysInScope.length === 0 &&
-    input.locale.sameAsEnglishKeys.length === 0
-  ) {
+  if (input.locale.fallbackKeysInScope.length === 0) {
     lines.push(`  No ${input.locale.meta.locale} locale problems found in this scope.`);
     return lines;
   }
 
-  if (input.locale.fallbackKeysInScope.length > 0) {
-    lines.push(
-      `  ${input.locale.meta.locale} has ${formatMissingKeyCount(input.locale.fallbackKeysInScope.length)}.`,
-    );
-  }
-  if (input.locale.sameAsEnglishKeys.length > 0) {
-    lines.push(
-      `  ${formatSameAsEnglishIssue(input.locale.sameAsEnglishKeys.length, input.locale.meta.locale)}.`,
-    );
-  }
+  lines.push(
+    `  ${input.locale.meta.locale} has ${formatMissingKeyCount(input.locale.fallbackKeysInScope.length)}.`,
+  );
   return lines;
 }
 
@@ -320,13 +283,6 @@ function formatMissingKeyCount(count: number) {
 
 function formatFallbackCount(count: number) {
   return `${count} ${count === 1 ? "fallback" : "fallbacks"}`;
-}
-
-function formatSameAsEnglishIssue(count: number, locale: string) {
-  if (count === 1) {
-    return `1 ${locale} translation still matches English and needs review`;
-  }
-  return `${count} ${locale} translations still match English and need review`;
 }
 
 function formatSurfaceLabel(surface?: string) {
@@ -369,20 +325,6 @@ async function loadLocaleMeta(locale: string): Promise<LocaleMeta> {
   return JSON.parse(await readFile(metaPath, "utf8")) as LocaleMeta;
 }
 
-async function loadLocaleMap(locale: string): Promise<TranslationMap> {
-  const filePath = locale === "en" ? SOURCE_LOCALE_PATH : path.join(LOCALES_DIR, `${locale}.ts`);
-  if (!existsSync(filePath)) {
-    throw new Error(`unknown locale file: ${locale}`);
-  }
-  const exportName = locale.replaceAll("-", "_");
-  const mod = (await import(pathToFileURL(filePath).href)) as Record<string, TranslationMap>;
-  const map = mod[exportName];
-  if (!map) {
-    throw new Error(`locale ${locale} does not export ${exportName}`);
-  }
-  return map;
-}
-
 async function buildReport(args: ReportArgs) {
   const baseline = await loadRawCopyBaseline();
   const entries = filterRawCopyEntries(baseline.entries, args.surface);
@@ -392,18 +334,10 @@ async function buildReport(args: ReportArgs) {
   };
 
   if (args.locale) {
-    const [meta, source, target] = await Promise.all([
-      loadLocaleMeta(args.locale),
-      loadLocaleMap("en"),
-      loadLocaleMap(args.locale),
-    ]);
+    const meta = await loadLocaleMeta(args.locale);
     input.locale = {
       fallbackKeysInScope: filterTranslationKeysBySurface(meta.fallbackKeys, args.surface),
       meta,
-      sameAsEnglishKeys: filterTranslationKeysBySurface(
-        computeSameAsEnglishKeys(flattenTranslations(source), flattenTranslations(target)),
-        args.surface,
-      ),
     };
   }
 
