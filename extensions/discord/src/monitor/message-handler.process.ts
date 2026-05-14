@@ -973,7 +973,12 @@ export async function processDiscordMessage(
         }
         if (removeAckAfterReply) {
           void (async () => {
-            await sleep(dispatchError ? DEFAULT_TIMING.errorHoldMs : DEFAULT_TIMING.doneHoldMs);
+            const configuredTiming = cfg.messages?.statusReactions?.timing;
+            await sleep(
+              dispatchError
+                ? configuredTiming?.errorHoldMs ?? DEFAULT_TIMING.errorHoldMs
+                : configuredTiming?.doneHoldMs ?? DEFAULT_TIMING.doneHoldMs,
+            );
             await statusReactions.clear();
           })();
         } else {
