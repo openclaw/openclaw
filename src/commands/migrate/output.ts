@@ -178,15 +178,9 @@ const RESULT_STATUS_GLYPHS: Record<string, string> = {
 };
 
 function formatItemPrefix(item: MigrationItem, mode: FormatMode): string {
-  // Manual-review items are technically status:"skipped", but rendering them
-  // with the skip glyph reads like "done, ignored". Use a magnifying glass to
-  // signal "look closer here" instead.
   if (item.kind === "manual") {
     return "🔍 ";
   }
-  // Archive items get status "migrated" once written to the report directory,
-  // but the ✅ glyph overstates what happened — the file was saved aside, not
-  // imported. A book signals "filed away for later reference".
   if (item.kind === "archive") {
     return "📖 ";
   }
