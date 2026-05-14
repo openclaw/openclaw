@@ -1,0 +1,49 @@
+{
+  "name": "@openclaw/evolution-learning",
+  "version": "2026.5.5",
+  "private": true,
+  "description": "OpenClaw 四層進化學習插件 — 女媧思維框架自動注入、成熟度追蹤與 REM 週期成長心跳",
+  "bin": {
+    "nuwa": "./bin/nuwa.js",
+    "nuwa-mcp": "./mcp/server.js"
+  },
+  "type": "module",
+  "exports": {
+    ".": "./index.ts",
+    "./src/cli": "./src/cli.ts",
+    "./src/cost-guard": "./src/cost-guard.ts",
+    "./src/subscription-registry": "./src/subscription-registry.ts",
+    "./src/model-pricing": "./src/model-pricing.ts",
+    "./src/subscription-verifier": "./src/subscription-verifier.ts",
+    "./mcp/server": "./mcp/server.ts"
+  },
+  "scripts": {
+    "mcp": "tsx mcp/server.ts",
+    "mcp:prod": "node mcp/server.js"
+  },
+  "devDependencies": {
+    "@hono/node-server": "^1.13.8",
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "@openclaw/plugin-sdk": "workspace:*",
+    "commander": "^12.0.0",
+    "hono": "^4.7.10",
+    "openclaw": "workspace:*",
+    "zod": "^3.24.0"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.5.5"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.5.5"
+    }
+  }
+}

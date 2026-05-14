@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "paths": {
+      "openclaw/plugin-sdk/plugin-entry": ["./stubs/plugin-entry.ts"],
+      "@mariozechner/pi-agent-core": ["./stubs/pi-agent-core.ts"]
+    }
+  },
+  "include": ["*.ts", "stubs/**/*.ts"]
+}

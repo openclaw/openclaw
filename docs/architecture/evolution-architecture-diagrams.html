@@ -1,0 +1,1922 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenClaw 自動化進化架構 - 建築藍圖</title>
+<style>
+  :root {
+    --bg: #0a0e17;
+    --surface: #111827;
+    --surface2: #1a2332;
+    --border: #2a3a4e;
+    --text: #e2e8f0;
+    --text2: #94a3b8;
+    --accent: #38bdf8;
+    --green: #4ade80;
+    --yellow: #fbbf24;
+    --orange: #fb923c;
+    --red: #f87171;
+    --purple: #c084fc;
+    --pink: #f472b6;
+    --cyan: #22d3ee;
+    --layer1: #059669;
+    --layer2: #7c3aed;
+    --layer3: #d97706;
+    --layer4: #dc2626;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Microsoft JhengHei', 'PingFang TC', 'Noto Sans TC', 'SF Mono', monospace;
+    line-height: 1.8;
+    padding: 0;
+  }
+  .header {
+    background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #0f172a 100%);
+    border-bottom: 1px solid var(--border);
+    padding: 40px 60px;
+    text-align: center;
+  }
+  .header h1 {
+    font-size: 28px;
+    background: linear-gradient(90deg, var(--accent), var(--purple), var(--pink));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 8px;
+  }
+  .header p { color: var(--text2); font-size: 14px; }
+  .nav {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 12px 60px;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+  .nav a {
+    color: var(--text2);
+    text-decoration: none;
+    padding: 6px 14px;
+    border-radius: 6px;
+    font-size: 13px;
+    transition: all 0.2s;
+    border: 1px solid transparent;
+  }
+  .nav a:hover { color: var(--accent); border-color: var(--accent); background: rgba(56,189,248,0.08); }
+  .content { max-width: 1400px; margin: 0 auto; padding: 40px 60px; }
+  section { margin-bottom: 60px; }
+  section h2 {
+    font-size: 22px;
+    margin-bottom: 24px;
+    padding-bottom: 12px;
+    border-bottom: 2px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  section h2 .badge {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-weight: normal;
+  }
+  .diagram {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 32px;
+    margin-bottom: 24px;
+    overflow-x: auto;
+  }
+  .diagram-title {
+    font-size: 14px;
+    color: var(--accent);
+    margin-bottom: 16px;
+    letter-spacing: 1px;
+    font-weight: bold;
+  }
+  svg { display: block; margin: 0 auto; }
+  svg text { font-family: 'Microsoft JhengHei', 'PingFang TC', 'Noto Sans TC', sans-serif; }
+
+  .spec-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 16px;
+    margin-top: 16px;
+  }
+  .spec-card {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+  }
+  .spec-card h4 {
+    font-size: 14px;
+    color: var(--accent);
+    margin-bottom: 12px;
+  }
+  .spec-card table { width: 100%; border-collapse: collapse; }
+  .spec-card td {
+    padding: 6px 0;
+    font-size: 13px;
+    border-bottom: 1px solid rgba(42,58,78,0.5);
+    vertical-align: top;
+  }
+  .spec-card td:first-child { color: var(--text2); width: 40%; }
+  .spec-card td:last-child { color: var(--text); }
+
+  .flow-table { width: 100%; border-collapse: collapse; margin-top: 16px; }
+  .flow-table th {
+    text-align: left;
+    padding: 10px 12px;
+    font-size: 13px;
+    color: var(--accent);
+    border-bottom: 2px solid var(--border);
+  }
+  .flow-table td {
+    padding: 8px 12px;
+    font-size: 13px;
+    border-bottom: 1px solid rgba(42,58,78,0.3);
+    vertical-align: top;
+  }
+  .flow-table tr:hover { background: rgba(56,189,248,0.03); }
+  .tag {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: bold;
+  }
+  .tag-void { background: rgba(74,222,128,0.15); color: var(--green); }
+  .tag-modify { background: rgba(251,191,36,0.15); color: var(--yellow); }
+
+  .timeline { position: relative; padding-left: 30px; margin-top: 20px; }
+  .timeline::before {
+    content: '';
+    position: absolute;
+    left: 10px;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: var(--border);
+  }
+  .timeline-item {
+    position: relative;
+    margin-bottom: 24px;
+    padding: 16px 20px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  .timeline-item::before {
+    content: '';
+    position: absolute;
+    left: -25px;
+    top: 20px;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    border: 2px solid var(--accent);
+    background: var(--bg);
+  }
+  .timeline-item h4 { font-size: 16px; margin-bottom: 8px; }
+  .timeline-item p { font-size: 13px; color: var(--text2); margin-bottom: 8px; }
+
+  .check-list { list-style: none; margin-top: 8px; }
+  .check-list li {
+    font-size: 13px;
+    padding: 3px 0;
+    padding-left: 22px;
+    position: relative;
+    color: var(--text2);
+  }
+  .check-list li::before {
+    content: '\2610';
+    position: absolute;
+    left: 0;
+    color: var(--accent);
+  }
+
+  pre {
+    background: rgba(0,0,0,0.3);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 16px;
+    font-size: 12px;
+    overflow-x: auto;
+    line-height: 1.6;
+    margin-top: 12px;
+    font-family: 'Cascadia Code', 'JetBrains Mono', monospace;
+  }
+  .legend {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-top: 12px;
+    font-size: 13px;
+  }
+  .legend-item { display: flex; align-items: center; gap: 6px; }
+  .legend-color {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    flex-shrink: 0;
+  }
+  .note {
+    background: rgba(56,189,248,0.05);
+    border-left: 3px solid var(--accent);
+    padding: 12px 16px;
+    margin-top: 16px;
+    font-size: 13px;
+    color: var(--text2);
+    border-radius: 0 6px 6px 0;
+  }
+  .warn {
+    background: rgba(248,113,113,0.05);
+    border-left: 3px solid var(--red);
+    padding: 12px 16px;
+    margin-top: 16px;
+    font-size: 13px;
+    color: var(--text2);
+    border-radius: 0 6px 6px 0;
+  }
+  @media (max-width: 900px) {
+    .content { padding: 20px; }
+    .header { padding: 20px; }
+    .nav { padding: 10px 20px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>OpenClaw 自動化進化學習擴張架構</h1>
+  <p>四層仿生進化堆疊 &mdash; 建築藍圖 v1.0 &mdash; 2026-05-14</p>
+</div>
+
+<div class="nav">
+  <a href="#overview">全景架構</a>
+  <a href="#current">現況問題</a>
+  <a href="#layer1">第一層：運行即學習</a>
+  <a href="#layer2">第二層：神經路由</a>
+  <a href="#layer3">第三層：增長心跳</a>
+  <a href="#layer4">第四層：有機細胞</a>
+  <a href="#dataflow">資料流向</a>
+  <a href="#hooks">Hook 對照表</a>
+  <a href="#comms">層間通訊</a>
+  <a href="#timeline">實施時程</a>
+  <a href="#files">檔案結構</a>
+  <a href="#safety">安全驗證</a>
+  <a href="#coldstart">冷啟動</a>
+  <a href="#dataformat">資料格式</a>
+  <a href="#negprotect">負向防護</a>
+  <a href="#dashboard">可觀測性</a>
+  <a href="#integration">整合對接</a>
+  <a href="#stress">效能壓力</a>
+</div>
+
+<div class="content">
+
+<!-- ============================================================ -->
+<section id="overview">
+<h2>一、全景架構圖 <span class="badge" style="background:rgba(56,189,248,0.15);color:var(--accent);">藍圖</span></h2>
+
+<div class="diagram">
+<div class="diagram-title">四層進化堆疊建立在 OpenClaw 現有基礎上</div>
+<svg width="1100" height="720" viewBox="0 0 1100 720">
+  <!-- 基礎層 -->
+  <rect x="50" y="560" width="1000" height="140" rx="12" fill="#111827" stroke="#2a3a4e" stroke-width="2"/>
+  <text x="550" y="588" text-anchor="middle" fill="#94a3b8" font-size="13" font-weight="bold">現有 OpenClaw 基礎（不修改）</text>
+  <text x="160" y="618" text-anchor="middle" fill="#4ade80" font-size="11">126 個擴充套件</text>
+  <text x="330" y="618" text-anchor="middle" fill="#4ade80" font-size="11">80+ 核心模組</text>
+  <text x="500" y="618" text-anchor="middle" fill="#4ade80" font-size="11">36 個掛鉤事件</text>
+  <text x="670" y="618" text-anchor="middle" fill="#4ade80" font-size="11">59 個技能</text>
+  <text x="840" y="618" text-anchor="middle" fill="#4ade80" font-size="11">Plugin SDK</text>
+  <text x="160" y="645" text-anchor="middle" fill="#64748b" font-size="10">記憶核心</text>
+  <text x="330" y="645" text-anchor="middle" fill="#64748b" font-size="10">主動記憶</text>
+  <text x="500" y="645" text-anchor="middle" fill="#64748b" font-size="10">向量記憶庫</text>
+  <text x="670" y="645" text-anchor="middle" fill="#64748b" font-size="10">軌跡記錄</text>
+  <text x="840" y="645" text-anchor="middle" fill="#64748b" font-size="10">承諾追蹤</text>
+  <text x="160" y="670" text-anchor="middle" fill="#64748b" font-size="10">上下文引擎</text>
+  <text x="330" y="670" text-anchor="middle" fill="#64748b" font-size="10">Hermes 代理</text>
+  <text x="500" y="670" text-anchor="middle" fill="#64748b" font-size="10">掛鉤系統</text>
+  <text x="670" y="670" text-anchor="middle" fill="#64748b" font-size="10">排程/心跳</text>
+  <text x="840" y="670" text-anchor="middle" fill="#64748b" font-size="10">睡眠整理</text>
+
+  <!-- 第一層 -->
+  <rect x="50" y="430" width="1000" height="110" rx="12" fill="none" stroke="#059669" stroke-width="2.5"/>
+  <rect x="50" y="430" width="1000" height="110" rx="12" fill="#059669" fill-opacity="0.06"/>
+  <circle cx="80" cy="448" r="6" fill="#059669"/>
+  <text x="95" y="453" fill="#059669" font-size="14" font-weight="bold">第一層：運行即學習</text>
+  <text x="890" y="453" fill="#059669" font-size="11" text-anchor="end">extensions/operational-learning/</text>
+  <text x="120" y="482" fill="#e2e8f0" font-size="12">收集器</text>
+  <text x="280" y="482" fill="#e2e8f0" font-size="12">分析器</text>
+  <text x="440" y="482" fill="#e2e8f0" font-size="12">權重儲存</text>
+  <text x="620" y="482" fill="#e2e8f0" font-size="12">注入器</text>
+  <text x="800" y="482" fill="#e2e8f0" font-size="12">查詢工具</text>
+  <rect x="80" y="462" width="100" height="30" rx="4" fill="none" stroke="#059669" stroke-width="1" stroke-opacity="0.4"/>
+  <rect x="240" y="462" width="100" height="30" rx="4" fill="none" stroke="#059669" stroke-width="1" stroke-opacity="0.4"/>
+  <rect x="400" y="462" width="110" height="30" rx="4" fill="none" stroke="#059669" stroke-width="1" stroke-opacity="0.4"/>
+  <rect x="580" y="462" width="100" height="30" rx="4" fill="none" stroke="#059669" stroke-width="1" stroke-opacity="0.4"/>
+  <rect x="760" y="462" width="100" height="30" rx="4" fill="none" stroke="#059669" stroke-width="1" stroke-opacity="0.4"/>
+  <text x="120" y="518" fill="#94a3b8" font-size="10">工具結果掛鉤</text>
+  <text x="280" y="518" fill="#94a3b8" font-size="10">模型結束掛鉤</text>
+  <text x="440" y="518" fill="#94a3b8" font-size="10">代理結束掛鉤</text>
+  <text x="620" y="518" fill="#94a3b8" font-size="10">會話結束掛鉤</text>
+  <text x="800" y="518" fill="#94a3b8" font-size="10">提示建構掛鉤</text>
+
+  <!-- 第二層 -->
+  <rect x="50" y="300" width="1000" height="110" rx="12" fill="none" stroke="#7c3aed" stroke-width="2.5"/>
+  <rect x="50" y="300" width="1000" height="110" rx="12" fill="#7c3aed" fill-opacity="0.06"/>
+  <circle cx="80" cy="318" r="6" fill="#7c3aed"/>
+  <text x="95" y="323" fill="#7c3aed" font-size="14" font-weight="bold">第二層：神經路由</text>
+  <text x="890" y="323" fill="#7c3aed" font-size="11" text-anchor="end">extensions/neural-router/</text>
+  <text x="140" y="352" fill="#e2e8f0" font-size="12">突觸權重</text>
+  <text x="310" y="352" fill="#e2e8f0" font-size="12">激活閾值</text>
+  <text x="470" y="352" fill="#e2e8f0" font-size="12">競爭選優</text>
+  <text x="630" y="352" fill="#e2e8f0" font-size="12">權重衰減</text>
+  <text x="810" y="352" fill="#e2e8f0" font-size="12">上下文訊號</text>
+  <rect x="90" y="332" width="120" height="30" rx="4" fill="none" stroke="#7c3aed" stroke-width="1" stroke-opacity="0.4"/>
+  <rect x="270" y="332" width="100" height="30" rx="4" fill="none" stroke="#7c3aed" stroke-width="1" stroke-opacity="0.4"/>
+  <rect x="430" y="332" width="100" height="30" rx="4" fill="none" stroke="#7c3aed" stroke-width="1" stroke-opacity="0.4"/>
+  <rect x="590" y="332" width="100" height="30" rx="4" fill="none" stroke="#7c3aed" stroke-width="1" stroke-opacity="0.4"/>
+  <rect x="760" y="332" width="120" height="30" rx="4" fill="none" stroke="#7c3aed" stroke-width="1" stroke-opacity="0.4"/>
+  <text x="140" y="390" fill="#94a3b8" font-size="10">模型選擇掛鉤</text>
+  <text x="310" y="390" fill="#94a3b8" font-size="10">回合準備掛鉤</text>
+  <text x="470" y="390" fill="#94a3b8" font-size="10">提示建構掛鉤</text>
+  <text x="630" y="390" fill="#94a3b8" font-size="10">模型結束掛鉤</text>
+  <text x="810" y="390" fill="#94a3b8" font-size="10">工具結果掛鉤</text>
+
+  <!-- 第三層 -->
+  <rect x="50" y="170" width="1000" height="110" rx="12" fill="none" stroke="#d97706" stroke-width="2.5"/>
+  <rect x="50" y="170" width="1000" height="110" rx="12" fill="#d97706" fill-opacity="0.06"/>
+  <circle cx="80" cy="188" r="6" fill="#d97706"/>
+  <text x="95" y="193" fill="#d97706" font-size="14" font-weight="bold">第三層：增長心跳</text>
+  <text x="890" y="193" fill="#d97706" font-size="11" text-anchor="end">extensions/growth-pulse/</text>
+  <text x="150" y="222" fill="#e2e8f0" font-size="12">淺層週期</text>
+  <text x="350" y="222" fill="#e2e8f0" font-size="12">快速眼動週期</text>
+  <text x="560" y="222" fill="#e2e8f0" font-size="12">深層週期</text>
+  <text x="770" y="222" fill="#e2e8f0" font-size="12">增長指標</text>
+  <rect x="100" y="204" width="120" height="28" rx="4" fill="none" stroke="#d97706" stroke-width="1" stroke-opacity="0.4"/>
+  <rect x="300" y="204" width="130" height="28" rx="4" fill="none" stroke="#d97706" stroke-width="1" stroke-opacity="0.4"/>
+  <rect x="510" y="204" width="120" height="28" rx="4" fill="none" stroke="#d97706" stroke-width="1" stroke-opacity="0.4"/>
+  <rect x="720" y="204" width="120" height="28" rx="4" fill="none" stroke="#d97706" stroke-width="1" stroke-opacity="0.4"/>
+  <text x="150" y="254" fill="#94a3b8" font-size="10">每 1 小時</text>
+  <text x="350" y="254" fill="#94a3b8" font-size="10">每 24 小時</text>
+  <text x="560" y="254" fill="#94a3b8" font-size="10">每 7 天</text>
+  <text x="770" y="254" fill="#94a3b8" font-size="10">心跳掛鉤</text>
+  <text x="150" y="268" fill="#64748b" font-size="9">權重微調</text>
+  <text x="350" y="268" fill="#64748b" font-size="9">模式提取+技能孵化</text>
+  <text x="560" y="268" fill="#64748b" font-size="9">結構重組+剪枝</text>
+  <text x="770" y="268" fill="#64748b" font-size="9">注入增長上下文</text>
+
+  <!-- 第四層 -->
+  <rect x="50" y="40" width="1000" height="110" rx="12" fill="none" stroke="#dc2626" stroke-width="2.5"/>
+  <rect x="50" y="40" width="1000" height="110" rx="12" fill="#dc2626" fill-opacity="0.06"/>
+  <circle cx="80" cy="58" r="6" fill="#dc2626"/>
+  <text x="95" y="63" fill="#dc2626" font-size="14" font-weight="bold">第四層：有機細胞</text>
+  <text x="890" y="63" fill="#dc2626" font-size="11" text-anchor="end">extensions/organic-cells/</text>
+  <text x="130" y="92" fill="#e2e8f0" font-size="12">細胞登記</text>
+  <text x="280" y="92" fill="#e2e8f0" font-size="12">新陳代謝</text>
+  <text x="430" y="92" fill="#e2e8f0" font-size="12">免疫系統</text>
+  <text x="580" y="92" fill="#e2e8f0" font-size="12">內分泌</text>
+  <text x="730" y="92" fill="#e2e8f0" font-size="12">幹細胞池</text>
+  <text x="880" y="92" fill="#e2e8f0" font-size="12">DNA 檢查</text>
+  <rect x="80" y="74" width="120" height="28" rx="4" fill="none" stroke="#dc2626" stroke-width="1" stroke-opacity="0.4"/>
+  <rect x="230" y="74" width="110" height="28" rx="4" fill="none" stroke="#dc2626" stroke-width="1" stroke-opacity="0.4"/>
+  <rect x="380" y="74" width="110" height="28" rx="4" fill="none" stroke="#dc2626" stroke-width="1" stroke-opacity="0.4"/>
+  <rect x="530" y="74" width="110" height="28" rx="4" fill="none" stroke="#dc2626" stroke-width="1" stroke-opacity="0.4"/>
+  <rect x="680" y="74" width="110" height="28" rx="4" fill="none" stroke="#dc2626" stroke-width="1" stroke-opacity="0.4"/>
+  <rect x="830" y="74" width="110" height="28" rx="4" fill="none" stroke="#dc2626" stroke-width="1" stroke-opacity="0.4"/>
+  <text x="130" y="130" fill="#94a3b8" font-size="10">健康追蹤</text>
+  <text x="280" y="130" fill="#94a3b8" font-size="10">輸入/輸出/廢物</text>
+  <text x="430" y="130" fill="#94a3b8" font-size="10">異常攔截</text>
+  <text x="580" y="130" fill="#94a3b8" font-size="10">荷爾蒙狀態</text>
+  <text x="730" y="130" fill="#94a3b8" font-size="10">技能胚胎</text>
+  <text x="880" y="130" fill="#94a3b8" font-size="10">清單校驗</text>
+
+  <!-- 回饋迴路 -->
+  <path d="M1060,80 Q1080,320 1060,540" fill="none" stroke="#38bdf8" stroke-width="2" stroke-dasharray="6,3"/>
+  <text x="1072" y="280" fill="#38bdf8" font-size="11" font-weight="bold" transform="rotate(90,1072,280)">回饋迴路：結果回饋到下次操作</text>
+</svg>
+</div>
+
+<div class="legend">
+  <div class="legend-item"><div class="legend-color" style="background:#059669"></div> 第一層：運行即學習</div>
+  <div class="legend-item"><div class="legend-color" style="background:#7c3aed"></div> 第二層：神經路由</div>
+  <div class="legend-item"><div class="legend-color" style="background:#d97706"></div> 第三層：增長心跳</div>
+  <div class="legend-item"><div class="legend-color" style="background:#dc2626"></div> 第四層：有機細胞</div>
+  <div class="legend-item"><div class="legend-color" style="background:#38bdf8"></div> 回饋迴路</div>
+  <div class="legend-item"><div class="legend-color" style="background:#4ade80"></div> 現有基礎</div>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section id="current">
+<h2>二、現況問題：八座孤島 <span class="badge" style="background:rgba(248,113,113,0.15);color:var(--red);">問題</span></h2>
+
+<div class="diagram">
+<div class="diagram-title">現有的學習機制全部是孤立的，彼此不連通</div>
+<svg width="1100" height="420" viewBox="0 0 1100 420">
+  <g transform="translate(60,40)">
+    <rect width="190" height="110" rx="8" fill="#1a2332" stroke="#4ade80" stroke-width="1.5"/>
+    <text x="95" y="24" text-anchor="middle" fill="#4ade80" font-size="12" font-weight="bold">記憶核心</text>
+    <text x="95" y="46" text-anchor="middle" fill="#94a3b8" font-size="10">睡眠整理（淺/快速/深層）</text>
+    <text x="95" y="64" text-anchor="middle" fill="#94a3b8" font-size="10">記憶搜尋、記憶取得</text>
+    <text x="95" y="88" text-anchor="middle" fill="#f87171" font-size="10">只整理記憶</text>
+    <text x="95" y="103" text-anchor="middle" fill="#f87171" font-size="10">不回饋到行為</text>
+  </g>
+  <g transform="translate(290,40)">
+    <rect width="190" height="110" rx="8" fill="#1a2332" stroke="#4ade80" stroke-width="1.5"/>
+    <text x="95" y="24" text-anchor="middle" fill="#4ade80" font-size="12" font-weight="bold">主動記憶</text>
+    <text x="95" y="46" text-anchor="middle" fill="#94a3b8" font-size="10">斷路器、子代理查詢</text>
+    <text x="95" y="64" text-anchor="middle" fill="#94a3b8" font-size="10">提示建構前注入</text>
+    <text x="95" y="88" text-anchor="middle" fill="#f87171" font-size="10">讀取記憶但不從</text>
+    <text x="95" y="103" text-anchor="middle" fill="#f87171" font-size="10">結果中學習</text>
+  </g>
+  <g transform="translate(520,40)">
+    <rect width="190" height="110" rx="8" fill="#1a2332" stroke="#4ade80" stroke-width="1.5"/>
+    <text x="95" y="24" text-anchor="middle" fill="#4ade80" font-size="12" font-weight="bold">向量記憶庫</text>
+    <text x="95" y="46" text-anchor="middle" fill="#94a3b8" font-size="10">向量嵌入、自動擷取</text>
+    <text x="95" y="64" text-anchor="middle" fill="#94a3b8" font-size="10">記憶召回、記憶儲存</text>
+    <text x="95" y="88" text-anchor="middle" fill="#f87171" font-size="10">儲存但不分析</text>
+    <text x="95" y="103" text-anchor="middle" fill="#f87171" font-size="10">模式</text>
+  </g>
+  <g transform="translate(750,40)">
+    <rect width="190" height="110" rx="8" fill="#1a2332" stroke="#4ade80" stroke-width="1.5"/>
+    <text x="95" y="24" text-anchor="middle" fill="#4ade80" font-size="12" font-weight="bold">Hermes 代理</text>
+    <text x="95" y="46" text-anchor="middle" fill="#94a3b8" font-size="10">學習記錄（最多200筆）</text>
+    <text x="95" y="64" text-anchor="middle" fill="#94a3b8" font-size="10">晉升閘道、審計</text>
+    <text x="95" y="88" text-anchor="middle" fill="#f87171" font-size="10">記錄但不更新</text>
+    <text x="95" y="103" text-anchor="middle" fill="#f87171" font-size="10">路由或策略</text>
+  </g>
+
+  <g transform="translate(60,210)">
+    <rect width="190" height="110" rx="8" fill="#1a2332" stroke="#fbbf24" stroke-width="1.5"/>
+    <text x="95" y="24" text-anchor="middle" fill="#fbbf24" font-size="12" font-weight="bold">軌跡記錄</text>
+    <text x="95" y="46" text-anchor="middle" fill="#94a3b8" font-size="10">執行追蹤記錄</text>
+    <text x="95" y="64" text-anchor="middle" fill="#94a3b8" font-size="10">匯出為 JSON</text>
+    <text x="95" y="88" text-anchor="middle" fill="#f87171" font-size="10">記錄但從來</text>
+    <text x="95" y="103" text-anchor="middle" fill="#f87171" font-size="10">不回饋</text>
+  </g>
+  <g transform="translate(290,210)">
+    <rect width="190" height="110" rx="8" fill="#1a2332" stroke="#fbbf24" stroke-width="1.5"/>
+    <text x="95" y="24" text-anchor="middle" fill="#fbbf24" font-size="12" font-weight="bold">承諾追蹤</text>
+    <text x="95" y="46" text-anchor="middle" fill="#94a3b8" font-size="10">承諾追蹤</text>
+    <text x="95" y="64" text-anchor="middle" fill="#94a3b8" font-size="10">模型選擇學習</text>
+    <text x="95" y="88" text-anchor="middle" fill="#f87171" font-size="10">範圍太窄：</text>
+    <text x="95" y="103" text-anchor="middle" fill="#f87171" font-size="10">只管模型選擇</text>
+  </g>
+  <g transform="translate(520,210)">
+    <rect width="190" height="110" rx="8" fill="#1a2332" stroke="#fbbf24" stroke-width="1.5"/>
+    <text x="95" y="24" text-anchor="middle" fill="#fbbf24" font-size="12" font-weight="bold">上下文引擎</text>
+    <text x="95" y="46" text-anchor="middle" fill="#94a3b8" font-size="10">可插拔上下文組裝</text>
+    <text x="95" y="64" text-anchor="middle" fill="#94a3b8" font-size="10">壓縮、生命週期</text>
+    <text x="95" y="88" text-anchor="middle" fill="#f87171" font-size="10">只是框架</text>
+    <text x="95" y="103" text-anchor="middle" fill="#f87171" font-size="10">不會自我改進</text>
+  </g>
+  <g transform="translate(750,210)">
+    <rect width="190" height="110" rx="8" fill="#1a2332" stroke="#fbbf24" stroke-width="1.5"/>
+    <text x="95" y="24" text-anchor="middle" fill="#fbbf24" font-size="12" font-weight="bold">掛鉤 + 排程</text>
+    <text x="95" y="46" text-anchor="middle" fill="#94a3b8" font-size="10">36 個掛鉤事件</text>
+    <text x="95" y="64" text-anchor="middle" fill="#94a3b8" font-size="10">排程執行</text>
+    <text x="95" y="88" text-anchor="middle" fill="#f87171" font-size="10">被動管道</text>
+    <text x="95" y="103" text-anchor="middle" fill="#f87171" font-size="10">無自適應行為</text>
+  </g>
+
+  <!-- 斷開標記 -->
+  <text x="265" y="95" fill="#f87171" font-size="20" font-weight="bold">X</text>
+  <text x="495" y="95" fill="#f87171" font-size="20" font-weight="bold">X</text>
+  <text x="725" y="95" fill="#f87171" font-size="20" font-weight="bold">X</text>
+  <text x="265" y="265" fill="#f87171" font-size="20" font-weight="bold">X</text>
+  <text x="495" y="265" fill="#f87171" font-size="20" font-weight="bold">X</text>
+  <text x="725" y="265" fill="#f87171" font-size="20" font-weight="bold">X</text>
+  <text x="155" y="185" fill="#f87171" font-size="20" font-weight="bold">X</text>
+  <text x="385" y="185" fill="#f87171" font-size="20" font-weight="bold">X</text>
+  <text x="615" y="185" fill="#f87171" font-size="20" font-weight="bold">X</text>
+  <text x="845" y="185" fill="#f87171" font-size="20" font-weight="bold">X</text>
+
+  <rect x="200" y="360" width="700" height="44" rx="8" fill="rgba(248,113,113,0.1)" stroke="#f87171" stroke-width="1" stroke-dasharray="4,3"/>
+  <text x="550" y="387" text-anchor="middle" fill="#f87171" font-size="14" font-weight="bold">8 座孤島 &mdash; 沒有連接、沒有回饋迴路、沒有增長</text>
+</svg>
+</div>
+
+<div class="warn">
+  核心問題：系統每天產生大量學習資料，但全部丟掉了。用完即忘，不是用完即長。
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section id="dataflow">
+<h2>三、完整資料流向 <span class="badge" style="background:rgba(34,211,238,0.15);color:var(--cyan);">流程</span></h2>
+
+<div class="diagram">
+<div class="diagram-title">端到端：從使用者操作到系統增長</div>
+<svg width="1100" height="600" viewBox="0 0 1100 600">
+  <defs>
+    <marker id="aw" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#e2e8f0"/></marker>
+    <marker id="ac" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#22d3ee"/></marker>
+  </defs>
+
+  <!-- 使用者 -->
+  <rect x="420" y="15" width="260" height="50" rx="25" fill="#38bdf8" fill-opacity="0.15" stroke="#38bdf8" stroke-width="2"/>
+  <text x="550" y="46" text-anchor="middle" fill="#38bdf8" font-size="15" font-weight="bold">使用者操作 OpenClaw</text>
+
+  <line x1="550" y1="65" x2="550" y2="95" stroke="#e2e8f0" stroke-width="1.5" marker-end="url(#aw)"/>
+
+  <!-- 步驟1：掛鉤收集 -->
+  <rect x="250" y="95" width="600" height="75" rx="8" fill="#1a2332" stroke="#059669" stroke-width="1.5"/>
+  <text x="550" y="120" text-anchor="middle" fill="#059669" font-size="13" font-weight="bold">第一層：掛鉤事件收集（觀察，不阻斷）</text>
+  <text x="340" y="148" text-anchor="middle" fill="#94a3b8" font-size="11">工具結果</text>
+  <text x="460" y="148" text-anchor="middle" fill="#94a3b8" font-size="11">模型效能</text>
+  <text x="580" y="148" text-anchor="middle" fill="#94a3b8" font-size="11">代理結果</text>
+  <text x="700" y="148" text-anchor="middle" fill="#94a3b8" font-size="11">會話統計</text>
+
+  <line x1="550" y1="170" x2="550" y2="200" stroke="#e2e8f0" stroke-width="1.5" marker-end="url(#aw)"/>
+
+  <!-- 步驟2：模式分析 -->
+  <rect x="300" y="200" width="500" height="55" rx="8" fill="#1a2332" stroke="#059669" stroke-width="1.5"/>
+  <text x="550" y="225" text-anchor="middle" fill="#059669" font-size="13" font-weight="bold">第一層：模式分析</text>
+  <text x="550" y="245" text-anchor="middle" fill="#94a3b8" font-size="11">提取模式 → 計算權重 → 偵測偏好</text>
+
+  <!-- 三路分支 -->
+  <line x1="390" y1="255" x2="200" y2="300" stroke="#e2e8f0" stroke-width="1" marker-end="url(#aw)"/>
+  <line x1="550" y1="255" x2="550" y2="300" stroke="#e2e8f0" stroke-width="1" marker-end="url(#aw)"/>
+  <line x1="710" y1="255" x2="900" y2="300" stroke="#e2e8f0" stroke-width="1" marker-end="url(#aw)"/>
+
+  <!-- 左：權重矩陣 -->
+  <rect x="70" y="300" width="260" height="55" rx="8" fill="#1a2332" stroke="#7c3aed" stroke-width="1.5"/>
+  <text x="200" y="322" text-anchor="middle" fill="#7c3aed" font-size="13" font-weight="bold">第二層：更新權重矩陣</text>
+  <text x="200" y="344" text-anchor="middle" fill="#94a3b8" font-size="11">突觸權重根據結果調整</text>
+
+  <!-- 中：提示注入 -->
+  <rect x="380" y="300" width="340" height="55" rx="8" fill="#1a2332" stroke="#059669" stroke-width="1.5"/>
+  <text x="550" y="322" text-anchor="middle" fill="#059669" font-size="13" font-weight="bold">第一層：注入學習結果</text>
+  <text x="550" y="344" text-anchor="middle" fill="#94a3b8" font-size="11">提示建構前 → 注入學到的模式</text>
+
+  <!-- 右：增長指標 -->
+  <rect x="770" y="300" width="260" height="55" rx="8" fill="#1a2332" stroke="#d97706" stroke-width="1.5"/>
+  <text x="900" y="322" text-anchor="middle" fill="#d97706" font-size="13" font-weight="bold">第三層：更新增長指標</text>
+  <text x="900" y="344" text-anchor="middle" fill="#94a3b8" font-size="11">記錄各層的增長趨勢</text>
+
+  <!-- 第二層決策 -->
+  <line x1="200" y1="355" x2="200" y2="400" stroke="#e2e8f0" stroke-width="1" marker-end="url(#aw)"/>
+  <rect x="70" y="400" width="260" height="55" rx="8" fill="#1a2332" stroke="#7c3aed" stroke-width="1.5"/>
+  <text x="200" y="422" text-anchor="middle" fill="#7c3aed" font-size="13" font-weight="bold">第二層：神經決策</text>
+  <text x="200" y="444" text-anchor="middle" fill="#94a3b8" font-size="11">模型選擇掛鉤 → 動態選擇最優路徑</text>
+
+  <!-- 第三層週期 -->
+  <line x1="900" y1="355" x2="900" y2="400" stroke="#e2e8f0" stroke-width="1" marker-end="url(#aw)"/>
+  <rect x="770" y="400" width="260" height="80" rx="8" fill="#1a2332" stroke="#d97706" stroke-width="1.5"/>
+  <text x="900" y="422" text-anchor="middle" fill="#d97706" font-size="13" font-weight="bold">第三層：增長週期</text>
+  <text x="810" y="445" fill="#94a3b8" font-size="10">淺層：權重微調（每小時）</text>
+  <text x="810" y="460" fill="#94a3b8" font-size="10">快速眼動：模式提取（每天）</text>
+  <text x="810" y="475" fill="#94a3b8" font-size="10">深層：結構重組（每週）</text>
+
+  <!-- 第四層 -->
+  <line x1="200" y1="455" x2="200" y2="505" stroke="#e2e8f0" stroke-width="1" marker-end="url(#aw)"/>
+  <line x1="550" y1="355" x2="550" y2="505" stroke="#e2e8f0" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#aw)"/>
+  <line x1="900" y1="480" x2="900" y2="505" stroke="#e2e8f0" stroke-width="1" marker-end="url(#aw)"/>
+
+  <rect x="70" y="505" width="960" height="70" rx="8" fill="#1a2332" stroke="#dc2626" stroke-width="1.5"/>
+  <text x="550" y="530" text-anchor="middle" fill="#dc2626" font-size="13" font-weight="bold">第四層：有機體狀態更新</text>
+  <text x="180" y="558" text-anchor="middle" fill="#94a3b8" font-size="11">細胞健康</text>
+  <text x="370" y="558" text-anchor="middle" fill="#94a3b8" font-size="11">新陳代謝</text>
+  <text x="550" y="558" text-anchor="middle" fill="#94a3b8" font-size="11">免疫掃描</text>
+  <text x="730" y="558" text-anchor="middle" fill="#94a3b8" font-size="11">荷爾蒙調節</text>
+  <text x="920" y="558" text-anchor="middle" fill="#94a3b8" font-size="11">DNA 驗證</text>
+
+  <!-- 回饋 -->
+  <path d="M1040,540 L1070,540 Q1090,540 1090,520 L1090,46 Q1090,26 1070,26 L680,26" fill="none" stroke="#22d3ee" stroke-width="2" stroke-dasharray="6,3" marker-end="url(#ac)"/>
+  <text x="1092" y="290" fill="#22d3ee" font-size="12" font-weight="bold" transform="rotate(90,1092,290)">下一次操作更聰明</text>
+</svg>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section id="hooks">
+<h2>四、掛鉤整合對照表 <span class="badge" style="background:rgba(56,189,248,0.15);color:var(--accent);">掛鉤</span></h2>
+
+<div class="diagram">
+<div class="diagram-title">四層共使用 13 個官方掛鉤（全部是 OpenClaw 內建的，不需修改核心）</div>
+<table class="flow-table">
+<thead>
+<tr><th>掛鉤名稱</th><th>類型</th><th>使用層</th><th>用途</th><th>會阻斷嗎？</th></tr>
+</thead>
+<tbody>
+<tr>
+  <td>after_tool_call</td>
+  <td><span class="tag tag-void">觀察</span></td>
+  <td><span class="tag" style="background:rgba(5,150,105,0.15);color:#059669">一</span> <span class="tag" style="background:rgba(124,58,237,0.15);color:#7c3aed">二</span> <span class="tag" style="background:rgba(220,38,38,0.15);color:#dc2626">四</span></td>
+  <td>記錄工具呼叫結果（成功/失敗/耗時），更新突觸權重，追蹤細胞代謝</td>
+  <td>不會</td>
+</tr>
+<tr>
+  <td>model_call_ended</td>
+  <td><span class="tag tag-void">觀察</span></td>
+  <td><span class="tag" style="background:rgba(5,150,105,0.15);color:#059669">一</span> <span class="tag" style="background:rgba(124,58,237,0.15);color:#7c3aed">二</span></td>
+  <td>記錄模型效能，更新模型突觸權重</td>
+  <td>不會</td>
+</tr>
+<tr>
+  <td>agent_end</td>
+  <td><span class="tag tag-void">觀察</span></td>
+  <td><span class="tag" style="background:rgba(5,150,105,0.15);color:#059669">一</span></td>
+  <td>記錄完整會話結果，用於模式分析</td>
+  <td>不會</td>
+</tr>
+<tr>
+  <td>session_end</td>
+  <td><span class="tag tag-void">觀察</span></td>
+  <td><span class="tag" style="background:rgba(5,150,105,0.15);color:#059669">一</span> <span class="tag" style="background:rgba(220,38,38,0.15);color:#dc2626">四</span></td>
+  <td>記錄會話統計，更新細胞健康</td>
+  <td>不會</td>
+</tr>
+<tr>
+  <td>session_start</td>
+  <td><span class="tag tag-void">觀察</span></td>
+  <td><span class="tag" style="background:rgba(220,38,38,0.15);color:#dc2626">四</span></td>
+  <td>內分泌：將有機體切換到活躍模式</td>
+  <td>不會</td>
+</tr>
+<tr>
+  <td>before_prompt_build</td>
+  <td><span class="tag tag-modify">修改</span></td>
+  <td><span class="tag" style="background:rgba(5,150,105,0.15);color:#059669">一</span> <span class="tag" style="background:rgba(124,58,237,0.15);color:#7c3aed">二</span></td>
+  <td>將學習到的模式和神經路由上下文注入提示</td>
+  <td>不會（只是添加）</td>
+</tr>
+<tr>
+  <td>before_model_resolve</td>
+  <td><span class="tag tag-modify">修改</span></td>
+  <td><span class="tag" style="background:rgba(124,58,237,0.15);color:#7c3aed">二</span></td>
+  <td>根據突觸權重動態選擇模型/提供者</td>
+  <td>不會（只是覆蓋選擇）</td>
+</tr>
+<tr>
+  <td>agent_turn_prepare</td>
+  <td><span class="tag tag-modify">修改</span></td>
+  <td><span class="tag" style="background:rgba(124,58,237,0.15);color:#7c3aed">二</span></td>
+  <td>準備上下文訊號用於神經路由決策</td>
+  <td>不會</td>
+</tr>
+<tr>
+  <td>before_tool_call</td>
+  <td><span class="tag tag-modify">修改</span></td>
+  <td><span class="tag" style="background:rgba(220,38,38,0.15);color:#dc2626">四</span></td>
+  <td>免疫系統：隔離錯誤率過高的工具</td>
+  <td>會（當隔離時阻斷）</td>
+</tr>
+<tr>
+  <td>gateway_start</td>
+  <td><span class="tag tag-void">觀察</span></td>
+  <td><span class="tag" style="background:rgba(217,119,6,0.15);color:#d97706">三</span> <span class="tag" style="background:rgba(220,38,38,0.15);color:#dc2626">四</span></td>
+  <td>初始化增長心跳排程，啟動免疫系統</td>
+  <td>不會</td>
+</tr>
+<tr>
+  <td>gateway_stop</td>
+  <td><span class="tag tag-void">觀察</span></td>
+  <td><span class="tag" style="background:rgba(217,119,6,0.15);color:#d97706">三</span></td>
+  <td>停止增長心跳，儲存最終指標</td>
+  <td>不會</td>
+</tr>
+<tr>
+  <td>heartbeat_prompt_contribution</td>
+  <td><span class="tag tag-modify">修改</span></td>
+  <td><span class="tag" style="background:rgba(217,119,6,0.15);color:#d97706">三</span></td>
+  <td>將增長上下文注入心跳提示</td>
+  <td>不會</td>
+</tr>
+<tr>
+  <td>before_install</td>
+  <td><span class="tag tag-modify">修改</span></td>
+  <td><span class="tag" style="background:rgba(220,38,38,0.15);color:#dc2626">四</span></td>
+  <td>幹細胞閘道：評估技能胚胎成熟度才允許安裝</td>
+  <td>會（可阻擋未成熟的安裝）</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+<div class="note">
+  所有「觀察」類掛鉤都是觀察即走，失敗也不影響系統。
+  「修改」類掛鉤只添加上下文或覆蓋模型選擇，不會阻斷代理迴圈。
+  只有 before_tool_call（免疫）和 before_install（幹細胞閘道）可以阻斷，且只在證據充分時才阻斷。
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section id="layer1">
+<h2>五、第一層細節：運行即學習 <span class="badge" style="background:rgba(5,150,105,0.15);color:#059669">細節</span></h2>
+
+<div class="diagram">
+<div class="diagram-title">閉環學習：收集 → 分析 → 儲存 → 注入 → 更聰明</div>
+<svg width="1100" height="280" viewBox="0 0 1100 280">
+  <defs><marker id="ag" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#059669"/></marker></defs>
+
+  <rect x="30" y="20" width="220" height="240" rx="8" fill="#1a2332" stroke="#059669" stroke-width="1.5"/>
+  <text x="140" y="48" text-anchor="middle" fill="#059669" font-size="14" font-weight="bold">收集</text>
+  <text x="140" y="68" text-anchor="middle" fill="#94a3b8" font-size="10">collector.ts</text>
+  <rect x="50" y="82" width="180" height="26" rx="4" fill="rgba(5,150,105,0.1)" stroke="#059669" stroke-width="0.5"/>
+  <text x="140" y="100" text-anchor="middle" fill="#e2e8f0" font-size="10">工具結果 → 工具記錄</text>
+  <rect x="50" y="116" width="180" height="26" rx="4" fill="rgba(5,150,105,0.1)" stroke="#059669" stroke-width="0.5"/>
+  <text x="140" y="134" text-anchor="middle" fill="#e2e8f0" font-size="10">模型結束 → 效能記錄</text>
+  <rect x="50" y="150" width="180" height="26" rx="4" fill="rgba(5,150,105,0.1)" stroke="#059669" stroke-width="0.5"/>
+  <text x="140" y="168" text-anchor="middle" fill="#e2e8f0" font-size="10">代理結束 → 會話記錄</text>
+  <rect x="50" y="184" width="180" height="26" rx="4" fill="rgba(5,150,105,0.1)" stroke="#059669" stroke-width="0.5"/>
+  <text x="140" y="202" text-anchor="middle" fill="#e2e8f0" font-size="10">會話結束 → 統計記錄</text>
+  <text x="140" y="238" text-anchor="middle" fill="#64748b" font-size="9">追加寫入，最多 2000 筆</text>
+
+  <line x1="250" y1="140" x2="300" y2="140" stroke="#059669" stroke-width="1.5" marker-end="url(#ag)"/>
+
+  <rect x="300" y="20" width="220" height="240" rx="8" fill="#1a2332" stroke="#059669" stroke-width="1.5"/>
+  <text x="410" y="48" text-anchor="middle" fill="#059669" font-size="14" font-weight="bold">分析</text>
+  <text x="410" y="68" text-anchor="middle" fill="#94a3b8" font-size="10">analyzer.ts</text>
+  <rect x="320" y="82" width="180" height="26" rx="4" fill="rgba(5,150,105,0.1)" stroke="#059669" stroke-width="0.5"/>
+  <text x="410" y="100" text-anchor="middle" fill="#e2e8f0" font-size="10">頻率統計</text>
+  <rect x="320" y="116" width="180" height="26" rx="4" fill="rgba(5,150,105,0.1)" stroke="#059669" stroke-width="0.5"/>
+  <text x="410" y="134" text-anchor="middle" fill="#e2e8f0" font-size="10">成功率計算</text>
+  <rect x="320" y="150" width="180" height="26" rx="4" fill="rgba(5,150,105,0.1)" stroke="#059669" stroke-width="0.5"/>
+  <text x="410" y="168" text-anchor="middle" fill="#e2e8f0" font-size="10">延遲百分位</text>
+  <rect x="320" y="184" width="180" height="26" rx="4" fill="rgba(5,150,105,0.1)" stroke="#059669" stroke-width="0.5"/>
+  <text x="410" y="202" text-anchor="middle" fill="#e2e8f0" font-size="10">偏好提取</text>
+  <text x="410" y="238" text-anchor="middle" fill="#64748b" font-size="9">非同步批次，不阻斷</text>
+
+  <line x1="520" y1="140" x2="570" y2="140" stroke="#059669" stroke-width="1.5" marker-end="url(#ag)"/>
+
+  <rect x="570" y="20" width="220" height="240" rx="8" fill="#1a2332" stroke="#059669" stroke-width="1.5"/>
+  <text x="680" y="48" text-anchor="middle" fill="#059669" font-size="14" font-weight="bold">儲存</text>
+  <text x="680" y="68" text-anchor="middle" fill="#94a3b8" font-size="10">weight-store.ts</text>
+  <rect x="590" y="82" width="180" height="26" rx="4" fill="rgba(5,150,105,0.1)" stroke="#059669" stroke-width="0.5"/>
+  <text x="680" y="100" text-anchor="middle" fill="#e2e8f0" font-size="10">權重矩陣（工具）</text>
+  <rect x="590" y="116" width="180" height="26" rx="4" fill="rgba(5,150,105,0.1)" stroke="#059669" stroke-width="0.5"/>
+  <text x="680" y="134" text-anchor="middle" fill="#e2e8f0" font-size="10">權重矩陣（模型）</text>
+  <rect x="590" y="150" width="180" height="26" rx="4" fill="rgba(5,150,105,0.1)" stroke="#059669" stroke-width="0.5"/>
+  <text x="680" y="168" text-anchor="middle" fill="#e2e8f0" font-size="10">權重矩陣（路由）</text>
+  <rect x="590" y="184" width="180" height="26" rx="4" fill="rgba(5,150,105,0.1)" stroke="#059669" stroke-width="0.5"/>
+  <text x="680" y="202" text-anchor="middle" fill="#e2e8f0" font-size="10">模式庫</text>
+  <text x="680" y="238" text-anchor="middle" fill="#64748b" font-size="9">JSON 檔案，遞減衰減</text>
+
+  <line x1="790" y1="140" x2="840" y2="140" stroke="#059669" stroke-width="1.5" marker-end="url(#ag)"/>
+
+  <rect x="840" y="20" width="220" height="240" rx="8" fill="#1a2332" stroke="#059669" stroke-width="1.5"/>
+  <text x="950" y="48" text-anchor="middle" fill="#059669" font-size="14" font-weight="bold">注入</text>
+  <text x="950" y="68" text-anchor="middle" fill="#94a3b8" font-size="10">injector.ts</text>
+  <rect x="860" y="82" width="180" height="26" rx="4" fill="rgba(5,150,105,0.1)" stroke="#059669" stroke-width="0.5"/>
+  <text x="950" y="100" text-anchor="middle" fill="#e2e8f0" font-size="10">提示建構前掛鉤</text>
+  <rect x="860" y="116" width="180" height="26" rx="4" fill="rgba(5,150,105,0.1)" stroke="#059669" stroke-width="0.5"/>
+  <text x="950" y="134" text-anchor="middle" fill="#e2e8f0" font-size="10">格式化前 N 個模式</text>
+  <rect x="860" y="150" width="180" height="26" rx="4" fill="rgba(5,150,105,0.1)" stroke="#059669" stroke-width="0.5"/>
+  <text x="950" y="168" text-anchor="middle" fill="#e2e8f0" font-size="10">加入系統提示</text>
+  <rect x="860" y="184" width="180" height="26" rx="4" fill="rgba(5,150,105,0.1)" stroke="#059669" stroke-width="0.5"/>
+  <text x="950" y="202" text-anchor="middle" fill="#e2e8f0" font-size="10">信心度 >= 0.6 才注入</text>
+  <text x="950" y="238" text-anchor="middle" fill="#64748b" font-size="9">結果：下次回應更聰明</text>
+</svg>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section id="layer2">
+<h2>六、第二層詳細：神經路由 <span class="badge" style="background:rgba(124,58,237,0.15);color:#7c3aed;">細節</span></h2>
+
+<div class="diagram">
+<div class="diagram-title">突觸競爭機制：epsilon-greedy 選路 + EMA 權重更新閉環</div>
+<svg width="1100" height="380" viewBox="0 0 1100 380">
+  <defs>
+    <marker id="an" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#7c3aed"/></marker>
+    <marker id="an2" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#22d3ee"/></marker>
+  </defs>
+
+  <!-- 上下文訊號 -->
+  <rect x="20" y="145" width="150" height="90" rx="8" fill="#1a2332" stroke="#7c3aed" stroke-width="1.5"/>
+  <text x="95" y="175" text-anchor="middle" fill="#7c3aed" font-size="13" font-weight="bold">上下文訊號</text>
+  <text x="95" y="193" text-anchor="middle" fill="#94a3b8" font-size="10">任務類型</text>
+  <text x="95" y="208" text-anchor="middle" fill="#94a3b8" font-size="10">複雜度 / 歷史偏好</text>
+  <line x1="170" y1="190" x2="210" y2="190" stroke="#7c3aed" stroke-width="1.5" marker-end="url(#an)"/>
+
+  <!-- Epsilon 菱形決策 -->
+  <polygon points="310,145 410,190 310,235 210,190" fill="#1a2332" stroke="#7c3aed" stroke-width="1.5"/>
+  <text x="310" y="184" text-anchor="middle" fill="#c084fc" font-size="12" font-weight="bold">隨機數</text>
+  <text x="310" y="200" text-anchor="middle" fill="#c084fc" font-size="11">&lt; ε (10%)?</text>
+
+  <!-- 探索路徑（向上） -->
+  <line x1="310" y1="145" x2="310" y2="75" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#an)"/>
+  <text x="320" y="113" fill="#fbbf24" font-size="10">是（探索）</text>
+  <rect x="220" y="18" width="180" height="52" rx="8" fill="#1a2332" stroke="#fbbf24" stroke-width="1.5"/>
+  <text x="310" y="41" text-anchor="middle" fill="#fbbf24" font-size="12" font-weight="bold">隨機選擇路徑</text>
+  <text x="310" y="58" text-anchor="middle" fill="#94a3b8" font-size="10">探索未知可能，避免局部最優</text>
+
+  <!-- 利用路徑（向右） -->
+  <line x1="410" y1="190" x2="460" y2="190" stroke="#7c3aed" stroke-width="1.5" marker-end="url(#an)"/>
+  <text x="435" y="180" text-anchor="middle" fill="#94a3b8" font-size="10">否（利用）</text>
+
+  <!-- 突觸權重矩陣 -->
+  <rect x="460" y="95" width="210" height="190" rx="8" fill="#1a2332" stroke="#7c3aed" stroke-width="1.5"/>
+  <text x="565" y="120" text-anchor="middle" fill="#7c3aed" font-size="12" font-weight="bold">突觸權重矩陣</text>
+  <text x="565" y="138" text-anchor="middle" fill="#64748b" font-size="9">（依上下文類型分組）</text>
+  <text x="480" y="162" fill="#94a3b8" font-size="10">claude-opus</text>
+  <rect x="590" y="150" width="60" height="16" rx="3" fill="#059669" fill-opacity="0.7"/>
+  <text x="620" y="162" text-anchor="middle" fill="#fff" font-size="10">0.87 ★</text>
+  <text x="480" y="185" fill="#94a3b8" font-size="10">claude-sonnet</text>
+  <rect x="590" y="173" width="45" height="16" rx="3" fill="#059669" fill-opacity="0.5"/>
+  <text x="620" y="185" text-anchor="middle" fill="#fff" font-size="10">0.72</text>
+  <text x="480" y="208" fill="#94a3b8" font-size="10">gpt-4o</text>
+  <rect x="590" y="196" width="32" height="16" rx="3" fill="#fbbf24" fill-opacity="0.5"/>
+  <text x="620" y="208" text-anchor="middle" fill="#fff" font-size="10">0.55</text>
+  <text x="480" y="231" fill="#94a3b8" font-size="10">gemini-pro</text>
+  <rect x="590" y="219" width="20" height="16" rx="3" fill="#f87171" fill-opacity="0.5"/>
+  <text x="620" y="231" text-anchor="middle" fill="#fff" font-size="10">0.34</text>
+  <text x="565" y="268" text-anchor="middle" fill="#64748b" font-size="9">最高權重 → 勝出</text>
+
+  <!-- 勝出路徑 -->
+  <line x1="670" y1="190" x2="730" y2="190" stroke="#4ade80" stroke-width="1.5" marker-end="url(#an)"/>
+
+  <!-- 勝出結果 -->
+  <rect x="730" y="155" width="155" height="70" rx="8" fill="#059669" fill-opacity="0.1" stroke="#059669" stroke-width="2"/>
+  <text x="808" y="182" text-anchor="middle" fill="#4ade80" font-size="13" font-weight="bold">勝出路徑</text>
+  <text x="808" y="200" text-anchor="middle" fill="#94a3b8" font-size="10">claude-opus  0.87</text>
+  <text x="808" y="215" text-anchor="middle" fill="#64748b" font-size="9">before_model_resolve 回傳</text>
+
+  <!-- EMA更新 -->
+  <line x1="885" y1="190" x2="940" y2="190" stroke="#7c3aed" stroke-width="1.5" marker-end="url(#an)"/>
+  <rect x="940" y="110" width="145" height="160" rx="8" fill="#1a2332" stroke="#7c3aed" stroke-width="1.5"/>
+  <text x="1013" y="135" text-anchor="middle" fill="#7c3aed" font-size="12" font-weight="bold">EMA 更新</text>
+  <text x="1013" y="158" text-anchor="middle" fill="#c084fc" font-size="11">w′ = α·r + (1-α)·w</text>
+  <line x1="958" y1="168" x2="1068" y2="168" stroke="#2a3a4e" stroke-width="1"/>
+  <text x="1013" y="184" text-anchor="middle" fill="#64748b" font-size="9">α = 0.1（學習率）</text>
+  <text x="1013" y="198" text-anchor="middle" fill="#64748b" font-size="9">r = 成功+1 / 失敗-0.5</text>
+  <text x="1013" y="212" text-anchor="middle" fill="#64748b" font-size="9">延遲懲罰: -Δms/1000</text>
+  <text x="1013" y="228" text-anchor="middle" fill="#64748b" font-size="9">時間衰減: w × 0.99/hr</text>
+  <text x="1013" y="248" text-anchor="middle" fill="#94a3b8" font-size="9">持久化到 weights.json</text>
+
+  <!-- 回饋閉環 -->
+  <path d="M1013,270 Q1013,340 565,340 Q310,340 310,235" fill="none" stroke="#22d3ee" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#an2)"/>
+  <text x="640" y="356" text-anchor="middle" fill="#22d3ee" font-size="11">下次決策更準確 — 閉環學習</text>
+</svg>
+</div>
+
+<div class="spec-grid" style="margin-top:20px;">
+  <div class="spec-card" style="border-color:#7c3aed;">
+    <h4 style="color:#7c3aed;">ε 探索率設計</h4>
+    <table>
+      <tr><td>初始 ε</td><td>0.30（冷啟動探索多）</td></tr>
+      <tr><td>穩定後 ε</td><td>0.10（熱態利用多）</td></tr>
+      <tr><td>衰減公式</td><td>ε × 0.995 每次更新</td></tr>
+      <tr><td>最低 ε</td><td>0.05（永保探索空間）</td></tr>
+    </table>
+  </div>
+  <div class="spec-card" style="border-color:#c084fc;">
+    <h4 style="color:#c084fc;">突觸修剪條件</h4>
+    <table>
+      <tr><td>閒置門檻</td><td>7 天未被選擇</td></tr>
+      <tr><td>死亡門檻</td><td>權重 &lt; 0.05</td></tr>
+      <tr><td>修剪時機</td><td>第三層深層週期</td></tr>
+      <tr><td>安全機制</td><td>修剪前快照備份</td></tr>
+    </table>
+  </div>
+  <div class="spec-card" style="border-color:#4ade80;">
+    <h4 style="color:#4ade80;">Reward 計算規則</h4>
+    <table>
+      <tr><td>成功完成</td><td>+1.0</td></tr>
+      <tr><td>成功但慢（&gt;p90）</td><td>+1.0 − Δms/1000</td></tr>
+      <tr><td>失敗</td><td>−0.5</td></tr>
+      <tr><td>超時中斷</td><td>−0.3</td></tr>
+    </table>
+  </div>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section id="layer3">
+<h2>七、第三層詳細：增長心跳 <span class="badge" style="background:rgba(217,119,6,0.15);color:#d97706;">細節</span></h2>
+
+<div class="diagram">
+<div class="diagram-title">三週期時間軸：增長心跳與 memory-core Dreaming 完美對齊</div>
+<svg width="1100" height="320" viewBox="0 0 1100 320">
+  <!-- Y labels -->
+  <text x="28" y="58" fill="#d97706" font-size="11" font-weight="bold">淺層週期</text>
+  <text x="28" y="72" fill="#64748b" font-size="9">每 1 小時</text>
+  <text x="28" y="140" fill="#38bdf8" font-size="11" font-weight="bold">快速眼動</text>
+  <text x="28" y="154" fill="#64748b" font-size="9">每 24 小時</text>
+  <text x="28" y="215" fill="#c084fc" font-size="11" font-weight="bold">Dreaming</text>
+  <text x="28" y="229" fill="#64748b" font-size="9">memory-core</text>
+  <text x="28" y="282" fill="#f87171" font-size="11" font-weight="bold">深層週期</text>
+  <text x="28" y="296" fill="#64748b" font-size="9">每 7 天</text>
+
+  <!-- 淺層週期：每小時一個小格，共24格 -->
+  <line x1="120" y1="300" x2="1080" y2="300" stroke="#2a3a4e" stroke-width="1"/>
+  <!-- hour ticks -->
+  <text x="120" y="315" fill="#64748b" font-size="9" text-anchor="middle">0h</text>
+  <text x="560" y="315" fill="#64748b" font-size="9" text-anchor="middle">12h</text>
+  <text x="1080" y="315" fill="#64748b" font-size="9" text-anchor="middle">24h</text>
+
+  <!-- 淺層方塊 24個 -->
+  <rect x="120" y="32" width="36" height="38" rx="3" fill="#d97706" fill-opacity="0.5"/>
+  <rect x="160" y="32" width="36" height="38" rx="3" fill="#d97706" fill-opacity="0.5"/>
+  <rect x="200" y="32" width="36" height="38" rx="3" fill="#d97706" fill-opacity="0.5"/>
+  <rect x="240" y="32" width="36" height="38" rx="3" fill="#d97706" fill-opacity="0.5"/>
+  <rect x="280" y="32" width="36" height="38" rx="3" fill="#d97706" fill-opacity="0.5"/>
+  <rect x="320" y="32" width="36" height="38" rx="3" fill="#d97706" fill-opacity="0.5"/>
+  <rect x="360" y="32" width="36" height="38" rx="3" fill="#d97706" fill-opacity="0.5"/>
+  <rect x="400" y="32" width="36" height="38" rx="3" fill="#d97706" fill-opacity="0.5"/>
+  <rect x="440" y="32" width="36" height="38" rx="3" fill="#d97706" fill-opacity="0.5"/>
+  <rect x="480" y="32" width="36" height="38" rx="3" fill="#d97706" fill-opacity="0.5"/>
+  <rect x="520" y="32" width="36" height="38" rx="3" fill="#d97706" fill-opacity="0.5"/>
+  <rect x="560" y="32" width="36" height="38" rx="3" fill="#d97706" fill-opacity="0.5"/>
+  <rect x="600" y="32" width="36" height="38" rx="3" fill="#d97706" fill-opacity="0.5"/>
+  <rect x="640" y="32" width="36" height="38" rx="3" fill="#d97706" fill-opacity="0.5"/>
+  <rect x="680" y="32" width="36" height="38" rx="3" fill="#d97706" fill-opacity="0.5"/>
+  <rect x="720" y="32" width="36" height="38" rx="3" fill="#d97706" fill-opacity="0.5"/>
+  <rect x="760" y="32" width="36" height="38" rx="3" fill="#d97706" fill-opacity="0.5"/>
+  <rect x="800" y="32" width="36" height="38" rx="3" fill="#d97706" fill-opacity="0.5"/>
+  <rect x="840" y="32" width="36" height="38" rx="3" fill="#d97706" fill-opacity="0.5"/>
+  <rect x="880" y="32" width="36" height="38" rx="3" fill="#d97706" fill-opacity="0.5"/>
+  <rect x="920" y="32" width="36" height="38" rx="3" fill="#d97706" fill-opacity="0.5"/>
+  <rect x="960" y="32" width="36" height="38" rx="3" fill="#d97706" fill-opacity="0.5"/>
+  <rect x="1000" y="32" width="36" height="38" rx="3" fill="#d97706" fill-opacity="0.5"/>
+  <rect x="1040" y="32" width="36" height="38" rx="3" fill="#d97706" fill-opacity="0.4"/>
+  <text x="600" y="56" text-anchor="middle" fill="#fff" font-size="10">權重微調 × 24 次</text>
+
+  <!-- 快速眼動：一整天一塊 -->
+  <rect x="120" y="108" width="960" height="50" rx="6" fill="#38bdf8" fill-opacity="0.12" stroke="#38bdf8" stroke-width="1.5"/>
+  <text x="600" y="130" text-anchor="middle" fill="#38bdf8" font-size="12">全天採集 → 凌晨 03:00 批次執行</text>
+  <text x="600" y="148" text-anchor="middle" fill="#94a3b8" font-size="10">提取 top-10 模式 ｜ 評估技能胚胎 ｜ 晉升成熟胚胎 ｜ 更新增長指標</text>
+
+  <!-- Dreaming 對齊 -->
+  <rect x="120" y="178" width="320" height="46" rx="6" fill="#c084fc" fill-opacity="0.08" stroke="#c084fc" stroke-width="1" stroke-dasharray="5,3"/>
+  <text x="280" y="200" text-anchor="middle" fill="#c084fc" font-size="10">memory-core 淺層整理</text>
+  <text x="280" y="215" text-anchor="middle" fill="#64748b" font-size="9">（輕度記憶鞏固，不阻斷）</text>
+  <rect x="600" y="178" width="480" height="46" rx="6" fill="#c084fc" fill-opacity="0.14" stroke="#c084fc" stroke-width="1.5"/>
+  <text x="840" y="200" text-anchor="middle" fill="#c084fc" font-size="11" font-weight="bold">memory-core 快速眼動（同步觸發）</text>
+  <text x="840" y="215" text-anchor="middle" fill="#64748b" font-size="9">增長心跳完成 → 通知 memory-core 執行深度整理</text>
+  <!-- 同步箭頭 -->
+  <line x1="600" y1="133" x2="600" y2="175" stroke="#c084fc" stroke-width="1" stroke-dasharray="3,2"/>
+  <text x="612" y="158" fill="#c084fc" font-size="9">同步</text>
+
+  <!-- 深層週期 -->
+  <rect x="120" y="250" width="960" height="36" rx="6" fill="#f87171" fill-opacity="0.08" stroke="#f87171" stroke-width="1" stroke-dasharray="7,4"/>
+  <text x="600" y="271" text-anchor="middle" fill="#f87171" font-size="11" font-weight="bold">每週日 04:00 — 剪除死突觸 ｜ DNA 完整性驗證 ｜ 細胞健康重組 ｜ 生成週報</text>
+</svg>
+</div>
+
+<div class="spec-grid" style="margin-top:20px;">
+  <div class="spec-card" style="border-color:#d97706;">
+    <h4 style="color:#d97706;">淺層週期任務（&lt; 500ms）</h4>
+    <table>
+      <tr><td>1</td><td>讀取最新 100 筆工具記錄</td></tr>
+      <tr><td>2</td><td>計算各工具成功率差分</td></tr>
+      <tr><td>3</td><td>微調突觸權重（α = 0.05）</td></tr>
+      <tr><td>4</td><td>套用時間衰減（× 0.99）</td></tr>
+      <tr><td>5</td><td>寫回 weights.json</td></tr>
+    </table>
+  </div>
+  <div class="spec-card" style="border-color:#38bdf8;">
+    <h4 style="color:#38bdf8;">快速眼動週期任務（&lt; 5s）</h4>
+    <table>
+      <tr><td>1</td><td>提取當日 top-10 成功模式</td></tr>
+      <tr><td>2</td><td>評估技能胚胎成熟度分數</td></tr>
+      <tr><td>3</td><td>晉升 score &gt; 0.8 的胚胎</td></tr>
+      <tr><td>4</td><td>通知 memory-core 同步整理</td></tr>
+      <tr><td>5</td><td>更新五維增長指標趨勢</td></tr>
+    </table>
+  </div>
+  <div class="spec-card" style="border-color:#f87171;">
+    <h4 style="color:#f87171;">深層週期任務（&lt; 30s）</h4>
+    <table>
+      <tr><td>1</td><td>剪除 7 天未用的死突觸</td></tr>
+      <tr><td>2</td><td>DNA 校驗碼驗證（所有擴充）</td></tr>
+      <tr><td>3</td><td>細胞健康評估 + 重組建議</td></tr>
+      <tr><td>4</td><td>備份當前權重快照</td></tr>
+      <tr><td>5</td><td>生成 GrowthMetrics 週報</td></tr>
+    </table>
+  </div>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section id="layer4">
+<h2>八、第四層詳細：有機細胞 <span class="badge" style="background:rgba(220,38,38,0.15);color:#dc2626;">細節</span></h2>
+
+<div class="diagram">
+<div class="diagram-title">細胞生命週期狀態機：每個擴充套件都是一個有生命的細胞</div>
+<svg width="1100" height="190" viewBox="0 0 1100 190">
+  <defs>
+    <marker id="ac2" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#e2e8f0"/></marker>
+    <marker id="ar2" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#4ade80"/></marker>
+    <marker id="af" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#f87171"/></marker>
+  </defs>
+  <!-- 健康 -->
+  <circle cx="120" cy="90" r="65" fill="#059669" fill-opacity="0.1" stroke="#059669" stroke-width="2"/>
+  <text x="120" y="82" text-anchor="middle" fill="#4ade80" font-size="14" font-weight="bold">健康</text>
+  <text x="120" y="98" text-anchor="middle" fill="#94a3b8" font-size="10">錯誤率 &lt; 20%</text>
+  <text x="120" y="113" text-anchor="middle" fill="#64748b" font-size="9">生長素↑ 皮質醇↓</text>
+  <!-- → 壓力 -->
+  <line x1="185" y1="90" x2="265" y2="90" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#ac2)"/>
+  <text x="225" y="80" text-anchor="middle" fill="#fbbf24" font-size="9">錯誤率 &gt; 20%</text>
+  <!-- 壓力 -->
+  <circle cx="330" cy="90" r="65" fill="#d97706" fill-opacity="0.1" stroke="#d97706" stroke-width="2"/>
+  <text x="330" y="82" text-anchor="middle" fill="#fbbf24" font-size="14" font-weight="bold">壓力</text>
+  <text x="330" y="98" text-anchor="middle" fill="#94a3b8" font-size="10">皮質醇上升</text>
+  <text x="330" y="113" text-anchor="middle" fill="#64748b" font-size="9">決策趨於保守</text>
+  <!-- → 隔離 -->
+  <line x1="395" y1="90" x2="475" y2="90" stroke="#f87171" stroke-width="1.5" marker-end="url(#ac2)"/>
+  <text x="435" y="80" text-anchor="middle" fill="#f87171" font-size="9">錯誤率 &gt; 50%</text>
+  <!-- 隔離 -->
+  <circle cx="540" cy="90" r="65" fill="#dc2626" fill-opacity="0.1" stroke="#dc2626" stroke-width="2.5"/>
+  <text x="540" y="82" text-anchor="middle" fill="#f87171" font-size="14" font-weight="bold">隔離</text>
+  <text x="540" y="98" text-anchor="middle" fill="#94a3b8" font-size="10">工具呼叫被阻斷</text>
+  <text x="540" y="113" text-anchor="middle" fill="#64748b" font-size="9">before_tool_call 返回錯誤</text>
+  <!-- → 恢復 -->
+  <line x1="605" y1="90" x2="685" y2="90" stroke="#38bdf8" stroke-width="1.5" marker-end="url(#ac2)"/>
+  <text x="645" y="80" text-anchor="middle" fill="#38bdf8" font-size="9">人工解除 / 自動觀察</text>
+  <!-- 恢復 -->
+  <circle cx="750" cy="90" r="65" fill="#0ea5e9" fill-opacity="0.08" stroke="#38bdf8" stroke-width="2"/>
+  <text x="750" y="82" text-anchor="middle" fill="#38bdf8" font-size="14" font-weight="bold">恢復中</text>
+  <text x="750" y="98" text-anchor="middle" fill="#94a3b8" font-size="10">監控模式觀察</text>
+  <text x="750" y="113" text-anchor="middle" fill="#64748b" font-size="9">不阻斷，但全程記錄</text>
+  <!-- → 健康（回路） -->
+  <path d="M815,90 Q920,20 190,20 Q90,20 80,70" fill="none" stroke="#4ade80" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#ar2)"/>
+  <text x="490" y="14" text-anchor="middle" fill="#4ade80" font-size="9">連續 3 小時錯誤率 &lt; 10% → 回復健康</text>
+  <!-- 幹細胞（獨立） -->
+  <rect x="940" y="52" width="140" height="76" rx="8" fill="#c084fc" fill-opacity="0.08" stroke="#c084fc" stroke-width="1.5" stroke-dasharray="5,3"/>
+  <text x="1010" y="82" text-anchor="middle" fill="#c084fc" font-size="12" font-weight="bold">幹細胞池</text>
+  <text x="1010" y="98" text-anchor="middle" fill="#94a3b8" font-size="10">技能胚胎孵化中</text>
+  <text x="1010" y="113" text-anchor="middle" fill="#64748b" font-size="9">before_install 閘道</text>
+</svg>
+</div>
+
+<div class="diagram" style="margin-top:16px;">
+<div class="diagram-title">四種荷爾蒙狀態機：驅動有機體全局行為</div>
+<svg width="1100" height="240" viewBox="0 0 1100 240">
+  <!-- 皮質醇 -->
+  <rect x="20" y="15" width="245" height="210" rx="10" fill="#1a2332" stroke="#f87171" stroke-width="1.5"/>
+  <text x="143" y="42" text-anchor="middle" fill="#f87171" font-size="14" font-weight="bold">🔴 皮質醇</text>
+  <text x="143" y="58" text-anchor="middle" fill="#64748b" font-size="10">Cortisol — 壓力荷爾蒙</text>
+  <rect x="40" y="72" width="205" height="16" rx="4" fill="#1e293b"/>
+  <rect x="40" y="72" width="123" height="16" rx="4" fill="#f87171" fill-opacity="0.7"/>
+  <text x="143" y="84" text-anchor="middle" fill="#fff" font-size="9">當前值 60 / 100</text>
+  <text x="40" y="108" fill="#94a3b8" font-size="10">高 → 謹慎選路，偏保守</text>
+  <text x="40" y="124" fill="#94a3b8" font-size="10">極高（&gt;80）→ 觸發免疫</text>
+  <text x="40" y="144" fill="#64748b" font-size="10">觸發：</text>
+  <text x="40" y="160" fill="#64748b" font-size="9">・工具失敗率 &gt; 30%</text>
+  <text x="40" y="174" fill="#64748b" font-size="9">・連續錯誤 &gt; 5 次</text>
+  <text x="40" y="188" fill="#64748b" font-size="9">・任務超時</text>
+  <text x="40" y="210" fill="#94a3b8" font-size="9">下降：每次成功操作 −2</text>
+
+  <!-- 生長素 -->
+  <rect x="285" y="15" width="245" height="210" rx="10" fill="#1a2332" stroke="#4ade80" stroke-width="1.5"/>
+  <text x="408" y="42" text-anchor="middle" fill="#4ade80" font-size="14" font-weight="bold">🟢 生長素</text>
+  <text x="408" y="58" text-anchor="middle" fill="#64748b" font-size="10">Growth Hormone — 擴張荷爾蒙</text>
+  <rect x="305" y="72" width="205" height="16" rx="4" fill="#1e293b"/>
+  <rect x="305" y="72" width="164" height="16" rx="4" fill="#4ade80" fill-opacity="0.7"/>
+  <text x="408" y="84" text-anchor="middle" fill="#fff" font-size="9">當前值 80 / 100</text>
+  <text x="305" y="108" fill="#94a3b8" font-size="10">高 → 允許技能擴張</text>
+  <text x="305" y="124" fill="#94a3b8" font-size="10">極高（&gt;85）→ 晉升胚胎</text>
+  <text x="305" y="144" fill="#64748b" font-size="10">觸發：</text>
+  <text x="305" y="160" fill="#64748b" font-size="9">・連續成功 &gt; 20 次</text>
+  <text x="305" y="174" fill="#64748b" font-size="9">・會話成功率 &gt; 85%</text>
+  <text x="305" y="188" fill="#64748b" font-size="9">・用戶正向反饋</text>
+  <text x="305" y="210" fill="#94a3b8" font-size="9">下降：時間自然衰減 −1/hr</text>
+
+  <!-- 褪黑激素 -->
+  <rect x="550" y="15" width="245" height="210" rx="10" fill="#1a2332" stroke="#7c3aed" stroke-width="1.5"/>
+  <text x="673" y="42" text-anchor="middle" fill="#c084fc" font-size="14" font-weight="bold">🟣 褪黑激素</text>
+  <text x="673" y="58" text-anchor="middle" fill="#64748b" font-size="10">Melatonin — 整理荷爾蒙</text>
+  <rect x="570" y="72" width="205" height="16" rx="4" fill="#1e293b"/>
+  <rect x="570" y="72" width="82" height="16" rx="4" fill="#7c3aed" fill-opacity="0.7"/>
+  <text x="673" y="84" text-anchor="middle" fill="#fff" font-size="9">當前值 40 / 100</text>
+  <text x="570" y="108" fill="#94a3b8" font-size="10">高 → 觸發深層週期</text>
+  <text x="570" y="124" fill="#94a3b8" font-size="10">極高（&gt;75）→ 強制 Dreaming</text>
+  <text x="570" y="144" fill="#64748b" font-size="10">觸發：</text>
+  <text x="570" y="160" fill="#64748b" font-size="9">・會話結束後累積</text>
+  <text x="570" y="174" fill="#64748b" font-size="9">・閒置 &gt; 30 分鐘</text>
+  <text x="570" y="188" fill="#64748b" font-size="9">・每日凌晨 03:00</text>
+  <text x="570" y="210" fill="#94a3b8" font-size="9">下降：新會話開始 −40</text>
+
+  <!-- 腎上腺素 -->
+  <rect x="815" y="15" width="265" height="210" rx="10" fill="#1a2332" stroke="#fbbf24" stroke-width="1.5"/>
+  <text x="948" y="42" text-anchor="middle" fill="#fbbf24" font-size="14" font-weight="bold">🟡 腎上腺素</text>
+  <text x="948" y="58" text-anchor="middle" fill="#64748b" font-size="10">Adrenaline — 警覺荷爾蒙</text>
+  <rect x="835" y="72" width="225" height="16" rx="4" fill="#1e293b"/>
+  <rect x="835" y="72" width="45" height="16" rx="4" fill="#fbbf24" fill-opacity="0.7"/>
+  <text x="948" y="84" text-anchor="middle" fill="#fff" font-size="9">當前值 20 / 100</text>
+  <text x="835" y="108" fill="#94a3b8" font-size="10">高 → 加速工具選擇</text>
+  <text x="835" y="124" fill="#94a3b8" font-size="10">極高（&gt;70）→ 跳過非必要學習</text>
+  <text x="835" y="144" fill="#64748b" font-size="10">觸發：</text>
+  <text x="835" y="160" fill="#64748b" font-size="9">・用戶標記緊急任務</text>
+  <text x="835" y="174" fill="#64748b" font-size="9">・回應時間壓力</text>
+  <text x="835" y="188" fill="#64748b" font-size="9">・連續快速對話</text>
+  <text x="835" y="210" fill="#94a3b8" font-size="9">下降：任務完成後 −30</text>
+</svg>
+</div>
+
+<div class="diagram" style="margin-top:16px;">
+<div class="diagram-title">幹細胞孵化流程：技能胚胎從記錄到正式安裝</div>
+<svg width="1100" height="155" viewBox="0 0 1100 155">
+  <defs>
+    <marker id="as2" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#c084fc"/></marker>
+    <marker id="af2" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#f87171"/></marker>
+  </defs>
+  <!-- 胚胎 -->
+  <ellipse cx="115" cy="75" rx="95" ry="55" fill="#1a2332" stroke="#c084fc" stroke-width="1.5" stroke-dasharray="6,3"/>
+  <text x="115" y="62" text-anchor="middle" fill="#c084fc" font-size="13" font-weight="bold">胚胎</text>
+  <text x="115" y="78" text-anchor="middle" fill="#94a3b8" font-size="10">模式首次被記錄</text>
+  <text x="115" y="94" text-anchor="middle" fill="#64748b" font-size="9">成熟分數 &lt; 0.3</text>
+  <text x="115" y="115" text-anchor="middle" fill="#64748b" font-size="9">樣本 &lt; 20 筆</text>
+  <line x1="210" y1="75" x2="260" y2="75" stroke="#c084fc" stroke-width="1.5" marker-end="url(#as2)"/>
+  <text x="235" y="65" text-anchor="middle" fill="#64748b" font-size="9">樣本 ≥ 20</text>
+  <!-- 孵化中 -->
+  <ellipse cx="360" cy="75" rx="95" ry="55" fill="#1a2332" stroke="#c084fc" stroke-width="2"/>
+  <text x="360" y="62" text-anchor="middle" fill="#c084fc" font-size="13" font-weight="bold">孵化中</text>
+  <text x="360" y="78" text-anchor="middle" fill="#94a3b8" font-size="10">快速眼動週期評估</text>
+  <text x="360" y="94" text-anchor="middle" fill="#64748b" font-size="9">成熟分數 0.3–0.8</text>
+  <text x="360" y="115" text-anchor="middle" fill="#64748b" font-size="9">連續 3 天採集</text>
+  <line x1="455" y1="75" x2="505" y2="75" stroke="#c084fc" stroke-width="1.5" marker-end="url(#as2)"/>
+  <text x="480" y="65" text-anchor="middle" fill="#64748b" font-size="9">分數 ≥ 0.8</text>
+  <!-- 就緒 -->
+  <ellipse cx="605" cy="75" rx="95" ry="55" fill="#4ade80" fill-opacity="0.06" stroke="#4ade80" stroke-width="2"/>
+  <text x="605" y="62" text-anchor="middle" fill="#4ade80" font-size="13" font-weight="bold">就緒</text>
+  <text x="605" y="78" text-anchor="middle" fill="#94a3b8" font-size="10">等待安裝閘道審核</text>
+  <text x="605" y="94" text-anchor="middle" fill="#64748b" font-size="9">已生成技能草稿</text>
+  <text x="605" y="115" text-anchor="middle" fill="#64748b" font-size="9">分數 &gt; 0.8</text>
+  <line x1="700" y1="75" x2="750" y2="75" stroke="#4ade80" stroke-width="1.5" marker-end="url(#as2)"/>
+  <text x="725" y="60" text-anchor="middle" fill="#64748b" font-size="9">before_install</text>
+  <text x="725" y="73" text-anchor="middle" fill="#64748b" font-size="9">閘道通過</text>
+  <!-- 已安裝 -->
+  <ellipse cx="855" cy="75" rx="95" ry="55" fill="#059669" fill-opacity="0.1" stroke="#059669" stroke-width="2.5"/>
+  <text x="855" y="62" text-anchor="middle" fill="#4ade80" font-size="13" font-weight="bold">已安裝</text>
+  <text x="855" y="78" text-anchor="middle" fill="#94a3b8" font-size="10">活躍細胞，納入登記</text>
+  <text x="855" y="94" text-anchor="middle" fill="#64748b" font-size="9">受免疫系統監控</text>
+  <text x="855" y="115" text-anchor="middle" fill="#64748b" font-size="9">生長素貢獻 +5</text>
+  <!-- 拒絕回路 -->
+  <line x1="725" y1="130" x2="605" y2="140" stroke="#f87171" stroke-width="1" stroke-dasharray="4,2" marker-end="url(#af2)"/>
+  <text x="660" y="152" text-anchor="middle" fill="#f87171" font-size="9">閘道拒絕 → 退回孵化</text>
+</svg>
+</div>
+
+<div class="diagram" style="margin-top:16px;">
+<div class="diagram-title">免疫系統決策樹：before_tool_call 掛鉤執行邏輯</div>
+<svg width="1100" height="270" viewBox="0 0 1100 270">
+  <defs><marker id="aim" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#e2e8f0"/></marker></defs>
+  <!-- 工具被呼叫 -->
+  <rect x="430" y="8" width="240" height="38" rx="19" fill="#38bdf8" fill-opacity="0.12" stroke="#38bdf8" stroke-width="1.5"/>
+  <text x="550" y="31" text-anchor="middle" fill="#38bdf8" font-size="13">工具被呼叫（before_tool_call）</text>
+  <line x1="550" y1="46" x2="550" y2="76" stroke="#e2e8f0" stroke-width="1.5" marker-end="url(#aim)"/>
+  <!-- 判斷1：已登記？ -->
+  <polygon points="550,76 720,113 550,150 380,113" fill="#1a2332" stroke="#7c3aed" stroke-width="1.5"/>
+  <text x="550" y="107" text-anchor="middle" fill="#c084fc" font-size="11">細胞已登記？</text>
+  <text x="550" y="123" text-anchor="middle" fill="#64748b" font-size="10">查詢 cell-registry.json</text>
+  <!-- 否→ 通過 -->
+  <line x1="380" y1="113" x2="230" y2="113" stroke="#4ade80" stroke-width="1.5" marker-end="url(#aim)"/>
+  <text x="310" y="103" text-anchor="middle" fill="#4ade80" font-size="10">否</text>
+  <rect x="100" y="88" width="130" height="50" rx="8" fill="#059669" fill-opacity="0.1" stroke="#059669" stroke-width="1.5"/>
+  <text x="165" y="112" text-anchor="middle" fill="#4ade80" font-size="12" font-weight="bold">通過</text>
+  <text x="165" y="128" text-anchor="middle" fill="#64748b" font-size="10">新工具，開始觀察</text>
+  <!-- 是→ 判斷2 -->
+  <line x1="550" y1="150" x2="550" y2="180" stroke="#e2e8f0" stroke-width="1.5" marker-end="url(#aim)"/>
+  <text x="562" y="167" fill="#94a3b8" font-size="10">是</text>
+  <!-- 判斷2：已隔離？ -->
+  <polygon points="550,180 730,218 550,256 370,218" fill="#1a2332" stroke="#f87171" stroke-width="1.5"/>
+  <text x="550" y="212" text-anchor="middle" fill="#f87171" font-size="11">細胞狀態 = 隔離？</text>
+  <text x="550" y="228" text-anchor="middle" fill="#64748b" font-size="10">錯誤率 &gt; 50% 已觸發</text>
+  <!-- 是→ 阻斷 -->
+  <line x1="730" y1="218" x2="870" y2="218" stroke="#f87171" stroke-width="1.5" marker-end="url(#aim)"/>
+  <text x="800" y="208" text-anchor="middle" fill="#f87171" font-size="10">是</text>
+  <rect x="870" y="193" width="160" height="50" rx="8" fill="#dc2626" fill-opacity="0.1" stroke="#dc2626" stroke-width="2"/>
+  <text x="950" y="217" text-anchor="middle" fill="#f87171" font-size="12" font-weight="bold">阻斷工具呼叫</text>
+  <text x="950" y="233" text-anchor="middle" fill="#64748b" font-size="10">皮質醇 +10</text>
+  <!-- 否→ 通過+監控 -->
+  <line x1="370" y1="218" x2="230" y2="218" stroke="#4ade80" stroke-width="1.5" marker-end="url(#aim)"/>
+  <text x="305" y="208" text-anchor="middle" fill="#4ade80" font-size="10">否</text>
+  <rect x="90" y="193" width="140" height="50" rx="8" fill="#059669" fill-opacity="0.1" stroke="#059669" stroke-width="1.5"/>
+  <text x="160" y="217" text-anchor="middle" fill="#4ade80" font-size="12" font-weight="bold">通過 + 監控</text>
+  <text x="160" y="233" text-anchor="middle" fill="#64748b" font-size="10">記錄結果到代謝</text>
+</svg>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section id="coldstart">
+<h2>九、冷啟動策略 <span class="badge" style="background:rgba(56,189,248,0.15);color:var(--accent);">必要</span></h2>
+
+<div class="diagram">
+<div class="diagram-title">四個啟動狀態：從零資料到全速運作</div>
+<svg width="1100" height="130" viewBox="0 0 1100 130">
+  <defs><marker id="acw" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#e2e8f0"/></marker></defs>
+  <!-- 冷態 -->
+  <rect x="20" y="20" width="230" height="90" rx="8" fill="#1a2332" stroke="#64748b" stroke-width="1.5"/>
+  <text x="135" y="46" text-anchor="middle" fill="#94a3b8" font-size="13" font-weight="bold">❄ 冷態</text>
+  <text x="135" y="64" text-anchor="middle" fill="#64748b" font-size="10">0 筆學習記錄</text>
+  <text x="135" y="80" text-anchor="middle" fill="#64748b" font-size="10">使用內建 bootstrap 權重</text>
+  <text x="135" y="96" text-anchor="middle" fill="#64748b" font-size="10">注入器不啟動</text>
+  <line x1="250" y1="65" x2="290" y2="65" stroke="#e2e8f0" stroke-width="1.5" marker-end="url(#acw)"/>
+  <text x="270" y="55" text-anchor="middle" fill="#64748b" font-size="9">≥ 20 筆</text>
+  <!-- 暖機中 -->
+  <rect x="290" y="20" width="230" height="90" rx="8" fill="#1a2332" stroke="#38bdf8" stroke-width="1.5"/>
+  <text x="405" y="46" text-anchor="middle" fill="#38bdf8" font-size="13" font-weight="bold">🌡 暖機中</text>
+  <text x="405" y="64" text-anchor="middle" fill="#64748b" font-size="10">20–99 筆記錄</text>
+  <text x="405" y="80" text-anchor="middle" fill="#64748b" font-size="10">僅收集，不注入</text>
+  <text x="405" y="96" text-anchor="middle" fill="#64748b" font-size="10">ε = 0.30（多探索）</text>
+  <line x1="520" y1="65" x2="560" y2="65" stroke="#e2e8f0" stroke-width="1.5" marker-end="url(#acw)"/>
+  <text x="540" y="55" text-anchor="middle" fill="#64748b" font-size="9">≥ 100 筆</text>
+  <!-- 半熱 -->
+  <rect x="560" y="20" width="230" height="90" rx="8" fill="#1a2332" stroke="#fbbf24" stroke-width="1.5"/>
+  <text x="675" y="46" text-anchor="middle" fill="#fbbf24" font-size="13" font-weight="bold">🔥 半熱</text>
+  <text x="675" y="64" text-anchor="middle" fill="#64748b" font-size="10">100–499 筆記錄</text>
+  <text x="675" y="80" text-anchor="middle" fill="#64748b" font-size="10">低信心注入（≥ 0.5）</text>
+  <text x="675" y="96" text-anchor="middle" fill="#64748b" font-size="10">ε = 0.15（均衡）</text>
+  <line x1="790" y1="65" x2="830" y2="65" stroke="#e2e8f0" stroke-width="1.5" marker-end="url(#acw)"/>
+  <text x="810" y="55" text-anchor="middle" fill="#64748b" font-size="9">≥ 500 筆</text>
+  <!-- 熱態 -->
+  <rect x="830" y="20" width="250" height="90" rx="8" fill="#059669" fill-opacity="0.1" stroke="#4ade80" stroke-width="2"/>
+  <text x="955" y="46" text-anchor="middle" fill="#4ade80" font-size="13" font-weight="bold">🚀 熱態</text>
+  <text x="955" y="64" text-anchor="middle" fill="#64748b" font-size="10">≥ 500 筆記錄</text>
+  <text x="955" y="80" text-anchor="middle" fill="#64748b" font-size="10">全功能注入（≥ 0.6）</text>
+  <text x="955" y="96" text-anchor="middle" fill="#64748b" font-size="10">ε = 0.10（穩定利用）</text>
+</svg>
+</div>
+
+<div class="spec-grid" style="margin-top:20px;">
+  <div class="spec-card" style="border-color:var(--accent);">
+    <h4 style="color:var(--accent);">Bootstrap 預設權重（冷態用）</h4>
+    <table>
+      <tr><td>claude-opus-4</td><td>0.75（高能力預設高）</td></tr>
+      <tr><td>claude-sonnet-4</td><td>0.65（均衡預設）</td></tr>
+      <tr><td>claude-haiku</td><td>0.50（速度優先）</td></tr>
+      <tr><td>其他提供者</td><td>0.40（保守預設）</td></tr>
+      <tr><td>所有工具</td><td>0.50（中性預設）</td></tr>
+    </table>
+  </div>
+  <div class="spec-card" style="border-color:var(--yellow);">
+    <h4 style="color:var(--yellow);">狀態轉換邏輯</h4>
+    <table>
+      <tr><td>狀態儲存</td><td>plugin state: warmup-state.json</td></tr>
+      <tr><td>計數方式</td><td>cumulative，跨會話持久</td></tr>
+      <tr><td>重置條件</td><td>手動清除 / 版本升級</td></tr>
+      <tr><td>回退條件</td><td>不回退，只向前進化</td></tr>
+    </table>
+  </div>
+</div>
+
+<div class="note">
+  冷啟動原則：<strong>永遠不崩潰</strong>。任何狀態下學習系統都只是提升效果，沒有學習資料時系統行為完全等同今天。
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section id="dataformat">
+<h2>十、資料格式規範 <span class="badge" style="background:rgba(34,211,238,0.15);color:var(--cyan);">格式</span></h2>
+
+<div class="spec-grid">
+  <div class="spec-card" style="border-color:#059669;">
+    <h4 style="color:#059669;">weights.json（第一層寫 → 第二層讀）</h4>
+<pre style="font-size:11px; margin-top:8px;">{
+  "version": 2,
+  "updated": "2026-05-14T03:00:00Z",
+  "tools": {
+    "bash": {
+      "weight": 0.87,
+      "successCount": 1420,
+      "failCount": 58,
+      "avgLatencyMs": 340,
+      "lastUsed": "2026-05-14T..."
+    }
+  },
+  "models": {
+    "claude-opus-4": { "weight": 0.87 },
+    "claude-sonnet-4": { "weight": 0.72 }
+  },
+  "routes": {
+    "coding_task": { "preferredModel": "claude-opus-4" }
+  }
+}</pre>
+  </div>
+  <div class="spec-card" style="border-color:#7c3aed;">
+    <h4 style="color:#7c3aed;">patterns.jsonl（第一層寫，每行一個模式）</h4>
+<pre style="font-size:11px; margin-top:8px;">{"id":"p001","type":"tool_sequence",
+ "pattern":["read","edit","bash"],
+ "confidence":0.82,
+ "successRate":0.91,
+ "sampleCount":47,
+ "context":"coding",
+ "createdAt":"2026-05-14T..."}
+
+{"id":"p002","type":"model_preference",
+ "pattern":{"context":"analysis","model":"claude-opus-4"},
+ "confidence":0.79,
+ "sampleCount":33,
+ "createdAt":"2026-05-14T..."}</pre>
+  </div>
+  <div class="spec-card" style="border-color:#dc2626;">
+    <h4 style="color:#dc2626;">cell-registry.json（第四層維護）</h4>
+<pre style="font-size:11px; margin-top:8px;">{
+  "version": 1,
+  "cells": {
+    "memory-core": {
+      "state": "healthy",
+      "errorRate": 0.02,
+      "inputCount": 8420,
+      "outputCount": 8398,
+      "wasteCount": 22,
+      "lastHealthCheck": "2026-05-14T...",
+      "dnaChecksum": "sha256:abc123..."
+    },
+    "active-memory": {
+      "state": "stressed",
+      "errorRate": 0.24,
+      "cortisol": 62
+    }
+  }
+}</pre>
+  </div>
+  <div class="spec-card" style="border-color:#d97706;">
+    <h4 style="color:#d97706;">growth-metrics.json（第三層維護）</h4>
+<pre style="font-size:11px; margin-top:8px;">{
+  "cycle": "rem-2026-05-14",
+  "perception": { "trend": +0.03, "score": 0.74 },
+  "routing":    { "trend": +0.05, "score": 0.81 },
+  "skill":      { "trend": +0.01, "score": 0.62 },
+  "judgment":   { "trend": +0.02, "score": 0.77 },
+  "structural": { "trend": +0.00, "score": 0.58 },
+  "embryos": [
+    { "id":"e001","maturity":0.83,"status":"ready" }
+  ]
+}</pre>
+  </div>
+</div>
+
+<div class="note" style="margin-top:16px;">
+  <strong>層間資料流向：</strong>
+  第一層寫 weights.json + patterns.jsonl → 第二層讀 weights.json → 第三層讀寫 growth-metrics.json → 第四層讀寫 cell-registry.json。
+  所有格式都是純 JSON，任何擴充套件都可以直接讀取用於除錯。
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section id="negprotect">
+<h2>十一、負向學習防護 <span class="badge" style="background:rgba(248,113,113,0.15);color:var(--red);">防護</span></h2>
+
+<div class="diagram">
+<div class="diagram-title">三道防線：確保系統只強化好習慣，不強化壞習慣</div>
+<svg width="1100" height="200" viewBox="0 0 1100 200">
+  <!-- 防線1 -->
+  <rect x="20" y="20" width="320" height="160" rx="10" fill="#1a2332" stroke="#fbbf24" stroke-width="2"/>
+  <text x="180" y="50" text-anchor="middle" fill="#fbbf24" font-size="14" font-weight="bold">🛡 第一防線：信心度門檻</text>
+  <text x="180" y="72" text-anchor="middle" fill="#94a3b8" font-size="11">模式信心度 &lt; 0.6 → 不注入</text>
+  <text x="180" y="90" text-anchor="middle" fill="#64748b" font-size="10">樣本數 &lt; 20 → 不計算</text>
+  <text x="180" y="108" text-anchor="middle" fill="#64748b" font-size="10">成功率 &lt; 0.5 → 負向模式</text>
+  <text x="180" y="126" text-anchor="middle" fill="#64748b" font-size="10">負向模式 → 加速衰減 ×2</text>
+  <text x="180" y="148" text-anchor="middle" fill="#94a3b8" font-size="10">效果：低品質模式自然死亡</text>
+  <text x="180" y="166" text-anchor="middle" fill="#f87171" font-size="9">絕不讓失敗模式影響下次決策</text>
+
+  <!-- 防線2 -->
+  <rect x="380" y="20" width="340" height="160" rx="10" fill="#1a2332" stroke="#f87171" stroke-width="2"/>
+  <text x="550" y="50" text-anchor="middle" fill="#f87171" font-size="14" font-weight="bold">🛡 第二防線：反迴圈偵測</text>
+  <text x="550" y="72" text-anchor="middle" fill="#94a3b8" font-size="11">偵測：相同錯誤連續發生 &gt; 3 次</text>
+  <text x="550" y="90" text-anchor="middle" fill="#64748b" font-size="10">動作：凍結相關突觸 24 小時</text>
+  <text x="550" y="108" text-anchor="middle" fill="#64748b" font-size="10">偵測：權重振盪（±0.3 / 1小時）</text>
+  <text x="550" y="126" text-anchor="middle" fill="#64748b" font-size="10">動作：切換到 bootstrap 預設值</text>
+  <text x="550" y="148" text-anchor="middle" fill="#94a3b8" font-size="10">效果：防止負向強化迴圈</text>
+  <text x="550" y="166" text-anchor="middle" fill="#f87171" font-size="9">壞習慣不會越來越根深蒂固</text>
+
+  <!-- 防線3 -->
+  <rect x="760" y="20" width="320" height="160" rx="10" fill="#1a2332" stroke="#4ade80" stroke-width="2"/>
+  <text x="920" y="50" text-anchor="middle" fill="#4ade80" font-size="14" font-weight="bold">🛡 第三防線：手動矯正</text>
+  <text x="920" y="72" text-anchor="middle" fill="#94a3b8" font-size="11">工具：learning_correct</text>
+  <text x="920" y="90" text-anchor="middle" fill="#64748b" font-size="10">功能：標記「這次很差」</text>
+  <text x="920" y="108" text-anchor="middle" fill="#64748b" font-size="10">效果：reward = −1（強懲罰）</text>
+  <text x="920" y="126" text-anchor="middle" fill="#64748b" font-size="10">功能：標記「這次很好」</text>
+  <text x="920" y="144" text-anchor="middle" fill="#64748b" font-size="10">效果：reward = +2（強獎勵）</text>
+  <text x="920" y="166" text-anchor="middle" fill="#f87171" font-size="9">你永遠有最終矯正控制權</text>
+</svg>
+</div>
+<div class="note">
+  <strong>設計原則：</strong>寧可學慢，不可學錯。信心度不足時系統傾向不動作，而非亂動作。矯正工具讓你隨時能推翻系統的錯誤判斷。
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section id="dashboard">
+<h2>十二、可觀測性儀表板設計 <span class="badge" style="background:rgba(74,222,128,0.15);color:var(--green);">監控</span></h2>
+
+<div class="diagram">
+<div class="diagram-title">learning_insights 工具返回的儀表板資料（可在 Claude 對話中直接查看）</div>
+<svg width="1100" height="380" viewBox="0 0 1100 380">
+  <!-- 左上：學習記錄計數 -->
+  <rect x="20" y="20" width="250" height="160" rx="8" fill="#1a2332" stroke="#059669" stroke-width="1.5"/>
+  <text x="145" y="46" text-anchor="middle" fill="#059669" font-size="12" font-weight="bold">📊 學習記錄</text>
+  <text x="145" y="90" text-anchor="middle" fill="#4ade80" font-size="36" font-weight="bold">1,842</text>
+  <text x="145" y="112" text-anchor="middle" fill="#94a3b8" font-size="11">總記錄數</text>
+  <text x="60" y="135" fill="#64748b" font-size="10">今日新增：+127</text>
+  <text x="60" y="150" fill="#64748b" font-size="10">模式總數：83</text>
+  <text x="60" y="165" fill="#64748b" font-size="10">狀態：🚀 熱態</text>
+
+  <!-- 右上：突觸強度 top-5 -->
+  <rect x="290" y="20" width="500" height="160" rx="8" fill="#1a2332" stroke="#7c3aed" stroke-width="1.5"/>
+  <text x="540" y="46" text-anchor="middle" fill="#7c3aed" font-size="12" font-weight="bold">🧠 突觸強度 Top-5 工具</text>
+  <text x="310" y="70" fill="#94a3b8" font-size="11">bash</text>
+  <rect x="380" y="58" width="370" height="16" rx="3" fill="#1e293b"/>
+  <rect x="380" y="58" width="323" height="16" rx="3" fill="#059669" fill-opacity="0.7"/>
+  <text x="760" y="70" fill="#4ade80" font-size="10">0.87</text>
+  <text x="310" y="95" fill="#94a3b8" font-size="11">read</text>
+  <rect x="380" y="83" width="370" height="16" rx="3" fill="#1e293b"/>
+  <rect x="380" y="83" width="289" height="16" rx="3" fill="#059669" fill-opacity="0.6"/>
+  <text x="760" y="95" fill="#4ade80" font-size="10">0.78</text>
+  <text x="310" y="120" fill="#94a3b8" font-size="11">edit</text>
+  <rect x="380" y="108" width="370" height="16" rx="3" fill="#1e293b"/>
+  <rect x="380" y="108" width="259" height="16" rx="3" fill="#fbbf24" fill-opacity="0.6"/>
+  <text x="760" y="120" fill="#fbbf24" font-size="10">0.70</text>
+  <text x="310" y="145" fill="#94a3b8" font-size="11">glob</text>
+  <rect x="380" y="133" width="370" height="16" rx="3" fill="#1e293b"/>
+  <rect x="380" y="133" width="222" height="16" rx="3" fill="#fbbf24" fill-opacity="0.5"/>
+  <text x="760" y="145" fill="#fbbf24" font-size="10">0.60</text>
+
+  <!-- 右上右：荷爾蒙儀 -->
+  <rect x="810" y="20" width="270" height="160" rx="8" fill="#1a2332" stroke="#dc2626" stroke-width="1.5"/>
+  <text x="945" y="46" text-anchor="middle" fill="#dc2626" font-size="12" font-weight="bold">🧬 荷爾蒙狀態</text>
+  <text x="830" y="72" fill="#f87171" font-size="11">皮質醇</text>
+  <rect x="900" y="60" width="160" height="14" rx="3" fill="#1e293b"/>
+  <rect x="900" y="60" width="96" height="14" rx="3" fill="#f87171" fill-opacity="0.6"/>
+  <text x="1065" y="72" fill="#f87171" font-size="10">60</text>
+  <text x="830" y="96" fill="#4ade80" font-size="11">生長素</text>
+  <rect x="900" y="84" width="160" height="14" rx="3" fill="#1e293b"/>
+  <rect x="900" y="84" width="128" height="14" rx="3" fill="#4ade80" fill-opacity="0.6"/>
+  <text x="1065" y="96" fill="#4ade80" font-size="10">80</text>
+  <text x="830" y="120" fill="#c084fc" font-size="11">褪黑激素</text>
+  <rect x="900" y="108" width="160" height="14" rx="3" fill="#1e293b"/>
+  <rect x="900" y="108" width="64" height="14" rx="3" fill="#c084fc" fill-opacity="0.6"/>
+  <text x="1065" y="120" fill="#c084fc" font-size="10">40</text>
+  <text x="830" y="144" fill="#fbbf24" font-size="11">腎上腺素</text>
+  <rect x="900" y="132" width="160" height="14" rx="3" fill="#1e293b"/>
+  <rect x="900" y="132" width="32" height="14" rx="3" fill="#fbbf24" fill-opacity="0.6"/>
+  <text x="1065" y="144" fill="#fbbf24" font-size="10">20</text>
+  <text x="945" y="168" text-anchor="middle" fill="#64748b" font-size="9">有機體狀態：生長期 🌱</text>
+
+  <!-- 下左：細胞健康 -->
+  <rect x="20" y="200" width="500" height="160" rx="8" fill="#1a2332" stroke="#dc2626" stroke-width="1.5"/>
+  <text x="270" y="226" text-anchor="middle" fill="#dc2626" font-size="12" font-weight="bold">🦠 細胞健康總覽（前8個）</text>
+  <text x="40" y="250" fill="#4ade80" font-size="11">● memory-core</text>
+  <text x="220" y="250" fill="#4ade80" font-size="10">健康  錯誤率 2%</text>
+  <text x="40" y="272" fill="#4ade80" font-size="11">● active-memory</text>
+  <text x="220" y="272" fill="#4ade80" font-size="10">健康  錯誤率 5%</text>
+  <text x="40" y="294" fill="#fbbf24" font-size="11">● memory-lancedb</text>
+  <text x="220" y="294" fill="#fbbf24" font-size="10">壓力  錯誤率 22%</text>
+  <text x="40" y="316" fill="#4ade80" font-size="11">● hermes-agent</text>
+  <text x="220" y="316" fill="#4ade80" font-size="10">健康  錯誤率 1%</text>
+  <text x="280" y="250" fill="#4ade80" font-size="11">● trajectory</text>
+  <text x="420" y="250" fill="#4ade80" font-size="10">健康  0%</text>
+  <text x="280" y="272" fill="#4ade80" font-size="11">● commitments</text>
+  <text x="420" y="272" fill="#4ade80" font-size="10">健康  3%</text>
+  <text x="280" y="294" fill="#f87171" font-size="11">● msteams</text>
+  <text x="420" y="294" fill="#f87171" font-size="10">隔離  錯誤率 52%</text>
+  <text x="280" y="316" fill="#4ade80" font-size="11">● github</text>
+  <text x="420" y="316" fill="#4ade80" font-size="10">健康  8%</text>
+  <text x="270" y="346" text-anchor="middle" fill="#64748b" font-size="9">共 126 個細胞 ｜ 健康 123 ｜ 壓力 2 ｜ 隔離 1</text>
+
+  <!-- 下右：增長趨勢 -->
+  <rect x="540" y="200" width="540" height="160" rx="8" fill="#1a2332" stroke="#d97706" stroke-width="1.5"/>
+  <text x="810" y="226" text-anchor="middle" fill="#d97706" font-size="12" font-weight="bold">📈 五維增長指標趨勢（本週）</text>
+  <text x="560" y="254" fill="#94a3b8" font-size="11">感知能力</text>
+  <rect x="650" y="242" width="400" height="16" rx="3" fill="#1e293b"/>
+  <rect x="650" y="242" width="296" height="16" rx="3" fill="#38bdf8" fill-opacity="0.6"/>
+  <text x="1058" y="254" fill="#38bdf8" font-size="10">+3% 0.74</text>
+  <text x="560" y="278" fill="#94a3b8" font-size="11">路由精準度</text>
+  <rect x="650" y="266" width="400" height="16" rx="3" fill="#1e293b"/>
+  <rect x="650" y="266" width="324" height="16" rx="3" fill="#4ade80" fill-opacity="0.6"/>
+  <text x="1058" y="278" fill="#4ade80" font-size="10">+5% 0.81</text>
+  <text x="560" y="302" fill="#94a3b8" font-size="11">技能擴張</text>
+  <rect x="650" y="290" width="400" height="16" rx="3" fill="#1e293b"/>
+  <rect x="650" y="290" width="248" height="16" rx="3" fill="#c084fc" fill-opacity="0.6"/>
+  <text x="1058" y="302" fill="#c084fc" font-size="10">+1% 0.62</text>
+  <text x="560" y="326" fill="#94a3b8" font-size="11">判斷品質</text>
+  <rect x="650" y="314" width="400" height="16" rx="3" fill="#1e293b"/>
+  <rect x="650" y="314" width="308" height="16" rx="3" fill="#fbbf24" fill-opacity="0.6"/>
+  <text x="1058" y="326" fill="#fbbf24" font-size="10">+2% 0.77</text>
+  <text x="560" y="350" fill="#94a3b8" font-size="11">結構健康</text>
+  <rect x="650" y="338" width="400" height="16" rx="3" fill="#1e293b"/>
+  <rect x="650" y="338" width="232" height="16" rx="3" fill="#d97706" fill-opacity="0.6"/>
+  <text x="1058" y="350" fill="#d97706" font-size="10">±0% 0.58</text>
+</svg>
+</div>
+
+<div class="note">
+  使用方式：在 Claude 對話中輸入 <code>learning_insights</code> 或 <code>learning_stats</code>
+  即可即時查看上面所有資料。無需另開儀表板，資料直接呈現在對話裡。
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section id="integration">
+<h2>十三、與現有系統整合 <span class="badge" style="background:rgba(251,191,36,0.15);color:var(--yellow);">整合</span></h2>
+
+<div class="diagram">
+<div class="diagram-title">四層進化系統與三個現有記憶系統的精確整合點</div>
+<svg width="1100" height="340" viewBox="0 0 1100 340">
+  <defs>
+    <marker id="aint" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#e2e8f0"/></marker>
+    <marker id="aintg" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#4ade80"/></marker>
+  </defs>
+
+  <!-- 第一層（中心） -->
+  <rect x="390" y="130" width="320" height="80" rx="8" fill="#059669" fill-opacity="0.12" stroke="#059669" stroke-width="2"/>
+  <text x="550" y="162" text-anchor="middle" fill="#059669" font-size="14" font-weight="bold">第一層：運行即學習</text>
+  <text x="550" y="180" text-anchor="middle" fill="#94a3b8" font-size="10">patterns.jsonl ｜ weights.json</text>
+  <text x="550" y="196" text-anchor="middle" fill="#64748b" font-size="9">operational-learning/</text>
+
+  <!-- hermes-agent（左上） -->
+  <rect x="30" y="20" width="300" height="110" rx="8" fill="#1a2332" stroke="#38bdf8" stroke-width="1.5"/>
+  <text x="180" y="46" text-anchor="middle" fill="#38bdf8" font-size="13" font-weight="bold">hermes-agent</text>
+  <text x="180" y="64" text-anchor="middle" fill="#94a3b8" font-size="10">學習記錄（最多200筆）+ 晉升閘道</text>
+  <text x="50" y="86" fill="#64748b" font-size="10">整合方式：</text>
+  <text x="50" y="101" fill="#64748b" font-size="9">第一層 patterns → 補充 hermes 記錄</text>
+  <text x="50" y="115" fill="#64748b" font-size="9">信心度高的模式優先晉升</text>
+  <line x1="330" y1="75" x2="390" y2="155" stroke="#38bdf8" stroke-width="1.5" marker-end="url(#aint)"/>
+  <text x="370" y="110" fill="#38bdf8" font-size="9">強化記錄</text>
+
+  <!-- memory-lancedb（右上） -->
+  <rect x="770" y="20" width="300" height="110" rx="8" fill="#1a2332" stroke="#c084fc" stroke-width="1.5"/>
+  <text x="920" y="46" text-anchor="middle" fill="#c084fc" font-size="13" font-weight="bold">memory-lancedb</text>
+  <text x="920" y="64" text-anchor="middle" fill="#94a3b8" font-size="10">向量嵌入 + 語意搜尋</text>
+  <text x="790" y="86" fill="#64748b" font-size="10">整合方式：</text>
+  <text x="790" y="101" fill="#64748b" font-size="9">成熟模式同步到向量庫</text>
+  <text x="790" y="115" fill="#64748b" font-size="9">神經路由查詢相似歷史決策</text>
+  <line x1="770" y1="75" x2="710" y2="155" stroke="#c084fc" stroke-width="1.5" marker-end="url(#aint)"/>
+  <text x="740" y="110" fill="#c084fc" font-size="9">語意強化</text>
+
+  <!-- active-memory（下） -->
+  <rect x="390" y="260" width="320" height="70" rx="8" fill="#1a2332" stroke="#fbbf24" stroke-width="1.5"/>
+  <text x="550" y="285" text-anchor="middle" fill="#fbbf24" font-size="13" font-weight="bold">active-memory</text>
+  <text x="550" y="303" text-anchor="middle" fill="#94a3b8" font-size="10">提示建構前注入（before_prompt_build）</text>
+  <text x="550" y="318" text-anchor="middle" fill="#64748b" font-size="9">協調：注入總量 ≤ 500 tokens，優先級分配</text>
+  <line x1="550" y1="210" x2="550" y2="260" stroke="#fbbf24" stroke-width="1.5" marker-end="url(#aint)"/>
+  <text x="562" y="238" fill="#fbbf24" font-size="9">協調注入</text>
+
+  <!-- 注入協調說明框 -->
+  <rect x="30" y="200" width="320" height="120" rx="8" fill="#1a2332" stroke="#2a3a4e" stroke-width="1"/>
+  <text x="190" y="224" text-anchor="middle" fill="#e2e8f0" font-size="12" font-weight="bold">提示注入預算分配</text>
+  <text x="50" y="248" fill="#059669" font-size="10">第一層（學習模式）</text><text x="280" y="248" text-anchor="end" fill="#059669" font-size="10">≤ 200 tokens</text>
+  <text x="50" y="266" fill="#7c3aed" font-size="10">第二層（神經路由上下文）</text><text x="280" y="266" text-anchor="end" fill="#7c3aed" font-size="10">≤ 100 tokens</text>
+  <text x="50" y="284" fill="#d97706" font-size="10">第三層（增長狀態）</text><text x="280" y="284" text-anchor="end" fill="#d97706" font-size="10">≤ 50 tokens</text>
+  <text x="50" y="302" fill="#fbbf24" font-size="10">active-memory（主注入）</text><text x="280" y="302" text-anchor="end" fill="#fbbf24" font-size="10">剩餘空間</text>
+  <line x1="50" y1="308" x2="300" y2="308" stroke="#2a3a4e" stroke-width="1"/>
+  <text x="50" y="318" fill="#94a3b8" font-size="9">總預算：500 tokens（可設定）</text>
+
+  <!-- 防膨脹說明 -->
+  <rect x="750" y="200" width="320" height="120" rx="8" fill="#1a2332" stroke="#2a3a4e" stroke-width="1"/>
+  <text x="910" y="224" text-anchor="middle" fill="#e2e8f0" font-size="12" font-weight="bold">防止提示膨脹機制</text>
+  <text x="770" y="248" fill="#64748b" font-size="10">優先級：active-memory &gt; 第一層 &gt; 第二層</text>
+  <text x="770" y="266" fill="#64748b" font-size="10">超出預算：低優先級內容自動截斷</text>
+  <text x="770" y="284" fill="#64748b" font-size="10">信心門檻：&lt; 0.6 的模式不注入</text>
+  <text x="770" y="302" fill="#64748b" font-size="10">Hook 優先級：active-memory(200) &gt;</text>
+  <text x="770" y="316" fill="#64748b" font-size="10">第一層(100) &gt; 第二層(90) &gt; 第三層(80)</text>
+</svg>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section id="stress">
+<h2>十四、效能壓力測試情境 <span class="badge" style="background:rgba(248,113,113,0.15);color:var(--red);">壓力</span></h2>
+
+<div class="diagram">
+<div class="diagram-title">三個壓力場景與對應保護機制</div>
+<table class="flow-table">
+<thead>
+<tr><th>場景</th><th>條件</th><th>風險</th><th>保護機制</th><th>預期結果</th></tr>
+</thead>
+<tbody>
+<tr>
+  <td><strong>場景一</strong><br>並發工具呼叫</td>
+  <td>10 個工具同時觸發<br>after_tool_call</td>
+  <td>第一層收集器積壓<br>寫入衝突</td>
+  <td>非同步追加寫入<br>JSONL 格式（逐行安全）<br>寫入佇列 + 批次刷新</td>
+  <td>全部收集成功<br>延遲 &lt; 5ms 每筆<br>無資料遺失</td>
+</tr>
+<tr>
+  <td><strong>場景二</strong><br>126 擴充同時觸發</td>
+  <td>gateway_start 觸發<br>所有細胞同時初始化</td>
+  <td>第四層登記爆炸<br>啟動延遲過長</td>
+  <td>懶載入：延遲到首次使用<br>批次登記（最多 20/秒）<br>非阻斷性初始化</td>
+  <td>啟動影響 &lt; 50ms<br>後台靜默完成登記</td>
+</tr>
+<tr>
+  <td><strong>場景三</strong><br>深層週期與會話同時</td>
+  <td>深層週期（30秒）執行中<br>用戶同時發起新會話</td>
+  <td>資源競爭<br>提示建構被阻塞</td>
+  <td>深層週期使用獨立 Worker<br>讀取優先（讀取 weights 不等待寫入）<br>寫入失敗 → 跳過此輪（不崩潰）</td>
+  <td>用戶會話不受影響<br>深層週期順延到下輪</td>
+</tr>
+<tr>
+  <td><strong>場景四</strong><br>免疫系統誤判風暴</td>
+  <td>網路抖動導致<br>多個工具同時錯誤率飆升</td>
+  <td>大量工具被隔離<br>系統功能嚴重喪失</td>
+  <td>誤判熔斷器：單次隔離上限 5 個工具<br>隔離需連續 3 次錯誤（非單次）<br>自動恢復觀察：60 分鐘後解除</td>
+  <td>誤判率 &lt; 1%<br>最壞情況仍有 121+ 工具可用</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+<div class="spec-grid" style="margin-top:20px;">
+  <div class="spec-card" style="border-color:var(--red);">
+    <h4 style="color:var(--red);">CI 效能斷言（PR 必須通過）</h4>
+    <table>
+      <tr><td>after_tool_call 收集</td><td>&lt; 5ms P99</td></tr>
+      <tr><td>before_prompt_build 注入</td><td>&lt; 50ms P99</td></tr>
+      <tr><td>before_model_resolve 競爭</td><td>&lt; 10ms P99</td></tr>
+      <tr><td>before_tool_call 免疫</td><td>&lt; 2ms P99</td></tr>
+      <tr><td>gateway_start 初始化</td><td>&lt; 50ms 總計</td></tr>
+    </table>
+  </div>
+  <div class="spec-card" style="border-color:var(--yellow);">
+    <h4 style="color:var(--yellow);">全域失敗開放保障</h4>
+    <table>
+      <tr><td>任何 Hook 拋出例外</td><td>記錄錯誤，繼續執行</td></tr>
+      <tr><td>JSON 讀取失敗</td><td>使用 bootstrap 預設值</td></tr>
+      <tr><td>分析器超時</td><td>跳過本輪，下輪補</td></tr>
+      <tr><td>整個擴充崩潰</td><td>等同停用，不影響其他</td></tr>
+    </table>
+  </div>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section id="comms">
+<h2>十五、層間通訊方式 <span class="badge" style="background:rgba(34,211,238,0.15);color:var(--cyan);">協定</span></h2>
+
+<div class="diagram">
+<div class="diagram-title">四種合規通訊管道（不違反跨擴充套件匯入禁令）</div>
+
+<div class="spec-grid">
+  <div class="spec-card" style="border-color: #38bdf8;">
+    <h4 style="color: #38bdf8;">管道一：共用狀態檔案</h4>
+    <table>
+      <tr><td>方式</td><td>JSON 檔案讀寫</td></tr>
+      <tr><td>範例</td><td>第一層寫 weights.json → 第二層讀取</td></tr>
+      <tr><td>優點</td><td>簡單、可審計、失敗安全</td></tr>
+      <tr><td>儲存位置</td><td>plugin state 目錄</td></tr>
+    </table>
+  </div>
+  <div class="spec-card" style="border-color: #c084fc;">
+    <h4 style="color: #c084fc;">管道二：掛鉤優先順序</h4>
+    <table>
+      <tr><td>方式</td><td>同一掛鉤不同優先級</td></tr>
+      <tr><td>範例</td><td>提示建構前：一(100) → 二(90) → 三(80)</td></tr>
+      <tr><td>優點</td><td>確定性順序</td></tr>
+      <tr><td>控制</td><td>priority 數值越大越先執行</td></tr>
+    </table>
+  </div>
+  <div class="spec-card" style="border-color: #4ade80;">
+    <h4 style="color: #4ade80;">管道三：註冊工具</h4>
+    <table>
+      <tr><td>方式</td><td>一個擴充註冊工具，另一個呼叫</td></tr>
+      <tr><td>範例</td><td>第一層註冊 learning_insights → 第三層查詢它</td></tr>
+      <tr><td>優點</td><td>解耦、可測試</td></tr>
+      <tr><td>呼叫方式</td><td>透過子代理呼叫工具</td></tr>
+    </table>
+  </div>
+  <div class="spec-card" style="border-color: #fbbf24;">
+    <h4 style="color: #fbbf24;">管道四：共用記憶</h4>
+    <table>
+      <tr><td>方式</td><td>透過記憶核心/向量記憶庫</td></tr>
+      <tr><td>範例</td><td>第一層寫模式到記憶 → 第二層用記憶搜尋讀取</td></tr>
+      <tr><td>優點</td><td>跨會話持久化</td></tr>
+      <tr><td>依賴</td><td>現有的記憶基礎設施</td></tr>
+    </table>
+  </div>
+</div>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section id="timeline">
+<h2>七、實施時程 <span class="badge" style="background:rgba(251,191,36,0.15);color:var(--yellow);">排程</span></h2>
+
+<div class="timeline">
+  <div class="timeline-item" style="border-left-color: #059669;">
+    <h4 style="color: #059669;">階段一：運行即學習（第 1-2 週）</h4>
+    <p>建立 extensions/operational-learning/</p>
+    <ul class="check-list">
+      <li>建立清單檔 + 套件設定 + 入口程式</li>
+      <li>實作收集器（4 個觀察掛鉤）</li>
+      <li>實作分析器（頻率、成功率、延遲）</li>
+      <li>實作權重儲存（JSON 持久化 + 遞減衰減）</li>
+      <li>實作注入器（提示建構前，同主動記憶模式）</li>
+      <li>實作查詢工具（learning_insights, learning_stats）</li>
+      <li>撰寫測試（共置 *.test.ts）</li>
+      <li>閘道：pnpm check:changed 通過</li>
+      <li>閘道：A/B 測試注入品質</li>
+    </ul>
+  </div>
+
+  <div class="timeline-item" style="border-left-color: #7c3aed;">
+    <h4 style="color: #7c3aed;">階段二：神經路由（第 3-5 週）</h4>
+    <p>建立 extensions/neural-router/</p>
+    <ul class="check-list">
+      <li>實作突觸權重（增刪改查 + 更新規則）</li>
+      <li>實作激活閾值（過濾器）</li>
+      <li>實作競爭選優（epsilon-greedy 策略）</li>
+      <li>實作上下文訊號提取</li>
+      <li>實作權重衰減（時間遞減）</li>
+      <li>接線模型選擇掛鉤 + 回合準備掛鉤</li>
+      <li>讀取第一層的權重檔案</li>
+      <li>閘道：競爭選擇優於隨機</li>
+      <li>閘道：停用開關正常運作（回退到預設路由）</li>
+    </ul>
+  </div>
+
+  <div class="timeline-item" style="border-left-color: #d97706;">
+    <h4 style="color: #d97706;">階段三：增長心跳（第 6-7 週）</h4>
+    <p>建立 extensions/growth-pulse/</p>
+    <ul class="check-list">
+      <li>實作心跳排程器</li>
+      <li>實作淺層週期（每小時權重微調）</li>
+      <li>實作快速眼動週期（每天模式提取 + 技能孵化）</li>
+      <li>實作深層週期（每週剪枝 + 結構重組）</li>
+      <li>實作增長指標（感知/路由/技能/判斷/結構）</li>
+      <li>接線閘道啟動/停止掛鉤 + 心跳掛鉤</li>
+      <li>與記憶核心的睡眠整理對齊</li>
+      <li>閘道：增長指標顯示正向趨勢</li>
+    </ul>
+  </div>
+
+  <div class="timeline-item" style="border-left-color: #dc2626;">
+    <h4 style="color: #dc2626;">階段四：有機細胞（第 8-11 週）</h4>
+    <p>建立 extensions/organic-cells/</p>
+    <ul class="check-list">
+      <li>實作細胞登記（每個擴充套件的健康追蹤）</li>
+      <li>實作新陳代謝（輸入/輸出/廢物記帳）</li>
+      <li>實作免疫系統（異常偵測 + 隔離）</li>
+      <li>實作內分泌系統（荷爾蒙狀態調節）</li>
+      <li>實作幹細胞池（技能胚胎生命週期）</li>
+      <li>實作 DNA 檢查（清單校驗碼驗證）</li>
+      <li>接線工具呼叫前掛鉤（免疫隔離）</li>
+      <li>接線安裝前掛鉤（幹細胞閘道）</li>
+      <li>閘道：免疫誤判率 < 1%</li>
+      <li>閘道：DNA 完整性檢查通過所有擴充套件</li>
+    </ul>
+  </div>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section id="files">
+<h2>八、完整檔案結構 <span class="badge" style="background:rgba(34,211,238,0.15);color:var(--cyan);">檔案</span></h2>
+
+<div class="diagram">
+<pre style="color: var(--text); font-size: 12px; line-height: 2;">
+extensions/
+  operational-learning/             <span style="color:#059669">## 第一層：用完即長閉環</span>
+    openclaw.plugin.json            <span style="color:#64748b"># 清單：id、啟動、契約、設定綱要</span>
+    package.json                    <span style="color:#64748b"># @openclaw/operational-learning</span>
+    api.ts                          <span style="color:#64748b"># 公開匯出</span>
+    index.ts                        <span style="color:#64748b"># 入口：4 個觀察掛鉤 + 1 個修改掛鉤 + 2 個工具</span>
+    src/
+      collector.ts                  <span style="color:#64748b"># 掛鉤事件 → 學習記錄（追加寫入 JSONL）</span>
+      analyzer.ts                   <span style="color:#64748b"># 批次模式提取（非同步、不阻斷）</span>
+      weight-store.ts               <span style="color:#64748b"># 權重矩陣增刪改查（JSON、遞減衰減）</span>
+      injector.ts                   <span style="color:#64748b"># 提示建構前 → 注入系統提示</span>
+      decay.ts                      <span style="color:#64748b"># 時間遞減衰減（半衰期可設定）</span>
+      tools.ts                      <span style="color:#64748b"># learning_insights、learning_stats 工具</span>
+      types.ts                      <span style="color:#64748b"># 學習記錄、學習模式、權重矩陣型別</span>
+      collector.test.ts             <span style="color:#64748b"># 單元測試</span>
+      analyzer.test.ts
+      weight-store.test.ts
+
+  neural-router/                    <span style="color:#7c3aed">## 第二層：動態突觸路由</span>
+    openclaw.plugin.json
+    package.json                    <span style="color:#64748b"># @openclaw/neural-router</span>
+    api.ts
+    index.ts                        <span style="color:#64748b"># 入口：模型選擇掛鉤 + 回合準備掛鉤 + 2 個工具</span>
+    src/
+      synapse-weights.ts            <span style="color:#64748b"># 突觸增刪改查、權重更新規則</span>
+      activation.ts                 <span style="color:#64748b"># 激活閾值過濾</span>
+      compete.ts                    <span style="color:#64748b"># epsilon-greedy 競爭選優</span>
+      decay.ts                      <span style="color:#64748b"># 未使用路徑權重衰減</span>
+      context-signal.ts             <span style="color:#64748b"># 從掛鉤事件提取上下文特徵</span>
+      types.ts                      <span style="color:#64748b"># 突觸、激活訊號、神經拓撲</span>
+      compete.test.ts
+      activation.test.ts
+
+  growth-pulse/                     <span style="color:#d97706">## 第三層：貫穿式增長心跳</span>
+    openclaw.plugin.json
+    package.json                    <span style="color:#64748b"># @openclaw/growth-pulse</span>
+    api.ts
+    index.ts                        <span style="color:#64748b"># 入口：閘道啟動/停止 + 心跳掛鉤</span>
+    src/
+      pulse.ts                      <span style="color:#64748b"># 增長心跳排程器</span>
+      light-cycle.ts                <span style="color:#64748b"># 每小時：權重微調</span>
+      rem-cycle.ts                  <span style="color:#64748b"># 每天：模式提取 + 技能胚胎孵化</span>
+      deep-cycle.ts                 <span style="color:#64748b"># 每週：結構重組 + 剪枝 + DNA 檢查</span>
+      metrics.ts                    <span style="color:#64748b"># 增長指標：感知/路由/技能/判斷/結構</span>
+      types.ts                      <span style="color:#64748b"># 增長指標、增長週期、增長狀態</span>
+      pulse.test.ts
+      light-cycle.test.ts
+
+  organic-cells/                    <span style="color:#dc2626">## 第四層：仿生有機體架構</span>
+    openclaw.plugin.json
+    package.json                    <span style="color:#64748b"># @openclaw/organic-cells</span>
+    api.ts
+    index.ts                        <span style="color:#64748b"># 入口：工具掛鉤 + 安裝掛鉤 + 會話掛鉤</span>
+    src/
+      cell-registry.ts              <span style="color:#64748b"># 每個擴充套件的細胞健康追蹤</span>
+      metabolism.ts                 <span style="color:#64748b"># 輸入/輸出/廢物記帳</span>
+      immune.ts                     <span style="color:#64748b"># 異常偵測、隔離（工具呼叫前阻斷）</span>
+      endocrine.ts                  <span style="color:#64748b"># 荷爾蒙狀態：皮質醇/生長/褪黑/腎上腺</span>
+      stem-pool.ts                  <span style="color:#64748b"># 技能胚胎管理（安裝前閘道）</span>
+      dna-check.ts                  <span style="color:#64748b"># 清單校驗碼驗證</span>
+      types.ts                      <span style="color:#64748b"># 細胞健康、細胞狀態、荷爾蒙、威脅模式</span>
+      immune.test.ts
+      endocrine.test.ts
+</pre>
+</div>
+</section>
+
+<!-- ============================================================ -->
+<section id="safety">
+<h2>九、安全驗證與回滾 <span class="badge" style="background:rgba(74,222,128,0.15);color:var(--green);">安全</span></h2>
+
+<div class="spec-grid">
+  <div class="spec-card">
+    <h4>架構合規檢查表</h4>
+    <table>
+      <tr><td>只匯入 plugin-sdk/*</td><td style="color:#4ade80">四層全部通過</td></tr>
+      <tr><td>不修改核心 src/**</td><td style="color:#4ade80">四層全部通過</td></tr>
+      <tr><td>清單優先宣告能力</td><td style="color:#4ade80">四層全部通過</td></tr>
+      <tr><td>只用掛鉤整合</td><td style="color:#4ade80">四層全部通過</td></tr>
+      <tr><td>懶載入模式</td><td style="color:#4ade80">四層全部通過</td></tr>
+      <tr><td>用 plugin state 儲存</td><td style="color:#4ade80">四層全部通過</td></tr>
+      <tr><td>不跨擴充套件匯入</td><td style="color:#4ade80">四層全部通過</td></tr>
+      <tr><td>向後相容</td><td style="color:#4ade80">四層全部通過</td></tr>
+      <tr><td>失敗開放（不影響系統）</td><td style="color:#4ade80">四層全部通過</td></tr>
+    </table>
+  </div>
+  <div class="spec-card">
+    <h4>回滾方式（每個擴充可獨立關閉）</h4>
+    <pre style="font-size: 11px; margin-top: 0; border: none; padding: 0; background: none;">// openclaw.json - 關閉任何一層
+{
+  "plugins": {
+    "entries": {
+      "operational-learning": {
+        "enabled": false
+      },
+      "neural-router": {
+        "enabled": false
+      },
+      "growth-pulse": {
+        "enabled": false
+      },
+      "organic-cells": {
+        "enabled": false
+      }
+    }
+  }
+}</pre>
+    <p style="font-size: 12px; color: var(--text2); margin-top: 8px;">關閉 = 系統行為和今天完全一樣。零風險。</p>
+  </div>
+  <div class="spec-card">
+    <h4>效能預算</h4>
+    <table>
+      <tr><td>第一層收集</td><td>&lt; 5 毫秒（非同步追加）</td></tr>
+      <tr><td>第一層注入</td><td>&lt; 50 毫秒（讀 JSON + 格式化）</td></tr>
+      <tr><td>第二層競爭</td><td>&lt; 10 毫秒（記憶體內矩陣）</td></tr>
+      <tr><td>第三層淺層</td><td>&lt; 500 毫秒（每小時批次）</td></tr>
+      <tr><td>第三層快速眼動</td><td>&lt; 5 秒（每天分析）</td></tr>
+      <tr><td>第三層深層</td><td>&lt; 30 秒（每週重組）</td></tr>
+      <tr><td>第四層免疫檢查</td><td>&lt; 2 毫秒（查表 + 閾值）</td></tr>
+      <tr><td>啟動影響</td><td>&lt; 50 毫秒（懶載入）</td></tr>
+    </table>
+  </div>
+  <div class="spec-card">
+    <h4>測試策略</h4>
+    <table>
+      <tr><td>單元測試</td><td>共置 *.test.ts，每個模組一個</td></tr>
+      <tr><td>整合測試</td><td>每個掛鉤接線一個煙霧測試</td></tr>
+      <tr><td>契約測試</td><td>清單 + SDK 匯入驗證</td></tr>
+      <tr><td>效能測試</td><td>CI 中的預算斷言</td></tr>
+      <tr><td>品質測試</td><td>第一層注入品質 A/B 比較</td></tr>
+      <tr><td>測試框架</td><td>vitest（pnpm test extensions/...）</td></tr>
+    </table>
+  </div>
+</div>
+
+<div class="note" style="margin-top: 24px; font-size: 14px;">
+  <strong>核心承諾：</strong>四個擴充套件、13 個掛鉤、零核心修改、100% Plugin SDK 合規。<br>
+  每個階段獨立有價值、獨立可關閉。關閉任何一個，系統和今天完全一樣。
+</div>
+</section>
+
+</div>
+
+<div style="text-align:center; padding: 40px; color: var(--text2); font-size: 12px; border-top: 1px solid var(--border);">
+  OpenClaw 自動化進化學習擴張架構建築藍圖 v1.0 &mdash; 2026-05-14
+  <br>4 個擴充套件 &bull; 13 個掛鉤 &bull; 零核心修改 &bull; 100% 合規
+</div>
+
+</body>
+</html>

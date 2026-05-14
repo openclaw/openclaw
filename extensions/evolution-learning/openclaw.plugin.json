@@ -1,0 +1,92 @@
+{
+  "id": "evolution-learning",
+  "activation": {
+    "onStartup": true
+  },
+  "name": "Evolution Learning",
+  "description": "四層進化學習系統 — 運行即學習、神經路由、增長心跳、有機細胞。自動偵測對話中的女媧人物框架需求，注入對應的思維模型，並記錄使用效果推動技能包成熟。",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": { "type": "boolean" },
+      "maxContextTokens": {
+        "type": "integer",
+        "minimum": 50,
+        "maximum": 500,
+        "description": "每次注入的最大 Token 預算（跨所有層合計）"
+      },
+      "confidenceThreshold": {
+        "type": "number",
+        "minimum": 0.1,
+        "maximum": 1.0,
+        "description": "觸發注入所需的最低信心度"
+      },
+      "remCycleHours": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 72,
+        "description": "REM 週期間隔（小時）"
+      },
+      "maturityThreshold": {
+        "type": "number",
+        "minimum": 0.5,
+        "maximum": 1.0,
+        "description": "幹細胞晉升為常駐細胞的成熟度門檻"
+      },
+      "logging": { "type": "boolean" },
+      "tavilyApiKey": {
+        "type": "string",
+        "description": "Tavily 搜尋 API Key（用於自動蒸餾。留空則跳過網路搜尋，僅用啟發式萃取）"
+      },
+      "autoDistillEnabled": {
+        "type": "boolean",
+        "description": "啟用自動蒸餾：高頻未匹配主題自動生成 pattern"
+      },
+      "autoDistillThreshold": {
+        "type": "integer",
+        "minimum": 5,
+        "maximum": 100,
+        "description": "觸發自動蒸餾的出現次數門檻（預設 8）"
+      }
+    }
+  },
+  "uiHints": {
+    "enabled": {
+      "label": "進化學習",
+      "help": "啟用或暫停四層進化學習系統。"
+    },
+    "maxContextTokens": {
+      "label": "最大注入 Token",
+      "help": "控制每次對話前注入的上下文量。建議 200-300。"
+    },
+    "confidenceThreshold": {
+      "label": "觸發信心度門檻",
+      "help": "低於此信心度的模式不會自動注入。"
+    },
+    "remCycleHours": {
+      "label": "REM 週期（小時）",
+      "help": "增長心跳的評估頻率。"
+    },
+    "maturityThreshold": {
+      "label": "成熟度門檻",
+      "help": "幹細胞達到此分數後自動晉升為常駐細胞。"
+    },
+    "logging": {
+      "label": "啟用日誌",
+      "help": "輸出進化學習的偵錯資訊。"
+    },
+    "tavilyApiKey": {
+      "label": "Tavily API Key",
+      "help": "填入後自動蒸餾會使用網路搜尋強化 pattern 品質。"
+    },
+    "autoDistillEnabled": {
+      "label": "自動蒸餾",
+      "help": "啟用後，高頻未匹配主題會自動蒸餾為可用 pattern。"
+    },
+    "autoDistillThreshold": {
+      "label": "自動蒸餾門檻",
+      "help": "主題出現幾次後觸發自動蒸餾。建議 8-15。"
+    }
+  }
+}
