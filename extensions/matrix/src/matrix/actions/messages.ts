@@ -14,6 +14,7 @@ import {
 
 const MATRIX_THREAD_RELATION_TYPE = "m.thread";
 const MAX_MAIN_TIMELINE_FETCH_PAGES = 3;
+const MAX_THREAD_PARENT_LOOKUP_DEPTH = 4;
 
 type MatrixMessagesPage = {
   chunk: MatrixRawEvent[];
@@ -27,24 +28,166 @@ type MatrixRelationsPage = {
   prev_batch?: string;
 };
 
-function isThreadRelation(value: unknown): boolean {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "rel_type" in value &&
-    value.rel_type === MATRIX_THREAD_RELATION_TYPE
-  );
+function relationRecord(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  return value as Record<string, unknown>;
 }
 
-function isThreadEvent(event: MatrixRawEvent): boolean {
-  if (isThreadRelation(event.content?.["m.relates_to"])) {
+function relationEventId(value: unknown): string | null {
+  const relation = relationRecord(value);
+  const eventId = relation?.event_id;
+  return typeof eventId === "string" && eventId.trim() ? eventId : null;
+}
+
+function threadRootFromRelation(value: unknown): string | null {
+  const relation = relationRecord(value);
+  if (relation?.rel_type !== MATRIX_THREAD_RELATION_TYPE) {
+    return null;
+  }
+  return relationEventId(relation);
+}
+
+function threadRootFromEvent(event: MatrixRawEvent): string | null {
+  const rootId = threadRootFromRelation(event.content?.["m.relates_to"]);
+  if (rootId) {
+    return rootId;
+  }
+  const newContent = relationRecord(event.content?.["m.new_content"]);
+  return threadRootFromRelation(newContent?.["m.relates_to"]);
+}
+
+function relationParentIds(event: MatrixRawEvent): string[] {
+  const parentIds = new Set<string>();
+  const rootId = threadRootFromEvent(event);
+  const parentId = relationEventId(event.content?.["m.relates_to"]);
+  if (parentId && parentId !== rootId) {
+    parentIds.add(parentId);
+  }
+  const newContent = relationRecord(event.content?.["m.new_content"]);
+  const newContentParentId = relationEventId(newContent?.["m.relates_to"]);
+  if (newContentParentId && newContentParentId !== rootId) {
+    parentIds.add(newContentParentId);
+  }
+  return [...parentIds];
+}
+
+function createEventResolver(
+  roomId: string,
+  client: MatrixActionClientOpts["client"],
+  knownEvents: MatrixRawEvent[],
+) {
+  const cache = new Map<string, Promise<MatrixRawEvent | null>>();
+  for (const event of knownEvents) {
+    if (event.event_id) {
+      cache.set(event.event_id, Promise.resolve(event));
+    }
+  }
+
+  return async (eventId: string): Promise<MatrixRawEvent | null> => {
+    const cached = cache.get(eventId);
+    if (cached) {
+      return await cached;
+    }
+    const loaded = client
+      ? client
+          .getEvent(roomId, eventId)
+          .then((event) => event as MatrixRawEvent | null)
+          .catch(() => null)
+      : Promise.resolve(null);
+    cache.set(eventId, loaded);
+    return await loaded;
+  };
+}
+
+async function eventBelongsToAnyThread(
+  event: MatrixRawEvent,
+  resolveEvent: (eventId: string) => Promise<MatrixRawEvent | null>,
+  depth = 0,
+  visited = new Set<string>(),
+): Promise<boolean> {
+  if (threadRootFromEvent(event)) {
     return true;
   }
-  const newContent = event.content?.["m.new_content"];
-  if (typeof newContent !== "object" || newContent === null) {
+  if (depth >= MAX_THREAD_PARENT_LOOKUP_DEPTH) {
     return false;
   }
-  return isThreadRelation((newContent as Record<string, unknown>)["m.relates_to"]);
+  for (const parentId of relationParentIds(event)) {
+    if (visited.has(parentId)) {
+      continue;
+    }
+    visited.add(parentId);
+    const parent = await resolveEvent(parentId);
+    if (parent && (await eventBelongsToAnyThread(parent, resolveEvent, depth + 1, visited))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function eventBelongsToThread(
+  event: MatrixRawEvent,
+  threadRootId: string,
+  resolveEvent: (eventId: string) => Promise<MatrixRawEvent | null>,
+  depth = 0,
+  visited = new Set<string>(),
+): Promise<boolean> {
+  if (event.event_id === threadRootId) {
+    return true;
+  }
+  const rootId = threadRootFromEvent(event);
+  if (rootId) {
+    return rootId === threadRootId;
+  }
+  if (depth >= MAX_THREAD_PARENT_LOOKUP_DEPTH) {
+    return false;
+  }
+  for (const parentId of relationParentIds(event)) {
+    if (parentId === threadRootId || visited.has(parentId)) {
+      continue;
+    }
+    visited.add(parentId);
+    const parent = await resolveEvent(parentId);
+    if (
+      parent &&
+      (await eventBelongsToThread(parent, threadRootId, resolveEvent, depth + 1, visited))
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function filterThreadEvents(
+  events: MatrixRawEvent[],
+  threadRootId: string,
+  roomId: string,
+  client: MatrixActionClientOpts["client"],
+): Promise<MatrixRawEvent[]> {
+  const resolveEvent = createEventResolver(roomId, client, events);
+  const filtered: MatrixRawEvent[] = [];
+  for (const event of events) {
+    if (await eventBelongsToThread(event, threadRootId, resolveEvent)) {
+      filtered.push(event);
+    }
+  }
+  return filtered;
+}
+
+async function filterMainTimelineEvents(
+  events: MatrixRawEvent[],
+  roomId: string,
+  client: MatrixActionClientOpts["client"],
+): Promise<MatrixRawEvent[]> {
+  const resolveEvent = createEventResolver(roomId, client, events);
+  const filtered: MatrixRawEvent[] = [];
+  for (const event of events) {
+    if (!(await eventBelongsToAnyThread(event, resolveEvent))) {
+      filtered.push(event);
+    }
+  }
+  return filtered;
 }
 
 function appendUniqueEvent(
@@ -142,11 +285,12 @@ export async function readMatrixMessages(
     if (opts.threadId) {
       const res = (await client.doRequest(
         "GET",
-        `/_matrix/client/v1/rooms/${encodeURIComponent(resolvedRoom)}/relations/${encodeURIComponent(opts.threadId)}/${MATRIX_THREAD_RELATION_TYPE}`,
+        `/_matrix/client/v1/rooms/${encodeURIComponent(resolvedRoom)}/relations/${encodeURIComponent(opts.threadId)}`,
         {
           dir: opts.after ? "f" : "b",
           limit,
           from: normalizeOptionalString(opts.before) ?? normalizeOptionalString(opts.after),
+          recurse: true,
         },
       )) as MatrixRelationsPage;
       nextBatch = res.next_batch ?? null;
@@ -161,7 +305,12 @@ export async function readMatrixMessages(
       for (const event of res.chunk) {
         appendUniqueEvent(rawThreadEvents, event);
       }
-      hydratedChunk = await client.hydrateEvents(resolvedRoom, rawThreadEvents);
+      hydratedChunk = await filterThreadEvents(
+        await client.hydrateEvents(resolvedRoom, rawThreadEvents),
+        opts.threadId,
+        resolvedRoom,
+        client,
+      );
     } else {
       let token = normalizeOptionalString(opts.before) ?? normalizeOptionalString(opts.after);
       const dir = opts.after ? "f" : "b";
@@ -183,10 +332,8 @@ export async function readMatrixMessages(
           },
         )) as MatrixMessagesPage;
         const hydratedPage = await client.hydrateEvents(resolvedRoom, res.chunk);
-        for (const event of hydratedPage) {
-          if (!isThreadEvent(event)) {
-            mainEvents.push(event);
-          }
+        for (const event of await filterMainTimelineEvents(hydratedPage, resolvedRoom, client)) {
+          mainEvents.push(event);
         }
         if (
           !res.end ||

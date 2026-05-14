@@ -354,10 +354,11 @@ describe("matrix message actions", () => {
     expect(doRequest).toHaveBeenCalledWith(
       "GET",
       expect.stringContaining(
-        "/_matrix/client/v1/rooms/!room%3Aexample.org/relations/%24thread-root/m.thread",
+        "/_matrix/client/v1/rooms/!room%3Aexample.org/relations/%24thread-root",
       ),
-      expect.objectContaining({ limit: 5 }),
+      expect.objectContaining({ limit: 5, recurse: true }),
     );
+    expect(String(mockCallArg(doRequest, 0, 1))).not.toContain("/m.thread");
     expect(String(mockCallArg(doRequest, 0, 1))).not.toContain("/m.room.message");
     expect(getEvent).toHaveBeenCalledWith("!room:example.org", "$thread-root");
     expect(hydrateEvents).toHaveBeenCalledWith(
@@ -430,8 +431,9 @@ describe("matrix message actions", () => {
     });
 
     expect(String(mockCallArg(doRequest, 0, 1))).toContain(
-      "/_matrix/client/v1/rooms/!room%3Aexample.org/relations/%24thread-root/m.thread",
+      "/_matrix/client/v1/rooms/!room%3Aexample.org/relations/%24thread-root",
     );
+    expect(String(mockCallArg(doRequest, 0, 1))).not.toContain("/m.thread");
     expect(String(mockCallArg(doRequest, 0, 1))).not.toContain("/m.room.message");
     expect(hydrateEvents).toHaveBeenCalledWith(
       "!room:example.org",
@@ -472,6 +474,13 @@ describe("matrix message actions", () => {
         { id: "a2", "m.text": "Strawberry" },
       ],
     });
+    pollRoot.content = {
+      ...pollRoot.content,
+      "m.relates_to": {
+        rel_type: "m.thread",
+        event_id: "$thread-root",
+      },
+    };
     const getEvent = vi.fn(async (_roomId: string, eventId: string) => {
       if (eventId === "$thread-root") {
         return threadRoot;
@@ -516,6 +525,96 @@ describe("matrix message actions", () => {
     );
     expect(result.messages.map((message) => message.eventId)).toEqual(["$thread-root", "$poll"]);
     expect(result.messages[1]?.body).toContain("1. Apple (1 vote)");
+  });
+
+  it("keeps indirect child relations in thread reads while filtering unrelated root relations", async () => {
+    const doRequest = vi.fn(async () => ({
+      chunk: [
+        {
+          event_id: "$reply-1",
+          sender: "@bob:example.org",
+          type: "m.room.message",
+          origin_server_ts: 20,
+          content: {
+            msgtype: "m.text",
+            body: "thread reply",
+            "m.relates_to": {
+              rel_type: "m.thread",
+              event_id: "$thread-root",
+            },
+          },
+        },
+        {
+          event_id: "$reply-edit",
+          sender: "@bob:example.org",
+          type: "m.room.message",
+          origin_server_ts: 30,
+          content: {
+            msgtype: "m.text",
+            body: "* edited thread reply",
+            "m.relates_to": {
+              rel_type: "m.replace",
+              event_id: "$reply-1",
+            },
+            "m.new_content": {
+              msgtype: "m.text",
+              body: "edited thread reply",
+            },
+          },
+        },
+        {
+          event_id: "$root-reaction",
+          sender: "@carol:example.org",
+          type: "m.reaction",
+          origin_server_ts: 40,
+          content: {
+            "m.relates_to": {
+              rel_type: "m.annotation",
+              event_id: "$thread-root",
+              key: "👍",
+            },
+          },
+        },
+      ],
+      next_batch: "thread-next-token",
+      prev_batch: "thread-prev-token",
+    }));
+    const threadRoot = {
+      event_id: "$thread-root",
+      sender: "@alice:example.org",
+      type: "m.room.message",
+      origin_server_ts: 10,
+      content: {
+        msgtype: "m.text",
+        body: "thread root",
+      },
+    };
+    const client = {
+      doRequest,
+      hydrateEvents: vi.fn(
+        async (_roomId: string, events: Array<Record<string, unknown>>) => events,
+      ),
+      getEvent: vi.fn(async () => threadRoot),
+      stop: vi.fn(),
+    } as unknown as MatrixClient;
+
+    const result = await readMatrixMessages("room:!room:example.org", {
+      client,
+      threadId: "$thread-root",
+      limit: 10,
+    });
+
+    expect(doRequest).toHaveBeenCalledWith(
+      "GET",
+      expect.stringContaining("/relations/%24thread-root"),
+      expect.objectContaining({ recurse: true }),
+    );
+    expect(String(mockCallArg(doRequest, 0, 1))).not.toContain("/m.thread");
+    expect(result.messages.map((message) => message.eventId)).toEqual([
+      "$thread-root",
+      "$reply-1",
+      "$reply-edit",
+    ]);
   });
 
   it("filters thread replies out of main-room reads", async () => {
@@ -620,6 +719,74 @@ describe("matrix message actions", () => {
 
     const result = await readMatrixMessages("room:!room:example.org", { client, limit: 5 });
 
+    expect(result.messages.map((message) => message.eventId)).toEqual(["$main-1"]);
+  });
+
+  it("filters indirect child relations of thread events out of main-room reads", async () => {
+    const doRequest = vi.fn(async () => ({
+      chunk: [
+        {
+          event_id: "$thread-reply-edit",
+          sender: "@bob:example.org",
+          type: "m.room.message",
+          origin_server_ts: 30,
+          content: {
+            msgtype: "m.text",
+            body: "* edited thread reply",
+            "m.relates_to": {
+              rel_type: "m.replace",
+              event_id: "$thread-reply",
+            },
+            "m.new_content": {
+              msgtype: "m.text",
+              body: "edited thread reply",
+            },
+          },
+        },
+        {
+          event_id: "$main-1",
+          sender: "@alice:example.org",
+          type: "m.room.message",
+          origin_server_ts: 10,
+          content: {
+            msgtype: "m.text",
+            body: "main room message",
+          },
+        },
+      ],
+      start: "start-token",
+      end: "end-token",
+    }));
+    const hydrateEvents = vi.fn(
+      async (_roomId: string, events: Array<Record<string, unknown>>) => events,
+    );
+    const client = {
+      doRequest,
+      hydrateEvents,
+      getEvent: vi.fn(async (_roomId: string, eventId: string) =>
+        eventId === "$thread-reply"
+          ? {
+              event_id: "$thread-reply",
+              sender: "@bob:example.org",
+              type: "m.room.message",
+              origin_server_ts: 20,
+              content: {
+                msgtype: "m.text",
+                body: "thread reply",
+                "m.relates_to": {
+                  rel_type: "m.thread",
+                  event_id: "$thread-root",
+                },
+              },
+            }
+          : null,
+      ),
+      stop: vi.fn(),
+    } as unknown as MatrixClient;
+
+    const result = await readMatrixMessages("room:!room:example.org", { client, limit: 5 });
+
+    expect(client.getEvent).toHaveBeenCalledWith("!room:example.org", "$thread-reply");
     expect(result.messages.map((message) => message.eventId)).toEqual(["$main-1"]);
   });
 
