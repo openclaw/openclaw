@@ -200,7 +200,7 @@ function buildSkillStatus(
       isEnvSatisfied,
       isConfigSatisfied,
     });
-  const eligible = !disabled && !blockedByAllowlist && requirementsSatisfied && !entry.parseError;
+  const eligible = !disabled && !blockedByAllowlist && requirementsSatisfied;
 
   return {
     name: entry.skill.name,
