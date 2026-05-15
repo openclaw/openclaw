@@ -50,6 +50,7 @@ Docs: https://docs.openclaw.ai
 - Require canonical node platform IDs [AI]. (#81880) Thanks @pgondhi987.
 - Agents/Azure OpenAI Responses: default unset Azure OpenAI API versions to `preview` so `/openai/v1/responses` calls use Azure's current Responses API route. (#82026) Thanks @leoge007.
 - Control UI/WebChat: compact the desktop chat header controls into a single aligned row so the session, model, thinking, and action controls no longer waste vertical space. Thanks @BunsDev.
+- Agents/model catalog: reuse manifest model-id normalization metadata while loading persisted read-only catalog rows, avoiding repeated metadata scans.
 - Agents: retry empty final turns for generic `anthropic-messages` providers instead of limiting non-visible recovery to Kimi, so custom/proxied Anthropic-compatible routes can recover with a visible answer. Addresses #46080. Thanks @wmgx, @w1tv, and @iFwu.
 - Agents/replies: strip workflow `<function_response>` scaffolding from user-visible sanitizer paths so raw tool output does not leak into chat history, transcript mirrors, or channel replies. Fixes #47444. Thanks @5toCode.
 - Agents/media: deliver generated image, music, and video results through structured attachments, keep message-tool-only Codex completions on the message tool, and fail completion handoff when expected media is not actually sent.
