@@ -3338,7 +3338,7 @@ packages:
     engines: {node: '>=20.11'}
 
   '@openclaw/proxyline@0.3.0':
-    resolution: {integrity: sha512-dFmNacSZHaHPtSvItpJDccMgLqEymhrCQC9BB1zWkBYhortRfmFF1Ap2YKro8q0Yk0cLfgXsCpbAh+paEy+Ubw==}
+    resolution: {integrity: sha512-+18F9jk948+qK70V63Nfiu4odfvdf+0T9qyKyzylmt1WLYGTtLLo88pLgtS+vN5CORJyCuC56Rdswkws5VsEig==}
     engines: {node: '>=20.18.1'}
     peerDependencies:
       undici: '>=7.25.0 <9'
