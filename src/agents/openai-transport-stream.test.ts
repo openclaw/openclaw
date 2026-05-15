@@ -1609,7 +1609,7 @@ describe("openai transport stream", () => {
       prompt_cache_retention: "24h",
       service_tier: "auto",
       temperature: 0.2,
-      text: { format: { type: "json_object" } },
+      text: { format: { type: "json_object" }, verbosity: "low" },
       top_p: 0.85,
     };
 
@@ -1635,7 +1635,7 @@ describe("openai transport stream", () => {
     expect(sanitized).not.toHaveProperty("prompt_cache_retention");
     expect(sanitized).not.toHaveProperty("service_tier");
     expect(sanitized).not.toHaveProperty("temperature");
-    expect(sanitized).not.toHaveProperty("text");
+    expect(sanitized.text).toEqual({ verbosity: "low" });
     expect(sanitized).not.toHaveProperty("top_p");
   });
 
