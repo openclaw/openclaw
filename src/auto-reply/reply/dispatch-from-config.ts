@@ -1599,6 +1599,7 @@ export async function dispatchReplyFromConfig(
     let finalDeliveryFailed = false;
     const shouldDeliverDespiteSourceReplySuppression = (reply: ReplyPayload) =>
       suppressAutomaticSourceDelivery &&
+      ctx.InboundTurnKind !== "room_event" &&
       !sendPolicyDenied &&
       getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression === true;
     for (const reply of replies) {

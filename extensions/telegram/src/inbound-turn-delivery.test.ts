@@ -46,6 +46,42 @@ describe("telegram inbound turn delivery", () => {
     end();
   });
 
+  it("matches provider-prefixed Telegram targets for delivery correlation", () => {
+    let count = 0;
+    const end = beginTelegramInboundTurnDeliveryCorrelation("sess:prefixed", {
+      outboundTo: "-100123",
+      markInboundTurnDelivered: () => {
+        count += 1;
+      },
+    });
+
+    notifyTelegramInboundTurnOutboundSuccess({
+      sessionKey: "sess:prefixed",
+      to: "telegram:-100123",
+    });
+
+    expect(count).toBe(1);
+    end();
+  });
+
+  it("matches Telegram topic targets by conversation for delivery correlation", () => {
+    let count = 0;
+    const end = beginTelegramInboundTurnDeliveryCorrelation("sess:topic", {
+      outboundTo: "-100123",
+      markInboundTurnDelivered: () => {
+        count += 1;
+      },
+    });
+
+    notifyTelegramInboundTurnOutboundSuccess({
+      sessionKey: "sess:topic",
+      to: "telegram:-100123:topic:77",
+    });
+
+    expect(count).toBe(1);
+    end();
+  });
+
   it("keeps user-request and room-event delivery correlations separate", () => {
     let userRequestCount = 0;
     let roomEventCount = 0;

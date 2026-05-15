@@ -9,6 +9,30 @@ type ActiveTurn = {
 
 const registry = new Map<string, ActiveTurn>();
 
+function normalizeTelegramDeliveryTarget(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/^(telegram|tg):/u, "");
+}
+
+function stripTelegramTopicTarget(value: string): string {
+  return value.replace(/:topic:\d+$/u, "");
+}
+
+function telegramDeliveryTargetsMatch(expected: string, actual: string): boolean {
+  const expectedTarget = normalizeTelegramDeliveryTarget(expected);
+  const actualTarget = normalizeTelegramDeliveryTarget(actual);
+  if (expectedTarget === actualTarget) {
+    return true;
+  }
+  const expectedBase = stripTelegramTopicTarget(expectedTarget);
+  const actualBase = stripTelegramTopicTarget(actualTarget);
+  return (
+    expectedBase === actualBase && (expectedTarget === expectedBase || actualTarget === actualBase)
+  );
+}
+
 export function resolveTelegramInboundTurnDeliveryCorrelationKey(
   sessionKey: string | undefined,
   inboundTurnKind?: TelegramInboundTurnDeliveryKind | string,
@@ -52,7 +76,7 @@ export function notifyTelegramInboundTurnOutboundSuccess(params: {
     return;
   }
   const turn = registry.get(key);
-  if (!turn || turn.outboundTo !== params.to) {
+  if (!turn || !telegramDeliveryTargetsMatch(turn.outboundTo, params.to)) {
     return;
   }
   if (turn.outboundAccountId && params.accountId && params.accountId !== turn.outboundAccountId) {
