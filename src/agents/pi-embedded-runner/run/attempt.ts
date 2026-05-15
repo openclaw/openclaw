@@ -1111,6 +1111,7 @@ export async function runEmbeddedAttempt(
             requireExplicitMessageTarget:
               params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+            inboundTurnKind: params.currentTurnKind,
             disableMessageTool: params.disableMessageTool,
             forceMessageTool: params.forceMessageTool,
             enableHeartbeatTool: params.enableHeartbeatTool,

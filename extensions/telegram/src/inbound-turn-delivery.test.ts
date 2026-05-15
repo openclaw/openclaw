@@ -45,4 +45,43 @@ describe("telegram inbound turn delivery", () => {
     expect(count).toBe(0);
     end();
   });
+
+  it("keeps user-request and room-event delivery correlations separate", () => {
+    let userRequestCount = 0;
+    let roomEventCount = 0;
+    const endUserRequest = beginTelegramInboundTurnDeliveryCorrelation("sess:x", {
+      outboundTo: "999",
+      markInboundTurnDelivered: () => {
+        userRequestCount += 1;
+      },
+    });
+    const endRoomEvent = beginTelegramInboundTurnDeliveryCorrelation(
+      "sess:x",
+      {
+        outboundTo: "999",
+        markInboundTurnDelivered: () => {
+          roomEventCount += 1;
+        },
+      },
+      { inboundTurnKind: "room_event" },
+    );
+
+    notifyTelegramInboundTurnOutboundSuccess({
+      sessionKey: "sess:x",
+      to: "999",
+      inboundTurnKind: "room_event",
+    });
+    expect(roomEventCount).toBe(1);
+    expect(userRequestCount).toBe(0);
+
+    notifyTelegramInboundTurnOutboundSuccess({
+      sessionKey: "sess:x",
+      to: "999",
+    });
+    expect(roomEventCount).toBe(1);
+    expect(userRequestCount).toBe(1);
+
+    endRoomEvent();
+    endUserRequest();
+  });
 });

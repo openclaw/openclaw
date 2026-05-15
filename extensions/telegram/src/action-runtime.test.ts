@@ -408,6 +408,42 @@ describe("handleTelegramAction", () => {
     end();
   });
 
+  it("marks room-event delivery correlations separately", async () => {
+    let roomEventCount = 0;
+    let userRequestCount = 0;
+    const endRoomEvent = beginTelegramInboundTurnDeliveryCorrelation(
+      "telegram-session",
+      {
+        outboundTo: "@testchannel",
+        markInboundTurnDelivered: () => {
+          roomEventCount += 1;
+        },
+      },
+      { inboundTurnKind: "room_event" },
+    );
+    const endUserRequest = beginTelegramInboundTurnDeliveryCorrelation("telegram-session", {
+      outboundTo: "@testchannel",
+      markInboundTurnDelivered: () => {
+        userRequestCount += 1;
+      },
+    });
+
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "@testchannel",
+        content: "Hello from a room event",
+      },
+      telegramConfig(),
+      { sessionKey: "telegram-session", inboundTurnKind: "room_event" },
+    );
+
+    expect(roomEventCount).toBe(1);
+    expect(userRequestCount).toBe(0);
+    endRoomEvent();
+    endUserRequest();
+  });
+
   it("accepts shared send action aliases", async () => {
     await handleTelegramAction(
       {

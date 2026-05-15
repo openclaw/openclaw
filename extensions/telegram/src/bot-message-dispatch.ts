@@ -168,6 +168,11 @@ type TelegramReplyFenceState = {
   activeDispatches: number;
 };
 
+type TelegramReplyFenceKey = {
+  activeKey: string;
+  roomEventKey: string;
+};
+
 // Newer accepted turns and authorized aborts can arrive ahead of older same-session reply work.
 const telegramReplyFenceByKey = new Map<string, TelegramReplyFenceState>();
 
@@ -183,12 +188,16 @@ function resolveTelegramReplyFenceKey(params: {
   ctxPayload: { SessionKey?: string; CommandTargetSessionKey?: string; InboundTurnKind?: string };
   chatId: number | string;
   threadSpec: { id?: number | string | null; scope?: string };
-}): string {
+}): TelegramReplyFenceKey {
   const baseKey =
     normalizeTelegramFenceKey(params.ctxPayload.CommandTargetSessionKey) ??
     normalizeTelegramFenceKey(params.ctxPayload.SessionKey) ??
     `telegram:${String(params.chatId)}:${params.threadSpec.scope ?? "default"}:${params.threadSpec.id ?? "root"}`;
-  return params.ctxPayload.InboundTurnKind === "room_event" ? `${baseKey}:room_event` : baseKey;
+  const roomEventKey = `${baseKey}:room_event`;
+  return {
+    activeKey: params.ctxPayload.InboundTurnKind === "room_event" ? roomEventKey : baseKey,
+    roomEventKey,
+  };
 }
 
 function beginTelegramReplyFence(params: { key: string; supersede: boolean }): number {
@@ -203,6 +212,15 @@ function beginTelegramReplyFence(params: { key: string; supersede: boolean }): n
   state.activeDispatches += 1;
   telegramReplyFenceByKey.set(params.key, state);
   return state.generation;
+}
+
+function supersedeTelegramReplyFence(key: string): void {
+  const state = telegramReplyFenceByKey.get(key);
+  if (!state) {
+    return;
+  }
+  state.generation += 1;
+  telegramReplyFenceByKey.set(key, state);
 }
 
 function isTelegramReplyFenceSuperseded(params: { key: string; generation: number }): boolean {
@@ -459,14 +477,14 @@ export const dispatchTelegramMessage = async ({
   const isDispatchSuperseded = () =>
     replyFenceGeneration !== undefined &&
     isTelegramReplyFenceSuperseded({
-      key: replyFenceKey,
+      key: replyFenceKey.activeKey,
       generation: replyFenceGeneration,
     });
   const releaseReplyFence = () => {
     if (replyFenceGeneration === undefined) {
       return;
     }
-    endTelegramReplyFence(replyFenceKey);
+    endTelegramReplyFence(replyFenceKey.activeKey);
     replyFenceGeneration = undefined;
   };
   const draftMaxChars = Math.min(textLimit, 4096);
@@ -851,9 +869,13 @@ export const dispatchTelegramMessage = async ({
 
   const chunkMode = resolveChunkMode(cfg, "telegram", route.accountId);
 
+  const supersedeReplyFence = shouldSupersedeTelegramReplyFence(ctxPayload);
+  if (!isRoomEvent && supersedeReplyFence) {
+    supersedeTelegramReplyFence(replyFenceKey.roomEventKey);
+  }
   replyFenceGeneration = beginTelegramReplyFence({
-    key: replyFenceKey,
-    supersede: shouldSupersedeTelegramReplyFence(ctxPayload),
+    key: replyFenceKey.activeKey,
+    supersede: supersedeReplyFence,
   });
 
   const implicitQuoteReplyTargetId =
@@ -875,6 +897,7 @@ export const dispatchTelegramMessage = async ({
       outboundAccountId: route.accountId,
       markInboundTurnDelivered: () => deliveryState.markDelivered(),
     },
+    { inboundTurnKind: ctxPayload.InboundTurnKind },
   );
   const clearGroupHistory = () => {
     if (isGroup && historyKey) {

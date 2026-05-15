@@ -16,6 +16,7 @@ import type {
   ChannelMessageActionName,
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.public.js";
+import type { InboundTurnKind } from "../../channels/turn/kind.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   hasInteractiveReplyBlocks,
@@ -121,6 +122,7 @@ export type RunMessageActionParams = {
   sandboxRoot?: string;
   dryRun?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  inboundTurnKind?: InboundTurnKind;
   abortSignal?: AbortSignal;
 };
 
@@ -556,6 +558,7 @@ async function runGatewayPluginMessageActionOrNull(params: {
       senderIsOwner: params.input.senderIsOwner,
       sessionKey: params.input.sessionKey,
       sessionId: params.input.sessionId,
+      inboundTurnKind: params.input.inboundTurnKind,
       agentId: params.agentId,
       toolContext: params.input.toolContext,
       idempotencyKey: await resolveGatewayActionIdempotencyKey(
@@ -937,6 +940,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       accountId: accountId ?? undefined,
       senderIsOwner: input.senderIsOwner,
       sessionId: input.sessionId,
+      inboundTurnKind: input.inboundTurnKind,
       gateway,
       toolContext: input.toolContext,
       deps: input.deps,
