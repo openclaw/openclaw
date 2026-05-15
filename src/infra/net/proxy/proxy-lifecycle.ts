@@ -32,10 +32,6 @@ import {
 export type ProxyHandle = {
   /** The operator-managed proxy URL injected into process.env. */
   proxyUrl: string;
-  /** Alias kept for CLI cleanup tests and logs. */
-  injectedProxyUrl: string;
-  /** Original proxy-related environment values, restored on stop/crash. */
-  envSnapshot: ProxyEnvSnapshot;
   /** Restore process-wide proxy state. */
   stop: () => Promise<void>;
   /** Synchronously restore process-wide proxy state during hard process exit. */
@@ -53,7 +49,7 @@ let baseProxyEnvSnapshot: ProxyEnvSnapshot | null = null;
 let proxylineHandle: ProxylineHandle | null = null;
 const gatewayLoopbackBypassAuthorityCounts = new Map<string, number>();
 
-export function _resetGlobalAgentBootstrapForTests(): void {
+export function resetProxyLifecycleForTests(): void {
   baseProxyEnvSnapshot = null;
   proxylineHandle?.stop();
   proxylineHandle = null;
@@ -207,8 +203,6 @@ export async function startProxy(config: ProxyConfig | undefined): Promise<Proxy
     const registration = registerActiveManagedProxyUrl(new URL(proxyUrl), loopbackMode);
     const handle: ProxyHandle = {
       proxyUrl,
-      injectedProxyUrl: proxyUrl,
-      envSnapshot: baseProxyEnvSnapshot ?? captureProxyEnv(),
       stop: async () => {
         stopActiveProxyRegistration(registration);
       },
@@ -221,11 +215,10 @@ export async function startProxy(config: ProxyConfig | undefined): Promise<Proxy
   stopInheritedProxylineRuntimeBeforeOwnedStart();
   baseProxyEnvSnapshot ??= captureProxyEnv();
   const lifecycleBaseEnvSnapshot = baseProxyEnvSnapshot;
-  let injectedEnvSnapshot = captureProxyEnv();
   let registration: ActiveManagedProxyRegistration | null = null;
 
   try {
-    injectedEnvSnapshot = injectProxyEnv(proxyUrl, loopbackMode);
+    injectProxyEnv(proxyUrl, loopbackMode);
     proxylineHandle ??= installGlobalProxy({
       mode: "managed",
       proxyUrl,
@@ -246,8 +239,6 @@ export async function startProxy(config: ProxyConfig | undefined): Promise<Proxy
 
   const handle: ProxyHandle = {
     proxyUrl,
-    injectedProxyUrl: proxyUrl,
-    envSnapshot: injectedEnvSnapshot,
     stop: async () => {
       if (registration) {
         stopActiveProxyRegistration(registration);

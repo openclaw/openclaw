@@ -32,8 +32,8 @@ import type { ProxylineBypassPolicy } from "@openclaw/proxyline";
 import { logInfo, logWarn } from "../../../logger.js";
 import { _resetActiveManagedProxyStateForTests } from "./active-proxy-state.js";
 import {
-  _resetGlobalAgentBootstrapForTests,
   ensureInheritedManagedProxyRoutingActive,
+  resetProxyLifecycleForTests,
   registerManagedProxyGatewayLoopbackBypass,
   startProxy,
   stopProxy,
@@ -100,7 +100,7 @@ describe("startProxy", () => {
     }
     mockLogInfo.mockReset();
     mockLogWarn.mockReset();
-    _resetGlobalAgentBootstrapForTests();
+    resetProxyLifecycleForTests();
     _resetActiveManagedProxyStateForTests();
     installGlobalProxyMock.mockClear();
     proxylineStopMock.mockClear();

@@ -270,9 +270,8 @@ describe("GatewayClient security checks", () => {
     delete process.env.OPENCLAW_PROXY_ACTIVE;
     delete process.env.OPENCLAW_PROXY_LOOPBACK_MODE;
     delete process.env.HTTP_PROXY;
-    const { _resetGlobalAgentBootstrapForTests } =
-      await import("../infra/net/proxy/proxy-lifecycle.js");
-    _resetGlobalAgentBootstrapForTests();
+    const { resetProxyLifecycleForTests } = await import("../infra/net/proxy/proxy-lifecycle.js");
+    resetProxyLifecycleForTests();
     installGlobalProxyMock.mockClear();
     proxylineStopMock.mockClear();
     wsInstances.length = 0;
@@ -285,9 +284,8 @@ describe("GatewayClient security checks", () => {
     delete process.env.OPENCLAW_PROXY_ACTIVE;
     delete process.env.OPENCLAW_PROXY_LOOPBACK_MODE;
     delete process.env.HTTP_PROXY;
-    const { _resetGlobalAgentBootstrapForTests } =
-      await import("../infra/net/proxy/proxy-lifecycle.js");
-    _resetGlobalAgentBootstrapForTests();
+    const { resetProxyLifecycleForTests } = await import("../infra/net/proxy/proxy-lifecycle.js");
+    resetProxyLifecycleForTests();
     wsConstructorObservers.length = 0;
   });
 

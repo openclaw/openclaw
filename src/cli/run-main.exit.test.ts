@@ -230,17 +230,6 @@ vi.mock("../infra/net/proxy/proxy-lifecycle.js", () => ({
 function makeProxyHandle() {
   return {
     proxyUrl: "http://127.0.0.1:19876",
-    injectedProxyUrl: "http://127.0.0.1:19876",
-    envSnapshot: {
-      http_proxy: undefined,
-      https_proxy: undefined,
-      HTTP_PROXY: undefined,
-      HTTPS_PROXY: undefined,
-      no_proxy: undefined,
-      NO_PROXY: undefined,
-      OPENCLAW_PROXY_ACTIVE: undefined,
-      OPENCLAW_PROXY_LOOPBACK_MODE: undefined,
-    },
     stop: vi.fn(async () => {}),
     kill: vi.fn(),
   };
