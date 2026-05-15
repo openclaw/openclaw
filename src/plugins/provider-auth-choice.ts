@@ -278,8 +278,8 @@ export async function runProviderPluginAuthMethod(params: {
       : resolveAgentDir(params.config, agentId, params.env));
   const workspaceDir =
     params.workspaceDir ??
-    resolveAgentWorkspaceDir(params.config, agentId) ??
-    resolveDefaultAgentWorkspaceDir();
+    resolveAgentWorkspaceDir(params.config, agentId, params.env) ??
+    resolveDefaultAgentWorkspaceDir(params.env);
 
   const result = await params.method.run({
     config: params.config,
@@ -344,9 +344,10 @@ export async function runProviderPluginAuthMethod(params: {
 export async function applyAuthChoiceLoadedPluginProvider(
   params: ApplyProviderAuthChoiceParams,
 ): Promise<ApplyProviderAuthChoiceResult | null> {
-  const agentId = params.agentId ?? resolveDefaultAgentId(params.config);
+  const agentId = params.agentId ?? resolveDefaultAgentId(params.config, params.env);
   const workspaceDir =
-    resolveAgentWorkspaceDir(params.config, agentId) ?? resolveDefaultAgentWorkspaceDir();
+    resolveAgentWorkspaceDir(params.config, agentId, params.env) ??
+    resolveDefaultAgentWorkspaceDir(params.env);
   let nextConfig = params.config;
   let enabledConfig = params.config;
   const {
@@ -530,7 +531,8 @@ export async function applyAuthChoicePluginProvider(
       ? resolveDefaultAgentDir(nextConfig, params.env)
       : resolveAgentDir(nextConfig, agentId, params.env));
   const workspaceDir =
-    resolveAgentWorkspaceDir(nextConfig, agentId) ?? resolveDefaultAgentWorkspaceDir();
+    resolveAgentWorkspaceDir(nextConfig, agentId, params.env) ??
+    resolveDefaultAgentWorkspaceDir(params.env);
 
   const { resolvePluginProviders, runProviderModelSelectedHook } =
     await loadPluginProviderRuntime();
