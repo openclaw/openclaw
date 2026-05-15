@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthHealthSummary } from "../../agents/auth-health.js";
+import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -15,7 +16,9 @@ const mocks = vi.hoisted(() => ({
     return { profiles: {} };
   }),
   listProfilesForProvider: vi.fn((): string[] => []),
-  removeProviderAuthProfilesWithLock: vi.fn(async () => ({ profiles: {} })),
+  removeProviderAuthProfilesWithLock: vi.fn(
+    async (): Promise<AuthProfileStore | null> => ({ profiles: {} }),
+  ),
   resolvePersistedAuthProfileOwnerAgentDir: vi.fn(
     (params: { agentDir?: string }) => params.agentDir,
   ),
