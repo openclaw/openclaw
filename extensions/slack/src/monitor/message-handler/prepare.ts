@@ -4,6 +4,7 @@ import {
   type AckReactionScope,
 } from "openclaw/plugin-sdk/channel-feedback";
 import {
+  buildChannelTurnContext,
   buildMentionRegexes,
   formatInboundEnvelope,
   implicitMentionKindWhen,
@@ -18,7 +19,6 @@ import { ensureConfiguredBindingRouteReady } from "openclaw/plugin-sdk/conversat
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { recordDroppedChannelTurnHistory } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
-import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
@@ -1056,8 +1056,6 @@ export async function prepareSlackMessage(params: {
 
   // Use direct media (including forwarded attachment media) if available, else thread starter media
   const effectiveMedia = effectiveDirectMedia ?? threadStarterMedia;
-  const firstMedia = effectiveMedia?.[0];
-
   const inboundHistory =
     isRoomish && ctx.historyLimit > 0
       ? channelHistory.buildInboundHistory({
@@ -1067,63 +1065,98 @@ export async function prepareSlackMessage(params: {
       : dmHistoryContext.inboundHistory;
   const commandBody = textForCommandDetection.trim();
 
-  const ctxPayload = finalizeInboundContext({
-    Body: combinedBody,
-    BodyForAgent: rawBody,
-    InboundHistory: inboundHistory,
-    RawBody: rawBody,
-    CommandBody: commandBody,
-    BodyForCommands: commandBody,
-    From: slackFrom,
-    To: slackTo,
-    SessionKey: sessionKey,
-    AccountId: route.accountId,
-    ChatType: chatType,
-    ConversationLabel: envelopeFrom,
-    GroupSubject: isRoomish ? roomLabel : undefined,
-    GroupSpace: ctx.teamId || undefined,
-    GroupSystemPrompt: groupSystemPrompt,
-    UntrustedContext: untrustedChannelMetadata ? [untrustedChannelMetadata] : undefined,
-    SenderName: senderName,
-    SenderId: senderId,
-    Provider: "slack" as const,
-    Surface: "slack" as const,
-    MessageSid: message.ts,
-    ReplyToId: threadContext.replyToId,
-    // Preserve thread context for routed tool notifications.
-    MessageThreadId: threadContext.messageThreadId,
-    ParentSessionKey: threadKeys.parentSessionKey,
-    // Only include thread starter body for NEW sessions (existing sessions already have it in their transcript)
-    ThreadStarterBody: !threadSessionPreviousTimestamp ? threadStarterBody : undefined,
-    ThreadHistoryBody: threadHistoryBody,
-    IsFirstThreadTurn:
-      isThreadReply && threadTs && !threadSessionPreviousTimestamp ? true : undefined,
-    ThreadLabel: threadLabel,
-    Timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
-    ...buildSlackMentionContextPayload({
-      isRoomish,
-      effectiveWasMentioned,
-      explicitlyMentioned,
-      mentionedUserIds,
-      mentionedSubteamIds,
-      matchedImplicitMentionKinds,
-      mentionSource,
-    }),
-    MediaPath: firstMedia?.path,
-    MediaType: firstMedia?.contentType,
-    MediaUrl: firstMedia?.path,
-    MediaPaths:
-      effectiveMedia && effectiveMedia.length > 0 ? effectiveMedia.map((m) => m.path) : undefined,
-    MediaUrls:
-      effectiveMedia && effectiveMedia.length > 0 ? effectiveMedia.map((m) => m.path) : undefined,
-    MediaTypes:
-      effectiveMedia && effectiveMedia.length > 0
-        ? effectiveMedia.map((m) => m.contentType ?? "")
-        : undefined,
-    CommandAuthorized: commandAuthorized,
-    OriginatingChannel: "slack" as const,
-    OriginatingTo: slackTo,
-    NativeChannelId: message.channel,
+  const ctxPayload = buildChannelTurnContext({
+    channel: "slack",
+    provider: "slack",
+    surface: "slack",
+    accountId: route.accountId,
+    messageId: message.ts,
+    timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
+    from: slackFrom,
+    sender: {
+      id: senderId,
+      name: senderName,
+      displayLabel: senderName,
+    },
+    conversation: {
+      kind: chatType,
+      id: message.channel,
+      label: envelopeFrom,
+      spaceId: ctx.teamId || undefined,
+      threadId: threadContext.messageThreadId,
+      nativeChannelId: message.channel,
+      routePeer: {
+        kind: chatType,
+        id: message.channel,
+      },
+    },
+    route: {
+      agentId: route.agentId,
+      accountId: route.accountId,
+      routeSessionKey: sessionKey,
+      parentSessionKey: threadKeys.parentSessionKey,
+    },
+    reply: {
+      to: slackTo,
+      originatingTo: slackTo,
+      replyToId: threadContext.replyToId,
+      messageThreadId: threadContext.messageThreadId,
+      nativeChannelId: message.channel,
+    },
+    message: {
+      body: combinedBody,
+      bodyForAgent: rawBody,
+      rawBody,
+      commandBody,
+      envelopeFrom,
+      inboundHistory,
+    },
+    access: {
+      mentions: {
+        canDetectMention: isRoomish,
+        wasMentioned: effectiveWasMentioned,
+        hasAnyMention: explicitlyMentioned || mentionedSubteamIds.length > 0,
+        implicitMentionKinds: matchedImplicitMentionKinds as Array<
+          "reply_to_bot" | "quoted_bot" | "bot_thread_participant" | "native"
+        >,
+        requireMention: shouldRequireMention,
+        effectiveWasMentioned,
+      },
+      commands: {
+        authorized: commandAuthorized,
+        allowTextCommands,
+        useAccessGroups: false,
+        authorizers: [],
+      },
+    },
+    media: effectiveMedia?.map((media) => ({
+      path: media.path,
+      contentType: media.contentType,
+    })),
+    supplemental: {
+      thread: {
+        // Only include thread starter body for NEW sessions (existing sessions already have it in their transcript)
+        starterBody: !threadSessionPreviousTimestamp ? threadStarterBody : undefined,
+        historyBody: threadHistoryBody,
+        label: threadLabel,
+      },
+      groupSystemPrompt,
+    },
+    extra: {
+      GroupSubject: isRoomish ? roomLabel : undefined,
+      UntrustedContext: untrustedChannelMetadata ? [untrustedChannelMetadata] : undefined,
+      IsFirstThreadTurn:
+        isThreadReply && threadTs && !threadSessionPreviousTimestamp ? true : undefined,
+      ...buildSlackMentionContextPayload({
+        isRoomish,
+        effectiveWasMentioned,
+        explicitlyMentioned,
+        mentionedUserIds,
+        mentionedSubteamIds,
+        matchedImplicitMentionKinds,
+        mentionSource,
+      }),
+    },
   }) satisfies FinalizedMsgContext;
 
   if (isRoomish && !shouldRequireMention) {
