@@ -49,6 +49,8 @@ export type SlackChannelConfig = {
    * Requires a resolved bot user ID. Default: false.
    */
   ignoreOtherMentions?: boolean;
+  /** Override Slack reply/thread behavior for this channel. */
+  replyToMode?: ReplyToMode;
   /** Optional tool policy overrides for this channel. */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
