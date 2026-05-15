@@ -1,8 +1,9 @@
 import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
 import { formatEmbeddedAgentExecutionPhase } from "../../agents/pi-embedded-runner/execution-phase.js";
+import { parseDurationMs } from "../../cli/parse-duration.js";
 import { readSessionEntry } from "../../config/sessions/store-load.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import type { CronConfig } from "../../config/types.cron.js";
+import type { CronConfig, CronRetryOn } from "../../config/types.cron.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import {
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
@@ -67,8 +68,8 @@ export { DEFAULT_JOB_TIMEOUT_MS } from "./timeout-policy.js";
 
 const MAX_TIMER_DELAY_MS = 60_000;
 const CRON_TIMEOUT_CLEANUP_GUARD_MS = 20_000;
-const CRON_AGENT_SETUP_WATCHDOG_MS = 60_000;
-const CRON_AGENT_PRE_EXECUTION_WATCHDOG_MS = 60_000;
+const DEFAULT_CRON_AGENT_SETUP_WATCHDOG_MS = 5 * 60_000;
+const DEFAULT_CRON_AGENT_PRE_EXECUTION_WATCHDOG_MS = 5 * 60_000;
 const CRON_AGENT_PRE_EXECUTION_MIN_WATCHDOG_MS = 1_000;
 
 /**
@@ -184,6 +185,7 @@ export async function executeJobCoreWithTimeout(
     resolveTimeout?.(timeoutMarker);
   };
   const watchdog = createCronAgentWatchdog({
+    cronConfig: state.deps.cronConfig,
     deferUntilRunner: deferTimeoutUntilExecutionStart,
     jobTimeoutMs,
     triggerTimeout,
@@ -222,6 +224,7 @@ export async function executeJobCoreWithTimeout(
 }
 
 function createCronAgentWatchdog(params: {
+  cronConfig?: CronConfig;
   deferUntilRunner: boolean;
   jobTimeoutMs: number;
   triggerTimeout: (reason: string) => void;
@@ -265,11 +268,14 @@ function createCronAgentWatchdog(params: {
     if (preExecutionTimeoutId || state !== "waiting_for_execution") {
       return;
     }
-    preExecutionTimeoutId = setTimeout(() => {
-      if (state === "waiting_for_execution") {
-        setTimedOut(preExecutionTimeoutErrorMessage(activeExecution));
-      }
-    }, resolveCronAgentPreExecutionWatchdogMs(params.jobTimeoutMs));
+    preExecutionTimeoutId = setTimeout(
+      () => {
+        if (state === "waiting_for_execution") {
+          setTimedOut(preExecutionTimeoutErrorMessage(activeExecution));
+        }
+      },
+      resolveCronAgentPreExecutionWatchdogMs(params.jobTimeoutMs, params.cronConfig),
+    );
   };
   const noteExecutionProgress = (info?: CronAgentExecutionStarted) => {
     if (!info) {
@@ -296,11 +302,14 @@ function createCronAgentWatchdog(params: {
   return {
     start: () => {
       if (params.deferUntilRunner) {
-        setupTimeoutId = setTimeout(() => {
-          if (state === "waiting_for_runner") {
-            setTimedOut(setupTimeoutErrorMessage(activeExecution));
-          }
-        }, CRON_AGENT_SETUP_WATCHDOG_MS);
+        setupTimeoutId = setTimeout(
+          () => {
+            if (state === "waiting_for_runner") {
+              setTimedOut(setupTimeoutErrorMessage(activeExecution));
+            }
+          },
+          resolveCronAgentSetupWatchdogMs(params.jobTimeoutMs, params.cronConfig),
+        );
         return;
       }
       startTimeout();
@@ -398,10 +407,46 @@ function formatCronAgentExecutionPhase(execution?: CronAgentExecutionStarted): s
   return formatEmbeddedAgentExecutionPhase(execution?.phase);
 }
 
-function resolveCronAgentPreExecutionWatchdogMs(jobTimeoutMs: number): number {
+function resolveCronAgentWatchdogDurationMs(
+  raw: string | number | undefined,
+  defaultMs: number,
+): number {
+  if (typeof raw === "number") {
+    return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : defaultMs;
+  }
+  if (typeof raw === "string") {
+    try {
+      const parsed = parseDurationMs(raw, { defaultUnit: "ms" });
+      return parsed > 0 ? parsed : defaultMs;
+    } catch {
+      return defaultMs;
+    }
+  }
+  return defaultMs;
+}
+
+export function resolveCronAgentSetupWatchdogMs(
+  jobTimeoutMs: number,
+  cronConfig?: CronConfig,
+): number {
+  void jobTimeoutMs;
+  return resolveCronAgentWatchdogDurationMs(
+    cronConfig?.isolatedAgentSetupWatchdog,
+    DEFAULT_CRON_AGENT_SETUP_WATCHDOG_MS,
+  );
+}
+
+export function resolveCronAgentPreExecutionWatchdogMs(
+  jobTimeoutMs: number,
+  cronConfig?: CronConfig,
+): number {
+  const configured = resolveCronAgentWatchdogDurationMs(
+    cronConfig?.isolatedAgentPreExecutionWatchdog,
+    DEFAULT_CRON_AGENT_PRE_EXECUTION_WATCHDOG_MS,
+  );
   return Math.max(
     CRON_AGENT_PRE_EXECUTION_MIN_WATCHDOG_MS,
-    Math.min(CRON_AGENT_PRE_EXECUTION_WATCHDOG_MS, Math.floor(jobTimeoutMs / 2)),
+    Math.min(configured, Math.floor(jobTimeoutMs / 2)),
   );
 }
 

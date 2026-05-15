@@ -130,6 +130,8 @@ const TARGET_KEYS = [
   "cron.enabled",
   "cron.store",
   "cron.maxConcurrentRuns",
+  "cron.isolatedAgentSetupWatchdog",
+  "cron.isolatedAgentPreExecutionWatchdog",
   "cron.retry",
   "cron.retry.maxAttempts",
   "cron.retry.backoffMs",

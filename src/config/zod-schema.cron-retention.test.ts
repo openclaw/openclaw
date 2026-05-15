@@ -6,6 +6,8 @@ describe("OpenClawSchema cron retention and run-log validation", () => {
     const result = OpenClawSchema.safeParse({
       cron: {
         sessionRetention: "1h30m",
+        isolatedAgentSetupWatchdog: "5m",
+        isolatedAgentPreExecutionWatchdog: 120_000,
         runLog: {
           maxBytes: "5mb",
           keepLines: 2500,
@@ -23,6 +25,23 @@ describe("OpenClawSchema cron retention and run-log validation", () => {
         },
       }),
     ).toThrow(/sessionRetention|duration/i);
+  });
+
+  it("rejects invalid isolated agent watchdog durations", () => {
+    expect(() =>
+      OpenClawSchema.parse({
+        cron: {
+          isolatedAgentSetupWatchdog: "wat",
+        },
+      }),
+    ).toThrow(/isolatedAgentSetupWatchdog|duration/i);
+    expect(() =>
+      OpenClawSchema.parse({
+        cron: {
+          isolatedAgentPreExecutionWatchdog: 0,
+        },
+      }),
+    ).toThrow(/isolatedAgentPreExecutionWatchdog|duration/i);
   });
 
   it("rejects invalid cron.runLog.maxBytes", () => {

@@ -76,7 +76,12 @@ and `openclaw cron runs` include a phase-specific error such as
 `stalled before first model call (last phase: context-engine)`.
 For CLI-backed providers, the pre-model watchdog stays active until the external
 CLI turn starts, so session lookup, hook, auth, prompt, and CLI setup stalls are
-reported as pre-model cron failures.
+reported as pre-model cron failures. The isolated-agent setup and pre-execution
+watchdogs default to `5m`; tune `cron.isolatedAgentSetupWatchdog` and
+`cron.isolatedAgentPreExecutionWatchdog` when healthy cron jobs need more startup
+time. The pre-execution watchdog is capped to half the job timeout; the setup
+watchdog remains independent so queued runner-lane time does not spend the
+execution timeout budget.
 
 ## Scheduling
 

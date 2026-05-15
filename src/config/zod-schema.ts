@@ -744,6 +744,8 @@ export const OpenClawSchema = z
         enabled: z.boolean().optional(),
         store: z.string().optional(),
         maxConcurrentRuns: z.number().int().positive().optional(),
+        isolatedAgentSetupWatchdog: z.union([z.string(), z.number()]).optional(),
+        isolatedAgentPreExecutionWatchdog: z.union([z.string(), z.number()]).optional(),
         retry: z
           .object({
             maxAttempts: z.number().int().min(0).max(10).optional(),
@@ -798,6 +800,32 @@ export const OpenClawSchema = z
               code: z.ZodIssueCode.custom,
               path: ["sessionRetention"],
               message: "invalid duration (use ms, s, m, h, d)",
+            });
+          }
+        }
+        for (const key of [
+          "isolatedAgentSetupWatchdog",
+          "isolatedAgentPreExecutionWatchdog",
+        ] as const) {
+          const raw = val[key];
+          if (raw === undefined) {
+            continue;
+          }
+          try {
+            const parsed =
+              typeof raw === "number"
+                ? raw
+                : parseDurationMs(normalizeStringifiedOptionalString(raw) ?? "", {
+                    defaultUnit: "ms",
+                  });
+            if (!Number.isFinite(parsed) || parsed <= 0) {
+              throw new Error("duration must be positive");
+            }
+          } catch {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: [key],
+              message: "invalid duration (use positive ms, s, m, h, d)",
             });
           }
         }
