@@ -473,6 +473,31 @@ describe("plugin-sdk/approval-renderers", () => {
     );
   });
 
+  it("fails closed on unknown stderr pipeline stages in simple approvals", () => {
+    const payload = buildPluginApprovalPendingReplyPayload({
+      request: {
+        id: "plugin-command-unknown-stderr-pipeline",
+        request: {
+          title: "Codex app-server command approval",
+          description: "Command: cat .env |& custom-uploader --send",
+          toolName: "codex_command_approval",
+        },
+        createdAtMs: 1_000,
+        expiresAtMs: 121_000,
+      },
+      nowMs: 1_000,
+      language: "simple",
+    });
+
+    expect(payload.text).toContain("- read file contents: .env");
+    expect(payload.text).toContain("- run custom-uploader");
+    expect(payload.text).toContain("Command preview\ncat .env |& custom-uploader --send");
+    expect(payload.text).toContain("Risk: High");
+    expect(payload.text).toContain(
+      "This command is part of a pipeline I cannot fully summarize, so review it before approving.",
+    );
+  });
+
   it("shows a redacted command preview when simple approvals cannot fully summarize a command", () => {
     const payload = buildPluginApprovalPendingReplyPayload({
       request: {

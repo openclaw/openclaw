@@ -575,7 +575,7 @@ function splitCommandSegments(command: string): string[] {
 function isShellRedirectionAmpersand(command: string, index: number): boolean {
   const previous = command[index - 1] ?? "";
   const next = command[index + 1] ?? "";
-  return previous === ">" || previous === "<" || next === ">";
+  return previous === "|" || previous === ">" || previous === "<" || next === ">";
 }
 
 function expandCommandSegment(segment: string): ExpandedCommandSegment[] {
@@ -675,6 +675,9 @@ function splitPipelineStages(segment: string): string[] {
     }
     if (char === "|" && next !== "|") {
       pushCurrent();
+      if (next === "&") {
+        index += 1;
+      }
       continue;
     }
     current += char;
@@ -684,7 +687,7 @@ function splitPipelineStages(segment: string): string[] {
 }
 
 function isPipeToShellSegment(segment: string): boolean {
-  return /\|\s*(?:sudo\s+)?(?:bash|fish|sh|zsh)(?:\s|$)/.test(segment);
+  return /\|&?\s*(?:sudo\s+)?(?:bash|fish|sh|zsh)(?:\s|$)/.test(segment);
 }
 
 function extractShellWrapperCommand(words: readonly string[]): string | null {
