@@ -1,0 +1,21 @@
+{
+  "id": "skills-setup",
+  "activation": {
+    "onStartup": true
+  },
+  "name": "Skills Setup",
+  "description": "Runs installed skill setup scripts through the admin-only skills.setup gateway RPC. Setup scripts must be idempotent — the plugin does not track completion state, so each call re-runs the script.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "timeoutMs": {
+        "type": "integer",
+        "minimum": 1000,
+        "maximum": 600000,
+        "default": 120000,
+        "description": "Default setup-script timeout in milliseconds. Callers may override per-request via params.timeoutMs; the maximum is always enforced."
+      }
+    }
+  }
+}

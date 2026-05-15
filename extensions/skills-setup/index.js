@@ -1,0 +1,337 @@
+import { access, readFile, realpath } from "node:fs/promises";
+import path from "node:path";
+import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { runPluginCommandWithTimeout } from "openclaw/plugin-sdk/sandbox";
+import { isPathInside } from "openclaw/plugin-sdk/security-runtime";
+
+// SDK gap: at openclaw@2026.5.5 the plugin SDK does not re-export the skills-
+// registry helpers (loadWorkspaceSkillEntries, parseSkillFrontmatter,
+// resolveOpenClawMetadata). Those live under src/agents/skills/* but the
+// published package's `exports` map limits plugin imports to ./plugin-sdk/*.
+// Until upstream surfaces them via ./plugin-sdk/skills-runtime (or similar),
+// this plugin resolves skill directories and parses frontmatter directly.
+
+const METHOD_NAME = "skills.setup";
+const PLUGIN_ID = "skills-setup";
+const DEFAULT_AGENT_ID = "main";
+const DEFAULT_TIMEOUT_MS = 120_000;
+const MAX_TIMEOUT_MS = 600_000;
+const MIN_TIMEOUT_MS = 1_000;
+const VALID_SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i;
+const RESERVED_ENV_KEYS = new Set([
+  "HOME",
+  "PATH",
+  "SKILL_DIR",
+  "XDG_CONFIG_HOME",
+  "XDG_DATA_HOME",
+]);
+
+// #region Basic request/config normalization
+
+function isRecord(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeString(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeSlug(value) {
+  const slug = normalizeString(value);
+  if (!slug || slug.includes("/") || slug.includes("\\") || slug.includes("..")) {
+    throw new Error("invalid skill slug");
+  }
+  if (!VALID_SLUG_PATTERN.test(slug) || /[^\x00-\x7F]/.test(slug)) {
+    throw new Error("invalid skill slug");
+  }
+  return slug;
+}
+
+function normalizeAgentId(value) {
+  return normalizeString(value) || DEFAULT_AGENT_ID;
+}
+
+// #endregion
+
+// #region Installed skill path resolution
+
+const ERR_SKILL_NOT_FOUND = "SKILL_NOT_FOUND";
+
+function skillNotFound(message) {
+  const err = new Error(message);
+  err.code = ERR_SKILL_NOT_FOUND;
+  return err;
+}
+
+async function resolveInstalledSkillDir({ workspaceDir, slug }) {
+  const skillsDir = path.join(path.resolve(workspaceDir), "skills");
+  const targetDir = path.resolve(skillsDir, slug);
+  if (!isPathInside(skillsDir, targetDir)) {
+    throw new Error("invalid skill target path");
+  }
+  let skillsDirReal;
+  let targetDirReal;
+  try {
+    [skillsDirReal, targetDirReal] = await Promise.all([realpath(skillsDir), realpath(targetDir)]);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      throw skillNotFound(`skill "${slug}" not installed`);
+    }
+    throw error;
+  }
+  if (!isPathInside(skillsDirReal, targetDirReal)) {
+    throw new Error("skill directory escapes skills root");
+  }
+  return targetDirReal;
+}
+
+// #endregion
+
+// #region SDK gap: setup script metadata parsing
+
+// SDK gap: OpenClaw has internal SKILL.md frontmatter helpers, but they are not
+// exported through `openclaw/plugin-sdk/*`.
+// Needed public surface: `parseSkillFrontmatter()` + `resolveOpenClawMetadata()`
+// or a narrower `resolveSkillSetupScript()` helper. That would replace
+// normalizeScalar(), extractFrontmatterBlock(), parseIndentedSetupScript(), and
+// parseSetupScriptFromSkillMarkdown().
+function normalizeScalar(raw) {
+  const value = raw.trim();
+  if (!value) {
+    return "";
+  }
+  if (
+    (value.startsWith('"') && value.endsWith('"')) ||
+    (value.startsWith("'") && value.endsWith("'"))
+  ) {
+    return value.slice(1, -1).trim();
+  }
+  const commentIndex = value.indexOf(" #");
+  return (commentIndex >= 0 ? value.slice(0, commentIndex) : value).trim();
+}
+
+function extractFrontmatterBlock(markdown) {
+  const lines = markdown.split(/\r?\n/);
+  if (lines[0]?.trim() !== "---") {
+    return undefined;
+  }
+  const endIndex = lines.findIndex((line, index) => index > 0 && line.trim() === "---");
+  return endIndex > 0 ? lines.slice(1, endIndex).join("\n") : undefined;
+}
+
+function parseIndentedSetupScript(frontmatter) {
+  const lines = frontmatter.split(/\r?\n/);
+  const stack = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    if (!line.trim() || line.trimStart().startsWith("#")) {
+      continue;
+    }
+    const match = /^(\s*)([A-Za-z0-9_-]+):(?:\s*(.*))?$/.exec(line);
+    if (!match) {
+      continue;
+    }
+    const indent = match[1].length;
+    const key = match[2];
+    const rawValue = match[3] ?? "";
+    while (stack.length > 0 && stack[stack.length - 1].indent >= indent) {
+      stack.pop();
+    }
+    const pathKeys = [...stack.map((entry) => entry.key), key];
+    if (pathKeys.join(".") === "metadata.openclaw.setup.script" && rawValue.trim()) {
+      return normalizeScalar(rawValue);
+    }
+    if (!rawValue.trim()) {
+      stack.push({ indent, key });
+    }
+  }
+  return undefined;
+}
+
+function parseSetupScriptFromSkillMarkdown(markdown) {
+  const frontmatter = extractFrontmatterBlock(markdown);
+  return frontmatter ? parseIndentedSetupScript(frontmatter) : undefined;
+}
+
+// #endregion
+
+// #region SDK gap: setup script path resolution
+
+// SDK gap: OpenClaw does not expose a public resolver for an installed skill's
+// setup script. Needed public surface: `resolveSkillSetupScriptPath(skillDir)`
+// that reads the supported metadata shape and enforces the same path boundary.
+async function resolveSetupScriptPath(skillDir) {
+  const skillMarkdown = await readFile(path.join(skillDir, "SKILL.md"), "utf8");
+  const script = parseSetupScriptFromSkillMarkdown(skillMarkdown);
+  if (!script) {
+    return undefined;
+  }
+  if (path.isAbsolute(script) || script.includes("\0")) {
+    throw new Error("setup.script must be a relative path inside the skill directory");
+  }
+  const scriptPath = path.resolve(skillDir, script);
+  if (!isPathInside(skillDir, scriptPath)) {
+    throw new Error("setup.script escapes the skill directory");
+  }
+  const scriptPathReal = await realpath(scriptPath);
+  if (!isPathInside(skillDir, scriptPathReal)) {
+    throw new Error("setup.script resolves outside the skill directory");
+  }
+  await access(scriptPathReal);
+  return scriptPathReal;
+}
+
+// #endregion
+
+// #region SDK gap: setup env overlay
+
+// SDK gap: OpenClaw does not expose a setup-env sanitizer that allows
+// operator-provided credential vars while blocking only execution-context
+// overrides. The generic sandbox sanitizer blocks token-like keys, which is
+// wrong for this setup hook. Needed public surface: `sanitizeSetupEnvOverlay()`.
+function normalizeEnvMap(value) {
+  const env = {};
+  if (!isRecord(value)) {
+    return env;
+  }
+  for (const [rawKey, rawValue] of Object.entries(value)) {
+    if (typeof rawValue !== "string") {
+      continue;
+    }
+    const key = rawKey.trim();
+    if (!key || RESERVED_ENV_KEYS.has(key.toUpperCase())) {
+      continue;
+    }
+    env[key] = rawValue;
+  }
+  return env;
+}
+
+function readSkillConfigEnv(config, slug) {
+  if (!isRecord(config?.skills) || !isRecord(config.skills.entries)) {
+    return {};
+  }
+  const entry = config.skills.entries[slug];
+  return isRecord(entry) ? normalizeEnvMap(entry.env) : {};
+}
+
+function buildSetupEnv({ configEnv, overlayEnv, skillDir }) {
+  const env = {};
+  Object.assign(env, configEnv, overlayEnv);
+  env.SKILL_DIR = skillDir;
+  return env;
+}
+
+// #endregion
+
+// #region Timeout resolution
+
+function clampTimeoutMs(candidate, fallback) {
+  if (typeof candidate !== "number" || !Number.isFinite(candidate)) {
+    return fallback;
+  }
+  const rounded = Math.floor(candidate);
+  if (rounded < MIN_TIMEOUT_MS) {
+    return MIN_TIMEOUT_MS;
+  }
+  if (rounded > MAX_TIMEOUT_MS) {
+    return MAX_TIMEOUT_MS;
+  }
+  return rounded;
+}
+
+function readPluginConfigTimeoutMs(config) {
+  if (!isRecord(config?.plugins) || !isRecord(config.plugins.entries)) {
+    return undefined;
+  }
+  const entry = config.plugins.entries[PLUGIN_ID];
+  // OpenClaw plugin config schema lives at plugins.entries.<id>.config.* — see
+  // openclaw/src/plugin-sdk/plugin-config-runtime.ts resolvePluginConfigObject.
+  // Reading entry.timeoutMs directly would silently ignore the operator setting.
+  if (!isRecord(entry) || !isRecord(entry.config)) {
+    return undefined;
+  }
+  return entry.config.timeoutMs;
+}
+
+function resolveTimeoutMs({ config, params }) {
+  const configured = clampTimeoutMs(readPluginConfigTimeoutMs(config), DEFAULT_TIMEOUT_MS);
+  return clampTimeoutMs(params?.timeoutMs, configured);
+}
+
+// #endregion
+
+// #region Gateway RPC registration
+
+function respondError(respond, code, message) {
+  respond(false, { error: message }, errorShape(code, message));
+}
+
+export default definePluginEntry({
+  id: "skills-setup",
+  register(api) {
+    api.registerGatewayMethod(
+      METHOD_NAME,
+      async ({ params, respond, context }) => {
+        const startedAt = Date.now();
+        let slugForLog = "?";
+        let agentIdForLog = "?";
+        try {
+          const slug = normalizeSlug(params?.slug);
+          const agentId = normalizeAgentId(params?.agentId);
+          slugForLog = slug;
+          agentIdForLog = agentId;
+          const config = context.getRuntimeConfig();
+          const workspaceDir = api.runtime.agent.resolveAgentWorkspaceDir(config, agentId);
+          const skillDir = await resolveInstalledSkillDir({ workspaceDir, slug });
+          const scriptPath = await resolveSetupScriptPath(skillDir);
+          if (!scriptPath) {
+            api.logger.debug(
+              `skills.setup ${slug} (agent=${agentId}) skipped: no setup script declared`,
+            );
+            respond(true, { code: 0, stdout: "", stderr: "" });
+            return;
+          }
+
+          const timeoutMs = resolveTimeoutMs({ config, params });
+          api.logger.debug(
+            `skills.setup ${slug} (agent=${agentId}) started: script=${path.relative(skillDir, scriptPath)} timeoutMs=${timeoutMs}`,
+          );
+
+          const result = await runPluginCommandWithTimeout({
+            argv: ["bash", scriptPath],
+            cwd: skillDir,
+            env: buildSetupEnv({
+              configEnv: readSkillConfigEnv(config, slug),
+              overlayEnv: normalizeEnvMap(params?.env),
+              skillDir,
+            }),
+            timeoutMs,
+          });
+          api.logger.debug(
+            `skills.setup ${slug} (agent=${agentId}) completed: code=${result.code} durationMs=${Date.now() - startedAt}`,
+          );
+          respond(true, result);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "skill setup failed";
+          // INVALID_REQUEST when the caller-supplied slug doesn't resolve to an
+          // installed skill on this agent — no generic NOT_FOUND code at v2026.5.5
+          // (see openclaw src/gateway/protocol/schema/error-codes.ts). Reserve
+          // UNAVAILABLE for transient / server-side execution failures.
+          const code =
+            error?.code === ERR_SKILL_NOT_FOUND
+              ? ErrorCodes.INVALID_REQUEST
+              : ErrorCodes.UNAVAILABLE;
+          api.logger.warn(
+            `skills.setup ${slugForLog} (agent=${agentIdForLog}) failed: ${message} durationMs=${Date.now() - startedAt}`,
+          );
+          respondError(respond, code, message);
+        }
+      },
+      { scope: "operator.admin" },
+    );
+  },
+});
+
+// #endregion

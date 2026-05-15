@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/skills-setup",
+  "version": "2026.5.12-beta.1",
+  "private": true,
+  "description": "OpenClaw plugin for running skill setup scripts.",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.js"
+    ]
+  }
+}
