@@ -9,8 +9,8 @@
   "type": "module",
   "dependencies": {
     "@azure/identity": "4.13.1",
-    "@microsoft/teams.api": "2.0.10",
-    "@microsoft/teams.apps": "2.0.10",
+    "@microsoft/teams.api": "2.0.11",
+    "@microsoft/teams.apps": "2.0.11",
     "express": "5.2.1",
     "jsonwebtoken": "9.0.3",
     "jwks-rsa": "4.0.1",

@@ -8,6 +8,7 @@ Docs: https://docs.openclaw.ai
 
 - Agents/config: support per-agent bootstrap profile overrides for `contextInjection`, `bootstrapMaxChars`, and `bootstrapTotalMaxChars`, inheriting from `agents.defaults` when omitted. Fixes #69966. Thanks @BunsDev.
 - Dependencies: route root ambient Node proxy agents through `@openclaw/proxyline` and drop root `proxy-agent`, `https-proxy-agent`, and `minimatch` dependencies.
+- Canvas: lazy-load HTTP host, hosted media resolver, CLI implementation, and tool runtime modules so Gateway startup only pays Canvas implementation cost on first use. (#82001) Thanks @samzong.
 - Control UI/i18n: add a `pnpm ui:i18n:report` baseline report for hardcoded-copy focus areas and locale fallback metadata. (#81320) Thanks @samzong.
 - Maintainer tooling: add a repo-local `codex-review` skill for Codex closeout reviews, including local dirty-work and PR-branch review helpers that rerun until no accepted/actionable findings remain and avoid unsupported inline prompts with `--base`.
 - Maintainer tooling: fail CI when pull requests add package patch files or pnpm patched dependencies, preserving the upstream-and-bump dependency workflow.
@@ -34,10 +35,13 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Config/doctor: rotate capped `.clobbered.*` repair snapshots by artifact timestamp so repeated repairs keep the newest forensic copy instead of preserving only the first capped set. (#82012) Thanks @Kaspre.
+- Telegram: initialize the bot before isolated polling drains spooled updates so default isolated polling no longer retries every update with `Bot not initialized` and stalls replies. Fixes #81973. (#81975) Thanks @neeravmakwana.
 - Telegram: apply method-aware Bot API request timeouts to direct message/action clients so `openclaw message delete --channel telegram` no longer waits on grammY's 500-second default when the API request wedges. Fixes #81908. Thanks @DashLabsDev.
 - Cron: treat attempt dispatch and assembled context as execution-start milestones so isolated agent jobs that have reached backend dispatch are governed by their configured job timeout instead of the 60s pre-execution watchdog. Fixes #81368. (#81871) Thanks @alexph-dev.
 - Doctor/auth: warn about stale per-agent OAuth auth profile shadows and let `openclaw doctor --fix` remove the local shadow so agents inherit the fresher main-agent credential.
 - Status/channels: show configured channels whose plugin setup failed to load as `plugin load failed: dependency tree corrupted; run openclaw doctor --fix` instead of silently dropping them from `openclaw status`.
+- Status/update: show pending or failed update restart handoffs in `openclaw status` and make `openclaw update` print explicit gateway restart verified, skipped, or failed guidance.
+- QA/update: add an E2E corrupt plugin dependency lane that verifies `status --all` guidance, `doctor --fix` cleanup, and channel status recovery.
 - Discord/channels: make `openclaw channels list --all` prefer reachable Gateway runtime account status and mark configured-but-unavailable credentials, avoiding false `not configured` output when Discord is running from service-only env. Fixes #79343. Thanks @EricY019.
 - WhatsApp: mark text slash commands as command turns so authorized group command replies stay visible under message-tool-only group reply mode. (#81972) Thanks @barbarhan.
 - Providers/OpenCode Go: stop sending unsupported reasoning parameters to Kimi K2.5/K2.6, avoiding OpenCode Go payload-validation failures while preserving DeepSeek V4 reasoning support.
@@ -46,9 +50,11 @@ Docs: https://docs.openclaw.ai
 - Plugin skills: replace generated Windows plugin-skill directories before publishing the current skill link, avoiding repeated `EINVAL` warnings from stale non-symlink entries. Fixes #81432. (#81446) Thanks @hclsys and @vincentkoc.
 - Channels/config: treat channel entries with only `enabled: true` as configured state so plugin-backed channels can auto-enable from an explicit on switch. Fixes #81323. (#81331) Thanks @EvanYao826 and @vincentkoc.
 - CLI/update: add an update finalization path for externally swapped core runtimes, running update-time doctor repair and plugin convergence from post-doctor config and install-record state before reporting completion. Thanks @shakkernerd.
+- CLI/update: refresh config after package-update doctor repairs before post-update plugin sync, avoiding stale-hash conflicts during package upgrade journeys.
 - macOS/Gateway: hand managed LaunchAgent package self-updates to the post-exit CLI path and report handoff failures through the update restart sentinel instead of leaving agent-invoked updates pending. Fixes #81894. (#81945) Thanks @BKF-Gitty.
 - Agents/WebChat: stop a successful assistant turn whose stale `errorMessage` matches a billing, auth, or rate-limit pattern from rotating profiles, falling back, or surfacing a hard `FailoverError` unless the current attempt has a real failover failure. (#70900) Thanks @truffle-dev.
 - Control UI/usage: remove the duplicated inner Usage page heading so the shared dashboard header is the only page title. Thanks @BunsDev.
+- Control UI/WebChat: keep mobile PWA composer controls above the iOS home indicator when standalone safe-area insets under-report. Fixes #77408. Thanks @BunsDev.
 - Control UI/logs: make the Gateway Logs stream height responsive to the viewport with a minimum height floor, so larger screens can show substantially more log lines without collapsing on shorter viewports. (#53916) Thanks @extrasmall0.
 - ACP/Codex: surface redacted Codex wrapper stderr for generic ACP internal failures and preserve safe Codex model/provider routing in isolated `CODEX_HOME`, making `sessions_spawn(runtime="acp", agentId="codex")` failures actionable. Fixes #80079. (#80718) Thanks @leoge007.
 - Agents/trace: mark execution traces as fallback-used when merged fallback attempts prove a primary model failed before the winning attempt, keeping `/trace raw` and agent JSON telemetry consistent. Addresses fallback telemetry in #81213. Thanks @BKF-Gitty.
@@ -138,6 +144,14 @@ Docs: https://docs.openclaw.ai
 - CLI/plugins: route lazy plugin command-registration chatter to stderr only during JSON-output command registration, keeping plugin-backed `--json` stdout parseable without changing parse-only or pass-through `--json` behavior. Fixes #81535. (#81536) Thanks @ScientificProgrammer and @vincentkoc.
 - Plugins: treat git plugin install refs as refs instead of checkout flags, so option-like selectors fail checkout instead of silently installing the default branch. Fixes #79898. (#79901) Thanks @afurm and @vincentkoc.
 - Doctor/memory: stop warning that no memory plugin is active when an enabled alternate memory plugin explicitly owns the memory slot, while preserving the warning for missing or disabled slot entries. Fixes #78540. (#78557) Thanks @carladams1299-lab and @vincentkoc.
+- Plugins: keep process-local plugin metadata snapshot memo freshness tied to the cached registry snapshot so policy-stale derived plugin metadata edits invalidate the memo instead of returning stale owners or command aliases. (#81064) Thanks @Kaspre.
+- Plugins: discover provider plugins from `setup.providers[].envVars` credentials during provider discovery while keeping the deprecated `providerAuthEnvVars` fallback. (#81542) Thanks @JARVIS-Glasses.
+- Docs/Codex harness: clarify that per-agent `CODEX_HOME` isolates `~/.codex` while inherited `HOME` intentionally keeps `.agents` discovery and subprocess user-home state available.
+- CLI/plugins: keep bare plugin and parent-command help on the lightweight path, avoiding plugin registry discovery before rendering help.
+- Auth: reclaim dead-owner stale file locks before retrying locked writes, so crashed OAuth refreshes no longer wedge `auth-profiles.json` until manual cleanup.
+- CLI tables: preserve muted/color styling on wrapped continuation lines after multiline cells, keeping `openclaw plugins list` descriptions readable.
+- Process execution: collapse case-insensitive duplicate child environment keys on Windows so caller-provided overrides such as `PATH` cannot be shadowed by host `Path`.
+- Browser CLI: request the existing `operator.admin` gateway scope explicitly for browser control commands, avoiding unnecessary scope-upgrade approval loops. Fixes #81555. (#81716) Thanks @joshavant.
 - Web: honor explicitly configured global `web_search` providers during provider ownership resolution while keeping sandboxed `web_fetch` limited to bundled providers.
 - Plugins/doctor: repair configured legacy npm declaration stubs by reinstalling their npm packages into the managed plugin root instead of loading workspace `node_modules`, and warn when discovery sees those stubs. Fixes #79632. Thanks @Dylanzhang1128 and @vincentkoc.
 - Channels: keep configured third-party channel plugins visible in `openclaw channels list` when their manifest declares `channels` but has not added `channelConfigs` metadata yet. Fixes #81334. (#81340) Thanks @AllynSheep and @vincentkoc.
@@ -596,6 +610,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/runtime: attribute deprecated runtime config load/write warnings to the plugin id and source that triggered them so logs and plugin doctor runs are actionable. Refs #81394. (#81425) Thanks @BKF-Gitty.
 - Agents/cron: honor a cron payload's explicit `timeoutSeconds` for the LLM idle watchdog even when it numerically equals `agents.defaults.timeoutSeconds`, preserving explicit per-run timeout intent and preventing stalled streaming replies from being cut to the implicit 120s cap. (#79426) Thanks @legolaz8451.
 - Codex app-server: keep the short post-tool completion watchdog armed across dynamic tool completion bookkeeping so embedded Codex runs fail fast and release their session lane when Codex goes quiet after a tool result. (#81697) Thanks @mbelinky.
+- Control UI/WebChat: wrap long inline code tokens inside chat bubbles instead of clipping them at the bubble edge. Fixes #81932. (#81931) Thanks @galiniliev.
 - CLI/media: render terminal QR codes with full-block characters by default so the bundled `qrcode` terminal renderer does not emit a pathologically dense ANSI final row in compact half-block mode that breaks scanning in some terminals. Fixes #77820. Thanks @KrasimirKralev.
 - Agents/compaction: read post-compaction AGENTS.md refresh context from the queued run workspace instead of the runner process cwd, so CLI-backed follow-up turns re-inject the correct workspace startup rules after compaction. Fixes #70541. (#75532) Thanks @vyctorbrzezowski.
 - Agents/read tool: treat positive offsets beyond EOF as empty ranges instead of surfacing the upstream read error, so stale pagination cursors no longer crash tool calls while unrelated read failures still fail loud. Fixes #62466. (#75536) Thanks @vyctorbrzezowski.

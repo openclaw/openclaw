@@ -27,6 +27,30 @@ Expected healthy signals:
 - `openclaw doctor` reports no blocking config/service issues.
 - `openclaw channels status --probe` shows live per-account transport status and, where supported, probe/audit results such as `works` or `audit ok`.
 
+## After an update
+
+Use this when an update finishes but the Gateway is down, channels are empty, or
+model calls start failing with 401s.
+
+```bash
+openclaw status --all
+openclaw update status --json
+openclaw gateway status --deep
+openclaw doctor --fix
+openclaw gateway restart
+```
+
+Look for:
+
+- `Update restart` in `openclaw status` / `openclaw status --all`. Pending or
+  failed handoffs include the next command to run.
+- `plugin load failed: dependency tree corrupted; run openclaw doctor --fix`
+  under Channels. That means the channel config still exists, but plugin
+  registration failed before the channel could load.
+- provider 401s after re-auth. `openclaw doctor --fix` checks for stale
+  per-agent OAuth auth shadows and removes the old copies so all agents resolve
+  the current shared profile.
+
 ## Split brain installs and newer config guard
 
 Use this when a gateway service unexpectedly stops after an update, or logs show that one `openclaw` binary is older than the version that last wrote `openclaw.json`.

@@ -387,15 +387,17 @@ describe("TelegramPollingSession", () => {
     expect(bot.api.getUpdates).not.toHaveBeenCalled();
   });
 
-  it("drains isolated ingress spool through the main-thread bot without offset watermark skipping", async () => {
+  it("initializes the main-thread bot before draining isolated ingress spool", async () => {
     const abort = new AbortController();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
     const handleUpdate = vi.fn(async () => undefined);
+    const init = vi.fn(async () => undefined);
     const bot = {
       api: {
         deleteWebhook: vi.fn(async () => true),
         config: { use: vi.fn() },
       },
+      init,
       handleUpdate,
       stop: vi.fn(async () => undefined),
     };
@@ -445,6 +447,7 @@ describe("TelegramPollingSession", () => {
       expect(
         mockObjectArg(createTelegramBotMock, "createTelegramBot").updateOffset,
       ).toBeUndefined();
+      expect(init).toHaveBeenCalledBefore(handleUpdate);
       expect(handleUpdate).toHaveBeenCalledWith({ update_id: 42, message: { text: "hello" } });
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
@@ -479,6 +482,7 @@ describe("TelegramPollingSession", () => {
         deleteWebhook: vi.fn(async () => true),
         config: { use: vi.fn() },
       },
+      init: vi.fn(async () => undefined),
       handleUpdate,
       stop: vi.fn(async () => undefined),
     };
@@ -575,6 +579,7 @@ describe("TelegramPollingSession", () => {
         deleteWebhook: vi.fn(async () => true),
         config: { use: vi.fn() },
       },
+      init: vi.fn(async () => undefined),
       handleUpdate,
       stop: vi.fn(async () => undefined),
     };
@@ -666,6 +671,7 @@ describe("TelegramPollingSession", () => {
         deleteWebhook: vi.fn(async () => true),
         config: { use: vi.fn() },
       },
+      init: vi.fn(async () => undefined),
       handleUpdate,
       stop: vi.fn(async () => undefined),
     };
@@ -746,6 +752,7 @@ describe("TelegramPollingSession", () => {
         deleteWebhook: vi.fn(async () => true),
         config: { use: vi.fn() },
       },
+      init: vi.fn(async () => undefined),
       handleUpdate,
       stop: vi.fn(async () => {
         events.push("bot:stop");

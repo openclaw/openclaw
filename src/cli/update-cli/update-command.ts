@@ -11,10 +11,9 @@ import {
 import { doctorCommand } from "../../commands/doctor.js";
 import { createPreUpdateConfigSnapshot } from "../../config/backup-rotation.js";
 import {
-  ConfigMutationConflictError,
   assertConfigWriteAllowedInCurrentMode,
+  mutateConfigFileWithRetry,
   readConfigFileSnapshot,
-  replaceConfigFile,
   resolveGatewayPort,
 } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
@@ -1574,6 +1573,9 @@ async function maybeRestartService(params: {
     }
 
     if (health.healthy) {
+      if (!params.opts.json) {
+        defaultRuntime.log(theme.success("Gateway: restarted and verified."));
+      }
       return true;
     }
 
@@ -1684,7 +1686,7 @@ async function maybeRestartService(params: {
         await createUpdateConfigSnapshot();
         restarted = await runDaemonRestart();
       } else if (!refreshedGatewayAlreadyHealthy && !params.opts.json) {
-        defaultRuntime.log(theme.muted("No installed gateway service found; skipped restart."));
+        defaultRuntime.log(theme.muted("Gateway: restart skipped (no installed service found)."));
       }
 
       const shouldVerifyRestart =
@@ -1726,7 +1728,7 @@ async function maybeRestartService(params: {
       }
     } catch (err) {
       if (!params.opts.json) {
-        defaultRuntime.log(theme.warn(`Daemon restart failed: ${String(err)}`));
+        defaultRuntime.log(theme.warn(`Gateway: restart failed: ${String(err)}`));
         defaultRuntime.log(
           theme.muted(
             `You may need to restart the service manually: ${replaceCliName(formatCliCommand("openclaw gateway restart"), CLI_NAME)}`,
@@ -1742,6 +1744,7 @@ async function maybeRestartService(params: {
 
   if (!params.opts.json) {
     defaultRuntime.log("");
+    defaultRuntime.log(theme.muted("Gateway: restart skipped (--no-restart)."));
     if (params.result.mode === "npm" || params.result.mode === "pnpm") {
       defaultRuntime.log(
         theme.muted(
@@ -1920,46 +1923,17 @@ async function persistRequestedUpdateChannel(params: {
   if (params.requestedChannel === storedChannel) {
     return params.configSnapshot;
   }
+  const requestedChannel = params.requestedChannel;
 
-  const next = {
-    ...params.configSnapshot.sourceConfig,
-    update: {
-      ...params.configSnapshot.sourceConfig.update,
-      channel: params.requestedChannel,
+  const mutation = await mutateConfigFileWithRetry({
+    mutate: (draft) => {
+      draft.update = {
+        ...draft.update,
+        channel: requestedChannel,
+      };
     },
-  };
-  try {
-    await replaceConfigFile({
-      nextConfig: next,
-      baseHash: params.configSnapshot.hash,
-    });
-    return createUpdatedChannelSnapshot(params.configSnapshot, next);
-  } catch (error) {
-    if (!(error instanceof ConfigMutationConflictError)) {
-      throw error;
-    }
-  }
-
-  const refreshed = await readConfigFileSnapshot();
-  if (!refreshed.valid) {
-    return refreshed;
-  }
-  const refreshedChannel = normalizeUpdateChannel(refreshed.config.update?.channel);
-  if (refreshedChannel === params.requestedChannel) {
-    return refreshed;
-  }
-  const refreshedNext = {
-    ...refreshed.sourceConfig,
-    update: {
-      ...refreshed.sourceConfig.update,
-      channel: params.requestedChannel,
-    },
-  };
-  await replaceConfigFile({
-    nextConfig: refreshedNext,
-    baseHash: refreshed.hash,
   });
-  return createUpdatedChannelSnapshot(refreshed, refreshedNext);
+  return createUpdatedChannelSnapshot(mutation.snapshot, mutation.nextConfig);
 }
 
 function createUpdatedChannelSnapshot(
@@ -2693,10 +2667,11 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     downgradeRisk,
   });
 
-  let postUpdateConfigSnapshot = configSnapshot;
+  let postUpdateConfigSnapshot =
+    result.status === "ok" && !opts.dryRun ? await readConfigFileSnapshot() : configSnapshot;
   if (!shouldResumePostCoreInFreshProcess) {
     postUpdateConfigSnapshot = await persistRequestedUpdateChannel({
-      configSnapshot,
+      configSnapshot: postUpdateConfigSnapshot,
       requestedChannel,
     });
   }
@@ -2737,7 +2712,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   if (!pluginsUpdatedInFreshProcess) {
     if (shouldResumePostCoreInFreshProcess) {
       postUpdateConfigSnapshot = await persistRequestedUpdateChannel({
-        configSnapshot,
+        configSnapshot: postUpdateConfigSnapshot,
         requestedChannel,
       });
     }

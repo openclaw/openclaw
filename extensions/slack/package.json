@@ -10,7 +10,7 @@
   "dependencies": {
     "@slack/bolt": "4.7.2",
     "@slack/types": "2.21.1",
-    "@slack/web-api": "7.15.2",
+    "@slack/web-api": "7.16.0",
     "https-proxy-agent": "9.0.0",
     "typebox": "1.1.38",
     "zod": "4.4.3"

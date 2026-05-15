@@ -261,6 +261,7 @@ function buildDockerE2eHarnessEntries(): Record<string, string> {
     "agents/pi-bundle-mcp-runtime": "src/agents/pi-bundle-mcp-runtime.ts",
     "agents/pi-embedded-runner/effective-tool-policy":
       "src/agents/pi-embedded-runner/effective-tool-policy.ts",
+    "agents/pi-embedded-runner/tool-split": "src/agents/pi-embedded-runner/tool-split.ts",
     "agents/pi-embedded-runner/run/runtime-context-prompt":
       "src/agents/pi-embedded-runner/run/runtime-context-prompt.ts",
     "auto-reply/reply/commands-crestodian": "src/auto-reply/reply/commands-crestodian.ts",
