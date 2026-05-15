@@ -55,6 +55,7 @@ import {
   resolveChannelContextVisibilityMode,
   resolveInboundSessionEnvelopeContext,
   resolvePinnedMainDmOwnerFromAllowlist,
+  isControlCommandMessage,
   shouldComputeCommandAuthorized,
   shouldLogVerbose,
   type getChildLogger,
@@ -407,7 +408,9 @@ export async function processMessage(params: {
     senderE164: sender.e164 ?? undefined,
     normalizeE164,
   });
-  const commandAuthorized = shouldComputeCommandAuthorized(params.msg.body, params.cfg)
+  const shouldCheckCommandAuth = shouldComputeCommandAuthorized(params.msg.body, params.cfg);
+  const isTextCommand = isControlCommandMessage(params.msg.body, params.cfg);
+  const commandAuthorized = shouldCheckCommandAuth
     ? await resolveWhatsAppCommandAuthorized({
         cfg: params.cfg,
         msg: params.msg,
@@ -448,6 +451,7 @@ export async function processMessage(params: {
     combinedBody,
     commandBody: params.msg.body,
     commandAuthorized,
+    commandSource: isTextCommand ? "text" : undefined,
     conversationId,
     groupHistory: visibleGroupHistory,
     groupMemberRoster: params.groupMemberNames.get(params.groupHistoryKey),

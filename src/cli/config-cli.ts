@@ -453,12 +453,19 @@ function getAtPath(root: unknown, path: PathSegment[]): { found: boolean; value?
   return { found: true, value: current };
 }
 
-function setAtPath(root: Record<string, unknown>, path: PathSegment[], value: unknown): void {
+type SetAtPathOptions = { numericObjectKeys?: boolean };
+
+function setAtPath(
+  root: Record<string, unknown>,
+  path: PathSegment[],
+  value: unknown,
+  options?: SetAtPathOptions,
+): void {
   let current: unknown = root;
   for (let i = 0; i < path.length - 1; i += 1) {
     const segment = path[i];
     const next = path[i + 1];
-    const nextIsIndex = Boolean(next && isIndexSegment(next));
+    const nextIsIndex = !options?.numericObjectKeys && Boolean(next && isIndexSegment(next));
     if (Array.isArray(current)) {
       if (!isIndexSegment(segment)) {
         throw new Error(`Expected numeric index for array segment "${segment}"`);
@@ -554,13 +561,18 @@ function mergeConfigValue(existing: unknown, patch: unknown, path: PathSegment[]
   throw new Error(`Cannot merge ${toDotPath(path)}; use --replace to replace intentionally.`);
 }
 
-function mergeAtPath(root: Record<string, unknown>, path: PathSegment[], value: unknown): void {
+function mergeAtPath(
+  root: Record<string, unknown>,
+  path: PathSegment[],
+  value: unknown,
+  options?: SetAtPathOptions,
+): void {
   const existing = getAtPath(root, path);
   if (!existing.found) {
-    setAtPath(root, path, value);
+    setAtPath(root, path, value, options);
     return;
   }
-  setAtPath(root, path, mergeConfigValue(existing.value, value, path));
+  setAtPath(root, path, mergeConfigValue(existing.value, value, path), options);
 }
 
 function isProviderModelListPath(path: PathSegment[]): boolean {
@@ -1675,7 +1687,9 @@ async function runConfigOperations(params: {
     }
     explicitSetPaths.push(operation.setPath);
     if (operation.mutation === "merge" || (options.merge && operation.mutation !== "replace")) {
-      mergeAtPath(next, operation.setPath, operation.value);
+      mergeAtPath(next, operation.setPath, operation.value, {
+        numericObjectKeys: params.successMode === "patch",
+      });
     } else {
       assertNonDestructiveReplacement({
         root: next,
@@ -1683,7 +1697,9 @@ async function runConfigOperations(params: {
         value: operation.value,
         allowReplace: options.replace || operation.mutation === "replace",
       });
-      setAtPath(next, operation.setPath, operation.value);
+      setAtPath(next, operation.setPath, operation.value, {
+        numericObjectKeys: params.successMode === "patch",
+      });
     }
   }
   const removedGatewayAuthPaths = pruneInactiveGatewayAuthCredentials({
