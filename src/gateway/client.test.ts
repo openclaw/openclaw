@@ -6,6 +6,7 @@ import { captureEnv } from "../test-utils/env.js";
 import { MIN_CLIENT_PROTOCOL_VERSION, PROTOCOL_VERSION } from "./protocol/index.js";
 
 const wsInstances = vi.hoisted((): MockWebSocket[] => []);
+const wsConstructorObservers = vi.hoisted((): Array<(url: string, options: unknown) => void> => []);
 const clearDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
 const loadDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
 const storeDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
@@ -54,6 +55,9 @@ class MockWebSocket {
   constructor(_url: string, options?: unknown) {
     this.options = options;
     wsInstances.push(this);
+    for (const observer of wsConstructorObservers) {
+      observer(_url, options);
+    }
   }
 
   on(event: "open", handler: WsEventHandlers["open"]): void;
@@ -273,6 +277,7 @@ describe("GatewayClient security checks", () => {
     installGlobalProxyMock.mockClear();
     proxylineStopMock.mockClear();
     wsInstances.length = 0;
+    wsConstructorObservers.length = 0;
   });
 
   afterEach(async () => {
@@ -284,6 +289,7 @@ describe("GatewayClient security checks", () => {
     const { _resetGlobalAgentBootstrapForTests } =
       await import("../infra/net/proxy/proxy-lifecycle.js");
     _resetGlobalAgentBootstrapForTests();
+    wsConstructorObservers.length = 0;
   });
 
   it("blocks ws:// to non-loopback addresses (CWE-319)", () => {
@@ -354,11 +360,16 @@ describe("GatewayClient security checks", () => {
     client.stop();
   });
 
-  it("keeps gateway-only loopback bypass active until WebSocket connection resolves", () => {
+  it("keeps gateway-only loopback bypass active only during WebSocket construction", () => {
     process.env.OPENCLAW_PROXY_ACTIVE = "1";
     process.env.OPENCLAW_PROXY_LOOPBACK_MODE = "gateway-only";
     process.env.HTTP_PROXY = "http://127.0.0.1:3128";
     const onConnectError = vi.fn();
+    const bypassDuringConstruction: boolean[] = [];
+    wsConstructorObservers.push((url) => {
+      const bypassPolicy = expectLastProxylineBypassPolicy();
+      bypassDuringConstruction.push(bypassPolicy({ surface: "unknown", url }));
+    });
     const client = new GatewayClient({
       url: "ws://127.0.0.1:18789",
       onConnectError,
@@ -367,12 +378,13 @@ describe("GatewayClient security checks", () => {
     client.start();
 
     const bypassPolicy = expectLastProxylineBypassPolicy();
-    expect(bypassPolicy({ surface: "websocket", url: "ws://127.0.0.1:18789" })).toBe(true);
+    expect(bypassDuringConstruction).toEqual([true]);
+    expect(bypassPolicy({ surface: "unknown", url: "ws://127.0.0.1:18789" })).toBe(false);
     const ws = getLatestWs();
 
     ws.emitOpen();
 
-    expect(bypassPolicy({ surface: "websocket", url: "ws://127.0.0.1:18789" })).toBe(false);
+    expect(bypassPolicy({ surface: "unknown", url: "ws://127.0.0.1:18789" })).toBe(false);
     expect(onConnectError).not.toHaveBeenCalled();
     client.stop();
   });
@@ -390,12 +402,12 @@ describe("GatewayClient security checks", () => {
     client.start();
 
     const bypassPolicy = expectLastProxylineBypassPolicy();
-    expect(bypassPolicy({ surface: "websocket", url: "ws://127.0.0.1:18789" })).toBe(true);
+    expect(bypassPolicy({ surface: "unknown", url: "ws://127.0.0.1:18789" })).toBe(false);
     const ws = getLatestWs();
 
     ws.emitError(new Error("proxy connection failed"));
 
-    expect(bypassPolicy({ surface: "websocket", url: "ws://127.0.0.1:18789" })).toBe(false);
+    expect(bypassPolicy({ surface: "unknown", url: "ws://127.0.0.1:18789" })).toBe(false);
     expect(onConnectError).toHaveBeenCalledWith(
       expect.objectContaining({ message: "proxy connection failed" }),
     );

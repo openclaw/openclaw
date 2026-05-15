@@ -321,18 +321,14 @@ export class GatewayClient {
     let ws: WebSocket;
     try {
       ws = new WebSocket(url, wsOptions as ClientOptions);
-    } catch (err) {
+    } finally {
       unregisterGatewayLoopbackBypass?.();
-      throw err;
     }
     this.ws = ws;
     this.socketOpened = false;
     this.connectNonce = null;
     this.connectSent = false;
     this.clearConnectChallengeTimeout();
-    ws.on("open", () => unregisterGatewayLoopbackBypass?.());
-    ws.on("error", () => unregisterGatewayLoopbackBypass?.());
-    ws.on("close", () => unregisterGatewayLoopbackBypass?.());
 
     ws.on("open", () => {
       this.socketOpened = true;
