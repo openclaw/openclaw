@@ -95,21 +95,22 @@ should call those tools directly.
 With the `acpx` backend, use these harness ids as `/acp spawn <id>`
 or `sessions_spawn({ runtime: "acp", agentId: "<id>" })` targets:
 
-| Harness id | Typical backend                                | Notes                                                                               |
-| ---------- | ---------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `claude`   | Claude Code ACP adapter                        | Requires Claude Code auth on the host.                                              |
-| `codex`    | Codex ACP adapter                              | Explicit ACP fallback only when native `/codex` is unavailable or ACP is requested. |
-| `copilot`  | GitHub Copilot ACP adapter                     | Requires Copilot CLI/runtime auth.                                                  |
-| `cursor`   | Cursor CLI ACP (`cursor-agent acp`)            | Override the acpx command if a local install exposes a different ACP entrypoint.    |
-| `droid`    | Factory Droid CLI                              | Requires Factory/Droid auth or `FACTORY_API_KEY` in the harness environment.        |
-| `gemini`   | Gemini CLI ACP adapter                         | Requires Gemini CLI auth or API key setup.                                          |
-| `iflow`    | iFlow CLI                                      | Adapter availability and model control depend on the installed CLI.                 |
-| `kilocode` | Kilo Code CLI                                  | Adapter availability and model control depend on the installed CLI.                 |
-| `kimi`     | Kimi/Moonshot CLI                              | Requires Kimi/Moonshot auth on the host.                                            |
-| `kiro`     | Kiro CLI                                       | Adapter availability and model control depend on the installed CLI.                 |
-| `opencode` | OpenCode ACP adapter                           | Requires OpenCode CLI/provider auth.                                                |
-| `openclaw` | OpenClaw Gateway bridge through `openclaw acp` | Lets an ACP-aware harness talk back to an OpenClaw Gateway session.                 |
-| `qwen`     | Qwen Code / Qwen CLI                           | Requires Qwen-compatible auth on the host.                                          |
+| Harness id | Typical backend                                | Notes                                                                                      |
+| ---------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `claude`   | Claude Code ACP adapter                        | Requires Claude Code auth on the host.                                                     |
+| `codex`    | Codex ACP adapter                              | Explicit ACP fallback only when native `/codex` is unavailable or ACP is requested.        |
+| `copilot`  | GitHub Copilot ACP adapter                     | Requires Copilot CLI/runtime auth.                                                         |
+| `cursor`   | Cursor CLI ACP (`cursor-agent acp`)            | Override the acpx command if a local install exposes a different ACP entrypoint.           |
+| `droid`    | Factory Droid CLI                              | Requires Factory/Droid auth or `FACTORY_API_KEY` in the harness environment.               |
+| `gemini`   | Gemini CLI ACP adapter                         | Requires Gemini CLI auth, or API-key/Vertex env auth with the explicit ACPX preserve flag. |
+| `iflow`    | iFlow CLI                                      | Adapter availability and model control depend on the installed CLI.                        |
+| `kilocode` | Kilo Code CLI                                  | Adapter availability and model control depend on the installed CLI.                        |
+| `kimi`     | Kimi/Moonshot CLI                              | Requires Kimi/Moonshot auth on the host.                                                   |
+| `kiro`     | Kiro CLI                                       | Adapter availability and model control depend on the installed CLI.                        |
+| `opencode` | OpenCode ACP adapter                           | Requires OpenCode CLI/provider auth.                                                       |
+| `openclaw` | OpenClaw Gateway bridge through `openclaw acp` | Lets an ACP-aware harness talk back to an OpenClaw Gateway session.                        |
+| `pi`       | Pi/embedded OpenClaw runtime                   | Used for OpenClaw-native harness experiments.                                              |
+| `qwen`     | Qwen Code / Qwen CLI                           | Requires Qwen-compatible auth on the host.                                                 |
 
 Custom acpx agent aliases can be configured in acpx itself, but OpenClaw
 policy still checks `acp.allowedAgents` and any

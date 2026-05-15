@@ -219,6 +219,7 @@ WRAP
       run_setup_command npm install -g @google/gemini-cli
     fi
     if [ -n "${GEMINI_API_KEY:-}" ] || [ -n "${GOOGLE_API_KEY:-}" ]; then
+      export OPENCLAW_ACPX_PRESERVE_GEMINI_AUTH_ENV="${OPENCLAW_ACPX_PRESERVE_GEMINI_AUTH_ENV:-1}"
       gemini_auth_type="gemini-api-key"
       if [ -z "${GEMINI_API_KEY:-}" ] && [ -n "${GOOGLE_API_KEY:-}" ]; then
         gemini_auth_type="vertex-ai"
@@ -400,6 +401,9 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
     -e OPENCLAW_LIVE_ACP_BIND_ANTHROPIC_API_KEY_OLD="${ANTHROPIC_API_KEY_OLD:-}" \
     -e GEMINI_API_KEY \
     -e GOOGLE_API_KEY \
+    -e GOOGLE_GENAI_USE_GCA \
+    -e GOOGLE_GENAI_USE_VERTEXAI \
+    -e OPENCLAW_ACPX_PRESERVE_GEMINI_AUTH_ENV \
     -e FACTORY_API_KEY \
     -e OPENAI_API_KEY \
     -e CODEX_API_KEY \
