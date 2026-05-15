@@ -38,4 +38,12 @@ describe("chat layout styles", () => {
     expect(css).toContain(".agent-chat__composer-combobox > textarea");
     expect(css).toContain(".chat-compose .chat-compose__field textarea");
   });
+
+  it("keeps mobile PWA composer controls above under-reported safe areas", () => {
+    const css = readLayoutCss();
+
+    expect(css).toContain("margin: 0 8px calc(14px + var(--safe-area-bottom));");
+    expect(css).toContain("@media (display-mode: standalone) and (max-width: 768px)");
+    expect(css).toContain("margin-bottom: calc(14px + max(var(--safe-area-bottom), 34px));");
+  });
 });
