@@ -23,6 +23,7 @@ minimumReleaseAgeExclude:
   - "@cloudflare/workers-types"
   - "@hono/node-server"
   - "@mariozechner/*"
+  - "@openclaw/proxyline"
   - "@openai/codex"
   - "@openai/codex-*"
   - "@smithy/shared-ini-file-loader@4.5.1"
@@ -86,6 +87,7 @@ allowBuilds:
   sharp: true
   tree-sitter-bash: false
   openclaw: true
+  "@openclaw/proxyline": true
 
 packageExtensions:
   "@earendil-works/pi-coding-agent":
