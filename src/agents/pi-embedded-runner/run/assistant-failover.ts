@@ -99,7 +99,18 @@ export async function handleAssistantFailover(params: {
   if (decision.action === "rotate_profile") {
     const failedProfileId = params.lastProfileId;
     const timeoutFailure = params.timedOut || params.idleTimedOut;
-    const failureReason = timeoutFailure ? "timeout" : params.assistantProfileFailureReason;
+    // Preserve a concrete classified profile failure reason (e.g. rate_limit)
+    // over generic timeout when both signals are present, so a 429 racing the
+    // idle-timeout watchdog still drives auth-profile cooldown via
+    // markAuthProfileFailure. Pure-timeout attempts continue to skip cooldown
+    // marking via the failureReason === "timeout" early return below (#81902).
+    const concreteProfileFailureReason: AuthProfileFailureReason | null =
+      params.assistantProfileFailureReason && params.assistantProfileFailureReason !== "timeout"
+        ? params.assistantProfileFailureReason
+        : null;
+    const failureReason: AuthProfileFailureReason | null =
+      concreteProfileFailureReason ??
+      (timeoutFailure ? "timeout" : params.assistantProfileFailureReason);
     const markFailedProfile = async () => {
       if (!failedProfileId || !failureReason || failureReason === "timeout") {
         return;

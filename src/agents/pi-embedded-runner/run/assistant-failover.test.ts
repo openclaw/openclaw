@@ -100,6 +100,48 @@ describe("handleAssistantFailover", () => {
       expect(events).toEqual(["advance", "mark-start", "mark-finish"]);
     });
 
+    it("preserves rate_limit profile failure reason when racing the idle-timeout watchdog (#81902)", async () => {
+      const maybeMarkAuthProfileFailure = vi.fn(async () => {});
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "rotate_profile", reason: "rate_limit" },
+          failoverReason: "rate_limit",
+          assistantProfileFailureReason: "rate_limit",
+          timedOut: true,
+          lastProfileId: "google:p1",
+          billingFailure: false,
+          rateLimitFailure: true,
+          maybeMarkAuthProfileFailure,
+          advanceAuthProfile: vi.fn(async () => true),
+        }),
+      );
+
+      expect(outcome.action).toBe("retry");
+      await vi.waitFor(() => expect(maybeMarkAuthProfileFailure).toHaveBeenCalledTimes(1));
+      expect(maybeMarkAuthProfileFailure).toHaveBeenCalledWith(
+        expect.objectContaining({ profileId: "google:p1", reason: "rate_limit" }),
+      );
+    });
+
+    it("still skips cooldown marking when only timedOut is set without a concrete reason", async () => {
+      const maybeMarkAuthProfileFailure = vi.fn(async () => {});
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "rotate_profile", reason: "timeout" },
+          failoverReason: "timeout",
+          timedOut: true,
+          assistantProfileFailureReason: null,
+          lastProfileId: "anthropic:p1",
+          billingFailure: false,
+          maybeMarkAuthProfileFailure,
+          advanceAuthProfile: vi.fn(async () => true),
+        }),
+      );
+
+      expect(outcome.action).toBe("retry");
+      expect(maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
+    });
+
     it("does not log profile-specific warnings without a failed profile id", async () => {
       const warn = vi.fn();
       const outcome = await handleAssistantFailover(
