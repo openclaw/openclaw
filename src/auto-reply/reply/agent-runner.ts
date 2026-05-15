@@ -2161,6 +2161,9 @@ export async function runReplyAgent(params: {
       err: error,
       sessionCtx,
       resolvedVerboseLevel,
+      cfg,
+      sessionKey,
+      surface: replyToChannel ?? sessionCtx.Surface ?? sessionCtx.Provider,
     });
     if (knownFailurePayload) {
       replyOperation.fail("run_failed", error);

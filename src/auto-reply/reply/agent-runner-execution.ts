@@ -9,6 +9,8 @@ import {
   classifyOAuthRefreshFailure,
 } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
+import { resolveSilentReplyPolicy } from "../../config/silent-reply.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
@@ -474,11 +476,25 @@ function resolveExternalRunFailureTextForConversation(params: {
   text: string;
   sessionCtx: TemplateContext;
   isGenericRunnerFailure: boolean;
+  cfg?: OpenClawConfig;
+  sessionKey?: string;
+  surface?: string;
 }): string {
   if (!isNonDirectConversationContext(params.sessionCtx)) {
     return params.text;
   }
   if (!params.isGenericRunnerFailure && !params.text.includes(AGENT_FAILED_BEFORE_REPLY_TEXT)) {
+    return params.text;
+  }
+  const chatType = normalizeLowercaseStringOrEmpty(params.sessionCtx.ChatType);
+  const conversationType = chatType === "channel" ? "group" : "group";
+  const policy = resolveSilentReplyPolicy({
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+    surface: params.surface,
+    conversationType,
+  });
+  if (policy === "disallow") {
     return params.text;
   }
   return SILENT_REPLY_TOKEN;
@@ -589,6 +605,9 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
   err: unknown;
   sessionCtx: TemplateContext;
   resolvedVerboseLevel: VerboseLevel | undefined;
+  cfg?: OpenClawConfig;
+  sessionKey?: string;
+  surface?: string;
 }): ReplyPayload | undefined {
   const message = formatErrorMessage(params.err);
   const isFallbackSummary = isFallbackSummaryError(params.err);
@@ -601,6 +620,9 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
         text: BILLING_ERROR_USER_MESSAGE,
         sessionCtx: params.sessionCtx,
         isGenericRunnerFailure: false,
+        cfg: params.cfg,
+        sessionKey: params.sessionKey,
+        surface: params.surface,
       }),
     });
   }
@@ -620,6 +642,9 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
         text: buildRateLimitCooldownMessage(params.err),
         sessionCtx: params.sessionCtx,
         isGenericRunnerFailure: false,
+        cfg: params.cfg,
+        sessionKey: params.sessionKey,
+        surface: params.surface,
       }),
     });
   }
@@ -630,6 +655,9 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
         text: rateLimitOrOverloadedCopy,
         sessionCtx: params.sessionCtx,
         isGenericRunnerFailure: false,
+        cfg: params.cfg,
+        sessionKey: params.sessionKey,
+        surface: params.surface,
       }),
     });
   }
@@ -645,6 +673,9 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
       text: externalRunFailureReply.text,
       sessionCtx: params.sessionCtx,
       isGenericRunnerFailure: false,
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+      surface: params.surface,
     }),
   });
 }
@@ -2112,6 +2143,9 @@ export async function runAgentTurnWithFallback(params: {
                 text: switchErrorText,
                 sessionCtx: params.sessionCtx,
                 isGenericRunnerFailure: !shouldSurfaceToControlUi,
+                cfg: runtimeConfig,
+                sessionKey: params.sessionKey,
+                surface: params.sessionCtx.Surface ?? params.sessionCtx.Provider,
               }),
             }),
           };
@@ -2318,6 +2352,9 @@ export async function runAgentTurnWithFallback(params: {
         text: fallbackText,
         sessionCtx: params.sessionCtx,
         isGenericRunnerFailure: externalRunFailureReply?.isGenericRunnerFailure ?? false,
+        cfg: runtimeConfig,
+        sessionKey: params.sessionKey,
+        surface: params.sessionCtx.Surface ?? params.sessionCtx.Provider,
       });
 
       params.replyOperation?.fail("run_failed", err);
