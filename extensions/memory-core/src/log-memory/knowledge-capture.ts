@@ -88,6 +88,8 @@ export function detectTeachingMoment(message: string): boolean {
 export interface KnowledgeCaptureRecord {
   entry: LogMemoryEntry;
   knowledgeFilePath: string;
+  // True when the content already existed in KNOWLEDGE.md and was not written again.
+  alreadyExisted?: boolean;
 }
 
 // Captures engineer-supplied knowledge straight into the semantic layer
@@ -108,6 +110,12 @@ export class KnowledgeCapture {
 
   private now(): Date {
     return this.opts.now?.() ?? new Date();
+  }
+
+  private async findSemanticDuplicate(content: string): Promise<LogMemoryEntry | null> {
+    const needle = content.trim().toLowerCase();
+    const entries = await this.opts.store.loadSemantic();
+    return entries.find((e) => e.payload.content.trim().toLowerCase() === needle) ?? null;
   }
 
   async maybeCapture(input: {
@@ -131,6 +139,17 @@ export class KnowledgeCapture {
     // knowledge that should participate in normal decay and dream cycles.
     pinned?: boolean;
   }): Promise<KnowledgeCaptureRecord> {
+    // Dedup: return the existing entry without writing if the same content is
+    // already in KNOWLEDGE.md. Comparison is trimmed + lowercased to survive
+    // minor whitespace differences.
+    const duplicate = await this.findSemanticDuplicate(input.message);
+    if (duplicate) {
+      return {
+        entry: duplicate,
+        knowledgeFilePath: this.opts.store.semanticPath(),
+        alreadyExisted: true,
+      };
+    }
     const now = this.now();
     const isImplicitRule = detectImplicitRule(input.message);
     const type = isImplicitRule ? "conversation_rule" : "engineer_knowledge";
