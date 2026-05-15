@@ -33,6 +33,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Control UI: rotate browser service-worker caches per build so updated Gateways are less likely to keep serving stale dashboard bundles that trigger protocol mismatch errors.
 - Config/doctor: rotate capped `.clobbered.*` repair snapshots by artifact timestamp so repeated repairs keep the newest forensic copy instead of preserving only the first capped set. (#82012) Thanks @Kaspre.
 - Telegram: initialize the bot before isolated polling drains spooled updates so default isolated polling no longer retries every update with `Bot not initialized` and stalls replies. Fixes #81973. (#81975) Thanks @neeravmakwana.
 - Telegram: apply method-aware Bot API request timeouts to direct message/action clients so `openclaw message delete --channel telegram` no longer waits on grammY's 500-second default when the API request wedges. Fixes #81908. Thanks @DashLabsDev.
