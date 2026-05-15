@@ -1,4 +1,4 @@
-import type { AcpTurnAttachment } from "../../acp/control-plane/manager.types.js";
+import type { AcpTurnAttachment as AgentTurnAttachment } from "../../acp/control-plane/manager.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { isImageAttachment } from "../../media-understanding/attachments.normalize.js";
@@ -11,34 +11,34 @@ import {
   resolveRecentInboundHistoryImages,
 } from "./history-media.js";
 
-const dispatchAcpMediaRuntimeLoader = createLazyImportLoader(
+const agentTurnMediaRuntimeLoader = createLazyImportLoader(
   () => import("./dispatch-acp-media.runtime.js"),
 );
 
-export function loadDispatchAcpMediaRuntime() {
-  return dispatchAcpMediaRuntimeLoader.load();
+export function loadAgentTurnMediaRuntime() {
+  return agentTurnMediaRuntimeLoader.load();
 }
 
-export type DispatchAcpAttachmentRuntime = Pick<
-  Awaited<ReturnType<typeof loadDispatchAcpMediaRuntime>>,
+export type AgentTurnAttachmentRuntime = Pick<
+  Awaited<ReturnType<typeof loadAgentTurnMediaRuntime>>,
   | "MediaAttachmentCache"
   | "isMediaUnderstandingSkipError"
   | "normalizeAttachments"
   | "resolveMediaAttachmentLocalRoots"
 >;
 
-const ACP_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
-const ACP_ATTACHMENT_TIMEOUT_MS = 1_000;
+const AGENT_TURN_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
+const AGENT_TURN_ATTACHMENT_TIMEOUT_MS = 1_000;
 
-export async function resolveAcpTurnAttachments(params: {
+export async function resolveAgentTurnAttachments(params: {
   ctx: FinalizedMsgContext;
   cfg: OpenClawConfig;
-  runtime?: DispatchAcpAttachmentRuntime;
+  runtime?: AgentTurnAttachmentRuntime;
 }): Promise<{
-  attachments: AcpTurnAttachment[];
+  attachments: AgentTurnAttachment[];
   recentHistoryImages: RecentInboundHistoryImage[];
 }> {
-  const runtime = params.runtime ?? (await loadDispatchAcpMediaRuntime());
+  const runtime = params.runtime ?? (await loadAgentTurnMediaRuntime());
   const currentAttachments = runtime
     .normalizeAttachments(params.ctx)
     .map((attachment) =>
@@ -65,7 +65,7 @@ export async function resolveAcpTurnAttachments(params: {
       ctx: params.ctx,
     }),
   });
-  const results: AcpTurnAttachment[] = [];
+  const results: AgentTurnAttachment[] = [];
   const resolvedHistoryImages: RecentInboundHistoryImage[] = [];
   for (const attachment of mediaAttachments) {
     const mediaType = attachment.mime ?? "application/octet-stream";
@@ -78,8 +78,8 @@ export async function resolveAcpTurnAttachments(params: {
     try {
       const { buffer } = await cache.getBuffer({
         attachmentIndex: attachment.index,
-        maxBytes: ACP_ATTACHMENT_MAX_BYTES,
-        timeoutMs: ACP_ATTACHMENT_TIMEOUT_MS,
+        maxBytes: AGENT_TURN_ATTACHMENT_MAX_BYTES,
+        timeoutMs: AGENT_TURN_ATTACHMENT_TIMEOUT_MS,
       });
       results.push({
         mediaType,
@@ -91,11 +91,13 @@ export async function resolveAcpTurnAttachments(params: {
       }
     } catch (error) {
       if (runtime.isMediaUnderstandingSkipError(error)) {
-        logVerbose(`dispatch-acp: skipping attachment #${attachment.index + 1} (${error.reason})`);
+        logVerbose(
+          `agent-turn-attachments: skipping attachment #${attachment.index + 1} (${error.reason})`,
+        );
       } else {
         const errorName = error instanceof Error ? error.name : typeof error;
         logVerbose(
-          `dispatch-acp: failed to read attachment #${attachment.index + 1} (${errorName})`,
+          `agent-turn-attachments: failed to read attachment #${attachment.index + 1} (${errorName})`,
         );
       }
     }
@@ -103,17 +105,17 @@ export async function resolveAcpTurnAttachments(params: {
   return { attachments: results, recentHistoryImages: resolvedHistoryImages };
 }
 
-export async function resolveAcpAttachments(params: {
+export async function resolveAgentAttachments(params: {
   ctx: FinalizedMsgContext;
   cfg: OpenClawConfig;
-  runtime?: DispatchAcpAttachmentRuntime;
-}): Promise<AcpTurnAttachment[]> {
-  return (await resolveAcpTurnAttachments(params)).attachments;
+  runtime?: AgentTurnAttachmentRuntime;
+}): Promise<AgentTurnAttachment[]> {
+  return (await resolveAgentTurnAttachments(params)).attachments;
 }
 
-export function resolveAcpInlineImageAttachments(
+export function resolveInlineAgentImageAttachments(
   images: Array<{ data: string; mimeType: string }> | undefined,
-): AcpTurnAttachment[] {
+): AgentTurnAttachment[] {
   if (!Array.isArray(images)) {
     return [];
   }

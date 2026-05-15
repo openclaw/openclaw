@@ -9,10 +9,10 @@ import type { SessionBindingRecord } from "../../infra/outbound/session-binding-
 import type { MediaUnderstandingSkipError } from "../../media-understanding/errors.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import {
-  resolveAcpAttachments,
-  resolveAcpInlineImageAttachments,
-  resolveAcpTurnAttachments,
-} from "./dispatch-acp-attachments.js";
+  resolveAgentAttachments,
+  resolveAgentTurnAttachments,
+  resolveInlineAgentImageAttachments,
+} from "./agent-turn-attachments.js";
 import { tryDispatchAcpReply } from "./dispatch-acp.js";
 import {
   appendRecentHistoryImageContext,
@@ -722,12 +722,12 @@ describe("tryDispatchAcpReply", () => {
     }
   });
 
-  it("forwards normalized image attachments into ACP turns", async () => {
+  it("forwards normalized image attachments into agent runtime turns", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
     const imagePath = path.join(tempDir, "inbound.png");
     try {
       await fs.writeFile(imagePath, "image-bytes");
-      const attachments = await resolveAcpAttachments({
+      const attachments = await resolveAgentAttachments({
         cfg: createAcpTestConfig({
           channels: {
             imessage: {
@@ -875,12 +875,12 @@ describe("tryDispatchAcpReply", () => {
     expect(text).not.toContain("/tmp/secret.png");
   });
 
-  it("forwards recent history image attachments into ACP turns", async () => {
+  it("forwards recent history image attachments into agent runtime turns", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-history-"));
     const imagePath = path.join(tempDir, "recent.png");
     try {
       await fs.writeFile(imagePath, "recent-image");
-      const result = await resolveAcpTurnAttachments({
+      const result = await resolveAgentTurnAttachments({
         cfg: createAcpTestConfig(),
         ctx: buildTestCtx({
           Provider: "discord",
@@ -942,7 +942,7 @@ describe("tryDispatchAcpReply", () => {
     try {
       await fs.writeFile(currentPath, "current-image");
       await fs.writeFile(historyPath, "history-image");
-      const result = await resolveAcpTurnAttachments({
+      const result = await resolveAgentTurnAttachments({
         cfg: createAcpTestConfig(),
         ctx: buildTestCtx({
           Provider: "discord",
@@ -984,14 +984,14 @@ describe("tryDispatchAcpReply", () => {
     }
   });
 
-  it("forwards chat.send inline image attachments into ACP turns", async () => {
+  it("forwards chat.send inline image attachments into agent runtime turns", async () => {
     setReadyAcpResolution();
     const image = {
       mimeType: "image/png",
       data: Buffer.from("image-bytes").toString("base64"),
     };
 
-    expect(resolveAcpInlineImageAttachments([image])).toEqual([
+    expect(resolveInlineAgentImageAttachments([image])).toEqual([
       {
         mediaType: "image/png",
         data: image.data,
@@ -1047,7 +1047,7 @@ describe("tryDispatchAcpReply", () => {
     ]);
   });
 
-  it("skips ACP attachments outside allowed inbound roots", async () => {
+  it("skips agent runtime attachments outside allowed inbound roots", async () => {
     setReadyAcpResolution();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
     const imagePath = path.join(tempDir, "outside-root.png");
@@ -1069,7 +1069,7 @@ describe("tryDispatchAcpReply", () => {
     }
   });
 
-  it("skips file URL ACP attachments outside allowed inbound roots", async () => {
+  it("skips file URL agent runtime attachments outside allowed inbound roots", async () => {
     setReadyAcpResolution();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
     const imagePath = path.join(tempDir, "outside-root.png");

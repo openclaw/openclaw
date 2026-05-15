@@ -29,10 +29,10 @@ import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
 import {
-  loadDispatchAcpMediaRuntime,
-  resolveAcpInlineImageAttachments,
-  resolveAcpTurnAttachments,
-} from "./dispatch-acp-attachments.js";
+  loadAgentTurnMediaRuntime,
+  resolveAgentTurnAttachments,
+  resolveInlineAgentImageAttachments,
+} from "./agent-turn-attachments.js";
 import {
   createAcpDispatchDeliveryCoordinator,
   type AcpDispatchDeliveryCoordinator,
@@ -457,7 +457,7 @@ export async function tryDispatchAcpReply(params: {
     }
     if (hasInboundMedia(params.ctx) && !params.ctx.MediaUnderstanding?.length) {
       try {
-        const { applyMediaUnderstanding } = await loadDispatchAcpMediaRuntime();
+        const { applyMediaUnderstanding } = await loadAgentTurnMediaRuntime();
         await applyMediaUnderstanding({
           ctx: params.ctx,
           cfg: params.cfg,
@@ -471,12 +471,12 @@ export async function tryDispatchAcpReply(params: {
     }
 
     const promptText = resolveAcpPromptText(params.ctx);
-    const resolvedTurnAttachments = await resolveAcpTurnAttachments({
+    const resolvedTurnAttachments = await resolveAgentTurnAttachments({
       ctx: params.ctx,
       cfg: params.cfg,
     });
     const mediaAttachments = resolvedTurnAttachments.attachments;
-    const inlineAttachments = resolveAcpInlineImageAttachments(params.images);
+    const inlineAttachments = resolveInlineAgentImageAttachments(params.images);
     const mediaAttachmentsAreOnlyRecentHistory =
       mediaAttachments.length > 0 &&
       mediaAttachments.length === resolvedTurnAttachments.recentHistoryImages.length;
