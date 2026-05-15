@@ -58,6 +58,15 @@ struct GeneralSettings: View {
                         binding: self.$state.canvasEnabled)
 
                     SettingsToggleRow(
+                        title: "Ambient Overlay",
+                        subtitle: "Show a click-through AI layer that can be armed with Control-Option-Space.",
+                        binding: self.$state.ambientOverlayEnabled)
+
+                    if self.state.ambientOverlayEnabled {
+                        self.ambientOverlayControls
+                    }
+
+                    SettingsToggleRow(
                         title: "Allow Camera",
                         subtitle: "Allow the agent to capture a photo or short video via the built-in camera.",
                         binding: self.$cameraEnabled)
@@ -99,6 +108,35 @@ struct GeneralSettings: View {
         Binding(
             get: { !self.state.isPaused },
             set: { self.state.isPaused = !$0 })
+    }
+
+    private var ambientOverlayControls: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Picker("Display scope", selection: self.$state.ambientOverlayDisplayScope) {
+                ForEach(AmbientOverlayDisplayScope.allCases) { scope in
+                    Text(scope.title).tag(scope)
+                }
+            }
+            .pickerStyle(.segmented)
+            .frame(maxWidth: 320, alignment: .leading)
+
+            HStack(spacing: 10) {
+                Text("Intensity")
+                    .font(.callout.weight(.semibold))
+                Slider(value: self.$state.ambientOverlayIntensity, in: 0.1...1.0)
+                    .frame(width: 180)
+                Text("\(Int((self.state.ambientOverlayIntensity * 100).rounded()))%")
+                    .font(.callout.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 44, alignment: .leading)
+            }
+
+            Stepper(
+                "Timeout: \(Int(self.state.ambientOverlayTimeoutSeconds.rounded()))s",
+                value: self.$state.ambientOverlayTimeoutSeconds,
+                in: 5...120,
+                step: 5)
+        }
     }
 
     private var connectionSection: some View {

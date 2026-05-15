@@ -96,6 +96,7 @@ struct SettingsViewSmokeTests {
 
     @Test func `general settings builds body`() {
         let state = AppState(preview: true)
+        state.ambientOverlayEnabled = true
         let view = GeneralSettings(state: state)
         _ = view.body
     }
