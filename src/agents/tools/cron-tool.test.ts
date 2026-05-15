@@ -775,6 +775,45 @@ describe("cron tool", () => {
     });
   });
 
+  it("preserves LINE recipient prefixes when inferring delivery from session keys", async () => {
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-line-group",
+        agentSessionKey: "agent:main:line:group:c0123456789abcdef0123456789abcdef",
+      }),
+    ).toEqual({
+      mode: "announce",
+      channel: "line",
+      to: "C0123456789abcdef0123456789abcdef",
+    });
+
+    callGatewayMock.mockClear();
+
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-line-user",
+        agentSessionKey: "agent:main:line:direct:u0123456789abcdef0123456789abcdef",
+      }),
+    ).toEqual({
+      mode: "announce",
+      channel: "line",
+      to: "U0123456789abcdef0123456789abcdef",
+    });
+  });
+
+  it("strips LINE target prefixes when inferring delivery from session keys", async () => {
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-line-prefixed-target",
+        agentSessionKey: "agent:main:line:group:line:group:C0123456789abcdef0123456789abcdef",
+      }),
+    ).toEqual({
+      mode: "announce",
+      channel: "line",
+      to: "C0123456789abcdef0123456789abcdef",
+    });
+  });
+
   it("preserves legacy telegram dm thread ids when inferring delivery", async () => {
     expect(
       await executeAddAndReadDelivery({

@@ -3,10 +3,7 @@ import { getRuntimeConfig } from "../../config/config.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import type { CronDelivery, CronMessageChannel } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
-import {
-  parseAgentSessionKey,
-  parseThreadSessionSuffix,
-} from "../../sessions/session-key-utils.js";
+import { parseThreadSessionSuffix } from "../../sessions/session-key-utils.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -510,6 +507,21 @@ function stripThreadSuffixFromSessionKey(sessionKey: string): string {
   return parent ? parent : sessionKey;
 }
 
+function parseRawAgentSessionRest(sessionKey: string): string | null {
+  const raw = normalizeOptionalString(sessionKey);
+  if (!raw) {
+    return null;
+  }
+  const parts = raw.split(":").filter(Boolean);
+  if (parts.length < 3 || normalizeOptionalLowercaseString(parts[0]) !== "agent") {
+    return null;
+  }
+  if (!normalizeOptionalString(parts[1])) {
+    return null;
+  }
+  return normalizeOptionalString(parts.slice(2).join(":")) ?? null;
+}
+
 function resolveTelegramDirectThreadId(params: {
   peerId: string;
   threadId?: string;
@@ -532,23 +544,47 @@ function resolveTelegramDirectThreadId(params: {
   return normalizeOptionalString(threadIdParts.join(":"));
 }
 
+function normalizeLineSessionKeyTarget(peerId: string): string | undefined {
+  const stripped = normalizeOptionalString(peerId)
+    ?.replace(/^line:(group|room|user):/i, "")
+    .replace(/^line:/i, "");
+  if (!stripped) {
+    return undefined;
+  }
+  if (/^[ucr][a-f0-9]{32}$/i.test(stripped)) {
+    return `${stripped[0]?.toUpperCase() ?? ""}${stripped.slice(1)}`;
+  }
+  return stripped;
+}
+
+function normalizeSessionKeyDeliveryTarget(params: {
+  channel?: CronMessageChannel;
+  peerId: string;
+}): string | undefined {
+  if (params.channel === "line") {
+    return normalizeLineSessionKeyTarget(params.peerId);
+  }
+  return normalizeOptionalString(params.peerId);
+}
+
 function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | null {
   const rawSessionKey = agentSessionKey?.trim();
   if (!rawSessionKey) {
     return null;
   }
   const threadSuffix = parseThreadSessionSuffix(rawSessionKey);
-  const parsed = parseAgentSessionKey(
+  const rawRest = parseRawAgentSessionRest(
     threadSuffix.baseSessionKey ?? stripThreadSuffixFromSessionKey(rawSessionKey),
   );
-  if (!parsed || !parsed.rest) {
+  if (!rawRest) {
     return null;
   }
-  const parts = parsed.rest.split(":").filter(Boolean);
+  const parts = rawRest.split(":").filter(Boolean);
   if (parts.length === 0) {
     return null;
   }
-  const head = normalizeOptionalLowercaseString(parts[0]);
+  const normalizedParts = parts.map((part) => normalizeOptionalLowercaseString(part) ?? "");
+  const head = normalizedParts[0];
   if (!head || head === "main" || head === "subagent" || head === "acp") {
     return null;
   }
@@ -562,7 +598,7 @@ function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | n
   // Note: legacy keys may use "dm" instead of "direct".
   // Threaded sessions append :thread:<id>, which we strip so delivery targets the parent peer.
   // NOTE: Telegram forum topics encode as <chatId>:topic:<topicId> and should be preserved.
-  const markerIndex = parts.findIndex(
+  const markerIndex = normalizedParts.findIndex(
     (part) => part === "direct" || part === "dm" || part === "group" || part === "channel",
   );
   if (markerIndex === -1) {
@@ -578,11 +614,18 @@ function inferDeliveryFromSessionKey(agentSessionKey?: string): CronDelivery | n
 
   let channel: CronMessageChannel | undefined;
   if (markerIndex >= 1) {
-    channel = normalizeOptionalLowercaseString(parts[0]) as CronMessageChannel | undefined;
+    channel = normalizedParts[0] as CronMessageChannel | undefined;
   }
 
-  const marker = parts[markerIndex];
-  const delivery: CronDelivery = { mode: "announce", to: peerId };
+  const marker = normalizedParts[markerIndex];
+  if (!marker) {
+    return null;
+  }
+  const target = normalizeSessionKeyDeliveryTarget({ channel, peerId });
+  if (!target) {
+    return null;
+  }
+  const delivery: CronDelivery = { mode: "announce", to: target };
   if (channel) {
     delivery.channel = channel;
   }
