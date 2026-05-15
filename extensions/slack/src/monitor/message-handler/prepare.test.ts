@@ -769,6 +769,75 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     }
   });
 
+  it("does not record inherited thread-starter files as skipped reply history media", async () => {
+    const originalFetch = globalThis.fetch;
+    const mockFetch = vi.fn(async () => {
+      throw new Error("inherited parent file should not be downloaded");
+    });
+    globalThis.fetch = mockFetch as typeof fetch;
+
+    try {
+      const replies = vi.fn().mockResolvedValue({
+        messages: [
+          {
+            text: "starter",
+            user: "U2",
+            ts: "600.000",
+            files: [
+              {
+                id: "F-parent",
+                name: "parent.png",
+                mimetype: "image/png",
+              },
+            ],
+          },
+        ],
+      });
+      const slackCtx = createInboundSlackCtx({
+        cfg: { channels: { slack: { enabled: true } } } as OpenClawConfig,
+        appClient: { conversations: { replies } } as unknown as App["client"],
+        defaultRequireMention: true,
+      });
+      slackCtx.historyLimit = 5;
+      slackCtx.resolveUserName = async () => ({ name: "Alice" });
+
+      const prepared = await prepareMessageWith(
+        slackCtx,
+        createSlackAccount(),
+        createSlackMessage({
+          channel: "C123",
+          channel_type: "channel",
+          text: "",
+          ts: "601.000",
+          thread_ts: "600.000",
+          files: [
+            {
+              id: "F-parent",
+              name: "parent.png",
+              mimetype: "image/png",
+              url_private: "https://files.slack.com/parent.png",
+            },
+          ],
+        }),
+      );
+
+      expect(prepared).toBeNull();
+      expect(replies).toHaveBeenCalledWith({
+        channel: "C123",
+        ts: "600.000",
+        limit: 1,
+        inclusive: true,
+      });
+      const entries = Array.from(slackCtx.channelHistories.values()).flat();
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.body).toBe("[Slack file: parent.png (fileId: F-parent)]");
+      expect(entries[0]?.media).toBeUndefined();
+      expect(mockFetch).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("allows bot-authored room messages with explicit mention when allowBots is mentions", async () => {
     const members = vi.fn();
     const slackCtx = createInboundSlackCtx({

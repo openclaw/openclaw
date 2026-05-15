@@ -1,7 +1,6 @@
 import type { AcpTurnAttachment as AgentTurnAttachment } from "../../acp/control-plane/manager.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import { isImageAttachment } from "../../media-understanding/attachments.normalize.js";
 import type { MediaAttachment } from "../../media-understanding/types.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -61,10 +60,7 @@ export async function resolveAgentTurnAttachments(params: {
         ? Object.assign({}, attachment, { url: undefined })
         : attachment,
     );
-  const hasCurrentImage = currentAttachments.some(isImageAttachment);
-  const recentHistoryImages = hasCurrentImage
-    ? []
-    : resolveRecentInboundHistoryImages({ ctx: params.ctx });
+  const recentHistoryImages = resolveRecentInboundHistoryImages({ ctx: params.ctx });
   const historyAttachments: MediaAttachment[] = recentHistoryImages.map((image, index) => ({
     path: image.path,
     mime: image.contentType,
@@ -82,13 +78,13 @@ export async function resolveAgentTurnAttachments(params: {
   });
   const results: AgentTurnAttachment[] = [];
   const resolvedHistoryImages: RecentInboundHistoryImage[] = [];
-  for (const attachment of mediaAttachments) {
+  const resolveImageAttachment = async (attachment: MediaAttachment): Promise<boolean> => {
     const mediaType = attachment.mime ?? "application/octet-stream";
     if (!mediaType.startsWith("image/")) {
-      continue;
+      return false;
     }
     if (!normalizeOptionalString(attachment.path)) {
-      continue;
+      return false;
     }
     try {
       const { buffer } = await cache.getBuffer({
@@ -104,6 +100,7 @@ export async function resolveAgentTurnAttachments(params: {
       if (historyImage) {
         resolvedHistoryImages.push(historyImage);
       }
+      return true;
     } catch (error) {
       if (runtime.isMediaUnderstandingSkipError(error)) {
         logVerbose(
@@ -115,6 +112,17 @@ export async function resolveAgentTurnAttachments(params: {
           `agent-turn-attachments: failed to read attachment #${attachment.index + 1} (${errorName})`,
         );
       }
+      return false;
+    }
+  };
+
+  let currentImageResolved = false;
+  for (const attachment of currentAttachments) {
+    currentImageResolved = (await resolveImageAttachment(attachment)) || currentImageResolved;
+  }
+  if (!currentImageResolved) {
+    for (const attachment of historyAttachments) {
+      await resolveImageAttachment(attachment);
     }
   }
   return { attachments: results, recentHistoryImages: resolvedHistoryImages };

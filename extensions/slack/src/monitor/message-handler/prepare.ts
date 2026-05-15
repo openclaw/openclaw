@@ -63,7 +63,7 @@ import { resolveConversationLabel } from "../conversation.runtime.js";
 import { authorizeSlackDirectMessage } from "../dm-auth.js";
 import { resolveSlackRoomContextHints } from "../room-context.js";
 import { sendMessageSlack } from "../send.runtime.js";
-import { resolveSlackThreadStarter } from "../thread.js";
+import { resolveSlackThreadStarter, type SlackThreadStarter } from "../thread.js";
 import { resolveSlackMessageContent } from "./prepare-content.js";
 import { resolveSlackDmHistoryContext, resolveSlackDmHistoryLimit } from "./prepare-dm-history.js";
 import { resolveSlackRoutingContext } from "./prepare-routing.js";
@@ -167,6 +167,7 @@ async function resolveSlackHistoryMediaForPendingRecord(params: {
   ctx: SlackMonitorContext;
   message: SlackMessageEvent;
   isThreadReply: boolean;
+  threadStarter: SlackThreadStarter | null;
   isBotMessage: boolean;
 }): Promise<HistoryMediaEntry[]> {
   const mediaMessage = buildSlackHistoryMediaCandidateMessage(params.message);
@@ -176,7 +177,7 @@ async function resolveSlackHistoryMediaForPendingRecord(params: {
   const content = await resolveSlackMessageContent({
     message: mediaMessage,
     isThreadReply: params.isThreadReply,
-    threadStarter: null,
+    threadStarter: params.threadStarter,
     isBotMessage: params.isBotMessage,
     client: params.ctx.app.client,
     botToken: params.ctx.botToken,
@@ -797,14 +798,21 @@ export async function prepareSlackMessage(params: {
   if (isRoom && shouldRequireMention && messageIngress.activationAccess.shouldSkip) {
     ctx.logger.info({ channel: message.channel, reason: "no-mention" }, "skipping channel message");
     const pendingText = (message.text ?? "").trim();
+    const historyMediaCandidate = buildSlackHistoryMediaCandidateMessage(message);
     const fallbackFile = message.files?.length
       ? `[Slack file: ${formatSlackFileReference(message.files[0])}]`
       : "";
     const fallbackSharedMedia =
-      !fallbackFile && buildSlackHistoryMediaCandidateMessage(message)
-        ? "[Slack media attachment]"
-        : "";
+      !fallbackFile && historyMediaCandidate ? "[Slack media attachment]" : "";
     const pendingBody = pendingText || fallbackFile || fallbackSharedMedia;
+    const skippedThreadStarter =
+      historyMediaCandidate && isThreadReply && threadTs
+        ? await resolveSlackThreadStarter({
+            channelId: message.channel,
+            threadTs,
+            client: ctx.app.client,
+          })
+        : null;
     await recordPendingHistoryEntryWithMedia({
       historyMap: ctx.channelHistories,
       historyKey,
@@ -824,6 +832,7 @@ export async function prepareSlackMessage(params: {
           ctx,
           message,
           isThreadReply,
+          threadStarter: skippedThreadStarter,
           isBotMessage,
         }),
     });
