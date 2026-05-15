@@ -7,6 +7,7 @@
  */
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
 import type { CreateReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.runtime-types.js";
+import type { OutboundIdentity } from "../../infra/outbound/identity-types.js";
 import type {
   ReadChannelAllowFromStoreForAccount,
   UpsertChannelPairingRequestForAccount,
@@ -154,6 +155,19 @@ export type PluginRuntimeChannel = {
   };
   outbound: {
     loadAdapter: import("../../channels/plugins/outbound/load.types.js").LoadChannelOutboundAdapter;
+    /**
+     * Send a raw text message to the last recorded channel route for a session.
+     *
+     * This performs direct outbound delivery only; it does not enqueue or trigger
+     * an LLM turn. Runtimes return `{ delivered: false, error: "no-route-found" }`
+     * when the session has not recorded an inbound route yet.
+     */
+    sendToSession: (params: {
+      sessionKey: string;
+      text: string;
+      /** Optional identity override for channels that support outbound identity metadata. */
+      identity?: OutboundIdentity;
+    }) => Promise<{ delivered: true } | { delivered: false; error: string }>;
   };
   turn: {
     run: typeof import("../../channels/turn/kernel.js").runChannelTurn;

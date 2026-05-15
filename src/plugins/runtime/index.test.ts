@@ -152,6 +152,31 @@ describe("plugin runtime command execution", () => {
     expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(["echo", "hello"], { timeoutMs: 1000 });
   });
 
+  it("returns not-wired for runtime.session.cancel without gateway cancellation binding", async () => {
+    await expect(
+      createPluginRuntime().session.cancel({
+        sessionKey: "agent:main:discord:user:123",
+        reason: "test",
+      }),
+    ).resolves.toEqual({ cancelled: false, reason: "not-wired" });
+  });
+
+  it("delegates runtime.session.cancel to the gateway cancellation binding", async () => {
+    const cancelSession = vi.fn(async () => ({ cancelled: true }));
+    const runtime = createPluginRuntime({ cancelSession });
+
+    await expect(
+      runtime.session.cancel({
+        sessionKey: "agent:main:discord:user:123",
+        reason: "plugin-requested",
+      }),
+    ).resolves.toEqual({ cancelled: true, reason: "plugin-requested" });
+    expect(cancelSession).toHaveBeenCalledWith({
+      sessionKey: "agent:main:discord:user:123",
+      reason: "plugin-requested",
+    });
+  });
+
   it.each([
     {
       name: "exposes runtime.events.onAgentEvent",

@@ -555,6 +555,36 @@ two-party event loops that do not go through the shared channel-turn kernel.
 
     Use `saveRemoteMedia(...)` when a remote URL should become OpenClaw media. Use `saveResponseMedia(...)` when the plugin already fetched a `Response` with plugin-owned auth, redirect, or allowlist handling. Use `readRemoteMediaBuffer(...)` only when the plugin needs raw bytes for inspection, transforms, decryption, or reupload. `fetchRemoteMedia(...)` remains a deprecated compatibility alias for `readRemoteMediaBuffer(...)`.
 
+    `api.runtime.channel.outbound.sendToSession(...)` sends raw text through the existing outbound adapter for the session's last recorded channel route. It does not enqueue or trigger an LLM turn.
+
+    ```typescript
+    const result = await api.runtime.channel.outbound.sendToSession({
+      sessionKey,
+      text: "Still working — I interrupted the slow turn and will retry with a shorter path.",
+    });
+
+    if (!result.delivered && result.error === "no-route-found") {
+      api.logger.warn("No recorded route for session", { sessionKey });
+    }
+    ```
+
+    `sendToSession(...)` resolves the session's `lastChannel`, `lastTo`, account id, thread id, and default agent identity from the session store. It returns `{ delivered: false, error: "no-route-found" }` when the session has not recorded an inbound route yet, and never exposes provider tokens to plugin code.
+
+    `api.runtime.session.cancel(...)` cancels an in-flight agent turn for a session key when the runtime is gateway-backed:
+
+    ```typescript
+    const result = await api.runtime.session.cancel({
+      sessionKey,
+      reason: "plugin-preempted-slow-turn",
+    });
+
+    if (!result.cancelled && result.reason === "not-wired") {
+      api.logger.debug("Session cancellation is unavailable in this runtime");
+    }
+    ```
+
+    Setup/test runtimes that are not wired to the gateway cancellation path return `{ cancelled: false, reason: "not-wired" }` instead of throwing.
+
     `api.runtime.channel.mentions` is the shared inbound mention-policy surface for bundled channel plugins that use runtime injection:
 
     ```typescript

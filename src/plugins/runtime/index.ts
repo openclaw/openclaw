@@ -4,11 +4,13 @@ import {
   generateImage as generateRuntimeImage,
   listRuntimeImageGenerationProviders,
 } from "../../image-generation/runtime.js";
+import { resolveAgentOutboundIdentity } from "../../infra/outbound/identity.js";
 import {
   generateMusic as generateRuntimeMusic,
   listRuntimeMusicGenerationProviders,
 } from "../../music-generation/runtime.js";
 import { RequestScopedSubagentRuntimeError } from "../../plugin-sdk/error-runtime.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import {
   createLazyRuntimeMethod,
   createLazyRuntimeMethodBinder,
@@ -228,12 +230,49 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
   const tasks = createRuntimeTasks({
     legacyTaskFlow: taskFlow,
   });
+  const runtimeConfig = createRuntimeConfig();
+  const runtimeAgent = createRuntimeAgent();
+  const runtimeChannel = createRuntimeChannel();
+
+  runtimeChannel.outbound.sendToSession = async ({ sessionKey, text, identity }) => {
+    try {
+      const storePath = runtimeAgent.session.resolveStorePath();
+      const store = runtimeAgent.session.loadSessionStore(storePath);
+      const entry = store[sessionKey];
+      const channelId = entry?.lastChannel;
+      const to = entry?.lastTo;
+      if (!channelId || !to) {
+        return { delivered: false as const, error: "no-route-found" };
+      }
+      const adapter = await runtimeChannel.outbound.loadAdapter(channelId);
+      if (!adapter?.sendText) {
+        return { delivered: false as const, error: "no-adapter-or-sendText-missing" };
+      }
+      const cfg = getRuntimeConfig();
+      await adapter.sendText({
+        cfg,
+        to,
+        text,
+        accountId: entry.lastAccountId ?? null,
+        threadId: entry.lastThreadId ?? null,
+        identity:
+          identity ?? resolveAgentOutboundIdentity(cfg, resolveAgentIdFromSessionKey(sessionKey)),
+      });
+      return { delivered: true as const };
+    } catch (error) {
+      return {
+        delivered: false as const,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  };
+
   const runtime = {
     // Sourced from the shared OpenClaw version resolver (#52899) so plugins
     // always see the same version the CLI reports, avoiding API-version drift.
     version: VERSION,
-    config: createRuntimeConfig(),
-    agent: createRuntimeAgent(),
+    config: runtimeConfig,
+    agent: runtimeAgent,
     subagent: createLateBindingSubagent(
       _options.subagent,
       _options.allowGatewaySubagentBinding === true,
@@ -245,9 +284,25 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
       listProviders: listWebSearchProviders,
       search: runWebSearch,
     },
-    channel: createRuntimeChannel(),
+    channel: runtimeChannel,
     events: createRuntimeEvents(),
     logging: createRuntimeLogging(),
+    session: {
+      cancel: async ({ sessionKey, reason }) => {
+        if (!_options.cancelSession) {
+          return { cancelled: false as const, reason: "not-wired" };
+        }
+        try {
+          const result = await _options.cancelSession({ sessionKey, reason });
+          if (result.cancelled) {
+            return { cancelled: true as const, reason: reason ?? "plugin-requested" };
+          }
+          return { cancelled: false as const, reason: "not-cancelled" };
+        } catch {
+          return { cancelled: false as const, reason: "error" };
+        }
+      },
+    },
     state: {
       resolveStateDir,
       openKeyedStore: () => {
