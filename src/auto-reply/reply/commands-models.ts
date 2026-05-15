@@ -3,6 +3,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
+import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
 import { resolveVisibleModelCatalog } from "../../agents/model-catalog-visibility.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
@@ -36,6 +37,13 @@ const PAGE_SIZE_DEFAULT = 20;
 const PAGE_SIZE_MAX = 100;
 const MODELS_ADD_DEPRECATED_TEXT =
   "⚠️ /models add is deprecated. Use /models to browse providers and /model to switch models.";
+const RUNTIME_CHOICE_LABELS: Readonly<Record<string, string>> = {
+  pi: "OpenClaw Pi Default",
+  codex: "OpenAI Codex",
+  "codex-cli": "OpenAI Codex",
+  "claude-cli": "Claude CLI",
+  "google-gemini-cli": "Gemini CLI",
+};
 
 type ModelsCommandSessionEntry = Partial<
   Pick<SessionEntry, "authProfileOverride" | "modelProvider" | "model">
@@ -77,6 +85,70 @@ function isModelsBrowseVisibleProvider(provider: string): boolean {
 
 function usesUnfilteredCatalogModels(provider: string): boolean {
   return isCliRuntimeProvider(provider);
+}
+
+function normalizeRuntimeChoiceId(runtime: string | undefined): string {
+  const trimmed = runtime?.trim();
+  if (!trimmed || trimmed === "auto" || trimmed === "default") {
+    return "pi";
+  }
+  return normalizeLowercaseStringOrEmpty(trimmed) || "pi";
+}
+
+function runtimeChoiceFor(params: {
+  provider: string;
+  runtime: string;
+  cli?: boolean;
+}): ModelsRuntimeChoice {
+  if (params.runtime === "pi") {
+    return {
+      id: "pi",
+      label: "OpenClaw Pi Default",
+      description: "Use the built-in OpenClaw Pi runtime.",
+    };
+  }
+  return {
+    id: params.runtime,
+    label: RUNTIME_CHOICE_LABELS[params.runtime] ?? params.runtime,
+    description: params.cli
+      ? `Run ${params.provider} models through ${params.runtime}.`
+      : `Run ${params.provider} models through the ${params.runtime} harness.`,
+  };
+}
+
+function resolveProviderDefaultRuntimeChoice(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  resolvedDefault: { provider: string; model: string };
+  byProvider: ReadonlyMap<string, ReadonlySet<string>>;
+  agentId?: string;
+}): string {
+  const modelId =
+    params.resolvedDefault.provider === params.provider
+      ? params.resolvedDefault.model
+      : params.byProvider.get(params.provider)?.values().next().value;
+  if (!modelId) {
+    return "pi";
+  }
+  return normalizeRuntimeChoiceId(
+    resolveAgentHarnessPolicy({
+      config: params.cfg,
+      provider: params.provider,
+      modelId,
+      agentId: params.agentId,
+    }).runtime,
+  );
+}
+
+function addRuntimeChoice(
+  choices: ModelsRuntimeChoice[],
+  choice: ModelsRuntimeChoice,
+): ModelsRuntimeChoice[] {
+  if (choices.some((existing) => existing.id === choice.id)) {
+    return choices;
+  }
+  choices.push(choice);
+  return choices;
 }
 
 export async function buildModelsProviderData(
@@ -222,20 +294,29 @@ export async function buildModelsProviderData(
   const runtimeChoicesByProvider = new Map<string, ModelsRuntimeChoice[]>();
   for (const alias of listLegacyRuntimeModelProviderAliases()) {
     const provider = normalizeProviderId(alias.provider);
-    const choices = runtimeChoicesByProvider.get(provider) ?? [
-      {
-        id: "pi",
-        label: "OpenClaw Pi Default",
-        description: "Use the built-in OpenClaw Pi runtime.",
-      },
-    ];
-    choices.push({
-      id: alias.runtime,
-      label: alias.runtime,
-      description: alias.cli
-        ? `Run ${provider} models through ${alias.runtime}.`
-        : `Run ${provider} models through the ${alias.runtime} harness.`,
-    });
+    const choices =
+      runtimeChoicesByProvider.get(provider) ??
+      addRuntimeChoice(
+        [],
+        runtimeChoiceFor({
+          provider,
+          runtime: resolveProviderDefaultRuntimeChoice({
+            cfg,
+            provider,
+            resolvedDefault,
+            byProvider,
+            agentId,
+          }),
+        }),
+      );
+    addRuntimeChoice(
+      choices,
+      runtimeChoiceFor({
+        provider,
+        runtime: normalizeRuntimeChoiceId(alias.runtime),
+        cli: alias.cli,
+      }),
+    );
     runtimeChoicesByProvider.set(provider, choices);
   }
 
