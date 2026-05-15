@@ -1681,7 +1681,7 @@ export const dispatchTelegramMessage = async ({
         },
       });
     }
-    if (!isRoomEvent) {
+    if (!isRoomEvent || deliveryState.snapshot().delivered) {
       clearGroupHistory();
     }
     return;

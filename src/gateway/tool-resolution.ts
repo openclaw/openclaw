@@ -23,6 +23,7 @@ import {
   resolveToolProfilePolicy,
 } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import type { InboundTurnKind } from "../channels/turn/kind.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
@@ -35,6 +36,7 @@ export function resolveGatewayScopedTools(params: {
   sessionKey: string;
   messageProvider?: string;
   accountId?: string;
+  inboundTurnKind?: InboundTurnKind;
   agentTo?: string;
   agentThreadId?: string;
   allowGatewaySubagentBinding?: boolean;
@@ -133,6 +135,7 @@ export function resolveGatewayScopedTools(params: {
     agentSessionKey: params.sessionKey,
     agentChannel: params.messageProvider ?? undefined,
     agentAccountId: params.accountId,
+    inboundTurnKind: params.inboundTurnKind,
     agentTo: params.agentTo,
     agentThreadId: params.agentThreadId,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
