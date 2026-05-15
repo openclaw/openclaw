@@ -787,10 +787,10 @@ Set `AZURE_OPENAI_API_VERSION` to pin a specific Azure preview or GA version
 for the Azure image-generation path:
 
 ```bash
-export AZURE_OPENAI_API_VERSION="preview"
+export AZURE_OPENAI_API_VERSION="2024-12-01-preview"
 ```
 
-The default is `preview` when the variable is unset.
+The default is `2024-12-01-preview` when the variable is unset.
 
 ### Model names are deployment names
 
