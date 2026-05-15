@@ -1969,18 +1969,19 @@ checkout_git_openclaw_ref() {
         return 0
     fi
 
+    if git -C "$repo_dir" ls-remote --exit-code --heads origin "$ref" >/dev/null 2>&1; then
+        run_quiet_step "Fetching requested version" git -C "$repo_dir" fetch --no-tags origin "refs/heads/${ref}:refs/remotes/origin/${ref}"
+        run_quiet_step "Checking out ${ref}" git -C "$repo_dir" checkout -B "$ref" "origin/$ref"
+        if [[ "$GIT_UPDATE" == "1" ]]; then
+            run_quiet_step "Updating repository" git -C "$repo_dir" pull --rebase --no-tags || true
+        fi
+        return 0
+    fi
+
     run_quiet_step "Fetching requested version" git -C "$repo_dir" fetch --tags origin
 
     if git -C "$repo_dir" rev-parse --verify --quiet "refs/tags/${ref}^{commit}" >/dev/null; then
         run_quiet_step "Checking out ${ref}" git -C "$repo_dir" checkout --detach "$ref"
-        return 0
-    fi
-
-    if git -C "$repo_dir" ls-remote --exit-code --heads origin "$ref" >/dev/null 2>&1; then
-        run_quiet_step "Checking out ${ref}" git -C "$repo_dir" checkout -B "$ref" "origin/$ref"
-        if [[ "$GIT_UPDATE" == "1" ]]; then
-            run_quiet_step "Updating repository" git -C "$repo_dir" pull --rebase || true
-        fi
         return 0
     fi
 

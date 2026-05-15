@@ -47,9 +47,18 @@ describe("install-cli.sh", () => {
     expect(result.stdout).toContain("main=main");
   });
 
-  it("fetches main without tags for git installs", () => {
+  it("fetches moving git refs without tags for git installs", () => {
     expect(script).toContain('git -C "$repo_dir" fetch --no-tags origin main');
+    expect(script).toContain(
+      'git -C "$repo_dir" fetch --no-tags origin "refs/heads/${ref}:refs/remotes/origin/${ref}"',
+    );
     expect(script).toContain('git -C "$repo_dir" pull --rebase --no-tags || true');
+
+    const branchCheckIndex = script.indexOf('ls-remote --exit-code --heads origin "$ref"');
+    const tagFetchIndex = script.indexOf("fetch --tags origin");
+    expect(branchCheckIndex).toBeGreaterThan(-1);
+    expect(tagFetchIndex).toBeGreaterThan(-1);
+    expect(branchCheckIndex).toBeLessThan(tagFetchIndex);
   });
 
   it("uses non-frozen lockfile installs only for moving git refs", () => {
