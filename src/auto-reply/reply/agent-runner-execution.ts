@@ -1622,19 +1622,23 @@ export async function runAgentTurnWithFallback(params: {
                   abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
                   replyOperation: params.replyOperation,
                 });
-                const result = isRoomEventCliTurn
-                  ? {
-                      ...rawResult,
-                      meta: {
-                        ...rawResult.meta,
-                        agentMeta: {
-                          ...rawResult.meta?.agentMeta,
-                          sessionId: "",
-                          cliSessionBinding: undefined,
-                        },
-                      },
-                    }
-                  : rawResult;
+                const result: EmbeddedAgentRunResult =
+                  isRoomEventCliTurn && rawResult.meta.agentMeta
+                    ? (() => {
+                        const { cliSessionBinding: _cliSessionBinding, ...agentMeta } =
+                          rawResult.meta.agentMeta;
+                        return {
+                          ...rawResult,
+                          meta: {
+                            ...rawResult.meta,
+                            agentMeta: {
+                              ...agentMeta,
+                              sessionId: "",
+                            },
+                          },
+                        };
+                      })()
+                    : rawResult;
                 bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
                   result.meta?.systemPromptReport,
                 );

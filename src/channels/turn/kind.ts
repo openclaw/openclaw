@@ -1,1 +1,1 @@
-export type { InboundTurnKind } from "./types.js";
+export type InboundTurnKind = "user_request" | "room_event";

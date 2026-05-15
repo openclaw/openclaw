@@ -232,6 +232,7 @@ function collectSummaryRuntimeMetadata(items: FollowupRun[]): FollowupRuntimeMet
 }
 
 function clearFollowupQueueSummaryState(queue: {
+  dropPolicy: "summarize" | "old" | "new";
   droppedCount: number;
   summaryLines: string[];
   summarySources?: FollowupRun[];

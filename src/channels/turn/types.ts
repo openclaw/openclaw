@@ -21,6 +21,8 @@ import type { InboundLastRouteUpdate, RecordInboundSession } from "../session.ty
 import type { ChannelBotLoopProtectionFacts } from "./bot-loop-protection.js";
 import type { InboundTurnKind } from "./kind.js";
 
+export type { InboundTurnKind } from "./kind.js";
+
 export type ChannelTurnAdmission =
   | { kind: "dispatch"; reason?: string }
   | { kind: "observeOnly"; reason: string }
