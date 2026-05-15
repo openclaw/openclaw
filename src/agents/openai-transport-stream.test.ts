@@ -3626,6 +3626,46 @@ describe("openai transport stream", () => {
     expect(disabled).not.toHaveProperty("reasoning_effort");
   });
 
+  it("maps volcengine thinking format to object budgets", () => {
+    const baseModel = {
+      id: "ark-code-latest",
+      name: "Ark Coding Plan",
+      api: "openai-completions",
+      provider: "volcengine-plan",
+      baseUrl: "https://ark.cn-beijing.volces.com/api/coding/v3",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 256000,
+      maxTokens: 4096,
+      compat: {
+        thinkingFormat: "volcengine",
+      },
+    } as unknown as Model<"openai-completions">;
+    const context = {
+      systemPrompt: "system",
+      messages: [],
+      tools: [],
+    } as never;
+
+    const low = buildOpenAICompletionsParams(baseModel, context, {
+      reasoning: "low",
+    } as never) as { reasoning_effort?: unknown; thinking?: unknown };
+    const high = buildOpenAICompletionsParams(baseModel, context, {
+      reasoning: "high",
+    } as never) as { reasoning_effort?: unknown; thinking?: unknown };
+    const disabled = buildOpenAICompletionsParams(baseModel, context, {
+      reasoning: "off",
+    } as never) as { reasoning_effort?: unknown; thinking?: unknown };
+
+    expect(low.thinking).toEqual({ type: "enabled", budget_tokens: 2048 });
+    expect(high.thinking).toEqual({ type: "enabled", budget_tokens: 4096 });
+    expect(disabled).not.toHaveProperty("thinking");
+    expect(low).not.toHaveProperty("reasoning_effort");
+    expect(high).not.toHaveProperty("reasoning_effort");
+    expect(disabled).not.toHaveProperty("reasoning_effort");
+  });
+
   it("omits unsupported disabled reasoning for completions providers", () => {
     const params = buildOpenAICompletionsParams(
       {

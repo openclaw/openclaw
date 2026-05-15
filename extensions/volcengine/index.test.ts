@@ -3,7 +3,9 @@ import { resolve } from "node:path";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
 import {
+  VOLCENGINE_CODING_THINKING_FORMAT,
   VOLCENGINE_UNSUPPORTED_TOOL_SCHEMA_KEYWORDS,
+  resolveVolcengineModelCompatPatch,
   resolveVolcengineToolSchemaCompatPatch,
 } from "./api.js";
 import plugin from "./index.js";
@@ -69,6 +71,15 @@ describe("volcengine plugin", () => {
     expect(resolveVolcengineToolSchemaCompatPatch()).toEqual({
       unsupportedToolSchemaKeywords: [...VOLCENGINE_UNSUPPORTED_TOOL_SCHEMA_KEYWORDS],
     });
+    expect(
+      resolveVolcengineModelCompatPatch({
+        provider: "volcengine-plan",
+        api: "openai-completions",
+      }),
+    ).toEqual({
+      unsupportedToolSchemaKeywords: [...VOLCENGINE_UNSUPPORTED_TOOL_SCHEMA_KEYWORDS],
+      thinkingFormat: VOLCENGINE_CODING_THINKING_FORMAT,
+    });
 
     const normalized = provider.normalizeResolvedModel?.({
       provider: "volcengine-plan",
@@ -82,8 +93,9 @@ describe("volcengine plugin", () => {
     } as never);
 
     const normalizedCompat = normalized?.compat as
-      | { unsupportedToolSchemaKeywords?: string[] }
+      | { thinkingFormat?: string; unsupportedToolSchemaKeywords?: string[] }
       | undefined;
+    expect(normalizedCompat?.thinkingFormat).toBe(VOLCENGINE_CODING_THINKING_FORMAT);
     expect(normalizedCompat?.unsupportedToolSchemaKeywords).toEqual([
       "not",
       ...VOLCENGINE_UNSUPPORTED_TOOL_SCHEMA_KEYWORDS,

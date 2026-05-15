@@ -210,6 +210,7 @@ const ModelCompatSchema = z
         z.literal("qwen"),
         z.literal("qwen-chat-template"),
         z.literal("zai"),
+        z.literal("volcengine"),
       ])
       .optional(),
     requiresToolResultName: z.boolean().optional(),

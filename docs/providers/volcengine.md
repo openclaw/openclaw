@@ -167,6 +167,14 @@ export VOLCENGINE_TTS_CLUSTER="volcano_tts"
     empty provider-scoped picker.
   </Accordion>
 
+  <Accordion title="Coding Plan thinking payloads">
+    The bundled `volcengine-plan` provider uses Volcengine CodingPlan's object
+    thinking control for reasoning-capable models. Enabled `/think` levels send
+    `thinking: { type: "enabled", budget_tokens: ... }`; disabled thinking omits
+    the `thinking` field. The token budget follows OpenClaw's normal thinking
+    levels and is capped by the model `maxTokens` value.
+  </Accordion>
+
   <Accordion title="Environment variables for daemon processes">
     If the Gateway runs as a daemon (launchd/systemd), make sure model and TTS
     env vars such as `VOLCANO_ENGINE_API_KEY`, `VOLCENGINE_TTS_API_KEY`,

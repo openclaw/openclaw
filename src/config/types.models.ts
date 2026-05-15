@@ -53,7 +53,8 @@ type SupportedAnthropicMessagesCompatFields = Pick<
 type SupportedThinkingFormat =
   | NonNullable<OpenAICompletionsCompat["thinkingFormat"]>
   | "deepseek"
-  | "openrouter";
+  | "openrouter"
+  | "volcengine";
 
 export type ModelCompatConfig = SupportedOpenAICompatFields &
   SupportedOpenAIResponsesCompatFields &

@@ -17,7 +17,13 @@ type OpenAICompletionsCompatDefaults = {
   supportsReasoningEffort: boolean;
   supportsUsageInStreaming: boolean;
   maxTokensField: "max_completion_tokens" | "max_tokens";
-  thinkingFormat: "openai" | "openrouter" | "deepseek" | "together" | "zai";
+  thinkingFormat:
+    | "openai"
+    | "openrouter"
+    | "deepseek"
+    | "together"
+    | "zai"
+    | "volcengine";
   visibleReasoningDetailTypes: string[];
   supportsStrictMode: boolean;
   requiresReasoningContentOnAssistantMessages: boolean;
