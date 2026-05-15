@@ -122,7 +122,7 @@ function getRecord(value: unknown): Record<string, unknown> | null {
 
 function formatProviderCounts(counts: Map<string, number>): string {
   return [...counts.entries()]
-    .sort(([left], [right]) => left.localeCompare(right))
+    .toSorted(([left], [right]) => left.localeCompare(right))
     .map(([provider, count]) => `${provider}=${count}`)
     .join(", ");
 }

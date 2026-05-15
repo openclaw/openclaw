@@ -623,6 +623,20 @@ describe("stripToolCallXmlTags", () => {
     expect(stripToolCallXmlTags(input, { stripFunctionCallsXmlPayloads: true })).toBe("\nAfter");
   });
 
+  it("strips plural function-call XML before function_response without stripping prose examples", () => {
+    const leak =
+      '<function_calls><invoke name="exec">internal</invoke></function_calls><function_response>raw</function_response>\nAfter';
+    const prose =
+      'prefix <function_calls><invoke name="find">secret</invoke></function_calls> suffix';
+
+    expect(stripToolCallXmlTags(leak, { stripFunctionResponseAfterPluralToolCalls: true })).toBe(
+      "\nAfter",
+    );
+    expect(stripToolCallXmlTags(prose, { stripFunctionResponseAfterPluralToolCalls: true })).toBe(
+      prose,
+    );
+  });
+
   it("strips function_response adjacent to an inline stripped function_calls block", () => {
     const input = [
       'Checking. <function_calls><invoke name="exec">internal</invoke></function_calls><function_response>',
@@ -785,6 +799,24 @@ describe("sanitizeAssistantVisibleText", () => {
     ].join("\n");
 
     expect(sanitizeAssistantVisibleText(input)).toBe("Visible answer");
+  });
+
+  it("strips adjacent plural function-call XML on the delivery path", () => {
+    const input = [
+      '<function_calls><invoke name="exec">internal</invoke></function_calls><function_response>',
+      'Searching for: "what skills matter most in the age of AI"',
+      "</function_response>",
+      "Visible answer",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("Visible answer");
+  });
+
+  it("preserves prose examples of plural function-call XML on the delivery path", () => {
+    const input =
+      'prefix <function_calls><invoke name="find">secret</invoke></function_calls> suffix';
+
+    expect(sanitizeAssistantVisibleText(input)).toBe(input);
   });
 
   it("strips relevant-memories blocks on the canonical user-visible path", () => {
