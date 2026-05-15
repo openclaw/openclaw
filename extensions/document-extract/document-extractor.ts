@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
-import os from "node:os";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import path from "node:path";
 import type {
   DocumentExtractedImage,
@@ -106,7 +106,7 @@ async function renderPageWithPdftoppm(
   targetWidth: number,
   targetHeight: number,
 ): Promise<Buffer | null> {
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "oc-pdf-"));
+  const tempDir = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "oc-pdf-"));
   await fs.chmod(tempDir, 0o700);
   try {
     const pdfPath = path.join(tempDir, "input.pdf");

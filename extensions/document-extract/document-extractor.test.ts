@@ -154,7 +154,7 @@ describe("pdftoppm fallback — canvas unavailable, pdftoppm available", () => {
       return { ...m, default: m };
     });
     const mod =
-      (await import("./document-extractor.js")) as typeof import("./document-extractor.js");
+      await import("./document-extractor.js");
     freshCreate = mod.createPdfDocumentExtractor;
   });
 
@@ -197,8 +197,9 @@ describe("pdftoppm fallback — canvas unavailable, pdftoppm available", () => {
       maxPixels: 1_000_000,
       minTextChars: 10,
     });
-    expect(result.images.length).toBeGreaterThan(0);
-    for (const img of result.images) {
+    expect(result).not.toBeNull();
+    expect(result!.images.length).toBeGreaterThan(0);
+    for (const img of result!.images) {
       expect(img.mimeType).toBe("image/png");
       expect(typeof img.data).toBe("string");
       expect(img.data.length).toBeGreaterThan(0);
@@ -261,7 +262,7 @@ describe("pdftoppm fallback — canvas unavailable, pdftoppm unavailable", () =>
     vi.doMock("pdfjs-dist/legacy/build/pdf.mjs", () => ({ getDocument: getDocumentMock }));
     vi.doMock("node:child_process", () => ({ spawn: mockSpawn }));
     const mod =
-      (await import("./document-extractor.js")) as typeof import("./document-extractor.js");
+      await import("./document-extractor.js");
     freshCreate = mod.createPdfDocumentExtractor;
   });
 
@@ -295,6 +296,7 @@ describe("pdftoppm fallback — canvas unavailable, pdftoppm unavailable", () =>
       onImageExtractionError,
     });
     expect(onImageExtractionError).toHaveBeenCalledTimes(1);
-    expect(result.images).toEqual([]);
+    expect(result).not.toBeNull();
+    expect(result!.images).toEqual([]);
   });
 });
