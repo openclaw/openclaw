@@ -177,7 +177,7 @@ function resolvePrivateNetworkAccess(params: ResolveProviderRequestPolicyConfigP
   if (configuredAllowPrivateNetwork !== undefined) {
     return {
       allowPrivateNetwork: configuredAllowPrivateNetwork,
-      explicitlyDenied: configuredAllowPrivateNetwork === false,
+      explicitlyDenied: !configuredAllowPrivateNetwork,
     };
   }
   return {
