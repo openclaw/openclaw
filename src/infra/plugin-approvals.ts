@@ -1182,6 +1182,7 @@ const GIT_GLOBAL_VALUE_OPTIONS = new Set([
 
 function parseGitSubcommand(args: readonly string[]): {
   ambiguous: boolean;
+  remainingArgs: string[];
   subcommand: string;
 } {
   for (let index = 0; index < args.length; index += 1) {
@@ -1190,10 +1191,10 @@ function parseGitSubcommand(args: readonly string[]): {
       continue;
     }
     if (arg === "--") {
-      return { ambiguous: false, subcommand: "" };
+      return { ambiguous: false, remainingArgs: args.slice(index + 1), subcommand: "" };
     }
     if (!arg.startsWith("-")) {
-      return { ambiguous: false, subcommand: arg };
+      return { ambiguous: false, remainingArgs: args.slice(index + 1), subcommand: arg };
     }
 
     const optionName = arg.includes("=") ? arg.slice(0, arg.indexOf("=")) : arg;
@@ -1210,19 +1211,38 @@ function parseGitSubcommand(args: readonly string[]): {
       if (!arg.includes("=")) {
         index += 1;
         if (index >= args.length) {
-          return { ambiguous: true, subcommand: "" };
+          return { ambiguous: true, remainingArgs: [], subcommand: "" };
         }
       }
       continue;
     }
 
-    return { ambiguous: true, subcommand: "" };
+    return { ambiguous: true, remainingArgs: [], subcommand: "" };
   }
-  return { ambiguous: false, subcommand: "" };
+  return { ambiguous: false, remainingArgs: [], subcommand: "" };
+}
+
+function hasGitDiscardOption(args: readonly string[]): boolean {
+  return args.some(
+    (arg) =>
+      arg === "-f" ||
+      arg === "--force" ||
+      arg === "--discard-changes" ||
+      arg === "--merge" ||
+      arg === "--ours" ||
+      arg === "--theirs",
+  );
+}
+
+function isGitPathCheckoutDiscard(args: readonly string[]): boolean {
+  return (
+    args.includes("--") ||
+    args.some((arg) => arg === "." || arg === ":/" || arg.startsWith("./") || arg.startsWith("../"))
+  );
 }
 
 function summarizeGitCommand(args: readonly string[]): CommandActionSummary {
-  const { ambiguous, subcommand } = parseGitSubcommand(args);
+  const { ambiguous, remainingArgs, subcommand } = parseGitSubcommand(args);
   if (ambiguous) {
     return {
       text: "run a git command with global options",
@@ -1236,7 +1256,24 @@ function summarizeGitCommand(args: readonly string[]): CommandActionSummary {
   if (["diff", "log", "show", "status", "branch"].includes(subcommand)) {
     return { text: `inspect git state (${subcommand})`, risk: "low", kind: "source-control" };
   }
-  if (["fetch", "pull", "checkout", "switch", "merge", "rebase", "stash"].includes(subcommand)) {
+  if (
+    ["fetch", "pull", "checkout", "switch", "merge", "rebase", "stash", "restore"].includes(
+      subcommand,
+    )
+  ) {
+    if (
+      subcommand === "restore" ||
+      ((subcommand === "checkout" || subcommand === "switch") &&
+        (hasGitDiscardOption(remainingArgs) || isGitPathCheckoutDiscard(remainingArgs)))
+    ) {
+      return {
+        text: `run a higher-risk git operation (${subcommand})`,
+        risk: "high",
+        kind: "source-control",
+        reason: "This git operation can discard local work or overwrite working-tree files.",
+        showCommandPreview: true,
+      };
+    }
     return {
       text: `change or update git working state (${subcommand})`,
       risk: "medium",

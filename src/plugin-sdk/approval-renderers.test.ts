@@ -462,6 +462,51 @@ describe("plugin-sdk/approval-renderers", () => {
     expect(payload.text).not.toContain("Risk: Medium");
   });
 
+  it.each([
+    {
+      command: "git restore .",
+      id: "plugin-command-git-restore",
+      subcommand: "restore",
+    },
+    {
+      command: "git checkout -- .",
+      id: "plugin-command-git-checkout-path",
+      subcommand: "checkout",
+    },
+    {
+      command: "git switch --discard-changes main",
+      id: "plugin-command-git-switch-discard",
+      subcommand: "switch",
+    },
+  ])(
+    "flags destructive git working-tree commands before hiding details: $command",
+    ({ command, id, subcommand }) => {
+      const payload = buildPluginApprovalPendingReplyPayload({
+        request: {
+          id,
+          request: {
+            title: "Codex app-server command approval",
+            description: `Command: ${command}`,
+            toolName: "codex_command_approval",
+          },
+          createdAtMs: 1_000,
+          expiresAtMs: 121_000,
+        },
+        nowMs: 1_000,
+        language: "simple",
+      });
+
+      expect(payload.text).toContain(`- run a higher-risk git operation (${subcommand})`);
+      expect(payload.text).toContain(`Command preview\n${command}`);
+      expect(payload.text).toContain("Risk: High");
+      expect(payload.text).toContain(
+        "This git operation can discard local work or overwrite working-tree files.",
+      );
+      expect(payload.text).not.toContain("- run a git command");
+      expect(payload.text).not.toContain("Risk: Medium");
+    },
+  );
+
   it("splits background shell commands before hiding technical details", () => {
     const payload = buildPluginApprovalPendingReplyPayload({
       request: {
