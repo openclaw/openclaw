@@ -497,6 +497,99 @@ describe("noteMemorySearchHealth", () => {
     expect(message).not.toContain("npm install -g @tobilu/qmd");
   });
 
+  it("warns when QMD backend uses session sources but QMD session export is disabled", async () => {
+    const qmdCfg = { memory: { backend: "qmd", qmd: { command: "qmd" } } } as OpenClawConfig;
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "auto",
+      sources: ["memory", "sessions"],
+      experimental: { sessionMemory: true },
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(qmdCfg, {});
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const message = String(note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain("memorySearch.sources with sessions");
+    expect(message).toContain("memory.qmd.sessions.enabled is not true");
+    expect(message).toContain("openclaw config set memory.qmd.sessions.enabled true");
+  });
+
+  it("warns when QMD session export is explicitly disabled", async () => {
+    const qmdCfg = {
+      memory: { backend: "qmd", qmd: { command: "qmd", sessions: { enabled: false } } },
+    } as OpenClawConfig;
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "auto",
+      sources: ["memory", "sessions"],
+      experimental: { sessionMemory: true },
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(qmdCfg, {});
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const message = String(note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain("QMD session transcript export is not enabled");
+  });
+
+  it("does not warn about QMD session export when session sources are not enabled", async () => {
+    const qmdCfg = { memory: { backend: "qmd", qmd: { command: "qmd" } } } as OpenClawConfig;
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "auto",
+      sources: ["memory"],
+      experimental: { sessionMemory: true },
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(qmdCfg, {});
+
+    expect(note).not.toHaveBeenCalled();
+  });
+
+  it("reports QMD binary and session export warnings independently", async () => {
+    const qmdCfg = { memory: { backend: "qmd", qmd: { command: "qmd" } } } as OpenClawConfig;
+    checkQmdBinaryAvailability.mockResolvedValueOnce({
+      available: false,
+      error: "spawn qmd ENOENT",
+    });
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "auto",
+      sources: ["memory", "sessions"],
+      experimental: { sessionMemory: true },
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(qmdCfg, {});
+
+    expect(note).toHaveBeenCalledTimes(2);
+    expect(String(note.mock.calls[0]?.[0] ?? "")).toContain("spawn qmd ENOENT");
+    expect(String(note.mock.calls[1]?.[0] ?? "")).toContain(
+      "QMD session transcript export is not enabled",
+    );
+  });
+
+  it("does not warn when QMD session sources and QMD session export are both enabled", async () => {
+    const qmdCfg = {
+      memory: { backend: "qmd", qmd: { command: "qmd", sessions: { enabled: true } } },
+    } as OpenClawConfig;
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "auto",
+      sources: ["memory", "sessions"],
+      experimental: { sessionMemory: true },
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(qmdCfg, {});
+
+    expect(note).not.toHaveBeenCalled();
+  });
+
   it("does not warn when remote apiKey is configured for explicit provider", async () => {
     await expectNoWarningWithConfiguredRemoteApiKey("openai");
   });
