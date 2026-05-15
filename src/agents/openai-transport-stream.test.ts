@@ -3151,7 +3151,7 @@ describe("openai transport stream", () => {
     expect(params.stream_options?.include_usage).toBe(true);
   });
 
-  it("omits streaming usage options for Volcengine CodingPlan by default", () => {
+  it("includes stream_options.include_usage for Volcengine CodingPlan", () => {
     const params = buildOpenAICompletionsParams(
       {
         id: "ark-code-latest",
@@ -3172,10 +3172,10 @@ describe("openai transport stream", () => {
       } as never,
       undefined,
     ) as {
-      stream_options?: unknown;
+      stream_options?: { include_usage?: boolean };
     };
 
-    expect(params).not.toHaveProperty("stream_options");
+    expect(params.stream_options).toEqual({ include_usage: true });
   });
 
   it("includes stream_options.include_usage for known local backends like llama-cpp", () => {
