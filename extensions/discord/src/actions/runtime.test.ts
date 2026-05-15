@@ -910,6 +910,27 @@ describe("handleDiscordGuildAction - channel management", () => {
     });
   });
 
+  it("prefers channelType when creating a channel", async () => {
+    await handleGuildAction(
+      "channelCreate",
+      {
+        guildId: "G1",
+        name: "forum-thread",
+        channelType: 11,
+        type: 0,
+      },
+      channelsEnabled,
+    );
+    expect(createChannelDiscord).toHaveBeenCalledWith(
+      expect.objectContaining({
+        guildId: "G1",
+        name: "forum-thread",
+        type: 11,
+      }),
+      { cfg: DISCORD_TEST_CFG },
+    );
+  });
+
   it("respects channel gating for channelCreate", async () => {
     await expect(
       handleGuildAction("channelCreate", { guildId: "G1", name: "test" }, channelsDisabled),

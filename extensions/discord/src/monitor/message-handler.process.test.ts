@@ -1052,6 +1052,72 @@ describe("processDiscordMessage session routing", () => {
     });
   });
 
+  it("does not attach referenced reply media when reply context is hidden", async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new Error("hidden reply media should not be fetched");
+    });
+    const ctx = await createBaseContext({
+      cfg: {
+        channels: { discord: { contextVisibility: "allowlist" } },
+        messages: { ackReaction: "👀" },
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+      },
+      author: {
+        id: "U1",
+        username: "alice",
+        discriminator: "0",
+        globalName: "Alice",
+      },
+      channelConfig: {
+        allowed: true,
+        users: ["U1"],
+      },
+      discordRestFetch: fetchImpl,
+      message: {
+        id: "m-reply-hidden-media",
+        channelId: "c1",
+        content: "<@bot> what is this?",
+        timestamp: new Date().toISOString(),
+        attachments: [],
+        messageReference: {
+          type: 0,
+          message_id: "m-hidden",
+          channel_id: "c1",
+        },
+        referencedMessage: {
+          id: "m-hidden",
+          channelId: "c1",
+          content: "hidden image",
+          timestamp: new Date().toISOString(),
+          attachments: [
+            {
+              id: "att-hidden",
+              url: "https://cdn.discordapp.com/attachments/hidden.png",
+              content_type: "image/png",
+              filename: "hidden.png",
+            },
+          ],
+          author: {
+            id: "U2",
+            username: "mallory",
+            discriminator: "0",
+            globalName: "Mallory",
+          },
+        },
+      },
+      baseText: "<@bot> what is this?",
+      messageText: "<@bot> what is this?",
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    const dispatchCtx = requireRecord(getLastDispatchCtx(), "dispatch context");
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(dispatchCtx.ReplyToBody).toBeUndefined();
+    expect(dispatchCtx.MediaPath).toBeUndefined();
+    expect(dispatchCtx.MediaPaths).toBeUndefined();
+  });
+
   it("stores DM lastRoute with user target for direct-session continuity", async () => {
     const ctx = await createBaseContext({
       ...createDirectMessageContextOverrides(),

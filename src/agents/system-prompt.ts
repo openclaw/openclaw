@@ -389,9 +389,22 @@ function buildTimeSection(params: { userTimezone?: string }) {
   return ["## Current Date & Time", `Time zone: ${params.userTimezone}`, ""];
 }
 
-function buildAssistantOutputDirectivesSection(isMinimal: boolean) {
-  if (isMinimal) {
+function buildAssistantOutputDirectivesSection(params: {
+  isMinimal: boolean;
+  sourceMessageToolOnly: boolean;
+}) {
+  if (params.isMinimal) {
     return [];
+  }
+  if (params.sourceMessageToolOnly) {
+    return [
+      "## Assistant Output Directives",
+      "- Visible source-channel output is delivered through `message(action=send)`.",
+      "- Attach media with message-tool attachment fields such as `media`, `path`, or `filePath`; do not use legacy `MEDIA:` directives for source-channel delivery.",
+      "- Voice-note audio hint: use message-tool `asVoice` when sending audio as a voice note.",
+      "- Native quote/reply: use message-tool `replyTo` when an explicit reply target is needed.",
+      "",
+    ];
   }
   return [
     "## Assistant Output Directives",
@@ -403,7 +416,11 @@ function buildAssistantOutputDirectivesSection(isMinimal: boolean) {
   ];
 }
 
-function buildWebchatCanvasSection(params: { isMinimal: boolean; runtimeChannel?: string }) {
+function buildWebchatCanvasSection(params: {
+  isMinimal: boolean;
+  runtimeChannel?: string;
+  sourceMessageToolOnly: boolean;
+}) {
   if (params.isMinimal || params.runtimeChannel !== "webchat") {
     return [];
   }
@@ -411,7 +428,9 @@ function buildWebchatCanvasSection(params: { isMinimal: boolean; runtimeChannel?
     "## Control UI Embed",
     "Use `[embed ...]` only in Control UI/webchat sessions for inline rich rendering inside the assistant bubble.",
     "- Do not use `[embed ...]` for non-web channels.",
-    "- `[embed ...]` is separate from `MEDIA:`. Use `MEDIA:` for attachments; use `[embed ...]` for web-only rich rendering.",
+    params.sourceMessageToolOnly
+      ? "- `[embed ...]` is separate from message-tool attachments; use message-tool attachment fields for files and `[embed ...]` for web-only rich rendering."
+      : "- `[embed ...]` is separate from `MEDIA:`. Use `MEDIA:` for attachments; use `[embed ...]` for web-only rich rendering.",
     '- Use self-closing form for hosted embed documents: `[embed ref="cv_123" title="Status" height="320" /]`.',
     '- You may also use an explicit hosted URL: `[embed url="/__openclaw__/canvas/documents/cv_123/index.html" title="Status" height="320" /]`.',
     '- Never use local filesystem paths or `file://...` URLs in `[embed ...]`. Hosted embeds must point at `/__openclaw__/canvas/...` URLs or use `ref="..."`.',
@@ -1166,7 +1185,7 @@ export function buildAgentSystemPrompt(params: {
       "## Workspace Files (injected)",
       "These user-editable files are loaded by OpenClaw and included below in Project Context.",
       "",
-      ...buildAssistantOutputDirectivesSection(isMinimal),
+      ...buildAssistantOutputDirectivesSection({ isMinimal, sourceMessageToolOnly }),
     ];
 
     if (reasoningHint) {
@@ -1218,6 +1237,7 @@ export function buildAgentSystemPrompt(params: {
     ...buildWebchatCanvasSection({
       isMinimal,
       runtimeChannel,
+      sourceMessageToolOnly,
     }),
     ...buildMessagingSection({
       isMinimal,

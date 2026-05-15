@@ -15,6 +15,7 @@ import type {
 } from "openclaw/plugin-sdk/config-contracts";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import {
+  buildInboundHistoryFromMap,
   buildPendingHistoryContextFromMap,
   type HistoryEntry,
 } from "openclaw/plugin-sdk/reply-history";
@@ -400,11 +401,11 @@ export async function buildTelegramInboundContextPayload(params: {
   });
   const inboundHistory =
     isGroup && historyKey && historyLimit > 0
-      ? (groupHistories.get(historyKey) ?? []).map((entry) => ({
-          sender: entry.sender,
-          body: entry.body,
-          timestamp: entry.timestamp,
-        }))
+      ? buildInboundHistoryFromMap({
+          historyMap: groupHistories,
+          historyKey,
+          limit: historyLimit,
+        })
       : undefined;
   const currentMediaForContext = stickerCacheHit ? [] : allMedia;
   const contextMedia = [...currentMediaForContext, ...replyMedia];
@@ -466,18 +467,16 @@ export async function buildTelegramInboundContextPayload(params: {
         authorizers: [],
       },
     },
-    commandTurn:
+    command:
       commandSource === "native"
         ? {
             kind: "native",
-            source: "native",
             authorized: commandAuthorized,
             body: commandBody,
           }
         : commandSource === "text"
           ? {
               kind: "text-slash",
-              source: "text",
               authorized: commandAuthorized,
               body: commandBody,
             }

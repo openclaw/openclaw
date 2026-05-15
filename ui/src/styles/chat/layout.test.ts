@@ -46,4 +46,25 @@ describe("chat layout styles", () => {
     expect(css).toContain("@media (display-mode: standalone) and (max-width: 768px)");
     expect(css).toContain("margin-bottom: calc(14px + max(var(--safe-area-bottom), 34px));");
   });
+
+  it("keeps desktop chat header controls on a compact aligned rhythm", () => {
+    const css = readLayoutCss();
+
+    expect(css).toContain("min-height: 36px;");
+    expect(css).toContain("height: 36px;");
+    expect(css).toContain(".chat-controls .btn--icon {");
+    expect(css).toContain("width: 36px;");
+    expect(css).toContain(".chat-controls__separator {");
+    expect(css).toContain("height: 22px;");
+  });
+
+  it("keeps composer controls labeled and large enough without shrinking mobile taps", () => {
+    const css = readLayoutCss();
+
+    expect(css).toContain(".agent-chat__control-label");
+    expect(css).toContain("min-width: 36px;");
+    expect(css).toContain("height: 36px;");
+    expect(css).toContain("@media (max-width: 860px)");
+    expect(css).toContain("width: 44px;");
+  });
 });
