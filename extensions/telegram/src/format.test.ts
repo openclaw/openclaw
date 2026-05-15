@@ -4,6 +4,7 @@ import {
   markdownToTelegramHtml,
   renderTelegramHtmlText,
   splitTelegramHtmlChunks,
+  telegramHtmlToPlainTextFallback,
 } from "./format.js";
 
 describe("markdownToTelegramHtml", () => {
@@ -227,6 +228,20 @@ describe("markdownToTelegramHtml", () => {
     const chunks = splitTelegramHtmlChunks(`&${"A".repeat(5000)}`, 4000);
     expect(chunks.length).toBeGreaterThan(1);
     expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
+  });
+
+  it("derives readable plain text from Telegram HTML fallback markup", () => {
+    const html = [
+      'Created: <a href="https://example.com/a?x=1&amp;y=2">Task &amp; One</a>',
+      "<code>file.md</code>",
+      "<br>",
+      '<a href="https://example.com/same">https://example.com/same</a>',
+      "<b>done</b>",
+    ].join(" ");
+
+    expect(telegramHtmlToPlainTextFallback(html)).toBe(
+      "Created: Task & One (https://example.com/a?x=1&y=2) file.md \n https://example.com/same done",
+    );
   });
 
   it("fails loudly when tag overhead leaves no room for text", () => {
