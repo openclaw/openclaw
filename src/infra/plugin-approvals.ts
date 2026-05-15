@@ -196,6 +196,19 @@ const CURL_OUTPUT_FLAGS = new Set([
   "--output-dir",
 ]);
 const WGET_UPLOAD_FILE_FLAGS = new Set(["--body-file", "--post-file"]);
+const WGET_AUTH_VALUE_FLAGS = new Set([
+  "--ftp-password",
+  "--ftp-user",
+  "--http-password",
+  "--http-user",
+  "--password",
+  "--proxy-password",
+  "--proxy-user",
+  "--user",
+]);
+const WGET_COOKIE_FLAGS = new Set(["--load-cookies"]);
+const WGET_COOKIE_JAR_FLAGS = new Set(["--save-cookies"]);
+const WGET_HEADER_FLAGS = new Set(["--header"]);
 const WGET_OUTPUT_FLAGS = new Set([
   "-O",
   "-P",
@@ -686,12 +699,14 @@ function summarizeCommandSegment(segment: string): CommandActionSummary {
       };
     case "printf":
     case "echo":
+      if (redirected) {
+        return summarizeRedirectedWrite(redirectionTargets, sudoPrefix);
+      }
       return withSudo(
         {
-          text: redirected ? "write terminal output into a file" : "format a short status message",
-          risk: redirected ? "medium" : "low",
-          kind: redirected ? "write" : "format",
-          reason: redirected ? "Shell redirection writes to a file." : undefined,
+          text: "format a short status message",
+          risk: "low",
+          kind: "format",
           hideWhenGrouped: !redirected,
         },
         sudoPrefix,
@@ -1358,8 +1373,61 @@ function isEnvOptionalInlineValueFlag(arg: string): boolean {
 }
 
 function splitShellWords(input: string): string[] {
-  const matches = input.match(/"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|\S+/g) ?? [];
-  return matches.map((word) => word.replace(/^(["'])(.*)\1$/, "$2"));
+  const words: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+  const pushCurrent = () => {
+    if (current) {
+      words.push(current);
+      current = "";
+    }
+  };
+
+  for (const char of input) {
+    if (quote) {
+      if (escaped) {
+        current += char;
+        escaped = false;
+        continue;
+      }
+      if (quote === '"' && char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (char === quote) {
+        quote = null;
+        continue;
+      }
+      current += char;
+      continue;
+    }
+
+    if (escaped) {
+      current += char;
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      pushCurrent();
+      continue;
+    }
+    current += char;
+  }
+
+  if (escaped) {
+    current += "\\";
+  }
+  pushCurrent();
+  return words;
 }
 
 function hasShellExecutionExpansion(segment: string): boolean {
@@ -1853,50 +1921,89 @@ function collectNetworkTransferOperands(
     const authValue =
       command === "curl"
         ? takeFlagValue(args, index, CURL_AUTH_VALUE_FLAGS, ["-u", "-U"])
+        : command === "wget"
+          ? takeFlagValue(args, index, WGET_AUTH_VALUE_FLAGS)
         : null;
     if (authValue) {
       usesInlineCredentialSource = true;
       index = Math.max(index, authValue.nextIndex);
       continue;
     }
-    if (command === "curl" && CURL_AUTH_VALUE_FLAGS.has(arg)) {
+    if (
+      (command === "curl" && CURL_AUTH_VALUE_FLAGS.has(arg)) ||
+      (command === "wget" && WGET_AUTH_VALUE_FLAGS.has(arg))
+    ) {
       usesAmbiguousCredentialSource = true;
       continue;
     }
 
     const headerValue =
-      command === "curl" ? takeFlagValue(args, index, CURL_HEADER_FLAGS, ["-H"]) : null;
+      command === "curl"
+        ? takeFlagValue(args, index, CURL_HEADER_FLAGS, ["-H"])
+        : command === "wget"
+          ? takeFlagValue(args, index, WGET_HEADER_FLAGS)
+          : null;
     if (headerValue) {
-      if (isCredentialHeaderValue(headerValue.value)) {
+      const headerSource = extractHeaderFileSource(headerValue.value);
+      if (headerSource.files.length > 0) {
+        credentialFiles.push(...headerSource.files);
+        usesHeaderCredentialSource = true;
+      } else if (headerSource.usesStdin) {
+        if (inputRedirection.targets.length > 0) {
+          credentialFiles.push(...inputRedirection.targets);
+        } else {
+          usesAmbiguousCredentialSource = true;
+        }
+        usesHeaderCredentialSource = true;
+      } else if (isCredentialHeaderValue(headerValue.value)) {
         usesHeaderCredentialSource = true;
       }
       index = Math.max(index, headerValue.nextIndex);
       continue;
     }
-    if (command === "curl" && CURL_HEADER_FLAGS.has(arg)) {
+    if (
+      (command === "curl" && CURL_HEADER_FLAGS.has(arg)) ||
+      (command === "wget" && WGET_HEADER_FLAGS.has(arg))
+    ) {
       usesAmbiguousCredentialSource = true;
       continue;
     }
 
     const cookieValue =
-      command === "curl" ? takeFlagValue(args, index, CURL_COOKIE_FLAGS, ["-b"]) : null;
+      command === "curl"
+        ? takeFlagValue(args, index, CURL_COOKIE_FLAGS, ["-b"])
+        : command === "wget"
+          ? takeFlagValue(args, index, WGET_COOKIE_FLAGS)
+          : null;
     if (cookieValue) {
-      const files = extractCurlCookieFiles(cookieValue.value);
+      const files =
+        command === "curl"
+          ? extractCurlCookieFiles(cookieValue.value)
+          : extractPlainLocalFileOperands(cookieValue.value);
       if (files.length > 0) {
         credentialFiles.push(...files);
-      } else {
+      } else if (command === "curl") {
         usesInlineCredentialSource = true;
+      } else {
+        usesAmbiguousCredentialSource = true;
       }
       index = Math.max(index, cookieValue.nextIndex);
       continue;
     }
-    if (command === "curl" && CURL_COOKIE_FLAGS.has(arg)) {
+    if (
+      (command === "curl" && CURL_COOKIE_FLAGS.has(arg)) ||
+      (command === "wget" && WGET_COOKIE_FLAGS.has(arg))
+    ) {
       usesAmbiguousCredentialSource = true;
       continue;
     }
 
     const cookieJarValue =
-      command === "curl" ? takeFlagValue(args, index, CURL_COOKIE_JAR_FLAGS, ["-c"]) : null;
+      command === "curl"
+        ? takeFlagValue(args, index, CURL_COOKIE_JAR_FLAGS, ["-c"])
+        : command === "wget"
+          ? takeFlagValue(args, index, WGET_COOKIE_JAR_FLAGS)
+          : null;
     if (cookieJarValue) {
       const files = extractPlainLocalFileOperands(cookieJarValue.value);
       if (files.length > 0) {
@@ -1907,7 +2014,10 @@ function collectNetworkTransferOperands(
       index = Math.max(index, cookieJarValue.nextIndex);
       continue;
     }
-    if (command === "curl" && CURL_COOKIE_JAR_FLAGS.has(arg)) {
+    if (
+      (command === "curl" && CURL_COOKIE_JAR_FLAGS.has(arg)) ||
+      (command === "wget" && WGET_COOKIE_JAR_FLAGS.has(arg))
+    ) {
       usesAmbiguousCredentialSource = true;
       continue;
     }
@@ -1994,9 +2104,21 @@ function isNetworkStdinOperand(value: string): boolean {
 }
 
 function isCredentialHeaderValue(value: string): boolean {
-  return /^(?:authorization|proxy-authorization|cookie|set-cookie|x[-_]?(?:api[-_]?key|auth[-_]?token|access[-_]?token|private[-_]?token))\s*:/i.test(
+  return /^(?:(?:proxy-)?authorization|(?:set-)?cookie|[-a-z0-9_]*(?:api[-_]?key|auth|credential|password|secret|session|token)[-a-z0-9_]*)\s*:/i.test(
     stripShellWordQuotes(value.trim()),
   );
+}
+
+function extractHeaderFileSource(value: string): { files: string[]; usesStdin: boolean } {
+  const trimmed = stripShellWordQuotes(value.trim());
+  if (!trimmed.startsWith("@")) {
+    return { files: [], usesStdin: false };
+  }
+  const file = stripNetworkFileOperandPrefix(trimmed);
+  if (file === "-") {
+    return { files: [], usesStdin: true };
+  }
+  return { files: extractPlainLocalFileOperands(trimmed), usesStdin: false };
 }
 
 function extractCurlCookieFiles(value: string): string[] {
