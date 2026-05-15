@@ -180,15 +180,15 @@ function normalizeTelegramFenceKey(value: unknown): string | undefined {
 }
 
 function resolveTelegramReplyFenceKey(params: {
-  ctxPayload: { SessionKey?: string; CommandTargetSessionKey?: string };
+  ctxPayload: { SessionKey?: string; CommandTargetSessionKey?: string; InboundTurnKind?: string };
   chatId: number | string;
   threadSpec: { id?: number | string | null; scope?: string };
 }): string {
-  return (
+  const baseKey =
     normalizeTelegramFenceKey(params.ctxPayload.CommandTargetSessionKey) ??
     normalizeTelegramFenceKey(params.ctxPayload.SessionKey) ??
-    `telegram:${String(params.chatId)}:${params.threadSpec.scope ?? "default"}:${params.threadSpec.id ?? "root"}`
-  );
+    `telegram:${String(params.chatId)}:${params.threadSpec.scope ?? "default"}:${params.threadSpec.id ?? "root"}`;
+  return params.ctxPayload.InboundTurnKind === "room_event" ? `${baseKey}:room_event` : baseKey;
 }
 
 function beginTelegramReplyFence(params: { key: string; supersede: boolean }): number {
