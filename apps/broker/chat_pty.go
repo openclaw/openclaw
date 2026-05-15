@@ -178,6 +178,27 @@ func (s *ptySession) kill() {
 	}
 }
 
+// claudePTYArgs builds the argv for the persistent-session claude
+// process. Extracted so the spawn-arg contract (especially the
+// auto-execute flag) is testable without launching a real process.
+func claudePTYArgs(sessionID string) []string {
+	return []string{
+		"-p",
+		"--session-id", sessionID,
+		"--input-format", "stream-json",
+		"--output-format", "stream-json",
+		"--verbose",
+		"--include-partial-messages",
+		// Auto-execute tools. The tenant's runtime image already isolates
+		// the process to that tenant's Fly machine + volume; prompting for
+		// per-tool confirmation in the SaaS chat path produces dead-end
+		// "approve this in your permission settings" responses (fleet-task
+		// #102). The agent fleet uses this flag everywhere for the same
+		// reason.
+		"--dangerously-skip-permissions",
+	}
+}
+
 // spawnSession starts a new `claude` (or other binary) process in
 // stream-json mode with a fresh UUID. The session_id is baked into the
 // CLI args so claude emits it in the init frame and every subsequent
@@ -188,14 +209,7 @@ func spawnSession(ctx context.Context, sessionID, binary, cwd string) (*ptySessi
 		// we ship claude-only persistent sessions per the MVP scope.
 		return nil, fmt.Errorf("persistent session only supports claude (got %q)", binary)
 	}
-	args := []string{
-		"-p",
-		"--session-id", sessionID,
-		"--input-format", "stream-json",
-		"--output-format", "stream-json",
-		"--verbose",
-		"--include-partial-messages",
-	}
+	args := claudePTYArgs(sessionID)
 	cmd := exec.Command(binary, args...)
 	cmd.Dir = cwd
 	cmd.Env = filteredEnv(os.Environ(), []string{"BROKER_TENANT_TOKEN"})

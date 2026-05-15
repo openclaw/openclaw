@@ -503,6 +503,25 @@ func flattenHistory(history []chatTurn, current string) string {
 // On invocation failure: 4xx/5xx with a JSON error body (not ndjson).
 // Once streaming has started, errors are emitted as a final ndjson
 // frame: {"type":"error","code":"...","message":"..."}.
+// claudeChatArgs builds the argv for the spawn-per-prompt claude path.
+// Extracted so the spawn-arg contract (especially the auto-execute
+// flag) is testable. fleet-task #102.
+func claudeChatArgs(promptArg, sessionID string) []string {
+	args := []string{
+		"-p", promptArg,
+		"--output-format", "stream-json",
+		"--verbose",
+		"--include-partial-messages",
+		// Auto-execute tools — see chat_pty.go claudePTYArgs for the
+		// rationale. fleet-task #102.
+		"--dangerously-skip-permissions",
+	}
+	if sessionID != "" {
+		args = append(args, "--resume", sessionID)
+	}
+	return args
+}
+
 func chatHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		jsonError(w, http.StatusMethodNotAllowed, "method_not_allowed",
@@ -575,15 +594,7 @@ func chatHandler(w http.ResponseWriter, r *http.Request) {
 		// --verbose ensures all events emit (system, assistant, tool_use,
 		// tool_result, result). --include-partial-messages gives us
 		// content_block_delta tokens as they stream.
-		args = []string{
-			"-p", promptArg,
-			"--output-format", "stream-json",
-			"--verbose",
-			"--include-partial-messages",
-		}
-		if req.SessionID != "" {
-			args = append(args, "--resume", req.SessionID)
-		}
+		args = claudeChatArgs(promptArg, req.SessionID)
 	case "codex":
 		// Codex CLI: `exec` is the headless invocation. `--json`
 		// emits structured stream-json that CodexBrokerBackend's

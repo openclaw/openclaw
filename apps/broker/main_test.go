@@ -31,6 +31,28 @@ func TestHealthz(t *testing.T) {
 	}
 }
 
+// Auto-execute contract for the spawn-per-prompt /chat path: claude
+// must be spawned with --dangerously-skip-permissions for the same
+// reason as the /chat-pty path. fleet-task #102.
+func TestClaudeChatArgsHasAutoExecute(t *testing.T) {
+	args := claudeChatArgs("hello", "")
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "--dangerously-skip-permissions") {
+		t.Fatalf("expected --dangerously-skip-permissions in args, got %q", joined)
+	}
+	if !strings.Contains(joined, "--output-format stream-json") {
+		t.Fatalf("expected stream-json output, got %q", joined)
+	}
+	// --resume only when a session_id is provided.
+	if strings.Contains(joined, "--resume") {
+		t.Fatalf("unexpected --resume with empty session, got %q", joined)
+	}
+	withSid := strings.Join(claudeChatArgs("hi", "sess-1"), " ")
+	if !strings.Contains(withSid, "--resume sess-1") {
+		t.Fatalf("expected --resume sess-1, got %q", withSid)
+	}
+}
+
 func TestConstantTimeStringEq(t *testing.T) {
 	if !constantTimeStringEq("abc", "abc") {
 		t.Fatal("equal strings should match")

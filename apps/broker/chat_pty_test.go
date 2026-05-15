@@ -437,6 +437,27 @@ func TestBoundedBufferCaps(t *testing.T) {
 	}
 }
 
+// Auto-execute contract: the persistent-session claude must be spawned
+// with --dangerously-skip-permissions so SaaS chat tool calls run
+// without dead-end "approve in your permission settings" responses
+// (fleet-task #102). --session-id must also be present so the broker
+// can correlate stream-json frames back to the WS turn.
+func TestClaudePTYArgsHasAutoExecuteAndSessionID(t *testing.T) {
+	sid := "11111111-2222-4333-8444-555555555555"
+	args := claudePTYArgs(sid)
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "--dangerously-skip-permissions") {
+		t.Fatalf("expected --dangerously-skip-permissions in args, got %q", joined)
+	}
+	// Sanity: session id flows through and stream-json is on.
+	if !strings.Contains(joined, "--session-id "+sid) {
+		t.Fatalf("expected --session-id %s in args, got %q", sid, joined)
+	}
+	if !strings.Contains(joined, "--output-format stream-json") {
+		t.Fatalf("expected stream-json output, got %q", joined)
+	}
+}
+
 // Sanity: spawnSession surfaces an error for unsupported binaries.
 func TestSpawnSessionRejectsCodex(t *testing.T) {
 	_, err := spawnSession(context.Background(), newSessionID(), "codex", os.TempDir())
