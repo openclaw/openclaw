@@ -1072,6 +1072,72 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.originatingThreadId).toBe("1739142736.000100");
     expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
   });
+
+  // Regression: when a Signal user quote-replies while the agent is busy, the
+  // inbound body is queued with the `[Quoting ... id:<ts>] "<body>" [/Quoting]`
+  // marker baked in by the Signal event handler. The "Queued messages while
+  // agent was busy" wrapper builds its merged prompt purely from each item's
+  // `prompt`, so the wrapped output must still carry the quote marker, the
+  // quote id, the quoted body, and the quoting author — otherwise the agent
+  // loses the conversational thread the user was responding to. See
+  // openclaw#36630 (fix(signal): complete bidirectional quote-reply support).
+  it("preserves Signal quote markers when wrapping queued messages while the agent is busy", async () => {
+    const key = `test-collect-signal-quote-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      done.resolve();
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    const signalRoute = {
+      originatingChannel: "signal" as const,
+      originatingTo: "signal:+15550001111",
+      originatingAccountId: "main",
+    };
+    const quotedAuthor = "+15550002222";
+    const quotedId = "1700000000000";
+    const quotedBody = "the meeting is at 3pm";
+    const quoteMarker = `[Quoting ${quotedAuthor} id:${quotedId}]\n"${quotedBody}"\n[/Quoting]`;
+
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "got it",
+        messageId: "1700000000005",
+        ...signalRoute,
+      }),
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: `yes please send it\n\n${quoteMarker}`,
+        messageId: "1700000000006",
+        ...signalRoute,
+      }),
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+    expect(calls).toHaveLength(1);
+    const merged = calls[0]?.prompt ?? "";
+    expect(merged).toContain("[Queued messages while agent was busy]");
+    expect(merged).toContain("got it");
+    expect(merged).toContain("yes please send it");
+    expect(merged).toContain(`[Quoting ${quotedAuthor} id:${quotedId}]`);
+    expect(merged).toContain(quotedBody);
+    expect(merged).toContain("[/Quoting]");
+    expect(calls[0]?.originatingChannel).toBe("signal");
+    expect(calls[0]?.originatingTo).toBe("signal:+15550001111");
+  });
 });
 
 describe("resolveFollowupAuthorizationKey", () => {
