@@ -290,6 +290,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 - Telegram is owned by the gateway process.
 - Routing is deterministic: Telegram inbound replies back to Telegram (the model does not pick channels).
 - Inbound messages normalize into the shared channel envelope with reply metadata, media placeholders, and persisted reply-chain context for Telegram replies the gateway has observed.
+- Direct chats can opt into compact model-visible metadata with `messages.inboundMetadataMode: "compact-direct"`. This replaces repeated direct-chat sender JSON with a terse direct-message context line while keeping full fenced metadata for groups, replies, forwards, locations, and history.
 - Group sessions are isolated by group ID. Forum topics append `:topic:<threadId>` to keep topics isolated.
 - DM messages can carry `message_thread_id`; OpenClaw preserves the thread ID for replies but keeps DMs on the flat session by default. Configure `channels.telegram.dm.threadReplies: "inbound"`, `channels.telegram.direct.<chatId>.threadReplies: "inbound"`, `requireTopic: true`, or a matching topic config when you intentionally want DM topic session isolation.
 - Long polling uses grammY runner with per-chat/per-thread sequencing. Overall runner sink concurrency uses `agents.defaults.maxConcurrent`.
