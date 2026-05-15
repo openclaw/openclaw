@@ -329,6 +329,36 @@ describe("createSessionVisibilityGuard", () => {
     });
   });
 
+  it("keeps old SDK A2A policy objects working for cross-agent row checks", () => {
+    const legacyPolicy = {
+      enabled: true,
+      matchesAllow: (agentId: string) => agentId === "main" || agentId === "ops",
+      isAllowed: (requesterAgentId: string, targetAgentId: string) =>
+        requesterAgentId === "main" && targetAgentId === "ops",
+    } as unknown as ReturnType<typeof createAgentToAgentPolicy>;
+    const guard = createSessionVisibilityRowChecker({
+      action: "list",
+      requesterSessionKey: "agent:main:main",
+      visibility: "all",
+      a2aPolicy: legacyPolicy,
+    });
+
+    expect(
+      guard.check({
+        key: "agent:ops:main",
+      }),
+    ).toEqual({ allowed: true });
+    expect(
+      guard.check({
+        key: "agent:support:main",
+      }),
+    ).toEqual({
+      allowed: false,
+      status: "forbidden",
+      error: "Agent-to-agent listing denied by tools.agentToAgent.allow.",
+    });
+  });
+
   it("does not do spawned lookup for list visibility without row metadata", async () => {
     const callGateway = vi.fn(async () => ({
       sessions: [{ key: "agent:codex:acp:child-1" }],
