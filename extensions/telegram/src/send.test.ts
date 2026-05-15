@@ -2836,6 +2836,28 @@ describe("editMessageTelegram", () => {
     expect(botApi.editMessageText).toHaveBeenCalledTimes(1);
   });
 
+  it("derives readable plain text when Telegram rejects edited HTML", async () => {
+    botApi.editMessageText
+      .mockRejectedValueOnce(new Error("400: Bad Request: can't parse entities"))
+      .mockResolvedValueOnce({ message_id: 1, chat: { id: "123" } });
+
+    await editMessageTelegram(
+      "123",
+      1,
+      'Created: <a href="https://example.com/a?x=1&amp;y=2">Task &lt;id&gt;</a>',
+      {
+        token: "tok",
+        cfg: {},
+        textMode: "html",
+      },
+    );
+
+    expect(botApi.editMessageText).toHaveBeenCalledTimes(2);
+    expect(mockCall(botApi.editMessageText, 1, "plain edit fallback")[2]).toBe(
+      "Created: Task <id> (https://example.com/a?x=1&y=2)",
+    );
+  });
+
   it("retries editMessageTelegram on Telegram 5xx errors", async () => {
     botApi.editMessageText
       .mockRejectedValueOnce(Object.assign(new Error("502: Bad Gateway"), { error_code: 502 }))

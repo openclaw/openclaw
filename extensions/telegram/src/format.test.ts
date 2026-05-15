@@ -244,6 +244,14 @@ describe("markdownToTelegramHtml", () => {
     );
   });
 
+  it("preserves escaped angle-bracket text in Telegram HTML fallback links", () => {
+    expect(
+      telegramHtmlToPlainTextFallback(
+        '<a href="https://example.com/task?id=1&amp;kind=bug">Task &lt;id&gt;</a>',
+      ),
+    ).toBe("Task <id> (https://example.com/task?id=1&kind=bug)");
+  });
+
   it("fails loudly when tag overhead leaves no room for text", () => {
     expect(() => splitTelegramHtmlChunks("<b><i><u>x</u></i></b>", 10)).toThrow(/tag overhead/i);
   });

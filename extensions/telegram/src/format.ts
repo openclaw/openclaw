@@ -320,6 +320,21 @@ function stripTelegramHtmlForPlainText(html: string): string {
   );
 }
 
+function encodePlainTextForTelegramHtmlStrip(text: string): string {
+  return text.replace(/[&<>]/g, (char) => {
+    switch (char) {
+      case "&":
+        return "&amp;";
+      case "<":
+        return "&lt;";
+      case ">":
+        return "&gt;";
+      default:
+        return char;
+    }
+  });
+}
+
 export function telegramHtmlToPlainTextFallback(html: string): string {
   TELEGRAM_HTML_ANCHOR_PATTERN.lastIndex = 0;
   const withPlainLinks = html.replace(
@@ -336,9 +351,11 @@ export function telegramHtmlToPlainTextFallback(html: string): string {
       ).trim();
       const label = stripTelegramHtmlForPlainText(labelHtml).trim();
       if (!href) {
-        return label;
+        return encodePlainTextForTelegramHtmlStrip(label);
       }
-      return !label || label === href ? href : `${label} (${href})`;
+      return encodePlainTextForTelegramHtmlStrip(
+        !label || label === href ? href : `${label} (${href})`,
+      );
     },
   );
   return stripTelegramHtmlForPlainText(withPlainLinks);
