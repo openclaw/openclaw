@@ -84,6 +84,8 @@ describe("buildContextReply", () => {
     expect(result.text).toContain("Bootstrap max/total: 60,000 chars");
     expect(result.text).toContain("⚠ Bootstrap context is over configured limits");
     expect(result.text).toContain("Causes: 1 file(s) exceeded max/file.");
+    expect(result.text).toContain("agents.list[].bootstrapMaxChars");
+    expect(result.text).toContain("agents.defaults.*");
   });
 
   it("does not show bootstrap truncation warning when there is no truncation", async () => {
