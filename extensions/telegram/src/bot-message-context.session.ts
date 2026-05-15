@@ -1,6 +1,7 @@
 import {
   type BuildChannelTurnContextParams,
   type BuiltChannelTurnContext,
+  type CommandTurnContext,
   formatInboundEnvelope,
   resolveEnvelopeFormatOptions,
   toLocationContext,
@@ -414,6 +415,7 @@ export async function buildTelegramInboundContextPayload(params: {
     : `telegram:${chatId}`;
   const telegramTo = `telegram:${chatId}`;
   const locationContext = locationData ? toLocationContext(locationData) : undefined;
+  const commandSource = options?.commandSource;
   const ctxPayload = sessionRuntime.buildChannelTurnContext({
     channel: "telegram",
     accountId: route.accountId,
@@ -465,6 +467,14 @@ export async function buildTelegramInboundContextPayload(params: {
         authorizers: [],
       },
     },
+    commandTurn: commandSource
+      ? ({
+          kind: commandSource === "native" ? "native" : "text-slash",
+          source: commandSource,
+          authorized: commandAuthorized,
+          body: commandBody,
+        } satisfies CommandTurnContext)
+      : undefined,
     media: contextMedia.map((media, index) => ({
       path: media.path,
       url: media.path,
@@ -523,7 +533,6 @@ export async function buildTelegramInboundContextPayload(params: {
       Sticker: allMedia[0]?.stickerMetadata,
       StickerMediaIncluded: allMedia[0]?.stickerMetadata ? !stickerCacheHit : undefined,
       ...locationContext,
-      CommandSource: options?.commandSource,
       IsForum: isForum,
       TopicName: isForum && topicName ? topicName : undefined,
     },

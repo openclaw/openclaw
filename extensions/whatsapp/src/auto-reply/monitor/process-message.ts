@@ -417,6 +417,19 @@ export async function processMessage(params: {
         policy: inboundPolicy,
       })
     : undefined;
+  const commandTurn = isTextCommand
+    ? {
+        kind: "text-slash" as const,
+        source: "text" as const,
+        authorized: Boolean(commandAuthorized),
+        body: params.msg.body,
+      }
+    : {
+        kind: "normal" as const,
+        source: "message" as const,
+        authorized: false,
+        body: params.msg.body,
+      };
   const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
     cfg: params.cfg,
     agentId: params.route.agentId,
@@ -451,7 +464,7 @@ export async function processMessage(params: {
     combinedBody,
     commandBody: params.msg.body,
     commandAuthorized,
-    commandSource: isTextCommand ? "text" : undefined,
+    commandTurn,
     conversationId,
     groupHistory: visibleGroupHistory,
     groupMemberRoster: params.groupMemberNames.get(params.groupHistoryKey),
