@@ -248,6 +248,7 @@ describe("buildProviderReplayFamilyHooks", () => {
           allowBase64Only: true,
           includeCamelCase: true,
         },
+        dropReasoningFromHistory: true,
       },
     );
 

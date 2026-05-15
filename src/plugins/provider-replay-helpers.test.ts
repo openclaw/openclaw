@@ -220,6 +220,19 @@ describe("provider replay helpers", () => {
     ).not.toHaveProperty("sanitizeThoughtSignatures");
   });
 
+  it("drops historical reasoning for passthrough OpenAI-compatible completions replay", () => {
+    expect(
+      buildPassthroughGeminiSanitizingReplayPolicy("kimi-k2.6", {
+        modelApi: "openai-completions",
+      }),
+    ).toHaveProperty("dropReasoningFromHistory", true);
+    expect(
+      buildPassthroughGeminiSanitizingReplayPolicy("gemini-2.5-pro", {
+        modelApi: "google-generative-ai",
+      }),
+    ).not.toHaveProperty("dropReasoningFromHistory");
+  });
+
   it("sanitizes Gemini replay ordering with a bootstrap turn", () => {
     const customEntries: Array<{ customType: string; data: unknown }> = [];
 

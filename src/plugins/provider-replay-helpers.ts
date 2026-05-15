@@ -191,12 +191,14 @@ export function buildGoogleGeminiReplayPolicy(): ProviderReplayPolicy {
 /** @deprecated Google provider replay helper; prefer provider-local replay hooks. */
 export function buildPassthroughGeminiSanitizingReplayPolicy(
   modelId?: string,
+  options: { modelApi?: string | null } = {},
 ): ProviderReplayPolicy {
   const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
   return {
     applyAssistantFirstOrderingFix: false,
     validateGeminiTurns: false,
     validateAnthropicTurns: false,
+    ...(options.modelApi === "openai-completions" ? { dropReasoningFromHistory: true } : {}),
     ...(normalizedModelId.includes("gemini")
       ? {
           sanitizeThoughtSignatures: {

@@ -18,6 +18,7 @@ export async function expectPassthroughReplayPolicy(params: {
     applyAssistantFirstOrderingFix: false,
     validateGeminiTurns: false,
     validateAnthropicTurns: false,
+    dropReasoningFromHistory: true,
   });
 
   if (params.sanitizeThoughtSignatures) {

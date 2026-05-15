@@ -221,8 +221,8 @@ export function buildProviderReplayFamilyHooks(
       };
     case "passthrough-gemini":
       return {
-        buildReplayPolicy: ({ modelId }: ProviderReplayPolicyContext) =>
-          buildPassthroughGeminiSanitizingReplayPolicy(modelId),
+        buildReplayPolicy: ({ modelApi, modelId }: ProviderReplayPolicyContext) =>
+          buildPassthroughGeminiSanitizingReplayPolicy(modelId, { modelApi }),
       };
     case "hybrid-anthropic-openai":
       return {
