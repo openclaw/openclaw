@@ -80,6 +80,14 @@ import {
   resolveChannelMessageToolHints,
   resolveChannelReactionGuidance,
 } from "../../channel-tools.js";
+import {
+  addClientToolsToCodeModeCatalog,
+  applyCodeModeCatalog,
+  CODE_MODE_EXEC_TOOL_NAME,
+  CODE_MODE_WAIT_TOOL_NAME,
+  createCodeModeTools,
+  resolveCodeModeConfig,
+} from "../../code-mode.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawReferencePaths } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
@@ -478,6 +486,7 @@ export function buildToolSearchRunPlan(params: {
   catalogRegistered: boolean;
   catalogToolCount: number;
   controlsEnabled: boolean;
+  controlNames?: readonly string[];
   explicitAllowlistSources: Array<{ entries: string[] }>;
 }): ToolSearchRunPlan {
   const visibleAllowedToolNames = collectAllowedToolNames({
@@ -488,9 +497,17 @@ export function buildToolSearchRunPlan(params: {
     tools: params.uncompactedTools,
     clientTools: params.clientTools,
   });
+  if (params.controlsEnabled) {
+    for (const controlName of params.controlNames ?? TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES) {
+      if (visibleAllowedToolNames.has(controlName)) {
+        replayAllowedToolNames.add(controlName);
+      }
+    }
+  }
   const autoAddedControlNames = buildAutoAddedToolSearchControlNamesForAllowlistCheck({
     toolSearchControlsEnabled: params.controlsEnabled,
     explicitAllowlistSources: params.explicitAllowlistSources,
+    controlNames: params.controlNames,
   });
   const clientCatalogCallableNames = params.catalogRegistered
     ? collectExplicitlyAllowedClientToolNames({
@@ -978,22 +995,33 @@ export async function runEmbeddedAttempt(
       toolsAllow: params.toolsAllow,
     });
     const toolsEnabled = supportsModelTools(params.model);
+    const codeModeConfig = resolveCodeModeConfig(params.config);
+    const codeModeControlsEnabledForRun =
+      toolsEnabled &&
+      params.disableTools !== true &&
+      !isRawModelRun &&
+      params.toolsAllow?.length !== 0 &&
+      codeModeConfig.enabled;
     const toolSearchControlsEnabledForRun =
       toolsEnabled &&
       params.disableTools !== true &&
       !isRawModelRun &&
       params.toolsAllow?.length !== 0 &&
+      !codeModeControlsEnabledForRun &&
       resolveToolSearchConfig(params.config).enabled;
     const effectiveToolsAllow =
       toolSearchControlsEnabledForRun && params.toolsAllow
         ? [...new Set([...params.toolsAllow, ...TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES])]
         : params.toolsAllow;
     const shouldConstructTools =
-      toolConstructionPlan.constructTools || toolSearchControlsEnabledForRun;
+      toolConstructionPlan.constructTools ||
+      toolSearchControlsEnabledForRun ||
+      codeModeControlsEnabledForRun;
     let toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor | undefined;
-    const toolSearchCatalogRef: ToolSearchCatalogRef | undefined = toolSearchControlsEnabledForRun
-      ? createToolSearchCatalogRef()
-      : undefined;
+    const toolSearchCatalogRef: ToolSearchCatalogRef | undefined =
+      toolSearchControlsEnabledForRun || codeModeControlsEnabledForRun
+        ? createToolSearchCatalogRef()
+        : undefined;
     const toolSearchTargetTranscriptProjections: ToolSearchTargetTranscriptProjection[] = [];
     const toolsRaw = !shouldConstructTools
       ? []
@@ -1313,35 +1341,67 @@ export async function runEmbeddedAttempt(
     });
     const uncompactedEffectiveTools = [...tools, ...filteredBundledTools];
     let effectiveTools = uncompactedEffectiveTools;
-    const toolSearch = applyToolSearchCatalog({
-      tools: effectiveTools,
-      config: params.config,
-      sessionId: params.sessionId,
-      sessionKey: sandboxSessionKey,
+    const catalogToolHookContext = {
       agentId: sessionAgentId,
+      config: params.config,
+      cwd: effectiveWorkspace,
+      sessionKey: sandboxSessionKey,
+      sessionId: params.sessionId,
       runId: params.runId,
-      catalogRef: toolSearchCatalogRef,
-      toolHookContext: {
+      channelId: params.currentChannelId,
+      trace: runTrace,
+      loopDetection: resolveToolLoopDetectionConfig({
+        cfg: params.config,
         agentId: sessionAgentId,
-        config: params.config,
-        cwd: effectiveWorkspace,
-        sessionKey: sandboxSessionKey,
-        sessionId: params.sessionId,
-        runId: params.runId,
-        channelId: params.currentChannelId,
-        trace: runTrace,
-        loopDetection: resolveToolLoopDetectionConfig({
-          cfg: params.config,
+      }),
+      onToolOutcome: params.onToolOutcome,
+    };
+    const codeModeTools = codeModeControlsEnabledForRun
+      ? createCodeModeTools({
+          config: params.config,
+          runtimeConfig: params.config,
           agentId: sessionAgentId,
-        }),
-        onToolOutcome: params.onToolOutcome,
-      },
-    });
+          sessionKey: sandboxSessionKey,
+          sessionId: params.sessionId,
+          runId: params.runId,
+          catalogRef: toolSearchCatalogRef,
+          abortSignal: runAbortController.signal,
+          executeTool: (toolParams) => {
+            if (!toolSearchCatalogExecutor) {
+              throw new Error("Code Mode catalog executor is unavailable for this run.");
+            }
+            return toolSearchCatalogExecutor(toolParams);
+          },
+        })
+      : [];
+    const toolSearch = codeModeControlsEnabledForRun
+      ? applyCodeModeCatalog({
+          tools: [...codeModeTools, ...effectiveTools],
+          config: params.config,
+          sessionId: params.sessionId,
+          sessionKey: sandboxSessionKey,
+          agentId: sessionAgentId,
+          runId: params.runId,
+          catalogRef: toolSearchCatalogRef,
+          toolHookContext: catalogToolHookContext,
+        })
+      : applyToolSearchCatalog({
+          tools: effectiveTools,
+          config: params.config,
+          sessionId: params.sessionId,
+          sessionKey: sandboxSessionKey,
+          agentId: sessionAgentId,
+          runId: params.runId,
+          catalogRef: toolSearchCatalogRef,
+          toolHookContext: catalogToolHookContext,
+        });
     effectiveTools = toolSearch.tools;
     if (toolSearch.compacted) {
-      prepStages.mark("tool-search");
+      prepStages.mark(codeModeControlsEnabledForRun ? "code-mode" : "tool-search");
       log.info(
-        `tool-search: cataloged ${toolSearch.catalogToolCount} tools behind compact prompt surface`,
+        codeModeControlsEnabledForRun
+          ? `code-mode: cataloged ${toolSearch.catalogToolCount} tools behind exec/wait`
+          : `tool-search: cataloged ${toolSearch.catalogToolCount} tools behind compact prompt surface`,
       );
     }
     prepStages.mark("bundle-tools");
@@ -1371,7 +1431,10 @@ export async function runEmbeddedAttempt(
       clientTools,
       catalogRegistered: toolSearch.catalogRegistered,
       catalogToolCount: toolSearch.catalogToolCount,
-      controlsEnabled: toolSearchControlsEnabledForRun,
+      controlsEnabled: toolSearchControlsEnabledForRun || codeModeControlsEnabledForRun,
+      controlNames: codeModeControlsEnabledForRun
+        ? [CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME]
+        : undefined,
       explicitAllowlistSources: explicitToolAllowlistSources,
     });
     const allowedToolNames = toolSearchRunPlan.visibleAllowedToolNames;
@@ -1872,19 +1935,31 @@ export async function runEmbeddedAttempt(
             },
           )
         : [];
-      const clientToolSearch = addClientToolsToToolSearchCatalog({
-        tools: clientToolDefs,
-        config: params.config,
-        sessionId: params.sessionId,
-        sessionKey: sandboxSessionKey,
-        agentId: sessionAgentId,
-        runId: params.runId,
-        catalogRef: toolSearchCatalogRef,
-      });
+      const clientToolSearch = codeModeControlsEnabledForRun
+        ? addClientToolsToCodeModeCatalog({
+            tools: clientToolDefs,
+            config: params.config,
+            sessionId: params.sessionId,
+            sessionKey: sandboxSessionKey,
+            agentId: sessionAgentId,
+            runId: params.runId,
+            catalogRef: toolSearchCatalogRef,
+          })
+        : addClientToolsToToolSearchCatalog({
+            tools: clientToolDefs,
+            config: params.config,
+            sessionId: params.sessionId,
+            sessionKey: sandboxSessionKey,
+            agentId: sessionAgentId,
+            runId: params.runId,
+            catalogRef: toolSearchCatalogRef,
+          });
       clientToolDefs = clientToolSearch.tools;
       if (clientToolSearch.compacted) {
         log.info(
-          `tool-search: cataloged ${clientToolSearch.catalogToolCount} client tools behind compact prompt surface`,
+          codeModeControlsEnabledForRun
+            ? `code-mode: cataloged ${clientToolSearch.catalogToolCount} client tools behind exec/wait`
+            : `tool-search: cataloged ${clientToolSearch.catalogToolCount} client tools behind compact prompt surface`,
         );
       }
 
