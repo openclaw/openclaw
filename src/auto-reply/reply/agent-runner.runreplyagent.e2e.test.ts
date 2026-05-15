@@ -5,6 +5,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import type { TemplateContext } from "../templating.js";
+import { getReplyPayloadMetadata } from "../types.js";
 import type { GetReplyOptions } from "../types.js";
 import {
   enqueueFollowupRun,
@@ -349,6 +350,109 @@ describe("runReplyAgent pending final delivery capture", () => {
     const raw = await readFile(storePath, "utf8");
     return JSON.parse(raw).main as SessionEntry;
   }
+
+  it("marks message-tool-only final replies for visible-delivery fallback", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "private final" }],
+      meta: {},
+    });
+
+    const { run } = createMinimalRun({
+      opts: { sourceReplyDeliveryMode: "message_tool_only" },
+      sessionCtx: {
+        ChatType: "channel",
+        Provider: "discord",
+        Surface: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:C1",
+      },
+    });
+
+    const result = await run();
+    const payloads = Array.isArray(result) ? result : result ? [result] : [];
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("private final");
+    expect(getReplyPayloadMetadata(payloads[0] as ReplyPayload)?.messageToolOnlyFinalFallback).toBe(
+      true,
+    );
+  });
+
+  it("does not mark message-tool-only fallback when the message tool already sent", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "already sent" }],
+      messagingToolSentTargets: [{ text: "already sent" }],
+      meta: {},
+    });
+
+    const { run } = createMinimalRun({
+      opts: { sourceReplyDeliveryMode: "message_tool_only" },
+      sessionCtx: {
+        ChatType: "channel",
+        Provider: "discord",
+        Surface: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:C1",
+      },
+    });
+
+    const result = await run();
+    const payloads = Array.isArray(result) ? result : result ? [result] : [];
+    if (payloads[0]) {
+      expect(
+        getReplyPayloadMetadata(payloads[0] as ReplyPayload)?.messageToolOnlyFinalFallback,
+      ).toBeUndefined();
+    }
+  });
+
+  it("does not mark normal final replies outside message-tool-only mode", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ordinary final" }],
+      meta: {},
+    });
+
+    const { run } = createMinimalRun({
+      sessionCtx: {
+        ChatType: "channel",
+        Provider: "discord",
+        Surface: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:C1",
+      },
+    });
+
+    const result = await run();
+    const payloads = Array.isArray(result) ? result : result ? [result] : [];
+    expect(payloads).toHaveLength(1);
+    expect(
+      getReplyPayloadMetadata(payloads[0] as ReplyPayload)?.messageToolOnlyFinalFallback,
+    ).toBeUndefined();
+  });
+
+  it("marks fallback when message-tool text evidence is blank", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "private final" }],
+      messagingToolSentTexts: ["   "],
+      meta: {},
+    });
+
+    const { run } = createMinimalRun({
+      opts: { sourceReplyDeliveryMode: "message_tool_only" },
+      sessionCtx: {
+        ChatType: "channel",
+        Provider: "discord",
+        Surface: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "channel:C1",
+      },
+    });
+
+    const result = await run();
+    const payloads = Array.isArray(result) ? result : result ? [result] : [];
+    expect(payloads).toHaveLength(1);
+    expect(getReplyPayloadMetadata(payloads[0] as ReplyPayload)?.messageToolOnlyFinalFallback).toBe(
+      true,
+    );
+  });
 
   it("does not persist message-tool-only final replies for heartbeat replay", async () => {
     const sessionEntry: SessionEntry = {

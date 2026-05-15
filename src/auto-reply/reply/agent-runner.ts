@@ -181,6 +181,24 @@ function hasSuccessfulSideEffectDelivery(params: {
   );
 }
 
+function hasCommittedMessagingToolDelivery(params: {
+  messagingToolSentTexts?: string[];
+  messagingToolSentMediaUrls?: string[];
+  messagingToolSentTargets?: unknown[];
+}): boolean {
+  return (
+    hasNonEmptyStringArray(params.messagingToolSentTexts) ||
+    hasNonEmptyStringArray(params.messagingToolSentMediaUrls) ||
+    hasCommittedMessagingTargetDeliveryEvidence(params.messagingToolSentTargets)
+  );
+}
+
+function markMessageToolOnlyFinalFallbackPayloads(payloads: ReplyPayload[]): ReplyPayload[] {
+  return payloads.map((payload) =>
+    setReplyPayloadMetadata(payload, { messageToolOnlyFinalFallback: true }),
+  );
+}
+
 function resolveConfiguredFallbackModel(params: {
   run: FollowupRun["run"];
   fallbackStateEntry?: SessionEntry;
@@ -1704,10 +1722,19 @@ export async function runReplyAgent(params: {
             sessionKey,
           })
         : false;
-    const guardedReplyPayloads =
+    const reminderGuardedReplyPayloads =
       hasReminderCommitment && successfulCronAdds === 0 && !coveredByExistingCron
         ? appendUnscheduledReminderNote(replyPayloads)
         : replyPayloads;
+    const guardedReplyPayloads =
+      opts?.sourceReplyDeliveryMode === "message_tool_only" &&
+      !hasCommittedMessagingToolDelivery({
+        messagingToolSentTexts: runResult.messagingToolSentTexts,
+        messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
+        messagingToolSentTargets: runResult.messagingToolSentTargets,
+      })
+        ? markMessageToolOnlyFinalFallbackPayloads(reminderGuardedReplyPayloads)
+        : reminderGuardedReplyPayloads;
 
     enqueueCommitmentExtractionForTurn({
       cfg,

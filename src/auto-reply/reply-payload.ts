@@ -57,6 +57,13 @@ export type ReplyPayloadMetadata = {
    */
   deliverDespiteSourceReplySuppression?: boolean;
   /**
+   * Discord-visible-stall motivated, but intentionally channel-agnostic: the
+   * assistant produced a normal final source reply in a message-tool-only
+   * conversation without any committed message-tool delivery. Dispatch may use
+   * this as a same-turn visible-delivery safety net; sendPolicy deny still wins.
+   */
+  messageToolOnlyFinalFallback?: boolean;
+  /**
    * A message-tool reply to the active internal UI source. The final payload is
    * still the live delivery vehicle; this mirror makes the reply durable for
    * chat.history and page reloads without turning the internal UI into an
