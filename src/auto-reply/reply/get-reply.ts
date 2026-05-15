@@ -795,7 +795,7 @@ export async function getReplyFromConfig(
             // senderExternalId (cross-app ID, e.g. Feishu union_id) is not available
             // in MsgContext; channel plugins can populate it via their own hook handlers.
           },
-        ),)
+        ),
       );
       if (hookResult?.handled) {
         return hookResult.reply ?? { text: SILENT_REPLY_TOKEN };
