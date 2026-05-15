@@ -31,6 +31,8 @@ struct AmbientOverlayDisplayInfo: Equatable, Identifiable {
 }
 
 struct AmbientOverlaySettings: Equatable {
+    static let intensityRange = 0.1...1.0
+    static let timeoutSecondsRange = 5.0...120.0
     static let defaultIntensity = 0.42
     static let defaultTimeoutSeconds = 30.0
     static let defaults = AmbientOverlaySettings(
@@ -43,6 +45,36 @@ struct AmbientOverlaySettings: Equatable {
     var displayScope: AmbientOverlayDisplayScope
     var intensity: Double
     var timeoutSeconds: Double
+
+    init(
+        isEnabled: Bool,
+        displayScope: AmbientOverlayDisplayScope,
+        intensity: Double,
+        timeoutSeconds: Double)
+    {
+        self.isEnabled = isEnabled
+        self.displayScope = displayScope
+        self.intensity = Self.normalizedIntensity(intensity)
+        self.timeoutSeconds = Self.normalizedTimeoutSeconds(timeoutSeconds)
+    }
+
+    static func normalizedIntensity(_ intensity: Double) -> Double {
+        guard intensity.isFinite else { return Self.defaultIntensity }
+        return min(max(intensity, Self.intensityRange.lowerBound), Self.intensityRange.upperBound)
+    }
+
+    static func normalizedTimeoutSeconds(_ timeoutSeconds: Double) -> Double {
+        guard timeoutSeconds.isFinite else { return Self.defaultTimeoutSeconds }
+        return min(max(timeoutSeconds, Self.timeoutSecondsRange.lowerBound), Self.timeoutSecondsRange.upperBound)
+    }
+
+    var normalized: AmbientOverlaySettings {
+        AmbientOverlaySettings(
+            isEnabled: self.isEnabled,
+            displayScope: self.displayScope,
+            intensity: self.intensity,
+            timeoutSeconds: self.timeoutSeconds)
+    }
 }
 
 enum AmbientOverlayDisplayResolver {

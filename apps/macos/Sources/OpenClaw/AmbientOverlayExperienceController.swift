@@ -1,5 +1,20 @@
+import AppKit
 import Foundation
 import Observation
+
+enum AmbientOverlayEscapeMatcher {
+    static let escapeKeyCode: UInt16 = 53
+
+    static func shouldHandle(
+        keyCode: UInt16,
+        modifierFlags: NSEvent.ModifierFlags,
+        isRepeat: Bool) -> Bool
+    {
+        guard keyCode == Self.escapeKeyCode, !isRepeat else { return false }
+        let disallowedModifiers: NSEvent.ModifierFlags = [.command, .control, .option, .shift]
+        return modifierFlags.intersection(disallowedModifiers).isEmpty
+    }
+}
 
 @MainActor
 @Observable
@@ -17,6 +32,7 @@ final class AmbientOverlayExperienceController {
     private let enableUI: Bool
     private var timeoutTask: Task<Void, Never>?
     private var displayController: AmbientOverlayDisplayController?
+    private var escapeMonitor: Any?
 
     var showAmbient: ((Double) -> Void)?
     var showWorkspace: (((@escaping () -> Void)) -> Void)?
@@ -35,14 +51,16 @@ final class AmbientOverlayExperienceController {
 
     @MainActor deinit {
         self.timeoutTask?.cancel()
+        self.removeEscapeMonitor()
     }
 
     func applySettings(_ settings: AmbientOverlaySettings) {
-        self.settings = settings
-        self.setEnabled(settings.isEnabled)
-        if settings.isEnabled {
-            self.showAmbientSurface(intensity: settings.intensity)
-            self.showAmbient?(settings.intensity)
+        let normalizedSettings = settings.normalized
+        self.settings = normalizedSettings
+        self.setEnabled(normalizedSettings.isEnabled)
+        if normalizedSettings.isEnabled {
+            self.showAmbientSurface(intensity: normalizedSettings.intensity)
+            self.showAmbient?(normalizedSettings.intensity)
         }
     }
 
@@ -53,6 +71,7 @@ final class AmbientOverlayExperienceController {
             self.closeSurfacesSurface()
             self.closeSurfaces?()
             self.displayController = nil
+            self.removeEscapeMonitor()
             self.showAmbient = nil
             self.showWorkspace = nil
             self.hideWorkspace = nil
@@ -94,12 +113,14 @@ final class AmbientOverlayExperienceController {
         }
         self.showWorkspaceSurface(onDismiss: onDismiss)
         self.showWorkspace?(onDismiss)
+        self.installEscapeMonitorIfNeeded()
         self.scheduleTimeout()
     }
 
     func dismissInteractive(reason _: DismissReason) {
         self.timeoutTask?.cancel()
         self.timeoutTask = nil
+        self.removeEscapeMonitor()
         self.hideWorkspaceSurface()
         self.hideWorkspace?()
         self.overlayState = .idle
@@ -112,11 +133,15 @@ final class AmbientOverlayExperienceController {
     }
 
     private func showAmbientSurface(intensity: Double) {
-        self.displayControllerIfNeeded()?.showAmbient(intensity: intensity)
+        self.displayControllerIfNeeded()?.showAmbient(
+            intensity: intensity,
+            displayScope: self.settings.displayScope)
     }
 
     private func showWorkspaceSurface(onDismiss: @escaping () -> Void) {
-        self.displayControllerIfNeeded()?.showWorkspace(onDismiss: onDismiss)
+        self.displayControllerIfNeeded()?.showWorkspace(
+            onDismiss: onDismiss,
+            displayScope: self.settings.displayScope)
     }
 
     private func hideWorkspaceSurface() {
@@ -151,12 +176,51 @@ final class AmbientOverlayExperienceController {
     }
 
     private func scheduleTimeout() {
-        let seconds = max(self.settings.timeoutSeconds, 1)
+        let seconds = AmbientOverlaySettings.normalizedTimeoutSeconds(self.settings.timeoutSeconds)
         let nanoseconds = UInt64(seconds * 1_000_000_000)
         self.timeoutTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: nanoseconds)
             guard !Task.isCancelled else { return }
             self?.dismissInteractive(reason: .timeout)
         }
+    }
+
+    private func installEscapeMonitorIfNeeded() {
+        guard self.enableUI, !Self.isRunningTests, self.escapeMonitor == nil else { return }
+        self.escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard AmbientOverlayEscapeMatcher.shouldHandle(
+                keyCode: event.keyCode,
+                modifierFlags: event.modifierFlags,
+                isRepeat: event.isARepeat)
+            else { return event }
+
+            Task { @MainActor [weak self] in
+                guard let self, self.overlayState == .armed else { return }
+                self.dismissInteractive(reason: .escape)
+            }
+            return nil
+        }
+    }
+
+    private func removeEscapeMonitor() {
+        guard let escapeMonitor else { return }
+        NSEvent.removeMonitor(escapeMonitor)
+        self.escapeMonitor = nil
+    }
+
+    func handleEscapeKeyDownForTesting(
+        keyCode: UInt16,
+        modifierFlags: NSEvent.ModifierFlags,
+        isRepeat: Bool) -> Bool
+    {
+        guard self.overlayState == .armed else { return false }
+        guard AmbientOverlayEscapeMatcher.shouldHandle(
+            keyCode: keyCode,
+            modifierFlags: modifierFlags,
+            isRepeat: isRepeat)
+        else { return false }
+
+        self.dismissInteractive(reason: .escape)
+        return true
     }
 }

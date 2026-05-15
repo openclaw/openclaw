@@ -249,6 +249,10 @@ final class AppState {
 
     var ambientOverlayIntensity: Double {
         didSet {
+            let normalizedIntensity = AmbientOverlaySettings.normalizedIntensity(self.ambientOverlayIntensity)
+            if self.ambientOverlayIntensity != normalizedIntensity {
+                self.ambientOverlayIntensity = normalizedIntensity
+            }
             self.ifNotPreview { UserDefaults.standard.set(
                 self.ambientOverlayIntensity,
                 forKey: ambientOverlayIntensityKey) }
@@ -257,6 +261,10 @@ final class AppState {
 
     var ambientOverlayTimeoutSeconds: Double {
         didSet {
+            let normalizedTimeout = AmbientOverlaySettings.normalizedTimeoutSeconds(self.ambientOverlayTimeoutSeconds)
+            if self.ambientOverlayTimeoutSeconds != normalizedTimeout {
+                self.ambientOverlayTimeoutSeconds = normalizedTimeout
+            }
             self.ifNotPreview { UserDefaults.standard.set(
                 self.ambientOverlayTimeoutSeconds,
                 forKey: ambientOverlayTimeoutSecondsKey) }
@@ -426,12 +434,12 @@ final class AppState {
             self.ambientOverlayDisplayScope = AmbientOverlaySettings.defaults.displayScope
         }
         if let storedIntensity = UserDefaults.standard.object(forKey: ambientOverlayIntensityKey) as? Double {
-            self.ambientOverlayIntensity = storedIntensity
+            self.ambientOverlayIntensity = AmbientOverlaySettings.normalizedIntensity(storedIntensity)
         } else {
             self.ambientOverlayIntensity = AmbientOverlaySettings.defaultIntensity
         }
         if let storedTimeout = UserDefaults.standard.object(forKey: ambientOverlayTimeoutSecondsKey) as? Double {
-            self.ambientOverlayTimeoutSeconds = storedTimeout
+            self.ambientOverlayTimeoutSeconds = AmbientOverlaySettings.normalizedTimeoutSeconds(storedTimeout)
         } else {
             self.ambientOverlayTimeoutSeconds = AmbientOverlaySettings.defaultTimeoutSeconds
         }
