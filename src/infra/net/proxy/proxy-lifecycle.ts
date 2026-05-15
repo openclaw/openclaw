@@ -17,10 +17,7 @@ import type { ProxyConfig } from "../../../config/zod-schema.proxy.js";
 export type ProxyLoopbackMode = NonNullable<NonNullable<ProxyConfig>["loopbackMode"]>;
 import { logInfo, logWarn } from "../../../logger.js";
 import { isLoopbackIpAddress } from "../../../shared/net/ip.js";
-import {
-  ensureGlobalUndiciEnvProxyDispatcher,
-  forceResetGlobalDispatcher,
-} from "../undici-global-dispatcher.js";
+import { forceResetGlobalDispatcher } from "../undici-global-dispatcher.js";
 import {
   getActiveManagedProxyLoopbackMode,
   getActiveManagedProxyUrl,
@@ -188,7 +185,7 @@ export function ensureInheritedManagedProxyRoutingActive(): void {
     proxyUrl,
     bypassPolicy: shouldBypassManagedProxyForGatewayLoopback,
   });
-  ensureGlobalUndiciEnvProxyDispatcher();
+  forceResetGlobalDispatcher({ preserveProxylineManaged: true });
 }
 
 export async function startProxy(config: ProxyConfig | undefined): Promise<ProxyHandle | null> {

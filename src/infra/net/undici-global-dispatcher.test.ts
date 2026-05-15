@@ -754,6 +754,21 @@ describe("forceResetGlobalDispatcher", () => {
       allowH2: false,
     });
   });
+
+  it("preserves Proxyline managed dispatcher when requested", () => {
+    vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(true);
+    vi.mocked(resolveEnvHttpProxyAgentOptions).mockReturnValue({
+      httpProxy: "http://proxy-a.example:8080",
+      httpsProxy: "http://proxy-a.example:8080",
+    });
+    const dispatcher = new ManagedUndiciDispatcher();
+    setCurrentDispatcher(dispatcher);
+
+    forceResetGlobalDispatcher({ preserveProxylineManaged: true });
+
+    expect(setGlobalDispatcher).not.toHaveBeenCalled();
+    expect(getCurrentDispatcher()).toBe(dispatcher);
+  });
 });
 
 afterAll(() => {

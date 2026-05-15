@@ -319,6 +319,25 @@ describe("startProxy", () => {
     );
   });
 
+  it("forces root undici onto the inherited managed proxy", () => {
+    process.env["OPENCLAW_PROXY_ACTIVE"] = "1";
+    process.env["OPENCLAW_PROXY_LOOPBACK_MODE"] = "gateway-only";
+    process.env["HTTP_PROXY"] = "http://127.0.0.1:3111";
+
+    ensureInheritedManagedProxyRoutingActive();
+
+    expect(installGlobalProxyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: "managed",
+        proxyUrl: "http://127.0.0.1:3111",
+      }),
+    );
+    expect(forceResetGlobalDispatcherMock).toHaveBeenCalledWith({
+      preserveProxylineManaged: true,
+    });
+    expect(ensureGlobalUndiciEnvProxyDispatcherMock).not.toHaveBeenCalled();
+  });
+
   it("restores previous proxy env and stops Proxyline on stop", async () => {
     process.env["HTTP_PROXY"] = "http://previous.example.com:8080";
     process.env["NO_PROXY"] = "corp.example.com";

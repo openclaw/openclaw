@@ -342,7 +342,7 @@ export function resetGlobalUndiciStreamTimeoutsForTests(): void {
  * EnvHttpProxyAgent when proxy env is present, and restores a direct Agent
  * after proxy env is cleared.
  */
-export function forceResetGlobalDispatcher(): void {
+export function forceResetGlobalDispatcher(opts?: { preserveProxylineManaged?: boolean }): void {
   lastAppliedTimeoutKey = null;
   if (!hasEnvHttpProxyAgentConfigured()) {
     if (lastAppliedProxyBootstrapKey === null) {
@@ -358,8 +358,16 @@ export function forceResetGlobalDispatcher(): void {
     return;
   }
   try {
-    const { EnvHttpProxyAgent, setGlobalDispatcher } = loadUndiciGlobalDispatcherDeps();
+    const runtime = loadUndiciGlobalDispatcherDeps();
+    const { EnvHttpProxyAgent, setGlobalDispatcher } = runtime;
     const proxyOptions = resolveEnvProxyDispatcherOptions();
+    if (opts?.preserveProxylineManaged) {
+      const current = resolveCurrentDispatcherInfo(runtime);
+      if (current?.kind === "proxyline-managed") {
+        lastAppliedProxyBootstrapKey = resolveEnvProxyBootstrapKey(proxyOptions);
+        return;
+      }
+    }
     setGlobalDispatcher(new EnvHttpProxyAgent(proxyOptions));
     lastAppliedProxyBootstrapKey = resolveEnvProxyBootstrapKey(proxyOptions);
   } catch {
