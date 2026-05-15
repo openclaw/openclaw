@@ -801,6 +801,7 @@ export async function dispatchReplyFromConfig(
     cfg,
     ctx,
     requested: params.replyOptions?.sourceReplyDeliveryMode,
+    strictMessageToolOnly: ctx.InboundTurnKind === "room_event",
     sendPolicy,
     suppressAcpChildUserDelivery,
     explicitSuppressTyping: params.replyOptions?.suppressTyping === true,

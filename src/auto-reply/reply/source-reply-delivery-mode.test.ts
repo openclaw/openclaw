@@ -178,7 +178,7 @@ describe("resolveSourceReplyDeliveryMode", () => {
     ).toBe("message_tool_only");
   });
 
-  it("falls back to automatic only for implicit message-tool-only mode", () => {
+  it("falls back to automatic when message-tool-only delivery cannot use the message tool", () => {
     expect(
       resolveSourceReplyDeliveryMode({
         cfg: emptyConfig,
@@ -198,6 +198,18 @@ describe("resolveSourceReplyDeliveryMode", () => {
         cfg: emptyConfig,
         ctx: { ChatType: "channel" },
         requested: "message_tool_only",
+        messageToolAvailable: false,
+      }),
+    ).toBe("automatic");
+  });
+
+  it("keeps strict message-tool-only delivery when the message tool is unavailable", () => {
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: emptyConfig,
+        ctx: { ChatType: "channel" },
+        requested: "message_tool_only",
+        strictMessageToolOnly: true,
         messageToolAvailable: false,
       }),
     ).toBe("message_tool_only");
@@ -378,7 +390,7 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
       },
     );
   });
-  it("falls back to automatic only for implicit message-tool-only mode", () => {
+  it("falls back to automatic when message-tool-only delivery cannot use the message tool", () => {
     expectPolicyFields(
       resolveSourceReplyVisibilityPolicy({
         cfg: emptyConfig,
@@ -399,6 +411,25 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
         cfg: emptyConfig,
         ctx: { ChatType: "channel" },
         requested: "message_tool_only",
+        sendPolicy: "allow",
+        messageToolAvailable: false,
+      }),
+      {
+        sourceReplyDeliveryMode: "automatic",
+        suppressAutomaticSourceDelivery: false,
+        suppressDelivery: false,
+        deliverySuppressionReason: "",
+      },
+    );
+  });
+
+  it("keeps strict message-tool-only delivery suppressed when the message tool is unavailable", () => {
+    expectPolicyFields(
+      resolveSourceReplyVisibilityPolicy({
+        cfg: emptyConfig,
+        ctx: { ChatType: "channel" },
+        requested: "message_tool_only",
+        strictMessageToolOnly: true,
         sendPolicy: "allow",
         messageToolAvailable: false,
       }),

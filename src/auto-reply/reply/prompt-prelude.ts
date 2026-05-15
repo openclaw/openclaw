@@ -20,6 +20,7 @@ export function buildReplyPromptBodies(params: {
   transcriptBody?: string;
   threadContextNote?: string;
   systemEventBlocks?: string[];
+  turnKind?: InboundTurnKind;
 }): {
   mediaNote?: string;
   mediaReplyHint?: string;
@@ -49,11 +50,14 @@ export function buildReplyPromptBodies(params: {
     ? [mediaNote, mediaReplyHint, prefixedBody].filter(Boolean).join("\n").trim()
     : prefixedBody;
   const transcriptBody = params.transcriptBody ?? params.effectiveBaseBody;
+  const includeMediaOnlyTranscript = mediaNote && params.turnKind !== "room_event";
   const transcriptCommandBodyRaw = transcriptBody
     ? mediaNote
       ? [mediaNote, transcriptBody].filter(Boolean).join("\n").trim()
       : transcriptBody
-    : "";
+    : includeMediaOnlyTranscript
+      ? mediaNote
+      : "";
   return {
     mediaNote,
     mediaReplyHint,
@@ -196,6 +200,7 @@ export function buildReplyPromptEnvelope(
     transcriptBody: base.transcriptBody,
     threadContextNote: params.threadContextNote,
     systemEventBlocks: params.systemEventBlocks,
+    turnKind: params.turnKind,
   });
 
   return {

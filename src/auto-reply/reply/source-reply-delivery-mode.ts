@@ -24,10 +24,16 @@ export function resolveSourceReplyDeliveryMode(params: {
   cfg: OpenClawConfig;
   ctx: SourceReplyDeliveryModeContext;
   requested?: SourceReplyDeliveryMode;
+  strictMessageToolOnly?: boolean;
   messageToolAvailable?: boolean;
   defaultVisibleReplies?: "automatic" | "message_tool";
 }): SourceReplyDeliveryMode {
-  if (params.requested) {
+  if (
+    params.requested &&
+    (params.requested !== "message_tool_only" ||
+      params.strictMessageToolOnly === true ||
+      params.messageToolAvailable !== false)
+  ) {
     return params.requested;
   }
   if (isExplicitSourceReplyCommand(params.ctx)) {
@@ -64,6 +70,7 @@ export function resolveSourceReplyVisibilityPolicy(params: {
   cfg: OpenClawConfig;
   ctx: SourceReplyDeliveryModeContext;
   requested?: SourceReplyDeliveryMode;
+  strictMessageToolOnly?: boolean;
   sendPolicy: SessionSendPolicyDecision;
   suppressAcpChildUserDelivery?: boolean;
   explicitSuppressTyping?: boolean;
@@ -75,6 +82,7 @@ export function resolveSourceReplyVisibilityPolicy(params: {
     cfg: params.cfg,
     ctx: params.ctx,
     requested: params.requested,
+    strictMessageToolOnly: params.strictMessageToolOnly,
     messageToolAvailable: params.messageToolAvailable,
     defaultVisibleReplies: params.defaultVisibleReplies,
   });

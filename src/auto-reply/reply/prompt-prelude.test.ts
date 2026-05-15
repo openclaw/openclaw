@@ -113,6 +113,31 @@ describe("buildReplyPromptEnvelope", () => {
     );
   });
 
+  it("keeps media-only notes in ordinary user request transcripts", () => {
+    const sessionCtx = finalizeInboundContext({
+      Body: "",
+      BodyStripped: "",
+      Provider: "telegram",
+      ChatType: "group",
+      MediaPaths: ["/tmp/openclaw-photo.jpg"],
+      MediaUrls: ["https://example.com/photo.jpg"],
+      InboundHistory: [{ sender: "Alice", timestamp: 1_700_000_000_000, body: "context" }],
+    });
+
+    const envelope = buildReplyPromptEnvelope({
+      ctx: sessionCtx,
+      sessionCtx,
+      baseBody: "",
+      hasUserBody: true,
+      inboundUserContext: "Current message:\nchat_id=G1",
+      isBareSessionReset: false,
+      startupAction: "new",
+    });
+
+    expect(envelope.transcriptCommandBody).toContain("[media attached");
+    expect(envelope.transcriptCommandBody).toContain("https://example.com/photo.jpg");
+  });
+
   it("keeps soft reset user notes visible without leaking startup context into transcripts", () => {
     const sessionCtx = finalizeInboundContext({
       Body: "",
