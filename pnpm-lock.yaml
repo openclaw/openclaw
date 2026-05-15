@@ -822,6 +822,16 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/guardrails:
+    dependencies:
+      '@monyone/aho-corasick':
+        specifier: ^1.1.8
+        version: 1.1.10
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/irc:
     dependencies:
       zod:
@@ -2175,6 +2185,9 @@ packages:
   '@babel/types@8.0.0-rc.5':
     resolution: {integrity: sha512-JeSVu/m8x/zpp4CLjYHVNXuhEyOkhPXuxM8YOXjh6L4LlvQNKuUNOTo5KdBuKAcTDHw8DquToTaEkhsBqPXOaA==}
     engines: {node: ^22.18.0 || >=24.11.0}
+
+  '@monyone/aho-corasick@1.1.10':
+    resolution: {integrity: sha512-BhOzXTzcD5BkZJsUC6Yi06wuOLVuQ4ou4fRtcwduOQtaT2J+y1qsupei6YQVeVDgqd6OeJ6lLzvGOVcEQ4i0tA==}
 
   '@bcoe/v8-coverage@1.0.2':
     resolution: {integrity: sha512-6zABk/ECA/QYSCQ1NGiVwwbQerUCZ+TQbp64Q3AgmfNvurHH0j8TtXa1qbShXA6qqkpAj4V5W8pP6mLe1mcMqA==}
@@ -9804,6 +9817,8 @@ snapshots:
 
   '@openai/codex@0.130.0-win32-x64':
     optional: true
+
+  '@monyone/aho-corasick@1.1.10': {}
 
   '@openclaw/fs-safe@0.2.4':
     optionalDependencies:

@@ -1,0 +1,28 @@
+{
+  "name": "@openclaw/guardrail-bridge-plugin",
+  "version": "2026.5.10-beta.1",
+  "private": true,
+  "description": "Pre-agent security plugin for OpenClaw — detects manipulation attempts and blocks policy-violating content before Agent dispatch.",
+  "type": "module",
+  "license": "MIT",
+  "files": [
+    "assets/"
+  ],
+  "dependencies": {
+    "@monyone/aho-corasick": "^1.1.8"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.5.10-beta.1"
+    },
+    "bundle": {
+      "stageRuntimeDependencies": true
+    }
+  }
+}
