@@ -122,6 +122,7 @@ function acquireClobberLockSync(deps: ConfigClobberSnapshotDeps, lockPath: strin
 type ClobberedSiblingSnapshot = {
   name: string;
   path: string;
+  timestampKey: string;
   mtimeMs: number;
 };
 
@@ -129,7 +130,11 @@ function compareClobberedSiblings(
   left: ClobberedSiblingSnapshot,
   right: ClobberedSiblingSnapshot,
 ): number {
-  return left.mtimeMs - right.mtimeMs || left.name.localeCompare(right.name);
+  return (
+    left.timestampKey.localeCompare(right.timestampKey) ||
+    left.mtimeMs - right.mtimeMs ||
+    left.name.localeCompare(right.name)
+  );
 }
 
 async function listClobberedSiblings(
@@ -146,7 +151,12 @@ async function listClobberedSiblings(
       }
       const snapshotPath = path.join(dir, entry);
       const stat = await deps.fs.promises.stat(snapshotPath).catch(() => null);
-      snapshots.push({ name: entry, path: snapshotPath, mtimeMs: stat?.mtimeMs ?? 0 });
+      snapshots.push({
+        name: entry,
+        path: snapshotPath,
+        timestampKey: entry.slice(prefix.length).replace(/-\d{2}$/, ""),
+        mtimeMs: stat?.mtimeMs ?? 0,
+      });
     }
     return snapshots.toSorted(compareClobberedSiblings);
   } catch {
@@ -167,7 +177,12 @@ function listClobberedSiblingsSync(
       }
       const snapshotPath = path.join(dir, entry);
       const stat = deps.fs.statSync(snapshotPath, { throwIfNoEntry: false });
-      snapshots.push({ name: entry, path: snapshotPath, mtimeMs: stat?.mtimeMs ?? 0 });
+      snapshots.push({
+        name: entry,
+        path: snapshotPath,
+        timestampKey: entry.slice(prefix.length).replace(/-\d{2}$/, ""),
+        mtimeMs: stat?.mtimeMs ?? 0,
+      });
     }
     return snapshots.toSorted(compareClobberedSiblings);
   } catch {
