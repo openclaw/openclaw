@@ -69,6 +69,10 @@ describe("method scope resolution", () => {
     ["nativeHook.invoke", ["operator.admin"]],
     ["wizard.start", ["operator.admin"]],
     ["update.run", ["operator.admin"]],
+    ["exec.approvals.get", ["operator.admin"]],
+    ["exec.approvals.set", ["operator.admin"]],
+    ["exec.approvals.node.get", ["operator.admin"]],
+    ["exec.approvals.node.set", ["operator.admin"]],
   ])("resolves least-privilege scopes for %s", (method, expected) => {
     expect(resolveLeastPrivilegeOperatorScopesForMethod(method)).toEqual(expected);
   });
@@ -292,6 +296,21 @@ describe("operator scope authorization", () => {
       });
     },
   );
+
+  it.each([
+    "exec.approvals.get",
+    "exec.approvals.set",
+    "exec.approvals.node.get",
+    "exec.approvals.node.set",
+  ])("requires admin scope for exec approval policy method %s", (method) => {
+    expect(authorizeOperatorScopesForMethod(method, ["operator.approvals"])).toEqual({
+      allowed: false,
+      missingScope: "operator.admin",
+    });
+    expect(authorizeOperatorScopesForMethod(method, ["operator.admin"])).toEqual({
+      allowed: true,
+    });
+  });
 
   it.each([
     "plugin.approval.list",
