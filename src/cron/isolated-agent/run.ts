@@ -546,11 +546,12 @@ async function prepareCronRunContext(params: {
   });
   const workspaceDir = workspace.dir;
 
-  // Ensure channel plugins and external model providers are loaded into the registry.
-  // Must happen before resolving models and delivery context to avoid multi-channel ambiguity
-  // and missing provider errors.
   const { ensureRuntimePluginsLoaded } = await loadRuntimePlugins();
-  ensureRuntimePluginsLoaded({ config: cfgWithAgentDefaults, workspaceDir });
+  ensureRuntimePluginsLoaded({
+    config: cfgWithAgentDefaults,
+    workspaceDir,
+    allowGatewaySubagentBinding: true,
+  });
 
   const isGmailHook = hookExternalContentSource === "gmail";
   const now = Date.now();

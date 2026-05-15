@@ -3,6 +3,8 @@ import { makeIsolatedAgentTurnParams, setupRunCronIsolatedAgentTurnSuite } from 
 import {
   loadRunCronIsolatedAgentTurn,
   ensureRuntimePluginsLoadedMock,
+  resolveConfiguredModelRefMock,
+  resolveCronDeliveryPlanMock,
 } from "./run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
@@ -24,6 +26,13 @@ describe("runCronIsolatedAgentTurn runtime plugins loading", () => {
         }),
       }),
       workspaceDir: "/tmp/workspace", // matches resolveAgentWorkspaceDir mock
+      allowGatewaySubagentBinding: true,
     });
+    expect(ensureRuntimePluginsLoadedMock.mock.invocationCallOrder[0]).toBeLessThan(
+      resolveConfiguredModelRefMock.mock.invocationCallOrder[0],
+    );
+    expect(ensureRuntimePluginsLoadedMock.mock.invocationCallOrder[0]).toBeLessThan(
+      resolveCronDeliveryPlanMock.mock.invocationCallOrder[0],
+    );
   });
 });
