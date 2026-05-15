@@ -30,8 +30,8 @@ struct AmbientCommandRegistryTests {
     @Test func `suggestions filter by prefix and include help text`() {
         let suggestions = AmbientCommandRegistry.default.suggestions(for: "/ca")
 
-        #expect(suggestions.map(\.name) == ["camera", "canvas"])
-        #expect(suggestions.first?.group == .modes)
+        #expect(suggestions.map(\.name) == ["capabilities", "camera", "canvas"])
+        #expect(suggestions.first?.group == .core)
         #expect(suggestions.last?.group == .surfaces)
         #expect(suggestions.last?.description == "Open or close Canvas")
     }
@@ -42,5 +42,18 @@ struct AmbientCommandRegistryTests {
         #expect(suggestions.contains(where: { $0.name == "help" }))
         #expect(suggestions.contains(where: { $0.name == "canvas" }))
         #expect(suggestions.contains(where: { $0.name == "restart-gateway" }))
+    }
+
+    @Test func `advanced assistant commands are registered`() {
+        let commandNames = AmbientCommandRegistry.default.commands.map(\.name)
+
+        #expect(commandNames.contains("context"))
+        #expect(commandNames.contains("capabilities"))
+        #expect(commandNames.contains("receipt"))
+        #expect(commandNames.contains("handoff"))
+        #expect(commandNames.contains("act"))
+        #expect(commandNames.contains("watch"))
+        #expect(commandNames.contains("approve"))
+        #expect(commandNames.contains("memory"))
     }
 }

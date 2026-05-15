@@ -8,7 +8,7 @@ struct AmbientCommandDockModelTests {
 
         model.inputText = "/ca"
 
-        #expect(model.suggestions.map(\.name) == ["camera", "canvas"])
+        #expect(model.suggestions.map(\.name) == ["capabilities", "camera", "canvas"])
         #expect(model.thomasState == .focused)
     }
 
@@ -69,5 +69,22 @@ struct AmbientCommandDockModelTests {
         #expect(model.inputText == "")
         #expect(model.result == .none)
         #expect(model.thomasState == .ready)
+    }
+
+    @Test func `refresh assistant snapshot updates visible context`() async {
+        let model = AmbientCommandDockModel(actions: AmbientCommandDockActionExecutor(environment: .testing(
+            assistantSnapshot: {
+                var snapshot = AmbientAssistantSurfaceSnapshot.default
+                snapshot.context.frontApp = "Xcode"
+                snapshot.status.detail = "Running tests"
+                snapshot.status.tone = .working
+                return snapshot
+            })))
+
+        await model.refreshAssistantSnapshot()
+
+        #expect(model.assistantSnapshot.context.frontApp == "Xcode")
+        #expect(model.assistantSnapshot.status.detail == "Running tests")
+        #expect(model.thomasState == .working)
     }
 }

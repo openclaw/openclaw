@@ -39,4 +39,26 @@ struct AmbientCommandDockActionTests {
         #expect(result == .success("Sent to Thomas"))
         #expect(capturedPrompt == "check my latest iMessage")
     }
+
+    @Test func `context command summarizes assistant snapshot`() async {
+        let executor = AmbientCommandDockActionExecutor(environment: .testing(
+            assistantSnapshot: {
+                var snapshot = AmbientAssistantSurfaceSnapshot.default
+                snapshot.context.frontApp = "Safari"
+                snapshot.context.gatewayLabel = "Gateway healthy"
+                return snapshot
+            }))
+
+        let result = await executor.execute(name: "context", arguments: "")
+
+        #expect(result == .info("Context: Safari · Gateway healthy · main session"))
+    }
+
+    @Test func `handoff command is honest when iphone service is not wired`() async {
+        let executor = AmbientCommandDockActionExecutor(environment: .testing())
+
+        let result = await executor.execute(name: "handoff", arguments: "iphone")
+
+        #expect(result == .info("iPhone handoff is visible in this layer, but execution will be wired in the cross-device phase."))
+    }
 }

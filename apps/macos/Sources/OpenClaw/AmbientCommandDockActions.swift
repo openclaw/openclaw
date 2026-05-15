@@ -21,6 +21,7 @@ struct AmbientCommandDockActionEnvironment {
     var toggleCamera: @MainActor () -> AmbientCommandResult
     var toggleBrowser: @MainActor () -> AmbientCommandResult
     var sendPrompt: @MainActor (String) async -> AmbientCommandResult
+    var assistantSnapshot: @MainActor () async -> AmbientAssistantSurfaceSnapshot
 
     static var live: AmbientCommandDockActionEnvironment {
         AmbientCommandDockActionEnvironment(
@@ -104,11 +105,15 @@ struct AmbientCommandDockActionEnvironment {
             },
             sendPrompt: { prompt in
                 await Self.sendPromptToGateway(prompt)
+            },
+            assistantSnapshot: {
+                await AmbientAssistantLayerService.makeSnapshot()
             })
     }
 
     static func testing(
-        sendPrompt: @escaping @MainActor (String) async -> AmbientCommandResult = { _ in .success("Sent to Thomas") })
+        sendPrompt: @escaping @MainActor (String) async -> AmbientCommandResult = { _ in .success("Sent to Thomas") },
+        assistantSnapshot: @escaping @MainActor () async -> AmbientAssistantSurfaceSnapshot = { .default })
         -> AmbientCommandDockActionEnvironment
     {
         AmbientCommandDockActionEnvironment(
@@ -130,7 +135,8 @@ struct AmbientCommandDockActionEnvironment {
             toggleVoiceWake: { .success("Voice Wake enabled") },
             toggleCamera: { .success("Camera access enabled") },
             toggleBrowser: { .success("Browser control enabled") },
-            sendPrompt: sendPrompt)
+            sendPrompt: sendPrompt,
+            assistantSnapshot: assistantSnapshot)
     }
 
     private static func sendPromptToGateway(_ prompt: String) async -> AmbientCommandResult {
@@ -171,6 +177,19 @@ struct AmbientCommandDockActionExecutor {
             return .success("Dismissed")
         case "status":
             return .info("Use /health for a fresh check, /logs for diagnostics, or /restart-gateway if the gateway is stuck.")
+        case "context":
+            let snapshot = await self.environment.assistantSnapshot()
+            return .info("Context: \(snapshot.context.frontApp) · \(snapshot.context.gatewayLabel) · \(snapshot.context.sessionLabel)")
+        case "capabilities":
+            let snapshot = await self.environment.assistantSnapshot()
+            let available = snapshot.capabilities
+                .filter { $0.availability == .available }
+                .map(\.title)
+                .joined(separator: ", ")
+            return .info(available.isEmpty ? "No assistant capabilities are available yet" : "Available: \(available)")
+        case "receipt":
+            let snapshot = await self.environment.assistantSnapshot()
+            return .info("\(snapshot.receipt.summary). \(snapshot.receipt.detail)")
         case "canvas":
             return await self.environment.openCanvas()
         case "chat", "main", "new":
@@ -232,6 +251,16 @@ struct AmbientCommandDockActionExecutor {
         case "nodes":
             self.environment.openSettings(.instances)
             return .success("Instances settings opened")
+        case "handoff":
+            return .info("iPhone handoff is visible in this layer, but execution will be wired in the cross-device phase.")
+        case "act":
+            return .info("Action proposals are designed; execution will be wired in the proposal service phase.")
+        case "watch":
+            return .info("Watchers are opt-in; proactive watchers will be wired after proposal receipts exist.")
+        case "approve":
+            return .info("No pending ambient proposal is awaiting approval.")
+        case "memory":
+            return .info("Memory curation is planned; current phase keeps memory writes explicit.")
         default:
             return .failure("Command /\(name) is not wired yet")
         }
@@ -242,6 +271,11 @@ struct AmbientCommandDockActionExecutor {
         let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .none }
         return await self.environment.sendPrompt(trimmed)
+    }
+
+    @MainActor
+    func assistantSnapshot() async -> AmbientAssistantSurfaceSnapshot {
+        await self.environment.assistantSnapshot()
     }
 
     private func helpText() -> String {

@@ -55,8 +55,12 @@ enum AmbientCommandResult: Equatable {
 }
 
 enum AmbientThomasOrbState: Equatable {
+    case quiet
     case ready
     case focused
+    case reading
+    case planning
+    case waitingForApproval
     case sending
     case working
     case success
@@ -71,6 +75,12 @@ struct AmbientThomasOrbMotionProfile: Equatable {
 
     static func profile(for state: AmbientThomasOrbState) -> AmbientThomasOrbMotionProfile {
         switch state {
+        case .quiet:
+            AmbientThomasOrbMotionProfile(
+                pulseSeconds: 4.0,
+                orbitSeconds: 14.0,
+                floatAmplitude: 3,
+                glowOpacity: 0.16)
         case .ready:
             AmbientThomasOrbMotionProfile(
                 pulseSeconds: 2.8,
@@ -83,6 +93,24 @@ struct AmbientThomasOrbMotionProfile: Equatable {
                 orbitSeconds: 8.0,
                 floatAmplitude: 12,
                 glowOpacity: 0.36)
+        case .reading:
+            AmbientThomasOrbMotionProfile(
+                pulseSeconds: 2.2,
+                orbitSeconds: 7.2,
+                floatAmplitude: 9,
+                glowOpacity: 0.34)
+        case .planning:
+            AmbientThomasOrbMotionProfile(
+                pulseSeconds: 2.0,
+                orbitSeconds: 6.2,
+                floatAmplitude: 11,
+                glowOpacity: 0.38)
+        case .waitingForApproval:
+            AmbientThomasOrbMotionProfile(
+                pulseSeconds: 1.6,
+                orbitSeconds: 5.8,
+                floatAmplitude: 6,
+                glowOpacity: 0.46)
         case .sending:
             AmbientThomasOrbMotionProfile(
                 pulseSeconds: 1.25,

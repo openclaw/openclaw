@@ -28,4 +28,12 @@ struct AmbientThomasOrbTests {
 
         _ = view.body
     }
+
+    @Test func `new assistant tones map to orb profiles`() {
+        let reading = AmbientThomasOrbMotionProfile.profile(for: .reading)
+        let approval = AmbientThomasOrbMotionProfile.profile(for: .waitingForApproval)
+
+        #expect(reading.floatAmplitude > 0)
+        #expect(approval.glowOpacity > 0)
+    }
 }

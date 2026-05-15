@@ -14,6 +14,7 @@ final class AmbientCommandDockModel {
     var thomasState: AmbientThomasOrbState = .ready
     var sessionLabel: String = "main session"
     var isSubmitting = false
+    private(set) var assistantSnapshot: AmbientAssistantSurfaceSnapshot = .default
     var shouldAcceptSuggestionOnReturn: Bool {
         guard !self.suggestions.isEmpty else { return false }
         if case .command = self.parsedInput() {
@@ -39,6 +40,7 @@ final class AmbientCommandDockModel {
         self.suggestions = []
         self.selectedSuggestionIndex = 0
         self.thomasState = .ready
+        self.assistantSnapshot = .default
     }
 
     func acceptSuggestion(_ suggestion: AmbientCommandSpec) {
@@ -60,6 +62,7 @@ final class AmbientCommandDockModel {
     }
 
     func submit() async {
+        await self.refreshAssistantSnapshot()
         let parsed = self.parsedInput()
         switch parsed {
         case .empty:
@@ -72,6 +75,14 @@ final class AmbientCommandDockModel {
             let hint = suggestions.prefix(3).map(\.displayName).joined(separator: ", ")
             self.result = .failure(hint.isEmpty ? "Unknown command /\(name)" : "Unknown command /\(name). Try \(hint)")
             self.thomasState = .error
+        }
+    }
+
+    func refreshAssistantSnapshot() async {
+        self.assistantSnapshot = await self.actions.assistantSnapshot()
+        self.sessionLabel = self.assistantSnapshot.context.sessionLabel
+        if !self.isSubmitting {
+            self.thomasState = self.thomasState(for: self.assistantSnapshot.status.tone)
         }
     }
 
@@ -128,6 +139,25 @@ final class AmbientCommandDockModel {
             .ready
         case .info, .success:
             .success
+        }
+    }
+
+    private func thomasState(for tone: AmbientAssistantTone) -> AmbientThomasOrbState {
+        switch tone {
+        case .ready:
+            .ready
+        case .reading:
+            .reading
+        case .planning:
+            .planning
+        case .waitingForApproval:
+            .waitingForApproval
+        case .working:
+            .working
+        case .success:
+            .success
+        case .blocked, .error:
+            .error
         }
     }
 }

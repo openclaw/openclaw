@@ -27,6 +27,24 @@ struct AmbientCommandRegistry {
             description: "Show gateway and session status",
             argumentHint: nil),
         AmbientCommandSpec(
+            name: "context",
+            aliases: ["ctx"],
+            group: .core,
+            description: "Summarize visible assistant context",
+            argumentHint: nil),
+        AmbientCommandSpec(
+            name: "capabilities",
+            aliases: ["caps"],
+            group: .core,
+            description: "Show what Thomas can do now",
+            argumentHint: nil),
+        AmbientCommandSpec(
+            name: "receipt",
+            aliases: ["receipts"],
+            group: .core,
+            description: "Show latest assistant receipt",
+            argumentHint: nil),
+        AmbientCommandSpec(
             name: "canvas",
             aliases: [],
             group: .surfaces,
@@ -199,6 +217,36 @@ struct AmbientCommandRegistry {
             aliases: [],
             group: .automation,
             description: "Open nodes/instances",
+            argumentHint: nil),
+        AmbientCommandSpec(
+            name: "handoff",
+            aliases: [],
+            group: .automation,
+            description: "Prepare cross-device handoff",
+            argumentHint: "iphone"),
+        AmbientCommandSpec(
+            name: "act",
+            aliases: [],
+            group: .automation,
+            description: "Create a safe action proposal",
+            argumentHint: nil),
+        AmbientCommandSpec(
+            name: "watch",
+            aliases: [],
+            group: .automation,
+            description: "Create an opt-in watcher proposal",
+            argumentHint: nil),
+        AmbientCommandSpec(
+            name: "approve",
+            aliases: [],
+            group: .automation,
+            description: "Approve the selected proposal",
+            argumentHint: nil),
+        AmbientCommandSpec(
+            name: "memory",
+            aliases: [],
+            group: .automation,
+            description: "Show memory and follow-up status",
             argumentHint: nil),
     ])
 

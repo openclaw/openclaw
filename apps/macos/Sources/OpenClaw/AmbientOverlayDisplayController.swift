@@ -211,8 +211,9 @@ final class AmbientOverlayDisplayController {
 
     nonisolated static func commandDockFrame(for display: DisplaySnapshot?) -> NSRect {
         let screen = display?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1200, height: 800)
-        let width = min(CGFloat(868), max(CGFloat(520), screen.width - 56))
-        let size = NSSize(width: width, height: 264)
+        let width = min(max(screen.width - 80, 960), 1040)
+        let height = min(max(screen.height * 0.54, 430), 520)
+        let size = NSSize(width: width, height: height)
         let origin = CGPoint(
             x: screen.midX - size.width / 2,
             y: screen.minY + 28)

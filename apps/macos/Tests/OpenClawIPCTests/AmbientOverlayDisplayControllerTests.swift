@@ -16,8 +16,8 @@ struct AmbientOverlayDisplayControllerTests {
 
         let frame = AmbientOverlayDisplayController.commandDockFrame(for: display)
 
-        #expect(frame.width == 868)
-        #expect(frame.height == 264)
+        #expect(frame.width >= 960)
+        #expect(frame.height >= 430)
         #expect(frame.midX == display.visibleFrame.midX)
         #expect(frame.minY == display.visibleFrame.minY + 28)
     }
