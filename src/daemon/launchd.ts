@@ -43,6 +43,13 @@ const LAUNCH_AGENT_ENV_FILE_MODE = 0o600;
 const LAUNCH_AGENT_ENV_WRAPPER_MODE = 0o700;
 const LAUNCH_AGENT_ENV_DIR_NAME = "service-env";
 const LAUNCH_AGENT_STDERR_PATH = "/dev/null";
+const OPENCLAW_UPDATE_LAUNCHD_LABEL_PREFIX = "ai.openclaw.update.";
+
+export type StaleOpenClawUpdateLaunchdJob = {
+  label: string;
+  pid?: number;
+  lastExitStatus?: number;
+};
 
 function assertValidLaunchAgentLabel(label: string): string {
   const trimmed = label.trim();
@@ -218,6 +225,45 @@ async function execLaunchctl(
   const file = isWindows ? (process.env.ComSpec ?? "cmd.exe") : "launchctl";
   const fileArgs = isWindows ? ["/d", "/s", "/c", "launchctl", ...args] : args;
   return await execFileUtf8(file, fileArgs, isWindows ? { windowsHide: true } : {});
+}
+
+export function parseLaunchctlListOpenClawUpdateJobs(
+  output: string,
+): StaleOpenClawUpdateLaunchdJob[] {
+  const jobs: StaleOpenClawUpdateLaunchdJob[] = [];
+  for (const rawLine of output.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) {
+      continue;
+    }
+    const parts = line.split(/\s+/);
+    const [pidRaw, statusRaw, ...labelParts] = parts;
+    const label = labelParts.join(" ");
+    if (!label.startsWith(OPENCLAW_UPDATE_LAUNCHD_LABEL_PREFIX)) {
+      continue;
+    }
+    const pid = pidRaw === "-" ? undefined : parseStrictPositiveInteger(pidRaw ?? "");
+    const lastExitStatus = parseStrictInteger(statusRaw ?? "");
+    jobs.push({
+      label,
+      ...(pid !== undefined ? { pid } : {}),
+      ...(lastExitStatus !== undefined ? { lastExitStatus } : {}),
+    });
+  }
+  return jobs.toSorted((a, b) => a.label.localeCompare(b.label));
+}
+
+export async function findStaleOpenClawUpdateLaunchdJobs(): Promise<
+  StaleOpenClawUpdateLaunchdJob[]
+> {
+  if (process.platform !== "darwin") {
+    return [];
+  }
+  const result = await execLaunchctl(["list"]);
+  if (result.code !== 0) {
+    return [];
+  }
+  return parseLaunchctlListOpenClawUpdateJobs(result.stdout);
 }
 
 function parseGatewayPortFromProgramArguments(

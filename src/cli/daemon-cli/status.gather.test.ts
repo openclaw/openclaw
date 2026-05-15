@@ -28,6 +28,7 @@ const loadGatewayTlsRuntime = vi.fn(async (_cfg?: unknown) => ({
   fingerprintSha256: "sha256:11:22:33:44",
 }));
 const findExtraGatewayServices = vi.fn(async (_env?: unknown, _opts?: unknown) => []);
+const findStaleOpenClawUpdateLaunchdJobs = vi.fn(async () => []);
 const inspectPortUsage = vi.fn(async (port: number) => ({
   port,
   status: "free" as const,
@@ -139,6 +140,10 @@ vi.mock("../../daemon/inspect.js", () => ({
   findExtraGatewayServices: (env: unknown, opts?: unknown) => findExtraGatewayServices(env, opts),
 }));
 
+vi.mock("../../daemon/launchd.js", () => ({
+  findStaleOpenClawUpdateLaunchdJobs: () => findStaleOpenClawUpdateLaunchdJobs(),
+}));
+
 vi.mock("../../daemon/service-audit.js", () => ({
   auditGatewayServiceConfig: (opts: unknown) => auditGatewayServiceConfig(opts),
 }));
@@ -210,6 +215,8 @@ describe("gatherDaemonStatus", () => {
     delete process.env.DAEMON_GATEWAY_PASSWORD;
     callGatewayStatusProbe.mockClear();
     createConfigIOCalls.mockClear();
+    findStaleOpenClawUpdateLaunchdJobs.mockReset();
+    findStaleOpenClawUpdateLaunchdJobs.mockResolvedValue([]);
     loadGatewayTlsRuntime.mockClear();
     inspectGatewayRestart.mockClear();
     readGatewayRestartHandoffSync.mockClear();
@@ -440,6 +447,31 @@ describe("gatherDaemonStatus", () => {
     expect(status.service.restartHandoff?.supervisorMode).toBe("launchd");
   });
 
+  it.runIf(process.platform === "darwin")(
+    "surfaces stale updater launchd jobs only during deep status",
+    async () => {
+      findStaleOpenClawUpdateLaunchdJobs.mockResolvedValueOnce([
+        {
+          label: "ai.openclaw.update.2026.5.12",
+          lastExitStatus: 127,
+        },
+      ]);
+
+      const status = await gatherDaemonStatus({
+        rpc: {},
+        probe: false,
+        deep: true,
+      });
+
+      expect(status.service.staleUpdateLaunchdJobs).toEqual([
+        {
+          label: "ai.openclaw.update.2026.5.12",
+          lastExitStatus: 127,
+        },
+      ]);
+    },
+  );
+
   it("does not read restart handoffs during normal status", async () => {
     await gatherDaemonStatus({
       rpc: {},
@@ -448,6 +480,7 @@ describe("gatherDaemonStatus", () => {
     });
 
     expect(readGatewayRestartHandoffSync).not.toHaveBeenCalled();
+    expect(findStaleOpenClawUpdateLaunchdJobs).not.toHaveBeenCalled();
   });
 
   it("uses the fast config path for plain same-file status reads", async () => {
