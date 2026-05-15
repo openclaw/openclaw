@@ -1142,6 +1142,154 @@ describe("short-term promotion", () => {
     ).toBe(false);
   });
 
+  it("treats markdown skeleton snippets as unpromotable", () => {
+    for (const snippet of [
+      "-",
+      "* ",
+      "- -",
+      ">",
+      "```",
+      "|",
+      "[]",
+      "## Tagesnotizen\n-\n\n## Entscheidungen\n-",
+      "## Tagesnotizen - ## Entscheidungen -",
+    ]) {
+      expect(__testing.isUnpromotableShortTermSnippet(snippet)).toBe(true);
+    }
+
+    expect(__testing.isUnpromotableShortTermSnippet("- Keep gateway restarts supervised.")).toBe(
+      false,
+    );
+  });
+
+  it("does not record placeholder-only grounded candidates for promotion", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-18", [
+        "## Tagesnotizen",
+        "-",
+        "",
+        "## Entscheidungen",
+        "-",
+      ]);
+
+      await recordGroundedShortTermCandidates({
+        workspaceDir,
+        query: "__dreaming_grounded_backfill__",
+        items: [
+          {
+            path: "memory/2026-04-18.md",
+            startLine: 2,
+            endLine: 2,
+            snippet: "-",
+            score: 0.92,
+            query: "__dreaming_grounded_backfill__:placeholder",
+            signalCount: 3,
+            dayBucket: "2026-04-18",
+          },
+        ],
+        nowMs: Date.parse("2026-04-18T10:00:00.000Z"),
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+
+      expect(ranked).toStrictEqual([]);
+    });
+  });
+
+  it("does not rank or apply already stored placeholder snippets", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-18", ["## Tagesnotizen", "-"]);
+      await fs.writeFile(
+        resolveShortTermRecallStorePath(workspaceDir),
+        JSON.stringify(
+          {
+            version: 1,
+            updatedAt: "2026-04-18T10:00:00.000Z",
+            entries: {
+              placeholder: {
+                key: "placeholder",
+                path: "memory/2026-04-18.md",
+                startLine: 2,
+                endLine: 2,
+                source: "memory",
+                snippet: "-",
+                recallCount: 3,
+                dailyCount: 0,
+                groundedCount: 0,
+                totalScore: 2.8,
+                maxScore: 0.95,
+                firstRecalledAt: "2026-04-18T10:00:00.000Z",
+                lastRecalledAt: "2026-04-18T10:00:00.000Z",
+                queryHashes: ["a", "b"],
+                recallDays: ["2026-04-18"],
+                conceptTags: [],
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      expect(ranked).toStrictEqual([]);
+
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        candidates: [
+          {
+            key: "manual-placeholder",
+            path: "memory/2026-04-18.md",
+            startLine: 2,
+            endLine: 2,
+            source: "memory",
+            snippet: "-",
+            recallCount: 3,
+            dailyCount: 0,
+            groundedCount: 0,
+            signalCount: 3,
+            avgScore: 0.92,
+            maxScore: 0.95,
+            uniqueQueries: 2,
+            firstRecalledAt: "2026-04-18T10:00:00.000Z",
+            lastRecalledAt: "2026-04-18T10:00:00.000Z",
+            ageDays: 0,
+            score: 0.9,
+            recallDays: ["2026-04-18"],
+            conceptTags: [],
+            components: {
+              frequency: 1,
+              relevance: 0.9,
+              diversity: 1,
+              recency: 1,
+              consolidation: 1,
+              conceptual: 0,
+            },
+          },
+        ],
+      });
+
+      expect(applied.applied).toBe(0);
+      await expect(
+        fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
   describe("lineRangeOverlapsDreamingFence", () => {
     it("returns true when the range falls inside a Light Sleep fence", () => {
       const lines = [
