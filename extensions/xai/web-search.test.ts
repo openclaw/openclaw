@@ -10,6 +10,34 @@ import { wrapXaiWebSearchError } from "./src/web-search-shared.js";
 import { __testing } from "./test-api.js";
 import { createXaiWebSearchProvider } from "./web-search.js";
 
+vi.mock("openclaw/plugin-sdk/provider-web-search", async (importOriginal) => {
+  const original = await importOriginal<typeof import("openclaw/plugin-sdk/provider-web-search")>();
+  return {
+    ...original,
+    postTrustedWebToolsJson: async (
+      params: {
+        url: string;
+        apiKey: string;
+        body: Record<string, unknown>;
+        extraHeaders?: Record<string, string>;
+      },
+      parseResponse: (response: Response) => Promise<unknown>,
+    ) => {
+      const response = await globalThis.fetch(params.url, {
+        method: "POST",
+        headers: {
+          ...params.extraHeaders,
+          Accept: "application/json",
+          Authorization: `Bearer ${params.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(params.body),
+      });
+      return await parseResponse(response);
+    },
+  };
+});
+
 const {
   extractXaiWebSearchContent,
   resolveXaiInlineCitations,
@@ -349,8 +377,11 @@ describe("xai web search config resolution", () => {
       },
       searchConfig: { provider: "grok" },
     });
+    if (!tool) {
+      throw new Error("Expected xAI web search tool");
+    }
 
-    await tool?.execute({ query: "OpenClaw Grok proxy test" });
+    await tool.execute({ query: "OpenClaw Grok proxy test" });
 
     expect(firstFetchUrl(mockFetch)).toBe("https://api.x.ai/proxy/v1/responses");
   });
