@@ -535,7 +535,7 @@ describe("stuck session diagnostics threshold", () => {
       logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
       markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
 
-      vi.advanceTimersByTime(9 * 60_000);
+      vi.advanceTimersByTime(4 * 60_000);
       expect(recoverStuckSession).not.toHaveBeenCalled();
 
       vi.advanceTimersByTime(2 * 60_000);
