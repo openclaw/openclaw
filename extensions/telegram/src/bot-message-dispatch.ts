@@ -166,6 +166,7 @@ type TelegramTranscriptMirrorPayload = { text?: string; mediaUrls?: string[] };
 type TelegramReplyFenceState = {
   generation: number;
   activeDispatches: number;
+  abortControllers?: Set<AbortController>;
 };
 
 type TelegramReplyFenceKey = {
@@ -200,7 +201,18 @@ function resolveTelegramReplyFenceKey(params: {
   };
 }
 
-function beginTelegramReplyFence(params: { key: string; supersede: boolean }): number {
+function abortTelegramReplyFenceControllers(state: TelegramReplyFenceState): void {
+  for (const controller of state.abortControllers ?? []) {
+    controller.abort();
+  }
+  state.abortControllers?.clear();
+}
+
+function beginTelegramReplyFence(params: {
+  key: string;
+  supersede: boolean;
+  abortController?: AbortController;
+}): number {
   const existing = telegramReplyFenceByKey.get(params.key);
   const state: TelegramReplyFenceState = existing ?? {
     generation: 0,
@@ -208,6 +220,10 @@ function beginTelegramReplyFence(params: { key: string; supersede: boolean }): n
   };
   if (params.supersede) {
     state.generation += 1;
+    abortTelegramReplyFenceControllers(state);
+  }
+  if (params.abortController) {
+    (state.abortControllers ??= new Set()).add(params.abortController);
   }
   state.activeDispatches += 1;
   telegramReplyFenceByKey.set(params.key, state);
@@ -220,6 +236,7 @@ function supersedeTelegramReplyFence(key: string): void {
     return;
   }
   state.generation += 1;
+  abortTelegramReplyFenceControllers(state);
   telegramReplyFenceByKey.set(key, state);
 }
 
@@ -227,10 +244,13 @@ function isTelegramReplyFenceSuperseded(params: { key: string; generation: numbe
   return (telegramReplyFenceByKey.get(params.key)?.generation ?? 0) !== params.generation;
 }
 
-function endTelegramReplyFence(key: string): void {
+function endTelegramReplyFence(key: string, abortController?: AbortController): void {
   const state = telegramReplyFenceByKey.get(key);
   if (!state) {
     return;
+  }
+  if (abortController) {
+    state.abortControllers?.delete(abortController);
   }
   state.activeDispatches -= 1;
   if (state.activeDispatches <= 0) {
@@ -473,6 +493,7 @@ export const dispatchTelegramMessage = async ({
     threadSpec,
   });
   let replyFenceGeneration: number | undefined;
+  const roomEventAbortController = isRoomEvent ? new AbortController() : undefined;
   let dispatchWasSuperseded = false;
   const isDispatchSuperseded = () =>
     replyFenceGeneration !== undefined &&
@@ -484,7 +505,7 @@ export const dispatchTelegramMessage = async ({
     if (replyFenceGeneration === undefined) {
       return;
     }
-    endTelegramReplyFence(replyFenceKey.activeKey);
+    endTelegramReplyFence(replyFenceKey.activeKey, roomEventAbortController);
     replyFenceGeneration = undefined;
   };
   const draftMaxChars = Math.min(textLimit, 4096);
@@ -876,6 +897,7 @@ export const dispatchTelegramMessage = async ({
   replyFenceGeneration = beginTelegramReplyFence({
     key: replyFenceKey.activeKey,
     supersede: supersedeReplyFence,
+    abortController: roomEventAbortController,
   });
 
   const implicitQuoteReplyTargetId =
@@ -1459,6 +1481,7 @@ export const dispatchTelegramMessage = async ({
                 replyOptions: {
                   skillFilter,
                   disableBlockStreaming,
+                  abortSignal: roomEventAbortController?.signal,
                   sourceReplyDeliveryMode: isRoomEvent ? "message_tool_only" : undefined,
                   suppressTyping: isRoomEvent,
                   onPartialReply:

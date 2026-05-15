@@ -244,6 +244,14 @@ export async function handleTelegramAction(
     cfg,
     accountId,
   });
+  const notifyVisibleOutboundSuccess = (to: string) => {
+    notifyTelegramInboundTurnOutboundSuccess({
+      sessionKey: options?.sessionKey ?? undefined,
+      to,
+      accountId,
+      inboundTurnKind: options?.inboundTurnKind,
+    });
+  };
 
   if (action === "react") {
     // All react failures return soft results (jsonResult with ok:false) instead
@@ -400,12 +408,7 @@ export async function handleTelegramAction(
         readBooleanParam(params, "asDocument") ??
         false,
     });
-    notifyTelegramInboundTurnOutboundSuccess({
-      sessionKey: options?.sessionKey ?? undefined,
-      to,
-      accountId,
-      inboundTurnKind: options?.inboundTurnKind,
-    });
+    notifyVisibleOutboundSuccess(to);
     await maybePinTelegramActionSend({
       args: params,
       cfg,
@@ -483,6 +486,7 @@ export async function handleTelegramAction(
         silent: silent ?? undefined,
       },
     );
+    notifyVisibleOutboundSuccess(to);
     return jsonResult({
       ok: true,
       messageId: result.messageId,
@@ -593,6 +597,7 @@ export async function handleTelegramAction(
       replyToMessageId: replyToMessageId ?? undefined,
       messageThreadId: messageThreadId ?? undefined,
     });
+    notifyVisibleOutboundSuccess(to);
     return jsonResult({
       ok: true,
       messageId: result.messageId,

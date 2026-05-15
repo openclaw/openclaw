@@ -444,6 +444,48 @@ describe("handleTelegramAction", () => {
     endUserRequest();
   });
 
+  it.each([
+    {
+      name: "poll",
+      params: {
+        action: "poll",
+        to: "@testchannel",
+        question: "Ready?",
+        answers: ["Yes", "No"],
+      },
+      cfg: telegramConfig(),
+    },
+    {
+      name: "sticker",
+      params: {
+        action: "sendSticker",
+        to: "@testchannel",
+        fileId: "sticker-1",
+      },
+      cfg: telegramConfig({ actions: { sticker: true } }),
+    },
+  ])("marks room-event delivery after successful $name actions", async ({ params, cfg }) => {
+    let count = 0;
+    const end = beginTelegramInboundTurnDeliveryCorrelation(
+      "telegram-session",
+      {
+        outboundTo: "@testchannel",
+        markInboundTurnDelivered: () => {
+          count += 1;
+        },
+      },
+      { inboundTurnKind: "room_event" },
+    );
+
+    await handleTelegramAction(params, cfg, {
+      sessionKey: "telegram-session",
+      inboundTurnKind: "room_event",
+    });
+
+    expect(count).toBe(1);
+    end();
+  });
+
   it("accepts shared send action aliases", async () => {
     await handleTelegramAction(
       {

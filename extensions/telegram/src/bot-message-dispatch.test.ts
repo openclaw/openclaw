@@ -1821,8 +1821,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
     const userRequestStartGate = new Promise<void>((resolve) => {
       userRequestStarted = resolve;
     });
+    let roomEventAbortSignal: AbortSignal | undefined;
     dispatchReplyWithBufferedBlockDispatcher
-      .mockImplementationOnce(async ({ dispatcherOptions }) => {
+      .mockImplementationOnce(async ({ dispatcherOptions, replyOptions }) => {
+        roomEventAbortSignal = replyOptions?.abortSignal;
         roomEventStarted?.();
         await roomEventGate;
         await dispatcherOptions.deliver({ text: "stale ambient answer" }, { kind: "final" });
@@ -1879,6 +1881,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       streamMode: "off",
     });
     await userRequestStartGate;
+    expect(roomEventAbortSignal?.aborted).toBe(true);
     releaseRoomEvent?.();
     await Promise.all([roomEventPromise, userRequestPromise]);
 
