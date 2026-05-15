@@ -983,7 +983,7 @@ describe("chat session controls", () => {
     await i18n.setLocale("en");
   });
 
-  it("filters chat sessions by agent and switches to that agent's main session", () => {
+  it("filters chat sessions by agent and switches to that agent's latest eligible session", () => {
     const { state } = createChatHeaderState();
     const onSwitchSession = vi.fn();
     state.sessionKey = "agent:alpha:main";
@@ -1040,7 +1040,7 @@ describe("chat session controls", () => {
     agentSelect!.value = "beta";
     agentSelect!.dispatchEvent(new Event("change", { bubbles: true }));
 
-    expect(onSwitchSession).toHaveBeenCalledWith(state, "agent:beta:main");
+    expect(onSwitchSession).toHaveBeenCalledWith(state, "agent:beta:dashboard:beta-recent");
   });
 
   it("renders selector labels from the active locale", async () => {

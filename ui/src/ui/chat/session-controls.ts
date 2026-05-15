@@ -480,6 +480,24 @@ function resolvePreferredSessionForAgent(state: AppViewState, agentId: string): 
   if (resolveChatAgentFilterId(state, state.sessionKey) === normalizedAgentId) {
     return state.sessionKey;
   }
+  const defaultAgentId = normalizeAgentId(state.agentsList?.defaultId ?? "main");
+  const eligible = (state.sessionsResult?.sessions ?? [])
+    .filter((row) => {
+      if (!isSessionKeyTiedToAgent(row.key, normalizedAgentId, defaultAgentId)) {
+        return false;
+      }
+      if (row.kind === "global" || row.kind === "unknown") {
+        return false;
+      }
+      if (isCronSessionKey(row.key)) {
+        return false;
+      }
+      return !isSubagentSessionKey(row.key) && !row.spawnedBy;
+    })
+    .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+  if (eligible[0]?.key) {
+    return eligible[0].key;
+  }
   return buildAgentMainSessionKey({ agentId: normalizedAgentId });
 }
 
