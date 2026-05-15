@@ -28,9 +28,7 @@ export function resolveSourceReplyDeliveryMode(params: {
   defaultVisibleReplies?: "automatic" | "message_tool";
 }): SourceReplyDeliveryMode {
   if (params.requested) {
-    return params.messageToolAvailable === false && params.requested === "message_tool_only"
-      ? "automatic"
-      : params.requested;
+    return params.requested;
   }
   if (isExplicitSourceReplyCommand(params.ctx)) {
     return "automatic";

@@ -178,7 +178,7 @@ describe("resolveSourceReplyDeliveryMode", () => {
     ).toBe("message_tool_only");
   });
 
-  it("falls back to automatic when message tool is unavailable", () => {
+  it("falls back to automatic only for implicit message-tool-only mode", () => {
     expect(
       resolveSourceReplyDeliveryMode({
         cfg: emptyConfig,
@@ -200,7 +200,7 @@ describe("resolveSourceReplyDeliveryMode", () => {
         requested: "message_tool_only",
         messageToolAvailable: false,
       }),
-    ).toBe("automatic");
+    ).toBe("message_tool_only");
   });
 
   it("keeps message-tool-only delivery when message tool availability is unknown", () => {
@@ -378,7 +378,7 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
       },
     );
   });
-  it("keeps delivery automatic when message-tool-only mode cannot send visibly", () => {
+  it("falls back to automatic only for implicit message-tool-only mode", () => {
     expectPolicyFields(
       resolveSourceReplyVisibilityPolicy({
         cfg: emptyConfig,
@@ -403,10 +403,10 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
         messageToolAvailable: false,
       }),
       {
-        sourceReplyDeliveryMode: "automatic",
-        suppressAutomaticSourceDelivery: false,
-        suppressDelivery: false,
-        deliverySuppressionReason: "",
+        sourceReplyDeliveryMode: "message_tool_only",
+        suppressAutomaticSourceDelivery: true,
+        suppressDelivery: true,
+        deliverySuppressionReason: "sourceReplyDeliveryMode: message_tool_only",
       },
     );
   });
