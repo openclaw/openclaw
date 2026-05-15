@@ -31,6 +31,23 @@ describe("extractToolResultMediaPaths", () => {
     });
   });
 
+  it("extracts structured details.media attachments", () => {
+    expect(
+      extractToolResultMediaArtifact({
+        details: {
+          media: {
+            attachments: [
+              { type: "audio", path: "/tmp/song.mp3", mimeType: "audio/mpeg" },
+              { type: "image", url: "https://example.test/cover.png" },
+            ],
+          },
+        },
+      }),
+    ).toEqual({
+      mediaUrls: ["/tmp/song.mp3", "https://example.test/cover.png"],
+    });
+  });
+
   it("returns empty array when content has no text or image blocks", () => {
     expect(extractToolResultMediaPaths({ content: [{ type: "other" }] })).toStrictEqual([]);
   });

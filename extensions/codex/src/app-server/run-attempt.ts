@@ -2322,7 +2322,8 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     modelHasVision,
     hasInboundImages: (params.images?.length ?? 0) > 0,
   });
-  const filteredTools = filterCodexDynamicToolsForAllowlist(visionFilteredTools, params.toolsAllow);
+  const toolsAllow = includeForcedMessageToolAllow(params.toolsAllow, params);
+  const filteredTools = filterCodexDynamicToolsForAllowlist(visionFilteredTools, toolsAllow);
   return normalizeAgentRuntimeTools({
     runtimePlan: params.runtimePlan,
     tools: filteredTools,
@@ -2334,6 +2335,20 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     modelApi: params.model.api,
     model: params.model,
   });
+}
+
+function includeForcedMessageToolAllow(
+  toolsAllow: string[] | undefined,
+  params: EmbeddedRunAttemptParams,
+): string[] | undefined {
+  if (!shouldForceMessageTool(params)) {
+    return toolsAllow;
+  }
+  if (!toolsAllow?.length) {
+    return toolsAllow;
+  }
+  const normalized = new Set(toolsAllow.map((name) => normalizeCodexDynamicToolName(name)));
+  return normalized.has("message") ? toolsAllow : [...toolsAllow, "message"];
 }
 
 function filterCodexDynamicToolsForAllowlist<T extends { name: string }>(

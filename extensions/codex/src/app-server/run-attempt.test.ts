@@ -886,6 +886,38 @@ describe("runCodexAppServerAttempt", () => {
     expect(__testing.shouldForceMessageTool(params)).toBe(false);
   });
 
+  it("keeps forced message dynamic tool when toolsAllow omits it", async () => {
+    __testing.setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("message"),
+      createRuntimeDynamicTool("music_generate"),
+    ]);
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.sourceReplyDeliveryMode = "message_tool_only";
+    params.toolsAllow = ["music_generate"];
+
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: { appServer: { mode: "yolo" } },
+    });
+    await harness.waitForMethod("turn/start", 120_000);
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const startRequest = harness.requests.find((entry) => entry.method === "thread/start");
+    const dynamicToolNames =
+      (
+        startRequest?.params as { dynamicTools?: Array<{ name?: string }> } | undefined
+      )?.dynamicTools?.map((tool) => tool.name) ?? [];
+
+    expect(dynamicToolNames).toContain("message");
+    expect(dynamicToolNames).toContain("music_generate");
+  });
+
   it("starts Codex threads with searchable OpenClaw dynamic tools by default", async () => {
     __testing.setOpenClawCodingToolsFactoryForTests(() => [
       createRuntimeDynamicTool("message"),

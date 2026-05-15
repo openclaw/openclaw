@@ -19,10 +19,12 @@ import {
   isInternalMessageChannel,
   normalizeMessageChannel,
 } from "../utils/message-channel.js";
+import { mediaUrlsFromGeneratedAttachments } from "./generated-attachments.js";
 import type { AgentInternalEvent } from "./internal-events.js";
 import {
   getAgentCommandDeliveryFailure,
   getGatewayAgentResult,
+  hasDeliveredExpectedMedia,
   hasMessagingToolDeliveryEvidence,
   hasVisibleAgentPayload,
 } from "./pi-embedded-runner/delivery-evidence.js";
@@ -497,6 +499,39 @@ function hasGatewayAgentMessagingToolDelivery(response: unknown): boolean {
   return Boolean(result && hasMessagingToolDeliveryEvidence(result));
 }
 
+function collectExpectedMediaFromInternalEvents(
+  events: AgentInternalEvent[] | undefined,
+): string[] {
+  if (!events?.length) {
+    return [];
+  }
+  const mediaUrls: string[] = [];
+  const seen = new Set<string>();
+  for (const event of events) {
+    const values = [
+      ...(Array.isArray(event.mediaUrls) ? event.mediaUrls : []),
+      ...mediaUrlsFromGeneratedAttachments(event.attachments),
+    ];
+    for (const value of values) {
+      const normalized = typeof value === "string" ? value.trim() : "";
+      if (!normalized || seen.has(normalized)) {
+        continue;
+      }
+      seen.add(normalized);
+      mediaUrls.push(normalized);
+    }
+  }
+  return mediaUrls;
+}
+
+function hasGatewayAgentDeliveredExpectedMedia(
+  response: unknown,
+  expectedMediaUrls: readonly string[],
+): boolean {
+  const result = getGatewayAgentResult(response);
+  return Boolean(result && hasDeliveredExpectedMedia(result, expectedMediaUrls));
+}
+
 function getGatewayAgentCommandDeliveryFailure(response: unknown): string | undefined {
   const result = getGatewayAgentResult(response);
   return result ? getAgentCommandDeliveryFailure(result) : undefined;
@@ -724,6 +759,18 @@ async function sendSubagentAnnounceDirectly(params: {
         delivered: false,
         path: "direct",
         error: "completion agent did not deliver through the message tool",
+      };
+    }
+    const expectedMediaUrls = collectExpectedMediaFromInternalEvents(params.internalEvents);
+    if (
+      agentMediatedCompletion &&
+      expectedMediaUrls.length > 0 &&
+      !hasGatewayAgentDeliveredExpectedMedia(directAnnounceResponse, expectedMediaUrls)
+    ) {
+      return {
+        delivered: false,
+        path: "direct",
+        error: "completion agent did not deliver generated media",
       };
     }
     const directDeliveryFailure = shouldDeliverAgentFinal

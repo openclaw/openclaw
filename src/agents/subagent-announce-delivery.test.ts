@@ -1316,6 +1316,53 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("reports generated media completions when the announce agent replies text-only", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [
+          {
+            text: "The track is ready.",
+          },
+        ],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      sourceTool: "music_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "music_generation",
+          childSessionKey: "music_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "music generation task",
+          taskLabel: "night-drive synthwave",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 track.",
+          attachments: [
+            {
+              type: "audio",
+              path: "/tmp/generated-night-drive.mp3",
+              mimeType: "audio/mpeg",
+              name: "generated-night-drive.mp3",
+            },
+          ],
+          replyInstruction: "Deliver the generated music.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      error: "completion agent did not deliver generated media",
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("reports generated media group completions that miss required message-tool delivery", async () => {
     const callGateway = createGatewayMock({
       result: {
