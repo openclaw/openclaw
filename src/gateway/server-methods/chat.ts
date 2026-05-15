@@ -6,6 +6,7 @@ import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { rewriteTranscriptEntriesInSessionFile } from "../../agents/pi-embedded-runner/transcript-rewrite.js";
+import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
@@ -62,6 +63,7 @@ import {
   type ChatAbortOps,
   isChatStopCommandText,
   registerChatAbortController,
+  updateChatRunProvider,
 } from "../chat-abort.js";
 import {
   type ChatImageContent,
@@ -2013,6 +2015,10 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionKey,
       config: cfg,
     });
+    const resolvedSessionModel = resolveSessionModelRef(cfg, entry, agentId);
+    const resolvedSessionAuthProvider = resolveProviderIdForAuth(resolvedSessionModel.provider, {
+      config: cfg,
+    });
     let parsedMessage = inboundMessage;
     let parsedImages: ChatImageContent[] = [];
     let imageOrder: PromptImageOrderEntry[] = [];
@@ -2113,11 +2119,10 @@ export const chatHandlers: GatewayRequestHandlers = {
         await measureDiagnosticsTimelineSpan(
           "gateway.chat_send.prepare_attachments",
           async () => {
-            const modelRef = resolveSessionModelRef(cfg, entry, agentId);
             const supportsSessionModelImages = await resolveGatewayModelSupportsImages({
               loadGatewayModelCatalog: context.loadGatewayModelCatalog,
-              provider: modelRef.provider,
-              model: modelRef.model,
+              provider: resolvedSessionModel.provider,
+              model: resolvedSessionModel.model,
             });
             // Bound plugin sessions own the real recipient model, so keep image
             // attachments even when the parent OpenClaw session model is text-only.
@@ -2195,6 +2200,8 @@ export const chatHandlers: GatewayRequestHandlers = {
         now,
         ownerConnId: normalizeOptionalText(client?.connId),
         ownerDeviceId: normalizeOptionalText(client?.connect?.device?.id),
+        providerId: resolvedSessionModel.provider,
+        authProviderId: resolvedSessionAuthProvider,
         kind: "chat-send",
       });
       if (!activeRunAbort.registered) {
@@ -2545,7 +2552,16 @@ export const chatHandlers: GatewayRequestHandlers = {
                   }
                 }
               },
-              onModelSelected,
+              onModelSelected: (modelSelection) => {
+                updateChatRunProvider(context.chatAbortControllers, {
+                  runId: clientRunId,
+                  providerId: modelSelection.provider,
+                  authProviderId: resolveProviderIdForAuth(modelSelection.provider, {
+                    config: cfg,
+                  }),
+                });
+                onModelSelected(modelSelection);
+              },
             },
           }),
         {
