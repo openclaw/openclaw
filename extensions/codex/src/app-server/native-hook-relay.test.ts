@@ -13,7 +13,7 @@ describe("Codex native hook relay config", () => {
     });
 
     expect(config).toEqual({
-      "features.codex_hooks": true,
+      "features.hooks": true,
       "hooks.PreToolUse": [
         {
           matcher: null,
@@ -87,7 +87,7 @@ describe("Codex native hook relay config", () => {
         events: ["permission_request"],
       }),
     ).toEqual({
-      "features.codex_hooks": true,
+      "features.hooks": true,
       "hooks.PermissionRequest": [
         {
           matcher: null,
@@ -118,7 +118,7 @@ describe("Codex native hook relay config", () => {
 
   it("builds deterministic clearing config when the relay is disabled", () => {
     expect(buildCodexNativeHookRelayDisabledConfig()).toEqual({
-      "features.codex_hooks": false,
+      "features.hooks": false,
       "hooks.PreToolUse": [],
       "hooks.PostToolUse": [],
       "hooks.PermissionRequest": [],

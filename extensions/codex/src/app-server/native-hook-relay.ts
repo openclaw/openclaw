@@ -27,7 +27,7 @@ export function buildCodexNativeHookRelayConfig(params: {
 }): JsonObject {
   const events = params.events?.length ? params.events : CODEX_NATIVE_HOOK_RELAY_EVENTS;
   const config: JsonObject = {
-    "features.codex_hooks": true,
+    "features.hooks": true,
   };
   for (const event of events) {
     const codexEvent = CODEX_HOOK_EVENT_BY_NATIVE_EVENT[event];
@@ -51,7 +51,7 @@ export function buildCodexNativeHookRelayConfig(params: {
 
 export function buildCodexNativeHookRelayDisabledConfig(): JsonObject {
   return {
-    "features.codex_hooks": false,
+    "features.hooks": false,
     "hooks.PreToolUse": [],
     "hooks.PostToolUse": [],
     "hooks.PermissionRequest": [],
