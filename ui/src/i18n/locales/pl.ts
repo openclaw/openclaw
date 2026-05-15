@@ -349,6 +349,12 @@ export const pl: TranslationMap = {
     eventLogSubtitle: "Latest gateway events.",
     noEvents: "No events yet.",
   },
+  quickSettings: {
+    security: {
+      browserEnabled: "Browser enabled",
+      toolProfile: "Tool profile",
+    },
+  },
   execApproval: {
     expiresIn: "expires in {time}",
     expired: "expired",
@@ -1043,10 +1049,10 @@ export const pl: TranslationMap = {
     settings: "Ustawienia czatu",
     thinkingToggle: "Przełącz wyświetlanie myślenia/pracy asystenta",
     toolCallsToggle: "Przełącz wyświetlanie wywołań narzędzi i wyników narzędzi",
-    autoScrollMode: "Auto-scroll mode",
-    autoScrollAlways: "Always",
-    autoScrollNearBottom: "Near bottom",
-    autoScrollOff: "Off",
+    autoScrollMode: "Tryb automatycznego przewijania",
+    autoScrollAlways: "Zawsze",
+    autoScrollNearBottom: "Blisko dołu",
+    autoScrollOff: "Wyłączone",
     focusToggle: "Przełącz tryb skupienia (ukryj pasek boczny i nagłówek strony)",
     hideCronSessions: "Ukryj sesje Cron",
     showCronSessions: "Pokaż sesje Cron",
