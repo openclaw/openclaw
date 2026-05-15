@@ -3,7 +3,6 @@ import {
   clearHistoryEntriesIfEnabled,
   recordPendingHistoryEntryWithMedia,
 } from "../../auto-reply/reply/history.js";
-import type { HistoryMediaEntry } from "../../auto-reply/reply/history.types.js";
 import { createChannelReplyPipeline } from "../message/reply-pipeline.js";
 import type { CreateChannelReplyPipelineParams } from "../message/reply-pipeline.js";
 import { recordChannelBotPairLoopAndCheckSuppression } from "./bot-loop-protection.js";
@@ -13,6 +12,7 @@ import {
   isDurableInboundReplyDeliveryHandled,
   throwIfDurableInboundReplyDeliveryFailed,
 } from "./durable-delivery.js";
+import { toHistoryMediaEntries } from "./media.js";
 export { buildChannelTurnContext, filterChannelTurnSupplementalContext } from "./context.js";
 export type { BuildChannelTurnContextParams } from "./context.js";
 export {
@@ -44,7 +44,6 @@ import type {
   ChannelTurnResolved,
   ChannelTurnResult,
   DispatchedChannelTurnResult,
-  InboundMediaFacts,
   NormalizedTurnInput,
   PreparedChannelTurn,
   PreflightFacts,
@@ -79,7 +78,6 @@ export type {
   ChannelTurnResult,
   DispatchedChannelTurnResult,
   ConversationFacts,
-  InboundMediaFacts,
   MessageFacts,
   NormalizedTurnInput,
   PreflightFacts,
@@ -91,6 +89,7 @@ export type {
   SenderFacts,
   SupplementalContextFacts,
 } from "./types.js";
+export type { InboundMediaFacts } from "./types.js";
 
 const DEFAULT_EVENT_CLASS: ChannelEventClass = {
   kind: "message",
@@ -161,22 +160,6 @@ function clearPendingHistoryAfterTurn(params?: ChannelTurnHistoryFinalizeOptions
   });
 }
 
-function historyMediaFromInboundFacts(
-  media: readonly InboundMediaFacts[] | readonly HistoryMediaEntry[] | null | undefined,
-  messageId: string,
-): HistoryMediaEntry[] {
-  if (!Array.isArray(media)) {
-    return [];
-  }
-  return media.map((entry) => ({
-    path: entry.path,
-    url: entry.url,
-    contentType: entry.contentType,
-    kind: entry.kind,
-    messageId: entry.messageId ?? messageId,
-  }));
-}
-
 function resolveDroppedHistorySender(input: NormalizedTurnInput, preflight: PreflightFacts) {
   return (
     preflight.message?.senderLabel ??
@@ -235,8 +218,8 @@ export async function recordDroppedChannelTurnHistory(params: {
     shouldRecord: history.shouldRecord,
     media:
       typeof media === "function"
-        ? async () => historyMediaFromInboundFacts(await media(), params.input.id)
-        : historyMediaFromInboundFacts(media, params.input.id),
+        ? async () => toHistoryMediaEntries(await media(), { messageId: params.input.id })
+        : toHistoryMediaEntries(media, { messageId: params.input.id }),
   });
 }
 

@@ -11,6 +11,7 @@ import {
   logInboundDrop,
   matchesMentionWithExplicit,
   resolveEnvelopeFormatOptions,
+  toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveChannelMessageSourceReplyDeliveryMode } from "openclaw/plugin-sdk/channel-message";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
@@ -164,14 +165,7 @@ async function resolveSlackHistoryMediaForPendingRecord(params: {
   isThreadReply: boolean;
   threadStarter: SlackThreadStarter | null;
   isBotMessage: boolean;
-}): Promise<
-  Array<{
-    path: string;
-    contentType?: string;
-    kind: "image";
-    messageId?: string;
-  }>
-> {
+}) {
   const mediaMessage = buildSlackHistoryMediaCandidateMessage(params.message);
   if (!mediaMessage) {
     return [];
@@ -187,12 +181,10 @@ async function resolveSlackHistoryMediaForPendingRecord(params: {
     mediaReadIdleTimeoutMs: SLACK_HISTORY_MEDIA_IDLE_TIMEOUT_MS,
     mediaTotalTimeoutMs: SLACK_HISTORY_MEDIA_TOTAL_TIMEOUT_MS,
   });
-  return (content?.effectiveDirectMedia ?? []).map((media) => ({
-    path: media.path,
-    contentType: media.contentType,
-    kind: "image" as const,
+  return toInboundMediaFacts(content?.effectiveDirectMedia, {
+    kind: "image",
     messageId: params.message.ts,
-  }));
+  });
 }
 
 type SlackConversationContext = {
@@ -1129,10 +1121,7 @@ export async function prepareSlackMessage(params: {
         authorizers: [],
       },
     },
-    media: effectiveMedia?.map((media) => ({
-      path: media.path,
-      contentType: media.contentType,
-    })),
+    media: toInboundMediaFacts(effectiveMedia),
     supplemental: {
       thread: {
         // Only include thread starter body for NEW sessions (existing sessions already have it in their transcript)

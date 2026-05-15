@@ -2,6 +2,7 @@ import {
   buildChannelTurnContext,
   formatInboundEnvelope,
   resolveEnvelopeFormatOptions,
+  toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/conversation-runtime";
@@ -397,11 +398,9 @@ export async function buildDiscordMessageProcessContext(params: {
       authorized: commandAuthorized,
       body: preflightAudioTranscript ?? baseText,
     },
-    media: mediaListForContext.map((media, index) => ({
-      path: media.path,
-      contentType: media.contentType,
-      transcribed: index === preflightAudioIndex,
-    })),
+    media: toInboundMediaFacts(mediaListForContext, {
+      transcribed: (_media, index) => index === preflightAudioIndex,
+    }),
     supplemental: {
       quote: filteredReplyContext
         ? {
