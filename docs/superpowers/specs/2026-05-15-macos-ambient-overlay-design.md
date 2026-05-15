@@ -49,6 +49,18 @@ The default display scope is "current display". The current display should be re
 
 ## Architecture
 
+### Click-Through Contract
+
+The overlay should be built as multiple AppKit panels rather than one full-screen interactive surface:
+
+- the ambient panel is always `ignoresMouseEvents = true`
+- annotation and workspace panels are separate windows that exist only while armed or executing
+- idle mode never toggles a full-screen window into an interactive state
+- armed mode makes only visible controls interactive
+- dismissing armed mode destroys or hides interactive panels before returning to idle visuals
+
+This is the key technical boundary for preserving normal desktop behavior. It also gives tests a clear invariant: if the overlay is idle, the only visible window should be passive.
+
 ### OverlayExperienceController
 
 `OverlayExperienceController` is the top-level state machine. It owns:
@@ -76,7 +88,7 @@ It should observe screen frame changes indirectly through a higher-level screen 
 The ambient panel is a full-screen transparent AppKit panel. It should:
 
 - use a borderless/nonactivating overlay style
-- join all Spaces where appropriate
+- join all Spaces when the existing overlay behavior allows it
 - support full-screen auxiliary behavior
 - set `ignoresMouseEvents = true`
 - never become key or main
@@ -116,7 +128,7 @@ If the workspace grows into a complex mini-app, it can embed WebKit and reuse Ca
 - avoid conflicting with the existing right Option push-to-talk behavior
 - expose a menu-bar fallback trigger when global monitoring is unavailable
 
-The first implementation should use `Control+Option+Space` as the default shortcut, with settings support to change it later. This avoids the existing right Option push-to-talk behavior and keeps the first slice concrete.
+The first implementation should use `Control+Option+Space` as the default shortcut, with settings support to change it later. This avoids the existing right Option push-to-talk behavior and keeps the first slice concrete. Because macOS and keyboard layouts can reserve nearby shortcuts for input-source switching, the first build must also include a menu-bar "Open Ambient Overlay" fallback so the feature remains usable before custom shortcut editing ships.
 
 ### ScreenUnderstandingService
 
@@ -140,7 +152,12 @@ Settings should include:
 - annotation density
 - debug overlay mode
 
-These settings should live with existing macOS app state and settings patterns.
+These settings should live with existing macOS app state and settings patterns. Suggested defaults keys:
+
+- `openclaw.ambientOverlayEnabled`
+- `openclaw.ambientOverlayDisplayScope`
+- `openclaw.ambientOverlayIntensity`
+- `openclaw.ambientOverlayTimeoutSeconds`
 
 The first implementation should use a subtle edge glow or frame at low opacity as the default ambient visual treatment. Armed mode should time out after 30 seconds of inactivity and return to idle.
 
@@ -285,10 +302,24 @@ Manual checks:
 ## Product Decisions
 
 - Default hotkey: `Control+Option+Space`.
+- Required fallback activation: menu-bar "Open Ambient Overlay".
 - First workspace implementation: native SwiftUI.
 - Idle ambient treatment: subtle low-opacity edge glow or frame.
 - Armed inactivity timeout: 30 seconds.
 - Default display scope: current display.
+
+## First Slice Acceptance Criteria
+
+The first shippable slice is complete when:
+
+- the feature can be enabled or disabled from General settings
+- enabling it shows a passive ambient layer on the current display
+- idle ambient mode is click-through
+- `Control+Option+Space` or the menu fallback arms the overlay
+- armed mode shows a native bottom workspace sheet
+- `Esc`, the hotkey, close control, or 30 seconds of inactivity returns to idle
+- disabling the feature closes all overlay panels
+- tests cover state transitions, display selection, hotkey activation, and settings persistence
 
 ## Recommended First Build Slice
 
