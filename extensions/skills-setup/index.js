@@ -1,4 +1,4 @@
-import { access, readFile, readdir, realpath } from "node:fs/promises";
+import { access, readFile, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
@@ -77,6 +77,24 @@ async function resolveRealSkillDirCandidate({ skillsDirReal, candidateDir }) {
   if (!isPathInside(skillsDirReal, candidateDirReal)) {
     throw new Error("skill directory escapes skills root");
   }
+
+  let skillMarkdownReal;
+  try {
+    skillMarkdownReal = await realpath(path.join(candidateDirReal, "SKILL.md"));
+    const skillMarkdownStat = await stat(skillMarkdownReal);
+    if (!skillMarkdownStat.isFile()) {
+      return undefined;
+    }
+  } catch (error) {
+    if (error?.code === "ENOENT" || error?.code === "ENOTDIR") {
+      return undefined;
+    }
+    throw error;
+  }
+  if (!isPathInside(candidateDirReal, skillMarkdownReal)) {
+    throw new Error("skill manifest escapes skill directory");
+  }
+
   return candidateDirReal;
 }
 
