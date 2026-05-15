@@ -58,7 +58,7 @@ function installBraveLlmContextFetch() {
         },
         sources: [],
       }),
-    } as Response;
+    } as unknown as Response;
   });
   global.fetch = mockFetch as typeof global.fetch;
   return mockFetch;
@@ -357,7 +357,7 @@ describe("brave web search provider", () => {
       return {
         ok: true,
         json: async () => ({ web: { results: [] } }),
-      } as Response;
+      } as unknown as Response;
     });
     global.fetch = mockFetch as typeof global.fetch;
 
@@ -502,7 +502,7 @@ describe("brave web search provider", () => {
       return {
         ok: true,
         json: async () => ({ web: { results: [] } }),
-      } as Response;
+      } as unknown as Response;
     });
     global.fetch = mockFetch as typeof global.fetch;
 
@@ -661,7 +661,7 @@ describe("brave web search provider", () => {
       return {
         ok: true,
         json: async () => ({ web: { results: [] } }),
-      } as Response;
+      } as unknown as Response;
     });
     global.fetch = mockFetch as typeof global.fetch;
 
@@ -703,7 +703,7 @@ describe("brave web search provider", () => {
             ],
           },
         }),
-      } as Response;
+      } as unknown as Response;
     });
     global.fetch = mockFetch as typeof global.fetch;
 

@@ -232,6 +232,125 @@ export function createDeepSeekV4OpenAICompatibleThinkingWrapper(params: {
   };
 }
 
+type ThinkingOnlyFinalTextStream = Awaited<ReturnType<StreamFn>>;
+
+function promoteThinkingOnlyFinalOutputToText(message: unknown): void {
+  if (!message || typeof message !== "object") {
+    return;
+  }
+  const record = message as { content?: unknown; stopReason?: unknown };
+  if (record.stopReason !== "stop" && record.stopReason !== "length") {
+    return;
+  }
+  if (!Array.isArray(record.content) || record.content.length === 0) {
+    return;
+  }
+
+  let hasVisibleText = false;
+  let hasToolCall = false;
+  let hasVisibleThinking = false;
+  for (const block of record.content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const typedBlock = block as { type?: unknown; text?: unknown; thinking?: unknown };
+    if (
+      typedBlock.type === "text" &&
+      typeof typedBlock.text === "string" &&
+      typedBlock.text.trim()
+    ) {
+      hasVisibleText = true;
+    }
+    if (typedBlock.type === "toolCall" || typedBlock.type === "tool_use") {
+      hasToolCall = true;
+    }
+    if (
+      typedBlock.type === "thinking" &&
+      typeof typedBlock.thinking === "string" &&
+      typedBlock.thinking.trim()
+    ) {
+      hasVisibleThinking = true;
+    }
+  }
+  if (hasVisibleText || hasToolCall || !hasVisibleThinking) {
+    return;
+  }
+
+  record.content = record.content.map((block) => {
+    if (!block || typeof block !== "object") {
+      return block;
+    }
+    const typedBlock = block as { type?: unknown; thinking?: unknown };
+    if (
+      typedBlock.type !== "thinking" ||
+      typeof typedBlock.thinking !== "string" ||
+      !typedBlock.thinking.trim()
+    ) {
+      return block;
+    }
+    return { type: "text", text: typedBlock.thinking };
+  });
+}
+
+function wrapThinkingOnlyFinalTextStream(
+  stream: ThinkingOnlyFinalTextStream,
+): ThinkingOnlyFinalTextStream {
+  const originalResult = stream.result.bind(stream);
+  stream.result = async () => {
+    const message = await originalResult();
+    promoteThinkingOnlyFinalOutputToText(message);
+    return message;
+  };
+
+  const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
+  (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
+    function () {
+      const iterator = originalAsyncIterator();
+      return {
+        async next() {
+          const result = await iterator.next();
+          if (!result.done && result.value && typeof result.value === "object") {
+            const event = result.value as { partial?: unknown; message?: unknown };
+            promoteThinkingOnlyFinalOutputToText(event.partial);
+            promoteThinkingOnlyFinalOutputToText(event.message);
+          }
+          return result;
+        },
+        async return(value?: unknown) {
+          return iterator.return?.(value) ?? { done: true as const, value: undefined };
+        },
+        async throw(error?: unknown) {
+          return iterator.throw?.(error) ?? { done: true as const, value: undefined };
+        },
+        [Symbol.asyncIterator]() {
+          return this;
+        },
+      };
+    };
+  return stream;
+}
+
+/** @deprecated OpenAI-compatible provider stream helper; do not use from third-party plugins. */
+export function createThinkingOnlyFinalTextWrapper(params: {
+  baseStreamFn: StreamFn | undefined;
+  shouldPatchModel: (model: Parameters<StreamFn>[0]) => boolean;
+}): StreamFn | undefined {
+  if (!params.baseStreamFn) {
+    return undefined;
+  }
+  const underlying = params.baseStreamFn;
+  return (model, context, options) => {
+    const maybeStream = underlying(model, context, options);
+    if (!params.shouldPatchModel(model)) {
+      return maybeStream;
+    }
+    if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
+      return Promise.resolve(maybeStream).then((stream) => wrapThinkingOnlyFinalTextStream(stream));
+    }
+    return wrapThinkingOnlyFinalTextStream(maybeStream);
+  };
+}
+
 /** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
 export type GoogleThinkingLevel = "MINIMAL" | "LOW" | "MEDIUM" | "HIGH";
 /** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */

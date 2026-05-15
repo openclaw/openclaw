@@ -5,8 +5,8 @@
   "description": "OpenClaw Google plugin",
   "type": "module",
   "dependencies": {
-    "@google/genai": "2.0.1",
-    "@earendil-works/pi-ai": "0.74.0"
+    "@earendil-works/pi-ai": "0.74.0",
+    "@google/genai": "2.2.0"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

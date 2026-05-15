@@ -525,5 +525,20 @@ export async function collectDoctorPreviewWarnings(params: {
     }
   }
 
+  const { collectStaleOAuthProfileShadowWarnings, scanStaleOAuthProfileShadows } =
+    await import("./stale-oauth-profile-shadows.js");
+  const staleOAuthProfileShadows = await scanStaleOAuthProfileShadows({
+    cfg: params.cfg,
+    env,
+  });
+  if (staleOAuthProfileShadows.length > 0) {
+    warnings.push(
+      collectStaleOAuthProfileShadowWarnings({
+        hits: staleOAuthProfileShadows,
+        doctorFixCommand: params.doctorFixCommand,
+      }).join("\n"),
+    );
+  }
+
   return warnings;
 }

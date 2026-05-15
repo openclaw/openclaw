@@ -863,6 +863,11 @@ describe("package artifact reuse", () => {
 
     expect(workflow).toContain("### Slowest jobs: ${label}");
     expect(workflow).toContain("### Longest queues: ${label}");
+    expect(workflow).toContain("Write release validation manifest");
+    expect(workflow).toContain("Upload release validation manifest");
+    expect(workflow).toContain("Failed child detail: ${label}");
+    expect(workflow).toContain("actions/runs/${run_id}/artifacts?per_page=100");
+    expect(workflow).toContain("full-release-validation-${{ github.run_id }}");
     expect(workflow).toContain("| Job | Result | Queue minutes | Run minutes |");
     expect(workflow).toContain(
       'gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100"',
@@ -898,6 +903,9 @@ describe("package artifact reuse", () => {
 
     expect(packageJson.scripts?.["release:verify-beta"]).toBe(
       "node --import tsx scripts/release-verify-beta.ts",
+    );
+    expect(packageJson.scripts?.["release:candidate"]).toBe(
+      "node scripts/release-candidate-checklist.mjs",
     );
     expect(packageJson.scripts?.["release:fast-pretag-check"]).toBe(
       "bash scripts/release-fast-pretag-check.sh",

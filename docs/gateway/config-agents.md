@@ -94,6 +94,9 @@ Controls when workspace bootstrap files are injected into the system prompt. Def
 }
 ```
 
+Per-agent override: `agents.list[].contextInjection`. Omitted values inherit
+`agents.defaults.contextInjection`.
+
 ### `agents.defaults.bootstrapMaxChars`
 
 Max characters per workspace bootstrap file before truncation. Default: `12000`.
@@ -104,6 +107,9 @@ Max characters per workspace bootstrap file before truncation. Default: `12000`.
 }
 ```
 
+Per-agent override: `agents.list[].bootstrapMaxChars`. Omitted values inherit
+`agents.defaults.bootstrapMaxChars`.
+
 ### `agents.defaults.bootstrapTotalMaxChars`
 
 Max total characters injected across all workspace bootstrap files. Default: `60000`.
@@ -111,6 +117,35 @@ Max total characters injected across all workspace bootstrap files. Default: `60
 ```json5
 {
   agents: { defaults: { bootstrapTotalMaxChars: 60000 } },
+}
+```
+
+Per-agent override: `agents.list[].bootstrapTotalMaxChars`. Omitted values
+inherit `agents.defaults.bootstrapTotalMaxChars`.
+
+### Per-agent bootstrap profile overrides
+
+Use per-agent bootstrap profile overrides when one agent needs different prompt
+injection behavior from the shared defaults. Omitted fields inherit from
+`agents.defaults`.
+
+```json5
+{
+  agents: {
+    defaults: {
+      contextInjection: "continuation-skip",
+      bootstrapMaxChars: 12000,
+      bootstrapTotalMaxChars: 60000,
+    },
+    list: [
+      {
+        id: "strict-worker",
+        contextInjection: "always",
+        bootstrapMaxChars: 50000,
+        bootstrapTotalMaxChars: 300000,
+      },
+    ],
+  },
 }
 ```
 
@@ -157,6 +192,9 @@ Use the matching per-agent override only when one agent needs a different
 budget:
 
 - `agents.list[].skillsLimits.maxSkillsPromptChars`
+- `agents.list[].contextInjection`
+- `agents.list[].bootstrapMaxChars`
+- `agents.list[].bootstrapTotalMaxChars`
 - `agents.list[].contextLimits.*`
 
 #### `agents.defaults.startupContext`

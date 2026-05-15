@@ -38,7 +38,7 @@ import {
 } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { resolveAgentOutboundIdentity } from "openclaw/plugin-sdk/outbound-runtime";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
-import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-history";
+import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
@@ -873,6 +873,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     }
   };
 
+  let draftPreviewCommitted = false;
   const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
     ...replyPipeline,
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
@@ -890,19 +891,20 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         kind: info.kind,
         payload,
         adapter: defineFinalizableLivePreviewAdapter({
-          draft: draftStream
-            ? {
-                flush: draftStream.flush,
-                clear: draftStream.clear,
-                discardPending: draftStream.discardPending,
-                seal: draftStream.seal,
-                id: () => {
-                  const channelId = draftStream.channelId();
-                  const messageId = draftStream.messageId();
-                  return channelId && messageId ? { channelId, messageId } : undefined;
-                },
-              }
-            : undefined,
+          draft:
+            draftStream && !draftPreviewCommitted
+              ? {
+                  flush: draftStream.flush,
+                  clear: draftStream.clear,
+                  discardPending: draftStream.discardPending,
+                  seal: draftStream.seal,
+                  id: () => {
+                    const channelId = draftStream.channelId();
+                    const messageId = draftStream.messageId();
+                    return channelId && messageId ? { channelId, messageId } : undefined;
+                  },
+                }
+              : undefined,
           buildFinalEdit: () => {
             if (
               !previewStreamingEnabled ||
@@ -936,6 +938,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             });
           },
           onPreviewFinalized: (_preview) => {
+            // The preview edit promotes the draft message into the final answer.
+            // Later same-turn payloads must not let fallback cleanup clear it.
+            draftPreviewCommitted = true;
             const finalThreadTs = usedReplyThreadTs ?? statusThreadTs;
             observedReplyDelivery = true;
             replyPlan.markSent();
@@ -1391,12 +1396,12 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       agentId: route.agentId,
     });
   }
+  const channelHistory = createChannelHistoryWindow({ historyMap: ctx.channelHistories });
 
   if (!anyReplyDelivered) {
     await draftStream?.clear();
     if (prepared.isRoomish && prepared.requireMention) {
-      clearHistoryEntriesIfEnabled({
-        historyMap: ctx.channelHistories,
+      channelHistory.clear({
         historyKey: prepared.historyKey,
         limit: ctx.historyLimit,
       });
@@ -1438,8 +1443,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   }
 
   if (prepared.isRoomish && prepared.requireMention) {
-    clearHistoryEntriesIfEnabled({
-      historyMap: ctx.channelHistories,
+    channelHistory.clear({
       historyKey: prepared.historyKey,
       limit: ctx.historyLimit,
     });

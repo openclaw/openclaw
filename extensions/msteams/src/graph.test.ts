@@ -27,6 +27,18 @@ vi.mock("./token.js", () => ({
   resolveMSTeamsCredentials: resolveMSTeamsCredentialsMock,
 }));
 
+vi.mock("../runtime-api.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../runtime-api.js")>();
+  return {
+    ...original,
+    fetchWithSsrFGuard: async (params: { url: string; init?: RequestInit }) => ({
+      response: await globalThis.fetch(params.url, params.init),
+      finalUrl: params.url,
+      release: async () => undefined,
+    }),
+  };
+});
+
 import { searchGraphUsers } from "./graph-users.js";
 import {
   deleteGraphRequest,
@@ -119,6 +131,14 @@ function fetchCallHeader(index: number, name: string) {
 
 function expectFetchPathContains(index: number, expectedPath: string) {
   expect(fetchCallUrl(index)).toContain(expectedPath);
+}
+
+function fetchCallSearchParam(index: number, name: string): string | null {
+  const url = fetchCallUrl(index);
+  if (!url) {
+    throw new Error(`Expected fetch call ${index}`);
+  }
+  return new URL(url).searchParams.get(name);
 }
 
 async function expectSearchGraphUsers(
@@ -305,10 +325,10 @@ describe("msteams graph helpers", () => {
       deploymentsChannel,
     ]);
 
-    expectFetchPathContains(
-      0,
-      "/groups?$filter=resourceProvisioningOptions%2FAny(x%3Ax%20eq%20'Team')%20and%20startsWith(displayName%2C'Bob''s%20Team')&$select=id,displayName",
+    expect(fetchCallSearchParam(0, "$filter")).toBe(
+      "resourceProvisioningOptions/Any(x:x eq 'Team') and startsWith(displayName,'Bob''s Team')",
     );
+    expect(fetchCallSearchParam(0, "$select")).toBe("id,displayName");
     expectFetchPathContains(1, "/teams/team%2Fops/channels?$select=id,displayName");
   });
 
@@ -324,10 +344,10 @@ describe("msteams graph helpers", () => {
     await expectSearchGraphUsers("alice.o'hara@example.com", [userOne], {
       token: "token-2",
     });
-    expectFetchPathContains(
-      0,
-      "/users?$filter=(mail%20eq%20'alice.o''hara%40example.com'%20or%20userPrincipalName%20eq%20'alice.o''hara%40example.com')&$select=id,displayName,mail,userPrincipalName",
+    expect(fetchCallSearchParam(0, "$filter")).toBe(
+      "(mail eq 'alice.o''hara@example.com' or userPrincipalName eq 'alice.o''hara@example.com')",
     );
+    expect(fetchCallSearchParam(0, "$select")).toBe("id,displayName,mail,userPrincipalName");
   });
 
   it("uses displayName search with eventual consistency and default top handling", async () => {
