@@ -165,6 +165,25 @@ RUN --mount=type=cache,id=openclaw-mt-apt-cache,target=/var/cache/apt,sharing=lo
 # their own venv via uv/pyenv at runtime.
 RUN python3 --version
 
+# Install the GitHub CLI (`gh`) — required by the GitHub-repo resource
+# feature (rockie-workspace#85 M0). The agent uses `gh pr create` /
+# `gh repo clone` under the hood when working on a git_repo source.
+# Pulls from cli.github.com per GitHub's documented Debian instructions.
+RUN --mount=type=cache,id=openclaw-mt-apt-cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,id=openclaw-mt-apt-lists,target=/var/lib/apt,sharing=locked \
+    mkdir -p -m 755 /etc/apt/keyrings && \
+    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+      | tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null && \
+    chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+      > /etc/apt/sources.list.d/github-cli.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends gh && \
+    rm -rf /var/lib/apt/lists/*
+
+# Verify gh resolved (cheap fail-fast at build time).
+RUN command -v gh && gh --version
+
 # Install official claude and codex CLIs globally via npm.
 # Both are published as npm packages; @anthropic-ai/claude-code is the
 # canonical name for the Claude Code CLI and @openai/codex is the canonical
@@ -224,6 +243,17 @@ COPY --from=skills-assembly --chown=runtime:runtime /work/home/.codex /home/runt
 COPY --chown=root:root overlay/multitenant/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY --chown=runtime:runtime overlay/multitenant/settings.json.j2 /home/runtime/.claude/settings.json.j2
 RUN chmod 755 /usr/local/bin/entrypoint.sh
+
+# Drop in the git credential helper for GitHub-repo resource access
+# (rockie-workspace#85 M0). The helper fetches a short-lived
+# installation token from platform-context whenever git asks for one,
+# so `git push` against a git_repo source works with no long-lived
+# token in the runtime. ``git config --system`` registers it as the
+# default credential helper for every shell mcp-rockie spawns.
+COPY --chown=root:root overlay/multitenant/runtime/git-credential-rockie.sh \
+  /usr/local/bin/git-credential-rockie.sh
+RUN chmod 755 /usr/local/bin/git-credential-rockie.sh && \
+    git config --system credential.helper /usr/local/bin/git-credential-rockie.sh
 
 # Drop in the PTY-WebSocket broker binary built in stage 4b.
 COPY --from=broker-build /out/broker /usr/local/bin/broker
