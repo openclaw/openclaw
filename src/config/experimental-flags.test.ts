@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyExperimentalConfigFlagValue,
   listExperimentalConfigFlags,
   resolveExperimentalConfigFlag,
 } from "./experimental-flags.js";
@@ -42,5 +43,26 @@ describe("experimental config flags", () => {
       "agents.defaults.experimental.localModelLean",
     );
     expect(resolveExperimentalConfigFlag("tools.experimental")).toBeUndefined();
+  });
+
+  it("writes explicit false when disabling an absent experimental flag", () => {
+    const { nextConfig, delta } = applyExperimentalConfigFlagValue(
+      {},
+      { path: "tools.experimental.planTool", value: false },
+    );
+
+    expect(delta).toMatchObject({ path: "tools.experimental.planTool", next: false });
+    expect(nextConfig).toEqual({ tools: { experimental: { planTool: false } } });
+  });
+
+  it("keeps explicit false no-op behavior for authored disabled flags", () => {
+    const root = { tools: { experimental: { planTool: false } } };
+    const { nextConfig, delta } = applyExperimentalConfigFlagValue(root, {
+      path: "tools.experimental.planTool",
+      value: false,
+    });
+
+    expect(delta).toBeNull();
+    expect(nextConfig).toEqual(root);
   });
 });

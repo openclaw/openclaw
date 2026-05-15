@@ -19,6 +19,7 @@ export type ExperimentalConfigFlag = {
 
 export type ExperimentalConfigFlagState = ExperimentalConfigFlag & {
   segments: string[];
+  authored: boolean;
   on: boolean;
 };
 
@@ -68,15 +69,22 @@ function summaryFor(path: string, node: JsonSchemaNode, hint?: ConfigUiHint): st
   return hint?.help ?? node.description ?? path;
 }
 
-function readBool(root: unknown, segments: readonly string[]): boolean {
+function readBoolState(
+  root: unknown,
+  segments: readonly string[],
+): { authored: boolean; on: boolean } {
   let cur: unknown = root;
   for (const segment of segments) {
     if (!cur || typeof cur !== "object" || Array.isArray(cur)) {
-      return false;
+      return { authored: false, on: false };
     }
-    cur = (cur as Record<string, unknown>)[segment];
+    const record = cur as Record<string, unknown>;
+    if (!Object.hasOwn(record, segment)) {
+      return { authored: false, on: false };
+    }
+    cur = record[segment];
   }
-  return cur === true;
+  return { authored: true, on: cur === true };
 }
 
 function setAt(root: Record<string, unknown>, segments: readonly string[], value: boolean): void {
@@ -113,12 +121,14 @@ export function listExperimentalConfigFlags(
 export function readExperimentalConfigFlagStates(root: unknown): ExperimentalConfigFlagState[] {
   return listExperimentalConfigFlags().map((flag) => {
     const segments = flag.path.split(".");
+    const state = readBoolState(root, segments);
     return {
       path: flag.path,
       label: flag.label,
       summary: flag.summary,
       segments,
-      on: readBool(root, segments),
+      authored: state.authored,
+      on: state.on,
     };
   });
 }
@@ -178,7 +188,7 @@ export function applyExperimentalConfigFlagValue(
   delta: ExperimentalConfigFlagDelta | null;
 } {
   const state = readExperimentalConfigFlagStates(root).find((flag) => flag.path === params.path);
-  if (!state || state.on === params.value) {
+  if (!state || (state.on === params.value && (params.value || state.authored))) {
     return { nextConfig: structuredClone(root), delta: null };
   }
   const nextConfig = structuredClone(root);
