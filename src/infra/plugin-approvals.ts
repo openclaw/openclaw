@@ -167,6 +167,8 @@ const CURL_UPLOAD_BODY_FLAGS = new Set([
   "--data-urlencode",
   "-F",
   "--form",
+  "--form-string",
+  "--json",
 ]);
 const CURL_CONFIG_FLAGS = new Set(["-K", "--config"]);
 const CURL_GET_FLAGS = new Set(["-G", "--get"]);
@@ -402,7 +404,7 @@ function redactQuotedCookieHeaderValues(command: string): string {
 function redactCurlQueryLikeCommandValues(command: string): string {
   return command
     .replace(
-      /(--(?:url-query|data|data-ascii|data-binary|data-raw|data-urlencode|form)|-[dF])(=|\s+)(?:"([^"]*)"|'([^']*)'|([^\s'"\\]+))/gi,
+      /(--(?:url-query|data|data-ascii|data-binary|data-raw|data-urlencode|form|form-string|json)|-[dF])(=|\s+)(?:"([^"]*)"|'([^']*)'|([^\s'"\\]+))/gi,
       (
         _match: string,
         flag: string,
@@ -412,7 +414,7 @@ function redactCurlQueryLikeCommandValues(command: string): string {
         bare: string,
       ) => {
         const value = doubleQuoted ?? singleQuoted ?? bare ?? "";
-        const redacted = redactSensitiveCurlUrlQueryValue(value);
+        const redacted = redactSensitiveCurlBodyValue(value);
         if (doubleQuoted !== undefined) {
           return `${flag}${separator}"${redacted}"`;
         }
@@ -420,20 +422,41 @@ function redactCurlQueryLikeCommandValues(command: string): string {
           return `${flag}${separator}'${redacted}'`;
         }
         return `${flag}${separator}${redacted}`;
-      }
+      },
     )
     .replace(
       /(^|\s)(-[dF])((?:\+)?[^\s'"\\]+)/g,
       (match: string, leading: string, flag: string, value: string) => {
-        const redacted = redactSensitiveCurlUrlQueryValue(value);
+        const redacted = redactSensitiveCurlBodyValue(value);
         return redacted === value ? match : `${leading}${flag}${redacted}`;
       },
     );
 }
 
+function redactSensitiveCurlBodyValue(value: string): string {
+  return redactSensitiveJsonLikeCredentialValues(redactSensitiveCurlUrlQueryValue(value));
+}
+
 function redactSensitiveCurlUrlQueryValue(value: string): string {
   return value.replace(/(^|[?&=])([^=\s&#]+)=([^&\s#]*)/gi, (match, prefix, key) =>
     isSensitiveUrlQueryKey(String(key)) ? `${prefix}${key}=[redacted]` : match,
+  );
+}
+
+function redactSensitiveJsonLikeCredentialValues(value: string): string {
+  return value.replace(
+    /(["']?)([A-Za-z0-9_.-]+)\1(\s*:\s*)("[^"]*"|'[^']*'|[^,}\s]+)/gi,
+    (match: string, quote: string, key: string, separator: string, rawValue: string) => {
+      if (!isSensitiveUrlQueryKey(key)) {
+        return match;
+      }
+      const redactedValue = rawValue.startsWith('"')
+        ? '"[redacted]"'
+        : rawValue.startsWith("'")
+          ? "'[redacted]'"
+          : "[redacted]";
+      return `${quote}${key}${quote}${separator}${redactedValue}`;
+    },
   );
 }
 
@@ -1249,10 +1272,7 @@ function parseGitSubcommand(args: readonly string[]): {
     if (GIT_GLOBAL_FLAGS.has(arg) || GIT_GLOBAL_FLAGS.has(optionName)) {
       continue;
     }
-    if (
-      (arg.startsWith("-C") && arg.length > 2) ||
-      (arg.startsWith("-c") && arg.length > 2)
-    ) {
+    if ((arg.startsWith("-C") && arg.length > 2) || (arg.startsWith("-c") && arg.length > 2)) {
       continue;
     }
     if (GIT_GLOBAL_VALUE_OPTIONS.has(optionName)) {
@@ -1286,7 +1306,9 @@ function isGitPathCheckoutDiscard(args: readonly string[]): boolean {
   const createsBranch = args.some((arg) => arg === "-b" || arg === "-B" || arg === "--orphan");
   return (
     args.includes("--") ||
-    args.some((arg) => arg === "." || arg === ":/" || arg.startsWith("./") || arg.startsWith("../")) ||
+    args.some(
+      (arg) => arg === "." || arg === ":/" || arg.startsWith("./") || arg.startsWith("../"),
+    ) ||
     args.some((arg) => arg === "--pathspec-from-file" || arg.startsWith("--pathspec-from-file=")) ||
     (!createsBranch && args.some((arg) => arg !== "--" && !arg.startsWith("-")))
   );
@@ -2202,7 +2224,7 @@ function collectNetworkTransferOperands(
         ? takeFlagValue(args, index, CURL_AUTH_VALUE_FLAGS, ["-u", "-U"])
         : command === "wget"
           ? takeFlagValue(args, index, WGET_AUTH_VALUE_FLAGS)
-        : null;
+          : null;
     if (authValue) {
       usesInlineCredentialSource = true;
       index = Math.max(index, authValue.nextIndex);
@@ -2368,6 +2390,23 @@ function collectNetworkTransferOperands(
           usesAmbiguousCredentialSource = true;
         }
       } else {
+        const credentialSource = analyzeCurlBodyCredentialValue(bodyValue.value);
+        if (credentialSource.files.length > 0) {
+          credentialFiles.push(...credentialSource.files);
+        }
+        if (credentialSource.usesStdin) {
+          if (inputRedirection.targets.length > 0) {
+            credentialFiles.push(...inputRedirection.targets);
+          } else {
+            usesAmbiguousCredentialSource = true;
+          }
+        }
+        if (credentialSource.hasSensitiveBodyKey) {
+          usesInlineCredentialSource = true;
+        }
+        if (credentialSource.ambiguous) {
+          usesAmbiguousCredentialSource = true;
+        }
         uploadFiles.push(...extractCurlBodyFileOperands(bodyValue.value));
         if (isCurlBodyStdinOperand(bodyValue.value)) {
           recordStdinUpload();
@@ -2504,6 +2543,46 @@ function analyzeCurlUrlQueryValue(value: string): {
   };
 }
 
+function analyzeCurlBodyCredentialValue(value: string): {
+  files: string[];
+  usesStdin: boolean;
+  hasSensitiveBodyKey: boolean;
+  ambiguous: boolean;
+} {
+  const trimmed = stripShellWordQuotes(value.trim());
+  if (!trimmed) {
+    return { files: [], usesStdin: false, hasSensitiveBodyKey: false, ambiguous: false };
+  }
+  const files: string[] = [];
+  let usesStdin = false;
+  let ambiguous = false;
+  let hasSensitiveBodyKey = hasSensitiveCurlBodyValue(trimmed);
+  const keyedFile = /^([^=@<;\s]+)(?:=)?([@<])(.+)$/.exec(trimmed);
+  if (keyedFile && isSensitiveUrlQueryKey(keyedFile[1] ?? "")) {
+    hasSensitiveBodyKey = true;
+    const fileOperand = stripNetworkFileOperandPrefix(
+      (keyedFile[3] ?? "").split(";")[0]?.trim() ?? "",
+    );
+    if (!fileOperand) {
+      ambiguous = true;
+    } else if (fileOperand === "-") {
+      usesStdin = true;
+    } else {
+      files.push(...extractPlainLocalFileOperands(fileOperand));
+    }
+  }
+  return {
+    files,
+    usesStdin,
+    hasSensitiveBodyKey,
+    ambiguous,
+  };
+}
+
+function hasSensitiveCurlBodyValue(value: string): boolean {
+  return hasSensitiveCurlUrlQueryValue(value) || hasSensitiveJsonLikeCredentialKey(value);
+}
+
 function extractCurlUrlQueryFileOperand(value: string): string | null {
   if (value.startsWith("@")) {
     return stripNetworkFileOperandPrefix(value);
@@ -2517,6 +2596,15 @@ function extractCurlUrlQueryFileOperand(value: string): string | null {
 
 function hasSensitiveCurlUrlQueryValue(value: string): boolean {
   for (const match of value.matchAll(/(?:^|[?&=])([^=\s&#]+)=/gi)) {
+    if (isSensitiveUrlQueryKey(match[1] ?? "")) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function hasSensitiveJsonLikeCredentialKey(value: string): boolean {
+  for (const match of value.matchAll(/["']?([A-Za-z0-9_.-]+)["']?\s*:/gi)) {
     if (isSensitiveUrlQueryKey(match[1] ?? "")) {
       return true;
     }
