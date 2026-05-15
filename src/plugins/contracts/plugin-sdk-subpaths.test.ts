@@ -547,6 +547,8 @@ describe("plugin-sdk subpath exports", () => {
     ]);
     expectSourceMentions("reply-chunking", ["chunkText", "chunkTextWithMode"]);
     expectSourceMentions("reply-history", [
+      "buildInboundHistoryFromEntries",
+      "buildInboundHistoryFromMap",
       "buildPendingHistoryContextFromMap",
       "clearHistoryEntriesIfEnabled",
       "recordPendingHistoryEntryIfEnabled",

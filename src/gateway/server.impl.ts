@@ -56,6 +56,19 @@ import {
 } from "../secrets/runtime.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
+import { ADMIN_SCOPE } from "./method-scopes.js";
+import {
+  STARTUP_UNAVAILABLE_GATEWAY_METHODS,
+  listCoreGatewayMethodNames,
+} from "./methods/core-descriptors.js";
+import {
+  createCoreGatewayMethodDescriptors,
+  createGatewayMethodDescriptorsFromHandlers,
+  createGatewayMethodRegistry,
+  createPluginGatewayMethodDescriptors,
+  isCoreGatewayMethodClassified,
+  type GatewayMethodRegistry,
+} from "./methods/registry.js";
 import {
   listChannelPluginConfigTargetIds,
   pluginConfigTargetsChanged,
@@ -74,7 +87,6 @@ import {
   getRequiredSharedGatewaySessionGeneration,
   type SharedGatewaySessionGenerationState,
 } from "./server-shared-auth-generation.js";
-import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./server-startup-unavailable-methods.js";
 import { createWizardSessionTracker } from "./server-wizard-sessions.js";
 import { createGatewayEventLoopHealthMonitor } from "./server/event-loop-health.js";
 import {
@@ -104,6 +116,7 @@ const POST_READY_MAINTENANCE_DELAY_MS = 250;
 type GatewayStartupChannelPlugin = {
   id: ChannelId;
   gatewayMethods?: readonly string[];
+  gatewayMethodDescriptors?: readonly { name: string }[];
   meta: {
     aliases?: readonly string[];
   };
@@ -561,6 +574,7 @@ export async function startGatewayServer(
     enqueueSystemEvent(`[${code}] ${message}`, {
       sessionKey: resolveMainSessionKey(cfg),
       contextKey: code,
+      forceSenderIsOwnerFalse: true,
       trusted: false,
     });
   };
@@ -652,6 +666,7 @@ export async function startGatewayServer(
     baseMethods,
     runtimePluginsLoaded,
   } = pluginBootstrap;
+  const coreGatewayMethodNames = listCoreGatewayMethodNames();
   setCurrentPluginMetadataSnapshot(pluginLookUpTable, {
     config: startupActivationSourceConfig,
     compatibleConfigs: [startupRuntimeConfig, cfgAtStart, gatewayPluginConfigAtStart],
@@ -683,13 +698,18 @@ export async function startGatewayServer(
   const channelRuntimeEnvs = Object.fromEntries(
     Object.entries(channelLogs).map(([id, logger]) => [id, runtimeForLogger(logger)]),
   ) as unknown as Record<ChannelId, RuntimeEnv>;
+  const listStartupChannelGatewayMethods = () => {
+    const methods: string[] = [];
+    for (const plugin of listGatewayStartupChannelPlugins()) {
+      methods.push(...(plugin.gatewayMethods ?? []));
+      for (const descriptor of plugin.gatewayMethodDescriptors ?? []) {
+        methods.push(descriptor.name);
+      }
+    }
+    return methods;
+  };
   const listActiveGatewayMethods = (nextBaseGatewayMethods: string[]) =>
-    Array.from(
-      new Set([
-        ...nextBaseGatewayMethods,
-        ...listGatewayStartupChannelPlugins().flatMap((plugin) => plugin.gatewayMethods ?? []),
-      ]),
-    );
+    Array.from(new Set([...nextBaseGatewayMethods, ...listStartupChannelGatewayMethods()]));
   const runtimeConfig = await startupTrace.measure("runtime.config", async () => {
     const { resolveGatewayRuntimeConfig } = await import("./server-runtime-config.js");
     return resolveGatewayRuntimeConfig({
@@ -1063,6 +1083,7 @@ export async function startGatewayServer(
     );
 
     const { createGatewayAuxHandlers } = await import("./server-aux-handlers.js");
+    const { coreGatewayHandlers } = await import("./server-methods.js");
     const { execApprovalManager, pluginApprovalManager, extraHandlers } = createGatewayAuxHandlers({
       log,
       activateRuntimeSecrets,
@@ -1078,22 +1099,56 @@ export async function startGatewayServer(
       ...extraHandlers,
     };
     let attachedPluginGatewayHandlerKeys = new Set(Object.keys(pluginRegistry.gatewayHandlers));
+    const buildAttachedGatewayMethodRegistry = (
+      nextPluginRegistry: typeof pluginRegistry,
+    ): GatewayMethodRegistry => {
+      const coreDescriptorHandlers: GatewayRequestHandlers = { ...coreGatewayHandlers };
+      const auxHandlers: GatewayRequestHandlers = {};
+      for (const [method, handler] of Object.entries(extraHandlers)) {
+        if (isCoreGatewayMethodClassified(method)) {
+          coreDescriptorHandlers[method] = handler;
+        } else {
+          auxHandlers[method] = handler;
+        }
+      }
+      return createGatewayMethodRegistry([
+        ...createCoreGatewayMethodDescriptors(coreDescriptorHandlers),
+        ...createPluginGatewayMethodDescriptors(nextPluginRegistry),
+        ...createGatewayMethodDescriptorsFromHandlers({
+          handlers: auxHandlers,
+          owner: { kind: "aux", area: "gateway-extra" },
+          defaultScope: ADMIN_SCOPE,
+        }),
+      ]);
+    };
+    let attachedGatewayMethodRegistry = buildAttachedGatewayMethodRegistry(pluginRegistry);
+    const listAttachedGatewayMethods = () => {
+      const methods = attachedGatewayMethodRegistry.listAdvertisedMethods();
+      methods.push(...listStartupChannelGatewayMethods());
+      return Array.from(new Set(methods));
+    };
+    runtimeState.gatewayMethods.splice(
+      0,
+      runtimeState.gatewayMethods.length,
+      ...listAttachedGatewayMethods(),
+    );
     const replaceAttachedPluginRuntime = (loaded: {
       pluginRegistry: typeof pluginRegistry;
       gatewayMethods: string[];
     }) => {
       pluginRegistry = loaded.pluginRegistry;
       baseGatewayMethods = loaded.gatewayMethods;
-      runtimeState.gatewayMethods.splice(
-        0,
-        runtimeState.gatewayMethods.length,
-        ...listActiveGatewayMethods(baseGatewayMethods),
-      );
       for (const key of attachedPluginGatewayHandlerKeys) {
         delete attachedGatewayExtraHandlers[key];
       }
       Object.assign(attachedGatewayExtraHandlers, pluginRegistry.gatewayHandlers);
       attachedPluginGatewayHandlerKeys = new Set(Object.keys(pluginRegistry.gatewayHandlers));
+      attachedGatewayMethodRegistry = buildAttachedGatewayMethodRegistry(pluginRegistry);
+      runtimeState.gatewayMethods.splice(
+        0,
+        runtimeState.gatewayMethods.length,
+        ...listAttachedGatewayMethods(),
+      );
       pinActivePluginHttpRouteRegistry(pluginRegistry);
       pinActivePluginChannelRegistry(pluginRegistry);
     };
@@ -1191,7 +1246,7 @@ export async function startGatewayServer(
         cfg: params.nextConfig,
         workspaceDir: defaultWorkspaceDir,
         log,
-        coreGatewayMethodNames: baseMethods,
+        coreGatewayMethodNames,
         hostServices: pluginHostServices,
         baseMethods,
         pluginLookUpTable: nextPluginLookUpTable,
@@ -1325,7 +1380,7 @@ export async function startGatewayServer(
           activationSourceConfig: startupActivationSourceConfig,
           workspaceDir: defaultWorkspaceDir,
           log,
-          coreGatewayMethodNames: baseMethods,
+          coreGatewayMethodNames,
           hostServices: pluginHostServices,
           baseMethods,
           pluginIds: startupPluginIds,
@@ -1363,6 +1418,7 @@ export async function startGatewayServer(
       logHealth,
       logWsControl,
       extraHandlers: attachedGatewayExtraHandlers,
+      getMethodRegistry: () => attachedGatewayMethodRegistry,
       broadcast,
       context: gatewayRequestContext,
     });
@@ -1435,6 +1491,7 @@ export async function startGatewayServer(
                   workspaceDir: defaultWorkspaceDir,
                   log,
                   baseMethods,
+                  coreGatewayMethodNames,
                   hostServices: pluginHostServices,
                   startupPluginIds,
                   pluginLookUpTable,

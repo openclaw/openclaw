@@ -173,6 +173,9 @@ importers:
       typebox:
         specifier: 1.1.38
         version: 1.1.38
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
       undici:
         specifier: 8.3.0
         version: 8.3.0
@@ -255,9 +258,6 @@ importers:
       tsx:
         specifier: 4.22.0
         version: 4.22.0
-      typescript:
-        specifier: 6.0.3
-        version: 6.0.3
       unrun:
         specifier: 0.3.0
         version: 0.3.0
@@ -283,6 +283,12 @@ importers:
       zod:
         specifier: 4.4.3
         version: 4.4.3
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
+  extensions/admin-http-rpc:
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*

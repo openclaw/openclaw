@@ -785,7 +785,7 @@ describe("CLI attempt execution", () => {
     });
   });
 
-  it("routes canonical OpenAI models through the configured Codex CLI runtime", async () => {
+  it("routes canonical OpenAI models through the configured embedded Codex runtime", async () => {
     const sessionKey = "agent:main:direct:canonical-codex-cli";
     const sessionEntry: SessionEntry = {
       sessionId: "openclaw-session-canonical-codex-cli",
@@ -793,7 +793,14 @@ describe("CLI attempt execution", () => {
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
-    runCliAgentMock.mockResolvedValueOnce(makeCliResult("canonical codex cli"));
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "canonical codex embedded" }],
+      meta: {
+        durationMs: 5,
+        finalAssistantVisibleText: "canonical codex embedded",
+        executionTrace: { runner: "pi" },
+      },
+    });
 
     await runAgentAttempt({
       providerOverride: "openai",
@@ -833,9 +840,9 @@ describe("CLI attempt execution", () => {
       sessionHasHistory: false,
     });
 
-    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
-    expectMockArgFields(runCliAgentMock, {
-      provider: "codex-cli",
+    expect(runCliAgentMock).not.toHaveBeenCalled();
+    expectMockArgFields(runEmbeddedPiAgentMock, {
+      provider: "openai",
       model: "gpt-5.4",
     });
   });
