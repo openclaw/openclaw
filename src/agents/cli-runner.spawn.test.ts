@@ -1490,6 +1490,160 @@ describe("runCliAgent spawn path", () => {
     expect(requireArgAfter(args, "--permission-prompt-tool")).toBe("stdio");
   });
 
+  it("answers Claude live control_request can_use_tool with allow when exec policy is full/no-ask", async () => {
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    const writes: string[] = [];
+    const stdin = {
+      write: vi.fn((data: string, cb?: (err?: Error | null) => void) => {
+        writes.push(data);
+        if (writes.length === 1) {
+          stdoutListener?.(
+            `${JSON.stringify({
+              type: "control_request",
+              request_id: "req-allow",
+              request: {
+                subtype: "can_use_tool",
+                tool_name: "Bash",
+                tool_use_id: "tool-allow-1",
+                input: { command: "ls" },
+              },
+            })}
+${JSON.stringify({
+  type: "system",
+  subtype: "init",
+  session_id: "live-control-allow",
+})}
+${JSON.stringify({
+  type: "result",
+  session_id: "live-control-allow",
+  result: "ok",
+})}
+`,
+          );
+        }
+        cb?.();
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      return {
+        runId: "live-run-allow",
+        pid: 3001,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel: vi.fn(),
+      };
+    });
+
+    const result = await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-control-allow",
+        prompt: "hello",
+        backend: { liveSession: "claude-stdio" },
+        config: {
+          tools: { exec: { security: "full", ask: "off" } },
+        } as PreparedCliRunContext["params"]["config"],
+      }),
+    );
+    expect(result.text).toBe("ok");
+    const controlResponse = writes.find((entry) => entry.includes('"control_response"'));
+    expect(controlResponse, "control_response written to stdin").toBeDefined();
+    const parsed = JSON.parse((controlResponse ?? "").trim()) as {
+      type: string;
+      response: {
+        subtype: string;
+        request_id: string;
+        response: { behavior: string; toolUseID?: string };
+      };
+    };
+    expect(parsed.type).toBe("control_response");
+    expect(parsed.response.subtype).toBe("success");
+    expect(parsed.response.request_id).toBe("req-allow");
+    expect(parsed.response.response.behavior).toBe("allow");
+    expect(parsed.response.response.toolUseID).toBe("tool-allow-1");
+  });
+
+  it("answers Claude live control_request can_use_tool with deny when exec policy is restrictive", async () => {
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    const writes: string[] = [];
+    const stdin = {
+      write: vi.fn((data: string, cb?: (err?: Error | null) => void) => {
+        writes.push(data);
+        if (writes.length === 1) {
+          stdoutListener?.(
+            `${JSON.stringify({
+              type: "control_request",
+              request_id: "req-deny",
+              request: {
+                subtype: "can_use_tool",
+                tool_name: "Bash",
+                tool_use_id: "tool-deny-1",
+                input: { command: "rm -rf /" },
+              },
+            })}
+${JSON.stringify({
+  type: "system",
+  subtype: "init",
+  session_id: "live-control-deny",
+})}
+${JSON.stringify({
+  type: "result",
+  session_id: "live-control-deny",
+  result: "ok",
+})}
+`,
+          );
+        }
+        cb?.();
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      return {
+        runId: "live-run-deny",
+        pid: 3002,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel: vi.fn(),
+      };
+    });
+
+    const result = await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-control-deny",
+        prompt: "hello",
+        backend: { liveSession: "claude-stdio" },
+        config: {
+          tools: { exec: { security: "allowlist", ask: "on-miss" } },
+        } as PreparedCliRunContext["params"]["config"],
+      }),
+    );
+    expect(result.text).toBe("ok");
+    const controlResponse = writes.find((entry) => entry.includes('"control_response"'));
+    expect(controlResponse, "control_response written to stdin").toBeDefined();
+    const parsed = JSON.parse((controlResponse ?? "").trim()) as {
+      type: string;
+      response: {
+        subtype: string;
+        request_id: string;
+        response: { behavior: string; message: string; decisionClassification: string };
+      };
+    };
+    expect(parsed.response.response.behavior).toBe("deny");
+    expect(parsed.response.response.decisionClassification).toBe("user_reject");
+    expect(parsed.response.response.message).toContain("security=allowlist");
+  });
+
   it("restarts Claude live sessions for env changes and fresh retries", async () => {
     const cancels: Array<ReturnType<typeof vi.fn>> = [];
     const turnResults = ["first-ok", "resume-ok", "env-ok", "fresh-ok"];
