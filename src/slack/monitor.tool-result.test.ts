@@ -63,8 +63,16 @@ describe("monitorSlackProvider tool results", () => {
     };
   }
 
-  function firstReplyCtx(): { WasMentioned?: boolean } {
-    return (replyMock.mock.calls[0]?.[0] ?? {}) as { WasMentioned?: boolean };
+  function firstReplyCtx(): {
+    WasMentioned?: boolean;
+    SessionKey?: string;
+    MessageThreadId?: string;
+  } {
+    return (replyMock.mock.calls[0]?.[0] ?? {}) as {
+      WasMentioned?: boolean;
+      SessionKey?: string;
+      MessageThreadId?: string;
+    };
   }
 
   function setRequireMentionChannelConfig(mentionPatterns?: string[]) {
@@ -391,6 +399,7 @@ describe("monitorSlackProvider tool results", () => {
           dm: { enabled: true, policy: "open", allowFrom: ["*"] },
           groupPolicy: "open",
           requireMention: false,
+          replyToMode: "all",
         },
       },
     };
@@ -404,6 +413,8 @@ describe("monitorSlackProvider tool results", () => {
 
     expect(replyMock).toHaveBeenCalledTimes(1);
     expect(firstReplyCtx().WasMentioned).toBe(false);
+    expect(firstReplyCtx().MessageThreadId).toBe("123");
+    expect(firstReplyCtx().SessionKey).toBe("agent:main:slack:channel:c1:thread:123");
     expect(sendMock).toHaveBeenCalledTimes(1);
   });
 

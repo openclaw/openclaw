@@ -473,6 +473,39 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared!.ctxPayload.MessageThreadId).toBe("1.000");
   });
 
+  it("seeds a thread session for top-level auto-response channel messages", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: {
+          slack: {
+            enabled: true,
+            replyToMode: "all",
+            channels: { C123: { allow: true, requireMention: false } },
+          },
+        },
+      } as OpenClawConfig,
+      defaultRequireMention: false,
+      replyToMode: "all",
+    });
+    slackCtx.resolveUserName = async () => ({ name: "Alice" });
+    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount({ replyToMode: "all" }),
+      createSlackMessage({
+        channel: "C123",
+        channel_type: "channel",
+        text: "seed thread",
+        ts: "300.000",
+      }),
+    );
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.SessionKey).toBe("agent:main:slack:channel:c123:thread:300.000");
+    expect(prepared!.ctxPayload.IsFirstThreadTurn).toBe(true);
+  });
+
   it("marks first thread turn and injects thread history for a new thread session", async () => {
     const { storePath } = makeTmpStorePath();
     const replies = vi
@@ -512,6 +545,88 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("follow-up question");
     expect(prepared!.ctxPayload.ThreadHistoryBody).not.toContain("current message");
     expect(replies).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    {
+      label: "DM thread, human-rooted",
+      channel: "D123",
+      channelType: "im" as const,
+      root: { text: "dm human root", user: "U2", ts: "400.000" },
+      history: [{ text: "assistant reply", bot_id: "B1", ts: "400.500" }],
+      expectedSessionKey: "agent:main:main:thread:400.000",
+    },
+    {
+      label: "DM thread, bot-rooted",
+      channel: "D123",
+      channelType: "im" as const,
+      root: { text: "dm bot root", bot_id: "B1", ts: "500.000" },
+      history: [{ text: "user follow-up", user: "U1", ts: "500.500" }],
+      expectedSessionKey: "agent:main:main:thread:500.000",
+    },
+    {
+      label: "channel thread, human-rooted",
+      channel: "C123",
+      channelType: "channel" as const,
+      root: { text: "channel human root", user: "U2", ts: "600.000" },
+      history: [{ text: "assistant reply", bot_id: "B1", ts: "600.500" }],
+      expectedSessionKey: "agent:main:slack:channel:c123:thread:600.000",
+    },
+    {
+      label: "channel thread, bot-rooted",
+      channel: "C123",
+      channelType: "channel" as const,
+      root: { text: "channel bot root", bot_id: "B1", ts: "700.000" },
+      history: [{ text: "user follow-up", user: "U1", ts: "700.500" }],
+      expectedSessionKey: "agent:main:slack:channel:c123:thread:700.000",
+    },
+  ])("$label preserves root once in thread hydration", async (scenario) => {
+    const { storePath } = makeTmpStorePath();
+    const replies = vi
+      .fn()
+      .mockResolvedValueOnce({
+        messages: [scenario.root],
+      })
+      .mockResolvedValueOnce({
+        messages: [
+          scenario.root,
+          ...scenario.history,
+          { text: "current reply", user: "U1", ts: "999.000" },
+        ],
+        response_metadata: { next_cursor: "" },
+      });
+    const slackCtx = createThreadSlackCtx({
+      cfg: {
+        session: { store: storePath },
+        channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+      } as OpenClawConfig,
+      replies,
+    });
+    slackCtx.resolveUserName = async (id: string) => ({
+      name: id === "U1" ? "Alice" : "Bob",
+    });
+    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createThreadAccount(),
+      createSlackMessage({
+        channel: scenario.channel,
+        channel_type: scenario.channelType,
+        thread_ts: scenario.root.ts,
+        text: "current reply",
+        ts: "999.000",
+      }),
+    );
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.SessionKey).toBe(scenario.expectedSessionKey);
+    expect(prepared!.ctxPayload.IsFirstThreadTurn).toBe(true);
+    expect(prepared!.ctxPayload.ThreadStarterBody).toBe(scenario.root.text);
+    expect(prepared!.ctxPayload.ThreadHistoryBody).not.toContain(scenario.root.text);
+    for (const entry of scenario.history) {
+      expect(prepared!.ctxPayload.ThreadHistoryBody).toContain(entry.text);
+    }
   });
 
   it("keeps loading thread history when thread session already exists in store", async () => {

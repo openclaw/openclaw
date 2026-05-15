@@ -20,9 +20,13 @@ export function resolveSlackThreadContext(params: {
   const isThreadReply =
     hasThreadTs && (incomingThreadTs !== messageTs || Boolean(params.message.parent_user_id));
   const replyToId = incomingThreadTs ?? messageTs;
+  const shouldSeedThreadSession =
+    !isThreadReply &&
+    Boolean(messageTs) &&
+    (params.replyToMode === "first" || params.replyToMode === "all");
   const messageThreadId = isThreadReply
     ? incomingThreadTs
-    : params.replyToMode === "all"
+    : shouldSeedThreadSession
       ? messageTs
       : undefined;
   return {

@@ -178,14 +178,15 @@ export async function prepareSlackMessage(params: {
   const threadContext = resolveSlackThreadContext({ message, replyToMode: ctx.replyToMode });
   const threadTs = threadContext.incomingThreadTs;
   const isThreadReply = threadContext.isThreadReply;
+  const threadSessionId = threadContext.messageThreadId;
   const threadKeys = resolveThreadSessionKeys({
     baseSessionKey,
-    threadId: isThreadReply ? threadTs : undefined,
-    parentSessionKey: isThreadReply && ctx.threadInheritParent ? baseSessionKey : undefined,
+    threadId: threadSessionId,
+    parentSessionKey: threadSessionId && ctx.threadInheritParent ? baseSessionKey : undefined,
   });
   const sessionKey = threadKeys.sessionKey;
   const historyKey =
-    isThreadReply && ctx.threadHistoryScope === "thread" ? sessionKey : message.channel;
+    threadSessionId && ctx.threadHistoryScope === "thread" ? sessionKey : message.channel;
 
   const mentionRegexes = buildMentionRegexes(cfg, route.agentId);
   const hasAnyMention = /<@[^>]+>/.test(message.text ?? "");
@@ -430,6 +431,12 @@ export async function prepareSlackMessage(params: {
     storePath,
     sessionKey: route.sessionKey,
   });
+  const threadSessionPreviousTimestamp = threadSessionId
+    ? readSessionUpdatedAt({
+        storePath,
+        sessionKey,
+      })
+    : undefined;
   const body = formatInboundEnvelope({
     channel: "Slack",
     from: envelopeFrom,
@@ -473,7 +480,6 @@ export async function prepareSlackMessage(params: {
 
   let threadStarterBody: string | undefined;
   let threadHistoryBody: string | undefined;
-  let threadSessionPreviousTimestamp: number | undefined;
   let threadLabel: string | undefined;
   let threadStarterMedia: Awaited<ReturnType<typeof resolveSlackMedia>> = null;
   if (isThreadReply && threadTs) {
@@ -509,18 +515,16 @@ export async function prepareSlackMessage(params: {
     // This provides context of previous messages (including bot replies) in the thread
     // Use the thread session key (not base session key) to determine if this is a new session
     const threadInitialHistoryLimit = account.config?.thread?.initialHistoryLimit ?? 20;
-    threadSessionPreviousTimestamp = readSessionUpdatedAt({
-      storePath,
-      sessionKey, // Thread-specific session key
-    });
     if (threadInitialHistoryLimit > 0) {
-      const threadHistory = await resolveSlackThreadHistory({
-        channelId: message.channel,
-        threadTs,
-        client: ctx.app.client,
-        currentMessageTs: message.ts,
-        limit: threadInitialHistoryLimit,
-      });
+      const threadHistory = (
+        await resolveSlackThreadHistory({
+          channelId: message.channel,
+          threadTs,
+          client: ctx.app.client,
+          currentMessageTs: message.ts,
+          limit: threadInitialHistoryLimit,
+        })
+      ).filter((historyMsg) => historyMsg.ts !== starter?.ts);
 
       if (threadHistory.length > 0) {
         // Batch resolve user names to avoid N sequential API calls
@@ -603,8 +607,7 @@ export async function prepareSlackMessage(params: {
     ParentSessionKey: threadKeys.parentSessionKey,
     ThreadStarterBody: threadStarterBody,
     ThreadHistoryBody: threadHistoryBody,
-    IsFirstThreadTurn:
-      isThreadReply && threadTs && !threadSessionPreviousTimestamp ? true : undefined,
+    IsFirstThreadTurn: threadSessionId && !threadSessionPreviousTimestamp ? true : undefined,
     ThreadLabel: threadLabel,
     Timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
     WasMentioned: isRoomish ? effectiveWasMentioned : undefined,
