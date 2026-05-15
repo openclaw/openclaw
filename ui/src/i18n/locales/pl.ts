@@ -696,9 +696,6 @@ export const pl: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle: "Zobacz, gdzie trafiają tokeny, kiedy sesje osiągają szczyt i co generuje koszty.",
-    },
     common: {
       emptyValue: "—",
       unknown: "nieznane",
@@ -1046,6 +1043,10 @@ export const pl: TranslationMap = {
     settings: "Ustawienia czatu",
     thinkingToggle: "Przełącz wyświetlanie myślenia/pracy asystenta",
     toolCallsToggle: "Przełącz wyświetlanie wywołań narzędzi i wyników narzędzi",
+    autoScrollMode: "Auto-scroll mode",
+    autoScrollAlways: "Always",
+    autoScrollNearBottom: "Near bottom",
+    autoScrollOff: "Off",
     focusToggle: "Przełącz tryb skupienia (ukryj pasek boczny i nagłówek strony)",
     hideCronSessions: "Ukryj sesje Cron",
     showCronSessions: "Pokaż sesje Cron",

@@ -15,7 +15,7 @@ describe("createChannelOutboundRuntimeSend", () => {
 
   function expectSingleCallParams(mockFn: ReturnType<typeof vi.fn>) {
     expect(mockFn).toHaveBeenCalledTimes(1);
-    const params = mockFn.mock.calls.at(0)?.[0] as Record<string, unknown> | undefined;
+    const params = mockFn.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
     if (params === undefined) {
       throw new Error("expected outbound send call params");
     }
@@ -87,6 +87,28 @@ describe("createChannelOutboundRuntimeSend", () => {
     expect(params.to).toBe("+15551234567");
     expect(params.text).toBe("hello");
     expect(params.accountId).toBe("default");
+  });
+
+  it("preserves rendered html formatting through lazy text sends", async () => {
+    const sendText = vi.fn(async () => ({ channel: "telegram", messageId: "tg-1" }));
+    mocks.loadChannelOutboundAdapter.mockResolvedValue({
+      sendText,
+    });
+
+    const { createChannelOutboundRuntimeSend } = await import("./channel-outbound-send.js");
+    const runtimeSend = createChannelOutboundRuntimeSend({
+      channelId: "telegram" as never,
+      unavailableMessage: "unavailable",
+    });
+    const opts = {
+      cfg: {},
+      textMode: "html" as const,
+    };
+
+    await runtimeSend.sendMessage("12345", '<a href="https://example.com">Example</a>', opts);
+
+    const params = expectSingleCallParams(sendText);
+    expect(params.formatting).toEqual({ parseMode: "HTML" });
   });
 
   it("routes block sends through payload delivery", async () => {

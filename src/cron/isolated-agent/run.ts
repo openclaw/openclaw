@@ -462,11 +462,19 @@ type PreparedCronRunContext = {
   resolvedDelivery: ResolvedCronDeliveryTarget;
   deliveryRequested: boolean;
   suppressExecNotifyOnExit: boolean;
+  senderIsOwner: boolean;
   toolPolicy: ReturnType<typeof resolveCronToolPolicy>;
   skillsSnapshot: SkillSnapshot;
   liveSelection: CronLiveSelection;
   thinkLevel: ThinkLevel | undefined;
   timeoutMs: number;
+  /**
+   * Set when the cron payload's `timeoutSeconds` was explicitly configured
+   * for this run (independent of whether its numeric value happens to equal
+   * `agents.defaults.timeoutSeconds`). Forwarded to the embedded runner so
+   * the LLM idle watchdog can honor the cron's per-run choice.
+   */
+  runTimeoutOverrideMs?: number;
 };
 
 type CronPreparationResult =
@@ -649,11 +657,24 @@ async function prepareCronRunContext(params: {
     }
   }
 
+  const explicitTimeoutSeconds =
+    input.job.payload.kind === "agentTurn" ? input.job.payload.timeoutSeconds : undefined;
   const timeoutMs = resolveAgentTimeoutMs({
     cfg: cfgWithAgentDefaults,
-    overrideSeconds:
-      input.job.payload.kind === "agentTurn" ? input.job.payload.timeoutSeconds : undefined,
+    overrideSeconds: explicitTimeoutSeconds,
   });
+  // Carry the "this run had an explicit per-run timeout" signal forward.
+  // `resolveAgentTimeoutMs` collapses overrideSeconds + the agent default into
+  // one number; the LLM idle watchdog at the embedded-runner attempt loses the
+  // explicit-vs-default distinction without this companion field, which would
+  // otherwise force the implicit 120 s cap whenever the cron payload's
+  // `timeoutSeconds` happens to numerically equal `agents.defaults.timeoutSeconds`.
+  const runTimeoutOverrideMs =
+    typeof explicitTimeoutSeconds === "number" &&
+    Number.isFinite(explicitTimeoutSeconds) &&
+    explicitTimeoutSeconds > 0
+      ? explicitTimeoutSeconds * 1000
+      : undefined;
   const agentPayload = input.job.payload.kind === "agentTurn" ? input.job.payload : null;
   const { deliveryPlan, deliveryRequested, resolvedDelivery, toolPolicy } =
     await resolveCronDeliveryContext({
@@ -792,11 +813,13 @@ async function prepareCronRunContext(params: {
       resolvedDelivery,
       deliveryRequested,
       suppressExecNotifyOnExit: deliveryPlan.mode === "none",
+      senderIsOwner: !isExternalHook,
       toolPolicy,
       skillsSnapshot,
       liveSelection,
       thinkLevel,
       timeoutMs,
+      runTimeoutOverrideMs,
     },
   };
 }
@@ -1144,7 +1167,9 @@ export async function runCronIsolatedAgentTurn(params: {
       isAborted,
       thinkLevel: prepared.context.thinkLevel,
       timeoutMs: prepared.context.timeoutMs,
+      runTimeoutOverrideMs: prepared.context.runTimeoutOverrideMs,
       suppressExecNotifyOnExit: prepared.context.suppressExecNotifyOnExit,
+      senderIsOwner: prepared.context.senderIsOwner,
     });
     if (isAborted()) {
       return prepared.context.withRunSession({

@@ -686,9 +686,6 @@ export const ar: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle: "اطّلع على أين تذهب الرموز، ومتى ترتفع الجلسات، وما الذي يحدد التكلفة.",
-    },
     common: {
       emptyValue: "—",
       unknown: "غير معروف",
@@ -1026,6 +1023,10 @@ export const ar: TranslationMap = {
     settings: "إعدادات الدردشة",
     thinkingToggle: "تبديل مخرجات تفكير/عمل المساعد",
     toolCallsToggle: "تبديل استدعاءات الأدوات ونتائج الأدوات",
+    autoScrollMode: "Auto-scroll mode",
+    autoScrollAlways: "Always",
+    autoScrollNearBottom: "Near bottom",
+    autoScrollOff: "Off",
     focusToggle: "تبديل وضع التركيز (إخفاء الشريط الجانبي + رأس الصفحة)",
     hideCronSessions: "إخفاء جلسات cron",
     showCronSessions: "إظهار جلسات cron",

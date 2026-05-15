@@ -52,6 +52,7 @@ import {
 } from "./io.audit.js";
 import { persistBoundedClobberedConfigSnapshot } from "./io.clobber-snapshot.js";
 import { throwInvalidConfig } from "./io.invalid-config.js";
+import { stampConfigWriteMetadata } from "./io.meta.js";
 import {
   promoteConfigSnapshotToLastKnownGood as promoteConfigSnapshotToLastKnownGoodWithDeps,
   recoverConfigFromLastKnownGood as recoverConfigFromLastKnownGoodWithDeps,
@@ -180,6 +181,7 @@ type ConfigHealthState = {
 };
 
 export type ParseConfigJson5Result = { ok: true; parsed: unknown } | { ok: false; error: string };
+export type ConfigWriteResult = { persistedHash: string; persistedConfig: OpenClawConfig };
 export type ConfigWriteOptions = {
   /**
    * Read-time env snapshot used to validate `${VAR}` restoration decisions.
@@ -877,6 +879,7 @@ export type ConfigIoDeps = {
   configPath?: string;
   logger?: Pick<typeof console, "error" | "warn">;
   measure?: ConfigSnapshotReadMeasure;
+  suppressFutureVersionWarning?: boolean;
 };
 
 function warnOnConfigMiskeys(raw: unknown, logger: Pick<typeof console, "warn">): void {
@@ -895,15 +898,7 @@ function warnOnConfigMiskeys(raw: unknown, logger: Pick<typeof console, "warn">)
 }
 
 function stampConfigVersion(cfg: OpenClawConfig): OpenClawConfig {
-  const now = new Date().toISOString();
-  return {
-    ...cfg,
-    meta: {
-      ...cfg.meta,
-      lastTouchedVersion: VERSION,
-      lastTouchedAt: now,
-    },
-  };
+  return stampConfigWriteMetadata(cfg);
 }
 
 function warnIfConfigFromFuture(cfg: OpenClawConfig, logger: Pick<typeof console, "warn">): void {
@@ -943,6 +938,7 @@ function normalizeDeps(overrides: ConfigIoDeps = {}): Required<ConfigIoDeps> {
     configPath: overrides.configPath ?? "",
     logger: overrides.logger ?? console,
     measure: overrides.measure ?? (async (_name, run) => await run()),
+    suppressFutureVersionWarning: overrides.suppressFutureVersionWarning ?? false,
   };
 }
 
@@ -1616,7 +1612,9 @@ export function createConfigIO(
           .join("\n");
         deps.logger.warn(`Config warnings:\n${details}`);
       }
-      warnIfConfigFromFuture(validated.config, deps.logger);
+      if (!deps.suppressFutureVersionWarning) {
+        warnIfConfigFromFuture(validated.config, deps.logger);
+      }
       const cfg = retainRuntimeOnlyShippedPluginInstallConfigRecords(
         materializeRuntimeConfig(validated.config, "load", {
           manifestRegistry: pluginMetadataSnapshot?.manifestRegistry,
@@ -1823,7 +1821,9 @@ export function createConfigIO(
         });
       }
 
-      warnIfConfigFromFuture(validated.config, deps.logger);
+      if (!deps.suppressFutureVersionWarning) {
+        warnIfConfigFromFuture(validated.config, deps.logger);
+      }
       const snapshotConfig = await deps.measure("config.snapshot.read.materialize", () =>
         retainRuntimeOnlyShippedPluginInstallConfigRecords(
           materializeRuntimeConfig(validated.config, "snapshot", {
@@ -2416,7 +2416,7 @@ export async function readSourceConfigSnapshotForWrite(): Promise<ReadConfigFile
 export async function writeConfigFile(
   cfg: OpenClawConfig,
   options: ConfigWriteOptions = {},
-): Promise<void> {
+): Promise<ConfigWriteResult> {
   const io = createConfigIO(options.skipPluginValidation ? { pluginValidation: "skip" } : {});
   assertConfigWriteAllowedInCurrentMode({ configPath: io.configPath });
   let nextCfg = cfg;
@@ -2429,6 +2429,7 @@ export async function writeConfigFile(
     nextCfg = coerceConfig(applyMergePatch(runtimeConfigSourceSnapshot!, runtimePatch));
   }
   const writeResult = await io.writeConfigFile(nextCfg, {
+    baseSnapshot: options.baseSnapshot,
     envSnapshotForRestore: resolveWriteEnvSnapshotForPath({
       actualConfigPath: io.configPath,
       expectedConfigPath: options.expectedConfigPath,
@@ -2439,6 +2440,7 @@ export async function writeConfigFile(
     explicitSetValueSource: options.explicitSetPaths
       ? (options.explicitSetValueSource ?? cfg)
       : undefined,
+    afterWrite: options.afterWrite,
     allowDestructiveWrite: options.allowDestructiveWrite,
     allowConfigSizeDrop: options.allowConfigSizeDrop,
     skipRuntimeSnapshotRefresh: options.skipRuntimeSnapshotRefresh,
@@ -2450,7 +2452,7 @@ export async function writeConfigFile(
     !hadRuntimeSnapshot &&
     !getRuntimeConfigSnapshotRefreshHandlerState()
   ) {
-    return;
+    return writeResult;
   }
   // Re-read the freshly persisted file so the sourceConfig we publish matches
   // exactly what readConfigFileSnapshot() will produce when the file-watcher
@@ -2504,4 +2506,5 @@ export async function writeConfigFile(
         { cause },
       ),
   });
+  return { ...writeResult, persistedConfig: canonicalSourceConfig };
 }

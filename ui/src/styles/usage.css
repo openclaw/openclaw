@@ -22,25 +22,6 @@
   line-height: 1.15;
 }
 
-.usage-page-header {
-  display: grid;
-  gap: 4px;
-}
-
-.usage-page-title {
-  font-size: 22px;
-  font-weight: 700;
-  letter-spacing: -0.025em;
-  color: var(--text-strong);
-}
-
-.usage-page-subtitle {
-  max-width: 720px;
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 1.5;
-}
-
 .usage-section-title {
   margin: 0;
 }
@@ -354,6 +335,16 @@
   width: 100%;
   padding: 8px 12px;
   font-size: 12px;
+}
+
+@media (hover: none) and (pointer: coarse) {
+  .usage-date-input,
+  .usage-select,
+  .usage-query-input,
+  .usage-filters-inline select,
+  .usage-filters-inline input[type="text"] {
+    font-size: 16px;
+  }
 }
 
 .usage-query-input::placeholder {

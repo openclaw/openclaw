@@ -164,6 +164,14 @@ function expectRecordFields(
   return record;
 }
 
+function firstMockArg(mock: ReturnType<typeof vi.fn>, label: string): unknown {
+  const [arg] = mock.mock.calls[0] ?? [];
+  if (arg === undefined) {
+    throw new Error(`expected ${label}`);
+  }
+  return arg;
+}
+
 async function expectGatewayRequestError(
   promise: Promise<unknown>,
   expected: Record<string, unknown>,
@@ -198,7 +206,7 @@ function expectSecurityConnectError(
   onConnectError: ReturnType<typeof vi.fn>,
   params?: { expectTailscaleHint?: boolean },
 ) {
-  const error = onConnectError.mock.calls[0]?.[0] as Error;
+  const error = firstMockArg(onConnectError, "connect error") as Error;
   expect(error.message).toContain("SECURITY ERROR");
   expect(error.message).toContain("openclaw doctor --fix");
   if (params?.expectTailscaleHint) {
@@ -729,6 +737,7 @@ describe("GatewayClient connect auth payload", () => {
         bootstrapToken?: string;
         deviceToken?: string;
         password?: string;
+        approvalRuntimeToken?: string;
       };
     };
   };
@@ -803,6 +812,7 @@ describe("GatewayClient connect auth payload", () => {
     ws: MockWebSocket,
     connectId: string | undefined,
     details: Record<string, unknown>,
+    message = "unauthorized",
   ) {
     ws.emitMessage(
       JSON.stringify({
@@ -811,7 +821,7 @@ describe("GatewayClient connect auth payload", () => {
         ok: false,
         error: {
           code: "INVALID_REQUEST",
-          message: "unauthorized",
+          message,
           details,
         },
       }),
@@ -836,8 +846,14 @@ describe("GatewayClient connect auth payload", () => {
     firstWs: MockWebSocket;
     connectId: string | undefined;
     failureDetails: Record<string, unknown>;
+    failureMessage?: string;
   }) {
-    emitConnectFailure(params.firstWs, params.connectId, params.failureDetails);
+    emitConnectFailure(
+      params.firstWs,
+      params.connectId,
+      params.failureDetails,
+      params.failureMessage,
+    );
     await vi.waitFor(() => expect(wsInstances.length).toBeGreaterThan(1), { timeout: 3_000 });
     const ws = getLatestWs();
     ws.emitOpen();
@@ -879,6 +895,42 @@ describe("GatewayClient connect auth payload", () => {
     client.stop();
   });
 
+  it("retries without approval runtime token when a gateway rejects the auth field", async () => {
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-token",
+      approvalRuntimeToken: "runtime-token",
+      deviceIdentity: null,
+    });
+
+    const { ws: ws1, connect: firstConnect } = startClientAndConnect({ client });
+    expectRecordFields(
+      firstConnect.params?.auth ?? {},
+      {
+        token: "shared-token",
+        approvalRuntimeToken: "runtime-token",
+      },
+      "initial connect auth",
+    );
+
+    const retriedAuth = await expectRetriedConnectAuth({
+      firstWs: ws1,
+      connectId: firstConnect.id,
+      failureDetails: {},
+      failureMessage:
+        "invalid connect params: at /auth: unexpected property 'approvalRuntimeToken'",
+    });
+    expectRecordFields(
+      retriedAuth,
+      {
+        token: "shared-token",
+      },
+      "retried connect auth",
+    );
+    expect(retriedAuth.approvalRuntimeToken).toBeUndefined();
+    client.stop();
+  });
+
   it("waits for socket open before sending connect after an early challenge", () => {
     const client = new GatewayClient({
       url: "ws://127.0.0.1:18789",
@@ -905,7 +957,7 @@ describe("GatewayClient connect auth payload", () => {
     client.stop();
 
     await vi.waitFor(() => {
-      const error = onConnectError.mock.calls[0]?.[0] as Error | undefined;
+      const error = firstMockArg(onConnectError, "connect error") as Error;
       expect(error?.message).toBe("gateway client stopped");
     });
     expect(logDebugMock).toHaveBeenCalledWith(
@@ -1018,7 +1070,7 @@ describe("GatewayClient connect auth payload", () => {
     emitConnectChallenge(ws);
 
     const loadTokenParams = expectRecordFields(
-      loadDeviceAuthTokenMock.mock.calls[0]?.[0],
+      firstMockArg(loadDeviceAuthTokenMock, "load device token params"),
       {
         role: "operator",
         env,
@@ -1176,6 +1228,60 @@ describe("GatewayClient connect auth payload", () => {
     });
   });
 
+  it("does not auto-reconnect on token mismatch when no device-token retry is available", async () => {
+    loadDeviceAuthTokenMock.mockReturnValue(null);
+    const onReconnectPaused = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-token",
+      onReconnectPaused,
+    });
+
+    const { ws: ws1, connect: firstConnect } = startClientAndConnect({ client });
+    await expectNoReconnectAfterConnectFailure({
+      client,
+      firstWs: ws1,
+      connectId: firstConnect.id,
+      failureDetails: { code: "AUTH_TOKEN_MISMATCH", canRetryWithDeviceToken: true },
+    });
+    expect(onReconnectPaused).toHaveBeenCalledWith({
+      code: 1008,
+      reason: "connect failed",
+      detailCode: "AUTH_TOKEN_MISMATCH",
+    });
+  });
+
+  it("keeps reconnecting on PAIRING_REQUIRED when retry hints keep reconnect active", async () => {
+    vi.useFakeTimers();
+    const onReconnectPaused = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      bootstrapToken: "setup-bootstrap-token",
+      role: "node",
+      scopes: [],
+      onReconnectPaused,
+    });
+
+    try {
+      const { ws: ws1, connect: firstConnect } = startClientAndConnect({ client });
+      emitConnectFailure(ws1, firstConnect.id, {
+        code: "PAIRING_REQUIRED",
+        reason: "not-paired",
+        recommendedNextStep: "wait_then_retry",
+        pauseReconnect: false,
+      });
+
+      await vi.advanceTimersByTimeAsync(999);
+      expect(wsInstances).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(wsInstances).toHaveLength(2);
+      expect(onReconnectPaused).not.toHaveBeenCalled();
+    } finally {
+      client.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it("clears stale stored device tokens and does not reconnect on AUTH_DEVICE_TOKEN_MISMATCH", async () => {
     loadDeviceAuthTokenMock.mockReturnValue({
       token: "stored-device-token",
@@ -1196,7 +1302,7 @@ describe("GatewayClient connect auth payload", () => {
       failureDetails: { code: "AUTH_DEVICE_TOKEN_MISMATCH" },
     });
     const clearTokenParams = expectRecordFields(
-      clearDeviceAuthTokenMock.mock.calls[0]?.[0],
+      firstMockArg(clearDeviceAuthTokenMock, "clear device token params"),
       { role: "operator" },
       "clear device token params",
     );

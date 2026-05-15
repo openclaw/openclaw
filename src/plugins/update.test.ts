@@ -1108,7 +1108,7 @@ describe("updateNpmInstalledPlugins", () => {
     expect(fs.existsSync(peerLinkPath("brave"))).toBe(true);
     expect(fs.existsSync(peerLinkPath("codex"))).toBe(true);
     expect(warnMessages).toEqual([
-      `Could not repair openclaw peer link for "broken" at ${brokenInstallPath}: Error: EEXIST: file already exists, mkdir '${path.join(brokenInstallPath, "node_modules")}'`,
+      `Could not repair openclaw peer link for "broken" at ${brokenInstallPath}: Skipping openclaw peerDependency link because ${path.join(brokenInstallPath, "node_modules")} is not a real directory.`,
     ]);
   });
 
@@ -1720,6 +1720,64 @@ describe("updateNpmInstalledPlugins", () => {
       config: { preserved: true },
     });
     expect(result.config.plugins?.installs?.demo).toEqual(config.plugins.installs.demo);
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "demo",
+        status: "skipped",
+        message,
+      },
+    ]);
+  });
+
+  it("clears stale plugin policy and slot references when disabling failed updates", async () => {
+    const warn = vi.fn();
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: false,
+      error: "security scan blocked install",
+    });
+    const config = {
+      plugins: {
+        allow: ["demo", "keep"],
+        deny: ["demo", "blocked"],
+        slots: {
+          memory: "demo",
+          contextEngine: "demo",
+        },
+        entries: {
+          demo: {
+            enabled: true,
+          },
+        },
+        installs: {
+          demo: {
+            source: "npm" as const,
+            spec: "@acme/demo",
+            installPath: "/tmp/demo",
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = await updateNpmInstalledPlugins({
+      config,
+      disableOnFailure: true,
+      logger: { warn },
+    });
+
+    const message =
+      'Disabled "demo" after plugin update failure; OpenClaw will continue without it. Failed to update demo: security scan blocked install';
+    expect(warn).toHaveBeenCalledWith(message);
+    expect(result.changed).toBe(true);
+    expect(result.config.plugins?.entries?.demo).toEqual({
+      enabled: false,
+    });
+    expect(result.config.plugins?.installs?.demo).toEqual(config.plugins.installs.demo);
+    expect(result.config.plugins?.allow).toEqual(["keep"]);
+    expect(result.config.plugins?.deny).toEqual(["blocked"]);
+    expect(result.config.plugins?.slots).toEqual({
+      memory: "memory-core",
+      contextEngine: "legacy",
+    });
     expect(result.outcomes).toEqual([
       {
         pluginId: "demo",
