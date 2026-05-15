@@ -186,7 +186,7 @@ metadata:
       handler,
       config,
       requestParams: {
-        slug: "demo",
+        slug: "Demo",
         env: {
           API_TOKEN: "from-request",
           CUSTOM: "from-request",

@@ -60,7 +60,7 @@ function normalizeString(value: unknown): string {
 }
 
 function normalizeSlug(value: unknown): string {
-  const slug = normalizeString(value);
+  const slug = normalizeString(value).toLowerCase();
   if (!slug || slug.includes("/") || slug.includes("\\") || slug.includes("..")) {
     throw new Error("invalid skill slug");
   }
