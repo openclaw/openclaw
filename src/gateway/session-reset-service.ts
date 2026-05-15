@@ -718,8 +718,6 @@ export async function performGatewaySessionReset(params: {
       model: resolvedModel.model,
       modelProvider: resolvedModel.provider,
       contextTokens: resetEntry?.contextTokens,
-      compactionCount: currentEntry?.compactionCount,
-      compactionCheckpoints: currentEntry?.compactionCheckpoints,
       sendPolicy: currentEntry?.sendPolicy,
       queueMode: currentEntry?.queueMode,
       queueDebounceMs: currentEntry?.queueDebounceMs,
