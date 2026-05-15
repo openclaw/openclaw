@@ -315,6 +315,15 @@ export class TelegramPollingSession {
     if (!ingress?.enabled) {
       return this.#runPollingCycle(bot);
     }
+    try {
+      await bot.init();
+    } catch (err) {
+      const shouldRetry = await this.#waitBeforeRetryOnRecoverableSetupError(
+        err,
+        "Telegram bot init failed",
+      );
+      return shouldRetry ? "continue" : "exit";
+    }
     const spoolDir =
       ingress.spoolDir ?? resolveTelegramIngressSpoolDir({ accountId: this.opts.accountId });
     const workerFactory = ingress.createWorker ?? createTelegramIngressWorker;

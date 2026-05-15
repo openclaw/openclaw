@@ -1163,6 +1163,12 @@ export const registerTelegramNativeCommands = ({
           Timestamp: msg.date ? msg.date * 1000 : undefined,
           WasMentioned: true,
           CommandAuthorized: commandAuthorized,
+          CommandTurn: {
+            kind: "native" as const,
+            source: "native" as const,
+            authorized: commandAuthorized,
+            body: prompt,
+          },
           CommandSource: "native" as const,
           SessionKey: commandSessionKey,
           AccountId: route.accountId,

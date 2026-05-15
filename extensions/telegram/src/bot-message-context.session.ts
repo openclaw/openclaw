@@ -414,6 +414,7 @@ export async function buildTelegramInboundContextPayload(params: {
     : `telegram:${chatId}`;
   const telegramTo = `telegram:${chatId}`;
   const locationContext = locationData ? toLocationContext(locationData) : undefined;
+  const commandSource = options?.commandSource;
   const ctxPayload = sessionRuntime.buildChannelTurnContext({
     channel: "telegram",
     accountId: route.accountId,
@@ -465,6 +466,20 @@ export async function buildTelegramInboundContextPayload(params: {
         authorizers: [],
       },
     },
+    command:
+      commandSource === "native"
+        ? {
+            kind: "native",
+            authorized: commandAuthorized,
+            body: commandBody,
+          }
+        : commandSource === "text"
+          ? {
+              kind: "text-slash",
+              authorized: commandAuthorized,
+              body: commandBody,
+            }
+          : undefined,
     media: contextMedia.map((media, index) => ({
       path: media.path,
       url: media.path,
@@ -523,7 +538,6 @@ export async function buildTelegramInboundContextPayload(params: {
       Sticker: allMedia[0]?.stickerMetadata,
       StickerMediaIncluded: allMedia[0]?.stickerMetadata ? !stickerCacheHit : undefined,
       ...locationContext,
-      CommandSource: options?.commandSource,
       IsForum: isForum,
       TopicName: isForum && topicName ? topicName : undefined,
     },

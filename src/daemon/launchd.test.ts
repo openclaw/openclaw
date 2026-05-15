@@ -8,8 +8,10 @@ import {
 } from "./launchd-plist.js";
 import {
   installLaunchAgent,
+  findStaleOpenClawUpdateLaunchdJobs,
   isLaunchAgentListed,
   parseLaunchctlPrint,
+  parseLaunchctlListOpenClawUpdateJobs,
   readLaunchAgentProgramArguments,
   readLaunchAgentRuntime,
   repairLaunchAgentBootstrap,
@@ -418,6 +420,45 @@ describe("launchctl list detection", () => {
     });
     expect(listed).toBe(false);
   });
+
+  it("parses stale OpenClaw updater jobs from launchctl list", () => {
+    const jobs = parseLaunchctlListOpenClawUpdateJobs(
+      [
+        "123 0 ai.openclaw.gateway",
+        "- 127 ai.openclaw.update.2026.5.12",
+        "8142 0 ai.openclaw.update.2026.5.13-beta.1",
+        "- 0 com.example.other",
+      ].join("\n"),
+    );
+
+    expect(jobs).toEqual([
+      {
+        label: "ai.openclaw.update.2026.5.12",
+        lastExitStatus: 127,
+      },
+      {
+        label: "ai.openclaw.update.2026.5.13-beta.1",
+        pid: 8142,
+        lastExitStatus: 0,
+      },
+    ]);
+  });
+
+  it.runIf(process.platform === "darwin")(
+    "finds stale OpenClaw updater jobs via launchctl list",
+    async () => {
+      state.listOutput = "- 127 ai.openclaw.update.2026.5.12\n";
+
+      const jobs = await findStaleOpenClawUpdateLaunchdJobs();
+
+      expect(jobs).toEqual([
+        {
+          label: "ai.openclaw.update.2026.5.12",
+          lastExitStatus: 127,
+        },
+      ]);
+    },
+  );
 });
 
 describe("launchd bootstrap repair", () => {

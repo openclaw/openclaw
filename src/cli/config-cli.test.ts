@@ -1973,6 +1973,43 @@ describe("config cli", () => {
       });
     });
 
+    it("keeps numeric config patch object keys as object keys", async () => {
+      const resolved = {
+        channels: {
+          discord: {
+            enabled: true,
+          },
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      const pathname = writeTempJson5File("openclaw-config-patch-numeric-object-key", {
+        channels: {
+          discord: {
+            guilds: {
+              "123456789012345678": {
+                token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+              },
+            },
+          },
+        },
+      });
+      try {
+        await runConfigCommand(["config", "patch", "--file", pathname]);
+      } finally {
+        fs.rmSync(pathname, { force: true });
+      }
+
+      const written = firstWrittenConfig() as {
+        channels?: { discord?: { guilds?: unknown } };
+      };
+      expect(written.channels?.discord?.guilds).toEqual({
+        "123456789012345678": {
+          token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+        },
+      });
+    });
+
     it("dry-runs config patch and resolves changed SecretRefs", async () => {
       const resolved = {
         secrets: {
