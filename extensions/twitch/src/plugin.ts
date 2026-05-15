@@ -191,7 +191,7 @@ export const twitchPlugin: ChannelPlugin<ResolvedTwitchAccount> =
             start: async () => {
               // Lazy import: the monitor pulls the reply pipeline; avoid ESM init cycles.
               const { monitorTwitchProvider } = await import("./monitor.js");
-              return await monitorTwitchProvider({
+              return monitorTwitchProvider({
                 account,
                 accountId,
                 config: ctx.cfg,
