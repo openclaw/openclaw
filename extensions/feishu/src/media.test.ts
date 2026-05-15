@@ -9,6 +9,7 @@ const resolveFeishuAccountMock = vi.hoisted(() => vi.fn());
 const normalizeFeishuTargetMock = vi.hoisted(() => vi.fn());
 const resolveReceiveIdTypeMock = vi.hoisted(() => vi.fn());
 const loadWebMediaMock = vi.hoisted(() => vi.fn());
+const resolveSystemBinMock = vi.hoisted(() => vi.fn());
 
 const fileCreateMock = vi.hoisted(() => vi.fn());
 const imageCreateMock = vi.hoisted(() => vi.fn());
@@ -45,6 +46,10 @@ vi.mock("./runtime.js", () => ({
 vi.mock("../../../src/channels/plugins/bundled.js", () => ({
   bundledChannelPlugins: [],
   bundledChannelSetupPlugins: [],
+}));
+
+vi.mock("../../../src/infra/resolve-system-bin.js", () => ({
+  resolveSystemBin: resolveSystemBinMock,
 }));
 
 let downloadImageFeishu: typeof import("./media.js").downloadImageFeishu;
@@ -330,6 +335,28 @@ describe("sendMediaFeishu msg_type routing", () => {
 
     const callData = messageReplyMock.mock.calls[0][0].data;
     expect(callData).not.toHaveProperty("reply_in_thread");
+  });
+
+  // Video thumbnail extraction tests — ffmpeg not required
+
+  it("skips thumbnail upload when ffmpeg is unavailable", async () => {
+    // simulate CI environment where ffmpeg is not installed
+    resolveSystemBinMock.mockReturnValue(undefined);
+
+    await sendMediaFeishu({
+      cfg: emptyConfig,
+      to: "user:ou_target",
+      mediaBuffer: Buffer.from("video"),
+      fileName: "clip.mp4",
+    });
+
+    // video still sends; thumbnail step silently skipped
+    expect(imageCreateMock).not.toHaveBeenCalled();
+    expect(messageCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ msg_type: "media" }),
+      }),
+    );
   });
 
   it("passes mediaLocalRoots as localRoots to loadWebMedia for local paths (#27884)", async () => {
