@@ -49,6 +49,7 @@ export type {
   TelegramInlineButtonsScope,
   TelegramNetworkConfig,
   TelegramTopicConfig,
+  TtsAutoEmotionConfig,
   TtsAutoMode,
   TtsConfig,
   TtsModelOverrideConfig,
