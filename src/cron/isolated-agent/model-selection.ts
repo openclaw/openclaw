@@ -1,3 +1,4 @@
+import type { AgentConfig } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronJob } from "../types.js";
 import {
@@ -9,6 +10,7 @@ import {
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
+  resolveSubagentModelConfigSelection,
 } from "./run-model-selection.runtime.js";
 
 type CronSessionModelOverrides = {
@@ -19,12 +21,7 @@ type CronSessionModelOverrides = {
 export type ResolveCronModelSelectionParams = {
   cfg: OpenClawConfig;
   cfgWithAgentDefaults: OpenClawConfig;
-  agentConfigOverride?: {
-    model?: unknown;
-    subagents?: {
-      model?: unknown;
-    };
-  };
+  agentConfigOverride?: Pick<AgentConfig, "model" | "subagents">;
   sessionEntry: CronSessionModelOverrides;
   payload: CronJob["payload"];
   isGmailHook: boolean;
@@ -82,10 +79,13 @@ export async function resolveCronModelSelection(
     return catalog;
   };
 
-  const subagentModelRaw =
-    normalizeModelSelection(params.agentConfigOverride?.subagents?.model) ??
-    normalizeModelSelection(params.agentConfigOverride?.model) ??
-    normalizeModelSelection(params.cfg.agents?.defaults?.subagents?.model);
+  const subagentModelRaw = normalizeModelSelection(
+    resolveSubagentModelConfigSelection({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      agentConfigOverride: params.agentConfigOverride,
+    }),
+  );
   if (subagentModelRaw) {
     const resolvedSubagent = resolveAllowedModelRef({
       cfg: params.cfgWithAgentDefaults,

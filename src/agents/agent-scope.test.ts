@@ -16,6 +16,7 @@ import {
   resolveAgentModelFallbacksOverride,
   resolveAgentModelPrimary,
   resolveRunModelFallbacksOverride,
+  resolveSubagentModelConfigSelection,
   resolveSubagentModelFallbacksOverride,
   resolveAgentWorkspaceDir,
   resolveAgentIdByWorkspacePath,
@@ -548,6 +549,16 @@ describe("resolveAgentConfig", () => {
             },
           },
           {
+            id: "metadata-only-subagent",
+            model: {
+              primary: "anthropic/claude-sonnet-4-6",
+              fallbacks: ["google/gemini-3-pro"],
+            },
+            subagents: {
+              model: { timeoutMs: 1_000 },
+            },
+          },
+          {
             id: "default-subagent",
           },
           {
@@ -567,11 +578,65 @@ describe("resolveAgentConfig", () => {
     expect(resolveSubagentModelFallbacksOverride(cfg, "agent-model")).toEqual([
       "google/gemini-3-pro",
     ]);
+    expect(resolveSubagentModelFallbacksOverride(cfg, "metadata-only-subagent")).toEqual([
+      "google/gemini-3-pro",
+    ]);
     expect(resolveSubagentModelFallbacksOverride(cfg, "default-subagent")).toEqual([
       "openai-codex/gpt-5.4",
       "zai/glm-5",
     ]);
     expect(resolveSubagentModelFallbacksOverride(cfg, "strict")).toStrictEqual([]);
+  });
+
+  it("resolves the subagent model config selected for isolated runs", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          subagents: { model: "openai/gpt-5.4" },
+        },
+        list: [
+          {
+            id: "agent-model",
+            model: {
+              primary: "anthropic/claude-sonnet-4-6",
+              fallbacks: ["google/gemini-3-pro"],
+            },
+          },
+          {
+            id: "subagent-model",
+            model: "anthropic/claude-sonnet-4-6",
+            subagents: {
+              model: {
+                primary: "kimi/kimi-code",
+                fallbacks: ["openai-codex/gpt-5.4"],
+              },
+            },
+          },
+          {
+            id: "metadata-only-subagent",
+            model: "anthropic/claude-sonnet-4-6",
+            subagents: {
+              model: { timeoutMs: 1_000 },
+            },
+          },
+        ],
+      },
+    };
+
+    expect(resolveSubagentModelConfigSelection({ cfg, agentId: "agent-model" })).toEqual({
+      primary: "anthropic/claude-sonnet-4-6",
+      fallbacks: ["google/gemini-3-pro"],
+    });
+    expect(resolveSubagentModelConfigSelection({ cfg, agentId: "subagent-model" })).toEqual({
+      primary: "kimi/kimi-code",
+      fallbacks: ["openai-codex/gpt-5.4"],
+    });
+    expect(resolveSubagentModelConfigSelection({ cfg, agentId: "metadata-only-subagent" })).toBe(
+      "anthropic/claude-sonnet-4-6",
+    );
+    expect(resolveSubagentModelConfigSelection({ cfg, agentId: "default-subagent" })).toBe(
+      "openai/gpt-5.4",
+    );
   });
 
   it("should return agent-specific sandbox config", () => {
