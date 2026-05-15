@@ -1,3 +1,4 @@
+import { isProxylineDispatcher } from "@openclaw/proxyline/dispatcher-brand";
 import { hasEnvHttpProxyAgentConfigured, resolveEnvHttpProxyAgentOptions } from "./proxy-env.js";
 import {
   createUndiciAutoSelectFamilyConnectOptions,
@@ -126,10 +127,7 @@ function resolveDispatcherKind(dispatcher: unknown): DispatcherKind {
   if (ctorName.includes("EnvHttpProxyAgent")) {
     return "env-proxy";
   }
-  if (isTimedProxylineManagedDispatcher(dispatcher)) {
-    return "proxyline-managed";
-  }
-  if (ctorName.includes("ManagedUndiciDispatcher")) {
+  if (isTimedProxylineManagedDispatcher(dispatcher) || isProxylineDispatcher(dispatcher)) {
     return "proxyline-managed";
   }
   if (ctorName.includes("ProxyAgent")) {

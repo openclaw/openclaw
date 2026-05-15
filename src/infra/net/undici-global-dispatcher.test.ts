@@ -13,6 +13,7 @@ const {
   getCurrentDispatcher,
   getDefaultAutoSelectFamily,
   setDefaultAutoSelectFamily,
+  isProxylineDispatcher,
   loadUndiciGlobalDispatcherDeps,
 } = vi.hoisted(() => {
   class Agent {
@@ -71,6 +72,9 @@ const {
   const getCurrentDispatcher = () => currentDispatcher;
   const getDefaultAutoSelectFamily = vi.fn(() => undefined as boolean | undefined);
   const setDefaultAutoSelectFamily = vi.fn();
+  const isProxylineDispatcher = vi.fn(
+    (dispatcher: unknown) => dispatcher instanceof ManagedUndiciDispatcher,
+  );
   const loadUndiciGlobalDispatcherDeps = vi.fn(() => ({
     Agent,
     EnvHttpProxyAgent,
@@ -88,12 +92,23 @@ const {
     setCurrentDispatcher,
     getCurrentDispatcher,
     getDefaultAutoSelectFamily,
+    isProxylineDispatcher,
     setDefaultAutoSelectFamily,
     loadUndiciGlobalDispatcherDeps,
   };
 });
 
-const mockedModuleIds = ["node:net", "./proxy-env.js", "./undici-runtime.js", "../wsl.js"] as const;
+const mockedModuleIds = [
+  "@openclaw/proxyline/dispatcher-brand",
+  "node:net",
+  "./proxy-env.js",
+  "./undici-runtime.js",
+  "../wsl.js",
+] as const;
+
+vi.mock("@openclaw/proxyline/dispatcher-brand", () => ({
+  isProxylineDispatcher,
+}));
 
 vi.mock("node:net", () => ({
   getDefaultAutoSelectFamily,

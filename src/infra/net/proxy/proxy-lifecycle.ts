@@ -9,8 +9,8 @@
 
 import {
   installGlobalProxy,
-  type ProxylineBypassPolicy,
   type ProxylineHandle,
+  type ProxylineUndiciOptions,
 } from "@openclaw/proxyline";
 import type { ProxyConfig } from "../../../config/zod-schema.proxy.js";
 
@@ -44,13 +44,14 @@ type ProxyEnvSnapshot = Record<ProxyEnvKey, string | undefined>;
 
 let baseProxyEnvSnapshot: ProxyEnvSnapshot | null = null;
 let proxylineHandle: ProxylineHandle | null = null;
-const gatewayLoopbackBypassAuthorityCounts = new Map<string, number>();
+const MANAGED_PROXY_UNDICI_OPTIONS = Object.freeze({
+  allowH2: false,
+}) satisfies ProxylineUndiciOptions;
 
 export function resetProxyLifecycleForTests(): void {
   baseProxyEnvSnapshot = null;
   proxylineHandle?.stop();
   proxylineHandle = null;
-  gatewayLoopbackBypassAuthorityCounts.clear();
 }
 
 function captureProxyEnv(): ProxyEnvSnapshot {
@@ -111,18 +112,6 @@ function restoreAfterFailedProxyActivation(restoreSnapshot: ProxyEnvSnapshot): v
   baseProxyEnvSnapshot = null;
 }
 
-function stopInheritedProxylineRuntimeBeforeOwnedStart(): void {
-  if (!proxylineHandle) {
-    return;
-  }
-  try {
-    proxylineHandle.stop();
-  } catch (err) {
-    logWarn(`proxy: failed to stop inherited Proxyline runtime: ${String(err)}`);
-  }
-  proxylineHandle = null;
-}
-
 function stopActiveProxyRegistration(registration: ActiveManagedProxyRegistration): void {
   if (registration.stopped) {
     return;
@@ -180,10 +169,11 @@ export function ensureInheritedManagedProxyRoutingActive(): void {
   if (!proxyUrl || !isSupportedProxyUrl(proxyUrl)) {
     return;
   }
-  proxylineHandle ??= installGlobalProxy({
+  proxylineHandle = installGlobalProxy({
     mode: "managed",
     proxyUrl,
-    bypassPolicy: shouldBypassManagedProxyForGatewayLoopback,
+    ifActive: "reuse-compatible",
+    undici: MANAGED_PROXY_UNDICI_OPTIONS,
   });
   forceResetGlobalDispatcher({ preserveProxylineManaged: true });
 }
@@ -209,19 +199,19 @@ export async function startProxy(config: ProxyConfig | undefined): Promise<Proxy
     };
     return handle;
   }
-  stopInheritedProxylineRuntimeBeforeOwnedStart();
   baseProxyEnvSnapshot ??= captureProxyEnv();
   const lifecycleBaseEnvSnapshot = baseProxyEnvSnapshot;
   let registration: ActiveManagedProxyRegistration | null = null;
 
   try {
     injectProxyEnv(proxyUrl, loopbackMode);
-    proxylineHandle ??= installGlobalProxy({
+    proxylineHandle = installGlobalProxy({
       mode: "managed",
       proxyUrl,
-      bypassPolicy: shouldBypassManagedProxyForGatewayLoopback,
+      ifActive: "replace",
+      undici: MANAGED_PROXY_UNDICI_OPTIONS,
     });
-    forceResetGlobalDispatcher();
+    forceResetGlobalDispatcher({ preserveProxylineManaged: true });
     registration = registerActiveManagedProxyUrl(new URL(proxyUrl), loopbackMode);
   } catch (err) {
     restoreAfterFailedProxyActivation(lifecycleBaseEnvSnapshot);
@@ -282,11 +272,6 @@ function getGatewayControlPlaneBypassAuthority(value: string): string | null {
   return url.port ? `${url.hostname}:${url.port}` : url.hostname;
 }
 
-const shouldBypassManagedProxyForGatewayLoopback: ProxylineBypassPolicy = ({ url }) => {
-  const authority = getGatewayControlPlaneBypassAuthority(url);
-  return authority !== null && (gatewayLoopbackBypassAuthorityCounts.get(authority) ?? 0) > 0;
-};
-
 export function registerManagedProxyGatewayLoopbackBypass(url: string): (() => void) | undefined {
   const authority = getGatewayControlPlaneBypassAuthority(url);
   if (!authority) {
@@ -302,23 +287,7 @@ export function registerManagedProxyGatewayLoopbackBypass(url: string): (() => v
     return undefined;
   }
 
-  gatewayLoopbackBypassAuthorityCounts.set(
-    authority,
-    (gatewayLoopbackBypassAuthorityCounts.get(authority) ?? 0) + 1,
-  );
-  let stopped = false;
-  return () => {
-    if (stopped) {
-      return;
-    }
-    stopped = true;
-    const nextCount = (gatewayLoopbackBypassAuthorityCounts.get(authority) ?? 1) - 1;
-    if (nextCount <= 0) {
-      gatewayLoopbackBypassAuthorityCounts.delete(authority);
-    } else {
-      gatewayLoopbackBypassAuthorityCounts.set(authority, nextCount);
-    }
-  };
+  return proxylineHandle?.registerBypass({ url });
 }
 
 function isGatewayControlPlaneLoopbackHost(hostname: string): boolean {

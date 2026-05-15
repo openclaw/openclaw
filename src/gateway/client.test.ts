@@ -1,5 +1,4 @@
 import { Buffer } from "node:buffer";
-import type { ProxylineBypassPolicy } from "@openclaw/proxyline";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeviceIdentity } from "../infra/device-identity.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -12,17 +11,29 @@ const loadDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
 const storeDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
 const logDebugMock = vi.hoisted(() => vi.fn());
 const logErrorMock = vi.hoisted(() => vi.fn());
-type MockProxylineInstallOptions = {
-  bypassPolicy?: ProxylineBypassPolicy;
-};
-const { installGlobalProxyMock, proxylineStopMock } = vi.hoisted(() => {
+const {
+  installGlobalProxyMock,
+  proxylineRegisterBypassMock,
+  proxylineStopMock,
+  proxylineUnregisterBypassMock,
+} = vi.hoisted(() => {
   const proxylineStopMock = vi.fn();
+  const proxylineUnregisterBypassMock = vi.fn();
+  const proxylineRegisterBypassMock = vi.fn(() => proxylineUnregisterBypassMock);
   return {
+    proxylineRegisterBypassMock,
     proxylineStopMock,
-    installGlobalProxyMock: vi.fn((_options: MockProxylineInstallOptions) => ({
+    proxylineUnregisterBypassMock,
+    installGlobalProxyMock: vi.fn(() => ({
       active: true,
+      createNodeAgent: vi.fn(),
+      createUndiciDispatcher: vi.fn(),
+      createWebSocketAgent: vi.fn(),
+      explain: vi.fn(),
       mode: "managed",
+      registerBypass: proxylineRegisterBypassMock,
       stop: proxylineStopMock,
+      withBypass: vi.fn(),
     })),
   };
 });
@@ -215,15 +226,6 @@ async function expectGatewayRequestError(
   expectRecordFields(error.details, { method: "chat.history" }, "gateway request error details");
 }
 
-function expectLastProxylineBypassPolicy(): ProxylineBypassPolicy {
-  const options = installGlobalProxyMock.mock.calls.at(-1)?.[0];
-  const bypassPolicy = options?.bypassPolicy;
-  if (typeof bypassPolicy !== "function") {
-    throw new Error("missing Proxyline bypass policy");
-  }
-  return (request) => bypassPolicy(request);
-}
-
 function createClientWithIdentity(
   deviceId: string,
   onClose: (code: number, reason: string) => void,
@@ -273,7 +275,9 @@ describe("GatewayClient security checks", () => {
     const { resetProxyLifecycleForTests } = await import("../infra/net/proxy/proxy-lifecycle.js");
     resetProxyLifecycleForTests();
     installGlobalProxyMock.mockClear();
+    proxylineRegisterBypassMock.mockClear();
     proxylineStopMock.mockClear();
+    proxylineUnregisterBypassMock.mockClear();
     wsInstances.length = 0;
     wsConstructorObservers.length = 0;
   });
@@ -349,9 +353,10 @@ describe("GatewayClient security checks", () => {
     expect(getLatestWs().options).not.toMatchObject({ agent: expect.any(Object) });
     expect(installGlobalProxyMock).toHaveBeenCalledWith(
       expect.objectContaining({
+        ifActive: "reuse-compatible",
         mode: "managed",
         proxyUrl: "http://127.0.0.1:3128",
-        bypassPolicy: expect.any(Function),
+        undici: expect.objectContaining({ allowH2: false }),
       }),
     );
     client.stop();
@@ -362,10 +367,12 @@ describe("GatewayClient security checks", () => {
     process.env.OPENCLAW_PROXY_LOOPBACK_MODE = "gateway-only";
     process.env.HTTP_PROXY = "http://127.0.0.1:3128";
     const onConnectError = vi.fn();
-    const bypassDuringConstruction: boolean[] = [];
-    wsConstructorObservers.push((url) => {
-      const bypassPolicy = expectLastProxylineBypassPolicy();
-      bypassDuringConstruction.push(bypassPolicy({ surface: "unknown", url }));
+    const bypassActiveDuringConstruction: boolean[] = [];
+    wsConstructorObservers.push(() => {
+      bypassActiveDuringConstruction.push(
+        proxylineRegisterBypassMock.mock.calls.length === 1 &&
+          proxylineUnregisterBypassMock.mock.calls.length === 0,
+      );
     });
     const client = new GatewayClient({
       url: "ws://127.0.0.1:18789",
@@ -374,14 +381,14 @@ describe("GatewayClient security checks", () => {
 
     client.start();
 
-    const bypassPolicy = expectLastProxylineBypassPolicy();
-    expect(bypassDuringConstruction).toEqual([true]);
-    expect(bypassPolicy({ surface: "unknown", url: "ws://127.0.0.1:18789" })).toBe(false);
+    expect(proxylineRegisterBypassMock).toHaveBeenCalledWith({ url: "ws://127.0.0.1:18789" });
+    expect(bypassActiveDuringConstruction).toEqual([true]);
+    expect(proxylineUnregisterBypassMock).toHaveBeenCalledOnce();
     const ws = getLatestWs();
 
     ws.emitOpen();
 
-    expect(bypassPolicy({ surface: "unknown", url: "ws://127.0.0.1:18789" })).toBe(false);
+    expect(proxylineUnregisterBypassMock).toHaveBeenCalledOnce();
     expect(onConnectError).not.toHaveBeenCalled();
     client.stop();
   });
@@ -398,13 +405,13 @@ describe("GatewayClient security checks", () => {
 
     client.start();
 
-    const bypassPolicy = expectLastProxylineBypassPolicy();
-    expect(bypassPolicy({ surface: "unknown", url: "ws://127.0.0.1:18789" })).toBe(false);
+    expect(proxylineRegisterBypassMock).toHaveBeenCalledWith({ url: "ws://127.0.0.1:18789" });
+    expect(proxylineUnregisterBypassMock).toHaveBeenCalledOnce();
     const ws = getLatestWs();
 
     ws.emitError(new Error("proxy connection failed"));
 
-    expect(bypassPolicy({ surface: "unknown", url: "ws://127.0.0.1:18789" })).toBe(false);
+    expect(proxylineUnregisterBypassMock).toHaveBeenCalledOnce();
     expect(onConnectError).toHaveBeenCalledWith(
       expect.objectContaining({ message: "proxy connection failed" }),
     );

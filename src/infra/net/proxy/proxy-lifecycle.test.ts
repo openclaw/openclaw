@@ -1,17 +1,31 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { installGlobalProxyMock, proxylineStopMock } = vi.hoisted(() => {
+const {
+  installGlobalProxyMock,
+  proxylineRegisterBypassMock,
+  proxylineStopMock,
+  proxylineUnregisterBypassMock,
+} = vi.hoisted(() => {
   const proxylineStopMock = vi.fn();
+  const proxylineUnregisterBypassMock = vi.fn();
+  const proxylineRegisterBypassMock = vi.fn(() => proxylineUnregisterBypassMock);
   return {
+    proxylineRegisterBypassMock,
     proxylineStopMock,
+    proxylineUnregisterBypassMock,
     installGlobalProxyMock: vi.fn(() => ({
       active: true,
+      createNodeAgent: vi.fn(),
+      createUndiciDispatcher: vi.fn(),
+      createWebSocketAgent: vi.fn(),
+      explain: vi.fn(),
       mode: "managed",
+      registerBypass: proxylineRegisterBypassMock,
       stop: proxylineStopMock,
+      withBypass: vi.fn(),
     })),
   };
 });
-const ensureGlobalUndiciEnvProxyDispatcherMock = vi.hoisted(() => vi.fn());
 const forceResetGlobalDispatcherMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@openclaw/proxyline", () => ({
@@ -19,7 +33,6 @@ vi.mock("@openclaw/proxyline", () => ({
 }));
 
 vi.mock("../undici-global-dispatcher.js", () => ({
-  ensureGlobalUndiciEnvProxyDispatcher: ensureGlobalUndiciEnvProxyDispatcherMock,
   forceResetGlobalDispatcher: forceResetGlobalDispatcherMock,
 }));
 
@@ -28,7 +41,6 @@ vi.mock("../../../logger.js", () => ({
   logWarn: vi.fn(),
 }));
 
-import type { ProxylineBypassPolicy } from "@openclaw/proxyline";
 import { logInfo, logWarn } from "../../../logger.js";
 import { _resetActiveManagedProxyStateForTests } from "./active-proxy-state.js";
 import {
@@ -61,22 +73,6 @@ function expectBypassUnregister(
   return unregister;
 }
 
-function expectLastProxylineBypassPolicy(): ProxylineBypassPolicy {
-  const calls: unknown = installGlobalProxyMock.mock.calls;
-  const lastCall = Array.isArray(calls) ? calls.at(-1) : undefined;
-  const optionsUnknown = Array.isArray(lastCall) ? lastCall[0] : undefined;
-  const options =
-    typeof optionsUnknown === "object" && optionsUnknown !== null
-      ? (optionsUnknown as Record<string, unknown>)
-      : undefined;
-  const bypassPolicy = options?.["bypassPolicy"];
-  expect(bypassPolicy).toBeTypeOf("function");
-  if (typeof bypassPolicy !== "function") {
-    throw new Error("Expected Proxyline bypass policy");
-  }
-  return (request) => bypassPolicy(request);
-}
-
 describe("startProxy", () => {
   const savedEnv: Record<string, string | undefined> = {};
   const envKeysToClean = [
@@ -103,8 +99,9 @@ describe("startProxy", () => {
     resetProxyLifecycleForTests();
     _resetActiveManagedProxyStateForTests();
     installGlobalProxyMock.mockClear();
+    proxylineRegisterBypassMock.mockClear();
     proxylineStopMock.mockClear();
-    ensureGlobalUndiciEnvProxyDispatcherMock.mockClear();
+    proxylineUnregisterBypassMock.mockClear();
     forceResetGlobalDispatcherMock.mockClear();
   });
 
@@ -259,20 +256,23 @@ describe("startProxy", () => {
 
     expect(installGlobalProxyMock).toHaveBeenCalledWith(
       expect.objectContaining({
+        ifActive: "replace",
         mode: "managed",
         proxyUrl: "http://127.0.0.1:3128",
-        bypassPolicy: expect.any(Function),
+        undici: expect.objectContaining({ allowH2: false }),
       }),
     );
+    expect(forceResetGlobalDispatcherMock).toHaveBeenCalledWith({
+      preserveProxylineManaged: true,
+    });
 
     await stopProxy(expectProxyHandle(handle));
 
     expect(proxylineStopMock).toHaveBeenCalledOnce();
-    expect(ensureGlobalUndiciEnvProxyDispatcherMock).not.toHaveBeenCalled();
     expect(forceResetGlobalDispatcherMock).toHaveBeenCalledTimes(2);
   });
 
-  it("reinstalls inherited Proxyline routing when startProxy takes ownership", async () => {
+  it("reuses inherited Proxyline routing and replaces it when startProxy takes ownership", async () => {
     process.env["OPENCLAW_PROXY_ACTIVE"] = "1";
     process.env["OPENCLAW_PROXY_LOOPBACK_MODE"] = "gateway-only";
     process.env["HTTP_PROXY"] = "http://127.0.0.1:3111";
@@ -281,8 +281,10 @@ describe("startProxy", () => {
 
     expect(installGlobalProxyMock).toHaveBeenCalledWith(
       expect.objectContaining({
+        ifActive: "reuse-compatible",
         mode: "managed",
         proxyUrl: "http://127.0.0.1:3111",
+        undici: expect.objectContaining({ allowH2: false }),
       }),
     );
     expect(proxylineStopMock).not.toHaveBeenCalled();
@@ -292,29 +294,30 @@ describe("startProxy", () => {
       proxyUrl: "http://127.0.0.1:3222",
     });
 
-    expect(proxylineStopMock).toHaveBeenCalledOnce();
     expect(installGlobalProxyMock).toHaveBeenCalledTimes(2);
     const installCalls = installGlobalProxyMock.mock.calls as unknown[][];
     expect(installCalls[1]?.[0]).toEqual(
       expect.objectContaining({
+        ifActive: "replace",
         mode: "managed",
         proxyUrl: "http://127.0.0.1:3222",
-        bypassPolicy: expect.any(Function),
+        undici: expect.objectContaining({ allowH2: false }),
       }),
     );
     expect(process.env["HTTP_PROXY"]).toBe("http://127.0.0.1:3222");
 
     await stopProxy(expectProxyHandle(handle));
 
-    expect(proxylineStopMock).toHaveBeenCalledTimes(2);
+    expect(proxylineStopMock).toHaveBeenCalledOnce();
     expect(process.env["HTTP_PROXY"]).toBe("http://127.0.0.1:3111");
     expect(process.env["OPENCLAW_PROXY_ACTIVE"]).toBe("1");
     expect(installGlobalProxyMock).toHaveBeenCalledTimes(3);
     expect(installCalls[2]?.[0]).toEqual(
       expect.objectContaining({
+        ifActive: "reuse-compatible",
         mode: "managed",
         proxyUrl: "http://127.0.0.1:3111",
-        bypassPolicy: expect.any(Function),
+        undici: expect.objectContaining({ allowH2: false }),
       }),
     );
   });
@@ -328,14 +331,15 @@ describe("startProxy", () => {
 
     expect(installGlobalProxyMock).toHaveBeenCalledWith(
       expect.objectContaining({
+        ifActive: "reuse-compatible",
         mode: "managed",
         proxyUrl: "http://127.0.0.1:3111",
+        undici: expect.objectContaining({ allowH2: false }),
       }),
     );
     expect(forceResetGlobalDispatcherMock).toHaveBeenCalledWith({
       preserveProxylineManaged: true,
     });
-    expect(ensureGlobalUndiciEnvProxyDispatcherMock).not.toHaveBeenCalled();
   });
 
   it("restores previous proxy env and stops Proxyline on stop", async () => {
@@ -357,7 +361,6 @@ describe("startProxy", () => {
     expect(process.env["NO_PROXY"]).toBe("corp.example.com");
     expect(process.env["OPENCLAW_PROXY_ACTIVE"]).toBeUndefined();
     expect(proxylineStopMock).toHaveBeenCalledOnce();
-    expect(ensureGlobalUndiciEnvProxyDispatcherMock).not.toHaveBeenCalled();
     expect(forceResetGlobalDispatcherMock).toHaveBeenCalledTimes(2);
   });
 
@@ -372,7 +375,6 @@ describe("startProxy", () => {
     });
 
     expect(installGlobalProxyMock).toHaveBeenCalledOnce();
-    expect(ensureGlobalUndiciEnvProxyDispatcherMock).not.toHaveBeenCalled();
     expect(forceResetGlobalDispatcherMock).toHaveBeenCalledOnce();
     expect(process.env["HTTP_PROXY"]).toBe("http://127.0.0.1:3128");
     expect(process.env["OPENCLAW_PROXY_ACTIVE"]).toBe("1");
@@ -448,31 +450,30 @@ describe("startProxy", () => {
     expect(process.env["OPENCLAW_PROXY_ACTIVE"]).toBeUndefined();
   });
 
-  it("registers exact Gateway loopback authorities in Proxyline bypass policy", async () => {
+  it("registers exact Gateway loopback URLs with Proxyline", async () => {
     const handle = await startProxy({
       enabled: true,
       proxyUrl: "http://127.0.0.1:3128",
     });
 
-    const bypassPolicy = expectLastProxylineBypassPolicy();
     const unregister = expectBypassUnregister(
       registerManagedProxyGatewayLoopbackBypass("ws://127.0.0.1:18789"),
     );
-    expect(bypassPolicy({ surface: "websocket", url: "ws://127.0.0.1:18789" })).toBe(true);
-    expect(bypassPolicy({ surface: "websocket", url: "ws://127.0.0.1:3000" })).toBe(false);
+    expect(proxylineRegisterBypassMock).toHaveBeenCalledWith({
+      url: "ws://127.0.0.1:18789",
+    });
 
     unregister();
-    expect(bypassPolicy({ surface: "websocket", url: "ws://127.0.0.1:18789" })).toBe(false);
+    expect(proxylineUnregisterBypassMock).toHaveBeenCalledOnce();
     await stopProxy(handle);
   });
 
-  it("keeps overlapping Gateway loopback bypass registrations active until the final unregister", async () => {
+  it("delegates overlapping Gateway loopback bypass registrations to Proxyline", async () => {
     const handle = await startProxy({
       enabled: true,
       proxyUrl: "http://127.0.0.1:3128",
     });
 
-    const bypassPolicy = expectLastProxylineBypassPolicy();
     const unregisterFirst = expectBypassUnregister(
       registerManagedProxyGatewayLoopbackBypass("ws://127.0.0.1:18789"),
     );
@@ -480,11 +481,17 @@ describe("startProxy", () => {
       registerManagedProxyGatewayLoopbackBypass("ws://127.0.0.1:18789"),
     );
 
-    expect(bypassPolicy({ surface: "websocket", url: "ws://127.0.0.1:18789" })).toBe(true);
+    expect(proxylineRegisterBypassMock).toHaveBeenCalledTimes(2);
+    expect(proxylineRegisterBypassMock).toHaveBeenNthCalledWith(1, {
+      url: "ws://127.0.0.1:18789",
+    });
+    expect(proxylineRegisterBypassMock).toHaveBeenNthCalledWith(2, {
+      url: "ws://127.0.0.1:18789",
+    });
     unregisterFirst();
-    expect(bypassPolicy({ surface: "websocket", url: "ws://127.0.0.1:18789" })).toBe(true);
+    expect(proxylineUnregisterBypassMock).toHaveBeenCalledTimes(1);
     unregisterSecond();
-    expect(bypassPolicy({ surface: "websocket", url: "ws://127.0.0.1:18789" })).toBe(false);
+    expect(proxylineUnregisterBypassMock).toHaveBeenCalledTimes(2);
 
     await stopProxy(handle);
   });
@@ -494,18 +501,17 @@ describe("startProxy", () => {
       enabled: true,
       proxyUrl: "http://127.0.0.1:3128",
     });
-    const bypassPolicy = expectLastProxylineBypassPolicy();
 
     const unregisterIpv6 = expectBypassUnregister(
       registerManagedProxyGatewayLoopbackBypass("ws://[::1]:18789"),
     );
-    expect(bypassPolicy({ surface: "websocket", url: "ws://[::1]:18789" })).toBe(true);
+    expect(proxylineRegisterBypassMock).toHaveBeenCalledWith({ url: "ws://[::1]:18789" });
     unregisterIpv6();
 
     const unregisterLocalhost = expectBypassUnregister(
       registerManagedProxyGatewayLoopbackBypass("ws://localhost.:18789"),
     );
-    expect(bypassPolicy({ surface: "websocket", url: "ws://localhost.:18789" })).toBe(true);
+    expect(proxylineRegisterBypassMock).toHaveBeenCalledWith({ url: "ws://localhost.:18789" });
     unregisterLocalhost();
 
     await stopProxy(handle);
@@ -520,12 +526,11 @@ describe("startProxy", () => {
       enabled: true,
       proxyUrl: "http://127.0.0.1:3128",
     });
-    const bypassPolicy = expectLastProxylineBypassPolicy();
 
     const unregister = expectBypassUnregister(
       registerManagedProxyGatewayLoopbackBypass("ws://127.0.0.1:3000"),
     );
-    expect(bypassPolicy({ surface: "websocket", url: "ws://127.0.0.1:3000" })).toBe(true);
+    expect(proxylineRegisterBypassMock).toHaveBeenCalledWith({ url: "ws://127.0.0.1:3000" });
 
     unregister();
     await stopProxy(handle);
@@ -553,11 +558,10 @@ describe("startProxy", () => {
       proxyUrl: "http://127.0.0.1:3128",
       loopbackMode: "proxy",
     });
-    const bypassPolicy = expectLastProxylineBypassPolicy();
 
     try {
       const unregister = registerManagedProxyGatewayLoopbackBypass("ws://127.0.0.1:18789");
-      expect(bypassPolicy({ surface: "websocket", url: "ws://127.0.0.1:18789" })).toBe(false);
+      expect(proxylineRegisterBypassMock).not.toHaveBeenCalled();
       expect(unregister).toBeUndefined();
     } finally {
       await stopProxy(handle);
