@@ -494,7 +494,7 @@ function resolvePreferredSessionForAgent(state: AppViewState, agentId: string): 
       }
       return !isSubagentSessionKey(row.key) && !row.spawnedBy;
     })
-    .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+    .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
   if (eligible[0]?.key) {
     return eligible[0].key;
   }
