@@ -117,6 +117,18 @@ function restoreAfterFailedProxyActivation(restoreSnapshot: ProxyEnvSnapshot): v
   baseProxyEnvSnapshot = null;
 }
 
+function stopInheritedProxylineRuntimeBeforeOwnedStart(): void {
+  if (!proxylineHandle) {
+    return;
+  }
+  try {
+    proxylineHandle.stop();
+  } catch (err) {
+    logWarn(`proxy: failed to stop inherited Proxyline runtime: ${String(err)}`);
+  }
+  proxylineHandle = null;
+}
+
 function stopActiveProxyRegistration(registration: ActiveManagedProxyRegistration): void {
   if (registration.stopped) {
     return;
@@ -205,6 +217,7 @@ export async function startProxy(config: ProxyConfig | undefined): Promise<Proxy
     };
     return handle;
   }
+  stopInheritedProxylineRuntimeBeforeOwnedStart();
   baseProxyEnvSnapshot ??= captureProxyEnv();
   const lifecycleBaseEnvSnapshot = baseProxyEnvSnapshot;
   let injectedEnvSnapshot = captureProxyEnv();

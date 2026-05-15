@@ -33,6 +33,7 @@ import { logInfo, logWarn } from "../../../logger.js";
 import { _resetActiveManagedProxyStateForTests } from "./active-proxy-state.js";
 import {
   _resetGlobalAgentBootstrapForTests,
+  ensureInheritedManagedProxyRoutingActive,
   registerManagedProxyGatewayLoopbackBypass,
   startProxy,
   stopProxy,
@@ -269,6 +270,45 @@ describe("startProxy", () => {
     expect(proxylineStopMock).toHaveBeenCalledOnce();
     expect(ensureGlobalUndiciEnvProxyDispatcherMock).toHaveBeenCalledOnce();
     expect(forceResetGlobalDispatcherMock).toHaveBeenCalledOnce();
+  });
+
+  it("reinstalls inherited Proxyline routing when startProxy takes ownership", async () => {
+    process.env["OPENCLAW_PROXY_ACTIVE"] = "1";
+    process.env["OPENCLAW_PROXY_LOOPBACK_MODE"] = "gateway-only";
+    process.env["HTTP_PROXY"] = "http://127.0.0.1:3111";
+
+    ensureInheritedManagedProxyRoutingActive();
+
+    expect(installGlobalProxyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: "managed",
+        proxyUrl: "http://127.0.0.1:3111",
+      }),
+    );
+    expect(proxylineStopMock).not.toHaveBeenCalled();
+
+    const handle = await startProxy({
+      enabled: true,
+      proxyUrl: "http://127.0.0.1:3222",
+    });
+
+    expect(proxylineStopMock).toHaveBeenCalledOnce();
+    expect(installGlobalProxyMock).toHaveBeenCalledTimes(2);
+    const installCalls = installGlobalProxyMock.mock.calls as unknown[][];
+    expect(installCalls[1]?.[0]).toEqual(
+      expect.objectContaining({
+        mode: "managed",
+        proxyUrl: "http://127.0.0.1:3222",
+        bypassPolicy: expect.any(Function),
+      }),
+    );
+    expect(process.env["HTTP_PROXY"]).toBe("http://127.0.0.1:3222");
+
+    await stopProxy(expectProxyHandle(handle));
+
+    expect(proxylineStopMock).toHaveBeenCalledTimes(2);
+    expect(process.env["HTTP_PROXY"]).toBe("http://127.0.0.1:3111");
+    expect(process.env["OPENCLAW_PROXY_ACTIVE"]).toBe("1");
   });
 
   it("restores previous proxy env and stops Proxyline on stop", async () => {
