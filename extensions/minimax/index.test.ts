@@ -15,6 +15,12 @@ vi.mock("./oauth.runtime.js", () => ({
     expires: Date.now() + 60_000,
     resourceUrl: "https://api.minimax.io/anthropic",
   })),
+  refreshMiniMaxPortalOAuth: vi.fn(async () => ({
+    access: "minimax-oauth-access-token-refreshed",
+    refresh: "minimax-oauth-refresh-token-rotated",
+    expires: Date.now() + 60_000,
+    resourceUrl: "https://api.minimax.io/anthropic",
+  })),
 }));
 
 const minimaxProviderPlugin = {
