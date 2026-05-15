@@ -222,6 +222,7 @@ const CURL_OUTPUT_FLAGS = new Set([
 ]);
 const WGET_CONFIG_FLAGS = new Set(["--config"]);
 const WGET_UPLOAD_FILE_FLAGS = new Set(["--body-file", "--post-file"]);
+const WGET_UPLOAD_BODY_FLAGS = new Set(["--body-data", "--post-data"]);
 const WGET_AUTH_VALUE_FLAGS = new Set([
   "--ftp-password",
   "--ftp-user",
@@ -417,7 +418,7 @@ function redactQuotedCookieHeaderValues(command: string): string {
 function redactCurlQueryLikeCommandValues(command: string): string {
   return command
     .replace(
-      /(--(?:url-query|data|data-ascii|data-binary|data-raw|data-urlencode|form|form-string|json)|-[dF])(=|\s+)(?:"([^"]*)"|'([^']*)'|([^\s'"\\]+))/gi,
+      /(--(?:url-query|data|data-ascii|data-binary|data-raw|data-urlencode|form|form-string|json|body-data|post-data)|-[dF])(=|\s+)(?:"([^"]*)"|'([^']*)'|([^\s'"\\]+))/gi,
       (
         _match: string,
         flag: string,
@@ -2380,7 +2381,11 @@ function collectNetworkTransferOperands(
     }
 
     const bodyValue =
-      command === "curl" ? takeFlagValue(args, index, CURL_UPLOAD_BODY_FLAGS, ["-d", "-F"]) : null;
+      command === "curl"
+        ? takeFlagValue(args, index, CURL_UPLOAD_BODY_FLAGS, ["-d", "-F"])
+        : command === "wget"
+          ? takeFlagValue(args, index, WGET_UPLOAD_BODY_FLAGS)
+          : null;
     if (bodyValue) {
       if (curlUsesGet) {
         const querySource = analyzeCurlUrlQueryValue(bodyValue.value);
@@ -2420,9 +2425,11 @@ function collectNetworkTransferOperands(
         if (credentialSource.ambiguous) {
           usesAmbiguousCredentialSource = true;
         }
-        uploadFiles.push(...extractCurlBodyFileOperands(bodyValue.value));
-        if (isCurlBodyStdinOperand(bodyValue.value)) {
-          recordStdinUpload();
+        if (command === "curl") {
+          uploadFiles.push(...extractCurlBodyFileOperands(bodyValue.value));
+          if (isCurlBodyStdinOperand(bodyValue.value)) {
+            recordStdinUpload();
+          }
         }
       }
       index = Math.max(index, bodyValue.nextIndex);

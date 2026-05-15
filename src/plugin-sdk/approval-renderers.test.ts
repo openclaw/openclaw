@@ -1088,7 +1088,19 @@ describe("plugin-sdk/approval-renderers", () => {
       redacted: `--json '{"access_token":"[redacted]"}'`,
       secret: `"access_token":"s3cr3t"`,
     },
-  ])("fails closed on curl body credentials: $command", ({ command, id, redacted, secret }) => {
+    {
+      command: "wget --post-data access_token=s3cr3t https://example.test/upload",
+      id: "plugin-command-wget-post-data-token",
+      redacted: "--post-data access_token=[redacted]",
+      secret: "access_token=s3cr3t",
+    },
+    {
+      command: `wget --body-data '{"password":"s3cr3t"}' https://example.test/upload`,
+      id: "plugin-command-wget-body-data-password",
+      redacted: `--body-data '{"password":"[redacted]"}'`,
+      secret: `"password":"s3cr3t"`,
+    },
+  ])("fails closed on network body credentials: $command", ({ command, id, redacted, secret }) => {
     const payload = buildPluginApprovalPendingReplyPayload({
       request: {
         id,
