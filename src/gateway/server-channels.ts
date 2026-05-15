@@ -38,6 +38,7 @@ const CHANNEL_RESTART_POLICY: BackoffPolicy = {
 const MAX_RESTART_ATTEMPTS = 10;
 const CHANNEL_STOP_ABORT_TIMEOUT_MS = 5_000;
 const CHANNEL_STARTUP_CONCURRENCY = 4;
+const DEFAULT_CHANNEL_STARTUP_TIMEOUT_MS = 30_000;
 
 type ChannelRuntimeStore = {
   aborts: Map<string, AbortController>;
@@ -192,9 +193,26 @@ type StopChannelOptions = {
   manual?: boolean;
 };
 
+export type ChannelStartupResult = {
+  id: string;
+  status: "started" | "failed" | "timed_out" | "skipped";
+  durationMs?: number;
+  error?: string;
+};
+
+export type ChannelStartupSummary = {
+  channelsAttempted: number;
+  channelsStarted: number;
+  channelsFailed: number;
+  channelsTimedOut: number;
+  channelResults: ChannelStartupResult[];
+  warnings: string[];
+  errors: string[];
+};
+
 export type ChannelManager = {
   getRuntimeSnapshot: () => ChannelRuntimeSnapshot;
-  startChannels: () => Promise<void>;
+  startChannels: () => Promise<ChannelStartupSummary>;
   startChannel: (channel: ChannelId, accountId?: string) => Promise<void>;
   stopChannel: (channel: ChannelId, accountId?: string, opts?: StopChannelOptions) => Promise<void>;
   markChannelLoggedOut: (channelId: ChannelId, cleared: boolean, accountId?: string) => void;
@@ -734,19 +752,64 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     );
   };
 
-  const startChannels = async () => {
+  const resolveChannelStartupTimeoutMs = () => {
+    const raw = process.env.OPENCLAW_CHANNEL_STARTUP_TIMEOUT_MS;
+    const parsed = raw ? Number(raw) : NaN;
+    return Number.isFinite(parsed) && parsed > 0
+      ? Math.max(1_000, Math.floor(parsed))
+      : DEFAULT_CHANNEL_STARTUP_TIMEOUT_MS;
+  };
+
+  const startChannelWithStartupTimeout = async (
+    channelId: ChannelId,
+  ): Promise<ChannelStartupResult> => {
+    const startedAt = Date.now();
+    const timeoutMs = resolveChannelStartupTimeoutMs();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        measureStartup(`channels.${channelId}.start`, () => startChannel(channelId)),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            reject(new Error(`channel startup timed out after ${timeoutMs}ms`));
+          }, timeoutMs);
+          timer.unref?.();
+        }),
+      ]);
+      return { id: channelId, status: "started", durationMs: Date.now() - startedAt };
+    } catch (err) {
+      const message = formatErrorMessage(err);
+      const status = /timed out/i.test(message) ? "timed_out" : "failed";
+      ensureChannelLog(channelId).error?.(`[${channelId}] channel startup ${status}: ${message}`);
+      return { id: channelId, status, durationMs: Date.now() - startedAt, error: message };
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
+  };
+
+  const startChannels = async (): Promise<ChannelStartupSummary> => {
+    const results: ChannelStartupResult[] = [];
     await runTasksWithConcurrency({
       limit: CHANNEL_STARTUP_CONCURRENCY,
       tasks: [...listChannelPlugins()].map((plugin) => async () => {
-        try {
-          await measureStartup(`channels.${plugin.id}.start`, () => startChannel(plugin.id));
-        } catch (err) {
-          ensureChannelLog(plugin.id).error?.(
-            `[${plugin.id}] channel startup failed: ${formatErrorMessage(err)}`,
-          );
-        }
+        results.push(await startChannelWithStartupTimeout(plugin.id));
       }),
     });
+    return {
+      channelsAttempted: results.length,
+      channelsStarted: results.filter((result) => result.status === "started").length,
+      channelsFailed: results.filter((result) => result.status === "failed").length,
+      channelsTimedOut: results.filter((result) => result.status === "timed_out").length,
+      channelResults: results.toSorted((a, b) => a.id.localeCompare(b.id)),
+      warnings: results
+        .filter((result) => result.status === "timed_out")
+        .map((result) => `${result.id}: ${result.error ?? "startup timed out"}`),
+      errors: results
+        .filter((result) => result.status === "failed")
+        .map((result) => `${result.id}: ${result.error ?? "startup failed"}`),
+    };
   };
 
   const markChannelLoggedOut = (channelId: ChannelId, cleared: boolean, accountId?: string) => {

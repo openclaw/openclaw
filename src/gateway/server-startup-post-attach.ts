@@ -4,6 +4,7 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { GatewayTailscaleMode } from "../config/types.gateway.js";
+import type { ChannelStartupSummary } from "./server-channels.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredInternalHooks } from "../hooks/configured.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -381,7 +382,7 @@ export async function startGatewaySidecars(params: {
   pluginRegistry: ReturnType<typeof loadOpenClawPlugins>;
   defaultWorkspaceDir: string;
   deps: CliDeps;
-  startChannels: () => Promise<void>;
+  startChannels: () => Promise<ChannelStartupSummary>;
   prewarmPrimaryModel?: typeof prewarmConfiguredPrimaryModel;
   log: { warn: (msg: string) => void };
   logHooks: {
@@ -470,6 +471,15 @@ export async function startGatewaySidecars(params: {
   const skipChannels =
     isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
     isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS);
+  let channelStartupSummary: ChannelStartupSummary = {
+    channelsAttempted: 0,
+    channelsStarted: 0,
+    channelsFailed: 0,
+    channelsTimedOut: 0,
+    channelResults: [],
+    warnings: [],
+    errors: [],
+  };
   await measureStartup(params.startupTrace, "sidecars.channels", async () => {
     if (!skipChannels) {
       try {
@@ -482,11 +492,15 @@ export async function startGatewaySidecars(params: {
           },
           params.prewarmPrimaryModel,
         );
-        await measureStartup(params.startupTrace, "sidecars.channel-start", () =>
-          params.startChannels(),
+        channelStartupSummary = await measureStartup(
+          params.startupTrace,
+          "sidecars.channel-start",
+          () => params.startChannels(),
         );
       } catch (err) {
-        params.logChannels.error(`channel startup failed: ${String(err)}`);
+        const message = String(err);
+        channelStartupSummary.errors.push(message);
+        params.logChannels.error(`channel startup failed: ${message}`);
       }
     } else {
       params.logChannels.info(
@@ -637,7 +651,7 @@ export async function startGatewaySidecars(params: {
     },
   });
 
-  return { pluginServices };
+  return { pluginServices, channelStartupSummary };
 }
 
 type GatewayPostAttachRuntimeDeps = {
@@ -697,7 +711,7 @@ export async function startGatewayPostAttachRuntime(
     pluginRegistry: ReturnType<typeof loadOpenClawPlugins>;
     defaultWorkspaceDir: string;
     deps: CliDeps;
-    startChannels: () => Promise<void>;
+    startChannels: () => Promise<ChannelStartupSummary>;
     logHooks: {
       info: (msg: string) => void;
       warn: (msg: string) => void;
@@ -716,7 +730,7 @@ export async function startGatewayPostAttachRuntime(
     }) => Awaitable<void>;
     getCronService?: () => PluginHookGatewayCronService | null | undefined;
     onPluginServices?: (pluginServices: PluginServicesHandle | null) => void;
-    onSidecarsReady?: () => void;
+    onSidecarsReady?: (summary?: ChannelStartupSummary) => void;
     startupTrace?: GatewayStartupTrace;
     deferSidecars?: boolean;
   },
@@ -777,8 +791,24 @@ export async function startGatewayPostAttachRuntime(
           }),
         );
 
+  const skippedChannelStartupSummary: ChannelStartupSummary = {
+    channelsAttempted: 0,
+    channelsStarted: 0,
+    channelsFailed: 0,
+    channelsTimedOut: 0,
+    channelResults: [],
+    warnings: [],
+    errors: [],
+  };
   const sidecarsPromise = params.minimalTestGateway
-    ? Promise.resolve({ pluginServices: null, pluginRegistry })
+    ? Promise.resolve({
+        pluginServices: null,
+        pluginRegistry,
+        channelStartupSummary: skippedChannelStartupSummary,
+      }).then((result) => {
+        params.onSidecarsReady?.(result.channelStartupSummary);
+        return result;
+      })
     : new Promise<void>((resolve) => setImmediate(resolve)).then(async () => {
         params.log.info("starting channels and sidecars...");
         const loaderStatsBefore = getPluginModuleLoaderStats();
@@ -813,7 +843,7 @@ export async function startGatewayPostAttachRuntime(
           params.unavailableGatewayMethods.delete(method);
         }
         params.onPluginServices?.(result.pluginServices);
-        params.onSidecarsReady?.();
+        params.onSidecarsReady?.(result.channelStartupSummary);
         params.startupTrace?.mark("sidecars.ready");
         params.log.info("gateway ready");
         return { ...result, pluginRegistry };

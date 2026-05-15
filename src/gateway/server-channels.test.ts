@@ -700,8 +700,15 @@ describe("server-channels auto restart", () => {
     );
     const manager = createManager({ channelIds: ["discord", "slack"] });
 
-    await expect(manager.startChannels()).resolves.toBeUndefined();
+    const summary = await manager.startChannels();
 
+    expect(summary).toMatchObject({
+      channelsAttempted: 2,
+      channelsStarted: 2,
+      channelsFailed: 0,
+      channelsTimedOut: 0,
+    });
+    expect(summary.channelResults.map((result) => result.id)).toEqual(["discord", "slack"]);
     expect(failingStart).toHaveBeenCalledTimes(1);
     expect(succeedingStart).toHaveBeenCalledTimes(1);
   });
@@ -1010,5 +1017,73 @@ describe("server-channels auto restart", () => {
     });
 
     expect(manager.isHealthMonitorEnabled("discord", "")).toBe(true);
+  });
+
+  it("summarizes successful channel startup", async () => {
+    const startAccount = vi.fn(() => new Promise<void>(() => {}));
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+
+    const summary = await manager.startChannels();
+
+    expect(summary.channelsAttempted).toBe(1);
+    expect(summary.channelsStarted).toBe(1);
+    expect(summary.channelsFailed).toBe(0);
+    expect(summary.channelsTimedOut).toBe(0);
+    expect(summary.channelResults).toMatchObject([{ id: "discord", status: "started" }]);
+  });
+
+  it("summarizes channel startup failures without throwing", async () => {
+    installTestRegistry(
+      createTestPlugin({
+        startAccount: vi.fn(() => new Promise<void>(() => {})),
+        resolveAccount: () => {
+          throw new Error("bad config");
+        },
+      }),
+    );
+    const manager = createManager();
+
+    const summary = await manager.startChannels();
+
+    expect(summary.channelsAttempted).toBe(1);
+    expect(summary.channelsStarted).toBe(0);
+    expect(summary.channelsFailed).toBe(1);
+    expect(summary.channelsTimedOut).toBe(0);
+    expect(summary.channelResults[0]).toMatchObject({
+      id: "discord",
+      status: "failed",
+      error: "bad config",
+    });
+  });
+
+  it("summarizes channel startup timeouts without hanging startup", async () => {
+    const previousTimeout = process.env.OPENCLAW_CHANNEL_STARTUP_TIMEOUT_MS;
+    process.env.OPENCLAW_CHANNEL_STARTUP_TIMEOUT_MS = "1000";
+    try {
+      installTestRegistry(
+        createTestPlugin({
+          startAccount: vi.fn(() => new Promise<void>(() => {})),
+          isConfigured: () => new Promise<boolean>(() => {}),
+        }),
+      );
+      const manager = createManager();
+
+      const summaryPromise = manager.startChannels();
+      await vi.advanceTimersByTimeAsync(1000);
+      const summary = await summaryPromise;
+
+      expect(summary.channelsAttempted).toBe(1);
+      expect(summary.channelsStarted).toBe(0);
+      expect(summary.channelsFailed).toBe(0);
+      expect(summary.channelsTimedOut).toBe(1);
+      expect(summary.channelResults[0]).toMatchObject({ id: "discord", status: "timed_out" });
+    } finally {
+      if (previousTimeout === undefined) {
+        delete process.env.OPENCLAW_CHANNEL_STARTUP_TIMEOUT_MS;
+      } else {
+        process.env.OPENCLAW_CHANNEL_STARTUP_TIMEOUT_MS = previousTimeout;
+      }
+    }
   });
 });

@@ -101,6 +101,11 @@ import { createReadinessChecker } from "./server/readiness.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";
+import {
+  createGatewayStartupRuntimeState,
+  writeGatewayStartupRuntimeState,
+  type GatewayStartupRuntimeState,
+} from "./startup-runtime-state.js";
 
 export async function __resetModelCatalogCacheForTest(): Promise<void> {
   const { __resetModelCatalogCacheForTest: resetModelCatalogCacheForTest } =
@@ -514,6 +519,8 @@ export type GatewayServerOptions = {
    * reparsing openclaw.json during server startup.
    */
   startupConfigSnapshotRead?: ReadConfigFileSnapshotWithPluginMetadataResult;
+  /** Start a local gateway/control UI only, skipping providers/channels/Bonjour/pricing side effects. */
+  safeMode?: boolean;
 };
 
 type SetupWizardRunner = NonNullable<GatewayServerOptions["wizardRunner"]>;
@@ -530,8 +537,40 @@ export async function startGatewayServer(
   const { bootstrapGatewayNetworkRuntime } = await import("./server-network-runtime.js");
   bootstrapGatewayNetworkRuntime();
 
+  const safeMode = opts.safeMode === true || isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_SAFE_MODE);
+  if (safeMode) {
+    process.env.OPENCLAW_GATEWAY_SAFE_MODE = "1";
+    process.env.OPENCLAW_SKIP_CHANNELS = "1";
+    process.env.OPENCLAW_SKIP_PROVIDERS = "1";
+    process.env.OPENCLAW_DISABLE_BONJOUR = "1";
+    process.env.OPENCLAW_DISABLE_MODEL_PRICING_STARTUP = "1";
+    log.info("[gateway] safe mode enabled");
+    log.info("[gateway] skipping plugins/providers/channels");
+    log.info("[gateway] bonjour disabled by safe mode");
+    log.info("[gateway] model pricing startup fetch disabled by safe mode");
+  }
   const minimalTestGateway =
-    isVitestRuntimeEnv() && process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1";
+    safeMode || (isVitestRuntimeEnv() && process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1");
+  const startupRuntimeState: GatewayStartupRuntimeState = createGatewayStartupRuntimeState({
+    port,
+    safeMode,
+    startupPhase: "starting",
+    providersSkipped: isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS),
+    channelsSkipped: isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) || minimalTestGateway,
+    bonjourDisabled: isTruthyEnvValue(process.env.OPENCLAW_DISABLE_BONJOUR) || minimalTestGateway,
+    modelPricingStartupDisabled: isTruthyEnvValue(
+      process.env.OPENCLAW_DISABLE_MODEL_PRICING_STARTUP,
+    ),
+    startupStartedAt: opts.startupStartedAt,
+  });
+  const writeStartupState = (phase: string) => {
+    startupRuntimeState.startupPhase = phase;
+    startupRuntimeState.startupDurationMs = opts.startupStartedAt
+      ? Date.now() - opts.startupStartedAt
+      : startupRuntimeState.startupDurationMs;
+    writeGatewayStartupRuntimeState(startupRuntimeState);
+  };
+  writeStartupState("starting");
 
   // Ensure all default port derivations (browser/canvas) see the actual runtime port.
   process.env.OPENCLAW_GATEWAY_PORT = String(port);
@@ -666,6 +705,8 @@ export async function startGatewayServer(
     baseMethods,
     runtimePluginsLoaded,
   } = pluginBootstrap;
+  startupRuntimeState.pluginsLoaded = startupPluginIds.length;
+  writeStartupState("plugins-bootstrapped");
   const coreGatewayMethodNames = listCoreGatewayMethodNames();
   setCurrentPluginMetadataSnapshot(pluginLookUpTable, {
     config: startupActivationSourceConfig,
@@ -1511,8 +1552,18 @@ export async function startGatewayServer(
           onPluginServices: (pluginServices) => {
             runtimeState.pluginServices = pluginServices;
           },
-          onSidecarsReady: () => {
+          onSidecarsReady: (summary) => {
+            if (summary) {
+              startupRuntimeState.channelsAttempted = summary.channelsAttempted;
+              startupRuntimeState.channelsStarted = summary.channelsStarted;
+              startupRuntimeState.channelsFailed = summary.channelsFailed;
+              startupRuntimeState.channelsTimedOut = summary.channelsTimedOut;
+              startupRuntimeState.channelResults = summary.channelResults;
+              startupRuntimeState.warnings.push(...summary.warnings);
+              startupRuntimeState.errors.push(...summary.errors);
+            }
             startupSidecarsReady = true;
+            writeStartupState("sidecars-ready");
             activateScheduledServicesWhenReady();
           },
           startupTrace,
@@ -1522,6 +1573,7 @@ export async function startGatewayServer(
     ));
     startupTrace.detail("memory.ready", collectProcessMemoryUsageMb());
     startupTrace.mark("ready");
+    writeStartupState(startupSidecarsReady ? "ready" : "http-ready");
     postAttachRuntimeReturned = true;
     activateScheduledServicesWhenReady();
 

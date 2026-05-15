@@ -1,3 +1,4 @@
+import net from "node:net";
 import type { Command } from "commander";
 import type { HealthSummary } from "../../commands/health.js";
 import type { CostUsageSummary } from "../../infra/session-cost-usage.js";
@@ -12,6 +13,9 @@ import {
   type DiagnosticStabilitySnapshot,
 } from "../../logging/diagnostic-stability.js";
 import type { WriteDiagnosticSupportExportResult } from "../../logging/diagnostic-support-export.js";
+import { resolveGatewayPort } from "../../config/paths.js";
+import { readGatewayStartupRuntimeState, resolveGatewayStartupRuntimeStatePath } from "../../gateway/startup-runtime-state.js";
+import { isTruthyEnvValue } from "../../infra/env.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { formatDocsLink } from "../../terminal/links.js";
@@ -345,6 +349,136 @@ function resolveSupportExportRpcOptions(
   };
 }
 
+async function probeTcpListening(host: string, port: number, timeoutMs = 1200): Promise<boolean> {
+  return await new Promise((resolve) => {
+    const socket = net.createConnection({ host, port });
+    const done = (ok: boolean) => {
+      clearTimeout(timer);
+      socket.removeAllListeners();
+      socket.destroy();
+      resolve(ok);
+    };
+    const timer = setTimeout(() => done(false), timeoutMs);
+    socket.once("connect", () => done(true));
+    socket.once("error", () => done(false));
+  });
+}
+
+async function probeHttpHealthy(port: number, timeoutMs = 1500): Promise<boolean> {
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}`, {
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    return response.status >= 200 && response.status < 500;
+  } catch {
+    return false;
+  }
+}
+
+async function probeControlUiHealthy(port: number, timeoutMs = 1500): Promise<boolean> {
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}`, {
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!response.ok) {
+      return false;
+    }
+    return /OpenClaw|Control/i.test(await response.text());
+  } catch {
+    return false;
+  }
+}
+
+function isProcessAlive(pid: number | null | undefined): boolean {
+  if (typeof pid !== "number" || !Number.isFinite(pid) || pid <= 0) {
+    return false;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function runGatewayStartupDoctor(opts: { json?: boolean }) {
+  const [{ readSourceConfigBestEffort }] = await Promise.all([loadConfigModule()]);
+  const cfg = await readSourceConfigBestEffort();
+  const port = resolveGatewayPort(cfg);
+  const runtime = readGatewayStartupRuntimeState();
+  const runtimePidAlive = isProcessAlive(runtime?.pid);
+  const runtimeDetected = Boolean(runtime && runtime.port === port && runtimePidAlive);
+  const portListening = await probeTcpListening("127.0.0.1", port);
+  const httpHealthy = await probeHttpHealthy(port);
+  const controlUiHealthy = await probeControlUiHealthy(port);
+  const configuredSafeMode = isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_SAFE_MODE);
+  const notes: string[] = [];
+  if (!runtimeDetected) {
+    notes.push(
+      "No running gateway runtime state detected; showing configured/default CLI-process state only.",
+    );
+  }
+  if (runtime && runtime.port !== port) {
+    notes.push(`Runtime state port ${String(runtime.port)} does not match configured port ${port}.`);
+  }
+  if (runtime && !runtimePidAlive) {
+    notes.push(`Runtime state pid ${runtime.pid} is not running.`);
+  }
+  const summary = {
+    configuredSafeMode,
+    effectiveSafeMode: runtimeDetected ? runtime?.safeMode === true : configuredSafeMode,
+    runtimeDetected,
+    runningPid: runtimeDetected ? runtime?.pid ?? null : null,
+    port,
+    portListening,
+    httpHealthy,
+    controlUiHealthy,
+    safeMode: runtimeDetected ? runtime?.safeMode === true : configuredSafeMode,
+    startupPhase: runtimeDetected ? runtime?.startupPhase ?? null : null,
+    pluginsLoaded: runtimeDetected ? runtime?.pluginsLoaded ?? null : null,
+    providersSkipped: runtimeDetected
+      ? runtime?.providersSkipped ?? null
+      : isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS),
+    channelsSkipped: runtimeDetected
+      ? runtime?.channelsSkipped ?? null
+      : isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS),
+    channelsAttempted: runtimeDetected ? runtime?.channelsAttempted ?? null : null,
+    channelsStarted: runtimeDetected ? runtime?.channelsStarted ?? null : null,
+    channelsFailed: runtimeDetected ? runtime?.channelsFailed ?? null : null,
+    channelsTimedOut: runtimeDetected ? runtime?.channelsTimedOut ?? null : null,
+    channelResults: runtimeDetected ? runtime?.channelResults ?? [] : [],
+    bonjourActive:
+      runtimeDetected && typeof runtime?.bonjourDisabled === "boolean"
+        ? !runtime.bonjourDisabled
+        : null,
+    bonjourDisabled: runtimeDetected
+      ? runtime?.bonjourDisabled ?? null
+      : isTruthyEnvValue(process.env.OPENCLAW_DISABLE_BONJOUR) || cfg.discovery?.mdns?.mode === "off",
+    modelPricingStartupFetchEnabled:
+      runtimeDetected && typeof runtime?.modelPricingStartupDisabled === "boolean"
+        ? !runtime.modelPricingStartupDisabled
+        : null,
+    modelPricingStartupDisabled: runtimeDetected
+      ? runtime?.modelPricingStartupDisabled ?? null
+      : isTruthyEnvValue(process.env.OPENCLAW_DISABLE_MODEL_PRICING_STARTUP),
+    startupDurationMs: runtimeDetected ? runtime?.startupDurationMs ?? null : null,
+    warnings: runtimeDetected ? runtime?.warnings ?? [] : [],
+    errors: runtimeDetected ? runtime?.errors ?? [] : [],
+    updatedAt: runtimeDetected ? runtime?.updatedAt ?? null : null,
+    notes,
+    runtimeStatePath: resolveGatewayStartupRuntimeStatePath(),
+  };
+  if (opts.json) {
+    defaultRuntime.writeJson(summary);
+    return;
+  }
+  const rich = isRich();
+  defaultRuntime.log(colorize(rich, theme.heading, "Gateway startup doctor"));
+  for (const [key, value] of Object.entries(summary)) {
+    defaultRuntime.log(`${colorize(rich, theme.muted, key)}: ${JSON.stringify(value)}`);
+  }
+}
+
 async function writeSupportExportFromCli(opts: {
   json?: boolean;
   output?: string;
@@ -593,6 +727,16 @@ export function registerGatewayCli(program: Command) {
           rpc: rpcOpts,
         });
       }, "Gateway diagnostics export failed");
+    });
+
+  gateway
+    .command("startup-doctor")
+    .description("Show local gateway startup resilience and safe-mode diagnostics")
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await runGatewayCommand(async () => {
+        await runGatewayStartupDoctor(opts);
+      }, "Gateway startup doctor failed");
     });
 
   gateway
