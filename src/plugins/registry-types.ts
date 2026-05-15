@@ -98,6 +98,7 @@ export type PluginHttpRouteRegistration = {
   auth: OpenClawPluginHttpRouteAuth;
   match: OpenClawPluginHttpRouteMatch;
   gatewayRuntimeScopeSurface?: OpenClawPluginGatewayRuntimeScopeSurface;
+  gatewayMethodDispatchAllowed?: boolean;
   nodeCapability?: {
     surface: string;
     ttlMs?: number;

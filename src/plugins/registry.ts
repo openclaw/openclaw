@@ -184,6 +184,9 @@ import type {
 export type PluginHttpRouteRegistration = RegistryTypesPluginHttpRouteRegistration & {
   gatewayRuntimeScopeSurface?: OpenClawPluginGatewayRuntimeScopeSurface;
 };
+
+const GATEWAY_METHOD_DISPATCH_CONTRACT = "authenticated-request";
+
 type PluginOwnedProviderRegistration<T extends { id: string }> = {
   pluginId: string;
   pluginName?: string;
@@ -726,6 +729,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     return `${plugin} (${source})`;
   };
 
+  const canDispatchGatewayMethodsFromHttpRoute = (record: PluginRecord): boolean =>
+    (record.contracts?.gatewayMethodDispatch ?? []).includes(GATEWAY_METHOD_DISPATCH_CONTRACT);
+
   const registerHttpRoute = (record: PluginRecord, params: OpenClawPluginHttpRouteParams) => {
     const normalizedPath = normalizePluginHttpPath(params.path);
     if (!normalizedPath) {
@@ -799,6 +805,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         ...(params.gatewayRuntimeScopeSurface
           ? { gatewayRuntimeScopeSurface: params.gatewayRuntimeScopeSurface }
           : {}),
+        ...(canDispatchGatewayMethodsFromHttpRoute(record)
+          ? { gatewayMethodDispatchAllowed: true }
+          : {}),
         ...(params.nodeCapability ? { nodeCapability: { ...params.nodeCapability } } : {}),
         source: record.source,
       };
@@ -814,6 +823,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       match,
       ...(params.gatewayRuntimeScopeSurface
         ? { gatewayRuntimeScopeSurface: params.gatewayRuntimeScopeSurface }
+        : {}),
+      ...(canDispatchGatewayMethodsFromHttpRoute(record)
+        ? { gatewayMethodDispatchAllowed: true }
         : {}),
       ...(params.nodeCapability ? { nodeCapability: { ...params.nodeCapability } } : {}),
       source: record.source,
