@@ -41,6 +41,7 @@ const MIN_POLL_STALL_THRESHOLD_MS = 30_000;
 const MAX_POLL_STALL_THRESHOLD_MS = 600_000;
 const POLL_WATCHDOG_INTERVAL_MS = 30_000;
 const POLL_STOP_GRACE_MS = 15_000;
+const ISOLATED_INGRESS_BACKLOG_STALL_MS = 25 * 60_000;
 const TELEGRAM_POLLING_CLIENT_TIMEOUT_FLOOR_SECONDS = Math.ceil(
   TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS / 1000,
 );
@@ -109,13 +110,34 @@ type TelegramPollingSessionOpts = {
   };
 };
 
+type SpooledUpdateHandlerState = {
+  handlerKey: string;
+  laneKey: string;
+  task: Promise<boolean>;
+  updateId: number;
+  startedAt: number;
+};
+
+type SpooledUpdateDrainResult = {
+  blockedByLane: Set<string>;
+  started: number;
+};
+
+// Account health restarts create a new session in the same process while an old
+// spooled handler may still be running after shutdown grace.
+const activeSpooledUpdateHandlersByLane = new Map<string, SpooledUpdateHandlerState>();
+
+function buildSpooledUpdateHandlerKey(params: { spoolDir: string; laneKey: string }): string {
+  return `${params.spoolDir}\0${params.laneKey}`;
+}
+
 export class TelegramPollingSession {
   #restartAttempts = 0;
   #webhookCleared = false;
   #forceRestarted = false;
   #activeRunner: ReturnType<typeof run> | undefined;
   #activeFetchAbort: AbortController | undefined;
-  #spooledUpdateHandlersByLane = new Map<string, Promise<boolean>>();
+  #spooledUpdateHandlerKeys = new Set<string>();
   #transportState: TelegramPollingTransportState;
   #status: ReturnType<typeof createTelegramPollingStatusPublisher>;
   #stallThresholdMs: number;
@@ -315,11 +337,19 @@ export class TelegramPollingSession {
   }
 
   async #waitForSpooledUpdateHandlers(): Promise<void> {
-    await Promise.allSettled(this.#spooledUpdateHandlersByLane.values());
+    await Promise.allSettled(
+      [...this.#spooledUpdateHandlerKeys]
+        .map((handlerKey) => activeSpooledUpdateHandlersByLane.get(handlerKey)?.task)
+        .filter((task): task is Promise<boolean> => Boolean(task)),
+    );
   }
 
-  async #drainSpooledUpdates(params: { bot: TelegramBot; spoolDir: string }): Promise<number> {
+  async #drainSpooledUpdates(params: {
+    bot: TelegramBot;
+    spoolDir: string;
+  }): Promise<SpooledUpdateDrainResult> {
     const updates = await listTelegramSpooledUpdates({ spoolDir: params.spoolDir, limit: 100 });
+    const blockedByLane = new Set<string>();
     let started = 0;
     for (const update of updates) {
       const laneKey = getTelegramSequentialKey({
@@ -329,20 +359,54 @@ export class TelegramPollingSession {
       if (this.opts.abortSignal?.aborted) {
         break;
       }
-      if (this.#spooledUpdateHandlersByLane.has(laneKey)) {
+      const handlerKey = buildSpooledUpdateHandlerKey({ spoolDir: params.spoolDir, laneKey });
+      if (activeSpooledUpdateHandlersByLane.has(handlerKey)) {
+        blockedByLane.add(handlerKey);
         continue;
       }
       const handler = this.#handleSpooledUpdate({
         bot: params.bot,
         update,
       });
-      this.#spooledUpdateHandlersByLane.set(laneKey, handler);
+      const state: SpooledUpdateHandlerState = {
+        handlerKey,
+        laneKey,
+        task: handler,
+        updateId: update.updateId,
+        startedAt: Date.now(),
+      };
+      activeSpooledUpdateHandlersByLane.set(handlerKey, state);
+      this.#spooledUpdateHandlerKeys.add(handlerKey);
       void handler.finally(() => {
-        this.#spooledUpdateHandlersByLane.delete(laneKey);
+        if (activeSpooledUpdateHandlersByLane.get(handlerKey) === state) {
+          activeSpooledUpdateHandlersByLane.delete(handlerKey);
+        }
+        this.#spooledUpdateHandlerKeys.delete(handlerKey);
       });
       started += 1;
     }
-    return started;
+    return { blockedByLane, started };
+  }
+
+  #detectStaleSpooledHandler(
+    blockedHandlerKeys: Set<string>,
+  ): (SpooledUpdateHandlerState & { ageMs: number }) | null {
+    const now = Date.now();
+    let stale: (SpooledUpdateHandlerState & { ageMs: number }) | null = null;
+    for (const handlerKey of blockedHandlerKeys) {
+      const handler = activeSpooledUpdateHandlersByLane.get(handlerKey);
+      if (!handler) {
+        continue;
+      }
+      const ageMs = now - handler.startedAt;
+      if (ageMs <= ISOLATED_INGRESS_BACKLOG_STALL_MS) {
+        continue;
+      }
+      if (!stale || ageMs > stale.ageMs) {
+        stale = { ...handler, ageMs };
+      }
+    }
+    return stale;
   }
 
   async #runIsolatedIngressCycle(bot: TelegramBot): Promise<"continue" | "exit"> {
@@ -384,6 +448,7 @@ export class TelegramPollingSession {
       outcome: "not-started",
     };
     let consecutiveDrainFailures = 0;
+    const stalledBacklogKeys = new Set<string>();
     const unsubscribe = worker.onMessage((message) => {
       if (message.type === "poll-start") {
         pollState.startedAt = message.startedAt;
@@ -393,7 +458,9 @@ export class TelegramPollingSession {
         return;
       }
       if (message.type === "poll-success") {
-        this.#status.notePollSuccess(message.finishedAt);
+        if (stalledBacklogKeys.size === 0) {
+          this.#status.notePollSuccess(message.finishedAt);
+        }
         this.#drainPendingDeliveriesAfterReconnect();
         pollState.outcome = `ok:${message.count}`;
         return;
@@ -409,14 +476,38 @@ export class TelegramPollingSession {
     this.opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
     const drainIntervalMs = Math.max(100, Math.floor(ingress.drainIntervalMs ?? 500));
     let drainActive = false;
+    const stopBot = () => {
+      return Promise.resolve(bot.stop())
+        .then(() => undefined)
+        .catch(() => {
+          // Bot may already be stopped by shutdown paths.
+        });
+    };
     const drainOnce = async () => {
       if (drainActive || this.opts.abortSignal?.aborted) {
         return;
       }
       drainActive = true;
       try {
-        await this.#drainSpooledUpdates({ bot, spoolDir });
+        const drain = await this.#drainSpooledUpdates({ bot, spoolDir });
         consecutiveDrainFailures = 0;
+        for (const handlerKey of [...stalledBacklogKeys]) {
+          if (
+            !activeSpooledUpdateHandlersByLane.has(handlerKey) ||
+            !drain.blockedByLane.has(handlerKey)
+          ) {
+            stalledBacklogKeys.delete(handlerKey);
+          }
+        }
+        const staleHandler = this.#detectStaleSpooledHandler(drain.blockedByLane);
+        if (staleHandler) {
+          if (!stalledBacklogKeys.has(staleHandler.handlerKey)) {
+            stalledBacklogKeys.add(staleHandler.handlerKey);
+            const message = `Telegram isolated polling spool backlog stalled behind update ${staleHandler.updateId} on lane ${staleHandler.laneKey} for ${formatDurationPrecise(staleHandler.ageMs)}; marking polling unhealthy until the backlog drains.`;
+            this.opts.log(`[telegram] ${message}`);
+            this.#status.notePollingError(message);
+          }
+        }
       } catch (err) {
         consecutiveDrainFailures += 1;
         this.opts.log(
@@ -431,13 +522,6 @@ export class TelegramPollingSession {
       void drainOnce();
     }, drainIntervalMs);
     drainTimer.unref?.();
-    const stopBot = () => {
-      return Promise.resolve(bot.stop())
-        .then(() => undefined)
-        .catch(() => {
-          // Bot may already be stopped by shutdown paths.
-        });
-    };
     try {
       await worker.task();
       if (this.opts.abortSignal?.aborted) {

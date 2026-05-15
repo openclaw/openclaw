@@ -71,6 +71,12 @@ type DrainPendingDeliveriesCall = {
     now: number,
   ) => { match: boolean; bypassBackoff: boolean };
 };
+type WorkerPollSuccessListener = (message: {
+  type: "poll-success";
+  offset: null;
+  count: number;
+  finishedAt: number;
+}) => void;
 type AsyncVoidFn = () => Promise<void>;
 type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
 
@@ -878,6 +884,309 @@ describe("TelegramPollingSession", () => {
       expect(events).toEqual(["regular:start", "regular:end", "bot:stop"]);
     } finally {
       releaseRegularTurn?.();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps active spooled lanes blocked across isolated ingress restarts", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const abort = new AbortController();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
+    let releaseRegularTurn: (() => void) | undefined;
+    const regularTurnDone = new Promise<void>((resolve) => {
+      releaseRegularTurn = resolve;
+    });
+    const handleUpdate = vi.fn(async () => {
+      await regularTurnDone;
+    });
+    createTelegramBotMock.mockImplementation(() => ({
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        config: { use: vi.fn() },
+      },
+      init: vi.fn(async () => undefined),
+      handleUpdate,
+      stop: vi.fn(async () => undefined),
+    }));
+    await writeTelegramSpooledUpdate({
+      spoolDir: tempDir,
+      update: {
+        update_id: 42,
+        message: { text: "summarize this", chat: { id: -100, type: "supergroup" } },
+      },
+    });
+
+    let workerTaskCalls = 0;
+    let stopWorker: (() => void) | undefined;
+    const workerDone = new Promise<void>((resolve) => {
+      stopWorker = resolve;
+    });
+    const createWorker = vi.fn(() => ({
+      onMessage: vi.fn(() => () => undefined),
+      stop: vi.fn(async () => {
+        stopWorker?.();
+      }),
+      task: vi.fn(async () => {
+        workerTaskCalls += 1;
+        if (workerTaskCalls === 1) {
+          return;
+        }
+        await workerDone;
+      }),
+    }));
+
+    try {
+      const session = createPollingSession({
+        abortSignal: abort.signal,
+        isolatedIngress: {
+          enabled: true,
+          spoolDir: tempDir,
+          createWorker,
+          drainIntervalMs: 100,
+        },
+      });
+
+      const runPromise = session.runUntilAbort();
+      await vi.waitFor(() => expect(handleUpdate).toHaveBeenCalledTimes(1));
+      await vi.advanceTimersByTimeAsync(16_000);
+      await vi.waitFor(() => expect(createWorker).toHaveBeenCalledTimes(2));
+      expect(handleUpdate).toHaveBeenCalledTimes(1);
+
+      releaseRegularTurn?.();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.waitFor(async () =>
+        expect(
+          (await listTelegramSpooledUpdates({ spoolDir: tempDir })).map(
+            (update) => update.updateId,
+          ),
+        ).toEqual([]),
+      );
+      abort.abort();
+      await vi.advanceTimersByTimeAsync(20_000);
+      await runPromise;
+    } finally {
+      releaseRegularTurn?.();
+      vi.useRealTimers();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps active spooled lanes blocked across account restarts", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const firstAbort = new AbortController();
+    const secondAbort = new AbortController();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
+    let releaseRegularTurn: (() => void) | undefined;
+    const regularTurnDone = new Promise<void>((resolve) => {
+      releaseRegularTurn = resolve;
+    });
+    const handleUpdate = vi.fn(async () => {
+      await regularTurnDone;
+    });
+    createTelegramBotMock.mockImplementation(() => ({
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        config: { use: vi.fn() },
+      },
+      init: vi.fn(async () => undefined),
+      handleUpdate,
+      stop: vi.fn(async () => undefined),
+    }));
+    await writeTelegramSpooledUpdate({
+      spoolDir: tempDir,
+      update: {
+        update_id: 42,
+        message: { text: "summarize this", chat: { id: -100, type: "supergroup" } },
+      },
+    });
+
+    const createWorker = vi.fn(() => {
+      let stopWorker: (() => void) | undefined;
+      const workerDone = new Promise<void>((resolve) => {
+        stopWorker = resolve;
+      });
+      return {
+        onMessage: vi.fn(() => () => undefined),
+        stop: vi.fn(async () => {
+          stopWorker?.();
+        }),
+        task: vi.fn(async () => {
+          await workerDone;
+        }),
+      };
+    });
+
+    try {
+      const firstSession = createPollingSession({
+        abortSignal: firstAbort.signal,
+        isolatedIngress: {
+          enabled: true,
+          spoolDir: tempDir,
+          createWorker,
+          drainIntervalMs: 100,
+        },
+      });
+
+      const firstRunPromise = firstSession.runUntilAbort();
+      await vi.waitFor(() => expect(handleUpdate).toHaveBeenCalledTimes(1));
+      firstAbort.abort();
+      await vi.advanceTimersByTimeAsync(16_000);
+      await firstRunPromise;
+
+      const secondSession = createPollingSession({
+        abortSignal: secondAbort.signal,
+        isolatedIngress: {
+          enabled: true,
+          spoolDir: tempDir,
+          createWorker,
+          drainIntervalMs: 100,
+        },
+      });
+      const secondRunPromise = secondSession.runUntilAbort();
+      await vi.waitFor(() => expect(createWorker).toHaveBeenCalledTimes(2));
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(handleUpdate).toHaveBeenCalledTimes(1);
+
+      releaseRegularTurn?.();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.waitFor(async () =>
+        expect(
+          (await listTelegramSpooledUpdates({ spoolDir: tempDir })).map(
+            (update) => update.updateId,
+          ),
+        ).toEqual([]),
+      );
+      secondAbort.abort();
+      await vi.advanceTimersByTimeAsync(20_000);
+      await secondRunPromise;
+    } finally {
+      releaseRegularTurn?.();
+      vi.useRealTimers();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("marks isolated ingress unhealthy when a spooled backlog wedges while polling stays live", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const abort = new AbortController();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
+    const log = vi.fn();
+    const setStatus = vi.fn();
+    let releaseRegularTurn: (() => void) | undefined;
+    const regularTurnDone = new Promise<void>((resolve) => {
+      releaseRegularTurn = resolve;
+    });
+    const handleUpdate = vi.fn(async () => {
+      await regularTurnDone;
+    });
+    createTelegramBotMock.mockImplementation(() => ({
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        config: { use: vi.fn() },
+      },
+      init: vi.fn(async () => undefined),
+      handleUpdate,
+      stop: vi.fn(async () => undefined),
+    }));
+    for (const updateId of [42, 43]) {
+      await writeTelegramSpooledUpdate({
+        spoolDir: tempDir,
+        update: {
+          update_id: updateId,
+          message: { text: `dm ${updateId}`, chat: { id: 123, type: "private" } },
+        },
+      });
+    }
+
+    const workerListeners: WorkerPollSuccessListener[] = [];
+    const createWorker = vi.fn(() => {
+      let stopWorker: (() => void) | undefined;
+      const workerDone = new Promise<void>((resolve) => {
+        stopWorker = resolve;
+      });
+      return {
+        onMessage: vi.fn((listener: WorkerPollSuccessListener) => {
+          workerListeners.push(listener);
+          return () => undefined;
+        }),
+        stop: vi.fn(async () => {
+          stopWorker?.();
+        }),
+        task: vi.fn(async () => {
+          await workerDone;
+        }),
+      };
+    });
+
+    try {
+      const session = createPollingSession({
+        abortSignal: abort.signal,
+        log,
+        setStatus,
+        isolatedIngress: {
+          enabled: true,
+          spoolDir: tempDir,
+          createWorker,
+          drainIntervalMs: 100,
+        },
+      });
+
+      const runPromise = session.runUntilAbort();
+      await vi.waitFor(() => expect(handleUpdate).toHaveBeenCalledTimes(1));
+      workerListeners[0]?.({
+        type: "poll-success",
+        offset: null,
+        count: 0,
+        finishedAt: Date.now(),
+      });
+      expect(statusPatches(setStatus).some((patch) => patch.connected === true)).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(25 * 60_000 + 100);
+
+      await vi.waitFor(() =>
+        expect(log).toHaveBeenCalledWith(
+          expect.stringContaining("isolated polling spool backlog stalled"),
+        ),
+      );
+      expect(
+        statusPatches(setStatus).some(
+          (patch) =>
+            patch.connected === false &&
+            String(patch.lastError).includes("isolated polling spool backlog stalled"),
+        ),
+      ).toBe(true);
+      workerListeners[0]?.({
+        type: "poll-success",
+        offset: null,
+        count: 0,
+        finishedAt: Date.now(),
+      });
+      expect(statusPatches(setStatus).at(-1)?.connected).toBe(false);
+
+      releaseRegularTurn?.();
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.waitFor(async () =>
+        expect(
+          (await listTelegramSpooledUpdates({ spoolDir: tempDir })).map(
+            (update) => update.updateId,
+          ),
+        ).toEqual([]),
+      );
+      workerListeners[0]?.({
+        type: "poll-success",
+        offset: null,
+        count: 0,
+        finishedAt: Date.now(),
+      });
+      await vi.waitFor(() => expect(statusPatches(setStatus).at(-1)?.connected).toBe(true));
+      expect(createWorker).toHaveBeenCalledTimes(1);
+
+      abort.abort();
+      await vi.advanceTimersByTimeAsync(20_000);
+      await runPromise;
+    } finally {
+      releaseRegularTurn?.();
+      vi.useRealTimers();
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
