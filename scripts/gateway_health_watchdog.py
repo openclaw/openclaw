@@ -155,7 +155,7 @@ def _read_protocol_version_from_repo() -> int | None:
         text = path.read_text(encoding="utf-8")
     except OSError:
         return None
-    m = re.search(r"export const PROTOCOL_VERSION\\s*=\\s*(\\d+)\\s*;", text)
+    m = re.search(r"export\s+const\s+PROTOCOL_VERSION\s*=\s*(\d+)(?:\s+as\s+const)?\s*;", text)
     if not m:
         return None
     try:
@@ -232,24 +232,180 @@ def _send_ws_frame(sock: socket.socket, opcode: int, payload: bytes = b"") -> No
     sock.sendall(header + mask + masked)
 
 
-def _resolve_secret_input_string(value: object, env: dict[str, str]) -> str | None:
+def _secret_defaults(config: dict) -> dict:
+    defaults = config.get("secrets", {}).get("defaults", {})
+    return defaults if isinstance(defaults, dict) else {}
+
+
+def _coerce_secret_ref(value: object, config: dict) -> dict | None:
+    defaults = _secret_defaults(config)
     if isinstance(value, str):
         trimmed = value.strip()
-        if not trimmed:
-            return None
-        m = re.fullmatch(r"\\$\\{([A-Z][A-Z0-9_]{0,127})\\}", trimmed)
+        m = re.fullmatch(r"\$\{([A-Z][A-Z0-9_]{0,127})\}", trimmed)
         if m:
-            return env.get(m.group(1))
+            return {
+                "source": "env",
+                "provider": defaults.get("env") or "default",
+                "id": m.group(1),
+            }
         for prefix in ("secretref-env:", "__env__:"):
             if trimmed.startswith(prefix):
-                return env.get(trimmed[len(prefix):])
-        return trimmed
+                secret_id = trimmed[len(prefix):]
+                if re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", secret_id):
+                    return {
+                        "source": "env",
+                        "provider": defaults.get("env") or "default",
+                        "id": secret_id,
+                    }
+        return None
 
     if isinstance(value, dict):
         source = value.get("source")
         secret_id = value.get("id")
-        if source == "env" and isinstance(secret_id, str):
-            return env.get(secret_id)
+        if source in ("env", "file", "exec") and isinstance(secret_id, str) and secret_id.strip():
+            provider = value.get("provider")
+            if not isinstance(provider, str) or not provider.strip():
+                provider = defaults.get(source) or "default"
+            return {"source": source, "provider": provider.strip(), "id": secret_id.strip()}
+    return None
+
+
+def _configured_secret_provider(config: dict, source: str, provider: str) -> dict | None:
+    providers = config.get("secrets", {}).get("providers", {})
+    provider_config = providers.get(provider) if isinstance(providers, dict) else None
+    if isinstance(provider_config, dict):
+        return provider_config if provider_config.get("source") == source else None
+    if source == "env" and provider == "default":
+        return {"source": "env"}
+    return None
+
+
+def _read_json_pointer(payload: object, pointer: str) -> object | None:
+    if pointer == "":
+        return payload
+    if not pointer.startswith("/"):
+        return None
+    current = payload
+    for raw_part in pointer[1:].split("/"):
+        part = raw_part.replace("~1", "/").replace("~0", "~")
+        if isinstance(current, dict) and part in current:
+            current = current[part]
+            continue
+        if isinstance(current, list):
+            try:
+                index = int(part)
+            except ValueError:
+                return None
+            if 0 <= index < len(current):
+                current = current[index]
+                continue
+        return None
+    return current
+
+
+def _resolve_secret_ref(ref: dict, config: dict, env: dict[str, str]) -> str | None:
+    source = ref["source"]
+    provider = ref["provider"]
+    secret_id = ref["id"]
+    provider_config = _configured_secret_provider(config, source, provider)
+    if provider_config is None:
+        return None
+
+    if source == "env":
+        allowlist = provider_config.get("allowlist")
+        if isinstance(allowlist, list) and secret_id not in allowlist:
+            return None
+        return env.get(secret_id)
+
+    if source == "file":
+        raw_path = provider_config.get("path")
+        if not isinstance(raw_path, str) or not raw_path:
+            return None
+        try:
+            text = Path(raw_path).expanduser().read_text(encoding="utf-8")
+        except OSError:
+            return None
+        if provider_config.get("mode") == "singleValue":
+            return text[:-1] if text.endswith("\n") else text
+        try:
+            payload = json.loads(text.lstrip("\ufeff"))
+        except json.JSONDecodeError:
+            return None
+        value = _read_json_pointer(payload, secret_id)
+        return value if isinstance(value, str) and value else None
+
+    if source == "exec":
+        command = provider_config.get("command")
+        if not isinstance(command, str) or not command:
+            return None
+        child_env: dict[str, str] = {}
+        pass_env = provider_config.get("passEnv")
+        if isinstance(pass_env, list):
+            for key in pass_env:
+                if isinstance(key, str) and key in env:
+                    child_env[key] = env[key]
+        configured_env = provider_config.get("env")
+        if isinstance(configured_env, dict):
+            child_env.update({str(k): str(v) for k, v in configured_env.items()})
+        request = json.dumps({"protocolVersion": 1, "provider": provider, "ids": [secret_id]})
+        timeout_s = max(float(provider_config.get("timeoutMs") or 5000) / 1000, 0.001)
+        command_path = str(Path(command).expanduser())
+        args = provider_config.get("args")
+        exec_args = [str(arg) for arg in args] if isinstance(args, list) else []
+        try:
+            result = subprocess.run(
+                [command_path, *exec_args],
+                input=request,
+                text=True,
+                capture_output=True,
+                timeout=timeout_s,
+                env=child_env,
+                cwd=str(Path(command_path).parent),
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError, ValueError):
+            return None
+        if result.returncode != 0:
+            return None
+        trimmed = result.stdout.strip()
+        if not trimmed:
+            return None
+        json_only = provider_config.get("jsonOnly", True)
+        if not json_only:
+            try:
+                parsed = json.loads(trimmed)
+            except json.JSONDecodeError:
+                return trimmed
+        else:
+            try:
+                parsed = json.loads(trimmed)
+            except json.JSONDecodeError:
+                return None
+        if not isinstance(parsed, dict) or parsed.get("protocolVersion") != 1:
+            return None
+        values = parsed.get("values")
+        value = values.get(secret_id) if isinstance(values, dict) else None
+        return value if isinstance(value, str) and value else None
+
+    return None
+
+
+def _resolve_secret_input_string(
+    value: object,
+    env: dict[str, str],
+    config: dict | None = None,
+) -> str | None:
+    config = config or {}
+    ref = _coerce_secret_ref(value, config)
+    if ref:
+        return _resolve_secret_ref(ref, config, env)
+
+    if isinstance(value, str):
+        trimmed = value.strip()
+        if not trimmed:
+            return None
+        return trimmed
+
     return None
 
 
@@ -261,20 +417,36 @@ def _load_config_json() -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def _parse_gateway_port_value(value: object) -> int | None:
+    if isinstance(value, int) and value > 0:
+        return value
+    if not isinstance(value, str):
+        return None
+    trimmed = value.strip()
+    if not trimmed:
+        return None
+    if re.fullmatch(r"\d+", trimmed):
+        port = int(trimmed)
+        return port if port > 0 else None
+    bracketed_ipv6 = re.fullmatch(r"\[[^\]]+\]:(\d+)", trimmed)
+    if bracketed_ipv6:
+        port = int(bracketed_ipv6.group(1))
+        return port if port > 0 else None
+    if trimmed.count(":") == 1:
+        _, suffix = trimmed.rsplit(":", 1)
+        if re.fullmatch(r"\d+", suffix):
+            port = int(suffix)
+            return port if port > 0 else None
+    return None
+
+
 def _resolve_gateway_port(config: dict) -> int:
-    env_port = os.environ.get("OPENCLAW_GATEWAY_PORT")
+    env_port = _parse_gateway_port_value(os.environ.get("OPENCLAW_GATEWAY_PORT"))
     if env_port:
-        try:
-            port = int(env_port)
-            if port > 0:
-                return port
-        except ValueError:
-            pass
+        return env_port
     port = config.get("gateway", {}).get("port")
     if isinstance(port, int) and port > 0:
         return port
-    if isinstance(port, str) and port.isdigit():
-        return int(port)
     return DEFAULT_GATEWAY_PORT
 
 
@@ -289,10 +461,10 @@ def _load_gateway_auth(config: dict) -> dict | None:
     auth = config.get("gateway", {}).get("auth", {})
     if not isinstance(auth, dict):
         return None
-    token = _resolve_secret_input_string(auth.get("token"), env)
+    token = _resolve_secret_input_string(auth.get("token"), env, config)
     if token:
         return {"token": token}
-    password = _resolve_secret_input_string(auth.get("password"), env)
+    password = _resolve_secret_input_string(auth.get("password"), env, config)
     if password:
         return {"password": password}
     return None
