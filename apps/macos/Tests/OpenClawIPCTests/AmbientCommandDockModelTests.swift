@@ -33,4 +33,17 @@ struct AmbientCommandDockModelTests {
         #expect(model.inputText == "/canvas ")
         #expect(model.suggestions.isEmpty)
     }
+
+    @Test func `submitting command clears input and stores result`() async {
+        let model = AmbientCommandDockModel(
+            registry: .default,
+            actions: AmbientCommandDockActionExecutor(environment: .testing()))
+        model.inputText = "/intensity 70"
+
+        await model.submit()
+
+        #expect(model.inputText == "")
+        #expect(model.result == .success("Ambient intensity set to 70%"))
+        #expect(model.thomasState == .success)
+    }
 }

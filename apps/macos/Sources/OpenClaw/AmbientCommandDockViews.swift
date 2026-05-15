@@ -228,8 +228,22 @@ struct AmbientCommandDockView: View {
                 .onSubmit {
                     if let selected = self.model.suggestions[safe: self.model.selectedSuggestionIndex] {
                         self.model.acceptSuggestion(selected)
+                    } else {
+                        Task { await self.model.submit() }
                     }
                 }
+
+            Button {
+                Task { await self.model.submit() }
+            } label: {
+                Image(systemName: self.model.isSubmitting ? "hourglass" : "arrow.up")
+                    .font(.system(size: 12, weight: .bold))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.primary)
+            .frame(width: 28, height: 28)
+            .background(.cyan.opacity(0.22), in: Circle())
+            .disabled(self.model.isSubmitting)
 
             Button(action: self.onDismiss) {
                 Image(systemName: "xmark")
