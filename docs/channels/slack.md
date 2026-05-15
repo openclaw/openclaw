@@ -1178,6 +1178,27 @@ Notes:
 - The interactive callback values are OpenClaw-generated opaque tokens, not raw agent-authored values.
 - If generated interactive blocks would exceed Slack Block Kit limits, OpenClaw falls back to the original text reply instead of sending an invalid blocks payload.
 
+### Plugin-owned modal submissions
+
+Slack plugins that register an interactive handler can also receive modal
+`view_submission` and `view_closed` lifecycle events before OpenClaw compacts
+the payload for the agent-visible system event. Use one of these routing
+patterns when opening a Slack modal:
+
+- Set `callback_id` to `openclaw:<namespace>:<payload>`.
+- Or keep an existing `callback_id` and put `pluginInteractiveData:
+"<namespace>:<payload>"` in the modal `private_metadata`.
+
+The handler receives `ctx.interaction.kind` as `view_submission` or
+`view_closed`, normalized `inputs`, and the full raw `stateValues` object from
+Slack. Callback-id-only routing is enough to invoke the plugin handler; include
+the existing modal `private_metadata` user/session routing fields when the
+modal should also produce an agent-visible system event. The agent receives a
+compact, redacted `Slack interaction: ...` system event. If the handler returns
+`systemEvent.summary`, `systemEvent.reference`, or `systemEvent.data`, those
+fields are included in that compact event so the agent can reference
+plugin-owned storage without seeing the complete form payload.
+
 ## Exec approvals in Slack
 
 Slack can act as a native approval client with interactive buttons and interactions, instead of falling back to the Web UI or terminal.
