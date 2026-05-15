@@ -657,6 +657,141 @@ describe("session store writer queue", () => {
     expect(store[key]?.model).toBe("gpt-5.4");
   });
 
+  it("preserves ACP metadata already written on disk during a stale session-store update", async () => {
+    const key = "agent:gemini:acp:race";
+    const acp: NonNullable<SessionEntry["acp"]> = {
+      backend: "acpx",
+      agent: "gemini",
+      runtimeSessionName: "gemini-runtime",
+      mode: "oneshot",
+      state: "idle",
+      lastActivityAt: 100,
+    };
+    const { storePath } = await makeTmpStore({
+      [key]: {
+        sessionId: "sess-acp-race",
+        updatedAt: 100,
+      },
+    });
+
+    await updateSessionStore(storePath, (store) => {
+      fs.writeFileSync(
+        storePath,
+        JSON.stringify(
+          {
+            [key]: {
+              sessionId: "sess-acp-race",
+              updatedAt: 101,
+              acp,
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+      store[key].label = "touched by gateway agent handler";
+      store[key].updatedAt = Date.now();
+    });
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(store[key]?.label).toBe("touched by gateway agent handler");
+    expect(store[key]?.acp).toEqual(acp);
+  });
+
+  it("uses fresh ACP metadata when disk changes during an in-place stale session-store update", async () => {
+    const key = "agent:gemini:acp:updated-on-disk";
+    const staleAcp: NonNullable<SessionEntry["acp"]> = {
+      backend: "acpx",
+      agent: "gemini",
+      runtimeSessionName: "stale-runtime",
+      mode: "oneshot",
+      state: "idle",
+      lastActivityAt: 100,
+    };
+    const freshAcp: NonNullable<SessionEntry["acp"]> = {
+      backend: "acpx",
+      agent: "gemini",
+      runtimeSessionName: "fresh-runtime",
+      mode: "oneshot",
+      state: "running",
+      lastActivityAt: 200,
+    };
+    const { storePath } = await makeTmpStore({
+      [key]: {
+        sessionId: "sess-acp-updated-on-disk",
+        updatedAt: 100,
+        acp: staleAcp,
+      },
+    });
+
+    await updateSessionStore(storePath, (store) => {
+      fs.writeFileSync(
+        storePath,
+        JSON.stringify(
+          {
+            [key]: {
+              sessionId: "sess-acp-updated-on-disk",
+              updatedAt: 101,
+              acp: freshAcp,
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+      store[key].label = "touched after disk ACP update";
+      store[key].updatedAt = Date.now();
+    });
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(store[key]?.label).toBe("touched after disk ACP update");
+    expect(store[key]?.acp).toEqual(freshAcp);
+  });
+
+  it("does not resurrect ACP metadata removed on disk during an in-place stale session-store update", async () => {
+    const key = "agent:gemini:acp:removed-on-disk";
+    const acp: NonNullable<SessionEntry["acp"]> = {
+      backend: "acpx",
+      agent: "gemini",
+      runtimeSessionName: "gemini-runtime",
+      mode: "oneshot",
+      state: "idle",
+      lastActivityAt: 100,
+    };
+    const { storePath } = await makeTmpStore({
+      [key]: {
+        sessionId: "sess-acp-removed-on-disk",
+        updatedAt: 100,
+        acp,
+      },
+    });
+
+    await updateSessionStore(storePath, (store) => {
+      fs.writeFileSync(
+        storePath,
+        JSON.stringify(
+          {
+            [key]: {
+              sessionId: "sess-acp-removed-on-disk",
+              updatedAt: 101,
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+      store[key].label = "touched after disk removal";
+      store[key].updatedAt = Date.now();
+    });
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(store[key]?.label).toBe("touched after disk removal");
+    expect(store[key]?.acp).toBeUndefined();
+  });
+
   it("allows explicit ACP metadata removal through the ACP session helper", async () => {
     const key = "agent:codex:acp:binding:discord:default:deadbeef";
     const { storePath } = await makeTmpStore({
