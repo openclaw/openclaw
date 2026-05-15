@@ -3,6 +3,7 @@ import type { LookupFn } from "../infra/net/ssrf.js";
 import {
   resolvePinnedHostnameWithPolicy,
   resolveSsrFPolicyForUrl,
+  SsrFBlockedError,
   ssrfPolicyFromHttpBaseUrlAllowedOrigin,
 } from "../infra/net/ssrf.js";
 import {
@@ -440,7 +441,7 @@ describe("ssrfPolicyFromHttpBaseUrlAllowedOrigin — SDK boundary safety", () =>
           policy: policyForUrl,
           lookupFn: createLookupFn([{ address: lookupAddress, family }]),
         }),
-      ).rejects.toThrow();
+      ).rejects.toThrow(SsrFBlockedError);
     },
   );
 
@@ -454,6 +455,6 @@ describe("ssrfPolicyFromHttpBaseUrlAllowedOrigin — SDK boundary safety", () =>
         policy: policyForUrl,
         lookupFn: createLookupFn([{ address: "169.254.169.254", family: 4 }]),
       }),
-    ).rejects.toThrow();
+    ).rejects.toThrow(SsrFBlockedError);
   });
 });
